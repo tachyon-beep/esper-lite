@@ -661,13 +661,19 @@ class EventLogEntry:
     """Single event log entry for display in Event Log panel.
 
     Reference: Used by aggregator to build event_log list
+
+    Design: message is GENERIC (e.g., "Germinated", "Stage changed").
+    Specific values (slot_id, reward, blueprint) go in metadata dict
+    for display in detail modal. This allows proper rollup by event_type.
     """
     timestamp: str  # Formatted as HH:MM:SS
     event_type: str  # REWARD_COMPUTED, SEED_GERMINATED, etc.
     env_id: int | None  # None for global events (PPO, BATCH)
-    message: str  # Formatted message for display
+    message: str  # Generic message (specific values in metadata)
     episode: int = 0  # Episode number for grouping
     relative_time: str = ""  # "(2s ago)" relative time string
+    # Structured metadata for detail view (slot_id, reward, blueprint, etc.)
+    metadata: dict[str, str | int | float] = field(default_factory=dict)
 
 
 @dataclass

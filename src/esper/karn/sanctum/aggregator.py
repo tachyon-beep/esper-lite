@@ -998,7 +998,11 @@ class SanctumAggregator:
             )
 
     def _add_event_log(self, event: "TelemetryEvent", event_type: str) -> None:
-        """Add event to log with formatting, episode, and relative time."""
+        """Add event to log with generic message and structured metadata.
+
+        Messages are kept generic for proper rollup grouping.
+        Specific values (slot_id, reward, blueprint) go in metadata.
+        """
         data = event.data or {}
         env_id = data.get("env_id")
         timestamp = event.timestamp or datetime.now(timezone.utc)
@@ -1013,37 +1017,43 @@ class SanctumAggregator:
         else:
             relative_time = f"({age_seconds/3600:.0f}h)"
 
-        # Format message based on event type
+        # Generic message + structured metadata based on event type
+        metadata: dict[str, str | int | float] = {}
+
         if event_type == "REWARD_COMPUTED":
-            action = normalize_action(data.get("action_name", "?"))
-            total = data.get("total_reward", 0.0)
-            message = f"{action} r={total:+.3f}"
+            message = "Reward computed"
+            metadata["action"] = normalize_action(data.get("action_name", "?"))
+            metadata["reward"] = data.get("total_reward", 0.0)
         elif event_type.startswith("SEED_"):
             slot_id = event.slot_id or data.get("slot_id", "?")
+            metadata["slot_id"] = slot_id
             if event_type == "SEED_GERMINATED":
-                blueprint = data.get("blueprint_id", "?")
-                message = f"{slot_id} germinated ({blueprint})"
+                message = "Germinated"
+                metadata["blueprint"] = data.get("blueprint_id", "?")
             elif event_type == "SEED_STAGE_CHANGED":
-                message = f"{slot_id} {data.get('from', '?')}->{data.get('to', '?')}"
+                message = "Stage changed"
+                metadata["from"] = data.get("from", "?")
+                metadata["to"] = data.get("to", "?")
             elif event_type == "SEED_FOSSILIZED":
-                improvement = data.get("improvement", 0.0)
-                message = f"{slot_id} fossilized" + (f" (+{improvement:.1f}%)" if improvement else "")
+                message = "Fossilized"
+                metadata["improvement"] = data.get("improvement", 0.0)
             elif event_type == "SEED_PRUNED":
-                reason = data.get("reason", "")
-                message = f"{slot_id} pruned" + (f" ({reason})" if reason else "")
+                message = "Pruned"
+                metadata["reason"] = data.get("reason", "")
             else:
-                message = slot_id
+                message = event_type.replace("SEED_", "")
         elif event_type == "PPO_UPDATE_COMPLETED":
             if data.get("skipped"):
-                message = "skipped (buffer rollback)"
+                message = "PPO skipped"
+                metadata["reason"] = "buffer rollback"
             else:
-                ent = data.get("entropy", 0.0)
-                clip = data.get("clip_fraction", 0.0)
-                message = f"ent={ent:.3f} clip={clip:.3f}"
+                message = "PPO update"
+                metadata["entropy"] = data.get("entropy", 0.0)
+                metadata["clip_fraction"] = data.get("clip_fraction", 0.0)
         elif event_type == "BATCH_EPOCH_COMPLETED":
-            batch = data.get("batch_idx", "?")
-            eps = data.get("episodes_completed", "?")
-            message = f"batch={batch} ep={eps}"
+            message = "Batch complete"
+            metadata["batch"] = data.get("batch_idx", 0)
+            metadata["episodes"] = data.get("episodes_completed", 0)
         else:
             message = event.message or event_type
 
@@ -1054,6 +1064,7 @@ class SanctumAggregator:
             message=message,
             episode=self._current_episode,
             relative_time=relative_time,
+            metadata=metadata,
         ))
 
     def _update_system_vitals(self) -> None:

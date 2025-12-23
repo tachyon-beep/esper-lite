@@ -93,22 +93,28 @@ class EventLogDetail(ModalScreen[None]):
             padding=(0, 1),
         )
 
-        # All EventLogEntry fields
+        # All EventLogEntry fields including metadata
         table.add_column("Time", style="dim", width=10)
         table.add_column("Type", style="bright_white", width=22)
         table.add_column("Env", style="bright_blue", width=4, justify="right")
         table.add_column("Ep", style="dim", width=4, justify="right")
-        table.add_column("Message", style="white", ratio=1)
+        table.add_column("Message", style="white", width=16)
+        table.add_column("Details", style="cyan", ratio=1)
 
         # Show events in reverse chronological order (newest first)
         for entry in reversed(self._events):
             env_str = f"{entry.env_id:02d}" if entry.env_id is not None else "--"
+            # Format metadata as key=value pairs
+            details = " ".join(
+                f"{k}={v}" for k, v in entry.metadata.items()
+            ) if entry.metadata else ""
             table.add_row(
                 entry.timestamp,
                 entry.event_type,
                 env_str,
                 str(entry.episode),
                 entry.message,
+                details,
             )
 
         return table
