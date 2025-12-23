@@ -424,6 +424,8 @@ class TamiyoState:
     grad_norm_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
     entropy_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
     explained_variance_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
+    kl_divergence_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
+    clip_fraction_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
 
     # PPO inner loop context
     inner_epoch: int = 0  # Current inner optimization epoch

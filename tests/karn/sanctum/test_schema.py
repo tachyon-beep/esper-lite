@@ -146,10 +146,17 @@ class TestTamiyoState:
         assert isinstance(tamiyo.grad_norm_history, deque)
         assert isinstance(tamiyo.entropy_history, deque)
         assert isinstance(tamiyo.explained_variance_history, deque)
+        assert isinstance(tamiyo.kl_divergence_history, deque)
+        assert isinstance(tamiyo.clip_fraction_history, deque)
 
         # Should have maxlen of 10
         assert tamiyo.policy_loss_history.maxlen == 10
         assert tamiyo.value_loss_history.maxlen == 10
+        assert tamiyo.grad_norm_history.maxlen == 10
+        assert tamiyo.entropy_history.maxlen == 10
+        assert tamiyo.explained_variance_history.maxlen == 10
+        assert tamiyo.kl_divergence_history.maxlen == 10
+        assert tamiyo.clip_fraction_history.maxlen == 10
 
     def test_per_head_entropy_fields(self):
         """TamiyoState should have per-head entropy for all 8 action heads."""
