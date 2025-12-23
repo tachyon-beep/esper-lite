@@ -24,6 +24,7 @@ from esper.karn.sanctum.widgets import (
     EnvDetailScreen,
     EnvOverview,
     EventLog,
+    EventLogDetail,
     HistoricalEnvDetail,
     RunHeader,
     Scoreboard,
@@ -54,6 +55,7 @@ HELP_TEXT = """\
   [cyan]p[/cyan]         Toggle pin on Best Runs item
   [cyan]r[/cyan]         Manual refresh
   [cyan]q[/cyan]         Quit Sanctum
+  [cyan]Click[/cyan]     Click Event Log for raw detail view
 
 [bold]In Detail Modal[/bold]
   [cyan]Esc[/cyan]       Close modal
@@ -561,3 +563,14 @@ class SanctumApp(App):
 
         # Refresh to show updated pin status
         self._poll_and_refresh()
+
+    def on_event_log_detail_requested(
+        self, event: EventLog.DetailRequested
+    ) -> None:
+        """Handle click on EventLog to show raw event detail modal.
+
+        Args:
+            event: The detail request with event list.
+        """
+        self.push_screen(EventLogDetail(events=event.events))
+        self.log.info(f"Opened EventLogDetail with {len(event.events)} events")

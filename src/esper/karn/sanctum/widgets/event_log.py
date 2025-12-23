@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from rich.console import Group
 from rich.text import Text
+from textual.message import Message
 from textual.widgets import Static
 
 if TYPE_CHECKING:
@@ -53,7 +54,15 @@ class EventLog(Static):
     - Color coding by event type
     - Episode grouping with separators
     - Consecutive identical messages rolled up (×N suffix)
+    - Click anywhere to open raw event detail modal
     """
+
+    class DetailRequested(Message):
+        """Posted when user clicks to view raw event log."""
+
+        def __init__(self, events: list["EventLogEntry"]) -> None:
+            super().__init__()
+            self.events = events
 
     def __init__(self, max_events: int = 30, **kwargs) -> None:
         """Initialize EventLog widget.
@@ -151,3 +160,10 @@ class EventLog(Static):
         """
         self._snapshot = snapshot
         self.refresh()  # Trigger re-render
+
+    def on_click(self) -> None:
+        """Handle click to open raw event detail modal."""
+        if self._snapshot is None or not self._snapshot.event_log:
+            return
+        # Pass all events (not just rendered ones) for full visibility
+        self.post_message(self.DetailRequested(list(self._snapshot.event_log)))
