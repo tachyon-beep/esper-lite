@@ -1579,6 +1579,7 @@ def train_ppo_vectorized(
         )
 
     history = []
+    episode_history = []  # Per-episode tracking for A/B testing
     best_avg_acc = 0.0
     best_state = None
     recent_accuracies = []
@@ -2707,6 +2708,13 @@ def train_ppo_vectorized(
                     env_final_accs[env_idx] = env_state.val_acc
                     env_total_rewards[env_idx] = sum(env_state.episode_rewards)
 
+                    # Track episode completion for A/B testing
+                    episode_history.append({
+                        "env_idx": env_idx,
+                        "episode_reward": env_total_rewards[env_idx],
+                        "final_accuracy": env_final_accs[env_idx],
+                    })
+
                     # Shapley contributions at episode end
                     if (
                         env_state.counterfactual_helper is not None
@@ -2979,6 +2987,31 @@ def train_ppo_vectorized(
 
     if save_path:
         agent.save(save_path)
+
+    # A/B Test Summary
+    if ab_reward_modes is not None:
+        print("\n" + "=" * 60)
+        print("A/B TEST RESULTS")
+        print("=" * 60)
+
+        # Group episodes by reward mode
+        from collections import defaultdict
+        ab_groups = defaultdict(list)
+        for ep_data in episode_history:
+            env_idx = ep_data["env_idx"]
+            mode = env_reward_configs[env_idx].reward_mode.value
+            ab_groups[mode].append(ep_data)
+
+        for mode, episodes in sorted(ab_groups.items()):
+            rewards = [ep.get("episode_reward", 0) for ep in episodes]
+            accuracies = [ep.get("final_accuracy", 0) for ep in episodes]
+            avg_reward = sum(rewards) / len(rewards) if rewards else 0
+            avg_acc = sum(accuracies) / len(accuracies) if accuracies else 0
+            print(f"\n{mode.upper()} ({len(episodes)} episodes):")
+            print(f"  Avg Episode Reward: {avg_reward:.2f}")
+            print(f"  Avg Final Accuracy: {avg_acc:.2f}%")
+            print(f"  Reward Range: [{min(rewards):.2f}, {max(rewards):.2f}]")
+        print("=" * 60)
 
     return agent, history
 
