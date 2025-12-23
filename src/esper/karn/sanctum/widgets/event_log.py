@@ -1,12 +1,17 @@
-"""EventLog widget - Scrolling log that waits for each second to complete.
+"""EventLog widget - Append-only scrolling log.
 
-- Buffers events until the second is complete
-- Then shows each event type on its own line with count
-- New completed seconds appear at bottom
-- Click for full unrolled history
+Architecture:
+- Maintains internal list of rendered lines (append-only, never recalculated)
+- Tracks which seconds have been processed
+- On update: checks for NEW completed seconds, aggregates them, appends lines
+- On render: just displays the lines list (no recalculation)
+
+This is a LOG, not a reactive view. Lines stay put once added.
 """
 from __future__ import annotations
 
+from collections import defaultdict
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from rich.console import Group
@@ -20,37 +25,32 @@ if TYPE_CHECKING:
 
 # Event type color mapping
 _EVENT_COLORS: dict[str, str] = {
-    # Seed lifecycle (green family)
+    # Seed lifecycle
     "SEED_GERMINATED": "bright_yellow",
     "SEED_STAGE_CHANGED": "bright_white",
     "SEED_FOSSILIZED": "bright_green",
     "SEED_PRUNED": "bright_red",
-    # Tamiyo actions (cyan)
+    # Tamiyo actions
     "REWARD_COMPUTED": "bright_cyan",
-    # Training events (blue)
+    # Training events
     "TRAINING_STARTED": "bright_green",
     "EPOCH_COMPLETED": "bright_blue",
     "PPO_UPDATE_COMPLETED": "bright_magenta",
     "BATCH_EPOCH_COMPLETED": "bright_blue",
 }
 
-# Event type emoji mapping (disabled - causes terminal rendering artifacts)
-_EVENT_EMOJI: dict[str, str] = {
-    # "SEED_GERMINATED": "🌱",
-    # "SEED_FOSSILIZED": "✅",
-    # "SEED_PRUNED": "⚠️",
-    # "REWARD_COMPUTED": "📊",
-    # "BATCH_EPOCH_COMPLETED": "🏆",
-}
+# Max envs to show before truncating with "(+ N)"
+_MAX_ENVS_SHOWN = 3
 
 
 class EventLog(Static):
-    """Scrolling log that waits for each second to complete.
+    """Append-only scrolling event log.
 
-    - Events from current second are buffered (not shown yet)
-    - Once a second completes, all its events are shown
-    - Each event type on its own line with count: "REWARD ×6"
-    - Click anywhere for full unrolled history
+    - Waits for each second to COMPLETE before showing its events
+    - Each event type within a second gets its own line with count
+    - Shows contributing env IDs right-justified
+    - Lines are appended at the bottom; existing lines never change
+    - Click anywhere to open raw event detail modal
     """
 
     class DetailRequested(Message):
@@ -60,110 +60,151 @@ class EventLog(Static):
             super().__init__()
             self.events = events
 
-    def __init__(self, max_events: int = 30, **kwargs) -> None:
+    def __init__(self, max_lines: int = 30, **kwargs) -> None:
         """Initialize EventLog widget.
 
         Args:
-            max_events: Maximum events to display (default: 30)
+            max_lines: Maximum lines to display (oldest trimmed).
         """
         super().__init__(**kwargs)
-        self._max_events = max_events
-        self._snapshot: SanctumSnapshot | None = None
+        self._max_lines = max_lines
         self.border_title = "EVENTS"
 
-    def _get_event_color(self, event_type: str) -> str:
-        """Get color for event type."""
-        return _EVENT_COLORS.get(event_type, "white")
+        # === APPEND-ONLY STATE ===
+        # The rendered lines - this is the source of truth for display
+        self._lines: list[Text] = []
+        # Seconds we've already processed (never process twice)
+        self._processed_seconds: set[str] = set()
+        # Track last minute shown (for abbreviated timestamps)
+        self._last_minute: str | None = None
+        # Keep reference to snapshot for click handler
+        self._snapshot: SanctumSnapshot | None = None
 
-    def _get_event_emoji(self, event_type: str) -> str:
-        """Get emoji for event type."""
-        return _EVENT_EMOJI.get(event_type, "")
+    def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
+        """Process snapshot and append any newly completed seconds.
 
-    def render(self):
-        """Render scrolling log - wait for each second to complete before showing.
-
-        - Group events by second
-        - Only show COMPLETED seconds (not current second still accumulating)
-        - Each event type on its own line with count
-        - New completed seconds appear at bottom
+        This is where the work happens - NOT in render().
         """
-        from collections import defaultdict
-        from datetime import datetime, timezone
+        self._snapshot = snapshot
 
-        if self._snapshot is None or not self._snapshot.event_log:
-            return Text("Waiting for events...", style="dim")
+        if not snapshot.event_log:
+            return
 
-        events = list(self._snapshot.event_log)
-        if not events:
-            return Text("No events (click for history)", style="dim")
-
-        # Get current second (we won't show events from this second yet)
+        # What second is it NOW? (UTC)
         now = datetime.now(timezone.utc)
         current_second = now.strftime("%H:%M:%S")
 
-        # Group events by timestamp second, then by event_type
-        # Structure: {timestamp: {event_type: count}}
-        second_groups: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-        for entry in events:
-            # Skip events from current second (still accumulating)
-            if entry.timestamp == current_second:
+        # Group events by timestamp, excluding current second (still accumulating)
+        # Structure: {timestamp: {event_type: set[env_id]}}
+        # env_id can be None for global events (PPO, BATCH)
+        second_groups: dict[str, dict[str, set[int | None]]] = defaultdict(
+            lambda: defaultdict(set)
+        )
+        for entry in snapshot.event_log:
+            ts = entry.timestamp
+            # Skip current second (not complete yet)
+            if ts == current_second:
                 continue
-            second_groups[entry.timestamp][entry.event_type] += 1
+            # Skip already-processed seconds
+            if ts in self._processed_seconds:
+                continue
+            second_groups[ts][entry.event_type].add(entry.env_id)
 
         if not second_groups:
-            return Text("Accumulating... (click for history)", style="dim")
+            return
 
-        # Sort seconds chronologically, take last N
-        sorted_seconds = sorted(second_groups.keys())[-self._max_events:]
+        # Process new completed seconds in chronological order
+        for timestamp in sorted(second_groups.keys()):
+            type_envs = second_groups[timestamp]
+            self._append_second(timestamp, type_envs)
+            self._processed_seconds.add(timestamp)
 
-        lines = []
-        last_minute = None
+        # Trim if we exceed max lines
+        if len(self._lines) > self._max_lines:
+            self._lines = self._lines[-self._max_lines:]
 
-        for timestamp in sorted_seconds:
-            type_counts = second_groups[timestamp]
+        # Trigger re-render (just displays self._lines)
+        self.refresh()
 
-            # Each event type gets its own line
-            for event_type in sorted(type_counts.keys()):
-                count = type_counts[event_type]
-                text = Text()
+    def _append_second(
+        self, timestamp: str, type_envs: dict[str, set[int | None]]
+    ) -> None:
+        """Append lines for a completed second.
 
-                # Timestamp: "MM:SS " or "  :SS "
-                parts = timestamp.split(":")
-                if len(parts) == 3:
-                    current_minute = parts[1]
-                    if current_minute != last_minute:
-                        text.append(f"{parts[1]}:{parts[2]} ", style="dim")
-                        last_minute = current_minute
-                    else:
-                        text.append(f"  :{parts[2]} ", style="dim")
-                else:
-                    text.append(f"{timestamp:>5} ", style="dim")
-
-                # Event type (shortened)
-                color = self._get_event_color(event_type)
-                label = event_type.replace("SEED_", "").replace("_COMPLETED", "").replace("_COMPUTED", "")
-                text.append(label, style=color)
-
-                # Count if > 1
-                if count > 1:
-                    text.append(f" ×{count}", style="dim")
-
-                lines.append(text)
-
-        return Group(*lines)
-
-    def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
-        """Update widget with new snapshot data.
-
-        Args:
-            snapshot: The current telemetry snapshot.
+        Each event type gets its own line with count and contributing envs.
         """
-        self._snapshot = snapshot
-        self.refresh()  # Trigger re-render
+        parts = timestamp.split(":")
+        if len(parts) != 3:
+            return
+
+        current_minute = parts[1]
+
+        for event_type in sorted(type_envs.keys()):
+            env_ids = type_envs[event_type]
+            count = len(env_ids)
+            text = Text()
+
+            # Timestamp: "MM:SS " or "  :SS " (abbreviated if same minute)
+            if current_minute != self._last_minute:
+                text.append(f"{parts[1]}:{parts[2]} ", style="dim")
+                self._last_minute = current_minute
+            else:
+                text.append(f"  :{parts[2]} ", style="dim")
+
+            # Event type (shortened for display)
+            color = _EVENT_COLORS.get(event_type, "white")
+            label = (
+                event_type
+                .replace("SEED_", "")
+                .replace("_COMPLETED", "")
+                .replace("_COMPUTED", "")
+            )
+            text.append(label, style=color)
+
+            # Count if > 1
+            if count > 1:
+                text.append(f" ×{count}", style="dim")
+
+            # Right-justified env list (only if we have real env_ids)
+            env_suffix = self._format_env_list(env_ids)
+            if env_suffix:
+                # Pad to push envs right (estimate ~35 char width for panel)
+                current_len = len(text.plain)
+                padding = max(1, 35 - current_len - len(env_suffix))
+                text.append(" " * padding)
+                text.append(env_suffix, style="dim")
+
+            self._lines.append(text)
+
+    def _format_env_list(self, env_ids: set[int | None]) -> str:
+        """Format env IDs for display, e.g., '0 1 2 (+3)'.
+
+        Returns empty string for global events (all None).
+        """
+        # Filter out None (global events)
+        real_ids = sorted(eid for eid in env_ids if eid is not None)
+        if not real_ids:
+            return ""
+
+        if len(real_ids) <= _MAX_ENVS_SHOWN:
+            return " ".join(str(eid) for eid in real_ids)
+        else:
+            shown = " ".join(str(eid) for eid in real_ids[:_MAX_ENVS_SHOWN])
+            extra = len(real_ids) - _MAX_ENVS_SHOWN
+            return f"{shown} (+{extra})"
+
+    def render(self):
+        """Render the log - just display self._lines.
+
+        NO recalculation. NO grouping. Just display what we have.
+        """
+        if not self._lines:
+            return Text("Waiting for events...", style="dim")
+
+        return Group(*self._lines)
 
     def on_click(self) -> None:
         """Handle click to open raw event detail modal."""
         if self._snapshot is None or not self._snapshot.event_log:
             return
-        # Pass all events (not just rendered ones) for full visibility
         self.post_message(self.DetailRequested(list(self._snapshot.event_log)))
