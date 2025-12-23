@@ -188,7 +188,7 @@ class SanctumApp(App):
         - Run Header: Episode, Epoch, Batch, Runtime, Best Accuracy, Connection
         - Anomaly Strip: Single-line automatic problem surfacing
         - Top row: EnvOverview (65%) | Scoreboard (35%)
-        - Bottom row: EventLog (50%) | TamiyoBrain (50%)
+        - Bottom row: TamiyoBrain (50%) | EventLog (50%)
         - Footer: Keybindings
         """
         yield RunHeader(id="run-header")
@@ -207,12 +207,12 @@ class SanctumApp(App):
                 yield EnvOverview(num_envs=self._num_envs, id="env-overview")
                 yield Scoreboard(id="scoreboard")
 
-            # Bottom section: Event Log (left) | TamiyoBrain (right)
+            # Bottom section: TamiyoBrain (left) | Event Log (right)
             with Horizontal(id="bottom-section"):
-                # Left side: Event Log (50%)
-                yield EventLog(id="event-log")
-                # Right side: TamiyoBrain (50%)
+                # Left side: TamiyoBrain (50%)
                 yield TamiyoBrain(id="tamiyo-brain")
+                # Right side: Event Log (50%)
+                yield EventLog(id="event-log")
 
         yield Footer()
 
