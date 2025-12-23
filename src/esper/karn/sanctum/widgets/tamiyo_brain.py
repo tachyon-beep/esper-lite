@@ -619,3 +619,118 @@ class TamiyoBrain(Static):
         filled = int((percentage / 100) * width)
         bar = "█" * filled + "─" * (width - filled)
         return Text(bar, style="dim")
+
+    def _render_gauge_grid(self) -> Table:
+        """Render 2x2 gauge grid: EV, Entropy, Clip, KL."""
+        tamiyo = self._snapshot.tamiyo
+        batch = self._snapshot.current_batch
+
+        grid = Table.grid(expand=True)
+        grid.add_column(ratio=1)
+        grid.add_column(ratio=1)
+
+        # Row 1: Explained Variance | Entropy
+        ev_gauge = self._render_gauge_v2(
+            "Expl.Var",
+            tamiyo.explained_variance,
+            min_val=-1.0,
+            max_val=1.0,
+            status=self._get_ev_status(tamiyo.explained_variance),
+            label_text=self._get_ev_label(tamiyo.explained_variance),
+        )
+        entropy_gauge = self._render_gauge_v2(
+            "Entropy",
+            tamiyo.entropy,
+            min_val=0.0,
+            max_val=2.0,
+            status=self._get_entropy_status(tamiyo.entropy),
+            label_text=self._get_entropy_label(tamiyo.entropy, batch),
+        )
+        grid.add_row(ev_gauge, entropy_gauge)
+
+        # Row 2: Clip Fraction | KL Divergence
+        clip_gauge = self._render_gauge_v2(
+            "Clip Frac",
+            tamiyo.clip_fraction,
+            min_val=0.0,
+            max_val=0.5,
+            status=self._get_clip_status(tamiyo.clip_fraction),
+            label_text=self._get_clip_label(tamiyo.clip_fraction),
+        )
+        kl_gauge = self._render_gauge_v2(
+            "KL Div",
+            tamiyo.kl_divergence,
+            min_val=0.0,
+            max_val=0.1,
+            status=self._get_kl_status(tamiyo.kl_divergence),
+            label_text=self._get_kl_label(tamiyo.kl_divergence, batch),
+        )
+        grid.add_row(clip_gauge, kl_gauge)
+
+        return grid
+
+    def _render_gauge_v2(
+        self,
+        label: str,
+        value: float,
+        min_val: float,
+        max_val: float,
+        status: str,
+        label_text: str,
+    ) -> Text:
+        """Render a gauge with status-colored bar."""
+        # Normalize to 0-1
+        if max_val != min_val:
+            normalized = (value - min_val) / (max_val - min_val)
+        else:
+            normalized = 0.5
+        normalized = max(0, min(1, normalized))
+
+        gauge_width = 10
+        filled = int(normalized * gauge_width)
+        empty = gauge_width - filled
+
+        # Status-based color (use bright_cyan for OK per UX spec)
+        bar_color = {"ok": "bright_cyan", "warning": "yellow", "critical": "red"}[status]
+
+        gauge = Text()
+        gauge.append(f" {label}\n", style="dim")
+        gauge.append(" [")
+        gauge.append("█" * filled, style=bar_color)
+        gauge.append("░" * empty, style="dim")
+        gauge.append("] ")
+
+        # Value with precision based on magnitude
+        if abs(value) < 0.1:
+            gauge.append(f"{value:.3f}", style=bar_color)
+        else:
+            gauge.append(f"{value:.2f}", style=bar_color)
+
+        if status == "critical":
+            gauge.append("!", style="red bold")
+
+        gauge.append(f'\n  "{label_text}"', style="italic dim")
+
+        return gauge
+
+    def _get_ev_label(self, ev: float) -> str:
+        """Get descriptive label for explained variance."""
+        if ev <= TUIThresholds.EXPLAINED_VAR_CRITICAL:
+            return "HARMFUL!"
+        elif ev < TUIThresholds.EXPLAINED_VAR_WARNING:
+            return "Uncertain"
+        elif ev < 0.5:
+            return "Improving"
+        else:
+            return "Learning!"
+
+    def _get_clip_label(self, clip: float) -> str:
+        """Get descriptive label for clip fraction."""
+        if clip > TUIThresholds.CLIP_CRITICAL:
+            return "TOO AGGRESSIVE!"
+        elif clip > TUIThresholds.CLIP_WARNING:
+            return "Aggressive"
+        elif clip < 0.1:
+            return "Very stable"
+        else:
+            return "Stable"

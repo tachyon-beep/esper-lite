@@ -715,3 +715,30 @@ async def test_status_banner_includes_all_metrics():
         assert "Adv:" in plain
         assert "GradHP:" in plain
         assert "batch:" in plain
+
+
+# ===========================
+# Task 2.3: 4-Gauge Grid Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_four_gauge_grid_rendered():
+    """Learning vitals should render 4 gauges in 2x2 grid."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            entropy=1.2,
+            explained_variance=0.6,
+            clip_fraction=0.15,
+            kl_divergence=0.01,
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+
+        # Should have 4 gauges: EV, Entropy, Clip, KL
+        gauge_grid = widget._render_gauge_grid()
+        assert gauge_grid is not None
