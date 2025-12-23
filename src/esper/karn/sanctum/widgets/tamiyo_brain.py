@@ -401,11 +401,13 @@ class TamiyoBrain(Static):
         3. Advantage std collapsed (normalization broken)
         4. KL > critical (excessive policy change)
         5. Clip > critical (too aggressive)
-        6. EV < warning (value weak)
-        7. KL > warning (mild drift)
-        8. Clip > warning
-        9. Entropy low
-        10. Advantage abnormal
+        6. Grad norm > critical (gradient explosion)
+        7. EV < warning (value weak)
+        8. KL > warning (mild drift)
+        9. Clip > warning
+        10. Entropy low
+        11. Advantage abnormal
+        12. Grad norm > warning
 
         Returns:
             Tuple of (status, label, style) where:
@@ -424,7 +426,7 @@ class TamiyoBrain(Static):
         # === CRITICAL CHECKS (immediate FAILING) ===
 
         # 1. Entropy collapse (policy is deterministic/dead)
-        if tamiyo.entropy < 0.1:
+        if tamiyo.entropy < TUIThresholds.ENTROPY_CRITICAL:
             return "critical", "FAILING", "red bold"
 
         # 2. EV <= 0 (value function useless or harmful)
@@ -447,28 +449,36 @@ class TamiyoBrain(Static):
         if tamiyo.clip_fraction > TUIThresholds.CLIP_CRITICAL:
             return "critical", "FAILING", "red bold"
 
+        # 7. Grad norm > critical (gradient explosion)
+        if tamiyo.grad_norm > TUIThresholds.GRAD_NORM_CRITICAL:
+            return "critical", "FAILING", "red bold"
+
         # === WARNING CHECKS (CAUTION) ===
 
-        # 7. EV < warning (value function weak but learning)
+        # 8. EV < warning (value function weak but learning)
         if tamiyo.explained_variance < TUIThresholds.EXPLAINED_VAR_WARNING:
             return "warning", "CAUTION", "yellow"
 
-        # 8. Entropy low (policy converging quickly)
-        if tamiyo.entropy < 0.3:
+        # 9. Entropy low (policy converging quickly)
+        if tamiyo.entropy < TUIThresholds.ENTROPY_WARNING:
             return "warning", "CAUTION", "yellow"
 
-        # 9. KL > warning (mild policy drift)
+        # 10. KL > warning (mild policy drift)
         if tamiyo.kl_divergence > TUIThresholds.KL_WARNING:
             return "warning", "CAUTION", "yellow"
 
-        # 10. Clip > warning
+        # 11. Clip > warning
         if tamiyo.clip_fraction > TUIThresholds.CLIP_WARNING:
             return "warning", "CAUTION", "yellow"
 
-        # 11. Advantage std abnormal
+        # 12. Advantage std abnormal
         if tamiyo.advantage_std > TUIThresholds.ADVANTAGE_STD_WARNING:
             return "warning", "CAUTION", "yellow"
         if tamiyo.advantage_std < TUIThresholds.ADVANTAGE_STD_LOW_WARNING:
+            return "warning", "CAUTION", "yellow"
+
+        # 13. Grad norm > warning
+        if tamiyo.grad_norm > TUIThresholds.GRAD_NORM_WARNING:
             return "warning", "CAUTION", "yellow"
 
         return "ok", "LEARNING", "green"

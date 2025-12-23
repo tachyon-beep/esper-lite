@@ -630,3 +630,49 @@ async def test_decision_tree_advantage_collapsed():
         status, label, style = widget._get_overall_status()
         assert status == "critical"
         assert label == "FAILING"
+
+
+@pytest.mark.asyncio
+async def test_decision_tree_grad_norm_critical():
+    """Decision tree should return FAILING when grad_norm > GRAD_NORM_CRITICAL."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            entropy=1.2,
+            explained_variance=0.6,
+            clip_fraction=0.15,
+            kl_divergence=0.01,
+            advantage_std=1.0,
+            grad_norm=15.0,  # > 10.0 = critical
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+        status, label, style = widget._get_overall_status()
+        assert status == "critical"
+        assert label == "FAILING"
+
+
+@pytest.mark.asyncio
+async def test_decision_tree_grad_norm_warning():
+    """Decision tree should return CAUTION when grad_norm > GRAD_NORM_WARNING."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            entropy=1.2,
+            explained_variance=0.6,
+            clip_fraction=0.15,
+            kl_divergence=0.01,
+            advantage_std=1.0,
+            grad_norm=7.0,  # Between 5.0 and 10.0 = warning
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+        status, label, style = widget._get_overall_status()
+        assert status == "warning"
+        assert label == "CAUTION"
