@@ -56,3 +56,18 @@ async def test_app_focus_navigation():
         await pilot.press("tab")
         # Should have moved focus
         assert app.focused is not None
+
+
+@pytest.mark.asyncio
+async def test_app_has_anomaly_strip():
+    """App should have AnomalyStrip widget between RunHeader and main content."""
+    from esper.karn.sanctum.widgets import AnomalyStrip
+
+    mock_backend = MagicMock()
+    mock_backend.get_snapshot.return_value = SanctumSnapshot()
+
+    app = SanctumApp(backend=mock_backend, num_envs=4)
+    async with app.run_test() as pilot:
+        # Query for anomaly strip
+        strip = app.query_one("#anomaly-strip", AnomalyStrip)
+        assert strip is not None

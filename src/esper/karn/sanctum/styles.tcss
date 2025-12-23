@@ -10,6 +10,19 @@
     background: $surface-lighten-1;  /* Slight background for separation */
 }
 
+/* Anomaly Strip - single line below header */
+#anomaly-strip {
+    height: 1;
+    min-height: 1;
+    padding: 0 1;
+    margin-bottom: 1;
+}
+
+/* When anomalies exist, make it stand out */
+#anomaly-strip.has-anomalies {
+    background: $error-darken-2;
+}
+
 #sanctum-main {
     height: 1fr;
     padding: 0 1;

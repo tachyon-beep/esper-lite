@@ -20,6 +20,7 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Input, Static
 
 from esper.karn.sanctum.widgets import (
+    AnomalyStrip,
     EnvDetailScreen,
     EnvOverview,
     EventLog,
@@ -183,11 +184,13 @@ class SanctumApp(App):
 
         Layout structure:
         - Run Header: Episode, Epoch, Batch, Runtime, Best Accuracy, Connection
+        - Anomaly Strip: Single-line automatic problem surfacing
         - Top row: EnvOverview (65%) | Scoreboard (35%)
         - Bottom row: EventLog (50%) | TamiyoBrain (50%)
         - Footer: Keybindings
         """
         yield RunHeader(id="run-header")
+        yield AnomalyStrip(id="anomaly-strip")
 
         # Filter input - hidden by default, shown when '/' pressed
         yield Input(
@@ -265,6 +268,14 @@ class SanctumApp(App):
             pass  # Widget hasn't mounted yet
         except Exception as e:
             self.log.warning(f"Failed to update run-header: {e}")
+
+        # Update anomaly strip (after run header)
+        try:
+            self.query_one("#anomaly-strip", AnomalyStrip).update_snapshot(snapshot)
+        except NoMatches:
+            pass  # Widget hasn't mounted yet
+        except Exception as e:
+            self.log.warning(f"Failed to update anomaly-strip: {e}")
 
         # Update each widget - query by ID and call update_snapshot
         try:
