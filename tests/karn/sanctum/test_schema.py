@@ -276,3 +276,32 @@ def test_decision_snapshot_creation():
     assert decision.chosen_action == "GERMINATE"
     assert decision.confidence == 0.73
     assert len(decision.alternatives) == 2
+
+
+def test_env_state_status_hysteresis():
+    """Status changes require 3 consecutive epochs of the condition."""
+    env = EnvState(env_id=0)
+
+    # Initial state
+    assert env.status == "initializing"
+    assert env.stall_counter == 0
+
+    # Simulate epochs 0-11 (12 calls) without improvement
+    for i in range(12):
+        env.add_accuracy(50.0, epoch=i)  # Same accuracy = no improvement
+
+    # After epoch 11, epochs_since_improvement=11 (>10), so stall_counter=1
+    # Status should still be initializing until counter reaches 3
+    assert env.stall_counter == 1
+
+    # Continue for 2 more epochs
+    env.add_accuracy(50.0, epoch=12)
+    env.add_accuracy(50.0, epoch=13)
+
+    # NOW status should be stalled (3 consecutive epochs over threshold)
+    assert env.status == "stalled"
+
+    # Improvement resets counter
+    env.add_accuracy(60.0, epoch=14)  # Better!
+    assert env.stall_counter == 0
+    assert env.status == "healthy"  # Improved but not > 80%

@@ -216,6 +216,11 @@ class EnvState:
     last_update: datetime | None = None
     epochs_since_improvement: int = 0
 
+    # Hysteresis counter for status changes (prevents flicker)
+    # Status only changes after 3 consecutive epochs meeting condition
+    stall_counter: int = 0
+    degraded_counter: int = 0
+
     # A/B test cohort (for color coding)
     # Captured from REWARD_COMPUTED event's ab_group field
     # Values: "shaped", "simplified", "sparse", or None if not A/B testing
@@ -256,6 +261,7 @@ class EnvState:
         prev_acc = self.accuracy_history[-1] if self.accuracy_history else 0.0
         self.accuracy_history.append(accuracy)
         self.host_accuracy = accuracy
+        self.current_epoch = epoch
 
         if accuracy > self.best_accuracy:
             self.best_accuracy = accuracy
@@ -320,18 +326,37 @@ class EnvState:
             self.total_actions += 1
 
     def _update_status(self, prev_acc: float, curr_acc: float) -> None:
-        """Update env status based on metrics.
+        """Update env status based on metrics with hysteresis.
 
         Status values: initializing, healthy, excellent, stalled, degraded
+
+        Hysteresis: Status only changes after 3 consecutive epochs meeting
+        the condition. This prevents flicker from transient spikes.
         """
+        HYSTERESIS_THRESHOLD = 3
+
+        # Check stall condition (>10 epochs without improvement)
         if self.epochs_since_improvement > 10:
-            self.status = "stalled"
-        elif curr_acc < prev_acc - 1.0:
-            self.status = "degraded"
-        elif curr_acc > 80.0:
-            self.status = "excellent"
-        elif self.current_epoch > 0:
-            self.status = "healthy"
+            self.stall_counter += 1
+            if self.stall_counter >= HYSTERESIS_THRESHOLD:
+                self.status = "stalled"
+        else:
+            self.stall_counter = 0  # Reset on improvement
+
+        # Check degraded condition (accuracy dropped >1%)
+        if curr_acc < prev_acc - 1.0:
+            self.degraded_counter += 1
+            if self.degraded_counter >= HYSTERESIS_THRESHOLD:
+                self.status = "degraded"
+        else:
+            self.degraded_counter = 0  # Reset on stable/improving
+
+        # Positive status updates (no hysteresis needed - immediate feedback is good)
+        if self.epochs_since_improvement == 0:  # Just improved
+            if curr_acc > 80.0:
+                self.status = "excellent"
+            elif self.current_epoch > 0:
+                self.status = "healthy"
 
 
 @dataclass
@@ -574,6 +599,10 @@ class BestRunRecord:
     Captured at batch end when an env achieves a new personal best.
     Shows both the peak accuracy and where the run ended up.
 
+    INTERACTIVE FEATURES:
+    - Left-click: Opens historical detail modal showing full env state at peak
+    - Right-click: Pins the record (prevents removal from leaderboard)
+
     Reference: tui.py lines 103-114 (BestRunRecord dataclass)
     """
     env_id: int
@@ -582,7 +611,35 @@ class BestRunRecord:
     final_accuracy: float  # Accuracy at the end of the batch
     epoch: int = 0  # Epoch within episode when best was achieved
     seeds: dict[str, SeedState] = field(default_factory=dict)  # Seeds at peak
+    slot_ids: list[str] = field(default_factory=list)  # All slot IDs (for showing DORMANT)
     growth_ratio: float = 1.0  # Model size ratio: (host + fossilized) / host
+
+    # === Interactive features (like DecisionSnapshot) ===
+    record_id: str = ""  # Unique ID for click targeting
+    pinned: bool = False  # Pinned records never get removed from leaderboard
+
+    # === Full env snapshot at peak (for historical detail view) ===
+    # Reward breakdown at peak
+    reward_components: "RewardComponents | None" = None
+    # Counterfactual matrix at peak (if available)
+    counterfactual_matrix: "CounterfactualSnapshot | None" = None
+    # Recent actions leading to peak (last 10)
+    action_history: list[str] = field(default_factory=list)
+    # Reward/accuracy history up to peak
+    reward_history: list[float] = field(default_factory=list)
+    accuracy_history: list[float] = field(default_factory=list)
+    # Host metrics at peak
+    host_loss: float = 0.0
+    host_params: int = 0
+    # Lifecycle counts at peak
+    fossilized_count: int = 0
+    pruned_count: int = 0
+    # A/B cohort (for dot indicator)
+    reward_mode: str | None = None
+    # Seed graveyard: per-blueprint lifecycle stats at time of snapshot
+    blueprint_spawns: dict[str, int] = field(default_factory=dict)
+    blueprint_fossilized: dict[str, int] = field(default_factory=dict)
+    blueprint_prunes: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -655,6 +712,14 @@ class SanctumSnapshot:
 
     # Best runs leaderboard (top 10 by peak accuracy)
     best_runs: list[BestRunRecord] = field(default_factory=list)
+
+    # Cumulative counts (never reset, tracks entire training run)
+    cumulative_fossilized: int = 0
+    cumulative_pruned: int = 0
+    # Cumulative graveyard (per-blueprint lifecycle stats across entire run)
+    cumulative_blueprint_spawns: dict[str, int] = field(default_factory=dict)
+    cumulative_blueprint_fossilized: dict[str, int] = field(default_factory=dict)
+    cumulative_blueprint_prunes: dict[str, int] = field(default_factory=dict)
 
     # Timestamps for staleness detection
     last_ppo_update: datetime | None = None
