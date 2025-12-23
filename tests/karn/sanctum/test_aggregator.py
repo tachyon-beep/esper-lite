@@ -1,0 +1,74 @@
+"""Tests for SanctumAggregator telemetry event processing."""
+
+from esper.karn.sanctum.aggregator import SanctumAggregator
+from esper.leyline import TelemetryEvent, TelemetryEventType
+
+
+def test_ppo_update_populates_history():
+    """PPO_UPDATE_COMPLETED should append to history deques."""
+    agg = SanctumAggregator(num_envs=4)
+
+    # Simulate 3 PPO updates
+    for i in range(3):
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+            data={
+                "policy_loss": 0.1 * (i + 1),
+                "value_loss": 0.2 * (i + 1),
+                "grad_norm": 1.0 * (i + 1),
+                "entropy": 1.5 - (0.1 * i),
+                "explained_variance": 0.3 * (i + 1),
+                "kl_divergence": 0.01 * (i + 1),
+                "clip_fraction": 0.1 + (0.02 * i),
+            },
+        )
+        agg.process_event(event)
+
+    snapshot = agg.get_snapshot()
+    tamiyo = snapshot.tamiyo
+
+    # Should have 3 values in each history
+    assert len(tamiyo.policy_loss_history) == 3
+    assert len(tamiyo.value_loss_history) == 3
+    assert len(tamiyo.grad_norm_history) == 3
+    assert len(tamiyo.entropy_history) == 3
+    assert len(tamiyo.explained_variance_history) == 3
+    assert len(tamiyo.kl_divergence_history) == 3
+    assert len(tamiyo.clip_fraction_history) == 3
+
+    # Values should be in order (use approximate comparison for floats)
+    policy_losses = list(tamiyo.policy_loss_history)
+    assert len(policy_losses) == 3
+    assert abs(policy_losses[0] - 0.1) < 1e-9
+    assert abs(policy_losses[1] - 0.2) < 1e-9
+    assert abs(policy_losses[2] - 0.3) < 1e-9
+
+    value_losses = list(tamiyo.value_loss_history)
+    assert len(value_losses) == 3
+    assert abs(value_losses[0] - 0.2) < 1e-9
+    assert abs(value_losses[1] - 0.4) < 1e-9
+    assert abs(value_losses[2] - 0.6) < 1e-9
+
+    grad_norms = list(tamiyo.grad_norm_history)
+    assert grad_norms == [1.0, 2.0, 3.0]
+
+    entropies = list(tamiyo.entropy_history)
+    assert len(entropies) == 3
+    assert abs(entropies[0] - 1.5) < 1e-9
+    assert abs(entropies[1] - 1.4) < 1e-9
+    assert abs(entropies[2] - 1.3) < 1e-9
+
+    explained_variances = list(tamiyo.explained_variance_history)
+    assert len(explained_variances) == 3
+    assert abs(explained_variances[0] - 0.3) < 1e-9
+    assert abs(explained_variances[1] - 0.6) < 1e-9
+    assert abs(explained_variances[2] - 0.9) < 1e-9
+
+    kl_divergences = list(tamiyo.kl_divergence_history)
+    assert kl_divergences == [0.01, 0.02, 0.03]
+
+    clip_fractions = list(tamiyo.clip_fraction_history)
+    assert len(clip_fractions) == 3
+    assert abs(clip_fractions[0] - 0.1) < 1e-9
+    assert abs(clip_fractions[1] - 0.12) < 1e-9
+    assert abs(clip_fractions[2] - 0.14) < 1e-9

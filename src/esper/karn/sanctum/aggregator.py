@@ -533,17 +533,37 @@ class SanctumAggregator:
         # Mark that we've received PPO data (enables TamiyoBrain display)
         self._tamiyo.ppo_data_received = True
 
-        # Update Tamiyo state with all PPO metrics
-        self._tamiyo.entropy = data.get("entropy", 0.0)
-        self._tamiyo.clip_fraction = data.get("clip_fraction", 0.0)
-        self._tamiyo.explained_variance = data.get("explained_variance", 0.0)
-        self._tamiyo.kl_divergence = data.get("kl_divergence", 0.0)
+        # Update Tamiyo state with all PPO metrics AND append to history
+        policy_loss = data.get("policy_loss", 0.0)
+        self._tamiyo.policy_loss = policy_loss
+        self._tamiyo.policy_loss_history.append(policy_loss)
 
-        # Losses
-        self._tamiyo.policy_loss = data.get("policy_loss", 0.0)
-        self._tamiyo.value_loss = data.get("value_loss", 0.0)
+        value_loss = data.get("value_loss", 0.0)
+        self._tamiyo.value_loss = value_loss
+        self._tamiyo.value_loss_history.append(value_loss)
+
+        entropy = data.get("entropy", 0.0)
+        self._tamiyo.entropy = entropy
+        self._tamiyo.entropy_history.append(entropy)
+
+        explained_variance = data.get("explained_variance", 0.0)
+        self._tamiyo.explained_variance = explained_variance
+        self._tamiyo.explained_variance_history.append(explained_variance)
+
+        grad_norm = data.get("grad_norm", 0.0)
+        self._tamiyo.grad_norm = grad_norm
+        self._tamiyo.grad_norm_history.append(grad_norm)
+
+        kl_divergence = data.get("kl_divergence", 0.0)
+        self._tamiyo.kl_divergence = kl_divergence
+        self._tamiyo.kl_divergence_history.append(kl_divergence)
+
+        clip_fraction = data.get("clip_fraction", 0.0)
+        self._tamiyo.clip_fraction = clip_fraction
+        self._tamiyo.clip_fraction_history.append(clip_fraction)
+
+        # Other losses (no history tracking)
         self._tamiyo.entropy_loss = data.get("entropy_loss", 0.0)
-        self._tamiyo.grad_norm = data.get("grad_norm", 0.0)
 
         # Advantage stats
         self._tamiyo.advantage_mean = data.get("advantage_mean", 0.0)
