@@ -24,6 +24,17 @@ class TestTrainingConfigDefaults:
         config = TrainingConfig()
         assert config.gamma == 0.995
 
+    def test_gae_lambda_configurable(self):
+        """Verify GAE lambda can be configured for scaffolding."""
+        config = TrainingConfig(gae_lambda=0.98)
+        assert config.gae_lambda == 0.98
+
+    def test_gae_lambda_default(self):
+        """Verify default GAE lambda is suitable for scaffolding (0.98)."""
+        config = TrainingConfig()
+        # DRL expert recommendation: 0.98 for longer credit horizon
+        assert config.gae_lambda == 0.98
+
     def test_chunk_length_auto_matches_max_epochs(self):
         """chunk_length=None should auto-match to max_epochs."""
         config = TrainingConfig(max_epochs=50)

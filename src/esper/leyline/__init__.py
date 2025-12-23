@@ -84,9 +84,10 @@ DEFAULT_LEARNING_RATE = 3e-4
 DEFAULT_CLIP_RATIO = 0.2
 
 # GAE lambda for advantage estimation bias-variance tradeoff.
-# 0.97 = less bias (good for long delays like 25-epoch episodes).
+# DRL expert recommendation for scaffolding: 0.98 for longer credit horizon
+# (was 0.97; increased to capture delayed scaffold effects)
 # Standard value is 0.95; higher reduces bias at cost of variance.
-DEFAULT_GAE_LAMBDA = 0.97
+DEFAULT_GAE_LAMBDA = 0.98
 
 # Value function loss coefficient in combined PPO loss.
 # 0.5 is standard; higher = prioritize value accuracy over policy.

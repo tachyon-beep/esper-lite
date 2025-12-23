@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import random
 import threading
 import time
@@ -56,6 +57,7 @@ from esper.leyline import (
     TelemetryEventType,
     SlotConfig,
     DEFAULT_GAMMA,
+    DEFAULT_GAE_LAMBDA,
     DEFAULT_EPISODE_LENGTH,
     DEFAULT_LSTM_HIDDEN_DIM,
     DEFAULT_N_ENVS,
@@ -121,7 +123,7 @@ from esper.simic.rewards import (
     ContributionRewardConfig,
     SeedInfo,
 )
-from esper.leyline import DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
+from esper.leyline import DEFAULT_MIN_FOSSILIZE_CONTRIBUTION, MIN_PRUNE_AGE
 from esper.nissa import get_hub, BlueprintAnalytics, DirectoryOutput
 from esper.tolaria import TolariaGovernor
 from esper.karn.health import HealthMonitor
@@ -474,6 +476,7 @@ def train_ppo_vectorized(
     adaptive_entropy_floor: bool = False,
     entropy_anneal_episodes: int = 0,
     gamma: float = DEFAULT_GAMMA,
+    gae_lambda: float = DEFAULT_GAE_LAMBDA,  # From leyline
     ppo_updates_per_batch: int = 1,
     save_path: str | None = None,
     resume_path: str | None = None,
@@ -813,6 +816,7 @@ def train_ppo_vectorized(
             hidden_dim=256,
             lr=lr,
             gamma=gamma,
+            gae_lambda=gae_lambda,
             clip_ratio=clip_ratio,
             entropy_coef=entropy_coef,
             entropy_coef_start=entropy_coef_start,
@@ -943,7 +947,11 @@ def train_ppo_vectorized(
     # Textual can modify terminal file descriptors and break multiprocessing
     # spawn. We therefore warm up both train and test loaders here, before we
     # signal `ready_event`.
-    if effective_workers > 0 and not (gpu_preload and task_spec.name == "cifar10"):
+    # Skip warmup when gpu_preload is True for any CIFAR variant (cifar10, cifar10_deep, cifar10_blind)
+    # SharedGPUBatchIterator already has num_workers=0, and iterating it during warmup can cause
+    # race conditions when accessing GPU-cached tensors across multiple devices before streams sync.
+    is_cifar_task = "cifar10" in task_spec.name.lower()
+    if effective_workers > 0 and not (gpu_preload and is_cifar_task):
         _warmup_iter = iter(shared_train_iter)
         try:
             next(_warmup_iter)
@@ -1238,6 +1246,9 @@ def train_ppo_vectorized(
                 seed_state is not None
                 and seed_state.alpha_controller.alpha_mode == AlphaMode.HOLD
                 and seed_state.can_transition_to(SeedStage.PRUNED)
+                # BUG-020 fix: enforce MIN_PRUNE_AGE to match masking invariant
+                and seed_state.metrics is not None
+                and seed_state.metrics.epochs_total >= MIN_PRUNE_AGE
             )
         elif op_idx == OP_SET_ALPHA_TARGET:
             action_valid_for_reward = (
@@ -1690,16 +1701,34 @@ def train_ppo_vectorized(
                 for i, env_state in enumerate(env_states):
                     if i >= len(env_batches):
                         continue
-                    # CRITICAL: DataLoader collation (torch.stack) runs on the default stream.
+                    # CRITICAL: DataLoader .to(device, non_blocking=True) runs on the DEFAULT stream.
                     # We must sync env_state.stream with default stream before using the data,
                     # otherwise we may access partially-transferred data (race condition).
-                    # This applies to BOTH SharedBatchIterator (CPU→GPU transfers) and
-                    # SharedGPUBatchIterator (collation still uses default stream for GPU data).
+                    # BUG FIX: Use default_stream(), NOT current_stream() - the transfer happens
+                    # on the default stream regardless of what stream is "current" in this context.
                     if env_state.stream:
-                        # robustness: wait on the current stream (where dataloader ran)
-                        loader_stream = torch.cuda.current_stream(env_state.env_device)
+                        # Wait for default stream where async .to() transfers are scheduled
+                        loader_stream = torch.cuda.default_stream(torch.device(env_state.env_device))
                         env_state.stream.wait_stream(loader_stream)
                     inputs, targets = env_batches[i]
+
+                    # BUG-031: Defensive validation for NLL loss assertion failures
+                    # If targets contain values outside [0, n_classes), the NLL loss kernel
+                    # will fail with "Assertion t>=0 && t < n_classes failed".
+                    # Enable with ESPER_DEBUG_TARGETS=1 to catch the issue with diagnostics.
+                    if os.environ.get("ESPER_DEBUG_TARGETS"):
+                        if targets.is_cuda:
+                            torch.cuda.synchronize(targets.device)
+                        target_min = targets.min().item()
+                        target_max = targets.max().item()
+                        if target_min < 0 or target_max >= 10:  # CIFAR-10 has 10 classes
+                            raise RuntimeError(
+                                f"BUG-031: Invalid target values detected before loss computation. "
+                                f"targets.min()={target_min}, targets.max()={target_max}, "
+                                f"targets.device={targets.device}, env_idx={i}, batch_step={batch_step}, "
+                                f"inputs.device={inputs.device}, inputs.shape={inputs.shape}, "
+                                f"gpu_preload={gpu_preload}"
+                            )
 
                     collect_gradients = use_telemetry and (
                         batch_step % gradient_telemetry_stride == 0
@@ -2466,8 +2495,11 @@ def train_ppo_vectorized(
                             ):
                                 env_state.contributing_fossilized += 1
                             env_state.acc_at_germination.pop(target_slot, None)
-                    elif op_idx == OP_PRUNE and model.has_active_seed_in_slot(
-                        target_slot
+                    elif (
+                        op_idx == OP_PRUNE
+                        and model.has_active_seed_in_slot(target_slot)
+                        # BUG-020 fix: enforce MIN_PRUNE_AGE at execution gate
+                        and seed_info.seed_age_epochs >= MIN_PRUNE_AGE
                     ):
                         speed_steps = ALPHA_SPEED_TO_STEPS[
                             AlphaSpeedAction(action_dict["alpha_speed"])

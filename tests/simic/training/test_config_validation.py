@@ -39,3 +39,15 @@ class TestHyperparameterValidation:
             TrainingConfig(entropy_coef=-0.1)
         # Zero is valid (no entropy bonus)
         TrainingConfig(entropy_coef=0.0)  # Should not raise
+
+    def test_gae_lambda_must_be_in_range(self):
+        """GAE lambda must be in (0, 1]."""
+        with pytest.raises(ValueError, match="gae_lambda"):
+            TrainingConfig(gae_lambda=1.5)
+        with pytest.raises(ValueError, match="gae_lambda"):
+            TrainingConfig(gae_lambda=0.0)
+        with pytest.raises(ValueError, match="gae_lambda"):
+            TrainingConfig(gae_lambda=-0.1)
+        # Valid edge cases
+        TrainingConfig(gae_lambda=1.0)  # Should not raise
+        TrainingConfig(gae_lambda=0.001)  # Should not raise

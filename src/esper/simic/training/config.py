@@ -33,6 +33,7 @@ from typing import Any
 
 from esper.leyline import (
     DEFAULT_GAMMA,
+    DEFAULT_GAE_LAMBDA,
     DEFAULT_EPISODE_LENGTH,
     DEFAULT_LSTM_HIDDEN_DIM,
     DEFAULT_N_ENVS,
@@ -63,6 +64,7 @@ class TrainingConfig:
     lr: float = DEFAULT_LEARNING_RATE
     clip_ratio: float = DEFAULT_CLIP_RATIO
     gamma: float = DEFAULT_GAMMA
+    gae_lambda: float = DEFAULT_GAE_LAMBDA
     ppo_updates_per_batch: int = 1
 
     # === Entropy (exploration) ===
@@ -227,6 +229,7 @@ class TrainingConfig:
         return {
             "lr": self.lr,
             "gamma": self.gamma,
+            "gae_lambda": self.gae_lambda,
             "clip_ratio": self.clip_ratio,
             "entropy_coef": self.entropy_coef,
             "entropy_coef_start": self.entropy_coef_start,
@@ -257,6 +260,7 @@ class TrainingConfig:
             "adaptive_entropy_floor": self.adaptive_entropy_floor,
             "entropy_anneal_episodes": self.entropy_anneal_episodes,
             "gamma": self.gamma,
+            "gae_lambda": self.gae_lambda,
             "ppo_updates_per_batch": self.ppo_updates_per_batch,
             "amp": self.amp,
             "amp_dtype": self.amp_dtype,
@@ -379,6 +383,7 @@ class TrainingConfig:
 
         # PPO hyperparameter ranges
         self._validate_range(self.gamma, "gamma", 0.0, 1.0, min_inclusive=False, max_inclusive=True)
+        self._validate_range(self.gae_lambda, "gae_lambda", 0.0, 1.0, min_inclusive=False, max_inclusive=True)
         self._validate_range(self.clip_ratio, "clip_ratio", 0.0, 1.0, min_inclusive=False, max_inclusive=True)
         self._validate_range(self.lr, "lr", 0.0, float("inf"), min_inclusive=False, max_inclusive=False)
         self._validate_range(self.entropy_coef, "entropy_coef", 0.0, float("inf"), min_inclusive=True, max_inclusive=False)
@@ -390,7 +395,7 @@ class TrainingConfig:
         """Human-readable summary of configuration."""
         lines = [
             "TrainingConfig:",
-            f"  PPO: lr={self.lr}, gamma={self.gamma}, clip={self.clip_ratio}",
+            f"  PPO: lr={self.lr}, gamma={self.gamma}, gae_lambda={self.gae_lambda}, clip={self.clip_ratio}",
             f"  Episodes: {self.n_episodes}, envs={self.n_envs}, max_epochs={self.max_epochs}",
             f"  Entropy: {self.entropy_coef}" + (f" -> {self.entropy_coef_end}" if self.entropy_coef_end else ""),
             f"  Updates/batch: {self.ppo_updates_per_batch}, amp={'on' if self.amp else 'off'}, amp_dtype={self.amp_dtype}, compile={self.compile_mode}",
