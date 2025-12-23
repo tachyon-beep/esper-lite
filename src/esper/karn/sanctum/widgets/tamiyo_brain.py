@@ -389,6 +389,91 @@ class TamiyoBrain(Static):
         return Panel(Group(*decision_panels), title=f"RECENT DECISIONS ({len(decisions)}) [dim]click to pin[/dim]", border_style="dim")
 
     # ========================================================================
+    # Decision Tree Logic
+    # ========================================================================
+
+    def _get_overall_status(self) -> tuple[str, str, str]:
+        """Get overall learning status using DRL decision tree.
+
+        Priority order (per DRL expert review):
+        1. Entropy collapse (policy dead)
+        2. EV <= 0 (value harmful)
+        3. Advantage std collapsed (normalization broken)
+        4. KL > critical (excessive policy change)
+        5. Clip > critical (too aggressive)
+        6. EV < warning (value weak)
+        7. KL > warning (mild drift)
+        8. Clip > warning
+        9. Entropy low
+        10. Advantage abnormal
+
+        Returns:
+            Tuple of (status, label, style) where:
+            - status: "ok", "warning", or "critical"
+            - label: "LEARNING", "CAUTION", or "FAILING"
+            - style: Rich style string for coloring
+        """
+        if self._snapshot is None:
+            return "ok", "WAITING", "dim"
+
+        tamiyo = self._snapshot.tamiyo
+
+        if not tamiyo.ppo_data_received:
+            return "ok", "WAITING", "dim"
+
+        # === CRITICAL CHECKS (immediate FAILING) ===
+
+        # 1. Entropy collapse (policy is deterministic/dead)
+        if tamiyo.entropy < 0.1:
+            return "critical", "FAILING", "red bold"
+
+        # 2. EV <= 0 (value function useless or harmful)
+        if tamiyo.explained_variance <= TUIThresholds.EXPLAINED_VAR_CRITICAL:
+            return "critical", "FAILING", "red bold"
+
+        # 3. Advantage std collapsed (normalization broken)
+        if tamiyo.advantage_std < TUIThresholds.ADVANTAGE_STD_COLLAPSED:
+            return "critical", "FAILING", "red bold"
+
+        # 4. Advantage std exploded
+        if tamiyo.advantage_std > TUIThresholds.ADVANTAGE_STD_CRITICAL:
+            return "critical", "FAILING", "red bold"
+
+        # 5. KL > critical (excessive policy change)
+        if tamiyo.kl_divergence > TUIThresholds.KL_CRITICAL:
+            return "critical", "FAILING", "red bold"
+
+        # 6. Clip > critical (updates too aggressive)
+        if tamiyo.clip_fraction > TUIThresholds.CLIP_CRITICAL:
+            return "critical", "FAILING", "red bold"
+
+        # === WARNING CHECKS (CAUTION) ===
+
+        # 7. EV < warning (value function weak but learning)
+        if tamiyo.explained_variance < TUIThresholds.EXPLAINED_VAR_WARNING:
+            return "warning", "CAUTION", "yellow"
+
+        # 8. Entropy low (policy converging quickly)
+        if tamiyo.entropy < 0.3:
+            return "warning", "CAUTION", "yellow"
+
+        # 9. KL > warning (mild policy drift)
+        if tamiyo.kl_divergence > TUIThresholds.KL_WARNING:
+            return "warning", "CAUTION", "yellow"
+
+        # 10. Clip > warning
+        if tamiyo.clip_fraction > TUIThresholds.CLIP_WARNING:
+            return "warning", "CAUTION", "yellow"
+
+        # 11. Advantage std abnormal
+        if tamiyo.advantage_std > TUIThresholds.ADVANTAGE_STD_WARNING:
+            return "warning", "CAUTION", "yellow"
+        if tamiyo.advantage_std < TUIThresholds.ADVANTAGE_STD_LOW_WARNING:
+            return "warning", "CAUTION", "yellow"
+
+        return "ok", "LEARNING", "green"
+
+    # ========================================================================
     # Legacy status helpers (kept for backward compatibility with existing tests)
     # ========================================================================
 

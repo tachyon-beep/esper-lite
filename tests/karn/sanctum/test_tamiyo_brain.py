@@ -493,3 +493,140 @@ async def test_tamiyo_brain_learning_vitals_gauges():
 
         advantage_gauge = widget._render_gauge("Advantage", 0.31, -1.0, 1.0, "Choices working")
         assert advantage_gauge is not None
+
+
+# ===========================
+# Decision Tree Tests (Task 2.1)
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_decision_tree_learning():
+    """Decision tree should return LEARNING when all metrics healthy."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            entropy=1.2,
+            explained_variance=0.6,  # > 0.3 warning threshold
+            clip_fraction=0.15,
+            kl_divergence=0.01,
+            advantage_std=1.0,  # Normal range
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+        status, label, style = widget._get_overall_status()
+        assert status == "ok"
+        assert label == "LEARNING"
+
+
+@pytest.mark.asyncio
+async def test_decision_tree_ev_warning():
+    """Decision tree should return CAUTION when EV between 0 and 0.3."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            entropy=1.2,
+            explained_variance=0.15,  # Between 0.0 and 0.3 = warning
+            clip_fraction=0.15,
+            kl_divergence=0.01,
+            advantage_std=1.0,  # Normal range (avoid collapsed trigger)
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+        status, label, style = widget._get_overall_status()
+        assert status == "warning"
+        assert label == "CAUTION"
+
+
+@pytest.mark.asyncio
+async def test_decision_tree_ev_critical():
+    """Decision tree should return FAILING when EV <= 0."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            entropy=1.2,
+            explained_variance=-0.1,  # < 0.0 = critical
+            clip_fraction=0.15,
+            kl_divergence=0.01,
+            advantage_std=1.0,  # Normal range
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+        status, label, style = widget._get_overall_status()
+        assert status == "critical"
+        assert label == "FAILING"
+
+
+@pytest.mark.asyncio
+async def test_decision_tree_entropy_collapsed():
+    """Decision tree should return FAILING when entropy collapsed."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            entropy=0.05,  # < 0.1 = collapsed
+            explained_variance=0.6,
+            clip_fraction=0.15,
+            kl_divergence=0.01,
+            advantage_std=1.0,  # Normal range
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+        status, label, style = widget._get_overall_status()
+        assert status == "critical"
+        assert label == "FAILING"
+
+
+@pytest.mark.asyncio
+async def test_decision_tree_kl_critical():
+    """Decision tree should return FAILING when KL > 0.03."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            entropy=1.2,
+            explained_variance=0.6,
+            clip_fraction=0.15,
+            kl_divergence=0.05,  # > 0.03 = critical
+            advantage_std=1.0,  # Normal range
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+        status, label, style = widget._get_overall_status()
+        assert status == "critical"
+        assert label == "FAILING"
+
+
+@pytest.mark.asyncio
+async def test_decision_tree_advantage_collapsed():
+    """Decision tree should return FAILING when advantage std collapsed."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            entropy=1.2,
+            explained_variance=0.6,
+            clip_fraction=0.15,
+            kl_divergence=0.01,
+            advantage_std=0.05,  # < 0.1 = collapsed
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+        status, label, style = widget._get_overall_status()
+        assert status == "critical"
+        assert label == "FAILING"
