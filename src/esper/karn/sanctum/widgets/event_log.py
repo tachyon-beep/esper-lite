@@ -1,7 +1,7 @@
 """EventLog widget - Recent event feed with color coding and global rollup.
 
 Enhanced design:
-- Only shows last 7 seconds of events (click for full history)
+- Only shows last 60 seconds of events (click for full history)
 - Color-coded by event type (green=lifecycle, cyan=tamiyo, yellow=warning, red=error)
 - Compact timestamps (:SS, MM:SS on minute change)
 - ALL identical messages rolled up globally with ×N suffix
@@ -49,7 +49,7 @@ class EventLog(Static):
     """Event log widget showing recent telemetry events.
 
     Enhanced features:
-    - Only shows last 7 seconds of events (reduces noise)
+    - Only shows last 60 seconds of events (click for full history)
     - Compact timestamps (:SS, MM:SS on minute change)
     - Color coding by event type
     - ALL identical messages rolled up globally (×N suffix)
@@ -86,24 +86,25 @@ class EventLog(Static):
         """Render the event log with global message rollup.
 
         Format optimized for fast-scrolling real-time events:
-        - Only shows events from last 7 seconds (click for full history)
+        - Only shows events from last 60 seconds (click for full history)
         - Compact time: :SS (shows MM:SS on minute change)
         - Compact env: just the number (00, 01, etc.)
         - ALL identical messages rolled up with ×N suffix (not just consecutive)
         - Ordered by most recent occurrence
         """
-        from datetime import datetime
+        from datetime import datetime, timezone
 
         if self._snapshot is None or not self._snapshot.event_log:
             return Text("Waiting for events...", style="dim")
 
-        # Filter to events from last 7 seconds only
-        now = datetime.now()
-        max_age_seconds = 7
+        # Filter to events from last 60 seconds only
+        # Use UTC since aggregator stores timestamps in UTC
+        now = datetime.now(timezone.utc)
+        max_age_seconds = 60
 
         recent_events = []
         for entry in self._snapshot.event_log:
-            # Parse timestamp "HH:MM:SS" and compare with current time
+            # Parse timestamp "HH:MM:SS" and compare with current UTC time
             try:
                 parts = entry.timestamp.split(":")
                 if len(parts) == 3:
