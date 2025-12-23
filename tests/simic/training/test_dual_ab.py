@@ -42,16 +42,19 @@ class TestTrainDualPolicyAB:
                 n_episodes=1,
             )
 
-    def test_default_group_configs(self):
-        """Should use default group configs if none provided."""
+    @pytest.mark.skipif(
+        torch.cuda.is_available(),
+        reason="Test expects CUDA to be unavailable",
+    )
+    def test_default_group_configs_requires_cuda(self):
+        """Should raise error if CUDA not available when using defaults."""
         from esper.simic.training import train_dual_policy_ab
 
-        # This will fail with CUDA error if run, but we're just testing
-        # that defaults are set correctly by catching the expected error
+        # This will fail with CUDA error when CUDA is not available
         with pytest.raises(ValueError, match="requires CUDA"):
             train_dual_policy_ab(
                 n_envs_per_group=1,
-                devices=None,  # Should auto-detect
+                devices=None,  # Should auto-detect and fail
                 n_episodes=1,
                 slots=["r0c0"],  # Minimal slot config for testing
             )
@@ -106,10 +109,14 @@ class TestTrainDualPolicyAB:
         This ensures groups don't have identical initialization.
         We test this by checking the seed calculation logic.
         """
-        # Test the seed generation logic
+        import hashlib
+
+        # Test the seed generation logic (using deterministic hash)
         base_seed = 42
-        group_a_seed = base_seed + hash("A") % 10000
-        group_b_seed = base_seed + hash("B") % 10000
+        group_a_hash = int(hashlib.md5("A".encode()).hexdigest()[:8], 16)
+        group_b_hash = int(hashlib.md5("B".encode()).hexdigest()[:8], 16)
+        group_a_seed = base_seed + (group_a_hash % 10000)
+        group_b_seed = base_seed + (group_b_hash % 10000)
 
         # Seeds should be different
         assert group_a_seed != group_b_seed

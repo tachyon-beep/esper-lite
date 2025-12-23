@@ -9,6 +9,14 @@ Architecture:
     - Groups train in lockstep for fair comparison
     - Final results show which reward mode produces the better policy
 
+Limitations:
+    - Phase 1 Implementation: Groups currently train sequentially, not in parallel lockstep
+    - This means later groups benefit from GPU warm-up and cached compilation
+    - True parallel comparison would require modifying train_ppo_vectorized to support
+      multiple agents running simultaneously, or using separate processes per group
+    - The current approach is acceptable for initial A/B comparisons where we care about
+      final policy quality rather than exact wall-clock parity during training
+
 Usage:
     from esper.simic.training import train_dual_policy_ab
     from esper.simic.rewards import RewardMode
@@ -29,6 +37,7 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from typing import TYPE_CHECKING
 
@@ -183,6 +192,10 @@ def train_dual_policy_ab(
         # Create reward config for this group
         reward_config = ContributionRewardConfig(reward_mode=reward_mode)
 
+        # Deterministic seed offset per group (for reproducibility across sessions)
+        group_hash = int(hashlib.md5(group_id.encode()).hexdigest()[:8], 16)
+        group_seed = seed + (group_hash % 10000)
+
         # Train this group using vectorized PPO
         agent, history = train_ppo_vectorized(
             n_episodes=n_episodes,
@@ -198,7 +211,7 @@ def train_dual_policy_ab(
             gamma=gamma,
             gae_lambda=gae_lambda,
             lstm_hidden_dim=lstm_hidden_dim,
-            seed=seed + hash(group_id) % 10000,  # Unique seed per group
+            seed=group_seed,  # Unique seed per group
             use_telemetry=use_telemetry,
             reward_mode=reward_mode.value,
             slots=slots,  # Pass slot configuration

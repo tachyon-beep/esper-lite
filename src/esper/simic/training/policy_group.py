@@ -65,6 +65,9 @@ class PolicyGroup:
     device: torch.device
     reward_mode: str
     agent: PPOAgent
+    # NOTE: envs field is for future parallel implementation - currently unused
+    # because we delegate to train_ppo_vectorized which manages its own environments.
+    # This field will be populated when we implement true parallel lockstep training.
     envs: list[ParallelEnvState] = field(default_factory=list)
     reward_config: ContributionRewardConfig = field(default_factory=ContributionRewardConfig)
     episode_history: list[dict] = field(default_factory=list)
