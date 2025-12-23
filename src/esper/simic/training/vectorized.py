@@ -607,13 +607,18 @@ def train_ppo_vectorized(
     task_spec = get_task_spec(task)
     ActionEnum = task_spec.action_enum
 
-    # Derive slot_config from host's injection specs
+    # Derive slot_config from host's injection specs, filtered to requested slots
     # Create a temporary model to query the host's injection topology
     temp_device = "cpu"  # Use CPU for temp model to avoid GPU allocation
     temp_model = create_model(
         task=task_spec, device=temp_device, slots=slots, permissive_gates=permissive_gates
     )
-    slot_config = SlotConfig.from_specs(temp_model.host.injection_specs())
+    # Filter specs to only include requested slots (not all host injection points)
+    enabled_specs = [
+        spec for spec in temp_model.host.injection_specs()
+        if spec.slot_id in temp_model.seed_slots
+    ]
+    slot_config = SlotConfig.from_specs(enabled_specs)
     # Calculate host_params while we have the model (constant across all envs)
     host_params_baseline = sum(
         p.numel() for p in temp_model.host.parameters() if p.requires_grad

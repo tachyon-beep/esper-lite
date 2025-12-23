@@ -993,3 +993,79 @@ def test_emit_batch_completed_is_resume_aware_and_clamped():
     assert data["start_episode"] == 10
     assert data["requested_episodes"] == 10
     assert data["batch_idx"] == 5
+
+
+# =============================================================================
+# Slot Configuration Tests (Regression tests)
+# =============================================================================
+
+
+def test_slot_config_filters_to_requested_slots_only():
+    """Regression test: slot_config should only contain requested slots.
+
+    Bug fixed: slot_config was incorrectly derived from host.injection_specs()
+    which returns ALL available injection points in the network architecture,
+    not just the user's requested slots. This caused the UI to show extra slots
+    (e.g., r0c1) even when config only had r0c0.
+
+    The fix filters injection_specs to only include slots that are actually
+    registered in the model's seed_slots dict.
+    """
+    from esper.tolaria.environment import create_model
+    from esper.leyline.slot_config import SlotConfig
+
+    # Request only a single slot
+    requested_slots = ["r0c0"]
+    model = create_model(task="cifar10", device="cpu", slots=requested_slots)
+
+    # Verify the model only has the requested slot
+    assert list(model.seed_slots.keys()) == requested_slots
+
+    # The host has MORE injection points than we requested (this is expected)
+    all_host_specs = model.host.injection_specs()
+    assert len(all_host_specs) > len(requested_slots), (
+        "Host should have more injection points than requested slots"
+    )
+
+    # The FIXED behavior: filter specs to only requested slots
+    enabled_specs = [
+        spec for spec in all_host_specs
+        if spec.slot_id in model.seed_slots
+    ]
+    slot_config = SlotConfig.from_specs(enabled_specs)
+
+    # slot_config.slot_ids should ONLY contain the requested slots
+    assert slot_config.slot_ids == tuple(requested_slots), (
+        f"slot_config.slot_ids should match requested slots {requested_slots}, "
+        f"but got {slot_config.slot_ids}. "
+        "This suggests the bug has regressed - slot_config is using all host "
+        "injection specs instead of filtering to requested slots."
+    )
+
+
+def test_slot_config_preserves_subset_of_slots():
+    """Verify slot_config works correctly with a subset of available slots.
+
+    Similar to above but tests with 2 of 3 available slots to ensure
+    the filtering works for intermediate cases, not just single slots.
+    """
+    from esper.tolaria.environment import create_model
+    from esper.leyline.slot_config import SlotConfig
+
+    # Request two slots (host has 3 for default cifar10)
+    requested_slots = ["r0c0", "r0c2"]  # Skip r0c1
+    model = create_model(task="cifar10", device="cpu", slots=requested_slots)
+
+    # Verify the model has exactly the requested slots
+    assert set(model.seed_slots.keys()) == set(requested_slots)
+
+    # The FIXED behavior: filter specs to only requested slots
+    enabled_specs = [
+        spec for spec in model.host.injection_specs()
+        if spec.slot_id in model.seed_slots
+    ]
+    slot_config = SlotConfig.from_specs(enabled_specs)
+
+    # slot_config should have exactly 2 slots, sorted by position
+    assert len(slot_config.slot_ids) == 2
+    assert set(slot_config.slot_ids) == set(requested_slots)
