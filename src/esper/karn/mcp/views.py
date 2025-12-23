@@ -140,7 +140,12 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.val_acc')::DOUBLE as val_acc,
             json_extract(data, '$.num_fossilized_seeds')::INTEGER as num_fossilized_seeds
         FROM raw_events
-        WHERE event_type = 'REWARD_COMPUTED'
+        WHERE
+            event_type = 'REWARD_COMPUTED'
+            OR (
+                event_type = 'ANALYTICS_SNAPSHOT'
+                AND json_extract_string(data, '$.kind') = 'last_action'
+            )
     """,
     "anomalies": """
         CREATE OR REPLACE VIEW anomalies AS
@@ -154,6 +159,7 @@ VIEW_DEFINITIONS: dict[str, str] = {
             'VALUE_COLLAPSE_DETECTED',
             'RATIO_EXPLOSION_DETECTED',
             'RATIO_COLLAPSE_DETECTED',
+            'GRADIENT_ANOMALY',
             'GRADIENT_PATHOLOGY_DETECTED',
             'NUMERICAL_INSTABILITY_DETECTED',
             'GOVERNOR_PANIC',

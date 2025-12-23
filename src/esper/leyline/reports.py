@@ -50,6 +50,10 @@ class SeedMetrics:
 
     # Causal attribution (set by counterfactual validation)
     counterfactual_contribution: float | None = None
+    # Contribution velocity: EMA of Δcontribution for fossilize lookahead
+    contribution_velocity: float = 0.0
+    # Previous contribution for velocity computation
+    _prev_contribution: float | None = None
 
     # Gradient activity (parameter-normalized) for G2 gate
     seed_gradient_norm_ratio: float = 0.0

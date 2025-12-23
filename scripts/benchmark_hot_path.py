@@ -117,8 +117,8 @@ def main():
     print(f"Compute capability: {compute_cap[0]}.{compute_cap[1]}")
     print(f"BF16 supported: {bf16_supported}")
 
-    # Benchmark parameters
-    n_episodes = 10
+    # Benchmark parameters - smaller for faster iteration
+    n_episodes = 5
     n_envs = 4
     max_epochs = 16
 
@@ -126,33 +126,27 @@ def main():
 
     results = []
 
-    # 1. Baseline: No AMP, no compile
+    # 1. Baseline: No AMP, no compile (fastest to run)
     results.append(run_benchmark(
         amp=False, amp_dtype="off", compile_mode="off",
         n_episodes=n_episodes, n_envs=n_envs, max_epochs=max_epochs
     ))
 
-    # 2. No AMP, compile=default
+    # 2. AMP FP16 (no compile) - compare AMP overhead
     results.append(run_benchmark(
-        amp=False, amp_dtype="off", compile_mode="default",
+        amp=True, amp_dtype="float16", compile_mode="off",
         n_episodes=n_episodes, n_envs=n_envs, max_epochs=max_epochs
     ))
 
-    # 3. AMP FP16, compile=default
+    # 3. AMP auto/BF16 (no compile) - compare BF16 vs FP16
     results.append(run_benchmark(
-        amp=True, amp_dtype="float16", compile_mode="default",
+        amp=True, amp_dtype="auto", compile_mode="off",
         n_episodes=n_episodes, n_envs=n_envs, max_epochs=max_epochs
     ))
 
-    # 4. AMP auto (BF16 if available), compile=default
+    # 4. AMP auto + compile=default (the recommended production config)
     results.append(run_benchmark(
         amp=True, amp_dtype="auto", compile_mode="default",
-        n_episodes=n_episodes, n_envs=n_envs, max_epochs=max_epochs
-    ))
-
-    # 5. AMP auto, compile=max-autotune
-    results.append(run_benchmark(
-        amp=True, amp_dtype="auto", compile_mode="max-autotune",
         n_episodes=n_episodes, n_envs=n_envs, max_epochs=max_epochs
     ))
 

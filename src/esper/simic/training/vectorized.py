@@ -718,6 +718,14 @@ def train_ppo_vectorized(
     analytics = BlueprintAnalytics(quiet=quiet_analytics)
     hub.add_backend(analytics)
 
+    # Ops-normal telemetry gates (UI snapshots, per-step decisions, etc).
+    # NOTE: `use_telemetry` controls whether telemetry features are part of the
+    # RL observation vector; it must not be used to gate ops-normal UI emission.
+    ops_telemetry_enabled = (
+        not telemetry_lifecycle_only
+        and (telemetry_config is None or telemetry_config.should_collect("ops_normal"))
+    )
+
     # Optional file-based telemetry logging (for programmatic callers that bypass scripts/train.py)
     if telemetry_dir and use_telemetry:
         hub.add_backend(DirectoryOutput(telemetry_dir))
@@ -973,7 +981,7 @@ def train_ppo_vectorized(
         """Configure slot telemetry and fast_mode for an environment."""
         apply_slot_telemetry(
             env_state,
-            ops_telemetry_enabled=use_telemetry and not telemetry_lifecycle_only,
+            ops_telemetry_enabled=ops_telemetry_enabled,
             lifecycle_only=telemetry_lifecycle_only,
             inner_epoch=inner_epoch,
             global_epoch=global_epoch,
@@ -1941,9 +1949,18 @@ def train_ppo_vectorized(
                         if env_state.model.has_active_seed_in_slot(slot_id):
                             seed_state = env_state.model.seed_slots[slot_id].state
                             if seed_state and seed_state.metrics:
-                                seed_state.metrics.counterfactual_contribution = (
-                                    env_state.val_acc - acc
-                                )
+                                new_contribution = env_state.val_acc - acc
+                                # Compute contribution velocity (EMA of delta)
+                                prev = seed_state.metrics._prev_contribution
+                                if prev is not None:
+                                    delta = new_contribution - prev
+                                    # EMA with decay 0.7 (responsive to recent changes)
+                                    seed_state.metrics.contribution_velocity = (
+                                        0.7 * seed_state.metrics.contribution_velocity
+                                        + 0.3 * delta
+                                    )
+                                seed_state.metrics._prev_contribution = new_contribution
+                                seed_state.metrics.counterfactual_contribution = new_contribution
                     elif kind == "all_off":
                         all_disabled_accs[i] = acc
                     elif kind == "pair":
@@ -2161,10 +2178,10 @@ def train_ppo_vectorized(
                 alpha_curve_mask=masks_batch["alpha_curve"],
                 op_mask=masks_batch["op"],
                 deterministic=False,
-                return_op_logits=use_telemetry,
+                return_op_logits=ops_telemetry_enabled,
             )
             op_probs_cpu: list[list[float]] | None = None
-            if hub and use_telemetry and action_result.op_logits is not None:
+            if ops_telemetry_enabled and action_result.op_logits is not None:
                 # Small tensor ([n_envs, 6]) - safe to move to CPU for UI telemetry.
                 op_probs_cpu = (
                     torch.softmax(action_result.op_logits, dim=-1)
@@ -2188,7 +2205,7 @@ def train_ppo_vectorized(
             values = values_tensor.tolist()
 
             # Batch compute mask stats for telemetry
-            if hub and use_telemetry:
+            if ops_telemetry_enabled:
                 masked_batch = {
                     key: ~masks_batch[key].all(dim=-1)  # [num_envs] bool tensor
                     for key in HEAD_NAMES
@@ -2436,7 +2453,7 @@ def train_ppo_vectorized(
                     )
 
                 # Consolidate telemetry via emitter
-                if hub and use_telemetry:
+                if ops_telemetry_enabled and masked_cpu is not None:
                     masked_flags = {k: bool(masked_cpu[k][env_idx]) for k in HEAD_NAMES}
                     for k, m in masked_flags.items():
                         mask_total[k] += 1
