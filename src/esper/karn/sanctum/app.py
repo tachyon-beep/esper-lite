@@ -188,7 +188,7 @@ class SanctumApp(App):
         - Run Header: Episode, Epoch, Batch, Runtime, Best Accuracy, Connection
         - Anomaly Strip: Single-line automatic problem surfacing
         - Top row: EnvOverview (65%) | Scoreboard (35%)
-        - Bottom row: TamiyoBrain (50%) | EventLog (50%)
+        - Bottom row: TamiyoBrain (65%) | EventLog (35%)
         - Footer: Keybindings
         """
         yield RunHeader(id="run-header")

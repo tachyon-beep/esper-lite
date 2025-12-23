@@ -74,33 +74,33 @@
     width: 100%;
 }
 
-/* Event Log - system velocity (60% width for more TamiyoBrain space) */
-#event-log {
-    width: 60%;
-    height: 1fr;
-    border: solid yellow;
-    border-title-color: yellow;
-    margin-right: 1;
-    overflow-y: auto;
-    padding: 0 1;
-}
-
-#event-log:focus {
-    border: double $accent;
-}
-
-/* Tamiyo Brain - learning + decisions (40% width for better gauge visibility) */
+/* Tamiyo Brain - learning + decisions (65% width, left side) */
 #tamiyo-brain {
-    width: 40%;
+    width: 65%;
     height: 1fr;
     border: solid magenta;
     border-title-color: magenta;
+    margin-right: 1;
     overflow-x: hidden;
     overflow-y: auto;
     padding: 0 1;
 }
 
 #tamiyo-brain:focus {
+    border: double $accent;
+}
+
+/* Event Log - system velocity (35% width, right side) */
+#event-log {
+    width: 35%;
+    height: 1fr;
+    border: solid yellow;
+    border-title-color: yellow;
+    overflow-y: auto;
+    padding: 0 1;
+}
+
+#event-log:focus {
     border: double $accent;
 }
 
