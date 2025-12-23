@@ -1,11 +1,10 @@
-"""EventLog widget - Recent event feed with color coding and episode grouping.
+"""EventLog widget - Recent event feed with color coding and global rollup.
 
 Enhanced design:
-- Full-width rows using all horizontal space
+- Only shows last 7 seconds of events (click for full history)
 - Color-coded by event type (green=lifecycle, cyan=tamiyo, yellow=warning, red=error)
 - Compact timestamps (:SS, MM:SS on minute change)
-- Episode grouping with visual separators
-- Consecutive identical messages rolled up with ×N suffix
+- ALL identical messages rolled up globally with ×N suffix
 """
 from __future__ import annotations
 
@@ -50,11 +49,11 @@ class EventLog(Static):
     """Event log widget showing recent telemetry events.
 
     Enhanced features:
+    - Only shows last 7 seconds of events (reduces noise)
     - Compact timestamps (:SS, MM:SS on minute change)
     - Color coding by event type
-    - Episode grouping with separators
-    - Consecutive identical messages rolled up (×N suffix)
-    - Click anywhere to open raw event detail modal
+    - ALL identical messages rolled up globally (×N suffix)
+    - Click anywhere to open full event history modal
     """
 
     class DetailRequested(Message):
@@ -84,49 +83,78 @@ class EventLog(Static):
         return _EVENT_EMOJI.get(event_type, "")
 
     def render(self):
-        """Render the event log with episode grouping and message rollup.
+        """Render the event log with global message rollup.
 
         Format optimized for fast-scrolling real-time events:
+        - Only shows events from last 7 seconds (click for full history)
         - Compact time: :SS (shows MM:SS on minute change)
         - Compact env: just the number (00, 01, etc.)
-        - No relative time (events scroll too fast for it to matter)
-        - Consecutive identical messages rolled up with ×N suffix
+        - ALL identical messages rolled up with ×N suffix (not just consecutive)
+        - Ordered by most recent occurrence
         """
+        from datetime import datetime
+
         if self._snapshot is None or not self._snapshot.event_log:
             return Text("Waiting for events...", style="dim")
 
-        events = list(self._snapshot.event_log)[-self._max_events:]
+        # Filter to events from last 7 seconds only
+        now = datetime.now()
+        max_age_seconds = 7
 
-        # First pass: roll up consecutive identical messages
-        rolled_events: list[tuple[EventLogEntry, int]] = []  # (entry, count)
+        recent_events = []
+        for entry in self._snapshot.event_log:
+            # Parse timestamp "HH:MM:SS" and compare with current time
+            try:
+                parts = entry.timestamp.split(":")
+                if len(parts) == 3:
+                    event_time = now.replace(
+                        hour=int(parts[0]),
+                        minute=int(parts[1]),
+                        second=int(parts[2]),
+                        microsecond=0,
+                    )
+                    # Handle midnight wraparound (event time > now means yesterday)
+                    if event_time > now:
+                        continue  # Skip events from "tomorrow" (actually yesterday)
+                    age = (now - event_time).total_seconds()
+                    if age <= max_age_seconds:
+                        recent_events.append(entry)
+            except (ValueError, IndexError):
+                # If we can't parse, include the event
+                recent_events.append(entry)
+
+        if not recent_events:
+            return Text("No recent events (click for history)", style="dim")
+
+        events = recent_events[-self._max_events:]
+
+        # Global rollup: count all occurrences of each unique message
+        # Track most recent entry and count for each message
+        message_counts: dict[str, tuple[EventLogEntry, int]] = {}
         for entry in events:
-            if rolled_events and rolled_events[-1][0].message == entry.message:
-                # Same message as previous - increment count
-                prev_entry, count = rolled_events[-1]
-                rolled_events[-1] = (prev_entry, count + 1)
+            if entry.message in message_counts:
+                # Keep the most recent entry (latest in list), increment count
+                _, count = message_counts[entry.message]
+                message_counts[entry.message] = (entry, count + 1)
             else:
-                # New message - start new group
-                rolled_events.append((entry, 1))
+                message_counts[entry.message] = (entry, 1)
 
-        # Second pass: render rolled-up events
+        # Sort by most recent timestamp (descending), then render
+        rolled_events = sorted(
+            message_counts.values(),
+            key=lambda x: x[0].timestamp,
+            reverse=True,
+        )
+
+        # Render rolled-up events (newest first)
         lines = []
-        last_episode = None
         last_minute = None
 
         for entry, count in rolled_events:
-            # Episode separator (short, won't stretch container)
-            if entry.episode != last_episode and last_episode is not None:
-                separator = Text(f"─── Episode {entry.episode} ───", style="dim")
-                lines.append(separator)
-            last_episode = entry.episode
-
-            # Event line
             color = self._get_event_color(entry.event_type)
-
             text = Text()
 
             # Compact timestamp: show MM:SS on minute change, otherwise just :SS
-            # entry.timestamp is "HH:MM:SS"
             parts = entry.timestamp.split(":")
             if len(parts) == 3:
                 current_minute = parts[1]
@@ -138,7 +166,7 @@ class EventLog(Static):
             else:
                 text.append(f"{entry.timestamp} ", style="dim")
 
-            # Compact env ID: just the number (omit if rolled up from multiple envs)
+            # Compact env ID: only show if single occurrence
             if count == 1 and entry.env_id is not None:
                 text.append(f"{entry.env_id:02d} ", style="bright_blue")
 
