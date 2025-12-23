@@ -388,6 +388,68 @@ class TamiyoBrain(Static):
 
         return Panel(Group(*decision_panels), title=f"RECENT DECISIONS ({len(decisions)}) [dim]click to pin[/dim]", border_style="dim")
 
+    def _render_status_banner(self) -> Text:
+        """Render 1-line status banner with icon and key metrics.
+
+        Format per UX spec:
+        [OK] LEARNING   EV:0.72 Clip:0.18 KL:0.008 Adv:0.12±0.94 GradHP:OK 12/12 batch:47/100
+        """
+        status, label, style = self._get_overall_status()
+        tamiyo = self._snapshot.tamiyo
+
+        icons = {"ok": "[OK]", "warning": "[!]", "critical": "[X]"}
+        icon = icons.get(status, "?")
+
+        banner = Text()
+        banner.append(f" {icon} ", style=style)
+        banner.append(f"{label}   ", style=style)
+
+        if tamiyo.ppo_data_received:
+            # EV with warning indicator
+            ev_style = self._status_style(self._get_ev_status(tamiyo.explained_variance))
+            banner.append(f"EV:{tamiyo.explained_variance:.2f}", style=ev_style)
+            if tamiyo.explained_variance <= 0:
+                banner.append("!", style="red")
+            banner.append("  ")
+
+            # Clip
+            clip_style = self._status_style(self._get_clip_status(tamiyo.clip_fraction))
+            banner.append(f"Clip:{tamiyo.clip_fraction:.2f}", style=clip_style)
+            if tamiyo.clip_fraction > TUIThresholds.CLIP_WARNING:
+                banner.append("!", style="yellow")
+            banner.append("  ")
+
+            # KL
+            kl_style = self._status_style(self._get_kl_status(tamiyo.kl_divergence))
+            banner.append(f"KL:{tamiyo.kl_divergence:.3f}", style=kl_style)
+            if tamiyo.kl_divergence > TUIThresholds.KL_WARNING:
+                banner.append("!", style="yellow")
+            banner.append("  ")
+
+            # Advantage summary (per UX spec)
+            adv_status = self._get_advantage_status(tamiyo.advantage_std)
+            adv_style = self._status_style(adv_status)
+            banner.append(f"Adv:{tamiyo.advantage_mean:+.2f}±{tamiyo.advantage_std:.2f}", style=adv_style)
+            if adv_status != "ok":
+                banner.append("!", style=adv_style)
+            banner.append("  ")
+
+            # Gradient health summary (per UX spec)
+            total_layers = 12  # Approximate
+            healthy = total_layers - tamiyo.dead_layers - tamiyo.exploding_layers
+            if tamiyo.dead_layers > 0 or tamiyo.exploding_layers > 0:
+                banner.append(f"GradHP:!! {tamiyo.dead_layers}D/{tamiyo.exploding_layers}E", style="red")
+            else:
+                banner.append(f"GradHP:OK {healthy}/{total_layers}", style="green")
+            banner.append("  ")
+
+            # Batch progress with denominator (per UX spec)
+            batch = self._snapshot.current_batch
+            max_batches = self._snapshot.max_batches
+            banner.append(f"batch:{batch}/{max_batches}", style="dim")
+
+        return banner
+
     # ========================================================================
     # Decision Tree Logic
     # ========================================================================
@@ -505,6 +567,8 @@ class TamiyoBrain(Static):
 
     def _get_kl_status(self, kl_div: float) -> str:
         """Get health status for KL divergence."""
+        if kl_div > TUIThresholds.KL_CRITICAL:
+            return "critical"
         if kl_div > TUIThresholds.KL_WARNING:
             return "warning"
         return "ok"
@@ -522,6 +586,18 @@ class TamiyoBrain(Static):
         if grad_norm > TUIThresholds.GRAD_NORM_CRITICAL:
             return "critical"
         elif grad_norm > TUIThresholds.GRAD_NORM_WARNING:
+            return "warning"
+        return "ok"
+
+    def _get_advantage_status(self, adv_std: float) -> str:
+        """Get status for advantage normalization."""
+        if adv_std < TUIThresholds.ADVANTAGE_STD_COLLAPSED:
+            return "critical"
+        if adv_std > TUIThresholds.ADVANTAGE_STD_CRITICAL:
+            return "critical"
+        if adv_std > TUIThresholds.ADVANTAGE_STD_WARNING:
+            return "warning"
+        if adv_std < TUIThresholds.ADVANTAGE_STD_LOW_WARNING:
             return "warning"
         return "ok"
 

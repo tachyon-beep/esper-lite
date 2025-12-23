@@ -676,3 +676,42 @@ async def test_decision_tree_grad_norm_warning():
         status, label, style = widget._get_overall_status()
         assert status == "warning"
         assert label == "CAUTION"
+
+
+# ===========================
+# Task 2.2: Status Banner Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_status_banner_includes_all_metrics():
+    """Status banner should include EV, Clip, KL, Adv, GradHP, batch."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            entropy=1.2,
+            explained_variance=0.65,
+            clip_fraction=0.18,
+            kl_divergence=0.008,
+            advantage_mean=0.12,
+            advantage_std=0.94,
+            dead_layers=0,
+            exploding_layers=0,
+            ppo_data_received=True,
+        )
+        snapshot.current_batch = 47
+        snapshot.max_batches = 100
+
+        widget.update_snapshot(snapshot)
+        banner = widget._render_status_banner()
+
+        # Should contain all key metrics
+        plain = banner.plain
+        assert "EV:" in plain
+        assert "Clip:" in plain
+        assert "KL:" in plain
+        assert "Adv:" in plain
+        assert "GradHP:" in plain
+        assert "batch:" in plain
