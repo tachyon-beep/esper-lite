@@ -332,6 +332,9 @@ class SeedInfo(NamedTuple):
     previous_stage: int = 0  # For PBRS stage bonus calculation
     previous_epochs_in_stage: int = 0  # Epochs in previous stage at transition (for PBRS telescoping)
     seed_age_epochs: int = 0  # Total epochs since germination (for rent grace)
+    # Scaffolding support (Phase 3.1)
+    interaction_sum: float = 0.0  # Total synergy with other seeds
+    boost_received: float = 0.0  # Strongest single interaction
 
     @staticmethod
     def from_seed_state(seed_state, seed_params: int = 0) -> "SeedInfo | None":
@@ -350,10 +353,14 @@ class SeedInfo(NamedTuple):
         improvement = 0.0
         total_improvement = 0.0
         seed_age = 0
+        interaction_sum = 0.0
+        boost_received = 0.0
         if metrics:
             improvement = metrics.current_val_accuracy - metrics.accuracy_at_stage_start
             total_improvement = metrics.total_improvement
             seed_age = metrics.epochs_total
+            interaction_sum = metrics.interaction_sum
+            boost_received = metrics.boost_received
         return SeedInfo(
             stage=seed_state.stage.value,
             improvement_since_stage_start=improvement,
@@ -363,6 +370,8 @@ class SeedInfo(NamedTuple):
             previous_stage=seed_state.previous_stage.value,
             previous_epochs_in_stage=seed_state.previous_epochs_in_stage,
             seed_age_epochs=seed_age,
+            interaction_sum=interaction_sum,
+            boost_received=boost_received,
         )
 
 
@@ -680,6 +689,18 @@ def compute_contribution_reward(
         reward += pbrs_bonus
     if components:
         components.pbrs_bonus = pbrs_bonus
+
+    # === 2b. SCAFFOLDING: Synergy Bonus ===
+    # Reward seeds that have positive interactions with others
+    synergy_bonus = 0.0
+    if seed_info is not None:
+        synergy_bonus = _compute_synergy_bonus(
+            seed_info.interaction_sum,
+            seed_info.boost_received,
+        )
+        reward += synergy_bonus
+    if components:
+        components.synergy_bonus = synergy_bonus
 
     # === 3. RENT: Compute Cost ===
     # Logarithmic penalty on parameter bloat from seeds (alpha-weighted + BaseSlotRent)
@@ -1161,6 +1182,32 @@ def _contribution_pbrs_bonus(
         )
 
     return config.pbrs_weight * (config.gamma * phi_current - phi_prev)
+
+
+def _compute_synergy_bonus(
+    interaction_sum: float,
+    boost_received: float,
+    synergy_weight: float = 0.1,
+) -> float:
+    """Compute synergy bonus for scaffolding behavior.
+
+    Rewards seeds that have positive interactions with others.
+    Uses tanh to bound the bonus and prevent reward hacking.
+
+    Args:
+        interaction_sum: Total interaction I_ij with all other seeds
+        boost_received: Maximum single interaction
+        synergy_weight: Scaling factor for bonus (default 0.1)
+
+    Returns:
+        Bounded synergy bonus in [0, synergy_weight]
+    """
+    if interaction_sum <= 0:
+        return 0.0
+
+    # Tanh bounds the bonus, preventing runaway positive feedback
+    raw_bonus = math.tanh(interaction_sum * 0.5)
+    return raw_bonus * synergy_weight
 
 
 def _contribution_fossilize_shaping(

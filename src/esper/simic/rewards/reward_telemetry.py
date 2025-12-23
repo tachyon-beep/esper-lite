@@ -36,6 +36,7 @@ class RewardComponentsTelemetry:
     # Bonuses
     stage_bonus: float = 0.0
     pbrs_bonus: float = 0.0
+    synergy_bonus: float = 0.0  # Scaffolding bonus for positive interactions
     action_shaping: float = 0.0
     terminal_bonus: float = 0.0
     fossilize_terminal_bonus: float = 0.0  # Terminal bonus from fossilized seed count
@@ -75,7 +76,7 @@ class RewardComponentsTelemetry:
         # 1e-8 is well below minimum meaningful reward magnitude (~0.01)
         if abs(self.total_reward) < 1e-8:
             return 0.0
-        shaped = self.stage_bonus + self.pbrs_bonus + self.action_shaping
+        shaped = self.stage_bonus + self.pbrs_bonus + self.synergy_bonus + self.action_shaping
         return abs(shaped) / abs(self.total_reward)
 
     def to_dict(self) -> dict:
@@ -97,6 +98,7 @@ class RewardComponentsTelemetry:
             "holding_warning": self.holding_warning,
             "stage_bonus": self.stage_bonus,
             "pbrs_bonus": self.pbrs_bonus,
+            "synergy_bonus": self.synergy_bonus,
             "action_shaping": self.action_shaping,
             "terminal_bonus": self.terminal_bonus,
             "fossilize_terminal_bonus": self.fossilize_terminal_bonus,
