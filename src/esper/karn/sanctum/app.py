@@ -28,6 +28,7 @@ from esper.karn.sanctum.widgets import (
     RunHeader,
     Scoreboard,
     TamiyoBrain,
+    ThreadDeathModal,
 )
 
 if TYPE_CHECKING:
@@ -178,6 +179,7 @@ class SanctumApp(App):
         self._poll_count = 0  # Debug: track timer fires
         self._training_thread = training_thread  # Monitor thread status
         self._filter_active = False  # Track filter input visibility
+        self._thread_death_shown = False  # Track if we've shown death modal
 
     def compose(self) -> ComposeResult:
         """Build the Sanctum layout.
@@ -239,6 +241,12 @@ class SanctumApp(App):
         # Debug: Check if training thread is still alive
         thread_alive = self._training_thread.is_alive() if self._training_thread else None
         snapshot.training_thread_alive = thread_alive
+
+        # Check if training thread died (and we haven't shown modal yet)
+        if thread_alive is False and not self._thread_death_shown:
+            self._thread_death_shown = True
+            self.push_screen(ThreadDeathModal())
+            self.log.error("Training thread died! Showing death modal.")
 
         # Debug: Log snapshot state (visible in Textual console with Ctrl+Shift+D)
         self.log.info(

@@ -71,3 +71,28 @@ async def test_app_has_anomaly_strip():
         # Query for anomaly strip
         strip = app.query_one("#anomaly-strip", AnomalyStrip)
         assert strip is not None
+
+
+@pytest.mark.asyncio
+async def test_app_shows_thread_death_modal():
+    """App should show ThreadDeathModal when thread dies."""
+    import threading
+    from esper.karn.sanctum.widgets import ThreadDeathModal
+
+    mock_backend = MagicMock()
+    mock_backend.get_snapshot.return_value = SanctumSnapshot()
+
+    # Create a thread that immediately stops
+    dead_thread = threading.Thread(target=lambda: None)
+    dead_thread.start()
+    dead_thread.join()  # Wait for it to die
+
+    app = SanctumApp(backend=mock_backend, num_envs=4, training_thread=dead_thread)
+
+    async with app.run_test() as pilot:
+        # Trigger a refresh which should detect dead thread
+        app._poll_and_refresh()
+        await pilot.pause()
+
+        # Check that modal was shown
+        assert app._thread_death_shown is True
