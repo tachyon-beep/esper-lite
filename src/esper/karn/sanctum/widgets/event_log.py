@@ -1,9 +1,8 @@
-"""EventLog widget - Normal scrolling log with consecutive rollup.
+"""EventLog widget - Scrolling log that waits for each second to complete.
 
-Like a regular log:
-- New entries at bottom, scrolls up
-- Each event type on its own line
-- Consecutive identical events rolled up: "REWARD ×6"
+- Buffers events until the second is complete
+- Then shows each event type on its own line with count
+- New completed seconds appear at bottom
 - Click for full unrolled history
 """
 from __future__ import annotations
@@ -46,12 +45,11 @@ _EVENT_EMOJI: dict[str, str] = {
 
 
 class EventLog(Static):
-    """Normal scrolling log with consecutive rollup.
+    """Scrolling log that waits for each second to complete.
 
-    Like a regular log file:
-    - New entries appear at bottom
-    - Each event type on its own line
-    - Consecutive identical events rolled up: "REWARD ×6"
+    - Events from current second are buffered (not shown yet)
+    - Once a second completes, all its events are shown
+    - Each event type on its own line with count: "REWARD ×6"
     - Click anywhere for full unrolled history
     """
 
@@ -82,62 +80,75 @@ class EventLog(Static):
         return _EVENT_EMOJI.get(event_type, "")
 
     def render(self):
-        """Render scrolling log with consecutive event rollup.
+        """Render scrolling log - wait for each second to complete before showing.
 
-        - Normal scrolling log (new entries at bottom)
-        - Consecutive identical events rolled up: "REWARD ×6"
-        - Each event type on its own line
-        - Click for full unrolled history
+        - Group events by second
+        - Only show COMPLETED seconds (not current second still accumulating)
+        - Each event type on its own line with count
+        - New completed seconds appear at bottom
         """
+        from collections import defaultdict
+        from datetime import datetime, timezone
+
         if self._snapshot is None or not self._snapshot.event_log:
             return Text("Waiting for events...", style="dim")
 
         events = list(self._snapshot.event_log)
-
         if not events:
             return Text("No events (click for history)", style="dim")
 
-        # Roll up CONSECUTIVE identical events (same event_type)
-        rolled: list[tuple[EventLogEntry, int]] = []
-        for entry in events:
-            if rolled and rolled[-1][0].event_type == entry.event_type:
-                # Same as previous - increment count, keep latest entry
-                _, count = rolled[-1]
-                rolled[-1] = (entry, count + 1)
-            else:
-                rolled.append((entry, 1))
+        # Get current second (we won't show events from this second yet)
+        now = datetime.now(timezone.utc)
+        current_second = now.strftime("%H:%M:%S")
 
-        # Take last N entries, render oldest to newest (new at bottom)
-        rolled = rolled[-self._max_events:]
+        # Group events by timestamp second, then by event_type
+        # Structure: {timestamp: {event_type: count}}
+        second_groups: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        for entry in events:
+            # Skip events from current second (still accumulating)
+            if entry.timestamp == current_second:
+                continue
+            second_groups[entry.timestamp][entry.event_type] += 1
+
+        if not second_groups:
+            return Text("Accumulating... (click for history)", style="dim")
+
+        # Sort seconds chronologically, take last N
+        sorted_seconds = sorted(second_groups.keys())[-self._max_events:]
 
         lines = []
         last_minute = None
 
-        for entry, count in rolled:
-            text = Text()
+        for timestamp in sorted_seconds:
+            type_counts = second_groups[timestamp]
 
-            # Timestamp: "MM:SS " or "  :SS "
-            parts = entry.timestamp.split(":")
-            if len(parts) == 3:
-                current_minute = parts[1]
-                if current_minute != last_minute:
-                    text.append(f"{parts[1]}:{parts[2]} ", style="dim")
-                    last_minute = current_minute
+            # Each event type gets its own line
+            for event_type in sorted(type_counts.keys()):
+                count = type_counts[event_type]
+                text = Text()
+
+                # Timestamp: "MM:SS " or "  :SS "
+                parts = timestamp.split(":")
+                if len(parts) == 3:
+                    current_minute = parts[1]
+                    if current_minute != last_minute:
+                        text.append(f"{parts[1]}:{parts[2]} ", style="dim")
+                        last_minute = current_minute
+                    else:
+                        text.append(f"  :{parts[2]} ", style="dim")
                 else:
-                    text.append(f"  :{parts[2]} ", style="dim")
-            else:
-                text.append(f"{entry.timestamp:>5} ", style="dim")
+                    text.append(f"{timestamp:>5} ", style="dim")
 
-            # Event type (shortened)
-            color = self._get_event_color(entry.event_type)
-            label = entry.event_type.replace("SEED_", "").replace("_COMPLETED", "").replace("_COMPUTED", "")
-            text.append(label, style=color)
+                # Event type (shortened)
+                color = self._get_event_color(event_type)
+                label = event_type.replace("SEED_", "").replace("_COMPLETED", "").replace("_COMPUTED", "")
+                text.append(label, style=color)
 
-            # Count if > 1
-            if count > 1:
-                text.append(f" ×{count}", style="dim")
+                # Count if > 1
+                if count > 1:
+                    text.append(f" ×{count}", style="dim")
 
-            lines.append(text)
+                lines.append(text)
 
         return Group(*lines)
 
