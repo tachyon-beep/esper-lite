@@ -125,15 +125,17 @@ def accuracies(draw):
 
 @st.composite
 def seed_stages(draw):
-    """Generate valid SeedStage enum values (1-7).
+    """Generate valid SeedStage enum values.
 
-    Values:
-        1=DORMANT, 2=GERMINATED, 3=TRAINING, 4=BLENDING,
-        5=SHADOWING (deprecated/reserved), 6=HOLDING, 7=FOSSILIZED
+    Valid values from VALID_STAGE_VALUES:
+        0=UNKNOWN, 1=DORMANT, 2=GERMINATED, 3=TRAINING, 4=BLENDING,
+        (5 reserved), 6=HOLDING, 7=FOSSILIZED, 8=PRUNED, 9=EMBARGOED, 10=RESETTING
 
     Note: SeedStage is an IntEnum, so we return integers directly.
+    Uses schema's VALID_STAGE_VALUES to ensure consistency.
     """
-    return draw(st.integers(min_value=1, max_value=7))
+    from esper.leyline.stage_schema import VALID_STAGE_VALUES
+    return draw(st.sampled_from(sorted(VALID_STAGE_VALUES)))
 
 
 @st.composite
@@ -183,7 +185,7 @@ def seed_telemetries(draw, seed_id: str | None = None):
         @given(seed_telemetries())
         def test_telemetry_features(telemetry):
             features = telemetry.to_features()
-            assert len(features) == 17
+            assert len(features) == 26  # Schema v1: 10 stage one-hot + 16 other
     """
     from esper.leyline import SeedTelemetry
     from esper.leyline.alpha import AlphaAlgorithm, AlphaMode

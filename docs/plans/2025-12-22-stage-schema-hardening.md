@@ -1,8 +1,56 @@
 # SeedStage Schema Hardening (Retired/Reserved Stage Elimination)
 
-**Status:** IN PROGRESS (Phase 0 COMPLETED 2025-12-23)
+**Status:** COMPLETED (Phase 0+1+2 COMPLETED 2025-12-23)
 **Date:** 2025-12-22
 **Owner:** Esper Core
+
+### Phase 1+2 Implementation Notes (2025-12-23)
+
+Phase 1+2 combined implementation - StageSchema contract with one-hot encoding:
+
+1. **`StageSchema` contract** (`src/esper/leyline/stage_schema.py` - NEW):
+   - `STAGE_SCHEMA_VERSION = 1`
+   - `VALID_STAGES`: tuple of 10 valid SeedStage values (excludes reserved value 5)
+   - `NUM_STAGES = 10`: dimension for one-hot encoding
+   - `STAGE_TO_INDEX`: non-contiguous stage values (0-4, 6-10) → contiguous indices (0-9)
+   - `INDEX_TO_STAGE`: inverse mapping for decoding
+   - `VALID_STAGE_VALUES`: frozenset for O(1) validation
+   - `RESERVED_STAGE_VALUES`: frozenset containing retired value 5
+   - Functions: `stage_to_one_hot()`, `stage_to_index()`, `validate_stage_value()`
+
+2. **SeedTelemetry updates** (`src/esper/leyline/telemetry.py`):
+   - `to_features()`: Now returns 26-dim vector (10 stage one-hot + 16 other features)
+   - `feature_dim()`: Returns `NUM_STAGES + 16 = 26`
+   - `to_dict()`: Includes `schema_version` for compatibility detection
+   - `from_dict()`: Validates schema version; fails on mismatch
+
+3. **Feature extraction updates** (`src/esper/tamiyo/policy/features.py`):
+   - Imports from `stage_schema` instead of hardcoded constants
+   - `SLOT_FEATURE_SIZE = 35` (was 26): 1 is_active + 10 stage one-hot + 11 state + 13 blueprint
+   - `MULTISLOT_FEATURE_SIZE = 128` (was 101): 23 base + 3 slots × 35
+   - Both `obs_to_multislot_features()` and `batch_obs_to_features()` use one-hot encoding
+
+4. **New tests** (`tests/leyline/test_stage_schema.py`):
+   - 24 tests covering schema constants, mappings, one-hot encoding, validation
+   - Tests for reserved value 5 rejection, out-of-range rejection, roundtrip consistency
+
+5. **Test updates**:
+   - `tests/integration/test_telemetry_pipeline.py`: 17→26 dim assertions
+   - `tests/tamiyo/policy/test_features.py`: Complete rewrite for new dimensions
+   - `tests/strategies.py`: `seed_stages()` now uses `VALID_STAGE_VALUES`
+
+**Dimension changes summary:**
+| Component | Before | After | Delta |
+|-----------|--------|-------|-------|
+| SeedTelemetry.feature_dim() | 17 | 26 | +9 |
+| SLOT_FEATURE_SIZE | 26 | 35 | +9 |
+| MULTISLOT_FEATURE_SIZE (3 slots) | 101 | 128 | +27 |
+| Total features (5 slots) | 153 | 198 | +45 |
+
+**Breaking changes (by design):**
+- All existing checkpoints are incompatible (requires fresh training)
+- Telemetry without schema_version is still accepted (lenient backwards compat)
+- Telemetry with wrong schema_version fails fast
 
 ### Phase 0 Implementation Notes (2025-12-23)
 

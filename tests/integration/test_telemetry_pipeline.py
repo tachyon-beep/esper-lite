@@ -125,8 +125,8 @@ class TestGradientCollectionPipeline:
 class TestSeedTelemetryFeatures:
     """Test SeedTelemetry feature conversion."""
 
-    def test_telemetry_to_features_17_dim(self):
-        """SeedTelemetry.to_features() must return 17-dim vector."""
+    def test_telemetry_to_features_26_dim(self):
+        """SeedTelemetry.to_features() must return 26-dim vector (schema v1, one-hot stage)."""
         telemetry = SeedTelemetry(
             seed_id="test",
             gradient_norm=1.0,
@@ -136,7 +136,8 @@ class TestSeedTelemetryFeatures:
 
         features = telemetry.to_features()
 
-        assert len(features) == 17
+        # Schema v1: 10 stage one-hot + 16 other features = 26
+        assert len(features) == 26
 
     def test_telemetry_feature_dim_matches(self):
         """SeedTelemetry.feature_dim() should match actual dimension."""
@@ -361,7 +362,7 @@ class TestTelemetryToFeaturesIntegration:
         features = telemetry.to_features()
 
         # Verify complete pipeline
-        assert len(features) == 17
+        assert len(features) == 26  # Schema v1: 10 stage one-hot + 16 other features
         assert all(isinstance(f, float) for f in features)
         assert all(-5.0 < f < 5.0 for f in features)
 

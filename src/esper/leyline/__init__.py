@@ -349,6 +349,20 @@ from esper.leyline.stages import (
     is_failure_stage,
 )
 
+# Stage schema (centralized stage encoding contract)
+from esper.leyline.stage_schema import (
+    STAGE_SCHEMA_VERSION,
+    VALID_STAGES,
+    NUM_STAGES,
+    STAGE_TO_INDEX,
+    INDEX_TO_STAGE,
+    VALID_STAGE_VALUES,
+    RESERVED_STAGE_VALUES,
+    stage_to_one_hot,
+    stage_to_index,
+    validate_stage_value,
+)
+
 # Signals
 from esper.leyline.signals import (
     TrainingMetrics,
@@ -501,6 +515,18 @@ __all__ = [
     "is_terminal_stage",
     "is_active_stage",
     "is_failure_stage",
+
+    # Stage Schema
+    "STAGE_SCHEMA_VERSION",
+    "VALID_STAGES",
+    "NUM_STAGES",
+    "STAGE_TO_INDEX",
+    "INDEX_TO_STAGE",
+    "VALID_STAGE_VALUES",
+    "RESERVED_STAGE_VALUES",
+    "stage_to_one_hot",
+    "stage_to_index",
+    "validate_stage_value",
 
     # Signals
     "TrainingMetrics",

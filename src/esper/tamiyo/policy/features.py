@@ -28,9 +28,14 @@ from esper.leyline.slot_config import SlotConfig
 # Debug flag for paranoia stage validation (set ESPER_DEBUG_STAGE=1 to enable)
 _DEBUG_STAGE_VALIDATION = os.environ.get("ESPER_DEBUG_STAGE", "").lower() in ("1", "true", "yes")
 
-# Valid SeedStage values (excludes reserved value 5 which was SHADOWING)
-# Used for paranoia asserts when _DEBUG_STAGE_VALIDATION is enabled
-_VALID_STAGE_VALUES: frozenset[int] = frozenset({0, 1, 2, 3, 4, 6, 7, 8, 9, 10})
+# Import stage schema for validation and one-hot encoding
+# NOTE: Imported at module level since these are fast O(1) lookups used in hot path
+from esper.leyline.stage_schema import (
+    VALID_STAGE_VALUES as _VALID_STAGE_VALUES,
+    NUM_STAGES as _NUM_STAGE_DIMS,
+    stage_to_one_hot as _stage_to_one_hot,
+    STAGE_TO_INDEX as _STAGE_TO_INDEX,
+)
 
 if TYPE_CHECKING:
     # Type hints only - not imported at runtime
@@ -78,20 +83,24 @@ def safe(v, default: float = 0.0, max_val: float = 100.0) -> float:
 # Base features (training state without per-slot features)
 BASE_FEATURE_SIZE = 23
 
-# Per-slot features:
-# 12 state (is_active, stage, alpha, improvement, tempo, alpha_target, alpha_mode,
-#          alpha_steps_total, alpha_steps_done, time_to_target, alpha_velocity, alpha_algorithm)
+# Per-slot features (schema v1 - one-hot stage encoding):
+# 1 is_active
+# + 10 stage one-hot (SeedStage categorical encoding via StageSchema)
+# + 11 state (alpha, improvement, fossilize_value, tempo, alpha_target, alpha_mode,
+#            alpha_steps_total, alpha_steps_done, time_to_target, alpha_velocity, alpha_algorithm)
 # + 13 blueprint one-hot
-SLOT_FEATURE_SIZE = 25
+# Total: 1 + 10 + 11 + 13 = 35 dims per slot
+SLOT_FEATURE_SIZE = 35
 
-# Feature size (with telemetry off): 23 base + 3 slots * 25 features per slot = 98
-# With telemetry on: + 3 slots * SeedTelemetry.feature_dim() (17) = 149 total
+# Feature size (with telemetry off): 23 base + 3 slots * 35 features per slot = 128
+# With telemetry on: + 3 slots * SeedTelemetry.feature_dim() (26) = 206 total
 # NOTE: Default for 3-slot configuration. Use get_feature_size(slot_config) for dynamic slot counts.
-MULTISLOT_FEATURE_SIZE = 98
+MULTISLOT_FEATURE_SIZE = 128
 
 # Observation normalization bounds (kept local to avoid heavier imports on the HOT PATH)
 _IMPROVEMENT_CLAMP_PCT_PTS: float = 10.0  # Clamp improvement to ±10 percentage points → [-1, 1]
 _DEFAULT_MAX_EPOCHS_DEN: float = 25.0  # Fallback when obs['max_epochs'] not provided
+_FOSSILIZE_LOOKAHEAD_EPOCHS: float = 3.0  # Lookahead horizon for fossilize value estimate
 _ALPHA_MODE_MAX: int = max(mode.value for mode in AlphaMode)
 _ALPHA_ALGO_MIN: int = min(algo.value for algo in AlphaAlgorithm)
 _ALPHA_ALGO_MAX: int = max(algo.value for algo in AlphaAlgorithm)
@@ -147,13 +156,14 @@ def obs_to_multislot_features(
     - Trends: plateau_epochs, best_val_accuracy, best_val_loss (3)
     - History: loss_history_5 (5), accuracy_history_5 (5)
     - Total params: total_params (1)
-    - Resource management: seed_utilization (1) [new - for resource awareness]
+    - Resource management: seed_utilization (1)
 
-    Per-slot features (25 dims each):
-    - is_active: 1.0 if seed active, 0.0 otherwise
-    - stage: seed lifecycle stage (SeedStage enum int, 0-10)
+    Per-slot features (35 dims each, schema v1 - one-hot stage):
+    - is_active: 1.0 if seed active, 0.0 otherwise (1 dim)
+    - stage_one_hot: categorical encoding via StageSchema (10 dims)
     - alpha: blending alpha (0.0-1.0)
     - improvement: counterfactual contribution delta (normalized to [-1, 1])
+    - fossilize_value: estimated long-term value (contribution + velocity * lookahead)
     - tempo: blend tempo epochs normalized (0-1)
     - alpha_target: controller target alpha (0.0-1.0)
     - alpha_mode: controller mode normalized to [0, 1] (AlphaMode enum)
@@ -168,7 +178,7 @@ def obs_to_multislot_features(
     a single flat observation vector that standard PPO implementations
     can consume without custom architecture changes.
 
-    Feature Layout (for default 3-slot config):
+    Feature Layout (for default 3-slot config, total 128 dims):
     [0-1]   Timing (epoch, global_step)
     [2-4]   Losses (train, val, delta)
     [5-7]   Accuracies (train, val, delta)
@@ -177,9 +187,9 @@ def obs_to_multislot_features(
     [16-20] Accuracy history (5 values)
     [21]    Total params
     [22]    Seed utilization
-    [23-47] Slot 0 (12 state + blueprint[13])
-    [48-72] Slot 1 (12 state + blueprint[13])
-    [73-97] Slot 2 (12 state + blueprint[13])
+    [23-57]  Slot 0 (1 is_active + 10 stage + 11 state + 13 blueprint)
+    [58-92]  Slot 1 (1 is_active + 10 stage + 11 state + 13 blueprint)
+    [93-127] Slot 2 (1 is_active + 10 stage + 11 state + 13 blueprint)
 
     Args:
         obs: Observation dictionary with optional 'slots' key
@@ -188,7 +198,7 @@ def obs_to_multislot_features(
         slot_config: Slot configuration (default: 3-slot config)
 
     Returns:
-        List of floats: 23 base + num_slots * 25 slot features
+        List of floats: 23 base + num_slots * 35 slot features
 
     Note (P2-9 Design Decision):
         Returns list[float] instead of torch.Tensor for flexibility during
@@ -258,12 +268,29 @@ def obs_to_multislot_features(
                 f"valid values are {sorted(_VALID_STAGE_VALUES)}"
             )
 
-        # State features (12 dims)
+        # Stage one-hot encoding (10 dims)
+        if stage_val in _VALID_STAGE_VALUES:
+            stage_one_hot = _stage_to_one_hot(stage_val)
+        else:
+            # Fallback: all zeros (should not happen after Phase 0 validation)
+            stage_one_hot = [0.0] * _NUM_STAGE_DIMS
+
+        # Compute fossilize value estimate: contribution + velocity * lookahead
+        contribution = safe(slot.get("improvement", 0.0), 0.0, max_val=_IMPROVEMENT_CLAMP_PCT_PTS)
+        contribution_velocity = safe(slot.get("contribution_velocity", 0.0), 0.0, max_val=_IMPROVEMENT_CLAMP_PCT_PTS)
+        fossilize_value = contribution + contribution_velocity * _FOSSILIZE_LOOKAHEAD_EPOCHS
+        # Clamp to same range as contribution
+        fossilize_value = max(-_IMPROVEMENT_CLAMP_PCT_PTS, min(fossilize_value, _IMPROVEMENT_CLAMP_PCT_PTS))
+
+        # is_active (1 dim)
+        slot_features.append(float(slot.get('is_active', 0)))
+        # Stage one-hot (10 dims)
+        slot_features.extend(stage_one_hot)
+        # Other state features (11 dims)
         slot_features.extend([
-            float(slot.get('is_active', 0)),
-            float(stage_val),
             alpha,
-            safe(slot.get("improvement", 0.0), 0.0, max_val=_IMPROVEMENT_CLAMP_PCT_PTS) / _IMPROVEMENT_CLAMP_PCT_PTS,
+            contribution / _IMPROVEMENT_CLAMP_PCT_PTS,
+            fossilize_value / _IMPROVEMENT_CLAMP_PCT_PTS,  # Fossilize value estimate
             # Tempo normalized to 0-1 range (max is ~12 epochs)
             float(slot.get('blend_tempo_epochs', 5)) / 12.0,
             alpha_target,
@@ -347,13 +374,14 @@ def batch_obs_to_features(
     # [22] Seed utilization
     features[:, 22] = torch.tensor(total_seeds, device=device, dtype=torch.float32) / max(max_seeds, 1)
     
-    # 2. Extract Slot Features (23 + num_slots * 25)
+    # 2. Extract Slot Features (23 + num_slots * 35)
+    # Per-slot layout: [is_active(1), stage_one_hot(10), state(11), blueprint(13)] = 35 dims
     max_epochs_den = float(max(max_epochs, 1))
-    
+
     for slot_idx, slot_id in enumerate(slot_config.slot_ids):
         offset = BASE_FEATURE_SIZE + slot_idx * SLOT_FEATURE_SIZE
-        
-        # State features (12 dims)
+
+        # Slot features: 1 is_active + 10 stage one-hot + 11 state + 13 blueprint = 35 dims
         for env_idx in range(n_envs):
             report = batch_slot_reports[env_idx].get(slot_id)
             if report:
@@ -361,34 +389,49 @@ def batch_obs_to_features(
                 if contribution is None:
                     contribution = report.metrics.improvement_since_stage_start
 
+                # Compute fossilize value: contribution + velocity * lookahead
+                velocity = report.metrics.contribution_velocity
+                fossilize_value = contribution + velocity * _FOSSILIZE_LOOKAHEAD_EPOCHS
+                # Clamp to same range as contribution
+                fossilize_value = max(-_IMPROVEMENT_CLAMP_PCT_PTS, min(fossilize_value, _IMPROVEMENT_CLAMP_PCT_PTS))
+
                 # Paranoia check for valid stage value (debug-only)
+                stage_val = report.stage.value
                 if _DEBUG_STAGE_VALIDATION:
-                    assert report.stage.value in _VALID_STAGE_VALUES, (
-                        f"Invalid stage value {report.stage.value} for slot {slot_id} env {env_idx}"
+                    assert stage_val in _VALID_STAGE_VALUES, (
+                        f"Invalid stage value {stage_val} for slot {slot_id} env {env_idx}"
                     )
 
-                # Manual entry for now (can be further vectorized with more metadata)
-                features[env_idx, offset] = 1.0 # is_active
-                features[env_idx, offset + 1] = float(report.stage.value)
-                features[env_idx, offset + 2] = report.metrics.current_alpha
-                features[env_idx, offset + 3] = max(-1.0, min(contribution / _IMPROVEMENT_CLAMP_PCT_PTS, 1.0))
-                features[env_idx, offset + 4] = float(report.blend_tempo_epochs) / 12.0
-                features[env_idx, offset + 5] = report.alpha_target
-                features[env_idx, offset + 6] = float(report.alpha_mode) / _ALPHA_MODE_MAX
-                features[env_idx, offset + 7] = min(float(report.alpha_steps_total), max_epochs_den) / max_epochs_den
-                features[env_idx, offset + 8] = min(float(report.alpha_steps_done), max_epochs_den) / max_epochs_den
-                features[env_idx, offset + 9] = min(float(report.time_to_target), max_epochs_den) / max_epochs_den
-                features[env_idx, offset + 10] = max(-1.0, min(report.alpha_velocity, 1.0))
-                features[env_idx, offset + 11] = float(report.alpha_algorithm - _ALPHA_ALGO_MIN) / _ALPHA_ALGO_RANGE
-                
-                # Blueprint one-hot (13 dims)
+                # is_active (offset + 0)
+                features[env_idx, offset] = 1.0
+
+                # Stage one-hot (offset + 1 to offset + 10, 10 dims)
+                if stage_val in _STAGE_TO_INDEX:
+                    stage_idx = _STAGE_TO_INDEX[stage_val]
+                    features[env_idx, offset + 1 + stage_idx] = 1.0
+                # else: all zeros (already initialized)
+
+                # Other state features (offset + 11 to offset + 21, 11 dims)
+                features[env_idx, offset + 11] = report.metrics.current_alpha
+                features[env_idx, offset + 12] = max(-1.0, min(contribution / _IMPROVEMENT_CLAMP_PCT_PTS, 1.0))
+                features[env_idx, offset + 13] = fossilize_value / _IMPROVEMENT_CLAMP_PCT_PTS
+                features[env_idx, offset + 14] = float(report.blend_tempo_epochs) / 12.0
+                features[env_idx, offset + 15] = report.alpha_target
+                features[env_idx, offset + 16] = float(report.alpha_mode) / _ALPHA_MODE_MAX
+                features[env_idx, offset + 17] = min(float(report.alpha_steps_total), max_epochs_den) / max_epochs_den
+                features[env_idx, offset + 18] = min(float(report.alpha_steps_done), max_epochs_den) / max_epochs_den
+                features[env_idx, offset + 19] = min(float(report.time_to_target), max_epochs_den) / max_epochs_den
+                features[env_idx, offset + 20] = max(-1.0, min(report.alpha_velocity, 1.0))
+                features[env_idx, offset + 21] = float(report.alpha_algorithm - _ALPHA_ALGO_MIN) / _ALPHA_ALGO_RANGE
+
+                # Blueprint one-hot (offset + 22 to offset + 34, 13 dims)
                 bp_idx = _BLUEPRINT_TO_INDEX.get(report.blueprint_id, -1)
                 if 0 <= bp_idx < _NUM_BLUEPRINT_TYPES:
-                    features[env_idx, offset + 12 + bp_idx] = 1.0
+                    features[env_idx, offset + 22 + bp_idx] = 1.0
             else:
                 # Slot inactive - already zeros from initialization except defaults
-                features[env_idx, offset + 11] = float(AlphaAlgorithm.ADD.value - _ALPHA_ALGO_MIN) / _ALPHA_ALGO_RANGE
-                features[env_idx, offset + 4] = 5.0 / 12.0 # Default tempo
+                features[env_idx, offset + 21] = float(AlphaAlgorithm.ADD.value - _ALPHA_ALGO_MIN) / _ALPHA_ALGO_RANGE
+                features[env_idx, offset + 14] = 5.0 / 12.0  # Default tempo
 
     # 3. Telemetry Features (Optional)
     if use_telemetry:

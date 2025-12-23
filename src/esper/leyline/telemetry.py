@@ -190,14 +190,41 @@ class SeedTelemetry:
     blending_velocity: float = 0.0  # d(alpha) / d(epoch)
 
     def to_features(self) -> list[float]:
-        """Convert to 17-dim feature vector for RL policies.
+        """Convert to 26-dim feature vector for RL policies.
 
-        All features normalized to approximately [0, 1] range.
-        Uses module constants for normalization bounds.
+        Features (schema v1, one-hot stage encoding):
+        - [0-9]: Stage one-hot (10 dims) - categorical stage representation
+        - [10]: gradient_norm (normalized to [0, 1])
+        - [11]: gradient_health ([0, 1])
+        - [12]: has_vanishing (0 or 1)
+        - [13]: has_exploding (0 or 1)
+        - [14]: epochs_in_stage (normalized)
+        - [15]: accuracy (normalized to [0, 1])
+        - [16]: accuracy_delta (clamped to [-1, 1])
+        - [17]: alpha ([0, 1])
+        - [18]: epoch/max_epochs (temporal position)
+        - [19]: alpha_target ([0, 1])
+        - [20]: alpha_mode (normalized)
+        - [21]: alpha_steps_total (normalized)
+        - [22]: alpha_steps_done (normalized)
+        - [23]: time_to_target (normalized)
+        - [24]: alpha_velocity (clamped to [-1, 1])
+        - [25]: alpha_algorithm (normalized)
         """
+        from esper.leyline.stage_schema import stage_to_one_hot, VALID_STAGE_VALUES
+
         steps_den = max(self.max_epochs, 1)
         alpha_algo_range = max(_ALPHA_ALGO_MAX - _ALPHA_ALGO_MIN, 1)
-        return [
+
+        # Stage one-hot (10 dims) - handles gap at value 5
+        if self.stage in VALID_STAGE_VALUES:
+            stage_one_hot = stage_to_one_hot(self.stage)
+        else:
+            # Fallback for invalid stage: all zeros (should not happen after Phase 0 validation)
+            from esper.leyline.stage_schema import NUM_STAGES
+            stage_one_hot = [0.0] * NUM_STAGES
+
+        return stage_one_hot + [
             min(self.gradient_norm, _GRADIENT_NORM_MAX) / _GRADIENT_NORM_MAX,
             self.gradient_health,
             float(self.has_vanishing),
@@ -205,7 +232,6 @@ class SeedTelemetry:
             min(self.epochs_in_stage, _EPOCHS_IN_STAGE_MAX) / _EPOCHS_IN_STAGE_MAX,
             self.accuracy / 100.0,
             max(-1.0, min(1.0, self.accuracy_delta / _ACCURACY_DELTA_SCALE)),
-            min((self.stage - 1) / 9.0, 1.0),  # stages 1-10 -> [0, 1], clamps >=10
             self.alpha,
             self.epoch / max(self.max_epochs, 1),  # temporal position
             self.alpha_target,
@@ -219,12 +245,18 @@ class SeedTelemetry:
 
     @classmethod
     def feature_dim(cls) -> int:
-        """Return current feature vector dimension."""
-        return 17
+        """Return current feature vector dimension.
+
+        Schema v1: 10 (stage one-hot) + 16 (other features) = 26
+        """
+        from esper.leyline.stage_schema import NUM_STAGES
+        return NUM_STAGES + 16  # 10 + 16 = 26
 
     def to_dict(self) -> dict:
         """Convert to primitive dict for serialization."""
+        from esper.leyline.stage_schema import STAGE_SCHEMA_VERSION
         return {
+            "schema_version": STAGE_SCHEMA_VERSION,
             "seed_id": self.seed_id,
             "blueprint_id": self.blueprint_id,
             "layer_id": self.layer_id,
@@ -255,6 +287,16 @@ class SeedTelemetry:
     def from_dict(cls, data: dict) -> "SeedTelemetry":
         """Reconstruct from primitive dict."""
         from datetime import datetime
+        from esper.leyline.stage_schema import STAGE_SCHEMA_VERSION
+
+        # Validate schema version if present (fail-fast on mismatch)
+        schema_version = data.get("schema_version")
+        if schema_version is not None and schema_version != STAGE_SCHEMA_VERSION:
+            raise ValueError(
+                f"SeedTelemetry schema version mismatch: "
+                f"expected {STAGE_SCHEMA_VERSION}, got {schema_version}. "
+                f"Telemetry from incompatible version cannot be loaded."
+            )
 
         stage_raw = data.get("stage", SeedStage.DORMANT.value)
         if not isinstance(stage_raw, int) or isinstance(stage_raw, bool):
