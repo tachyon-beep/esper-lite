@@ -55,6 +55,16 @@ class SeedMetrics:
     # Previous contribution for velocity computation
     _prev_contribution: float | None = None
 
+    # Inter-slot interaction tracking (set by counterfactual engine)
+    # interaction_sum: Σ I_ij for all j ≠ i (total synergy from interactions)
+    interaction_sum: float = 0.0
+    # boost_received: max(I_ij) for j ≠ i (strongest interaction partner)
+    boost_received: float = 0.0
+    # upstream_alpha_sum: Σ alpha_j for slots j < i (position-aware blending)
+    upstream_alpha_sum: float = 0.0
+    # downstream_alpha_sum: Σ alpha_j for slots j > i (position-aware blending)
+    downstream_alpha_sum: float = 0.0
+
     # Gradient activity (parameter-normalized) for G2 gate
     seed_gradient_norm_ratio: float = 0.0
 
