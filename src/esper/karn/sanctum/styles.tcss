@@ -98,6 +98,7 @@
     border-title-color: yellow;
     overflow-x: hidden;
     overflow-y: auto;
+    scrollbar-size: 0 0;  /* Hide scrollbar to avoid double vertical line */
     padding: 0 1;
 }
 
