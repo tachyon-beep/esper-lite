@@ -35,13 +35,13 @@ _EVENT_COLORS: dict[str, str] = {
     "BATCH_EPOCH_COMPLETED": "bright_blue",
 }
 
-# Event type emoji mapping
+# Event type emoji mapping (disabled - causes terminal rendering artifacts)
 _EVENT_EMOJI: dict[str, str] = {
-    "SEED_GERMINATED": "🌱",
-    "SEED_FOSSILIZED": "✅",
-    "SEED_PRUNED": "⚠️",
-    "REWARD_COMPUTED": "📊",
-    "BATCH_EPOCH_COMPLETED": "🏆",
+    # "SEED_GERMINATED": "🌱",
+    # "SEED_FOSSILIZED": "✅",
+    # "SEED_PRUNED": "⚠️",
+    # "REWARD_COMPUTED": "📊",
+    # "BATCH_EPOCH_COMPLETED": "🏆",
 }
 
 
