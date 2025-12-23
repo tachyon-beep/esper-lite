@@ -149,3 +149,48 @@ class TestABTestingCLI:
             if config.n_envs % 2 != 0:
                 raise ValueError("--ab-test requires even number of envs")
 
+
+class TestDualABTestingCLI:
+    """Test CLI --dual-ab argument for dual-policy A/B testing."""
+
+    def test_dual_ab_argument_parsed(self):
+        """--dual-ab argument should be parsed correctly."""
+        from esper.scripts.train import build_parser
+
+        parser = build_parser()
+
+        # Test all three valid choices
+        args = parser.parse_args(["ppo", "--dual-ab", "shaped-vs-simplified"])
+        assert args.dual_ab == "shaped-vs-simplified"
+
+        args = parser.parse_args(["ppo", "--dual-ab", "shaped-vs-sparse"])
+        assert args.dual_ab == "shaped-vs-sparse"
+
+        args = parser.parse_args(["ppo", "--dual-ab", "simplified-vs-sparse"])
+        assert args.dual_ab == "simplified-vs-sparse"
+
+    def test_dual_ab_default_is_none(self):
+        """--dual-ab should default to None when not specified."""
+        from esper.scripts.train import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(["ppo"])
+        assert args.dual_ab is None
+
+    def test_dual_ab_mutually_exclusive_concept(self):
+        """--dual-ab and --ab-test represent different testing modes.
+
+        Note: They are not enforced as mutually exclusive at the parser level,
+        but --dual-ab takes precedence in the training logic (checked first).
+        This test documents the expected behavior.
+        """
+        from esper.scripts.train import build_parser
+
+        parser = build_parser()
+
+        # Both flags can be parsed together (no parser error)
+        args = parser.parse_args(["ppo", "--ab-test", "shaped-vs-simplified", "--dual-ab", "shaped-vs-sparse"])
+        assert args.ab_test == "shaped-vs-simplified"
+        assert args.dual_ab == "shaped-vs-sparse"
+        # In actual training, dual_ab would take precedence (checked first in if statement)
+

@@ -3,6 +3,8 @@
 
 import argparse
 
+import torch
+
 from esper.nissa import ConsoleOutput, DirectoryOutput, FileOutput, get_hub
 from esper.simic.training import TrainingConfig
 
@@ -184,6 +186,13 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["shaped-vs-simplified", "shaped-vs-sparse"],
         default=None,
         help="Run A/B test: split envs between two reward modes (requires even n_envs)",
+    )
+    ppo_parser.add_argument(
+        "--dual-ab",
+        type=str,
+        choices=["shaped-vs-simplified", "shaped-vs-sparse", "simplified-vs-sparse"],
+        default=None,
+        help="True A/B test: train separate policies on separate GPUs",
     )
 
     return parser
@@ -495,26 +504,77 @@ def main():
                         config.ab_reward_modes = ["shaped"] * half + ["sparse"] * half
                     print(f"[A/B Test] {half} envs SHAPED vs {half} envs {args.ab_test.split('-vs-')[1].upper()}")
 
-                print(config.summary())
+                # Handle dual-policy A/B testing
+                if args.dual_ab:
+                    # Check for GPU availability
+                    if not torch.cuda.is_available():
+                        raise ValueError("--dual-ab requires CUDA")
+                    if torch.cuda.device_count() < 2:
+                        raise ValueError("--dual-ab requires at least 2 GPUs")
 
-                # Use task from config if specified, otherwise CLI arg
-                effective_task = config.task if config.task else args.task
+                    # Parse dual-ab choice to reward modes
+                    from esper.simic.rewards import RewardMode
+                    mode_map = {
+                        "shaped": RewardMode.SHAPED,
+                        "simplified": RewardMode.SIMPLIFIED,
+                        "sparse": RewardMode.SPARSE,
+                    }
+                    parts = args.dual_ab.split("-vs-")
+                    mode_a = mode_map[parts[0]]
+                    mode_b = mode_map[parts[1]]
 
-                from esper.simic.training import train_ppo_vectorized
-                train_ppo_vectorized(
-                    device=args.device,
-                    devices=args.devices,
-                    task=effective_task,
-                    save_path=args.save,
-                    resume_path=args.resume,
-                    num_workers=args.num_workers,
-                    gpu_preload=args.gpu_preload,
-                    telemetry_config=telemetry_config,
-                    telemetry_lifecycle_only=args.telemetry_lifecycle_only,
-                    quiet_analytics=use_overwatch or use_sanctum,
-                    ready_event=dataloader_ready_event,
-                    **config.to_train_kwargs(),
-                )
+                    group_configs = [
+                        ("A", mode_a),
+                        ("B", mode_b),
+                    ]
+                    devices = ["cuda:0", "cuda:1"]
+
+                    print(f"[Dual-Policy A/B Test] Training Policy A ({mode_a.value}) on {devices[0]} vs Policy B ({mode_b.value}) on {devices[1]}")
+                    print(config.summary())
+
+                    # Use task from config if specified, otherwise CLI arg
+                    effective_task = config.task if config.task else args.task
+
+                    from esper.simic.training import train_dual_policy_ab
+                    train_dual_policy_ab(
+                        n_envs_per_group=config.n_envs,
+                        group_configs=group_configs,
+                        devices=devices,
+                        n_episodes=config.n_episodes,
+                        max_epochs=config.episode_length,
+                        task=effective_task,
+                        lr=config.learning_rate,
+                        clip_ratio=config.clip_ratio,
+                        entropy_coef=config.entropy_coef,
+                        entropy_coef_min=config.entropy_coef_min,
+                        gamma=config.gamma,
+                        gae_lambda=config.gae_lambda,
+                        lstm_hidden_dim=config.lstm_hidden_dim,
+                        seed=config.seed,
+                        use_telemetry=config.use_telemetry,
+                        slots=config.slots,
+                    )
+                else:
+                    print(config.summary())
+
+                    # Use task from config if specified, otherwise CLI arg
+                    effective_task = config.task if config.task else args.task
+
+                    from esper.simic.training import train_ppo_vectorized
+                    train_ppo_vectorized(
+                        device=args.device,
+                        devices=args.devices,
+                        task=effective_task,
+                        save_path=args.save,
+                        resume_path=args.resume,
+                        num_workers=args.num_workers,
+                        gpu_preload=args.gpu_preload,
+                        telemetry_config=telemetry_config,
+                        telemetry_lifecycle_only=args.telemetry_lifecycle_only,
+                        quiet_analytics=use_overwatch or use_sanctum,
+                        ready_event=dataloader_ready_event,
+                        **config.to_train_kwargs(),
+                    )
         except Exception:
             import traceback
             traceback.print_exc()

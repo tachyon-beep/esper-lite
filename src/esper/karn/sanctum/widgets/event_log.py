@@ -75,13 +75,20 @@ class EventLog(Static):
         return _EVENT_EMOJI.get(event_type, "")
 
     def render(self):
-        """Render the event log with episode grouping."""
+        """Render the event log with episode grouping.
+
+        Format optimized for fast-scrolling real-time events:
+        - Compact time: :SS (shows MM:SS on minute change)
+        - Compact env: just the number (00, 01, etc.)
+        - No relative time (events scroll too fast for it to matter)
+        """
         if self._snapshot is None or not self._snapshot.event_log:
             return Text("Waiting for events...", style="dim")
 
         events = list(self._snapshot.event_log)[-self._max_events:]
         lines = []
         last_episode = None
+        last_minute = None
 
         for entry in events:
             # Episode separator (short, won't stretch container)
@@ -92,16 +99,26 @@ class EventLog(Static):
 
             # Event line
             color = self._get_event_color(entry.event_type)
-            emoji = self._get_event_emoji(entry.event_type)
 
             text = Text()
-            text.append(f"{entry.timestamp} ", style="dim")
-            if entry.relative_time:
-                text.append(f"{entry.relative_time} ", style="dim")
-            if emoji:
-                text.append(f"{emoji} ")
+
+            # Compact timestamp: show MM:SS on minute change, otherwise just :SS
+            # entry.timestamp is "HH:MM:SS"
+            parts = entry.timestamp.split(":")
+            if len(parts) == 3:
+                current_minute = parts[1]
+                if current_minute != last_minute:
+                    text.append(f"{parts[1]}:{parts[2]} ", style="dim")
+                    last_minute = current_minute
+                else:
+                    text.append(f":{parts[2]} ", style="dim")
+            else:
+                text.append(f"{entry.timestamp} ", style="dim")
+
+            # Compact env ID: just the number
             if entry.env_id is not None:
-                text.append(f"ENV:{entry.env_id:02d} ", style="bright_blue")
+                text.append(f"{entry.env_id:02d} ", style="bright_blue")
+
             text.append(entry.message, style=color)
 
             lines.append(text)
