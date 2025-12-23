@@ -120,3 +120,27 @@ class TestTrainDualPolicyAB:
 
         # Seeds should be different
         assert group_a_seed != group_b_seed
+
+
+class TestTelemetryGroupId:
+    """Tests for group_id telemetry tagging."""
+
+    def test_telemetry_event_has_group_id_field(self):
+        """TelemetryEvent should have group_id field for A/B testing."""
+        from esper.leyline import TelemetryEvent, TelemetryEventType
+
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            group_id="A",
+            message="Test",
+        )
+        assert event.group_id == "A"
+
+    def test_train_ppo_vectorized_accepts_group_id(self):
+        """train_ppo_vectorized should accept group_id parameter."""
+        import inspect
+        from esper.simic.training.vectorized import train_ppo_vectorized
+
+        sig = inspect.signature(train_ppo_vectorized)
+        assert "group_id" in sig.parameters
+        assert sig.parameters["group_id"].default is None

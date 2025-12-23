@@ -368,6 +368,7 @@ def _emit_anomaly_diagnostics(
     total_episodes: int,
     collect_debug: bool,
     ratio_diagnostic: dict | None = None,
+    group_id: str | None = None,
 ) -> None:
     """Emit anomaly telemetry, optionally with expensive diagnostics when debug is enabled."""
     if hub is None or anomaly_report is None or not anomaly_report.has_anomaly:
@@ -412,6 +413,7 @@ def _emit_anomaly_diagnostics(
             TelemetryEvent(
                 event_type=event_type,
                 epoch=batch_epoch_id,  # Anomalies detected at batch boundary
+                group_id=group_id,
                 data=data,
                 severity="debug" if collect_debug else "warning",
             )
@@ -506,6 +508,7 @@ def train_ppo_vectorized(
     quiet_analytics: bool = False,
     telemetry_dir: str | None = None,
     ready_event: "threading.Event | None" = None,
+    group_id: str | None = None,  # A/B testing group identifier
 ) -> tuple[PPOAgent, list[dict]]:
     """Train PPO with vectorized environments using INVERTED CONTROL FLOW.
 
@@ -806,6 +809,7 @@ def train_ppo_vectorized(
         hub.emit(
             TelemetryEvent(
                 event_type=TelemetryEventType.CHECKPOINT_LOADED,
+                group_id=group_id,
                 data={
                     "path": str(resume_path),
                     "start_episode": start_episode,
@@ -860,6 +864,7 @@ def train_ppo_vectorized(
 
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.TRAINING_STARTED,
+        group_id=group_id,
         message=(
             f"PPO vectorized training initialized: policy_device={device}, "
             f"env_device_counts={env_device_counts}"
@@ -2896,6 +2901,7 @@ def train_ppo_vectorized(
                 max_epochs,
                 total_episodes,
                 False,
+                group_id=group_id,
             )
 
         # Track results and aggregate batch-level metrics

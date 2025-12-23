@@ -215,6 +215,7 @@ def train_dual_policy_ab(
             use_telemetry=use_telemetry,
             reward_mode=reward_mode.value,
             slots=slots,  # Pass slot configuration
+            group_id=group_id,  # Tag telemetry events with group
             **kwargs,
         )
 
