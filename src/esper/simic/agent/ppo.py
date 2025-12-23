@@ -59,7 +59,7 @@ CHECKPOINT_VERSION = 1
 # =============================================================================
 
 def signals_to_features(
-    signals,
+    signals: Any,
     *,
     slot_reports: dict[str, "SeedStateReport"],
     use_telemetry: bool = True,
@@ -70,30 +70,14 @@ def signals_to_features(
     max_seeds: int = 0,
     slot_config: "SlotConfig | None" = None,
 ) -> list[float]:
-    """Convert training signals to feature vector.
+    """Convert training signals to a flat feature vector for PPO.
 
-    Args:
-        signals: TrainingSignals from tamiyo
-        slot_reports: Slot -> SeedStateReport snapshot for this timestep
-        use_telemetry: Whether to include telemetry features
-        max_epochs: Maximum epochs for learning phase normalization
-        slots: Enabled slot IDs (used to pick telemetry seed deterministically)
-        total_params: Total model params (host + active seeds)
-        total_seeds: Current total seeds across all slots (for utilization calc)
-        max_seeds: Maximum allowed seeds (for utilization calc)
-        slot_config: Slot configuration (default: 3-slot config)
-
-    Returns:
-        Feature vector: base (23 + num_slots*25) + telemetry per slot (num_slots * 17) when telemetry enabled.
-
-    Note:
-        TrainingSignals.active_seeds contains seed IDs (strings), not SeedState
-        objects, so seed-specific features are zero-padded when slot reports
-        are missing.
+    This is a thin wrapper around `tamiyo.policy.features.obs_to_multislot_features`
+    plus optional per-slot `SeedTelemetry` features appended in deterministic
+    `slot_config` order.
     """
-    from esper.tamiyo.policy.features import obs_to_multislot_features
     from esper.leyline.slot_id import validate_slot_ids
-    from esper.leyline.slot_config import SlotConfig
+    from esper.tamiyo.policy.features import obs_to_multislot_features
 
     if slot_config is None:
         slot_config = SlotConfig.default()
@@ -104,90 +88,82 @@ def signals_to_features(
     enabled_slots = validate_slot_ids(list(slots))
     enabled_set = set(enabled_slots)
 
-    # Build observation dict
-    loss_hist = list(signals.loss_history[-5:]) if signals.loss_history else []
+    loss_hist = list(signals.loss_history[-5:]) if getattr(signals, "loss_history", None) else []
     while len(loss_hist) < 5:
         loss_hist.insert(0, 0.0)
 
-    acc_hist = list(signals.accuracy_history[-5:]) if signals.accuracy_history else []
+    acc_hist = list(signals.accuracy_history[-5:]) if getattr(signals, "accuracy_history", None) else []
     while len(acc_hist) < 5:
         acc_hist.insert(0, 0.0)
 
-    obs = {
-        'epoch': signals.metrics.epoch,
-        'global_step': signals.metrics.global_step,
-        'train_loss': signals.metrics.train_loss,
-        'val_loss': signals.metrics.val_loss,
-        'loss_delta': signals.metrics.loss_delta,
-        'train_accuracy': signals.metrics.train_accuracy,
-        'val_accuracy': signals.metrics.val_accuracy,
-        'accuracy_delta': signals.metrics.accuracy_delta,
-        'plateau_epochs': signals.metrics.plateau_epochs,
-        'best_val_accuracy': signals.metrics.best_val_accuracy,
-        'best_val_loss': signals.metrics.best_val_loss,
-        'loss_history_5': loss_hist,
-        'accuracy_history_5': acc_hist,
-        'total_params': total_params,
-        'max_epochs': max_epochs,
+    obs: dict[str, Any] = {
+        "epoch": signals.metrics.epoch,
+        "global_step": signals.metrics.global_step,
+        "train_loss": signals.metrics.train_loss,
+        "val_loss": signals.metrics.val_loss,
+        "loss_delta": signals.metrics.loss_delta,
+        "train_accuracy": signals.metrics.train_accuracy,
+        "val_accuracy": signals.metrics.val_accuracy,
+        "accuracy_delta": signals.metrics.accuracy_delta,
+        "plateau_epochs": signals.metrics.plateau_epochs,
+        "best_val_accuracy": signals.metrics.best_val_accuracy,
+        "best_val_loss": signals.metrics.best_val_loss,
+        "loss_history_5": loss_hist,
+        "accuracy_history_5": acc_hist,
+        "total_params": total_params,
+        "max_epochs": max_epochs,
+        "slots": {},
     }
 
-    # Build per-slot state dict from reports
-    slot_states = {}
+    # Build per-slot state dict from reports (missing reports are treated as inactive slots).
+    slot_states: dict[str, dict[str, Any]] = {}
     for slot_id in slot_config.slot_ids:
         report = slot_reports.get(slot_id)
-        if report:
-            contribution = report.metrics.counterfactual_contribution
-            if contribution is None:
-                contribution = report.metrics.improvement_since_stage_start
-            slot_states[slot_id] = {
-                'is_active': 1.0,
-                'stage': report.stage.value,
-                'alpha': report.metrics.current_alpha,
-                'improvement': contribution,
-                'alpha_target': report.alpha_target,
-                'alpha_mode': report.alpha_mode,
-                'alpha_steps_total': report.alpha_steps_total,
-                'alpha_steps_done': report.alpha_steps_done,
-                'time_to_target': report.time_to_target,
-                'alpha_velocity': report.alpha_velocity,
-                'alpha_algorithm': report.alpha_algorithm,
-                'blend_tempo_epochs': report.blend_tempo_epochs,
-                'blueprint_id': report.blueprint_id,
-            }
-        else:
-            slot_states[slot_id] = {
-                'is_active': 0.0,
-                'stage': 0,
-                'alpha': 0.0,
-                'improvement': 0.0,
-                'alpha_target': 0.0,
-                'alpha_mode': 0,
-                'alpha_steps_total': 0,
-                'alpha_steps_done': 0,
-                'time_to_target': 0,
-                'alpha_velocity': 0.0,
-                'alpha_algorithm': 1,  # AlphaAlgorithm.ADD.value
-                'blend_tempo_epochs': 5,
-                'blueprint_id': None,
-            }
+        if report is None:
+            continue
 
-    obs['slots'] = slot_states
+        contribution = report.metrics.counterfactual_contribution
+        if contribution is None:
+            contribution = report.metrics.improvement_since_stage_start
 
-    features = obs_to_multislot_features(obs, total_seeds=total_seeds, max_seeds=max_seeds, slot_config=slot_config)
+        slot_states[slot_id] = {
+            "is_active": 1.0,
+            "stage": report.stage.value,
+            "alpha": report.metrics.current_alpha,
+            "improvement": contribution,
+            "blend_tempo_epochs": report.blend_tempo_epochs,
+            "alpha_target": report.alpha_target,
+            "alpha_mode": report.alpha_mode,
+            "alpha_steps_total": report.alpha_steps_total,
+            "alpha_steps_done": report.alpha_steps_done,
+            "time_to_target": report.time_to_target,
+            "alpha_velocity": report.alpha_velocity,
+            "alpha_algorithm": report.alpha_algorithm,
+            "blueprint_id": report.blueprint_id,
+        }
+
+    obs["slots"] = slot_states
+
+    features = obs_to_multislot_features(
+        obs,
+        total_seeds=total_seeds,
+        max_seeds=max_seeds,
+        slot_config=slot_config,
+    )
 
     if use_telemetry:
-        # Deterministic ordering from slot_config; zero-pad empty/disabled slots.
         from esper.leyline import SeedTelemetry
 
         telemetry_features: list[float] = []
+        dim = SeedTelemetry.feature_dim()
         for slot_id in slot_config.slot_ids:
             if slot_id not in enabled_set:
-                telemetry_features.extend([0.0] * SeedTelemetry.feature_dim())
+                telemetry_features.extend([0.0] * dim)
                 continue
 
             report = slot_reports.get(slot_id)
             if report is None or report.telemetry is None:
-                telemetry_features.extend([0.0] * SeedTelemetry.feature_dim())
+                telemetry_features.extend([0.0] * dim)
                 continue
 
             telemetry_features.extend(report.telemetry.to_features())
@@ -245,7 +221,8 @@ class PPOAgent:
         num_envs: int = DEFAULT_N_ENVS,  # For TamiyoRolloutBuffer
         max_steps_per_env: int = DEFAULT_EPISODE_LENGTH,  # For TamiyoRolloutBuffer (from leyline)
         # Compilation
-        compile_network: bool = True,  # Use torch.compile() for 10-30% speedup
+        compile_network: bool = True,  # DEPRECATED: use compile_mode instead
+        compile_mode: str = "default",  # "default", "max-autotune", "reduce-overhead", "off"
         # Slot configuration (preferred over explicit state_dim)
         slot_config: "SlotConfig | None" = None,
     ):
@@ -356,12 +333,23 @@ class PPOAgent:
         self.ratio_collapse_threshold = DEFAULT_RATIO_COLLAPSE_THRESHOLD
 
         # [PyTorch 2.0+] Compile network for 10-30% speedup on forward/backward
-        # mode="default" is safest for networks with MaskedCategorical
+        # Modes: "default" (fast compile), "max-autotune" (slow compile, faster runtime),
+        #        "reduce-overhead" (minimal overhead), "off" (no compilation)
         # MaskedCategorical._validate_action_mask has @torch.compiler.disable
         # M22: dynamic=True handles varying sequence lengths without recompilation
-        if compile_network:
+        #
+        # Resolve effective compile mode (backwards compat: compile_network=False -> "off")
+        effective_compile_mode = compile_mode
+        if not compile_network and compile_mode != "off":
+            effective_compile_mode = "off"  # compile_network=False overrides
+
+        if effective_compile_mode != "off":
             # torch.compile returns OptimizedModule which wraps the network
-            self.network = torch.compile(self.network, mode="default", dynamic=True)  # type: ignore[assignment]
+            self.network = torch.compile(
+                self.network,
+                mode=effective_compile_mode,
+                dynamic=True
+            )  # type: ignore[assignment]
 
         # [PyTorch 2.9] Use fused=True for CUDA, foreach=True for CPU
         use_cuda = device.startswith("cuda")

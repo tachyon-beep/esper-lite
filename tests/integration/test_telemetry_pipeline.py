@@ -283,6 +283,51 @@ class TestSeedTelemetryFeatures:
         with pytest.raises(ValueError, match="SeedTelemetry\\.stage"):
             SeedTelemetry.from_dict(data)
 
+    def test_telemetry_from_dict_rejects_invalid_alpha_mode(self):
+        """from_dict() must reject invalid alpha_mode values."""
+        telemetry = SeedTelemetry(seed_id="test")
+        data = telemetry.to_dict()
+        data["alpha_mode"] = 999  # Out of range
+
+        with pytest.raises(ValueError, match="SeedTelemetry\\.alpha_mode"):
+            SeedTelemetry.from_dict(data)
+
+    def test_telemetry_from_dict_rejects_invalid_alpha_algorithm(self):
+        """from_dict() must reject invalid alpha_algorithm values."""
+        telemetry = SeedTelemetry(seed_id="test")
+        data = telemetry.to_dict()
+        data["alpha_algorithm"] = 999  # Out of range
+
+        with pytest.raises(ValueError, match="SeedTelemetry\\.alpha_algorithm"):
+            SeedTelemetry.from_dict(data)
+
+    def test_telemetry_from_dict_rejects_non_int_alpha_mode(self):
+        """from_dict() must reject non-int alpha_mode values."""
+        telemetry = SeedTelemetry(seed_id="test")
+        data = telemetry.to_dict()
+        data["alpha_mode"] = "HOLD"  # String instead of int
+
+        with pytest.raises(ValueError, match="SeedTelemetry\\.alpha_mode"):
+            SeedTelemetry.from_dict(data)
+
+    def test_telemetry_from_dict_rejects_bool_alpha_mode(self):
+        """from_dict() must reject bool alpha_mode values (bool is subclass of int)."""
+        telemetry = SeedTelemetry(seed_id="test")
+        data = telemetry.to_dict()
+        data["alpha_mode"] = True  # bool, not int
+
+        with pytest.raises(ValueError, match="SeedTelemetry\\.alpha_mode"):
+            SeedTelemetry.from_dict(data)
+
+    def test_telemetry_from_dict_rejects_bool_alpha_algorithm(self):
+        """from_dict() must reject bool alpha_algorithm values."""
+        telemetry = SeedTelemetry(seed_id="test")
+        data = telemetry.to_dict()
+        data["alpha_algorithm"] = False  # bool, not int
+
+        with pytest.raises(ValueError, match="SeedTelemetry\\.alpha_algorithm"):
+            SeedTelemetry.from_dict(data)
+
 
 class TestTelemetryToFeaturesIntegration:
     """Test end-to-end flow from gradients to features."""

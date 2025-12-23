@@ -9,8 +9,10 @@ class TestEpochCompletedEmission:
 
     def test_epoch_completed_emitted_with_aggregate_metrics(self):
         """EPOCH_COMPLETED includes aggregate metrics across envs."""
-        from esper.nissa import get_hub
+        from esper.nissa import get_hub, reset_hub
 
+        # Reset hub to clear any stale backends from previous tests
+        reset_hub()
         hub = get_hub()
         captured = []
 
@@ -39,13 +41,14 @@ class TestEpochCompletedEmission:
                     "n_envs": 4,
                 }
             ))
+            hub.flush()  # Wait for async worker to process the event
 
             assert len(captured) == 1
             assert captured[0].epoch == 5
             assert captured[0].data["n_envs"] == 4
         finally:
             # Clean up to prevent cross-test pollution
-            hub.remove_backend(backend)
+            reset_hub()
 
 
 class TestEpochTelemetryContract:

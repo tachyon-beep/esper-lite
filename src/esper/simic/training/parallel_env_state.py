@@ -174,7 +174,6 @@ class ParallelEnvState:
         self.prev_slot_alphas = {slot_id: 0.0 for slot_id in slots}
         self.prev_slot_params = {slot_id: 0 for slot_id in slots}
         self.gradient_ratio_ema = {slot_id: 0.0 for slot_id in slots}
-        self.lstm_hidden = None
         self.signal_tracker.reset()
         self.governor.reset()
         if self.health_monitor is not None:

@@ -1,8 +1,32 @@
 # SeedStage Schema Hardening (Retired/Reserved Stage Elimination)
 
-**Status:** IN PROGRESS (Phase 0 complete)  
-**Date:** 2025-12-22  
+**Status:** IN PROGRESS (Phase 0 COMPLETED 2025-12-23)
+**Date:** 2025-12-22
 **Owner:** Esper Core
+
+### Phase 0 Implementation Notes (2025-12-23)
+
+Phase 0 is now fully complete with the following additions:
+
+1. **`SeedTelemetry.from_dict()` enum validation** (`src/esper/leyline/telemetry.py`):
+   - Added validation for `alpha_mode` (AlphaMode enum)
+   - Added validation for `alpha_algorithm` (AlphaAlgorithm enum)
+   - Pattern: type guard (int, not bool) + enum constructor validation + clear error messages
+
+2. **Debug-gated paranoia asserts** (`src/esper/tamiyo/policy/features.py`):
+   - Added `_DEBUG_STAGE_VALIDATION` flag (env var `ESPER_DEBUG_STAGE=1`)
+   - Added `_VALID_STAGE_VALUES` frozenset for O(1) lookup
+   - Added assert in `obs_to_multislot_features()` for dict-based stage values
+   - Added assert in `batch_obs_to_features()` for typed report stage values
+
+3. **Tests** (`tests/integration/test_telemetry_pipeline.py`):
+   - `test_telemetry_from_dict_rejects_invalid_alpha_mode`
+   - `test_telemetry_from_dict_rejects_invalid_alpha_algorithm`
+   - `test_telemetry_from_dict_rejects_non_int_alpha_mode`
+   - `test_telemetry_from_dict_rejects_bool_alpha_mode`
+   - `test_telemetry_from_dict_rejects_bool_alpha_algorithm`
+
+4. **Deferred**: Action head enum validation (GerminationStyle, LifecycleOp, etc.) - no JSON deserialization path exists; `FactoredAction.from_indices()` takes ints from network output.
 
 ## Problem Statement
 

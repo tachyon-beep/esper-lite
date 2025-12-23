@@ -1002,6 +1002,47 @@ class TestSanctumAggregator:
         assert decision.slot_states == {"r0c0": "Training 12%", "r0c1": "Empty"}
         assert decision.alternatives == [("WAIT", 0.15), ("SET_ALPHA_TARGET", 0.12)]
 
+    def test_aggregator_captures_decision_snapshot_from_last_action_snapshot(self):
+        """ANALYTICS_SNAPSHOT(kind=last_action) should populate Sanctum decision carousel."""
+        from esper.karn.sanctum.aggregator import SanctumAggregator
+        from esper.leyline import TelemetryEvent, TelemetryEventType
+
+        agg = SanctumAggregator(num_envs=4)
+
+        # Vectorized PPO emits kind=last_action at ops_normal; Sanctum should treat
+        # enriched snapshots (with action_confidence) like REWARD_COMPUTED.
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+            timestamp=datetime.now(timezone.utc),
+            epoch=10,
+            data={
+                "kind": "last_action",
+                "env_id": 0,
+                "total_reward": 0.38,
+                "action_name": "GERMINATE",
+                "action_slot": "r0c1",
+                "action_confidence": 0.73,
+                "value_estimate": 0.42,
+                "slot_states": {"r0c0": "Training 12%", "r0c1": "Empty"},
+                "host_accuracy": 67.0,
+                "alternatives": [("WAIT", 0.15), ("SET_ALPHA_TARGET", 0.12)],
+            },
+        )
+
+        agg.process_event(event)
+        snapshot = agg.get_snapshot()
+
+        decision = snapshot.tamiyo.last_decision
+        assert decision is not None
+        assert decision.chosen_action == "GERMINATE"
+        assert decision.confidence == 0.73
+        assert decision.expected_value == 0.42
+        assert decision.actual_reward == 0.38
+        assert decision.chosen_slot == "r0c1"
+        assert decision.host_accuracy == 67.0
+        assert decision.slot_states == {"r0c0": "Training 12%", "r0c1": "Empty"}
+        assert decision.alternatives == [("WAIT", 0.15), ("SET_ALPHA_TARGET", 0.12)]
+
 
 class TestSanctumBackend:
     """Test SanctumBackend OutputBackend protocol."""

@@ -379,6 +379,7 @@ def run_heuristic_episode(
     slots: list[str] | None = None,
     telemetry_config: TelemetryConfig | None = None,
     telemetry_lifecycle_only: bool = False,
+    gradient_telemetry_stride: int = 10,
 ) -> tuple[float, dict[str, int], list[float]]:
     """Run a single training episode with heuristic policy.
 
@@ -717,6 +718,7 @@ def train_heuristic(
     telemetry_config: TelemetryConfig | None = None,
     telemetry_lifecycle_only: bool = False,
     min_fossilize_improvement: float | None = None,
+    gradient_telemetry_stride: int = 10,
 ):
     """Train with heuristic policy.
 
@@ -806,6 +808,7 @@ def train_heuristic(
             slots=slots,
             telemetry_config=telemetry_config,
             telemetry_lifecycle_only=telemetry_lifecycle_only,
+            gradient_telemetry_stride=gradient_telemetry_stride,
         )
 
         total_reward = sum(rewards)

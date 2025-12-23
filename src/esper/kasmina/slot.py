@@ -1666,39 +1666,24 @@ class SeedSlot(nn.Module):
             DEFAULT_GRADIENT_EMA_DECAY * current_avg + (1 - DEFAULT_GRADIENT_EMA_DECAY) * seed_norm
         )
 
-    def forward(self, host_features: torch.Tensor) -> torch.Tensor:
-        """Process features through this slot.
+    def forward(self, host_features: torch.Tensor, alpha_override: torch.Tensor | None = None) -> torch.Tensor:
+        """Forward pass applying the seed's transformation to host features.
 
-        torch.compile behavior:
-        Dynamo creates specialized graphs for each stage/config combination
-        (~6-8 graphs total). Guard failures occur at stage transitions (once
-        per epoch), triggering recompilation. After warmup, execution stays
-        within a single specialized graph per epoch with no recompilation.
+        Args:
+            host_features: Input features from the host backbone.
+            alpha_override: Optional tensor of shape [B, 1, 1, 1] (or similar) to override
+                this slot's scalar alpha for fused multi-configuration passes.
 
-        DO NOT use @torch.compiler.disable here - it completely opts out of
-        compilation, which is worse than allowing graph specialization. The
-        stage-dependent control flow causes specialization overhead during
-        warmup, but steady-state performance benefits from end-to-end fusion.
+        Returns:
+            Blended feature map.
         """
-        # blend_with_isolation imported at module level for torch.compile compatibility
-
-        # 1. Early exit if there is no active seed or the lifecycle
-        #    stage is inactive (PRUNED/EMBARGOED/RESETTING).
-        if not self.is_active or not is_active_stage(self.state.stage):
+        # 1. NO-OP: Slot is dormant or in failure stage - return host features unchanged
+        if not self.is_active or self.seed is None or not is_active_stage(self.state.stage):
             return host_features
 
-        # 2. Compute seed features. For Incubator/Training we must detach the
-        #    host input so seed gradients do not flow back into the host.
-        #
-        #    CHANNELS_LAST WORKAROUND (BUG-005): When using channels_last memory
-        #    format with isolate_gradients=True, PyTorch segfaults during backward.
-        #    The bug affects BOTH the STE path (TRAINING) and the blend path
-        #    (BLENDING+). The root cause is the combination of non-contiguous
-        #    tensors (channels_last) with detach() in the autograd graph.
-        #
-        #    The fix is to ensure the DETACHED seed input is contiguous_format.
-        #    We intentionally keep `host_features` in its current memory format
-        #    (often: channels_last) to preserve host CNN throughput.
+        # 2. ISOLATION: Detach host input into the seed path if requested.
+        #    This prevents seed gradients from backpropagating into the host.
+        #    We preserve memory format (often: channels_last) to preserve host CNN throughput.
         #
         # PERF FIX (BUG-005): Preserve channels_last output under isolation.
         # Avoid coercing host_features to contiguous_format; instead feed the seed a
@@ -1722,7 +1707,7 @@ class SeedSlot(nn.Module):
         # This lets the seed see the error signal without changing the
         # host activations. With isolate_gradients=True, host gradients
         # are also identical to the no-seed case.
-        if self.state.stage == SeedStage.TRAINING and self.alpha == 0.0:
+        if alpha_override is None and self.state.stage == SeedStage.TRAINING and self.alpha == 0.0:
             if _DEBUG_STE:
                 assert seed_features.requires_grad, (
                     "STE requires seed_features to have requires_grad=True for gradient flow"
@@ -1730,31 +1715,24 @@ class SeedSlot(nn.Module):
             return ste_forward(host_features, seed_features)
 
         # 4. BLENDING and later stages: standard lerp with proper gradient flow.
-        #
-        # Gradient isolation strategy (updated 2025-12-10):
-        # - DIRECT PATH (host ← loss): Host receives (1-α) weighted gradients.
-        #   Always active - enables host backbone to continue learning.
-        # - SEED PATH (host ← seed ← loss): Controlled by isolate_gradients
-        #   at the seed INPUT (line 1024), not here in the blend output.
-        #   CNNs: blocked (isolate_gradients=True) to prevent co-adaptation
-        #   Transformers: allowed (isolate_gradients=False) for co-adaptation
-        #
-        # Impact on credit assignment: Transformer improvements during BLENDING+
-        # may come from seed OR host adaptation. Use counterfactual_contribution
-        # (not blending_delta) for causal attribution.
-
-        # Phase 3: alpha amplitude is always scheduled by AlphaController and stored
-        # in self.alpha (scalar). We cache a 0-dim tensor for torch.compile-friendly
-        # blending ops and to avoid per-forward allocations.
-        if (
-            self._cached_alpha_tensor is None
-            or self._cached_alpha_tensor.device != host_features.device
-            or self._cached_alpha_tensor.dtype != host_features.dtype
-        ):
-            self._cached_alpha_tensor = torch.tensor(
-                self.alpha, device=host_features.device, dtype=host_features.dtype
-            )
-        alpha_amplitude = self._cached_alpha_tensor
+        
+        # PERF: Use persistent alpha tensor to avoid per-forward allocations.
+        # If alpha_override is provided, we use it directly (already a tensor).
+        if alpha_override is not None:
+            alpha_amplitude = alpha_override
+        else:
+            # Cache alpha tensor for torch.compile-friendly blending.
+            # The cache is invalidated when alpha changes (see set_alpha, advance_stage, etc.)
+            # so we only need to check device/dtype here - no fill_() which breaks compile.
+            if (
+                self._cached_alpha_tensor is None
+                or self._cached_alpha_tensor.device != host_features.device
+                or self._cached_alpha_tensor.dtype != host_features.dtype
+            ):
+                self._cached_alpha_tensor = torch.tensor(
+                    self.alpha, device=host_features.device, dtype=host_features.dtype
+                )
+            alpha_amplitude = self._cached_alpha_tensor
 
         match self.state.alpha_algorithm:
             case AlphaAlgorithm.ADD:

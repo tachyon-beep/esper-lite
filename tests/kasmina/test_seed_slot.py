@@ -35,6 +35,46 @@ def test_seed_slot_forward_dormant_identity():
     assert torch.allclose(out, x)
 
 
+def test_seed_slot_forward_inactive_stages_never_call_seed():
+    """Inactive stages must never call the seed forward pass."""
+    from esper.kasmina.slot import SeedSlot
+    from esper.leyline import SeedStage
+
+    class CallTrackingModule(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.call_count = 0
+
+        def forward(self, x):
+            self.call_count += 1
+            return x
+
+    slot = SeedSlot(slot_id="test", channels=64)
+    tracker = CallTrackingModule()
+    
+    # Germinate a seed to get state
+    slot.germinate("norm", "test-seed")
+    # Replace real seed with tracker
+    slot.seed = tracker
+
+    inactive_stages = [
+        SeedStage.DORMANT,
+        SeedStage.GERMINATED,
+        SeedStage.PRUNED,
+        SeedStage.EMBARGOED,
+        SeedStage.RESETTING,
+    ]
+
+    x = torch.randn(2, 64, 8, 8)
+
+    for stage in inactive_stages:
+        slot.state.stage = stage
+        tracker.call_count = 0
+        out = slot.forward(x)
+        assert torch.allclose(out, x)
+        assert tracker.call_count == 0, f"Seed called during {stage.name} stage"
+
+
 def test_seed_slot_forward_with_seed():
     """SeedSlot forward applies seed transformation when scale is non-zero.
 

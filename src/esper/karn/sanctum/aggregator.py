@@ -886,6 +886,15 @@ class SanctumAggregator:
                 self._tamiyo.total_actions = sum(counts.values())
             return
 
+        # Vectorized PPO emits per-step "last_action" snapshots at ops_normal.
+        # When these include decision fields (total_reward/action_confidence/etc),
+        # treat them like REWARD_COMPUTED so Sanctum can populate:
+        # - Recent Decisions carousel (TamiyoBrain)
+        # - RewardComponents panel
+        if kind == "last_action" and "action_confidence" in data:
+            self._handle_reward_computed(event)
+            return
+
     # =========================================================================
     # Helpers
     # =========================================================================

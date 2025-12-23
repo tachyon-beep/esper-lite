@@ -76,6 +76,14 @@ class TrainingConfig:
     # === Telemetry and runtime flags ===
     use_telemetry: bool = True
     amp: bool = False
+    # AMP dtype: "auto" (detect BF16 support), "float16", "bfloat16", or "off"
+    # BF16 eliminates GradScaler overhead on Ampere+ GPUs (compute capability >= 8.0)
+    amp_dtype: str = "auto"
+    # torch.compile mode for policy network: "default", "max-autotune", or "off"
+    # max-autotune: 2-5x longer compile, potentially 10-20% faster runtime
+    # default: fast compile, good balance for development
+    # off: disable torch.compile entirely
+    compile_mode: str = "default"
 
     # === LSTM configuration ===
     lstm_hidden_dim: int = DEFAULT_LSTM_HIDDEN_DIM
@@ -99,6 +107,7 @@ class TrainingConfig:
     # === Diagnostics thresholds ===
     plateau_threshold: float = 0.5
     improvement_threshold: float = 2.0
+    gradient_telemetry_stride: int = 10
 
     # === Reproducibility ===
     seed: int = 42
@@ -250,6 +259,8 @@ class TrainingConfig:
             "gamma": self.gamma,
             "ppo_updates_per_batch": self.ppo_updates_per_batch,
             "amp": self.amp,
+            "amp_dtype": self.amp_dtype,
+            "compile_mode": self.compile_mode,
             "lstm_hidden_dim": self.lstm_hidden_dim,
             "chunk_length": self.chunk_length,
             "slots": list(self.slots),
@@ -261,6 +272,7 @@ class TrainingConfig:
             "sparse_reward_scale": self.sparse_reward_scale,
             "plateau_threshold": self.plateau_threshold,
             "improvement_threshold": self.improvement_threshold,
+            "gradient_telemetry_stride": self.gradient_telemetry_stride,
             "seed": self.seed,
             "ab_reward_modes": self.ab_reward_modes,
         }
@@ -291,6 +303,7 @@ class TrainingConfig:
         self._validate_positive(self.n_envs, "n_envs")
         self._validate_positive(self.max_epochs, "max_epochs")
         self._validate_positive(self.ppo_updates_per_batch, "ppo_updates_per_batch")
+        self._validate_positive(self.gradient_telemetry_stride, "gradient_telemetry_stride")
         if self.batch_size_per_env is not None:
             self._validate_positive(self.batch_size_per_env, "batch_size_per_env")
 
@@ -323,6 +336,20 @@ class TrainingConfig:
 
         if self.param_budget <= 0:
             raise ValueError("param_budget must be positive")
+
+        # Validate amp_dtype
+        valid_amp_dtypes = {"auto", "float16", "bfloat16", "off"}
+        if self.amp_dtype not in valid_amp_dtypes:
+            raise ValueError(
+                f"amp_dtype must be one of {sorted(valid_amp_dtypes)} (got '{self.amp_dtype}')"
+            )
+
+        # Validate compile_mode
+        valid_compile_modes = {"default", "max-autotune", "reduce-overhead", "off"}
+        if self.compile_mode not in valid_compile_modes:
+            raise ValueError(
+                f"compile_mode must be one of {sorted(valid_compile_modes)} (got '{self.compile_mode}')"
+            )
         if self.param_penalty_weight < 0:
             raise ValueError("param_penalty_weight must be non-negative")
         if self.sparse_reward_scale <= 0:
@@ -366,7 +393,7 @@ class TrainingConfig:
             f"  PPO: lr={self.lr}, gamma={self.gamma}, clip={self.clip_ratio}",
             f"  Episodes: {self.n_episodes}, envs={self.n_envs}, max_epochs={self.max_epochs}",
             f"  Entropy: {self.entropy_coef}" + (f" -> {self.entropy_coef_end}" if self.entropy_coef_end else ""),
-            f"  Updates/batch: {self.ppo_updates_per_batch}, amp={'on' if self.amp else 'off'}",
+            f"  Updates/batch: {self.ppo_updates_per_batch}, amp={'on' if self.amp else 'off'}, amp_dtype={self.amp_dtype}, compile={self.compile_mode}",
             f"  LSTM: hidden={self.lstm_hidden_dim}, chunk={self.chunk_length}",
             f"  Slots: {','.join(self.slots)} | reward_family={self.reward_family.value} mode={self.reward_mode.value}",
             f"  Telemetry: {'enabled' if self.use_telemetry else 'disabled'}",

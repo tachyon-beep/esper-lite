@@ -545,6 +545,28 @@ class MorphogeneticModel(nn.Module):
             prev_segment = slot_id
         return self.host.forward_from_segment(prev_segment, x)
 
+    def fused_forward(self, x: torch.Tensor, alpha_overrides: dict[str, torch.Tensor]) -> torch.Tensor:
+        """Fused forward pass for multiple alpha configurations (Zero-Sync Validation).
+
+        Args:
+            x: Expanded input tensor of shape [K * B, C, H, W] where K is number of configs.
+            alpha_overrides: Dict mapping slot_id -> tensor of shape [K * B, 1, 1, 1].
+
+        Returns:
+            Output logits for all configurations [K * B, num_classes].
+        """
+        if not self._active_slots:
+            return self.host(x)
+
+        prev_segment = None
+        for slot_id in self._active_slots:
+            x = self.host.forward_to_segment(slot_id, x, from_segment=prev_segment)
+            # Call slot with alpha_override tensor
+            override = alpha_overrides.get(slot_id)
+            x = self.seed_slots[slot_id](x, alpha_override=override)
+            prev_segment = slot_id
+        return self.host.forward_from_segment(prev_segment, x)
+
     def germinate_seed(
         self,
         blueprint_id: str,

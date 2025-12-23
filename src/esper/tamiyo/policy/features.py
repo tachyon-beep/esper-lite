@@ -15,21 +15,32 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import os
 from typing import TYPE_CHECKING
+
+import torch
 
 from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
 from esper.leyline.slot_config import SlotConfig
 
 # HOT PATH: ONLY leyline imports allowed!
 
+# Debug flag for paranoia stage validation (set ESPER_DEBUG_STAGE=1 to enable)
+_DEBUG_STAGE_VALIDATION = os.environ.get("ESPER_DEBUG_STAGE", "").lower() in ("1", "true", "yes")
+
+# Valid SeedStage values (excludes reserved value 5 which was SHADOWING)
+# Used for paranoia asserts when _DEBUG_STAGE_VALIDATION is enabled
+_VALID_STAGE_VALUES: frozenset[int] = frozenset({0, 1, 2, 3, 4, 6, 7, 8, 9, 10})
+
 if TYPE_CHECKING:
     # Type hints only - not imported at runtime
-    pass
+    from esper.leyline import SeedStateReport
 
 
 __all__ = [
     "safe",
     "obs_to_multislot_features",
+    "batch_obs_to_features",
     "MULTISLOT_FEATURE_SIZE",
     "get_feature_size",
     "BASE_FEATURE_SIZE",
@@ -239,10 +250,18 @@ def obs_to_multislot_features(
         alpha_algorithm_raw = max(_ALPHA_ALGO_MIN, min(alpha_algorithm_raw, _ALPHA_ALGO_MAX))
         alpha_algorithm_norm = (alpha_algorithm_raw - _ALPHA_ALGO_MIN) / _ALPHA_ALGO_RANGE
 
+        # Extract and optionally validate stage value
+        stage_val = int(slot.get('stage', 0))
+        if _DEBUG_STAGE_VALIDATION:
+            assert stage_val in _VALID_STAGE_VALUES, (
+                f"Invalid stage value {stage_val} for slot {slot_id}; "
+                f"valid values are {sorted(_VALID_STAGE_VALUES)}"
+            )
+
         # State features (12 dims)
         slot_features.extend([
             float(slot.get('is_active', 0)),
-            float(slot.get('stage', 0)),
+            float(stage_val),
             alpha,
             safe(slot.get("improvement", 0.0), 0.0, max_val=_IMPROVEMENT_CLAMP_PCT_PTS) / _IMPROVEMENT_CLAMP_PCT_PTS,
             # Tempo normalized to 0-1 range (max is ~12 epochs)
@@ -264,6 +283,134 @@ def obs_to_multislot_features(
         slot_features.extend(blueprint_one_hot)
 
     return base + slot_features
+
+
+def batch_obs_to_features(
+    batch_signals: list,
+    batch_slot_reports: list[dict[str, "SeedStateReport"]],
+    use_telemetry: bool,
+    max_epochs: int,
+    total_params: list[int],
+    total_seeds: list[int],
+    max_seeds: int,
+    slot_config: SlotConfig,
+    device: torch.device,
+) -> torch.Tensor:
+    """Consolidated tensor-driven feature extraction for all environments.
+    
+    Replaces dict-based loops with vectorized torch operations.
+    """
+    n_envs = len(batch_signals)
+    num_slots = slot_config.num_slots
+    state_dim = get_feature_size(slot_config)
+    
+    # Pre-allocate feature tensor
+    features = torch.zeros((n_envs, state_dim), device=device)
+    
+    # 1. Extract Base Features (0-22)
+    # [0-1] Timing (epoch, global_step)
+    epochs = torch.tensor([s.metrics.epoch for s in batch_signals], device=device, dtype=torch.float32)
+    steps = torch.tensor([s.metrics.global_step for s in batch_signals], device=device, dtype=torch.float32)
+    features[:, 0] = epochs
+    features[:, 1] = steps
+    
+    # [2-4] Losses (train, val, delta)
+    features[:, 2] = torch.tensor([s.metrics.train_loss for s in batch_signals], device=device).clamp(-10, 10)
+    features[:, 3] = torch.tensor([s.metrics.val_loss for s in batch_signals], device=device).clamp(-10, 10)
+    features[:, 4] = torch.tensor([s.metrics.loss_delta for s in batch_signals], device=device).clamp(-10, 10)
+    
+    # [5-7] Accuracies (train, val, delta)
+    features[:, 5] = torch.tensor([s.metrics.train_accuracy for s in batch_signals], device=device)
+    features[:, 6] = torch.tensor([s.metrics.val_accuracy for s in batch_signals], device=device)
+    features[:, 7] = torch.tensor([s.metrics.accuracy_delta for s in batch_signals], device=device).clamp(-10, 10)
+    
+    # [8-10] Trends (plateau_epochs, best_val_acc, best_val_loss)
+    features[:, 8] = torch.tensor([s.metrics.plateau_epochs for s in batch_signals], device=device, dtype=torch.float32)
+    features[:, 9] = torch.tensor([s.metrics.best_val_accuracy for s in batch_signals], device=device)
+    features[:, 10] = torch.tensor([s.metrics.best_val_loss for s in batch_signals], device=device).clamp(-10, 10)
+    
+    # [11-15] Loss history (5 values)
+    for i, s in enumerate(batch_signals):
+        hist = list(s.loss_history[-5:])
+        while len(hist) < 5: hist.insert(0, 0.0)
+        features[i, 11:16] = torch.tensor(hist, device=device).clamp(-10, 10)
+        
+    # [16-20] Accuracy history (5 values)
+    for i, s in enumerate(batch_signals):
+        hist = list(s.accuracy_history[-5:])
+        while len(hist) < 5: hist.insert(0, 0.0)
+        features[i, 16:21] = torch.tensor(hist, device=device)
+        
+    # [21] Total params
+    features[:, 21] = torch.tensor(total_params, device=device, dtype=torch.float32)
+    
+    # [22] Seed utilization
+    features[:, 22] = torch.tensor(total_seeds, device=device, dtype=torch.float32) / max(max_seeds, 1)
+    
+    # 2. Extract Slot Features (23 + num_slots * 25)
+    max_epochs_den = float(max(max_epochs, 1))
+    
+    for slot_idx, slot_id in enumerate(slot_config.slot_ids):
+        offset = BASE_FEATURE_SIZE + slot_idx * SLOT_FEATURE_SIZE
+        
+        # State features (12 dims)
+        for env_idx in range(n_envs):
+            report = batch_slot_reports[env_idx].get(slot_id)
+            if report:
+                contribution = report.metrics.counterfactual_contribution
+                if contribution is None:
+                    contribution = report.metrics.improvement_since_stage_start
+
+                # Paranoia check for valid stage value (debug-only)
+                if _DEBUG_STAGE_VALIDATION:
+                    assert report.stage.value in _VALID_STAGE_VALUES, (
+                        f"Invalid stage value {report.stage.value} for slot {slot_id} env {env_idx}"
+                    )
+
+                # Manual entry for now (can be further vectorized with more metadata)
+                features[env_idx, offset] = 1.0 # is_active
+                features[env_idx, offset + 1] = float(report.stage.value)
+                features[env_idx, offset + 2] = report.metrics.current_alpha
+                features[env_idx, offset + 3] = max(-1.0, min(contribution / _IMPROVEMENT_CLAMP_PCT_PTS, 1.0))
+                features[env_idx, offset + 4] = float(report.blend_tempo_epochs) / 12.0
+                features[env_idx, offset + 5] = report.alpha_target
+                features[env_idx, offset + 6] = float(report.alpha_mode) / _ALPHA_MODE_MAX
+                features[env_idx, offset + 7] = min(float(report.alpha_steps_total), max_epochs_den) / max_epochs_den
+                features[env_idx, offset + 8] = min(float(report.alpha_steps_done), max_epochs_den) / max_epochs_den
+                features[env_idx, offset + 9] = min(float(report.time_to_target), max_epochs_den) / max_epochs_den
+                features[env_idx, offset + 10] = max(-1.0, min(report.alpha_velocity, 1.0))
+                features[env_idx, offset + 11] = float(report.alpha_algorithm - _ALPHA_ALGO_MIN) / _ALPHA_ALGO_RANGE
+                
+                # Blueprint one-hot (13 dims)
+                bp_idx = _BLUEPRINT_TO_INDEX.get(report.blueprint_id, -1)
+                if 0 <= bp_idx < _NUM_BLUEPRINT_TYPES:
+                    features[env_idx, offset + 12 + bp_idx] = 1.0
+            else:
+                # Slot inactive - already zeros from initialization except defaults
+                features[env_idx, offset + 11] = float(AlphaAlgorithm.ADD.value - _ALPHA_ALGO_MIN) / _ALPHA_ALGO_RANGE
+                features[env_idx, offset + 4] = 5.0 / 12.0 # Default tempo
+
+    # 3. Telemetry Features (Optional)
+    if use_telemetry:
+        # Append telemetry features from reports
+        from esper.leyline import SeedTelemetry
+        tele_dim = SeedTelemetry.feature_dim()
+        
+        tele_features_list = []
+        for env_idx in range(n_envs):
+            env_tele = []
+            for slot_id in slot_config.slot_ids:
+                report = batch_slot_reports[env_idx].get(slot_id)
+                if report and report.telemetry:
+                    env_tele.extend(report.telemetry.to_features())
+                else:
+                    env_tele.extend([0.0] * tele_dim)
+            tele_features_list.append(env_tele)
+        
+        tele_tensor = torch.tensor(tele_features_list, device=device, dtype=torch.float32)
+        features = torch.cat([features, tele_tensor], dim=1)
+
+    return features
 
 
 # =============================================================================

@@ -224,8 +224,9 @@ def _cifar10_blind_spec() -> TaskSpec:
     def _make_model(device: str, slots: list[str] | None = None) -> MorphogeneticModel:
         if not slots:
             raise ValueError("slots parameter is required and cannot be empty")
-        # kernel_size=1 creates the "blind" host
-        host = CNNHost(num_classes=10, base_channels=32, kernel_size=1)
+        # Medium-Weak blind host: 32 channels (for bandwidth), 2 blocks, no pooling.
+        # This provides a wide feature space for seeds but zero spatial context.
+        host = CNNHost(num_classes=10, base_channels=32, n_blocks=2, pool_layers=0, kernel_size=1)
         return MorphogeneticModel(host, device=device, slots=slots, task_config=cifar_config)
 
     return TaskSpec(

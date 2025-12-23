@@ -31,6 +31,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Telemetry verbosity level (default: normal)",
     )
     telemetry_parent.add_argument(
+        "--gradient-telemetry-stride",
+        type=int,
+        default=None,
+        help="Stride for gradient telemetry collection (default: 10, or 1 if level is debug)",
+    )
+    telemetry_parent.add_argument(
         "--telemetry-lifecycle-only",
         action="store_true",
         help="Keep lightweight seed lifecycle telemetry even when ops telemetry is disabled",
@@ -149,6 +155,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--amp",
         action="store_true",
         help="Enable automatic mixed precision (CUDA only)",
+    )
+    ppo_parser.add_argument(
+        "--amp-dtype",
+        type=str,
+        choices=["auto", "float16", "bfloat16", "off"],
+        default="auto",
+        help="AMP dtype: auto (detect BF16 support), float16, bfloat16, or off. "
+             "BF16 eliminates GradScaler overhead on Ampere+ GPUs. (default: auto)",
+    )
+    ppo_parser.add_argument(
+        "--compile-mode",
+        type=str,
+        choices=["default", "max-autotune", "reduce-overhead", "off"],
+        default="default",
+        help="torch.compile mode: default (fast compile), max-autotune (slow compile, faster runtime), "
+             "reduce-overhead (minimal overhead), or off. (default: default)",
     )
     ppo_parser.add_argument(
         "--seed",
@@ -423,6 +445,7 @@ def main():
                     telemetry_config=telemetry_config,
                     telemetry_lifecycle_only=args.telemetry_lifecycle_only,
                     min_fossilize_improvement=args.min_fossilize_improvement,
+                    gradient_telemetry_stride=args.gradient_telemetry_stride if args.gradient_telemetry_stride is not None else (1 if args.telemetry_level == "debug" else 10),
                 )
 
             elif args.algorithm == "ppo":
@@ -444,8 +467,20 @@ def main():
                     config.seed = args.seed
                 if args.amp:
                     config.amp = True
+                # CLI amp_dtype overrides config only if explicitly set (not default 'auto')
+                if hasattr(args, 'amp_dtype') and args.amp_dtype:
+                    config.amp_dtype = args.amp_dtype
+                # CLI compile_mode overrides config
+                if hasattr(args, 'compile_mode') and args.compile_mode:
+                    config.compile_mode = args.compile_mode
                 if telemetry_config.level.name == "OFF":
                     config.use_telemetry = False
+
+                # Handle gradient telemetry stride: CLI > debug default (1) > config default (10)
+                if args.gradient_telemetry_stride is not None:
+                    config.gradient_telemetry_stride = args.gradient_telemetry_stride
+                elif args.telemetry_level == "debug":
+                    config.gradient_telemetry_stride = 1
 
                 # Handle A/B testing - set on config for validation
                 if args.ab_test:

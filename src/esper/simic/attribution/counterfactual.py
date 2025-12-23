@@ -16,12 +16,15 @@ For publication-grade causal claims, use parallel control runs.
 from __future__ import annotations
 
 import time
+import logging
 from dataclasses import dataclass, field
 from itertools import permutations
 from typing import Callable, Literal, TYPE_CHECKING
 import random
 
 from esper.leyline import TelemetryEvent, TelemetryEventType
+
+_logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     pass
@@ -82,6 +85,7 @@ class CounterfactualMatrix:
     configs: list[CounterfactualResult] = field(default_factory=list)
     strategy_used: str = ""
     compute_time_seconds: float = 0.0
+    failed_configs: int = 0
 
     # Derived metrics (computed lazily)
     _marginal_contributions: dict[str, float] | None = field(
@@ -192,6 +196,26 @@ class CounterfactualEngine:
         self.config = config or CounterfactualConfig()
         self._emit_callback = emit_callback
 
+    def generate_configs(self, slot_ids: list[str]) -> list[tuple[bool, ...]]:
+        """Generate the list of configurations required for the current strategy."""
+        n_seeds = len(slot_ids)
+        strategy = self.config.effective_strategy(n_seeds)
+
+        if strategy == "full_factorial":
+            configs = self._generate_full_factorial(slot_ids)
+        elif strategy == "shapley":
+            configs = self._generate_shapley_configs(slot_ids)
+        elif strategy == "ablation_only":
+            configs = self._generate_ablation_configs(slot_ids)
+        else:
+            configs = self._generate_full_factorial(slot_ids)
+
+        # Apply max_configurations limit
+        if self.config.max_configurations:
+            configs = configs[: self.config.max_configurations]
+
+        return configs
+
     def compute_matrix(
         self,
         slot_ids: list[str],
@@ -212,19 +236,7 @@ class CounterfactualEngine:
         start_time = time.monotonic()
 
         matrix = CounterfactualMatrix(strategy_used=strategy)
-
-        if strategy == "full_factorial":
-            configs = self._generate_full_factorial(slot_ids)
-        elif strategy == "shapley":
-            configs = self._generate_shapley_configs(slot_ids)
-        elif strategy == "ablation_only":
-            configs = self._generate_ablation_configs(slot_ids)
-        else:
-            configs = self._generate_full_factorial(slot_ids)
-
-        # Apply max_configurations limit
-        if self.config.max_configurations:
-            configs = configs[: self.config.max_configurations]
+        configs = self.generate_configs(slot_ids)
 
         # Evaluate each configuration
         for config_tuple in configs:
@@ -243,7 +255,14 @@ class CounterfactualEngine:
             # Evaluate
             try:
                 val_loss, val_accuracy = evaluate_fn(alpha_settings)
-            except Exception:
+            except Exception as e:
+                matrix.failed_configs += 1
+                if matrix.failed_configs <= 5:  # Throttle logs
+                    _logger.warning(
+                        "Counterfactual evaluation failed for config %s: %s",
+                        config_tuple,
+                        e,
+                    )
                 continue  # Skip failed evaluations
 
             result = CounterfactualResult(
@@ -256,6 +275,34 @@ class CounterfactualEngine:
             matrix.configs.append(result)
 
         matrix.compute_time_seconds = time.monotonic() - start_time
+        return matrix
+
+    def compute_matrix_from_results(
+        self,
+        slot_ids: list[str],
+        results: dict[tuple[bool, ...], tuple[float, float]],
+    ) -> CounterfactualMatrix:
+        """Compute matrix from pre-calculated results (e.g. fused validation)."""
+        n_seeds = len(slot_ids)
+        strategy = self.config.effective_strategy(n_seeds)
+        matrix = CounterfactualMatrix(strategy_used=strategy)
+
+        # We assume the results passed in match what generate_configs would request,
+        # or at least contain the subsets we care about.
+        for config_tuple, (val_loss, val_accuracy) in results.items():
+            alpha_settings = {
+                slot_id: 1.0 if enabled else 0.0
+                for slot_id, enabled in zip(slot_ids, config_tuple)
+            }
+            result = CounterfactualResult(
+                config=config_tuple,
+                slot_ids=tuple(slot_ids),
+                alpha_settings=alpha_settings,
+                val_loss=val_loss,
+                val_accuracy=val_accuracy,
+            )
+            matrix.configs.append(result)
+
         return matrix
 
     def _generate_full_factorial(
@@ -343,13 +390,17 @@ class CounterfactualEngine:
         # Compute Shapley values
         shapley_values: dict[str, list[float]] = {sid: [] for sid in slot_ids}
 
-        # Sample permutations
-        n_perms = min(100, len(list(permutations(range(n)))))
-        perms = list(permutations(range(n)))
-        random.shuffle(perms)
-        perms = perms[:n_perms]
-
-        for perm in perms:
+        # Sample permutations (FIX BUG-027: Avoid materializing all permutations)
+        # We sample up to 100 random permutations (or use the config limit)
+        n_samples = getattr(self.config, "shapley_samples", 20)
+        n_perms = min(100, n_samples)
+        
+        # If n is very small (e.g. <= 4), we could theoretically use all perms,
+        # but random sampling is still safe and avoids branching logic.
+        for _ in range(n_perms):
+            perm = list(range(n))
+            random.shuffle(perm)
+            
             for i, slot_idx in enumerate(perm):
                 # Coalition before adding this slot
                 before_set = set(perm[:i])

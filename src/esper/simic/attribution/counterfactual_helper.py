@@ -81,6 +81,26 @@ class CounterfactualHelper:
         self.engine = CounterfactualEngine(config, emit_callback=emit_callback)
         self._last_matrix: CounterfactualMatrix | None = None
 
+    def get_required_configs(self, slot_ids: list[str]) -> list[tuple[bool, ...]]:
+        """Get list of configurations (seed masks) required for current strategy.
+
+        Used by training loop to fuse counterfactuals into validation pass.
+        """
+        return self.engine.generate_configs(slot_ids)
+
+    def compute_contributions_from_results(
+        self,
+        slot_ids: list[str],
+        results: dict[tuple[bool, ...], tuple[float, float]],
+        epoch: int | None = None,
+    ) -> dict[str, ContributionResult]:
+        """Compute contributions from pre-calculated batch results."""
+        if not slot_ids:
+            return {}
+
+        matrix = self.engine.compute_matrix_from_results(slot_ids, results)
+        return self._process_matrix(matrix, slot_ids)
+
     def compute_contributions(
         self,
         slot_ids: list[str],
@@ -102,8 +122,13 @@ class CounterfactualHelper:
 
         # Compute full matrix
         matrix = self.engine.compute_matrix(slot_ids, evaluate_fn)
-        self._last_matrix = matrix
+        return self._process_matrix(matrix, slot_ids)
 
+    def _process_matrix(
+        self, matrix: CounterfactualMatrix, slot_ids: list[str]
+    ) -> dict[str, ContributionResult]:
+        """Extract contributions from a computed matrix."""
+        self._last_matrix = matrix
         results: dict[str, ContributionResult] = {}
 
         # Get marginal contributions
@@ -122,9 +147,6 @@ class CounterfactualHelper:
                     results[slot_id].shapley_mean = estimate.mean
                     results[slot_id].shapley_std = estimate.std
                     results[slot_id].is_significant = estimate.is_significant()
-
-        # Note: Telemetry is emitted by CounterfactualEngine.compute_shapley_values()
-        # when emit_events=True (default). See ANALYTICS_SNAPSHOT events.
 
         _logger.debug(
             f"Counterfactual computed: {len(matrix.configs)} configs, "

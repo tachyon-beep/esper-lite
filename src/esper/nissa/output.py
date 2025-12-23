@@ -400,16 +400,24 @@ class DirectoryOutput(OutputBackend):
         self._file_output.close()
 
 
+import queue
+import threading
+
 class NissaHub:
     """Central telemetry hub that routes events to multiple backends.
 
     The hub receives carbon copies of events from all domains and
     distributes them to all registered output backends.
 
+    Performance:
+        Emission is asynchronous. Events are placed in a queue and processed
+        by a background worker thread. This prevents slow I/O backends
+        (e.g. console, network) from blocking the training loop.
+
     Lifecycle Contract:
         - add_backend(): Starts backend immediately; raises RuntimeError if hub is closed
-        - emit(): Delivers to all backends; silently drops (with warning) if hub is closed
-        - close(): Idempotent; closes all backends and marks hub as closed
+        - emit(): Places event in queue; silently drops (with warning) if hub is closed
+        - close(): Idempotent; flushes queue, closes all backends, and stops worker
         - reset(): Closes all backends, clears list, and reopens hub for reuse
 
         This contract is shared with KarnCollector for consistency across telemetry systems.
@@ -423,10 +431,44 @@ class NissaHub:
         hub.emit(event)
     """
 
-    def __init__(self):
+    def __init__(self, max_queue_size: int = 1000):
         self._backends: list[OutputBackend] = []
         self._closed = False  # Idempotency flag for close()
         self._emit_after_close_warned = False
+        self._queue: queue.Queue[TelemetryEvent | None] = queue.Queue(maxsize=max_queue_size)
+        self._worker_thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+
+    def _start_worker(self) -> None:
+        """Start the background worker thread if not already running."""
+        with self._lock:
+            if self._worker_thread is None or not self._worker_thread.is_alive():
+                self._worker_thread = threading.Thread(
+                    target=self._worker_loop, name="NissaHubWorker", daemon=True
+                )
+                self._worker_thread.start()
+
+    def _worker_loop(self) -> None:
+        """Background worker loop that processes events from the queue."""
+        while True:
+            try:
+                event = self._queue.get(timeout=1.0)
+                if event is None:  # Shutdown signal
+                    self._queue.task_done()
+                    break
+
+                for backend in self._backends:
+                    try:
+                        backend.emit(event)
+                    except Exception as e:
+                        # Log error but don't let one backend failure break others
+                        _logger.error(f"Error in backend {backend.__class__.__name__}: {e}")
+                
+                self._queue.task_done()
+            except queue.Empty:
+                continue
+            except Exception as e:
+                _logger.error(f"Unexpected error in NissaHub worker loop: {e}")
 
     def add_backend(self, backend: OutputBackend) -> None:
         """Add an output backend to the hub.
@@ -451,6 +493,7 @@ class NissaHub:
         try:
             backend.start()
             self._backends.append(backend)
+            self._start_worker()
         except Exception:
             _logger.exception(f"Failed to start backend {backend.__class__.__name__}, not adding")
             raise
@@ -469,7 +512,7 @@ class NissaHub:
             self._backends.remove(backend)
 
     def emit(self, event: TelemetryEvent) -> None:
-        """Emit a telemetry event to all backends.
+        """Emit a telemetry event to all backends (asynchronously).
 
         Args:
             event: The telemetry event to emit.
@@ -483,12 +526,31 @@ class NissaHub:
                 _logger.warning("emit() called on closed NissaHub (event dropped)")
                 self._emit_after_close_warned = True
             return
-        for backend in self._backends:
-            try:
-                backend.emit(event)
-            except Exception as e:
-                # Log error but don't let one backend failure break others
-                _logger.error(f"Error in backend {backend.__class__.__name__}: {e}")
+
+        try:
+            # Non-blocking put to avoid stalling training if queue is full.
+            # If queue is full, we drop the event and warn.
+            self._queue.put_nowait(event)
+        except queue.Full:
+            _logger.warning("NissaHub queue full, dropping telemetry event")
+
+    def flush(self, timeout: float | None = None) -> None:
+        """Block until all queued events have been processed.
+
+        Useful for tests or shutdown sequences where you need to ensure
+        all events have been delivered to backends before proceeding.
+
+        Args:
+            timeout: Maximum time to wait in seconds. None means wait forever.
+        """
+        if self._closed:
+            return
+        # Only wait if there's actually a worker running to process events
+        if self._worker_thread is None or not self._worker_thread.is_alive():
+            return
+        # join() blocks until all items in the queue have been processed
+        # (i.e., task_done() has been called for each get())
+        self._queue.join()
 
     def reset(self) -> None:
         """Reset the hub: close all backends and clear the list.
@@ -505,14 +567,29 @@ class NissaHub:
         self._backends.clear()
         self._closed = False  # Allow hub to be reused after reset
         self._emit_after_close_warned = False
+        # Create fresh queue to ensure no stale events from previous runs
+        self._queue = queue.Queue(maxsize=self._queue.maxsize)
+        self._worker_thread = None  # Will be recreated on next add_backend()
 
     def close(self) -> None:
         """Close all backends (idempotent).
 
         Safe to call multiple times - only closes backends once.
+        Flushes pending events before shutting down the worker.
         """
         if self._closed:
             return
+        
+        # Signal worker to stop and wait for it to finish
+        if self._worker_thread is not None and self._worker_thread.is_alive():
+            try:
+                # Add None to queue as sentinel for worker shutdown.
+                # Use blocking put with timeout to ensure signal is received.
+                self._queue.put(None, timeout=2.0)
+                self._worker_thread.join(timeout=5.0)
+            except (queue.Full, RuntimeError):
+                pass  # Worker might already be dead or queue unreachable
+
         self._closed = True
         for backend in self._backends:
             try:

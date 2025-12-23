@@ -26,12 +26,14 @@ class TestGlobalHubReset:
         hub.add_backend(backend)
 
         hub.emit(TelemetryEvent(event_type=TelemetryEventType.EPOCH_COMPLETED, epoch=1))
+        hub.flush()  # Wait for async worker to process the event
         assert len(captured) == 1
 
         # Reset should clear all backends so subsequent emits don't duplicate.
         reset_hub()
 
         hub.emit(TelemetryEvent(event_type=TelemetryEventType.EPOCH_COMPLETED, epoch=2))
+        hub.flush()  # Wait for async processing (should be no-op since reset clears backends)
         assert len(captured) == 1
 
         # Clean up (idempotent)

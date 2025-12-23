@@ -268,6 +268,32 @@ class SeedTelemetry:
                 f"SeedTelemetry.stage must be a valid SeedStage.value, got {stage_raw!r}"
             ) from e
 
+        # Validate alpha_mode (AlphaMode enum)
+        alpha_mode_raw = data.get("alpha_mode", AlphaMode.HOLD.value)
+        if not isinstance(alpha_mode_raw, int) or isinstance(alpha_mode_raw, bool):
+            raise ValueError(
+                f"SeedTelemetry.alpha_mode must be an int AlphaMode.value, got {alpha_mode_raw!r}"
+            )
+        try:
+            alpha_mode = AlphaMode(alpha_mode_raw).value
+        except ValueError as e:
+            raise ValueError(
+                f"SeedTelemetry.alpha_mode must be a valid AlphaMode.value, got {alpha_mode_raw!r}"
+            ) from e
+
+        # Validate alpha_algorithm (AlphaAlgorithm enum)
+        alpha_algorithm_raw = data.get("alpha_algorithm", AlphaAlgorithm.ADD.value)
+        if not isinstance(alpha_algorithm_raw, int) or isinstance(alpha_algorithm_raw, bool):
+            raise ValueError(
+                f"SeedTelemetry.alpha_algorithm must be an int AlphaAlgorithm.value, got {alpha_algorithm_raw!r}"
+            )
+        try:
+            alpha_algorithm = AlphaAlgorithm(alpha_algorithm_raw).value
+        except ValueError as e:
+            raise ValueError(
+                f"SeedTelemetry.alpha_algorithm must be a valid AlphaAlgorithm.value, got {alpha_algorithm_raw!r}"
+            ) from e
+
         return cls(
             seed_id=data["seed_id"],
             blueprint_id=data.get("blueprint_id", ""),
@@ -282,12 +308,12 @@ class SeedTelemetry:
             stage=stage,
             alpha=data.get("alpha", 0.0),
             alpha_target=data.get("alpha_target", 0.0),
-            alpha_mode=data.get("alpha_mode", AlphaMode.HOLD.value),
+            alpha_mode=alpha_mode,
             alpha_steps_total=data.get("alpha_steps_total", 0),
             alpha_steps_done=data.get("alpha_steps_done", 0),
             time_to_target=data.get("time_to_target", 0),
             alpha_velocity=data.get("alpha_velocity", 0.0),
-            alpha_algorithm=data.get("alpha_algorithm", AlphaAlgorithm.ADD.value),
+            alpha_algorithm=alpha_algorithm,
             epoch=data.get("epoch", 0),
             max_epochs=data.get("max_epochs", 25),
             captured_at=datetime.fromisoformat(data["captured_at"]) if data.get("captured_at") else _utc_now(),
