@@ -84,10 +84,9 @@ class EventLog(Static):
         last_episode = None
 
         for entry in events:
-            # Episode separator
+            # Episode separator (short, won't stretch container)
             if entry.episode != last_episode and last_episode is not None:
-                separator = Text(f"─── Episode {entry.episode} ", style="dim")
-                separator.append("─" * 40, style="dim")
+                separator = Text(f"─── Episode {entry.episode} ───", style="dim")
                 lines.append(separator)
             last_episode = entry.episode
 

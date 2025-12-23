@@ -96,6 +96,7 @@
     height: 1fr;
     border: solid yellow;
     border-title-color: yellow;
+    overflow-x: hidden;
     overflow-y: auto;
     padding: 0 1;
 }
