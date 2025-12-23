@@ -416,14 +416,14 @@ class TamiyoBrain(Static):
             clip_style = self._status_style(self._get_clip_status(tamiyo.clip_fraction))
             banner.append(f"Clip:{tamiyo.clip_fraction:.2f}", style=clip_style)
             if tamiyo.clip_fraction > TUIThresholds.CLIP_WARNING:
-                banner.append("!", style="yellow")
+                banner.append("!", style=clip_style)
             banner.append("  ")
 
             # KL
             kl_style = self._status_style(self._get_kl_status(tamiyo.kl_divergence))
             banner.append(f"KL:{tamiyo.kl_divergence:.3f}", style=kl_style)
             if tamiyo.kl_divergence > TUIThresholds.KL_WARNING:
-                banner.append("!", style="yellow")
+                banner.append("!", style=kl_style)
             banner.append("  ")
 
             # Advantage summary (per UX spec)
