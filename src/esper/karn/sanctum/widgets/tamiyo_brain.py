@@ -122,17 +122,18 @@ class TamiyoBrain(Static):
         gauges.add_column(ratio=1)
         gauges.add_column(ratio=1)
 
+        batch = self._snapshot.current_batch
         entropy_gauge = self._render_gauge(
             "Entropy", tamiyo.entropy, 0, 2.0,
-            self._get_entropy_label(tamiyo.entropy)
+            self._get_entropy_label(tamiyo.entropy, batch)
         )
         value_gauge = self._render_gauge(
             "Value Loss", tamiyo.value_loss, 0, 1.0,
-            self._get_value_loss_label(tamiyo.value_loss)
+            self._get_value_loss_label(tamiyo.value_loss, batch)
         )
         kl_gauge = self._render_gauge(
             "KL", tamiyo.kl_divergence, 0.0, 0.1,
-            self._get_kl_label(tamiyo.kl_divergence)
+            self._get_kl_label(tamiyo.kl_divergence, batch)
         )
 
         gauges.add_row(entropy_gauge, value_gauge, kl_gauge)
@@ -216,21 +217,56 @@ class TamiyoBrain(Static):
 
         return gauge
 
-    def _get_entropy_label(self, entropy: float) -> str:
+    def _get_entropy_label(self, entropy: float, batch: int = 0) -> str:
+        """Batch-aware entropy label."""
         if entropy < TUIThresholds.ENTROPY_CRITICAL:
             return "Collapsed!"
         elif entropy < TUIThresholds.ENTROPY_WARNING:
+            if batch < 20:
+                return "Focusing early"
             return "Getting decisive"
         else:
+            if batch < 10:
+                return "Warming up"
             return "Exploring"
 
-    def _get_value_loss_label(self, value_loss: float) -> str:
-        if value_loss < 0.1:
-            return "Learning well"
-        elif value_loss < 0.5:
-            return "Still learning"
+    def _get_value_loss_label(self, value_loss: float, batch: int = 0) -> str:
+        """Batch-aware value loss label.
+
+        Early training: High loss is expected (value function learning)
+        Mid training: Should be decreasing
+        Late training: Should be stable and low
+        """
+        # Early training (batch < 20): lenient thresholds
+        if batch < 20:
+            if value_loss < 1.0:
+                return "Good for early"
+            elif value_loss < 5.0:
+                return "Learning (expected)"
+            else:
+                return "High (normal early)"
+
+        # Mid training (batch 20-100): moderate expectations
+        elif batch < 100:
+            if value_loss < 0.5:
+                return "Learning well"
+            elif value_loss < 2.0:
+                return "Progressing"
+            elif value_loss < 5.0:
+                return "Slow progress"
+            else:
+                return "Check rewards"
+
+        # Late training (batch 100+): strict expectations
         else:
-            return "Struggling"
+            if value_loss < 0.1:
+                return "Excellent"
+            elif value_loss < 0.5:
+                return "Learning well"
+            elif value_loss < 1.0:
+                return "Still learning"
+            else:
+                return "Struggling"
 
     def _get_advantage_label(self, advantage: float) -> str:
         if advantage > 0.2:
@@ -240,10 +276,22 @@ class TamiyoBrain(Static):
         else:
             return "Needs improvement"
 
-    def _get_kl_label(self, kl_divergence: float) -> str:
+    def _get_kl_label(self, kl_divergence: float, batch: int = 0) -> str:
+        """Batch-aware KL divergence label.
+
+        KL = 0 early is expected; later it should be small but non-zero.
+        """
         if kl_divergence > TUIThresholds.KL_WARNING:
             return "Too fast"
-        return "Stable"
+        elif kl_divergence < 0.0001:
+            if batch < 5:
+                return "Starting up"
+            else:
+                return "Not updating?"
+        elif kl_divergence < 0.005:
+            return "Very stable"
+        else:
+            return "Stable"
 
     def _render_recent_decisions(self) -> Panel:
         """Render Recent Decisions section (up to 3, each visible for 30s minimum).
