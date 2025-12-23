@@ -2,7 +2,7 @@
 
 > **WebSocket-based browser dashboard for remote Esper training monitoring.**
 >
-> **Status:** Design Complete (UX Reviewed)
+> **Status:** DEFERRED (awaiting feature set lock)
 > **Branch:** `feat/overwatch-textual-ui` (shared foundation with Overwatch)
 > **Supersedes:** Existing `--dashboard` feature
 > **UX Review:** 2025-12-18 by elspeth-ux-specialist
