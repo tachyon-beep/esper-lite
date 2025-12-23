@@ -30,6 +30,10 @@ class EventLogDetail(ModalScreen[None]):
         Binding("q", "dismiss", "Close"),
     ]
 
+    def on_click(self) -> None:
+        """Dismiss modal on click anywhere."""
+        self.dismiss()
+
     DEFAULT_CSS = """
     EventLogDetail {
         align: center middle;
