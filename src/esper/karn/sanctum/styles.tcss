@@ -34,9 +34,9 @@
     min-height: 15;
 }
 
-/* Environment Overview - main table (68% width, +5 chars for columns) */
+/* Environment Overview - main table (70% width) */
 #env-overview {
-    width: 68%;
+    width: 70%;
     height: 1fr;
     border: solid $primary;
     margin-right: 1;
@@ -47,9 +47,9 @@
     border: double $accent;
 }
 
-/* Scoreboard - Best Runs (32% width) */
+/* Scoreboard - Best Runs (30% width) */
 #scoreboard {
-    width: 32%;
+    width: 30%;
     height: 1fr;
     border: solid cyan;
     border-title-color: cyan;
@@ -74,9 +74,9 @@
     width: 100%;
 }
 
-/* Tamiyo Brain - learning + decisions (65% width, left side) */
+/* Tamiyo Brain - learning + decisions (70% width, left side) */
 #tamiyo-brain {
-    width: 65%;
+    width: 70%;
     height: 1fr;
     border: solid magenta;
     border-title-color: magenta;
@@ -90,9 +90,9 @@
     border: double $accent;
 }
 
-/* Event Log - system velocity (35% width, right side) */
+/* Event Log - system velocity (30% width, right side) */
 #event-log {
-    width: 35%;
+    width: 30%;
     height: 1fr;
     border: solid yellow;
     border-title-color: yellow;
