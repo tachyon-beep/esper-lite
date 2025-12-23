@@ -1,8 +1,15 @@
 # Dual-Policy A/B Testing: One Policy Per GPU
 
-**Status:** DESIGN
+**Status:** COMPLETED
 **Date:** 2025-12-24
+**Completed:** 2025-12-24
 **Goal:** True A/B comparison of reward modes by training separate policies on separate GPUs
+
+> **Implementation Notes:**
+> - Phase 1 uses sequential training (not parallel lockstep) for simplicity
+> - Task 3 (live comparative logging) deferred - requires parallel architecture
+> - CLI: `esper ppo --dual-ab shaped-vs-simplified`
+> - Files: `policy_group.py`, `dual_ab.py`, CLI in `train.py`
 
 ---
 
