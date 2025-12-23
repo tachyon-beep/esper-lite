@@ -26,6 +26,7 @@ import torch
 
 from esper.simic.agent import PPOAgent
 from esper.simic.rewards import ContributionRewardConfig
+from esper.simic.training.parallel_env_state import ParallelEnvState
 
 
 @dataclass
@@ -47,6 +48,7 @@ class PolicyGroup:
         device: PyTorch device for this group's policy and environments
         reward_mode: Human-readable reward mode name (e.g., "SHAPED", "SIMPLIFIED")
         agent: PPO agent for this group (independent policy)
+        envs: List of parallel environment states for this group
         reward_config: Reward computation configuration for this group
         episode_history: Per-episode metrics for this group (list of dicts)
         total_episodes: Total number of episodes completed by this group
@@ -63,7 +65,8 @@ class PolicyGroup:
     device: torch.device
     reward_mode: str
     agent: PPOAgent
-    reward_config: ContributionRewardConfig
+    envs: list[ParallelEnvState] = field(default_factory=list)
+    reward_config: ContributionRewardConfig = field(default_factory=ContributionRewardConfig)
     episode_history: list[dict] = field(default_factory=list)
 
     # Per-group metrics

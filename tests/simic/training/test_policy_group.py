@@ -27,6 +27,7 @@ class TestPolicyGroupInitialization:
             device=device,
             reward_mode="SHAPED",
             agent=mock_agent,
+            envs=[],
             reward_config=reward_config,
         )
 
@@ -43,6 +44,7 @@ class TestPolicyGroupInitialization:
             device=torch.device("cpu"),
             reward_mode="SIMPLIFIED",
             agent=mock_agent,
+            envs=[],
             reward_config=ContributionRewardConfig(),
         )
 
@@ -57,6 +59,7 @@ class TestPolicyGroupInitialization:
             device=torch.device("cpu"),
             reward_mode="SPARSE",
             agent=mock_agent,
+            envs=[],
             reward_config=ContributionRewardConfig(),
         )
 
@@ -75,6 +78,7 @@ class TestPolicyGroupInitialization:
             device=device,
             reward_mode="SHAPED",
             agent=mock_agent,
+            envs=[],
             reward_config=ContributionRewardConfig(),
         )
 
@@ -92,6 +96,7 @@ class TestPolicyGroupMetricsTracking:
             device=torch.device("cpu"),
             reward_mode="SHAPED",
             agent=mock_agent,
+            envs=[],
             reward_config=ContributionRewardConfig(),
         )
 
@@ -111,6 +116,7 @@ class TestPolicyGroupMetricsTracking:
             device=torch.device("cpu"),
             reward_mode="SIMPLIFIED",
             agent=mock_agent,
+            envs=[],
             reward_config=ContributionRewardConfig(),
         )
 
@@ -138,6 +144,7 @@ class TestPolicyGroupIndependence:
             device=torch.device("cpu"),
             reward_mode="SHAPED",
             agent=agent_a,
+            envs=[],
             reward_config=ContributionRewardConfig(),
         )
 
@@ -146,6 +153,7 @@ class TestPolicyGroupIndependence:
             device=torch.device("cpu"),
             reward_mode="SIMPLIFIED",
             agent=agent_b,
+            envs=[],
             reward_config=ContributionRewardConfig(),
         )
 
@@ -166,6 +174,7 @@ class TestPolicyGroupIndependence:
             device=torch.device("cpu"),
             reward_mode="SHAPED",
             agent=agent_a,
+            envs=[],
             reward_config=ContributionRewardConfig(),
         )
 
@@ -174,6 +183,7 @@ class TestPolicyGroupIndependence:
             device=torch.device("cpu"),  # In real usage, this would be cuda:1
             reward_mode="SIMPLIFIED",
             agent=agent_b,
+            envs=[],
             reward_config=ContributionRewardConfig(),
         )
 
@@ -206,6 +216,7 @@ class TestPolicyGroupRewardConfig:
             device=torch.device("cpu"),
             reward_mode="SHAPED",
             agent=agent_a,
+            envs=[],
             reward_config=config_a,
         )
 
@@ -214,6 +225,7 @@ class TestPolicyGroupRewardConfig:
             device=torch.device("cpu"),
             reward_mode="SIMPLIFIED",
             agent=agent_b,
+            envs=[],
             reward_config=config_b,
         )
 
@@ -221,3 +233,52 @@ class TestPolicyGroupRewardConfig:
         assert group_a.reward_config.contribution_weight == 1.0
         assert group_b.reward_config.contribution_weight == 0.5
         assert group_a.reward_config is not group_b.reward_config
+
+    def test_environment_list_independence(self):
+        """Each group should maintain its own independent environment list."""
+        from esper.simic.training.parallel_env_state import ParallelEnvState
+        from unittest.mock import Mock
+
+        agent_a = PPOAgent(state_dim=30, action_dim=7)
+        agent_b = PPOAgent(state_dim=30, action_dim=7)
+
+        group_a = PolicyGroup(
+            group_id="A",
+            device=torch.device("cpu"),
+            reward_mode="SHAPED",
+            agent=agent_a,
+            envs=[],
+            reward_config=ContributionRewardConfig(),
+        )
+
+        group_b = PolicyGroup(
+            group_id="B",
+            device=torch.device("cpu"),
+            reward_mode="SIMPLIFIED",
+            agent=agent_b,
+            envs=[],
+            reward_config=ContributionRewardConfig(),
+        )
+
+        # Create mock environments
+        mock_model_a = Mock()
+        mock_optimizer_a = Mock()
+        mock_signal_tracker_a = Mock()
+        mock_governor_a = Mock()
+
+        env_a = ParallelEnvState(
+            model=mock_model_a,
+            host_optimizer=mock_optimizer_a,
+            signal_tracker=mock_signal_tracker_a,
+            governor=mock_governor_a,
+            env_device="cpu",
+        )
+
+        # Add environment to group A only
+        group_a.envs.append(env_a)
+
+        # Verify independence
+        assert len(group_a.envs) == 1
+        assert len(group_b.envs) == 0
+        assert group_a.envs is not group_b.envs
+        assert group_a.envs[0] is env_a
