@@ -118,6 +118,12 @@ class TrainingConfig:
     # If set, overrides CLI --task. Valid: "cifar10", "cifar10_deep", "cifar10_blind", "tinystories"
     task: str | None = None
 
+    # === Gate mode ===
+    # If True, quality gates only check structural requirements (epoch counts, alpha completion)
+    # and let Tamiyo learn quality thresholds through reward signals. If False, gates enforce
+    # hard-coded thresholds for gradient ratios, contribution levels, and stability metrics.
+    permissive_gates: bool = True
+
     def __post_init__(self):
         """Validate and set defaults."""
         # Auto-match chunk_length to max_epochs if not set
@@ -279,6 +285,7 @@ class TrainingConfig:
             "gradient_telemetry_stride": self.gradient_telemetry_stride,
             "seed": self.seed,
             "ab_reward_modes": self.ab_reward_modes,
+            "permissive_gates": self.permissive_gates,
         }
 
     # ------------------------------------------------------------------
@@ -401,7 +408,7 @@ class TrainingConfig:
             f"  Updates/batch: {self.ppo_updates_per_batch}, amp={'on' if self.amp else 'off'}, amp_dtype={self.amp_dtype}, compile={self.compile_mode}",
             f"  LSTM: hidden={self.lstm_hidden_dim}, chunk={self.chunk_length}",
             f"  Slots: {','.join(self.slots)} | reward_family={self.reward_family.value} mode={self.reward_mode.value}",
-            f"  Telemetry: {'enabled' if self.use_telemetry else 'disabled'}",
+            f"  Telemetry: {'enabled' if self.use_telemetry else 'disabled'}, gates={'permissive' if self.permissive_gates else 'strict'}",
         ]
         return "\n".join(lines)
 

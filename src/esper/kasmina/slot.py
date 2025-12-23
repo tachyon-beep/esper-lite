@@ -579,6 +579,15 @@ class QualityGates:
     """Quality gate checks for stage transitions.
 
     Each gate validates that a seed is ready for the next stage.
+
+    Args:
+        permissive: If True, gates only enforce structural requirements
+            (alpha completion, health checks) and let Tamiyo learn quality
+            thresholds through reward signals. If False (default), gates
+            enforce quality thresholds that prevent low-quality seeds from
+            advancing. Set permissive=True for RL training where we want
+            the policy to learn from mistakes rather than being prevented
+            from making them.
     """
 
     def __init__(
@@ -587,11 +596,13 @@ class QualityGates:
         min_blending_epochs: int = DEFAULT_MIN_BLENDING_EPOCHS,
         min_probation_stability: float = DEFAULT_MIN_PROBATION_STABILITY,
         min_seed_gradient_ratio: float = DEFAULT_GRADIENT_RATIO_THRESHOLD,
+        permissive: bool = False,
     ):
         self.min_training_improvement = min_training_improvement
         self.min_blending_epochs = min_blending_epochs
         self.min_probation_stability = min_probation_stability
         self.min_seed_gradient_ratio = min_seed_gradient_ratio
+        self.permissive = permissive
 
     def check_gate(self, state: SeedState, target_stage: SeedStage) -> GateResult:
         """Check if seed passes the gate for target stage."""
@@ -681,12 +692,33 @@ class QualityGates:
         input boundary. There is no numeric "violation" detection - the structural
         guarantee is absolute. Host gradients from the direct loss path are EXPECTED
         and do NOT indicate isolation failures.
+
+        In permissive mode, only checks that seed has trained at least 1 epoch.
+        This lets Tamiyo learn quality thresholds through reward signals.
         """
         checks_passed = []
         checks_failed = []
 
         improvement = state.metrics.improvement_since_stage_start
 
+        # PERMISSIVE MODE: Only check structural minimum (trained at least 1 epoch)
+        if self.permissive:
+            if state.metrics.epochs_in_current_stage >= 1:
+                checks_passed.append("trained_at_least_1_epoch")
+                passed = True
+            else:
+                checks_failed.append("no_training_epochs")
+                passed = False
+            return GateResult(
+                gate=GateLevel.G2,
+                passed=passed,
+                score=min(1.0, improvement / 5.0) if improvement > 0 else 0.0,
+                checks_passed=checks_passed,
+                checks_failed=checks_failed,
+                message=f"Permissive G2: {improvement:.2f}% improvement",
+            )
+
+        # STRICT MODE: Full quality checks
         # Global performance: host + training loop improving
         if improvement >= self.min_training_improvement:
             checks_passed.append(f"global_improvement_{improvement:.2f}%")
@@ -725,32 +757,52 @@ class QualityGates:
         )
 
     def _check_g3(self, state: SeedState) -> GateResult:
-        """G3: Holding readiness - blending completed with stable integration."""
+        """G3: Holding readiness - blending completed with stable integration.
+
+        In permissive mode, only checks alpha completion (structural requirement).
+        The min_blending_epochs check is skipped to let Tamiyo learn timing.
+        """
         checks_passed = []
         checks_failed = []
-
-        # Check blending duration
-        if state.metrics.epochs_in_current_stage >= self.min_blending_epochs:
-            checks_passed.append("blending_complete")
-        else:
-            checks_failed.append(f"blending_incomplete_{state.metrics.epochs_in_current_stage}")
-
         controller = state.alpha_controller
         eps = 1e-6
 
+        # STRUCTURAL CHECKS (always enforced, both modes):
         # BLENDING -> HOLDING is only legal at full amplitude (alpha_target==1.0).
         if controller.alpha_target >= 1.0 - eps:
             checks_passed.append("alpha_target_full")
+            alpha_target_ok = True
         else:
             checks_failed.append(f"alpha_target_not_full_{controller.alpha_target:.2f}")
+            alpha_target_ok = False
 
         # Completion is defined by reaching the controller target and entering HOLD.
         if controller.alpha_mode == AlphaMode.HOLD and abs(controller.alpha - controller.alpha_target) <= eps:
             checks_passed.append("alpha_target_reached")
+            alpha_reached_ok = True
         else:
             checks_failed.append(
                 f"alpha_not_at_target_{controller.alpha:.2f}_target_{controller.alpha_target:.2f}_mode_{controller.alpha_mode.name}"
             )
+            alpha_reached_ok = False
+
+        # PERMISSIVE MODE: Only structural alpha checks
+        if self.permissive:
+            passed = alpha_target_ok and alpha_reached_ok
+            return GateResult(
+                gate=GateLevel.G3,
+                passed=passed,
+                score=controller.alpha,
+                checks_passed=checks_passed,
+                checks_failed=checks_failed,
+                message="Permissive G3: alpha completion only",
+            )
+
+        # STRICT MODE: Also check blending duration
+        if state.metrics.epochs_in_current_stage >= self.min_blending_epochs:
+            checks_passed.append("blending_complete")
+        else:
+            checks_failed.append(f"blending_incomplete_{state.metrics.epochs_in_current_stage}")
 
         passed = len(checks_failed) == 0
         return GateResult(
@@ -766,11 +818,17 @@ class QualityGates:
 
         G5 is only reachable from HOLDING stage where counterfactual
         validation is mandatory. No fallback to total_improvement.
+
+        In permissive mode, only checks:
+        - Counterfactual is available (needed for measurement)
+        - Seed is healthy (safety - don't fossilize broken seeds)
+        The contribution threshold is skipped to let Tamiyo learn.
         """
         checks_passed = []
         checks_failed = []
 
-        # REQUIRE counterfactual - no fallback
+        # REQUIRE counterfactual - no fallback (both modes)
+        # We need counterfactual for reward computation even in permissive mode
         contribution = state.metrics.counterfactual_contribution
         if contribution is None:
             return GateResult(
@@ -781,20 +839,36 @@ class QualityGates:
                 checks_failed=["counterfactual_not_available"],
             )
 
-        # Check contribution meets minimum threshold
-        # Prevents zero/negligible contribution seeds from fossilizing
+        # Log contribution for telemetry (both modes)
+        checks_passed.append(f"counterfactual_available_{contribution:.2f}%")
+
+        # SAFETY CHECK: Health (both modes - never fossilize a broken seed)
+        if state.is_healthy:
+            checks_passed.append("healthy")
+            health_ok = True
+        else:
+            checks_failed.append("unhealthy")
+            health_ok = False
+
+        # PERMISSIVE MODE: Skip contribution threshold, let Tamiyo learn
+        if self.permissive:
+            passed = health_ok  # Only health matters
+            return GateResult(
+                gate=GateLevel.G5,
+                passed=passed,
+                score=min(1.0, contribution / 10.0) if contribution > 0 else 0.0,
+                checks_passed=checks_passed,
+                checks_failed=checks_failed,
+                message=f"Permissive G5: {contribution:.2f}% contribution (no threshold)",
+            )
+
+        # STRICT MODE: Check contribution meets minimum threshold
         if contribution >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION:
             checks_passed.append(f"sufficient_contribution_{contribution:.2f}%")
         else:
             checks_failed.append(
                 f"insufficient_contribution_{contribution:.2f}%_below_{DEFAULT_MIN_FOSSILIZE_CONTRIBUTION}%"
             )
-
-        # Check health
-        if state.is_healthy:
-            checks_passed.append("healthy")
-        else:
-            checks_failed.append("unhealthy")
 
         passed = len(checks_failed) == 0
         return GateResult(
@@ -893,10 +967,6 @@ class SeedSlot(nn.Module):
         # Invalidated when alpha changes via set_alpha() or device changes via to()
         self._cached_alpha_tensor: torch.Tensor | None = None
 
-        # Preallocated buffer for DDP gate synchronization to avoid per-call tensor creation
-        # Only used when torch.distributed is available and initialized
-        self._ddp_sync_buffer: torch.Tensor | None = None
-
         # Pending async gradient stats (tensor-based, no .item() sync yet)
         # Used by capture_gradient_telemetry_async() / finalize_gradient_telemetry() pair
         self._pending_gradient_stats: dict | None = None
@@ -971,7 +1041,6 @@ class SeedSlot(nn.Module):
         if self.device != old_device:
             self._shape_probe_cache.clear()
             self._cached_alpha_tensor = None  # Alpha tensor has device affinity
-            self._ddp_sync_buffer = None  # DDP buffer has device affinity
 
         return self
 
@@ -1235,8 +1304,13 @@ class SeedSlot(nn.Module):
                 checks_failed=["no_valid_transition"],
             )
 
-        # Check gate
+        # Check gate (local evaluation)
         gate_result = self.gates.check_gate(self.state, target_stage)
+
+        # Synchronize gate decision across DDP ranks (rank-0 authoritative)
+        # This prevents BUG-030 architecture divergence from unsynced lifecycle transitions
+        gate_result = self._sync_gate_decision(gate_result)
+
         self._emit_telemetry(
             TelemetryEventType.SEED_GATE_EVALUATED,
             data={
@@ -1962,55 +2036,70 @@ class SeedSlot(nn.Module):
         self.state.alpha_controller.alpha_steps_done = self.state.alpha_controller.alpha_steps_total
 
     def _sync_gate_decision(self, gate_result: GateResult) -> GateResult:
-        """Ensure all DDP ranks agree on lifecycle transitions (Unanimous Consensus).
+        """Ensure all DDP ranks agree on lifecycle transitions via rank-0 broadcast.
 
-        We use ReduceOp.MIN (Logical AND) for all transitions.
-        - Advancement: Everyone must be ready.
-        - Culling: If one rank votes to keep, we wait (conservative).
+        Rank 0 makes the authoritative gate decision and broadcasts it to all ranks.
+        This design (vs. all_reduce consensus) avoids JANK-003 deadlocks when ranks
+        have seeds at different stages, because rank-0's decision is always used
+        regardless of other ranks' local evaluations.
 
         This prevents Architecture Divergence, where ranks typically crash
         if parameter shapes mismatch during the next forward pass.
 
         COLLECTIVE OPERATION: All ranks MUST call this in identical order
-        for each gate check, or deadlock will occur.
+        for each slot's gate check, or deadlock will occur. The training loop
+        must ensure symmetric advance_stage() calls across ranks.
 
         Returns:
-            New GateResult with synchronized pass/fail decision (immutable pattern).
+            GateResult from rank 0, broadcast to all ranks.
         """
         if not (torch.distributed.is_available() and torch.distributed.is_initialized()):
             return gate_result
 
-        # Use preallocated buffer to avoid per-call tensor creation overhead
-        # Buffer is lazily created on first DDP sync and invalidated on device change
-        if self._ddp_sync_buffer is None:
-            self._ddp_sync_buffer = torch.zeros(1, device=self.device, dtype=torch.int)
+        rank = torch.distributed.get_rank()
 
-        # 1 = Passed, 0 = Failed; MIN gives unanimous consensus
-        self._ddp_sync_buffer.fill_(int(gate_result.passed))
-        torch.distributed.all_reduce(self._ddp_sync_buffer, op=torch.distributed.ReduceOp.MIN)
+        # Serialize GateResult for broadcast
+        # We broadcast a minimal dict to avoid pickle overhead on full dataclass
+        if rank == 0:
+            sync_data = {
+                "gate": gate_result.gate.value,  # GateLevel enum value
+                "passed": gate_result.passed,
+                "score": gate_result.score,
+                "checks_passed": list(gate_result.checks_passed),
+                "checks_failed": list(gate_result.checks_failed),
+                "message": gate_result.message,
+            }
+        else:
+            sync_data = None
 
-        is_passed = bool(self._ddp_sync_buffer.item())
+        # broadcast_object_list requires a list; rank 0 sends, others receive
+        object_list = [sync_data]
+        torch.distributed.broadcast_object_list(object_list, src=0)
+        synced_data = object_list[0]
 
-        if gate_result.passed and not is_passed:
-            # Vetoed by DDP consensus - create new result with updated status
-            return GateResult(
-                gate=gate_result.gate,
-                passed=False,
-                score=gate_result.score,
-                checks_passed=gate_result.checks_passed,
-                checks_failed=gate_result.checks_failed + ["ddp_veto"],
-                message=gate_result.message + " (Vetoed by DDP consensus)",
+        # Reconstruct GateResult from broadcast data
+        synced_result = GateResult(
+            gate=GateLevel(synced_data["gate"]),
+            passed=synced_data["passed"],
+            score=synced_data["score"],
+            checks_passed=synced_data["checks_passed"],
+            checks_failed=synced_data["checks_failed"],
+            message=synced_data["message"],
+        )
+
+        # Track divergence for debugging (non-rank-0 had different local result)
+        if rank != 0 and gate_result.passed != synced_result.passed:
+            divergence_note = f" (local={gate_result.passed}, synced from rank0={synced_result.passed})"
+            synced_result = GateResult(
+                gate=synced_result.gate,
+                passed=synced_result.passed,
+                score=synced_result.score,
+                checks_passed=synced_result.checks_passed,
+                checks_failed=synced_result.checks_failed,
+                message=synced_result.message + divergence_note,
             )
 
-        # Either already failed locally or passed consensus
-        return GateResult(
-            gate=gate_result.gate,
-            passed=is_passed,
-            score=gate_result.score,
-            checks_passed=gate_result.checks_passed,
-            checks_failed=gate_result.checks_failed,
-            message=gate_result.message,
-        )
+        return synced_result
 
     def step_epoch(self) -> bool:
         """Advance lifecycle mechanics once per epoch (Kasmina timekeeper).

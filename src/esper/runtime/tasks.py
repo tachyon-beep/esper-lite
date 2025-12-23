@@ -50,16 +50,23 @@ class TaskSpec:
     def __post_init__(self) -> None:
         self.action_enum = build_action_enum(self.topology)
 
-    def create_model(self, device: str = "cuda:0", slots: list[str] | None = None) -> MorphogeneticModel:
+    def create_model(
+        self,
+        device: str = "cuda:0",
+        slots: list[str] | None = None,
+        permissive_gates: bool = True,
+    ) -> MorphogeneticModel:
         """Instantiate model for this task on the target device.
 
         Args:
             device: Target device for the model.
             slots: Seed slots to enable. Required - cannot be None or empty.
+            permissive_gates: If True, quality gates only check structural requirements
+                and let Tamiyo learn quality thresholds through reward signals.
         """
         if not slots:
             raise ValueError("slots parameter is required and cannot be empty")
-        return self.model_factory(device, slots=slots)
+        return self.model_factory(device, slots=slots, permissive_gates=permissive_gates)
 
     def create_dataloaders(self, **overrides):
         """Instantiate dataloaders with defaults merged with overrides."""
@@ -99,13 +106,18 @@ def _cifar10_spec() -> TaskSpec:
     cifar_config = TaskConfig.for_cifar10()
     loss_cfg = LossRewardConfig.for_cifar10()
 
-    def _make_model(device: str, slots: list[str] | None = None) -> MorphogeneticModel:
+    def _make_model(
+        device: str, slots: list[str] | None = None, permissive_gates: bool = True
+    ) -> MorphogeneticModel:
         # Deliberately weak host (8 base channels vs default 32) to leave
         # headroom for seeds to demonstrate value. Expected accuracy ~40-50%.
         if not slots:
             raise ValueError("slots parameter is required and cannot be empty")
         host = CNNHost(num_classes=10, base_channels=8)
-        return MorphogeneticModel(host, device=device, slots=slots, task_config=cifar_config)
+        return MorphogeneticModel(
+            host, device=device, slots=slots, task_config=cifar_config,
+            permissive_gates=permissive_gates,
+        )
 
     return TaskSpec(
         name="cifar10",
@@ -139,7 +151,9 @@ def _cifar10_deep_spec() -> TaskSpec:
     cifar_config = TaskConfig.for_cifar10()
     loss_cfg = LossRewardConfig.for_cifar10()
 
-    def _make_model(device: str, slots: list[str] | None = None) -> MorphogeneticModel:
+    def _make_model(
+        device: str, slots: list[str] | None = None, permissive_gates: bool = True
+    ) -> MorphogeneticModel:
         # Deep but narrow: 5 blocks with 8 base channels (8→16→32→64→128)
         # 5 pools → spatial: 32→16→8→4→2→1
         # 4 injection points at 4 distinct spatial resolutions (8×8, 4×4, 2×2, 1×1).
@@ -148,7 +162,10 @@ def _cifar10_deep_spec() -> TaskSpec:
         if not slots:
             raise ValueError("slots parameter is required and cannot be empty")
         host = CNNHost(num_classes=10, base_channels=8, n_blocks=5, pool_layers=5)
-        return MorphogeneticModel(host, device=device, slots=slots, task_config=cifar_config)
+        return MorphogeneticModel(
+            host, device=device, slots=slots, task_config=cifar_config,
+            permissive_gates=permissive_gates,
+        )
 
     return TaskSpec(
         name="cifar10_deep",
@@ -176,7 +193,9 @@ def _tinystories_spec() -> TaskSpec:
     block_size = 256
     vocab_size = 50257
 
-    def _make_model(device: str, slots: list[str] | None = None) -> MorphogeneticModel:
+    def _make_model(
+        device: str, slots: list[str] | None = None, permissive_gates: bool = True
+    ) -> MorphogeneticModel:
         if not slots:
             raise ValueError("slots parameter is required and cannot be empty")
         host = TransformerHost(
@@ -187,7 +206,10 @@ def _tinystories_spec() -> TaskSpec:
             block_size=block_size,
             dropout=DEFAULT_DROPOUT,
         )
-        return MorphogeneticModel(host, device=device, slots=slots, task_config=ts_config)
+        return MorphogeneticModel(
+            host, device=device, slots=slots, task_config=ts_config,
+            permissive_gates=permissive_gates,
+        )
 
     return TaskSpec(
         name="tinystories",
@@ -221,13 +243,18 @@ def _cifar10_blind_spec() -> TaskSpec:
     cifar_config = TaskConfig.for_cifar10()
     loss_cfg = LossRewardConfig.for_cifar10()
 
-    def _make_model(device: str, slots: list[str] | None = None) -> MorphogeneticModel:
+    def _make_model(
+        device: str, slots: list[str] | None = None, permissive_gates: bool = True
+    ) -> MorphogeneticModel:
         if not slots:
             raise ValueError("slots parameter is required and cannot be empty")
         # Medium-Weak blind host: 32 channels (for bandwidth), 2 blocks, no pooling.
         # This provides a wide feature space for seeds but zero spatial context.
         host = CNNHost(num_classes=10, base_channels=32, n_blocks=2, pool_layers=0, kernel_size=1)
-        return MorphogeneticModel(host, device=device, slots=slots, task_config=cifar_config)
+        return MorphogeneticModel(
+            host, device=device, slots=slots, task_config=cifar_config,
+            permissive_gates=permissive_gates,
+        )
 
     return TaskSpec(
         name="cifar10_blind",

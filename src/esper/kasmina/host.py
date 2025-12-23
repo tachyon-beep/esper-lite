@@ -15,7 +15,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from esper.leyline import AlphaAlgorithm, SeedStage, is_terminal_stage
-from esper.kasmina.slot import SeedSlot
+from esper.kasmina.slot import QualityGates, SeedSlot
 from esper.kasmina.blueprints.cnn import ConvBlock  # Reuse shared building block
 
 if TYPE_CHECKING:
@@ -476,14 +476,19 @@ class MorphogeneticModel(nn.Module):
         slots: list[str],
         task_config=None,
         fast_mode: bool = False,
+        permissive_gates: bool = False,
     ):
         super().__init__()
         self.host = host
         self._device = device
         self.task_config = task_config
+        self.permissive_gates = permissive_gates
 
         # Host must expose segment_channels for multi-slot support
         segment_channels = host.segment_channels
+
+        # Create quality gates (permissive mode lets Tamiyo learn thresholds via rewards)
+        gates = QualityGates(permissive=permissive_gates)
 
         # Create seed slots as ModuleDict for proper submodule registration
         slots_dict = {}
@@ -496,6 +501,7 @@ class MorphogeneticModel(nn.Module):
                 slot_id=slot_id,
                 channels=segment_channels[slot_id],
                 device=device,
+                gates=gates,
                 task_config=task_config,
                 fast_mode=fast_mode,
             )

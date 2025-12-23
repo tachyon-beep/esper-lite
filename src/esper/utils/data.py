@@ -251,6 +251,15 @@ class SharedGPUBatchIterator:
         for device in self._device_to_env_indices.keys():
             _ensure_cifar10_cached(device, data_root)
 
+        # CRITICAL: Synchronize all devices after cache initialization.
+        # Although .to(device) is synchronous, ensuring all GPU memory transfers
+        # are complete before creating DataLoaders prevents race conditions when
+        # multiple devices access cached tensors concurrently.
+        if torch.cuda.is_available():
+            for device in self._device_to_env_indices.keys():
+                if device.startswith("cuda"):
+                    torch.cuda.synchronize(torch.device(device))
+
         # Create ONE DataLoader per device with combined batch size
         self._device_loaders: dict[str, DataLoader] = {}
         self._device_iters: dict[str, object] = {}

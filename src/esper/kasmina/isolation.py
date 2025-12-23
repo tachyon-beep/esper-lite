@@ -61,6 +61,10 @@ def blend_with_isolation(
     # Clamp alpha to [0, 1] for safety
     # Use Tensor.clamp() method for torch.compile compatibility with 0-dim tensors
     alpha = alpha.clamp(0.0, 1.0)
+    # Ensure all tensors match host_features dtype (required for BF16 autocast compatibility)
+    target_dtype = host_features.dtype
+    seed_features = seed_features.to(target_dtype)
+    alpha = alpha.to(target_dtype)
     return torch.lerp(host_features, seed_features, alpha)
 
 

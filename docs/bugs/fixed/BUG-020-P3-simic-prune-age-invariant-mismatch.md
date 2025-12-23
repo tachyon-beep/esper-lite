@@ -16,10 +16,16 @@
   - `action_valid_for_reward` for `PRUNE`, and
   - `OP_PRUNE` execution branch gate (alongside HOLD + can_transition checks).
 - **Validation Plan:** Unit test that `PRUNE` is rejected (treated as invalid/WAIT) when `epochs_total < MIN_PRUNE_AGE`.
-- **Status:** Open
+- **Status:** Fixed (2025-12-24)
+- **Fix Applied:**
+  1. Added `MIN_PRUNE_AGE` import to vectorized.py
+  2. Added `seed_state.metrics.epochs_total >= MIN_PRUNE_AGE` check to `action_valid_for_reward` for `OP_PRUNE` (line ~1247)
+  3. Added `seed_info.seed_age_epochs >= MIN_PRUNE_AGE` check to the `OP_PRUNE` execution gate (line ~2499)
+  4. Created unit tests in `tests/simic/training/test_min_prune_age_enforcement.py` (9 tests)
 - **Links:**
   - Masking invariant: `src/esper/tamiyo/policy/action_masks.py:220`
-  - Reward-validity: `src/esper/simic/training/vectorized.py:2140`
-  - Execution gate: `src/esper/simic/training/vectorized.py:2374`
+  - Reward-validity: `src/esper/simic/training/vectorized.py:1247`
+  - Execution gate: `src/esper/simic/training/vectorized.py:2499`
   - Constant: `src/esper/leyline/__init__.py:33`
+  - Tests: `tests/simic/training/test_min_prune_age_enforcement.py`
 

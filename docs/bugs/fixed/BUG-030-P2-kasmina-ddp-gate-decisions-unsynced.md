@@ -17,9 +17,18 @@
   - Wire in `_sync_gate_decision()` but only after ensuring every rank calls gate checks in identical order for all slots (otherwise collective-call deadlocks are likely).
 - **Validation Plan:**
   - Add a minimal DDP test harness that forces a divergent local gate outcome and verifies the synchronized path keeps stages consistent across ranks (or fails fast with a clear error if DDP unsupported).
-- **Status:** Open
+- **Status:** Fixed
+- **Fix Applied:**
+  - Replaced `_sync_gate_decision()` implementation from `all_reduce` consensus to rank-0 broadcast
+  - Rank 0 makes the authoritative gate decision and broadcasts to all ranks via `broadcast_object_list`
+  - This avoids JANK-003 deadlocks when ranks have seeds at different stages
+  - Wired `_sync_gate_decision()` into `advance_stage()` after local gate check
+  - Added divergence tracking in message field when local result differs from synced result
+  - Removed unused `_ddp_sync_buffer` attribute
+  - Added 6 unit tests in `tests/kasmina/test_ddp_gate_sync.py`
 - **Links:**
-  - `advance_stage()`: `src/esper/kasmina/slot.py:1176`
-  - `_sync_gate_decision()`: `src/esper/kasmina/slot.py:1958`
-  - Related jank: `docs/bugs/JANK-003-P1-kasmina-ddp-gate-deadlock.md`
+  - `advance_stage()`: `src/esper/kasmina/slot.py:1238-1243`
+  - `_sync_gate_decision()`: `src/esper/kasmina/slot.py:1964-2028`
+  - Test file: `tests/kasmina/test_ddp_gate_sync.py`
+  - Related jank: `docs/bugs/JANK-003-P1-kasmina-ddp-gate-deadlock.md` (partially addressed by rank-0 broadcast design)
 

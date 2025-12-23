@@ -502,6 +502,7 @@ def train_ppo_vectorized(
     sparse_reward_scale: float = 1.0,
     reward_family: str = "contribution",
     ab_reward_modes: list[str] | None = None,
+    permissive_gates: bool = True,
     quiet_analytics: bool = False,
     telemetry_dir: str | None = None,
     ready_event: "threading.Event | None" = None,
@@ -609,7 +610,9 @@ def train_ppo_vectorized(
     # Derive slot_config from host's injection specs
     # Create a temporary model to query the host's injection topology
     temp_device = "cpu"  # Use CPU for temp model to avoid GPU allocation
-    temp_model = create_model(task=task_spec, device=temp_device, slots=slots)
+    temp_model = create_model(
+        task=task_spec, device=temp_device, slots=slots, permissive_gates=permissive_gates
+    )
     slot_config = SlotConfig.from_specs(temp_model.host.injection_specs())
     # Calculate host_params while we have the model (constant across all envs)
     host_params_baseline = sum(
@@ -1037,7 +1040,9 @@ def train_ppo_vectorized(
         torch.manual_seed(base_seed + env_idx * 1000)
         random.seed(base_seed + env_idx * 1000)
 
-        model = create_model(task=task_spec, device=env_device, slots=slots)
+        model = create_model(
+            task=task_spec, device=env_device, slots=slots, permissive_gates=permissive_gates
+        )
 
         telemetry_cb = make_telemetry_callback(env_idx, env_device)
         for slot in model.seed_slots.values():

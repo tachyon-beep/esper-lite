@@ -43,13 +43,20 @@ def _validate_device(device: str) -> None:
         )
 
 
-def create_model(task: TaskSpec | str = "cifar10", device: str = "cuda", slots: list[str] | None = None) -> torch.nn.Module:
+def create_model(
+    task: TaskSpec | str = "cifar10",
+    device: str = "cuda",
+    slots: list[str] | None = None,
+    permissive_gates: bool = True,
+) -> torch.nn.Module:
     """Create a MorphogeneticModel for the given task on device.
 
     Args:
         task: Task specification or name.
         device: Target device for the model.
         slots: Seed slots to enable. Required and cannot be empty.
+        permissive_gates: If True, quality gates only check structural requirements
+            and let Tamiyo learn quality thresholds through reward signals.
     """
     if isinstance(task, str):
         from esper.runtime import get_task_spec  # Lazy import to avoid circular dependency
@@ -62,4 +69,4 @@ def create_model(task: TaskSpec | str = "cifar10", device: str = "cuda", slots: 
     if not slots:
         raise ValueError("slots parameter is required and cannot be empty")
 
-    return task_spec.create_model(device=device, slots=slots)
+    return task_spec.create_model(device=device, slots=slots, permissive_gates=permissive_gates)

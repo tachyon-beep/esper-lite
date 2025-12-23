@@ -36,6 +36,10 @@ def blend_add(
         y = lerp(h, s, a) = h + a * (s - h)
     """
     alpha = _clamp_unit_interval(alpha)
+    # Ensure all tensors match host_features dtype (required for BF16 autocast compatibility)
+    target_dtype = host_features.dtype
+    seed_features = seed_features.to(target_dtype)
+    alpha = alpha.to(target_dtype)
     return torch.lerp(host_features, seed_features, alpha)
 
 
@@ -79,7 +83,12 @@ def blend_multiply(
     Locked formula:
         y = h * (1 + a * tanh(m))
     """
-    seed_input = host_features if seed_input is None else seed_input
+    # Ensure all tensors match host_features dtype (required for BF16 autocast compatibility)
+    target_dtype = host_features.dtype
+    seed_features = seed_features.to(target_dtype)
+    alpha = alpha.to(target_dtype)
+
+    seed_input = host_features if seed_input is None else seed_input.to(target_dtype)
     seed_modulation = seed_features - seed_input
     multiplier = multiply_valve_multiplier(alpha, seed_modulation)
     return host_features * multiplier
@@ -108,6 +117,10 @@ def blend_gate(
     (or an equivalent learned gate), and must be in [0, 1].
     """
     effective_alpha = gate_effective_alpha(alpha, gate)
+    # Ensure all tensors match host_features dtype (required for BF16 autocast compatibility)
+    target_dtype = host_features.dtype
+    seed_features = seed_features.to(target_dtype)
+    effective_alpha = effective_alpha.to(target_dtype)
     return torch.lerp(host_features, seed_features, effective_alpha)
 
 
