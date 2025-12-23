@@ -128,20 +128,21 @@ class EventLog(Static):
 
         events = recent_events[-self._max_events:]
 
-        # Global rollup: count all occurrences of each unique message
-        # Track most recent entry and count for each message
-        message_counts: dict[str, tuple[EventLogEntry, int]] = {}
+        # Global rollup: count all occurrences of each unique event TYPE
+        # (not message - messages have varying details like slot IDs)
+        # Track most recent entry and count for each event type
+        type_counts: dict[str, tuple[EventLogEntry, int]] = {}
         for entry in events:
-            if entry.message in message_counts:
+            if entry.event_type in type_counts:
                 # Keep the most recent entry (latest in list), increment count
-                _, count = message_counts[entry.message]
-                message_counts[entry.message] = (entry, count + 1)
+                _, count = type_counts[entry.event_type]
+                type_counts[entry.event_type] = (entry, count + 1)
             else:
-                message_counts[entry.message] = (entry, 1)
+                type_counts[entry.event_type] = (entry, 1)
 
         # Sort by most recent timestamp (descending), then render
         rolled_events = sorted(
-            message_counts.values(),
+            type_counts.values(),
             key=lambda x: x[0].timestamp,
             reverse=True,
         )
