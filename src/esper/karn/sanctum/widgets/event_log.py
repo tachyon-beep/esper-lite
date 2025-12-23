@@ -155,16 +155,17 @@ class EventLog(Static):
             text = Text()
 
             # Compact timestamp: show MM:SS on minute change, otherwise just :SS
+            # Pad to 6 chars total for vertical alignment: "MM:SS " or "  :SS "
             parts = entry.timestamp.split(":")
             if len(parts) == 3:
                 current_minute = parts[1]
                 if current_minute != last_minute:
-                    text.append(f"{parts[1]}:{parts[2]} ", style="dim")
+                    text.append(f"{parts[1]}:{parts[2]} ", style="dim")  # "MM:SS "
                     last_minute = current_minute
                 else:
-                    text.append(f":{parts[2]} ", style="dim")
+                    text.append(f"  :{parts[2]} ", style="dim")  # "  :SS "
             else:
-                text.append(f"{entry.timestamp} ", style="dim")
+                text.append(f"{entry.timestamp:>5} ", style="dim")
 
             # Compact env ID: only show if single occurrence
             if count == 1 and entry.env_id is not None:
