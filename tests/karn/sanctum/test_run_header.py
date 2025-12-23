@@ -258,3 +258,41 @@ def test_run_header_system_alarm_triggered():
     # Should show alarm indicator with device and percentage
     assert "cuda:0" in rendered
     assert "95%" in rendered
+
+
+def test_run_header_border_red_on_memory_alarm():
+    """RunHeader border should be red when memory alarm is active."""
+    from rich.panel import Panel
+    from esper.karn.sanctum.schema import SystemVitals
+
+    # Create snapshot with memory alarm
+    snapshot = SanctumSnapshot()
+    snapshot.vitals = SystemVitals(ram_used_gb=14.5, ram_total_gb=16.0)  # >90%
+    snapshot.connected = True
+
+    header = RunHeader()
+    header.update_snapshot(snapshot)
+
+    # Render and check border style
+    rendered = header.render()
+    assert isinstance(rendered, Panel)
+    assert rendered.border_style == "bold red"
+
+
+def test_run_header_border_blue_normally():
+    """RunHeader border should be blue when no memory alarm."""
+    from rich.panel import Panel
+    from esper.karn.sanctum.schema import SystemVitals
+
+    # Create snapshot without memory alarm
+    snapshot = SanctumSnapshot()
+    snapshot.vitals = SystemVitals(ram_used_gb=8.0, ram_total_gb=16.0)  # 50%
+    snapshot.connected = True
+
+    header = RunHeader()
+    header.update_snapshot(snapshot)
+
+    # Render and check border style
+    rendered = header.render()
+    assert isinstance(rendered, Panel)
+    assert rendered.border_style == "blue"

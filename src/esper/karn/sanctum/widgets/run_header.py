@@ -297,10 +297,13 @@ class RunHeader(Static):
         alarm_indicator = self._get_system_alarm_indicator()
         alarm_style = "green" if alarm_indicator == "OK" else "bold red"
 
+        # Dynamic border: red when memory alarm active
+        border_style = "bold red" if self._snapshot.vitals.has_memory_alarm else "blue"
+
         return Panel(
             table,
             title="[bold]RUN STATUS[/bold]",
             subtitle=f"[{alarm_style}]{alarm_indicator}[/]",
             subtitle_align="right",
-            border_style="blue",
+            border_style=border_style,
         )
