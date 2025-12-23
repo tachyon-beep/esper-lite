@@ -3,9 +3,9 @@
 Enhanced design:
 - Full-width rows using all horizontal space
 - Color-coded by event type (green=lifecycle, cyan=tamiyo, yellow=warning, red=error)
-- Timestamp + relative time "(2s ago)"
+- Compact timestamps (:SS, MM:SS on minute change)
 - Episode grouping with visual separators
-- Emoji prefixes for quick scanning
+- Consecutive identical messages rolled up with ×N suffix
 """
 from __future__ import annotations
 
@@ -49,10 +49,10 @@ class EventLog(Static):
     """Event log widget showing recent telemetry events.
 
     Enhanced features:
-    - Full-width rows with timestamp + relative time
+    - Compact timestamps (:SS, MM:SS on minute change)
     - Color coding by event type
     - Episode grouping with separators
-    - Emoji prefixes for quick scanning
+    - Consecutive identical messages rolled up (×N suffix)
     """
 
     def __init__(self, max_events: int = 30, **kwargs) -> None:
@@ -75,22 +75,36 @@ class EventLog(Static):
         return _EVENT_EMOJI.get(event_type, "")
 
     def render(self):
-        """Render the event log with episode grouping.
+        """Render the event log with episode grouping and message rollup.
 
         Format optimized for fast-scrolling real-time events:
         - Compact time: :SS (shows MM:SS on minute change)
         - Compact env: just the number (00, 01, etc.)
         - No relative time (events scroll too fast for it to matter)
+        - Consecutive identical messages rolled up with ×N suffix
         """
         if self._snapshot is None or not self._snapshot.event_log:
             return Text("Waiting for events...", style="dim")
 
         events = list(self._snapshot.event_log)[-self._max_events:]
+
+        # First pass: roll up consecutive identical messages
+        rolled_events: list[tuple[EventLogEntry, int]] = []  # (entry, count)
+        for entry in events:
+            if rolled_events and rolled_events[-1][0].message == entry.message:
+                # Same message as previous - increment count
+                prev_entry, count = rolled_events[-1]
+                rolled_events[-1] = (prev_entry, count + 1)
+            else:
+                # New message - start new group
+                rolled_events.append((entry, 1))
+
+        # Second pass: render rolled-up events
         lines = []
         last_episode = None
         last_minute = None
 
-        for entry in events:
+        for entry, count in rolled_events:
             # Episode separator (short, won't stretch container)
             if entry.episode != last_episode and last_episode is not None:
                 separator = Text(f"─── Episode {entry.episode} ───", style="dim")
@@ -115,11 +129,15 @@ class EventLog(Static):
             else:
                 text.append(f"{entry.timestamp} ", style="dim")
 
-            # Compact env ID: just the number
-            if entry.env_id is not None:
+            # Compact env ID: just the number (omit if rolled up from multiple envs)
+            if count == 1 and entry.env_id is not None:
                 text.append(f"{entry.env_id:02d} ", style="bright_blue")
 
             text.append(entry.message, style=color)
+
+            # Add rollup count if > 1
+            if count > 1:
+                text.append(f" ×{count}", style="dim")
 
             lines.append(text)
 
