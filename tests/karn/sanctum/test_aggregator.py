@@ -109,3 +109,20 @@ def test_ppo_update_populates_head_entropies():
     assert tamiyo.head_alpha_speed_entropy == 1.1
     assert tamiyo.head_alpha_curve_entropy == 0.7
     assert tamiyo.head_op_entropy == 1.5
+
+
+def test_ppo_update_extracts_group_id():
+    """PPO_UPDATE_COMPLETED should extract group_id for A/B testing."""
+    agg = SanctumAggregator(num_envs=4)
+
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        data={
+            "policy_loss": 0.1,
+        },
+        group_id="B",
+    )
+    agg.process_event(event)
+
+    snapshot = agg.get_snapshot()
+    assert snapshot.tamiyo.group_id == "B"

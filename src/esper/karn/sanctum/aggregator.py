@@ -533,6 +533,11 @@ class SanctumAggregator:
         # Mark that we've received PPO data (enables TamiyoBrain display)
         self._tamiyo.ppo_data_received = True
 
+        # A/B testing group identification
+        group_id = event.group_id
+        if group_id:
+            self._tamiyo.group_id = group_id
+
         # Update Tamiyo state with all PPO metrics AND append to history
         policy_loss = data.get("policy_loss", 0.0)
         self._tamiyo.policy_loss = policy_loss
