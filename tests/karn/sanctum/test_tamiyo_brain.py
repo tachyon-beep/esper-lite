@@ -1862,7 +1862,9 @@ def test_thrashing_detects_germinate_prune_cycles():
     now = datetime.now(timezone.utc)
 
     # Germinate-Prune-Germinate-Prune cycle = THRASHING
-    actions = ["GERMINATE", "PRUNE", "GERMINATE", "PRUNE", "WAIT", "WAIT", "WAIT", "WAIT"]
+    # List is newest-first (index 0 = most recent). After reverse to chronological:
+    # [WAIT, WAIT, WAIT, WAIT, GERMINATE, PRUNE, GERMINATE, PRUNE] → detects GERM→PRUNE cycles
+    actions = ["PRUNE", "GERMINATE", "PRUNE", "GERMINATE", "WAIT", "WAIT", "WAIT", "WAIT"]
     decisions = [
         DecisionSnapshot(
             timestamp=now - timedelta(seconds=i),

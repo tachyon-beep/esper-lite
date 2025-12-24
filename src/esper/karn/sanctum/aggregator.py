@@ -908,10 +908,12 @@ class SanctumAggregator:
 
         # Episode Return (PRIMARY RL METRIC per DRL review)
         # avg_reward from BATCH_EPOCH_COMPLETED is the average episode return
-        episode_return = data.get("avg_reward", 0.0)
-        if episode_return != 0.0:
-            self._tamiyo.current_episode_return = episode_return
-            self._tamiyo.episode_return_history.append(episode_return)
+        # NOTE: Record zero returns - they're valid (sparse rewards, early training).
+        # Only skip if the field is actually missing (None).
+        episode_return = data.get("avg_reward")
+        if episode_return is not None:
+            self._tamiyo.current_episode_return = float(episode_return)
+            self._tamiyo.episode_return_history.append(float(episode_return))
 
         # Calculate throughput
         now = time.time()

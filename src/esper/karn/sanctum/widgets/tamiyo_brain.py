@@ -36,6 +36,11 @@ def detect_action_patterns(
 
     Per UX review: Returns pattern names for icon display.
 
+    NOTE: decisions list is newest-first (aggregator uses insert(0, decision)).
+    We reverse to chronological order for pattern analysis so that:
+    - actions[-8:] checks the 8 MOST RECENT actions
+    - THRASH detection finds GERMINATE→PRUNE (not PRUNE→GERMINATE)
+
     Returns:
         List of pattern names: ["STUCK"], ["THRASH"], ["ALPHA_OSC"]
     """
@@ -43,7 +48,9 @@ def detect_action_patterns(
     if not decisions:
         return patterns
 
-    actions = [d.chosen_action for d in decisions[:12]]
+    # Reverse to chronological order: oldest first, newest last
+    # So actions[-8:] = most recent 8, and i→i+1 = earlier→later
+    actions = [d.chosen_action for d in reversed(decisions[:12])]
 
     # STUCK: All WAIT when dormant slots exist (per DRL review)
     if len(actions) >= 8 and all(a == "WAIT" for a in actions[-8:]):
