@@ -1272,3 +1272,31 @@ async def test_no_group_label_when_none():
     assert "Policy A" not in output
     assert "Policy B" not in output
     assert "Policy C" not in output
+
+
+@pytest.mark.asyncio
+async def test_border_title_includes_group_id():
+    """border_title should include group_id for accessibility."""
+    from textual.app import App, ComposeResult
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
+
+    class TestApp(App):
+        def compose(self) -> ComposeResult:
+            yield TamiyoBrain(id="tamiyo")
+
+    app = TestApp()
+    async with app.run_test():
+        widget = app.query_one("#tamiyo", TamiyoBrain)
+
+        # Without group_id
+        snapshot_single = SanctumSnapshot()
+        snapshot_single.tamiyo = TamiyoState(group_id=None, ppo_data_received=True)
+        widget.update_snapshot(snapshot_single)
+        assert widget.border_title == "TAMIYO"
+
+        # With group_id
+        snapshot_ab = SanctumSnapshot()
+        snapshot_ab.tamiyo = TamiyoState(group_id="A", ppo_data_received=True)
+        widget.update_snapshot(snapshot_ab)
+        assert widget.border_title == "TAMIYO [A]"

@@ -101,6 +101,12 @@ class TamiyoBrain(Static):
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         self._snapshot = snapshot
         self._update_status_class()
+        # Update border_title for accessibility (screen readers, colorblind users)
+        if snapshot.tamiyo.group_id:
+            # Escape opening bracket to prevent Rich markup interpretation
+            self.border_title = f"TAMIYO \\[{snapshot.tamiyo.group_id}]"
+        else:
+            self.border_title = "TAMIYO"
         self.refresh()
 
     def _is_compact_mode(self) -> bool:
