@@ -421,6 +421,75 @@ class TamiyoBrain(Static):
         else:
             return "Stable"
 
+    def _render_compact_decision(self, decision: "DecisionSnapshot", index: int) -> Text:
+        """Render a compact 2-line decision card for side-by-side layout.
+
+        Format (fits in ~22 chars width):
+        ┌─ D1 12s ─────────┐
+        │ WAIT 92%  H:87%  │
+        │ +0.12→+0.08 ✓    │
+        └──────────────────┘
+
+        Args:
+            decision: The decision snapshot to render.
+            index: 0-indexed position (0=most recent).
+
+        Returns:
+            Rich Text with compact decision card.
+        """
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+        age = (now - decision.timestamp).total_seconds()
+        age_str = f"{age:.0f}s" if age < 60 else f"{age/60:.0f}m"
+
+        # Action colors
+        action_colors = {
+            "GERMINATE": "green",
+            "WAIT": "dim",
+            "FOSSILIZE": "blue",
+            "PRUNE": "red",
+            "SET_ALPHA_TARGET": "cyan",
+            "ADVANCE": "cyan",
+        }
+        action_style = action_colors.get(decision.chosen_action, "white")
+
+        # Pin indicator
+        pin = "📌" if decision.pinned else ""
+
+        # Build card
+        card = Text()
+
+        # Title line: D1 12s (with pin if applicable)
+        card.append(f"┌─ D{index+1} {age_str} {pin}─────────┐\n", style="dim")
+
+        # Line 1: ACTION PROB%  H:XX%
+        action_abbrev = decision.chosen_action[:4].upper()  # WAIT, GERM, FOSS, PRUN, ADVA
+        card.append("│ ")
+        card.append(f"{action_abbrev}", style=action_style)
+        card.append(f" {decision.confidence:.0%}", style="dim")
+        card.append(f"  H:{decision.host_accuracy:.0f}%", style="cyan")
+        card.append(" │\n")
+
+        # Line 2: +0.12→+0.08 ✓/✗
+        card.append("│ ")
+        card.append(f"{decision.expected_value:+.2f}", style="dim")
+        card.append("→", style="dim")
+        if decision.actual_reward is not None:
+            diff = abs(decision.actual_reward - decision.expected_value)
+            style = "green" if diff < 0.1 else ("yellow" if diff < 0.3 else "red")
+            icon = "✓" if diff < 0.1 else "✗"
+            card.append(f"{decision.actual_reward:+.2f}", style=style)
+            card.append(f" {icon}", style=style)
+        else:
+            card.append("...", style="dim italic")
+        card.append("    │\n")
+
+        # Bottom border
+        card.append("└──────────────────┘", style="dim")
+
+        return card
+
     def _render_recent_decisions(self) -> Panel:
         """Render Recent Decisions section (up to 3, each visible for 30s minimum).
 

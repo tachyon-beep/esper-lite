@@ -1300,3 +1300,46 @@ async def test_border_title_includes_group_id():
         snapshot_ab.tamiyo = TamiyoState(group_id="A", ppo_data_received=True)
         widget.update_snapshot(snapshot_ab)
         assert widget.border_title == "TAMIYO [A]"
+
+
+# ===========================
+# Task 1: Compact Decision Card Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_compact_decision_card_format():
+    """Compact decision card should fit in ~20 chars width with 2 lines."""
+    from esper.karn.sanctum.schema import DecisionSnapshot
+    from datetime import datetime, timezone
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        decision = DecisionSnapshot(
+            decision_id="test-1",
+            timestamp=datetime.now(timezone.utc),
+            slot_states={"r0c0": "TRAINING"},
+            host_accuracy=87.5,
+            chosen_action="WAIT",
+            chosen_slot=None,
+            confidence=0.92,
+            expected_value=0.12,
+            actual_reward=0.08,
+            alternatives=[("GERMINATE", 0.05), ("FOSSILIZE", 0.03)],
+            pinned=False,
+        )
+
+        # Render compact card
+        card = widget._render_compact_decision(decision, index=0)
+        card_str = str(card)
+
+        # Should contain key info in compact format
+        assert "D1" in card_str  # Decision number
+        assert "WAIT" in card_str  # Action
+        assert "92%" in card_str  # Confidence
+        assert "H:87" in card_str or "H:88" in card_str  # Host accuracy (rounded)
+        assert "0.12" in card_str  # Expected
+        assert "0.08" in card_str  # Actual
+        assert "✓" in card_str  # Good prediction indicator
