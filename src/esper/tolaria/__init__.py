@@ -18,6 +18,11 @@ Public API:
     from esper.tolaria import TolariaGovernor, GovernorReport
 """
 
+# TODO: [DEAD CODE] - The following exports are never used in production:
+# train_epoch_normal, train_epoch_incubator_mode, train_epoch_blended,
+# validate_and_get_metrics, validate_with_attribution, AttributionResult.
+# Only TolariaGovernor and create_model are used. See: risk assessment 2024-12-24.
+
 from esper.tolaria.environment import create_model
 from esper.tolaria.governor import GovernorReport, TolariaGovernor
 from esper.tolaria.trainer import (

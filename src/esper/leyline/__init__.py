@@ -130,6 +130,13 @@ DEFAULT_RATIO_COLLAPSE_THRESHOLD = 0.1
 # Factored Action Space Constants
 # =============================================================================
 
+# TODO: [BROKEN CONTRACT] - The docstring example at line 19 shows importing FactoredAction
+# and LifecycleOp from esper.leyline, but these symbols are NOT imported into this module.
+# `from esper.leyline import FactoredAction` fails with ImportError.
+# All production code imports directly from esper.leyline.factored_actions instead.
+# Either: (1) add the missing imports and add to __all__, or (2) fix the docstring example.
+# See: architectural risk assessment 2024-12-24.
+
 # Head names for factored action space (slot selection, blueprint, blend algorithm, tempo,
 # alpha target/speed/curve/algorithm, lifecycle op).
 # Order matters: slot → blueprint → blend → tempo → alpha_target → alpha_speed → alpha_curve

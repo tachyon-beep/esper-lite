@@ -101,6 +101,9 @@ class BlendAlgorithm(nn.Module, ABC):
         return 0.5
 
 
+# TODO: [DEAD CODE] - LinearBlend is registered in BlendCatalog but never instantiated.
+# Production only uses BlendCatalog.create("gated", ...). Either wire this into
+# production or delete it. See: architectural risk assessment 2024-12-24.
 class LinearBlend(BlendAlgorithm):
     """Linear ramp from 0 to 1 over total_steps."""
 
@@ -120,6 +123,9 @@ class LinearBlend(BlendAlgorithm):
         return self._get_cached_alpha_tensor(alpha, x)
 
 
+# TODO: [DEAD CODE] - SigmoidBlend is registered in BlendCatalog but never instantiated.
+# Production only uses BlendCatalog.create("gated", ...). Either wire this into
+# production or delete it. See: architectural risk assessment 2024-12-24.
 class SigmoidBlend(BlendAlgorithm):
     """Sigmoid curve for smooth transitions."""
 
@@ -208,6 +214,8 @@ class GatedBlend(BlendAlgorithm):
 class BlendCatalog:
     """Registry of blending algorithms."""
 
+    # TODO: [DEAD CODE] - "linear" and "sigmoid" catalog entries are never used.
+    # Only "gated" is instantiated in production. Consider removing these entries.
     _algorithms: dict[str, type] = {
         "linear": LinearBlend,
         "sigmoid": SigmoidBlend,

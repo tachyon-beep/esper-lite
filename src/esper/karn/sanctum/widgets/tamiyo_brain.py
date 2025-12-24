@@ -46,6 +46,10 @@ class TamiyoBrain(Static):
     # Neural network architecture constant
     _TOTAL_LAYERS = 12
 
+    # Prediction accuracy thresholds for decision cards
+    PREDICTION_EXCELLENT_THRESHOLD = 0.1  # Green checkmark: |actual - expected| < 0.1
+    PREDICTION_ACCEPTABLE_THRESHOLD = 0.3  # Yellow warning: |actual - expected| < 0.3
+
     # Per-head max entropy values from factored_actions.py (DRL CORRECTED)
     # These are ln(N) where N is the number of actions for each head
     HEAD_MAX_ENTROPIES = {
@@ -422,11 +426,11 @@ class TamiyoBrain(Static):
             return "Stable"
 
     def _render_compact_decision(self, decision: "DecisionSnapshot", index: int) -> Text:
-        """Render a compact 2-line decision card for side-by-side layout.
+        """Render a compact 4-line decision card with fixed 20-char width.
 
-        Format (fits in ~22 chars width):
+        Format (exactly 20 chars per line):
         ┌─ D1 12s ─────────┐
-        │ WAIT 92%  H:87%  │
+        │ WAIT 92% H:87% [P]│
         │ +0.12→+0.08 ✓    │
         └──────────────────┘
 
@@ -435,7 +439,7 @@ class TamiyoBrain(Static):
             index: 0-indexed position (0=most recent).
 
         Returns:
-            Rich Text with compact decision card.
+            Rich Text with fixed-width compact decision card.
         """
         from datetime import datetime, timezone
 
@@ -454,38 +458,72 @@ class TamiyoBrain(Static):
         }
         action_style = action_colors.get(decision.chosen_action, "white")
 
-        # Pin indicator
-        pin = "📌" if decision.pinned else ""
-
-        # Build card
+        # Build card with fixed width (20 chars total per line)
         card = Text()
 
-        # Title line: D1 12s (with pin if applicable)
-        card.append(f"┌─ D{index+1} {age_str} {pin}─────────┐\n", style="dim")
+        # Title line: Fixed width using left-padded content
+        # Format: "┌─ D1 12s ─────────┐" (20 chars)
+        title_content = f"D{index+1} {age_str}"
+        title_fill = 20 - 4 - len(title_content)  # 20 total - "┌─ " - "┐"
+        card.append(f"┌─ {title_content}{'─' * title_fill}┐\n", style="dim")
 
-        # Line 1: ACTION PROB%  H:XX%
+        # Line 1: ACTION PROB% H:XX% P (fixed 20 chars)
+        # Format: "│ WAIT 92% H:87%P  │" or "│ WAIT 92% H:87%   │"
+        # Structure: "│ " (2) + content (16) + " │" (2) = 20 total
+        # When pinned, drop % from host and append P to fit in 16 chars
         action_abbrev = decision.chosen_action[:4].upper()  # WAIT, GERM, FOSS, PRUN, ADVA
+
+        if decision.pinned:
+            # Format: "GERM 100% H:100P" (exactly 16 chars worst case)
+            line1_content = f"{action_abbrev} {decision.confidence:.0%} H:{decision.host_accuracy:.0f}P"
+        else:
+            # Format: "GERM 100% H:100%" (exactly 16 chars worst case)
+            line1_content = f"{action_abbrev} {decision.confidence:.0%} H:{decision.host_accuracy:.0f}%"
+
         card.append("│ ")
+        # Append styled segments
         card.append(f"{action_abbrev}", style=action_style)
         card.append(f" {decision.confidence:.0%}", style="dim")
-        card.append(f"  H:{decision.host_accuracy:.0f}%", style="cyan")
+        if decision.pinned:
+            card.append(f" H:{decision.host_accuracy:.0f}", style="cyan")
+            card.append("P", style="yellow")
+        else:
+            card.append(f" H:{decision.host_accuracy:.0f}%", style="cyan")
+
+        # Padding: need to reach 16 chars total content, then add " │"
+        content_len = len(line1_content)
+        padding_needed = 16 - content_len
+        if padding_needed > 0:
+            card.append(" " * padding_needed)
         card.append(" │\n")
 
-        # Line 2: +0.12→+0.08 ✓/✗
+        # Line 2: +0.12→+0.08 ✓ (fixed 20 chars)
+        # Format: "│ +0.12→+0.08 ✓   │"
+        # Structure: "│ " (2) + content (16) + " │" (2) = 20 total
         card.append("│ ")
         card.append(f"{decision.expected_value:+.2f}", style="dim")
         card.append("→", style="dim")
         if decision.actual_reward is not None:
             diff = abs(decision.actual_reward - decision.expected_value)
-            style = "green" if diff < 0.1 else ("yellow" if diff < 0.3 else "red")
-            icon = "✓" if diff < 0.1 else "✗"
+            style = "green" if diff < self.PREDICTION_EXCELLENT_THRESHOLD else (
+                "yellow" if diff < self.PREDICTION_ACCEPTABLE_THRESHOLD else "red"
+            )
+            icon = "✓" if diff < self.PREDICTION_EXCELLENT_THRESHOLD else "✗"
             card.append(f"{decision.actual_reward:+.2f}", style=style)
             card.append(f" {icon}", style=style)
+            # Content: "+0.12" (5) + "→" (1) + "+0.08" (5) + " " (1) + "✓" (1) = 13
+            content_len = 5 + 1 + 5 + 1 + 1  # 13 chars
+            padding = 16 - content_len
+            card.append(" " * padding)
         else:
             card.append("...", style="dim italic")
-        card.append("    │\n")
+            # Content: "+0.12" (5) + "→" (1) + "..." (3) = 9 chars
+            content_len = 5 + 1 + 3  # 9 chars
+            padding = 16 - content_len
+            card.append(" " * padding)
+        card.append(" │\n")
 
-        # Bottom border
+        # Bottom border (20 chars)
         card.append("└──────────────────┘", style="dim")
 
         return card

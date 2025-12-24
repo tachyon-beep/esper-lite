@@ -10,6 +10,10 @@ if TYPE_CHECKING:
     from esper.tamiyo.policy.types import ActionResult, EvalResult, ForwardResult
 
 
+# TODO: [DEAD CODE] - PolicyBundle protocol is defined but never used in production.
+# The only implementor (LSTMPolicyBundle) is never instantiated. HeuristicPolicyBundle
+# raises NotImplementedError for most methods. This abstraction layer is test-only.
+# See: architectural risk assessment 2024-12-24.
 @runtime_checkable
 class PolicyBundle(Protocol):
     """Interface for swappable Tamiyo policy implementations.

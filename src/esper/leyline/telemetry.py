@@ -55,6 +55,8 @@ class TelemetryEventType(Enum):
     TAMIYO_INITIATED = auto()  # Host stabilized, germination now allowed
 
     # Health events
+    # TODO: [DEAD CODE] - ISOLATION_VIOLATION is defined but never emitted or handled.
+    # Appears to be planned functionality that was never implemented. Delete or implement.
     ISOLATION_VIOLATION = auto()
     GRADIENT_ANOMALY = auto()
     PERFORMANCE_DEGRADATION = auto()
@@ -63,6 +65,9 @@ class TelemetryEventType(Enum):
     PPO_UPDATE_COMPLETED = auto()
     MEMORY_WARNING = auto()
     REWARD_HACKING_SUSPECTED = auto()
+    # TODO: [DEAD CODE] - REWARD_COMPUTED is defined, tested, and handled by Karn,
+    # but NEVER emitted in production. Reward data flows via ANALYTICS_SNAPSHOT instead.
+    # Either emit this event from vectorized.py or remove it. See: risk assessment 2024-12-24.
     REWARD_COMPUTED = auto()  # Per-step reward breakdown for debugging
 
     # === NEW: Debug Events (triggered by anomalies) ===
@@ -73,12 +78,18 @@ class TelemetryEventType(Enum):
     NUMERICAL_INSTABILITY_DETECTED = auto()
 
     # === Governor Events (Tolaria) ===
+    # TODO: [DEAD CODE] - GOVERNOR_PANIC is defined and has console formatting in nissa/output.py,
+    # but Governor only emits GOVERNOR_ROLLBACK. Either emit this or remove handler code.
     GOVERNOR_PANIC = auto()           # Vital signs check failed
     GOVERNOR_ROLLBACK = auto()        # Emergency rollback executed
+    # TODO: [DEAD CODE] - GOVERNOR_SNAPSHOT is defined but never emitted or handled.
+    # Appears to be planned functionality that was never implemented. Delete or implement.
     GOVERNOR_SNAPSHOT = auto()        # LKG checkpoint saved
 
     # === Training Progress Events ===
     TRAINING_STARTED = auto()         # Training run initialized
+    # TODO: [DEAD CODE] - CHECKPOINT_SAVED is defined and has console formatting,
+    # but checkpoint saves in vectorized.py don't emit this event. Either emit or remove.
     CHECKPOINT_SAVED = auto()         # Model checkpoint saved
     CHECKPOINT_LOADED = auto()        # Model checkpoint restored
 
@@ -112,6 +123,9 @@ class TelemetryEvent:
     severity: str = "info"  # debug, info, warning, error, critical
 
 
+# TODO: [DEAD CODE] - PerformanceBudgets and DEFAULT_BUDGETS are defined but never used
+# anywhere in production. Either integrate into training pipeline or delete.
+# See: architectural risk assessment 2024-12-24.
 @dataclass(frozen=True)
 class PerformanceBudgets:
     """Performance budget constants."""

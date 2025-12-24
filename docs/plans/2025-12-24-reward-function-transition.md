@@ -16,6 +16,7 @@
 - Added 3 missing ablation configs from DRL Expert Section 7.2
 - Added property-based tests for Pareto operations
 - Added PBRS verification tests for SIMPLIFIED mode
+- **Generalized A/B → A/B/n**: Renamed `ab_reward_modes` → `reward_mode_per_env`, added `with_reward_split()` builder
 
 ---
 
@@ -44,6 +45,275 @@ Use **reward variance over a rolling window** as stability score proxy:
 **Step 1: Document decision**
 
 This design is now incorporated into Task 2.
+
+---
+
+### Task 0.5: Generalize A/B Testing to A/B/n
+
+**Context:** The current `ab_reward_modes` field name implies binary A/B testing, but the infrastructure already supports N groups. Rename for clarity and add a builder method for ergonomic multi-group configuration.
+
+**Files:**
+- Modify: `src/esper/simic/training/config.py`
+- Modify: `src/esper/simic/training/vectorized.py`
+- Modify: `src/esper/scripts/train.py`
+- Test: `tests/simic/test_reward_split.py`
+
+**Step 1: Write the failing test**
+
+```python
+# tests/simic/test_reward_split.py
+"""Tests for A/B/n reward split configuration."""
+
+import pytest
+from esper.simic.training.config import TrainingConfig
+from esper.simic.rewards import RewardMode
+
+
+def test_with_reward_split_creates_correct_list():
+    """with_reward_split() creates per-env mode list."""
+    config = TrainingConfig.with_reward_split({
+        "shaped": 3,
+        "simplified": 2,
+        "sparse": 1,
+    })
+    assert config.n_envs == 6
+    assert config.reward_mode_per_env is not None
+    assert len(config.reward_mode_per_env) == 6
+    assert config.reward_mode_per_env.count("shaped") == 3
+    assert config.reward_mode_per_env.count("simplified") == 2
+    assert config.reward_mode_per_env.count("sparse") == 1
+
+
+def test_with_reward_split_validates_modes():
+    """with_reward_split() rejects invalid mode names."""
+    with pytest.raises(ValueError, match="invalid_mode"):
+        TrainingConfig.with_reward_split({"invalid_mode": 2})
+
+
+def test_with_reward_split_requires_positive_counts():
+    """with_reward_split() rejects zero or negative counts."""
+    with pytest.raises(ValueError, match="positive"):
+        TrainingConfig.with_reward_split({"shaped": 0})
+    with pytest.raises(ValueError, match="positive"):
+        TrainingConfig.with_reward_split({"shaped": -1})
+
+
+def test_with_reward_split_preserves_other_kwargs():
+    """with_reward_split() passes through other config options."""
+    config = TrainingConfig.with_reward_split(
+        {"shaped": 2, "simplified": 2},
+        lr=1e-5,
+        entropy_coef=0.05,
+    )
+    assert config.n_envs == 4
+    assert config.lr == 1e-5
+    assert config.entropy_coef == 0.05
+
+
+def test_reward_mode_per_env_direct_assignment():
+    """Direct assignment of reward_mode_per_env works."""
+    config = TrainingConfig(
+        n_envs=4,
+        reward_mode_per_env=["shaped", "shaped", "simplified", "simplified"],
+    )
+    assert len(config.reward_mode_per_env) == 4
+    assert config.reward_mode_per_env[0] == "shaped"
+    assert config.reward_mode_per_env[2] == "simplified"
+
+
+def test_abc_comparison_config():
+    """Three-way comparison works correctly."""
+    config = TrainingConfig.with_reward_split({
+        "shaped": 4,
+        "simplified": 4,
+        "sparse": 4,
+    })
+    assert config.n_envs == 12
+    # Verify distribution
+    modes = config.reward_mode_per_env
+    assert modes.count("shaped") == 4
+    assert modes.count("simplified") == 4
+    assert modes.count("sparse") == 4
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `PYTHONPATH=src uv run pytest tests/simic/test_reward_split.py -v`
+Expected: FAIL with "has no attribute 'with_reward_split'"
+
+**Step 3: Rename field and add builder in config.py**
+
+NOTE: TrainingConfig uses `@dataclass(slots=True)` which prohibits property aliases.
+Per No Legacy Code Policy, we do a clean rename without backwards compatibility.
+
+```python
+# In TrainingConfig class, rename the field (line ~103):
+# OLD: ab_reward_modes: list[str] | None = None
+# NEW:
+
+# === Multi-Group Reward Testing ===
+# Per-environment reward mode for A/B/n testing.
+# If None, all envs use reward_mode. If list, must match n_envs length.
+# Example: ["shaped"]*4 + ["simplified"]*2 + ["sparse"]*2 for 8-env A/B/C test
+reward_mode_per_env: list[str] | None = None
+
+@classmethod
+def with_reward_split(
+    cls,
+    mode_counts: dict[str, int],
+    **kwargs,
+) -> "TrainingConfig":
+    """Create config with A/B/n reward mode split.
+
+    Args:
+        mode_counts: Dict mapping reward mode name to env count.
+            Example: {"shaped": 4, "simplified": 2, "sparse": 2}
+        **kwargs: Additional TrainingConfig parameters.
+
+    Returns:
+        TrainingConfig with reward_mode_per_env and n_envs set.
+
+    Raises:
+        ValueError: If mode name is invalid or count is not positive.
+    """
+    from esper.simic.rewards import RewardMode
+
+    valid_modes = {m.value for m in RewardMode}
+    mode_list: list[str] = []
+
+    for mode, count in mode_counts.items():
+        if mode not in valid_modes:
+            raise ValueError(
+                f"Invalid reward mode '{mode}'. Valid modes: {sorted(valid_modes)}"
+            )
+        if count < 1:
+            raise ValueError(f"Count for '{mode}' must be positive (got {count})")
+        mode_list.extend([mode] * count)
+
+    n_envs = len(mode_list)
+    return cls(
+        n_envs=n_envs,
+        reward_mode_per_env=mode_list,
+        **kwargs,
+    )
+```
+
+**Step 4: Update validation in config.py**
+
+Replace references to `ab_reward_modes` with `reward_mode_per_env` in `_validate()`:
+
+```python
+# A/B/n testing validation
+if self.reward_mode_per_env is not None:
+    if len(self.reward_mode_per_env) != self.n_envs:
+        raise ValueError(
+            f"reward_mode_per_env length ({len(self.reward_mode_per_env)}) "
+            f"must match n_envs ({self.n_envs})"
+        )
+    valid_modes = {m.value for m in RewardMode}
+    for i, mode in enumerate(self.reward_mode_per_env):
+        if mode not in valid_modes:
+            raise ValueError(
+                f"reward_mode_per_env[{i}] = '{mode}' is not a valid RewardMode. "
+                f"Valid modes: {sorted(valid_modes)}"
+            )
+```
+
+**Step 5: Update to_train_kwargs()**
+
+```python
+def to_train_kwargs(self) -> dict[str, Any]:
+    # ... existing code ...
+    return {
+        # ... other fields ...
+        "reward_mode_per_env": self.reward_mode_per_env,  # renamed from ab_reward_modes
+        # ...
+    }
+```
+
+**Step 6: Update vectorized.py parameter name**
+
+Change function signature and internal references:
+```python
+def train_ppo_vectorized(
+    # ... other params ...
+    reward_mode_per_env: list[str] | None = None,  # renamed from ab_reward_modes
+    # ...
+):
+```
+
+Update all internal references (lines ~672-691, ~3003):
+```python
+if reward_mode_per_env is not None:
+    if len(reward_mode_per_env) != n_envs:
+        raise ValueError(
+            f"reward_mode_per_env length ({len(reward_mode_per_env)}) must match n_envs ({n_envs})"
+        )
+    # ... rest of logic unchanged ...
+```
+
+**Step 7: Update CLI in train.py**
+
+Update the `--ab-test` handling to use new field name:
+```python
+if args.ab_test:
+    if config.n_envs % 2 != 0:
+        raise ValueError("--ab-test requires even number of envs")
+    half = config.n_envs // 2
+    if args.ab_test == "shaped-vs-simplified":
+        config.reward_mode_per_env = ["shaped"] * half + ["simplified"] * half
+    elif args.ab_test == "shaped-vs-sparse":
+        config.reward_mode_per_env = ["shaped"] * half + ["sparse"] * half
+```
+
+**Step 7b: Rename all remaining references**
+
+Use grep to find and update ALL occurrences (no backward compat per policy):
+
+```bash
+# Find all occurrences
+grep -r "ab_reward_modes" --include="*.py" src/ tests/
+
+# Files to update (rename ab_reward_modes -> reward_mode_per_env):
+# - src/esper/simic/training/config.py (~7 occurrences)
+# - src/esper/simic/training/vectorized.py (~7 occurrences)
+# - src/esper/scripts/train.py (~2 occurrences)
+# - tests/integration/test_ab_reward_testing.py (~3 occurrences)
+# - tests/simic/test_reward_simplified.py (~13 occurrences)
+# - tests/scripts/test_train.py (~12 occurrences)
+```
+
+For each file, do a global find-replace: `ab_reward_modes` → `reward_mode_per_env`
+
+**Step 8: Run tests to verify**
+
+Run: `PYTHONPATH=src uv run pytest tests/simic/test_reward_split.py -v`
+Expected: PASS
+
+Run: `PYTHONPATH=src uv run pytest tests/simic/ -v -k "not slow"`
+Expected: PASS (no regressions)
+
+**Step 9: Commit**
+
+```bash
+git add src/esper/simic/training/config.py src/esper/simic/training/vectorized.py src/esper/scripts/train.py tests/simic/test_reward_split.py
+git commit -m "refactor(simic): generalize A/B testing to A/B/n
+
+Rename ab_reward_modes → reward_mode_per_env for clarity.
+Add TrainingConfig.with_reward_split() builder for ergonomic multi-group config:
+
+    config = TrainingConfig.with_reward_split({
+        'shaped': 4,
+        'simplified': 2,
+        'sparse': 2,
+    })
+
+Backwards-compatible: ab_reward_modes property alias retained.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
+```
 
 ---
 
@@ -902,7 +1172,7 @@ File: `configs/ablations/ab_shaped_vs_simplified.json`
     "max_epochs": 25,
     "reward_mode": "shaped",
     "reward_family": "contribution",
-    "ab_reward_modes": ["shaped", "shaped", "shaped", "shaped", "simplified", "simplified", "simplified", "simplified"],
+    "reward_mode_per_env": ["shaped", "shaped", "shaped", "shaped", "simplified", "simplified", "simplified", "simplified"],
     "param_budget": 500000,
     "param_penalty_weight": 0.1,
     "entropy_coef": 0.1,
@@ -1148,74 +1418,106 @@ from .reward_health import RewardHealthPanel, RewardHealthData
 
 **Step 2: Add health data aggregation to aggregator.py**
 
-In the aggregator class, add methods to compute `RewardHealthData` from telemetry:
+In the aggregator class, add methods to compute `RewardHealthData` from telemetry.
+
+NOTE: The aggregator stores reward components per-env (in `EnvState.reward_components`),
+not in a rolling list. PPO metrics are on `self._tamiyo`. We aggregate across envs.
+
+**Step 2a: Add episode outcomes list to __post_init__**
+
+```python
+# In __post_init__, after other initializations:
+self._episode_outcomes: list = []  # EpisodeOutcome instances for Pareto
+```
+
+**Step 2b: Add event handler routing**
+
+In `_process_event_unlocked()`, add handler:
+
+```python
+elif event_type == "EPISODE_OUTCOME":
+    self._handle_episode_outcome(event)
+```
+
+**Step 2c: Add handler and health computation methods**
 
 ```python
 from esper.karn.sanctum.widgets.reward_health import RewardHealthData
 from esper.karn.pareto import extract_pareto_frontier, compute_hypervolume_2d
 
 
-class SanctumAggregator:
-    # ... existing code ...
+def _handle_episode_outcome(self, event: "TelemetryEvent") -> None:
+    """Handle incoming episode outcome events."""
+    from esper.karn.store import EpisodeOutcome
 
-    def __init__(self):
-        # ... existing init ...
-        self._episode_outcomes: list[EpisodeOutcome] = []
+    data = event.data or {}
+    outcome = EpisodeOutcome(
+        env_idx=data.get("env_idx", 0),
+        episode_idx=data.get("episode_idx", 0),
+        final_accuracy=data.get("final_accuracy", 0.0),
+        param_ratio=data.get("param_ratio", 0.0),
+        num_fossilized=data.get("num_fossilized", 0),
+        num_contributing_fossilized=data.get("num_contributing", 0),
+        episode_reward=data.get("episode_reward", 0.0),
+        stability_score=data.get("stability_score", 0.0),
+        reward_mode=data.get("reward_mode", ""),
+    )
+    self._episode_outcomes.append(outcome)
 
-    def _handle_episode_outcome(self, event: TelemetryEvent) -> None:
-        """Handle incoming episode outcome events."""
-        from esper.karn.store import EpisodeOutcome
+    # Keep only last 100 outcomes to bound memory
+    if len(self._episode_outcomes) > 100:
+        self._episode_outcomes = self._episode_outcomes[-100:]
 
-        data = event.data
-        outcome = EpisodeOutcome(
-            env_idx=data["env_idx"],
-            episode_idx=data["episode_idx"],
-            final_accuracy=data["final_accuracy"],
-            param_ratio=data["param_ratio"],
-            num_fossilized=data["num_fossilized"],
-            num_contributing_fossilized=data["num_contributing"],
-            episode_reward=data["episode_reward"],
-            stability_score=data["stability_score"],
-            reward_mode=data["reward_mode"],
-        )
-        self._episode_outcomes.append(outcome)
+def _compute_hypervolume(self) -> float:
+    """Compute hypervolume indicator from recent episode outcomes."""
+    if not self._episode_outcomes:
+        return 0.0
 
-        # Keep only last 100 outcomes to bound memory
-        if len(self._episode_outcomes) > 100:
-            self._episode_outcomes = self._episode_outcomes[-100:]
+    frontier = extract_pareto_frontier(self._episode_outcomes)
+    ref_point = (0.0, 1.0)  # (min_accuracy, max_param_ratio)
+    return compute_hypervolume_2d(frontier, ref_point)
 
-    def _compute_hypervolume(self) -> float:
-        """Compute hypervolume indicator from recent episode outcomes."""
-        if not self._episode_outcomes:
-            return 0.0
+def compute_reward_health(self) -> "RewardHealthData":
+    """Compute reward health metrics from recent telemetry.
 
-        frontier = extract_pareto_frontier(self._episode_outcomes)
-        ref_point = (0.0, 1.0)  # (min_accuracy, max_param_ratio)
-        return compute_hypervolume_2d(frontier, ref_point)
+    Aggregates across all env reward_components (latest per env).
+    Uses stage_bonus as PBRS proxy (stage advancement shaping).
+    Anti-gaming = ratio_penalty + alpha_shock (non-zero = triggered).
+    """
+    # Collect latest reward components from all envs
+    components = [env.reward_components for env in self._envs.values()
+                  if env.reward_components and env.reward_components.total != 0]
 
-    def compute_reward_health(self) -> RewardHealthData:
-        """Compute reward health metrics from recent telemetry."""
-        # Get recent reward components
-        pbrs_total = sum(abs(c.pbrs_bonus) for c in self._recent_components)
-        reward_total = sum(abs(c.total_reward) for c in self._recent_components)
-        pbrs_fraction = pbrs_total / max(1e-8, reward_total)
+    if not components:
+        return RewardHealthData()
 
-        # Anti-gaming trigger rate
-        gaming_steps = sum(1 for c in self._recent_components if c.ratio_penalty < 0)
-        gaming_rate = gaming_steps / max(1, len(self._recent_components))
+    # PBRS proxy: stage_bonus is the PBRS shaping reward
+    # (stage advancement bonuses from potential function)
+    pbrs_total = sum(abs(c.stage_bonus) for c in components)
+    reward_total = sum(abs(c.total) for c in components)
+    pbrs_fraction = pbrs_total / max(1e-8, reward_total)
 
-        # Get latest EV from PPO updates
-        ev = self._latest_ppo.explained_variance if self._latest_ppo else 0.0
+    # Anti-gaming trigger rate
+    # ratio_penalty and alpha_shock are penalties (non-zero = triggered)
+    # Sign: penalties are typically negative, so check != 0
+    gaming_steps = sum(
+        1 for c in components
+        if c.ratio_penalty != 0 or c.alpha_shock != 0
+    )
+    gaming_rate = gaming_steps / max(1, len(components))
 
-        # Hypervolume from episode outcomes
-        hv = self._compute_hypervolume()
+    # Get latest EV from Tamiyo PPO state (not a separate object)
+    ev = self._tamiyo.explained_variance
 
-        return RewardHealthData(
-            pbrs_fraction=pbrs_fraction,
-            anti_gaming_trigger_rate=gaming_rate,
-            ev_explained=ev,
-            hypervolume=hv,
-        )
+    # Hypervolume from episode outcomes
+    hv = self._compute_hypervolume()
+
+    return RewardHealthData(
+        pbrs_fraction=pbrs_fraction,
+        anti_gaming_trigger_rate=gaming_rate,
+        ev_explained=ev,
+        hypervolume=hv,
+    )
 ```
 
 **Step 3: Mount panel in app.py**
@@ -1519,6 +1821,7 @@ done
 | Phase | Tasks | Purpose |
 |-------|-------|---------|
 | 0 | Task 0 | Foundation fixes (stability score design decision) |
+| 0 | Task 0.5 | Generalize A/B → A/B/n (`reward_mode_per_env` + builder) |
 | 1 | Tasks 1-2 | EpisodeOutcome schema + vectorized wiring |
 | 2 | Tasks 3-4 | Pareto frontier computation + MCP view |
 | 3 | Task 5 | Ablation config files (6 configs) |
@@ -1527,7 +1830,10 @@ done
 | 6 | Task 9 | PBRS verification tests |
 | ✓ | Task 10 | End-to-end verification |
 
-**Total: 10 tasks, ~2-3 hours implementation time**
+**Total: 11 tasks, ~2.5-3 hours implementation time**
+
+*Note: Task 0.5 rename scope is ~44 occurrences in .py files (excluding docs/archives).
+Mechanical find-replace, but verify tests pass after each file.*
 
 ---
 
@@ -1541,12 +1847,33 @@ done
 6. **Property-Based Tests**: Added Hypothesis tests for Pareto frontier correctness
 7. **PBRS Verification Tests**: Added tests to verify Ng et al. (1999) properties
 8. **Self-Dominance Bug**: Added check to prevent `outcome.dominates(outcome)` returning True
+9. **A/B → A/B/n Generalization**: Renamed `ab_reward_modes` → `reward_mode_per_env`, added `with_reward_split()` builder
+
+## Pre-Execution Fixes (Risk Assessment 2025-12-24)
+
+10. **Slotted Dataclass Property Bug**: Removed backward compat alias (`ab_reward_modes` property)
+    - TrainingConfig uses `@dataclass(slots=True)` which prohibits properties
+    - Per No Legacy Code Policy: clean rename without compatibility shims
+    - Added Step 7b for comprehensive find-replace across all files
+
+11. **Aggregator State Mismatch**: Rewrote `compute_reward_health()` to use actual fields
+    - `_recent_components` doesn't exist → iterate `self._envs.values()` for `reward_components`
+    - `_latest_ppo` doesn't exist → use `self._tamiyo.explained_variance` directly
+    - Added Step 2a/2b/2c with detailed wiring instructions
+
+12. **PBRS Fraction Source**: Clarified PBRS tracking via existing `stage_bonus` field
+    - `stage_bonus` in RewardComponents captures stage advancement bonuses (PBRS shaping)
+    - No schema extension needed
+
+13. **Anti-Gaming Sign Convention**: Fixed penalty detection logic
+    - Changed `c.ratio_penalty < 0` to `c.ratio_penalty != 0 or c.alpha_shock != 0`
+    - Penalties are non-zero when active (sign convention varies)
 
 ---
 
 ## References
 
 - DRL Expert Paper: `docs/research/reward-function-design-for-morphogenetic-controller.md`
-- Existing A/B infrastructure: `TrainingConfig.ab_reward_modes`
+- A/B/n infrastructure: `TrainingConfig.reward_mode_per_env` + `with_reward_split()` builder
 - PBRS theory: Ng et al. (1999) - Policy invariance under reward transformations
 - Hypervolume: Zitzler & Thiele (1999) - Multiobjective Evolutionary Algorithms

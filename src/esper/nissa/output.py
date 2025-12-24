@@ -177,6 +177,8 @@ class ConsoleOutput(OutputBackend):
                 threshold = f"{threshold:.4f}"
             print(f"[{timestamp}] GOVERNOR | 🚨 ROLLBACK: {reason} (loss={loss}, threshold={threshold}, panics={panics})")
         elif event_type == "GOVERNOR_PANIC":
+            # TODO: [DEAD CODE] - This formatting code for GOVERNOR_PANIC is unreachable
+            # because these events are never emitted. See: leyline/telemetry.py dead event TODOs.
             data = event.data or {}
             loss = data.get("current_loss", "?")
             panics = data.get("consecutive_panics", 0)
@@ -211,6 +213,8 @@ class ConsoleOutput(OutputBackend):
                 contribution = data.get("contribution", 0.0)
                 print(f"[{timestamp}] env{env_id} | Counterfactual {slot_id}: {real_acc:.1f}% real, {baseline_acc:.1f}% baseline, Δ={contribution:+.1f}%")
         elif event_type == "CHECKPOINT_SAVED":
+            # TODO: [DEAD CODE] - This formatting code for CHECKPOINT_SAVED is unreachable
+            # because these events are never emitted. See: leyline/telemetry.py dead event TODOs.
             data = event.data or {}
             path = data.get("path", "?")
             avg_acc = data.get("avg_accuracy", 0.0)

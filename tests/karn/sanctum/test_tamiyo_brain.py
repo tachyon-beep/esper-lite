@@ -1309,7 +1309,7 @@ async def test_border_title_includes_group_id():
 
 @pytest.mark.asyncio
 async def test_compact_decision_card_format():
-    """Compact decision card should fit in ~20 chars width with 2 lines."""
+    """Compact decision card should be exactly 20 chars wide with 4 lines."""
     from esper.karn.sanctum.schema import DecisionSnapshot
     from datetime import datetime, timezone
 
@@ -1333,9 +1333,24 @@ async def test_compact_decision_card_format():
 
         # Render compact card
         card = widget._render_compact_decision(decision, index=0)
-        card_str = str(card)
+        card_plain = card.plain
+        lines = card_plain.split('\n')
+
+        # Should have exactly 4 lines (no trailing newline on last border)
+        assert len(lines) == 4
+
+        # All 4 actual lines should be exactly 20 chars
+        for i, line in enumerate(lines[:4]):
+            assert len(line) == 20, f"Line {i} has length {len(line)}, expected 20: '{line}'"
+
+        # Verify border structure
+        assert lines[0].startswith("┌─")
+        assert lines[0].endswith("┐")
+        assert lines[3].startswith("└")
+        assert lines[3].endswith("┘")
 
         # Should contain key info in compact format
+        card_str = card_plain
         assert "D1" in card_str  # Decision number
         assert "WAIT" in card_str  # Action
         assert "92%" in card_str  # Confidence
@@ -1343,3 +1358,111 @@ async def test_compact_decision_card_format():
         assert "0.12" in card_str  # Expected
         assert "0.08" in card_str  # Actual
         assert "✓" in card_str  # Good prediction indicator
+
+
+@pytest.mark.asyncio
+async def test_compact_decision_card_pinned():
+    """Pinned decision should show P indicator at end of line 1."""
+    from esper.karn.sanctum.schema import DecisionSnapshot
+    from datetime import datetime, timezone
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        decision_pinned = DecisionSnapshot(
+            decision_id="test-2",
+            timestamp=datetime.now(timezone.utc),
+            slot_states={"r0c0": "TRAINING"},
+            host_accuracy=87.5,
+            chosen_action="WAIT",
+            chosen_slot=None,
+            confidence=0.92,
+            expected_value=0.12,
+            actual_reward=0.08,
+            alternatives=[],
+            pinned=True,
+        )
+
+        # Render pinned card
+        card = widget._render_compact_decision(decision_pinned, index=0)
+        lines = card.plain.split('\n')
+
+        # Line 1 should contain P indicator (format: "WAIT 92% H:88P")
+        # Pin replaces % on host accuracy
+        assert "P" in lines[1]
+        # Should NOT have % after host accuracy when pinned
+        # The P comes right after the host accuracy number
+        assert "H:88P" in lines[1] or "H:87P" in lines[1]
+
+        # All lines still exactly 20 chars
+        for i, line in enumerate(lines[:4]):
+            assert len(line) == 20, f"Pinned card line {i} has length {len(line)}, expected 20"
+
+
+@pytest.mark.asyncio
+async def test_compact_decision_card_thresholds():
+    """Decision card should use class constants for prediction thresholds."""
+    from esper.karn.sanctum.schema import DecisionSnapshot
+    from datetime import datetime, timezone
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        # Verify constants exist
+        assert hasattr(TamiyoBrain, 'PREDICTION_EXCELLENT_THRESHOLD')
+        assert hasattr(TamiyoBrain, 'PREDICTION_ACCEPTABLE_THRESHOLD')
+        assert TamiyoBrain.PREDICTION_EXCELLENT_THRESHOLD == 0.1
+        assert TamiyoBrain.PREDICTION_ACCEPTABLE_THRESHOLD == 0.3
+
+        # Test excellent prediction (diff < 0.1)
+        decision_excellent = DecisionSnapshot(
+            decision_id="test-3",
+            timestamp=datetime.now(timezone.utc),
+            slot_states={"r0c0": "TRAINING"},
+            host_accuracy=87.5,
+            chosen_action="WAIT",
+            chosen_slot=None,
+            confidence=0.92,
+            expected_value=0.12,
+            actual_reward=0.15,  # diff = 0.03 < 0.1
+            alternatives=[],
+            pinned=False,
+        )
+        card = widget._render_compact_decision(decision_excellent, index=0)
+        assert "✓" in card.plain
+
+        # Test acceptable prediction (0.1 <= diff < 0.3)
+        decision_acceptable = DecisionSnapshot(
+            decision_id="test-4",
+            timestamp=datetime.now(timezone.utc),
+            slot_states={"r0c0": "TRAINING"},
+            host_accuracy=87.5,
+            chosen_action="WAIT",
+            chosen_slot=None,
+            confidence=0.92,
+            expected_value=0.12,
+            actual_reward=0.30,  # diff = 0.18 (0.1 < diff < 0.3)
+            alternatives=[],
+            pinned=False,
+        )
+        card = widget._render_compact_decision(decision_acceptable, index=0)
+        assert "✗" in card.plain  # Should show ✗ for warnings
+
+        # Test poor prediction (diff >= 0.3)
+        decision_poor = DecisionSnapshot(
+            decision_id="test-5",
+            timestamp=datetime.now(timezone.utc),
+            slot_states={"r0c0": "TRAINING"},
+            host_accuracy=87.5,
+            chosen_action="WAIT",
+            chosen_slot=None,
+            confidence=0.92,
+            expected_value=0.12,
+            actual_reward=0.50,  # diff = 0.38 > 0.3
+            alternatives=[],
+            pinned=False,
+        )
+        card = widget._render_compact_decision(decision_poor, index=0)
+        assert "✗" in card.plain
