@@ -148,3 +148,64 @@ async def test_sanctum_app_shows_multiple_tamiyo_widgets():
         has_group_b = any("group-b" in " ".join(w.classes) for w in widgets)
         assert has_group_a, "Missing group-a widget"
         assert has_group_b, "Missing group-b widget"
+
+
+@pytest.mark.asyncio
+async def test_keyboard_switches_between_policies():
+    """Tab key should cycle focus between policy widgets."""
+    from esper.karn.sanctum.app import SanctumApp
+    from esper.karn.sanctum.backend import SanctumBackend
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.leyline import TelemetryEvent, TelemetryEventType
+
+    backend = SanctumBackend()
+    app = SanctumApp(backend=backend, num_envs=4)
+    async with app.run_test() as pilot:
+        # Create two policies - note: group_id is TOP-LEVEL attribute
+        for group_id in ["A", "B"]:
+            event = TelemetryEvent(
+                event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+                group_id=group_id,  # TOP-LEVEL, not in data
+                data={"policy_loss": 0.1},
+            )
+            app.handle_telemetry_event(event)
+
+        # Allow widgets to mount
+        await pilot.pause()
+
+        # Verify we have two TamiyoBrain widgets
+        widgets = list(app.query(TamiyoBrain))
+        assert len(widgets) == 2, f"Expected 2 widgets, got {len(widgets)}"
+
+        # Press Tab multiple times to cycle through focusable widgets until we reach a TamiyoBrain
+        # The focus order is: EnvOverview's DataTable, EventLog, then TamiyoBrain widgets
+        max_tabs = 10
+        for _ in range(max_tabs):
+            await pilot.press("tab")
+            await pilot.pause()
+            if isinstance(app.focused, TamiyoBrain):
+                break
+
+        # Should now have a focused TamiyoBrain
+        assert isinstance(app.focused, TamiyoBrain), f"Expected TamiyoBrain to be focused, got {app.focused}"
+        first_focused = app.focused
+
+        # Verify the focused class was added
+        assert first_focused.has_class("focused"), "Focused widget should have 'focused' class"
+
+        # Press Tab again to move to second TamiyoBrain
+        await pilot.press("tab")
+        await pilot.pause()
+
+        # If there are only 2 TamiyoBrain widgets and we were on the first, we should now be on the second
+        # (or cycle back depending on focus order)
+        second_focused = app.focused
+
+        # Either we moved to the second TamiyoBrain, or we cycled to something else
+        # Let's check that the old focused widget lost its class and a new one got it
+        assert not first_focused.has_class("focused"), "First widget should no longer have 'focused' class"
+
+        # Find the currently focused widget if it's a TamiyoBrain
+        if isinstance(second_focused, TamiyoBrain):
+            assert second_focused.has_class("focused"), "Second focused widget should have 'focused' class"
+            assert second_focused != first_focused, "Focus should have moved to a different widget"

@@ -32,6 +32,9 @@ class TamiyoBrain(Static):
     Click on a decision panel to pin it (prevents replacement).
     """
 
+    # Enable keyboard focus for Tab navigation between policy widgets
+    can_focus = True
+
     # Widget width for separators (96 - 2 for padding = 94)
     SEPARATOR_WIDTH = 94
 
@@ -71,6 +74,14 @@ class TamiyoBrain(Static):
         self._snapshot: SanctumSnapshot | None = None
         self._decision_ids: list[str] = []  # IDs of currently displayed decisions
         self.border_title = "TAMIYO"  # Top-left title like EventLog
+
+    def on_focus(self) -> None:
+        """Handle focus - highlight border."""
+        self.add_class("focused")
+
+    def on_blur(self) -> None:
+        """Handle blur - remove highlight."""
+        self.remove_class("focused")
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         self._snapshot = snapshot
