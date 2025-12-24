@@ -265,3 +265,39 @@ async def test_run_header_no_ab_comparison_in_single_mode():
         # RunHeader should NOT be in A/B mode
         header = app.query_one("#run-header", RunHeader)
         assert header._ab_mode is False
+
+
+@pytest.mark.asyncio
+async def test_backend_emits_create_multiple_tamiyo_widgets():
+    """Backend emitting A/B events should create two TamiyoBrain widgets via production path."""
+    from esper.karn.sanctum.app import SanctumApp
+    from esper.karn.sanctum.backend import SanctumBackend
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.leyline import TelemetryEvent, TelemetryEventType
+
+    backend = SanctumBackend(num_envs=4)
+    backend.start()
+
+    # Emit events for two groups through backend (production path)
+    for group_id in ["A", "B"]:
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+            group_id=group_id,
+            data={"policy_loss": 0.1},
+        )
+        backend.emit(event)
+
+    app = SanctumApp(backend=backend, num_envs=4)
+    async with app.run_test() as pilot:
+        # Trigger refresh (simulates timer firing)
+        app._poll_and_refresh()
+        await pilot.pause()
+
+        # Should have two TamiyoBrain widgets
+        widgets = list(app.query(TamiyoBrain))
+        assert len(widgets) == 2, f"Expected 2 TamiyoBrain widgets, got {len(widgets)}"
+
+        # Each should have correct group class
+        classes = [" ".join(w.classes) for w in widgets]
+        assert any("group-a" in c for c in classes), "Missing group-a widget"
+        assert any("group-b" in c for c in classes), "Missing group-b widget"

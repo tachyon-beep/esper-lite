@@ -261,6 +261,53 @@ class SanctumApp(App):
                 self.log.warning(f"Cannot mount TamiyoBrain for {group_id}: container not found")
                 raise
 
+    def _refresh_tamiyo_widgets(self) -> None:
+        """Refresh TamiyoBrain widgets from backend's multi-group snapshots.
+
+        Creates widgets dynamically for each policy group. Handles both
+        single-policy mode (one widget) and A/B testing (two+ widgets).
+        """
+        snapshots = self._backend.get_all_snapshots()
+
+        # Handle empty case (no events yet) - create default widget
+        if not snapshots:
+            try:
+                widget = self._get_or_create_tamiyo_widget("default")
+                from esper.karn.sanctum.schema import SanctumSnapshot as SnapshotClass
+                widget.update_snapshot(SnapshotClass())
+            except NoMatches:
+                pass
+            return
+
+        # Create/update widget for each group
+        for group_id, group_snapshot in snapshots.items():
+            try:
+                widget = self._get_or_create_tamiyo_widget(group_id)
+                widget.update_snapshot(group_snapshot)
+            except NoMatches:
+                pass  # Container hasn't mounted yet
+            except Exception as e:
+                self.log.warning(f"Failed to update tamiyo widget for {group_id}: {e}")
+
+        # Update RunHeader with A/B comparison data when 2+ policies
+        if len(snapshots) >= 2:
+            try:
+                run_header = self.query_one("#run-header", RunHeader)
+                group_ids = sorted(snapshots.keys())
+                snapshot_a = snapshots[group_ids[0]]
+                snapshot_b = snapshots[group_ids[1]]
+
+                run_header.update_comparison(
+                    group_a_accuracy=snapshot_a.aggregate_mean_accuracy,
+                    group_b_accuracy=snapshot_b.aggregate_mean_accuracy,
+                    group_a_reward=snapshot_a.aggregate_mean_reward,
+                    group_b_reward=snapshot_b.aggregate_mean_reward,
+                )
+            except NoMatches:
+                pass
+            except Exception as e:
+                self.log.warning(f"Failed to update run header comparison: {e}")
+
     def _update_widgets(self) -> None:
         """Update all TamiyoBrain widgets with latest snapshots."""
         snapshots = self._aggregator_registry.get_all_snapshots()
@@ -343,7 +390,7 @@ class SanctumApp(App):
         """Refresh all panels with new snapshot data.
 
         Args:
-            snapshot: The current telemetry snapshot.
+            snapshot: The current telemetry snapshot (for non-TamiyoBrain widgets).
         """
         # Update run header first (most important context)
         try:
@@ -376,19 +423,8 @@ class SanctumApp(App):
         except Exception as e:
             self.log.warning(f"Failed to update scoreboard: {e}")
 
-        # Update default TamiyoBrain widget from backend snapshot
-        # This handles single-policy mode where events don't flow through handle_telemetry_event
-        try:
-            # Get or create default tamiyo widget
-            widget = self._get_or_create_tamiyo_widget("default")
-            # Create a snapshot wrapper with the tamiyo data from backend
-            from esper.karn.sanctum.schema import SanctumSnapshot as SnapshotClass
-            tamiyo_snapshot = SnapshotClass(tamiyo=snapshot.tamiyo)
-            widget.update_snapshot(tamiyo_snapshot)
-        except NoMatches:
-            pass  # Container hasn't mounted yet
-        except Exception as e:
-            self.log.warning(f"Failed to update tamiyo-default: {e}")
+        # Update TamiyoBrain widgets using multi-group API
+        self._refresh_tamiyo_widgets()
 
         try:
             self.query_one("#event-log", EventLog).update_snapshot(snapshot)
