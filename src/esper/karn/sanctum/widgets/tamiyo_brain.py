@@ -50,6 +50,9 @@ class TamiyoBrain(Static):
     # Neural network architecture constant
     _TOTAL_LAYERS = 12
 
+    # Sparkline width for trend visibility (Task 1)
+    SPARKLINE_WIDTH = 20
+
     # Prediction accuracy thresholds for decision cards
     PREDICTION_EXCELLENT_THRESHOLD = 0.1  # Green checkmark: |actual - expected| < 0.1
     PREDICTION_ACCEPTABLE_THRESHOLD = 0.3  # Yellow warning: |actual - expected| < 0.3
@@ -1036,19 +1039,22 @@ class TamiyoBrain(Static):
     def _render_sparkline(
         self,
         history: list[float] | deque[float],
-        width: int = 10,
+        width: int | None = None,
         style: str = "bright_cyan",
     ) -> Text:
         """Render sparkline using unicode block characters.
 
         Args:
             history: Historical values to visualize
-            width: Maximum width in characters
+            width: Maximum width in characters (defaults to SPARKLINE_WIDTH)
             style: Rich style for the blocks
 
         Returns:
             Text with sparkline or placeholder for empty/flat data.
         """
+        if width is None:
+            width = self.SPARKLINE_WIDTH
+
         BLOCKS = "▁▂▃▄▅▆▇█"
 
         if not history:

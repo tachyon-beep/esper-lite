@@ -1713,3 +1713,19 @@ async def test_click_decision_in_horizontal_layout():
 
         # Decision IDs should be populated
         assert widget._decision_ids == ["click-test-1"]
+
+
+# ===========================
+# Task 1: Sparkline Width Tests
+# ===========================
+
+
+def test_sparklines_are_twenty_chars():
+    """Sparklines should be 20 characters for meaningful trend visibility."""
+    from esper.karn.sanctum.schema import make_sparkline
+    from collections import deque
+
+    values = deque([float(i) for i in range(20)], maxlen=20)
+    sparkline = make_sparkline(values, width=20)
+
+    assert len(sparkline) == 20, f"Expected 20-char sparkline, got {len(sparkline)}"
