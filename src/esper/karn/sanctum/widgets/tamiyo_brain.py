@@ -119,16 +119,21 @@ class TamiyoBrain(Static):
         return Text("─" * width, style="dim")
 
     def _update_status_class(self) -> None:
-        """Update CSS class based on overall status."""
+        """Update CSS class based on overall status and A/B group."""
         status, _, _ = self._get_overall_status()
 
         # Remove all status classes
-        self.remove_class("status-ok")
-        self.remove_class("status-warning")
-        self.remove_class("status-critical")
+        self.remove_class("status-ok", "status-warning", "status-critical")
 
         # Add current status class
         self.add_class(f"status-{status}")
+
+        # Add group class if in A/B mode
+        if self._snapshot and self._snapshot.tamiyo.group_id:
+            # Remove all group classes before adding the current one
+            self.remove_class("group-a", "group-b", "group-c")
+            group = self._snapshot.tamiyo.group_id.lower()
+            self.add_class(f"group-{group}")
 
     def on_click(self, event) -> None:
         """Handle click to toggle decision pin.

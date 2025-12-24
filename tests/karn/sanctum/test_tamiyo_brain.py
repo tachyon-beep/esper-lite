@@ -1140,3 +1140,38 @@ async def test_ab_group_labels():
         assert len(TamiyoBrain.GROUP_LABELS["A"]) > 0
         assert len(TamiyoBrain.GROUP_LABELS["B"]) > 0
         assert len(TamiyoBrain.GROUP_LABELS["C"]) > 0
+
+
+# ===========================
+# Task 5.3: Apply Group Color to Border and Title Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_group_a_has_green_border():
+    """Group A TamiyoBrain should have green border styling."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            group_id="A",
+            ppo_data_received=True,
+        )
+        widget.update_snapshot(snapshot)
+        assert widget.has_class("group-a")
+
+
+@pytest.mark.asyncio
+async def test_group_b_has_blue_border():
+    """Group B TamiyoBrain should have blue border styling."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            group_id="B",
+            ppo_data_received=True,
+        )
+        widget.update_snapshot(snapshot)
+        assert widget.has_class("group-b")
