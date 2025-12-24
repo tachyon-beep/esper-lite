@@ -423,6 +423,12 @@ from esper.leyline.alpha import (
     AlphaAlgorithm,
 )
 
+# Type contracts for observations
+from esper.leyline.types import (
+    SeedObservationFields,
+    SlotObservationFields,
+)
+
 __all__ = [
     # Version
     "LEYLINE_VERSION",
@@ -590,4 +596,8 @@ __all__ = [
     "AlphaMode",
     "AlphaCurve",
     "AlphaAlgorithm",
+
+    # Type contracts
+    "SeedObservationFields",
+    "SlotObservationFields",
 ]
