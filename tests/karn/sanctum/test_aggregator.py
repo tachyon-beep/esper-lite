@@ -142,3 +142,71 @@ def test_ppo_update_filters_default_group_id():
     snapshot = agg.get_snapshot()
     # Should NOT be set to "default" - that would show [default] label
     assert snapshot.tamiyo.group_id is None
+
+
+def test_ppo_update_with_none_group_id():
+    """group_id=None should leave tamiyo.group_id as None."""
+    agg = SanctumAggregator(num_envs=4)
+
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        data={"policy_loss": 0.1},
+        group_id=None,
+    )
+    agg.process_event(event)
+
+    snapshot = agg.get_snapshot()
+    assert snapshot.tamiyo.group_id is None
+
+
+def test_ppo_update_group_id_transition():
+    """Group ID change (A→B) should update tamiyo.group_id."""
+    agg = SanctumAggregator(num_envs=4)
+
+    # First event with group A
+    event_a = TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        data={"policy_loss": 0.1},
+        group_id="A",
+    )
+    agg.process_event(event_a)
+    assert agg.get_snapshot().tamiyo.group_id == "A"
+
+    # Second event with group B
+    event_b = TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        data={"policy_loss": 0.1},
+        group_id="B",
+    )
+    agg.process_event(event_b)
+    assert agg.get_snapshot().tamiyo.group_id == "B"
+
+
+def test_ppo_update_group_c():
+    """Group C should be accepted (not just A and B)."""
+    agg = SanctumAggregator(num_envs=4)
+
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        data={"policy_loss": 0.1},
+        group_id="C",
+    )
+    agg.process_event(event)
+
+    snapshot = agg.get_snapshot()
+    assert snapshot.tamiyo.group_id == "C"
+
+
+def test_ppo_update_unknown_group_id():
+    """Unknown group_id (e.g., 'experiment_42') should be accepted."""
+    agg = SanctumAggregator(num_envs=4)
+
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        data={"policy_loss": 0.1},
+        group_id="experiment_42",  # Arbitrary identifier
+    )
+    agg.process_event(event)
+
+    snapshot = agg.get_snapshot()
+    assert snapshot.tamiyo.group_id == "experiment_42"

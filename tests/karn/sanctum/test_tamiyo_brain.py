@@ -1202,3 +1202,73 @@ async def test_status_banner_shows_group_label():
 
         # Should show group indicator
         assert "Policy A" in plain or "🟢" in plain or "[A]" in plain
+
+
+@pytest.mark.asyncio
+async def test_group_c_has_magenta_border():
+    """Group C should use magenta border color."""
+    from textual.app import App, ComposeResult
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
+
+    class TestApp(App):
+        CSS = """
+        TamiyoBrain.group-c { border: solid magenta; }
+        """
+        def compose(self) -> ComposeResult:
+            yield TamiyoBrain(id="tamiyo")
+
+    app = TestApp()
+    async with app.run_test():
+        widget = app.query_one("#tamiyo", TamiyoBrain)
+        snapshot = SanctumSnapshot()
+        snapshot.tamiyo = TamiyoState(group_id="C", ppo_data_received=True)
+        widget.update_snapshot(snapshot)
+
+        assert widget.has_class("group-c")
+
+
+@pytest.mark.asyncio
+async def test_unknown_group_shows_fallback_label():
+    """Unknown group_id should show [D] format in banner."""
+    from io import StringIO
+    from rich.console import Console
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
+
+    widget = TamiyoBrain()
+    snapshot = SanctumSnapshot()
+    snapshot.tamiyo = TamiyoState(group_id="D", ppo_data_received=True)
+    widget._snapshot = snapshot
+
+    banner = widget._render_status_banner()
+    console = Console(file=StringIO(), width=120, force_terminal=True)
+    console.print(banner)
+    output = console.file.getvalue()
+
+    # Should show [D] fallback format
+    assert "[D]" in output
+
+
+@pytest.mark.asyncio
+async def test_no_group_label_when_none():
+    """No group label should appear when group_id is None."""
+    from io import StringIO
+    from rich.console import Console
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
+
+    widget = TamiyoBrain()
+    snapshot = SanctumSnapshot()
+    snapshot.tamiyo = TamiyoState(group_id=None, ppo_data_received=True)
+    widget._snapshot = snapshot
+
+    banner = widget._render_status_banner()
+    console = Console(file=StringIO(), width=120, force_terminal=True)
+    console.print(banner)
+    output = console.file.getvalue()
+
+    # Should NOT contain group labels or separator before status
+    assert "Policy A" not in output
+    assert "Policy B" not in output
+    assert "Policy C" not in output
