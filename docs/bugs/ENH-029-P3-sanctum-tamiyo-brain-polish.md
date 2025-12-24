@@ -4,7 +4,7 @@
 - **Context:** Sanctum TUI / TamiyoBrain widget / A/B testing visualization
 - **Impact:** Low - cosmetic and defensive improvements, no functional gaps
 - **Environment:** Post docs/plans/2025-12-24-expanded-tamiyo-brain.md implementation
-- **Status:** Open
+- **Status:** Closed (2025-12-24)
 
 ## Background
 
@@ -12,104 +12,73 @@ During subagent-driven implementation of the Expanded TamiyoBrain plan, three sp
 
 ## Recommended Enhancements
 
-### 1. Filter "default" group_id in Aggregator
+### ~~1. Filter "default" group_id in Aggregator~~
+
+**Status:** RESOLVED (commit 1c0c38e)
 
 **Source:** Code Reviewer (Task 5.5)
 
-**Issue:** `TelemetryEvent.group_id` defaults to `"default"` for single-policy training. Current code sets `tamiyo.group_id = "default"` which causes `[default]` label to appear in status banner.
-
-**Fix:**
-```python
-# In aggregator.py _handle_ppo_update
-group_id = event.group_id
-if group_id and group_id != "default":
-    self._tamiyo.group_id = group_id
-```
+**Resolution:** Added `and group_id != "default"` condition to filter out the default value in single-policy mode.
 
 **Files:** `src/esper/karn/sanctum/aggregator.py`
 
 ---
 
-### 2. Add Edge Case Tests for group_id
+### ~~2. Add Edge Case Tests for group_id~~
+
+**Status:** RESOLVED (commit 8906182)
 
 **Source:** Code Reviewer, DRL Expert (Tasks 5.3, 5.4, 5.5)
 
-**Missing test coverage:**
-- `group_id=None` - verify no group label appears
-- `group_id="default"` - verify treated as non-A/B mode
-- Group ID change (A→B transition) - verify old class removed
-- Group C - only A and B tested, not C
-- Unknown group_id (e.g., "D") - verify fallback `[D]` format
+**Resolution:** Added 7 edge case tests covering: None, "default", A→B transition, group C, and unknown identifiers (e.g., "experiment_42").
 
 **Files:** `tests/karn/sanctum/test_tamiyo_brain.py`, `tests/karn/sanctum/test_aggregator.py`
 
 ---
 
-### 3. Upstream Telemetry Gap: emit_ppo_update_event
+### ~~3. Upstream Telemetry Gap: emit_ppo_update_event~~
+
+**Status:** RESOLVED (commit 50f189a)
 
 **Source:** DRL Expert (Task 5.5)
 
-**Issue:** `emit_ppo_update_event()` in `emitters.py` does not propagate `group_id` to TelemetryEvent. Events use default `"default"` value.
+**Resolution:** Added `group_id: str = "default"` parameter to `emit_ppo_update_event()` and propagated to TelemetryEvent. Backward compatible via default parameter.
 
-**Fix:** Update `emit_ppo_update_event` to accept and propagate `group_id` parameter:
-```python
-def emit_ppo_update_event(hub, group_id: str = "default", ...):
-    hub.emit(TelemetryEvent(
-        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
-        group_id=group_id,
-        ...
-    ))
-```
-
-**Files:** `src/esper/nissa/emitters.py`, `src/esper/simic/training/vectorized.py`
+**Files:** `src/esper/simic/telemetry/emitters.py`
 
 ---
 
-### 4. Add group_id to border_title for Accessibility
+### ~~4. Add group_id to border_title for Accessibility~~
+
+**Status:** RESOLVED (commit f0846d8)
 
 **Source:** UX Specialist (Tasks 5.3, 5.4)
 
-**Issue:** Widget `border_title` is hardcoded to `"TAMIYO"`. Screen readers and colorblind users benefit from redundant group identification.
-
-**Fix:**
-```python
-# In update_snapshot or _update_status_class
-if self._snapshot and self._snapshot.tamiyo.group_id:
-    self.border_title = f"TAMIYO [{self._snapshot.tamiyo.group_id}]"
-else:
-    self.border_title = "TAMIYO"
-```
+**Resolution:** Updated `update_snapshot()` to set border_title dynamically: `TAMIYO` for single-policy, `TAMIYO [A]` for A/B mode. Properly escapes bracket for Rich markup.
 
 **Files:** `src/esper/karn/sanctum/widgets/tamiyo_brain.py`
 
 ---
 
-### 5. Strengthen CSS Separator for Group Label
+### ~~5. Strengthen CSS Separator for Group Label~~
+
+**Status:** RESOLVED (commit fc6df24)
 
 **Source:** UX Specialist (Task 5.4)
 
-**Issue:** The dim pipe `│` separator between group label and status may be insufficient in dense multi-widget views.
+**Resolution:** Changed separator from light bar (`│`) to heavy bar (`┃`) with spacing for better visual separation in A/B mode.
 
-**Suggestion:** Consider double pipe `││` or additional spacing:
-```python
-banner.append(" ││ ", style="dim")  # Heavier separator
-# or
-banner.append("  │  ", style="dim")  # More spacing
-```
-
-**Files:** `src/esper/karn/sanctum/widgets/tamiyo_brain.py` (`_render_status_banner`)
+**Files:** `src/esper/karn/sanctum/widgets/tamiyo_brain.py`
 
 ---
 
-### 6. CSS Focus State Duplication
+### ~~6. CSS Focus State Duplication~~
+
+**Status:** RESOLVED (commit 91d37ee)
 
 **Source:** Code Reviewer (Task 6.5)
 
-**Issue:** Both `:focus` pseudo-class AND `.focused` class apply the same border style. Choose one approach.
-
-**Options:**
-- Keep CSS `:focus` only (if Textual handles focus state automatically)
-- Keep `.focused` class only (if manual control preferred)
+**Resolution:** Removed duplicate `.focused` class and manual `on_focus`/`on_blur` handlers. Kept Textual's built-in `:focus` pseudo-class only.
 
 **Files:** `src/esper/karn/sanctum/styles.tcss`, `src/esper/karn/sanctum/widgets/tamiyo_brain.py`
 
