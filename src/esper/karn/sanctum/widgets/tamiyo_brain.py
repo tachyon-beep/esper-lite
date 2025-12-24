@@ -8,7 +8,7 @@ New layout focuses on answering:
 from __future__ import annotations
 
 from collections import deque
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from rich.panel import Panel
 from rich.table import Table
@@ -61,6 +61,21 @@ class TamiyoBrain(Static):
 
     # Heads that PPOAgent currently tracks (others awaiting neural network changes)
     TRACKED_HEADS = {"slot", "blueprint"}
+
+    # A/B/C testing color scheme
+    # A = Green (primary/control), B = Cyan (variant), C = Magenta (second variant)
+    # NOTE: Do NOT use red for C - red is reserved for error/critical states
+    GROUP_COLORS: ClassVar[dict[str, str]] = {
+        "A": "bright_green",
+        "B": "bright_cyan",
+        "C": "bright_magenta",
+    }
+
+    GROUP_LABELS: ClassVar[dict[str, str]] = {
+        "A": "🟢 Policy A",
+        "B": "🔵 Policy B",
+        "C": "🟣 Policy C",
+    }
 
     class DecisionPinToggled(Message):
         """Posted when user clicks a decision to toggle pin status."""

@@ -1095,3 +1095,48 @@ async def test_heatmap_appears_in_render():
         # Verify head abbreviations are present
         assert "sl[" in output  # slot head
         assert "bp[" in output  # blueprint head
+
+
+# ===========================
+# Task 5.2: A/B/C Group Color Constants Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_ab_group_color_mapping():
+    """GROUP_COLORS should define colors for A/B/C groups."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        # Access GROUP_COLORS directly on class (no hasattr)
+        assert "A" in TamiyoBrain.GROUP_COLORS
+        assert "B" in TamiyoBrain.GROUP_COLORS
+        assert "C" in TamiyoBrain.GROUP_COLORS
+
+        # Verify color assignments
+        # A = Green (primary/control)
+        assert "green" in TamiyoBrain.GROUP_COLORS["A"]
+        # B = Cyan/Blue (variant)
+        color_b = TamiyoBrain.GROUP_COLORS["B"]
+        assert "cyan" in color_b or "blue" in color_b
+        # C = Magenta (second variant, NOT red)
+        assert "magenta" in TamiyoBrain.GROUP_COLORS["C"]
+
+
+@pytest.mark.asyncio
+async def test_ab_group_labels():
+    """GROUP_LABELS should define labels for A/B/C groups."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        # Access GROUP_LABELS directly on class (no hasattr)
+        assert "A" in TamiyoBrain.GROUP_LABELS
+        assert "B" in TamiyoBrain.GROUP_LABELS
+        assert "C" in TamiyoBrain.GROUP_LABELS
+
+        # Verify labels are non-empty
+        assert len(TamiyoBrain.GROUP_LABELS["A"]) > 0
+        assert len(TamiyoBrain.GROUP_LABELS["B"]) > 0
+        assert len(TamiyoBrain.GROUP_LABELS["C"]) > 0
