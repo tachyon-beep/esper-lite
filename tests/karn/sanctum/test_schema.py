@@ -1,5 +1,4 @@
 """Tests for Sanctum schema - must match all existing TUI state."""
-import pytest
 from collections import deque
 
 from esper.karn.sanctum.schema import (
@@ -425,3 +424,101 @@ def test_degraded_counter_persists_on_stable():
 
     env.add_accuracy(81.0, epoch=6)  # +0.5% improvement
     assert env.degraded_counter == 0  # NOW it resets
+
+
+# ========================================================================
+# Task 2: Trend Detection Tests
+# ========================================================================
+
+def test_detect_trend_improving_loss():
+    """Decreasing loss should be detected as 'improving'."""
+    from esper.karn.sanctum.schema import detect_trend
+
+    # Clear downward trend in loss
+    values = [1.0, 0.95, 0.9, 0.85, 0.8, 0.75, 0.7, 0.65, 0.6, 0.55, 0.5, 0.45, 0.4, 0.35, 0.3]
+    trend = detect_trend(values, metric_name="policy_loss", metric_type="loss")
+    assert trend == "improving", f"Expected 'improving', got '{trend}'"
+
+
+def test_detect_trend_warning_loss():
+    """Increasing loss should be detected as 'warning'."""
+    from esper.karn.sanctum.schema import detect_trend
+
+    values = [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8]
+    trend = detect_trend(values, metric_name="policy_loss", metric_type="loss")
+    assert trend == "warning", f"Expected 'warning', got '{trend}'"
+
+
+def test_detect_trend_stable():
+    """Flat values should be detected as 'stable'."""
+    from esper.karn.sanctum.schema import detect_trend
+
+    values = [0.5, 0.51, 0.49, 0.5, 0.51, 0.5, 0.49, 0.5, 0.51, 0.5, 0.49, 0.5, 0.51, 0.5, 0.49]
+    trend = detect_trend(values, metric_name="policy_loss", metric_type="loss")
+    assert trend == "stable", f"Expected 'stable', got '{trend}'"
+
+
+def test_detect_trend_volatile():
+    """High recent variance vs historical should be 'volatile'."""
+    from esper.karn.sanctum.schema import detect_trend
+
+    # Stable early, then wild swings
+    values = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.1, 0.9, 0.2, 0.8, 0.3, 0.7, 0.4, 0.6]
+    trend = detect_trend(values, metric_name="policy_loss", metric_type="loss")
+    assert trend == "volatile", f"Expected 'volatile', got '{trend}'"
+
+
+def test_detect_trend_accuracy_improving():
+    """Increasing accuracy (metric_type='accuracy') should be 'improving'."""
+    from esper.karn.sanctum.schema import detect_trend
+
+    # Clear upward trend in accuracy
+    values = [50.0, 52.0, 54.0, 56.0, 58.0, 60.0, 62.0, 64.0, 66.0, 68.0, 70.0, 72.0, 74.0, 76.0, 78.0]
+    trend = detect_trend(values, metric_name="episode_return", metric_type="accuracy")
+    assert trend == "improving", f"Expected 'improving', got '{trend}'"
+
+
+def test_detect_trend_accuracy_warning():
+    """Decreasing accuracy (metric_type='accuracy') should be 'warning'."""
+    from esper.karn.sanctum.schema import detect_trend
+
+    # Clear downward trend in accuracy
+    values = [78.0, 76.0, 74.0, 72.0, 70.0, 68.0, 66.0, 64.0, 62.0, 60.0, 58.0, 56.0, 54.0, 52.0, 50.0]
+    trend = detect_trend(values, metric_name="episode_return", metric_type="accuracy")
+    assert trend == "warning", f"Expected 'warning', got '{trend}'"
+
+
+def test_detect_trend_insufficient_data():
+    """Less than 5 values should return 'stable'."""
+    from esper.karn.sanctum.schema import detect_trend
+
+    values = [0.5, 0.6, 0.7]
+    trend = detect_trend(values, metric_name="policy_loss", metric_type="loss")
+    assert trend == "stable", f"Expected 'stable' for insufficient data, got '{trend}'"
+
+
+def test_trend_to_indicator():
+    """Convert trend labels to display indicators and styles."""
+    from esper.karn.sanctum.schema import trend_to_indicator
+
+    # Test all trend types
+    indicator, style = trend_to_indicator("improving")
+    assert indicator == "^", f"Expected '^' for improving, got '{indicator}'"
+    assert style == "green", f"Expected 'green' for improving, got '{style}'"
+
+    indicator, style = trend_to_indicator("stable")
+    assert indicator == "-", f"Expected '-' for stable, got '{indicator}'"
+    assert style == "dim", f"Expected 'dim' for stable, got '{style}'"
+
+    indicator, style = trend_to_indicator("volatile")
+    assert indicator == "~", f"Expected '~' for volatile, got '{indicator}'"
+    assert style == "yellow", f"Expected 'yellow' for volatile, got '{style}'"
+
+    indicator, style = trend_to_indicator("warning")
+    assert indicator == "v", f"Expected 'v' for warning, got '{indicator}'"
+    assert style == "red", f"Expected 'red' for warning, got '{style}'"
+
+    # Unknown trend should return stable
+    indicator, style = trend_to_indicator("unknown")
+    assert indicator == "-", f"Expected '-' for unknown, got '{indicator}'"
+    assert style == "dim", f"Expected 'dim' for unknown, got '{style}'"

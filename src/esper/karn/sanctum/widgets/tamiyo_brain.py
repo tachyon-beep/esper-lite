@@ -19,7 +19,7 @@ from textual.widgets import Static
 from esper.karn.constants import TUIThresholds
 
 if TYPE_CHECKING:
-    from esper.karn.sanctum.schema import SanctumSnapshot
+    from esper.karn.sanctum.schema import DecisionSnapshot, SanctumSnapshot
 
 
 class TamiyoBrain(Static):
@@ -922,13 +922,44 @@ class TamiyoBrain(Static):
         return Text(bar, style="dim")
 
     def _render_gauge_grid(self) -> Table:
-        """Render 2x2 gauge grid: EV, Entropy, Clip, KL."""
+        """Render 2x2 gauge grid: EV, Entropy, Clip, KL with trend indicators."""
+        from esper.karn.sanctum.schema import detect_trend, trend_to_indicator
+
         tamiyo = self._snapshot.tamiyo
         batch = self._snapshot.current_batch
 
         grid = Table.grid(expand=True)
         grid.add_column(ratio=1)
         grid.add_column(ratio=1)
+
+        # Detect trends for each metric
+        ev_trend = detect_trend(
+            list(tamiyo.explained_variance_history),
+            metric_name="expl_var",
+            metric_type="accuracy"
+        )
+        ev_indicator, ev_indicator_style = trend_to_indicator(ev_trend)
+
+        entropy_trend = detect_trend(
+            list(tamiyo.entropy_history),
+            metric_name="entropy",
+            metric_type="accuracy"
+        )
+        entropy_indicator, entropy_indicator_style = trend_to_indicator(entropy_trend)
+
+        clip_trend = detect_trend(
+            list(tamiyo.clip_fraction_history),
+            metric_name="clip_fraction",
+            metric_type="loss"
+        )
+        clip_indicator, clip_indicator_style = trend_to_indicator(clip_trend)
+
+        kl_trend = detect_trend(
+            list(tamiyo.kl_divergence_history),
+            metric_name="kl_divergence",
+            metric_type="loss"
+        )
+        kl_indicator, kl_indicator_style = trend_to_indicator(kl_trend)
 
         # Row 1: Explained Variance | Entropy
         ev_gauge = self._render_gauge_v2(
@@ -938,6 +969,8 @@ class TamiyoBrain(Static):
             max_val=1.0,
             status=self._get_ev_status(tamiyo.explained_variance),
             label_text=self._get_ev_label(tamiyo.explained_variance),
+            trend_indicator=ev_indicator,
+            trend_style=ev_indicator_style,
         )
         entropy_gauge = self._render_gauge_v2(
             "Entropy",
@@ -946,6 +979,8 @@ class TamiyoBrain(Static):
             max_val=2.0,
             status=self._get_entropy_status(tamiyo.entropy),
             label_text=self._get_entropy_label(tamiyo.entropy, batch),
+            trend_indicator=entropy_indicator,
+            trend_style=entropy_indicator_style,
         )
         grid.add_row(ev_gauge, entropy_gauge)
 
@@ -957,6 +992,8 @@ class TamiyoBrain(Static):
             max_val=0.5,
             status=self._get_clip_status(tamiyo.clip_fraction),
             label_text=self._get_clip_label(tamiyo.clip_fraction),
+            trend_indicator=clip_indicator,
+            trend_style=clip_indicator_style,
         )
         kl_gauge = self._render_gauge_v2(
             "KL Div",
@@ -965,6 +1002,8 @@ class TamiyoBrain(Static):
             max_val=0.1,
             status=self._get_kl_status(tamiyo.kl_divergence),
             label_text=self._get_kl_label(tamiyo.kl_divergence, batch),
+            trend_indicator=kl_indicator,
+            trend_style=kl_indicator_style,
         )
         grid.add_row(clip_gauge, kl_gauge)
 
@@ -978,8 +1017,10 @@ class TamiyoBrain(Static):
         max_val: float,
         status: str,
         label_text: str,
+        trend_indicator: str = "-",
+        trend_style: str = "dim",
     ) -> Text:
-        """Render a gauge with status-colored bar."""
+        """Render a gauge with status-colored bar and trend indicator."""
         # Normalize to 0-1
         if max_val != min_val:
             normalized = (value - min_val) / (max_val - min_val)
@@ -1006,6 +1047,10 @@ class TamiyoBrain(Static):
             gauge.append(f"{value:.3f}", style=bar_color)
         else:
             gauge.append(f"{value:.2f}", style=bar_color)
+
+        # Add trend indicator (per Task 2)
+        gauge.append(" ", style="dim")
+        gauge.append(trend_indicator, style=trend_style)
 
         if status == "critical":
             gauge.append("!", style="red bold")
@@ -1081,14 +1126,16 @@ class TamiyoBrain(Static):
         return result
 
     def _render_metrics_column(self) -> Text:
-        """Render secondary metrics column with sparklines."""
+        """Render secondary metrics column with sparklines and trend indicators."""
+        from esper.karn.sanctum.schema import detect_trend, trend_to_indicator
+
         tamiyo = self._snapshot.tamiyo
         result = Text()
 
         # Advantage stats
         adv_status = self._get_advantage_status(tamiyo.advantage_std)
         adv_style = self._status_style(adv_status)
-        result.append(f" Advantage   ", style="dim")
+        result.append(" Advantage   ", style="dim")
         result.append(f"{tamiyo.advantage_mean:+.2f} ± {tamiyo.advantage_std:.2f}", style=adv_style)
         if adv_status != "ok":
             result.append(" [!]", style=adv_style)
@@ -1097,34 +1144,58 @@ class TamiyoBrain(Static):
         # Ratio bounds
         ratio_status = self._get_ratio_status(tamiyo.ratio_min, tamiyo.ratio_max)
         ratio_style = self._status_style(ratio_status)
-        result.append(f" Ratio       ", style="dim")
+        result.append(" Ratio       ", style="dim")
         result.append(f"{tamiyo.ratio_min:.2f} < r < {tamiyo.ratio_max:.2f}", style=ratio_style)
         if ratio_status != "ok":
             result.append(" [!]", style=ratio_style)
         result.append("\n")
 
-        # Policy loss with sparkline
+        # Policy loss with sparkline and trend indicator
         pl_sparkline = self._render_sparkline(tamiyo.policy_loss_history)
-        result.append(f" Policy Loss ", style="dim")
+        pl_trend = detect_trend(
+            list(tamiyo.policy_loss_history),
+            metric_name="policy_loss",
+            metric_type="loss"
+        )
+        pl_indicator, pl_indicator_style = trend_to_indicator(pl_trend)
+        result.append(" Policy Loss ", style="dim")
         result.append(pl_sparkline)
-        result.append(f" {tamiyo.policy_loss:.3f}\n", style="bright_cyan")
+        result.append(f" {tamiyo.policy_loss:.3f} ", style="bright_cyan")
+        result.append(pl_indicator, style=pl_indicator_style)
+        result.append("\n")
 
-        # Value loss with sparkline
+        # Value loss with sparkline and trend indicator
         vl_sparkline = self._render_sparkline(tamiyo.value_loss_history)
-        result.append(f" Value Loss  ", style="dim")
+        vl_trend = detect_trend(
+            list(tamiyo.value_loss_history),
+            metric_name="value_loss",
+            metric_type="loss"
+        )
+        vl_indicator, vl_indicator_style = trend_to_indicator(vl_trend)
+        result.append(" Value Loss  ", style="dim")
         result.append(vl_sparkline)
-        result.append(f" {tamiyo.value_loss:.3f}\n", style="bright_cyan")
+        result.append(f" {tamiyo.value_loss:.3f} ", style="bright_cyan")
+        result.append(vl_indicator, style=vl_indicator_style)
+        result.append("\n")
 
-        # Grad norm with sparkline
+        # Grad norm with sparkline and trend indicator
         gn_sparkline = self._render_sparkline(tamiyo.grad_norm_history)
         gn_status = self._get_grad_norm_status(tamiyo.grad_norm)
         gn_style = self._status_style(gn_status)
-        result.append(f" Grad Norm   ", style="dim")
+        gn_trend = detect_trend(
+            list(tamiyo.grad_norm_history),
+            metric_name="grad_norm",
+            metric_type="loss"
+        )
+        gn_indicator, gn_indicator_style = trend_to_indicator(gn_trend)
+        result.append(" Grad Norm   ", style="dim")
         result.append(gn_sparkline)
-        result.append(f" {tamiyo.grad_norm:.2f}\n", style=gn_style)
+        result.append(f" {tamiyo.grad_norm:.2f} ", style=gn_style)
+        result.append(gn_indicator, style=gn_indicator_style)
+        result.append("\n")
 
         # Layer health
-        result.append(f" Layers      ", style="dim")
+        result.append(" Layers      ", style="dim")
         if tamiyo.dead_layers > 0 or tamiyo.exploding_layers > 0:
             result.append(f"!! {tamiyo.dead_layers} dead, {tamiyo.exploding_layers} exploding", style="red")
         else:

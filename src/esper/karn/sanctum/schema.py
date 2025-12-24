@@ -15,7 +15,6 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
 
 
 @dataclass
@@ -761,6 +760,103 @@ class SanctumSnapshot:
         STALENESS THRESHOLD: 5 seconds (matches Overwatch behavior)
         """
         return self.staleness_seconds > 5.0
+
+
+# Metric-specific thresholds (per DRL review)
+# Higher threshold = more change needed to trigger improving/warning
+TREND_THRESHOLDS: dict[str, float] = {
+    "episode_return": 0.15,   # 15% - returns vary naturally
+    "entropy": 0.08,          # 8% - entropy changes are meaningful
+    "policy_loss": 0.20,      # 20% - policy loss is noisy
+    "value_loss": 0.20,       # 20% - value loss is noisy
+    "kl_divergence": 0.30,    # 30% - KL varies widely
+    "clip_fraction": 0.30,    # 30% - clip fraction is variable
+    "grad_norm": 0.25,        # 25% - gradients vary batch-to-batch
+    "expl_var": 0.15,         # 15% - explained variance
+    "default": 0.15,          # 15% - fallback
+}
+
+
+def detect_trend(
+    values: list[float] | deque[float],
+    metric_name: str = "default",
+    metric_type: str = "loss",
+) -> str:
+    """Detect trend pattern in metric values with RL-appropriate thresholds.
+
+    Uses 10-sample windows (not 5) because RL metrics are inherently noisy.
+    Uses variance ratio for volatility (not CV) per DRL review.
+
+    Args:
+        values: Recent metric values (oldest first).
+        metric_name: Specific metric for threshold lookup.
+        metric_type: "loss" (lower=better) or "accuracy" (higher=better).
+
+    Returns:
+        Trend label: "improving", "stable", "volatile", "warning"
+    """
+    if len(values) < 5:
+        return "stable"
+
+    values_list = list(values)
+
+    # Use 10-sample windows for RL (per DRL review)
+    window_size = min(10, len(values_list) // 2)
+    if window_size < 3:
+        return "stable"
+
+    recent = values_list[-window_size:]
+    older = values_list[:-window_size] if len(values_list) > window_size else values_list[:window_size]
+
+    if not recent or not older:
+        return "stable"
+
+    recent_mean = sum(recent) / len(recent)
+    older_mean = sum(older) / len(older)
+
+    # Volatility check: variance ratio > 3x (per DRL review, not CV > 50%)
+    recent_var = sum((v - recent_mean) ** 2 for v in recent) / len(recent)
+    older_var = sum((v - older_mean) ** 2 for v in older) / len(older)
+
+    if older_var > 0 and recent_var / older_var > 3.0:
+        return "volatile"
+
+    # Get metric-specific threshold
+    threshold_pct = TREND_THRESHOLDS.get(metric_name, TREND_THRESHOLDS["default"])
+    change_threshold = threshold_pct * abs(older_mean) if older_mean != 0 else 0.01
+    change = recent_mean - older_mean
+
+    if metric_type == "loss":
+        # For loss: decreasing is good, increasing is bad
+        if change < -change_threshold:
+            return "improving"
+        elif change > change_threshold:
+            return "warning"
+    else:
+        # For accuracy/return: increasing is good, decreasing is bad
+        if change > change_threshold:
+            return "improving"
+        elif change < -change_threshold:
+            return "warning"
+
+    return "stable"
+
+
+def trend_to_indicator(trend: str) -> tuple[str, str]:
+    """Convert trend label to display indicator and style.
+
+    Per UX review: No brackets, just single char with color.
+
+    Returns:
+        Tuple of (indicator_string, rich_style)
+    """
+    indicators = {
+        "improving": ("^", "green"),
+        "stable": ("-", "dim"),
+        "volatile": ("~", "yellow"),
+        "warning": ("v", "red"),
+    }
+    return indicators.get(trend, ("-", "dim"))
 
 
 def make_sparkline(values: list[float] | deque[float], width: int = 8) -> str:
