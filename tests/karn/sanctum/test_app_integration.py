@@ -212,11 +212,11 @@ async def test_keyboard_switches_between_policies():
 
 
 @pytest.mark.asyncio
-async def test_comparison_header_appears_in_ab_mode():
-    """Comparison header should appear when 2+ policies exist."""
+async def test_run_header_shows_ab_comparison():
+    """RunHeader should show A/B comparison when 2+ policies exist."""
     from esper.karn.sanctum.app import SanctumApp
     from esper.karn.sanctum.backend import SanctumBackend
-    from esper.karn.sanctum.widgets.comparison_header import ComparisonHeader
+    from esper.karn.sanctum.widgets.run_header import RunHeader
     from esper.leyline import TelemetryEvent, TelemetryEventType
 
     backend = SanctumBackend()
@@ -233,17 +233,20 @@ async def test_comparison_header_appears_in_ab_mode():
 
         await pilot.pause()
 
-        # Should have comparison header visible
-        header = app.query_one("#comparison-header", ComparisonHeader)
-        assert header.display is True
+        # RunHeader should have A/B mode active with a leader
+        header = app.query_one("#run-header", RunHeader)
+        # Leader is determined in update_comparison() when called by app
+        # Both policies start with same metrics so leader depends on tiebreaker
+        # Just verify A/B mode is active (leader can be A, B, or None)
+        assert header._ab_mode is True
 
 
 @pytest.mark.asyncio
-async def test_comparison_header_hidden_in_single_mode():
-    """Comparison header should be hidden with only one policy."""
+async def test_run_header_no_ab_comparison_in_single_mode():
+    """RunHeader should not show A/B comparison with only one policy."""
     from esper.karn.sanctum.app import SanctumApp
     from esper.karn.sanctum.backend import SanctumBackend
-    from esper.karn.sanctum.widgets.comparison_header import ComparisonHeader
+    from esper.karn.sanctum.widgets.run_header import RunHeader
     from esper.leyline import TelemetryEvent, TelemetryEventType
 
     backend = SanctumBackend()
@@ -259,6 +262,6 @@ async def test_comparison_header_hidden_in_single_mode():
 
         await pilot.pause()
 
-        # Header should be hidden
-        header = app.query_one("#comparison-header", ComparisonHeader)
-        assert header.display is False
+        # RunHeader should NOT be in A/B mode
+        header = app.query_one("#run-header", RunHeader)
+        assert header._ab_mode is False

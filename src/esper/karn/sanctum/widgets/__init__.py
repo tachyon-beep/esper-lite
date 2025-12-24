@@ -1,6 +1,5 @@
 """Sanctum TUI widgets."""
 from esper.karn.sanctum.widgets.anomaly_strip import AnomalyStrip
-from esper.karn.sanctum.widgets.comparison_header import ComparisonHeader
 from esper.karn.sanctum.widgets.env_detail_screen import EnvDetailScreen
 from esper.karn.sanctum.widgets.env_overview import EnvOverview
 from esper.karn.sanctum.widgets.event_log import EventLog
@@ -13,7 +12,6 @@ from esper.karn.sanctum.widgets.thread_death_modal import ThreadDeathModal
 
 __all__ = [
     "AnomalyStrip",
-    "ComparisonHeader",
     "EnvDetailScreen",
     "EnvOverview",
     "EventLog",

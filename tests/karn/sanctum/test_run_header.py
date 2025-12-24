@@ -296,3 +296,110 @@ def test_run_header_border_blue_normally():
     rendered = header.render()
     assert isinstance(rendered, Panel)
     assert rendered.border_style == "blue"
+
+
+# =============================================================================
+# A/B Comparison Tests (moved from test_comparison_header.py)
+# =============================================================================
+
+
+def test_run_header_update_comparison_method():
+    """RunHeader should have update_comparison method for A/B data."""
+    header = RunHeader()
+
+    # Should not raise
+    header.update_comparison(
+        group_a_accuracy=75.0,
+        group_b_accuracy=68.0,
+        group_a_reward=12.5,
+        group_b_reward=10.2,
+    )
+
+    # Should have a leader property
+    assert header.leader == "A"
+
+
+def test_run_header_shows_comparison_delta():
+    """RunHeader should show accuracy delta when in A/B mode."""
+    snapshot = SanctumSnapshot(connected=True, staleness_seconds=1.0)
+
+    header = RunHeader()
+    header.update_snapshot(snapshot)
+    header.update_comparison(
+        group_a_accuracy=75.0,
+        group_b_accuracy=68.0,
+        group_a_reward=12.5,
+        group_b_reward=10.2,
+    )
+
+    rendered = header.render()
+    text = render_to_text(rendered)
+
+    # Should show delta (75.0 - 68.0 = +7.0%)
+    assert "+7.0%" in text
+
+
+def test_run_header_comparison_reward_decisive():
+    """Reward should be decisive when significantly different."""
+    header = RunHeader()
+
+    # B has lower accuracy but significantly higher reward
+    header.update_comparison(
+        group_a_accuracy=75.0,
+        group_b_accuracy=68.0,
+        group_a_reward=10.0,
+        group_b_reward=15.0,  # B has 50% higher reward
+    )
+
+    # B should lead because reward is the RL objective
+    assert header.leader == "B"
+
+
+def test_run_header_comparison_tied():
+    """Leader should be None when metrics are equal."""
+    header = RunHeader()
+
+    header.update_comparison(
+        group_a_accuracy=70.0,
+        group_b_accuracy=70.0,
+        group_a_reward=10.0,
+        group_b_reward=10.0,
+    )
+
+    assert header.leader is None
+
+
+def test_run_header_no_comparison_by_default():
+    """RunHeader should not show comparison info when not in A/B mode."""
+    snapshot = SanctumSnapshot(connected=True, staleness_seconds=1.0)
+
+    header = RunHeader()
+    header.update_snapshot(snapshot)
+
+    rendered = header.render()
+    text = render_to_text(rendered)
+
+    # Should NOT show A/B comparison elements
+    assert "A/B" not in text
+    assert "Leading:" not in text
+    assert "Acc Δ" not in text
+
+
+def test_run_header_shows_leader_indicator():
+    """RunHeader should show leader indicator in A/B mode."""
+    snapshot = SanctumSnapshot(connected=True, staleness_seconds=1.0)
+
+    header = RunHeader()
+    header.update_snapshot(snapshot)
+    header.update_comparison(
+        group_a_accuracy=75.0,
+        group_b_accuracy=68.0,
+        group_a_reward=12.5,
+        group_b_reward=10.2,
+    )
+
+    rendered = header.render()
+    text = render_to_text(rendered)
+
+    # Should show leader
+    assert "A" in text  # Leading policy indicator

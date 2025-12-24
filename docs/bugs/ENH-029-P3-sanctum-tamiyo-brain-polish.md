@@ -115,31 +115,13 @@ banner.append("  │  ", style="dim")  # More spacing
 
 ---
 
-### 7. Reduce EnvsList and BestRuns Height for Layout Balance
+### ~~7. Reduce EnvsList and BestRuns Height for Layout Balance~~
 
-**Source:** Operator feedback (post-implementation)
+**Status:** RESOLVED
 
-**Issue:** With ComparisonHeader added to the layout, vertical space is tighter. TamiyoBrain and EventLog need more room to display their expanded content (gauges, heatmap, event history).
+**Resolution:** ComparisonHeader was consolidated into RunHeader, freeing up 3 rows of vertical space. Height reduction is no longer necessary.
 
-**Fix:** Reduce EnvsList and BestRuns widgets by 4-5 rows of height:
-
-```tcss
-/* In styles.tcss - adjust height constraints */
-#envs-list {
-    height: 12;  /* Reduce from current ~16-17 */
-}
-
-#best-runs {
-    height: 8;   /* Reduce from current ~12-13 */
-}
-```
-
-**Rationale:**
-- EnvsList shows 4 envs by default - 12 rows is sufficient (header + 4 env rows + margins)
-- BestRuns typically shows top 3-5 runs - 8 rows is sufficient
-- Freed space allows TamiyoBrain's expanded 24-row layout and EventLog to render without clipping
-
-**Files:** `src/esper/karn/sanctum/styles.tcss`
+**Commit:** (pending) - Moved A/B comparison display into RunHeader, deleted ComparisonHeader widget.
 
 ---
 
@@ -158,4 +140,4 @@ P3 - Polish items. All functional requirements from the plan are complete and te
 
 - Plan: `docs/plans/2025-12-24-expanded-tamiyo-brain.md`
 - Branch: `sanctum-tamiyo-ux-enhancement`
-- Commits: ae0d147..d627954 (Phase 5 implementation)
+- Commits: ae0d147..HEAD (Phase 5 implementation + ComparisonHeader consolidation)
