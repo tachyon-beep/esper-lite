@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol
 
-from textual.widget import Widget
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot

@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 from textual.widgets import DataTable, Static
 
 if TYPE_CHECKING:
-    from esper.karn.sanctum.schema import EnvState, SanctumSnapshot, SeedState
+    from esper.karn.sanctum.schema import EnvState, SanctumSnapshot
 
 
 # A/B test cohort styling - colored pips for reward modes

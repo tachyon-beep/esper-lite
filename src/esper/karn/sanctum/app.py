@@ -9,12 +9,11 @@ NOT embedded in right column. Event Log included at bottom-left.
 from __future__ import annotations
 
 import threading
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical
+from textual.containers import Container, Horizontal
 from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Input, Static
@@ -35,7 +34,6 @@ from esper.karn.sanctum.widgets import (
 if TYPE_CHECKING:
     from esper.karn.sanctum.backend import SanctumBackend
     from esper.karn.sanctum.schema import SanctumSnapshot
-    from esper.leyline.telemetry import TelemetryEvent
 
 
 HELP_TEXT = """\

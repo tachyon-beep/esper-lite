@@ -10,7 +10,6 @@ Reference: Overwatch's run_header.py adapted for Sanctum schema.
 """
 from __future__ import annotations
 
-from datetime import datetime
 from typing import TYPE_CHECKING
 
 from rich.panel import Panel
