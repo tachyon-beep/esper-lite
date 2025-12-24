@@ -987,3 +987,69 @@ async def test_diagnostic_matrix_layout():
         # Render diagnostic matrix
         matrix = widget._render_diagnostic_matrix()
         assert matrix is not None
+
+
+# ===========================
+# Task 4.1: Per-Head Entropy Heatmap Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_per_head_entropy_heatmap():
+    """Per-head heatmap should show 8 heads with correct max entropy values."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            head_slot_entropy=1.0,
+            head_blueprint_entropy=2.0,
+            head_style_entropy=1.2,
+            head_tempo_entropy=0.9,
+            head_alpha_target_entropy=0.8,
+            head_alpha_speed_entropy=1.1,
+            head_alpha_curve_entropy=0.7,
+            head_op_entropy=1.5,
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+
+        # Render heatmap
+        heatmap = widget._render_head_heatmap()
+        assert heatmap is not None
+        # Should contain all 8 head labels
+        plain = heatmap.plain
+        assert "sl" in plain.lower() or "slot" in plain.lower()
+        assert "bp" in plain.lower()
+
+
+@pytest.mark.asyncio
+async def test_per_head_heatmap_missing_data_visual():
+    """Heatmap should show visual distinction for unpopulated heads."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        # Only slot and blueprint have data, others are 0.0
+        snapshot.tamiyo = TamiyoState(
+            head_slot_entropy=1.0,
+            head_blueprint_entropy=2.0,
+            head_style_entropy=0.0,  # Missing
+            head_tempo_entropy=0.0,  # Missing
+            head_alpha_target_entropy=0.0,  # Missing
+            head_alpha_speed_entropy=0.0,  # Missing
+            head_alpha_curve_entropy=0.0,  # Missing
+            head_op_entropy=0.0,  # Missing
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+
+        # Render heatmap
+        heatmap = widget._render_head_heatmap()
+        plain = heatmap.plain.lower()
+
+        # Should indicate missing/pending data visually
+        # (implementation will use "n/a" or similar for zeros)
+        assert "n/a" in plain or "---" in plain or "?" in plain

@@ -43,6 +43,22 @@ class TamiyoBrain(Static):
     # Neural network architecture constant
     _TOTAL_LAYERS = 12
 
+    # Per-head max entropy values from factored_actions.py (DRL CORRECTED)
+    # These are ln(N) where N is the number of actions for each head
+    HEAD_MAX_ENTROPIES = {
+        "slot": 1.099,       # ln(3) - default SlotConfig has 3 slots
+        "blueprint": 2.565,  # ln(13) - BlueprintAction has 13 values
+        "style": 1.386,      # ln(4) - GerminationStyle has 4 values
+        "tempo": 1.099,      # ln(3) - TempoAction has 3 values
+        "alpha_target": 1.099,  # ln(3) - AlphaTargetAction has 3 values
+        "alpha_speed": 1.386,   # ln(4) - AlphaSpeedAction has 4 values
+        "alpha_curve": 1.099,   # ln(3) - AlphaCurveAction has 3 values
+        "op": 1.792,         # ln(6) - LifecycleOp has 6 values
+    }
+
+    # Heads that PPOAgent currently tracks (others awaiting neural network changes)
+    TRACKED_HEADS = {"slot", "blueprint"}
+
     class DecisionPinToggled(Message):
         """Posted when user clicks a decision to toggle pin status."""
 
@@ -915,3 +931,86 @@ class TamiyoBrain(Static):
 
         matrix.add_row(gauge_grid, separator, metrics_col)
         return matrix
+
+    def _render_head_heatmap(self) -> Text:
+        """Render per-head entropy heatmap with 8 action heads.
+
+        Shows visual distinction for heads without telemetry data.
+        Per DRL review: max entropy values computed from actual action space dimensions.
+        """
+        tamiyo = self._snapshot.tamiyo
+
+        # Head config: (abbrev, field_name, head_key)
+        heads = [
+            ("sl", "head_slot_entropy", "slot"),
+            ("bp", "head_blueprint_entropy", "blueprint"),
+            ("sy", "head_style_entropy", "style"),
+            ("te", "head_tempo_entropy", "tempo"),
+            ("at", "head_alpha_target_entropy", "alpha_target"),
+            ("as", "head_alpha_speed_entropy", "alpha_speed"),
+            ("ac", "head_alpha_curve_entropy", "alpha_curve"),
+            ("op", "head_op_entropy", "op"),
+        ]
+
+        result = Text()
+        result.append(" Heads: ", style="dim")
+
+        # First line: bars
+        for abbrev, field, head_key in heads:
+            value = getattr(tamiyo, field, 0.0)
+            max_ent = self.HEAD_MAX_ENTROPIES[head_key]
+            is_tracked = head_key in self.TRACKED_HEADS
+
+            # Check for missing data (value=0.0 for untracked heads)
+            if value == 0.0 and not is_tracked:
+                # Visual distinction for awaiting telemetry (per risk assessor)
+                result.append(f"{abbrev}[", style="dim")
+                result.append("n/a", style="dim italic")
+                result.append("] ")
+                continue
+
+            # Normalize to 0-1
+            fill = value / max_ent if max_ent > 0 else 0
+            fill = max(0, min(1, fill))
+
+            # 3-char bar (narrower for 80-char terminal compatibility)
+            bar_width = 3
+            filled = int(fill * bar_width)
+            empty = bar_width - filled
+
+            # Color based on fill level (high entropy = exploring, low = converged)
+            if fill > 0.5:
+                color = "green"
+            elif fill > 0.25:
+                color = "yellow"
+            else:
+                color = "red"
+
+            result.append(f"{abbrev}[")
+            result.append("█" * filled, style=color)
+            result.append("░" * empty, style="dim")
+            result.append("] ")
+
+        result.append("\n        ")
+
+        # Second line: values (fixed-width for alignment per UX spec)
+        for abbrev, field, head_key in heads:
+            value = getattr(tamiyo, field, 0.0)
+            is_tracked = head_key in self.TRACKED_HEADS
+
+            if value == 0.0 and not is_tracked:
+                result.append("  ?  ", style="dim italic")
+                result.append(" ")
+                continue
+
+            max_ent = self.HEAD_MAX_ENTROPIES[head_key]
+            fill = value / max_ent if max_ent > 0 else 0
+
+            # Fixed 5-char width for alignment
+            if fill < 0.25:
+                result.append(f"{value:5.2f}!", style="red")
+            else:
+                result.append(f"{value:5.2f} ", style="dim")
+            result.append(" ")
+
+        return result
