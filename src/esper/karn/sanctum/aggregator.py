@@ -75,6 +75,11 @@ def normalize_action(action: str) -> str:
     return normalized
 
 
+# Maximum decisions to keep for display
+# Must match TamiyoBrain._get_max_decision_cards() upper bound (8)
+MAX_DECISIONS = 8
+
+
 @dataclass
 class SanctumAggregator:
     """Aggregates telemetry events into SanctumSnapshot state.
@@ -313,9 +318,9 @@ class SanctumAggregator:
             self._tamiyo.total_actions = total_actions
 
         # Stable carousel: keep decisions for 30s minimum, never remove pinned
-        # Only expire if we have > 3 and oldest unpinned is > 30s old
+        # Only expire if we have > MAX_DECISIONS and oldest unpinned is > 30s old
         decisions = self._tamiyo.recent_decisions
-        if len(decisions) > 3:
+        if len(decisions) > MAX_DECISIONS:
             # Find oldest unpinned decision that's > 30s old
             for i in range(len(decisions) - 1, -1, -1):
                 d = decisions[i]
@@ -323,7 +328,7 @@ class SanctumAggregator:
                 if not d.pinned and age > 30.0:
                     decisions.pop(i)
                     break
-            self._tamiyo.recent_decisions = decisions[:3]
+            self._tamiyo.recent_decisions = decisions[:MAX_DECISIONS]
 
         # Get focused env's reward components for the detail panel
         focused_rewards = RewardComponents()
@@ -684,12 +689,12 @@ class SanctumAggregator:
             )
 
             # Stable carousel: only add if we can make room
-            # - If < 3 decisions: always add
-            # - If 3 decisions: only replace oldest unpinned if > 30s old
+            # - If < MAX_DECISIONS: always add
+            # - If MAX_DECISIONS: only replace oldest unpinned if > 30s old
             decisions = self._tamiyo.recent_decisions
-            can_add = len(decisions) < 3
+            can_add = len(decisions) < MAX_DECISIONS
 
-            if not can_add and len(decisions) >= 3:
+            if not can_add and len(decisions) >= MAX_DECISIONS:
                 # Find oldest unpinned decision
                 for i in range(len(decisions) - 1, -1, -1):
                     d = decisions[i]
@@ -703,8 +708,8 @@ class SanctumAggregator:
 
             if can_add:
                 decisions.insert(0, decision)
-                # Cap at 3 (shouldn't exceed, but safety)
-                self._tamiyo.recent_decisions = decisions[:3]
+                # Cap at MAX_DECISIONS (shouldn't exceed, but safety)
+                self._tamiyo.recent_decisions = decisions[:MAX_DECISIONS]
 
             # Also keep last_decision for backwards compatibility
             self._tamiyo.last_decision = decision
