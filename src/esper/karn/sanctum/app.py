@@ -19,6 +19,7 @@ from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Input, Static
 
+from esper.karn.sanctum.registry import AggregatorRegistry
 from esper.karn.sanctum.widgets import (
     AnomalyStrip,
     EnvDetailScreen,
@@ -35,6 +36,7 @@ from esper.karn.sanctum.widgets import (
 if TYPE_CHECKING:
     from esper.karn.sanctum.backend import SanctumBackend
     from esper.karn.sanctum.schema import SanctumSnapshot
+    from esper.leyline.telemetry import TelemetryEvent
 
 
 HELP_TEXT = """\
@@ -173,6 +175,7 @@ class SanctumApp(App):
         """
         super().__init__()
         self._backend = backend
+        self._aggregator_registry = AggregatorRegistry(num_envs=num_envs)
         self._num_envs = num_envs
         self._refresh_interval = 1.0 / refresh_rate
         self._focused_env_id: int = 0
@@ -221,6 +224,32 @@ class SanctumApp(App):
     def on_mount(self) -> None:
         """Start refresh timer when app mounts."""
         self.set_interval(self._refresh_interval, self._poll_and_refresh)
+
+    def handle_telemetry_event(self, event: "TelemetryEvent") -> None:
+        """Route telemetry event to appropriate aggregator.
+
+        Args:
+            event: TelemetryEvent to process.
+        """
+        self._aggregator_registry.process_event(event)
+        self._update_widgets()
+
+    def _update_widgets(self) -> None:
+        """Update all TamiyoBrain widgets with latest snapshots."""
+        snapshots = self._aggregator_registry.get_all_snapshots()
+        # For each registered group, update corresponding widget
+        # Currently we have a single TamiyoBrain widget, so we'll update it
+        # with the snapshot from the first group (for now).
+        # Future: multi-widget layout will create one widget per group.
+        if snapshots:
+            # Get the first snapshot (or you could merge them)
+            first_snapshot = next(iter(snapshots.values()))
+            try:
+                self.query_one("#tamiyo-brain", TamiyoBrain).update_snapshot(first_snapshot)
+            except NoMatches:
+                pass  # Widget hasn't mounted yet
+            except Exception as e:
+                self.log.warning(f"Failed to update tamiyo-brain from registry: {e}")
 
     def _poll_and_refresh(self) -> None:
         """Poll backend for new snapshot and refresh all panels.
