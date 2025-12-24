@@ -1175,3 +1175,30 @@ async def test_group_b_has_blue_border():
         )
         widget.update_snapshot(snapshot)
         assert widget.has_class("group-b")
+
+
+# ===========================
+# Task 5.4: Group Label in Status Banner Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_status_banner_shows_group_label():
+    """Status banner should show group label when in A/B mode."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            group_id="A",
+            entropy=1.2,
+            explained_variance=0.6,
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+        banner = widget._render_status_banner()
+        plain = banner.plain
+
+        # Should show group indicator
+        assert "Policy A" in plain or "🟢" in plain or "[A]" in plain
