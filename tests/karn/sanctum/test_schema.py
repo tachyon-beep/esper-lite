@@ -172,6 +172,21 @@ class TestTamiyoState:
         assert hasattr(tamiyo, 'head_alpha_curve_entropy')
         assert hasattr(tamiyo, 'head_op_entropy')
 
+    def test_tamiyo_state_has_group_id(self):
+        """TamiyoState should have group_id for A/B testing identification."""
+        from esper.karn.sanctum.schema import TamiyoState
+
+        # Default is None (not in A/B mode)
+        state = TamiyoState()
+        assert state.group_id is None
+
+        # Can be set to policy group identifier
+        state_a = TamiyoState(group_id="A")
+        assert state_a.group_id == "A"
+
+        state_b = TamiyoState(group_id="B")
+        assert state_b.group_id == "B"
+
 
 class TestSystemVitals:
     """SystemVitals must capture all system metrics."""

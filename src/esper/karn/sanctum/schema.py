@@ -446,6 +446,9 @@ class TamiyoState:
     # Recent decisions list (up to 3, each visible for at least 10 seconds)
     recent_decisions: list["DecisionSnapshot"] = field(default_factory=list)
 
+    # A/B testing identification (None when not in A/B mode)
+    group_id: str | None = None
+
 
 @dataclass
 class SystemVitals:
