@@ -742,3 +742,35 @@ async def test_four_gauge_grid_rendered():
         # Should have 4 gauges: EV, Entropy, Clip, KL
         gauge_grid = widget._render_gauge_grid()
         assert gauge_grid is not None
+
+
+# ===========================
+# Task 2.6: Dynamic Border Color Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_border_color_updates_on_status():
+    """Widget border should change color based on overall status."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        # Healthy state
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            entropy=1.2,
+            explained_variance=0.6,
+            clip_fraction=0.15,
+            kl_divergence=0.01,
+            advantage_std=1.0,
+            ppo_data_received=True,
+        )
+        widget.update_snapshot(snapshot)
+        assert widget.has_class("status-ok")
+
+        # Warning state (EV between 0 and 0.3)
+        snapshot.tamiyo.explained_variance = 0.2
+        widget.update_snapshot(snapshot)
+        assert widget.has_class("status-warning")
+        assert not widget.has_class("status-ok")

@@ -49,7 +49,20 @@ class TamiyoBrain(Static):
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         self._snapshot = snapshot
+        self._update_status_class()
         self.refresh()
+
+    def _update_status_class(self) -> None:
+        """Update CSS class based on overall status."""
+        status, _, _ = self._get_overall_status()
+
+        # Remove all status classes
+        self.remove_class("status-ok")
+        self.remove_class("status-warning")
+        self.remove_class("status-critical")
+
+        # Add current status class
+        self.add_class(f"status-{status}")
 
     def on_click(self, event) -> None:
         """Handle click to toggle decision pin.
