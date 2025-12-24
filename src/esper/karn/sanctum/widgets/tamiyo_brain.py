@@ -352,8 +352,8 @@ class TamiyoBrain(Static):
         content.add_row(self._render_action_distribution_bar())
         content.add_row(self._render_separator())
 
-        # Full decision panels (legacy format)
-        content.add_row(self._render_recent_decisions())
+        # Decision cards (uses dynamic count and enriched format)
+        content.add_row(self._render_decisions_column())
 
         return content
 
@@ -761,92 +761,6 @@ class TamiyoBrain(Static):
         card.append("└" + "─" * (self.DECISION_CARD_WIDTH - 2) + "┘", style="dim")
 
         return card
-
-    def _render_recent_decisions(self) -> Panel:
-        """Render Recent Decisions section (up to 3, each visible for 30s minimum).
-
-        Stable carousel behavior:
-        - Each decision stays visible for at least 30 seconds
-        - Only the oldest unpinned decision can be replaced
-        - Click on a decision to pin it (📌 shown in title)
-        """
-        from datetime import datetime, timezone
-        from rich.console import Group
-
-        tamiyo = self._snapshot.tamiyo
-        decisions = tamiyo.recent_decisions
-
-        if not decisions:
-            return Panel(
-                Text("No decisions captured yet\n[dim]Click to pin decisions[/dim]", style="dim italic"),
-                title="RECENT DECISIONS",
-                border_style="dim",
-            )
-
-        now = datetime.now(timezone.utc)
-        decision_panels = []
-
-        # Store decision IDs for click handling
-        self._decision_ids = [d.decision_id for d in decisions[:3]]
-
-        for i, decision in enumerate(decisions[:3]):
-            age = (now - decision.timestamp).total_seconds()
-            age_str = f"{age:.1f}s ago" if age < 60 else f"{age/60:.0f}m ago"
-
-            # Build full decision display (like the original single panel)
-            content = Table.grid(expand=True)
-            content.add_column(ratio=1)
-
-            # SAW line
-            saw_line = Text()
-            saw_line.append("SAW:  ", style="bold")
-            for slot_id, state in decision.slot_states.items():
-                saw_line.append(f"{slot_id}: {state} │ ", style="dim")
-            saw_line.append(f"Host: {decision.host_accuracy:.0f}%", style="cyan")
-            content.add_row(saw_line)
-
-            # CHOSE line (with Also alternatives on same line, tab-separated)
-            chose_line = Text()
-            chose_line.append("CHOSE: ", style="bold")
-            action_colors = {
-                "GERMINATE": "green bold",
-                "WAIT": "dim",
-                "FOSSILIZE": "blue bold",
-                "PRUNE": "red bold",
-            }
-            chose_line.append(f"{decision.chosen_action}", style=action_colors.get(decision.chosen_action, "white"))
-            if decision.chosen_slot:
-                chose_line.append(f" {decision.chosen_slot}", style="cyan")
-            chose_line.append(f" ({decision.confidence:.0%})", style="dim")
-            # Add alternatives on same line
-            if decision.alternatives:
-                chose_line.append("\t\tAlso: ", style="dim")
-                for action, prob in decision.alternatives[:2]:
-                    chose_line.append(f"{action} ({prob:.0%}) ", style="dim")
-            content.add_row(chose_line)
-
-            # EXPECTED vs GOT line
-            result_line = Text()
-            result_line.append("EXPECTED: ", style="dim")
-            result_line.append(f"{decision.expected_value:+.2f}", style="cyan")
-            result_line.append("  →  GOT: ", style="dim")
-            if decision.actual_reward is not None:
-                diff = decision.actual_reward - decision.expected_value
-                style = "green" if abs(diff) < 0.1 else ("yellow" if diff > 0 else "red")
-                result_line.append(f"{decision.actual_reward:+.2f} ", style=style)
-                result_line.append("✓" if abs(diff) < 0.1 else "✗", style=style)
-            else:
-                result_line.append("pending...", style="dim italic")
-            content.add_row(result_line)
-
-            # Show pinned status in title
-            pin_icon = "📌 " if decision.pinned else ""
-            title = f"{pin_icon}DECISION {i+1} ({age_str})"
-            border = "cyan" if decision.pinned else "dim"
-
-            decision_panels.append(Panel(content, title=title, border_style=border))
-
-        return Panel(Group(*decision_panels), title=f"RECENT DECISIONS ({len(decisions)}) [dim]click to pin[/dim]", border_style="dim")
 
     def _render_status_banner(self) -> Text:
         """Render 1-line status banner with icon and key metrics.
