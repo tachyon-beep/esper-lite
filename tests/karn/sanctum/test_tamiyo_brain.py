@@ -956,3 +956,34 @@ async def test_secondary_metrics_column():
         assert "Advantage" in plain
         assert "Ratio" in plain
         assert "Policy" in plain or "Grad" in plain
+
+
+# ===========================
+# Task 3.3: Diagnostic Matrix Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_matrix_layout():
+    """Diagnostic matrix should have gauges left, metrics right."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            entropy=1.2,
+            explained_variance=0.6,
+            clip_fraction=0.15,
+            kl_divergence=0.01,
+            advantage_mean=0.15,
+            advantage_std=0.95,
+            ratio_min=0.85,
+            ratio_max=1.15,
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+
+        # Render diagnostic matrix
+        matrix = widget._render_diagnostic_matrix()
+        assert matrix is not None

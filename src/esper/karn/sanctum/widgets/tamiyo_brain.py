@@ -133,10 +133,9 @@ class TamiyoBrain(Static):
         main_table.add_row(self._render_separator())
 
         # Row 3: Diagnostic Matrix (gauges left, metrics right)
-        # For now, just gauges - Phase 3 adds metrics column
         if self._snapshot.tamiyo.ppo_data_received:
-            gauge_grid = self._render_gauge_grid()
-            main_table.add_row(gauge_grid)
+            diagnostic_matrix = self._render_diagnostic_matrix()
+            main_table.add_row(diagnostic_matrix)
         else:
             waiting_text = Text(style="dim italic")
             waiting_text.append("⏳ Waiting for PPO vitals\n")
@@ -902,3 +901,17 @@ class TamiyoBrain(Static):
         if ratio_max > TUIThresholds.RATIO_MAX_WARNING or ratio_min < TUIThresholds.RATIO_MIN_WARNING:
             return "warning"
         return "ok"
+
+    def _render_diagnostic_matrix(self) -> Table:
+        """Render diagnostic matrix: gauges left, metrics right."""
+        matrix = Table.grid(expand=True)
+        matrix.add_column(ratio=1)  # Gauges
+        matrix.add_column(width=2)  # Separator
+        matrix.add_column(ratio=1)  # Metrics
+
+        gauge_grid = self._render_gauge_grid()
+        separator = Text("│\n│\n│\n│\n│\n│", style="dim")
+        metrics_col = self._render_metrics_column()
+
+        matrix.add_row(gauge_grid, separator, metrics_col)
+        return matrix
