@@ -522,3 +522,23 @@ def test_trend_to_indicator():
     indicator, style = trend_to_indicator("unknown")
     assert indicator == "-", f"Expected '-' for unknown, got '{indicator}'"
     assert style == "dim", f"Expected 'dim' for unknown, got '{style}'"
+
+
+def test_detect_trend_minimum_window():
+    """Minimum valid window size is 3."""
+    from esper.karn.sanctum.schema import detect_trend
+
+    # 6 values = window_size 3
+    values = [1.0, 0.9, 0.8, 0.5, 0.4, 0.3]
+    trend = detect_trend(values, metric_name="policy_loss", metric_type="loss")
+    assert trend == "improving", f"Expected 'improving' with minimum window, got '{trend}'"
+
+
+def test_detect_trend_uses_deque():
+    """Function should accept deque as input."""
+    from esper.karn.sanctum.schema import detect_trend
+    from collections import deque
+
+    values = deque([1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1], maxlen=20)
+    trend = detect_trend(values, metric_name="policy_loss", metric_type="loss")
+    assert trend == "improving"

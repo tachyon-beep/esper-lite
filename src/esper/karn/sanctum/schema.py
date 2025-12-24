@@ -806,7 +806,12 @@ def detect_trend(
         return "stable"
 
     recent = values_list[-window_size:]
-    older = values_list[:-window_size] if len(values_list) > window_size else values_list[:window_size]
+    # Use the window immediately before recent (non-overlapping)
+    if len(values_list) >= 2 * window_size:
+        older = values_list[-2*window_size:-window_size]
+    else:
+        # Not enough data for proper comparison - use what we have
+        older = values_list[:window_size]
 
     if not recent or not older:
         return "stable"
@@ -818,7 +823,8 @@ def detect_trend(
     recent_var = sum((v - recent_mean) ** 2 for v in recent) / len(recent)
     older_var = sum((v - older_mean) ** 2 for v in older) / len(older)
 
-    if older_var > 0 and recent_var / older_var > 3.0:
+    VOLATILITY_EPSILON = 1e-8
+    if older_var > VOLATILITY_EPSILON and recent_var / older_var > 3.0:
         return "volatile"
 
     # Get metric-specific threshold
@@ -828,15 +834,15 @@ def detect_trend(
 
     if metric_type == "loss":
         # For loss: decreasing is good, increasing is bad
-        if change < -change_threshold:
+        if change <= -change_threshold:  # Include boundary
             return "improving"
-        elif change > change_threshold:
+        elif change >= change_threshold:  # Include boundary
             return "warning"
     else:
         # For accuracy/return: increasing is good, decreasing is bad
-        if change > change_threshold:
+        if change >= change_threshold:  # Include boundary
             return "improving"
-        elif change < -change_threshold:
+        elif change <= -change_threshold:  # Include boundary
             return "warning"
 
     return "stable"
