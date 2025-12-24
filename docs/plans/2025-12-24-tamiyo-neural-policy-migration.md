@@ -74,20 +74,71 @@ The PolicyBundle abstraction is fully implemented but disconnected. PPOAgent byp
 └─────────────────────────────────────────────────────────────┘
 ```
 
+## Task Dependency Chain
+
+```
+Task 1 ──► Task 2 ──► Task 3 ──► Task 4 ──► Task 5 ──► Task 6 ──► Task 7 ──► Task 8
+  │           │           │           │           │           │
+  │           │           │           │           │           └── Tests pass
+  │           │           │           │           └── vectorized.py uses factory
+  │           │           │           └── PPOAgent uses PolicyBundle
+  │           │           └── Factory can create policies
+  │           └── LSTMPolicyBundle imports from Tamiyo
+  └── Network exists in Tamiyo
+```
+
+**IMPORTANT:** Tasks are strictly sequential. Do NOT parallelize.
+
+---
+
 ## Implementation Tasks
 
 ### Task 1: Create Tamiyo Networks Directory
 
+**Depends on:** Nothing (first task)
+
 Create `src/esper/tamiyo/networks/__init__.py` and move `FactoredRecurrentActorCritic` from Simic.
+
+**What moves to Tamiyo:**
+```python
+# These ALL move from simic/agent/network.py to tamiyo/networks/factored_lstm.py:
+
+@dataclass(frozen=True, slots=True)
+class GetActionResult:  # Used by lstm_bundle.py, vectorized.py
+    ...
+
+class _ForwardOutput(TypedDict):  # Internal to network
+    ...
+
+class FactoredRecurrentActorCritic(nn.Module):  # The main network
+    ...
+```
+
+**What stays in Simic (delete the rest):**
+```python
+# simic/agent/network.py becomes EMPTY or is deleted entirely
+# All contents move to Tamiyo
+```
 
 **Files:**
 - CREATE: `src/esper/tamiyo/networks/__init__.py`
-- CREATE: `src/esper/tamiyo/networks/factored_lstm.py` (move from `simic/agent/network.py`)
-- MODIFY: `src/esper/simic/agent/network.py` (remove FactoredRecurrentActorCritic, keep imports if needed)
+  ```python
+  from esper.tamiyo.networks.factored_lstm import (
+      FactoredRecurrentActorCritic,
+      GetActionResult,
+  )
+
+  __all__ = ["FactoredRecurrentActorCritic", "GetActionResult"]
+  ```
+- CREATE: `src/esper/tamiyo/networks/factored_lstm.py` (move entire contents from `simic/agent/network.py`)
+- DELETE: `src/esper/simic/agent/network.py` (entire file)
+- MODIFY: `src/esper/simic/agent/__init__.py` (remove network imports if any)
 
 **Test:** `uv run pytest tests/tamiyo/networks/ -v`
 
 ### Task 2: Update LSTMPolicyBundle Import
+
+**Depends on:** Task 1 (network must exist in Tamiyo)
 
 Change the import in LSTMPolicyBundle from Simic to local Tamiyo networks.
 
@@ -99,6 +150,8 @@ Change the import in LSTMPolicyBundle from Simic to local Tamiyo networks.
 **Test:** `uv run pytest tests/tamiyo/policy/test_lstm_bundle.py -v`
 
 ### Task 3: Create Policy Factory
+
+**Depends on:** Task 2 (LSTMPolicyBundle must import from Tamiyo)
 
 Add `create_policy()` factory function that uses the registry.
 
@@ -113,59 +166,110 @@ def create_policy(
     state_dim: int,
     num_slots: int,
     device: torch.device,
+    compile_mode: str = "off",  # Handle torch.compile at factory level
     **kwargs
 ) -> PolicyBundle:
     """Create a policy from the registry."""
     from esper.tamiyo.policy.registry import get_policy_class
     policy_cls = get_policy_class(policy_type)
-    return policy_cls(state_dim=state_dim, num_slots=num_slots, **kwargs).to(device)
+    bundle = policy_cls(state_dim=state_dim, num_slots=num_slots, **kwargs).to(device)
+
+    # Compile the inner network, not the wrapper (PyTorch expert recommendation)
+    if compile_mode != "off":
+        bundle._network = torch.compile(
+            bundle._network,
+            mode=compile_mode,
+            dynamic=True
+        )
+    return bundle
 ```
 
 **Test:** `uv run pytest tests/tamiyo/policy/test_factory.py -v`
 
 ### Task 4: Refactor PPOAgent Constructor
 
+**Depends on:** Task 3 (factory must exist)
+
 Change PPOAgent to accept PolicyBundle via dependency injection.
 
 **Files:**
 - MODIFY: `src/esper/simic/agent/ppo.py`
-  - Remove `FactoredRecurrentActorCritic` import
-  - Change `__init__` signature: `policy: PolicyBundle` instead of `state_dim: int`
-  - Replace `self.network` with `self.policy`
-  - Update all method calls to use PolicyBundle interface
 
-**Before:**
-```python
-def __init__(self, state_dim: int, slot_config: SlotConfig, ...):
-    self.network = FactoredRecurrentActorCritic(state_dim=state_dim, ...)
-```
+**Complete list of changes (18 references across 13 locations):**
 
-**After:**
+| Line | Current Code | New Code |
+|------|--------------|----------|
+| 311 | `self.network = FactoredRecurrentActorCritic(...)` | DELETE (policy injected) |
+| 325 | `self.network.lstm_hidden_dim` | `self.policy.network.lstm_hidden_dim` |
+| 327 | `self.network.lstm_hidden_dim` | `self.policy.network.lstm_hidden_dim` |
+| 329 | `self.network.num_slots` | `self.policy.network.num_slots` |
+| 331 | `self.network.num_slots` | `self.policy.network.num_slots` |
+| 350-351 | `self.network = torch.compile(self.network, ...)` | DELETE (factory handles compile) |
+| 372-385 | `self._base_network.<head>.parameters()` | `self.policy.network.<head>.parameters()` |
+| 395 | `self.network.parameters()` | `self.policy.network.parameters()` |
+| 409-411 | `_base_network` property checks `_orig_mod` | DELETE property (use `self.policy.network`) |
+| 554 | `self.network.evaluate_actions(...)` | `self.policy.evaluate_actions(...)` + EvalResult handling |
+| 724 | `base_net = self._base_network` | `base_net = self.policy.network` |
+| 745 | `nn.utils.clip_grad_norm_(self.network.parameters(), ...)` | `nn.utils.clip_grad_norm_(self.policy.network.parameters(), ...)` |
+| 802 | `base_net = self._base_network` | `base_net = self.policy.network` |
+
+**Constructor signature change:**
+
 ```python
-def __init__(self, policy: PolicyBundle, slot_config: SlotConfig, ...):
+# Before
+def __init__(
+    self,
+    state_dim: int | None = None,
+    action_dim: int = 7,  # REMOVE - unused legacy param
+    hidden_dim: int = 256,  # REMOVE - unused legacy param
+    ...
+    compile_mode: str = "default",  # REMOVE - factory handles this
+    slot_config: "SlotConfig | None" = None,
+):
+    self.network = FactoredRecurrentActorCritic(...)
+
+# After
+def __init__(
+    self,
+    policy: "PolicyBundle",  # NEW - injected policy
+    slot_config: "SlotConfig | None" = None,
+    ...
+    # Remove: state_dim, action_dim, hidden_dim, compile_mode, lstm_hidden_dim
+):
     self.policy = policy
 ```
+
+**Delete the `_base_network` property entirely** - use `self.policy.network` instead.
 
 **Test:** `uv run pytest tests/simic/test_ppo.py -v`
 
 ### Task 5: Update Vectorized Training Entry Point
 
+**Depends on:** Task 4 (PPOAgent must accept PolicyBundle)
+
 Wire vectorized.py to create PolicyBundle from Tamiyo before creating PPOAgent.
 
 **Files:**
 - MODIFY: `src/esper/simic/training/vectorized.py`
+  - Update `GetActionResult` import: FROM `esper.simic.agent.network` TO `esper.tamiyo.networks`
+  - Add `create_policy` import from `esper.tamiyo.policy`
+  - Create policy before PPOAgent
 
 **Before:**
 ```python
+from esper.simic.agent.network import GetActionResult
+
 agent = PPOAgent(
     state_dim=obs_dim,
     slot_config=slot_config,
+    compile_mode=compile_mode,
     ...
 )
 ```
 
 **After:**
 ```python
+from esper.tamiyo.networks import GetActionResult
 from esper.tamiyo.policy import create_policy
 
 policy = create_policy(
@@ -173,6 +277,7 @@ policy = create_policy(
     state_dim=obs_dim,
     num_slots=slot_config.num_slots,
     device=device,
+    compile_mode=compile_mode,  # Factory handles compilation
 )
 agent = PPOAgent(policy=policy, slot_config=slot_config, ...)
 ```
@@ -181,26 +286,65 @@ agent = PPOAgent(policy=policy, slot_config=slot_config, ...)
 
 ### Task 6: Update All Test Fixtures
 
+**Depends on:** Task 5 (vectorized.py must be updated)
+
 Fix all tests that create PPOAgent directly.
 
-**Files:**
-- MODIFY: `tests/simic/test_ppo.py`
-- MODIFY: `tests/simic/test_rollout_buffer.py`
-- MODIFY: `tests/integration/test_*.py` (any that use PPOAgent)
+**Explicit file list (9 files):**
+
+| File | What to Change |
+|------|----------------|
+| `tests/conftest.py` | Update `small_ppo_model_deterministic` fixture to use `create_policy()` |
+| `tests/simic/test_ppo.py` | All direct PPOAgent instantiations |
+| `tests/simic/test_ppo_checkpoint.py` | Checkpoint tests with PPOAgent |
+| `tests/simic/training/test_policy_group.py` | Policy group tests |
+| `tests/integration/test_ppo_integration.py` | Integration tests |
+| `tests/integration/test_vectorized_factored.py` | Vectorized training tests |
+| `tests/integration/test_dynamic_slots_e2e.py` | Dynamic slot tests |
+| `tests/integration/test_slot_consistency.py` | Slot consistency tests |
+| `tests/stress/test_slot_scaling.py` | Stress tests |
+
+**Pattern for updating tests:**
+
+```python
+# Before
+from esper.simic.agent import PPOAgent
+
+agent = PPOAgent(state_dim=30, slot_config=slot_config, ...)
+
+# After
+from esper.simic.agent import PPOAgent
+from esper.tamiyo.policy import create_policy
+
+policy = create_policy(
+    policy_type="lstm",
+    state_dim=30,
+    num_slots=slot_config.num_slots,
+    device="cpu",  # Tests typically use CPU
+)
+agent = PPOAgent(policy=policy, slot_config=slot_config, ...)
+```
 
 **Test:** `uv run pytest tests/ -v --ignore=tests/karn`
 
 ### Task 7: Remove Dead Code
 
+**Depends on:** Task 6 (all tests must pass first)
+
 Delete the TODO-marked dead code that is now superseded.
 
 **Files:**
-- DELETE: `src/esper/simic/agent/network.py` (if empty after move)
-- MODIFY: `src/esper/tamiyo/policy/protocol.py` (remove TODO comment)
-- MODIFY: `src/esper/tamiyo/policy/lstm_bundle.py` (remove TODO comment)
-- MODIFY: `src/esper/tamiyo/policy/registry.py` (remove TODO comment)
+- VERIFY DELETED: `src/esper/simic/agent/network.py` (should be gone from Task 1)
+- MODIFY: `src/esper/tamiyo/policy/protocol.py` (remove `# TODO: [DEAD CODE]` comment - now ALIVE)
+- MODIFY: `src/esper/tamiyo/policy/lstm_bundle.py` (remove `# TODO: [DEAD CODE]` comment - now ALIVE)
+- MODIFY: `src/esper/tamiyo/policy/registry.py` (remove `# TODO: [DEAD CODE]` comment - now ALIVE)
+- MODIFY: `src/esper/simic/agent/__init__.py` (remove any stale network imports)
+
+**Test:** `uv run pytest tests/ -v --ignore=tests/karn`
 
 ### Task 8: Integration Verification
+
+**Depends on:** Task 7 (all cleanup complete)
 
 Full test suite and manual verification.
 
@@ -210,7 +354,19 @@ uv run pytest tests/ -v
 
 # Training smoke test (short run)
 uv run python -m esper.scripts.train ppo --episodes 10 --num-envs 2
+
+# Verify no imports from old location
+grep -r "from esper.simic.agent.network" src/ tests/
+# Should return NO results
 ```
+
+**Verification checklist:**
+- [ ] All tests pass
+- [ ] Training runs without errors
+- [ ] No imports from `esper.simic.agent.network` remain
+- [ ] `FactoredRecurrentActorCritic` lives in `tamiyo/networks/`
+- [ ] PPOAgent uses `self.policy` (not `self.network`)
+- [ ] torch.compile handled by factory
 
 ## Rollback Plan
 
