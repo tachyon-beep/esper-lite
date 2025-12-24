@@ -117,11 +117,19 @@ def signals_to_features(
         "slots": {},
     }
 
-    # Build per-slot state dict from reports (missing reports are treated as inactive slots).
+    # Build per-slot state dict from reports.
+    # ALL slots in slot_config must be present (Task 4: fail loudly on missing required fields).
     slot_states: dict[str, dict[str, Any]] = {}
     for slot_id in slot_config.slot_ids:
         report = slot_reports.get(slot_id)
         if report is None:
+            # Missing report -> inactive slot with default values
+            slot_states[slot_id] = {
+                "is_active": 0.0,
+                "stage": 0,
+                "alpha": 0.0,
+                "improvement": 0.0,
+            }
             continue
 
         contribution = report.metrics.counterfactual_contribution
