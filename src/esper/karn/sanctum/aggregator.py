@@ -317,18 +317,18 @@ class SanctumAggregator:
             self._tamiyo.action_counts = aggregated_actions
             self._tamiyo.total_actions = total_actions
 
-        # Stable carousel: keep decisions for 30s minimum, never remove pinned
-        # Only expire if we have > MAX_DECISIONS and oldest unpinned is > 30s old
+        # Carousel rotation: expire ONE oldest unpinned decision per cycle if > 30s old
+        # This runs every snapshot (250ms), creating natural stagger as each decision
+        # expires based on its individual timestamp, not batch replacement.
         decisions = self._tamiyo.recent_decisions
-        if len(decisions) > MAX_DECISIONS:
-            # Find oldest unpinned decision that's > 30s old
-            for i in range(len(decisions) - 1, -1, -1):
-                d = decisions[i]
+        for i in range(len(decisions) - 1, -1, -1):  # Iterate oldest-first
+            d = decisions[i]
+            if not d.pinned:
                 age = (now_dt - d.timestamp).total_seconds()
-                if not d.pinned and age > 30.0:
+                if age > 30.0:
                     decisions.pop(i)
-                    break
-            self._tamiyo.recent_decisions = decisions[:MAX_DECISIONS]
+                    break  # Only expire ONE per cycle for smooth rotation
+        self._tamiyo.recent_decisions = decisions[:MAX_DECISIONS]
 
         # Get focused env's reward components for the detail panel
         focused_rewards = RewardComponents()
@@ -688,28 +688,13 @@ class SanctumAggregator:
                 decision_id=str(uuid.uuid4())[:8],  # Short unique ID for pinning
             )
 
-            # Stable carousel: only add if we can make room
-            # - If < MAX_DECISIONS: always add
-            # - If MAX_DECISIONS: only replace oldest unpinned if > 30s old
+            # Add decision if room available (expiration handled by build_snapshot)
+            # Decisions expire after 30s via build_snapshot() carousel logic,
+            # creating natural stagger as each expires on its own timestamp.
             decisions = self._tamiyo.recent_decisions
-            can_add = len(decisions) < MAX_DECISIONS
-
-            if not can_add and len(decisions) >= MAX_DECISIONS:
-                # Find oldest unpinned decision
-                for i in range(len(decisions) - 1, -1, -1):
-                    d = decisions[i]
-                    if not d.pinned:
-                        age = (now_dt - d.timestamp).total_seconds()
-                        if age > 30.0:
-                            # Remove oldest unpinned, make room
-                            decisions.pop(i)
-                            can_add = True
-                        break
-
-            if can_add:
+            if len(decisions) < MAX_DECISIONS:
                 decisions.insert(0, decision)
-                # Cap at MAX_DECISIONS (shouldn't exceed, but safety)
-                self._tamiyo.recent_decisions = decisions[:MAX_DECISIONS]
+                self._tamiyo.recent_decisions = decisions
 
             # Also keep last_decision for backwards compatibility
             self._tamiyo.last_decision = decision
