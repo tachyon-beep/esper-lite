@@ -1171,3 +1171,34 @@ class TamiyoBrain(Static):
                 result.append(f" {value:4.2f}  ", style="dim")
 
         return result
+
+    def _render_decisions_column(self) -> Text:
+        """Render vertical stack of 3 compact decision cards for right column.
+
+        Returns:
+            Rich Text with stacked compact decision cards.
+        """
+        tamiyo = self._snapshot.tamiyo
+        decisions = tamiyo.recent_decisions
+
+        if not decisions:
+            result = Text()
+            result.append("DECISIONS\n", style="dim bold")
+            result.append("No decisions yet\n", style="dim italic")
+            result.append("Waiting for\n", style="dim")
+            result.append("agent actions...", style="dim")
+            return result
+
+        # Store decision IDs for click handling
+        self._decision_ids = [d.decision_id for d in decisions[:3]]
+
+        result = Text()
+        result.append("DECISIONS\n", style="dim bold")
+
+        for i, decision in enumerate(decisions[:3]):
+            card = self._render_compact_decision(decision, index=i)
+            result.append(card)
+            if i < 2:  # Add spacing between cards
+                result.append("\n")
+
+        return result

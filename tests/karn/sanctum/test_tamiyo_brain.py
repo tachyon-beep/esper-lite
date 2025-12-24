@@ -1466,3 +1466,57 @@ async def test_compact_decision_card_thresholds():
         )
         card = widget._render_compact_decision(decision_poor, index=0)
         assert "✗" in card.plain
+
+
+# ===========================
+# Task 2: Decisions Column Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_decisions_column_renders_three_cards():
+    """Decisions column should render 3 compact decision cards vertically."""
+    from esper.karn.sanctum.schema import DecisionSnapshot, TamiyoState, SanctumSnapshot
+    from datetime import datetime, timezone, timedelta
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        # Create 3 decisions
+        now = datetime.now(timezone.utc)
+        decisions = [
+            DecisionSnapshot(
+                decision_id=f"test-{i}",
+                timestamp=now - timedelta(seconds=i * 15),
+                slot_states={"r0c0": "TRAINING"},
+                host_accuracy=85.0 + i,
+                chosen_action="WAIT" if i % 2 == 0 else "GERMINATE",
+                chosen_slot=None,
+                confidence=0.90 - i * 0.05,
+                expected_value=0.1 * i,
+                actual_reward=0.1 * i + 0.02,
+                alternatives=[],
+                pinned=False,
+            )
+            for i in range(3)
+        ]
+
+        snapshot = SanctumSnapshot(
+            tamiyo=TamiyoState(
+                recent_decisions=decisions,
+                ppo_data_received=True,
+            )
+        )
+        widget.update_snapshot(snapshot)
+
+        # Render decisions column
+        column = widget._render_decisions_column()
+        column_str = str(column)
+
+        # Should have 3 decision cards
+        assert "D1" in column_str
+        assert "D2" in column_str
+        assert "D3" in column_str
+        assert "WAIT" in column_str
+        assert "GERM" in column_str
