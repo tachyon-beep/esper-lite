@@ -964,8 +964,9 @@ class TamiyoBrain(Static):
             # Check for missing data (value=0.0 for untracked heads)
             if value == 0.0 and not is_tracked:
                 # Visual distinction for awaiting telemetry (per risk assessor)
+                # Using "---" for consistent 8-char width
                 result.append(f"{abbrev}[", style="dim")
-                result.append("n/a", style="dim italic")
+                result.append("---", style="dim italic")
                 result.append("] ")
                 continue
 
@@ -993,24 +994,28 @@ class TamiyoBrain(Static):
 
         result.append("\n        ")
 
-        # Second line: values (fixed-width for alignment per UX spec)
+        # Second line: values (8-char width to match bars)
         for abbrev, field, head_key in heads:
             value = getattr(tamiyo, field, 0.0)
             is_tracked = head_key in self.TRACKED_HEADS
 
             if value == 0.0 and not is_tracked:
-                result.append("  ?  ", style="dim italic")
-                result.append(" ")
+                # 8-char segment: "  n/a   " (2 spaces + n/a + 3 spaces)
+                result.append("  n/a   ", style="dim italic")
                 continue
 
             max_ent = self.HEAD_MAX_ENTROPIES[head_key]
             fill = value / max_ent if max_ent > 0 else 0
 
-            # Fixed 5-char width for alignment
+            # 8-char segment with indicators: critical (!), warning (*), normal
             if fill < 0.25:
-                result.append(f"{value:5.2f}!", style="red")
+                # Critical: " 1.00! " (6 chars) + 2 padding = 8 total
+                result.append(f" {value:4.2f}! ", style="red")
+            elif fill < 0.5:
+                # Warning: " 1.00* " (6 chars) + 2 padding = 8 total
+                result.append(f" {value:4.2f}* ", style="yellow")
             else:
-                result.append(f"{value:5.2f} ", style="dim")
-            result.append(" ")
+                # Normal: " 1.00  " (6 chars) + 2 padding = 8 total
+                result.append(f" {value:4.2f}  ", style="dim")
 
         return result
