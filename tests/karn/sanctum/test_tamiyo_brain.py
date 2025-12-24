@@ -1613,3 +1613,60 @@ async def test_layout_mode_compact_horizontal_for_medium_terminal():
     async with app.run_test(size=(90, 30)):
         widget = app.query_one(TamiyoBrain)
         assert widget._get_layout_mode() == "compact-horizontal"
+
+
+# ===========================
+# Task 5: Horizontal Layout Integration Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_horizontal_layout_has_two_columns():
+    """Horizontal layout should have vitals (left) and decisions (right)."""
+    from esper.karn.sanctum.schema import TamiyoState, SanctumSnapshot, DecisionSnapshot
+    from datetime import datetime, timezone
+    from rich.console import Console
+    from io import StringIO
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test(size=(120, 30)):
+        widget = app.query_one(TamiyoBrain)
+
+        # Create snapshot with decisions
+        decisions = [
+            DecisionSnapshot(
+                decision_id="test-1",
+                timestamp=datetime.now(timezone.utc),
+                slot_states={"r0c0": "TRAINING"},
+                host_accuracy=87.0,
+                chosen_action="WAIT",
+                chosen_slot=None,
+                confidence=0.92,
+                expected_value=0.12,
+                actual_reward=0.08,
+                alternatives=[],
+                pinned=False,
+            )
+        ]
+        snapshot = SanctumSnapshot(
+            tamiyo=TamiyoState(
+                ppo_data_received=True,
+                entropy=1.5,
+                recent_decisions=decisions,
+            )
+        )
+        widget.update_snapshot(snapshot)
+
+        # Force render
+        rendered = widget.render()
+
+        # Convert to string for assertions
+        console_io = StringIO()
+        console = Console(file=console_io, force_terminal=True, width=120)
+        console.print(rendered)
+        rendered_str = console_io.getvalue()
+
+        # Should have both vitals and decisions visible
+        assert "Entropy" in rendered_str  # Vitals
+        assert "D1" in rendered_str  # Compact decision
+        assert "WAIT" in rendered_str  # Action in decision

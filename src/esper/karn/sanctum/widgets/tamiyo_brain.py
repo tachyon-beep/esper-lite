@@ -186,25 +186,63 @@ class TamiyoBrain(Static):
             self.post_message(self.DecisionPinToggled(decision_id))
 
     def render(self):
-        """Render Tamiyo content with expanded layout."""
+        """Render Tamiyo content with responsive layout.
+
+        Layout modes:
+        - horizontal (≥96 chars): Side-by-side [vitals 2/3 | decisions 1/3]
+        - compact-horizontal (85-95 chars): Compressed side-by-side
+        - stacked (<85 chars): Vertical stack (legacy layout)
+        """
         if self._snapshot is None:
             return Text("No data", style="dim")
 
-        # Main layout: stacked sections
-        main_table = Table.grid(expand=True)
-        main_table.add_column(ratio=1)
+        layout_mode = self._get_layout_mode()
 
-        # Row 1: Status Banner (1 line)
+        # Main layout container
+        main_table = Table.grid(expand=True)
+
+        # Row 1: Status Banner (always full width)
+        main_table.add_column(ratio=1)
         status_banner = self._render_status_banner()
         main_table.add_row(status_banner)
 
-        # Row 2: Separator (full width per UX spec)
+        # Row 2: Separator
         main_table.add_row(self._render_separator())
 
-        # Row 3: Diagnostic Matrix (gauges left, metrics right)
-        if self._snapshot.tamiyo.ppo_data_received:
+        # Row 3: Content (layout-dependent)
+        if layout_mode in ("horizontal", "compact-horizontal"):
+            # Side-by-side: vitals left (2/3), decisions right (1/3)
+            content_table = Table.grid(expand=True)
+            content_table.add_column(ratio=2)  # Vitals (2/3)
+            content_table.add_column(width=1)  # Separator
+            content_table.add_column(ratio=1)  # Decisions (1/3)
+
+            vitals_col = self._render_vitals_column()
+            separator = Text("│\n" * 15, style="dim")  # Vertical separator
+            decisions_col = self._render_decisions_column()
+
+            content_table.add_row(vitals_col, separator, decisions_col)
+            main_table.add_row(content_table)
+        else:
+            # Stacked layout (legacy)
+            main_table.add_row(self._render_stacked_content())
+
+        return main_table
+
+    def _render_stacked_content(self) -> Table:
+        """Render legacy stacked layout for narrow terminals.
+
+        Preserves original vertical stack behavior for <85 char terminals.
+        """
+        tamiyo = self._snapshot.tamiyo
+
+        content = Table.grid(expand=True)
+        content.add_column(ratio=1)
+
+        # Diagnostic Matrix (gauges + metrics)
+        if tamiyo.ppo_data_received:
             diagnostic_matrix = self._render_diagnostic_matrix()
-            main_table.add_row(diagnostic_matrix)
+            content.add_row(diagnostic_matrix)
         else:
             waiting_text = Text(style="dim italic")
             waiting_text.append("⏳ Waiting for PPO vitals\n")
@@ -212,31 +250,24 @@ class TamiyoBrain(Static):
                 f"Progress: {self._snapshot.current_epoch}/{self._snapshot.max_epochs} epochs",
                 style="cyan",
             )
-            main_table.add_row(waiting_text)
+            content.add_row(waiting_text)
 
-        # Row 4: Separator
-        main_table.add_row(self._render_separator())
+        # Separator
+        content.add_row(self._render_separator())
 
-        # Row 5: Per-Head Entropy Heatmap (P2 cool factor)
-        if self._snapshot.tamiyo.ppo_data_received:
-            head_heatmap = self._render_head_heatmap()
-            main_table.add_row(head_heatmap)
+        # Head heatmap
+        if tamiyo.ppo_data_received:
+            content.add_row(self._render_head_heatmap())
+            content.add_row(self._render_separator())
 
-            # Row 6: Separator
-            main_table.add_row(self._render_separator())
+        # Action bar
+        content.add_row(self._render_action_distribution_bar())
+        content.add_row(self._render_separator())
 
-        # Row 7: Action Distribution
-        action_bar = self._render_action_distribution_bar()
-        main_table.add_row(action_bar)
+        # Full decision panels (legacy format)
+        content.add_row(self._render_recent_decisions())
 
-        # Row 8: Separator
-        main_table.add_row(self._render_separator())
-
-        # Row 9: Decision Carousel
-        decisions_panel = self._render_recent_decisions()
-        main_table.add_row(decisions_panel)
-
-        return main_table
+        return content
 
     def _render_learning_vitals(self) -> Panel:
         """Render Learning Vitals section with action bar and gauges."""
