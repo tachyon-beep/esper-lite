@@ -417,6 +417,12 @@ class TamiyoState:
     head_alpha_curve_entropy: float = 0.0
     head_op_entropy: float = 0.0
 
+    # Episode return tracking (PRIMARY RL METRIC - per DRL review)
+    episode_return_history: deque[float] = field(
+        default_factory=lambda: deque(maxlen=20)
+    )
+    current_episode_return: float = 0.0
+
     # History for trend sparklines (last 10 values)
     policy_loss_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
     value_loss_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))

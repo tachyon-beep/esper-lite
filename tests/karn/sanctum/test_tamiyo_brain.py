@@ -1729,3 +1729,37 @@ def test_sparklines_are_twenty_chars():
     sparkline = make_sparkline(values, width=20)
 
     assert len(sparkline) == 20, f"Expected 20-char sparkline, got {len(sparkline)}"
+
+
+# ===========================
+# Task 3: Episode Return and Entropy at Top Tests
+# ===========================
+
+
+def test_episode_return_elevated_position():
+    """Episode Return should appear near the top, not buried at bottom."""
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
+    from collections import deque
+
+    widget = TamiyoBrain()
+    snapshot = SanctumSnapshot(
+        tamiyo=TamiyoState(
+            episode_return_history=deque([10.0, 20.0, 30.0, 40.0, 50.0], maxlen=20),
+            current_episode_return=50.0,
+            entropy_history=deque([6.0, 5.9, 5.8, 5.7, 5.6], maxlen=20),
+            entropy=5.6,
+            learning_rate=3e-4,
+            entropy_coef=0.01,
+        )
+    )
+    widget._snapshot = snapshot
+
+    # Render the primary metrics section (should be at top)
+    primary = widget._render_primary_metrics()
+    primary_str = str(primary)
+
+    assert "Ep.Return" in primary_str or "Episode" in primary_str, \
+        "Episode Return should be in primary metrics section"
+    assert "Entropy" in primary_str, \
+        "Entropy sparkline should be in primary metrics section"

@@ -582,8 +582,13 @@ class SanctumAggregator:
         self._tamiyo.ratio_std = data.get("ratio_std", 0.0)
 
         # Learning rate and entropy coefficient
-        self._tamiyo.learning_rate = data.get("lr")
-        self._tamiyo.entropy_coef = data.get("entropy_coef", 0.0)
+        lr = data.get("lr")
+        if lr is not None:
+            self._tamiyo.learning_rate = lr
+
+        entropy_coef = data.get("entropy_coef")
+        if entropy_coef is not None:
+            self._tamiyo.entropy_coef = entropy_coef
 
         # Gradient health
         self._tamiyo.dead_layers = data.get("dead_layers", 0)
@@ -836,6 +841,13 @@ class SanctumAggregator:
         self._batch_rolling_accuracy = data.get("rolling_accuracy", 0.0)
         self._batch_avg_reward = data.get("avg_reward", 0.0)
         self._batch_total_episodes = data.get("total_episodes", 0)
+
+        # Episode Return (PRIMARY RL METRIC per DRL review)
+        # avg_reward from BATCH_EPOCH_COMPLETED is the average episode return
+        episode_return = data.get("avg_reward", 0.0)
+        if episode_return != 0.0:
+            self._tamiyo.current_episode_return = episode_return
+            self._tamiyo.episode_return_history.append(episode_return)
 
         # Calculate throughput
         now = time.time()

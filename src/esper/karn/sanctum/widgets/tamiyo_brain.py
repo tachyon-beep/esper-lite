@@ -1345,10 +1345,64 @@ class TamiyoBrain(Static):
 
         return result
 
+    def _render_primary_metrics(self) -> Text:
+        """Render primary metrics row (Episode Return + Entropy).
+
+        Per UX review: These go at row 3, prime visual real estate.
+        Per DRL review: Entropy sparkline critical for collapse detection.
+        """
+        from esper.karn.sanctum.schema import detect_trend, trend_to_indicator
+
+        tamiyo = self._snapshot.tamiyo
+        result = Text()
+
+        # Episode Return (PRIMARY RL METRIC)
+        if tamiyo.episode_return_history:
+            sparkline = self._render_sparkline(
+                tamiyo.episode_return_history,
+                width=self.SPARKLINE_WIDTH
+            )
+            trend = detect_trend(
+                list(tamiyo.episode_return_history),
+                metric_name="episode_return",
+                metric_type="accuracy"  # Higher is better
+            )
+            indicator, style = trend_to_indicator(trend)
+
+            result.append("Ep.Return  ", style="bold cyan")
+            result.append(sparkline)
+            result.append(f"  {tamiyo.current_episode_return:>6.1f} ", style="white")
+            result.append(indicator, style=style)
+            result.append(f"      LR:{tamiyo.learning_rate:.0e}" if tamiyo.learning_rate else "      LR:n/a", style="dim")
+            result.append(f"  EntCoef:{tamiyo.entropy_coef:.2f}", style="dim")
+            result.append("\n")
+
+        # Entropy (COLLAPSE DETECTION)
+        if tamiyo.entropy_history:
+            sparkline = self._render_sparkline(
+                tamiyo.entropy_history,
+                width=self.SPARKLINE_WIDTH
+            )
+            trend = detect_trend(
+                list(tamiyo.entropy_history),
+                metric_name="entropy",
+                metric_type="accuracy"  # Stable/high is good, low is collapse
+            )
+            indicator, style = trend_to_indicator(trend)
+
+            result.append("Entropy    ", style="bold")
+            result.append(sparkline)
+            result.append(f"  {tamiyo.entropy:>6.2f} ", style="white")
+            result.append(indicator, style=style)
+
+        return result
+
     def _render_vitals_column(self) -> Table:
         """Render left 2/3 column with all learning vitals.
 
         Contains (top to bottom):
+        - Primary metrics (Episode Return + Entropy) at TOP
+        - Separator
         - Diagnostic matrix (gauges + metrics)
         - Separator
         - Head heatmap
@@ -1373,21 +1427,28 @@ class TamiyoBrain(Static):
             content.add_row(waiting_text)
             return content
 
-        # Row 1: Diagnostic matrix (gauges left, metrics right)
+        # Row 0: PRIMARY METRICS AT TOP (per UX review)
+        primary = self._render_primary_metrics()
+        content.add_row(primary)
+
+        # Row 1: Separator
+        content.add_row(self._render_separator())
+
+        # Row 2: Diagnostic matrix (gauges left, metrics right)
         diagnostic_matrix = self._render_diagnostic_matrix()
         content.add_row(diagnostic_matrix)
 
-        # Row 2: Separator
+        # Row 3: Separator
         content.add_row(self._render_separator())
 
-        # Row 3: Head heatmap
+        # Row 4: Head heatmap
         head_heatmap = self._render_head_heatmap()
         content.add_row(head_heatmap)
 
-        # Row 4: Separator
+        # Row 5: Separator
         content.add_row(self._render_separator())
 
-        # Row 5: Action distribution bar
+        # Row 6: Action distribution bar
         action_bar = self._render_action_distribution_bar()
         content.add_row(action_bar)
 
