@@ -7,6 +7,7 @@ New layout focuses on answering:
 """
 from __future__ import annotations
 
+from collections import deque
 from typing import TYPE_CHECKING
 
 from rich.panel import Panel
@@ -800,7 +801,7 @@ class TamiyoBrain(Static):
 
     def _render_sparkline(
         self,
-        history: list[float] | "deque[float]",
+        history: list[float] | deque[float],
         width: int = 10,
         style: str = "bright_cyan",
     ) -> Text:
