@@ -267,6 +267,197 @@ No database migrations or external dependencies affected.
 └───────────────────────────────────────────────────────────────────┘
 ```
 
+## Expert Review Findings
+
+### DRL Expert Review (2025-12-24)
+
+**Verdict:** Architecturally sound, preserves PPO correctness. Three critical issues identified.
+
+#### Critical Issues
+
+1. **Interface Signature Mismatch** - `evaluate_actions()` uses different patterns:
+   - Network: 8 individual mask kwargs (`slot_mask=...`, `blueprint_mask=...`)
+   - PolicyBundle: Single dict (`masks: dict[str, Tensor]`)
+   - **Action:** Task 4 must update all call sites
+
+2. **Return Type Mismatch** - PPOAgent expects 4-tuple, PolicyBundle returns EvalResult:
+   ```python
+   # Current (will break)
+   log_probs, values, entropy, _ = self.network.evaluate_actions(...)
+
+   # Required change
+   result = self.policy.evaluate_actions(...)
+   log_probs, values, entropy = result.log_prob, result.value, result.entropy
+   ```
+
+3. **Optimizer Parameter Binding** - Must update to access via PolicyBundle:
+   ```python
+   # Current
+   self.optimizer = torch.optim.Adam(self.network.parameters(), ...)
+
+   # Required change
+   self.optimizer = torch.optim.Adam(self.policy.network.parameters(), ...)
+   ```
+
+#### Verified Correct
+
+- Gradient flow preserved (EvalResult is pure delegation, no `.detach()`)
+- Hidden state threading correct (initial_hidden for rollouts, stored initial for training)
+- On-policy integrity maintained (rollout uses get_action, training recomputes with evaluate_actions)
+- Value estimation unchanged
+
+### PyTorch Expert Review (2025-12-24)
+
+**Verdict:** Design is sound for torch.compile, AMP, and gradient flow. One high-priority issue.
+
+#### High Priority
+
+1. **torch.compile Target** - PolicyBundle is not nn.Module, so compile must target inner network:
+   ```python
+   # WRONG - PolicyBundle is not nn.Module
+   self.policy = torch.compile(self.policy, ...)
+
+   # CORRECT - Compile the inner network
+   self.policy._network = torch.compile(self.policy.network, mode=..., dynamic=True)
+   ```
+   **Action:** Add compile logic to factory (Task 3) or document in Task 4
+
+#### Verified Correct
+
+- Gradient flow: Pure delegation without detach/no_grad
+- AMP compatibility: dtype property correctly delegates to parameters
+- Device management: `.to(device)` at factory level handles placement
+- LSTM hidden state: `initial_hidden()` correctly uses inference_mode for rollouts
+
+#### Recommendations
+
+- Add `fullgraph=True` test to catch graph breaks
+- Consider having network return protocol-compatible types directly (eliminates wrapper conversion overhead)
+- Add `parameters()` method to PolicyBundle for cleaner optimizer construction
+
+---
+
+## Updated Implementation Details
+
+### Task 3 Update: Factory with torch.compile
+
+```python
+# factory.py (updated)
+def create_policy(
+    policy_type: str,
+    state_dim: int,
+    num_slots: int,
+    device: torch.device,
+    compile_mode: str = "off",  # NEW: Handle compile at factory level
+    **kwargs
+) -> PolicyBundle:
+    """Create a policy from the registry."""
+    from esper.tamiyo.policy.registry import get_policy_class
+    policy_cls = get_policy_class(policy_type)
+    bundle = policy_cls(state_dim=state_dim, num_slots=num_slots, **kwargs).to(device)
+
+    # Compile the inner network, not the wrapper
+    if compile_mode != "off":
+        bundle._network = torch.compile(
+            bundle._network,
+            mode=compile_mode,
+            dynamic=True
+        )
+    return bundle
+```
+
+### Task 4 Update: Critical Call Site Changes
+
+**1. Mask consolidation in `update()`:**
+```python
+# Before (8 kwargs)
+log_probs, values, entropy, _ = self.network.evaluate_actions(
+    data["states"],
+    actions,
+    slot_mask=data["slot_masks"],
+    blueprint_mask=data["blueprint_masks"],
+    style_mask=data["style_masks"],
+    # ... 5 more masks
+    hidden=(data["initial_hidden_h"], data["initial_hidden_c"]),
+)
+
+# After (dict + EvalResult)
+masks = {
+    "slot": data["slot_masks"],
+    "blueprint": data["blueprint_masks"],
+    "style": data["style_masks"],
+    "tempo": data["tempo_masks"],
+    "alpha_target": data["alpha_target_masks"],
+    "alpha_speed": data["alpha_speed_masks"],
+    "alpha_curve": data["alpha_curve_masks"],
+    "op": data["op_masks"],
+}
+result = self.policy.evaluate_actions(
+    data["states"],
+    actions,
+    masks,
+    hidden=(data["initial_hidden_h"], data["initial_hidden_c"]),
+)
+log_probs = result.log_prob
+values = result.value
+entropy = result.entropy
+```
+
+**2. Optimizer construction:**
+```python
+# Before
+self.optimizer = torch.optim.Adam(self.network.parameters(), lr=learning_rate)
+
+# After
+self.optimizer = torch.optim.Adam(self.policy.network.parameters(), lr=learning_rate)
+```
+
+**3. Buffer validation:**
+```python
+# Before
+assert self.buffer.lstm_hidden_dim == self.network.lstm_hidden_dim
+
+# After (add properties to PolicyBundle or access via network)
+assert self.buffer.lstm_hidden_dim == self.policy.network.lstm_hidden_dim
+```
+
+**4. Checkpoint save/load:**
+```python
+# Before
+save_dict = {'network_state_dict': self._base_network.state_dict(), ...}
+
+# After (PolicyBundle.state_dict() handles compile wrapper)
+save_dict = {'network_state_dict': self.policy.state_dict(), ...}
+```
+
+### Additional Test Coverage
+
+```bash
+# Gradient flow through bundle
+uv run pytest tests/tamiyo/policy/test_lstm_bundle.py::test_evaluate_actions_gradient_flow -v
+
+# Checkpoint round-trip
+uv run pytest tests/simic/test_ppo.py::test_checkpoint_with_policy_bundle -v
+
+# Graph break detection
+uv run pytest tests/tamiyo/policy/test_lstm_bundle.py::test_no_graph_breaks -v
+```
+
+---
+
+## Risk Assessment (Post-Review)
+
+| Risk | Probability | Impact | Mitigation |
+|------|------------|--------|------------|
+| Gradient flow broken | Low | Critical | EvalResult is pure delegation |
+| Call site mismatch | **High** | Critical | Task 4 changes are mandatory |
+| Optimizer binding | **High** | Critical | Must update parameter access |
+| torch.compile wrong target | Medium | High | Factory handles compile |
+| Checkpoint breakage | Medium | High | Use PolicyBundle.state_dict() |
+| Hidden state contamination | Low | High | Documented correctly |
+
+---
+
 ## Notes
 
 - The HeuristicPolicyBundle remains unimplemented (raises NotImplementedError) - this is intentional for now
