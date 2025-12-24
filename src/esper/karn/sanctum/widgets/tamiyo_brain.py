@@ -299,11 +299,13 @@ class TamiyoBrain(Static):
 
         # Row 3: Content (layout-dependent)
         if layout_mode in ("horizontal", "compact-horizontal"):
-            # Side-by-side: vitals left (2/3), decisions right (1/3)
+            # Side-by-side: vitals left (expanding), decisions right (fixed width)
+            # Decisions column is fixed at card width + padding to avoid whitespace
+            # Extra space goes to vitals (sparklines, gauges) not empty decisions area
             content_table = Table.grid(expand=True)
-            content_table.add_column(ratio=2)  # Vitals (2/3)
+            content_table.add_column(ratio=1)  # Vitals (expands to fill)
             content_table.add_column(width=1)  # Separator
-            content_table.add_column(ratio=1)  # Decisions (1/3)
+            content_table.add_column(width=self.DECISION_CARD_WIDTH + 4)  # Decisions (fixed)
 
             vitals_col = self._render_vitals_column()
             separator = Text("│\n" * 15, style="dim")  # Vertical separator
