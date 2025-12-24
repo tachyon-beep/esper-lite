@@ -87,6 +87,21 @@ class TestComputeSeedPotential:
         for i in range(1, len(potentials)):
             assert potentials[i] > potentials[i-1], f"Stage {i+2} should have higher potential than stage {i+1}"
 
+    def test_missing_has_active_seed_raises_keyerror(self):
+        """Missing has_active_seed should fail loudly."""
+        with pytest.raises(KeyError, match="has_active_seed"):
+            compute_seed_potential({})
+
+    def test_missing_seed_stage_raises_keyerror(self):
+        """Missing seed_stage should fail loudly."""
+        with pytest.raises(KeyError, match="seed_stage"):
+            compute_seed_potential({"has_active_seed": 1})
+
+    def test_missing_seed_epochs_in_stage_raises_keyerror(self):
+        """Missing seed_epochs_in_stage should fail loudly."""
+        with pytest.raises(KeyError, match="seed_epochs_in_stage"):
+            compute_seed_potential({"has_active_seed": 1, "seed_stage": 2})
+
 
 class TestPBRSStageBonus:
     """Tests for PBRS stage bonus behaviour using unified reward."""

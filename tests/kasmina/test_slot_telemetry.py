@@ -1,6 +1,8 @@
 def test_lifecycle_events_include_alpha_and_epochs():
+    """Test that SEED_STAGE_CHANGED payload includes alpha and epochs."""
     from esper.kasmina.slot import SeedSlot, SeedState
     from esper.leyline import SeedStage, TelemetryEventType
+    from esper.leyline.telemetry import SeedStageChangedPayload
 
     emitted = []
     slot = SeedSlot(
@@ -15,18 +17,29 @@ def test_lifecycle_events_include_alpha_and_epochs():
     slot.telemetry_inner_epoch = 5
     slot.telemetry_global_epoch = 12
 
-    slot._emit_telemetry(TelemetryEventType.SEED_STAGE_CHANGED, data={})
+    # Use typed payload with explicit alpha and epochs_in_stage
+    payload = SeedStageChangedPayload(
+        slot_id="r0c1",
+        env_id=0,
+        from_stage="GERMINATED",
+        to_stage="TRAINING",
+        alpha=0.3,
+        epochs_in_stage=5,
+    )
+    slot._emit_telemetry(TelemetryEventType.SEED_STAGE_CHANGED, data=payload)
 
     assert emitted
     event = emitted[0]
-    assert event.data["alpha"] == 0.3
-    assert event.data["inner_epoch"] == 5
-    assert event.data["global_epoch"] == 12
+    assert isinstance(event.data, SeedStageChangedPayload)
+    assert event.data.alpha == 0.3
+    assert event.data.epochs_in_stage == 5
 
 
 def test_lifecycle_events_include_health_fields_when_available():
+    """Test that SEED_STAGE_CHANGED payload includes gradient health fields."""
     from esper.kasmina.slot import SeedSlot, SeedState
     from esper.leyline import SeedStage, TelemetryEventType
+    from esper.leyline.telemetry import SeedStageChangedPayload
 
     emitted = []
     slot = SeedSlot(
@@ -47,13 +60,24 @@ def test_lifecycle_events_include_health_fields_when_available():
         max_epochs=25,
     )
 
-    slot._emit_telemetry(TelemetryEventType.SEED_STAGE_CHANGED, data={"from": "A", "to": "B"})
-    payload = emitted[-1].data
+    # Use typed payload with explicit gradient health fields
+    payload = SeedStageChangedPayload(
+        slot_id="r0c1",
+        env_id=0,
+        from_stage="TRAINING",
+        to_stage="BLENDING",
+        grad_ratio=0.42,
+        has_vanishing=True,
+        has_exploding=False,
+    )
+    slot._emit_telemetry(TelemetryEventType.SEED_STAGE_CHANGED, data=payload)
 
-    assert payload["seed_gradient_norm_ratio"] == 0.42
-    assert payload["gradient_health"] == 0.9
-    assert payload["has_vanishing"] is True
-    assert payload["has_exploding"] is False
+    assert emitted
+    event = emitted[-1]
+    assert isinstance(event.data, SeedStageChangedPayload)
+    assert event.data.grad_ratio == 0.42
+    assert event.data.has_vanishing is True
+    assert event.data.has_exploding is False
 
 
 def test_sync_telemetry_training_stage_accuracy_delta_zero():

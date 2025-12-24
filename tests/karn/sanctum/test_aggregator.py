@@ -2,6 +2,7 @@
 
 from esper.karn.sanctum.aggregator import SanctumAggregator
 from esper.leyline import TelemetryEvent, TelemetryEventType
+from esper.leyline.telemetry import PPOUpdatePayload
 
 
 def test_ppo_update_populates_history():
@@ -12,15 +13,16 @@ def test_ppo_update_populates_history():
     for i in range(3):
         event = TelemetryEvent(
             event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
-            data={
-                "policy_loss": 0.1 * (i + 1),
-                "value_loss": 0.2 * (i + 1),
-                "grad_norm": 1.0 * (i + 1),
-                "entropy": 1.5 - (0.1 * i),
-                "explained_variance": 0.3 * (i + 1),
-                "kl_divergence": 0.01 * (i + 1),
-                "clip_fraction": 0.1 + (0.02 * i),
-            },
+            data=PPOUpdatePayload(
+                policy_loss=0.1 * (i + 1),
+                value_loss=0.2 * (i + 1),
+                grad_norm=1.0 * (i + 1),
+                entropy=1.5 - (0.1 * i),
+                explained_variance=0.3 * (i + 1),
+                kl_divergence=0.01 * (i + 1),
+                clip_fraction=0.1 + (0.02 * i),
+                nan_grad_count=0,
+            ),
         )
         agg.process_event(event)
 
@@ -80,20 +82,24 @@ def test_ppo_update_populates_head_entropies():
 
     event = TelemetryEvent(
         event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
-        data={
-            "policy_loss": 0.1,
-            "value_loss": 0.2,
-            "entropy": 1.5,
+        data=PPOUpdatePayload(
+            policy_loss=0.1,
+            value_loss=0.2,
+            entropy=1.5,
+            grad_norm=0.0,
+            kl_divergence=0.0,
+            clip_fraction=0.0,
+            nan_grad_count=0,
             # Per-head entropies (when neural network emits them)
-            "head_slot_entropy": 1.0,
-            "head_blueprint_entropy": 2.0,
-            "head_style_entropy": 1.2,
-            "head_tempo_entropy": 0.9,
-            "head_alpha_target_entropy": 0.8,
-            "head_alpha_speed_entropy": 1.1,
-            "head_alpha_curve_entropy": 0.7,
-            "head_op_entropy": 1.5,
-        },
+            head_slot_entropy=1.0,
+            head_blueprint_entropy=2.0,
+            head_style_entropy=1.2,
+            head_tempo_entropy=0.9,
+            head_alpha_target_entropy=0.8,
+            head_alpha_speed_entropy=1.1,
+            head_alpha_curve_entropy=0.7,
+            head_op_entropy=1.5,
+        ),
     )
     agg.process_event(event)
 
@@ -117,9 +123,15 @@ def test_ppo_update_extracts_group_id():
 
     event = TelemetryEvent(
         event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
-        data={
-            "policy_loss": 0.1,
-        },
+        data=PPOUpdatePayload(
+            policy_loss=0.1,
+            value_loss=0.0,
+            entropy=0.0,
+            grad_norm=0.0,
+            kl_divergence=0.0,
+            clip_fraction=0.0,
+            nan_grad_count=0,
+        ),
         group_id="B",
     )
     agg.process_event(event)
@@ -134,7 +146,15 @@ def test_ppo_update_filters_default_group_id():
 
     event = TelemetryEvent(
         event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
-        data={"policy_loss": 0.1},
+        data=PPOUpdatePayload(
+            policy_loss=0.1,
+            value_loss=0.0,
+            entropy=0.0,
+            grad_norm=0.0,
+            kl_divergence=0.0,
+            clip_fraction=0.0,
+            nan_grad_count=0,
+        ),
         group_id="default",  # This is the default for single-policy
     )
     agg.process_event(event)
@@ -150,7 +170,15 @@ def test_ppo_update_with_none_group_id():
 
     event = TelemetryEvent(
         event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
-        data={"policy_loss": 0.1},
+        data=PPOUpdatePayload(
+            policy_loss=0.1,
+            value_loss=0.0,
+            entropy=0.0,
+            grad_norm=0.0,
+            kl_divergence=0.0,
+            clip_fraction=0.0,
+            nan_grad_count=0,
+        ),
         group_id=None,
     )
     agg.process_event(event)
@@ -166,7 +194,15 @@ def test_ppo_update_group_id_transition():
     # First event with group A
     event_a = TelemetryEvent(
         event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
-        data={"policy_loss": 0.1},
+        data=PPOUpdatePayload(
+            policy_loss=0.1,
+            value_loss=0.0,
+            entropy=0.0,
+            grad_norm=0.0,
+            kl_divergence=0.0,
+            clip_fraction=0.0,
+            nan_grad_count=0,
+        ),
         group_id="A",
     )
     agg.process_event(event_a)
@@ -175,7 +211,15 @@ def test_ppo_update_group_id_transition():
     # Second event with group B
     event_b = TelemetryEvent(
         event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
-        data={"policy_loss": 0.1},
+        data=PPOUpdatePayload(
+            policy_loss=0.1,
+            value_loss=0.0,
+            entropy=0.0,
+            grad_norm=0.0,
+            kl_divergence=0.0,
+            clip_fraction=0.0,
+            nan_grad_count=0,
+        ),
         group_id="B",
     )
     agg.process_event(event_b)
@@ -188,7 +232,15 @@ def test_ppo_update_group_c():
 
     event = TelemetryEvent(
         event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
-        data={"policy_loss": 0.1},
+        data=PPOUpdatePayload(
+            policy_loss=0.1,
+            value_loss=0.0,
+            entropy=0.0,
+            grad_norm=0.0,
+            kl_divergence=0.0,
+            clip_fraction=0.0,
+            nan_grad_count=0,
+        ),
         group_id="C",
     )
     agg.process_event(event)
@@ -203,7 +255,15 @@ def test_ppo_update_unknown_group_id():
 
     event = TelemetryEvent(
         event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
-        data={"policy_loss": 0.1},
+        data=PPOUpdatePayload(
+            policy_loss=0.1,
+            value_loss=0.0,
+            entropy=0.0,
+            grad_norm=0.0,
+            kl_divergence=0.0,
+            clip_fraction=0.0,
+            nan_grad_count=0,
+        ),
         group_id="experiment_42",  # Arbitrary identifier
     )
     agg.process_event(event)

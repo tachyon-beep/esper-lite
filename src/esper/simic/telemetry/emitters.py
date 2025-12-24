@@ -20,6 +20,11 @@ from esper.leyline import (
     SeedStage,
     TelemetryEvent,
     TelemetryEventType,
+    EpochCompletedPayload,
+    BatchEpochCompletedPayload,
+    PPOUpdatePayload,
+    CounterfactualMatrixPayload,
+    AnalyticsSnapshotPayload,
 )
 from esper.leyline.factored_actions import (
     ALPHA_CURVE_NAMES,
@@ -104,15 +109,13 @@ class VectorizedEmitter:
         self._emit(TelemetryEvent(
             event_type=TelemetryEventType.EPOCH_COMPLETED,
             epoch=epoch,
-            data={
-                "env_id": self.env_id,
-                "inner_epoch": epoch,
-                "val_accuracy": env_state.val_acc,
-                "val_loss": env_state.val_loss,
-                "train_accuracy": env_state.train_acc,
-                "train_loss": env_state.train_loss,
-                "seeds": seeds_telemetry,
-            },
+            data=EpochCompletedPayload(
+                env_id=self.env_id,
+                val_accuracy=env_state.val_acc,
+                val_loss=env_state.val_loss,
+                inner_epoch=epoch,
+                seeds=seeds_telemetry,
+            ),
         ))
 
     def on_counterfactual_matrix(
@@ -166,13 +169,13 @@ class VectorizedEmitter:
 
         self._emit(TelemetryEvent(
             event_type=TelemetryEventType.COUNTERFACTUAL_MATRIX_COMPUTED,
-            data={
-                "env_id": self.env_id,
-                "slot_ids": active_slots,
-                "configs": configs,
-                "strategy": strategy,
-                "compute_time_ms": 0.0,
-            },
+            data=CounterfactualMatrixPayload(
+                env_id=self.env_id,
+                slot_ids=tuple(active_slots),
+                configs=tuple(configs),
+                strategy=strategy,
+                compute_time_ms=0.0,
+            ),
         ))
 
     def on_last_action(
@@ -253,7 +256,14 @@ class VectorizedEmitter:
             epoch=epoch,
             severity="debug",
             message="Last action",
-            data=data,
+            data=AnalyticsSnapshotPayload(
+                kind="last_action",
+                env_id=self.env_id,
+                total_reward=total_reward,
+                action_name=data["action_name"],
+                action_confidence=action_confidence,
+                value_estimate=value_estimate,
+            ),
         ))
 
     def on_ppo_update(
@@ -333,25 +343,24 @@ class VectorizedEmitter:
 
         total_seeds_created = sum(es.seeds_created for es in env_states)
         total_seeds_fossilized = sum(es.seeds_fossilized for es in env_states)
-        
+
         self.hub.emit(TelemetryEvent(
             event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
             epoch=episodes_completed,
-            data={
-                "inner_epoch": epoch,
-                "batch": batch_idx + 1,
-                "accuracy": rolling_avg_acc,
-                "host_accuracy": avg_acc,
-                "entropy": metrics.get("entropy", 0.0),
-                "kl_divergence": metrics.get("approx_kl", 0.0),
-                "value_variance": metrics.get("explained_variance", 0.0),
-                "seeds": {
-                    "total_created": total_seeds_created,
-                    "total_fossilized": total_seeds_fossilized,
-                },
-                "episodes_completed": episodes_completed,
-                "skipped_update": update_skipped,
-            },
+            data=AnalyticsSnapshotPayload(
+                kind="batch_stats",
+                inner_epoch=epoch,
+                batch=batch_idx + 1,
+                accuracy=rolling_avg_acc,
+                host_accuracy=avg_acc,
+                entropy=metrics.get("entropy", 0.0),
+                kl_divergence=metrics.get("approx_kl", 0.0),
+                value_variance=metrics.get("explained_variance", 0.0),
+                seeds_created=total_seeds_created,
+                seeds_fossilized=total_seeds_fossilized,
+                episodes_completed=episodes_completed,
+                skipped_update=update_skipped,
+            ),
         ))
 
         if prev_rolling_avg_acc is not None:
@@ -390,25 +399,16 @@ class VectorizedEmitter:
         self.hub.emit(TelemetryEvent(
             event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED,
             epoch=episodes_completed,
-            data={
-                "inner_epoch": epoch,
-                "batch_idx": batch_idx + 1,
-                "episodes_completed": episodes_completed,
-                "total_episodes": total_episodes,
-                "start_episode": start_episode,
-                "requested_episodes": n_episodes,
-                "env_accuracies": env_final_accs,
-                "avg_accuracy": avg_acc,
-                "rolling_accuracy": rolling_avg_acc,
-                "avg_reward": avg_reward,
-                "train_loss": sum(train_losses) / max(len(env_states) * num_train_batches, 1),
-                "train_accuracy": 100.0 * total_train_correct / max(total_train_samples, 1),
-                "val_loss": sum(val_losses) / max(len(env_states) * num_test_batches, 1),
-                "val_accuracy": 100.0 * total_val_correct / max(total_val_samples, 1),
-                "n_envs": len(env_states),
-                "skipped_update": update_skipped,
-                "plateau_detected": plateau_detected,
-            },
+            data=BatchEpochCompletedPayload(
+                episodes_completed=episodes_completed,
+                batch_idx=batch_idx + 1,
+                avg_accuracy=avg_acc,
+                avg_reward=avg_reward,
+                total_episodes=total_episodes,
+                n_envs=len(env_states),
+                rolling_accuracy=rolling_avg_acc,
+                env_accuracies=tuple(env_final_accs),
+            ),
         ))
 
         if self._should_emit("ops_normal"):
@@ -448,24 +448,40 @@ class VectorizedEmitter:
                 event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
                 severity="info",
                 message=message,
-                data={
-                    "batch": batch_idx + 1,
-                    "episodes_completed": episodes_completed,
-                    "summary_table": summary_table,
-                    "scoreboard_tables": scoreboard_tables,
-                },
+                data=AnalyticsSnapshotPayload(
+                    kind="summary_table",
+                    batch=batch_idx + 1,
+                    episodes_completed=episodes_completed,
+                    summary_table=summary_table,
+                    scoreboard_tables=scoreboard_tables,
+                ),
             ))
 
 
 def emit_with_env_context(hub, env_idx: int, device: str, event: TelemetryEvent) -> None:
-    """Safely emit telemetry with env_id/device injected and no shared mutation.
+    """Emit telemetry with env_id injected for per-environment events.
 
     Creates a new event with the additional context rather than mutating the input.
+
+    For typed payloads from slots (which don't know their env_id), replaces the
+    sentinel env_id=-1 with the actual env_id. For dict payloads, adds env_id/device.
+
+    NOTE: Only use for per-env events (seed lifecycle, epoch completed, etc.).
+    Batch-level events (PPO updates, batch completed) should use hub.emit() directly.
+    Passing a payload without env_id will raise TypeError - this is intentional.
     """
-    data = dict(event.data) if event.data else {}
-    data["env_id"] = env_idx
-    data["device"] = device
-    new_event = dataclasses.replace(event, data=data)
+    if event.data is None or isinstance(event.data, dict):
+        # Legacy dict or None payload - add env_id and device
+        data = dict(event.data) if event.data else {}
+        data["env_id"] = env_idx
+        data["device"] = device
+        new_event = dataclasses.replace(event, data=data)
+    else:
+        # Typed payload - replace sentinel env_id with actual env_id
+        # TypeError here means caller is misusing this function with batch-level events
+        payload = dataclasses.replace(event.data, env_id=env_idx)
+        new_event = dataclasses.replace(event, data=payload)
+
     hub.emit(new_event)
 
 
@@ -487,17 +503,18 @@ def emit_batch_completed(
     hub.emit(
         TelemetryEvent(
             event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED,
-            data={
-                "batch_idx": batch_idx,
-                "episodes_completed": clamped_completed,
-                "total_episodes": total_episodes,
-                "start_episode": start_episode,
-                "requested_episodes": requested_episodes,
-                "env_accuracies": env_final_accs,
-                "avg_accuracy": avg_acc,
-                "rolling_accuracy": rolling_avg_acc,
-                "avg_reward": avg_reward,
-            },
+            data=BatchEpochCompletedPayload(
+                episodes_completed=clamped_completed,
+                batch_idx=batch_idx,
+                avg_accuracy=avg_acc,
+                avg_reward=avg_reward,
+                total_episodes=total_episodes,
+                n_envs=len(env_final_accs),
+                start_episode=start_episode,
+                requested_episodes=requested_episodes,
+                rolling_accuracy=rolling_avg_acc,
+                env_accuracies=tuple(env_final_accs),
+            ),
         )
     )
 
@@ -541,7 +558,40 @@ def emit_last_action(
     """
     hub = get_hub()
     selected_alpha_algorithm = STYLE_ALPHA_ALGORITHMS[style_idx].name
-    data = {
+    payload = AnalyticsSnapshotPayload(
+        kind="last_action",
+        env_id=env_id,
+        action_name=OP_NAMES[op_idx],
+        slot_id=slot_id,
+        blueprint_id=BLUEPRINT_IDS[blueprint_idx],
+        style=STYLE_NAMES[style_idx],
+        blend_id=STYLE_BLEND_IDS[style_idx],
+        tempo_idx=tempo_idx,
+        alpha_target=ALPHA_TARGET_VALUES[alpha_target_idx],
+        alpha_speed=ALPHA_SPEED_NAMES[alpha_speed_idx],
+        alpha_curve=ALPHA_CURVE_NAMES[alpha_curve_idx],
+        alpha_algorithm=active_alpha_algorithm or selected_alpha_algorithm,
+        alpha_algorithm_selected=selected_alpha_algorithm,
+        op_masked=bool(masked.get("op", False)),
+        slot_masked=bool(masked.get("slot", False)),
+        blueprint_masked=bool(masked.get("blueprint", False)),
+        style_masked=bool(masked.get("style", False)),
+        tempo_masked=bool(masked.get("tempo", False)),
+        alpha_target_masked=bool(masked.get("alpha_target", False)),
+        alpha_speed_masked=bool(masked.get("alpha_speed", False)),
+        alpha_curve_masked=bool(masked.get("alpha_curve", False)),
+        action_success=success,
+        batch=epoch,  # inner_epoch mapped to batch for consistency
+    )
+    hub.emit(TelemetryEvent(
+        event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+        epoch=epoch,
+        severity="debug",
+        message="Last action",
+        data=payload,
+    ))
+    # Return dict for backwards compatibility with tests
+    return {
         "kind": "last_action",
         "env_id": env_id,
         "inner_epoch": epoch,
@@ -566,14 +616,6 @@ def emit_last_action(
         "alpha_curve_masked": bool(masked.get("alpha_curve", False)),
         "action_success": success,
     }
-    hub.emit(TelemetryEvent(
-        event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
-        epoch=epoch,
-        severity="debug",
-        message="Last action",
-        data=data,
-    ))
-    return data
 
 
 def compute_grad_norm_surrogate(module: nn.Module) -> float | None:
@@ -664,56 +706,48 @@ def emit_ppo_update_event(
             avg_grad_norm = sum(values) / len(values) if values else 0.0
             head_grad_norms_avg[f"head_{head}_grad_norm"] = avg_grad_norm
 
-    data = {
-        "inner_epoch": epoch,  # Final inner epoch (typically max_epochs)
-        "batch": batch_idx + 1,
-        "episodes_completed": episodes_completed,
-        "train_steps": metrics.get("train_steps", 0),
-        # Core losses
-        "policy_loss": metrics.get("policy_loss", 0.0),
-        "value_loss": metrics.get("value_loss", 0.0),
-        "entropy": metrics.get("entropy", 0.0),
-        "entropy_coef": metrics.get("entropy_coef", 0.0),
-        # PPO health (KL, clipping) - normalized to kl_divergence for Karn
-        "kl_divergence": metrics.get("approx_kl", 0.0),
-        "clip_fraction": metrics.get("clip_fraction", 0.0),
-        # Ratio statistics (early warning for policy collapse)
-        "ratio_max": metrics.get("ratio_max", 1.0),
-        "ratio_min": metrics.get("ratio_min", 1.0),
-        "ratio_std": metrics.get("ratio_std", 0.0),
-        # Value function health (negative = critic broken)
-        "explained_variance": metrics.get("explained_variance", 0.0),
-        # Advantage statistics (normalization health - should have mean≈0, std≈1 after norm)
-        "advantage_mean": metrics.get("advantage_mean", 0.0),
-        "advantage_std": metrics.get("advantage_std", 0.0),
-        # Early stopping info
-        "early_stop_epoch": metrics.get("early_stop_epoch"),
-        # Episode-level metrics
-        "avg_accuracy": metrics.get("avg_accuracy", 0.0),
-        "avg_reward": metrics.get("avg_reward", 0.0),
-        "rolling_avg_accuracy": metrics.get("rolling_avg_accuracy", 0.0),
-        # Vitals
-        "lr": lr,
-        "grad_norm": grad_norm,
-        "update_time_ms": update_time_ms,
-        # Gradient layer health (Task 1)
-        "dead_layers": metrics.get("dead_layers", 0),
-        "exploding_layers": metrics.get("exploding_layers", 0),
-        "nan_grad_count": metrics.get("nan_grad_count", 0),
-        # Gradient health score (Task 2)
-        "layer_gradient_health": metrics.get("layer_gradient_health"),
-        # Entropy collapse flag (Task 3) - M11: use leyline constant
-        "entropy_collapsed": metrics.get("entropy", 1.0) < DEFAULT_ENTROPY_COLLAPSE_THRESHOLD,
-    }
-    # Add per-head entropy (P3-1)
-    data.update(head_entropies_avg)
-    # Add per-head gradient norms (P4-6)
-    data.update(head_grad_norms_avg)
-
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
         epoch=episodes_completed,  # Monotonic per-batch epoch id (NOT inner epoch!)
-        data=data,
+        data=PPOUpdatePayload(
+            policy_loss=metrics.get("policy_loss", 0.0),
+            value_loss=metrics.get("value_loss", 0.0),
+            entropy=metrics.get("entropy", 0.0),
+            grad_norm=grad_norm if grad_norm is not None else 0.0,
+            kl_divergence=metrics.get("approx_kl", 0.0),
+            clip_fraction=metrics.get("clip_fraction", 0.0),
+            nan_grad_count=metrics.get("nan_grad_count", 0),
+            # Optional fields
+            explained_variance=metrics.get("explained_variance"),
+            entropy_loss=0.0,
+            advantage_mean=metrics.get("advantage_mean", 0.0),
+            advantage_std=metrics.get("advantage_std", 0.0),
+            ratio_mean=metrics.get("ratio_mean", 1.0),
+            ratio_min=metrics.get("ratio_min", 1.0),
+            ratio_max=metrics.get("ratio_max", 1.0),
+            ratio_std=metrics.get("ratio_std", 0.0),
+            lr=lr,
+            entropy_coef=metrics.get("entropy_coef"),
+            inf_grad_count=0,
+            dead_layers=metrics.get("dead_layers", 0),
+            exploding_layers=metrics.get("exploding_layers", 0),
+            layer_gradient_health=metrics.get("layer_gradient_health"),
+            entropy_collapsed=metrics.get("entropy", 1.0) < DEFAULT_ENTROPY_COLLAPSE_THRESHOLD,
+            update_time_ms=update_time_ms if update_time_ms is not None else 0.0,
+            early_stop_epoch=metrics.get("early_stop_epoch"),
+            head_slot_entropy=head_entropies_avg.get("head_slot_entropy"),
+            head_blueprint_entropy=head_entropies_avg.get("head_blueprint_entropy"),
+            head_slot_grad_norm=head_grad_norms_avg.get("head_slot_grad_norm"),
+            head_blueprint_grad_norm=head_grad_norms_avg.get("head_blueprint_grad_norm"),
+            head_style_entropy=head_entropies_avg.get("head_style_entropy"),
+            head_tempo_entropy=head_entropies_avg.get("head_tempo_entropy"),
+            head_alpha_target_entropy=head_entropies_avg.get("head_alpha_target_entropy"),
+            head_alpha_speed_entropy=head_entropies_avg.get("head_alpha_speed_entropy"),
+            head_alpha_curve_entropy=head_entropies_avg.get("head_alpha_curve_entropy"),
+            head_op_entropy=head_entropies_avg.get("head_op_entropy"),
+            inner_epoch=epoch,
+            batch=batch_idx + 1,
+        ),
         group_id=group_id,
     ))
 
@@ -730,13 +764,10 @@ def emit_action_distribution(
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
         epoch=episodes_completed,
-        data={
-            "kind": "action_distribution",
-            "batch": batch_idx,
-            "episodes_completed": episodes_completed,
-            "action_counts": dict(action_counts),
-            "success_counts": dict(success_counts),
-        },
+        data=AnalyticsSnapshotPayload(
+            kind="action_distribution",
+            action_counts=dict(action_counts),
+        ),
     ))
 
 
@@ -775,15 +806,15 @@ def emit_throughput(
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
         epoch=episodes_completed,
-        data={
-            "kind": "throughput",
-            "env_id": env_id,
-            "batch": batch_idx,
-            "episodes_completed": episodes_completed,
-            "fps": fps,
-            "step_time_ms": step_time_ms,
-            "dataloader_wait_ms": dataloader_wait_ms,
-        },
+        data=AnalyticsSnapshotPayload(
+            kind="throughput",
+            env_id=env_id,
+            batch=batch_idx,
+            episodes_completed=episodes_completed,
+            fps=fps,
+            step_time_ms=step_time_ms,
+            dataloader_wait_ms=dataloader_wait_ms,
+        ),
     ))
 
 
@@ -799,13 +830,13 @@ def emit_reward_summary(
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
         epoch=episodes_completed,
-        data={
-            "kind": "reward_summary",
-            "env_id": env_id,
-            "batch": batch_idx,
-            "episodes_completed": episodes_completed,
-            "summary": dict(summary),
-        },
+        data=AnalyticsSnapshotPayload(
+            kind="reward_summary",
+            env_id=env_id,
+            batch=batch_idx,
+            episodes_completed=episodes_completed,
+            summary=dict(summary),
+        ),
     ))
 
 
@@ -821,13 +852,13 @@ def emit_mask_hit_rates(
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
         epoch=episodes_completed,
-        data={
-            "kind": "mask_hit_rates",
-            "batch": batch_idx,
-            "episodes_completed": episodes_completed,
-            "mask_hits": dict(mask_hits),
-            "mask_total": dict(mask_total),
-        },
+        data=AnalyticsSnapshotPayload(
+            kind="mask_hit_rates",
+            batch=batch_idx,
+            episodes_completed=episodes_completed,
+            mask_hits=dict(mask_hits),
+            mask_total=dict(mask_total),
+        ),
     ))
 
 

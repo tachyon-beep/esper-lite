@@ -24,6 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 from esper.leyline import TelemetryEvent
+from esper.leyline.telemetry import EpochCompletedPayload, BatchEpochCompletedPayload
 
 _logger = logging.getLogger(__name__)
 
@@ -87,8 +88,13 @@ class ConsoleOutput(OutputBackend):
 
         # Format message based on event type
         if event_type == "EPOCH_COMPLETED":
-            loss = event.data.get("val_loss", "?")
-            acc = event.data.get("val_accuracy", "?")
+            # Handle typed payload or dict fallback
+            if isinstance(event.data, EpochCompletedPayload):
+                loss = event.data.val_loss
+                acc = event.data.val_accuracy
+            else:
+                loss = event.data.get("val_loss", "?")
+                acc = event.data.get("val_accuracy", "?")
             epoch = event.epoch or "?"
             print(f"[{timestamp}] {seed_id} | Epoch {epoch}: loss={loss} acc={acc}")
         elif "COMMAND" in event_type:
@@ -186,14 +192,24 @@ class ConsoleOutput(OutputBackend):
                 loss = f"{loss:.4f}"
             print(f"[{timestamp}] GOVERNOR | ⚠️  PANIC #{panics}: loss={loss}")
         elif event_type == "BATCH_EPOCH_COMPLETED":
-            data = event.data or {}
-            batch_idx = data.get("batch_idx", "?")
-            episodes = data.get("episodes_completed", "?")
-            total = data.get("total_episodes", "?")
-            avg_acc = data.get("avg_accuracy", 0.0)
-            rolling_acc = data.get("rolling_accuracy", 0.0)
-            avg_reward = data.get("avg_reward", 0.0)
-            env_accs = data.get("env_accuracies", [])
+            # Handle typed payload or dict fallback
+            if isinstance(event.data, BatchEpochCompletedPayload):
+                batch_idx = event.data.batch_idx
+                episodes = event.data.episodes_completed
+                total = event.data.total_episodes
+                avg_acc = event.data.avg_accuracy
+                rolling_acc = event.data.rolling_accuracy
+                avg_reward = event.data.avg_reward
+                env_accs = event.data.env_accuracies or []
+            else:
+                data = event.data or {}
+                batch_idx = data.get("batch_idx", "?")
+                episodes = data.get("episodes_completed", "?")
+                total = data.get("total_episodes", "?")
+                avg_acc = data.get("avg_accuracy", 0.0)
+                rolling_acc = data.get("rolling_accuracy", 0.0)
+                avg_reward = data.get("avg_reward", 0.0)
+                env_accs = data.get("env_accuracies", [])
             env_acc_str = ", ".join(f"{a:.1f}%" for a in env_accs) if env_accs else ""
             print(f"[{timestamp}] BATCH {batch_idx} | Episodes {episodes}/{total}")
             if env_acc_str:

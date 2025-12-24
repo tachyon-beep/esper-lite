@@ -11,11 +11,39 @@ Usage:
 
 from __future__ import annotations
 
+import dataclasses
 import json
-from typing import TYPE_CHECKING
+from enum import Enum
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from esper.karn.contracts import TelemetryEventLike
+
+
+def _payload_to_dict(obj: Any) -> Any:
+    """Convert a typed payload to a JSON-serializable dict.
+
+    Handles:
+    - Dataclass instances → dict via dataclasses.asdict()
+    - Enum values → their .name string
+    - None, primitives → pass through
+    - Already-dict → pass through
+    """
+    if obj is None:
+        return None
+    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+        # It's a dataclass instance, convert to dict
+        # Use a custom dict_factory to handle nested enums
+        return dataclasses.asdict(
+            obj,
+            dict_factory=lambda items: {
+                k: v.name if isinstance(v, Enum) else v for k, v in items
+            },
+        )
+    if isinstance(obj, dict):
+        return obj
+    # For any other type (shouldn't happen with typed payloads), pass through
+    return obj
 
 
 def serialize_event(event: "TelemetryEventLike") -> str:
@@ -49,7 +77,7 @@ def serialize_event(event: "TelemetryEventLike") -> str:
     data = {
         "event_type": event_type,
         "timestamp": timestamp,
-        "data": event.data,
+        "data": _payload_to_dict(event.data),
         "epoch": event.epoch,
         "seed_id": event.seed_id,
         "slot_id": event.slot_id,

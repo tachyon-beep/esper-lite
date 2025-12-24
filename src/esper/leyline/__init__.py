@@ -401,6 +401,19 @@ from esper.leyline.telemetry import (
     PerformanceBudgets,
     DEFAULT_BUDGETS,
     SeedTelemetry,
+    # Typed payloads (see docs/plans/2025-12-25-typed-telemetry-payloads-design.md)
+    TelemetryPayload,
+    TrainingStartedPayload,
+    EpochCompletedPayload,
+    BatchEpochCompletedPayload,
+    PPOUpdatePayload,
+    RewardComputedPayload,
+    SeedGerminatedPayload,
+    SeedStageChangedPayload,
+    SeedFossilizedPayload,
+    SeedPrunedPayload,
+    CounterfactualMatrixPayload,
+    AnalyticsSnapshotPayload,
 )
 
 # Alpha controller contracts
@@ -559,6 +572,19 @@ __all__ = [
     "PerformanceBudgets",
     "DEFAULT_BUDGETS",
     "SeedTelemetry",
+    # Typed payloads
+    "TelemetryPayload",
+    "TrainingStartedPayload",
+    "EpochCompletedPayload",
+    "BatchEpochCompletedPayload",
+    "PPOUpdatePayload",
+    "RewardComputedPayload",
+    "SeedGerminatedPayload",
+    "SeedStageChangedPayload",
+    "SeedFossilizedPayload",
+    "SeedPrunedPayload",
+    "CounterfactualMatrixPayload",
+    "AnalyticsSnapshotPayload",
 
     # Alpha controller
     "AlphaMode",

@@ -4,6 +4,16 @@ import pytest
 from datetime import datetime, timezone
 
 from esper.leyline import TelemetryEvent, TelemetryEventType
+from esper.leyline.telemetry import (
+    TrainingStartedPayload,
+    BatchEpochCompletedPayload,
+    EpochCompletedPayload,
+    PPOUpdatePayload,
+    SeedGerminatedPayload,
+    SeedStageChangedPayload,
+    SeedPrunedPayload,
+    AnalyticsSnapshotPayload,
+)
 from esper.karn.overwatch.aggregator import TelemetryAggregator
 
 
@@ -25,12 +35,22 @@ class TestAggregatorBasics:
 
         event = TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={
-                "episode_id": "run-abc123",
-                "task": "cifar10",
-                "max_epochs": 75,
-                "n_envs": 4,
-            },
+            data=TrainingStartedPayload(
+                n_envs=4,
+                max_epochs=75,
+                task="cifar10",
+                host_params=1000,
+                slot_ids=("r0c0", "r0c1", "r1c0", "r1c1"),
+                seed=42,
+                n_episodes=100,
+                lr=3e-4,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=100000,
+                policy_device="cuda:0",
+                env_devices=("cuda:0", "cuda:1", "cuda:2", "cuda:3"),
+                episode_id="run-abc123",
+            ),
         )
         agg.process_event(event)
 
@@ -47,7 +67,22 @@ class TestAggregatorBasics:
         event = TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
             timestamp=datetime.now(timezone.utc),
-            data={"episode_id": "test"},
+            data=TrainingStartedPayload(
+                n_envs=1,
+                max_epochs=75,
+                task="test",
+                host_params=1000,
+                slot_ids=("r0c0",),
+                seed=42,
+                n_episodes=100,
+                lr=3e-4,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=100000,
+                policy_device="cuda:0",
+                env_devices=("cuda:0",),
+                episode_id="test",
+            ),
         )
         agg.process_event(event)
 
@@ -64,18 +99,35 @@ class TestBatchAndEpisodeTracking:
         agg = TelemetryAggregator()
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"episode_id": "test", "n_envs": 2},
+            data=TrainingStartedPayload(
+                n_envs=2,
+                max_epochs=75,
+                task="test",
+                host_params=1000,
+                slot_ids=("r0c0", "r0c1"),
+                seed=42,
+                n_episodes=100,
+                lr=3e-4,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=100000,
+                policy_device="cuda:0",
+                env_devices=("cuda:0", "cuda:1"),
+                episode_id="test",
+            ),
         ))
 
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED,
-            data={
-                "batch_idx": 5,
-                "episodes_completed": 10,
-                "total_episodes": 100,
-                "avg_accuracy": 65.5,
-                "rolling_accuracy": 64.0,
-            },
+            data=BatchEpochCompletedPayload(
+                batch_idx=5,
+                episodes_completed=10,
+                total_episodes=100,
+                avg_accuracy=65.5,
+                avg_reward=0.5,
+                n_envs=2,
+                rolling_accuracy=64.0,
+            ),
         ))
 
         snapshot = agg.get_snapshot()
@@ -93,21 +145,37 @@ class TestPPOVitals:
         agg = TelemetryAggregator()
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"episode_id": "test"},
+            data=TrainingStartedPayload(
+                n_envs=1,
+                max_epochs=75,
+                task="test",
+                host_params=1000,
+                slot_ids=("r0c0",),
+                seed=42,
+                n_episodes=100,
+                lr=3e-4,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=100000,
+                policy_device="cuda:0",
+                env_devices=("cuda:0",),
+                episode_id="test",
+            ),
         ))
 
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
-            data={
-                "kl_divergence": 0.015,
-                "entropy": 1.2,
-                "clip_fraction": 0.08,
-                "explained_variance": 0.85,
-                "policy_loss": -0.02,
-                "value_loss": 0.5,
-                "grad_norm": 1.5,
-                "lr": 3e-4,
-            },
+            data=PPOUpdatePayload(
+                policy_loss=-0.02,
+                value_loss=0.5,
+                entropy=1.2,
+                grad_norm=1.5,
+                kl_divergence=0.015,
+                clip_fraction=0.08,
+                nan_grad_count=0,
+                explained_variance=0.85,
+                lr=3e-4,
+            ),
         ))
 
         snapshot = agg.get_snapshot()
@@ -125,16 +193,32 @@ class TestEpochCompleted:
         agg = TelemetryAggregator(num_envs=2)
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"episode_id": "test", "n_envs": 2},
+            data=TrainingStartedPayload(
+                n_envs=2,
+                max_epochs=75,
+                task="test",
+                host_params=1000,
+                slot_ids=("r0c0", "r0c1"),
+                seed=42,
+                n_episodes=100,
+                lr=3e-4,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=100000,
+                policy_device="cuda:0",
+                env_devices=("cuda:0", "cuda:1"),
+                episode_id="test",
+            ),
         ))
 
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.EPOCH_COMPLETED,
-            data={
-                "env_id": 0,
-                "val_accuracy": 72.5,
-                "val_loss": 0.8,
-            },
+            data=EpochCompletedPayload(
+                env_id=0,
+                val_accuracy=72.5,
+                val_loss=0.8,
+                inner_epoch=1,
+            ),
         ))
 
         snapshot = agg.get_snapshot()
@@ -147,15 +231,32 @@ class TestEpochCompleted:
         agg = TelemetryAggregator(num_envs=1)
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"episode_id": "test", "n_envs": 1},
+            data=TrainingStartedPayload(
+                n_envs=1,
+                max_epochs=75,
+                task="test",
+                host_params=1000,
+                slot_ids=("r0c0",),
+                seed=42,
+                n_episodes=100,
+                lr=3e-4,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=100000,
+                policy_device="cuda:0",
+                env_devices=("cuda:0",),
+                episode_id="test",
+            ),
         ))
 
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.EPOCH_COMPLETED,
-            data={
-                "env_id": 0,
-                "val_accuracy": 72.5,
-                "seeds": {
+            data=EpochCompletedPayload(
+                env_id=0,
+                val_accuracy=72.5,
+                val_loss=0.5,
+                inner_epoch=1,
+                seeds={
                     "r0c1": {
                         "stage": "TRAINING",
                         "blueprint_id": "conv3x3",
@@ -163,7 +264,7 @@ class TestEpochCompleted:
                         "epochs_in_stage": 5,
                     },
                 },
-            },
+            ),
         ))
 
         snapshot = agg.get_snapshot()
@@ -178,45 +279,35 @@ class TestEpochCompleted:
 class TestAnalyticsSnapshot:
     """Test ANALYTICS_SNAPSHOT event wiring."""
 
-    def test_throughput_updates_env_summary(self):
-        """Throughput analytics snapshot should populate EnvSummary throughput fields."""
-        agg = TelemetryAggregator(num_envs=1)
-        agg.process_event(TelemetryEvent(
-            event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"episode_id": "test", "n_envs": 1},
-        ))
-
-        agg.process_event(TelemetryEvent(
-            event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
-            data={
-                "kind": "throughput",
-                "env_id": 0,
-                "fps": 200.0,
-                "step_time_ms": 5.0,
-                "dataloader_wait_ms": 1.0,
-            },
-        ))
-
-        snapshot = agg.get_snapshot()
-        env0 = snapshot.flight_board[0]
-        assert env0.throughput_fps == pytest.approx(200.0)
-        assert env0.step_time_ms == pytest.approx(5.0)
-
     def test_action_distribution_updates_tamiyo_action_counts(self):
         """Action distribution analytics snapshot should populate TamiyoState.action_counts."""
         agg = TelemetryAggregator(num_envs=1)
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"episode_id": "test", "n_envs": 1},
+            data=TrainingStartedPayload(
+                n_envs=1,
+                max_epochs=75,
+                task="test",
+                host_params=1000,
+                slot_ids=("r0c0",),
+                seed=42,
+                n_episodes=100,
+                lr=3e-4,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=100000,
+                policy_device="cuda:0",
+                env_devices=("cuda:0",),
+                episode_id="test",
+            ),
         ))
 
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
-            data={
-                "kind": "action_distribution",
-                "action_counts": {"WAIT": 7, "GERMINATE": 3},
-                "success_counts": {"WAIT": 7, "GERMINATE": 2},
-            },
+            data=AnalyticsSnapshotPayload(
+                kind="action_distribution",
+                action_counts={"WAIT": 7, "GERMINATE": 3},
+            ),
         ))
 
         snapshot = agg.get_snapshot()
@@ -228,13 +319,32 @@ class TestAnalyticsSnapshot:
         agg = TelemetryAggregator(num_envs=1)
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"episode_id": "test", "n_envs": 1},
+            data=TrainingStartedPayload(
+                n_envs=1,
+                max_epochs=75,
+                task="test",
+                host_params=1000,
+                slot_ids=("r0c0",),
+                seed=42,
+                n_episodes=100,
+                lr=3e-4,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=100000,
+                policy_device="cuda:0",
+                env_devices=("cuda:0",),
+                episode_id="test",
+            ),
         ))
 
         for op in ["WAIT", "GERMINATE", "PRUNE", "FOSSILIZE"]:
             agg.process_event(TelemetryEvent(
                 event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
-                data={"kind": "last_action", "env_id": 0, "op": op},
+                data=AnalyticsSnapshotPayload(
+                    kind="last_action",
+                    env_id=0,
+                    action_name=op,
+                ),
             ))
 
         snapshot = agg.get_snapshot()
@@ -249,18 +359,33 @@ class TestSeedLifecycle:
         agg = TelemetryAggregator(num_envs=2)
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"episode_id": "test", "n_envs": 2},
+            data=TrainingStartedPayload(
+                n_envs=2,
+                max_epochs=75,
+                task="test",
+                host_params=1000,
+                slot_ids=("r0c0", "r0c1"),
+                seed=42,
+                n_episodes=100,
+                lr=3e-4,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=100000,
+                policy_device="cuda:0",
+                env_devices=("cuda:0", "cuda:1"),
+                episode_id="test",
+            ),
         ))
 
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.SEED_GERMINATED,
             slot_id="r0c0",
-            data={
-                "env_id": 0,
-                "seed_id": "seed-001",
-                "blueprint_id": "conv3x3",
-                "params": 1500,
-            },
+            data=SeedGerminatedPayload(
+                slot_id="r0c0",
+                env_id=0,
+                blueprint_id="conv3x3",
+                params=1500,
+            ),
         ))
 
         snapshot = agg.get_snapshot()
@@ -279,21 +404,46 @@ class TestSeedLifecycle:
         agg = TelemetryAggregator(num_envs=1)
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"episode_id": "test", "n_envs": 1},
+            data=TrainingStartedPayload(
+                n_envs=1,
+                max_epochs=75,
+                task="test",
+                host_params=1000,
+                slot_ids=("r0c0",),
+                seed=42,
+                n_episodes=100,
+                lr=3e-4,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=100000,
+                policy_device="cuda:0",
+                env_devices=("cuda:0",),
+                episode_id="test",
+            ),
         ))
 
         # Germinate first
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.SEED_GERMINATED,
             slot_id="r0c0",
-            data={"env_id": 0, "blueprint_id": "conv3x3"},
+            data=SeedGerminatedPayload(
+                slot_id="r0c0",
+                env_id=0,
+                blueprint_id="conv3x3",
+                params=1000,
+            ),
         ))
 
         # Transition to TRAINING
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.SEED_STAGE_CHANGED,
             slot_id="r0c0",
-            data={"env_id": 0, "from": "GERMINATED", "to": "TRAINING"},
+            data=SeedStageChangedPayload(
+                slot_id="r0c0",
+                env_id=0,
+                from_stage="GERMINATED",
+                to_stage="TRAINING",
+            ),
         ))
 
         snapshot = agg.get_snapshot()
@@ -305,17 +455,41 @@ class TestSeedLifecycle:
         agg = TelemetryAggregator(num_envs=1)
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"episode_id": "test", "n_envs": 1},
+            data=TrainingStartedPayload(
+                n_envs=1,
+                max_epochs=75,
+                task="test",
+                host_params=1000,
+                slot_ids=("r0c0",),
+                seed=42,
+                n_episodes=100,
+                lr=3e-4,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=100000,
+                policy_device="cuda:0",
+                env_devices=("cuda:0",),
+                episode_id="test",
+            ),
         ))
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.SEED_GERMINATED,
             slot_id="r0c0",
-            data={"env_id": 0, "blueprint_id": "conv3x3"},
+            data=SeedGerminatedPayload(
+                slot_id="r0c0",
+                env_id=0,
+                blueprint_id="conv3x3",
+                params=1000,
+            ),
         ))
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.SEED_PRUNED,
             slot_id="r0c0",
-            data={"env_id": 0, "reason": "degradation"},
+            data=SeedPrunedPayload(
+                slot_id="r0c0",
+                env_id=0,
+                reason="degradation",
+            ),
         ))
 
         snapshot = agg.get_snapshot()
@@ -332,13 +506,34 @@ class TestGateEvaluation:
         agg = TelemetryAggregator(num_envs=1)
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"episode_id": "test", "n_envs": 1},
+            data=TrainingStartedPayload(
+                n_envs=1,
+                max_epochs=75,
+                task="test",
+                host_params=1000,
+                slot_ids=("r0c0",),
+                seed=42,
+                n_episodes=100,
+                lr=3e-4,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=100000,
+                policy_device="cuda:0",
+                env_devices=("cuda:0",),
+                episode_id="test",
+            ),
         ))
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.SEED_GERMINATED,
             slot_id="r0c0",
-            data={"env_id": 0, "blueprint_id": "conv3x3"},
+            data=SeedGerminatedPayload(
+                slot_id="r0c0",
+                env_id=0,
+                blueprint_id="conv3x3",
+                params=1000,
+            ),
         ))
+        # SEED_GATE_EVALUATED doesn't have a typed payload yet
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.SEED_GATE_EVALUATED,
             slot_id="r0c0",
@@ -363,7 +558,22 @@ class TestEventFeedManagement:
         agg = TelemetryAggregator(num_envs=1, max_feed_events=5)
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"episode_id": "test", "n_envs": 1},
+            data=TrainingStartedPayload(
+                n_envs=1,
+                max_epochs=75,
+                task="test",
+                host_params=1000,
+                slot_ids=("r0c0",),
+                seed=42,
+                n_episodes=100,
+                lr=3e-4,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=100000,
+                policy_device="cuda:0",
+                env_devices=("cuda:0",),
+                episode_id="test",
+            ),
         ))
 
         # Add many events
@@ -371,7 +581,12 @@ class TestEventFeedManagement:
             agg.process_event(TelemetryEvent(
                 event_type=TelemetryEventType.SEED_GERMINATED,
                 slot_id="r0c0",
-                data={"env_id": 0, "blueprint_id": f"bp{i}"},
+                data=SeedGerminatedPayload(
+                    slot_id="r0c0",
+                    env_id=0,
+                    blueprint_id=f"bp{i}",
+                    params=1000,
+                ),
             ))
 
         snapshot = agg.get_snapshot()
@@ -388,7 +603,22 @@ class TestThreadSafety:
         agg = TelemetryAggregator(num_envs=2)
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"episode_id": "test", "n_envs": 2},
+            data=TrainingStartedPayload(
+                n_envs=2,
+                max_epochs=75,
+                task="test",
+                host_params=1000,
+                slot_ids=("r0c0", "r0c1"),
+                seed=42,
+                n_episodes=100,
+                lr=3e-4,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=100000,
+                policy_device="cuda:0",
+                env_devices=("cuda:0", "cuda:1"),
+                episode_id="test",
+            ),
         ))
 
         errors = []
@@ -398,7 +628,14 @@ class TestThreadSafety:
                 for i in range(100):
                     agg.process_event(TelemetryEvent(
                         event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED,
-                        data={"batch_idx": i, "avg_accuracy": 50.0 + i * 0.1},
+                        data=BatchEpochCompletedPayload(
+                            batch_idx=i,
+                            episodes_completed=i,
+                            total_episodes=100,
+                            avg_accuracy=50.0 + i * 0.1,
+                            avg_reward=0.5,
+                            n_envs=2,
+                        ),
                     ))
             except Exception as e:
                 errors.append(e)

@@ -402,7 +402,7 @@ class TamiyoState:
     dead_layers: int = 0
     exploding_layers: int = 0
     nan_grad_count: int = 0  # NaN gradient count
-    layer_gradient_health: float = 1.0  # GradHP percentage (0-1)
+    layer_gradient_health: dict[str, float] | None = None  # Per-layer gradient health metrics
     entropy_collapsed: bool = False  # Entropy collapse detected
 
     # Performance timing (for throughput monitoring)
@@ -632,7 +632,7 @@ class RunConfig:
     entropy_coef: float = 0.01  # Initial entropy coefficient
     param_budget: int = 0  # Seed parameter budget
     resume_path: str = ""  # Checkpoint resume path (empty if fresh run)
-    entropy_anneal: dict = field(default_factory=dict)  # Entropy schedule config
+    entropy_anneal: dict[str, float] = field(default_factory=dict)  # Entropy schedule config
 
 
 @dataclass

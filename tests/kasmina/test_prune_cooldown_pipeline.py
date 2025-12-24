@@ -179,5 +179,6 @@ class TestGovernorEmergencyPrune:
         pruned_events = events_by_type[TelemetryEventType.SEED_PRUNED.name]
         assert len(pruned_events) == 1
         payload = pruned_events[0]
-        assert payload.get("reason") == "governor_nan"
-        assert payload.get("initiator") == "governor"
+        # Typed payload access (SeedPrunedPayload)
+        assert payload.reason == "governor_nan"
+        assert payload.initiator == "governor"

@@ -53,6 +53,11 @@ from esper.leyline import (
     TelemetryEvent,
     TelemetryEventType,
     SeedTelemetry,
+    # Telemetry Payloads
+    SeedGerminatedPayload,
+    SeedStageChangedPayload,
+    SeedFossilizedPayload,
+    SeedPrunedPayload,
     # Gate Thresholds (from leyline - single source of truth)
     DEFAULT_MIN_FOSSILIZE_CONTRIBUTION,
     DEFAULT_GRADIENT_RATIO_THRESHOLD,
@@ -1289,12 +1294,19 @@ class SeedSlot(nn.Module):
 
         self._emit_telemetry(
             TelemetryEventType.SEED_GERMINATED,
-            data={
-                "blueprint_id": blueprint_id,
-                "seed_id": seed_id,
-                "params": sum(p.numel() for p in self.seed.parameters() if p.requires_grad),
-                "blend_tempo_epochs": blend_tempo_epochs,
-            }
+            data=SeedGerminatedPayload(
+                slot_id=self.slot_id,
+                env_id=-1,  # Sentinel - will be replaced by emit_with_env_context
+                blueprint_id=blueprint_id,
+                params=sum(p.numel() for p in self.seed.parameters() if p.requires_grad),
+                alpha=self.state.alpha if self.state else 0.0,
+                blend_tempo_epochs=blend_tempo_epochs,
+                # Optional gradient health fields - will be zero/false at germination
+                grad_ratio=0.0,
+                has_vanishing=False,
+                has_exploding=False,
+                epochs_in_stage=0,
+            )
         )
         return self.state
 
@@ -1370,32 +1382,49 @@ class SeedSlot(nn.Module):
 
                 self._emit_telemetry(
                     TelemetryEventType.SEED_STAGE_CHANGED,
-                    data={
-                        "from": old_stage.name,
-                        "to": target_stage.name,
-                        "accuracy_delta": improvement,
-                        "epochs_in_stage": epochs_in_stage,
-                        "epochs_total": epochs_total,
-                        "counterfactual": counterfactual,
-                    }
+                    data=SeedStageChangedPayload(
+                        slot_id=self.slot_id,
+                        env_id=-1,  # Sentinel - will be replaced by emit_with_env_context
+                        from_stage=old_stage.name,
+                        to_stage=target_stage.name,
+                        alpha=self.state.alpha,
+                        accuracy_delta=improvement,
+                        epochs_in_stage=epochs_in_stage,
+                        # Optional gradient health fields
+                        grad_ratio=(
+                            self.state.metrics.seed_gradient_norm_ratio
+                            if self.state.telemetry and self.state.telemetry.epoch > 0
+                            else 0.0
+                        ),
+                        has_vanishing=(
+                            self.state.telemetry.has_vanishing
+                            if self.state.telemetry and self.state.telemetry.epoch > 0
+                            else False
+                        ),
+                        has_exploding=(
+                            self.state.telemetry.has_exploding
+                            if self.state.telemetry and self.state.telemetry.epoch > 0
+                            else False
+                        ),
+                    )
                 )
 
                 # Handle special stage entry logic
                 if target_stage == SeedStage.FOSSILIZED:
                     self._emit_telemetry(
                         TelemetryEventType.SEED_FOSSILIZED,
-                        data={
-                            "blueprint_id": blueprint_id,
-                            "seed_id": seed_id,
-                            "improvement": improvement,
-                            "blending_delta": blending_delta,
-                            "counterfactual": counterfactual,  # True causal attribution
-                            "params_added": sum(
+                        data=SeedFossilizedPayload(
+                            slot_id=self.slot_id,
+                            env_id=-1,  # Sentinel - will be replaced by emit_with_env_context
+                            blueprint_id=blueprint_id,
+                            improvement=improvement,
+                            params_added=sum(
                                 p.numel() for p in self.seed.parameters() if p.requires_grad
                             ),
-                            "epochs_total": epochs_total,
-                            "epochs_in_stage": epochs_in_stage,
-                        }
+                            alpha=self.state.alpha,
+                            epochs_total=epochs_total,
+                            counterfactual=counterfactual,
+                        )
                     )
             else:
                 gate_result = GateResult(
@@ -1450,29 +1479,45 @@ class SeedSlot(nn.Module):
 
         self._emit_telemetry(
             TelemetryEventType.SEED_STAGE_CHANGED,
-            data={
-                "from": old_stage.name,
-                "to": SeedStage.PRUNED.name,
-                "accuracy_delta": improvement,
-                "epochs_in_stage": epochs_in_stage,
-                "epochs_total": epochs_total,
-                "counterfactual": counterfactual,
-            },
+            data=SeedStageChangedPayload(
+                slot_id=self.slot_id,
+                env_id=-1,  # Sentinel - will be replaced by emit_with_env_context
+                from_stage=old_stage.name,
+                to_stage=SeedStage.PRUNED.name,
+                alpha=self.state.alpha,
+                accuracy_delta=improvement,
+                epochs_in_stage=epochs_in_stage,
+                # Optional gradient health fields
+                grad_ratio=(
+                    self.state.metrics.seed_gradient_norm_ratio
+                    if self.state.telemetry and self.state.telemetry.epoch > 0
+                    else 0.0
+                ),
+                has_vanishing=(
+                    self.state.telemetry.has_vanishing
+                    if self.state.telemetry and self.state.telemetry.epoch > 0
+                    else False
+                ),
+                has_exploding=(
+                    self.state.telemetry.has_exploding
+                    if self.state.telemetry and self.state.telemetry.epoch > 0
+                    else False
+                ),
+            ),
         )
         self._emit_telemetry(
             TelemetryEventType.SEED_PRUNED,
-            data={
-                "reason": reason,
-                "initiator": initiator,
-                "auto_pruned": is_auto_prune,  # Distinguish explicit vs environment prunes
-                "blueprint_id": blueprint_id,
-                "seed_id": seed_id,
-                "improvement": improvement,
-                "blending_delta": blending_delta,
-                "counterfactual": counterfactual,  # True causal attribution
-                "epochs_total": epochs_total,
-                "epochs_in_stage": epochs_in_stage,
-            }
+            data=SeedPrunedPayload(
+                slot_id=self.slot_id,
+                env_id=-1,  # Sentinel - will be replaced by emit_with_env_context
+                reason=reason,
+                blueprint_id=blueprint_id,
+                improvement=improvement,
+                auto_pruned=is_auto_prune,
+                epochs_total=epochs_total,
+                counterfactual=counterfactual,
+                initiator=initiator,
+            )
         )
         self.seed = None
         # Phase 4 contract: keep state after physical removal so PRUNED/EMBARGOED/
@@ -1541,14 +1586,31 @@ class SeedSlot(nn.Module):
             self._on_enter_stage(SeedStage.BLENDING, old_stage)
             self._emit_telemetry(
                 TelemetryEventType.SEED_STAGE_CHANGED,
-                data={
-                    "from": old_stage.name,
-                    "to": SeedStage.BLENDING.name,
-                    "accuracy_delta": improvement,
-                    "epochs_in_stage": epochs_in_stage,
-                    "epochs_total": epochs_total,
-                    "counterfactual": counterfactual,
-                },
+                data=SeedStageChangedPayload(
+                    slot_id=self.slot_id,
+                    env_id=-1,  # Sentinel - will be replaced by emit_with_env_context
+                    from_stage=old_stage.name,
+                    to_stage=SeedStage.BLENDING.name,
+                    alpha=self.state.alpha,
+                    accuracy_delta=improvement,
+                    epochs_in_stage=epochs_in_stage,
+                    # Optional gradient health fields
+                    grad_ratio=(
+                        self.state.metrics.seed_gradient_norm_ratio
+                        if self.state.telemetry and self.state.telemetry.epoch > 0
+                        else 0.0
+                    ),
+                    has_vanishing=(
+                        self.state.telemetry.has_vanishing
+                        if self.state.telemetry and self.state.telemetry.epoch > 0
+                        else False
+                    ),
+                    has_exploding=(
+                        self.state.telemetry.has_exploding
+                        if self.state.telemetry and self.state.telemetry.epoch > 0
+                        else False
+                    ),
+                ),
             )
         elif self.state.stage != SeedStage.BLENDING:
             return self.prune(reason=reason, initiator=initiator)
@@ -1609,14 +1671,31 @@ class SeedSlot(nn.Module):
             self._on_enter_stage(SeedStage.BLENDING, old_stage)
             self._emit_telemetry(
                 TelemetryEventType.SEED_STAGE_CHANGED,
-                data={
-                    "from": old_stage.name,
-                    "to": SeedStage.BLENDING.name,
-                    "accuracy_delta": improvement,
-                    "epochs_in_stage": epochs_in_stage,
-                    "epochs_total": epochs_total,
-                    "counterfactual": counterfactual,
-                },
+                data=SeedStageChangedPayload(
+                    slot_id=self.slot_id,
+                    env_id=-1,  # Sentinel - will be replaced by emit_with_env_context
+                    from_stage=old_stage.name,
+                    to_stage=SeedStage.BLENDING.name,
+                    alpha=self.state.alpha,
+                    accuracy_delta=improvement,
+                    epochs_in_stage=epochs_in_stage,
+                    # Optional gradient health fields
+                    grad_ratio=(
+                        self.state.metrics.seed_gradient_norm_ratio
+                        if self.state.telemetry and self.state.telemetry.epoch > 0
+                        else 0.0
+                    ),
+                    has_vanishing=(
+                        self.state.telemetry.has_vanishing
+                        if self.state.telemetry and self.state.telemetry.epoch > 0
+                        else False
+                    ),
+                    has_exploding=(
+                        self.state.telemetry.has_exploding
+                        if self.state.telemetry and self.state.telemetry.epoch > 0
+                        else False
+                    ),
+                ),
             )
 
         # Update alpha algorithm if requested (HOLD-only changes).
@@ -2195,12 +2274,31 @@ class SeedSlot(nn.Module):
                 )
             self._emit_telemetry(
                 TelemetryEventType.SEED_STAGE_CHANGED,
-                data={
-                    "from": old_stage.name,
-                    "to": self.state.stage.name,
-                    "epochs_in_stage": epochs_in_stage,
-                    "epochs_total": epochs_total,
-                },
+                data=SeedStageChangedPayload(
+                    slot_id=self.slot_id,
+                    env_id=-1,  # Sentinel - will be replaced by emit_with_env_context
+                    from_stage=old_stage.name,
+                    to_stage=self.state.stage.name,
+                    alpha=self.state.alpha,
+                    accuracy_delta=0.0,
+                    epochs_in_stage=epochs_in_stage,
+                    # Optional gradient health fields
+                    grad_ratio=(
+                        self.state.metrics.seed_gradient_norm_ratio
+                        if self.state.telemetry and self.state.telemetry.epoch > 0
+                        else 0.0
+                    ),
+                    has_vanishing=(
+                        self.state.telemetry.has_vanishing
+                        if self.state.telemetry and self.state.telemetry.epoch > 0
+                        else False
+                    ),
+                    has_exploding=(
+                        self.state.telemetry.has_exploding
+                        if self.state.telemetry and self.state.telemetry.epoch > 0
+                        else False
+                    ),
+                ),
             )
             return False
 
@@ -2225,12 +2323,31 @@ class SeedSlot(nn.Module):
                 )
             self._emit_telemetry(
                 TelemetryEventType.SEED_STAGE_CHANGED,
-                data={
-                    "from": old_stage.name,
-                    "to": self.state.stage.name,
-                    "epochs_in_stage": epochs_in_stage,
-                    "epochs_total": epochs_total,
-                },
+                data=SeedStageChangedPayload(
+                    slot_id=self.slot_id,
+                    env_id=-1,  # Sentinel - will be replaced by emit_with_env_context
+                    from_stage=old_stage.name,
+                    to_stage=self.state.stage.name,
+                    alpha=self.state.alpha,
+                    accuracy_delta=0.0,
+                    epochs_in_stage=epochs_in_stage,
+                    # Optional gradient health fields
+                    grad_ratio=(
+                        self.state.metrics.seed_gradient_norm_ratio
+                        if self.state.telemetry and self.state.telemetry.epoch > 0
+                        else 0.0
+                    ),
+                    has_vanishing=(
+                        self.state.telemetry.has_vanishing
+                        if self.state.telemetry and self.state.telemetry.epoch > 0
+                        else False
+                    ),
+                    has_exploding=(
+                        self.state.telemetry.has_exploding
+                        if self.state.telemetry and self.state.telemetry.epoch > 0
+                        else False
+                    ),
+                ),
             )
             return False
 
@@ -2251,12 +2368,31 @@ class SeedSlot(nn.Module):
             # clear state so slot_reports treat the slot as empty.
             self._emit_telemetry(
                 TelemetryEventType.SEED_STAGE_CHANGED,
-                data={
-                    "from": old_stage.name,
-                    "to": SeedStage.DORMANT.name,
-                    "epochs_in_stage": epochs_in_stage,
-                    "epochs_total": epochs_total,
-                },
+                data=SeedStageChangedPayload(
+                    slot_id=self.slot_id,
+                    env_id=-1,  # Sentinel - will be replaced by emit_with_env_context
+                    from_stage=old_stage.name,
+                    to_stage=SeedStage.DORMANT.name,
+                    alpha=self.state.alpha,
+                    accuracy_delta=0.0,
+                    epochs_in_stage=epochs_in_stage,
+                    # Optional gradient health fields
+                    grad_ratio=(
+                        self.state.metrics.seed_gradient_norm_ratio
+                        if self.state.telemetry and self.state.telemetry.epoch > 0
+                        else 0.0
+                    ),
+                    has_vanishing=(
+                        self.state.telemetry.has_vanishing
+                        if self.state.telemetry and self.state.telemetry.epoch > 0
+                        else False
+                    ),
+                    has_exploding=(
+                        self.state.telemetry.has_exploding
+                        if self.state.telemetry and self.state.telemetry.epoch > 0
+                        else False
+                    ),
+                ),
             )
             self.state = None
             return False
@@ -2272,33 +2408,43 @@ class SeedSlot(nn.Module):
     def _emit_telemetry(
         self,
         event_type: TelemetryEventType,
-        data: dict | None = None,
+        data: dict | SeedGerminatedPayload | SeedStageChangedPayload | SeedFossilizedPayload | SeedPrunedPayload | None = None,
     ) -> None:
         """Emit a telemetry event.
 
         Skipped entirely in fast_mode for zero overhead in PPO rollouts.
+
+        Accepts either a dict (for events without typed payloads) or a typed payload.
+        For typed payloads, no additional enrichment is done (all fields should be
+        passed in the payload constructor). For dicts, optional enrichment adds
+        alpha, epochs, and gradient health fields if available.
         """
         if self.on_telemetry is None:
             return
         if self.fast_mode and not self.telemetry_lifecycle_only:
             return
 
-        payload = dict(data) if data else {}
-        if self.state is not None:
-            payload.setdefault("alpha", self.state.alpha)
-        if self.telemetry_inner_epoch is not None:
-            payload.setdefault("inner_epoch", self.telemetry_inner_epoch)
-        if self.telemetry_global_epoch is not None:
-            payload.setdefault("global_epoch", self.telemetry_global_epoch)
-        if (
-            self.state is not None
-            and self.state.telemetry is not None
-            and self.state.telemetry.epoch > 0
-        ):
-            payload.setdefault("seed_gradient_norm_ratio", self.state.metrics.seed_gradient_norm_ratio)
-            payload.setdefault("gradient_health", self.state.telemetry.gradient_health)
-            payload.setdefault("has_vanishing", self.state.telemetry.has_vanishing)
-            payload.setdefault("has_exploding", self.state.telemetry.has_exploding)
+        if isinstance(data, dict) or data is None:
+            # Legacy dict payload - apply enrichment
+            payload = dict(data) if data else {}
+            if self.state is not None:
+                payload.setdefault("alpha", self.state.alpha)
+            if self.telemetry_inner_epoch is not None:
+                payload.setdefault("inner_epoch", self.telemetry_inner_epoch)
+            if self.telemetry_global_epoch is not None:
+                payload.setdefault("global_epoch", self.telemetry_global_epoch)
+            if (
+                self.state is not None
+                and self.state.telemetry is not None
+                and self.state.telemetry.epoch > 0
+            ):
+                payload.setdefault("seed_gradient_norm_ratio", self.state.metrics.seed_gradient_norm_ratio)
+                payload.setdefault("gradient_health", self.state.telemetry.gradient_health)
+                payload.setdefault("has_vanishing", self.state.telemetry.has_vanishing)
+                payload.setdefault("has_exploding", self.state.telemetry.has_exploding)
+        else:
+            # Typed payload - use as-is (no enrichment)
+            payload = data
 
         event = TelemetryEvent(
             event_type=event_type,

@@ -4,6 +4,7 @@ import pytest
 from unittest.mock import MagicMock
 
 from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState, EnvState
+from esper.leyline.telemetry import PPOUpdatePayload
 
 
 class TestSanctumAppIntegration:
@@ -136,7 +137,15 @@ async def test_sanctum_app_shows_multiple_tamiyo_widgets():
             event = TelemetryEvent(
                 event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
                 group_id=group_id,  # Top-level attribute, NOT in data
-                data={"policy_loss": 0.1},
+                data=PPOUpdatePayload(
+                    policy_loss=0.1,
+                    value_loss=0.0,
+                    entropy=0.0,
+                    grad_norm=0.0,
+                    kl_divergence=0.0,
+                    clip_fraction=0.0,
+                    nan_grad_count=0,
+                ),
             )
             backend.emit(event)
 
@@ -172,7 +181,15 @@ async def test_keyboard_switches_between_policies():
             event = TelemetryEvent(
                 event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
                 group_id=group_id,  # TOP-LEVEL, not in data
-                data={"policy_loss": 0.1},
+                data=PPOUpdatePayload(
+                    policy_loss=0.1,
+                    value_loss=0.0,
+                    entropy=0.0,
+                    grad_norm=0.0,
+                    kl_divergence=0.0,
+                    clip_fraction=0.0,
+                    nan_grad_count=0,
+                ),
             )
             backend.emit(event)
 
@@ -235,7 +252,15 @@ async def test_run_header_shows_ab_comparison():
             event = TelemetryEvent(
                 event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
                 group_id=group_id,
-                data={"policy_loss": 0.1},
+                data=PPOUpdatePayload(
+                    policy_loss=0.1,
+                    value_loss=0.0,
+                    entropy=0.0,
+                    grad_norm=0.0,
+                    kl_divergence=0.0,
+                    clip_fraction=0.0,
+                    nan_grad_count=0,
+                ),
             )
             backend.emit(event)
 
@@ -267,7 +292,15 @@ async def test_run_header_no_ab_comparison_in_single_mode():
         event = TelemetryEvent(
             event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
             group_id="A",
-            data={"policy_loss": 0.1},
+            data=PPOUpdatePayload(
+                policy_loss=0.1,
+                value_loss=0.0,
+                entropy=0.0,
+                grad_norm=0.0,
+                kl_divergence=0.0,
+                clip_fraction=0.0,
+                nan_grad_count=0,
+            ),
         )
         backend.emit(event)
 
@@ -296,7 +329,15 @@ async def test_backend_emits_create_multiple_tamiyo_widgets():
         event = TelemetryEvent(
             event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
             group_id=group_id,
-            data={"policy_loss": 0.1},
+            data=PPOUpdatePayload(
+                policy_loss=0.1,
+                value_loss=0.0,
+                entropy=0.0,
+                grad_norm=0.0,
+                kl_divergence=0.0,
+                clip_fraction=0.0,
+                nan_grad_count=0,
+            ),
         )
         backend.emit(event)
 

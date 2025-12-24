@@ -12,6 +12,13 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 from esper.leyline import TelemetryEvent, TelemetryEventType
+from esper.leyline.telemetry import (
+    SeedGerminatedPayload,
+    SeedFossilizedPayload,
+    SeedPrunedPayload,
+    SeedStageChangedPayload,
+    AnalyticsSnapshotPayload,
+)
 from esper.nissa.output import OutputBackend
 
 _logger = logging.getLogger(__name__)
@@ -155,10 +162,14 @@ class BlueprintAnalytics(OutputBackend):
     def emit(self, event: TelemetryEvent) -> None:
         """Process lifecycle events to update stats and print status."""
         if event.event_type == TelemetryEventType.SEED_GERMINATED:
-            bp_id = event.data.get("blueprint_id", "unknown")
-            env_id = event.data.get("env_id", 0)
-            seed_id = event.data.get("seed_id", "unknown")
-            params = event.data.get("params", 0)
+            if isinstance(event.data, SeedGerminatedPayload):
+                bp_id = event.data.blueprint_id
+                env_id = event.data.env_id
+                seed_id = event.seed_id or "unknown"
+                params = event.data.params
+            else:
+                _logger.warning(f"Unexpected SEED_GERMINATED payload type: {type(event.data)}")
+                return
 
             self.stats[bp_id].germinated += 1
             sb = self._get_scoreboard(env_id)
@@ -169,14 +180,18 @@ class BlueprintAnalytics(OutputBackend):
                 print(f"    [env{env_id}] Germinated '{seed_id}' ({bp_id}, {params/1000:.1f}K params)")
 
         elif event.event_type == TelemetryEventType.SEED_FOSSILIZED:
-            bp_id = event.data.get("blueprint_id", "unknown")
-            env_id = event.data.get("env_id", 0)
-            seed_id = event.data.get("seed_id", "unknown")
-            improvement = event.data.get("improvement", 0.0)
-            blending_delta = event.data.get("blending_delta", 0.0)
-            counterfactual = event.data.get("counterfactual")  # May be None
-            params = event.data.get("params_added", 0)
-            epochs_total = event.data.get("epochs_total", 0)
+            if isinstance(event.data, SeedFossilizedPayload):
+                bp_id = event.data.blueprint_id
+                env_id = event.data.env_id
+                seed_id = event.seed_id or "unknown"
+                improvement = event.data.improvement
+                blending_delta = event.data.blending_delta if event.data.blending_delta is not None else 0.0
+                counterfactual = event.data.counterfactual
+                params = event.data.params_added
+                epochs_total = event.data.epochs_total
+            else:
+                _logger.warning(f"Unexpected SEED_FOSSILIZED payload type: {type(event.data)}")
+                return
 
             self.stats[bp_id].fossilized += 1
             self.stats[bp_id].acc_deltas.append(improvement)
@@ -198,14 +213,18 @@ class BlueprintAnalytics(OutputBackend):
                       f"total Δacc {improvement:+.2f}%, blending Δ {blending_delta:+.2f}%{causal_str})")
 
         elif event.event_type == TelemetryEventType.SEED_PRUNED:
-            bp_id = event.data.get("blueprint_id", "unknown")
-            env_id = event.data.get("env_id", 0)
-            seed_id = event.data.get("seed_id", "unknown")
-            improvement = event.data.get("improvement", 0.0)
-            blending_delta = event.data.get("blending_delta", 0.0)
-            counterfactual = event.data.get("counterfactual")  # May be None
-            reason = event.data.get("reason", "")
-            epochs_total = event.data.get("epochs_total", 0)
+            if isinstance(event.data, SeedPrunedPayload):
+                bp_id = event.data.blueprint_id or "unknown"
+                env_id = event.data.env_id
+                seed_id = event.seed_id or "unknown"
+                improvement = event.data.improvement
+                blending_delta = event.data.blending_delta if event.data.blending_delta is not None else 0.0
+                counterfactual = event.data.counterfactual
+                reason = event.data.reason
+                epochs_total = event.data.epochs_total
+            else:
+                _logger.warning(f"Unexpected SEED_PRUNED payload type: {type(event.data)}")
+                return
 
             self.stats[bp_id].pruned += 1
             self.stats[bp_id].churns.append(improvement)
@@ -226,125 +245,91 @@ class BlueprintAnalytics(OutputBackend):
                       f"total Δacc {improvement:+.2f}%, blending Δ {blending_delta:+.2f}%{causal_str}){reason_str}")
 
         elif event.event_type == TelemetryEventType.ANALYTICS_SNAPSHOT:
-            kind = event.data.get("kind", "unknown")
-            env_id = event.data.get("env_id", 0)
-
-            if kind == "shapley_computed":
-                shapley_values = event.data.get("shapley_values", {})
-                num_slots = event.data.get("num_slots", 0)
-
-                if not self.quiet and shapley_values:
-                    # Format Shapley values compactly
-                    values_str = ", ".join(
-                        f"{slot}: {val.get('mean', 0):+.2f}%"
-                        for slot, val in shapley_values.items()
-                    )
-                    print(f"    [env{env_id}] Shapley values ({num_slots} slots): {values_str}")
+            if isinstance(event.data, AnalyticsSnapshotPayload):
+                kind = event.data.kind
+                env_id = event.data.env_id
+                if not self.quiet:
+                    _logger.debug(f"[env{env_id}] ANALYTICS_SNAPSHOT kind={kind}")
             else:
-                _logger.debug(f"[env{env_id}] ANALYTICS_SNAPSHOT kind={kind}")
+                _logger.warning(f"Unexpected ANALYTICS_SNAPSHOT payload type: {type(event.data)}")
+                return
 
         # === Training Progress Events ===
         elif event.event_type == TelemetryEventType.SEED_STAGE_CHANGED:
-            env_id = event.data.get("env_id", 0)
-            slot_id = event.data.get("slot_id", "?")
-            old_stage = event.data.get("old_stage", "?")
-            new_stage = event.data.get("new_stage", "?")
-            _logger.debug(f"[env{env_id}] Stage change {slot_id}: {old_stage} → {new_stage}")
+            if isinstance(event.data, SeedStageChangedPayload):
+                env_id = event.data.env_id
+                slot_id = event.data.slot_id
+                old_stage = event.data.from_stage
+                new_stage = event.data.to_stage
+                _logger.debug(f"[env{env_id}] Stage change {slot_id}: {old_stage} → {new_stage}")
+            else:
+                _logger.warning(f"Unexpected SEED_STAGE_CHANGED payload type: {type(event.data)}")
+                return
 
         elif event.event_type == TelemetryEventType.SEED_GATE_EVALUATED:
-            env_id = event.data.get("env_id", 0)
-            slot_id = event.data.get("slot_id", "?")
-            gate = event.data.get("gate", "?")
-            passed = event.data.get("passed", False)
-            _logger.debug(f"[env{env_id}] Gate {gate} for {slot_id}: {'PASSED' if passed else 'BLOCKED'}")
+            _logger.warning(f"SEED_GATE_EVALUATED event not yet migrated to typed payload")
+            return
 
         elif event.event_type == TelemetryEventType.TAMIYO_INITIATED:
-            env_id = event.data.get("env_id", 0)
-            epoch = event.data.get("epoch", 0)
-            _logger.debug(f"[env{env_id}] Tamiyo initiated at epoch {epoch}")
+            _logger.warning(f"TAMIYO_INITIATED event not yet migrated to typed payload")
+            return
 
         # === Trend Detection Events ===
         elif event.event_type == TelemetryEventType.PLATEAU_DETECTED:
-            env_id = event.data.get("env_id", 0)
-            delta = event.data.get("delta", 0)
-            if not self.quiet:
-                print(f"    [env{env_id}] ⏸ Plateau detected (Δ={delta:+.3f}%)")
+            _logger.warning(f"PLATEAU_DETECTED event not yet migrated to typed payload")
+            return
 
         elif event.event_type == TelemetryEventType.DEGRADATION_DETECTED:
-            env_id = event.data.get("env_id", 0)
-            delta = event.data.get("delta", 0)
-            if not self.quiet:
-                print(f"    [env{env_id}] 📉 Degradation detected (Δ={delta:+.3f}%)")
+            _logger.warning(f"DEGRADATION_DETECTED event not yet migrated to typed payload")
+            return
 
         elif event.event_type == TelemetryEventType.IMPROVEMENT_DETECTED:
-            env_id = event.data.get("env_id", 0)
-            delta = event.data.get("delta", 0)
-            if not self.quiet:
-                print(f"    [env{env_id}] 📈 Improvement detected (Δ={delta:+.3f}%)")
+            _logger.warning(f"IMPROVEMENT_DETECTED event not yet migrated to typed payload")
+            return
 
         # === Health/Warning Events ===
         elif event.event_type == TelemetryEventType.MEMORY_WARNING:
-            gpu_util = event.data.get("gpu_utilization", 0)
-            gpu_gb = event.data.get("gpu_allocated_gb", 0)
-            if not self.quiet:
-                print(f"    ⚠️ Memory warning: GPU {gpu_util:.0%} ({gpu_gb:.1f}GB)")
+            _logger.warning(f"MEMORY_WARNING event not yet migrated to typed payload")
+            return
 
         elif event.event_type == TelemetryEventType.GRADIENT_ANOMALY:
-            env_id = event.data.get("env_id", 0)
-            anomaly_type = event.data.get("anomaly_type", "unknown")
-            if not self.quiet:
-                print(f"    [env{env_id}] ⚠️ Gradient anomaly: {anomaly_type}")
+            _logger.warning(f"GRADIENT_ANOMALY event not yet migrated to typed payload")
+            return
 
         elif event.event_type == TelemetryEventType.PERFORMANCE_DEGRADATION:
-            env_id = event.data.get("env_id", 0)
-            metric = event.data.get("metric", "unknown")
-            if not self.quiet:
-                print(f"    [env{env_id}] ⚠️ Performance degradation: {metric}")
+            _logger.warning(f"PERFORMANCE_DEGRADATION event not yet migrated to typed payload")
+            return
 
         elif event.event_type == TelemetryEventType.REWARD_HACKING_SUSPECTED:
-            env_id = event.data.get("env_id", 0)
-            reason = event.data.get("reason", "unknown")
-            if not self.quiet:
-                print(f"    [env{env_id}] 🚨 Reward hacking suspected: {reason}")
+            _logger.warning(f"REWARD_HACKING_SUSPECTED event not yet migrated to typed payload")
+            return
 
         # === PPO Anomaly Events ===
         elif event.event_type == TelemetryEventType.RATIO_EXPLOSION_DETECTED:
-            env_id = event.data.get("env_id", 0)
-            max_ratio = event.data.get("max_ratio", 0)
-            if not self.quiet:
-                print(f"    [env{env_id}] 💥 Ratio explosion: max={max_ratio:.2f}")
+            _logger.warning(f"RATIO_EXPLOSION_DETECTED event not yet migrated to typed payload")
+            return
 
         elif event.event_type == TelemetryEventType.RATIO_COLLAPSE_DETECTED:
-            env_id = event.data.get("env_id", 0)
-            min_ratio = event.data.get("min_ratio", 0)
-            if not self.quiet:
-                print(f"    [env{env_id}] 📉 Ratio collapse: min={min_ratio:.4f}")
+            _logger.warning(f"RATIO_COLLAPSE_DETECTED event not yet migrated to typed payload")
+            return
 
         elif event.event_type == TelemetryEventType.VALUE_COLLAPSE_DETECTED:
-            env_id = event.data.get("env_id", 0)
-            std = event.data.get("value_std", 0)
-            if not self.quiet:
-                print(f"    [env{env_id}] 📉 Value collapse: std={std:.4f}")
+            _logger.warning(f"VALUE_COLLAPSE_DETECTED event not yet migrated to typed payload")
+            return
 
         elif event.event_type == TelemetryEventType.NUMERICAL_INSTABILITY_DETECTED:
-            env_id = event.data.get("env_id", 0)
-            details = event.data.get("details", "unknown")
-            if not self.quiet:
-                print(f"    [env{env_id}] ⚠️ Numerical instability: {details}")
+            _logger.warning(f"NUMERICAL_INSTABILITY_DETECTED event not yet migrated to typed payload")
+            return
 
         # === Governor Events ===
         elif event.event_type == TelemetryEventType.GOVERNOR_ROLLBACK:
-            env_id = event.data.get("env_id", 0)
-            reason = event.data.get("reason", "vital signs failure")
-            if not self.quiet:
-                print(f"    [env{env_id}] 🔄 Governor rollback: {reason}")
+            _logger.warning(f"GOVERNOR_ROLLBACK event not yet migrated to typed payload")
+            return
 
         # === Counterfactual Events ===
         elif event.event_type == TelemetryEventType.COUNTERFACTUAL_COMPUTED:
-            env_id = event.data.get("env_id", 0)
-            slot_id = event.data.get("slot_id", "?")
-            contribution = event.data.get("contribution", 0)
-            _logger.debug(f"[env{env_id}] Counterfactual {slot_id}: {contribution:+.2f}%")
+            _logger.warning(f"COUNTERFACTUAL_COMPUTED event not yet migrated to typed payload")
+            return
 
     def _get_scoreboard(self, env_id: int) -> SeedScoreboard:
         """Get or create scoreboard for environment."""

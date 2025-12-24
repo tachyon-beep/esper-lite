@@ -39,6 +39,18 @@ from esper.karn.ingest import (
     coerce_str,
     coerce_str_or_none,
 )
+from esper.leyline.telemetry import (
+    TrainingStartedPayload,
+    EpochCompletedPayload,
+    BatchEpochCompletedPayload,
+    PPOUpdatePayload,
+    RewardComputedPayload,
+    SeedGerminatedPayload,
+    SeedStageChangedPayload,
+    SeedFossilizedPayload,
+    SeedPrunedPayload,
+    CounterfactualMatrixPayload,
+)
 
 if TYPE_CHECKING:
     from esper.leyline.telemetry import TelemetryEvent
@@ -283,62 +295,55 @@ class KarnCollector:
 
     def _handle_training_started(self, event: "TelemetryEvent") -> None:
         """Handle TRAINING_STARTED event - auto-initialize episode AND first epoch."""
-        data = event.data or {}
-        episode_id = data.get("episode_id") or event.event_id
-        self.start_episode(
-            episode_id=episode_id,
-            seed=coerce_int(data.get("seed", 42), field="seed", default=42, minimum=0),
-            task_type=coerce_str(
-                data.get("task", "classification"),
-                field="task",
-                default="classification",
-            ),
-            reward_mode=coerce_str(
-                data.get("reward_mode", "shaped"),
-                field="reward_mode",
-                default="shaped",
-            ),
-            max_epochs=coerce_int(
-                data.get("max_epochs", 75),
-                field="max_epochs",
-                default=75,
-                minimum=1,
-            ),
-        )
+        # Typed payload path
+        if isinstance(event.data, TrainingStartedPayload):
+            episode_id = event.data.episode_id or event.event_id
+            self.start_episode(
+                episode_id=episode_id,
+                seed=event.data.seed,
+                task_type=event.data.task,
+                reward_mode=event.data.reward_mode or "shaped",
+                max_epochs=event.data.max_epochs,
+            )
+        else:
+            _logger.warning(f"Unknown data type in TRAINING_STARTED: {type(event.data)}")
+            return
         # Start at epoch 1 to match Simic's range(1, max_epochs + 1)
         self.store.start_epoch(1)
         _logger.debug(f"Auto-started episode and epoch 1 from TRAINING_STARTED: {episode_id}")
 
     def _handle_epoch_completed(self, event: "TelemetryEvent") -> None:
         """Handle EPOCH_COMPLETED event."""
-        data = event.data or {}
-        raw_epoch = event.epoch if event.epoch is not None else data.get("epoch", 0)
-        epoch = coerce_int(raw_epoch, field="epoch", default=0, minimum=0)
+        # Typed payload path
+        if isinstance(event.data, EpochCompletedPayload):
+            raw_epoch = event.epoch if event.epoch is not None else event.data.inner_epoch
+            epoch = coerce_int(raw_epoch, field="epoch", default=0, minimum=0)
 
-        # Auto-start epoch if none exists
-        if not self.store.current_epoch:
-            self.store.start_epoch(epoch)
+            # Auto-start epoch if none exists
+            if not self.store.current_epoch:
+                self.store.start_epoch(epoch)
 
-        # Update host snapshot
-        # Keep EpochSnapshot.epoch aligned with the commit-barrier epoch identifier.
-        # (HostSnapshot.epoch mirrors this value for convenience.)
-        self.store.current_epoch.epoch = epoch
-        self.store.current_epoch.host.epoch = epoch
-        self.store.current_epoch.host.val_loss = coerce_float(
-            data.get("val_loss"), field="val_loss", default=0.0
-        )
-        self.store.current_epoch.host.val_accuracy = coerce_float(
-            data.get("val_accuracy"), field="val_accuracy", default=0.0
-        )
-        self.store.current_epoch.host.train_loss = coerce_float(
-            data.get("train_loss"), field="train_loss", default=0.0
-        )
-        self.store.current_epoch.host.train_accuracy = coerce_float(
-            data.get("train_accuracy"), field="train_accuracy", default=0.0
-        )
-        self.store.current_epoch.host.host_grad_norm = coerce_float(
-            data.get("grad_norm"), field="grad_norm", default=0.0
-        )
+            # Update host snapshot from typed payload
+            self.store.current_epoch.epoch = epoch
+            self.store.current_epoch.host.epoch = epoch
+            self.store.current_epoch.host.val_loss = event.data.val_loss
+            self.store.current_epoch.host.val_accuracy = event.data.val_accuracy
+            # Use payload fields if provided, else default to 0.0
+            self.store.current_epoch.host.train_loss = (
+                event.data.train_loss if event.data.train_loss is not None else 0.0
+            )
+            self.store.current_epoch.host.train_accuracy = (
+                event.data.train_accuracy if event.data.train_accuracy is not None else 0.0
+            )
+            self.store.current_epoch.host.host_grad_norm = (
+                event.data.host_grad_norm if event.data.host_grad_norm is not None else 0.0
+            )
+        else:
+            _logger.warning(
+                "Expected EpochCompletedPayload for EPOCH_COMPLETED, got %s",
+                type(event.data).__name__,
+            )
+            return
 
         # P0 Fix: Increment epochs_in_stage for all occupied slots
         # (includes EMBARGOED/RESETTING dwell while excluding PRUNED + terminal).
@@ -377,17 +382,35 @@ class KarnCollector:
         if not self.store.current_epoch:
             return
 
-        data = event.data or {}
+        # hasattr AUTHORIZED by John on 2025-12-14 03:30:00 UTC
+        # Justification: Serialization - handle both enum and string event_type values
+        event_type = (
+            event.event_type.name
+            if hasattr(event.event_type, "name")
+            else str(event.event_type)
+        )
 
-        if "env_id" not in data:
+        # Extract env_id and slot_id
+        env_id: int = -1
+        slot_id: str = "unknown"
+
+        # Typed payload path
+        if isinstance(event.data, (SeedGerminatedPayload, SeedStageChangedPayload, SeedFossilizedPayload, SeedPrunedPayload)):
+            env_id = event.data.env_id
+            slot_id = event.data.slot_id
+        # SEED_GATE_EVALUATED has no typed payload yet - dict-only for now
+        elif event_type == "SEED_GATE_EVALUATED" and isinstance(event.data, dict):
+            data = event.data
+            if "env_id" not in data:
+                return
+            env_id = coerce_int(data.get("env_id"), field="env_id", default=-1, minimum=0)
+            raw_slot_id = event.slot_id if event.slot_id is not None else data.get("slot_id", "unknown")
+            slot_id = coerce_str(raw_slot_id, field="slot_id", default="unknown").strip() or "unknown"
+        else:
             return
-        env_id = coerce_int(data.get("env_id"), field="env_id", default=-1, minimum=0)
+
         if env_id < 0:
             return
-
-        # Get raw slot_id
-        raw_slot_id = event.slot_id if event.slot_id is not None else data.get("slot_id", "unknown")
-        slot_id = coerce_str(raw_slot_id, field="slot_id", default="unknown").strip() or "unknown"
 
         # Namespace slot key by env_id to prevent multi-env collisions
         slot_key = f"env{env_id}:{slot_id}"
@@ -399,32 +422,29 @@ class KarnCollector:
         slot = self.store.current_epoch.slots[slot_key]
 
         # Update based on event type
-        # hasattr AUTHORIZED by John on 2025-12-14 03:30:00 UTC
-        # Justification: Serialization - handle both enum and string event_type values
-        event_type = (
-            event.event_type.name
-            if hasattr(event.event_type, "name")
-            else str(event.event_type)
-        )
-
         if event_type == "SEED_GERMINATED":
-            slot.stage = SeedStage.GERMINATED
-            slot.seed_id = coerce_str_or_none(data.get("seed_id"), field="seed_id")
-            slot.blueprint_id = coerce_str_or_none(data.get("blueprint_id"), field="blueprint_id")
-            slot.seed_params = coerce_int(data.get("params", 0), field="params", default=0, minimum=0)
+            if isinstance(event.data, SeedGerminatedPayload):
+                slot.stage = SeedStage.GERMINATED
+                slot.seed_id = event.seed_id  # From TelemetryEvent, not payload
+                slot.blueprint_id = event.data.blueprint_id
+                slot.seed_params = event.data.params
         elif event_type == "SEED_STAGE_CHANGED":
-            new_stage = coerce_seed_stage(data.get("to"), field="to", default=slot.stage)
-            if new_stage != slot.stage:
-                slot.stage = new_stage
-                slot.epochs_in_stage = 0
+            if isinstance(event.data, SeedStageChangedPayload):
+                new_stage = coerce_seed_stage(event.data.to_stage, field="to", default=slot.stage)
+                if new_stage != slot.stage:
+                    slot.stage = new_stage
+                    slot.epochs_in_stage = 0
         elif event_type == "SEED_GATE_EVALUATED":
-            slot.last_gate_attempted = coerce_str_or_none(data.get("gate"), field="gate")
-            slot.last_gate_passed = coerce_bool_or_none(data.get("passed"), field="passed")
-            slot.last_gate_reason = coerce_str_or_none(data.get("message"), field="message")
-            if not slot.last_gate_reason:
-                checks_failed = data.get("checks_failed")
-                if isinstance(checks_failed, list) and checks_failed:
-                    slot.last_gate_reason = ",".join(str(c) for c in checks_failed)
+            # Dict-only handler until typed payload is created
+            if isinstance(event.data, dict):
+                data = event.data
+                slot.last_gate_attempted = coerce_str_or_none(data.get("gate"), field="gate")
+                slot.last_gate_passed = coerce_bool_or_none(data.get("passed"), field="passed")
+                slot.last_gate_reason = coerce_str_or_none(data.get("message"), field="message")
+                if not slot.last_gate_reason:
+                    checks_failed = data.get("checks_failed")
+                    if isinstance(checks_failed, list) and checks_failed:
+                        slot.last_gate_reason = ",".join(str(c) for c in checks_failed)
         elif event_type == "SEED_FOSSILIZED":
             slot.stage = SeedStage.FOSSILIZED
         elif event_type == "SEED_PRUNED":
@@ -436,18 +456,23 @@ class KarnCollector:
         if not self.store.current_epoch:
             return
 
-        data = event.data or {}
-
         # Create policy snapshot if not exists
         if not self.store.current_epoch.policy:
             self.store.current_epoch.policy = PolicySnapshot()
 
         policy = self.store.current_epoch.policy
-        policy.kl_divergence = coerce_float_or_none(data.get("kl_divergence"), field="kl_divergence")
-        policy.explained_variance = coerce_float_or_none(
-            data.get("explained_variance"), field="explained_variance"
-        )
-        policy.entropy = coerce_float_or_none(data.get("entropy"), field="entropy")
+
+        # Typed payload path
+        if isinstance(event.data, PPOUpdatePayload):
+            policy.kl_divergence = event.data.kl_divergence
+            policy.explained_variance = event.data.explained_variance
+            policy.entropy = event.data.entropy
+        else:
+            _logger.warning(
+                "Expected PPOUpdatePayload for PPO_UPDATE_COMPLETED, got %s",
+                type(event.data).__name__,
+            )
+            return
 
     def _handle_reward_computed(self, event: "TelemetryEvent") -> None:
         """Handle REWARD_COMPUTED event."""
@@ -458,10 +483,18 @@ class KarnCollector:
         if not self.store.current_epoch.policy:
             self.store.current_epoch.policy = PolicySnapshot()
 
-        data = event.data or {}
         policy = self.store.current_epoch.policy
-        policy.reward_total = coerce_float(data.get("total_reward"), field="total_reward", default=0.0)
-        policy.action_op = coerce_str(data.get("action_name"), field="action_name", default="")
+
+        # Typed payload path
+        if isinstance(event.data, RewardComputedPayload):
+            policy.reward_total = event.data.total_reward
+            policy.action_op = event.data.action_name
+        else:
+            _logger.warning(
+                "Expected RewardComputedPayload for REWARD_COMPUTED, got %s",
+                type(event.data).__name__,
+            )
+            return
 
     def _handle_counterfactual_computed(self, event: "TelemetryEvent") -> None:
         """Handle COUNTERFACTUAL_COMPUTED event."""
@@ -508,8 +541,12 @@ class KarnCollector:
             return
 
         # P1-06: Prefer epoch field over episode for trace windowing
-        data = event.data or {}
-        epoch = event.epoch or data.get("epoch", self.store.current_epoch.epoch)
+        # Anomaly events don't have specific typed payloads yet, but they may be dict or typed
+        epoch = event.epoch
+        if epoch is None and isinstance(event.data, dict):
+            epoch = event.data.get("epoch", self.store.current_epoch.epoch)
+        elif epoch is None:
+            epoch = self.store.current_epoch.epoch
 
         # Skip if anomaly detection disabled
         if not self.config.capture_dense_traces:
@@ -610,7 +647,7 @@ class KarnCollector:
             return {}
 
         return {
-            slot_id: slot.counterfactual_contribution or 0.0
+            slot_id: slot.counterfactual_contribution  # Already filtered for not None
             for slot_id, slot in self.store.latest_epoch.slots.items()
             if slot.counterfactual_contribution is not None
         }

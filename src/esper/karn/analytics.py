@@ -264,8 +264,11 @@ class EpisodeAnalytics:
             for slot_id, slot in snap.slots.items():
                 if slot_id not in contributions:
                     contributions[slot_id] = []
+                # Use explicit None check to distinguish "not computed" from "zero"
                 contributions[slot_id].append(
-                    slot.counterfactual_contribution or 0.0
+                    slot.counterfactual_contribution
+                    if slot.counterfactual_contribution is not None
+                    else 0.0
                 )
 
         return contributions

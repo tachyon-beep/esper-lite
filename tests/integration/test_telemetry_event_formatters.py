@@ -3,8 +3,12 @@
 Tests new telemetry event types and console output formatting.
 """
 
+import time
 import pytest
 from esper.leyline import TelemetryEvent, TelemetryEventType
+from esper.leyline.telemetry import (
+    BatchEpochCompletedPayload,
+)
 from esper.nissa.output import ConsoleOutput, NissaHub
 
 
@@ -92,6 +96,7 @@ class TestConsoleOutputFormatters:
     def test_formats_governor_rollback(self, capsys: pytest.CaptureFixture[str]) -> None:
         """Verify ConsoleOutput formats GOVERNOR_ROLLBACK correctly."""
         console = ConsoleOutput()
+        # Note: GOVERNOR_ROLLBACK does not yet have a typed payload (Governor events still use dict)
         event = TelemetryEvent(
             event_type=TelemetryEventType.GOVERNOR_ROLLBACK,
             data={
@@ -112,14 +117,15 @@ class TestConsoleOutputFormatters:
         console = ConsoleOutput()
         event = TelemetryEvent(
             event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED,
-            data={
-                "batch_idx": 3,
-                "episodes_completed": 24,
-                "total_episodes": 100,
-                "avg_accuracy": 67.2,
-                "rolling_accuracy": 65.1,
-                "avg_reward": 2.3,
-            },
+            data=BatchEpochCompletedPayload(
+                batch_idx=3,
+                episodes_completed=24,
+                total_episodes=100,
+                avg_accuracy=67.2,
+                rolling_accuracy=65.1,
+                avg_reward=2.3,
+                n_envs=1,
+            ),
         )
         console.emit(event)
         captured = capsys.readouterr()
@@ -130,6 +136,7 @@ class TestConsoleOutputFormatters:
     def test_formats_counterfactual_computed(self, capsys: pytest.CaptureFixture[str]) -> None:
         """Verify ConsoleOutput formats COUNTERFACTUAL_COMPUTED correctly."""
         console = ConsoleOutput()
+        # Note: COUNTERFACTUAL_COMPUTED does not yet have a typed payload
         event = TelemetryEvent(
             event_type=TelemetryEventType.COUNTERFACTUAL_COMPUTED,
             data={
@@ -145,6 +152,7 @@ class TestConsoleOutputFormatters:
     def test_formats_checkpoint_saved(self, capsys: pytest.CaptureFixture[str]) -> None:
         """Verify ConsoleOutput formats CHECKPOINT_SAVED correctly."""
         console = ConsoleOutput()
+        # Note: CHECKPOINT_SAVED does not yet have a typed payload
         event = TelemetryEvent(
             event_type=TelemetryEventType.CHECKPOINT_SAVED,
             data={
@@ -160,6 +168,7 @@ class TestConsoleOutputFormatters:
     def test_formats_checkpoint_loaded(self, capsys: pytest.CaptureFixture[str]) -> None:
         """Verify ConsoleOutput formats CHECKPOINT_LOADED correctly."""
         console = ConsoleOutput()
+        # Note: CHECKPOINT_LOADED does not yet have a typed payload
         event = TelemetryEvent(
             event_type=TelemetryEventType.CHECKPOINT_LOADED,
             data={
@@ -185,6 +194,9 @@ class TestNissaHubRouting:
         event = TelemetryEvent(event_type=TelemetryEventType.GOVERNOR_ROLLBACK)
         hub.emit(event)
 
+        # Wait for background worker to process event
+        time.sleep(0.1)
+
         assert len(mock.events) == 1
         assert mock.events[0].event_type == TelemetryEventType.GOVERNOR_ROLLBACK
 
@@ -198,6 +210,9 @@ class TestNissaHubRouting:
 
         event = TelemetryEvent(event_type=TelemetryEventType.GOVERNOR_ROLLBACK)
         hub.emit(event)
+
+        # Wait for background worker to process event
+        time.sleep(0.1)
 
         assert len(mock1.events) == 1
         assert len(mock2.events) == 1
@@ -213,6 +228,9 @@ class TestNissaHubRouting:
         hub.emit(TelemetryEvent(event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED))
         hub.emit(TelemetryEvent(event_type=TelemetryEventType.GOVERNOR_PANIC))
         hub.emit(TelemetryEvent(event_type=TelemetryEventType.CHECKPOINT_SAVED))
+
+        # Wait for background worker to process events
+        time.sleep(0.1)
 
         assert len(mock.events) == 3
         assert mock.events[0].event_type == TelemetryEventType.BATCH_EPOCH_COMPLETED

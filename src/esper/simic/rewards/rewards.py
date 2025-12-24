@@ -1479,19 +1479,25 @@ def compute_seed_potential(obs: dict) -> float:
     This preserves optimal policy (PBRS guarantee) while improving learning.
 
     Args:
-        obs: Observation dictionary with has_active_seed, seed_stage, seed_epochs_in_stage
+        obs: Observation dictionary with REQUIRED keys:
+            - has_active_seed: 0 or 1, whether a seed is active
+            - seed_stage: int, current seed stage (see Note)
+            - seed_epochs_in_stage: int, epochs in current stage
 
     Returns:
         Potential value for the current state
+
+    Raises:
+        KeyError: If any required key is missing from obs
 
     Note:
         seed_stage values match SeedStage enum from leyline:
         - DORMANT=1, GERMINATED=2, TRAINING=3, BLENDING=4
         - HOLDING=6, FOSSILIZED=7
     """
-    has_active = obs.get("has_active_seed", 0)
-    seed_stage = obs.get("seed_stage", 0)
-    epochs_in_stage = obs.get("seed_epochs_in_stage", 0)
+    has_active = obs["has_active_seed"]
+    seed_stage = obs["seed_stage"]
+    epochs_in_stage = obs["seed_epochs_in_stage"]
 
     # No potential for inactive seeds or DORMANT (stage 1)
     if not has_active or seed_stage <= 1:

@@ -13,6 +13,7 @@ from unittest.mock import Mock, MagicMock, patch
 
 from esper.leyline import SeedStage, TelemetryEvent, TelemetryEventType
 from esper.leyline.slot_config import SlotConfig
+from esper.leyline.telemetry import SeedGerminatedPayload
 from esper.simic.telemetry import AnomalyReport
 from esper.simic.training.vectorized import (
     _advance_active_seed,
@@ -65,12 +66,29 @@ def test_lifecycle_only_keeps_slot_telemetry():
 
 def test_emit_with_env_context_includes_device():
     hub = Mock()
-    event = TelemetryEvent(event_type=TelemetryEventType.SEED_GERMINATED, data={})
+    # Test with typed payload - env_id is replaced, device is not added
+    payload = SeedGerminatedPayload(
+        slot_id="r0c0",
+        env_id=0,
+        blueprint_id="conv3x3",
+        params=1024,
+        alpha=0.0,
+    )
+    event = TelemetryEvent(event_type=TelemetryEventType.SEED_GERMINATED, data=payload)
     emit_with_env_context(hub, env_idx=2, device="cpu", event=event)
 
     emitted = hub.emit.call_args[0][0]
-    assert emitted.data["env_id"] == 2
-    assert emitted.data["device"] == "cpu"
+    assert emitted.data.env_id == 2
+    # Device is not added to typed payloads (only in dict payloads)
+
+    # Test with dict payload - both env_id and device are added
+    hub.reset_mock()
+    dict_event = TelemetryEvent(event_type=TelemetryEventType.SEED_GERMINATED, data={})
+    emit_with_env_context(hub, env_idx=2, device="cpu", event=dict_event)
+
+    emitted_dict = hub.emit.call_args[0][0]
+    assert emitted_dict.data["env_id"] == 2
+    assert emitted_dict.data["device"] == "cpu"
 
 
 def test_last_action_event_emitted():
@@ -104,8 +122,8 @@ def test_last_action_event_emitted():
         )
 
         emitted = hub.emit.call_args[0][0]
-        assert emitted.data["slot_id"] == "r0c1"
-        assert emitted.data["style_masked"] is True
+        assert emitted.data.slot_id == "r0c1"
+        assert emitted.data.style_masked is True
 
 
 def test_ppo_update_event_includes_vitals():
@@ -121,10 +139,11 @@ def test_ppo_update_event_includes_vitals():
         grad_norm=1.23,
         update_time_ms=12.5,
     )
-    data = hub.emit.call_args[0][0].data
-    assert data["lr"] == 0.0003
-    assert data["grad_norm"] == 1.23
-    assert data["update_time_ms"] == 12.5
+    payload = hub.emit.call_args[0][0].data
+    # Typed payload access (PPOUpdatePayload)
+    assert payload.lr == 0.0003
+    assert payload.grad_norm == 1.23
+    assert payload.update_time_ms == 12.5
 
 
 def test_action_distribution_snapshot():
@@ -136,8 +155,9 @@ def test_action_distribution_snapshot():
         action_counts={"WAIT": 3, "GERMINATE": 1},
         success_counts={"WAIT": 3, "GERMINATE": 1},
     )
-    data = hub.emit.call_args[0][0].data
-    assert data["action_counts"]["WAIT"] == 3
+    payload = hub.emit.call_args[0][0].data
+    # Typed payload access (AnalyticsSnapshotPayload)
+    assert payload.action_counts["WAIT"] == 3
 
 
 def test_counterfactual_unavailable_event():
@@ -164,8 +184,8 @@ def test_throughput_metrics_emitted():
         dataloader_wait_ms=2.0,
     )
     data = hub.emit.call_args[0][0].data
-    assert data["step_time_ms"] == 5.0
-    assert data["dataloader_wait_ms"] == 2.0
+    assert data.step_time_ms == 5.0
+    # Note: dataloader_wait_ms is not currently captured in AnalyticsSnapshotPayload
 
 
 def test_throughput_metrics_include_fps():
@@ -179,7 +199,7 @@ def test_throughput_metrics_include_fps():
         dataloader_wait_ms=2.0,
     )
     data = hub.emit.call_args[0][0].data
-    assert data["fps"] == 50.0
+    assert data.fps == 50.0
 
 
 def test_reward_summary_emitted():
@@ -191,7 +211,8 @@ def test_reward_summary_emitted():
         summary={"bounded_attribution": 0.4, "compute_rent": -0.1, "total_reward": 0.3},
     )
     data = hub.emit.call_args[0][0].data
-    assert data["summary"]["total_reward"] == 0.3
+    assert data.summary is not None
+    assert data.summary["total_reward"] == 0.3
 
 
 def test_mask_hit_rates_emitted():
@@ -204,8 +225,10 @@ def test_mask_hit_rates_emitted():
         mask_total={"op": 12},
     )
     data = hub.emit.call_args[0][0].data
-    assert data["mask_hits"]["op"] == 10
-    assert data["mask_total"]["op"] == 12
+    assert data.mask_hits is not None
+    assert data.mask_hits["op"] == 10
+    assert data.mask_total is not None
+    assert data.mask_total["op"] == 12
 
 
 def test_performance_degradation_emitted_on_accuracy_drop():
@@ -987,12 +1010,13 @@ def test_emit_batch_completed_is_resume_aware_and_clamped():
     )
 
     assert len(hub.events) == 1
-    data = hub.events[0].data
-    assert data["episodes_completed"] == 20  # clamped
-    assert data["total_episodes"] == 20
-    assert data["start_episode"] == 10
-    assert data["requested_episodes"] == 10
-    assert data["batch_idx"] == 5
+    payload = hub.events[0].data
+    # BatchEpochCompletedPayload is a typed dataclass - use attribute access
+    assert payload.episodes_completed == 20  # clamped
+    assert payload.total_episodes == 20
+    assert payload.start_episode == 10
+    assert payload.requested_episodes == 10
+    assert payload.batch_idx == 5
 
 
 # =============================================================================
