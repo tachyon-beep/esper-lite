@@ -1081,10 +1081,6 @@ async def test_heatmap_appears_in_render():
 
         # Convert to plain text to verify heatmap is included
         # Heatmap contains "Heads:" label and head abbreviations like "sl[" and "bp["
-        plain = rendered.__rich_console__(None, None).__str__() if hasattr(rendered, '__rich_console__') else str(rendered)
-
-        # The heatmap should have the "Heads:" label and at least some head indicators
-        # We can also check by rendering the widget directly and inspecting plain text
         from rich.console import Console
         from io import StringIO
 
@@ -1094,4 +1090,8 @@ async def test_heatmap_appears_in_render():
         output = console_io.getvalue()
 
         # Heatmap should be present with "Heads:" label
-        assert "Heads:" in output or "heads:" in output.lower()
+        assert "heads:" in output.lower()
+
+        # Verify head abbreviations are present
+        assert "sl[" in output  # slot head
+        assert "bp[" in output  # blueprint head
