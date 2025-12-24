@@ -209,3 +209,56 @@ async def test_keyboard_switches_between_policies():
         if isinstance(second_focused, TamiyoBrain):
             assert second_focused.has_class("focused"), "Second focused widget should have 'focused' class"
             assert second_focused != first_focused, "Focus should have moved to a different widget"
+
+
+@pytest.mark.asyncio
+async def test_comparison_header_appears_in_ab_mode():
+    """Comparison header should appear when 2+ policies exist."""
+    from esper.karn.sanctum.app import SanctumApp
+    from esper.karn.sanctum.backend import SanctumBackend
+    from esper.karn.sanctum.widgets.comparison_header import ComparisonHeader
+    from esper.leyline import TelemetryEvent, TelemetryEventType
+
+    backend = SanctumBackend()
+    app = SanctumApp(backend=backend, num_envs=4)
+    async with app.run_test() as pilot:
+        # Create two policies - note: group_id is TOP-LEVEL
+        for group_id in ["A", "B"]:
+            event = TelemetryEvent(
+                event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+                group_id=group_id,
+                data={"policy_loss": 0.1},
+            )
+            app.handle_telemetry_event(event)
+
+        await pilot.pause()
+
+        # Should have comparison header visible
+        header = app.query_one("#comparison-header", ComparisonHeader)
+        assert header.display is True
+
+
+@pytest.mark.asyncio
+async def test_comparison_header_hidden_in_single_mode():
+    """Comparison header should be hidden with only one policy."""
+    from esper.karn.sanctum.app import SanctumApp
+    from esper.karn.sanctum.backend import SanctumBackend
+    from esper.karn.sanctum.widgets.comparison_header import ComparisonHeader
+    from esper.leyline import TelemetryEvent, TelemetryEventType
+
+    backend = SanctumBackend()
+    app = SanctumApp(backend=backend, num_envs=4)
+    async with app.run_test() as pilot:
+        # Only one policy
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+            group_id="A",
+            data={"policy_loss": 0.1},
+        )
+        app.handle_telemetry_event(event)
+
+        await pilot.pause()
+
+        # Header should be hidden
+        header = app.query_one("#comparison-header", ComparisonHeader)
+        assert header.display is False

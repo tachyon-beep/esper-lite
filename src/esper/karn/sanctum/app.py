@@ -22,6 +22,7 @@ from textual.widgets import DataTable, Footer, Input, Static
 from esper.karn.sanctum.registry import AggregatorRegistry
 from esper.karn.sanctum.widgets import (
     AnomalyStrip,
+    ComparisonHeader,
     EnvDetailScreen,
     EnvOverview,
     EventLog,
@@ -192,12 +193,14 @@ class SanctumApp(App):
         Layout structure:
         - Run Header: Episode, Epoch, Batch, Runtime, Best Accuracy, Connection
         - Anomaly Strip: Single-line automatic problem surfacing
+        - Comparison Header: A/B comparison metrics (shown when 2+ policies)
         - Top row: EnvOverview (70%) | Scoreboard (30%)
         - Bottom row: TamiyoBrain (70%) | EventLog (30%)
         - Footer: Keybindings
         """
         yield RunHeader(id="run-header")
         yield AnomalyStrip(id="anomaly-strip")
+        yield ComparisonHeader(id="comparison-header")
 
         # Filter input - hidden by default, shown when '/' pressed
         yield Input(
@@ -274,6 +277,32 @@ class SanctumApp(App):
                 pass  # Container hasn't mounted yet
             except Exception as e:
                 self.log.warning(f"Failed to update tamiyo widget for {group_id}: {e}")
+
+        # Update ComparisonHeader visibility and data based on number of policies
+        try:
+            header = self.query_one("#comparison-header", ComparisonHeader)
+            if len(snapshots) >= 2:
+                # Show header and update with comparison data
+                header.display = True
+                # Extract A and B snapshots (alphabetically sorted)
+                group_ids = sorted(snapshots.keys())
+                snapshot_a = snapshots[group_ids[0]]
+                snapshot_b = snapshots[group_ids[1]]
+
+                # Update comparison metrics
+                header.update_comparison(
+                    group_a_accuracy=snapshot_a.aggregate_mean_accuracy,
+                    group_b_accuracy=snapshot_b.aggregate_mean_accuracy,
+                    group_a_reward=snapshot_a.aggregate_mean_reward,
+                    group_b_reward=snapshot_b.aggregate_mean_reward,
+                )
+            else:
+                # Hide header when only 1 policy
+                header.display = False
+        except NoMatches:
+            pass  # Header hasn't mounted yet
+        except Exception as e:
+            self.log.warning(f"Failed to update comparison header: {e}")
 
     def _poll_and_refresh(self) -> None:
         """Poll backend for new snapshot and refresh all panels.
