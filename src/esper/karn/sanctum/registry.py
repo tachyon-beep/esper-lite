@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from esper.karn.sanctum.aggregator import SanctumAggregator
     from esper.karn.sanctum.schema import SanctumSnapshot
+    from esper.leyline.telemetry import TelemetryEvent
 
 
 class AggregatorRegistry:
@@ -43,10 +44,8 @@ class AggregatorRegistry:
             for group_id, agg in self._aggregators.items()
         }
 
-    def process_event(self, event) -> None:
+    def process_event(self, event: "TelemetryEvent") -> None:
         """Route event to appropriate aggregator based on group_id."""
-        # Null safety: event.data may be None for some event types
-        data = event.data or {}
-        group_id = data.get("group_id", "default")
+        group_id = event.group_id
         agg = self.get_or_create(group_id)
         agg.process_event(event)

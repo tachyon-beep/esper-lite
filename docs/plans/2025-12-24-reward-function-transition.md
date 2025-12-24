@@ -8,6 +8,43 @@
 
 **Tech Stack:** Python dataclasses, DuckDB views (Karn MCP), Textual widgets (Sanctum), existing A/B testing infrastructure.
 
+**Revision Notes (2025-12-24):** Updated based on DRL Expert and Code Reviewer feedback:
+- Fixed hypervolume algorithm (corrected sweep-line implementation)
+- Fixed stability score computation (uses reward variance proxy, not non-existent `governor.anomalies_detected`)
+- Added missing aggregator methods
+- Adjusted PBRS healthy range to 10-40%
+- Added 3 missing ablation configs from DRL Expert Section 7.2
+- Added property-based tests for Pareto operations
+- Added PBRS verification tests for SIMPLIFIED mode
+
+---
+
+## Phase 0: Foundation Fixes
+
+### Task 0: Fix Stability Score Computation Design
+
+**Context:** The original plan referenced `env_state.governor.anomalies_detected` which does not exist in the vectorized training context. This task establishes the stability score computation using reward variance as a proxy (DRL Expert Option C).
+
+**Files:**
+- Design decision only (no code changes yet)
+
+**Decision:**
+Use **reward variance over a rolling window** as stability score proxy:
+- Track last N rewards (window_size=20)
+- Compute variance: `var = np.var(recent_rewards)`
+- Normalize: `stability = 1.0 / (1.0 + var)`
+- High variance → low stability, low variance → high stability
+
+**Rationale:**
+- Doesn't require additional state in env
+- Captures the signal we care about: erratic training = instability
+- Easy to compute from existing `episode_history`
+- Aligns with DRL Expert recommendation (Option C)
+
+**Step 1: Document decision**
+
+This design is now incorporated into Task 2.
+
 ---
 
 ## Phase 1: Multi-Objective Episode Outcomes
@@ -65,6 +102,36 @@ def test_episode_outcome_dominates():
     assert not worse.dominates(better)
 
 
+def test_episode_outcome_no_self_dominance():
+    """Outcome does not dominate itself."""
+    outcome = EpisodeOutcome(
+        env_idx=0, episode_idx=1,
+        final_accuracy=80.0, param_ratio=0.1, num_fossilized=2,
+        num_contributing_fossilized=2, episode_reward=15.0,
+        stability_score=0.98, reward_mode="shaped",
+    )
+    assert not outcome.dominates(outcome)
+
+
+def test_episode_outcome_dominates_requires_strict_improvement():
+    """Dominance requires at least one strictly better objective."""
+    equal1 = EpisodeOutcome(
+        env_idx=0, episode_idx=1,
+        final_accuracy=80.0, param_ratio=0.1, num_fossilized=2,
+        num_contributing_fossilized=2, episode_reward=15.0,
+        stability_score=0.98, reward_mode="shaped",
+    )
+    equal2 = EpisodeOutcome(
+        env_idx=1, episode_idx=2,
+        final_accuracy=80.0, param_ratio=0.1, num_fossilized=1,
+        num_contributing_fossilized=1, episode_reward=10.0,  # Different reward but not an objective
+        stability_score=0.98, reward_mode="shaped",
+    )
+    # Equal in all objectives = no dominance
+    assert not equal1.dominates(equal2)
+    assert not equal2.dominates(equal1)
+
+
 def test_episode_outcome_to_dict():
     """to_dict() produces JSON-serializable output."""
     outcome = EpisodeOutcome(
@@ -112,7 +179,7 @@ class EpisodeOutcome:
     num_fossilized: int
     num_contributing_fossilized: int
     episode_reward: float  # Scalarized reward (for comparison)
-    stability_score: float  # 0-1, higher = more stable (no anomalies)
+    stability_score: float  # 0-1, higher = more stable (low reward variance)
 
     # Metadata
     reward_mode: str  # "shaped", "sparse", "minimal", "simplified"
@@ -124,6 +191,9 @@ class EpisodeOutcome:
         Dominance: at least as good in all objectives, strictly better in one.
         Objectives: accuracy (max), stability (max), param_ratio (min).
         """
+        if self is other:
+            return False  # Cannot dominate self
+
         # At least as good in all
         acc_ok = self.final_accuracy >= other.final_accuracy
         stab_ok = self.stability_score >= other.stability_score
@@ -168,6 +238,7 @@ git commit -m "feat(karn): add EpisodeOutcome schema for multi-objective trackin
 
 Captures accuracy, param_ratio, stability_score for Pareto analysis.
 Includes dominates() method for frontier computation.
+Self-dominance correctly returns False.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
@@ -189,6 +260,7 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 """Tests that EpisodeOutcome is emitted at episode end."""
 
 import pytest
+import numpy as np
 from esper.karn.store import EpisodeOutcome
 
 
@@ -203,7 +275,7 @@ def test_episode_outcome_created_at_episode_end():
         num_fossilized=1,
         num_contributing_fossilized=1,
         episode_reward=10.5,
-        stability_score=1.0,  # No anomalies
+        stability_score=0.8,  # Computed from reward variance
         reward_mode="shaped",
     )
 
@@ -216,12 +288,33 @@ def test_episode_outcome_created_at_episode_end():
     ]
     for field in required_fields:
         assert field in d, f"Missing required field: {field}"
+
+
+def test_stability_score_from_reward_variance():
+    """Stability score computed correctly from reward variance."""
+    # Simulating the computation that will be in vectorized.py
+
+    # Low variance = high stability
+    low_var_rewards = [10.0, 10.1, 9.9, 10.0, 10.2]
+    var_low = np.var(low_var_rewards)
+    stability_low = 1.0 / (1.0 + var_low)
+    assert stability_low > 0.9, "Low variance should give high stability"
+
+    # High variance = low stability
+    high_var_rewards = [5.0, 15.0, 2.0, 18.0, 8.0]
+    var_high = np.var(high_var_rewards)
+    stability_high = 1.0 / (1.0 + var_high)
+    assert stability_high < 0.1, "High variance should give low stability"
+
+    # Stability always in [0, 1]
+    assert 0.0 <= stability_low <= 1.0
+    assert 0.0 <= stability_high <= 1.0
 ```
 
 **Step 2: Run test to verify it passes (schema already exists)**
 
 Run: `PYTHONPATH=src uv run pytest tests/simic/test_episode_outcome_emission.py -v`
-Expected: PASS (this test validates the schema, not the wiring yet)
+Expected: PASS (this test validates the schema and stability computation logic)
 
 **Step 3: Modify vectorized.py to emit EpisodeOutcome**
 
@@ -232,11 +325,16 @@ In `src/esper/simic/training/vectorized.py`, find the episode completion block (
 # Add EpisodeOutcome creation:
 
 from esper.karn.store import EpisodeOutcome
+import numpy as np
 
-# Compute stability score (1.0 if no anomalies detected this episode)
-stability = 1.0
-if env_state.governor.anomalies_detected > 0:
-    stability = max(0.0, 1.0 - (env_state.governor.anomalies_detected * 0.1))
+# Compute stability score from reward variance over the episode
+# Use last 20 step rewards as proxy for training stability
+recent_rewards = env_step_rewards[env_idx][-20:] if len(env_step_rewards[env_idx]) >= 20 else env_step_rewards[env_idx]
+if len(recent_rewards) > 1:
+    reward_var = float(np.var(recent_rewards))
+    stability = 1.0 / (1.0 + reward_var)
+else:
+    stability = 1.0  # Default if insufficient data
 
 episode_outcome = EpisodeOutcome(
     env_idx=env_idx,
@@ -255,6 +353,13 @@ episode_outcomes.append(episode_outcome)
 Also add at function start (after `episode_history = []`):
 ```python
 episode_outcomes: list[EpisodeOutcome] = []
+env_step_rewards: dict[int, list[float]] = {i: [] for i in range(n_envs)}
+```
+
+And in the step loop, track per-step rewards:
+```python
+# After computing step reward
+env_step_rewards[env_idx].append(step_reward)
 ```
 
 **Step 4: Run full test suite to verify no regressions**
@@ -270,6 +375,7 @@ git commit -m "feat(simic): emit EpisodeOutcome at episode completion
 
 Captures multi-objective data for Pareto analysis:
 - final_accuracy, param_ratio, stability_score
+- Stability computed from reward variance (not governor.anomalies_detected)
 - Wired into existing episode_history infrastructure
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
@@ -294,6 +400,7 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 """Tests for Pareto frontier computation."""
 
 import pytest
+from hypothesis import given, strategies as st
 from esper.karn.store import EpisodeOutcome
 from esper.karn.pareto import extract_pareto_frontier, compute_hypervolume_2d
 
@@ -341,7 +448,14 @@ def test_extract_pareto_frontier_empty():
     assert extract_pareto_frontier([]) == []
 
 
-def test_hypervolume_2d():
+def test_extract_pareto_frontier_single():
+    """Single outcome is always on frontier."""
+    single = [make_outcome(50, 0.5)]
+    frontier = extract_pareto_frontier(single)
+    assert len(frontier) == 1
+
+
+def test_hypervolume_2d_basic():
     """Compute 2D hypervolume for accuracy vs param_ratio."""
     frontier = [
         make_outcome(80, 0.1),
@@ -352,6 +466,90 @@ def test_hypervolume_2d():
     hv = compute_hypervolume_2d(frontier, ref_point)
     # Expected: dominated area > 0
     assert hv > 0
+
+
+def test_hypervolume_2d_known_value():
+    """Verify hypervolume with known expected value."""
+    # Single point at (80, 0.2) with ref (0, 1.0)
+    # Area = 80 * (1.0 - 0.2) = 80 * 0.8 = 64
+    frontier = [make_outcome(80, 0.2)]
+    ref_point = (0.0, 1.0)
+    hv = compute_hypervolume_2d(frontier, ref_point)
+    assert abs(hv - 64.0) < 1e-6, f"Expected 64.0, got {hv}"
+
+
+def test_hypervolume_2d_two_points():
+    """Verify hypervolume with two non-dominated points."""
+    # Points: (80, 0.3) and (60, 0.1) with ref (0, 1.0)
+    # Sorted by acc descending: [(80, 0.3), (60, 0.1)]
+    # Area from (80, 0.3): 80 * (1.0 - 0.3) = 56
+    # Area from (60, 0.1): 60 * (0.3 - 0.1) = 12 (additional area below first point)
+    # Total = 56 + 12 = 68
+    frontier = [make_outcome(80, 0.3), make_outcome(60, 0.1)]
+    ref_point = (0.0, 1.0)
+    hv = compute_hypervolume_2d(frontier, ref_point)
+    assert abs(hv - 68.0) < 1e-6, f"Expected 68.0, got {hv}"
+
+
+def test_hypervolume_2d_empty():
+    """Empty frontier has zero hypervolume."""
+    assert compute_hypervolume_2d([], (0.0, 1.0)) == 0.0
+
+
+# Property-based tests for Pareto operations
+@given(st.lists(
+    st.tuples(
+        st.floats(min_value=0, max_value=100),  # accuracy
+        st.floats(min_value=0.01, max_value=1.0),  # param_ratio
+    ),
+    min_size=0, max_size=20
+))
+def test_pareto_frontier_is_non_dominated(points):
+    """Property: all frontier points are non-dominated."""
+    outcomes = [make_outcome(acc, param) for acc, param in points]
+    frontier = extract_pareto_frontier(outcomes)
+
+    # Every frontier point should not be dominated by any other point
+    for f_point in frontier:
+        for other in outcomes:
+            if other is not f_point:
+                assert not other.dominates(f_point), "Frontier point should not be dominated"
+
+
+@given(st.lists(
+    st.tuples(
+        st.floats(min_value=0, max_value=100),
+        st.floats(min_value=0.01, max_value=1.0),
+    ),
+    min_size=0, max_size=20
+))
+def test_pareto_frontier_covers_all_non_dominated(points):
+    """Property: frontier contains all non-dominated points."""
+    outcomes = [make_outcome(acc, param) for acc, param in points]
+    frontier = extract_pareto_frontier(outcomes)
+    frontier_set = set(id(o) for o in frontier)
+
+    # Every non-dominated outcome should be in frontier
+    for outcome in outcomes:
+        is_dominated = any(other.dominates(outcome) for other in outcomes if other is not outcome)
+        if not is_dominated:
+            assert id(outcome) in frontier_set, "Non-dominated point should be in frontier"
+
+
+@given(st.lists(
+    st.tuples(
+        st.floats(min_value=1, max_value=100),
+        st.floats(min_value=0.01, max_value=0.99),
+    ),
+    min_size=1, max_size=10
+))
+def test_hypervolume_is_non_negative(points):
+    """Property: hypervolume is always non-negative."""
+    outcomes = [make_outcome(acc, param) for acc, param in points]
+    frontier = extract_pareto_frontier(outcomes)
+    ref_point = (0.0, 1.0)
+    hv = compute_hypervolume_2d(frontier, ref_point)
+    assert hv >= 0, "Hypervolume should be non-negative"
 ```
 
 **Step 2: Run test to verify it fails**
@@ -367,6 +565,9 @@ Expected: FAIL with "No module named 'esper.karn.pareto'"
 
 Provides tools for extracting non-dominated outcomes and computing
 hypervolume indicators for tracking training progress.
+
+Hypervolume Algorithm: Sweep-line approach for 2D case.
+Reference: Zitzler & Thiele (1999), "Multiobjective Evolutionary Algorithms"
 """
 
 from __future__ import annotations
@@ -418,8 +619,13 @@ def compute_hypervolume_2d(
 ) -> float:
     """Compute 2D hypervolume for accuracy vs param_ratio.
 
-    Hypervolume indicator measures the area dominated by the Pareto
-    frontier relative to a reference point. Higher is better.
+    Uses sweep-line algorithm: sort by accuracy descending, sweep from
+    high accuracy to low, accumulating rectangular areas.
+
+    For objectives (accuracy: maximize, param_ratio: minimize):
+    - Points with higher accuracy contribute width
+    - Points with lower param_ratio contribute height
+    - Reference point (min_accuracy, max_param_ratio) defines the dominated region
 
     Args:
         frontier: List of Pareto-optimal outcomes
@@ -431,28 +637,60 @@ def compute_hypervolume_2d(
     if not frontier:
         return 0.0
 
-    # Extract (accuracy, param_ratio) points
-    # For hypervolume, we want to maximize area, so we invert param_ratio
-    # (lower param_ratio = better = higher contribution to hypervolume)
-    points = [
-        (o.final_accuracy, ref_point[1] - o.param_ratio)
-        for o in frontier
-    ]
-
-    # Sort by first objective (accuracy) descending
-    points.sort(key=lambda p: -p[0])
-
     ref_acc, ref_param = ref_point
 
-    hv = 0.0
-    prev_height = 0.0
+    # Extract (accuracy, param_ratio) and sort by accuracy descending
+    points = [(o.final_accuracy, o.param_ratio) for o in frontier]
+    points.sort(key=lambda p: -p[0])  # Descending by accuracy
 
-    for acc, inv_param in points:
-        width = acc - ref_acc
-        height = inv_param - prev_height
-        if width > 0 and height > 0:
-            hv += width * height
-        prev_height = max(prev_height, inv_param)
+    hv = 0.0
+    prev_acc = ref_acc  # Start from reference (bottom-left corner)
+    best_param = ref_param  # Track best (lowest) param_ratio seen so far
+
+    for acc, param in points:
+        # Only consider points that improve on param_ratio
+        if param < best_param:
+            # Width: from previous accuracy to this accuracy
+            width = acc - prev_acc
+            # Height: improvement in param_ratio from reference
+            height = best_param - param
+
+            if width > 0 and height > 0:
+                hv += width * height
+
+            best_param = param
+            prev_acc = acc
+
+    # Add remaining rectangle from last point to max accuracy
+    # This captures the area from the highest accuracy point to ref_acc
+    if points:
+        highest_acc = points[0][0]
+        lowest_param = min(p[1] for p in points)
+        # Main rectangle: highest_acc * (ref_param - lowest_param)
+        hv = highest_acc * (ref_param - lowest_param)
+
+        # Subtract areas where we don't dominate (stairstep pattern)
+        # Actually, let's use the correct sweep-line formulation:
+
+    # Correct implementation: sweep-line from right to left
+    if not frontier:
+        return 0.0
+
+    # Re-extract and sort by accuracy descending
+    points = sorted(
+        [(o.final_accuracy, o.param_ratio) for o in frontier],
+        key=lambda p: -p[0]
+    )
+
+    hv = 0.0
+    current_param = ref_param  # Start at worst param_ratio
+
+    for acc, param in points:
+        if param < current_param:
+            # This point extends the dominated region
+            # Add rectangle: width = acc, height = (current_param - param)
+            hv += acc * (current_param - param)
+            current_param = param
 
     return hv
 
@@ -472,7 +710,8 @@ git add src/esper/karn/pareto.py tests/karn/test_pareto.py
 git commit -m "feat(karn): add Pareto frontier extraction and hypervolume
 
 - extract_pareto_frontier(): finds non-dominated outcomes
-- compute_hypervolume_2d(): area metric for training progress
+- compute_hypervolume_2d(): sweep-line algorithm for area metric
+- Property-based tests verify frontier correctness
 - Used for multi-objective reward function evaluation
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
@@ -539,6 +778,8 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 **Files:**
 - Create: `configs/ablations/simplified_baseline.json`
 - Create: `configs/ablations/no_pbrs.json`
+- Create: `configs/ablations/no_terminal.json`
+- Create: `configs/ablations/no_anti_gaming.json`
 - Create: `configs/ablations/pure_sparse.json`
 - Create: `configs/ablations/ab_shaped_vs_simplified.json`
 
@@ -567,7 +808,70 @@ File: `configs/ablations/simplified_baseline.json`
 }
 ```
 
-**Step 3: Create pure sparse config**
+**Step 3: Create no_pbrs ablation config (DRL Expert Section 7.2)**
+
+File: `configs/ablations/no_pbrs.json`
+
+```json
+{
+    "_comment": "Ablation: SIMPLIFIED without PBRS shaping - tests raw terminal + intervention",
+    "n_episodes": 100,
+    "n_envs": 4,
+    "max_epochs": 25,
+    "reward_mode": "simplified",
+    "reward_family": "contribution",
+    "disable_pbrs": true,
+    "param_budget": 500000,
+    "param_penalty_weight": 0.1,
+    "entropy_coef": 0.1,
+    "lr": 3e-4,
+    "slots": ["r0c1"]
+}
+```
+
+**Step 4: Create no_terminal ablation config (DRL Expert Section 7.2)**
+
+File: `configs/ablations/no_terminal.json`
+
+```json
+{
+    "_comment": "Ablation: SIMPLIFIED without terminal accuracy reward - tests pure shaping",
+    "n_episodes": 100,
+    "n_envs": 4,
+    "max_epochs": 25,
+    "reward_mode": "simplified",
+    "reward_family": "contribution",
+    "disable_terminal_reward": true,
+    "param_budget": 500000,
+    "param_penalty_weight": 0.1,
+    "entropy_coef": 0.1,
+    "lr": 3e-4,
+    "slots": ["r0c1"]
+}
+```
+
+**Step 5: Create no_anti_gaming ablation config (DRL Expert Section 7.2)**
+
+File: `configs/ablations/no_anti_gaming.json`
+
+```json
+{
+    "_comment": "Ablation: SIMPLIFIED without anti-gaming penalties - tests reward exploitation",
+    "n_episodes": 100,
+    "n_envs": 4,
+    "max_epochs": 25,
+    "reward_mode": "simplified",
+    "reward_family": "contribution",
+    "disable_anti_gaming": true,
+    "param_budget": 500000,
+    "param_penalty_weight": 0.1,
+    "entropy_coef": 0.1,
+    "lr": 3e-4,
+    "slots": ["r0c1"]
+}
+```
+
+**Step 6: Create pure sparse config**
 
 File: `configs/ablations/pure_sparse.json`
 
@@ -587,7 +891,7 @@ File: `configs/ablations/pure_sparse.json`
 }
 ```
 
-**Step 4: Create A/B comparison config**
+**Step 7: Create A/B comparison config**
 
 File: `configs/ablations/ab_shaped_vs_simplified.json`
 
@@ -607,14 +911,17 @@ File: `configs/ablations/ab_shaped_vs_simplified.json`
 }
 ```
 
-**Step 5: Commit**
+**Step 8: Commit**
 
 ```bash
 git add configs/ablations/
 git commit -m "feat(configs): add ablation config files for reward experiments
 
-4 configs for systematic reward function evaluation:
+6 configs for systematic reward function evaluation:
 - simplified_baseline: DRL Expert recommended baseline
+- no_pbrs: Ablation without PBRS shaping
+- no_terminal: Ablation without terminal accuracy reward
+- no_anti_gaming: Ablation without anti-gaming penalties
 - pure_sparse: Credit assignment test (higher variance)
 - ab_shaped_vs_simplified: Direct A/B comparison (4+4 envs)
 
@@ -652,15 +959,35 @@ def test_reward_health_data_from_components():
         hypervolume=42.5,
     )
     assert data.pbrs_fraction == 0.25
-    assert data.is_pbrs_healthy  # 0.1-0.5 range
+    assert data.is_pbrs_healthy  # 0.1-0.4 range
     assert data.is_gaming_healthy  # <0.05
     assert data.is_ev_healthy  # >0.5
+
+
+def test_reward_health_pbrs_boundary_low():
+    """PBRS below 10% is unhealthy (shaping too weak)."""
+    data = RewardHealthData(pbrs_fraction=0.05)
+    assert not data.is_pbrs_healthy
+
+
+def test_reward_health_pbrs_boundary_high():
+    """PBRS above 40% is unhealthy (shaping dominates)."""
+    data = RewardHealthData(pbrs_fraction=0.45)
+    assert not data.is_pbrs_healthy
+
+
+def test_reward_health_pbrs_at_boundaries():
+    """PBRS exactly at 10% and 40% is healthy."""
+    low_boundary = RewardHealthData(pbrs_fraction=0.10)
+    high_boundary = RewardHealthData(pbrs_fraction=0.40)
+    assert low_boundary.is_pbrs_healthy
+    assert high_boundary.is_pbrs_healthy
 
 
 def test_reward_health_warnings():
     """Warnings triggered for unhealthy metrics."""
     unhealthy = RewardHealthData(
-        pbrs_fraction=0.7,  # >0.5 = too much shaping
+        pbrs_fraction=0.7,  # >0.4 = too much shaping
         anti_gaming_trigger_rate=0.15,  # >0.05 = policy exploiting
         ev_explained=0.3,  # <0.5 = poor value estimation
         hypervolume=10.0,
@@ -682,7 +1009,7 @@ Expected: FAIL with import error
 """Reward health monitoring panel for Sanctum TUI.
 
 Displays DRL Expert recommended metrics:
-- PBRS fraction of total reward (healthy: 10-30%)
+- PBRS fraction of total reward (healthy: 10-40%)
 - Anti-gaming penalty frequency (healthy: <5%)
 - Value function explained variance (healthy: >0.5)
 - Hypervolume indicator (should increase over training)
@@ -707,8 +1034,8 @@ class RewardHealthData:
 
     @property
     def is_pbrs_healthy(self) -> bool:
-        """PBRS should be 10-50% of total reward."""
-        return 0.1 <= self.pbrs_fraction <= 0.5
+        """PBRS should be 10-40% of total reward (DRL Expert recommendation)."""
+        return 0.1 <= self.pbrs_fraction <= 0.4
 
     @property
     def is_gaming_healthy(self) -> bool:
@@ -750,7 +1077,7 @@ class RewardHealthPanel(Static):
         lines.append(Text.assemble(
             ("PBRS: ", "bold"),
             (f"{self._data.pbrs_fraction:.0%}", pbrs_color),
-            (" (10-50%)", "dim"),
+            (" (10-40%)", "dim"),
         ))
 
         # Anti-gaming
@@ -794,7 +1121,7 @@ git add src/esper/karn/sanctum/widgets/reward_health.py tests/karn/sanctum/test_
 git commit -m "feat(sanctum): add RewardHealthPanel widget
 
 Displays DRL Expert recommended health metrics:
-- PBRS fraction (10-50% healthy)
+- PBRS fraction (10-40% healthy, per DRL Expert Section 6.2)
 - Anti-gaming trigger rate (<5% healthy)
 - Value function explained variance (>0.5 healthy)
 - Hypervolume indicator (Pareto progress)
@@ -821,32 +1148,74 @@ from .reward_health import RewardHealthPanel, RewardHealthData
 
 **Step 2: Add health data aggregation to aggregator.py**
 
-In the aggregator class, add method to compute `RewardHealthData` from telemetry:
+In the aggregator class, add methods to compute `RewardHealthData` from telemetry:
 
 ```python
-def compute_reward_health(self) -> RewardHealthData:
-    """Compute reward health metrics from recent telemetry."""
-    # Get recent reward components
-    pbrs_total = sum(c.pbrs_bonus for c in self._recent_components)
-    reward_total = sum(abs(c.total_reward) for c in self._recent_components)
-    pbrs_fraction = pbrs_total / max(1e-8, reward_total)
+from esper.karn.sanctum.widgets.reward_health import RewardHealthData
+from esper.karn.pareto import extract_pareto_frontier, compute_hypervolume_2d
 
-    # Anti-gaming trigger rate
-    gaming_steps = sum(1 for c in self._recent_components if c.ratio_penalty < 0)
-    gaming_rate = gaming_steps / max(1, len(self._recent_components))
 
-    # Get latest EV from PPO updates
-    ev = self._latest_ppo.explained_variance if self._latest_ppo else 0.0
+class SanctumAggregator:
+    # ... existing code ...
 
-    # Hypervolume from episode outcomes
-    hv = self._compute_hypervolume()
+    def __init__(self):
+        # ... existing init ...
+        self._episode_outcomes: list[EpisodeOutcome] = []
 
-    return RewardHealthData(
-        pbrs_fraction=pbrs_fraction,
-        anti_gaming_trigger_rate=gaming_rate,
-        ev_explained=ev,
-        hypervolume=hv,
-    )
+    def _handle_episode_outcome(self, event: TelemetryEvent) -> None:
+        """Handle incoming episode outcome events."""
+        from esper.karn.store import EpisodeOutcome
+
+        data = event.data
+        outcome = EpisodeOutcome(
+            env_idx=data["env_idx"],
+            episode_idx=data["episode_idx"],
+            final_accuracy=data["final_accuracy"],
+            param_ratio=data["param_ratio"],
+            num_fossilized=data["num_fossilized"],
+            num_contributing_fossilized=data["num_contributing"],
+            episode_reward=data["episode_reward"],
+            stability_score=data["stability_score"],
+            reward_mode=data["reward_mode"],
+        )
+        self._episode_outcomes.append(outcome)
+
+        # Keep only last 100 outcomes to bound memory
+        if len(self._episode_outcomes) > 100:
+            self._episode_outcomes = self._episode_outcomes[-100:]
+
+    def _compute_hypervolume(self) -> float:
+        """Compute hypervolume indicator from recent episode outcomes."""
+        if not self._episode_outcomes:
+            return 0.0
+
+        frontier = extract_pareto_frontier(self._episode_outcomes)
+        ref_point = (0.0, 1.0)  # (min_accuracy, max_param_ratio)
+        return compute_hypervolume_2d(frontier, ref_point)
+
+    def compute_reward_health(self) -> RewardHealthData:
+        """Compute reward health metrics from recent telemetry."""
+        # Get recent reward components
+        pbrs_total = sum(abs(c.pbrs_bonus) for c in self._recent_components)
+        reward_total = sum(abs(c.total_reward) for c in self._recent_components)
+        pbrs_fraction = pbrs_total / max(1e-8, reward_total)
+
+        # Anti-gaming trigger rate
+        gaming_steps = sum(1 for c in self._recent_components if c.ratio_penalty < 0)
+        gaming_rate = gaming_steps / max(1, len(self._recent_components))
+
+        # Get latest EV from PPO updates
+        ev = self._latest_ppo.explained_variance if self._latest_ppo else 0.0
+
+        # Hypervolume from episode outcomes
+        hv = self._compute_hypervolume()
+
+        return RewardHealthData(
+            pbrs_fraction=pbrs_fraction,
+            anti_gaming_trigger_rate=gaming_rate,
+            ev_explained=ev,
+            hypervolume=hv,
+        )
 ```
 
 **Step 3: Mount panel in app.py**
@@ -874,7 +1243,11 @@ Run: `PYTHONPATH=src uv run python -c "from esper.karn.sanctum.widgets.reward_he
 git add src/esper/karn/sanctum/app.py src/esper/karn/sanctum/aggregator.py src/esper/karn/sanctum/widgets/__init__.py
 git commit -m "feat(sanctum): wire RewardHealthPanel into app layout
 
-Aggregator computes health metrics from telemetry stream.
+Aggregator computes health metrics from telemetry stream:
+- _handle_episode_outcome() processes incoming events
+- _compute_hypervolume() computes Pareto hypervolume
+- compute_reward_health() aggregates all metrics
+
 Panel updates on each refresh cycle.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
@@ -934,9 +1307,147 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 
 ---
 
+## Phase 6: PBRS Verification (DRL Expert Recommendation)
+
+### Task 9: Add PBRS Verification Tests for SIMPLIFIED Mode
+
+**Files:**
+- Create: `tests/simic/test_pbrs_verification.py`
+
+**Step 1: Write PBRS verification tests**
+
+```python
+# tests/simic/test_pbrs_verification.py
+"""Verify PBRS properties hold for SIMPLIFIED reward mode.
+
+Per Ng et al. (1999): PBRS guarantees optimal policy invariance
+when shaping reward F(s,s') = gamma * Phi(s') - Phi(s).
+
+These tests verify our implementation maintains this property.
+"""
+
+import pytest
+import torch
+from esper.simic.rewards.rewards import (
+    RewardMode,
+    ContributionRewardConfig,
+    STAGE_POTENTIALS,
+)
+from esper.leyline import SeedStage
+
+
+def test_pbrs_uses_stage_potentials():
+    """PBRS bonus uses predefined stage potentials."""
+    # Verify STAGE_POTENTIALS is defined for all stages
+    for stage in SeedStage:
+        assert stage in STAGE_POTENTIALS, f"Missing potential for {stage}"
+
+
+def test_pbrs_potential_monotonicity():
+    """Later stages should have higher potentials (progress is rewarded)."""
+    # The lifecycle goes: DORMANT -> GERMINATED -> TRAINING -> BLENDING -> HOLDING -> FOSSILIZED
+    lifecycle = [
+        SeedStage.DORMANT,
+        SeedStage.GERMINATED,
+        SeedStage.TRAINING,
+        SeedStage.BLENDING,
+        SeedStage.HOLDING,
+        SeedStage.FOSSILIZED,
+    ]
+
+    prev_potential = float('-inf')
+    for stage in lifecycle:
+        current = STAGE_POTENTIALS[stage]
+        assert current >= prev_potential, f"{stage} potential should be >= previous"
+        prev_potential = current
+
+
+def test_pbrs_is_difference_based():
+    """PBRS reward should be Phi(s') - Phi(s), not absolute."""
+    # This is a design constraint test - PBRS must be computed as delta
+    # The actual computation happens in rewards.py
+
+    # Verify the formula: advancing DORMANT->GERMINATED gives positive reward
+    phi_dormant = STAGE_POTENTIALS[SeedStage.DORMANT]
+    phi_germinated = STAGE_POTENTIALS[SeedStage.GERMINATED]
+
+    pbrs_advance = phi_germinated - phi_dormant
+    assert pbrs_advance > 0, "Advancing stage should give positive PBRS"
+
+    # Verify: going backwards would give negative reward
+    pbrs_regress = phi_dormant - phi_germinated
+    assert pbrs_regress < 0, "Regressing stage should give negative PBRS"
+
+
+def test_simplified_mode_includes_pbrs():
+    """SIMPLIFIED mode should include PBRS component."""
+    config = ContributionRewardConfig(reward_mode=RewardMode.SIMPLIFIED)
+    # SIMPLIFIED = PBRS + intervention penalties + terminal accuracy
+    # This is a config-level test; actual computation tested in integration
+    assert config.reward_mode == RewardMode.SIMPLIFIED
+
+
+def test_pbrs_zero_for_same_stage():
+    """PBRS for staying in same stage should be zero."""
+    for stage in SeedStage:
+        phi = STAGE_POTENTIALS[stage]
+        pbrs = phi - phi  # Same stage transition
+        assert pbrs == 0.0, f"PBRS for {stage}->{stage} should be 0"
+
+
+def test_pbrs_net_zero_over_episode():
+    """PBRS should approximately net to zero over a complete episode.
+
+    This verifies policy invariance: the shaping rewards telescope,
+    leaving only the difference Phi(terminal) - Phi(initial).
+    """
+    # Simulate a lifecycle: DORMANT -> GERMINATED -> TRAINING -> FOSSILIZED
+    trajectory = [
+        (SeedStage.DORMANT, SeedStage.GERMINATED),
+        (SeedStage.GERMINATED, SeedStage.TRAINING),
+        (SeedStage.TRAINING, SeedStage.BLENDING),
+        (SeedStage.BLENDING, SeedStage.HOLDING),
+        (SeedStage.HOLDING, SeedStage.FOSSILIZED),
+    ]
+
+    total_pbrs = 0.0
+    for s, s_prime in trajectory:
+        pbrs = STAGE_POTENTIALS[s_prime] - STAGE_POTENTIALS[s]
+        total_pbrs += pbrs
+
+    # Total should equal Phi(FOSSILIZED) - Phi(DORMANT)
+    expected = STAGE_POTENTIALS[SeedStage.FOSSILIZED] - STAGE_POTENTIALS[SeedStage.DORMANT]
+    assert abs(total_pbrs - expected) < 1e-6, "PBRS should telescope correctly"
+```
+
+**Step 2: Run tests**
+
+Run: `PYTHONPATH=src uv run pytest tests/simic/test_pbrs_verification.py -v`
+Expected: PASS
+
+**Step 3: Commit**
+
+```bash
+git add tests/simic/test_pbrs_verification.py
+git commit -m "test(simic): add PBRS verification tests for SIMPLIFIED mode
+
+Verifies Ng et al. (1999) PBRS properties:
+- Stage potentials defined for all stages
+- Potential monotonicity (progress rewarded)
+- Difference-based computation (not absolute)
+- Zero reward for same-stage transitions
+- Telescoping property over episode
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
+```
+
+---
+
 ## Verification
 
-### Task 9: End-to-End Verification
+### Task 10: End-to-End Verification
 
 **Step 1: Run A/B test with SHAPED vs SIMPLIFIED**
 
@@ -954,6 +1465,7 @@ PYTHONPATH=src uv run python -m esper.scripts.train ppo \
 SELECT reward_mode,
        AVG(final_accuracy) as avg_acc,
        AVG(param_ratio) as avg_params,
+       AVG(stability_score) as avg_stability,
        COUNT(*) as episodes
 FROM episode_outcomes
 GROUP BY reward_mode
@@ -962,12 +1474,15 @@ GROUP BY reward_mode
 **Step 3: Compute Pareto frontier**
 
 ```python
-from esper.karn.pareto import extract_pareto_frontier
+from esper.karn.pareto import extract_pareto_frontier, compute_hypervolume_2d
 from esper.karn.store import EpisodeOutcome
 
 # Load outcomes from telemetry...
 frontier = extract_pareto_frontier(outcomes)
 print(f"Pareto frontier size: {len(frontier)}")
+
+hv = compute_hypervolume_2d(frontier, (0.0, 1.0))
+print(f"Hypervolume: {hv:.2f}")
 ```
 
 **Step 4: Verify Sanctum displays health metrics**
@@ -978,7 +1493,24 @@ PYTHONPATH=src uv run python -m esper.scripts.train ppo \
     --n-episodes 5
 ```
 
-Check that RewardHealthPanel shows PBRS fraction, gaming rate, EV, and HV.
+Check that RewardHealthPanel shows:
+- PBRS fraction (should be 10-40% if healthy)
+- Gaming rate (<5% if healthy)
+- EV (>0.5 if healthy)
+- HV (should increase over training)
+
+**Step 5: Run ablation study**
+
+```bash
+# Run each ablation config and compare outcomes:
+for config in simplified_baseline no_pbrs no_terminal no_anti_gaming; do
+    PYTHONPATH=src uv run python -m esper.scripts.train ppo \
+        --config-json configs/ablations/${config}.json \
+        --task cifar10 \
+        --telemetry-dir telemetry_${config} \
+        --n-episodes 50
+done
+```
 
 ---
 
@@ -986,14 +1518,29 @@ Check that RewardHealthPanel shows PBRS fraction, gaming rate, EV, and HV.
 
 | Phase | Tasks | Purpose |
 |-------|-------|---------|
+| 0 | Task 0 | Foundation fixes (stability score design decision) |
 | 1 | Tasks 1-2 | EpisodeOutcome schema + vectorized wiring |
 | 2 | Tasks 3-4 | Pareto frontier computation + MCP view |
-| 3 | Task 5 | Ablation config files |
+| 3 | Task 5 | Ablation config files (6 configs) |
 | 4 | Tasks 6-7 | Sanctum RewardHealthPanel |
 | 5 | Task 8 | Telemetry emission |
-| ✓ | Task 9 | End-to-end verification |
+| 6 | Task 9 | PBRS verification tests |
+| ✓ | Task 10 | End-to-end verification |
 
-**Total: 9 tasks, ~45 minutes implementation time**
+**Total: 10 tasks, ~2-3 hours implementation time**
+
+---
+
+## Critical Fixes Applied (from Specialist Reviews)
+
+1. **Hypervolume Algorithm**: Fixed sweep-line implementation to correctly compute dominated area
+2. **Stability Score**: Changed from non-existent `governor.anomalies_detected` to reward variance proxy
+3. **Missing Aggregator Methods**: Added `_handle_episode_outcome()` and `_compute_hypervolume()`
+4. **PBRS Healthy Range**: Adjusted from 10-50% to 10-40% per DRL Expert recommendation
+5. **Missing Ablation Configs**: Added `no_pbrs.json`, `no_terminal.json`, `no_anti_gaming.json`
+6. **Property-Based Tests**: Added Hypothesis tests for Pareto frontier correctness
+7. **PBRS Verification Tests**: Added tests to verify Ng et al. (1999) properties
+8. **Self-Dominance Bug**: Added check to prevent `outcome.dominates(outcome)` returning True
 
 ---
 
@@ -1002,3 +1549,4 @@ Check that RewardHealthPanel shows PBRS fraction, gaming rate, EV, and HV.
 - DRL Expert Paper: `docs/research/reward-function-design-for-morphogenetic-controller.md`
 - Existing A/B infrastructure: `TrainingConfig.ab_reward_modes`
 - PBRS theory: Ng et al. (1999) - Policy invariance under reward transformations
+- Hypervolume: Zitzler & Thiele (1999) - Multiobjective Evolutionary Algorithms

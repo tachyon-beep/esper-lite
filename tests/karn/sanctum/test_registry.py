@@ -3,6 +3,7 @@
 import pytest
 from esper.karn.sanctum.registry import AggregatorRegistry
 from esper.karn.sanctum.aggregator import SanctumAggregator
+from esper.leyline.telemetry import TelemetryEvent, TelemetryEventType
 
 
 def test_registry_creates_aggregator_on_demand():
@@ -44,3 +45,48 @@ def test_registry_list_snapshots():
     assert len(snapshots) == 2
     assert "A" in snapshots
     assert "B" in snapshots
+
+
+def test_registry_routes_events_by_group_id():
+    """Registry should route events to correct aggregator based on group_id."""
+    registry = AggregatorRegistry(num_envs=4)
+
+    # Create events for different groups
+    event_a = TelemetryEvent(
+        event_type=TelemetryEventType.EPOCH_COMPLETED,
+        group_id="A",
+        message="Group A event"
+    )
+    event_b = TelemetryEvent(
+        event_type=TelemetryEventType.EPOCH_COMPLETED,
+        group_id="B",
+        message="Group B event"
+    )
+
+    # Process events
+    registry.process_event(event_a)
+    registry.process_event(event_b)
+
+    # Verify aggregators were created for both groups
+    assert "A" in registry.group_ids
+    assert "B" in registry.group_ids
+    assert len(registry.group_ids) == 2
+
+
+def test_registry_default_group_for_missing_group_id():
+    """Registry should use default group when group_id is default."""
+    registry = AggregatorRegistry(num_envs=4)
+
+    # Create event with default group_id
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.EPOCH_COMPLETED,
+        group_id="default",
+        message="Default group event"
+    )
+
+    # Process event
+    registry.process_event(event)
+
+    # Verify default aggregator was created
+    assert "default" in registry.group_ids
+    assert len(registry.group_ids) == 1
