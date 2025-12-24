@@ -858,7 +858,13 @@ class TamiyoBrain(Static):
 
         now = datetime.now(timezone.utc)
         age = (now - decision.timestamp).total_seconds()
-        age_str = f"{age:.0f}s" if age < 60 else f"{age / 60:.0f}m"
+        # Precise formatting: "45s" for <60s, "1:35" for >=60s (no rounding confusion)
+        if age < 60:
+            age_str = f"{age:.0f}s"
+        else:
+            mins = int(age // 60)
+            secs = int(age % 60)
+            age_str = f"{mins}:{secs:02d}"
 
         action_colors = {
             "GERMINATE": "green",
@@ -963,7 +969,9 @@ class TamiyoBrain(Static):
         card.append("\n")
 
         # Bottom border
-        card.append("└" + "─" * (self.DECISION_CARD_WIDTH - 2) + "┘", style=border_style)
+        card.append(
+            "└" + "─" * (self.DECISION_CARD_WIDTH - 2) + "┘", style=border_style
+        )
 
         return card
 
@@ -1562,7 +1570,11 @@ class TamiyoBrain(Static):
             ("atgt", "head_alpha_target_entropy", "alpha_target"),
             ("aspd", "head_alpha_speed_entropy", "alpha_speed"),
             ("acrv", "head_alpha_curve_entropy", "alpha_curve"),
-            ("  op", "head_op_entropy", "op"),  # Padded to 4 chars
+            (
+                "op",
+                "head_op_entropy",
+                "op",
+            ),  # No need to pad this unless it stops being the last one.
         ]
 
         result = Text()
@@ -1671,27 +1683,21 @@ class TamiyoBrain(Static):
             result.append("agent actions...", style="dim")
             return result
 
-        # Build set of incoming IDs for quick lookup
-        incoming_ids = {d.decision_id for d in incoming}
-        incoming_by_id = {d.decision_id: d for d in incoming}
-
-        # Remove any displayed decisions that are no longer in incoming
-        # (This handles decisions that expired at the source)
-        self._displayed_decisions = [
-            d for d in self._displayed_decisions if d.decision_id in incoming_ids
-        ]
+        # Build set of displayed IDs for deduplication
+        # NOTE: We do NOT remove displayed decisions when they expire from incoming.
+        # The display buffer is independent - cards stay until replaced by the
+        # throttled replacement logic (ONE card per 30s interval).
 
         # Time check: has enough time passed since last card change?
         time_since_swap = now - self._last_card_swap_time
         can_change = time_since_swap >= self.CARD_SWAP_INTERVAL
 
         # Find the newest incoming decision not already in display
+        # EXPLICITLY sort by timestamp to guarantee we get the freshest decision,
+        # regardless of incoming list order
         displayed_ids = {d.decision_id for d in self._displayed_decisions}
-        new_decision = None
-        for d in incoming:
-            if d.decision_id not in displayed_ids:
-                new_decision = d
-                break  # Take the first (newest) one not in display
+        candidates = [d for d in incoming if d.decision_id not in displayed_ids]
+        new_decision = max(candidates, key=lambda d: d.timestamp) if candidates else None
 
         if new_decision and can_change:
             # We have a new decision and enough time has passed
@@ -1722,7 +1728,9 @@ class TamiyoBrain(Static):
 
         total_cards = len(self._displayed_decisions)
         for i, decision in enumerate(self._displayed_decisions):
-            card = self._render_enriched_decision(decision, index=i, total_cards=total_cards)
+            card = self._render_enriched_decision(
+                decision, index=i, total_cards=total_cards
+            )
             result.append(card)
             if i < total_cards - 1:  # Add spacing between cards
                 result.append("\n")
