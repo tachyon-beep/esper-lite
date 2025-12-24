@@ -593,10 +593,10 @@ class SanctumAggregator:
         self._tamiyo.early_stop_epoch = data.get("early_stop_epoch")
 
         # Per-head entropy and gradient norms
-        self._tamiyo.head_slot_entropy = data.get("head_slot_entropy", 0.0)
-        self._tamiyo.head_slot_grad_norm = data.get("head_slot_grad_norm", 0.0)
-        self._tamiyo.head_blueprint_entropy = data.get("head_blueprint_entropy", 0.0)
-        self._tamiyo.head_blueprint_grad_norm = data.get("head_blueprint_grad_norm", 0.0)
+        self._tamiyo.head_slot_entropy = data.get("head_slot_entropy", self._tamiyo.head_slot_entropy)
+        self._tamiyo.head_slot_grad_norm = data.get("head_slot_grad_norm", self._tamiyo.head_slot_grad_norm)
+        self._tamiyo.head_blueprint_entropy = data.get("head_blueprint_entropy", self._tamiyo.head_blueprint_entropy)
+        self._tamiyo.head_blueprint_grad_norm = data.get("head_blueprint_grad_norm", self._tamiyo.head_blueprint_grad_norm)
 
         # Per-head entropies (for heatmap visualization)
         # These are optional - only present when neural network emits them
