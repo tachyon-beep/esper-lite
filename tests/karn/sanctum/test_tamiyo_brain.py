@@ -1303,13 +1303,13 @@ async def test_border_title_includes_group_id():
 
 
 # ===========================
-# Task 1: Compact Decision Card Tests
+# Task 5: Enriched Decision Card Tests
 # ===========================
 
 
 @pytest.mark.asyncio
-async def test_compact_decision_card_format():
-    """Compact decision card should be exactly 20 chars wide with 4 lines."""
+async def test_enriched_decision_card_format():
+    """Enriched decision card should be 24 chars wide with 6 lines."""
     from esper.karn.sanctum.schema import DecisionSnapshot
     from datetime import datetime, timezone
 
@@ -1323,46 +1323,50 @@ async def test_compact_decision_card_format():
             slot_states={"r0c0": "TRAINING"},
             host_accuracy=87.5,
             chosen_action="WAIT",
-            chosen_slot=None,
+            chosen_slot="r0",
             confidence=0.92,
             expected_value=0.12,
             actual_reward=0.08,
             alternatives=[("GERMINATE", 0.05), ("FOSSILIZE", 0.03)],
             pinned=False,
+            value_estimate=0.45,
+            advantage=-0.12,
+            decision_entropy=0.85,
         )
 
-        # Render compact card
-        card = widget._render_compact_decision(decision, index=0)
+        # Render enriched card
+        card = widget._render_enriched_decision(decision, index=0)
         card_plain = card.plain
         lines = card_plain.split('\n')
 
-        # Should have exactly 4 lines (no trailing newline on last border)
-        assert len(lines) == 4
+        # Should have exactly 7 lines (title + 5 content + bottom border)
+        assert len(lines) == 7
 
-        # All 4 actual lines should be exactly 20 chars
-        for i, line in enumerate(lines[:4]):
-            assert len(line) == 20, f"Line {i} has length {len(line)}, expected 20: '{line}'"
+        # All lines should be exactly 24 chars
+        for i, line in enumerate(lines[:7]):
+            assert len(line) == 24, f"Line {i} has length {len(line)}, expected 24: '{line}'"
 
         # Verify border structure
         assert lines[0].startswith("┌─")
         assert lines[0].endswith("┐")
-        assert lines[3].startswith("└")
-        assert lines[3].endswith("┘")
+        assert lines[6].startswith("└")
+        assert lines[6].endswith("┘")
 
-        # Should contain key info in compact format
+        # Should contain enriched info
         card_str = card_plain
         assert "D1" in card_str  # Decision number
         assert "WAIT" in card_str  # Action
         assert "92%" in card_str  # Confidence
-        assert "H:87" in card_str or "H:88" in card_str  # Host accuracy (rounded)
-        assert "0.12" in card_str  # Expected
-        assert "0.08" in card_str  # Actual
-        assert "✓" in card_str  # Good prediction indicator
+        assert "H:87" in card_str or "H:88" in card_str  # Host accuracy
+        assert "V:" in card_str  # Value estimate
+        assert "A:" in card_str  # Advantage
+        assert "ent:" in card_str  # Decision entropy
+        assert "alt:" in card_str  # Alternatives
 
 
 @pytest.mark.asyncio
-async def test_compact_decision_card_pinned():
-    """Pinned decision should show P indicator at end of line 1."""
+async def test_enriched_decision_card_hit_miss():
+    """Enriched card should show HIT/MISS text based on prediction accuracy."""
     from esper.karn.sanctum.schema import DecisionSnapshot
     from datetime import datetime, timezone
 
@@ -1370,39 +1374,52 @@ async def test_compact_decision_card_pinned():
     async with app.run_test():
         widget = app.query_one(TamiyoBrain)
 
-        decision_pinned = DecisionSnapshot(
-            decision_id="test-2",
+        # Test HIT (diff < 0.1)
+        decision_hit = DecisionSnapshot(
+            decision_id="test-hit",
             timestamp=datetime.now(timezone.utc),
             slot_states={"r0c0": "TRAINING"},
             host_accuracy=87.5,
             chosen_action="WAIT",
-            chosen_slot=None,
+            chosen_slot="r0",
             confidence=0.92,
             expected_value=0.12,
-            actual_reward=0.08,
+            actual_reward=0.15,  # diff = 0.03 < 0.1
             alternatives=[],
-            pinned=True,
+            pinned=False,
+            value_estimate=0.45,
+            advantage=-0.12,
+            decision_entropy=0.85,
         )
+        card = widget._render_enriched_decision(decision_hit, index=0)
+        assert "HIT" in card.plain
+        assert "✓" in card.plain
 
-        # Render pinned card
-        card = widget._render_compact_decision(decision_pinned, index=0)
-        lines = card.plain.split('\n')
-
-        # Line 1 should contain P indicator (format: "WAIT 92% H:88P")
-        # Pin replaces % on host accuracy
-        assert "P" in lines[1]
-        # Should NOT have % after host accuracy when pinned
-        # The P comes right after the host accuracy number
-        assert "H:88P" in lines[1] or "H:87P" in lines[1]
-
-        # All lines still exactly 20 chars
-        for i, line in enumerate(lines[:4]):
-            assert len(line) == 20, f"Pinned card line {i} has length {len(line)}, expected 20"
+        # Test MISS (diff >= 0.1)
+        decision_miss = DecisionSnapshot(
+            decision_id="test-miss",
+            timestamp=datetime.now(timezone.utc),
+            slot_states={"r0c0": "TRAINING"},
+            host_accuracy=87.5,
+            chosen_action="WAIT",
+            chosen_slot="r0",
+            confidence=0.92,
+            expected_value=0.12,
+            actual_reward=0.50,  # diff = 0.38 >= 0.1
+            alternatives=[],
+            pinned=False,
+            value_estimate=0.45,
+            advantage=-0.12,
+            decision_entropy=0.85,
+        )
+        card = widget._render_enriched_decision(decision_miss, index=0)
+        assert "MISS" in card.plain
+        assert "✗" in card.plain
 
 
 @pytest.mark.asyncio
-async def test_compact_decision_card_thresholds():
-    """Decision card should use class constants for prediction thresholds."""
+async def test_enriched_decision_card_uses_constant():
+    """Enriched card should use PREDICTION_EXCELLENT_THRESHOLD constant."""
     from esper.karn.sanctum.schema import DecisionSnapshot
     from datetime import datetime, timezone
 
@@ -1412,60 +1429,69 @@ async def test_compact_decision_card_thresholds():
 
         # Verify constants exist
         assert hasattr(TamiyoBrain, 'PREDICTION_EXCELLENT_THRESHOLD')
-        assert hasattr(TamiyoBrain, 'PREDICTION_ACCEPTABLE_THRESHOLD')
         assert TamiyoBrain.PREDICTION_EXCELLENT_THRESHOLD == 0.1
-        assert TamiyoBrain.PREDICTION_ACCEPTABLE_THRESHOLD == 0.3
 
-        # Test excellent prediction (diff < 0.1)
-        decision_excellent = DecisionSnapshot(
-            decision_id="test-3",
+        # Test exact threshold boundary
+        decision = DecisionSnapshot(
+            decision_id="test-threshold",
             timestamp=datetime.now(timezone.utc),
             slot_states={"r0c0": "TRAINING"},
             host_accuracy=87.5,
             chosen_action="WAIT",
-            chosen_slot=None,
+            chosen_slot="r0",
             confidence=0.92,
             expected_value=0.12,
-            actual_reward=0.15,  # diff = 0.03 < 0.1
+            actual_reward=0.22,  # diff = 0.10 exactly at threshold
             alternatives=[],
             pinned=False,
+            value_estimate=0.45,
+            advantage=-0.12,
+            decision_entropy=0.85,
         )
-        card = widget._render_compact_decision(decision_excellent, index=0)
-        assert "✓" in card.plain
+        card = widget._render_enriched_decision(decision, index=0)
+        # diff = 0.10, which is NOT < 0.1, so should be MISS
+        assert "MISS" in card.plain
 
-        # Test acceptable prediction (0.1 <= diff < 0.3)
-        decision_acceptable = DecisionSnapshot(
-            decision_id="test-4",
-            timestamp=datetime.now(timezone.utc),
-            slot_states={"r0c0": "TRAINING"},
-            host_accuracy=87.5,
-            chosen_action="WAIT",
-            chosen_slot=None,
-            confidence=0.92,
-            expected_value=0.12,
-            actual_reward=0.30,  # diff = 0.18 (0.1 < diff < 0.3)
-            alternatives=[],
-            pinned=False,
-        )
-        card = widget._render_compact_decision(decision_acceptable, index=0)
-        assert "✗" in card.plain  # Should show ✗ for warnings
 
-        # Test poor prediction (diff >= 0.3)
-        decision_poor = DecisionSnapshot(
-            decision_id="test-5",
+@pytest.mark.asyncio
+async def test_decisions_column_uses_enriched_cards():
+    """Decisions column should use enriched cards with V(s), A(s,a)."""
+    from esper.karn.sanctum.schema import DecisionSnapshot, SanctumSnapshot, TamiyoState
+    from datetime import datetime, timezone
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        decision = DecisionSnapshot(
             timestamp=datetime.now(timezone.utc),
-            slot_states={"r0c0": "TRAINING"},
-            host_accuracy=87.5,
+            slot_states={"r0": "Training 12%"},
+            host_accuracy=87.0,
             chosen_action="WAIT",
-            chosen_slot=None,
+            chosen_slot="r0",
             confidence=0.92,
             expected_value=0.12,
-            actual_reward=0.50,  # diff = 0.38 > 0.3
+            actual_reward=0.08,
             alternatives=[],
-            pinned=False,
+            decision_id="test-1",
+            value_estimate=0.45,
+            advantage=-0.12,
+            decision_entropy=0.85,
         )
-        card = widget._render_compact_decision(decision_poor, index=0)
-        assert "✗" in card.plain
+
+        snapshot = SanctumSnapshot(
+            tamiyo=TamiyoState(
+                recent_decisions=[decision],
+                entropy=6.55,
+            )
+        )
+        widget._snapshot = snapshot
+
+        column = widget._render_decisions_column()
+        column_str = str(column)
+
+        assert "V:" in column_str, f"Decisions column should show V(s). Got: {column_str}"
+        assert "A:" in column_str, f"Decisions column should show A(s,a). Got: {column_str}"
 
 
 # ===========================
@@ -1475,7 +1501,7 @@ async def test_compact_decision_card_thresholds():
 
 @pytest.mark.asyncio
 async def test_decisions_column_renders_three_cards():
-    """Decisions column should render 3 compact decision cards vertically."""
+    """Decisions column should render 3 enriched decision cards vertically."""
     from esper.karn.sanctum.schema import DecisionSnapshot, TamiyoState, SanctumSnapshot
     from datetime import datetime, timezone, timedelta
 
@@ -1492,12 +1518,15 @@ async def test_decisions_column_renders_three_cards():
                 slot_states={"r0c0": "TRAINING"},
                 host_accuracy=85.0 + i,
                 chosen_action="WAIT" if i % 2 == 0 else "GERMINATE",
-                chosen_slot=None,
+                chosen_slot="r0",
                 confidence=0.90 - i * 0.05,
                 expected_value=0.1 * i,
                 actual_reward=0.1 * i + 0.02,
                 alternatives=[],
                 pinned=False,
+                value_estimate=0.45,
+                advantage=-0.12,
+                decision_entropy=0.85,
             )
             for i in range(3)
         ]
@@ -1876,3 +1905,51 @@ def test_alpha_oscillation_detection():
     ]
     patterns = detect_action_patterns(decisions, {})
     assert "ALPHA_OSC" in patterns, "Should detect alpha oscillation with 4+ changes"
+
+
+# ===========================
+# Task 5: Enriched Decision Cards Tests
+# ===========================
+
+
+def test_decision_card_shows_value_and_advantage():
+    """Decision cards should show V(s) and A(s,a) per DRL review."""
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.schema import DecisionSnapshot, SanctumSnapshot, TamiyoState
+    from datetime import datetime, timezone
+
+    decision = DecisionSnapshot(
+        timestamp=datetime.now(timezone.utc),
+        slot_states={"r0": "Training 12%", "r1": "Blending 45%"},
+        host_accuracy=87.0,
+        chosen_action="WAIT",
+        chosen_slot="r1",
+        confidence=0.92,
+        expected_value=0.12,
+        actual_reward=0.08,
+        alternatives=[("GERMINATE", 0.04), ("FOSSILIZE", 0.02)],
+        decision_id="test-1",
+        value_estimate=0.45,  # V(s)
+        advantage=-0.12,       # A(s,a)
+        decision_entropy=0.85,  # Decision entropy
+    )
+
+    widget = TamiyoBrain()
+    snapshot = SanctumSnapshot(
+        tamiyo=TamiyoState(
+            recent_decisions=[decision],
+            entropy=6.55,
+        )
+    )
+    widget._snapshot = snapshot
+
+    card = widget._render_enriched_decision(decision, index=0)
+    card_str = str(card)
+
+    # Should show V(s) and A(s,a)
+    assert "V:" in card_str, f"Card should show value estimate V(s). Got: {card_str}"
+    assert "A:" in card_str, f"Card should show advantage A(s,a). Got: {card_str}"
+
+    # Should show outcome text (per UX review)
+    assert "HIT" in card_str or "MISS" in card_str, \
+        f"Card should show outcome text. Got: {card_str}"

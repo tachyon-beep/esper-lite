@@ -599,6 +599,13 @@ class DecisionSnapshot:
     # Pinned decisions never get replaced
     pinned: bool = False
 
+    # Value function outputs (per DRL review - Task 5)
+    value_estimate: float = 0.0   # V(s) - state value estimate
+    advantage: float = 0.0        # A(s,a) - advantage for chosen action
+
+    # Decision-specific entropy (per DRL review - more useful than policy entropy)
+    decision_entropy: float = 0.0  # -sum(p*log(p)) for this action distribution
+
 
 @dataclass
 class RunConfig:

@@ -103,6 +103,9 @@ class TamiyoBrain(Static):
     PREDICTION_EXCELLENT_THRESHOLD = 0.1  # Green checkmark: |actual - expected| < 0.1
     PREDICTION_ACCEPTABLE_THRESHOLD = 0.3  # Yellow warning: |actual - expected| < 0.3
 
+    # Enriched decision card width (Task 5)
+    DECISION_CARD_WIDTH = 24
+
     # Per-head max entropy values from factored_actions.py (DRL CORRECTED)
     # These are ln(N) where N is the number of actions for each head
     HEAD_MAX_ENTROPIES = {
@@ -598,106 +601,99 @@ class TamiyoBrain(Static):
         else:
             return "Stable"
 
-    def _render_compact_decision(self, decision: "DecisionSnapshot", index: int) -> Text:
-        """Render a compact 4-line decision card with fixed 20-char width.
+    def _render_enriched_decision(self, decision: "DecisionSnapshot", index: int) -> Text:
+        """Render an enriched 6-line decision card (24 chars wide).
 
-        Format (exactly 20 chars per line):
-        ┌─ D1 12s ─────────┐
-        │ WAIT 92% H:87% [P]│
-        │ +0.12→+0.08 ✓    │
-        └──────────────────┘
-
-        Args:
-            decision: The decision snapshot to render.
-            index: 0-indexed position (0=most recent).
-
-        Returns:
-            Rich Text with fixed-width compact decision card.
+        Format per DRL + UX reviews:
+        ┌─ D1 16s ──────────────┐
+        │ WAIT s:1 100%         │  Action, slot, confidence
+        │ H:25% ent:0.85        │  Host accuracy, decision entropy
+        │ V:+0.45 A:-0.12       │  Value estimate, advantage (NEW)
+        │ -0.68→+0.00 ✓ HIT     │  Expected vs actual + text (NEW)
+        │ alt: G:12% P:8%       │  Alternatives
+        └───────────────────────┘
         """
         from datetime import datetime, timezone
+
+        CONTENT_WIDTH = self.DECISION_CARD_WIDTH - 4  # "│ " + content + " │"
 
         now = datetime.now(timezone.utc)
         age = (now - decision.timestamp).total_seconds()
         age_str = f"{age:.0f}s" if age < 60 else f"{age/60:.0f}m"
 
-        # Action colors
         action_colors = {
-            "GERMINATE": "green",
-            "WAIT": "dim",
-            "FOSSILIZE": "blue",
-            "PRUNE": "red",
-            "SET_ALPHA_TARGET": "cyan",
-            "ADVANCE": "cyan",
+            "GERMINATE": "green", "WAIT": "dim", "FOSSILIZE": "blue",
+            "PRUNE": "red", "SET_ALPHA_TARGET": "cyan", "ADVANCE": "cyan",
         }
         action_style = action_colors.get(decision.chosen_action, "white")
 
-        # Build card with fixed width (20 chars total per line)
         card = Text()
 
-        # Title line: Fixed width using left-padded content
-        # Format: "┌─ D1 12s ─────────┐" (20 chars)
-        title_content = f"D{index+1} {age_str}"
-        title_fill = 20 - 4 - len(title_content)  # 20 total - "┌─ " - "┐"
-        card.append(f"┌─ {title_content}{'─' * title_fill}┐\n", style="dim")
+        # Title: ┌─ D1 16s ──────────────┐
+        title = f"D{index+1} {age_str}"
+        fill = self.DECISION_CARD_WIDTH - 4 - len(title)
+        card.append(f"┌─ {title}{'─' * fill}┐\n", style="dim")
 
-        # Line 1: ACTION PROB% H:XX% P (fixed 20 chars)
-        # Format: "│ WAIT 92% H:87%P  │" or "│ WAIT 92% H:87%   │"
-        # Structure: "│ " (2) + content (16) + " │" (2) = 20 total
-        # When pinned, drop % from host and append P to fit in 16 chars
-        action_abbrev = decision.chosen_action[:4].upper()  # WAIT, GERM, FOSS, PRUN, ADVA
-
-        if decision.pinned:
-            # Format: "GERM 100% H:100P" (exactly 16 chars worst case)
-            line1_content = f"{action_abbrev} {decision.confidence:.0%} H:{decision.host_accuracy:.0f}P"
-        else:
-            # Format: "GERM 100% H:100%" (exactly 16 chars worst case)
-            line1_content = f"{action_abbrev} {decision.confidence:.0%} H:{decision.host_accuracy:.0f}%"
-
+        # Line 1: ACTION s:N CONF%
+        action_abbrev = decision.chosen_action[:4].upper()
+        slot_num = decision.chosen_slot[-1] if decision.chosen_slot else "-"
+        line1 = f"{action_abbrev} s:{slot_num} {decision.confidence:.0%}"
         card.append("│ ")
-        # Append styled segments
-        card.append(f"{action_abbrev}", style=action_style)
+        card.append(action_abbrev, style=action_style)
+        card.append(f" s:{slot_num}", style="cyan")
         card.append(f" {decision.confidence:.0%}", style="dim")
-        if decision.pinned:
-            card.append(f" H:{decision.host_accuracy:.0f}", style="cyan")
-            card.append("P", style="yellow")
-        else:
-            card.append(f" H:{decision.host_accuracy:.0f}%", style="cyan")
+        card.append(" " * max(0, CONTENT_WIDTH - len(line1)) + " │\n")
 
-        # Padding: need to reach 16 chars total content, then add " │"
-        content_len = len(line1_content)
-        padding_needed = 16 - content_len
-        if padding_needed > 0:
-            card.append(" " * padding_needed)
-        card.append(" │\n")
+        # Line 2: H:XX% ent:X.XX (decision entropy, per DRL review)
+        line2 = f"H:{decision.host_accuracy:.0f}% ent:{decision.decision_entropy:.2f}"
+        card.append("│ ")
+        card.append(f"H:{decision.host_accuracy:.0f}%", style="cyan")
+        card.append(f" ent:{decision.decision_entropy:.2f}", style="dim")
+        card.append(" " * max(0, CONTENT_WIDTH - len(line2)) + " │\n")
 
-        # Line 2: +0.12→+0.08 ✓ (fixed 20 chars)
-        # Format: "│ +0.12→+0.08 ✓   │"
-        # Structure: "│ " (2) + content (16) + " │" (2) = 20 total
+        # Line 3: V:+X.XX A:+X.XX (per DRL review)
+        line3 = f"V:{decision.value_estimate:+.2f} A:{decision.advantage:+.2f}"
+        card.append("│ ")
+        card.append(f"V:{decision.value_estimate:+.2f}", style="cyan")
+        card.append(f" A:{decision.advantage:+.2f}", style="magenta")
+        card.append(" " * max(0, CONTENT_WIDTH - len(line3)) + " │\n")
+
+        # Line 4: Expected → Actual ✓ HIT / ✗ MISS (per UX review)
         card.append("│ ")
         card.append(f"{decision.expected_value:+.2f}", style="dim")
         card.append("→", style="dim")
         if decision.actual_reward is not None:
             diff = abs(decision.actual_reward - decision.expected_value)
-            style = "green" if diff < self.PREDICTION_EXCELLENT_THRESHOLD else (
-                "yellow" if diff < self.PREDICTION_ACCEPTABLE_THRESHOLD else "red"
-            )
-            icon = "✓" if diff < self.PREDICTION_EXCELLENT_THRESHOLD else "✗"
+            is_hit = diff < self.PREDICTION_EXCELLENT_THRESHOLD
+            style = "green" if is_hit else "red"
+            icon = "✓" if is_hit else "✗"
+            text = "HIT" if is_hit else "MISS"
             card.append(f"{decision.actual_reward:+.2f}", style=style)
-            card.append(f" {icon}", style=style)
-            # Content: "+0.12" (5) + "→" (1) + "+0.08" (5) + " " (1) + "✓" (1) = 13
-            content_len = 5 + 1 + 5 + 1 + 1  # 13 chars
-            padding = 16 - content_len
-            card.append(" " * padding)
+            card.append(f" {icon} {text}", style=style)
+            line4 = f"{decision.expected_value:+.2f}→{decision.actual_reward:+.2f} {icon} {text}"
         else:
             card.append("...", style="dim italic")
-            # Content: "+0.12" (5) + "→" (1) + "..." (3) = 9 chars
-            content_len = 5 + 1 + 3  # 9 chars
-            padding = 16 - content_len
-            card.append(" " * padding)
-        card.append(" │\n")
+            line4 = f"{decision.expected_value:+.2f}→..."
+        card.append(" " * max(0, CONTENT_WIDTH - len(line4)) + " │\n")
 
-        # Bottom border (20 chars)
-        card.append("└──────────────────┘", style="dim")
+        # Line 5: alt: G:12% P:8%
+        card.append("│ ")
+        if decision.alternatives:
+            alt_strs = [f"{a[0]}:{p:.0%}" for a, p in decision.alternatives[:2]]
+            line5 = "alt: " + " ".join(alt_strs)
+            card.append("alt: ", style="dim")
+            for i, (alt_action, prob) in enumerate(decision.alternatives[:2]):
+                if i > 0:
+                    card.append(" ", style="dim")
+                alt_style = action_colors.get(alt_action, "dim")
+                card.append(f"{alt_action[0]}:{prob:.0%}", style=alt_style)
+        else:
+            line5 = "alt: -"
+            card.append("alt: -", style="dim")
+        card.append(" " * max(0, CONTENT_WIDTH - len(line5)) + " │\n")
+
+        # Bottom border
+        card.append("└" + "─" * (self.DECISION_CARD_WIDTH - 2) + "┘", style="dim")
 
         return card
 
@@ -1443,7 +1439,7 @@ class TamiyoBrain(Static):
         result.append("DECISIONS\n", style="dim bold")
 
         for i, decision in enumerate(decisions[:3]):
-            card = self._render_compact_decision(decision, index=i)
+            card = self._render_enriched_decision(decision, index=i)
             result.append(card)
             if i < 2:  # Add spacing between cards
                 result.append("\n")
