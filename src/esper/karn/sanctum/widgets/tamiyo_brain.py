@@ -839,3 +839,66 @@ class TamiyoBrain(Static):
             result.append(BLOCKS[idx], style=style)
 
         return result
+
+    def _render_metrics_column(self) -> Text:
+        """Render secondary metrics column with sparklines."""
+        tamiyo = self._snapshot.tamiyo
+        result = Text()
+
+        # Advantage stats
+        adv_status = self._get_advantage_status(tamiyo.advantage_std)
+        adv_style = self._status_style(adv_status)
+        result.append(f" Advantage   ", style="dim")
+        result.append(f"{tamiyo.advantage_mean:+.2f} ± {tamiyo.advantage_std:.2f}", style=adv_style)
+        if adv_status != "ok":
+            result.append(" [!]", style=adv_style)
+        result.append("\n")
+
+        # Ratio bounds
+        ratio_status = self._get_ratio_status(tamiyo.ratio_min, tamiyo.ratio_max)
+        ratio_style = self._status_style(ratio_status)
+        result.append(f" Ratio       ", style="dim")
+        result.append(f"{tamiyo.ratio_min:.2f} < r < {tamiyo.ratio_max:.2f}", style=ratio_style)
+        if ratio_status != "ok":
+            result.append(" [!]", style=ratio_style)
+        result.append("\n")
+
+        # Policy loss with sparkline
+        pl_sparkline = self._render_sparkline(tamiyo.policy_loss_history)
+        result.append(f" Policy Loss ", style="dim")
+        result.append(pl_sparkline)
+        result.append(f" {tamiyo.policy_loss:.3f}\n", style="bright_cyan")
+
+        # Value loss with sparkline
+        vl_sparkline = self._render_sparkline(tamiyo.value_loss_history)
+        result.append(f" Value Loss  ", style="dim")
+        result.append(vl_sparkline)
+        result.append(f" {tamiyo.value_loss:.3f}\n", style="bright_cyan")
+
+        # Grad norm with sparkline
+        gn_sparkline = self._render_sparkline(tamiyo.grad_norm_history)
+        gn_status = self._get_grad_norm_status(tamiyo.grad_norm)
+        gn_style = self._status_style(gn_status)
+        result.append(f" Grad Norm   ", style="dim")
+        result.append(gn_sparkline)
+        result.append(f" {tamiyo.grad_norm:.2f}\n", style=gn_style)
+
+        # Layer health
+        total_layers = 12
+        if tamiyo.dead_layers > 0 or tamiyo.exploding_layers > 0:
+            result.append(f" Layers      ", style="dim")
+            result.append(f"!! {tamiyo.dead_layers} dead, {tamiyo.exploding_layers} exploding", style="red")
+        else:
+            healthy = total_layers - tamiyo.dead_layers - tamiyo.exploding_layers
+            result.append(f" Layers      ", style="dim")
+            result.append(f"OK {healthy}/{total_layers} healthy", style="green")
+
+        return result
+
+    def _get_ratio_status(self, ratio_min: float, ratio_max: float) -> str:
+        """Get status for PPO ratio bounds."""
+        if ratio_max > TUIThresholds.RATIO_MAX_CRITICAL or ratio_min < TUIThresholds.RATIO_MIN_CRITICAL:
+            return "critical"
+        if ratio_max > TUIThresholds.RATIO_MAX_WARNING or ratio_min < TUIThresholds.RATIO_MIN_WARNING:
+            return "warning"
+        return "ok"

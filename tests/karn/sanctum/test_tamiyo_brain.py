@@ -909,3 +909,50 @@ async def test_sparkline_color_coding():
         sparkline = widget._render_sparkline(history, width=5, style="yellow")
         # Should have content (verify by checking it's not all placeholders)
         assert len(sparkline.plain) == 5
+
+
+# ===========================
+# Task 3.2: Secondary Metrics Column Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_secondary_metrics_column():
+    """Secondary metrics should show Advantage, Ratio, losses with sparklines."""
+    from collections import deque
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+
+        tamiyo = TamiyoState(
+            advantage_mean=0.15,
+            advantage_std=0.95,
+            ratio_min=0.85,
+            ratio_max=1.15,
+            policy_loss=0.025,
+            value_loss=0.142,
+            grad_norm=1.5,
+            dead_layers=0,
+            exploding_layers=0,
+            ppo_data_received=True,
+        )
+        # Add history
+        for i in range(5):
+            tamiyo.policy_loss_history.append(0.03 - i * 0.001)
+            tamiyo.value_loss_history.append(0.2 - i * 0.01)
+            tamiyo.grad_norm_history.append(1.5 + i * 0.1)
+
+        snapshot.tamiyo = tamiyo
+        widget.update_snapshot(snapshot)
+
+        # Render metrics column
+        metrics = widget._render_metrics_column()
+        assert metrics is not None
+
+        # Should contain key metrics
+        plain = metrics.plain
+        assert "Advantage" in plain
+        assert "Ratio" in plain
+        assert "Policy" in plain or "Grad" in plain
