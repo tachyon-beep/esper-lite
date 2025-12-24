@@ -1202,3 +1202,51 @@ class TamiyoBrain(Static):
                 result.append("\n")
 
         return result
+
+    def _render_vitals_column(self) -> Table:
+        """Render left 2/3 column with all learning vitals.
+
+        Contains (top to bottom):
+        - Diagnostic matrix (gauges + metrics)
+        - Separator
+        - Head heatmap
+        - Separator
+        - Action distribution bar
+
+        Returns:
+            Rich Table with vertically stacked vitals components.
+        """
+        tamiyo = self._snapshot.tamiyo
+
+        content = Table.grid(expand=True)
+        content.add_column(ratio=1)
+
+        if not tamiyo.ppo_data_received:
+            waiting_text = Text(style="dim italic")
+            waiting_text.append("⏳ Waiting for PPO vitals\n")
+            waiting_text.append(
+                f"Progress: {self._snapshot.current_epoch}/{self._snapshot.max_epochs} epochs",
+                style="cyan",
+            )
+            content.add_row(waiting_text)
+            return content
+
+        # Row 1: Diagnostic matrix (gauges left, metrics right)
+        diagnostic_matrix = self._render_diagnostic_matrix()
+        content.add_row(diagnostic_matrix)
+
+        # Row 2: Separator
+        content.add_row(self._render_separator())
+
+        # Row 3: Head heatmap
+        head_heatmap = self._render_head_heatmap()
+        content.add_row(head_heatmap)
+
+        # Row 4: Separator
+        content.add_row(self._render_separator())
+
+        # Row 5: Action distribution bar
+        action_bar = self._render_action_distribution_bar()
+        content.add_row(action_bar)
+
+        return content

@@ -1520,3 +1520,64 @@ async def test_decisions_column_renders_three_cards():
         assert "D3" in column_str
         assert "WAIT" in column_str
         assert "GERM" in column_str
+
+
+# ===========================
+# Task 3: Vitals Column Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_vitals_column_contains_all_components():
+    """Vitals column should contain gauges, metrics, heads, and action bar."""
+    from esper.karn.sanctum.schema import TamiyoState, SanctumSnapshot
+    from rich.console import Console
+    from io import StringIO
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        snapshot = SanctumSnapshot(
+            tamiyo=TamiyoState(
+                ppo_data_received=True,
+                entropy=1.5,
+                explained_variance=0.7,
+                clip_fraction=0.1,
+                kl_divergence=0.005,
+                advantage_mean=0.15,
+                advantage_std=0.8,
+                policy_loss=0.03,
+                value_loss=0.09,
+                grad_norm=1.2,
+                action_counts={"WAIT": 60, "GERMINATE": 9, "SET_ALPHA_TARGET": 2, "FOSSILIZE": 0, "PRUNE": 6},
+                total_actions=77,
+            )
+        )
+        widget.update_snapshot(snapshot)
+
+        # Render vitals column
+        vitals = widget._render_vitals_column()
+
+        # Convert Rich Table to string for assertions
+        console_io = StringIO()
+        console = Console(file=console_io, force_terminal=True, width=120)
+        console.print(vitals)
+        vitals_str = console_io.getvalue()
+
+        # Should contain gauge labels
+        assert "Expl.Var" in vitals_str
+        assert "Entropy" in vitals_str
+        assert "Clip" in vitals_str
+        assert "KL" in vitals_str
+
+        # Should contain metrics
+        assert "Advantage" in vitals_str
+        assert "Policy Loss" in vitals_str
+        assert "Grad Norm" in vitals_str
+
+        # Should contain heads heatmap marker
+        assert "Heads:" in vitals_str
+
+        # Should contain action bar marker
+        assert "G=" in vitals_str or "W=" in vitals_str  # Action legend
