@@ -528,7 +528,7 @@ class TamiyoBrain(Static):
             group_color = self.GROUP_COLORS.get(tamiyo.group_id, "white")
             group_label = self.GROUP_LABELS.get(tamiyo.group_id, f"[{tamiyo.group_id}]")
             banner.append(f" {group_label} ", style=group_color)
-            banner.append("│ ", style="dim")
+            banner.append(" ┃ ", style="dim")  # Heavy vertical bar with spacing
 
         banner.append(f"{icon} ", style=style)
         banner.append(f"{label}   ", style=style)
