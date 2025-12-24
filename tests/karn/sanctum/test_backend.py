@@ -1108,3 +1108,56 @@ class TestSanctumBackend:
         snapshot = backend.get_snapshot()
 
         assert snapshot.run_id == ""
+
+
+class TestBackendMultiGroupAPI:
+    """Tests for multi-group snapshot API."""
+
+    def test_get_all_snapshots_empty_initially(self):
+        """get_all_snapshots returns empty dict before any events."""
+        backend = SanctumBackend(num_envs=4)
+        backend.start()
+
+        snapshots = backend.get_all_snapshots()
+
+        assert snapshots == {}
+
+    def test_get_all_snapshots_single_group(self):
+        """get_all_snapshots returns single group after events."""
+        from esper.leyline import TelemetryEvent, TelemetryEventType
+
+        backend = SanctumBackend(num_envs=4)
+        backend.start()
+
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+            group_id="A",
+            data={"policy_loss": 0.1},
+        )
+        backend.emit(event)
+
+        snapshots = backend.get_all_snapshots()
+
+        assert "A" in snapshots
+        assert len(snapshots) == 1
+
+    def test_get_all_snapshots_multiple_groups(self):
+        """get_all_snapshots returns all groups for A/B testing."""
+        from esper.leyline import TelemetryEvent, TelemetryEventType
+
+        backend = SanctumBackend(num_envs=4)
+        backend.start()
+
+        for group_id in ["A", "B"]:
+            event = TelemetryEvent(
+                event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+                group_id=group_id,
+                data={"policy_loss": 0.1},
+            )
+            backend.emit(event)
+
+        snapshots = backend.get_all_snapshots()
+
+        assert "A" in snapshots
+        assert "B" in snapshots
+        assert len(snapshots) == 2

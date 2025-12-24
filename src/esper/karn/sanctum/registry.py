@@ -19,8 +19,9 @@ class AggregatorRegistry:
     The registry creates aggregators on-demand when first accessed.
     """
 
-    def __init__(self, num_envs: int = 4) -> None:
+    def __init__(self, num_envs: int = 4, max_event_log: int = 100) -> None:
         self._num_envs = num_envs
+        self._max_event_log = max_event_log
         self._aggregators: dict[str, SanctumAggregator] = {}
 
     def get_or_create(self, group_id: str) -> "SanctumAggregator":
@@ -28,7 +29,8 @@ class AggregatorRegistry:
         if group_id not in self._aggregators:
             from esper.karn.sanctum.aggregator import SanctumAggregator
             self._aggregators[group_id] = SanctumAggregator(
-                num_envs=self._num_envs
+                num_envs=self._num_envs,
+                max_event_log=self._max_event_log,
             )
         return self._aggregators[group_id]
 
