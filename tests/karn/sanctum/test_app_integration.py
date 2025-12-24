@@ -127,17 +127,22 @@ async def test_sanctum_app_shows_multiple_tamiyo_widgets():
     from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
     from esper.leyline import TelemetryEvent, TelemetryEventType
 
-    backend = SanctumBackend()
+    backend = SanctumBackend(num_envs=4)
+    backend.start()
     app = SanctumApp(backend=backend, num_envs=4)
-    async with app.run_test():
-        # Send events for two groups
+    async with app.run_test() as pilot:
+        # Send events for two groups via backend (production path)
         for group_id in ["A", "B"]:
             event = TelemetryEvent(
                 event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
                 group_id=group_id,  # Top-level attribute, NOT in data
                 data={"policy_loss": 0.1},
             )
-            app.handle_telemetry_event(event)
+            backend.emit(event)
+
+        # Trigger refresh and allow processing
+        app._poll_and_refresh()
+        await pilot.pause()
 
         # Should have two TamiyoBrain widgets
         widgets = app.query(TamiyoBrain)
@@ -158,7 +163,8 @@ async def test_keyboard_switches_between_policies():
     from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
     from esper.leyline import TelemetryEvent, TelemetryEventType
 
-    backend = SanctumBackend()
+    backend = SanctumBackend(num_envs=4)
+    backend.start()
     app = SanctumApp(backend=backend, num_envs=4)
     async with app.run_test() as pilot:
         # Create two policies - note: group_id is TOP-LEVEL attribute
@@ -168,9 +174,10 @@ async def test_keyboard_switches_between_policies():
                 group_id=group_id,  # TOP-LEVEL, not in data
                 data={"policy_loss": 0.1},
             )
-            app.handle_telemetry_event(event)
+            backend.emit(event)
 
-        # Allow widgets to mount
+        # Trigger refresh and allow widgets to mount
+        app._poll_and_refresh()
         await pilot.pause()
 
         # Verify we have two TamiyoBrain widgets
@@ -219,7 +226,8 @@ async def test_run_header_shows_ab_comparison():
     from esper.karn.sanctum.widgets.run_header import RunHeader
     from esper.leyline import TelemetryEvent, TelemetryEventType
 
-    backend = SanctumBackend()
+    backend = SanctumBackend(num_envs=4)
+    backend.start()
     app = SanctumApp(backend=backend, num_envs=4)
     async with app.run_test() as pilot:
         # Create two policies - note: group_id is TOP-LEVEL
@@ -229,8 +237,10 @@ async def test_run_header_shows_ab_comparison():
                 group_id=group_id,
                 data={"policy_loss": 0.1},
             )
-            app.handle_telemetry_event(event)
+            backend.emit(event)
 
+        # Trigger refresh and allow processing
+        app._poll_and_refresh()
         await pilot.pause()
 
         # RunHeader should have A/B mode active with a leader
@@ -249,7 +259,8 @@ async def test_run_header_no_ab_comparison_in_single_mode():
     from esper.karn.sanctum.widgets.run_header import RunHeader
     from esper.leyline import TelemetryEvent, TelemetryEventType
 
-    backend = SanctumBackend()
+    backend = SanctumBackend(num_envs=4)
+    backend.start()
     app = SanctumApp(backend=backend, num_envs=4)
     async with app.run_test() as pilot:
         # Only one policy
@@ -258,8 +269,10 @@ async def test_run_header_no_ab_comparison_in_single_mode():
             group_id="A",
             data={"policy_loss": 0.1},
         )
-        app.handle_telemetry_event(event)
+        backend.emit(event)
 
+        # Trigger refresh and allow processing
+        app._poll_and_refresh()
         await pilot.pause()
 
         # RunHeader should NOT be in A/B mode

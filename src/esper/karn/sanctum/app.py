@@ -19,7 +19,6 @@ from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Input, Static
 
-from esper.karn.sanctum.registry import AggregatorRegistry
 from esper.karn.sanctum.widgets import (
     AnomalyStrip,
     EnvDetailScreen,
@@ -175,7 +174,6 @@ class SanctumApp(App):
         """
         super().__init__()
         self._backend = backend
-        self._aggregator_registry = AggregatorRegistry(num_envs=num_envs)
         self._num_envs = num_envs
         self._refresh_interval = 1.0 / refresh_rate
         self._focused_env_id: int = 0
@@ -225,15 +223,6 @@ class SanctumApp(App):
     def on_mount(self) -> None:
         """Start refresh timer when app mounts."""
         self.set_interval(self._refresh_interval, self._poll_and_refresh)
-
-    def handle_telemetry_event(self, event: "TelemetryEvent") -> None:
-        """Route telemetry event to appropriate aggregator.
-
-        Args:
-            event: TelemetryEvent to process.
-        """
-        self._aggregator_registry.process_event(event)
-        self._update_widgets()
 
     def _get_or_create_tamiyo_widget(self, group_id: str) -> TamiyoBrain:
         """Get or create TamiyoBrain widget for a policy group.
@@ -305,41 +294,6 @@ class SanctumApp(App):
                 )
             except NoMatches:
                 pass
-            except Exception as e:
-                self.log.warning(f"Failed to update run header comparison: {e}")
-
-    def _update_widgets(self) -> None:
-        """Update all TamiyoBrain widgets with latest snapshots."""
-        snapshots = self._aggregator_registry.get_all_snapshots()
-
-        # For each group, get/create widget and update it
-        for group_id, snapshot in snapshots.items():
-            try:
-                widget = self._get_or_create_tamiyo_widget(group_id)
-                widget.update_snapshot(snapshot)
-            except NoMatches:
-                pass  # Container hasn't mounted yet
-            except Exception as e:
-                self.log.warning(f"Failed to update tamiyo widget for {group_id}: {e}")
-
-        # Update RunHeader with A/B comparison data when 2+ policies
-        if len(snapshots) >= 2:
-            try:
-                run_header = self.query_one("#run-header", RunHeader)
-                # Extract A and B snapshots (alphabetically sorted)
-                group_ids = sorted(snapshots.keys())
-                snapshot_a = snapshots[group_ids[0]]
-                snapshot_b = snapshots[group_ids[1]]
-
-                # Update comparison metrics in run header
-                run_header.update_comparison(
-                    group_a_accuracy=snapshot_a.aggregate_mean_accuracy,
-                    group_b_accuracy=snapshot_b.aggregate_mean_accuracy,
-                    group_a_reward=snapshot_a.aggregate_mean_reward,
-                    group_b_reward=snapshot_b.aggregate_mean_reward,
-                )
-            except NoMatches:
-                pass  # Header hasn't mounted yet
             except Exception as e:
                 self.log.warning(f"Failed to update run header comparison: {e}")
 

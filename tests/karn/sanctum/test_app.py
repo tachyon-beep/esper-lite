@@ -112,37 +112,3 @@ async def test_app_shows_thread_death_modal():
         assert app._thread_death_shown is True
 
 
-@pytest.mark.asyncio
-async def test_sanctum_app_creates_registry():
-    """SanctumApp should create AggregatorRegistry on init."""
-    from esper.karn.sanctum.registry import AggregatorRegistry
-
-    mock_backend = MagicMock()
-    mock_backend.get_snapshot.return_value = SanctumSnapshot()
-
-    app = SanctumApp(backend=mock_backend)
-
-    # Direct type check - no hasattr needed
-    assert isinstance(app._aggregator_registry, AggregatorRegistry)
-
-
-@pytest.mark.asyncio
-async def test_sanctum_app_routes_to_registry():
-    """SanctumApp should route events through registry."""
-    from esper.leyline import TelemetryEvent, TelemetryEventType
-
-    mock_backend = MagicMock()
-    mock_backend.get_snapshot.return_value = SanctumSnapshot()
-
-    app = SanctumApp(backend=mock_backend)
-
-    event = TelemetryEvent(
-        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
-        data={"policy_loss": 0.1},
-        group_id="A",
-    )
-
-    app.handle_telemetry_event(event)
-
-    snapshots = app._aggregator_registry.get_all_snapshots()
-    assert "A" in snapshots
