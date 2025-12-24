@@ -239,8 +239,9 @@ def obs_to_multislot_features(
     # 12 state features + 13 blueprint one-hot
     max_epochs_den = max(float(obs.get("max_epochs") or _DEFAULT_MAX_EPOCHS_DEN), 1.0)
     slot_features = []
+    slots = obs["slots"]  # KeyError if missing 'slots'
     for slot_id in slot_config.slot_ids:
-        slot = obs.get('slots', {}).get(slot_id, {})
+        slot = slots[slot_id]  # KeyError if slot_id missing
         alpha = safe(slot.get("alpha", 0.0), 0.0, max_val=1.0)
         alpha = max(0.0, alpha)  # safe() clamps symmetrically; alpha should be >= 0
         alpha_target = safe(slot.get("alpha_target", alpha), alpha, max_val=1.0)

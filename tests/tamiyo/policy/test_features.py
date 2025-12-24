@@ -155,9 +155,9 @@ def test_multislot_features_normalized_values():
         'loss_history_5': [2.0, 1.8, 1.6, 1.5, 1.5],
         'accuracy_history_5': [75.0, 78.0, 81.0, 83.0, 83.0],
         'slots': {
-            'early': {'is_active': True, 'stage': 2, 'alpha': 0.3, 'improvement': 1.2},
-            'mid': {'is_active': False, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0},
-            'late': {'is_active': True, 'stage': 6, 'alpha': 0.9, 'improvement': -0.5},  # HOLDING = 6
+            'r0c0': {'is_active': True, 'stage': 2, 'alpha': 0.3, 'improvement': 1.2},
+            'r0c1': {'is_active': False, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0},
+            'r0c2': {'is_active': True, 'stage': 6, 'alpha': 0.9, 'improvement': -0.5},  # HOLDING = 6
         },
     }
 
@@ -169,47 +169,6 @@ def test_multislot_features_normalized_values():
         # No NaN or inf
         assert not (f != f), f"Feature {i} is NaN"
         assert abs(f) < 1e6, f"Feature {i} has unreasonable magnitude: {f}"
-
-
-def test_multislot_features_missing_slots():
-    """Should handle missing slot data gracefully."""
-    from esper.tamiyo.policy.features import obs_to_multislot_features
-
-    obs = {
-        'epoch': 10,
-        'global_step': 100,
-        'train_loss': 0.5,
-        'val_loss': 0.6,
-        'loss_delta': -0.1,
-        'train_accuracy': 70.0,
-        'val_accuracy': 68.0,
-        'accuracy_delta': 0.5,
-        'plateau_epochs': 2,
-        'best_val_accuracy': 70.0,
-        'best_val_loss': 0.5,
-        'loss_history_5': [0.6, 0.55, 0.5, 0.52, 0.5],
-        'accuracy_history_5': [65.0, 66.0, 67.0, 68.0, 68.0],
-        # No 'slots' key
-    }
-
-    features = obs_to_multislot_features(obs)
-
-    # Should still produce 140 features, with slot features defaulting to 0 or defaults
-    assert len(features) == 140
-    # Each slot has 39 features
-    tempo_default = 5 / 12.0
-    for i in range(3):  # 3 slots
-        slot_offset = 23 + i * 39
-        # is_active should be 0
-        assert features[slot_offset] == 0.0
-        # stage one-hot: stage 0 (UNKNOWN) -> index 0 set to 1.0
-        stage_one_hot = features[slot_offset + 1:slot_offset + 11]
-        assert stage_one_hot[0] == 1.0  # UNKNOWN at index 0
-        assert sum(stage_one_hot) == 1.0
-        # tempo at offset 14
-        assert abs(features[slot_offset + 14] - tempo_default) < 1e-6
-        # Blueprint zeros (last 13 dims, offset 26-38)
-        assert features[slot_offset + 26:slot_offset + 39] == [0.0] * 13
 
 
 def test_multislot_feature_size_constant():
@@ -231,9 +190,9 @@ def test_multislot_feature_size_constant():
         'loss_history_5': [0.6, 0.55, 0.5, 0.52, 0.5],
         'accuracy_history_5': [65.0, 66.0, 67.0, 68.0, 68.0],
         'slots': {
-            'early': {'is_active': False, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0},
-            'mid': {'is_active': True, 'stage': 3, 'alpha': 0.5, 'improvement': 2.5},
-            'late': {'is_active': False, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0},
+            'r0c0': {'is_active': False, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0},
+            'r0c1': {'is_active': True, 'stage': 3, 'alpha': 0.5, 'improvement': 2.5},
+            'r0c2': {'is_active': False, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0},
         },
     }
 
@@ -263,9 +222,9 @@ def test_seed_utilization_feature():
         'accuracy_history_5': [65.0, 66.0, 67.0, 68.0, 68.0],
         'total_params': 100_000,
         'slots': {
-            'early': {'is_active': False, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0},
-            'mid': {'is_active': False, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0},
-            'late': {'is_active': False, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0},
+            'r0c0': {'is_active': False, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0},
+            'r0c1': {'is_active': False, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0},
+            'r0c2': {'is_active': False, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0},
         },
     }
 
@@ -580,3 +539,55 @@ def test_slot_features_include_interactions():
     # (was 35: 1 + 10 + 11 + 13)
     # Added 4 dims: interaction_sum, boost_received, upstream_alpha, downstream_alpha
     assert SLOT_FEATURE_SIZE == 39, f"Expected 39 dims/slot, got {SLOT_FEATURE_SIZE}"
+
+
+def test_missing_slots_raises_keyerror():
+    """Observations without 'slots' key should fail loudly."""
+    import pytest
+    from esper.tamiyo.policy.features import obs_to_multislot_features
+
+    obs = {
+        'epoch': 10,
+        'global_step': 100,
+        'train_loss': 0.5,
+        'val_loss': 0.6,
+        'loss_delta': -0.1,
+        'train_accuracy': 70.0,
+        'val_accuracy': 68.0,
+        'accuracy_delta': 0.5,
+        'plateau_epochs': 2,
+        'best_val_accuracy': 70.0,
+        'best_val_loss': 0.5,
+        'loss_history_5': [0.6, 0.55, 0.5, 0.52, 0.5],
+        'accuracy_history_5': [65.0, 66.0, 67.0, 68.0, 68.0],
+        # No 'slots' key - should fail
+    }
+
+    with pytest.raises(KeyError, match="slots"):
+        obs_to_multislot_features(obs)
+
+
+def test_missing_slot_id_raises_keyerror():
+    """Missing slot_id in slots dict should fail loudly."""
+    import pytest
+    from esper.tamiyo.policy.features import obs_to_multislot_features
+
+    obs = {
+        'epoch': 10,
+        'global_step': 100,
+        'train_loss': 0.5,
+        'val_loss': 0.6,
+        'loss_delta': -0.1,
+        'train_accuracy': 70.0,
+        'val_accuracy': 68.0,
+        'accuracy_delta': 0.5,
+        'plateau_epochs': 2,
+        'best_val_accuracy': 70.0,
+        'best_val_loss': 0.5,
+        'loss_history_5': [0.6, 0.55, 0.5, 0.52, 0.5],
+        'accuracy_history_5': [65.0, 66.0, 67.0, 68.0, 68.0],
+        'slots': {},  # Empty - missing r0c0, r0c1, r0c2
+    }
+
+    with pytest.raises(KeyError):
+        obs_to_multislot_features(obs)
