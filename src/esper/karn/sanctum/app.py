@@ -376,8 +376,19 @@ class SanctumApp(App):
         except Exception as e:
             self.log.warning(f"Failed to update scoreboard: {e}")
 
-        # Note: TamiyoBrain widgets are updated via _update_widgets() in handle_telemetry_event
-        # They are NOT updated here because they are group-specific and managed by the registry
+        # Update default TamiyoBrain widget from backend snapshot
+        # This handles single-policy mode where events don't flow through handle_telemetry_event
+        try:
+            # Get or create default tamiyo widget
+            widget = self._get_or_create_tamiyo_widget("default")
+            # Create a snapshot wrapper with the tamiyo data from backend
+            from esper.karn.sanctum.schema import SanctumSnapshot as SnapshotClass
+            tamiyo_snapshot = SnapshotClass(tamiyo=snapshot.tamiyo)
+            widget.update_snapshot(tamiyo_snapshot)
+        except NoMatches:
+            pass  # Container hasn't mounted yet
+        except Exception as e:
+            self.log.warning(f"Failed to update tamiyo-default: {e}")
 
         try:
             self.query_one("#event-log", EventLog).update_snapshot(snapshot)
