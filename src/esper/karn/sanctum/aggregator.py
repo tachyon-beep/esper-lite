@@ -534,8 +534,9 @@ class SanctumAggregator:
         self._tamiyo.ppo_data_received = True
 
         # A/B testing group identification
+        # Filter out "default" - that's the single-policy default value
         group_id = event.group_id
-        if group_id:
+        if group_id and group_id != "default":
             self._tamiyo.group_id = group_id
 
         # Update Tamiyo state with all PPO metrics AND append to history

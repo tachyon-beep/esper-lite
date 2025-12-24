@@ -126,3 +126,19 @@ def test_ppo_update_extracts_group_id():
 
     snapshot = agg.get_snapshot()
     assert snapshot.tamiyo.group_id == "B"
+
+
+def test_ppo_update_filters_default_group_id():
+    """group_id='default' should NOT set tamiyo.group_id (single-policy mode)."""
+    agg = SanctumAggregator(num_envs=4)
+
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        data={"policy_loss": 0.1},
+        group_id="default",  # This is the default for single-policy
+    )
+    agg.process_event(event)
+
+    snapshot = agg.get_snapshot()
+    # Should NOT be set to "default" - that would show [default] label
+    assert snapshot.tamiyo.group_id is None
