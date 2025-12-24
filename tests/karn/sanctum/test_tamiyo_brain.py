@@ -1763,3 +1763,116 @@ def test_episode_return_elevated_position():
         "Episode Return should be in primary metrics section"
     assert "Entropy" in primary_str, \
         "Entropy sparkline should be in primary metrics section"
+
+
+# ===========================
+# Task 4: Smart Action Pattern Detection Tests
+# ===========================
+
+
+def test_stuck_detection_checks_slot_availability():
+    """STUCK should only trigger when waiting despite actionable opportunities."""
+    from esper.karn.sanctum.widgets.tamiyo_brain import detect_action_patterns
+    from esper.karn.sanctum.schema import DecisionSnapshot
+    from datetime import datetime, timezone, timedelta
+
+    now = datetime.now(timezone.utc)
+
+    # All WAIT, but no dormant slots = NOT stuck (correct behavior)
+    decisions_no_dormant = [
+        DecisionSnapshot(
+            timestamp=now - timedelta(seconds=i),
+            slot_states={"r0": "Grafted", "r1": "Grafted", "r2": "Grafted"},
+            host_accuracy=80.0,
+            chosen_action="WAIT",
+            chosen_slot=None,
+            confidence=0.9,
+            expected_value=0.1,
+            actual_reward=0.1,
+            alternatives=[],
+            decision_id=f"test-{i}",
+        )
+        for i in range(12)
+    ]
+    slot_states_grafted = {"r0": "Grafted", "r1": "Grafted", "r2": "Grafted"}
+    patterns = detect_action_patterns(decisions_no_dormant, slot_states_grafted)
+    assert "STUCK" not in patterns, "Should NOT be stuck when all slots grafted"
+
+    # All WAIT with dormant slot = STUCK
+    decisions_with_dormant = [
+        DecisionSnapshot(
+            timestamp=now - timedelta(seconds=i),
+            slot_states={"r0": "Dormant", "r1": "Grafted", "r2": "Grafted"},
+            host_accuracy=80.0,
+            chosen_action="WAIT",
+            chosen_slot=None,
+            confidence=0.9,
+            expected_value=0.1,
+            actual_reward=0.1,
+            alternatives=[],
+            decision_id=f"test-{i}",
+        )
+        for i in range(12)
+    ]
+    slot_states_dormant = {"r0": "Dormant", "r1": "Grafted", "r2": "Grafted"}
+    patterns = detect_action_patterns(decisions_with_dormant, slot_states_dormant)
+    assert "STUCK" in patterns, "Should be STUCK when waiting with dormant slot available"
+
+
+def test_thrashing_detects_germinate_prune_cycles():
+    """THRASHING should detect germinate→prune cycles (wasted compute)."""
+    from esper.karn.sanctum.widgets.tamiyo_brain import detect_action_patterns
+    from esper.karn.sanctum.schema import DecisionSnapshot
+    from datetime import datetime, timezone, timedelta
+
+    now = datetime.now(timezone.utc)
+
+    # Germinate-Prune-Germinate-Prune cycle = THRASHING
+    actions = ["GERMINATE", "PRUNE", "GERMINATE", "PRUNE", "WAIT", "WAIT", "WAIT", "WAIT"]
+    decisions = [
+        DecisionSnapshot(
+            timestamp=now - timedelta(seconds=i),
+            slot_states={},
+            host_accuracy=80.0,
+            chosen_action=actions[i] if i < len(actions) else "WAIT",
+            chosen_slot=None,
+            confidence=0.9,
+            expected_value=0.1,
+            actual_reward=0.1,
+            alternatives=[],
+            decision_id=f"test-{i}",
+        )
+        for i in range(8)
+    ]
+    patterns = detect_action_patterns(decisions, {})
+    assert "THRASH" in patterns, "Should detect germinate-prune thrashing"
+
+
+def test_alpha_oscillation_detection():
+    """ALPHA_OSC should detect excessive alpha target changes."""
+    from esper.karn.sanctum.widgets.tamiyo_brain import detect_action_patterns
+    from esper.karn.sanctum.schema import DecisionSnapshot
+    from datetime import datetime, timezone, timedelta
+
+    now = datetime.now(timezone.utc)
+
+    # 4+ SET_ALPHA_TARGET actions = ALPHA_OSC
+    actions = ["SET_ALPHA_TARGET", "WAIT", "SET_ALPHA_TARGET", "WAIT",
+               "SET_ALPHA_TARGET", "WAIT", "SET_ALPHA_TARGET", "WAIT"]
+    decisions = [
+        DecisionSnapshot(
+            timestamp=now - timedelta(seconds=i),
+            slot_states={},
+            host_accuracy=80.0,
+            chosen_action=actions[i] if i < len(actions) else "WAIT",
+            chosen_slot=None,
+            confidence=0.9,
+            expected_value=0.1,
+            actual_reward=0.1,
+            alternatives=[],
+            decision_id=f"test-{i}",
+        )
+        for i in range(8)
+    ]
+    patterns = detect_action_patterns(decisions, {})
+    assert "ALPHA_OSC" in patterns, "Should detect alpha oscillation with 4+ changes"

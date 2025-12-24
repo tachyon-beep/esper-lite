@@ -22,6 +22,52 @@ if TYPE_CHECKING:
     from esper.karn.sanctum.schema import DecisionSnapshot, SanctumSnapshot
 
 
+def detect_action_patterns(
+    decisions: list["DecisionSnapshot"],
+    slot_states: dict[str, str],
+) -> list[str]:
+    """Detect problematic action patterns with DRL-informed logic.
+
+    Per DRL review:
+    - STUCK = all WAIT when dormant slots exist (actionable opportunities)
+    - THRASH = germinate→prune cycles (wasted compute)
+    - ALPHA_OSC = too many alpha changes without completion
+
+    Per UX review: Returns pattern names for icon display.
+
+    Returns:
+        List of pattern names: ["STUCK"], ["THRASH"], ["ALPHA_OSC"]
+    """
+    patterns = []
+    if not decisions:
+        return patterns
+
+    actions = [d.chosen_action for d in decisions[:12]]
+
+    # STUCK: All WAIT when dormant slots exist (per DRL review)
+    if len(actions) >= 8 and all(a == "WAIT" for a in actions[-8:]):
+        has_dormant = any("Dormant" in str(s) or "Empty" in str(s) for s in slot_states.values())
+        has_training = any("Training" in str(s) for s in slot_states.values())
+        # Stuck = waiting when we COULD germinate (dormant exists, nothing training)
+        if has_dormant and not has_training:
+            patterns.append("STUCK")
+
+    # THRASH: Germinate-Prune cycles (per DRL review)
+    germ_prune_cycles = 0
+    for i in range(len(actions) - 1):
+        if actions[i] == "GERMINATE" and actions[i + 1] == "PRUNE":
+            germ_prune_cycles += 1
+    if germ_prune_cycles >= 2:
+        patterns.append("THRASH")
+
+    # ALPHA_OSC: Too many alpha changes (per DRL review)
+    alpha_count = sum(1 for a in actions if a == "SET_ALPHA_TARGET")
+    if alpha_count >= 4:
+        patterns.append("ALPHA_OSC")
+
+    return patterns
+
+
 class TamiyoBrain(Static):
     """TamiyoBrain widget - Policy agent diagnostics.
 
@@ -387,6 +433,65 @@ class TamiyoBrain(Static):
                 bar.append(" ", style="dim")
 
         return bar
+
+    def _render_action_sequence(self) -> Text:
+        """Render action sequence line with pattern detection.
+
+        Format: "Recent:  W W G W W W F W W W W W"
+        With pattern warnings: "⚠ STUCK" or "⚡ THRASH"
+
+        Per UX review: Icons for accessibility (not just color).
+        """
+        decisions = self._snapshot.tamiyo.recent_decisions[:12]
+        if not decisions:
+            return Text("Recent:  (no actions yet)", style="dim italic")
+
+        # Get current slot states for pattern detection
+        slot_states = {}
+        if decisions:
+            slot_states = decisions[0].slot_states
+
+        # Detect patterns
+        patterns = detect_action_patterns(decisions, slot_states)
+
+        # Action to single-char abbreviation with colors
+        action_map = {
+            "GERMINATE": ("G", "green"),
+            "WAIT": ("W", "dim"),
+            "FOSSILIZE": ("F", "blue"),
+            "PRUNE": ("P", "red"),
+            "SET_ALPHA_TARGET": ("A", "cyan"),
+            "ADVANCE": ("→", "cyan"),
+        }
+
+        # Build sequence (oldest first for left-to-right reading)
+        sequence = [action_map.get(d.chosen_action, ("?", "white")) for d in decisions]
+        sequence.reverse()
+
+        result = Text()
+        result.append("Recent:  ", style="dim")
+
+        # Highlight based on pattern
+        is_stuck = "STUCK" in patterns
+        is_thrash = "THRASH" in patterns
+
+        for char, color in sequence:
+            if is_stuck:
+                result.append(char + " ", style="yellow")
+            elif is_thrash:
+                result.append(char + " ", style="red")
+            else:
+                result.append(char + " ", style=color)
+
+        # Pattern warnings with icons (per UX review: icon + text)
+        if is_stuck:
+            result.append("  ⚠ STUCK", style="yellow bold")
+        if is_thrash:
+            result.append("  ⚡ THRASH", style="red bold")
+        if "ALPHA_OSC" in patterns:
+            result.append("  ↔ ALPHA", style="cyan bold")
+
+        return result
 
     def _render_gauge(self, label: str, value: float, min_val: float, max_val: float, description: str) -> Text:
         """Render a single gauge with label and description on separate lines."""
@@ -1451,5 +1556,9 @@ class TamiyoBrain(Static):
         # Row 6: Action distribution bar
         action_bar = self._render_action_distribution_bar()
         content.add_row(action_bar)
+
+        # Row 7: Action sequence with pattern detection
+        action_sequence = self._render_action_sequence()
+        content.add_row(action_sequence)
 
         return content
