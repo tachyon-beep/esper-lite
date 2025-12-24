@@ -797,3 +797,44 @@ class TamiyoBrain(Static):
             return "Very stable"
         else:
             return "Stable"
+
+    def _render_sparkline(
+        self,
+        history: list[float] | "deque[float]",
+        width: int = 10,
+        style: str = "bright_cyan",
+    ) -> Text:
+        """Render sparkline using unicode block characters.
+
+        Args:
+            history: Historical values to visualize
+            width: Maximum width in characters
+            style: Rich style for the blocks
+
+        Returns:
+            Text with sparkline or placeholder for empty/flat data.
+        """
+        BLOCKS = "▁▂▃▄▅▆▇█"
+
+        if not history:
+            return Text("─" * width, style="dim")
+
+        values = list(history)[-width:]  # Last N values
+        if len(values) < width:
+            # Pad with placeholder on left
+            pad_count = width - len(values)
+            result = Text("─" * pad_count, style="dim")
+        else:
+            result = Text()
+
+        min_val = min(values) if values else 0
+        max_val = max(values) if values else 1
+        val_range = max_val - min_val if max_val != min_val else 1
+
+        for v in values:
+            normalized = (v - min_val) / val_range
+            idx = int(normalized * (len(BLOCKS) - 1))
+            idx = max(0, min(len(BLOCKS) - 1, idx))
+            result.append(BLOCKS[idx], style=style)
+
+        return result

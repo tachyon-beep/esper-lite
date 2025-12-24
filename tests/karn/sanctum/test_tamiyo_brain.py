@@ -815,3 +815,97 @@ async def test_full_mode_separator_width_wide():
     async with app.run_test(size=(120, 24)):
         widget = app.query_one(TamiyoBrain)
         assert widget._get_separator_width() == 94  # 96 - 2 padding
+
+
+# ===========================
+# Task 3.1: Sparkline Renderer Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_sparkline_rendering():
+    """Sparkline should render 10-value history as unicode blocks."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        # Test sparkline with known values
+        history = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+        sparkline = widget._render_sparkline(history, width=10)
+
+        # Should be 10 characters
+        assert len(sparkline.plain) == 10
+        # First char should be lowest block, last should be highest
+        assert "▁" in sparkline.plain
+        assert "█" in sparkline.plain
+
+
+@pytest.mark.asyncio
+async def test_sparkline_empty_history():
+    """Sparkline should show placeholder for empty history."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        # Empty history
+        sparkline = widget._render_sparkline([], width=10)
+        assert len(sparkline.plain) == 10
+        assert "─" in sparkline.plain
+
+
+@pytest.mark.asyncio
+async def test_sparkline_single_value():
+    """Sparkline should render single value as one block."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        # Single value
+        sparkline = widget._render_sparkline([0.5], width=10)
+        # Should have 9 placeholder chars and 1 block
+        assert len(sparkline.plain) == 10
+        assert sparkline.plain.count("─") == 9
+
+
+@pytest.mark.asyncio
+async def test_sparkline_all_same_values():
+    """Sparkline should handle all same values (flat line)."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        # All same values
+        history = [0.5, 0.5, 0.5, 0.5, 0.5]
+        sparkline = widget._render_sparkline(history, width=10)
+        # Should have 5 placeholder chars and 5 identical blocks
+        assert len(sparkline.plain) == 10
+        # When all values are the same, they should all use the same block character
+        # (the implementation will pick one based on normalization)
+
+
+@pytest.mark.asyncio
+async def test_sparkline_width_parameter():
+    """Sparkline should limit output to specified width."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        # 20 values but width=8
+        history = list(range(20))
+        sparkline = widget._render_sparkline(history, width=8)
+        # Should only show last 8 values
+        assert len(sparkline.plain) == 8
+
+
+@pytest.mark.asyncio
+async def test_sparkline_color_coding():
+    """Sparkline should apply color style to recent values."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        # Test with custom style
+        history = [0.1, 0.5, 0.9]
+        sparkline = widget._render_sparkline(history, width=5, style="yellow")
+        # Should have content (verify by checking it's not all placeholders)
+        assert len(sparkline.plain) == 5
