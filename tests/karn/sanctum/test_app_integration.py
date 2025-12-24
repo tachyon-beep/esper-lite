@@ -190,8 +190,8 @@ async def test_keyboard_switches_between_policies():
         assert isinstance(app.focused, TamiyoBrain), f"Expected TamiyoBrain to be focused, got {app.focused}"
         first_focused = app.focused
 
-        # Verify the focused class was added
-        assert first_focused.has_class("focused"), "Focused widget should have 'focused' class"
+        # Verify Textual's built-in focus state (focus handled by :focus pseudo-class)
+        assert app.focused == first_focused, "First TamiyoBrain should be focused"
 
         # Press Tab again to move to second TamiyoBrain
         await pilot.press("tab")
@@ -202,12 +202,12 @@ async def test_keyboard_switches_between_policies():
         second_focused = app.focused
 
         # Either we moved to the second TamiyoBrain, or we cycled to something else
-        # Let's check that the old focused widget lost its class and a new one got it
-        assert not first_focused.has_class("focused"), "First widget should no longer have 'focused' class"
+        # Verify focus moved away from first widget
+        assert app.focused != first_focused, "Focus should have moved away from first widget"
 
         # Find the currently focused widget if it's a TamiyoBrain
         if isinstance(second_focused, TamiyoBrain):
-            assert second_focused.has_class("focused"), "Second focused widget should have 'focused' class"
+            assert app.focused == second_focused, "Second TamiyoBrain should now be focused"
             assert second_focused != first_focused, "Focus should have moved to a different widget"
 
 

@@ -133,10 +133,6 @@
     border: double $accent;
 }
 
-TamiyoBrain.focused {
-    border: double $accent;
-}
-
 /* Event Log - system velocity (30% width, right side) */
 #event-log {
     width: 30%;

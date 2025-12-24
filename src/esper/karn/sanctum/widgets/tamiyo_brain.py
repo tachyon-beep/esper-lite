@@ -90,14 +90,6 @@ class TamiyoBrain(Static):
         self._decision_ids: list[str] = []  # IDs of currently displayed decisions
         self.border_title = "TAMIYO"  # Top-left title like EventLog
 
-    def on_focus(self) -> None:
-        """Handle focus - highlight border."""
-        self.add_class("focused")
-
-    def on_blur(self) -> None:
-        """Handle blur - remove highlight."""
-        self.remove_class("focused")
-
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         self._snapshot = snapshot
         self._update_status_class()
