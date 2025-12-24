@@ -1581,3 +1581,35 @@ async def test_vitals_column_contains_all_components():
 
         # Should contain action bar marker
         assert "G=" in vitals_str or "W=" in vitals_str  # Action legend
+
+
+# ===========================
+# Task 4: Layout Mode Detection Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_layout_mode_horizontal_for_wide_terminal():
+    """Wide terminals (≥96 chars) should use horizontal layout."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test(size=(120, 30)):
+        widget = app.query_one(TamiyoBrain)
+        assert widget._get_layout_mode() == "horizontal"
+
+
+@pytest.mark.asyncio
+async def test_layout_mode_stacked_for_narrow_terminal():
+    """Narrow terminals (<85 chars) should use stacked layout."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test(size=(80, 30)):
+        widget = app.query_one(TamiyoBrain)
+        assert widget._get_layout_mode() == "stacked"
+
+
+@pytest.mark.asyncio
+async def test_layout_mode_compact_horizontal_for_medium_terminal():
+    """Medium terminals (85-95 chars) should use compact-horizontal layout."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test(size=(90, 30)):
+        widget = app.query_one(TamiyoBrain)
+        assert widget._get_layout_mode() == "compact-horizontal"

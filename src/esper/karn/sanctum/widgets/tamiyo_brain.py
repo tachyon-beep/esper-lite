@@ -43,6 +43,10 @@ class TamiyoBrain(Static):
     COMPACT_WIDTH = 80
     COMPACT_THRESHOLD = 85
 
+    # Layout mode thresholds
+    HORIZONTAL_THRESHOLD = 96  # Full side-by-side
+    COMPACT_HORIZONTAL_THRESHOLD = 85  # Compressed side-by-side
+
     # Neural network architecture constant
     _TOTAL_LAYERS = 12
 
@@ -108,6 +112,22 @@ class TamiyoBrain(Static):
     def _is_compact_mode(self) -> bool:
         """Detect if terminal is too narrow for full 96-char layout."""
         return self.size.width < self.COMPACT_THRESHOLD
+
+    def _get_layout_mode(self) -> str:
+        """Determine layout mode based on terminal width.
+
+        Returns:
+            - "horizontal": Full side-by-side (≥96 chars)
+            - "compact-horizontal": Compressed side-by-side (85-95 chars)
+            - "stacked": Vertical stack fallback (<85 chars)
+        """
+        width = self.size.width
+        if width >= self.HORIZONTAL_THRESHOLD:
+            return "horizontal"
+        elif width >= self.COMPACT_HORIZONTAL_THRESHOLD:
+            return "compact-horizontal"
+        else:
+            return "stacked"
 
     def _get_separator_width(self) -> int:
         """Get separator width based on current mode."""
