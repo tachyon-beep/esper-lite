@@ -343,6 +343,38 @@ class SanctumAggregator:
         mean_accuracy = sum(accuracies) / len(accuracies) if accuracies else 0.0
         mean_reward = sum(rewards) / len(rewards) if rewards else 0.0
 
+        # Aggregate slot states across all environments for TamiyoBrain slot summary
+        slot_stage_counts: dict[str, int] = {
+            "DORMANT": 0,
+            "GERMINATED": 0,
+            "TRAINING": 0,
+            "BLENDING": 0,
+            "HOLDING": 0,
+            "FOSSILIZED": 0,
+        }
+        total_epochs_in_stage = 0
+        non_dormant_count = 0
+
+        for env in self._envs.values():
+            for slot_id in self._slot_ids:
+                seed = env.seeds.get(slot_id)
+                if seed is None:
+                    slot_stage_counts["DORMANT"] += 1
+                else:
+                    stage = seed.stage
+                    if stage in slot_stage_counts:
+                        slot_stage_counts[stage] += 1
+                    else:
+                        # Handle transition states (PRUNED, EMBARGOED, RESETTING) as DORMANT
+                        slot_stage_counts["DORMANT"] += 1
+                    if stage != "DORMANT":
+                        total_epochs_in_stage += seed.epochs_in_stage
+                        non_dormant_count += 1
+
+        total_slots = len(self._envs) * len(self._slot_ids)
+        active_slots = total_slots - slot_stage_counts["DORMANT"]
+        avg_epochs = total_epochs_in_stage / non_dormant_count if non_dormant_count > 0 else 0.0
+
         return SanctumSnapshot(
             # Run context
             run_id=self._run_id,
@@ -384,6 +416,11 @@ class SanctumAggregator:
             cumulative_blueprint_spawns=dict(self._cumulative_blueprint_spawns),
             cumulative_blueprint_fossilized=dict(self._cumulative_blueprint_fossilized),
             cumulative_blueprint_prunes=dict(self._cumulative_blueprint_prunes),
+            # Aggregate slot state across all environments
+            slot_stage_counts=slot_stage_counts,
+            total_slots=total_slots,
+            active_slots=active_slots,
+            avg_epochs_in_stage=avg_epochs,
         )
 
     # =========================================================================

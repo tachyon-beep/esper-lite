@@ -760,6 +760,13 @@ class SanctumSnapshot:
     cumulative_blueprint_fossilized: dict[str, int] = field(default_factory=dict)
     cumulative_blueprint_prunes: dict[str, int] = field(default_factory=dict)
 
+    # Aggregate slot state across all environments (for TamiyoBrain slot summary)
+    # Keys: DORMANT, GERMINATED, TRAINING, BLENDING, HOLDING, FOSSILIZED
+    slot_stage_counts: dict[str, int] = field(default_factory=dict)
+    total_slots: int = 0  # n_envs * n_slots_per_env
+    active_slots: int = 0  # Slots not in DORMANT state
+    avg_epochs_in_stage: float = 0.0  # Mean epochs_in_stage for non-dormant slots
+
     # Timestamps for staleness detection
     last_ppo_update: datetime | None = None
     last_reward_update: datetime | None = None

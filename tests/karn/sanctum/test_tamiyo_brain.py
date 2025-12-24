@@ -2214,3 +2214,81 @@ async def test_return_history_color_coding():
         rendered_plain = rendered.plain
         assert "+10.5" in rendered_plain or "10.5" in rendered_plain, "Should show positive return"
         assert "-2.3" in rendered_plain, "Should show negative return"
+
+
+# ===========================
+# Slot Summary Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_slot_summary_shows_stage_counts():
+    """Slot summary should show aggregate counts across all environments."""
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.schema import SanctumSnapshot, EnvState
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(
+            envs={0: EnvState(env_id=0), 1: EnvState(env_id=1)},
+            slot_stage_counts={
+                "DORMANT": 12,
+                "GERMINATED": 2,
+                "TRAINING": 8,
+                "BLENDING": 4,
+                "HOLDING": 2,
+                "FOSSILIZED": 0,
+            },
+            total_slots=28,
+            active_slots=16,
+            avg_epochs_in_stage=5.5,
+            cumulative_fossilized=10,
+            cumulative_pruned=5,
+        )
+        widget._snapshot = snapshot
+
+        rendered = widget._render_slot_summary()
+        rendered_plain = rendered.plain
+
+        # Verify key elements are present
+        assert "SLOTS" in rendered_plain, "Should have SLOTS header"
+        assert "DORM:12" in rendered_plain or "DORM:" in rendered_plain, "Should show DORMANT count"
+        assert "TRAIN:" in rendered_plain, "Should show TRAINING count"
+        assert "Foss:" in rendered_plain, "Should show fossilized count"
+        assert "Rate:" in rendered_plain, "Should show success rate"
+
+
+@pytest.mark.asyncio
+async def test_slot_summary_shows_constraint_when_no_dormant():
+    """Slot summary should show constraint message when no dormant slots."""
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.schema import SanctumSnapshot, EnvState
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(
+            envs={0: EnvState(env_id=0)},
+            slot_stage_counts={
+                "DORMANT": 0,
+                "GERMINATED": 3,
+                "TRAINING": 6,
+                "BLENDING": 3,
+                "HOLDING": 0,
+                "FOSSILIZED": 0,
+            },
+            total_slots=12,
+            active_slots=12,
+            avg_epochs_in_stage=4.0,
+            cumulative_fossilized=5,
+            cumulative_pruned=2,
+        )
+        widget._snapshot = snapshot
+
+        rendered = widget._render_slot_summary()
+        rendered_plain = rendered.plain
+
+        # Should show constraint message about no dormant slots
+        assert "GERMINATE blocked" in rendered_plain, \
+            "Should explain that GERMINATE is blocked when no dormant slots"

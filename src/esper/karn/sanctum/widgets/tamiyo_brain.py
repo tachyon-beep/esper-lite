@@ -492,6 +492,101 @@ class TamiyoBrain(Static):
 
         return result
 
+    def _render_slot_summary(self) -> Text:
+        """Render aggregate slot state across all environments.
+
+        Shows distribution of slots by lifecycle stage to explain Tamiyo's actions.
+        Format:
+            SLOTS (96 across 32 envs)
+            ┌──────────┬──────────┬──────────┬──────────┬──────────┬──────────┐
+            │ DORMANT  │GERMINATED│ TRAINING │ BLENDING │ HOLDING  │FOSSILIZED│
+            │    42    │     8    │    31    │    12    │     3    │     0    │
+            └──────────┴──────────┴──────────┴──────────┴──────────┴──────────┘
+            Fossilized: 14  Pruned: 6  Rate: 70%  AvgAge: 8.2 epochs
+        """
+        snapshot = self._snapshot
+        counts = snapshot.slot_stage_counts
+        total = snapshot.total_slots
+        active = snapshot.active_slots
+
+        if total == 0:
+            return Text("SLOTS: (no environments)", style="dim italic")
+
+        result = Text()
+
+        # Header line
+        n_envs = len(snapshot.envs) if snapshot.envs else 0
+        result.append(f"SLOTS ({total} across {n_envs} envs)\n", style="bold")
+
+        # Stage distribution with mini-bars
+        # Calculate proportions for visual bars (max 8 chars per stage)
+        stages = ["DORMANT", "GERMINATED", "TRAINING", "BLENDING", "HOLDING", "FOSSILIZED"]
+        stage_colors = {
+            "DORMANT": "dim",
+            "GERMINATED": "green",
+            "TRAINING": "cyan",
+            "BLENDING": "yellow",
+            "HOLDING": "bright_cyan",
+            "FOSSILIZED": "blue",
+        }
+        stage_abbrevs = {
+            "DORMANT": "DORM",
+            "GERMINATED": "GERM",
+            "TRAINING": "TRAIN",
+            "BLENDING": "BLEND",
+            "HOLDING": "HOLD",
+            "FOSSILIZED": "FOSS",
+        }
+
+        # Build distribution line: "DORM:48 ░░░░ │ GERM:4 ░ │ TRAIN:28 ████ │ ..."
+        for i, stage in enumerate(stages):
+            count = counts.get(stage, 0)
+            abbrev = stage_abbrevs[stage]
+            color = stage_colors[stage]
+
+            # Proportional bar (max 4 chars)
+            bar_width = min(4, int((count / max(1, total)) * 16)) if total > 0 else 0
+            bar_char = "█" if stage != "DORMANT" else "░"
+            bar = bar_char * bar_width
+
+            result.append(f"{abbrev}:", style="dim")
+            result.append(f"{count}", style=color)
+            if bar:
+                result.append(f" {bar}", style=color)
+
+            if i < len(stages) - 1:
+                result.append("  ", style="dim")
+
+        result.append("\n")
+
+        # Summary line with lifecycle stats
+        foss = snapshot.cumulative_fossilized
+        pruned = snapshot.cumulative_pruned
+        rate = (foss / max(1, foss + pruned)) * 100 if (foss + pruned) > 0 else 0
+        avg_epochs = snapshot.avg_epochs_in_stage
+
+        result.append("Foss:", style="dim")
+        result.append(f"{foss}", style="blue")
+        result.append("  Prune:", style="dim")
+        result.append(f"{pruned}", style="red" if pruned > foss else "dim")
+        result.append("  Rate:", style="dim")
+        rate_color = "green" if rate >= 70 else "yellow" if rate >= 50 else "red"
+        result.append(f"{rate:.0f}%", style=rate_color)
+        result.append("  AvgAge:", style="dim")
+        result.append(f"{avg_epochs:.1f}", style="cyan")
+        result.append(" epochs", style="dim")
+
+        # Constraint insight line (explains WHY Tamiyo behaves this way)
+        dormant = counts.get("DORMANT", 0)
+        if dormant == 0:
+            result.append("\n")
+            result.append("→ No DORMANT slots: GERMINATE blocked", style="yellow italic")
+        elif dormant >= total * 0.5:
+            result.append("\n")
+            result.append(f"→ {dormant} DORMANT: GERMINATE opportunities available", style="green italic")
+
+        return result
+
     def _render_action_sequence(self) -> Text:
         """Render action sequence with two rows for more history.
 
@@ -1546,5 +1641,12 @@ class TamiyoBrain(Static):
         # Row 8: Episode return history
         return_history = self._render_return_history()
         content.add_row(return_history)
+
+        # Row 9: Separator before slot summary
+        content.add_row(self._render_separator())
+
+        # Row 10: Aggregate slot summary (explains Tamiyo's action constraints)
+        slot_summary = self._render_slot_summary()
+        content.add_row(slot_summary)
 
         return content
