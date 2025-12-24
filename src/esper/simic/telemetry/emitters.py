@@ -636,6 +636,7 @@ def emit_ppo_update_event(
     optimizer,
     grad_norm: float | None,
     update_time_ms: float | None,
+    group_id: str = "default",  # A/B testing identifier
 ) -> None:
     """Emit PPO update completion telemetry with optional vitals."""
     lr = None
@@ -706,6 +707,7 @@ def emit_ppo_update_event(
         event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
         epoch=episodes_completed,  # Monotonic per-batch epoch id (NOT inner epoch!)
         data=data,
+        group_id=group_id,
     ))
 
 
