@@ -160,26 +160,40 @@ class TamiyoBrain(Static):
     def on_click(self, event) -> None:
         """Handle click to toggle decision pin.
 
-        Decisions are in the bottom section of the widget.
-        Each decision panel is ~5 lines tall (border + 3 content + border).
-        We estimate which decision was clicked based on Y coordinate.
+        In horizontal layout: decisions are in right 1/3 column
+        In stacked layout: decisions are at bottom after vitals
         """
         if not self._decision_ids:
             return
 
-        # The RECENT DECISIONS section starts after LEARNING VITALS
-        # LEARNING VITALS is roughly: title(1) + action bar(1) + gauges(3) + padding(1) = 6 lines
-        # Then RECENT DECISIONS title(1), then each decision panel(~5 lines)
-        vitals_height = 7  # Approximate height of Learning Vitals section
-        decision_height = 5  # Each decision panel height
+        layout_mode = self._get_layout_mode()
 
-        y = event.y
-        if y < vitals_height:
-            return  # Click was in Learning Vitals, not decisions
+        if layout_mode in ("horizontal", "compact-horizontal"):
+            # In horizontal layout, check if click is in right 1/3
+            widget_width = self.size.width
+            decision_column_start = int(widget_width * 2 / 3)
 
-        # Calculate which decision was clicked
-        decision_y = y - vitals_height
-        decision_index = decision_y // decision_height
+            if event.x < decision_column_start:
+                return  # Click was in vitals column, not decisions
+
+            # Calculate which decision card based on Y position
+            # Each compact card is ~4 lines (title + 2 content + gap)
+            header_height = 2  # Status banner + separator
+            card_height = 4
+            decision_y = event.y - header_height
+            decision_index = max(0, decision_y // card_height)
+
+        else:
+            # Stacked layout: original click handling
+            vitals_height = 7  # Approximate height of Learning Vitals section
+            decision_height = 5  # Each full decision panel height
+
+            y = event.y
+            if y < vitals_height:
+                return  # Click was in Learning Vitals
+
+            decision_y = y - vitals_height
+            decision_index = decision_y // decision_height
 
         if 0 <= decision_index < len(self._decision_ids):
             decision_id = self._decision_ids[decision_index]
