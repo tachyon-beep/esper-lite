@@ -23,7 +23,7 @@ class TestSanctumAppIntegration:
             # Verify all widgets exist
             assert app.query_one("#env-overview") is not None
             assert app.query_one("#scoreboard") is not None
-            assert app.query_one("#tamiyo-brain") is not None
+            assert app.query_one("#tamiyo-container") is not None  # Container for dynamic widgets
             assert app.query_one("#event-log") is not None
 
     @pytest.mark.asyncio
@@ -107,9 +107,9 @@ async def test_new_layout_structure():
         assert app.query_one("#env-overview") is not None
         assert app.query_one("#scoreboard") is not None
 
-        # Should have EventLog and TamiyoBrain in bottom section
+        # Should have EventLog and TamiyoBrain container in bottom section
         assert app.query_one("#event-log") is not None
-        assert app.query_one("#tamiyo-brain") is not None
+        assert app.query_one("#tamiyo-container") is not None  # Container for dynamic widgets
 
         # Should NOT have SystemResources or TrainingHealth
         from textual.css.query import NoMatches
@@ -117,3 +117,34 @@ async def test_new_layout_structure():
             app.query_one("#system-resources")
         with pytest.raises(NoMatches):
             app.query_one("#training-health")
+
+
+@pytest.mark.asyncio
+async def test_sanctum_app_shows_multiple_tamiyo_widgets():
+    """A/B mode should show two TamiyoBrain widgets side-by-side."""
+    from esper.karn.sanctum.app import SanctumApp
+    from esper.karn.sanctum.backend import SanctumBackend
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.leyline import TelemetryEvent, TelemetryEventType
+
+    backend = SanctumBackend()
+    app = SanctumApp(backend=backend, num_envs=4)
+    async with app.run_test():
+        # Send events for two groups
+        for group_id in ["A", "B"]:
+            event = TelemetryEvent(
+                event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+                group_id=group_id,  # Top-level attribute, NOT in data
+                data={"policy_loss": 0.1},
+            )
+            app.handle_telemetry_event(event)
+
+        # Should have two TamiyoBrain widgets
+        widgets = app.query(TamiyoBrain)
+        assert len(widgets) == 2
+
+        # Each should have correct group class
+        has_group_a = any("group-a" in " ".join(w.classes) for w in widgets)
+        has_group_b = any("group-b" in " ".join(w.classes) for w in widgets)
+        assert has_group_a, "Missing group-a widget"
+        assert has_group_b, "Missing group-b widget"

@@ -74,34 +74,40 @@
     width: 100%;
 }
 
-/* Tamiyo Brain - EXPANDED for comprehensive PPO diagnostics (70% width, left side) */
-#tamiyo-brain {
+/* Tamiyo Container - holds multiple TamiyoBrain widgets for A/B testing */
+#tamiyo-container {
+    layout: horizontal;
     width: 70%;
+    height: 1fr;
+}
+
+#tamiyo-container TamiyoBrain {
+    width: 1fr;
+    margin: 0 1;
     height: 1fr;
     min-height: 24;
     min-width: 96;
     border: solid magenta;
     border-title-color: magenta;
-    margin-right: 1;
     overflow-x: hidden;
     overflow-y: auto;
     padding: 0 1;
 }
 
 /* Use theme variables for consistency (per UX spec) */
-#tamiyo-brain.status-ok {
+#tamiyo-container TamiyoBrain.status-ok {
     border: solid $success;
 }
 
-#tamiyo-brain.status-warning {
+#tamiyo-container TamiyoBrain.status-warning {
     border: solid $warning;
 }
 
-#tamiyo-brain.status-critical {
+#tamiyo-container TamiyoBrain.status-critical {
     border: solid $error;
 }
 
-#tamiyo-brain:focus {
+#tamiyo-container TamiyoBrain:focus {
     border: double $accent;
 }
 

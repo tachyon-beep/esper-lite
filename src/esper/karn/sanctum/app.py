@@ -214,9 +214,10 @@ class SanctumApp(App):
 
             # Bottom section: TamiyoBrain (left) | Event Log (right)
             with Horizontal(id="bottom-section"):
-                # Left side: TamiyoBrain (50%)
-                yield TamiyoBrain(id="tamiyo-brain")
-                # Right side: Event Log (50%)
+                # Left side: TamiyoBrain container (70%) - widgets created dynamically
+                with Horizontal(id="tamiyo-container"):
+                    pass  # TamiyoBrain widgets mounted dynamically
+                # Right side: Event Log (30%)
                 yield EventLog(id="event-log")
 
         yield Footer()
@@ -234,22 +235,45 @@ class SanctumApp(App):
         self._aggregator_registry.process_event(event)
         self._update_widgets()
 
+    def _get_or_create_tamiyo_widget(self, group_id: str) -> TamiyoBrain:
+        """Get or create TamiyoBrain widget for a policy group.
+
+        Args:
+            group_id: Policy group identifier (e.g., "A", "B", "default")
+
+        Returns:
+            TamiyoBrain widget for this group.
+        """
+        widget_id = f"tamiyo-{group_id.lower()}"
+        css_class = f"group-{group_id.lower()}"
+
+        try:
+            # Try to find existing widget
+            return self.query_one(f"#{widget_id}", TamiyoBrain)
+        except NoMatches:
+            # Create new widget and mount it
+            widget = TamiyoBrain(id=widget_id, classes=css_class)
+            try:
+                container = self.query_one("#tamiyo-container")
+                container.mount(widget)
+                return widget
+            except NoMatches:
+                self.log.warning(f"Cannot mount TamiyoBrain for {group_id}: container not found")
+                raise
+
     def _update_widgets(self) -> None:
         """Update all TamiyoBrain widgets with latest snapshots."""
         snapshots = self._aggregator_registry.get_all_snapshots()
-        # For each registered group, update corresponding widget
-        # Currently we have a single TamiyoBrain widget, so we'll update it
-        # with the snapshot from the first group (for now).
-        # Future: multi-widget layout will create one widget per group.
-        if snapshots:
-            # Get the first snapshot (or you could merge them)
-            first_snapshot = next(iter(snapshots.values()))
+
+        # For each group, get/create widget and update it
+        for group_id, snapshot in snapshots.items():
             try:
-                self.query_one("#tamiyo-brain", TamiyoBrain).update_snapshot(first_snapshot)
+                widget = self._get_or_create_tamiyo_widget(group_id)
+                widget.update_snapshot(snapshot)
             except NoMatches:
-                pass  # Widget hasn't mounted yet
+                pass  # Container hasn't mounted yet
             except Exception as e:
-                self.log.warning(f"Failed to update tamiyo-brain from registry: {e}")
+                self.log.warning(f"Failed to update tamiyo widget for {group_id}: {e}")
 
     def _poll_and_refresh(self) -> None:
         """Poll backend for new snapshot and refresh all panels.
@@ -331,12 +355,8 @@ class SanctumApp(App):
         except Exception as e:
             self.log.warning(f"Failed to update scoreboard: {e}")
 
-        try:
-            self.query_one("#tamiyo-brain", TamiyoBrain).update_snapshot(snapshot)
-        except NoMatches:
-            pass  # Widget hasn't mounted yet
-        except Exception as e:
-            self.log.warning(f"Failed to update tamiyo-brain: {e}")
+        # Note: TamiyoBrain widgets are updated via _update_widgets() in handle_telemetry_event
+        # They are NOT updated here because they are group-specific and managed by the registry
 
         try:
             self.query_one("#event-log", EventLog).update_snapshot(snapshot)
