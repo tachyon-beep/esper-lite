@@ -993,9 +993,10 @@ class TestSanctumAggregator:
         agg.process_event(event)
         snapshot = agg.get_snapshot()
 
-        # Decision should be captured
-        decision = snapshot.tamiyo.last_decision
-        assert decision is not None
+        # Decision should be captured in recent_decisions list
+        # (last_decision was removed - use recent_decisions[0] instead)
+        assert len(snapshot.tamiyo.recent_decisions) > 0
+        decision = snapshot.tamiyo.recent_decisions[0]
         assert decision.chosen_action == "GERMINATE"
         assert decision.confidence == 0.73
         assert decision.expected_value == 0.42
@@ -1035,8 +1036,10 @@ class TestSanctumAggregator:
         agg.process_event(event)
         snapshot = agg.get_snapshot()
 
-        decision = snapshot.tamiyo.last_decision
-        assert decision is not None
+        # Decision should be captured in recent_decisions list
+        # (last_decision was removed - use recent_decisions[0] instead)
+        assert len(snapshot.tamiyo.recent_decisions) > 0
+        decision = snapshot.tamiyo.recent_decisions[0]
         assert decision.chosen_action == "GERMINATE"
         assert decision.confidence == 0.73
         assert decision.expected_value == 0.42

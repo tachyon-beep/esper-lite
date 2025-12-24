@@ -34,9 +34,19 @@ from esper.karn.sanctum.schema import (
     CounterfactualConfig,
     CounterfactualSnapshot,
 )
+from esper.leyline import DEFAULT_GAMMA
 
 if TYPE_CHECKING:
     from esper.leyline import TelemetryEvent
+
+
+@dataclass
+class PendingDecision:
+    """Data needed to compute TD advantage when next V(s') arrives."""
+    decision: DecisionSnapshot
+    reward: float
+    value_s: float  # V(s) at decision time
+    env_id: int
 
 
 # Action normalization map: factored action names -> base action
@@ -167,6 +177,10 @@ class SanctumAggregator:
 
     # Rolling average history (mean accuracy across all envs, updated per epoch)
     _mean_accuracy_history: deque[float] = field(default_factory=lambda: deque(maxlen=50))
+
+    # Pending decisions per env (for delayed TD advantage computation)
+    # When we get V(s') for env, we compute td_advantage for its pending decision
+    _pending_decisions: dict[int, PendingDecision] = field(default_factory=dict)
 
     # Thread safety
     _lock: threading.Lock = field(default_factory=threading.Lock)
@@ -712,6 +726,18 @@ class SanctumAggregator:
         # Only capture if we have decision data (action_confidence present)
         if "action_confidence" in data:
             now_dt = event.timestamp or datetime.now(timezone.utc)
+            value_s = data.get("value_estimate", 0.0)
+
+            # Compute TD advantage for previous decision from this env
+            # td_advantage = r_prev + γ*V(s) - V(s_prev)
+            # where V(s) is the current value estimate (next state for prev decision)
+            if env_id in self._pending_decisions:
+                pending = self._pending_decisions[env_id]
+                # Current value_s is V(s') for the pending decision
+                td_adv = pending.reward + DEFAULT_GAMMA * value_s - pending.value_s
+                pending.decision.td_advantage = td_adv
+                del self._pending_decisions[env_id]
+
             decision = DecisionSnapshot(
                 timestamp=now_dt,
                 slot_states=data.get("slot_states", {}),
@@ -719,10 +745,24 @@ class SanctumAggregator:
                 chosen_action=action_name,
                 chosen_slot=data.get("action_slot"),
                 confidence=data.get("action_confidence", 0.0),
-                expected_value=data.get("value_estimate", 0.0),
+                expected_value=value_s,
                 actual_reward=total_reward,
                 alternatives=data.get("alternatives", []),
                 decision_id=str(uuid.uuid4())[:8],  # Short unique ID for pinning
+                decision_entropy=data.get("decision_entropy", 0.0),
+                env_id=env_id,
+                # value_residual = r - V(s): immediate reward minus value estimate
+                value_residual=total_reward - value_s,
+                # td_advantage computed on NEXT decision when V(s') is known
+                td_advantage=None,
+            )
+
+            # Store as pending for TD advantage computation on next decision
+            self._pending_decisions[env_id] = PendingDecision(
+                decision=decision,
+                reward=total_reward,
+                value_s=value_s,
+                env_id=env_id,
             )
 
             # Add decision if room available (expiration handled by build_snapshot)
@@ -732,9 +772,6 @@ class SanctumAggregator:
             if len(decisions) < MAX_DECISIONS:
                 decisions.insert(0, decision)
                 self._tamiyo.recent_decisions = decisions
-
-            # Also keep last_decision for backwards compatibility
-            self._tamiyo.last_decision = decision
 
         # Track focused env for reward panel
         self._focused_env_id = env_id

@@ -530,6 +530,16 @@ class PPOAgent:
         metrics["explained_variance"] = [explained_variance]
         early_stopped = False
 
+        # Compute advantage stats for status banner diagnostics
+        # These indicate if advantage normalization is working correctly
+        valid_advantages_for_stats = data["advantages"][valid_mask]
+        if valid_advantages_for_stats.numel() > 0:
+            metrics["advantage_mean"] = [valid_advantages_for_stats.mean().item()]
+            metrics["advantage_std"] = [valid_advantages_for_stats.std().item()]
+        else:
+            metrics["advantage_mean"] = [0.0]
+            metrics["advantage_std"] = [0.0]
+
         # Initialize per-head entropy tracking (P3-1)
         head_entropy_history: dict[str, list[float]] = {head: [] for head in HEAD_NAMES}
         # Initialize per-head gradient norm tracking (P4-6)

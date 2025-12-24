@@ -389,10 +389,14 @@ class TamiyoState:
     ratio_std: float = 0.0  # Standard deviation of ratio
 
     # Advantage statistics (from PPO update)
+    # Post-normalization stats (should be ~0 mean, ~1 std if normalization working)
     advantage_mean: float = 0.0
     advantage_std: float = 0.0
     advantage_min: float = 0.0
     advantage_max: float = 0.0
+    # Pre-normalization stats (raw learning signal magnitude)
+    advantage_raw_mean: float = 0.0
+    advantage_raw_std: float = 0.0
 
     # Gradient health (shown in Vitals)
     dead_layers: int = 0
@@ -405,17 +409,25 @@ class TamiyoState:
     update_time_ms: float = 0.0  # PPO update duration in milliseconds
     early_stop_epoch: int | None = None  # KL early stopping triggered at this epoch
 
-    # Per-head entropy and gradient norms (for multi-head policy)
-    head_slot_entropy: float = 0.0  # Entropy for slot action head
-    head_slot_grad_norm: float = 0.0  # Gradient norm for slot head
-    head_blueprint_entropy: float = 0.0  # Entropy for blueprint action head
-    head_blueprint_grad_norm: float = 0.0  # Gradient norm for blueprint head
+    # Per-head entropy (for multi-head policy collapse detection)
+    head_slot_entropy: float = 0.0
+    head_blueprint_entropy: float = 0.0
     head_style_entropy: float = 0.0
     head_tempo_entropy: float = 0.0
     head_alpha_target_entropy: float = 0.0
     head_alpha_speed_entropy: float = 0.0
     head_alpha_curve_entropy: float = 0.0
     head_op_entropy: float = 0.0
+
+    # Per-head gradient norms (for multi-head gradient health)
+    head_slot_grad_norm: float = 0.0
+    head_blueprint_grad_norm: float = 0.0
+    head_style_grad_norm: float = 0.0
+    head_tempo_grad_norm: float = 0.0
+    head_alpha_target_grad_norm: float = 0.0
+    head_alpha_speed_grad_norm: float = 0.0
+    head_alpha_curve_grad_norm: float = 0.0
+    head_op_grad_norm: float = 0.0
 
     # Episode return tracking (PRIMARY RL METRIC - per DRL review)
     episode_return_history: deque[float] = field(
@@ -444,10 +456,6 @@ class TamiyoState:
 
     # PPO data received flag
     ppo_data_received: bool = False
-
-    # Last decision snapshot (captured from REWARD_COMPUTED events)
-    # Deprecated: Use recent_decisions instead
-    last_decision: "DecisionSnapshot | None" = None
 
     # Recent decisions list (up to 3, each visible for at least 10 seconds)
     recent_decisions: list["DecisionSnapshot"] = field(default_factory=list)
@@ -599,10 +607,13 @@ class DecisionSnapshot:
     decision_id: str = ""
     # Pinned decisions never get replaced
     pinned: bool = False
+    # Environment ID that made this decision (for TD advantage tracking)
+    env_id: int = 0
 
-    # Value function outputs (per DRL review - Task 5)
-    value_estimate: float = 0.0   # V(s) - state value estimate
-    advantage: float = 0.0        # A(s,a) - advantage for chosen action
+    # Per-decision metrics (per DRL review)
+    # Note: expected_value (above) contains V(s), no need for separate value_estimate
+    value_residual: float = 0.0   # r - V(s): immediate reward minus value estimate
+    td_advantage: float | None = None  # r + γV(s') - V(s): true TD(0) advantage (None until next step)
 
     # Decision-specific entropy (per DRL review - more useful than policy entropy)
     decision_entropy: float = 0.0  # -sum(p*log(p)) for this action distribution

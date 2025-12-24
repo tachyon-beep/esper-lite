@@ -2599,6 +2599,7 @@ def train_ppo_vectorized(
 
                     action_confidence = None
                     alternatives: list[tuple[str, float]] | None = None
+                    decision_entropy = None
                     if op_probs_cpu is not None and env_idx < len(op_probs_cpu):
                         probs = op_probs_cpu[env_idx]
                         chosen_op = int(action_dict["op"])
@@ -2610,6 +2611,12 @@ def train_ppo_vectorized(
                             for op_idx, prob in ranked
                             if op_idx != chosen_op
                         ][:2]
+                        # Compute decision entropy: -sum(p * log(p)) for op head
+                        entropy_sum = 0.0
+                        for p in probs:
+                            if p > 1e-8:  # Avoid log(0)
+                                entropy_sum -= p * math.log(p)
+                        decision_entropy = entropy_sum
                     emitters[env_idx].on_last_action(
                         epoch,
                         action_dict,
@@ -2623,6 +2630,7 @@ def train_ppo_vectorized(
                         slot_states=decision_slot_states,
                         action_confidence=action_confidence,
                         alternatives=alternatives,
+                        decision_entropy=decision_entropy,
                     )
 
                 # Store transition

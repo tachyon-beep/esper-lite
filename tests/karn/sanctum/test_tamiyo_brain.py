@@ -1025,22 +1025,26 @@ async def test_per_head_entropy_heatmap():
 
 
 @pytest.mark.asyncio
-async def test_per_head_heatmap_missing_data_visual():
-    """Heatmap should show visual distinction for unpopulated heads."""
+async def test_per_head_heatmap_zero_entropy_critical():
+    """Heatmap should show critical indicator for zero-entropy heads.
+
+    All 8 heads are now tracked by PPO. When a head has 0.0 entropy
+    (fully collapsed), it should display "0.00!" with critical styling.
+    """
     app = TamiyoBrainTestApp()
     async with app.run_test():
         widget = app.query_one(TamiyoBrain)
         snapshot = SanctumSnapshot(slot_ids=["R0C0"])
-        # Only slot and blueprint have data, others are 0.0
+        # Slot and blueprint have healthy entropy, others are collapsed (0.0)
         snapshot.tamiyo = TamiyoState(
             head_slot_entropy=1.0,
             head_blueprint_entropy=2.0,
-            head_style_entropy=0.0,  # Missing
-            head_tempo_entropy=0.0,  # Missing
-            head_alpha_target_entropy=0.0,  # Missing
-            head_alpha_speed_entropy=0.0,  # Missing
-            head_alpha_curve_entropy=0.0,  # Missing
-            head_op_entropy=0.0,  # Missing
+            head_style_entropy=0.0,  # Collapsed
+            head_tempo_entropy=0.0,  # Collapsed
+            head_alpha_target_entropy=0.0,  # Collapsed
+            head_alpha_speed_entropy=0.0,  # Collapsed
+            head_alpha_curve_entropy=0.0,  # Collapsed
+            head_op_entropy=0.0,  # Collapsed
             ppo_data_received=True,
         )
 
@@ -1050,9 +1054,9 @@ async def test_per_head_heatmap_missing_data_visual():
         heatmap = widget._render_head_heatmap()
         plain = heatmap.plain.lower()
 
-        # Should indicate missing/pending data visually
-        # (implementation will use "n/a" or similar for zeros)
-        assert "n/a" in plain or "---" in plain or "?" in plain
+        # Zero-entropy heads should show critical indicator (!)
+        # Multiple heads with 0.00! indicates exploration collapse
+        assert "0.00!" in plain
 
 
 # ===========================
@@ -1080,7 +1084,7 @@ async def test_heatmap_appears_in_render():
         assert rendered is not None
 
         # Convert to plain text to verify heatmap is included
-        # Heatmap contains "Heads:" label and head abbreviations like "sl[" and "bp["
+        # Heatmap contains "Heads:" label and head abbreviations like "slot[" and "bpnt["
         from rich.console import Console
         from io import StringIO
 
@@ -1092,9 +1096,9 @@ async def test_heatmap_appears_in_render():
         # Heatmap should be present with "Heads:" label
         assert "heads:" in output.lower()
 
-        # Verify head abbreviations are present
-        assert "sl[" in output  # slot head
-        assert "bp[" in output  # blueprint head
+        # Verify head abbreviations are present (expanded per UX review)
+        assert "slot[" in output  # slot head
+        assert "bpnt[" in output  # blueprint head
 
 
 # ===========================
@@ -1329,8 +1333,7 @@ async def test_enriched_decision_card_format():
             actual_reward=0.08,
             alternatives=[("GERMINATE", 0.05), ("FOSSILIZE", 0.03)],
             pinned=False,
-            value_estimate=0.45,
-            advantage=-0.12,
+            value_residual=-0.04,  # r - V(s) = 0.08 - 0.12
             decision_entropy=0.85,
         )
 
@@ -1358,8 +1361,8 @@ async def test_enriched_decision_card_format():
         assert "WAIT" in card_str  # Action
         assert "92%" in card_str  # Confidence
         assert "H:87" in card_str or "H:88" in card_str  # Host accuracy
-        assert "V:" in card_str  # Value estimate
-        assert "A:" in card_str  # Advantage
+        assert "V:" in card_str  # Value estimate V(s)
+        assert "δ:" in card_str  # Value residual δ = r - V(s)
         assert "ent:" in card_str  # Decision entropy
         assert "alt:" in card_str  # Alternatives
 
@@ -1387,12 +1390,11 @@ async def test_enriched_decision_card_hit_miss():
             actual_reward=0.15,  # diff = 0.03 < 0.1
             alternatives=[],
             pinned=False,
-            value_estimate=0.45,
-            advantage=-0.12,
+            value_residual=0.03,  # r - V(s) = 0.15 - 0.12
             decision_entropy=0.85,
         )
         card = widget._render_enriched_decision(decision_hit, index=0)
-        assert "HIT" in card.plain
+        # Note: HIT/MISS text removed from new format - just icon now
         assert "✓" in card.plain
 
         # Test MISS (diff >= 0.1)
@@ -1408,12 +1410,11 @@ async def test_enriched_decision_card_hit_miss():
             actual_reward=0.50,  # diff = 0.38 >= 0.1
             alternatives=[],
             pinned=False,
-            value_estimate=0.45,
-            advantage=-0.12,
+            value_residual=0.38,  # r - V(s) = 0.50 - 0.12
             decision_entropy=0.85,
         )
         card = widget._render_enriched_decision(decision_miss, index=0)
-        assert "MISS" in card.plain
+        # Note: HIT/MISS text removed from new format - just icon now
         assert "✗" in card.plain
 
 
@@ -1444,18 +1445,17 @@ async def test_enriched_decision_card_uses_constant():
             actual_reward=0.22,  # diff = 0.10 exactly at threshold
             alternatives=[],
             pinned=False,
-            value_estimate=0.45,
-            advantage=-0.12,
+            value_residual=0.10,  # r - V(s) = 0.22 - 0.12
             decision_entropy=0.85,
         )
         card = widget._render_enriched_decision(decision, index=0)
-        # diff = 0.10, which is NOT < 0.1, so should be MISS
-        assert "MISS" in card.plain
+        # diff = 0.10, which is NOT < 0.1, so should be MISS (✗ icon)
+        assert "✗" in card.plain
 
 
 @pytest.mark.asyncio
 async def test_decisions_column_uses_enriched_cards():
-    """Decisions column should use enriched cards with V(s), A(s,a)."""
+    """Decisions column should use enriched cards with V(s) and δ (value residual)."""
     from esper.karn.sanctum.schema import DecisionSnapshot, SanctumSnapshot, TamiyoState
     from datetime import datetime, timezone
 
@@ -1474,8 +1474,7 @@ async def test_decisions_column_uses_enriched_cards():
             actual_reward=0.08,
             alternatives=[],
             decision_id="test-1",
-            value_estimate=0.45,
-            advantage=-0.12,
+            value_residual=-0.04,  # r - V(s) = 0.08 - 0.12
             decision_entropy=0.85,
         )
 
@@ -1491,7 +1490,7 @@ async def test_decisions_column_uses_enriched_cards():
         column_str = str(column)
 
         assert "V:" in column_str, f"Decisions column should show V(s). Got: {column_str}"
-        assert "A:" in column_str, f"Decisions column should show A(s,a). Got: {column_str}"
+        assert "δ:" in column_str, f"Decisions column should show δ (value residual). Got: {column_str}"
 
 
 # ===========================
@@ -1501,7 +1500,11 @@ async def test_decisions_column_uses_enriched_cards():
 
 @pytest.mark.asyncio
 async def test_decisions_column_renders_three_cards():
-    """Decisions column should render 3 enriched decision cards vertically."""
+    """Decisions column should render 3 enriched decision cards vertically.
+
+    Note: The widget uses display throttling (one card swap per 30s).
+    For testing, we pre-populate the display buffer to bypass throttling.
+    """
     from esper.karn.sanctum.schema import DecisionSnapshot, TamiyoState, SanctumSnapshot
     from datetime import datetime, timezone, timedelta
 
@@ -1524,8 +1527,7 @@ async def test_decisions_column_renders_three_cards():
                 actual_reward=0.1 * i + 0.02,
                 alternatives=[],
                 pinned=False,
-                value_estimate=0.45,
-                advantage=-0.12,
+                value_residual=0.02,  # r - V(s) = +0.02 for all
                 decision_entropy=0.85,
             )
             for i in range(3)
@@ -1538,6 +1540,9 @@ async def test_decisions_column_renders_three_cards():
             )
         )
         widget.update_snapshot(snapshot)
+
+        # Pre-populate display buffer to bypass throttling (tests rendering, not throttling)
+        widget._displayed_decisions = decisions.copy()
 
         # Render decisions column
         column = widget._render_decisions_column()
@@ -1913,7 +1918,7 @@ def test_alpha_oscillation_detection():
 
 
 def test_decision_card_shows_value_and_advantage():
-    """Decision cards should show V(s) and A(s,a) per DRL review."""
+    """Decision cards should show V(s) and δ (value residual) per DRL review."""
     from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
     from esper.karn.sanctum.schema import DecisionSnapshot, SanctumSnapshot, TamiyoState
     from datetime import datetime, timezone
@@ -1925,12 +1930,11 @@ def test_decision_card_shows_value_and_advantage():
         chosen_action="WAIT",
         chosen_slot="r1",
         confidence=0.92,
-        expected_value=0.12,
+        expected_value=0.12,  # V(s)
         actual_reward=0.08,
         alternatives=[("GERMINATE", 0.04), ("FOSSILIZE", 0.02)],
         decision_id="test-1",
-        value_estimate=0.45,  # V(s)
-        advantage=-0.12,       # A(s,a)
+        value_residual=-0.04,  # δ = r - V(s) = 0.08 - 0.12
         decision_entropy=0.85,  # Decision entropy
     )
 
@@ -1946,13 +1950,13 @@ def test_decision_card_shows_value_and_advantage():
     card = widget._render_enriched_decision(decision, index=0)
     card_str = str(card)
 
-    # Should show V(s) and A(s,a)
+    # Should show V(s) and δ (value residual)
     assert "V:" in card_str, f"Card should show value estimate V(s). Got: {card_str}"
-    assert "A:" in card_str, f"Card should show advantage A(s,a). Got: {card_str}"
+    assert "δ:" in card_str, f"Card should show value residual δ. Got: {card_str}"
 
-    # Should show outcome text (per UX review)
-    assert "HIT" in card_str or "MISS" in card_str, \
-        f"Card should show outcome text. Got: {card_str}"
+    # Should show outcome icon (per UX review - HIT/MISS text removed, just icon)
+    assert "✓" in card_str or "✗" in card_str, \
+        f"Card should show outcome icon. Got: {card_str}"
 
 
 @pytest.mark.asyncio

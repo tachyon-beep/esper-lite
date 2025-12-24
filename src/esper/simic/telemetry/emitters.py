@@ -190,6 +190,7 @@ class VectorizedEmitter:
         slot_states: dict[str, str] | None = None,
         action_confidence: float | None = None,
         alternatives: list[tuple[str, float]] | None = None,
+        decision_entropy: float | None = None,
     ) -> None:
         """Emit last-action detail, offloading formatting to the hub thread."""
         if not self._should_emit("ops_normal"):
@@ -244,7 +245,9 @@ class VectorizedEmitter:
             data["action_confidence"] = float(action_confidence)
         if alternatives is not None:
             data["alternatives"] = list(alternatives)
-        
+        if decision_entropy is not None:
+            data["decision_entropy"] = float(decision_entropy)
+
         self._emit(TelemetryEvent(
             event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
             epoch=epoch,
@@ -647,11 +650,12 @@ def emit_ppo_update_event(
             lr = None
 
     # Compute per-head entropy averages for logging (P3-1)
+    # Key format: head_{name}_entropy to match aggregator field names
     head_entropies_avg = {}
     if "head_entropies" in metrics:
         for head, values in metrics["head_entropies"].items():
             avg_entropy = sum(values) / len(values) if values else 0.0
-            head_entropies_avg[f"{head}_entropy"] = avg_entropy
+            head_entropies_avg[f"head_{head}_entropy"] = avg_entropy
 
     # Compute per-head gradient norm averages for logging (P4-6)
     head_grad_norms_avg = {}
@@ -679,6 +683,9 @@ def emit_ppo_update_event(
         "ratio_std": metrics.get("ratio_std", 0.0),
         # Value function health (negative = critic broken)
         "explained_variance": metrics.get("explained_variance", 0.0),
+        # Advantage statistics (normalization health - should have mean≈0, std≈1 after norm)
+        "advantage_mean": metrics.get("advantage_mean", 0.0),
+        "advantage_std": metrics.get("advantage_std", 0.0),
         # Early stopping info
         "early_stop_epoch": metrics.get("early_stop_epoch"),
         # Episode-level metrics

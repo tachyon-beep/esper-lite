@@ -5,6 +5,7 @@ New layout focuses on answering:
 - "Is she learning?" (Entropy, Value Loss, KL gauges)
 - "What did she just decide?" (Last Decision snapshot)
 """
+
 from __future__ import annotations
 
 from collections import deque
@@ -46,7 +47,9 @@ def detect_action_patterns(
 
     # STUCK: All WAIT when dormant slots exist (per DRL review)
     if len(actions) >= 8 and all(a == "WAIT" for a in actions[-8:]):
-        has_dormant = any("Dormant" in str(s) or "Empty" in str(s) for s in slot_states.values())
+        has_dormant = any(
+            "Dormant" in str(s) or "Empty" in str(s) for s in slot_states.values()
+        )
         has_training = any("Training" in str(s) for s in slot_states.values())
         # Stuck = waiting when we COULD germinate (dormant exists, nothing training)
         if has_dormant and not has_training:
@@ -112,18 +115,27 @@ class TamiyoBrain(Static):
     # Per-head max entropy values from factored_actions.py (DRL CORRECTED)
     # These are ln(N) where N is the number of actions for each head
     HEAD_MAX_ENTROPIES = {
-        "slot": 1.099,       # ln(3) - default SlotConfig has 3 slots
+        "slot": 1.099,  # ln(3) - default SlotConfig has 3 slots
         "blueprint": 2.565,  # ln(13) - BlueprintAction has 13 values
-        "style": 1.386,      # ln(4) - GerminationStyle has 4 values
-        "tempo": 1.099,      # ln(3) - TempoAction has 3 values
+        "style": 1.386,  # ln(4) - GerminationStyle has 4 values
+        "tempo": 1.099,  # ln(3) - TempoAction has 3 values
         "alpha_target": 1.099,  # ln(3) - AlphaTargetAction has 3 values
-        "alpha_speed": 1.386,   # ln(4) - AlphaSpeedAction has 4 values
-        "alpha_curve": 1.099,   # ln(3) - AlphaCurveAction has 3 values
-        "op": 1.792,         # ln(6) - LifecycleOp has 6 values
+        "alpha_speed": 1.386,  # ln(4) - AlphaSpeedAction has 4 values
+        "alpha_curve": 1.099,  # ln(3) - AlphaCurveAction has 3 values
+        "op": 1.792,  # ln(6) - LifecycleOp has 6 values
     }
 
-    # Heads that PPOAgent currently tracks (others awaiting neural network changes)
-    TRACKED_HEADS = {"slot", "blueprint"}
+    # All 8 action heads are tracked by PPO (per-head entropy from factored policy)
+    TRACKED_HEADS = {
+        "slot",
+        "blueprint",
+        "style",
+        "tempo",
+        "alpha_target",
+        "alpha_speed",
+        "alpha_curve",
+        "op",
+    }
 
     # A/B/C testing color scheme
     # A = Green (primary/control), B = Cyan (variant), C = Magenta (second variant)
@@ -147,11 +159,18 @@ class TamiyoBrain(Static):
             super().__init__()
             self.decision_id = decision_id
 
+    # Decision card display throttling: ONE card swap per interval, maximum
+    CARD_SWAP_INTERVAL = 30.0  # Minimum seconds between card replacements
+
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
         self._decision_ids: list[str] = []  # IDs of currently displayed decisions
         self.border_title = "TAMIYO"  # Top-left title like EventLog
+
+        # Display throttling state: stable buffer updated ONE card at a time
+        self._displayed_decisions: list["DecisionSnapshot"] = []
+        self._last_card_swap_time: float = 0.0
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         self._snapshot = snapshot
@@ -305,7 +324,9 @@ class TamiyoBrain(Static):
             content_table = Table.grid(expand=True)
             content_table.add_column(ratio=1)  # Vitals (expands to fill)
             content_table.add_column(width=1)  # Separator
-            content_table.add_column(width=self.DECISION_CARD_WIDTH + 4)  # Decisions (fixed)
+            content_table.add_column(
+                width=self.DECISION_CARD_WIDTH + 4
+            )  # Decisions (fixed)
 
             vitals_col = self._render_vitals_column()
             separator = Text("│\n" * 15, style="dim")  # Vertical separator
@@ -388,16 +409,25 @@ class TamiyoBrain(Static):
 
         batch = self._snapshot.current_batch
         entropy_gauge = self._render_gauge(
-            "Entropy", tamiyo.entropy, 0, 2.0,
-            self._get_entropy_label(tamiyo.entropy, batch)
+            "Entropy",
+            tamiyo.entropy,
+            0,
+            2.0,
+            self._get_entropy_label(tamiyo.entropy, batch),
         )
         value_gauge = self._render_gauge(
-            "Value Loss", tamiyo.value_loss, 0, 1.0,
-            self._get_value_loss_label(tamiyo.value_loss, batch)
+            "Value Loss",
+            tamiyo.value_loss,
+            0,
+            1.0,
+            self._get_value_loss_label(tamiyo.value_loss, batch),
         )
         kl_gauge = self._render_gauge(
-            "KL", tamiyo.kl_divergence, 0.0, 0.1,
-            self._get_kl_label(tamiyo.kl_divergence, batch)
+            "KL",
+            tamiyo.kl_divergence,
+            0.0,
+            0.1,
+            self._get_kl_label(tamiyo.kl_divergence, batch),
         )
 
         gauges.add_row(entropy_gauge, value_gauge, kl_gauge)
@@ -450,7 +480,9 @@ class TamiyoBrain(Static):
         legend_parts = []
         for action in ["GERMINATE", "SET_ALPHA_TARGET", "FOSSILIZE", "PRUNE", "WAIT"]:
             pct = pcts.get(action, 0)
-            legend_parts.append((f"{abbrevs[action]}={pct:02.0f}", colors.get(action, "white")))
+            legend_parts.append(
+                (f"{abbrevs[action]}={pct:02.0f}", colors.get(action, "white"))
+            )
 
         # Add spacing then fixed-width legend
         bar.append(" ")
@@ -520,7 +552,14 @@ class TamiyoBrain(Static):
 
         # Stage distribution with mini-bars
         # Calculate proportions for visual bars (max 8 chars per stage)
-        stages = ["DORMANT", "GERMINATED", "TRAINING", "BLENDING", "HOLDING", "FOSSILIZED"]
+        stages = [
+            "DORMANT",
+            "GERMINATED",
+            "TRAINING",
+            "BLENDING",
+            "HOLDING",
+            "FOSSILIZED",
+        ]
         stage_colors = {
             "DORMANT": "dim",
             "GERMINATED": "green",
@@ -580,10 +619,15 @@ class TamiyoBrain(Static):
         dormant = counts.get("DORMANT", 0)
         if dormant == 0:
             result.append("\n")
-            result.append("→ No DORMANT slots: GERMINATE blocked", style="yellow italic")
+            result.append(
+                "→ No DORMANT slots: GERMINATE blocked", style="yellow italic"
+            )
         elif dormant >= total * 0.5:
             result.append("\n")
-            result.append(f"→ {dormant} DORMANT: GERMINATE opportunities available", style="green italic")
+            result.append(
+                f"→ {dormant} DORMANT: GERMINATE opportunities available",
+                style="green italic",
+            )
 
         return result
 
@@ -628,7 +672,9 @@ class TamiyoBrain(Static):
 
         # Recent row (most recent 12)
         recent_decisions = decisions[:12]
-        recent_actions = [action_map.get(d.chosen_action, ("?", "white")) for d in recent_decisions]
+        recent_actions = [
+            action_map.get(d.chosen_action, ("?", "white")) for d in recent_decisions
+        ]
         recent_actions.reverse()  # Oldest first for left-to-right reading
 
         result.append("Recent:  ", style="dim")
@@ -649,19 +695,27 @@ class TamiyoBrain(Static):
         # Prior row (older 12)
         prior_decisions = decisions[12:24]
         if prior_decisions:
-            prior_actions = [action_map.get(d.chosen_action, ("?", "white")) for d in prior_decisions]
+            prior_actions = [
+                action_map.get(d.chosen_action, ("?", "white")) for d in prior_decisions
+            ]
             prior_actions.reverse()
 
             result.append("Prior:   ", style="dim")
             for char, color in prior_actions:
-                result.append(char + " ", style=color)  # No pattern highlighting on prior
+                result.append(
+                    char + " ", style=color
+                )  # No pattern highlighting on prior
 
         return result
 
-    def _render_gauge(self, label: str, value: float, min_val: float, max_val: float, description: str) -> Text:
+    def _render_gauge(
+        self, label: str, value: float, min_val: float, max_val: float, description: str
+    ) -> Text:
         """Render a single gauge with label and description on separate lines."""
         # Normalize to 0-1
-        normalized = (value - min_val) / (max_val - min_val) if max_val != min_val else 0.5
+        normalized = (
+            (value - min_val) / (max_val - min_val) if max_val != min_val else 0.5
+        )
         normalized = max(0, min(1, normalized))
 
         # Build gauge bar (width 12)
@@ -763,8 +817,18 @@ class TamiyoBrain(Static):
         else:
             return "Stable"
 
-    def _render_enriched_decision(self, decision: "DecisionSnapshot", index: int) -> Text:
+    def _render_enriched_decision(
+        self,
+        decision: "DecisionSnapshot",
+        index: int,
+        total_cards: int = 3,
+    ) -> Text:
         """Render an enriched 6-line decision card (24 chars wide).
+
+        Age-based border colors (per UX review):
+        - Newest (index 0): cyan border - fresh, actionable
+        - Middle: dim grey border - intermediate
+        - Oldest (index == total-1): yellow border - aging out soon
 
         Format per DRL + UX reviews:
         ┌─ D1 16s ──────────────┐
@@ -779,67 +843,109 @@ class TamiyoBrain(Static):
 
         CONTENT_WIDTH = self.DECISION_CARD_WIDTH - 4  # "│ " + content + " │"
 
+        # Age-based border colors (per UX review):
+        # - Newest (index 0): cyan - fresh, actionable
+        # - Middle: dim grey - intermediate
+        # - Oldest (index == total-1): yellow - aging out soon
+        if total_cards <= 1:
+            border_style = "cyan"  # Single card is always "newest"
+        elif index == 0:
+            border_style = "cyan"  # Newest
+        elif index == total_cards - 1:
+            border_style = "yellow"  # Oldest
+        else:
+            border_style = "dim"  # Middle
+
         now = datetime.now(timezone.utc)
         age = (now - decision.timestamp).total_seconds()
-        age_str = f"{age:.0f}s" if age < 60 else f"{age/60:.0f}m"
+        age_str = f"{age:.0f}s" if age < 60 else f"{age / 60:.0f}m"
 
         action_colors = {
-            "GERMINATE": "green", "WAIT": "dim", "FOSSILIZE": "blue",
-            "PRUNE": "red", "SET_ALPHA_TARGET": "cyan", "ADVANCE": "cyan",
+            "GERMINATE": "green",
+            "WAIT": "dim",
+            "FOSSILIZE": "blue",
+            "PRUNE": "red",
+            "SET_ALPHA_TARGET": "cyan",
+            "ADVANCE": "cyan",
         }
         action_style = action_colors.get(decision.chosen_action, "white")
 
         card = Text()
 
         # Title: ┌─ D1 16s ──────────────┐
-        title = f"D{index+1} {age_str}"
+        title = f"D{index + 1} {age_str}"
         fill = self.DECISION_CARD_WIDTH - 4 - len(title)
-        card.append(f"┌─ {title}{'─' * fill}┐\n", style="dim")
+        card.append(f"┌─ {title}{'─' * fill}┐\n", style=border_style)
 
         # Line 1: ACTION s:N CONF%
         action_abbrev = decision.chosen_action[:4].upper()
         slot_num = decision.chosen_slot[-1] if decision.chosen_slot else "-"
         line1 = f"{action_abbrev} s:{slot_num} {decision.confidence:.0%}"
-        card.append("│ ")
+        card.append("│", style=border_style)
+        card.append(" ")
         card.append(action_abbrev, style=action_style)
         card.append(f" s:{slot_num}", style="cyan")
         card.append(f" {decision.confidence:.0%}", style="dim")
-        card.append(" " * max(0, CONTENT_WIDTH - len(line1)) + " │\n")
+        card.append(" " * max(0, CONTENT_WIDTH - len(line1)) + " ")
+        card.append("│", style=border_style)
+        card.append("\n")
 
         # Line 2: H:XX% ent:X.XX (decision entropy, per DRL review)
         line2 = f"H:{decision.host_accuracy:.0f}% ent:{decision.decision_entropy:.2f}"
-        card.append("│ ")
+        card.append("│", style=border_style)
+        card.append(" ")
         card.append(f"H:{decision.host_accuracy:.0f}%", style="cyan")
         card.append(f" ent:{decision.decision_entropy:.2f}", style="dim")
-        card.append(" " * max(0, CONTENT_WIDTH - len(line2)) + " │\n")
+        card.append(" " * max(0, CONTENT_WIDTH - len(line2)) + " ")
+        card.append("│", style=border_style)
+        card.append("\n")
 
-        # Line 3: V:+X.XX A:+X.XX (per DRL review)
-        line3 = f"V:{decision.value_estimate:+.2f} A:{decision.advantage:+.2f}"
-        card.append("│ ")
-        card.append(f"V:{decision.value_estimate:+.2f}", style="cyan")
-        card.append(f" A:{decision.advantage:+.2f}", style="magenta")
-        card.append(" " * max(0, CONTENT_WIDTH - len(line3)) + " │\n")
+        # Line 3: V:+X.XX δ:+X.XX (per DRL review)
+        # V = expected_value = V(s) value function estimate
+        # δ = value_residual = r - V(s) = prediction error
+        line3 = (
+            f"V:{decision.expected_value:+.2f} \u03b4:{decision.value_residual:+.2f}"
+        )
+        card.append("│", style=border_style)
+        card.append(" ")
+        card.append(f"V:{decision.expected_value:+.2f}", style="cyan")
+        card.append(f" \u03b4:{decision.value_residual:+.2f}", style="magenta")
+        card.append(" " * max(0, CONTENT_WIDTH - len(line3)) + " ")
+        card.append("│", style=border_style)
+        card.append("\n")
 
-        # Line 4: Expected → Actual ✓ HIT / ✗ MISS (per UX review)
-        card.append("│ ")
-        card.append(f"{decision.expected_value:+.2f}", style="dim")
-        card.append("→", style="dim")
+        # Line 4: r:+X.XX TD:+X.XX ✓ HIT / ✗ MISS (per DRL + UX review)
+        # r = actual_reward = immediate reward received
+        # TD = td_advantage = r + γV(s') - V(s) = true TD(0) advantage
+        # HIT/MISS based on prediction accuracy |r - V(s)|
+        card.append("│", style=border_style)
+        card.append(" ")
         if decision.actual_reward is not None:
             diff = abs(decision.actual_reward - decision.expected_value)
             is_hit = diff < self.PREDICTION_EXCELLENT_THRESHOLD
             style = "green" if is_hit else "red"
             icon = "✓" if is_hit else "✗"
             text = "HIT" if is_hit else "MISS"
-            card.append(f"{decision.actual_reward:+.2f}", style=style)
-            card.append(f" {icon} {text}", style=style)
-            line4 = f"{decision.expected_value:+.2f}→{decision.actual_reward:+.2f} {icon} {text}"
+            # Show reward
+            card.append(f"r:{decision.actual_reward:+.2f}", style=style)
+            # Show TD advantage if computed (requires next step's V(s'))
+            if decision.td_advantage is not None:
+                card.append(f" TD:{decision.td_advantage:+.2f}", style="bright_cyan")
+                line4 = f"r:{decision.actual_reward:+.2f} TD:{decision.td_advantage:+.2f} {icon}"
+            else:
+                card.append(" TD:...", style="dim italic")
+                line4 = f"r:{decision.actual_reward:+.2f} TD:... {icon}"
+            card.append(f" {icon}", style=style)
         else:
-            card.append("...", style="dim italic")
-            line4 = f"{decision.expected_value:+.2f}→..."
-        card.append(" " * max(0, CONTENT_WIDTH - len(line4)) + " │\n")
+            card.append("r:... TD:...", style="dim italic")
+            line4 = "r:... TD:..."
+        card.append(" " * max(0, CONTENT_WIDTH - len(line4)) + " ")
+        card.append("│", style=border_style)
+        card.append("\n")
 
         # Line 5: alt: G:12% P:8%
-        card.append("│ ")
+        card.append("│", style=border_style)
+        card.append(" ")
         if decision.alternatives:
             alt_strs = [f"{a[0]}:{p:.0%}" for a, p in decision.alternatives[:2]]
             line5 = "alt: " + " ".join(alt_strs)
@@ -852,10 +958,12 @@ class TamiyoBrain(Static):
         else:
             line5 = "alt: -"
             card.append("alt: -", style="dim")
-        card.append(" " * max(0, CONTENT_WIDTH - len(line5)) + " │\n")
+        card.append(" " * max(0, CONTENT_WIDTH - len(line5)) + " ")
+        card.append("│", style=border_style)
+        card.append("\n")
 
         # Bottom border
-        card.append("└" + "─" * (self.DECISION_CARD_WIDTH - 2) + "┘", style="dim")
+        card.append("└" + "─" * (self.DECISION_CARD_WIDTH - 2) + "┘", style=border_style)
 
         return card
 
@@ -885,7 +993,9 @@ class TamiyoBrain(Static):
 
         if tamiyo.ppo_data_received:
             # EV with warning indicator
-            ev_style = self._status_style(self._get_ev_status(tamiyo.explained_variance))
+            ev_style = self._status_style(
+                self._get_ev_status(tamiyo.explained_variance)
+            )
             banner.append(f"EV:{tamiyo.explained_variance:.2f}", style=ev_style)
             if tamiyo.explained_variance <= 0:
                 banner.append("!", style="red")
@@ -908,7 +1018,10 @@ class TamiyoBrain(Static):
             # Advantage summary (per UX spec)
             adv_status = self._get_advantage_status(tamiyo.advantage_std)
             adv_style = self._status_style(adv_status)
-            banner.append(f"Adv:{tamiyo.advantage_mean:+.2f}±{tamiyo.advantage_std:.2f}", style=adv_style)
+            banner.append(
+                f"Adv:{tamiyo.advantage_mean:+.2f}±{tamiyo.advantage_std:.2f}",
+                style=adv_style,
+            )
             if adv_status != "ok":
                 banner.append("!", style=adv_style)
             banner.append("  ")
@@ -916,9 +1029,14 @@ class TamiyoBrain(Static):
             # Gradient health summary (per UX spec)
             healthy = self._TOTAL_LAYERS - tamiyo.dead_layers - tamiyo.exploding_layers
             if tamiyo.dead_layers > 0 or tamiyo.exploding_layers > 0:
-                banner.append(f"GradHP:!! {tamiyo.dead_layers}D/{tamiyo.exploding_layers}E", style="red")
+                banner.append(
+                    f"GradHP:!! {tamiyo.dead_layers}D/{tamiyo.exploding_layers}E",
+                    style="red",
+                )
             else:
-                banner.append(f"GradHP:OK {healthy}/{self._TOTAL_LAYERS}", style="green")
+                banner.append(
+                    f"GradHP:OK {healthy}/{self._TOTAL_LAYERS}", style="green"
+                )
             banner.append("  ")
 
             # Batch progress with denominator (per UX spec)
@@ -1113,28 +1231,26 @@ class TamiyoBrain(Static):
         ev_trend = detect_trend(
             list(tamiyo.explained_variance_history),
             metric_name="expl_var",
-            metric_type="accuracy"
+            metric_type="accuracy",
         )
         ev_indicator, ev_indicator_style = trend_to_indicator(ev_trend)
 
         entropy_trend = detect_trend(
-            list(tamiyo.entropy_history),
-            metric_name="entropy",
-            metric_type="accuracy"
+            list(tamiyo.entropy_history), metric_name="entropy", metric_type="accuracy"
         )
         entropy_indicator, entropy_indicator_style = trend_to_indicator(entropy_trend)
 
         clip_trend = detect_trend(
             list(tamiyo.clip_fraction_history),
             metric_name="clip_fraction",
-            metric_type="loss"
+            metric_type="loss",
         )
         clip_indicator, clip_indicator_style = trend_to_indicator(clip_trend)
 
         kl_trend = detect_trend(
             list(tamiyo.kl_divergence_history),
             metric_name="kl_divergence",
-            metric_type="loss"
+            metric_type="loss",
         )
         kl_indicator, kl_indicator_style = trend_to_indicator(kl_trend)
 
@@ -1210,7 +1326,9 @@ class TamiyoBrain(Static):
         empty = gauge_width - filled
 
         # Status-based color (use bright_cyan for OK per UX spec)
-        bar_color = {"ok": "bright_cyan", "warning": "yellow", "critical": "red"}[status]
+        bar_color = {"ok": "bright_cyan", "warning": "yellow", "critical": "red"}[
+            status
+        ]
 
         gauge = Text()
         gauge.append(f" {label}\n", style="dim")
@@ -1313,7 +1431,10 @@ class TamiyoBrain(Static):
         adv_status = self._get_advantage_status(tamiyo.advantage_std)
         adv_style = self._status_style(adv_status)
         result.append(" Advantage   ", style="dim")
-        result.append(f"{tamiyo.advantage_mean:+.2f} ± {tamiyo.advantage_std:.2f}", style=adv_style)
+        result.append(
+            f"{tamiyo.advantage_mean:+.2f} ± {tamiyo.advantage_std:.2f}",
+            style=adv_style,
+        )
         if adv_status != "ok":
             result.append(" [!]", style=adv_style)
         result.append("\n")
@@ -1322,7 +1443,9 @@ class TamiyoBrain(Static):
         ratio_status = self._get_ratio_status(tamiyo.ratio_min, tamiyo.ratio_max)
         ratio_style = self._status_style(ratio_status)
         result.append(" Ratio       ", style="dim")
-        result.append(f"{tamiyo.ratio_min:.2f} < r < {tamiyo.ratio_max:.2f}", style=ratio_style)
+        result.append(
+            f"{tamiyo.ratio_min:.2f} < r < {tamiyo.ratio_max:.2f}", style=ratio_style
+        )
         if ratio_status != "ok":
             result.append(" [!]", style=ratio_style)
         result.append("\n")
@@ -1332,7 +1455,7 @@ class TamiyoBrain(Static):
         pl_trend = detect_trend(
             list(tamiyo.policy_loss_history),
             metric_name="policy_loss",
-            metric_type="loss"
+            metric_type="loss",
         )
         pl_indicator, pl_indicator_style = trend_to_indicator(pl_trend)
         result.append(" Policy Loss ", style="dim")
@@ -1346,7 +1469,7 @@ class TamiyoBrain(Static):
         vl_trend = detect_trend(
             list(tamiyo.value_loss_history),
             metric_name="value_loss",
-            metric_type="loss"
+            metric_type="loss",
         )
         vl_indicator, vl_indicator_style = trend_to_indicator(vl_trend)
         result.append(" Value Loss  ", style="dim")
@@ -1360,9 +1483,7 @@ class TamiyoBrain(Static):
         gn_status = self._get_grad_norm_status(tamiyo.grad_norm)
         gn_style = self._status_style(gn_status)
         gn_trend = detect_trend(
-            list(tamiyo.grad_norm_history),
-            metric_name="grad_norm",
-            metric_type="loss"
+            list(tamiyo.grad_norm_history), metric_name="grad_norm", metric_type="loss"
         )
         gn_indicator, gn_indicator_style = trend_to_indicator(gn_trend)
         result.append(" Grad Norm   ", style="dim")
@@ -1374,7 +1495,10 @@ class TamiyoBrain(Static):
         # Layer health
         result.append(" Layers      ", style="dim")
         if tamiyo.dead_layers > 0 or tamiyo.exploding_layers > 0:
-            result.append(f"!! {tamiyo.dead_layers} dead, {tamiyo.exploding_layers} exploding", style="red")
+            result.append(
+                f"!! {tamiyo.dead_layers} dead, {tamiyo.exploding_layers} exploding",
+                style="red",
+            )
         else:
             healthy = self._TOTAL_LAYERS - tamiyo.dead_layers - tamiyo.exploding_layers
             result.append(f"OK {healthy}/{self._TOTAL_LAYERS} healthy", style="green")
@@ -1383,9 +1507,15 @@ class TamiyoBrain(Static):
 
     def _get_ratio_status(self, ratio_min: float, ratio_max: float) -> str:
         """Get status for PPO ratio bounds."""
-        if ratio_max > TUIThresholds.RATIO_MAX_CRITICAL or ratio_min < TUIThresholds.RATIO_MIN_CRITICAL:
+        if (
+            ratio_max > TUIThresholds.RATIO_MAX_CRITICAL
+            or ratio_min < TUIThresholds.RATIO_MIN_CRITICAL
+        ):
             return "critical"
-        if ratio_max > TUIThresholds.RATIO_MAX_WARNING or ratio_min < TUIThresholds.RATIO_MIN_WARNING:
+        if (
+            ratio_max > TUIThresholds.RATIO_MAX_WARNING
+            or ratio_min < TUIThresholds.RATIO_MIN_WARNING
+        ):
             return "warning"
         return "ok"
 
@@ -1403,30 +1533,42 @@ class TamiyoBrain(Static):
         matrix.add_row(gauge_grid, separator, metrics_col)
         return matrix
 
+    # Head segment width: 10 chars per head for alignment
+    # Format: "abbr[███] " = 4-char abbrev + "[" + 3-char bar + "] " = 10 chars
+    HEAD_SEGMENT_WIDTH = 10
+
     def _render_head_heatmap(self) -> Text:
         """Render per-head entropy heatmap with 8 action heads.
 
         Shows visual distinction for heads without telemetry data.
         Per DRL review: max entropy values computed from actual action space dimensions.
+
+        Layout uses fixed-width segments (HEAD_SEGMENT_WIDTH=9 chars) for alignment:
+        - Row 1: "abbr[███] " - 4-char label + bar
+        - Row 2: "  0.00!  " - centered value with indicator
+
+        Per UX review: expanded abbreviations for readability.
+        Per Code review: explicit width accounting prevents drift.
         """
         tamiyo = self._snapshot.tamiyo
 
         # Head config: (abbrev, field_name, head_key)
+        # Expanded abbreviations per UX review for readability
         heads = [
-            ("sl", "head_slot_entropy", "slot"),
-            ("bp", "head_blueprint_entropy", "blueprint"),
-            ("sy", "head_style_entropy", "style"),
-            ("te", "head_tempo_entropy", "tempo"),
-            ("at", "head_alpha_target_entropy", "alpha_target"),
-            ("as", "head_alpha_speed_entropy", "alpha_speed"),
-            ("ac", "head_alpha_curve_entropy", "alpha_curve"),
-            ("op", "head_op_entropy", "op"),
+            ("slot", "head_slot_entropy", "slot"),
+            ("bpnt", "head_blueprint_entropy", "blueprint"),
+            ("styl", "head_style_entropy", "style"),
+            ("temp", "head_tempo_entropy", "tempo"),
+            ("atgt", "head_alpha_target_entropy", "alpha_target"),
+            ("aspd", "head_alpha_speed_entropy", "alpha_speed"),
+            ("acrv", "head_alpha_curve_entropy", "alpha_curve"),
+            ("  op", "head_op_entropy", "op"),  # Padded to 4 chars
         ]
 
         result = Text()
         result.append(" Heads: ", style="dim")
 
-        # First line: bars
+        # First line: bars (9-char segments)
         for abbrev, field, head_key in heads:
             value = getattr(tamiyo, field, 0.0)
             max_ent = self.HEAD_MAX_ENTROPIES[head_key]
@@ -1435,7 +1577,7 @@ class TamiyoBrain(Static):
             # Check for missing data (value=0.0 for untracked heads)
             if value == 0.0 and not is_tracked:
                 # Visual distinction for awaiting telemetry (per risk assessor)
-                # Using "---" for consistent 8-char width
+                # 9-char segment: "abbr[---] "
                 result.append(f"{abbrev}[", style="dim")
                 result.append("---", style="dim italic")
                 result.append("] ")
@@ -1458,6 +1600,7 @@ class TamiyoBrain(Static):
             else:
                 color = "red"
 
+            # 9-char segment: "abbr[███] " = 4 + 1 + 3 + 1 + space = 9
             result.append(f"{abbrev}[")
             result.append("█" * filled, style=color)
             result.append("░" * empty, style="dim")
@@ -1465,44 +1608,62 @@ class TamiyoBrain(Static):
 
         result.append("\n        ")
 
-        # Second line: values (8-char width to match bars)
+        # Second line: values (10-char segments to match bars)
         for abbrev, field, head_key in heads:
             value = getattr(tamiyo, field, 0.0)
             is_tracked = head_key in self.TRACKED_HEADS
 
             if value == 0.0 and not is_tracked:
-                # 8-char segment: "  n/a   " (2 spaces + n/a + 3 spaces)
-                result.append("  n/a   ", style="dim italic")
+                # 10-char segment: "   n/a    " (centered)
+                result.append("   n/a    ", style="dim italic")
                 continue
 
             max_ent = self.HEAD_MAX_ENTROPIES[head_key]
             fill = value / max_ent if max_ent > 0 else 0
 
-            # 8-char segment with indicators: critical (!), warning (*), normal
+            # 10-char segment with indicators: critical (!), warning (*), normal
+            # Format: "  X.XX!   " = 2 spaces + 4.2f (4 chars) + indicator + 3 spaces = 10
             if fill < 0.25:
-                # Critical: " 1.00! " (6 chars) + 2 padding = 8 total
-                result.append(f" {value:4.2f}! ", style="red")
+                # Critical: entropy collapsed (< 25% of max)
+                result.append(f"  {value:4.2f}!   ", style="red")
             elif fill < 0.5:
-                # Warning: " 1.00* " (6 chars) + 2 padding = 8 total
-                result.append(f" {value:4.2f}* ", style="yellow")
+                # Warning: entropy converging (< 50% of max)
+                result.append(f"  {value:4.2f}*   ", style="yellow")
             else:
-                # Normal: " 1.00  " (6 chars) + 2 padding = 8 total
-                result.append(f" {value:4.2f}  ", style="dim")
+                # Normal: healthy exploration (>= 50% of max)
+                result.append(f"  {value:4.2f}    ", style="dim")
 
         return result
 
     def _render_decisions_column(self) -> Text:
         """Render vertical stack of compact decision cards for right column.
 
-        Card count dynamically adjusts based on available widget height.
+        CRITICAL INVARIANT: ONE card swap per CARD_SWAP_INTERVAL (30s), maximum.
+        This provides visual stability - users need time to read each card.
+
+        The display buffer (_displayed_decisions) is separate from the incoming
+        data firehose. It updates slowly and predictably:
+        - Growing: Add ONE card per interval until max_cards reached
+        - Replacing: Swap ONE oldest card for ONE newest card per interval
+
+        NEVER replace 2+ cards simultaneously. That is a bug.
 
         Returns:
             Rich Text with stacked compact decision cards.
         """
-        tamiyo = self._snapshot.tamiyo
-        decisions = tamiyo.recent_decisions
+        import time
 
-        if not decisions:
+        tamiyo = self._snapshot.tamiyo
+        incoming = tamiyo.recent_decisions
+        max_cards = self._get_max_decision_cards()
+        now = time.time()
+
+        # === THROTTLED DISPLAY BUFFER UPDATE ===
+        # Rule: ONE card change every CARD_SWAP_INTERVAL, maximum.
+
+        if not incoming:
+            # No data - clear display and show waiting message
+            self._displayed_decisions = []
             result = Text()
             result.append("DECISIONS\n", style="dim bold")
             result.append("No decisions yet\n", style="dim italic")
@@ -1510,19 +1671,60 @@ class TamiyoBrain(Static):
             result.append("agent actions...", style="dim")
             return result
 
-        # Calculate how many cards fit in available height
-        max_cards = self._get_max_decision_cards()
+        # Build set of incoming IDs for quick lookup
+        incoming_ids = {d.decision_id for d in incoming}
+        incoming_by_id = {d.decision_id: d for d in incoming}
+
+        # Remove any displayed decisions that are no longer in incoming
+        # (This handles decisions that expired at the source)
+        self._displayed_decisions = [
+            d for d in self._displayed_decisions if d.decision_id in incoming_ids
+        ]
+
+        # Time check: has enough time passed since last card change?
+        time_since_swap = now - self._last_card_swap_time
+        can_change = time_since_swap >= self.CARD_SWAP_INTERVAL
+
+        # Find the newest incoming decision not already in display
+        displayed_ids = {d.decision_id for d in self._displayed_decisions}
+        new_decision = None
+        for d in incoming:
+            if d.decision_id not in displayed_ids:
+                new_decision = d
+                break  # Take the first (newest) one not in display
+
+        if new_decision and can_change:
+            # We have a new decision and enough time has passed
+            if len(self._displayed_decisions) < max_cards:
+                # GROWING: Add ONE card to display
+                self._displayed_decisions.insert(0, new_decision)
+            else:
+                # REPLACING: Remove oldest (last), add newest (first)
+                self._displayed_decisions.pop()  # Remove ONE oldest
+                self._displayed_decisions.insert(0, new_decision)  # Add ONE newest
+
+            self._last_card_swap_time = now
+
+        # Clamp to max_cards (in case max_cards shrunk due to resize)
+        self._displayed_decisions = self._displayed_decisions[:max_cards]
 
         # Store decision IDs for click handling
-        self._decision_ids = [d.decision_id for d in decisions[:max_cards]]
+        self._decision_ids = [d.decision_id for d in self._displayed_decisions]
 
+        # === RENDER THE STABLE DISPLAY BUFFER ===
         result = Text()
         result.append("DECISIONS\n", style="dim bold")
 
-        for i, decision in enumerate(decisions[:max_cards]):
-            card = self._render_enriched_decision(decision, index=i)
+        if not self._displayed_decisions:
+            # Buffer empty but incoming has data - waiting for first interval
+            result.append("Loading...\n", style="dim italic")
+            return result
+
+        total_cards = len(self._displayed_decisions)
+        for i, decision in enumerate(self._displayed_decisions):
+            card = self._render_enriched_decision(decision, index=i, total_cards=total_cards)
             result.append(card)
-            if i < max_cards - 1:  # Add spacing between cards
+            if i < total_cards - 1:  # Add spacing between cards
                 result.append("\n")
 
         return result
@@ -1541,13 +1743,12 @@ class TamiyoBrain(Static):
         # Episode Return (PRIMARY RL METRIC)
         if tamiyo.episode_return_history:
             sparkline = self._render_sparkline(
-                tamiyo.episode_return_history,
-                width=self.SPARKLINE_WIDTH
+                tamiyo.episode_return_history, width=self.SPARKLINE_WIDTH
             )
             trend = detect_trend(
                 list(tamiyo.episode_return_history),
                 metric_name="episode_return",
-                metric_type="accuracy"  # Higher is better
+                metric_type="accuracy",  # Higher is better
             )
             indicator, style = trend_to_indicator(trend)
 
@@ -1555,20 +1756,24 @@ class TamiyoBrain(Static):
             result.append(sparkline)
             result.append(f"  {tamiyo.current_episode_return:>6.1f} ", style="white")
             result.append(indicator, style=style)
-            result.append(f"      LR:{tamiyo.learning_rate:.0e}" if tamiyo.learning_rate else "      LR:n/a", style="dim")
+            result.append(
+                f"      LR:{tamiyo.learning_rate:.0e}"
+                if tamiyo.learning_rate
+                else "      LR:n/a",
+                style="dim",
+            )
             result.append(f"  EntCoef:{tamiyo.entropy_coef:.2f}", style="dim")
             result.append("\n")
 
         # Entropy (COLLAPSE DETECTION)
         if tamiyo.entropy_history:
             sparkline = self._render_sparkline(
-                tamiyo.entropy_history,
-                width=self.SPARKLINE_WIDTH
+                tamiyo.entropy_history, width=self.SPARKLINE_WIDTH
             )
             trend = detect_trend(
                 list(tamiyo.entropy_history),
                 metric_name="entropy",
-                metric_type="accuracy"  # Stable/high is good, low is collapse
+                metric_type="accuracy",  # Stable/high is good, low is collapse
             )
             indicator, style = trend_to_indicator(trend)
 
