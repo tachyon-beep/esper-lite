@@ -34,6 +34,11 @@ class TamiyoBrain(Static):
     # Widget width for separators (96 - 2 for padding = 94)
     SEPARATOR_WIDTH = 94
 
+    # Layout width constants for compact mode detection
+    FULL_WIDTH = 96
+    COMPACT_WIDTH = 80
+    COMPACT_THRESHOLD = 85
+
     class DecisionPinToggled(Message):
         """Posted when user clicks a decision to toggle pin status."""
 
@@ -51,6 +56,21 @@ class TamiyoBrain(Static):
         self._snapshot = snapshot
         self._update_status_class()
         self.refresh()
+
+    def _is_compact_mode(self) -> bool:
+        """Detect if terminal is too narrow for full 96-char layout."""
+        return self.size.width < self.COMPACT_THRESHOLD
+
+    def _get_separator_width(self) -> int:
+        """Get separator width based on current mode."""
+        if self._is_compact_mode():
+            return self.COMPACT_WIDTH - 2  # 78 chars
+        return self.FULL_WIDTH - 2  # 94 chars
+
+    def _render_separator(self) -> Text:
+        """Render horizontal separator at correct width."""
+        width = self._get_separator_width()
+        return Text("─" * width, style="dim")
 
     def _update_status_class(self) -> None:
         """Update CSS class based on overall status."""
@@ -106,7 +126,7 @@ class TamiyoBrain(Static):
         main_table.add_row(status_banner)
 
         # Row 2: Separator (full width per UX spec)
-        main_table.add_row(Text("─" * self.SEPARATOR_WIDTH, style="dim"))
+        main_table.add_row(self._render_separator())
 
         # Row 3: Diagnostic Matrix (gauges left, metrics right)
         # For now, just gauges - Phase 3 adds metrics column
@@ -123,14 +143,14 @@ class TamiyoBrain(Static):
             main_table.add_row(waiting_text)
 
         # Row 4: Separator
-        main_table.add_row(Text("─" * self.SEPARATOR_WIDTH, style="dim"))
+        main_table.add_row(self._render_separator())
 
         # Row 5: Action Distribution
         action_bar = self._render_action_distribution_bar()
         main_table.add_row(action_bar)
 
         # Row 6: Separator
-        main_table.add_row(Text("─" * self.SEPARATOR_WIDTH, style="dim"))
+        main_table.add_row(self._render_separator())
 
         # Row 7: Decision Carousel
         decisions_panel = self._render_recent_decisions()

@@ -774,3 +774,44 @@ async def test_border_color_updates_on_status():
         widget.update_snapshot(snapshot)
         assert widget.has_class("status-warning")
         assert not widget.has_class("status-ok")
+
+
+# ===========================
+# Task 2.7: Compact Mode Detection Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_compact_mode_detected_for_narrow_terminal():
+    """Widget should detect 80-char terminals and switch to compact layout."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test(size=(80, 24)):
+        widget = app.query_one(TamiyoBrain)
+        assert widget._is_compact_mode() is True
+
+
+@pytest.mark.asyncio
+async def test_full_mode_for_wide_terminal():
+    """Widget should use full layout for 96+ char terminals."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test(size=(120, 24)):
+        widget = app.query_one(TamiyoBrain)
+        assert widget._is_compact_mode() is False
+
+
+@pytest.mark.asyncio
+async def test_compact_mode_separator_width_narrow():
+    """Compact mode should use 78-char separator for 80-char terminal."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test(size=(80, 24)):
+        widget = app.query_one(TamiyoBrain)
+        assert widget._get_separator_width() == 78  # 80 - 2 padding
+
+
+@pytest.mark.asyncio
+async def test_full_mode_separator_width_wide():
+    """Full mode should use 94-char separator for 96+ char terminal."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test(size=(120, 24)):
+        widget = app.query_one(TamiyoBrain)
+        assert widget._get_separator_width() == 94  # 96 - 2 padding
