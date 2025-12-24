@@ -1053,3 +1053,45 @@ async def test_per_head_heatmap_missing_data_visual():
         # Should indicate missing/pending data visually
         # (implementation will use "n/a" or similar for zeros)
         assert "n/a" in plain or "---" in plain or "?" in plain
+
+
+# ===========================
+# Task 4.2: Wire Heatmap into render() Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_heatmap_appears_in_render():
+    """Heatmap should appear in widget render output."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            head_slot_entropy=1.0,
+            head_blueprint_entropy=2.0,
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+
+        # Force render and check output
+        rendered = widget.render()
+        assert rendered is not None
+
+        # Convert to plain text to verify heatmap is included
+        # Heatmap contains "Heads:" label and head abbreviations like "sl[" and "bp["
+        plain = rendered.__rich_console__(None, None).__str__() if hasattr(rendered, '__rich_console__') else str(rendered)
+
+        # The heatmap should have the "Heads:" label and at least some head indicators
+        # We can also check by rendering the widget directly and inspecting plain text
+        from rich.console import Console
+        from io import StringIO
+
+        console_io = StringIO()
+        console = Console(file=console_io, force_terminal=True, width=120)
+        console.print(rendered)
+        output = console_io.getvalue()
+
+        # Heatmap should be present with "Heads:" label
+        assert "Heads:" in output or "heads:" in output.lower()

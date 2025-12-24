@@ -164,14 +164,22 @@ class TamiyoBrain(Static):
         # Row 4: Separator
         main_table.add_row(self._render_separator())
 
-        # Row 5: Action Distribution
+        # Row 5: Per-Head Entropy Heatmap (P2 cool factor)
+        if self._snapshot.tamiyo.ppo_data_received:
+            head_heatmap = self._render_head_heatmap()
+            main_table.add_row(head_heatmap)
+
+            # Row 6: Separator
+            main_table.add_row(self._render_separator())
+
+        # Row 7: Action Distribution
         action_bar = self._render_action_distribution_bar()
         main_table.add_row(action_bar)
 
-        # Row 6: Separator
+        # Row 8: Separator
         main_table.add_row(self._render_separator())
 
-        # Row 7: Decision Carousel
+        # Row 9: Decision Carousel
         decisions_panel = self._render_recent_decisions()
         main_table.add_row(decisions_panel)
 
