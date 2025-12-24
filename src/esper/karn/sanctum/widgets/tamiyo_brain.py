@@ -97,14 +97,17 @@ class TamiyoBrain(Static):
     _TOTAL_LAYERS = 12
 
     # Sparkline width for trend visibility (Task 1)
-    SPARKLINE_WIDTH = 20
+    SPARKLINE_WIDTH = 35
 
     # Prediction accuracy thresholds for decision cards
     PREDICTION_EXCELLENT_THRESHOLD = 0.1  # Green checkmark: |actual - expected| < 0.1
     PREDICTION_ACCEPTABLE_THRESHOLD = 0.3  # Yellow warning: |actual - expected| < 0.3
 
     # Enriched decision card width (Task 5)
-    DECISION_CARD_WIDTH = 24
+    DECISION_CARD_WIDTH = 30
+
+    # Decision card height for dynamic count calculation
+    DECISION_CARD_HEIGHT = 7  # 6 lines (title + 5 content) + 1 gap
 
     # Per-head max entropy values from factored_actions.py (DRL CORRECTED)
     # These are ln(N) where N is the number of actions for each head
@@ -164,6 +167,25 @@ class TamiyoBrain(Static):
     def _is_compact_mode(self) -> bool:
         """Detect if terminal is too narrow for full 96-char layout."""
         return self.size.width < self.COMPACT_THRESHOLD
+
+    def _get_max_decision_cards(self) -> int:
+        """Calculate how many decision cards fit in available height.
+
+        Returns:
+            Number of decision cards that fit (clamped between 3 and 8).
+        """
+        # Get widget content height (approximate based on min-height)
+        # min-height is 24 in CSS, but actual may be larger
+        available_height = max(24, self.size.height - 2)  # -2 for borders
+
+        # Reserve space for "DECISIONS" header (1 line)
+        content_height = available_height - 1
+
+        # Calculate how many cards fit
+        max_cards = content_height // self.DECISION_CARD_HEIGHT
+
+        # Clamp between 3 and 8 (reasonable bounds)
+        return max(3, min(8, max_cards))
 
     def _get_layout_mode(self) -> str:
         """Determine layout mode based on terminal width.
@@ -437,15 +459,49 @@ class TamiyoBrain(Static):
 
         return bar
 
-    def _render_action_sequence(self) -> Text:
-        """Render action sequence line with pattern detection.
+    def _render_return_history(self) -> Text:
+        """Render recent episode returns for quick reference.
 
-        Format: "Recent:  W W G W W W F W W W W W"
+        Format: Returns: Ep47:+12.3  Ep46:+8.1  Ep45:-2.4  ...
+        """
+        tamiyo = self._snapshot.tamiyo
+        history = list(tamiyo.episode_return_history)
+
+        if not history:
+            return Text("Returns: (no episodes yet)", style="dim italic")
+
+        result = Text()
+        result.append("Returns: ", style="dim")
+
+        # Show last 6 returns (most recent first), with episode numbers
+        current_ep = tamiyo.current_episode
+
+        # Take last 6 values, reverse to show most recent first
+        recent_returns = history[-6:][::-1]
+
+        for i, ret in enumerate(recent_returns):
+            ep_num = current_ep - i
+            # Color code: green for positive, red for negative
+            style = "green" if ret >= 0 else "red"
+            result.append(f"Ep{ep_num}:", style="dim")
+            result.append(f"{ret:+.1f}", style=style)
+            if i < len(recent_returns) - 1:
+                result.append("  ", style="dim")  # spacing between entries
+
+        return result
+
+    def _render_action_sequence(self) -> Text:
+        """Render action sequence with two rows for more history.
+
+        Format:
+            Recent:  W W G W W W F W W W W W  (actions 0-11, most recent)
+            Prior:   G G F P W W W G F W W W  (actions 12-23, older)
+
         With pattern warnings: "⚠ STUCK" or "⚡ THRASH"
 
         Per UX review: Icons for accessibility (not just color).
         """
-        decisions = self._snapshot.tamiyo.recent_decisions[:12]
+        decisions = self._snapshot.tamiyo.recent_decisions[:24]
         if not decisions:
             return Text("Recent:  (no actions yet)", style="dim italic")
 
@@ -454,8 +510,8 @@ class TamiyoBrain(Static):
         if decisions:
             slot_states = decisions[0].slot_states
 
-        # Detect patterns
-        patterns = detect_action_patterns(decisions, slot_states)
+        # Detect patterns on recent 12 actions
+        patterns = detect_action_patterns(decisions[:12], slot_states)
 
         # Action to single-char abbreviation with colors
         action_map = {
@@ -467,32 +523,41 @@ class TamiyoBrain(Static):
             "ADVANCE": ("→", "cyan"),
         }
 
-        # Build sequence (oldest first for left-to-right reading)
-        sequence = [action_map.get(d.chosen_action, ("?", "white")) for d in decisions]
-        sequence.reverse()
-
-        result = Text()
-        result.append("Recent:  ", style="dim")
-
         # Highlight based on pattern
         is_stuck = "STUCK" in patterns
         is_thrash = "THRASH" in patterns
 
-        for char, color in sequence:
-            if is_stuck:
-                result.append(char + " ", style="yellow")
-            elif is_thrash:
-                result.append(char + " ", style="red")
-            else:
-                result.append(char + " ", style=color)
+        result = Text()
 
-        # Pattern warnings with icons (per UX review: icon + text)
+        # Recent row (most recent 12)
+        recent_decisions = decisions[:12]
+        recent_actions = [action_map.get(d.chosen_action, ("?", "white")) for d in recent_decisions]
+        recent_actions.reverse()  # Oldest first for left-to-right reading
+
+        result.append("Recent:  ", style="dim")
+        for char, color in recent_actions:
+            style = "yellow" if is_stuck else ("red" if is_thrash else color)
+            result.append(char + " ", style=style)
+
+        # Pattern warnings
         if is_stuck:
-            result.append("  ⚠ STUCK", style="yellow bold")
+            result.append(" ⚠ STUCK", style="yellow bold")
         if is_thrash:
-            result.append("  ⚡ THRASH", style="red bold")
+            result.append(" ⚡ THRASH", style="red bold")
         if "ALPHA_OSC" in patterns:
-            result.append("  ↔ ALPHA", style="cyan bold")
+            result.append(" ↔ ALPHA", style="cyan bold")
+
+        result.append("\n")
+
+        # Prior row (older 12)
+        prior_decisions = decisions[12:24]
+        if prior_decisions:
+            prior_actions = [action_map.get(d.chosen_action, ("?", "white")) for d in prior_decisions]
+            prior_actions.reverse()
+
+            result.append("Prior:   ", style="dim")
+            for char, color in prior_actions:
+                result.append(char + " ", style=color)  # No pattern highlighting on prior
 
         return result
 
@@ -1416,7 +1481,9 @@ class TamiyoBrain(Static):
         return result
 
     def _render_decisions_column(self) -> Text:
-        """Render vertical stack of 3 compact decision cards for right column.
+        """Render vertical stack of compact decision cards for right column.
+
+        Card count dynamically adjusts based on available widget height.
 
         Returns:
             Rich Text with stacked compact decision cards.
@@ -1432,16 +1499,19 @@ class TamiyoBrain(Static):
             result.append("agent actions...", style="dim")
             return result
 
+        # Calculate how many cards fit in available height
+        max_cards = self._get_max_decision_cards()
+
         # Store decision IDs for click handling
-        self._decision_ids = [d.decision_id for d in decisions[:3]]
+        self._decision_ids = [d.decision_id for d in decisions[:max_cards]]
 
         result = Text()
         result.append("DECISIONS\n", style="dim bold")
 
-        for i, decision in enumerate(decisions[:3]):
+        for i, decision in enumerate(decisions[:max_cards]):
             card = self._render_enriched_decision(decision, index=i)
             result.append(card)
-            if i < 2:  # Add spacing between cards
+            if i < max_cards - 1:  # Add spacing between cards
                 result.append("\n")
 
         return result
@@ -1556,5 +1626,9 @@ class TamiyoBrain(Static):
         # Row 7: Action sequence with pattern detection
         action_sequence = self._render_action_sequence()
         content.add_row(action_sequence)
+
+        # Row 8: Episode return history
+        return_history = self._render_return_history()
+        content.add_row(return_history)
 
         return content

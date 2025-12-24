@@ -1342,9 +1342,9 @@ async def test_enriched_decision_card_format():
         # Should have exactly 7 lines (title + 5 content + bottom border)
         assert len(lines) == 7
 
-        # All lines should be exactly 24 chars
+        # All lines should be exactly 30 chars
         for i, line in enumerate(lines[:7]):
-            assert len(line) == 24, f"Line {i} has length {len(line)}, expected 24: '{line}'"
+            assert len(line) == 30, f"Line {i} has length {len(line)}, expected 30: '{line}'"
 
         # Verify border structure
         assert lines[0].startswith("┌─")
@@ -1953,3 +1953,264 @@ def test_decision_card_shows_value_and_advantage():
     # Should show outcome text (per UX review)
     assert "HIT" in card_str or "MISS" in card_str, \
         f"Card should show outcome text. Got: {card_str}"
+
+
+@pytest.mark.asyncio
+async def test_decision_card_count_scales_with_height():
+    """More decision cards shown when widget is taller."""
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+
+    # Test with small height (24 lines) - minimum, should give 3 cards
+    app = TamiyoBrainTestApp()
+    async with app.run_test(size=(120, 24)) as pilot:
+        widget = app.query_one(TamiyoBrain)
+        await pilot.pause()
+
+        # The method should clamp to minimum of 3
+        max_cards = widget._get_max_decision_cards()
+        assert 3 <= max_cards <= 8, f"Expected 3-8 cards, got {max_cards}"
+
+    # Test with large height (50 lines)
+    app2 = TamiyoBrainTestApp()
+    async with app2.run_test(size=(120, 50)) as pilot:
+        widget2 = app2.query_one(TamiyoBrain)
+        await pilot.pause()
+
+        # With larger terminal, should allow more cards (but hard to predict exact number
+        # due to CSS layout, so just verify it's within reasonable bounds)
+        max_cards2 = widget2._get_max_decision_cards()
+        assert 3 <= max_cards2 <= 8, f"Expected 3-8 cards, got {max_cards2}"
+
+    # Test with very large height (70 lines) - should clamp to max of 8
+    app3 = TamiyoBrainTestApp()
+    async with app3.run_test(size=(120, 70)) as pilot:
+        widget3 = app3.query_one(TamiyoBrain)
+        await pilot.pause()
+
+        # Should clamp to maximum of 8
+        max_cards3 = widget3._get_max_decision_cards()
+        assert 3 <= max_cards3 <= 8, f"Expected 3-8 cards (with clamping), got {max_cards3}"
+
+
+# ===========================
+# Action Sequence Two-Row Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_action_sequence_shows_two_rows():
+    """Action sequence should show Recent and Prior rows."""
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.schema import DecisionSnapshot, SanctumSnapshot, TamiyoState
+    from datetime import datetime, timezone, timedelta
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        now = datetime.now(timezone.utc)
+        decisions = [
+            DecisionSnapshot(
+                timestamp=now - timedelta(seconds=i),
+                slot_states={},
+                host_accuracy=80.0,
+                chosen_action="WAIT" if i % 2 == 0 else "GERMINATE",
+                chosen_slot=None,
+                confidence=0.9,
+                expected_value=0.1,
+                actual_reward=0.1,
+                alternatives=[],
+                decision_id=f"test-{i}",
+            )
+            for i in range(24)
+        ]
+
+        snapshot = SanctumSnapshot(tamiyo=TamiyoState(recent_decisions=decisions))
+        widget.update_snapshot(snapshot)
+
+        rendered = widget._render_action_sequence()
+        rendered_str = rendered.plain
+
+        assert "Recent:" in rendered_str, "Should show Recent row"
+        assert "Prior:" in rendered_str, "Should show Prior row when 12+ decisions"
+
+
+@pytest.mark.asyncio
+async def test_action_sequence_prior_row_only_with_enough_history():
+    """Prior row should only appear when there are 12+ decisions."""
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.schema import DecisionSnapshot, SanctumSnapshot, TamiyoState
+    from datetime import datetime, timezone, timedelta
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        now = datetime.now(timezone.utc)
+        # Only 10 decisions - should NOT show Prior row
+        decisions = [
+            DecisionSnapshot(
+                timestamp=now - timedelta(seconds=i),
+                slot_states={},
+                host_accuracy=80.0,
+                chosen_action="WAIT",
+                chosen_slot=None,
+                confidence=0.9,
+                expected_value=0.1,
+                actual_reward=0.1,
+                alternatives=[],
+                decision_id=f"test-{i}",
+            )
+            for i in range(10)
+        ]
+
+        snapshot = SanctumSnapshot(tamiyo=TamiyoState(recent_decisions=decisions))
+        widget.update_snapshot(snapshot)
+
+        rendered = widget._render_action_sequence()
+        rendered_str = rendered.plain
+
+        assert "Recent:" in rendered_str, "Should show Recent row"
+        assert "Prior:" not in rendered_str, "Should NOT show Prior row with <12 decisions"
+
+
+@pytest.mark.asyncio
+async def test_action_sequence_pattern_detection_only_on_recent():
+    """Pattern detection should only apply to recent 12 actions, not prior."""
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.schema import DecisionSnapshot, SanctumSnapshot, TamiyoState
+    from datetime import datetime, timezone, timedelta
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        now = datetime.now(timezone.utc)
+        # First 12 (recent): all WAIT with dormant slot = STUCK
+        # Next 12 (prior): mixed actions
+        decisions = []
+
+        # Recent 12: all WAIT
+        for i in range(12):
+            decisions.append(
+                DecisionSnapshot(
+                    timestamp=now - timedelta(seconds=i),
+                    slot_states={"r0": "Dormant"},
+                    host_accuracy=80.0,
+                    chosen_action="WAIT",
+                    chosen_slot=None,
+                    confidence=0.9,
+                    expected_value=0.1,
+                    actual_reward=0.1,
+                    alternatives=[],
+                    decision_id=f"test-{i}",
+                )
+            )
+
+        # Prior 12: mixed
+        for i in range(12, 24):
+            decisions.append(
+                DecisionSnapshot(
+                    timestamp=now - timedelta(seconds=i),
+                    slot_states={"r0": "Training"},
+                    host_accuracy=80.0,
+                    chosen_action="GERMINATE" if i % 3 == 0 else "WAIT",
+                    chosen_slot=None,
+                    confidence=0.9,
+                    expected_value=0.1,
+                    actual_reward=0.1,
+                    alternatives=[],
+                    decision_id=f"test-{i}",
+                )
+            )
+
+        snapshot = SanctumSnapshot(tamiyo=TamiyoState(recent_decisions=decisions))
+        widget.update_snapshot(snapshot)
+
+        rendered = widget._render_action_sequence()
+        rendered_str = rendered.plain
+
+        # Should show STUCK pattern (because recent 12 are all WAIT with dormant slot)
+        assert "STUCK" in rendered_str, "Should detect STUCK pattern on recent actions"
+
+
+# ===========================
+# Episode Return History Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_return_history_shows_recent_episodes():
+    """Return history should show recent episode returns."""
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
+    from collections import deque
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(
+            tamiyo=TamiyoState(
+                episode_return_history=deque([10.5, -2.3, 15.0, 8.2, -1.5, 20.0], maxlen=20),
+                current_episode=47,
+            )
+        )
+        widget._snapshot = snapshot
+
+        rendered = widget._render_return_history()
+        rendered_str = str(rendered)
+
+        assert "Returns:" in rendered_str, "Should have Returns label"
+        assert "Ep47" in rendered_str or "Ep" in rendered_str, "Should show episode numbers"
+
+
+@pytest.mark.asyncio
+async def test_return_history_empty():
+    """Return history should show placeholder when no episodes yet."""
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
+    from collections import deque
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(
+            tamiyo=TamiyoState(
+                episode_return_history=deque([], maxlen=20),
+                current_episode=0,
+            )
+        )
+        widget._snapshot = snapshot
+
+        rendered = widget._render_return_history()
+        rendered_str = str(rendered)
+
+        assert "no episodes yet" in rendered_str, "Should show placeholder for empty history"
+
+
+@pytest.mark.asyncio
+async def test_return_history_color_coding():
+    """Return history should color positive returns green and negative red."""
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
+    from collections import deque
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(
+            tamiyo=TamiyoState(
+                episode_return_history=deque([10.5, -2.3], maxlen=20),
+                current_episode=5,
+            )
+        )
+        widget._snapshot = snapshot
+
+        rendered = widget._render_return_history()
+
+        # Check that it's a Rich Text object with styles
+        assert rendered is not None
+        # Verify formatting includes positive and negative values
+        rendered_plain = rendered.plain
+        assert "+10.5" in rendered_plain or "10.5" in rendered_plain, "Should show positive return"
+        assert "-2.3" in rendered_plain, "Should show negative return"

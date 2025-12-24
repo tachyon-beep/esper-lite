@@ -422,6 +422,7 @@ class TamiyoState:
         default_factory=lambda: deque(maxlen=20)
     )
     current_episode_return: float = 0.0
+    current_episode: int = 0  # Current episode number for return history display
 
     # History for trend sparklines (last 10 values)
     policy_loss_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
