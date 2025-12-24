@@ -1,12 +1,12 @@
 """EventLog widget - Append-only scrolling log.
 
 Architecture:
-- Maintains internal list of rendered lines (append-only, never recalculated)
+- Maintains internal list of line data (append-only, never recalculated)
 - Tracks which seconds have been processed
-- On update: checks for NEW completed seconds, aggregates them, appends lines
-- On render: just displays the lines list (no recalculation)
+- On update: checks for NEW completed seconds, aggregates them, appends line data
+- On render: formats line data using actual widget width for right-justification
 
-This is a LOG, not a reactive view. Lines stay put once added.
+This is a LOG, not a reactive view. Line data stays put once added.
 """
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ _EVENT_COLORS: dict[str, str] = {
     "BATCH_EPOCH_COMPLETED": "bright_blue",
 }
 
-# Max envs to show before truncating with "(+ N)"
+# Max envs to show before truncating with "+"
 _MAX_ENVS_SHOWN = 3
 
 
@@ -48,7 +48,7 @@ class EventLog(Static):
 
     - Waits for each second to COMPLETE before showing its events
     - Each event type within a second gets its own line with count
-    - Shows contributing env IDs right-justified
+    - Shows contributing env IDs right-justified to panel edge
     - Lines are appended at the bottom; existing lines never change
     - Click anywhere to open raw event detail modal
     """
@@ -71,8 +71,10 @@ class EventLog(Static):
         self.border_title = "EVENTS"
 
         # === APPEND-ONLY STATE ===
-        # The rendered lines - this is the source of truth for display
-        self._lines: list[Text] = []
+        # Line data: list of (left_text, right_str) tuples
+        # - left_text: Rich Text with timestamp + event + count
+        # - right_str: Plain string with env IDs (or empty)
+        self._line_data: list[tuple[Text, str]] = []
         # Seconds we've already processed (never process twice)
         self._processed_seconds: set[str] = set()
         # Track last minute shown (for abbreviated timestamps)
@@ -96,7 +98,6 @@ class EventLog(Static):
 
         # Group events by timestamp, excluding current second (still accumulating)
         # Structure: {timestamp: {event_type: set[env_id]}}
-        # env_id can be None for global events (PPO, BATCH)
         second_groups: dict[str, dict[str, set[int | None]]] = defaultdict(
             lambda: defaultdict(set)
         )
@@ -120,16 +121,16 @@ class EventLog(Static):
             self._processed_seconds.add(timestamp)
 
         # Trim if we exceed max lines
-        if len(self._lines) > self._max_lines:
-            self._lines = self._lines[-self._max_lines:]
+        if len(self._line_data) > self._max_lines:
+            self._line_data = self._line_data[-self._max_lines:]
 
-        # Trigger re-render (just displays self._lines)
+        # Trigger re-render
         self.refresh()
 
     def _append_second(
         self, timestamp: str, type_envs: dict[str, set[int | None]]
     ) -> None:
-        """Append lines for a completed second.
+        """Append line data for a completed second.
 
         Each event type gets its own line with count and contributing envs.
         """
@@ -142,14 +143,16 @@ class EventLog(Static):
         for event_type in sorted(type_envs.keys()):
             env_ids = type_envs[event_type]
             count = len(env_ids)
-            text = Text()
+
+            # Build left part (timestamp + event + count)
+            left = Text()
 
             # Timestamp: "MM:SS " or "  :SS " (abbreviated if same minute)
             if current_minute != self._last_minute:
-                text.append(f"{parts[1]}:{parts[2]} ", style="dim")
+                left.append(f"{parts[1]}:{parts[2]} ", style="dim")
                 self._last_minute = current_minute
             else:
-                text.append(f"  :{parts[2]} ", style="dim")
+                left.append(f"  :{parts[2]} ", style="dim")
 
             # Event type (shortened for display)
             color = _EVENT_COLORS.get(event_type, "white")
@@ -159,25 +162,19 @@ class EventLog(Static):
                 .replace("_COMPLETED", "")
                 .replace("_COMPUTED", "")
             )
-            text.append(label, style=color)
+            left.append(label, style=color)
 
             # Count if > 1
             if count > 1:
-                text.append(f" ×{count}", style="dim")
+                left.append(f" ×{count}", style="dim")
 
-            # Right-justified env list (only if we have real env_ids)
-            env_suffix = self._format_env_list(env_ids)
-            if env_suffix:
-                # Pad to push envs right (estimate ~35 char width for panel)
-                current_len = len(text.plain)
-                padding = max(1, 35 - current_len - len(env_suffix))
-                text.append(" " * padding)
-                text.append(env_suffix, style="dim")
+            # Build right part (env list)
+            right = self._format_env_list(env_ids)
 
-            self._lines.append(text)
+            self._line_data.append((left, right))
 
     def _format_env_list(self, env_ids: set[int | None]) -> str:
-        """Format env IDs for display, e.g., '0 1 2 (+3)'.
+        """Format env IDs for display, e.g., '0 1 2 3 +'.
 
         Returns empty string for global events (all None).
         """
@@ -190,18 +187,35 @@ class EventLog(Static):
             return " ".join(str(eid) for eid in real_ids)
         else:
             shown = " ".join(str(eid) for eid in real_ids[:_MAX_ENVS_SHOWN])
-            extra = len(real_ids) - _MAX_ENVS_SHOWN
-            return f"{shown} (+{extra})"
+            return f"{shown} +"
 
     def render(self):
-        """Render the log - just display self._lines.
+        """Render the log with proper right-justification.
 
-        NO recalculation. NO grouping. Just display what we have.
+        Uses actual widget width to align env IDs to right edge.
         """
-        if not self._lines:
+        if not self._line_data:
             return Text("Waiting for events...", style="dim")
 
-        return Group(*self._lines)
+        # Get actual widget width (subtract 2 for border padding)
+        width = self.size.width - 2 if self.size.width > 4 else 30
+
+        lines = []
+        for left_text, right_str in self._line_data:
+            line = Text()
+            line.append_text(left_text)
+
+            if right_str:
+                # Calculate padding to push right_str to right edge
+                left_len = len(left_text.plain)
+                right_len = len(right_str)
+                padding = max(1, width - left_len - right_len)
+                line.append(" " * padding)
+                line.append(right_str, style="dim")
+
+            lines.append(line)
+
+        return Group(*lines)
 
     def on_click(self) -> None:
         """Handle click to open raw event detail modal."""

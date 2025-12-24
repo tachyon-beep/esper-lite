@@ -389,7 +389,7 @@ class TestSanctumAggregator:
         assert env.seeds["r0c0"].stage == "FOSSILIZED"
 
     def test_event_log_captures_events(self):
-        """Events should be logged."""
+        """Events should be logged with metadata."""
         agg = SanctumAggregator(num_envs=4, max_event_log=10)
 
         event = MagicMock()
@@ -407,8 +407,11 @@ class TestSanctumAggregator:
         snapshot = agg.get_snapshot()
 
         assert len(snapshot.event_log) == 1
-        assert snapshot.event_log[0].event_type == "REWARD_COMPUTED"
-        assert "WAIT" in snapshot.event_log[0].message
+        entry = snapshot.event_log[0]
+        assert entry.event_type == "REWARD_COMPUTED"
+        # Action and reward are now in metadata, not message
+        assert entry.metadata.get("action") == "WAIT"
+        assert entry.metadata.get("reward") == 0.5
 
     def test_event_log_populates_episode_and_relative_time(self):
         """Event log entries should include episode and relative_time fields."""

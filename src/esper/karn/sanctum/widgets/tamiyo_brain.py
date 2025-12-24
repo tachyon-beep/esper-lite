@@ -40,6 +40,9 @@ class TamiyoBrain(Static):
     COMPACT_WIDTH = 80
     COMPACT_THRESHOLD = 85
 
+    # Neural network architecture constant
+    _TOTAL_LAYERS = 12
+
     class DecisionPinToggled(Message):
         """Posted when user clicks a decision to toggle pin status."""
 
@@ -499,12 +502,11 @@ class TamiyoBrain(Static):
             banner.append("  ")
 
             # Gradient health summary (per UX spec)
-            total_layers = 12  # Approximate
-            healthy = total_layers - tamiyo.dead_layers - tamiyo.exploding_layers
+            healthy = self._TOTAL_LAYERS - tamiyo.dead_layers - tamiyo.exploding_layers
             if tamiyo.dead_layers > 0 or tamiyo.exploding_layers > 0:
                 banner.append(f"GradHP:!! {tamiyo.dead_layers}D/{tamiyo.exploding_layers}E", style="red")
             else:
-                banner.append(f"GradHP:OK {healthy}/{total_layers}", style="green")
+                banner.append(f"GradHP:OK {healthy}/{self._TOTAL_LAYERS}", style="green")
             banner.append("  ")
 
             # Batch progress with denominator (per UX spec)
@@ -884,14 +886,12 @@ class TamiyoBrain(Static):
         result.append(f" {tamiyo.grad_norm:.2f}\n", style=gn_style)
 
         # Layer health
-        total_layers = 12
+        result.append(f" Layers      ", style="dim")
         if tamiyo.dead_layers > 0 or tamiyo.exploding_layers > 0:
-            result.append(f" Layers      ", style="dim")
             result.append(f"!! {tamiyo.dead_layers} dead, {tamiyo.exploding_layers} exploding", style="red")
         else:
-            healthy = total_layers - tamiyo.dead_layers - tamiyo.exploding_layers
-            result.append(f" Layers      ", style="dim")
-            result.append(f"OK {healthy}/{total_layers} healthy", style="green")
+            healthy = self._TOTAL_LAYERS - tamiyo.dead_layers - tamiyo.exploding_layers
+            result.append(f"OK {healthy}/{self._TOTAL_LAYERS} healthy", style="green")
 
         return result
 

@@ -28,7 +28,7 @@ def test_event_log_creation():
 
     widget = EventLog()
     assert widget is not None
-    assert widget._max_events == 30  # Increased for more context
+    assert widget._max_lines == 30  # Default max lines
     assert widget.border_title == "EVENTS"
 
 
@@ -47,13 +47,23 @@ def test_event_log_no_events():
 
 
 def test_event_log_with_events():
-    """Test render with events shows formatted log."""
-    from esper.karn.sanctum.widgets.event_log import EventLog
-    from esper.karn.sanctum.schema import EventLogEntry
-    from rich.console import Group
+    """Test render with events shows formatted log.
 
-    widget = EventLog(max_events=10)
-    widget._snapshot = SanctumSnapshot(
+    NOTE: The refactored EventLog is append-only and groups events by second.
+    It waits for a second to COMPLETE before showing events, so we can't test
+    live rendering without mocking datetime. We test the line data population instead.
+    """
+    from esper.karn.sanctum.widgets.event_log import EventLog, _EVENT_COLORS
+    from esper.karn.sanctum.schema import EventLogEntry
+    from unittest.mock import patch
+    from datetime import datetime, timezone
+
+    widget = EventLog(max_lines=10)
+
+    # Mock datetime to make all test timestamps "complete" (in the past)
+    mock_now = datetime(2024, 1, 1, 10, 15, 40, tzinfo=timezone.utc)
+
+    snapshot = SanctumSnapshot(
         event_log=[
             EventLogEntry(
                 timestamp="10:15:30",
@@ -75,25 +85,30 @@ def test_event_log_with_events():
             ),
         ]
     )
-    result = widget.render()
 
-    # Should return Group of Text lines
-    assert isinstance(result, Group)
+    with patch("esper.karn.sanctum.widgets.event_log.datetime") as mock_datetime:
+        mock_datetime.now.return_value = mock_now
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+        widget.update_snapshot(snapshot)
 
-    # Render to text and check content
-    rendered = render_to_text(result)
-    assert "10:15:30" in rendered
-    assert "10:15:31" in rendered
-    assert "10:15:32" in rendered
-    assert "WAIT r=+0.500" in rendered
-    assert "A1 germinated" in rendered
+    # Should have line data for the 3 seconds (each event type per second = 1 line each)
+    assert len(widget._line_data) == 3
+
+    # Verify the event types are in the line data
+    all_text = " ".join(left.plain for left, _ in widget._line_data)
+    assert "TRAINING_STARTED" in all_text or "TRAINING" in all_text
+    assert "REWARD" in all_text
+    assert "GERMINATED" in all_text
 
 
-def test_event_log_max_events_limit():
-    """Test that only max_events are shown."""
+def test_event_log_max_lines_limit():
+    """Test that only max_lines are kept in line data."""
     from esper.karn.sanctum.widgets.event_log import EventLog
     from esper.karn.sanctum.schema import EventLogEntry
+    from unittest.mock import patch
+    from datetime import datetime, timezone
 
+    # Create 30 events at different seconds
     events = [
         EventLogEntry(
             timestamp=f"10:00:{i:02d}",
@@ -101,18 +116,21 @@ def test_event_log_max_events_limit():
             env_id=0,
             message=f"Event {i}"
         )
-        for i in range(30)  # 30 events
+        for i in range(30)  # 30 events at 30 different seconds
     ]
 
-    widget = EventLog(max_events=10)  # Only show 10
-    widget._snapshot = SanctumSnapshot(event_log=events)
-    result = widget.render()
+    widget = EventLog(max_lines=10)  # Only keep 10 lines
 
-    rendered = render_to_text(result)
-    # Should only have last 10 events (20-29)
-    assert "Event 20" in rendered
-    assert "Event 29" in rendered
-    assert "Event 19" not in rendered  # Should be cut off
+    # Mock datetime to make all timestamps "complete"
+    mock_now = datetime(2024, 1, 1, 10, 1, 0, tzinfo=timezone.utc)
+
+    with patch("esper.karn.sanctum.widgets.event_log.datetime") as mock_datetime:
+        mock_datetime.now.return_value = mock_now
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+        widget.update_snapshot(SanctumSnapshot(event_log=events))
+
+    # Should have trimmed to max_lines
+    assert len(widget._line_data) == 10
 
 
 def test_event_log_color_mapping():
@@ -131,81 +149,112 @@ def test_event_log_color_mapping():
     assert "BATCH_EPOCH_COMPLETED" in _EVENT_COLORS
 
 
-def test_event_log_episode_grouping():
-    """EventLog should group events by episode with separators."""
+def test_event_log_groups_by_second():
+    """EventLog groups events by timestamp second, showing counts for duplicates."""
     from esper.karn.sanctum.widgets.event_log import EventLog
     from esper.karn.sanctum.schema import EventLogEntry
-    from rich.console import Group
+    from unittest.mock import patch
+    from datetime import datetime, timezone
 
     widget = EventLog()
-    widget._snapshot = SanctumSnapshot(
+
+    # Multiple events in the same second should be counted
+    snapshot = SanctumSnapshot(
         event_log=[
             EventLogEntry(
                 timestamp="12:33:12",
-                event_type="BATCH_EPOCH_COMPLETED",
-                env_id=None,
-                message="Episode 4 complete",
-                episode=4,
-                relative_time="(1m)",
-            ),
-            EventLogEntry(
-                timestamp="12:34:51",
                 event_type="REWARD_COMPUTED",
                 env_id=0,
                 message="WAIT r=+0.12",
-                episode=5,
-                relative_time="(7s)",
             ),
             EventLogEntry(
-                timestamp="12:34:56",
+                timestamp="12:33:12",
+                event_type="REWARD_COMPUTED",
+                env_id=1,
+                message="WAIT r=+0.15",
+            ),
+            EventLogEntry(
+                timestamp="12:33:12",
+                event_type="REWARD_COMPUTED",
+                env_id=2,
+                message="WAIT r=+0.18",
+            ),
+            EventLogEntry(
+                timestamp="12:33:13",
                 event_type="SEED_GERMINATED",
                 env_id=0,
-                message="seed_0a3f germinated",
-                episode=5,
-                relative_time="(2s)",
+                message="seed germinated",
             ),
         ]
     )
 
-    result = widget.render()
-    assert isinstance(result, Group)
+    # Mock datetime to make all timestamps "complete"
+    mock_now = datetime(2024, 1, 1, 12, 33, 20, tzinfo=timezone.utc)
 
-    # Render to text and check for episode separator
-    rendered = render_to_text(result)
-    assert "Episode 5" in rendered
-    assert "seed_0a3f germinated" in rendered
-    assert "WAIT r=+0.12" in rendered
-    assert "Episode 4 complete" in rendered
-    assert "(2s)" in rendered
-    assert "(7s)" in rendered
-    assert "(1m)" in rendered
+    with patch("esper.karn.sanctum.widgets.event_log.datetime") as mock_datetime:
+        mock_datetime.now.return_value = mock_now
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+        widget.update_snapshot(snapshot)
+
+    # Should have 2 lines: one for REWARD_COMPUTED ×3, one for SEED_GERMINATED
+    assert len(widget._line_data) == 2
+
+    # Check first line has count indicator
+    first_line_text = widget._line_data[0][0].plain
+    assert "×3" in first_line_text  # 3 REWARD_COMPUTED events
+
+    # Check env IDs are captured
+    first_line_envs = widget._line_data[0][1]
+    assert "0" in first_line_envs
+    assert "1" in first_line_envs
+    assert "2" in first_line_envs
 
 
 def test_event_log_color_coding():
-    """EventLog should color-code events by type."""
-    from esper.karn.sanctum.widgets.event_log import EventLog
+    """EventLog uses module-level _EVENT_COLORS for color mapping."""
+    from esper.karn.sanctum.widgets.event_log import _EVENT_COLORS
+
+    # Test color mapping directly from module constant
+    assert _EVENT_COLORS["SEED_GERMINATED"] == "bright_yellow"
+    assert _EVENT_COLORS["SEED_FOSSILIZED"] == "bright_green"
+    assert _EVENT_COLORS["SEED_PRUNED"] == "bright_red"
+    assert _EVENT_COLORS["REWARD_COMPUTED"] == "bright_cyan"
+    assert _EVENT_COLORS["BATCH_EPOCH_COMPLETED"] == "bright_blue"
+
+    # Unknown events default to "white" via .get() in implementation
+    assert _EVENT_COLORS.get("UNKNOWN_EVENT", "white") == "white"
+
+
+def test_event_log_uses_colors_in_rendering():
+    """EventLog applies colors from _EVENT_COLORS when rendering lines."""
+    from esper.karn.sanctum.widgets.event_log import EventLog, _EVENT_COLORS
+    from esper.karn.sanctum.schema import EventLogEntry
+    from unittest.mock import patch
+    from datetime import datetime, timezone
 
     widget = EventLog()
 
-    # Test color mapping
-    assert widget._get_event_color("SEED_GERMINATED") == "bright_yellow"
-    assert widget._get_event_color("SEED_FOSSILIZED") == "bright_green"
-    assert widget._get_event_color("SEED_PRUNED") == "bright_red"
-    assert widget._get_event_color("REWARD_COMPUTED") == "bright_cyan"
-    assert widget._get_event_color("BATCH_EPOCH_COMPLETED") == "bright_blue"
-    assert widget._get_event_color("UNKNOWN_EVENT") == "white"  # Default
+    snapshot = SanctumSnapshot(
+        event_log=[
+            EventLogEntry(
+                timestamp="12:00:00",
+                event_type="SEED_GERMINATED",
+                env_id=0,
+                message="seed germinated",
+            ),
+        ]
+    )
 
+    mock_now = datetime(2024, 1, 1, 12, 0, 5, tzinfo=timezone.utc)
 
-def test_event_log_emoji_mapping():
-    """EventLog should return correct emoji for event types."""
-    from esper.karn.sanctum.widgets.event_log import EventLog
+    with patch("esper.karn.sanctum.widgets.event_log.datetime") as mock_datetime:
+        mock_datetime.now.return_value = mock_now
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+        widget.update_snapshot(snapshot)
 
-    widget = EventLog()
+    # Line data should contain styled text
+    assert len(widget._line_data) == 1
+    left_text, _ = widget._line_data[0]
 
-    # Test emoji mapping
-    assert widget._get_event_emoji("SEED_GERMINATED") == "🌱"
-    assert widget._get_event_emoji("SEED_FOSSILIZED") == "✅"
-    assert widget._get_event_emoji("SEED_PRUNED") == "⚠️"
-    assert widget._get_event_emoji("REWARD_COMPUTED") == "📊"
-    assert widget._get_event_emoji("BATCH_EPOCH_COMPLETED") == "🏆"
-    assert widget._get_event_emoji("UNKNOWN_EVENT") == ""  # No emoji for unknown
+    # The text should contain GERMINATED (after SEED_ is stripped)
+    assert "GERMINATED" in left_text.plain

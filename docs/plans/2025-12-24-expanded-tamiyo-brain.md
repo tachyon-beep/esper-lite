@@ -10,6 +10,40 @@
 
 ---
 
+## Pre-Implementation Addendum (2025-12-24)
+
+### Test Fixes Completed
+
+Before implementing this plan, 10 pre-existing test failures were fixed:
+
+| Test File | Issue | Resolution |
+|-----------|-------|------------|
+| `test_event_log.py` (6 tests) | EventLog widget refactored (`_max_events` → `_max_lines`, removed helper methods) | Tests updated to match new append-only architecture |
+| `test_app_integration.py` (3 tests) | Outdated `asyncio.run()` pattern, timing issues | Converted to `@pytest.mark.asyncio` async methods |
+| `test_backend.py` (1 test) | Event message format changed (action now in metadata) | Test updated to check `metadata.get("action")` |
+
+**All 216 sanctum tests now pass.**
+
+### Task 1.1 Already Implemented
+
+The TUIThresholds corrections specified in Task 1.1 are **already present** in `src/esper/karn/constants.py:96-151`:
+- `EXPLAINED_VAR_WARNING: 0.3` ✓
+- `EXPLAINED_VAR_CRITICAL: 0.0` ✓
+- `KL_WARNING: 0.015` ✓
+- `KL_CRITICAL: 0.03` ✓
+- `ADVANTAGE_STD_WARNING/CRITICAL/LOW_WARNING/COLLAPSED` ✓
+
+**→ SKIP Task 1.1** — proceed directly to Task 1.2 (schema fields).
+
+### Schema Fields Needed (Task 1.2)
+
+The following fields are missing from `TamiyoState` and must be added:
+- `kl_divergence_history: deque[float]`
+- `clip_fraction_history: deque[float]`
+- `group_id: str | None` (for A/B testing)
+
+---
+
 ## Review Feedback Incorporated (v2 + v3 Changes)
 
 This revision addresses feedback from four specialist reviewers across two review rounds.
