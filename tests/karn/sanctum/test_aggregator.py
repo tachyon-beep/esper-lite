@@ -72,3 +72,40 @@ def test_ppo_update_populates_history():
     assert abs(clip_fractions[0] - 0.1) < 1e-9
     assert abs(clip_fractions[1] - 0.12) < 1e-9
     assert abs(clip_fractions[2] - 0.14) < 1e-9
+
+
+def test_ppo_update_populates_head_entropies():
+    """PPO_UPDATE_COMPLETED should populate all 8 head entropies when available."""
+    agg = SanctumAggregator(num_envs=4)
+
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        data={
+            "policy_loss": 0.1,
+            "value_loss": 0.2,
+            "entropy": 1.5,
+            # Per-head entropies (when neural network emits them)
+            "head_slot_entropy": 1.0,
+            "head_blueprint_entropy": 2.0,
+            "head_style_entropy": 1.2,
+            "head_tempo_entropy": 0.9,
+            "head_alpha_target_entropy": 0.8,
+            "head_alpha_speed_entropy": 1.1,
+            "head_alpha_curve_entropy": 0.7,
+            "head_op_entropy": 1.5,
+        },
+    )
+    agg.process_event(event)
+
+    snapshot = agg.get_snapshot()
+    tamiyo = snapshot.tamiyo
+
+    # Should have all 8 head entropies
+    assert tamiyo.head_slot_entropy == 1.0
+    assert tamiyo.head_blueprint_entropy == 2.0
+    assert tamiyo.head_style_entropy == 1.2
+    assert tamiyo.head_tempo_entropy == 0.9
+    assert tamiyo.head_alpha_target_entropy == 0.8
+    assert tamiyo.head_alpha_speed_entropy == 1.1
+    assert tamiyo.head_alpha_curve_entropy == 0.7
+    assert tamiyo.head_op_entropy == 1.5

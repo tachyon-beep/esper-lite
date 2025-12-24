@@ -598,6 +598,15 @@ class SanctumAggregator:
         self._tamiyo.head_blueprint_entropy = data.get("head_blueprint_entropy", 0.0)
         self._tamiyo.head_blueprint_grad_norm = data.get("head_blueprint_grad_norm", 0.0)
 
+        # Per-head entropies (for heatmap visualization)
+        # These are optional - only present when neural network emits them
+        self._tamiyo.head_style_entropy = data.get("head_style_entropy", self._tamiyo.head_style_entropy)
+        self._tamiyo.head_tempo_entropy = data.get("head_tempo_entropy", self._tamiyo.head_tempo_entropy)
+        self._tamiyo.head_alpha_target_entropy = data.get("head_alpha_target_entropy", self._tamiyo.head_alpha_target_entropy)
+        self._tamiyo.head_alpha_speed_entropy = data.get("head_alpha_speed_entropy", self._tamiyo.head_alpha_speed_entropy)
+        self._tamiyo.head_alpha_curve_entropy = data.get("head_alpha_curve_entropy", self._tamiyo.head_alpha_curve_entropy)
+        self._tamiyo.head_op_entropy = data.get("head_op_entropy", self._tamiyo.head_op_entropy)
+
         # PPO inner loop context
         self._tamiyo.inner_epoch = data.get("inner_epoch", 0)
         self._tamiyo.ppo_batch = data.get("batch", 0)
