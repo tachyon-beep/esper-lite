@@ -31,6 +31,9 @@ class TamiyoBrain(Static):
     Click on a decision panel to pin it (prevents replacement).
     """
 
+    # Widget width for separators (96 - 2 for padding = 94)
+    SEPARATOR_WIDTH = 94
+
     class DecisionPinToggled(Message):
         """Posted when user clicks a decision to toggle pin status."""
 
@@ -77,19 +80,46 @@ class TamiyoBrain(Static):
             self.post_message(self.DecisionPinToggled(decision_id))
 
     def render(self):
-        """Render Tamiyo content (border provided by CSS, not Rich Panel)."""
+        """Render Tamiyo content with expanded layout."""
         if self._snapshot is None:
             return Text("No data", style="dim")
 
-        # Main layout: two sections stacked
+        # Main layout: stacked sections
         main_table = Table.grid(expand=True)
         main_table.add_column(ratio=1)
 
-        # Section 1: Learning Vitals
-        vitals_panel = self._render_learning_vitals()
-        main_table.add_row(vitals_panel)
+        # Row 1: Status Banner (1 line)
+        status_banner = self._render_status_banner()
+        main_table.add_row(status_banner)
 
-        # Section 2: Recent Decisions (up to 3, each visible for 10s minimum)
+        # Row 2: Separator (full width per UX spec)
+        main_table.add_row(Text("─" * self.SEPARATOR_WIDTH, style="dim"))
+
+        # Row 3: Diagnostic Matrix (gauges left, metrics right)
+        # For now, just gauges - Phase 3 adds metrics column
+        if self._snapshot.tamiyo.ppo_data_received:
+            gauge_grid = self._render_gauge_grid()
+            main_table.add_row(gauge_grid)
+        else:
+            waiting_text = Text(style="dim italic")
+            waiting_text.append("⏳ Waiting for PPO vitals\n")
+            waiting_text.append(
+                f"Progress: {self._snapshot.current_epoch}/{self._snapshot.max_epochs} epochs",
+                style="cyan",
+            )
+            main_table.add_row(waiting_text)
+
+        # Row 4: Separator
+        main_table.add_row(Text("─" * self.SEPARATOR_WIDTH, style="dim"))
+
+        # Row 5: Action Distribution
+        action_bar = self._render_action_distribution_bar()
+        main_table.add_row(action_bar)
+
+        # Row 6: Separator
+        main_table.add_row(Text("─" * self.SEPARATOR_WIDTH, style="dim"))
+
+        # Row 7: Decision Carousel
         decisions_panel = self._render_recent_decisions()
         main_table.add_row(decisions_panel)
 
