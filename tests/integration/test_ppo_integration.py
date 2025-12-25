@@ -9,7 +9,7 @@ Tests that PPO components work together correctly:
 import torch
 
 from esper.simic.agent import PPOAgent, signals_to_features
-from esper.tamiyo.policy.features import MULTISLOT_FEATURE_SIZE, get_feature_size
+from esper.tamiyo.policy.features import MULTISLOT_FEATURE_SIZE
 from esper.tamiyo.policy.factory import create_policy
 from esper.leyline import TrainingSignals, SeedTelemetry
 from esper.leyline.slot_config import SlotConfig

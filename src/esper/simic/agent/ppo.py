@@ -280,7 +280,7 @@ class PPOAgent:
         self.clip_value = clip_value
         self.value_clip = value_clip
         self.max_grad_norm = max_grad_norm
-        self.lstm_hidden_dim = policy.network.lstm_hidden_dim
+        self.lstm_hidden_dim = policy.hidden_dim
         self.n_epochs = n_epochs
         self.batch_size = batch_size
         self.target_kl = target_kl
@@ -317,14 +317,14 @@ class PPOAgent:
             slot_config=self.slot_config,
             device=torch.device(device),
         )
-        # Validate buffer and network use same hidden dim and slot config
-        assert self.buffer.lstm_hidden_dim == self.policy.network.lstm_hidden_dim, (
+        # Validate buffer and policy use same hidden dim and slot config
+        assert self.buffer.lstm_hidden_dim == self.policy.hidden_dim, (
             f"Buffer lstm_hidden_dim ({self.buffer.lstm_hidden_dim}) != "
-            f"network lstm_hidden_dim ({self.policy.network.lstm_hidden_dim})"
+            f"policy hidden_dim ({self.policy.hidden_dim})"
         )
-        assert self.buffer.num_slots == self.policy.network.num_slots, (
+        assert self.buffer.num_slots == self.policy.slot_config.num_slots, (
             f"Buffer num_slots ({self.buffer.num_slots}) != "
-            f"network num_slots ({self.policy.network.num_slots})"
+            f"policy num_slots ({self.policy.slot_config.num_slots})"
         )
         # CRITICAL: Validate slot_ids ORDERING, not just count
         # This catches observation-action misalignment bugs where configs have
