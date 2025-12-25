@@ -4,7 +4,7 @@
 
 **Goal:** Replace flat observation concatenation with a Slot Transformer Encoder that provides weight sharing across slots, natural variable slot count support, and learned slot-slot interactions via self-attention. This enables scaling from 3 slots to 50+ slots without linear parameter growth.
 
-**Architecture:** Four-phase incremental delivery: (1) SlotTransformerEncoder module, (2) SlotTransformerActorCritic network, (3) PolicyBundle integration and factory, (4) Benchmarking and cutover. Each phase is independently testable.
+**Architecture:** Five-phase incremental delivery: (1) SlotTransformerEncoder module, (2) SlotTransformerActorCritic network, (3) PolicyBundle integration and factory, (4) Telemetry and Sanctum integration, (5) Benchmarking and cutover. Each phase is independently testable.
 
 **Tech Stack:** PyTorch 2.x, torch.compile compatible, nn.TransformerEncoder, learnable positional encoding
 
@@ -369,11 +369,142 @@ policy = create_policy(
 
 ---
 
-## Phase 4: Benchmarking and Cutover
+## Phase 4: Telemetry and Sanctum Integration
+
+**Files:** `src/esper/leyline/telemetry.py` (modify), `src/esper/karn/sanctum/` (modify)
+
+### Task 4.1: Extend PPOUpdatePayload for Transformer Metrics
+
+Add optional transformer-specific fields to telemetry:
+
+```python
+@dataclass
+class PPOUpdatePayload:
+    ...
+    # Existing fields unchanged
+
+    # OPTIONAL - Transformer attention diagnostics (None if LSTM)
+    attention_entropy_mean: float | None = None  # Mean entropy of attention distributions
+    attention_entropy_min: float | None = None   # Lowest entropy (sharpest attention)
+    slot_attention_distribution: list[float] | None = None  # Per-slot attention mass
+    network_type: str = "lstm"  # "lstm" | "transformer" for TUI routing
+```
+
+**Rationale:**
+- `attention_entropy_mean`: Low = sharp attention (good for focused decisions), High = diffuse (exploring)
+- `slot_attention_distribution`: Which slots get most attention - useful for debugging slot selection
+- `network_type`: Allows Sanctum to adapt display based on architecture
+
+### Task 4.2: Emit Attention Metrics in PPO Update
+
+Modify `PPOAgent._compute_diagnostics()` to extract attention weights when using transformer:
+
+```python
+def _compute_diagnostics(self, ...) -> dict:
+    diagnostics = {...}  # Existing
+
+    # Transformer-specific metrics
+    if hasattr(self.policy.network, 'get_attention_stats'):
+        attn_stats = self.policy.network.get_attention_stats()
+        diagnostics.update({
+            "attention_entropy_mean": attn_stats["entropy_mean"],
+            "attention_entropy_min": attn_stats["entropy_min"],
+            "slot_attention_distribution": attn_stats["slot_distribution"],
+            "network_type": "transformer",
+        })
+    else:
+        diagnostics["network_type"] = "lstm"
+
+    return diagnostics
+```
+
+### Task 4.3: TamiyoBrain Architecture Indicator
+
+Add network type badge to TamiyoBrain status banner:
+
+```python
+# In _render_status_banner()
+network_badge = "🔄 LSTM" if state.network_type == "lstm" else "⚡ XFMR"
+self._append_text(network_badge, style="dim")
+```
+
+**Location:** Status banner, right-aligned after existing metrics.
+
+### Task 4.4: Optional Attention Heatmap Widget
+
+Create `AttentionHeatmap` widget for Sanctum (optional, behind feature flag):
+
+```python
+class AttentionHeatmap(Static):
+    """Visualize slot-slot attention patterns.
+
+    Shows which slots the agent is attending to when making decisions.
+    Useful for debugging and understanding learned slot interactions.
+    """
+
+    def __init__(self, max_slots: int = 10):
+        super().__init__()
+        self.max_slots = max_slots
+
+    def update_attention(self, attention_matrix: list[list[float]]) -> None:
+        """Update with new attention weights [num_slots, num_slots]."""
+        ...
+
+    def compose(self) -> ComposeResult:
+        # Render as ASCII heatmap with slot labels
+        ...
+```
+
+**Display format:**
+```
+Slot Attention (last step)
+    r0c0 r0c1 r1c0
+r0c0  ██   ▓▓   ░░
+r0c1  ▓▓   ██   ▓▓
+r1c0  ░░   ▓▓   ██
+```
+
+**Integration:** Add to EnvDetailScreen when network_type == "transformer".
+
+### Task 4.5: SanctumSnapshot Schema Extension
+
+Extend schema to carry transformer metrics:
+
+```python
+@dataclass
+class TamiyoState:
+    ...
+    # Existing fields
+
+    # Transformer metrics (None if LSTM)
+    network_type: str = "lstm"
+    attention_entropy: float | None = None
+    slot_attention_weights: list[float] | None = None
+```
+
+### Task 4.6: Aggregator Updates
+
+Update `SanctumAggregator` to populate transformer fields from PPOUpdatePayload:
+
+```python
+def _handle_ppo_update(self, payload: PPOUpdatePayload) -> None:
+    ...
+    # Existing handling
+
+    # Transformer metrics
+    self._tamiyo.network_type = payload.network_type
+    if payload.attention_entropy_mean is not None:
+        self._tamiyo.attention_entropy = payload.attention_entropy_mean
+        self._tamiyo.slot_attention_weights = payload.slot_attention_distribution
+```
+
+---
+
+## Phase 5: Benchmarking and Cutover
 
 **Files:** `scripts/benchmark_architectures.py` (new)
 
-### Task 4.1: Benchmark Script
+### Task 5.1: Benchmark Script
 
 Create comprehensive benchmark comparing LSTM vs Transformer:
 
@@ -399,7 +530,7 @@ def benchmark_architecture(
     ...
 ```
 
-### Task 4.2: Training Comparison
+### Task 5.2: Training Comparison
 
 Run short training comparisons on each configuration:
 
@@ -410,7 +541,7 @@ Run short training comparisons on each configuration:
 | 10 slots | LSTM | 500 | ? | ? |
 | 10 slots | Transformer | 500 | ? | ? |
 
-### Task 4.3: Cutover Decision
+### Task 5.3: Cutover Decision
 
 **If Transformer wins on 10+ slots:**
 1. Make `network_type="transformer"` the default
@@ -468,7 +599,14 @@ Useful for debugging which slots the agent considers together.
 | `src/esper/tamiyo/policy/__init__.py` | Modify | 3 |
 | `src/esper/simic/training/config.py` | Modify | 3 |
 | `src/esper/simic/training/vectorized.py` | Modify | 3 |
-| `scripts/benchmark_architectures.py` | Create | 4 |
+| `src/esper/leyline/telemetry.py` | Modify | 4 |
+| `src/esper/simic/agent/ppo.py` | Modify | 4 |
+| `src/esper/karn/sanctum/schema.py` | Modify | 4 |
+| `src/esper/karn/sanctum/aggregator.py` | Modify | 4 |
+| `src/esper/karn/sanctum/widgets/tamiyo_brain.py` | Modify | 4 |
+| `src/esper/karn/sanctum/widgets/attention_heatmap.py` | Create | 4 |
+| `tests/karn/sanctum/test_attention_heatmap.py` | Create | 4 |
+| `scripts/benchmark_architectures.py` | Create | 5 |
 
 ---
 
@@ -478,7 +616,9 @@ Useful for debugging which slots the agent considers together.
 2. **No regression on 3-slot**: Performance within 10% of LSTM baseline
 3. **Scaling win**: Transformer uses <50% memory of LSTM at 50 slots
 4. **Compile clean**: `fullgraph=True` succeeds with no graph breaks
-5. **All tests pass**: Including existing PPO integration tests
+5. **Telemetry complete**: Attention metrics flow from PPO → Nissa → Karn → Sanctum
+6. **TUI adaptation**: TamiyoBrain shows network type badge; attention heatmap available
+7. **All tests pass**: Including existing PPO integration tests and new telemetry tests
 
 ---
 
