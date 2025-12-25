@@ -9,6 +9,7 @@ import torch
 from esper.leyline import DEFAULT_LSTM_HIDDEN_DIM
 
 if TYPE_CHECKING:
+    from esper.leyline.slot_config import SlotConfig
     from esper.tamiyo.policy.protocol import PolicyBundle
 
 # Valid torch.compile modes
@@ -19,11 +20,12 @@ def create_policy(
     policy_type: str = "lstm",
     state_dim: int | None = None,
     num_slots: int = 4,
+    slot_config: "SlotConfig | None" = None,
     device: torch.device | str = "cpu",
     compile_mode: str = "off",
     lstm_hidden_dim: int = DEFAULT_LSTM_HIDDEN_DIM,
     **kwargs: Any,
-) -> PolicyBundle:
+) -> "PolicyBundle":
     """Create a policy instance with optional torch.compile.
 
     This is the recommended entry point for creating policies. It handles:
@@ -33,8 +35,11 @@ def create_policy(
 
     Args:
         policy_type: Registered policy name (default: "lstm")
-        state_dim: Observation feature dimension. If None, computed from num_slots.
-        num_slots: Number of seed slots (used to compute state_dim if not provided)
+        state_dim: Observation feature dimension. If None, computed from slot_config.
+        num_slots: Number of seed slots (deprecated - use slot_config instead)
+        slot_config: Explicit slot configuration. If provided, num_slots is ignored.
+            IMPORTANT: Always pass slot_config when using non-default slot layouts
+            to ensure action heads and masks align correctly.
         device: Target device for the policy
         compile_mode: torch.compile mode ("off", "default", "reduce-overhead", "max-autotune")
         lstm_hidden_dim: Hidden dimension for LSTM policies
@@ -47,10 +52,11 @@ def create_policy(
         ValueError: If compile_mode is not valid
 
     Example:
+        >>> from esper.leyline.slot_config import SlotConfig
+        >>> slot_config = SlotConfig.for_grid(rows=1, cols=4)
         >>> policy = create_policy(
         ...     policy_type="lstm",
-        ...     state_dim=64,
-        ...     num_slots=4,
+        ...     slot_config=slot_config,
         ...     device="cuda:0",
         ...     compile_mode="default",
         ... )
@@ -68,8 +74,10 @@ def create_policy(
             f"compile_mode must be one of {sorted(VALID_COMPILE_MODES)}, got {compile_mode!r}"
         )
 
-    # Create slot config (single-row grid by default)
-    slot_config = SlotConfig.for_grid(rows=1, cols=num_slots)
+    # Use provided slot_config or create default from num_slots
+    # IMPORTANT: Always prefer explicit slot_config for non-default layouts
+    if slot_config is None:
+        slot_config = SlotConfig.for_grid(rows=1, cols=num_slots)
 
     # Compute state_dim if not provided
     if state_dim is None:

@@ -836,10 +836,12 @@ def train_ppo_vectorized(
         effective_compile_mode = compile_mode if not quiet_analytics else "off"
 
         # Create policy via Tamiyo factory
+        # IMPORTANT: Pass actual slot_config to ensure action heads/masks align
+        # with environment slot ordering (critical for non-default slot layouts)
         policy = create_policy(
             policy_type="lstm",
             state_dim=state_dim,
-            num_slots=slot_config.num_slots,
+            slot_config=slot_config,
             device=device,
             compile_mode=effective_compile_mode,
             lstm_hidden_dim=lstm_hidden_dim,

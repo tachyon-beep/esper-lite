@@ -45,7 +45,7 @@ class TestMemoryUsage:
         policy = create_policy(
             policy_type="lstm",
             state_dim=state_dim,
-            num_slots=config.num_slots,
+            slot_config=config,
             device="cpu",
             compile_mode="off",
         )
@@ -211,7 +211,7 @@ class TestEpisodeCycling:
         policy = create_policy(
             policy_type="lstm",
             state_dim=state_dim,
-            num_slots=config.num_slots,
+            slot_config=config,
             device="cpu",
             compile_mode="off",
         )
@@ -298,7 +298,7 @@ class TestEpisodeCycling:
         policy = create_policy(
             policy_type="lstm",
             state_dim=state_dim,
-            num_slots=config.num_slots,
+            slot_config=config,
             device="cpu",
             compile_mode="off",
         )
@@ -370,7 +370,7 @@ class TestScalingBehavior:
             policy = create_policy(
                 policy_type="lstm",
                 state_dim=state_dim,
-                num_slots=config.num_slots,
+                slot_config=config,
                 device="cpu",
                 compile_mode="off",
             )

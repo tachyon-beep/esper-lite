@@ -28,7 +28,7 @@ class TestPPOCheckpointRoundTrip:
         policy = create_policy(
             policy_type="lstm",
             state_dim=get_feature_size(slot_config),
-            num_slots=slot_config.num_slots,
+            slot_config=slot_config,
             device="cpu",
             compile_mode="off",
         )
@@ -55,7 +55,7 @@ class TestPPOCheckpointRoundTrip:
         policy = create_policy(
             policy_type="lstm",
             state_dim=get_feature_size(slot_config),
-            num_slots=slot_config.num_slots,
+            slot_config=slot_config,
             device="cpu",
             compile_mode="off",
         )
@@ -77,7 +77,7 @@ class TestPPOCheckpointRoundTrip:
         policy = create_policy(
             policy_type="lstm",
             state_dim=get_feature_size(slot_config),
-            num_slots=slot_config.num_slots,
+            slot_config=slot_config,
             device="cpu",
             compile_mode="off",
         )
@@ -121,7 +121,7 @@ class TestPPOCheckpointValidation:
         policy = create_policy(
             policy_type="lstm",
             state_dim=get_feature_size(slot_config),
-            num_slots=slot_config.num_slots,
+            slot_config=slot_config,
             device="cpu",
             compile_mode="off",
         )
@@ -148,7 +148,7 @@ class TestPPOCheckpointNoBackwardsCompatibility:
         policy = create_policy(
             policy_type="lstm",
             state_dim=get_feature_size(slot_config),
-            num_slots=slot_config.num_slots,
+            slot_config=slot_config,
             device="cpu",
             compile_mode="off",
         )
@@ -171,7 +171,7 @@ class TestPPOCheckpointNoBackwardsCompatibility:
         policy = create_policy(
             policy_type="lstm",
             state_dim=get_feature_size(slot_config),
-            num_slots=slot_config.num_slots,
+            slot_config=slot_config,
             device="cpu",
             compile_mode="off",
         )
@@ -197,7 +197,7 @@ class TestPPOCheckpointVersion:
         policy = create_policy(
             policy_type="lstm",
             state_dim=get_feature_size(slot_config),
-            num_slots=slot_config.num_slots,
+            slot_config=slot_config,
             device="cpu",
             compile_mode="off",
         )
@@ -214,7 +214,7 @@ class TestPPOCheckpointVersion:
         policy = create_policy(
             policy_type="lstm",
             state_dim=get_feature_size(slot_config),
-            num_slots=slot_config.num_slots,
+            slot_config=slot_config,
             device="cpu",
             compile_mode="off",
         )

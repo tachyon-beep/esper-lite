@@ -324,6 +324,16 @@ class PPOAgent:
             f"Buffer num_slots ({self.buffer.num_slots}) != "
             f"network num_slots ({self.policy.network.num_slots})"
         )
+        # CRITICAL: Validate slot_ids ORDERING, not just count
+        # This catches observation-action misalignment bugs where configs have
+        # same num_slots but different slot orderings (e.g., from SlotConfig.from_specs
+        # vs SlotConfig.for_grid). Such misalignment causes silent training corruption
+        # where the policy learns phantom correlations between wrong slots.
+        assert self.buffer.slot_config.slot_ids == self.policy.slot_config.slot_ids, (
+            f"Slot config ordering mismatch! Buffer slot_ids={self.buffer.slot_config.slot_ids} "
+            f"!= policy slot_ids={self.policy.slot_config.slot_ids}. "
+            f"This WILL cause silent training corruption where actions target wrong slots."
+        )
         # M21: Ratio anomaly thresholds from leyline (single source of truth)
         self.ratio_explosion_threshold = DEFAULT_RATIO_EXPLOSION_THRESHOLD
         self.ratio_collapse_threshold = DEFAULT_RATIO_COLLAPSE_THRESHOLD

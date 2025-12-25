@@ -27,7 +27,7 @@ def test_ppo_agent_architecture():
     slot_config = SlotConfig.default()
     policy = create_policy(
         policy_type="lstm",
-        num_slots=slot_config.num_slots,
+        slot_config=slot_config,
         device="cpu",
         compile_mode="off",
     )
@@ -49,7 +49,7 @@ def test_kl_early_stopping_triggers():
     slot_config = SlotConfig.default()
     policy = create_policy(
         policy_type="lstm",
-        num_slots=slot_config.num_slots,
+        slot_config=slot_config,
         device="cpu",
         compile_mode="off",
     )
@@ -152,7 +152,7 @@ def test_kl_early_stopping_with_single_epoch():
     slot_config = SlotConfig.default()
     policy = create_policy(
         policy_type="lstm",
-        num_slots=slot_config.num_slots,
+        slot_config=slot_config,
         device="cpu",
         compile_mode="off",
     )
@@ -230,7 +230,7 @@ def test_value_clipping_uses_appropriate_range():
     slot_config = SlotConfig.default()
     policy = create_policy(
         policy_type="lstm",
-        num_slots=slot_config.num_slots,
+        slot_config=slot_config,
         device="cpu",
         compile_mode="off",
     )
@@ -253,7 +253,7 @@ def test_value_clipping_disabled_option():
     slot_config = SlotConfig.default()
     policy = create_policy(
         policy_type="lstm",
-        num_slots=slot_config.num_slots,
+        slot_config=slot_config,
         device="cpu",
         compile_mode="off",
     )
@@ -275,7 +275,7 @@ def test_weight_decay_optimizer_covers_all_network_params() -> None:
     slot_config = SlotConfig.default()
     policy = create_policy(
         policy_type="lstm",
-        num_slots=slot_config.num_slots,
+        slot_config=slot_config,
         device="cpu",
         compile_mode="off",
     )
@@ -313,7 +313,7 @@ def test_head_grad_norms_includes_tempo_head() -> None:
     slot_config = SlotConfig.default()
     policy = create_policy(
         policy_type="lstm",
-        num_slots=slot_config.num_slots,
+        slot_config=slot_config,
         device="cpu",
         compile_mode="off",
     )
@@ -521,7 +521,7 @@ def test_ppo_agent_accepts_slot_config():
     slot_config = SlotConfig.default()  # 3 slots
     policy = create_policy(
         policy_type="lstm",
-        num_slots=slot_config.num_slots,
+        slot_config=slot_config,
         device="cpu",
         compile_mode="off",
     )
@@ -543,7 +543,7 @@ def test_ppo_agent_with_3_slot_config():
     slot_config = SlotConfig.default()  # 3 slots (r0c0, r0c1, r0c2)
     policy = create_policy(
         policy_type="lstm",
-        num_slots=slot_config.num_slots,
+        slot_config=slot_config,
         device="cpu",
         compile_mode="off",
     )
@@ -566,7 +566,7 @@ def test_ppo_agent_with_5_slot_config():
     slot_config = SlotConfig(slot_ids=("r0c0", "r0c1", "r0c2", "r1c0", "r1c1"))
     policy = create_policy(
         policy_type="lstm",
-        num_slots=slot_config.num_slots,
+        slot_config=slot_config,
         device="cpu",
         compile_mode="off",
     )
@@ -588,7 +588,7 @@ def test_ppo_agent_network_slot_head_matches_config():
     slot_config = SlotConfig(slot_ids=("r0c0", "r0c1", "r0c2", "r1c0"))  # 4 slots
     policy = create_policy(
         policy_type="lstm",
-        num_slots=slot_config.num_slots,
+        slot_config=slot_config,
         device="cpu",
         compile_mode="off",
     )
@@ -609,7 +609,7 @@ def test_ppo_agent_buffer_matches_slot_config():
     slot_config = SlotConfig.for_grid(rows=1, cols=5)  # 5 slots
     policy = create_policy(
         policy_type="lstm",
-        num_slots=slot_config.num_slots,
+        slot_config=slot_config,
         device="cpu",
         compile_mode="off",
     )
@@ -633,7 +633,7 @@ def test_ppo_agent_full_update_with_5_slots():
     slot_config = SlotConfig.for_grid(rows=1, cols=5)  # 5 slots
     policy = create_policy(
         policy_type="lstm",
-        num_slots=slot_config.num_slots,
+        slot_config=slot_config,
         device="cpu",
         compile_mode="off",
     )
