@@ -554,7 +554,11 @@ class SanctumAggregator:
 
         # Update per-seed telemetry from EPOCH_COMPLETED event
         # Note: seeds is dict[str, dict[str, Any]] - inner dicts remain untyped
-        seeds_data = payload.seeds or {}
+        if payload.seeds is None:
+            _logger.warning("EPOCH_COMPLETED missing seeds telemetry")
+            seeds_data = {}
+        else:
+            seeds_data = payload.seeds
         for slot_id, seed_telemetry in seeds_data.items():
             # Ensure seed exists
             if slot_id not in env.seeds:

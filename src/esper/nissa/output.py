@@ -97,11 +97,17 @@ class ConsoleOutput(OutputBackend):
                 loss = event.data.val_loss
                 acc = event.data.val_accuracy
             else:
+                if event.data is None:
+                    _logger.warning("EPOCH_COMPLETED event has no data payload")
+                    return
                 loss = event.data.get("val_loss", "?")
                 acc = event.data.get("val_accuracy", "?")
             epoch = event.epoch or "?"
             print(f"[{timestamp}] {seed_id} | Epoch {epoch}: loss={loss} acc={acc}")
         elif "COMMAND" in event_type:
+            if event.data is None:
+                _logger.warning("COMMAND event has no data payload")
+                return
             action = event.data.get("action", "unknown")
             print(f"[{timestamp}] {seed_id} | Command: {action}")
         elif event_type.startswith("SEED_"):
