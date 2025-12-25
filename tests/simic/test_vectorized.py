@@ -866,10 +866,13 @@ def test_emit_anomaly_diagnostics_skips_debug_when_disabled(monkeypatch):
             self.events.append(event)
 
     class _StubAgent:
-        class _Net:
-            pass
+        class _Policy:
+            class _Net:
+                pass
+            def __init__(self):
+                self._network = _StubAgent._Policy._Net()
         def __init__(self):
-            self.network = self._Net()
+            self.policy = self._Policy()
 
     # Make gradient/stability collection fail if called
     def _fail_gradients(_):
@@ -915,10 +918,13 @@ def test_emit_anomaly_diagnostics_collects_when_debug_enabled(monkeypatch):
             self.events.append(event)
 
     class _StubAgent:
-        class _Net:
-            pass
+        class _Policy:
+            class _Net:
+                pass
+            def __init__(self):
+                self._network = _StubAgent._Policy._Net()
         def __init__(self):
-            self.network = self._Net()
+            self.policy = self._Policy()
 
     grad_called = {"count": 0}
     stability_called = {"count": 0}

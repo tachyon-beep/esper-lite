@@ -25,6 +25,7 @@ from esper.leyline.factored_actions import (
     NUM_TEMPO,
 )
 from esper.simic.agent import PPOAgent
+from esper.tamiyo.policy import create_policy
 from esper.tamiyo.policy.features import get_feature_size
 from esper.tamiyo.policy.action_masks import compute_action_masks, MaskSeedInfo
 
@@ -41,11 +42,17 @@ class TestMemoryUsage:
         gc.collect()
         tracemalloc.start()
 
-        agent = PPOAgent(
+        policy = create_policy(
+            policy_type="lstm",
             state_dim=state_dim,
+            num_slots=config.num_slots,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(
+            policy=policy,
             slot_config=config,
             device="cpu",
-            compile_network=False,
             num_envs=4,
             max_steps_per_env=100,
         )
@@ -64,7 +71,7 @@ class TestMemoryUsage:
         }
 
         with torch.no_grad():
-            _ = agent.network.get_action(
+            _ = agent.policy.network.get_action(
                 states,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -201,11 +208,17 @@ class TestEpisodeCycling:
         n_envs = 2
         n_episodes = 50  # Reduced from 100 for faster tests
 
-        agent = PPOAgent(
+        policy = create_policy(
+            policy_type="lstm",
             state_dim=state_dim,
+            num_slots=config.num_slots,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(
+            policy=policy,
             slot_config=config,
             device="cpu",
-            compile_network=False,
             num_envs=n_envs,
             max_steps_per_env=20,
         )
@@ -221,11 +234,12 @@ class TestEpisodeCycling:
                 agent.buffer.start_episode(env_id=env_idx)
 
             # Add transitions
+            hidden_dim = agent.policy.hidden_dim  # Get from policy
             for step in range(10):
                 for env_idx in range(n_envs):
                     state = torch.randn(state_dim)
-                    hidden_h = torch.randn(1, agent.lstm_hidden_dim)
-                    hidden_c = torch.randn(1, agent.lstm_hidden_dim)
+                    hidden_h = torch.randn(1, hidden_dim)
+                    hidden_c = torch.randn(1, hidden_dim)
 
                     agent.buffer.add(
                         env_id=env_idx,
@@ -281,11 +295,17 @@ class TestEpisodeCycling:
         config = SlotConfig.default()
         state_dim = get_feature_size(config)
 
-        agent = PPOAgent(
+        policy = create_policy(
+            policy_type="lstm",
             state_dim=state_dim,
+            num_slots=config.num_slots,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(
+            policy=policy,
             slot_config=config,
             device="cpu",
-            compile_network=False,
         )
 
         gc.collect()
@@ -308,7 +328,7 @@ class TestEpisodeCycling:
             }
 
             with torch.no_grad():
-                result = agent.network.get_action(
+                result = agent.policy.network.get_action(
                     states,
                     slot_mask=masks["slot"],
                     blueprint_mask=masks["blueprint"],
@@ -347,11 +367,17 @@ class TestScalingBehavior:
         for config, label in configs:
             state_dim = get_feature_size(config)
 
-            agent = PPOAgent(
+            policy = create_policy(
+                policy_type="lstm",
                 state_dim=state_dim,
+                num_slots=config.num_slots,
+                device="cpu",
+                compile_mode="off",
+            )
+            agent = PPOAgent(
+                policy=policy,
                 slot_config=config,
                 device="cpu",
-                compile_network=False,
             )
 
             # Warmup
@@ -369,7 +395,7 @@ class TestScalingBehavior:
 
             with torch.no_grad():
                 for _ in range(5):
-                    _ = agent.network.get_action(
+                    _ = agent.policy.network.get_action(
                         states,
                         slot_mask=masks["slot"],
                         blueprint_mask=masks["blueprint"],
@@ -387,7 +413,7 @@ class TestScalingBehavior:
 
             with torch.no_grad():
                 for _ in range(n_iterations):
-                    _ = agent.network.get_action(
+                    _ = agent.policy.network.get_action(
                         states,
                         slot_mask=masks["slot"],
                         blueprint_mask=masks["blueprint"],

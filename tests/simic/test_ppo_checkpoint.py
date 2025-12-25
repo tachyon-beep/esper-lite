@@ -45,8 +45,8 @@ class TestPPOCheckpointRoundTrip:
         assert loaded.slot_config == original.slot_config
         assert loaded.train_steps == 42
         assert torch.allclose(
-            original._base_network.slot_head[2].weight,
-            loaded._base_network.slot_head[2].weight,
+            original.policy.network.slot_head[2].weight,
+            loaded.policy.network.slot_head[2].weight,
         )
 
     def test_roundtrip_custom_5_slot_config(self, tmp_path: Path):
@@ -69,7 +69,7 @@ class TestPPOCheckpointRoundTrip:
         loaded = PPOAgent.load(tmp_path / "agent.pt", device="cpu")
 
         assert loaded.slot_config == slot_config
-        assert loaded._base_network.num_slots == 5
+        assert loaded.policy.network.num_slots == 5
 
     def test_roundtrip_preserves_all_hyperparams(self, tmp_path: Path):
         """All hyperparameters survive round-trip."""

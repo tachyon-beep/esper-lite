@@ -231,7 +231,8 @@ class PPOAgent:
         # Store policy and extract slot_config
         self.policy = policy
         if slot_config is None:
-            slot_config = policy.network.slot_config
+            # Get slot_config from the PolicyBundle, not the inner network
+            slot_config = policy.slot_config
         self.slot_config = slot_config
 
         # Extract state_dim from policy network
