@@ -159,6 +159,28 @@ class HeuristicPolicyBundle:
         """Return float32 for compatibility."""
         return torch.float32
 
+    # === Configuration Access (required by protocol, not usable for heuristic) ===
+
+    @property
+    def slot_config(self) -> Any:
+        """Not supported - heuristic doesn't use slot configuration."""
+        raise NotImplementedError("Heuristic does not have slot_config")
+
+    @property
+    def feature_dim(self) -> int:
+        """Not supported - heuristic doesn't use features."""
+        raise NotImplementedError("Heuristic does not have feature_dim")
+
+    @property
+    def hidden_dim(self) -> int:
+        """Heuristic is stateless - returns 0."""
+        return 0
+
+    @property
+    def network(self) -> Any:
+        """Not supported - heuristic has no neural network."""
+        raise NotImplementedError("Heuristic has no neural network")
+
     # === Optional ===
 
     def enable_gradient_checkpointing(self, enabled: bool = True) -> None:
