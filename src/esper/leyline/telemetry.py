@@ -941,6 +941,10 @@ class AnalyticsSnapshotPayload:
     - "mask_hit_rates": per-head mask statistics
     - "batch_stats": training batch metrics (console output)
     - "summary_table": formatted analytics tables (console output)
+    - "heuristic_config": heuristic mode run configuration
+    - "heuristic_episode": heuristic mode episode completion
+    - "heuristic_warning": heuristic mode telemetry warning
+    - "shapley_computed": Shapley value attribution results
     """
 
     # REQUIRED
@@ -1005,6 +1009,32 @@ class AnalyticsSnapshotPayload:
     summary_table: str | None = None
     scoreboard_tables: dict[int, str] | None = None
 
+    # For kind="heuristic_config", includes heuristic run configuration
+    mode: str | None = None  # "heuristic"
+    task: str | None = None
+    topology: str | None = None
+    device: str | None = None
+    slots: tuple[str, ...] | None = None
+    episodes: int | None = None
+    max_epochs: int | None = None
+    max_batches: int | None = None
+    min_fossilize_improvement: float | None = None
+    telemetry_lifecycle_only: bool | None = None
+    telemetry_level: str | None = None
+
+    # For kind="heuristic_episode", includes episode completion summary
+    episode_id: str | None = None
+    episode: int | None = None
+    episodes_total: int | None = None
+    base_seed: int | None = None
+    final_accuracy: float | None = None
+    # total_reward already defined above for last_action
+
+    # For kind="shapley_computed", includes Shapley value estimates
+    shapley_values: dict[str, dict[str, float]] | None = None
+    num_slots: int | None = None
+    # epoch already defined via batch/inner_epoch
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AnalyticsSnapshotPayload":
         """Parse from dict. Raises KeyError on missing required fields."""
@@ -1054,6 +1084,26 @@ class AnalyticsSnapshotPayload:
             skipped_update=data.get("skipped_update"),
             summary_table=data.get("summary_table"),
             scoreboard_tables=data.get("scoreboard_tables"),
+            # Heuristic mode fields
+            mode=data.get("mode"),
+            task=data.get("task"),
+            topology=data.get("topology"),
+            device=data.get("device"),
+            slots=tuple(data["slots"]) if data.get("slots") else None,
+            episodes=data.get("episodes"),
+            max_epochs=data.get("max_epochs"),
+            max_batches=data.get("max_batches"),
+            min_fossilize_improvement=data.get("min_fossilize_improvement"),
+            telemetry_lifecycle_only=data.get("telemetry_lifecycle_only"),
+            telemetry_level=data.get("telemetry_level"),
+            episode_id=data.get("episode_id"),
+            episode=data.get("episode"),
+            episodes_total=data.get("episodes_total"),
+            base_seed=data.get("base_seed"),
+            final_accuracy=data.get("final_accuracy"),
+            # Shapley fields
+            shapley_values=data.get("shapley_values"),
+            num_slots=data.get("num_slots"),
         )
 
 

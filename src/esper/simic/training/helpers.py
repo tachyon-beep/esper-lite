@@ -753,30 +753,32 @@ def train_heuristic(
             event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
             severity="warning",
             message="Ops telemetry disabled; emitting lifecycle-only seed telemetry",
-            data={
-                "env_id": 0,
-                "mode": "heuristic",
-                "task": task_spec.name,
-                "device": device,
-                "telemetry_lifecycle_only": True,
-                "telemetry_level": telemetry_config.level.name if telemetry_config is not None else None,
-            },
+            data=AnalyticsSnapshotPayload(
+                kind="heuristic_warning",
+                env_id=0,
+                mode="heuristic",
+                task=task_spec.name,
+                device=device,
+                telemetry_lifecycle_only=True,
+                telemetry_level=telemetry_config.level.name if telemetry_config is not None else None,
+            ),
         ))
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
-        data={
-            "env_id": 0,
-            "mode": "heuristic",
-            "task": task_spec.name,
-            "topology": task_spec.topology,
-            "episodes": n_episodes,
-            "max_epochs": max_epochs,
-            "max_batches": max_batches,
-            "device": device,
-            "slots": slots,
-            "min_fossilize_improvement": min_fossilize_improvement,
-        },
         message="Heuristic training run configuration",
+        data=AnalyticsSnapshotPayload(
+            kind="heuristic_config",
+            env_id=0,
+            mode="heuristic",
+            task=task_spec.name,
+            topology=task_spec.topology,
+            episodes=n_episodes,
+            max_epochs=max_epochs,
+            max_batches=max_batches,
+            device=device,
+            slots=tuple(slots),
+            min_fossilize_improvement=min_fossilize_improvement,
+        ),
     ))
 
     trainloader, testloader = task_spec.create_dataloaders()
@@ -814,19 +816,20 @@ def train_heuristic(
         total_reward = sum(rewards)
         hub.emit(TelemetryEvent(
             event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
-            data={
-                "env_id": 0,
-                "mode": "heuristic",
-                "task": task_spec.name,
-                "episode_id": episode_id,
-                "episode": ep,
-                "episodes_total": n_episodes,
-                "base_seed": base_seed,
-                "final_accuracy": final_acc,
-                "total_reward": total_reward,
-                "action_counts": dict(action_counts),
-            },
             message="Heuristic episode completed",
+            data=AnalyticsSnapshotPayload(
+                kind="heuristic_episode",
+                env_id=0,
+                mode="heuristic",
+                task=task_spec.name,
+                episode_id=episode_id,
+                episode=ep,
+                episodes_total=n_episodes,
+                base_seed=base_seed,
+                final_accuracy=final_acc,
+                total_reward=total_reward,
+                action_counts={str(k): int(v) for k, v in action_counts.items()},
+            ),
         ))
 
         history.append({
