@@ -5,9 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 
-import pytest
 from esper.karn.serialization import serialize_event, _payload_to_dict
-from esper.karn.contracts import TelemetryEventLike
 from esper.leyline.telemetry import (
     EpochCompletedPayload,
     TrainingStartedPayload,

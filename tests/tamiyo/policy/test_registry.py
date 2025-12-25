@@ -3,7 +3,6 @@
 import pytest
 import torch
 
-from esper.tamiyo.policy import PolicyBundle
 from esper.tamiyo.policy.registry import (
     register_policy,
     get_policy,

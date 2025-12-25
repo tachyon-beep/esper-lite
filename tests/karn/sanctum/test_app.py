@@ -13,7 +13,7 @@ async def test_app_launches():
     mock_backend.get_snapshot.return_value = SanctumSnapshot()
 
     app = SanctumApp(backend=mock_backend)
-    async with app.run_test() as pilot:
+    async with app.run_test():
         assert app.title == "Sanctum - Developer Diagnostics"
 
 
@@ -24,7 +24,7 @@ async def test_app_has_main_panels():
     mock_backend.get_snapshot.return_value = SanctumSnapshot()
 
     app = SanctumApp(backend=mock_backend)
-    async with app.run_test() as pilot:
+    async with app.run_test():
         # Main panels from existing TUI layout
         assert app.query_one("#env-overview") is not None
         assert app.query_one("#scoreboard") is not None
@@ -81,7 +81,7 @@ async def test_app_has_anomaly_strip():
     mock_backend.get_snapshot.return_value = SanctumSnapshot()
 
     app = SanctumApp(backend=mock_backend, num_envs=4)
-    async with app.run_test() as pilot:
+    async with app.run_test():
         # Query for anomaly strip
         strip = app.query_one("#anomaly-strip", AnomalyStrip)
         assert strip is not None
@@ -91,7 +91,6 @@ async def test_app_has_anomaly_strip():
 async def test_app_shows_thread_death_modal():
     """App should show ThreadDeathModal when thread dies."""
     import threading
-    from esper.karn.sanctum.widgets import ThreadDeathModal
 
     mock_backend = MagicMock()
     mock_backend.get_snapshot.return_value = SanctumSnapshot()

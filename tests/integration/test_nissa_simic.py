@@ -8,9 +8,8 @@ Tests the core integration where:
 """
 
 import pytest
-import torch
 
-from esper.nissa import NissaHub, get_hub
+from esper.nissa import NissaHub
 from esper.leyline import TelemetryEvent, TelemetryEventType
 from esper.leyline.telemetry import RewardComputedPayload
 from esper.simic.telemetry import AnomalyDetector

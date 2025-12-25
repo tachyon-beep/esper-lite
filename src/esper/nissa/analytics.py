@@ -272,33 +272,33 @@ class BlueprintAnalytics(OutputBackend):
             return
 
         elif event.event_type == TelemetryEventType.TAMIYO_INITIATED:
-            _logger.warning(f"TAMIYO_INITIATED event not yet migrated to typed payload")
+            _logger.warning("TAMIYO_INITIATED event not yet migrated to typed payload")
             return
 
         # === Trend Detection Events ===
         elif event.event_type == TelemetryEventType.PLATEAU_DETECTED:
-            _logger.warning(f"PLATEAU_DETECTED event not yet migrated to typed payload")
+            _logger.warning("PLATEAU_DETECTED event not yet migrated to typed payload")
             return
 
         elif event.event_type == TelemetryEventType.DEGRADATION_DETECTED:
-            _logger.warning(f"DEGRADATION_DETECTED event not yet migrated to typed payload")
+            _logger.warning("DEGRADATION_DETECTED event not yet migrated to typed payload")
             return
 
         elif event.event_type == TelemetryEventType.IMPROVEMENT_DETECTED:
-            _logger.warning(f"IMPROVEMENT_DETECTED event not yet migrated to typed payload")
+            _logger.warning("IMPROVEMENT_DETECTED event not yet migrated to typed payload")
             return
 
         # === Health/Warning Events ===
         elif event.event_type == TelemetryEventType.MEMORY_WARNING:
-            _logger.warning(f"MEMORY_WARNING event not yet migrated to typed payload")
+            _logger.warning("MEMORY_WARNING event not yet migrated to typed payload")
             return
 
         elif event.event_type == TelemetryEventType.PERFORMANCE_DEGRADATION:
-            _logger.warning(f"PERFORMANCE_DEGRADATION event not yet migrated to typed payload")
+            _logger.warning("PERFORMANCE_DEGRADATION event not yet migrated to typed payload")
             return
 
         elif event.event_type == TelemetryEventType.REWARD_HACKING_SUSPECTED:
-            _logger.warning(f"REWARD_HACKING_SUSPECTED event not yet migrated to typed payload")
+            _logger.warning("REWARD_HACKING_SUSPECTED event not yet migrated to typed payload")
             return
 
         # === PPO Anomaly Events (use AnomalyDetectedPayload) ===
@@ -316,12 +316,12 @@ class BlueprintAnalytics(OutputBackend):
 
         # === Governor Events ===
         elif event.event_type == TelemetryEventType.GOVERNOR_ROLLBACK:
-            _logger.warning(f"GOVERNOR_ROLLBACK event not yet migrated to typed payload")
+            _logger.warning("GOVERNOR_ROLLBACK event not yet migrated to typed payload")
             return
 
         # === Counterfactual Events ===
         elif event.event_type == TelemetryEventType.COUNTERFACTUAL_COMPUTED:
-            _logger.warning(f"COUNTERFACTUAL_COMPUTED event not yet migrated to typed payload")
+            _logger.warning("COUNTERFACTUAL_COMPUTED event not yet migrated to typed payload")
             return
 
     def _get_scoreboard(self, env_id: int) -> SeedScoreboard:

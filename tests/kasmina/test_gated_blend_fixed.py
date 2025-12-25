@@ -4,7 +4,6 @@ Tests the corrected GatedBlend.get_alpha() implementation that tracks
 step-based progress for lifecycle compatibility.
 """
 
-import pytest
 import torch
 
 from esper.kasmina.blending import GatedBlend

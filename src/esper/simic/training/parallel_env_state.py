@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import torch
-import torch.nn as nn
 
 from esper.leyline.factored_actions import LifecycleOp
 

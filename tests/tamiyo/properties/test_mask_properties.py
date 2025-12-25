@@ -595,7 +595,7 @@ class TestBlueprintMask:
             if bp == BlueprintAction.NOOP:
                 # NOOP always disabled
                 assert masks["blueprint"][bp].item() is False, (
-                    f"NOOP blueprint should always be disabled"
+                    "NOOP blueprint should always be disabled"
                 )
             elif bp in CNN_BLUEPRINTS:
                 # CNN-compatible blueprints should be enabled
@@ -687,7 +687,6 @@ class TestTempoMaskInvariants:
     )
     def test_tempo_mask_independent_of_slot_state(self, config: SlotConfig, data):
         """Property: Tempo mask is independent of which slots are occupied."""
-        from esper.leyline.factored_actions import TempoAction
 
         # Generate random slot states
         slot_states = data.draw(slot_states_for_config(config))

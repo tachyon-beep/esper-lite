@@ -8,20 +8,10 @@ from __future__ import annotations
 import functools
 import logging
 import random
-from typing import Callable, Iterator, Protocol, TYPE_CHECKING, cast
+from typing import Callable, Iterator, Protocol, cast
 
 import torch
 import torch.nn as nn
-
-logger = logging.getLogger(__name__)
-
-
-class _HasSeedParameters(Protocol):
-    """Protocol for models that have seed parameters (e.g., HostModel)."""
-
-    def get_seed_parameters(self, slot: str | None = None) -> Iterator[torch.nn.Parameter]:
-        """Yield seed parameters for gradient collection."""
-        ...
 
 from esper.leyline.factored_actions import FactoredAction, LifecycleOp
 from esper.leyline import (
@@ -43,6 +33,16 @@ from esper.leyline.slot_config import SlotConfig
 from esper.leyline.slot_id import validate_slot_ids
 from esper.nissa import get_hub
 from esper.utils.loss import compute_task_loss_with_metrics
+
+logger = logging.getLogger(__name__)
+
+
+class _HasSeedParameters(Protocol):
+    """Protocol for models that have seed parameters (e.g., HostModel)."""
+
+    def get_seed_parameters(self, slot: str | None = None) -> Iterator[torch.nn.Parameter]:
+        """Yield seed parameters for gradient collection."""
+        ...
 
 
 def compute_rent_and_shock_inputs(
@@ -691,7 +691,7 @@ def run_heuristic_episode(
                 if not gate_result.passed:
                     pass
 
-        summary_seed_id = signals.active_seeds[0] if signals.active_seeds else None
+        signals.active_seeds[0] if signals.active_seeds else None
         hub.emit(TelemetryEvent(
             event_type=TelemetryEventType.EPOCH_COMPLETED,
             epoch=epoch,

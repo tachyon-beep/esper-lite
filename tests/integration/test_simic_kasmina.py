@@ -8,10 +8,8 @@ Tests the core integration where:
 
 import pytest
 import torch
-import torch.nn as nn
 
 from esper.kasmina import MorphogeneticModel, CNNHost
-from esper.kasmina.slot import SeedSlot
 from esper.leyline import SeedStage
 from esper.leyline.factored_actions import LifecycleOp
 from esper.simic.rewards import (

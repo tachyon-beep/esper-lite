@@ -1,7 +1,6 @@
 """Tests for EnvDetailScreen modal - detailed environment and seed inspection."""
 from io import StringIO
 
-import pytest
 from rich.console import Console
 
 from esper.karn.sanctum.schema import (

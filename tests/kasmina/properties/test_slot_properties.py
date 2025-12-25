@@ -10,12 +10,12 @@ all possible states and inputs:
 5. Gradient flow during blending reaches both host and seed
 """
 
-import pytest
 import torch
 from hypothesis import given, settings, assume
 from hypothesis import strategies as st
+from hypothesis.stateful import RuleBasedStateMachine, rule, invariant, initialize, precondition
 
-from esper.kasmina.slot import SeedSlot, SeedMetrics, SeedState, QualityGates
+from esper.kasmina.slot import SeedSlot, SeedMetrics, SeedState
 from esper.kasmina.isolation import ste_forward, blend_with_isolation
 from esper.leyline import (
     SeedStage,
@@ -401,8 +401,6 @@ class TestTempoProperties:
 # =============================================================================
 # Stateful Testing: Seed Lifecycle State Machine
 # =============================================================================
-
-from hypothesis.stateful import RuleBasedStateMachine, rule, invariant, initialize, precondition
 
 
 class SeedSlotStateMachine(RuleBasedStateMachine):

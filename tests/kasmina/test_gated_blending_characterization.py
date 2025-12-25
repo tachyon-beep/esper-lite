@@ -345,7 +345,7 @@ class TestComparisonWithScheduleBasedBlends:
         # Gated: different purposes
         gated = BlendCatalog.create("gated", channels=64, topology="cnn", total_steps=10)
         gated_scalar = gated.get_alpha(5)
-        gated_tensor = gated.get_alpha_for_blend(torch.randn(1, 64, 8, 8))
+        gated.get_alpha_for_blend(torch.randn(1, 64, 8, 8))
 
         # get_alpha returns step-based progress (for lifecycle)
         assert gated_scalar == 0.5  # Step 5 of 10

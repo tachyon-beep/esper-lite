@@ -18,7 +18,6 @@ from __future__ import annotations
 import time
 import logging
 from dataclasses import dataclass, field
-from itertools import permutations
 from typing import Callable, Literal, TYPE_CHECKING
 import random
 

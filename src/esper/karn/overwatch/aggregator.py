@@ -16,8 +16,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-_logger = logging.getLogger(__name__)
-
 from esper.karn.overwatch.schema import (
     TuiSnapshot,
     ConnectionStatus,
@@ -42,6 +40,8 @@ from esper.leyline import (
 
 if TYPE_CHECKING:
     from esper.leyline import TelemetryEvent
+
+_logger = logging.getLogger(__name__)
 
 
 def _parse_cuda_device_index(device: str) -> int | None:

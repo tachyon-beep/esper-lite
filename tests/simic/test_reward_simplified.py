@@ -1,6 +1,18 @@
 """Tests for SIMPLIFIED reward mode."""
+
 import pytest
-from esper.simic.rewards import RewardMode
+
+from esper.simic.rewards import (
+    RewardMode,
+    compute_simplified_reward,
+    ContributionRewardConfig,
+    SeedInfo,
+    STAGE_TRAINING,
+    STAGE_HOLDING,
+    compute_reward,
+)
+from esper.leyline.factored_actions import LifecycleOp
+from esper.simic.training.config import TrainingConfig
 
 
 def test_simplified_mode_exists():
@@ -13,16 +25,6 @@ def test_simplified_mode_string_conversion():
     """SIMPLIFIED mode should round-trip through string."""
     mode = RewardMode("simplified")
     assert mode == RewardMode.SIMPLIFIED
-
-
-from esper.simic.rewards import (
-    compute_simplified_reward,
-    ContributionRewardConfig,
-    SeedInfo,
-    STAGE_TRAINING,
-    STAGE_HOLDING,
-)
-from esper.leyline.factored_actions import LifecycleOp
 
 
 class TestComputeSimplifiedReward:
@@ -43,7 +45,7 @@ class TestComputeSimplifiedReward:
         )
 
         # WAIT action: only PBRS, no intervention cost
-        reward_wait = compute_simplified_reward(
+        compute_simplified_reward(
             action=LifecycleOp.WAIT,
             seed_info=seed_info,
             epoch=10,
@@ -147,9 +149,6 @@ class TestComputeSimplifiedReward:
         assert reward > -2.0
 
 
-from esper.simic.rewards import compute_reward
-
-
 class TestComputeRewardDispatcher:
     """Test that compute_reward dispatches to SIMPLIFIED correctly."""
 
@@ -188,9 +187,6 @@ class TestComputeRewardDispatcher:
         # Should NOT have holding_warning (-9.0) or attribution (+5.0)
         # Should be small (just PBRS)
         assert -2.0 < reward < 2.0
-
-
-from esper.simic.training.config import TrainingConfig
 
 
 class TestABTestingConfig:

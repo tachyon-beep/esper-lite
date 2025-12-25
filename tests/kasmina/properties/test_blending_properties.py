@@ -11,7 +11,7 @@ LinearBlend, SigmoidBlend, and GatedBlend:
 
 import pytest
 import torch
-from hypothesis import given, settings, assume
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from esper.kasmina.blending import LinearBlend, SigmoidBlend, GatedBlend, BlendCatalog

@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import json
 import logging
+import queue
+import threading
 from abc import ABC, abstractmethod
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
@@ -457,9 +459,6 @@ class DirectoryOutput(OutputBackend):
         """Close the directory backend."""
         self._file_output.close()
 
-
-import queue
-import threading
 
 class NissaHub:
     """Central telemetry hub that routes events to multiple backends.

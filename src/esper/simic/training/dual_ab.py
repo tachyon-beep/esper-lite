@@ -55,8 +55,6 @@ from esper.leyline import (
 )
 from esper.simic.agent import PPOAgent
 from esper.simic.rewards import ContributionRewardConfig, RewardMode
-from esper.tamiyo.policy.features import get_feature_size
-from .policy_group import PolicyGroup
 from .vectorized import train_ppo_vectorized
 
 if TYPE_CHECKING:
@@ -190,7 +188,7 @@ def train_dual_policy_ab(
         )
 
         # Create reward config for this group
-        reward_config = ContributionRewardConfig(reward_mode=reward_mode)
+        ContributionRewardConfig(reward_mode=reward_mode)
 
         # Deterministic seed offset per group (for reproducibility across sessions)
         group_hash = int(hashlib.md5(group_id.encode()).hexdigest()[:8], 16)

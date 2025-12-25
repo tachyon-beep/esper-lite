@@ -37,12 +37,10 @@ from esper.karn.ingest import (
     coerce_int,
     coerce_seed_stage,
     coerce_str,
-    coerce_str_or_none,
 )
 from esper.leyline.telemetry import (
     TrainingStartedPayload,
     EpochCompletedPayload,
-    BatchEpochCompletedPayload,
     PPOUpdatePayload,
     RewardComputedPayload,
     SeedGerminatedPayload,
@@ -50,7 +48,6 @@ from esper.leyline.telemetry import (
     SeedGateEvaluatedPayload,
     SeedFossilizedPayload,
     SeedPrunedPayload,
-    CounterfactualMatrixPayload,
 )
 
 if TYPE_CHECKING:

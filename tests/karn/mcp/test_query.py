@@ -1,7 +1,6 @@
 """Tests for query execution and formatting."""
-import pytest
 
-from esper.karn.mcp.query import execute_query, format_as_markdown, add_limit_if_missing
+from esper.karn.mcp.query import format_as_markdown, add_limit_if_missing
 
 
 class TestAddLimitIfMissing:

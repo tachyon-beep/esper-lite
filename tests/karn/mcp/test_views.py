@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 
 import duckdb
-import pytest
 
 from esper.karn.mcp.views import create_views, VIEW_DEFINITIONS
 

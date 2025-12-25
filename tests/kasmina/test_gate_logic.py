@@ -8,15 +8,13 @@ Tests verify correct behavior of individual quality gates:
 - G5: Fossilization readiness (counterfactual, health)
 """
 
-import pytest
 
-from esper.kasmina.slot import SeedState, SeedMetrics, QualityGates
+from esper.kasmina.slot import SeedState, QualityGates
 from esper.leyline import (
     SeedStage,
     GateLevel,
     DEFAULT_MIN_TRAINING_IMPROVEMENT,
     DEFAULT_MIN_BLENDING_EPOCHS,
-    DEFAULT_ALPHA_COMPLETE_THRESHOLD,
     DEFAULT_MIN_FOSSILIZE_CONTRIBUTION,
     DEFAULT_GRADIENT_RATIO_THRESHOLD,
 )

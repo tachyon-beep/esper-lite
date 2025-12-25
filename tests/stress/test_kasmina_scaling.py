@@ -20,7 +20,7 @@ import torch
 import torch.nn as nn
 
 from esper.kasmina.host import CNNHost, TransformerHost, MorphogeneticModel
-from esper.kasmina.slot import SeedSlot, SeedState
+from esper.kasmina.slot import SeedSlot
 from esper.kasmina.isolation import blend_with_isolation, GradientHealthMonitor
 from esper.leyline import SeedStage, DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE
 
@@ -42,7 +42,7 @@ class TestLargeHostMemory:
         )
 
         # Count parameters
-        param_count = sum(p.numel() for p in host.parameters())
+        sum(p.numel() for p in host.parameters())
 
         # Create model with 3 slots
         model = MorphogeneticModel(host, slots=["r0c0", "r0c1", "r0c2"])

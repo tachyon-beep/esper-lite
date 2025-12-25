@@ -19,7 +19,7 @@ from esper.kasmina.slot import QualityGates, SeedSlot
 from esper.kasmina.blueprints.cnn import ConvBlock  # Reuse shared building block
 
 if TYPE_CHECKING:
-    from esper.leyline import SeedStateReport
+    from esper.leyline import InjectionSpec, SeedStateReport
 
 
 class CNNHost(nn.Module):

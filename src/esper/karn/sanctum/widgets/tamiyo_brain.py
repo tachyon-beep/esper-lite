@@ -546,7 +546,6 @@ class TamiyoBrain(Static):
         snapshot = self._snapshot
         counts = snapshot.slot_stage_counts
         total = snapshot.total_slots
-        active = snapshot.active_slots
 
         if total == 0:
             return Text("SLOTS: (no environments)", style="dim italic")
@@ -938,7 +937,6 @@ class TamiyoBrain(Static):
             is_hit = diff < self.PREDICTION_EXCELLENT_THRESHOLD
             style = "green" if is_hit else "red"
             icon = "✓" if is_hit else "✗"
-            text = "HIT" if is_hit else "MISS"
             # Show reward
             card.append(f"r:{decision.actual_reward:+.2f}", style=style)
             # Show TD advantage if computed (requires next step's V(s'))

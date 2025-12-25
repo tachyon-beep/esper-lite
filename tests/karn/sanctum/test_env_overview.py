@@ -1,7 +1,6 @@
 """Tests for EnvOverview widget."""
 import pytest
 from collections import deque
-from datetime import datetime
 
 from textual.app import App
 
@@ -347,7 +346,7 @@ async def test_status_color_coding(populated_snapshot):
         # Statuses: EXCL, OK, STAL, DEGR, INIT
         row0 = get_row_text(widget.table, 0)
         row1 = get_row_text(widget.table, 1)
-        row2 = get_row_text(widget.table, 2)
+        get_row_text(widget.table, 2)
 
         assert "EXCL" in row0 or "excellent" in row0.lower()
         assert "STAL" in row1 or "stalled" in row1.lower()

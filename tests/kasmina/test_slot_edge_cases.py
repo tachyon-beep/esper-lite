@@ -12,7 +12,7 @@ Tests verify correct behavior at boundary conditions:
 import pytest
 import torch
 
-from esper.kasmina.slot import SeedSlot, SeedMetrics, SeedState, QualityGates
+from esper.kasmina.slot import SeedSlot, SeedMetrics, SeedState
 from esper.kasmina.isolation import blend_with_isolation
 from esper.leyline import SeedStage, DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE
 

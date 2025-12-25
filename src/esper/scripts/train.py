@@ -6,10 +6,10 @@ import logging
 
 import torch
 
-_logger = logging.getLogger(__name__)
-
 from esper.nissa import ConsoleOutput, DirectoryOutput, FileOutput, get_hub
 from esper.simic.training import TrainingConfig
+
+_logger = logging.getLogger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -270,8 +270,8 @@ def main():
     # Warn about deprecated --tui-layout flag
     if args.tui_layout != "auto":
         print(
-            f"WARNING: --tui-layout is deprecated and ignored. "
-            f"Use --sanctum for the developer TUI or --overwatch for operator monitoring."
+            "WARNING: --tui-layout is deprecated and ignored. "
+            "Use --sanctum for the developer TUI or --overwatch for operator monitoring."
         )
 
     # Add console output if not using a TUI backend
@@ -617,7 +617,7 @@ def main():
                 """Wrap training to capture exceptions."""
                 try:
                     run_training()
-                except Exception as e:
+                except Exception:
                     training_error[0] = traceback.format_exc()
                     # Log to stderr (visible in Textual console)
                     import sys

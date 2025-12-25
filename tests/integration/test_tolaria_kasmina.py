@@ -13,7 +13,6 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from esper.tolaria.trainer import (
     train_epoch_normal,
-    train_epoch_blended,
     validate_with_attribution,
     AttributionResult,
 )

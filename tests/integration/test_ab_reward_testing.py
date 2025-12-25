@@ -3,7 +3,6 @@ import pytest
 import torch
 
 from esper.simic.training.config import TrainingConfig
-from esper.simic.rewards import RewardMode
 
 
 @pytest.mark.slow

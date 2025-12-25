@@ -22,11 +22,16 @@ Design principles:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import torch
 from enum import IntEnum
 from hypothesis import strategies as st
 from hypothesis.extra.numpy import arrays
 import numpy as np
+
+if TYPE_CHECKING:
+    from esper.leyline import SeedStage
 
 # =============================================================================
 # Low-Level Primitives
@@ -636,7 +641,7 @@ def seed_states_kasmina(draw, stage: "SeedStage | None" = None):
         def test_state_property(state):
             assert state.alpha >= 0.0
     """
-    from esper.kasmina.slot import SeedState, SeedMetrics
+    from esper.kasmina.slot import SeedState
     from esper.leyline import SeedStage
 
     if stage is None:

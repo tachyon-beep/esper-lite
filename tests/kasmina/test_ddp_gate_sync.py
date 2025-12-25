@@ -6,10 +6,9 @@ which prevents BUG-030 (architecture divergence from unsynced lifecycle transiti
 
 from __future__ import annotations
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
-import torch
 
 from esper.kasmina.slot import SeedSlot
 from esper.leyline import GateLevel, GateResult

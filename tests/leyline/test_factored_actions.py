@@ -1,7 +1,6 @@
 # tests/leyline/test_factored_actions.py
 # Removed: test_slot_action_enum - SlotAction enum deleted per No Legacy Code Policy
 
-import pytest
 from hypothesis import given, strategies as st
 
 from esper.leyline.factored_actions import (

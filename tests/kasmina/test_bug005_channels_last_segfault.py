@@ -13,7 +13,6 @@ detached copy under isolation (avoid channels_last + detach in backward)
 without coercing the host_features stream.
 """
 
-import pytest
 import torch
 
 from esper.kasmina.host import CNNHost, MorphogeneticModel

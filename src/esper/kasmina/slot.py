@@ -69,8 +69,6 @@ from esper.leyline import (
     # QualityGates thresholds
     DEFAULT_MIN_TRAINING_IMPROVEMENT,
     DEFAULT_MIN_BLENDING_EPOCHS,
-    DEFAULT_ALPHA_COMPLETE_THRESHOLD,
-    # Cooldown (Phase 4)
     DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE,
 )
 
@@ -1378,12 +1376,10 @@ class SeedSlot(nn.Module):
             # Capture metrics before transition resets stage counters
             metrics = self.state.metrics
             improvement = metrics.total_improvement
-            blending_delta = metrics.blending_delta
             counterfactual = metrics.counterfactual_contribution
             epochs_total = metrics.epochs_total
             epochs_in_stage = metrics.epochs_in_current_stage
             blueprint_id = self.state.blueprint_id
-            seed_id = self.state.seed_id
 
             if self.state.transition(target_stage):
                 # Call unified stage entry hook
@@ -1468,12 +1464,10 @@ class SeedSlot(nn.Module):
 
         # Capture metrics before transition clears state
         improvement = self.state.metrics.total_improvement
-        blending_delta = self.state.metrics.blending_delta
         counterfactual = self.state.metrics.counterfactual_contribution
         epochs_total = self.state.metrics.epochs_total
         epochs_in_stage = self.state.metrics.epochs_in_current_stage
         blueprint_id = self.state.blueprint_id
-        seed_id = self.state.seed_id
 
         # Track auto-prune status for degenerate policy detection.
         # Auto-prunes happen via environment safety mechanisms, not explicit RL actions.
@@ -1584,9 +1578,7 @@ class SeedSlot(nn.Module):
             old_stage = self.state.stage
             metrics = self.state.metrics
             epochs_in_stage = metrics.epochs_in_current_stage
-            epochs_total = metrics.epochs_total
             improvement = metrics.total_improvement
-            counterfactual = metrics.counterfactual_contribution
 
             if not self.state.transition(SeedStage.BLENDING):
                 raise RuntimeError(
@@ -1669,9 +1661,7 @@ class SeedSlot(nn.Module):
             old_stage = self.state.stage
             metrics = self.state.metrics
             epochs_in_stage = metrics.epochs_in_current_stage
-            epochs_total = metrics.epochs_total
             improvement = metrics.total_improvement
-            counterfactual = metrics.counterfactual_contribution
 
             if not self.state.transition(SeedStage.BLENDING):
                 raise RuntimeError(
@@ -2274,7 +2264,6 @@ class SeedSlot(nn.Module):
             old_stage = self.state.stage
             metrics = self.state.metrics
             epochs_in_stage = metrics.epochs_in_current_stage
-            epochs_total = metrics.epochs_total
 
             ok = self.state.transition(SeedStage.EMBARGOED)
             if not ok:
@@ -2323,7 +2312,6 @@ class SeedSlot(nn.Module):
             old_stage = self.state.stage
             metrics = self.state.metrics
             epochs_in_stage = metrics.epochs_in_current_stage
-            epochs_total = metrics.epochs_total
 
             ok = self.state.transition(SeedStage.RESETTING)
             if not ok:
@@ -2371,7 +2359,6 @@ class SeedSlot(nn.Module):
             old_stage = self.state.stage
             metrics = self.state.metrics
             epochs_in_stage = metrics.epochs_in_current_stage
-            epochs_total = metrics.epochs_total
 
             # Emit explicit "back to DORMANT" transition for telemetry/UI, then
             # clear state so slot_reports treat the slot as empty.

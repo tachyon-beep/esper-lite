@@ -6,7 +6,6 @@ Tests the core integration where:
 - Training metrics flow to RL reward computation
 """
 
-import math
 import pytest
 import torch
 import torch.nn as nn

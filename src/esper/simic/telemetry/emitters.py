@@ -12,15 +12,11 @@ import dataclasses
 import logging
 from typing import TYPE_CHECKING, Any, Sequence
 
-_logger = logging.getLogger(__name__)
-
 import torch
 from torch import nn
 
 from esper.leyline import (
     DEFAULT_ENTROPY_COLLAPSE_THRESHOLD,
-    HEAD_NAMES,
-    SeedStage,
     TelemetryEvent,
     TelemetryEventType,
     EpochCompletedPayload,
@@ -34,7 +30,6 @@ from esper.leyline.factored_actions import (
     ALPHA_SPEED_NAMES,
     ALPHA_TARGET_VALUES,
     BLUEPRINT_IDS,
-    LifecycleOp,
     OP_NAMES,
     STYLE_ALPHA_ALGORITHMS,
     STYLE_BLEND_IDS,
@@ -48,6 +43,8 @@ if TYPE_CHECKING:
     from esper.simic.training.parallel_env_state import ParallelEnvState
 
     from .telemetry_config import TelemetryConfig
+
+_logger = logging.getLogger(__name__)
 
 
 class VectorizedEmitter:
@@ -389,12 +386,12 @@ class VectorizedEmitter:
                 ))
 
         # BATCH_EPOCH_COMPLETED
-        total_train_correct = sum(train_corrects)
-        total_train_samples = sum(train_totals)
-        total_val_correct = sum(val_corrects)
-        total_val_samples = sum(val_totals)
+        sum(train_corrects)
+        sum(train_totals)
+        sum(val_corrects)
+        sum(val_totals)
 
-        plateau_detected = (
+        (
             abs(rolling_avg_acc - prev_rolling_avg_acc) < 0.5 
             if prev_rolling_avg_acc is not None else False
         )

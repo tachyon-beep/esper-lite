@@ -8,7 +8,6 @@ This module tests:
 """
 
 import torch
-import torch.nn as nn
 
 from esper.kasmina.host import CNNHost, TransformerHost, MorphogeneticModel
 from esper.leyline import InjectionSpec

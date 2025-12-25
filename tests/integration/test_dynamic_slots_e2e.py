@@ -6,7 +6,6 @@ Tests verify that training works correctly with various slot configurations:
 - Slot saturation and recovery after culling
 """
 
-import pytest
 import torch
 
 from esper.leyline.slot_config import SlotConfig
@@ -240,7 +239,7 @@ class TestMultiEnvMaskIndependence:
         assert masks_env0["op"][LifecycleOp.GERMINATE], "GERMINATE should be valid"
 
         # Env 1: Two slots empty, one occupied
-        assert masks_env1["slot"][0] == True  # r0c0 occupied, but slot selection is valid
+        assert masks_env1["slot"][0]  # r0c0 occupied, but slot selection is valid
         assert masks_env1["op"][LifecycleOp.GERMINATE], "GERMINATE valid with empty slots"
 
         # Env 2: All slots occupied - GERMINATE should be invalid
@@ -249,7 +248,6 @@ class TestMultiEnvMaskIndependence:
     def test_batched_masks_preserve_per_env_differences(self):
         """Batched mask computation should preserve per-environment differences."""
         config = SlotConfig.default()
-        n_envs = 4
 
         # Create different slot states for each environment
         slot_states_batch = [
@@ -345,7 +343,7 @@ class TestSlotSaturationAndRecovery:
             "r0c2": None,
         }
 
-        masks_before = compute_action_masks(
+        compute_action_masks(
             slot_states,
             enabled_slots=list(config.slot_ids),
             slot_config=config,

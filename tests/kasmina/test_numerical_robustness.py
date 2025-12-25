@@ -11,12 +11,10 @@ Tests verify correct behavior under numerical edge conditions:
 
 import pytest
 import torch
-import torch.nn as nn
 
-from esper.kasmina.slot import SeedSlot, SeedState, SeedMetrics
+from esper.kasmina.slot import SeedSlot, SeedMetrics
 from esper.kasmina.isolation import blend_with_isolation, ste_forward
 from esper.kasmina.blending import LinearBlend, SigmoidBlend, GatedBlend
-from esper.leyline import SeedStage
 
 
 class TestNaNDetection:

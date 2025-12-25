@@ -1,7 +1,6 @@
 """Tests for RunHeader widget - displays run status and training progress."""
 from io import StringIO
 
-import pytest
 from rich.console import Console
 
 from esper.karn.sanctum.schema import (

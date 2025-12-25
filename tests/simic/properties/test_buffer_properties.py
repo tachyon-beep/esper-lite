@@ -16,7 +16,7 @@ Key invariants tested:
 from __future__ import annotations
 
 import torch
-from hypothesis import given, settings, assume
+from hypothesis import given, settings
 from hypothesis import strategies as st
 from hypothesis.stateful import (
     RuleBasedStateMachine,

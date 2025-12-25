@@ -53,7 +53,7 @@ def test_event_log_with_events():
     It waits for a second to COMPLETE before showing events, so we can't test
     live rendering without mocking datetime. We test the line data population instead.
     """
-    from esper.karn.sanctum.widgets.event_log import EventLog, _EVENT_COLORS
+    from esper.karn.sanctum.widgets.event_log import EventLog
     from esper.karn.sanctum.schema import EventLogEntry
     from unittest.mock import patch
     from datetime import datetime, timezone
@@ -227,7 +227,7 @@ def test_event_log_color_coding():
 
 def test_event_log_uses_colors_in_rendering():
     """EventLog applies colors from _EVENT_COLORS when rendering lines."""
-    from esper.karn.sanctum.widgets.event_log import EventLog, _EVENT_COLORS
+    from esper.karn.sanctum.widgets.event_log import EventLog
     from esper.karn.sanctum.schema import EventLogEntry
     from unittest.mock import patch
     from datetime import datetime, timezone

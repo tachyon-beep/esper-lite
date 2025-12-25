@@ -8,7 +8,6 @@ import torch
 import pytest
 
 from esper.kasmina.blending import LinearBlend, SigmoidBlend
-from esper.kasmina.slot import SeedSlot
 
 
 class TestBlendingPerformance:
@@ -100,7 +99,6 @@ class TestBlendingPerformance:
 
     def test_slot_forward_uses_cached_alpha(self):
         """Verify slot.forward() uses cached alpha tensor across calls."""
-        from esper.leyline import SeedStage
 
         # Create blend algorithm directly and test it in the blending context
         blend = LinearBlend(total_steps=10)
@@ -125,7 +123,7 @@ class TestBlendingPerformance:
         for _ in range(2):
             alpha = blend.get_alpha_for_blend(x)
             # Simulate blending operation
-            blended = x * alpha
+            x * alpha
 
         # Restore original method
         blend.get_alpha_for_blend = original_get_alpha

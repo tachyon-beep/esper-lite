@@ -27,7 +27,6 @@ from __future__ import annotations
 from esper.leyline import (
     DEFAULT_ENTROPY_COLLAPSE_THRESHOLD,
     DEFAULT_ENTROPY_WARNING_THRESHOLD,
-    DEFAULT_GOVERNOR_LOSS_MULTIPLIER,
 )
 
 

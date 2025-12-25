@@ -1,6 +1,5 @@
 """Tests for leyline.py - shared contracts."""
 
-import pytest
 from esper.leyline import (
     SeedStage,
     VALID_TRANSITIONS,

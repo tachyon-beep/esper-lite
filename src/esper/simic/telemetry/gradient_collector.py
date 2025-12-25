@@ -280,7 +280,7 @@ def collect_seed_gradients(
     # Trade-off: allocates O(total_params) temporary tensor, but eliminates
     # data-dependent loop that caused TorchDynamo to insert graph breaks.
     # Since this is telemetry (not hot path), memory overhead is acceptable.
-    device = grads[0].device
+    grads[0].device
     all_grads_flat = torch.cat([g.view(-1) for g in grads])
     total_elements = all_grads_flat.numel()
     zero_count_t = (all_grads_flat == 0).sum()

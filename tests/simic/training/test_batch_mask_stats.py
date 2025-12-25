@@ -6,7 +6,6 @@ from esper.leyline.factored_actions import (
     NUM_ALPHA_SPEEDS,
     NUM_ALPHA_TARGETS,
     NUM_BLUEPRINTS,
-    NUM_OPS,
     NUM_STYLES,
     NUM_TEMPO,
 )

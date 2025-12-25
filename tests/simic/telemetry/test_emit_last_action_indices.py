@@ -1,11 +1,9 @@
 """Test emit_last_action with raw indices instead of FactoredAction."""
 
-import pytest
 
 from esper.leyline.factored_actions import (
     FactoredAction,
     OP_NAMES,
-    BLUEPRINT_IDS,
     NUM_OPS,
     ALPHA_TARGET_VALUES,
     ALPHA_SPEED_NAMES,

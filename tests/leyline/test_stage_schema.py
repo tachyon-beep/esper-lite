@@ -130,7 +130,7 @@ class TestStageToOneHot:
             assert sum(one_hot) == 1.0
 
 
-class TestStageToIndex:
+class TestStageToIndexFunction:
     """Test stage_to_index function."""
 
     def test_returns_correct_index(self):

@@ -4,7 +4,6 @@ Verifies that HealthMonitor and CounterfactualHelper are properly wired
 to emit telemetry events via callback injection.
 """
 
-import pytest
 from esper.karn.health import HealthMonitor
 from esper.simic.attribution import CounterfactualHelper, ContributionResult
 from esper.leyline import TelemetryEventType

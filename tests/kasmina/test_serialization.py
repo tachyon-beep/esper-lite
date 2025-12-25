@@ -10,7 +10,7 @@ Tests verify correct save/load behavior:
 
 import pytest
 import torch
-from datetime import datetime, timezone
+from datetime import datetime
 
 from esper.kasmina.slot import SeedSlot, SeedState, SeedMetrics
 from esper.kasmina.blending import LinearBlend, SigmoidBlend, GatedBlend

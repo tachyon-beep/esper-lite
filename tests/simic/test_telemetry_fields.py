@@ -3,7 +3,6 @@
 Tests gradient health aggregation, reward shaping ratio, and entropy collapse detection.
 """
 
-import pytest
 
 from esper.simic.telemetry import LayerGradientStats
 from esper.simic.rewards import RewardComponentsTelemetry

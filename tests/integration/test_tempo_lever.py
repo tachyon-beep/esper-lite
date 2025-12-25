@@ -1,7 +1,6 @@
 import pytest
-import torch
 
-from esper.kasmina.slot import SeedSlot, SeedStage
+from esper.kasmina.slot import SeedSlot
 from esper.leyline.factored_actions import TempoAction, TEMPO_TO_EPOCHS
 from esper.leyline import HEAD_NAMES
 

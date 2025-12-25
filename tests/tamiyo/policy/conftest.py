@@ -2,7 +2,7 @@
 
 import pytest
 
-from esper.tamiyo.policy.registry import _REGISTRY, list_policies
+from esper.tamiyo.policy.registry import _REGISTRY
 
 
 @pytest.fixture(autouse=True)

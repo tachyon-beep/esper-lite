@@ -1,8 +1,7 @@
 """Tests for Karn health module."""
 
-import pytest
-from esper.karn.health import VitalSignsMonitor, VitalSigns
-from esper.karn.store import TelemetryStore, EpochSnapshot, SlotSnapshot, HostSnapshot, EpisodeContext
+from esper.karn.health import VitalSignsMonitor
+from esper.karn.store import TelemetryStore, SlotSnapshot, EpisodeContext
 from esper.leyline import SeedStage
 
 

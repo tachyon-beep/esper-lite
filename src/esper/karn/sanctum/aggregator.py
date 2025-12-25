@@ -20,8 +20,6 @@ from typing import TYPE_CHECKING
 
 import psutil
 
-_logger = logging.getLogger(__name__)
-
 from esper.karn.sanctum.schema import (
     SanctumSnapshot,
     EnvState,
@@ -54,6 +52,8 @@ from esper.leyline import (
 
 if TYPE_CHECKING:
     from esper.leyline import TelemetryEvent
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass

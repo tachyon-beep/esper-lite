@@ -7,7 +7,6 @@ See docs/plans/2025-12-16-tolaria-kasmina-remediation.md for full investigation.
 import tempfile
 import torch
 import torch.nn as nn
-import pytest
 
 from esper.kasmina.slot import SeedSlot, SeedState
 from esper.kasmina.blending import GatedBlend

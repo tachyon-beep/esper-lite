@@ -2,9 +2,8 @@
 
 import pytest
 from datetime import datetime, timezone
-from collections import deque
 
-from esper.kasmina.slot import SeedState, SeedMetrics
+from esper.kasmina.slot import SeedState
 from esper.leyline.stages import SeedStage
 
 

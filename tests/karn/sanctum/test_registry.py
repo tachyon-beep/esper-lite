@@ -1,6 +1,5 @@
 # tests/karn/sanctum/test_registry.py
 
-import pytest
 from esper.karn.sanctum.registry import AggregatorRegistry
 from esper.karn.sanctum.aggregator import SanctumAggregator
 from esper.leyline.telemetry import TelemetryEvent, TelemetryEventType

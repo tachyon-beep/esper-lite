@@ -20,7 +20,7 @@ class TestSanctumAppIntegration:
 
         app = SanctumApp(backend=mock_backend, num_envs=4)
 
-        async with app.run_test() as pilot:
+        async with app.run_test():
             # Verify all widgets exist
             assert app.query_one("#env-overview") is not None
             assert app.query_one("#scoreboard") is not None
@@ -61,7 +61,7 @@ class TestSanctumAppIntegration:
 
         app = SanctumApp(backend=mock_backend, num_envs=16)
 
-        async with app.run_test() as pilot:
+        async with app.run_test():
             # Verify initial state
             assert app._focused_env_id == 0
 
@@ -103,7 +103,7 @@ async def test_new_layout_structure():
     backend = SanctumBackend()
     app = SanctumApp(backend=backend, num_envs=4)
 
-    async with app.run_test() as pilot:
+    async with app.run_test():
         # Should have EnvOverview and Scoreboard in top section
         assert app.query_one("#env-overview") is not None
         assert app.query_one("#scoreboard") is not None

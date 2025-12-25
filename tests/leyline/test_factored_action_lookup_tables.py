@@ -1,6 +1,5 @@
 """Tests for factored action lookup tables."""
 
-import pytest
 
 from esper.leyline.factored_actions import (
     BlueprintAction,

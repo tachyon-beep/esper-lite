@@ -1,5 +1,4 @@
 """Tests for CounterfactualPanel widget."""
-import pytest
 from esper.karn.sanctum.schema import CounterfactualConfig, CounterfactualSnapshot
 from esper.karn.sanctum.widgets.counterfactual_panel import CounterfactualPanel
 

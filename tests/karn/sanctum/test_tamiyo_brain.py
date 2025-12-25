@@ -919,7 +919,6 @@ async def test_sparkline_color_coding():
 @pytest.mark.asyncio
 async def test_secondary_metrics_column():
     """Secondary metrics should show Advantage, Ratio, losses with sparklines."""
-    from collections import deque
 
     app = TamiyoBrainTestApp()
     async with app.run_test():
@@ -1111,7 +1110,7 @@ async def test_ab_group_color_mapping():
     """GROUP_COLORS should define colors for A/B/C groups."""
     app = TamiyoBrainTestApp()
     async with app.run_test():
-        widget = app.query_one(TamiyoBrain)
+        app.query_one(TamiyoBrain)
 
         # Access GROUP_COLORS directly on class (no hasattr)
         assert "A" in TamiyoBrain.GROUP_COLORS
@@ -1133,7 +1132,7 @@ async def test_ab_group_labels():
     """GROUP_LABELS should define labels for A/B/C groups."""
     app = TamiyoBrainTestApp()
     async with app.run_test():
-        widget = app.query_one(TamiyoBrain)
+        app.query_one(TamiyoBrain)
 
         # Access GROUP_LABELS directly on class (no hasattr)
         assert "A" in TamiyoBrain.GROUP_LABELS
