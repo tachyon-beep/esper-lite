@@ -12,6 +12,7 @@ analytics consume them, and outputs serialize them.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +33,29 @@ from esper.karn.ingest import (
     coerce_str_or_none,
     filter_dataclass_kwargs,
 )
+
+__all__ = [
+    # Tier 1
+    "EpisodeContext",
+    "HostBaseline",
+    # Tier 2
+    "SlotSnapshot",
+    "HostSnapshot",
+    "RewardComponents",
+    "PolicySnapshot",
+    "AdvantageStats",
+    "RatioStats",
+    "EpochSnapshot",
+    # Tier 3
+    "DenseTraceTrigger",
+    "BatchMetrics",
+    "GateEvaluationTrace",
+    "DenseTrace",
+    # Pareto Analysis
+    "EpisodeOutcome",
+    # Store
+    "TelemetryStore",
+]
 
 
 def _utc_now() -> datetime:
@@ -330,6 +354,36 @@ class DenseTrace:
 
     # Gate internals (if gate event)
     gate_evaluation_details: GateEvaluationTrace | None = None
+
+
+# =============================================================================
+# Episode Outcome (Pareto Analysis)
+# =============================================================================
+
+
+@dataclass(slots=True, frozen=True)
+class EpisodeOutcome:
+    """Multi-objective outcome for Pareto analysis.
+
+    Captures the key metrics we're optimizing:
+    - final_accuracy: Task performance (higher = better)
+    - param_ratio: Parameter efficiency (lower = better)
+    - stability_score: Training stability (higher = better)
+    """
+
+    env_id: int
+    episode: int
+    reward_mode: str  # "shaped", "simplified", etc.
+
+    # Pareto objectives (all normalized 0-1)
+    final_accuracy: float
+    param_ratio: float  # total_params / host_params
+    stability_score: float  # 1 - variance(recent_losses)
+
+    # Context
+    timestamp: float = field(default_factory=time.time)
+    slot_count: int = 0
+    fossilized_count: int = 0
 
 
 # =============================================================================
