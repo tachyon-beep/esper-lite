@@ -1184,18 +1184,6 @@ class SanctumAggregator:
         Messages are kept generic for proper rollup grouping.
         Specific values (slot_id, reward, blueprint) go in metadata.
         """
-        from typing import Any
-
-        data: Any = event.data or {}
-
-        # Helper to get value from dict or dataclass payload
-        def get_field(key: str, default: Any = None) -> Any:
-            if isinstance(data, dict):
-                return data.get(key, default)
-            else:
-                return getattr(data, key, default)
-
-        env_id = get_field("env_id")
         timestamp = event.timestamp or datetime.now(timezone.utc)
 
         # Calculate relative time
@@ -1210,42 +1198,62 @@ class SanctumAggregator:
 
         # Generic message + structured metadata based on event type
         metadata: dict[str, str | int | float] = {}
+        env_id: int | None = None
 
         if event_type == "REWARD_COMPUTED":
-            message = "Reward computed"
-            metadata["action"] = normalize_action(get_field("action_name", "?"))
-            metadata["reward"] = get_field("total_reward", 0.0)
+            if isinstance(event.data, RewardComputedPayload):
+                message = "Reward computed"
+                metadata["action"] = normalize_action(event.data.action_name)
+                metadata["reward"] = event.data.total_reward
+                env_id = event.data.env_id
+            else:
+                message = "Reward computed (unknown payload)"
         elif event_type.startswith("SEED_"):
-            slot_id = event.slot_id or get_field("slot_id", "?")
-            metadata["slot_id"] = slot_id
-            if event_type == "SEED_GERMINATED":
+            if event_type == "SEED_GERMINATED" and isinstance(event.data, SeedGerminatedPayload):
                 message = "Germinated"
-                metadata["blueprint"] = get_field("blueprint_id", "?")
-            elif event_type == "SEED_STAGE_CHANGED":
+                slot_id = event.slot_id or event.data.slot_id
+                metadata["slot_id"] = slot_id
+                metadata["blueprint"] = event.data.blueprint_id
+                env_id = event.data.env_id
+            elif event_type == "SEED_STAGE_CHANGED" and isinstance(event.data, SeedStageChangedPayload):
                 message = "Stage changed"
-                # Note: SEED_STAGE_CHANGED uses 'from_stage'/'to_stage' in payload but 'from'/'to' in dict
-                metadata["from"] = get_field("from_stage", get_field("from", "?"))
-                metadata["to"] = get_field("to_stage", get_field("to", "?"))
-            elif event_type == "SEED_FOSSILIZED":
+                slot_id = event.slot_id or event.data.slot_id
+                metadata["slot_id"] = slot_id
+                metadata["from"] = event.data.from_stage
+                metadata["to"] = event.data.to_stage
+                env_id = event.data.env_id
+            elif event_type == "SEED_FOSSILIZED" and isinstance(event.data, SeedFossilizedPayload):
                 message = "Fossilized"
-                metadata["improvement"] = get_field("improvement", 0.0)
-            elif event_type == "SEED_PRUNED":
+                slot_id = event.slot_id or event.data.slot_id
+                metadata["slot_id"] = slot_id
+                metadata["improvement"] = event.data.improvement
+                env_id = event.data.env_id
+            elif event_type == "SEED_PRUNED" and isinstance(event.data, SeedPrunedPayload):
                 message = "Pruned"
-                metadata["reason"] = get_field("reason", "")
+                slot_id = event.slot_id or event.data.slot_id
+                metadata["slot_id"] = slot_id
+                metadata["reason"] = event.data.reason
+                env_id = event.data.env_id
             else:
                 message = event_type.replace("SEED_", "")
         elif event_type == "PPO_UPDATE_COMPLETED":
-            if get_field("skipped"):
-                message = "PPO skipped"
-                metadata["reason"] = "buffer rollback"
+            if isinstance(event.data, PPOUpdatePayload):
+                if event.data.skipped:
+                    message = "PPO skipped"
+                    metadata["reason"] = "buffer rollback"
+                else:
+                    message = "PPO update"
+                    metadata["entropy"] = event.data.entropy
+                    metadata["clip_fraction"] = event.data.clip_fraction
             else:
-                message = "PPO update"
-                metadata["entropy"] = get_field("entropy", 0.0)
-                metadata["clip_fraction"] = get_field("clip_fraction", 0.0)
+                message = "PPO update (unknown payload)"
         elif event_type == "BATCH_EPOCH_COMPLETED":
-            message = "Batch complete"
-            metadata["batch"] = get_field("batch_idx", 0)
-            metadata["episodes"] = get_field("episodes_completed", 0)
+            if isinstance(event.data, BatchEpochCompletedPayload):
+                message = "Batch complete"
+                metadata["batch"] = event.data.batch_idx
+                metadata["episodes"] = event.data.episodes_completed
+            else:
+                message = "Batch complete (unknown payload)"
         else:
             message = event.message or event_type
 
