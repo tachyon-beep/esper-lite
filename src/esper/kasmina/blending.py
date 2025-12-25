@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import threading
-from typing import Protocol
+from typing import Any, Protocol
 
 import torch
 import torch.nn as nn
@@ -55,7 +55,7 @@ class BlendAlgorithm(nn.Module, ABC):
     algorithm_id: str = "base"
     _current_step: int = 0  # Tracked internally for schedule-based blends
 
-    def __init__(self):
+    def __init__(self) -> None:
         # nn.Module must initialize first in the MRO so submodules register correctly.
         super().__init__()
         # Thread-local cache for alpha tensor to avoid per-forward allocation
@@ -77,7 +77,9 @@ class BlendAlgorithm(nn.Module, ABC):
         if cache is not None:
             cached_device, cached_dtype, cached_value, cached_tensor = cache
             if cached_device == x.device and cached_dtype == x.dtype and cached_value == value:
-                return cached_tensor
+                # Cached tensor is guaranteed to be a Tensor
+                result: torch.Tensor = cached_tensor
+                return result
 
         # Create new tensor and cache it
         tensor = torch.tensor(value, device=x.device, dtype=x.dtype)
@@ -87,6 +89,19 @@ class BlendAlgorithm(nn.Module, ABC):
     def step(self, step: int) -> None:
         """Update the current step for schedule-based algorithms."""
         self._current_step = step
+
+    def reset_cache(self) -> None:
+        """Clear thread-local alpha tensor cache.
+
+        Call at epoch boundaries to prevent memory accumulation in long-running
+        training with DataParallel. Each worker thread creates its own cache
+        entry that persists until thread death. In very long training runs,
+        this can accumulate memory.
+
+        Note: Clearing the cache has minimal performance impact - the tensor
+        will be re-created on the next forward pass (single allocation).
+        """
+        self._alpha_cache_local.cache = None
 
     @abstractmethod
     def get_alpha_for_blend(self, x: torch.Tensor) -> torch.Tensor:
@@ -170,9 +185,11 @@ class GatedBlend(BlendAlgorithm):
         alpha = self.gate(pooled)  # (B, 1)
         # Expand for broadcasting to match input shape
         if self.topology == "cnn":
-            return alpha.view(-1, 1, 1, 1)  # (B, 1, 1, 1)
+            result: torch.Tensor = alpha.view(-1, 1, 1, 1)  # (B, 1, 1, 1)
+            return result
         else:
-            return alpha.view(-1, 1, 1)  # (B, 1, 1)
+            result = alpha.view(-1, 1, 1)  # (B, 1, 1)
+            return result
 
 
 class BlendCatalog:
@@ -192,10 +209,10 @@ class BlendCatalog:
         return list(cls._algorithms.keys())
 
     @classmethod
-    def create(cls, algorithm_id: str, **kwargs) -> BlendAlgorithm:
+    def create(cls, algorithm_id: str, **kwargs: Any) -> BlendAlgorithm:
         if algorithm_id not in cls._algorithms:
             raise ValueError(f"Unknown blend algorithm: {algorithm_id}")
-        return cls._algorithms[algorithm_id](**kwargs)
+        return cls._algorithms[algorithm_id](**kwargs)  # type: ignore[no-any-return]
 
 
 __all__ = [

@@ -58,8 +58,8 @@ def compute_task_loss(
     """
     if task_type == "lm":
         vocab = outputs.size(-1)
-        return criterion(outputs.view(-1, vocab), targets.view(-1))
-    return criterion(outputs, targets)
+        return criterion(outputs.view(-1, vocab), targets.view(-1))  # type: ignore[no-any-return]
+    return criterion(outputs, targets)  # type: ignore[no-any-return]
 
 
 def compute_task_loss_with_metrics(

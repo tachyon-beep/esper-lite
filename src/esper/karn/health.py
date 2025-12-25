@@ -194,10 +194,13 @@ class HealthMonitor:
 
         self._last_memory_warning = now
         if self._emit_callback is not None:
+            # Emit MEMORY_WARNING with dict payload (typed payload migration pending)
+            # This matches the pattern used in other telemetry emission sites
+            # Type ignore is needed until MemoryWarningPayload is defined
             self._emit_callback(TelemetryEvent(
                 event_type=TelemetryEventType.MEMORY_WARNING,
                 severity="warning",
-                data={
+                data={  # type: ignore[arg-type]
                     "gpu_utilization": gpu_utilization,
                     "gpu_allocated_gb": gpu_allocated_gb,
                     "gpu_total_gb": gpu_total_gb,

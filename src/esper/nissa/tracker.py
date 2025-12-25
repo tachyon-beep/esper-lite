@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 import torch
@@ -38,7 +39,7 @@ class GradientStats:
     exploding_pct: float = 0.0  # % of very large gradients
     percentiles: dict[int, float] = field(default_factory=dict)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "layer": self.layer_name,
             "norm": self.norm,
@@ -59,7 +60,7 @@ class GradientHealth:
     exploding_layers: int = 0
     health_score: float = 1.0  # 0-1, higher is healthier
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "overall_norm": self.overall_norm,
             "norm_variance": self.norm_variance,
@@ -99,8 +100,8 @@ class EpochSnapshot:
     red_flags: list[str] = field(default_factory=list)
     opportunities: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> dict:
-        result = {
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
             "epoch": self.epoch,
             "train_loss": self.train_loss,
             "val_loss": self.val_loss,
@@ -160,16 +161,16 @@ class DiagnosticTracker:
             return "weight" in name
         return any(layer in name for layer in self.config.gradients.layers)
 
-    def _register_gradient_hooks(self):
+    def _register_gradient_hooks(self) -> None:
         """Register hooks to capture gradients during backward pass."""
         for name, param in self.model.named_parameters():
             if param.requires_grad and self._should_track_layer(name):
-                hook = param.register_hook(
+                hook = param.register_hook(  # type: ignore[no-untyped-call]
                     lambda grad, n=name: self._record_grad(n, grad)
                 )
                 self._hooks.append(hook)
 
-    def _record_grad(self, name: str, grad: torch.Tensor):
+    def _record_grad(self, name: str, grad: torch.Tensor) -> None:
         """Record gradient statistics for a layer.
 
         Uses batched tensor ops with single .tolist() sync to avoid
@@ -225,11 +226,11 @@ class DiagnosticTracker:
 
         self._grad_stats[name] = stats
 
-    def on_batch_loss(self, loss: float):
+    def on_batch_loss(self, loss: float) -> None:
         """Record batch loss for noise estimation."""
         self._batch_losses.append(loss)
 
-    def on_backward(self):
+    def on_backward(self) -> None:
         """Call after loss.backward() to ensure gradients are captured.
 
         Note: Gradient hooks fire automatically during backward(),
@@ -268,7 +269,7 @@ class DiagnosticTracker:
 
         return health
 
-    def _estimate_sharpness(self, val_loader, criterion) -> float | None:
+    def _estimate_sharpness(self, val_loader: Any, criterion: Any) -> float | None:
         """Estimate loss landscape sharpness via perturbation.
 
         Higher sharpness = sharper minimum = less generalizable.
@@ -302,7 +303,7 @@ class DiagnosticTracker:
 
         return float(np.mean(perturbations)) / cfg.perturbation_scale
 
-    def _compute_val_loss(self, val_loader, criterion) -> float:
+    def _compute_val_loss(self, val_loader: Any, criterion: Any) -> float:
         """Compute validation loss."""
         total_loss = torch.tensor(0.0, device=self.device)
         n_batches = 0
@@ -348,8 +349,8 @@ class DiagnosticTracker:
         val_accuracy: float,
         per_class_accuracy: dict[int, float] | None = None,
         per_class_loss: dict[int, float] | None = None,
-        val_loader=None,
-        criterion=None,
+        val_loader: Any = None,
+        criterion: Any = None,
     ) -> EpochSnapshot:
         """Record end-of-epoch metrics and return rich snapshot."""
         snapshot = EpochSnapshot(
@@ -504,7 +505,7 @@ class DiagnosticTracker:
 
         return opportunities
 
-    def get_decision_brief(self, action: str, reason: str = "") -> dict:
+    def get_decision_brief(self, action: str, reason: str = "") -> dict[str, Any]:
         """Generate structured brief for a decision."""
         if not self.history:
             return {"action": action, "error": "No history available"}
@@ -527,13 +528,13 @@ class DiagnosticTracker:
             }
         }
 
-    def cleanup(self):
+    def cleanup(self) -> None:
         """Remove gradient hooks."""
         for hook in self._hooks:
             hook.remove()
         self._hooks.clear()
 
-    def __del__(self):
+    def __del__(self) -> None:
         self.cleanup()
 
 

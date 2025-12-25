@@ -357,7 +357,7 @@ class InvalidStateMachineError(RuntimeError):
     pass
 
 
-@torch.compiler.disable
+@torch.compiler.disable  # type: ignore[untyped-decorator]
 def _validate_action_mask(mask: torch.Tensor) -> None:
     """Validate that at least one action is valid per batch element.
 
@@ -372,7 +372,7 @@ def _validate_action_mask(mask: torch.Tensor) -> None:
         )
 
 
-@torch.compiler.disable
+@torch.compiler.disable  # type: ignore[untyped-decorator]
 def _validate_logits(logits: torch.Tensor) -> None:
     """Validate that logits don't contain inf/nan (indicates network instability).
 
@@ -429,12 +429,9 @@ class MaskedCategorical:
             _validate_logits(logits)
 
         self.mask = mask
-        mask_value = torch.tensor(
-            MASKED_LOGIT_VALUE,
-            device=logits.device,
-            dtype=logits.dtype,
-        )
-        self.masked_logits = logits.masked_fill(~mask, mask_value)
+        # Use Python float directly - masked_fill broadcasts correctly
+        # Avoids tensor allocation on every __init__ (hot path optimization)
+        self.masked_logits = logits.masked_fill(~mask, MASKED_LOGIT_VALUE)
         self._dist = Categorical(logits=self.masked_logits)
 
     @property
@@ -444,11 +441,11 @@ class MaskedCategorical:
 
     def sample(self) -> torch.Tensor:
         """Sample actions from the masked distribution."""
-        return self._dist.sample()
+        return self._dist.sample()  # type: ignore[no-any-return,no-untyped-call]
 
     def log_prob(self, actions: torch.Tensor) -> torch.Tensor:
         """Compute log probability of actions."""
-        return self._dist.log_prob(actions)
+        return self._dist.log_prob(actions)  # type: ignore[no-any-return,no-untyped-call]
 
     def entropy(self) -> torch.Tensor:
         """Compute normalized entropy over valid actions.

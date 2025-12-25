@@ -5,7 +5,7 @@ TypedDicts provide type safety for dictionary returns from PPO and network funct
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import torch
 
@@ -41,26 +41,30 @@ class PPOUpdateMetrics(TypedDict, total=False):
 
     Note: total=False makes all keys optional since update() may return
     empty dict when buffer is empty, or subset of keys in some cases.
+
+    Important: PPOAgent.update() aggregates metrics across epochs before
+    returning, so scalar metrics are float (not list[float]). Only
+    head_entropies and head_grad_norms retain per-epoch structure.
     """
 
-    policy_loss: list[float]
-    value_loss: list[float]
-    entropy_loss: list[float]
-    total_loss: list[float]
-    approx_kl: list[float]
-    clip_fraction: list[float]
+    # Scalar metrics (aggregated across epochs)
+    policy_loss: float
+    value_loss: float
+    entropy_loss: float
+    total_loss: float
+    approx_kl: float
+    clip_fraction: float
     explained_variance: float
+    entropy: float
+    ratio_mean: float
+    ratio_max: float
+    ratio_min: float
+    early_stop_epoch: int
+    # Structured metrics
     gradient_stats: GradientStats | None
-    # Per-head entropy (P3-1) - for exploring exploration collapse
-    head_entropies: dict[str, list[float]]
-    # Per-head gradient norms (P4-6) - for diagnosing head dominance
-    head_grad_norms: dict[str, list[float]]
-    # Additional metrics that may be present
-    entropy: list[float]
-    ratio_mean: list[float]
-    ratio_max: list[float]
-    ratio_min: list[float]
-    ratio_diagnostic: dict
+    head_entropies: dict[str, list[float]]  # Per-head, per-epoch
+    head_grad_norms: dict[str, list[float]]  # Per-head, per-epoch
+    ratio_diagnostic: dict[str, Any]
 
 
 class HeadLogProbs(TypedDict):

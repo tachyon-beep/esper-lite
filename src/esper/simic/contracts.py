@@ -21,9 +21,23 @@ class SeedStateProtocol(Protocol):
     Captures the interface used by Simic when accessing seed state.
     """
 
+    seed_id: str
+    metrics: Any  # SeedMetrics
+    blueprint_id: str
+    alpha_controller: Any  # AlphaController
+    alpha_algorithm: Any  # AlphaAlgorithm
+
     @property
     def stage(self) -> "SeedStage":
         """Current lifecycle stage of the seed."""
+        ...
+
+    def can_transition_to(self, new_stage: "SeedStage") -> bool:
+        """Check if transition to new stage is valid."""
+        ...
+
+    def sync_telemetry(self) -> None:
+        """Synchronize internal state to telemetry fields."""
         ...
 
 
@@ -37,6 +51,14 @@ class SeedSlotProtocol(Protocol):
 
     This enables proper type checking without circular imports.
     """
+
+    # Mutable attributes for telemetry configuration
+    fast_mode: bool
+    telemetry_lifecycle_only: bool
+    on_telemetry: Any  # Callable[[TelemetryEvent], None] | None
+    isolate_gradients: bool
+    telemetry_inner_epoch: int
+    telemetry_global_epoch: int
 
     @property
     def state(self) -> SeedStateProtocol | None:
@@ -53,6 +75,16 @@ class SeedSlotProtocol(Protocol):
         """Number of trainable parameters in active seed, or 0 if no seed."""
         ...
 
+    @property
+    def alpha(self) -> float:
+        """Current alpha (blend weight) value."""
+        ...
+
+    @property
+    def alpha_schedule(self) -> nn.Module | None:
+        """Alpha schedule network (for GATE algorithm), or None."""
+        ...
+
     def advance_stage(self, target_stage: "SeedStage | None" = None) -> "GateResult":
         """Advance seed to next stage (or specific target stage).
 
@@ -66,6 +98,10 @@ class SeedSlotProtocol(Protocol):
         Returns:
             True if an auto-prune occurred, False otherwise.
         """
+        ...
+
+    def set_alpha(self, value: float) -> None:
+        """Set the alpha value directly."""
         ...
 
     @contextmanager
@@ -85,8 +121,48 @@ class SlottedHostProtocol(Protocol):
     """
 
     @property
-    def seed_slots(self) -> dict[str, SeedSlotProtocol]:
-        """Dictionary of slot_id -> SeedSlot for all configured slots."""
+    def seed_slots(self) -> Any:
+        """Mapping of slot_id -> SeedSlot (ModuleDict or dict)."""
+        ...
+
+    @property
+    def active_seed_params(self) -> int:
+        """Total number of trainable parameters in all active seeds."""
+        ...
+
+    @property
+    def has_active_seed(self) -> bool:
+        """Whether any slot has an active seed."""
+        ...
+
+    def has_active_seed_in_slot(self, slot_id: str) -> bool:
+        """Check if a specific slot has an active seed."""
+        ...
+
+    def germinate_seed(
+        self,
+        blueprint_id: str,
+        seed_id: str,
+        *,
+        slot: str,
+        blend_algorithm_id: str = ...,
+        blend_tempo_epochs: int = ...,
+        alpha_algorithm: Any = ...,  # AlphaAlgorithm
+        alpha_target: float | None = ...,
+    ) -> None:
+        """Create a new seed in the specified slot."""
+        ...
+
+    def prune_seed(self, *, slot: str) -> None:
+        """Remove the seed from the specified slot."""
+        ...
+
+    def get_host_parameters(self) -> Iterator[nn.Parameter]:
+        """Get host parameters (excluding seed parameters)."""
+        ...
+
+    def get_seed_parameters(self, slot: str | None = None) -> Iterator[nn.Parameter]:
+        """Get seed parameters, optionally filtered by slot."""
         ...
 
     def __call__(self, x: Any) -> Any:
@@ -97,15 +173,15 @@ class SlottedHostProtocol(Protocol):
         """Return model parameters."""
         ...
 
-    def to(self, *args: Any, **kwargs: Any) -> "SlottedHostProtocol":
+    def to(self, *args: Any, **kwargs: Any) -> Any:
         """Move model to device."""
         ...
 
-    def train(self, mode: bool = True) -> "SlottedHostProtocol":
+    def train(self, mode: bool = True) -> Any:
         """Set training mode."""
         ...
 
-    def eval(self) -> "SlottedHostProtocol":
+    def eval(self) -> Any:
         """Set evaluation mode."""
         ...
 

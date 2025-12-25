@@ -12,7 +12,7 @@ Interactive features:
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Iterator
 
 from textual.binding import Binding
 from textual.message import Message
@@ -53,15 +53,15 @@ class Scoreboard(Static):
             super().__init__()
             self.record_id = record_id
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         """Initialize Scoreboard widget."""
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
         self._displayed_records: list["BestRunRecord"] = []
         self.border_title = "BEST RUNS"
-        self.table = DataTable(zebra_stripes=True, cursor_type="row")
+        self.table: DataTable[Any] = DataTable[Any](zebra_stripes=True, cursor_type="row")
 
-    def compose(self):
+    def compose(self) -> Iterator[Static | DataTable[Any]]:
         """Compose the widget."""
         yield Static(id="scoreboard-stats")
         yield self.table

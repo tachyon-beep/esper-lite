@@ -7,7 +7,7 @@ Reference: src/esper/karn/tui.py lines 1777-1959 (_render_env_overview method)
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Iterator
 
 from textual.widgets import DataTable, Static
 
@@ -42,7 +42,7 @@ class EnvOverview(Static):
     3. A/B cohort: Colored pip (●) next to env ID based on reward_mode
     """
 
-    def __init__(self, num_envs: int = 16, **kwargs) -> None:
+    def __init__(self, num_envs: int = 16, **kwargs: Any) -> None:
         """Initialize EnvOverview widget.
 
         Args:
@@ -50,7 +50,7 @@ class EnvOverview(Static):
         """
         super().__init__(**kwargs)
         self._num_envs = num_envs
-        self.table = DataTable(zebra_stripes=True, cursor_type="row")
+        self.table: DataTable[Any] = DataTable[Any](zebra_stripes=True, cursor_type="row")
         self._snapshot: SanctumSnapshot | None = None
         self._current_slot_ids: list[str] = []  # Track slot_ids to detect column changes
         self._filter_text: str = ""  # Filter text for env rows
@@ -91,7 +91,7 @@ class EnvOverview(Static):
 
         return False
 
-    def compose(self):
+    def compose(self) -> Iterator[DataTable[Any]]:
         """Compose the widget."""
         yield self.table
 
@@ -271,8 +271,8 @@ class EnvOverview(Static):
         reward_cell = self._format_reward(env)
 
         # Sparklines
-        acc_spark = self._make_sparkline(env.accuracy_history)
-        rwd_spark = self._make_sparkline(env.reward_history)
+        acc_spark = self._make_sparkline(list(env.accuracy_history))
+        rwd_spark = self._make_sparkline(list(env.reward_history))
 
         # Reward components
         delta_acc_cell = self._format_delta_acc(env)
@@ -281,8 +281,9 @@ class EnvOverview(Static):
 
         # Dynamic slot cells
         slot_cells = []
-        for slot_id in self._snapshot.slot_ids:
-            slot_cells.append(self._format_slot_cell(env, slot_id))
+        if self._snapshot is not None:
+            for slot_id in self._snapshot.slot_ids:
+                slot_cells.append(self._format_slot_cell(env, slot_id))
 
         # Last action
         last_action = self._format_last_action(env)
@@ -649,7 +650,7 @@ class EnvOverview(Static):
         status_style = status_styles.get(env.status, "white")
         return f"[{status_style}]{status_short}[/{status_style}]"
 
-    def _make_sparkline(self, values, width: int = 8) -> str:
+    def _make_sparkline(self, values: list[float], width: int = 8) -> str:
         """Create sparkline from values using schema module."""
         from esper.karn.sanctum.schema import make_sparkline
         return make_sparkline(values, width)

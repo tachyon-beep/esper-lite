@@ -40,8 +40,10 @@ def build_action_enum(topology: str) -> type[IntEnum]:
     members["PRUNE"] = len(blueprints) + 2
     members["ADVANCE"] = len(blueprints) + 3
 
-    enum_name = f"{topology.title()}Action"
-    action_enum = IntEnum(enum_name, members)
+    # Build list of tuples for IntEnum (avoids string literal requirement)
+    member_list = list(members.items())
+    # Type ignore needed: IntEnum expects string literal but we build dynamically
+    action_enum = IntEnum(f"{topology.title()}Action", member_list)  # type: ignore[misc]
     _action_enum_cache[topology] = action_enum
     return action_enum
 

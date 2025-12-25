@@ -9,6 +9,8 @@ Renders a single slot's state as a compact chip showing:
 
 from __future__ import annotations
 
+from typing import Any
+
 from textual.app import ComposeResult
 from textual.widgets import Static
 
@@ -103,7 +105,7 @@ class SlotChip(Static):
         self,
         state: SlotChipState,
         expanded: bool = False,
-        **kwargs,
+        **kwargs: Any,
     ) -> None:
         """Initialize the slot chip.
 

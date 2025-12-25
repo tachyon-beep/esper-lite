@@ -949,6 +949,8 @@ class AnalyticsSnapshotPayload:
     alpha_target_masked: bool | None = None
     alpha_speed_masked: bool | None = None
     alpha_curve_masked: bool | None = None
+    # Reward component breakdown (for kind="last_action")
+    base_acc_delta: float | None = None  # Legacy shaped signal from accuracy improvement
 
     # For kind="throughput", includes performance metrics
     batch: int | None = None
@@ -1129,6 +1131,60 @@ class AnomalyDetectedPayload:
         )
 
 
+@dataclass(slots=True, frozen=True)
+class CounterfactualUnavailablePayload:
+    """Payload for COUNTERFACTUAL_COMPUTED when baseline is unavailable.
+
+    Emitted when counterfactual computation cannot be performed for a slot,
+    e.g., due to missing baseline or invalid slot state.
+    """
+
+    # REQUIRED
+    env_id: int
+    slot_id: str
+    reason: str  # Why counterfactual is unavailable (e.g., "no_baseline", "dormant_slot")
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "CounterfactualUnavailablePayload":
+        """Parse from dict. Raises KeyError on missing required fields."""
+        return cls(
+            env_id=data["env_id"],
+            slot_id=data["slot_id"],
+            reason=data["reason"],
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class PerformanceDegradationPayload:
+    """Payload for PERFORMANCE_DEGRADATION event.
+
+    Emitted when current accuracy drops significantly below rolling average,
+    indicating potential training instability or policy collapse.
+    """
+
+    # REQUIRED
+    env_id: int
+    current_acc: float
+    rolling_avg_acc: float
+    drop_percent: float  # Relative drop as percentage (0-100)
+    threshold_percent: float  # Threshold that was exceeded
+
+    # OPTIONAL
+    training_progress: float = 0.0  # Progress through training (0.0 to 1.0)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "PerformanceDegradationPayload":
+        """Parse from dict. Raises KeyError on missing required fields."""
+        return cls(
+            env_id=data["env_id"],
+            current_acc=data["current_acc"],
+            rolling_avg_acc=data["rolling_avg_acc"],
+            drop_percent=data["drop_percent"],
+            threshold_percent=data["threshold_percent"],
+            training_progress=data.get("training_progress", 0.0),
+        )
+
+
 # =============================================================================
 # Telemetry Payload Type Union
 # =============================================================================
@@ -1146,6 +1202,8 @@ TelemetryPayload = (
     | SeedFossilizedPayload
     | SeedPrunedPayload
     | CounterfactualMatrixPayload
+    | CounterfactualUnavailablePayload
     | AnalyticsSnapshotPayload
     | AnomalyDetectedPayload
+    | PerformanceDegradationPayload
 )

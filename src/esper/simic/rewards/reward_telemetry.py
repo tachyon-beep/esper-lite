@@ -71,15 +71,33 @@ class RewardComponentsTelemetry:
             in this system are typically O(0.1) to O(10). Rewards below 1e-8
             indicate either (a) true zero or (b) near-perfect cancellation of
             positive/negative terms - in either case, the ratio is meaningless.
+
+        PyTorch Expert Review 2025-12-26: Added all shaping terms to computation.
+        Previous version only included 4 of 10 shaping terms.
         """
         # M1: Guard against division by zero/near-zero
         # 1e-8 is well below minimum meaningful reward magnitude (~0.01)
         if abs(self.total_reward) < 1e-8:
             return 0.0
-        shaped = self.stage_bonus + self.pbrs_bonus + self.synergy_bonus + self.action_shaping
+        # All shaping terms (bonuses and penalties that are not primary signal)
+        shaped = (
+            # Bonuses
+            self.stage_bonus
+            + self.pbrs_bonus
+            + self.synergy_bonus
+            + self.action_shaping
+            + self.terminal_bonus
+            + self.fossilize_terminal_bonus
+            # Penalties (these shape behavior, so include in total)
+            + self.compute_rent
+            + self.alpha_shock
+            + self.blending_warning
+            + self.holding_warning
+            + self.ratio_penalty
+        )
         return abs(shaped) / abs(self.total_reward)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, float | int | str | None]:
         """Convert to dict for TelemetryEvent data field.
 
         Uses explicit dict construction instead of asdict() for 3-5x performance

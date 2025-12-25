@@ -21,6 +21,7 @@ Example:
 """
 
 from dataclasses import dataclass, field
+from typing import Any
 
 import torch
 
@@ -70,7 +71,7 @@ class PolicyGroup:
     # This field will be populated when we implement true parallel lockstep training.
     envs: list[ParallelEnvState] = field(default_factory=list)
     reward_config: ContributionRewardConfig = field(default_factory=ContributionRewardConfig)
-    episode_history: list[dict] = field(default_factory=list)
+    episode_history: list[dict[str, Any]] = field(default_factory=list)
 
     # Per-group metrics
     total_episodes: int = 0

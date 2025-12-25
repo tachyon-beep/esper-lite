@@ -17,6 +17,24 @@ The underlying tensor operations (ste_forward, blend_with_isolation) in
 isolation.py are pure tensor ops that compile efficiently.
 
 Use TORCH_LOGS=guards to monitor graph specialization during training.
+
+DDP Symmetry Requirements
+-------------------------
+When using DistributedDataParallel (DDP), ALL ranks MUST:
+
+1. Have identical SeedSlot configurations (same slots, same stages)
+2. Execute the same forward() code path on each iteration
+3. Call advance_stage() / step_epoch() in identical order
+
+Violation causes gradient bucket mismatches → NCCL deadlock or shape errors.
+
+Key mechanisms for DDP safety:
+- _sync_gate_decision(): Broadcasts rank-0's gate decision to all ranks
+- Symmetric lifecycle: All slots advance stages simultaneously
+- Same seeds: All ranks germinate the same blueprint in the same slot
+
+WARNING: force_alpha() context manager is NOT DDP-safe (mutates local state).
+For counterfactual evaluation under DDP, use a separate non-DDP model replica.
 """
 
 from __future__ import annotations
@@ -26,7 +44,7 @@ from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from typing import Callable, ClassVar, TYPE_CHECKING
+from typing import Any, Callable, ClassVar, Generator, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
@@ -74,7 +92,7 @@ from esper.leyline import (
 
 if TYPE_CHECKING:
     from esper.kasmina.blending import AlphaScheduleProtocol
-    from esper.simic.features import TaskConfig
+    from esper.tamiyo.policy.features import TaskConfig
 
 # Debug flag for STE gradient assertions (set ESPER_DEBUG_STE=1 to enable)
 _DEBUG_STE = os.environ.get("ESPER_DEBUG_STE", "").lower() in ("1", "true", "yes")
@@ -276,7 +294,7 @@ class SeedMetrics:
     # Increment when fields are added/removed/changed
     _SCHEMA_VERSION: ClassVar[int] = 2  # v2: added _prev_contribution, contribution_velocity
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to primitive dict for serialization."""
         return {
             "_schema_version": self._SCHEMA_VERSION,
@@ -304,7 +322,7 @@ class SeedMetrics:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "SeedMetrics":
+    def from_dict(cls, data: dict[str, Any]) -> "SeedMetrics":
         """Reconstruct from primitive dict.
 
         Raises KeyError if required fields are missing (no silent defaults).
@@ -382,12 +400,12 @@ class SeedState:
     is_paused: bool = False
 
     # History (bounded to prevent unbounded memory growth in long-running training)
-    stage_history: deque = field(default_factory=lambda: deque(maxlen=PROBATION_HISTORY_MAXLEN))
+    stage_history: deque[tuple[SeedStage, datetime]] = field(default_factory=lambda: deque(maxlen=PROBATION_HISTORY_MAXLEN))
 
     # Telemetry (initialized in __post_init__)
     telemetry: SeedTelemetry | None = field(default=None)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Initialize telemetry with seed identity."""
         if self.telemetry is None:
             self.telemetry = SeedTelemetry(
@@ -399,23 +417,31 @@ class SeedState:
 
     def sync_telemetry(
         self,
-        gradient_norm: float,
-        gradient_health: float,
-        has_vanishing: bool,
-        has_exploding: bool,
+        gradient_norm: float | None = None,
+        gradient_health: float | None = None,
+        has_vanishing: bool | None = None,
+        has_exploding: bool | None = None,
         epoch: int = 0,
         max_epochs: int = 25,
     ) -> None:
-        """Sync telemetry from metrics + gradient signals.
+        """Sync telemetry from metrics + optional gradient signals.
 
         Call this once per epoch after validation to update telemetry.
         SeedMetrics remains the source of truth for accuracy/epoch data.
+
+        Gradient parameters are optional - when None, gradient-related telemetry
+        fields are left at their default values (no gradient data available).
+        This separates the concern of accuracy telemetry (always available)
+        from gradient telemetry (only when gradient stats are collected).
 
         IMPORTANT: accuracy_delta is stage-aware:
         - TRAINING/GERMINATED (alpha=0): Always 0.0 because seed cannot affect output
         - BLENDING+ (alpha>0): Stage-relative improvement (proxy for causal contribution)
         """
         from datetime import timezone
+
+        if self.telemetry is None:
+            return
 
         self.telemetry.accuracy = self.metrics.current_val_accuracy
 
@@ -446,10 +472,16 @@ class SeedState:
             )
         self.telemetry.alpha_algorithm = int(self.alpha_algorithm)
 
-        self.telemetry.gradient_norm = gradient_norm
-        self.telemetry.gradient_health = gradient_health
-        self.telemetry.has_vanishing = has_vanishing
-        self.telemetry.has_exploding = has_exploding
+        # Only update gradient telemetry when data is provided
+        # (separates accuracy telemetry from gradient telemetry concerns)
+        if gradient_norm is not None:
+            self.telemetry.gradient_norm = gradient_norm
+        if gradient_health is not None:
+            self.telemetry.gradient_health = gradient_health
+        if has_vanishing is not None:
+            self.telemetry.has_vanishing = has_vanishing
+        if has_exploding is not None:
+            self.telemetry.has_exploding = has_exploding
 
         self.telemetry.epoch = epoch
         self.telemetry.max_epochs = max_epochs
@@ -523,14 +555,14 @@ class SeedState:
             needs_attention=not self.is_healthy,
         )
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to primitive dict for PyTorch 2.9 weights_only=True serialization."""
         return {
             "seed_id": self.seed_id,
             "blueprint_id": self.blueprint_id,
             "slot_id": self.slot_id,
             "stage": self.stage.value,  # Enum -> int
-            "previous_stage": self.previous_stage.value if self.previous_stage is not None else None,
+            "previous_stage": self.previous_stage.value if self.previous_stage != SeedStage.UNKNOWN else None,
             "stage_entered_at": self.stage_entered_at.isoformat(),  # datetime -> str
             "alpha": self.alpha,
             "stage_history": [
@@ -547,7 +579,7 @@ class SeedState:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "SeedState":
+    def from_dict(cls, data: dict[str, Any]) -> "SeedState":
         """Reconstruct from primitive dict.
 
         Raises KeyError/ValueError if required fields are missing (no silent defaults).
@@ -573,7 +605,7 @@ class SeedState:
             blueprint_id=data["blueprint_id"],  # Required
             slot_id=data["slot_id"],  # Required
             stage=SeedStage(data["stage"]),  # Required
-            previous_stage=SeedStage(data["previous_stage"]) if data["previous_stage"] is not None else None,
+            previous_stage=SeedStage(data["previous_stage"]) if data["previous_stage"] is not None else SeedStage.UNKNOWN,
             alpha_algorithm=AlphaAlgorithm(int(data["alpha_algorithm"])),
         )
         state.stage_entered_at = datetime.fromisoformat(data["stage_entered_at"])  # Required
@@ -990,7 +1022,7 @@ class SeedSlot(nn.Module):
         self.isolate_gradients: bool = False
 
         # Only create isolation monitor if not in fast mode
-        self.isolation_monitor = None
+        self.isolation_monitor: GradientHealthMonitor | None = None
 
         # Cached shape probes to avoid per-germinate allocation
         # Keys: (topology, channels), values: (device, tensor)
@@ -1002,7 +1034,7 @@ class SeedSlot(nn.Module):
 
         # Pending async gradient stats (tensor-based, no .item() sync yet)
         # Used by capture_gradient_telemetry_async() / finalize_gradient_telemetry() pair
-        self._pending_gradient_stats: dict | None = None
+        self._pending_gradient_stats: dict[str, Any] | None = None
 
         # Phase 3: BLEND_OUT freeze tracking (mandatory invariant during DOWN schedules).
         # We record which params were trainable so we can restore on exit.
@@ -1051,7 +1083,7 @@ class SeedSlot(nn.Module):
         self._shape_probe_cache[key] = (self.device, probe)
         return probe
 
-    def to(self, *args, **kwargs) -> "SeedSlot":
+    def to(self, *args: Any, **kwargs: Any) -> "SeedSlot":
         """Transfer slot and any active seed to device."""
         old_device = self.device  # Track before move
         super().to(*args, **kwargs)
@@ -1093,7 +1125,7 @@ class SeedSlot(nn.Module):
         return self.state.alpha if self.state else 0.0
 
     @contextmanager
-    def force_alpha(self, value: float):
+    def force_alpha(self, value: float) -> Generator[None, None, None]:
         """Temporarily override alpha for counterfactual evaluation.
 
         Used for differential validation to measure true seed contribution
@@ -1165,10 +1197,12 @@ class SeedSlot(nn.Module):
         if self.seed is None:
             return 0
         total = 0
-        for module in (self.seed, self.alpha_schedule):
-            if module is None:
-                continue
-            for param in module.parameters():
+        if self.seed is not None:
+            for param in self.seed.parameters():
+                if param.requires_grad:
+                    total += param.numel()
+        if self.alpha_schedule is not None and isinstance(self.alpha_schedule, nn.Module):
+            for param in self.alpha_schedule.parameters():
                 if param.requires_grad:
                     total += param.numel()
         return total
@@ -1327,6 +1361,8 @@ class SeedSlot(nn.Module):
                 checks_failed=["no_active_seed"],
             )
 
+        assert self.state is not None  # is_active guarantees this
+
         if target_stage is not None and is_failure_stage(target_stage):
             raise ValueError(
                 f"advance_stage() cannot target failure stage {target_stage.name}; "
@@ -1424,7 +1460,7 @@ class SeedSlot(nn.Module):
                             blueprint_id=blueprint_id,
                             improvement=improvement,
                             params_added=sum(
-                                p.numel() for p in self.seed.parameters() if p.requires_grad
+                                p.numel() for p in (self.seed.parameters() if self.seed is not None else []) if p.requires_grad
                             ),
                             alpha=self.state.alpha,
                             epochs_total=epochs_total,
@@ -1705,14 +1741,17 @@ class SeedSlot(nn.Module):
 
                     topology = self.task_config.topology if self.task_config else "cnn"
                     total_steps = max(1, int(steps))
-                    self.alpha_schedule = BlendCatalog.create(
+                    # BlendCatalog.create returns BlendAlgorithm which satisfies AlphaScheduleProtocol
+                    created_schedule = BlendCatalog.create(
                         "gated",
                         channels=self.channels,
                         topology=topology,
                         total_steps=total_steps,
                     )
-                    if isinstance(self.alpha_schedule, nn.Module):
-                        self.alpha_schedule = self.alpha_schedule.to(self.device)
+                    if isinstance(created_schedule, nn.Module):
+                        self.alpha_schedule = created_schedule.to(self.device)  # type: ignore[assignment]
+                    else:
+                        self.alpha_schedule = created_schedule
             else:
                 # Non-gated algorithms must not carry a gate schedule.
                 self.alpha_schedule = None
@@ -1725,7 +1764,7 @@ class SeedSlot(nn.Module):
         )
 
         # Freeze learnable params when blending down.
-        self._set_blend_out_freeze(controller.alpha_mode == AlphaMode.DOWN)
+        self._set_blend_out_freeze(controller.alpha_mode == AlphaMode.DOWN)  # type: ignore[comparison-overlap]
         return True
 
     def capture_gradient_telemetry(self) -> None:
@@ -1844,6 +1883,7 @@ class SeedSlot(nn.Module):
             return
 
         # Materialize tensor values (this is where .item() sync happens)
+        assert self.isolation_monitor is not None  # Checked above
         stats = self.isolation_monitor.materialize_gradient_stats(self._pending_gradient_stats)
         self._pending_gradient_stats = None
 
@@ -1886,7 +1926,7 @@ class SeedSlot(nn.Module):
             Blended feature map.
         """
         # 1. NO-OP: Slot is dormant or in failure stage - return host features unchanged
-        if not self.is_active or self.seed is None or not is_active_stage(self.state.stage):
+        if not self.is_active or self.seed is None or self.state is None or not is_active_stage(self.state.stage):
             return host_features
 
         # 2. ISOLATION: Detach host input into the seed path if requested.
@@ -1960,16 +2000,18 @@ class SeedSlot(nn.Module):
                 if self.alpha_schedule is None:
                     raise RuntimeError("alpha_schedule is required when alpha_algorithm=GATE.")
                 # Isolation contract: use the same input reference that the seed sees.
-                gate = self.alpha_schedule.get_alpha_for_blend(seed_input)
+                # Type: ignore because AlphaScheduleProtocol is a structural protocol,
+                # but all actual instances are BlendAlgorithm (nn.Module) which have this method
+                gate = self.alpha_schedule.get_alpha_for_blend(seed_input)  # type: ignore[attr-defined]
                 return blend_gate(host_features, seed_features, alpha_amplitude, gate)
             case algo:
                 raise ValueError(f"Unknown alpha_algorithm: {algo!r}")
 
-    def get_parameters(self):
+    def get_parameters(self) -> Generator[torch.nn.Parameter, None, None]:
         """Yield trainable parameters for the seed (and alpha_schedule when present)."""
         if self.seed is not None:
             yield from self.seed.parameters()
-        if self.alpha_schedule is not None:
+        if self.alpha_schedule is not None and isinstance(self.alpha_schedule, nn.Module):
             yield from self.alpha_schedule.parameters()
 
     def set_alpha(self, alpha: float) -> None:
@@ -2000,10 +2042,12 @@ class SeedSlot(nn.Module):
             for module in (self.seed, self.alpha_schedule):
                 if module is None:
                     continue
-                for param in module.parameters():
-                    if param.requires_grad:
-                        param.requires_grad_(False)
-                        self._blend_out_frozen_params.append(param)
+                # alpha_schedule may be a Protocol, check if it's actually a Module
+                if isinstance(module, nn.Module):
+                    for param in module.parameters():
+                        if param.requires_grad:
+                            param.requires_grad_(False)
+                            self._blend_out_frozen_params.append(param)
             self._blend_out_freeze_active = True
             return
 
@@ -2080,11 +2124,14 @@ class SeedSlot(nn.Module):
         # only for per-sample gating so its parameters are tracked and checkpointed.
         self.alpha_schedule = None
         if algorithm_id == "gated":
-            self.alpha_schedule = BlendCatalog.create(
+            # BlendCatalog.create returns BlendAlgorithm which satisfies AlphaScheduleProtocol
+            created_schedule = BlendCatalog.create(
                 algorithm_id, channels=self.channels, topology=topology, total_steps=total_steps
             )
-            if isinstance(self.alpha_schedule, nn.Module):
-                self.alpha_schedule = self.alpha_schedule.to(self.device)
+            if isinstance(created_schedule, nn.Module):
+                self.alpha_schedule = created_schedule.to(self.device)  # type: ignore[assignment]
+            else:
+                self.alpha_schedule = created_schedule
 
     def _on_enter_stage(self, new_stage: SeedStage, old_stage: SeedStage) -> None:
         """Handle stage entry logic uniformly for both advance_stage() and step_epoch().
@@ -2179,18 +2226,19 @@ class SeedSlot(nn.Module):
             sync_data = None
 
         # broadcast_object_list requires a list; rank 0 sends, others receive
-        object_list = [sync_data]
+        object_list: list[dict[str, Any] | None] = [sync_data]
         torch.distributed.broadcast_object_list(object_list, src=0)
         synced_data = object_list[0]
 
         # Reconstruct GateResult from broadcast data
+        assert synced_data is not None, "Broadcast should always succeed with rank 0 data"
         synced_result = GateResult(
-            gate=GateLevel(synced_data["gate"]),
-            passed=synced_data["passed"],
-            score=synced_data["score"],
-            checks_passed=synced_data["checks_passed"],
-            checks_failed=synced_data["checks_failed"],
-            message=synced_data["message"],
+            gate=GateLevel(int(synced_data["gate"])),
+            passed=bool(synced_data["passed"]),
+            score=float(synced_data["score"]),
+            checks_passed=list(synced_data["checks_passed"]),
+            checks_failed=list(synced_data["checks_failed"]),
+            message=str(synced_data["message"]),
         )
 
         # Track divergence for debugging (non-rank-0 had different local result)
@@ -2404,7 +2452,7 @@ class SeedSlot(nn.Module):
     def _emit_telemetry(
         self,
         event_type: TelemetryEventType,
-        data: dict | SeedGerminatedPayload | SeedStageChangedPayload | SeedGateEvaluatedPayload | SeedFossilizedPayload | SeedPrunedPayload | None = None,
+        data: dict[str, Any] | SeedGerminatedPayload | SeedStageChangedPayload | SeedGateEvaluatedPayload | SeedFossilizedPayload | SeedPrunedPayload | None = None,
     ) -> None:
         """Emit a telemetry event.
 
@@ -2420,43 +2468,46 @@ class SeedSlot(nn.Module):
         if self.fast_mode and not self.telemetry_lifecycle_only:
             return
 
+        # Type narrowing: determine payload type
+        payload_data: Any
         if isinstance(data, dict) or data is None:
             # Legacy dict payload - apply enrichment
-            payload = dict(data) if data else {}
+            payload_dict: dict[str, Any] = dict(data) if data else {}
             if self.state is not None:
-                payload.setdefault("alpha", self.state.alpha)
+                payload_dict.setdefault("alpha", self.state.alpha)
             if self.telemetry_inner_epoch is not None:
-                payload.setdefault("inner_epoch", self.telemetry_inner_epoch)
+                payload_dict.setdefault("inner_epoch", self.telemetry_inner_epoch)
             if self.telemetry_global_epoch is not None:
-                payload.setdefault("global_epoch", self.telemetry_global_epoch)
+                payload_dict.setdefault("global_epoch", self.telemetry_global_epoch)
             if (
                 self.state is not None
                 and self.state.telemetry is not None
                 and self.state.telemetry.epoch > 0
             ):
-                payload.setdefault("seed_gradient_norm_ratio", self.state.metrics.seed_gradient_norm_ratio)
-                payload.setdefault("gradient_health", self.state.telemetry.gradient_health)
-                payload.setdefault("has_vanishing", self.state.telemetry.has_vanishing)
-                payload.setdefault("has_exploding", self.state.telemetry.has_exploding)
+                payload_dict.setdefault("seed_gradient_norm_ratio", self.state.metrics.seed_gradient_norm_ratio)
+                payload_dict.setdefault("gradient_health", self.state.telemetry.gradient_health)
+                payload_dict.setdefault("has_vanishing", self.state.telemetry.has_vanishing)
+                payload_dict.setdefault("has_exploding", self.state.telemetry.has_exploding)
+            payload_data = payload_dict
         else:
             # Typed payload - use as-is (no enrichment)
-            payload = data
+            payload_data = data
 
         event = TelemetryEvent(
             event_type=event_type,
             seed_id=self.state.seed_id if self.state else None,
             slot_id=self.slot_id,
-            data=payload,
+            data=payload_data,
         )
         self.on_telemetry(event)
 
-    def get_extra_state(self) -> dict:
+    def get_extra_state(self) -> dict[str, Any]:
         """Persist SeedState for PyTorch 2.9+ weights_only=True compatibility.
 
         Returns only primitive types (dict, list, str, int, float, bool, None).
         The alpha_schedule nn.Module weights are saved via state_dict(), not here.
         """
-        state_dict = {
+        state_dict: dict[str, Any] = {
             "isolate_gradients": self.isolate_gradients,
             "blend_algorithm_id": self._blend_algorithm_id,
             "blend_tempo_epochs": self._blend_tempo_epochs,
@@ -2470,17 +2521,18 @@ class SeedSlot(nn.Module):
         # The nn.Module weights are saved in state_dict() automatically
         if self.alpha_schedule is not None:
             # Contract: all alpha_schedule objects must satisfy AlphaScheduleProtocol
-            state_dict["alpha_schedule_config"] = {
+            alpha_schedule_config: dict[str, Any] = {
                 "algorithm_id": self.alpha_schedule.algorithm_id,
                 "total_steps": self.alpha_schedule.total_steps,
                 "current_step": self.alpha_schedule._current_step,
             }
+            state_dict["alpha_schedule_config"] = alpha_schedule_config
         else:
             state_dict["alpha_schedule_config"] = None
 
         return state_dict
 
-    def set_extra_state(self, state: dict) -> None:
+    def set_extra_state(self, state: dict[str, Any]) -> None:
         """Restore SeedState from primitive dict."""
         self.isolate_gradients = state.get("isolate_gradients", False)
         if "blend_algorithm_id" in state:

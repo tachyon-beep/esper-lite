@@ -15,6 +15,7 @@ from __future__ import annotations
 import itertools
 import math
 from dataclasses import dataclass
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -44,7 +45,7 @@ class AttributionResult:
 # which is never called in production. Delete if parent function is removed.
 def _run_validation_pass(
     model: nn.Module,
-    testloader: DataLoader,
+    testloader: DataLoader[Any],
     criterion: nn.Module,
     device: str,
     task_type: str,
@@ -63,7 +64,7 @@ def _run_validation_pass(
     Returns:
         Tuple of (average_loss, accuracy)
     """
-    loss_tensor = torch.tensor(0.0, device=device)
+    loss_tensor = torch.tensor(0.0, device=device, dtype=torch.float32)
     correct_tensor = torch.tensor(0, dtype=torch.long, device=device)
     total = 0
 
@@ -94,7 +95,7 @@ def _run_validation_pass(
 # Either wire this into production or delete. See: risk assessment 2024-12-24.
 def train_epoch_normal(
     model: nn.Module,
-    trainloader: DataLoader,
+    trainloader: DataLoader[Any],
     criterion: nn.Module,
     optimizer: torch.optim.Optimizer,
     device: str,
@@ -126,9 +127,12 @@ def train_epoch_normal(
         optimizer.zero_grad(set_to_none=True)
         outputs = model(inputs)
         loss = compute_task_loss(outputs, labels, criterion, task_type)
-        loss.backward()
+        loss.backward()  # type: ignore[no-untyped-call]
         if max_grad_norm is not None:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+            # Filter to params with gradients (avoids iterating frozen params)
+            torch.nn.utils.clip_grad_norm_(
+                (p for p in model.parameters() if p.grad is not None), max_grad_norm
+            )
         optimizer.step()
 
 
@@ -137,7 +141,7 @@ def train_epoch_normal(
 # or delete. See: architectural risk assessment 2024-12-24.
 def train_epoch_incubator_mode(
     model: nn.Module,
-    trainloader: DataLoader,
+    trainloader: DataLoader[Any],
     criterion: nn.Module,
     host_optimizer: torch.optim.Optimizer,
     seed_optimizer: torch.optim.Optimizer,
@@ -174,7 +178,8 @@ def train_epoch_incubator_mode(
             Clips both host and seed parameters when set.
     """
     model.train()
-    seed_slot = model.seed_slots[slot]
+    # mypy doesn't understand nn.Module can have custom attributes
+    seed_slot = model.seed_slots[slot]  # type: ignore[index]
 
     # Validate max_grad_norm parameter
     if max_grad_norm is not None:
@@ -187,15 +192,18 @@ def train_epoch_incubator_mode(
         seed_optimizer.zero_grad(set_to_none=True)
         outputs = model(inputs)
         loss = compute_task_loss(outputs, labels, criterion, task_type)
-        loss.backward()
+        loss.backward()  # type: ignore[no-untyped-call]
 
         # Capture gradient telemetry for G2 gate (strided to avoid GPU stalls)
         if gradient_telemetry_stride > 0 and step % gradient_telemetry_stride == 0:
-            seed_slot.capture_gradient_telemetry()
+            seed_slot.capture_gradient_telemetry()  # type: ignore[union-attr]
 
         # Clip gradients for both host and seed parameters
         if max_grad_norm is not None:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+            # Filter to params with gradients (avoids iterating frozen params)
+            torch.nn.utils.clip_grad_norm_(
+                (p for p in model.parameters() if p.grad is not None), max_grad_norm
+            )
 
         host_optimizer.step()
         seed_optimizer.step()
@@ -206,7 +214,7 @@ def train_epoch_incubator_mode(
 # or delete. See: architectural risk assessment 2024-12-24.
 def train_epoch_blended(
     model: nn.Module,
-    trainloader: DataLoader,
+    trainloader: DataLoader[Any],
     criterion: nn.Module,
     host_optimizer: torch.optim.Optimizer,
     seed_optimizer: torch.optim.Optimizer | None,
@@ -243,9 +251,12 @@ def train_epoch_blended(
             seed_optimizer.zero_grad(set_to_none=True)
         outputs = model(inputs)
         loss = compute_task_loss(outputs, labels, criterion, task_type)
-        loss.backward()
+        loss.backward()  # type: ignore[no-untyped-call]
         if max_grad_norm is not None:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+            # Filter to params with gradients (avoids iterating frozen params)
+            torch.nn.utils.clip_grad_norm_(
+                (p for p in model.parameters() if p.grad is not None), max_grad_norm
+            )
         host_optimizer.step()
         if seed_optimizer:
             seed_optimizer.step()
@@ -256,8 +267,8 @@ def train_epoch_blended(
 # Either wire this into production or delete. See: risk assessment 2024-12-24.
 def validate_and_get_metrics(
     model: nn.Module,
-    trainloader: DataLoader,
-    testloader: DataLoader,
+    trainloader: DataLoader[Any],
+    testloader: DataLoader[Any],
     criterion: nn.Module,
     device: str,
     compute_per_class: bool = False,
@@ -284,7 +295,7 @@ def validate_and_get_metrics(
     model.eval()
 
     # Validation - accumulate on GPU to avoid CPU-GPU sync per batch
-    val_loss_tensor = torch.tensor(0.0, device=device)
+    val_loss_tensor = torch.tensor(0.0, device=device, dtype=torch.float32)
     val_correct_tensor = torch.tensor(0, dtype=torch.long, device=device)
     val_total = 0
 
@@ -334,7 +345,7 @@ def validate_and_get_metrics(
         }
 
     # Training metrics (quick sample) - use islice to avoid graph-breaking if-break
-    train_loss_tensor = torch.tensor(0.0, device=device)
+    train_loss_tensor = torch.tensor(0.0, device=device, dtype=torch.float32)
     train_correct_tensor = torch.tensor(0, dtype=torch.long, device=device)
     train_total = 0
     train_batches = 0
@@ -372,7 +383,7 @@ def validate_and_get_metrics(
 # Either wire this into production or delete. See: risk assessment 2024-12-24.
 def validate_with_attribution(
     model: nn.Module,
-    testloader: DataLoader,
+    testloader: DataLoader[Any],
     criterion: nn.Module,
     device: str,
     slot: str,
@@ -414,8 +425,9 @@ def validate_with_attribution(
 
         # Pass 2: Baseline validation with alpha=0 (host-only)
         # Use force_alpha context manager to temporarily override alpha
-        seed_slot = model.seed_slots[slot]
-        with seed_slot.force_alpha(0.0):
+        # mypy doesn't understand nn.Module can have custom attributes
+        seed_slot = model.seed_slots[slot]  # type: ignore[index]
+        with seed_slot.force_alpha(0.0):  # type: ignore[union-attr]
             baseline_loss, baseline_accuracy = _run_validation_pass(
                 model, testloader, criterion, device, task_type
             )

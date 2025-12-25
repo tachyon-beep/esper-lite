@@ -13,7 +13,7 @@ Heuristic germinations always target full amplitude (no partial holds).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol, TYPE_CHECKING
+from typing import Any, Protocol, TYPE_CHECKING
 
 from esper.leyline import (
     SeedStage,
@@ -94,10 +94,10 @@ class HeuristicTamiyo:
     - Wait otherwise
     """
 
-    def __init__(self, config: HeuristicPolicyConfig | None = None, topology: str = "cnn"):
+    def __init__(self, config: HeuristicPolicyConfig | None = None, topology: str = "cnn") -> None:
         self.config = config or HeuristicPolicyConfig()
         self.topology = topology
-        self._action_enum = build_action_enum(topology)
+        self._action_enum: Any = build_action_enum(topology)  # Dynamic IntEnum
 
         # P1-B fix: Validate blueprint_rotation against available actions at init
         # Prevents AttributeError crash during training when getattr fails

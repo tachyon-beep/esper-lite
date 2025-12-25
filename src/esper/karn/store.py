@@ -438,7 +438,7 @@ class TelemetryStore:
         import json
         from dataclasses import asdict, is_dataclass
 
-        def serialize(obj):
+        def serialize(obj: Any) -> Any:
             """Serialize dataclass or primitive to JSON-safe dict."""
             if is_dataclass(obj) and not isinstance(obj, type):
                 return asdict(obj)
@@ -446,7 +446,7 @@ class TelemetryStore:
                 return list(obj)
             return obj
 
-        def json_default(obj):
+        def json_default(obj: Any) -> str:
             """Handle non-serializable types for json.dumps."""
             if isinstance(obj, datetime):
                 return obj.isoformat()
@@ -455,7 +455,7 @@ class TelemetryStore:
             # hasattr AUTHORIZED by John on 2025-12-14 15:00:00 UTC
             # Justification: Serialization - handle Enum values in JSON export
             if hasattr(obj, "name") and hasattr(obj, "value"):
-                return obj.name  # Serialize enum as name string
+                return str(obj.name)  # Serialize enum as name string
             raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
         path = Path(path)
@@ -502,6 +502,7 @@ class TelemetryStore:
         def _coerce_tuple_pairs(value: Any, *, field: str) -> tuple[tuple[str, Any], ...]:
             if value is None:
                 return ()
+            seq: tuple[Any, ...] | list[Any]
             if isinstance(value, tuple):
                 seq = value
             elif isinstance(value, list):
@@ -510,17 +511,18 @@ class TelemetryStore:
                 _logger.warning("Invalid %s=%r (expected list/tuple of pairs); using empty tuple", field, value)
                 return ()
 
-            result: list[tuple[str, Any]] = []
+            result_list: list[tuple[str, Any]] = []
             for item in seq:
                 if isinstance(item, (list, tuple)) and len(item) == 2:
-                    result.append((str(item[0]), item[1]))
+                    result_list.append((str(item[0]), item[1]))
                 else:
                     _logger.warning("Invalid %s item=%r (expected pair); skipping", field, item)
-            return tuple(result)
+            return tuple(result_list)
 
         def _coerce_slot_config(value: Any) -> tuple[tuple[str, int], ...]:
             if value is None:
                 return ()
+            seq: tuple[Any, ...] | list[Any]
             if isinstance(value, tuple):
                 seq = value
             elif isinstance(value, list):
@@ -528,15 +530,15 @@ class TelemetryStore:
             else:
                 _logger.warning("Invalid slot_config=%r (expected list/tuple of pairs); using empty tuple", value)
                 return ()
-            result: list[tuple[str, int]] = []
+            result_list: list[tuple[str, int]] = []
             for item in seq:
                 if not (isinstance(item, (list, tuple)) and len(item) == 2):
                     _logger.warning("Invalid slot_config item=%r (expected pair); skipping", item)
                     continue
                 slot_id = str(item[0])
                 width = coerce_int(item[1], field="slot_config.width", default=0, minimum=0)
-                result.append((slot_id, width))
-            return tuple(result)
+                result_list.append((slot_id, width))
+            return tuple(result_list)
 
         def _parse_episode_context(raw: dict[str, Any]) -> EpisodeContext:
             data = filter_dataclass_kwargs(EpisodeContext, raw, context="EpisodeContext")
@@ -875,11 +877,25 @@ class TelemetryStore:
                         store.current_epoch.host.val_loss = data.get("val_loss", 0.0)
                         store.current_epoch.host.val_accuracy = data.get("val_accuracy", 0.0)
                 elif event_type == "REWARD_COMPUTED":
+                    # Legacy event type (kept for backwards compat with old JSONL files)
                     if store.current_epoch and not store.current_epoch.policy:
                         store.current_epoch.policy = PolicySnapshot()
                     if store.current_epoch and store.current_epoch.policy:
                         store.current_epoch.policy.reward_total = data.get("total_reward", 0.0)
                         store.current_epoch.policy.action_op = data.get("action_name", "")
+                elif event_type == "ANALYTICS_SNAPSHOT":
+                    # New event type: handle kind="last_action" for policy data
+                    kind = data.get("kind")
+                    if kind == "last_action" and store.current_epoch:
+                        if not store.current_epoch.policy:
+                            store.current_epoch.policy = PolicySnapshot()
+                        policy = store.current_epoch.policy
+                        if "total_reward" in data:
+                            policy.reward_total = data.get("total_reward", 0.0)
+                        if "action_name" in data:
+                            policy.action_op = data.get("action_name", "")
+                        if "value_estimate" in data:
+                            policy.value_estimate = data.get("value_estimate", 0.0)
 
         # Commit final epoch
         if store.current_epoch:

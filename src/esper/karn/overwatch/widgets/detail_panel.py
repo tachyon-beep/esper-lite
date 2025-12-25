@@ -9,7 +9,7 @@ Toggle with 'c' for context, 't' for tamiyo.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from textual.app import ComposeResult
 from textual.containers import Container
@@ -60,7 +60,7 @@ class DetailPanel(Container):
 
     mode: reactive[PanelMode] = reactive("context")
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         """Initialize the detail panel."""
         super().__init__(**kwargs)
         self._env: EnvSummary | None = None

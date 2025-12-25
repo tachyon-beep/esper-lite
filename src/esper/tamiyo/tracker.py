@@ -77,7 +77,7 @@ class SignalTracker:
     _prev_accuracy: float = 0.0
     _prev_loss: float = float('inf')
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Initialize deques with proper maxlen from history_window."""
         # Recreate deques with the correct maxlen from history_window parameter
         self._loss_history = deque(self._loss_history, maxlen=self.history_window)
@@ -143,6 +143,11 @@ class SignalTracker:
                         hub.emit(TelemetryEvent(
                             event_type=TelemetryEventType.TAMIYO_INITIATED,
                             epoch=epoch,
+                            message=(
+                                f"Host stabilized - germination now allowed "
+                                f"(env_id={self.env_id}, stable_count={self._stable_count}, "
+                                f"stabilization_epochs={self.stabilization_epochs}, val_loss={val_loss:.4f})"
+                            ),
                             data={
                                 "env_id": self.env_id,
                                 "epoch": epoch,
@@ -150,7 +155,6 @@ class SignalTracker:
                                 "stabilization_epochs": self.stabilization_epochs,
                                 "val_loss": val_loss,
                             },
-                            message="Host stabilized - germination now allowed",
                         ))
                 else:
                     self._stable_count = 0

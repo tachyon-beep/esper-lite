@@ -33,7 +33,7 @@ class TaskSpec:
     topology: str
     task_type: str  # "classification" | "lm"
     model_factory: Callable[[str], MorphogeneticModel]
-    dataloader_factory: Callable[..., tuple]
+    dataloader_factory: Callable[..., tuple[Any, Any]]
     dataloader_defaults: dict[str, Any] = field(default_factory=dict)
     task_config: TaskConfig = field(default_factory=TaskConfig.for_cifar10)
     loss_reward_config: LossRewardConfig = field(default_factory=LossRewardConfig.default)
@@ -66,14 +66,15 @@ class TaskSpec:
         """
         if not slots:
             raise ValueError("slots parameter is required and cannot be empty")
-        return self.model_factory(device, slots=slots, permissive_gates=permissive_gates)
+        return self.model_factory(device, slots=slots, permissive_gates=permissive_gates)  # type: ignore[call-arg]
 
-    def create_dataloaders(self, **overrides):
+    def create_dataloaders(self, **overrides: Any) -> tuple[Any, Any]:
         """Instantiate dataloaders with defaults merged with overrides."""
         params = {**self.dataloader_defaults, **overrides}
-        return self.dataloader_factory(**params)
+        result: tuple[Any, Any] = self.dataloader_factory(**params)
+        return result
 
-    def get_datasets(self) -> tuple[Dataset, Dataset]:
+    def get_datasets(self) -> tuple[Dataset[Any], Dataset[Any]]:
         """Get raw train/test datasets (for SharedBatchIterator).
 
         Returns:

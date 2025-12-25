@@ -9,7 +9,7 @@ Row 2: Actions: G:10% A:20% P:5% W:65% | Recent: GAWPW
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from textual.app import ComposeResult
 from textual.containers import Container
@@ -71,7 +71,7 @@ class TamiyoStrip(Container):
     }
     """
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         """Initialize the Tamiyo strip."""
         super().__init__(**kwargs)
         self._snapshot: TuiSnapshot | None = None

@@ -10,7 +10,7 @@ Reference: Overwatch's run_header.py adapted for Sanctum schema.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from rich.panel import Panel
 from rich.table import Table
@@ -49,7 +49,7 @@ class RunHeader(Static):
     Provides at-a-glance training context that was in the old Rich TUI header.
     """
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         """Initialize RunHeader widget."""
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
@@ -206,8 +206,9 @@ class RunHeader(Static):
         alarms = []
         for device in vitals.memory_alarm_devices:
             if device == "RAM":
-                pct = int((vitals.ram_used_gb / vitals.ram_total_gb) * 100)
-                alarms.append(f"RAM {pct}%")
+                if vitals.ram_used_gb is not None and vitals.ram_total_gb is not None and vitals.ram_total_gb > 0:
+                    pct = int((vitals.ram_used_gb / vitals.ram_total_gb) * 100)
+                    alarms.append(f"RAM {pct}%")
             elif device.startswith("cuda:"):
                 device_id = int(device.split(":")[1])
                 stats = vitals.gpu_stats.get(device_id)

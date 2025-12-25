@@ -237,7 +237,14 @@ class PPOAgent:
         self.slot_config = slot_config
 
         # Extract state_dim from policy network
-        state_dim = policy.network.state_dim
+        # Handle torch.compile wrapper (_orig_mod)
+        # getattr AUTHORIZED by Code Review 2025-12-17
+        # Justification: torch.compile wraps modules - must unwrap to access state_dim
+        base_net_untyped = getattr(policy.network, '_orig_mod', policy.network)
+        # Type assertion: we know this is the actual network module
+        from esper.tamiyo.networks import FactoredRecurrentActorCritic
+        assert isinstance(base_net_untyped, FactoredRecurrentActorCritic)
+        state_dim: int = base_net_untyped.state_dim
 
         self.num_envs = num_envs
         self.max_steps_per_env = max_steps_per_env
@@ -354,7 +361,14 @@ class PPOAgent:
             # Shared layers feed into actor, so they must also have wd=0.
             # Reference: SAC, TD3 implementations apply WD only to critic.
             # FactoredRecurrentActorCritic: slot/blueprint/style/tempo/alpha_* /op heads are actors
-            base_net = self.policy.network
+            # Handle torch.compile wrapper (_orig_mod)
+            # getattr AUTHORIZED by Code Review 2025-12-17
+            # Justification: torch.compile wraps modules - must unwrap to access head modules
+            base_net_untyped = getattr(self.policy.network, '_orig_mod', self.policy.network)
+            # Type assertion: we know this is the actual network module
+            from esper.tamiyo.networks import FactoredRecurrentActorCritic
+            assert isinstance(base_net_untyped, FactoredRecurrentActorCritic)
+            base_net = base_net_untyped
             actor_params = (
                 list(base_net.slot_head.parameters()) +
                 list(base_net.blueprint_head.parameters()) +
@@ -488,7 +502,10 @@ class PPOAgent:
         data = self.buffer.get_batched_sequences(device=self.device)
         valid_mask = data["valid_mask"]
 
-        # Compute explained variance before updates
+        # Compute explained variance BEFORE updates (intentional - standard practice)
+        # This measures how well the value function from rollout collection predicts returns.
+        # Post-update EV would measure the updated value function against stale returns,
+        # which is less meaningful. High pre-update EV (>0.8) indicates good value estimates.
         valid_values = data["values"][valid_mask]
         valid_returns = data["returns"][valid_mask]
         var_returns = valid_returns.var()
@@ -499,16 +516,21 @@ class PPOAgent:
         else:
             explained_variance = 0.0
 
-        metrics = defaultdict(list)
+        metrics: dict[str, Any] = defaultdict(list)
         metrics["explained_variance"] = [explained_variance]
         early_stopped = False
 
         # Compute advantage stats for status banner diagnostics
         # These indicate if advantage normalization is working correctly
+        # PERF: Batch mean/std into single GPU→CPU transfer
         valid_advantages_for_stats = data["advantages"][valid_mask]
         if valid_advantages_for_stats.numel() > 0:
-            metrics["advantage_mean"] = [valid_advantages_for_stats.mean().item()]
-            metrics["advantage_std"] = [valid_advantages_for_stats.std().item()]
+            adv_stats = torch.stack([
+                valid_advantages_for_stats.mean(),
+                valid_advantages_for_stats.std(),
+            ]).cpu().tolist()
+            metrics["advantage_mean"] = [adv_stats[0]]
+            metrics["advantage_std"] = [adv_stats[1]]
         else:
             metrics["advantage_mean"] = [0.0]
             metrics["advantage_std"] = [0.0]
@@ -562,8 +584,11 @@ class PPOAgent:
                 entropy[key] = entropy[key][valid_mask]
 
             # Track per-head entropy (P3-1)
-            for key in HEAD_NAMES:
-                head_entropy_history[key].append(entropy[key].mean().item())
+            # PERF: Batch all 8 head entropies into single GPU→CPU transfer
+            head_entropy_tensors = [entropy[key].mean() for key in HEAD_NAMES]
+            head_entropy_values = torch.stack(head_entropy_tensors).cpu().tolist()
+            for key, val in zip(HEAD_NAMES, head_entropy_values):
+                head_entropy_history[key].append(val)
 
             valid_advantages = data["advantages"][valid_mask]
             valid_returns = data["returns"][valid_mask]
@@ -576,13 +601,25 @@ class PPOAgent:
 
             # Compute causal masks for masked mean computation
             # (avoid bias from averaging zeros with real values)
+            #
+            # Causal structure (see advantages.py for full documentation):
+            #   WAIT:           only op head
+            #   GERMINATE:      slot, blueprint, style, tempo, alpha_target
+            #   SET_ALPHA:      slot, style, alpha_target, alpha_speed, alpha_curve
+            #   PRUNE:          slot, alpha_speed, alpha_curve
+            #   FOSSILIZE:      slot only (implicit via ~is_wait)
+            #   ADVANCE:        slot only (implicit via ~is_wait)
+            #
+            # Note: ADVANCE and FOSSILIZE are handled implicitly by ~is_wait for slot
+            # and by NOT appearing in any other mask's OR conditions. This is intentional
+            # and more maintainable than explicit enumeration.
             is_wait = valid_op_actions == LifecycleOp.WAIT
             is_germinate = valid_op_actions == LifecycleOp.GERMINATE
             is_set_alpha = valid_op_actions == LifecycleOp.SET_ALPHA_TARGET
             is_prune = valid_op_actions == LifecycleOp.PRUNE
             head_masks = {
                 "op": torch.ones_like(is_wait),  # op always relevant
-                "slot": ~is_wait,  # slot relevant except WAIT
+                "slot": ~is_wait,  # All non-WAIT ops (incl. ADVANCE, FOSSILIZE)
                 "blueprint": is_germinate,  # only for GERMINATE
                 "style": is_germinate | is_set_alpha,  # GERMINATE + SET_ALPHA_TARGET
                 "tempo": is_germinate,  # only for GERMINATE
@@ -605,7 +642,12 @@ class PPOAgent:
 
             per_head_ratios = {}
             for key in HEAD_NAMES:
-                per_head_ratios[key] = torch.exp(log_probs[key] - old_log_probs[key])
+                # Clamp log-ratio to prevent inf/NaN from exp() when probabilities diverge
+                # significantly. log(exp(20)) ≈ 4.85e8 is already extreme; log(exp(88)) overflows.
+                # This provides early protection before ratio explosion detection (lines 809-821).
+                log_ratio = log_probs[key] - old_log_probs[key]
+                log_ratio_clamped = torch.clamp(log_ratio, min=-20.0, max=20.0)
+                per_head_ratios[key] = torch.exp(log_ratio_clamped)
 
             # Compute KL divergence EARLY (before optimizer step) for effective early stopping
             # BUG-003 FIX: With recurrent_n_epochs=1, the old check at loop end was useless
@@ -618,10 +660,14 @@ class PPOAgent:
             # Sparse heads (blueprint, style) are only active during GERMINATE (~5-15%).
             # Without weighting, they contribute full KL to the sum despite being rarely
             # causally relevant, inflating joint KL and triggering premature early stopping.
-            # Weight = (n_valid for head) / (total timesteps) to scale by relevance.
+            #
+            # PyTorch Expert Review 2025-12-26: Normalize weights to sum to 1.0 for proper
+            # weighted average. Without normalization, joint KL was biased toward high-activity
+            # heads since overlapping masks (slot ~90%, blueprint ~10%) don't sum to 1.0.
             with torch.inference_mode():
                 total_timesteps = valid_mask.sum().float().clamp(min=1)
                 weighted_kl_sum = torch.tensor(0.0, device=self.device)
+                total_weight = torch.tensor(0.0, device=self.device)
                 for key in HEAD_NAMES:
                     mask = head_masks[key]
                     log_ratio = log_probs[key] - old_log_probs[key]
@@ -632,13 +678,16 @@ class PPOAgent:
                     # Weight by fraction of timesteps where head is causally relevant
                     causal_weight = n_valid / total_timesteps
                     weighted_kl_sum = weighted_kl_sum + causal_weight * head_kl
-                approx_kl = weighted_kl_sum.item()
+                    total_weight = total_weight + causal_weight
+                # Normalize to proper weighted average (weights sum to 1)
+                approx_kl = (weighted_kl_sum / total_weight.clamp(min=1e-8)).item()
                 metrics["approx_kl"].append(approx_kl)
 
                 # Clip fraction: how often clipping was active
                 joint_ratio = per_head_ratios["op"]
-                clip_fraction = ((joint_ratio - 1.0).abs() > self.clip_ratio).float().mean().item()
-                metrics["clip_fraction"].append(clip_fraction)
+                clip_fraction_t = ((joint_ratio - 1.0).abs() > self.clip_ratio).float().mean()
+                # Defer .item() - will be synced with approx_kl check anyway
+                metrics["clip_fraction"].append(clip_fraction_t.cpu().item())
 
                 # Early stopping: if KL exceeds threshold, skip this update entirely
                 # 1.5x multiplier is standard (OpenAI baselines, Stable-Baselines3)
@@ -705,43 +754,66 @@ class PPOAgent:
             loss = policy_loss + self.value_coef * value_loss + entropy_coef * entropy_loss
 
             self.optimizer.zero_grad(set_to_none=True)
-            loss.backward()
+            loss.backward()  # type: ignore[no-untyped-call]
 
             # Collect per-head gradient norms BEFORE clipping (P4-6)
             # Measures raw gradients to diagnose head dominance
+            # PERF: Batch all norm computations, then single .tolist() at end
             with torch.inference_mode():
-                base_net = self.policy.network
-                for head_name, head_module in [
-                    ("slot", base_net.slot_head),
-                    ("blueprint", base_net.blueprint_head),
-                    ("style", base_net.style_head),
-                    ("tempo", base_net.tempo_head),
-                    ("alpha_target", base_net.alpha_target_head),
-                    ("alpha_speed", base_net.alpha_speed_head),
-                    ("alpha_curve", base_net.alpha_curve_head),
-                    ("op", base_net.op_head),
-                    ("value", base_net.value_head),
-                ]:
+                # Handle torch.compile wrapper (_orig_mod)
+                # getattr AUTHORIZED by Code Review 2025-12-17
+                # Justification: torch.compile wraps modules - must unwrap to access head modules
+                base_net_untyped = getattr(self.policy.network, '_orig_mod', self.policy.network)
+                # Type assertion: we know this is the actual network module
+                from esper.tamiyo.networks import FactoredRecurrentActorCritic
+                assert isinstance(base_net_untyped, FactoredRecurrentActorCritic)
+                base_net = base_net_untyped
+
+                head_names = ["slot", "blueprint", "style", "tempo", "alpha_target",
+                              "alpha_speed", "alpha_curve", "op", "value"]
+                head_modules = [
+                    base_net.slot_head, base_net.blueprint_head, base_net.style_head,
+                    base_net.tempo_head, base_net.alpha_target_head, base_net.alpha_speed_head,
+                    base_net.alpha_curve_head, base_net.op_head, base_net.value_head,
+                ]
+
+                # Collect all head norms as tensors (no .item() yet)
+                head_norm_tensors: list[torch.Tensor] = []
+                for head_module in head_modules:
                     params_with_grad = [p for p in head_module.parameters() if p.grad is not None]
                     if params_with_grad:
-                        grad_norm = torch.linalg.vector_norm(
+                        norm_t = torch.linalg.vector_norm(
                             torch.stack([torch.linalg.vector_norm(p.grad) for p in params_with_grad])
-                        ).item()
+                        )
                     else:
-                        grad_norm = 0.0
+                        norm_t = torch.tensor(0.0, device=self.device)
+                    head_norm_tensors.append(norm_t)
+
+                # Single GPU→CPU sync: stack all norms, then .tolist()
+                all_norms = torch.stack(head_norm_tensors).cpu().tolist()
+                for head_name, grad_norm in zip(head_names, all_norms):
                     head_grad_norm_history[head_name].append(grad_norm)
 
             nn.utils.clip_grad_norm_(self.policy.network.parameters(), self.max_grad_norm)
             self.optimizer.step()
 
             # Track metrics
+            # PERF: Batch all 6 logging metrics into single GPU→CPU transfer
             joint_ratio = per_head_ratios["op"]  # Use op ratio as representative
-            metrics["policy_loss"].append(policy_loss.item())
-            metrics["value_loss"].append(value_loss.item())
-            metrics["entropy"].append(-entropy_loss.item())
-            metrics["ratio_mean"].append(joint_ratio.mean().item())
-            metrics["ratio_max"].append(joint_ratio.max().item())
-            metrics["ratio_min"].append(joint_ratio.min().item())
+            logging_tensors = torch.stack([
+                policy_loss,
+                value_loss,
+                -entropy_loss,  # negate here to match original semantics
+                joint_ratio.mean(),
+                joint_ratio.max(),
+                joint_ratio.min(),
+            ]).cpu().tolist()
+            metrics["policy_loss"].append(logging_tensors[0])
+            metrics["value_loss"].append(logging_tensors[1])
+            metrics["entropy"].append(logging_tensors[2])
+            metrics["ratio_mean"].append(logging_tensors[3])
+            metrics["ratio_max"].append(logging_tensors[4])
+            metrics["ratio_min"].append(logging_tensors[5])
             if (
                 joint_ratio.max() > self.ratio_explosion_threshold
                 or joint_ratio.min() < self.ratio_collapse_threshold
@@ -762,25 +834,28 @@ class PPOAgent:
             self.buffer.reset()
 
         # Aggregate into typed result dict
-        result: PPOUpdateMetrics = {}
+        # TypedDict doesn't support dynamic key assignment, so we use type: ignore
+        # The aggregation converts list[float] to float for most metrics
+        aggregated_result: PPOUpdateMetrics = {}
         for k, v in metrics.items():
             if not v:
-                result[k] = 0.0  # type: ignore[literal-required]
+                aggregated_result[k] = 0.0  # type: ignore[literal-required]
                 continue
 
             first = v[0]
             if isinstance(first, dict):
                 # Diagnostic payloads (ratio_diagnostic) are not aggregated
-                result[k] = first  # type: ignore[literal-required]
+                aggregated_result[k] = first  # type: ignore[literal-required]
             else:
-                result[k] = sum(v) / len(v)  # type: ignore[literal-required]
+                # Average across epochs (converts list[float] to float)
+                aggregated_result[k] = sum(v) / len(v)  # type: ignore[literal-required]
 
         # Add per-head entropy tracking (P3-1)
-        result["head_entropies"] = head_entropy_history
+        aggregated_result["head_entropies"] = head_entropy_history
         # Add per-head gradient norm tracking (P4-6)
-        result["head_grad_norms"] = head_grad_norm_history
+        aggregated_result["head_grad_norms"] = head_grad_norm_history
 
-        return result
+        return aggregated_result
 
     def save(self, path: str | Path, metadata: dict[str, Any] | None = None) -> None:
         """Save agent to file."""
@@ -788,7 +863,14 @@ class PPOAgent:
         path.parent.mkdir(parents=True, exist_ok=True)
 
         # Get network state dict from policy
-        base_net = self.policy.network
+        # Handle torch.compile wrapper (_orig_mod)
+        # getattr AUTHORIZED by Code Review 2025-12-17
+        # Justification: torch.compile wraps modules - must unwrap to access state_dim
+        base_net_untyped = getattr(self.policy.network, '_orig_mod', self.policy.network)
+        # Type assertion: we know this is the actual network module
+        from esper.tamiyo.networks import FactoredRecurrentActorCritic
+        assert isinstance(base_net_untyped, FactoredRecurrentActorCritic)
+        base_net = base_net_untyped
         save_dict = {
             # Version for forward compatibility
             'checkpoint_version': CHECKPOINT_VERSION,

@@ -103,7 +103,7 @@ def create_norm_seed(channels: int) -> nn.Module:
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             # Bound scale to [-1, 1] via tanh to prevent gradient explosion
-            return x + torch.tanh(self.scale) * (self.norm(x) - x)
+            return x + torch.tanh(self.scale) * (self.norm(x) - x)  # type: ignore[no-any-return]
 
     return NormSeed(channels)
 
@@ -148,8 +148,8 @@ def create_attention_seed(channels: int, reduction: int = 4) -> nn.Module:
             # Bias 3.0 gives sigmoid(3.0) ≈ 0.95 (near-identity scaling)
             # TODO: [EXPERIMENT] - Evaluate higher bias (e.g., 6.0 -> ~0.997) for
             # closer-to-identity scaling at birth, and measure stability/learning impact.
-            nn.init.zeros_(self.fc[2].weight)
-            nn.init.constant_(self.fc[2].bias, 3.0)
+            nn.init.zeros_(self.fc[2].weight)  # type: ignore[arg-type]
+            nn.init.constant_(self.fc[2].bias, 3.0)  # type: ignore[arg-type]
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             # Squeeze: global average pooling to channel descriptor
@@ -158,7 +158,7 @@ def create_attention_seed(channels: int, reduction: int = 4) -> nn.Module:
             # Excitation: channel-wise attention weights via FC bottleneck
             y = self.fc(y).reshape(b, c, 1, 1)
             # Scale: multiplicative recalibration (canonical SE formulation)
-            return x * y.expand_as(x)
+            return x * y.expand_as(x)  # type: ignore[no-any-return]
 
     return AttentionSeed(channels, reduction)
 
@@ -269,7 +269,7 @@ def create_conv_light_seed(channels: int) -> nn.Module:
             self.enhance = SeedConvBlock(channels, channels)
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
-            return x + self.enhance(x)
+            return x + self.enhance(x)  # type: ignore[no-any-return]
 
     return ConvLightSeed(channels)
 
@@ -287,7 +287,7 @@ def create_conv_heavy_seed(channels: int) -> nn.Module:
             )
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
-            return x + self.enhance(x)
+            return x + self.enhance(x)  # type: ignore[no-any-return]
 
     return ConvHeavySeed(channels)
 

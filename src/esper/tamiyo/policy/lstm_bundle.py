@@ -14,7 +14,7 @@ from esper.tamiyo.policy.protocol import PolicyBundle
 from esper.tamiyo.policy.registry import register_policy
 from esper.tamiyo.policy.types import ActionResult, EvalResult, ForwardResult
 from esper.leyline.slot_config import SlotConfig
-from esper.leyline import DEFAULT_LSTM_HIDDEN_DIM, HEAD_NAMES
+from esper.leyline import DEFAULT_LSTM_HIDDEN_DIM
 
 
 @register_policy("lstm")
@@ -89,6 +89,7 @@ class LSTMPolicyBundle:
         the dict-based mask format to individual mask parameters.
         """
         # Convert dict masks to individual parameters
+        # Request op_logits for telemetry (decision snapshots need action probabilities)
         result = self._network.get_action(
             features,
             hidden,
@@ -101,6 +102,7 @@ class LSTMPolicyBundle:
             alpha_speed_mask=masks.get("alpha_speed"),
             alpha_curve_mask=masks.get("alpha_curve"),
             deterministic=deterministic,
+            return_op_logits=True,
         )
 
         # Network returns GetActionResult dataclass
@@ -109,6 +111,7 @@ class LSTMPolicyBundle:
             log_prob=result.log_probs,
             value=result.values,
             hidden=result.hidden,
+            op_logits=result.op_logits,
         )
 
     def forward(
@@ -159,8 +162,20 @@ class LSTMPolicyBundle:
             alpha_curve_mask=expand_mask(masks.get("alpha_curve")),
         )
 
+        # Build logits dict with explicit key access to satisfy mypy TypedDict constraints
+        logits_dict = {
+            "slot": output["slot_logits"],
+            "blueprint": output["blueprint_logits"],
+            "style": output["style_logits"],
+            "tempo": output["tempo_logits"],
+            "alpha_target": output["alpha_target_logits"],
+            "alpha_speed": output["alpha_speed_logits"],
+            "alpha_curve": output["alpha_curve_logits"],
+            "op": output["op_logits"],
+        }
+
         return ForwardResult(
-            logits={head: output[f"{head}_logits"] for head in HEAD_NAMES},
+            logits=logits_dict,
             value=output["value"],
             hidden=output["hidden"],
         )
@@ -245,11 +260,17 @@ class LSTMPolicyBundle:
 
     @torch.inference_mode()
     def initial_hidden(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor]:
-        """Get initial LSTM hidden state.
+        """Get initial LSTM hidden state for rollout collection.
 
-        Returns non-differentiable tensors suitable for rollout collection.
-        For PPO training, pass hidden=None to evaluate_actions() instead -
-        the network creates gradient-compatible hidden states internally.
+        WARNING: Returns inference-mode tensors that are NOT differentiable.
+        These are suitable ONLY for rollout collection (action sampling).
+
+        For PPO training (evaluate_actions), pass hidden=None instead.
+        The network will create fresh gradient-compatible hidden states
+        internally, ensuring proper backpropagation through the LSTM.
+
+        Passing these tensors to evaluate_actions() will NOT cause errors,
+        but gradients will not flow through the initial hidden state.
         """
         return self._network.get_initial_hidden(batch_size, self.device)
 
@@ -330,7 +351,11 @@ class LSTMPolicyBundle:
         """
         if mode == "off" or self.is_compiled:
             return
-        self._network = torch.compile(self._network, mode=mode, dynamic=dynamic)
+        # torch.compile returns a compiled version but mypy sees it as generic callable
+        # Type is actually the same as input (FactoredRecurrentActorCritic)
+        compiled_net = torch.compile(self._network, mode=mode, dynamic=dynamic)
+        # Safe to reassign since torch.compile preserves the module interface
+        self._network = compiled_net  # type: ignore[assignment]
 
     @property
     def is_compiled(self) -> bool:

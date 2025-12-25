@@ -124,7 +124,7 @@ class TrainingConfig:
     # hard-coded thresholds for gradient ratios, contribution levels, and stability metrics.
     permissive_gates: bool = True
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Validate and set defaults.
 
         Note: String-to-enum coercion for reward_family/reward_mode is handled

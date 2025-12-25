@@ -381,6 +381,35 @@ class TestSanctumAggregator:
         assert env.reward_history[0] == 0.5
         assert env.action_counts["GERMINATE"] == 1  # Normalized
 
+    def test_last_action_populates_base_acc_delta(self):
+        """ANALYTICS_SNAPSHOT(last_action) with base_acc_delta should populate reward_components."""
+        agg = SanctumAggregator(num_envs=4)
+
+        event = MagicMock()
+        event.event_type = MagicMock()
+        event.event_type.name = "ANALYTICS_SNAPSHOT"
+        event.timestamp = datetime.now(timezone.utc)
+        event.epoch = 10
+        event.data = AnalyticsSnapshotPayload(
+            kind="last_action",
+            env_id=1,
+            total_reward=0.75,
+            action_name="WAIT",
+            value_estimate=0.5,
+            action_confidence=0.9,
+            base_acc_delta=0.12,  # This should populate reward_components
+        )
+
+        agg.process_event(event)
+        snapshot = agg.get_snapshot()
+
+        env = snapshot.envs[1]
+        # Verify base_acc_delta was populated
+        assert env.reward_components.base_acc_delta == 0.12
+        assert env.reward_components.total == 0.75
+        assert env.reward_components.last_action == "WAIT"
+        assert env.reward_components.env_id == 1
+
     def test_seed_germinated_adds_seed(self):
         """SEED_GERMINATED should add seed to env."""
         agg = SanctumAggregator(num_envs=4)

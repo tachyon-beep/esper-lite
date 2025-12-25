@@ -22,6 +22,7 @@ if not torch.cuda.is_available():
     print("CUDA not available - benchmark requires GPU")
     sys.exit(1)
 
+from esper.nissa import reset_hub
 from esper.simic.training.vectorized import train_ppo_vectorized
 
 
@@ -34,6 +35,10 @@ def run_benchmark(
     max_epochs: int = 16,
 ) -> dict:
     """Run a single benchmark configuration."""
+    # Reset global hub to prevent backend accumulation across runs
+    # (each train_ppo_vectorized adds BlueprintAnalytics backend)
+    reset_hub()
+
     config_name = f"amp={amp}, dtype={amp_dtype}, compile={compile_mode}"
     print(f"\n{'='*60}")
     print(f"Benchmarking: {config_name}")

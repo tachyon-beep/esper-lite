@@ -6,7 +6,7 @@ Supports navigation, selection, and expansion of env rows.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -81,7 +81,7 @@ class FlightBoard(VerticalScroll):
             self.env_id = env_id
             self.expanded = expanded
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         """Initialize the flight board."""
         super().__init__(**kwargs)
         self._display_state = DisplayState()

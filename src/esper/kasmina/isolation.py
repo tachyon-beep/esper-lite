@@ -80,6 +80,9 @@ def ste_forward(host_features: torch.Tensor, seed_features: torch.Tensor) -> tor
         SeedSlot.forward enforces this by feeding the seed a contiguous_format
         detached copy while keeping host_features in its original memory format.
     """
+    # Ensure dtype consistency under autocast (seed may be different dtype)
+    if seed_features.dtype != host_features.dtype:
+        seed_features = seed_features.to(host_features.dtype)
     return host_features + (seed_features - seed_features.detach())
 
 
@@ -105,7 +108,7 @@ class GradientHealthMonitor:
     and do NOT indicate isolation failures.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.host_grad_norm: float = 0.0
         self.seed_grad_norm: float = 0.0
         self._host_params: list[nn.Parameter] = []
@@ -117,7 +120,7 @@ class GradientHealthMonitor:
         self._seed_params = [p for p in seed.parameters() if p.requires_grad]
 
     @torch.no_grad()
-    def compute_gradient_health(self) -> dict:
+    def compute_gradient_health(self) -> dict[str, float]:
         """Compute gradient health metrics (sync version).
 
         WARNING: Calls .item() which forces CPU-GPU sync. Use compute_gradient_health_async()
@@ -130,7 +133,7 @@ class GradientHealthMonitor:
         return self.materialize_gradient_stats(async_stats)
 
     @torch.no_grad()
-    def compute_gradient_health_async(self) -> dict:
+    def compute_gradient_health_async(self) -> dict[str, bool | torch.Tensor | None]:
         """Compute gradient health returning tensors (async-safe, no .item() sync).
 
         Uses torch._foreach_norm for batched norm computation - O(1) CUDA kernel
@@ -139,18 +142,33 @@ class GradientHealthMonitor:
         Call materialize_gradient_stats() AFTER stream.synchronize() to get
         final values.
 
+        PERF NOTE - Multi-GPU Mixed-Device Gradients:
+        When parameters span multiple GPUs (model parallelism), the .to(target_device)
+        calls at lines 162/174 force inter-device synchronization. This is necessary
+        for correctness (torch.stack requires same device) but negates the "async"
+        nature of this method for model-parallel setups. For typical single-GPU or
+        DDP (data parallel) training where all params are on one device, there is
+        no cross-device overhead.
+
+        If model parallelism becomes common, consider:
+        1. Computing squared norms per-device first, then reducing
+        2. Using NCCL all_reduce for distributed gradient norm computation
+        3. Returning per-device norms separately for async materialization
+
         Returns:
             Dict with tensor values; use materialize_gradient_stats() to convert.
         """
         host_grads = [p.grad for p in self._host_params if p.grad is not None]
         seed_grads = [p.grad for p in self._seed_params if p.grad is not None]
 
-        result = {'_async': True}
+        result: dict[str, bool | torch.Tensor | None] = {'_async': True}
 
         if host_grads:
-            # torch._foreach_norm returns list of norms per tensor
-            # NOTE: torch._foreach_norm is a private API but stable since PyTorch 1.9.
-            # If removed in future PyTorch, fallback: torch.stack([p.norm() for p in grads])
+            # torch._foreach_norm returns list of norms per tensor.
+            # NOTE: Private API (underscore prefix) but stable since PyTorch 1.9 and
+            # used internally by torch.nn.utils.clip_grad_norm_. If removed in a
+            # future PyTorch version, fallback to: norms = [p.norm() for p in host_grads]
+            # The _foreach variant is O(1) kernel launches vs O(n) - 10-50x faster.
             norms = torch._foreach_norm(host_grads)
 
             # FIX BUG-013: Handle mixed devices (e.g., host parts on different GPUs)
@@ -177,7 +195,7 @@ class GradientHealthMonitor:
 
         return result
 
-    def materialize_gradient_stats(self, async_stats: dict) -> dict:
+    def materialize_gradient_stats(self, async_stats: dict[str, bool | torch.Tensor | None]) -> dict[str, float]:
         """Convert async gradient stats to final values.
 
         Call this AFTER stream.synchronize() to safely extract .item() values.

@@ -71,7 +71,7 @@ class GradientHealthMetrics:
             and not self.has_exploding
         )
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, float | int | bool]:
         """Convert to dict for TelemetryEvent data field."""
         return asdict(self)
 
@@ -107,7 +107,7 @@ class SeedGradientCollector:
         self.vanishing_threshold = vanishing_threshold
         self.exploding_threshold = exploding_threshold
 
-    def collect(self, parameters: Iterator[nn.Parameter]) -> dict:
+    def collect(self, parameters: Iterator[nn.Parameter]) -> dict[str, float | bool]:
         """Collect gradient statistics from parameters (sync version).
 
         Call this after loss.backward() to gather gradient stats.
@@ -123,7 +123,7 @@ class SeedGradientCollector:
         async_stats = self.collect_async(parameters)
         return materialize_grad_stats(async_stats)
 
-    def collect_async(self, parameters: Iterator[nn.Parameter]) -> dict:
+    def collect_async(self, parameters: Iterator[nn.Parameter]) -> dict[str, bool | int | float | torch.Tensor]:
         """Collect gradient statistics as tensors (async-safe version).
 
         Returns tensors instead of floats to avoid .item() sync inside CUDA streams.
@@ -170,7 +170,7 @@ class SeedGradientCollector:
         }
 
 
-def materialize_grad_stats(async_stats: dict) -> dict:
+def materialize_grad_stats(async_stats: dict[str, bool | int | float | torch.Tensor]) -> dict[str, float | bool]:
     """Convert async gradient stats tensors to Python values.
 
     Call this AFTER stream.synchronize() to safely extract .item() values.
@@ -184,17 +184,28 @@ def materialize_grad_stats(async_stats: dict) -> dict:
     if async_stats.get('_empty', False):
         # Already materialized (empty case returns Python values directly)
         return {
-            'gradient_norm': async_stats['gradient_norm'],
-            'gradient_health': async_stats['gradient_health'],
-            'has_vanishing': async_stats['has_vanishing'],
-            'has_exploding': async_stats['has_exploding'],
+            'gradient_norm': float(async_stats['gradient_norm']),
+            'gradient_health': float(async_stats['gradient_health']),
+            'has_vanishing': bool(async_stats['has_vanishing']),
+            'has_exploding': bool(async_stats['has_exploding']),
         }
 
     # Extract tensor values - safe to call .item() after stream sync
-    n_grads = async_stats['_n_grads']
-    total_squared_norm = async_stats['_total_squared_norm'].item()
-    n_vanishing = async_stats['_n_vanishing'].item()
-    n_exploding = async_stats['_n_exploding'].item()
+    n_grads_val = async_stats['_n_grads']
+    assert isinstance(n_grads_val, int)
+    n_grads = n_grads_val
+
+    total_squared_val = async_stats['_total_squared_norm']
+    assert isinstance(total_squared_val, torch.Tensor)
+    total_squared_norm = total_squared_val.item()
+
+    n_vanishing_val = async_stats['_n_vanishing']
+    assert isinstance(n_vanishing_val, torch.Tensor)
+    n_vanishing = int(n_vanishing_val.item())
+
+    n_exploding_val = async_stats['_n_exploding']
+    assert isinstance(n_exploding_val, torch.Tensor)
+    n_exploding = int(n_exploding_val.item())
 
     # Compute derived statistics
     gradient_norm = (total_squared_norm ** 0.5) / n_grads
@@ -221,7 +232,7 @@ def collect_seed_gradients(
     vanishing_threshold: float = DEFAULT_VANISHING_THRESHOLD,
     exploding_threshold: float = DEFAULT_EXPLODING_THRESHOLD,
     return_enhanced: bool = False,
-) -> dict | GradientHealthMetrics:
+) -> dict[str, float | bool] | GradientHealthMetrics:
     """Convenience function to collect gradient stats (vectorized).
 
     Uses torch._foreach_norm for efficient batch norm computation,
@@ -280,7 +291,11 @@ def collect_seed_gradients(
     # Trade-off: allocates O(total_params) temporary tensor, but eliminates
     # data-dependent loop that caused TorchDynamo to insert graph breaks.
     # Since this is telemetry (not hot path), memory overhead is acceptable.
-    grads[0].device
+    #
+    # PERF NOTE: For models with 100M+ params, this allocation may spike VRAM.
+    # Future optimization: compute zero/nan/inf counts per-param then sum:
+    #   counts = [(g == 0).sum() for g in grads]; total_zero = sum(counts)
+    # Would trade O(1) kernel for O(n) but eliminate large temp tensor.
     all_grads_flat = torch.cat([g.view(-1) for g in grads])
     total_elements = all_grads_flat.numel()
     zero_count_t = (all_grads_flat == 0).sum()
@@ -346,7 +361,7 @@ def collect_seed_gradients_async(
     seed_parameters: Iterator[nn.Parameter],
     vanishing_threshold: float = DEFAULT_VANISHING_THRESHOLD,
     exploding_threshold: float = DEFAULT_EXPLODING_THRESHOLD,
-) -> dict:
+) -> dict[str, bool | int | float | torch.Tensor]:
     """Collect gradient stats as tensors (async-safe version).
 
     Returns tensors instead of floats to avoid .item() sync inside CUDA streams.
@@ -407,10 +422,10 @@ class DualGradientStats:
         seed_intensity = self.seed_grad_norm / (self.seed_param_count ** 0.5)
         host_intensity = self.host_grad_norm / (self.host_param_count ** 0.5)
 
-        return seed_intensity / (host_intensity + eps)
+        return float(seed_intensity / (host_intensity + eps))
 
 
-def materialize_dual_grad_stats(async_stats: dict) -> DualGradientStats:
+def materialize_dual_grad_stats(async_stats: dict[str, torch.Tensor | int]) -> DualGradientStats:
     """Convert async dual gradient stats to DualGradientStats.
 
     Call this AFTER stream.synchronize() to safely extract .item() values.
@@ -421,27 +436,37 @@ def materialize_dual_grad_stats(async_stats: dict) -> DualGradientStats:
     Returns:
         DualGradientStats with computed norms and param counts
     """
-    host_squared = async_stats['_host_squared_sum']
-    seed_squared = async_stats['_seed_squared_sum']
+    host_squared_val = async_stats['_host_squared_sum']
+    seed_squared_val = async_stats['_seed_squared_sum']
 
     # Handle tensor vs float (depends on whether collected in stream)
-    if isinstance(host_squared, torch.Tensor):
-        host_squared = host_squared.item()
-    if isinstance(seed_squared, torch.Tensor):
-        seed_squared = seed_squared.item()
+    if isinstance(host_squared_val, torch.Tensor):
+        host_squared = float(host_squared_val.item())
+    else:
+        host_squared = float(host_squared_val)
+
+    if isinstance(seed_squared_val, torch.Tensor):
+        seed_squared = float(seed_squared_val.item())
+    else:
+        seed_squared = float(seed_squared_val)
+
+    host_param_count_val = async_stats['_host_param_count']
+    seed_param_count_val = async_stats['_seed_param_count']
+    assert isinstance(host_param_count_val, int)
+    assert isinstance(seed_param_count_val, int)
 
     return DualGradientStats(
         host_grad_norm=host_squared ** 0.5,
-        host_param_count=async_stats['_host_param_count'],
+        host_param_count=host_param_count_val,
         seed_grad_norm=seed_squared ** 0.5,
-        seed_param_count=async_stats['_seed_param_count'],
+        seed_param_count=seed_param_count_val,
     )
 
 
 def collect_host_gradients_async(
     host_parameters: Iterator[nn.Parameter],
     device: torch.device | str = "cpu",
-) -> dict:
+) -> dict[str, torch.Tensor | int]:
     """Collect gradient stats for host network only (async-safe).
 
     Use this when computing host gradients once and reusing across multiple seeds.
@@ -477,7 +502,7 @@ def collect_host_gradients_async(
 def collect_seed_gradients_only_async(
     seed_parameters: Iterator[nn.Parameter],
     device: torch.device | str = "cpu",
-) -> dict:
+) -> dict[str, torch.Tensor | int]:
     """Collect gradient stats for seed network only (async-safe).
 
     Use with collect_host_gradients_async when host stats are precomputed.
@@ -514,7 +539,7 @@ def collect_dual_gradients_async(
     host_parameters: Iterator[nn.Parameter],
     seed_parameters: Iterator[nn.Parameter],
     device: torch.device | str = "cpu",
-) -> dict:
+) -> dict[str, torch.Tensor | int]:
     """Collect gradient stats for both host and seed networks (async-safe).
 
     Returns tensors instead of floats to avoid .item() sync inside CUDA streams.

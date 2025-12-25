@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 
 import torch.nn as nn
 
@@ -62,10 +62,10 @@ class BlueprintRegistry:
         topology: str,
         param_estimate: int,
         description: str = "",
-    ):
+    ) -> Callable[[Callable[[int], nn.Module]], Callable[[int], nn.Module]]:
         """Decorator to register a blueprint factory."""
 
-        def decorator(factory: Callable[[int], nn.Module]):
+        def decorator(factory: Callable[[int], nn.Module]) -> Callable[[int], nn.Module]:
             key = f"{topology}:{name}"
             cls._blueprints[key] = BlueprintSpec(
                 name=name,
@@ -100,7 +100,7 @@ class BlueprintRegistry:
         return cls._blueprints[key]
 
     @classmethod
-    def create(cls, topology: str, name: str, dim: int, **kwargs) -> nn.Module:
+    def create(cls, topology: str, name: str, dim: int, **kwargs: Any) -> nn.Module:
         """Create a module from a registered blueprint.
 
         Args:

@@ -480,11 +480,11 @@ class SystemVitals:
     gpu_temperature: float = 0.0
 
     # FIX: CPU was collected but never displayed in old TUI
-    cpu_percent: float = 0.0
+    cpu_percent: float | None = 0.0
 
     # RAM
-    ram_used_gb: float = 0.0
-    ram_total_gb: float = 0.0
+    ram_used_gb: float | None = 0.0
+    ram_total_gb: float | None = 0.0
 
     # Throughput
     epochs_per_second: float = 0.0
@@ -498,7 +498,8 @@ class SystemVitals:
     def has_memory_alarm(self) -> bool:
         """Check if any device exceeds 90% memory usage."""
         # Check RAM
-        if self.ram_total_gb > 0 and (self.ram_used_gb / self.ram_total_gb) > 0.90:
+        if (self.ram_total_gb is not None and self.ram_used_gb is not None and
+            self.ram_total_gb > 0 and (self.ram_used_gb / self.ram_total_gb) > 0.90):
             return True
         # Check GPUs
         for stats in self.gpu_stats.values():
@@ -518,7 +519,8 @@ class SystemVitals:
         """Get list of devices exceeding 90% memory usage."""
         devices = []
         # Check RAM
-        if self.ram_total_gb > 0 and (self.ram_used_gb / self.ram_total_gb) > 0.90:
+        if (self.ram_total_gb is not None and self.ram_used_gb is not None and
+            self.ram_total_gb > 0 and (self.ram_used_gb / self.ram_total_gb) > 0.90):
             devices.append("RAM")
         # Check multi-GPU stats
         for device, stats in self.gpu_stats.items():

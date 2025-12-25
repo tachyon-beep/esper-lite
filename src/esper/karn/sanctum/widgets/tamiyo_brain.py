@@ -9,7 +9,7 @@ New layout focuses on answering:
 from __future__ import annotations
 
 from collections import deque
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from rich.panel import Panel
 from rich.table import Table
@@ -44,7 +44,7 @@ def detect_action_patterns(
     Returns:
         List of pattern names: ["STUCK"], ["THRASH"], ["ALPHA_OSC"]
     """
-    patterns = []
+    patterns: list[str] = []
     if not decisions:
         return patterns
 
@@ -169,7 +169,7 @@ class TamiyoBrain(Static):
     # Decision card display throttling: ONE card swap per interval, maximum
     CARD_SWAP_INTERVAL = 30.0  # Minimum seconds between card replacements
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
         self._decision_ids: list[str] = []  # IDs of currently displayed decisions
@@ -257,7 +257,7 @@ class TamiyoBrain(Static):
             group = self._snapshot.tamiyo.group_id.lower()
             self.add_class(f"group-{group}")
 
-    def on_click(self, event) -> None:
+    def on_click(self, event: Any) -> None:
         """Handle click to toggle decision pin.
 
         In horizontal layout: decisions are in right 1/3 column
@@ -299,7 +299,7 @@ class TamiyoBrain(Static):
             decision_id = self._decision_ids[decision_index]
             self.post_message(self.DecisionPinToggled(decision_id))
 
-    def render(self):
+    def render(self) -> Text | Table:
         """Render Tamiyo content with responsive layout.
 
         Layout modes:
@@ -352,6 +352,12 @@ class TamiyoBrain(Static):
 
         Preserves original vertical stack behavior for <85 char terminals.
         """
+        if self._snapshot is None:
+            content = Table.grid(expand=True)
+            content.add_column(ratio=1)
+            content.add_row(Text("No data", style="dim"))
+            return content
+
         tamiyo = self._snapshot.tamiyo
 
         content = Table.grid(expand=True)
@@ -389,6 +395,9 @@ class TamiyoBrain(Static):
 
     def _render_learning_vitals(self) -> Panel:
         """Render Learning Vitals section with action bar and gauges."""
+        if self._snapshot is None:
+            return Panel(Text("No data", style="dim"), title="LEARNING VITALS", border_style="dim")
+
         tamiyo = self._snapshot.tamiyo
 
         content = Table.grid(expand=True)
@@ -444,6 +453,9 @@ class TamiyoBrain(Static):
 
     def _render_action_distribution_bar(self) -> Text:
         """Render horizontal stacked bar for action distribution."""
+        if self._snapshot is None:
+            return Text("[no data]", style="dim")
+
         tamiyo = self._snapshot.tamiyo
         total = tamiyo.total_actions
 
@@ -505,6 +517,9 @@ class TamiyoBrain(Static):
 
         Format: Returns: Ep47:+12.3  Ep46:+8.1  Ep45:-2.4  ...
         """
+        if self._snapshot is None:
+            return Text("Returns: (no data)", style="dim italic")
+
         tamiyo = self._snapshot.tamiyo
         history = list(tamiyo.episode_return_history)
 
@@ -543,6 +558,9 @@ class TamiyoBrain(Static):
             └──────────┴──────────┴──────────┴──────────┴──────────┴──────────┘
             Fossilized: 14  Pruned: 6  Rate: 70%  AvgAge: 8.2 epochs
         """
+        if self._snapshot is None:
+            return Text("SLOTS: (no data)", style="dim italic")
+
         snapshot = self._snapshot
         counts = snapshot.slot_stage_counts
         total = snapshot.total_slots
@@ -648,12 +666,15 @@ class TamiyoBrain(Static):
 
         Per UX review: Icons for accessibility (not just color).
         """
+        if self._snapshot is None:
+            return Text("Recent:  (no data)", style="dim italic")
+
         decisions = self._snapshot.tamiyo.recent_decisions[:24]
         if not decisions:
             return Text("Recent:  (no actions yet)", style="dim italic")
 
         # Get current slot states for pattern detection
-        slot_states = {}
+        slot_states: dict[str, str] = {}
         if decisions:
             slot_states = decisions[0].slot_states
 
@@ -986,6 +1007,9 @@ class TamiyoBrain(Static):
         Format per UX spec:
         [OK] LEARNING   EV:0.72 Clip:0.18 KL:0.008 Adv:0.12±0.94 GradHP:OK 12/12 batch:47/100
         """
+        if self._snapshot is None:
+            return Text("[?] NO DATA", style="dim")
+
         status, label, style = self._get_overall_status()
         tamiyo = self._snapshot.tamiyo
 
@@ -1233,6 +1257,12 @@ class TamiyoBrain(Static):
         """Render 2x2 gauge grid: EV, Entropy, Clip, KL with trend indicators."""
         from esper.karn.sanctum.schema import detect_trend, trend_to_indicator
 
+        if self._snapshot is None:
+            grid = Table.grid(expand=True)
+            grid.add_column(ratio=1)
+            grid.add_row(Text("No data", style="dim"))
+            return grid
+
         tamiyo = self._snapshot.tamiyo
         batch = self._snapshot.current_batch
 
@@ -1437,6 +1467,9 @@ class TamiyoBrain(Static):
         """Render secondary metrics column with sparklines and trend indicators."""
         from esper.karn.sanctum.schema import detect_trend, trend_to_indicator
 
+        if self._snapshot is None:
+            return Text("No data", style="dim")
+
         tamiyo = self._snapshot.tamiyo
         result = Text()
 
@@ -1505,18 +1538,72 @@ class TamiyoBrain(Static):
         result.append(gn_indicator, style=gn_indicator_style)
         result.append("\n")
 
-        # Layer health
+        # Layer health with per-layer detail
         result.append(" Layers      ", style="dim")
         if tamiyo.dead_layers > 0 or tamiyo.exploding_layers > 0:
             result.append(
                 f"!! {tamiyo.dead_layers} dead, {tamiyo.exploding_layers} exploding",
                 style="red",
             )
+            # Show which layers are unhealthy (if per-layer data available)
+            if tamiyo.layer_gradient_health:
+                result.append("\n")
+                result.append("              ", style="dim")  # Indent to align
+                unhealthy_layers = [
+                    (name, health)
+                    for name, health in tamiyo.layer_gradient_health.items()
+                    if health < 0.5  # Dead (0.0) or exploding (0.1)
+                ]
+                # Show up to 4 layer names, truncated for TUI width
+                for name, health in unhealthy_layers[:4]:
+                    # Shorten layer name (e.g., "lstm.weight_ih_l0" -> "lstm.wih0")
+                    short_name = self._shorten_layer_name(name)
+                    if health == 0.0:
+                        result.append(f"{short_name}", style="red")
+                        result.append("(D) ", style="dim red")
+                    elif health <= 0.1:
+                        result.append(f"{short_name}", style="yellow")
+                        result.append("(E) ", style="dim yellow")
+                    else:
+                        result.append(f"{short_name}", style="yellow")
+                        result.append("(W) ", style="dim yellow")
+                if len(unhealthy_layers) > 4:
+                    result.append(f"+{len(unhealthy_layers) - 4} more", style="dim")
         else:
             healthy = self._TOTAL_LAYERS - tamiyo.dead_layers - tamiyo.exploding_layers
             result.append(f"OK {healthy}/{self._TOTAL_LAYERS} healthy", style="green")
 
         return result
+
+    def _shorten_layer_name(self, name: str) -> str:
+        """Shorten layer name for TUI display.
+
+        Examples:
+            lstm.weight_ih_l0 -> lstm.wih0
+            policy_net.fc1.weight -> pn.fc1.w
+            value_head.bias -> vh.b
+        """
+        # Common abbreviations
+        replacements = [
+            ("weight_ih", "wih"),
+            ("weight_hh", "whh"),
+            ("weight", "w"),
+            ("bias", "b"),
+            ("policy_net", "pn"),
+            ("value_head", "vh"),
+            ("actor_head", "ah"),
+            ("critic_head", "ch"),
+            ("_l0", "0"),
+            ("_l1", "1"),
+            ("layer", "L"),
+        ]
+        short = name
+        for old, new in replacements:
+            short = short.replace(old, new)
+        # Truncate if still too long
+        if len(short) > 12:
+            short = short[:10] + ".."
+        return short
 
     def _get_ratio_status(self, ratio_min: float, ratio_max: float) -> str:
         """Get status for PPO ratio bounds."""
@@ -1563,6 +1650,9 @@ class TamiyoBrain(Static):
         Per UX review: expanded abbreviations for readability.
         Per Code review: explicit width accounting prevents drift.
         """
+        if self._snapshot is None:
+            return Text("Heads: (no data)", style="dim")
+
         tamiyo = self._snapshot.tamiyo
 
         # Head config: (abbrev, field_name, head_key)
@@ -1681,6 +1771,12 @@ class TamiyoBrain(Static):
         """
         import time
 
+        if self._snapshot is None:
+            result = Text()
+            result.append("DECISIONS\n", style="dim bold")
+            result.append("No data\n", style="dim italic")
+            return result
+
         tamiyo = self._snapshot.tamiyo
         incoming = tamiyo.recent_decisions
         max_cards = self._get_max_decision_cards()
@@ -1761,6 +1857,9 @@ class TamiyoBrain(Static):
         """
         from esper.karn.sanctum.schema import detect_trend, trend_to_indicator
 
+        if self._snapshot is None:
+            return Text("No data", style="dim")
+
         tamiyo = self._snapshot.tamiyo
         result = Text()
 
@@ -1823,6 +1922,12 @@ class TamiyoBrain(Static):
         Returns:
             Rich Table with vertically stacked vitals components.
         """
+        if self._snapshot is None:
+            content = Table.grid(expand=True)
+            content.add_column(ratio=1)
+            content.add_row(Text("No data", style="dim"))
+            return content
+
         tamiyo = self._snapshot.tamiyo
 
         content = Table.grid(expand=True)

@@ -7,7 +7,7 @@ Reference: src/esper/karn/tui.py lines 1648-1748 (_render_esper_status method)
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from rich.panel import Panel
 from rich.table import Table
@@ -61,7 +61,7 @@ class EsperStatus(Static):
     - GPU utilization: green <80%, yellow 80-95%, red >95%
     """
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         """Initialize EsperStatus widget."""
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
@@ -159,7 +159,7 @@ class EsperStatus(Static):
             table.add_row("GPU:", "-")
 
         # RAM
-        if vitals.ram_total_gb > 0:
+        if vitals.ram_total_gb is not None and vitals.ram_used_gb is not None and vitals.ram_total_gb > 0:
             ram_pct = (vitals.ram_used_gb / vitals.ram_total_gb) * 100
             ram_style = "red" if ram_pct > 90 else "yellow" if ram_pct > 75 else "dim"
             table.add_row(
@@ -168,7 +168,7 @@ class EsperStatus(Static):
             )
 
         # FIX: CPU percentage (was collected but never displayed in old TUI)
-        if vitals.cpu_percent > 0:
+        if vitals.cpu_percent is not None and vitals.cpu_percent > 0:
             # No color thresholds for CPU (unlike GPU/RAM)
             table.add_row("CPU:", f"{vitals.cpu_percent:.1f}%")
 

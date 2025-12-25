@@ -223,15 +223,24 @@ class FactoredRecurrentActorCritic(nn.Module):
             self.alpha_curve_head,
             self.op_head,
         ]:
-            nn.init.orthogonal_(head[-1].weight, gain=0.01)
-        nn.init.orthogonal_(self.value_head[-1].weight, gain=1.0)
+            # head[-1] is a Linear layer, access .weight.data to get Tensor
+            last_layer = head[-1]
+            if isinstance(last_layer, nn.Linear):
+                nn.init.orthogonal_(last_layer.weight.data, gain=0.01)
+        # value_head[-1] is also a Linear layer
+        last_value_layer = self.value_head[-1]
+        if isinstance(last_value_layer, nn.Linear):
+            nn.init.orthogonal_(last_value_layer.weight.data, gain=1.0)
 
         # LSTM-specific initialization
         for name, param in self.lstm.named_parameters():
             if "weight_ih" in name:
-                nn.init.orthogonal_(param)
+                # param is a Parameter, access .data to get the Tensor
+                weight_tensor: torch.Tensor = param.data
+                nn.init.orthogonal_(weight_tensor)
             elif "weight_hh" in name:
-                nn.init.orthogonal_(param)
+                weight_tensor = param.data
+                nn.init.orthogonal_(weight_tensor)
             elif "bias" in name:
                 nn.init.zeros_(param)
                 # M9: Set forget gate bias to 1 (helps with long-term memory)
@@ -252,7 +261,27 @@ class FactoredRecurrentActorCritic(nn.Module):
         batch_size: int,
         device: torch.device,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return zero-initialized hidden state."""
+        """Return zero-initialized hidden state.
+
+        MEMORY MANAGEMENT - Hidden State Detachment:
+        --------------------------------------------
+        LSTM hidden states carry gradient graphs. To prevent memory leaks during
+        training, callers MUST detach hidden states at episode boundaries:
+
+            hidden = (h.detach(), c.detach())  # Break gradient graph
+
+        Failure to detach causes:
+        1. Unbounded BPTT across episode boundaries (exploding memory)
+        2. Gradient graph accumulation proportional to total training steps
+        3. OOM after ~100-1000 episodes on typical GPU memory
+
+        The training loop (vectorized.py) handles this automatically when
+        resetting environments. If using this network directly, ensure you
+        call .detach() on hidden states when starting new episodes.
+
+        Returns:
+            Tuple of (h, c) zero tensors, each [num_layers, batch, hidden_dim]
+        """
         h = torch.zeros(self.lstm_layers, batch_size, self.lstm_hidden_dim, device=device)
         c = torch.zeros(self.lstm_layers, batch_size, self.lstm_hidden_dim, device=device)
         return h, c

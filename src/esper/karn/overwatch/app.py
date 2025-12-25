@@ -6,7 +6,7 @@ Main application class for the Overwatch TUI monitoring interface.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -24,9 +24,11 @@ from esper.karn.overwatch.widgets.replay_status import ReplayStatusBar
 if TYPE_CHECKING:
     from esper.karn.overwatch.schema import TuiSnapshot
     from esper.karn.overwatch.backend import OverwatchBackend
+    from esper.karn.overwatch.replay_controller import ReplayController
+    from textual.timer import Timer
 
 
-class OverwatchApp(App):
+class OverwatchApp(App[None]):
     """Overwatch TUI for monitoring Esper training runs.
 
     Provides real-time visibility into:
@@ -69,7 +71,7 @@ class OverwatchApp(App):
         replay_path: Path | str | None = None,
         backend: "OverwatchBackend | None" = None,
         poll_interval_ms: int = 250,
-        **kwargs,
+        **kwargs: Any,
     ) -> None:
         """Initialize the Overwatch app.
 
@@ -85,9 +87,9 @@ class OverwatchApp(App):
         self._poll_interval_ms = poll_interval_ms
         self._snapshot: TuiSnapshot | None = None
         self._help_visible = False
-        self._replay_controller = None
-        self._playback_timer = None
-        self._live_timer = None
+        self._replay_controller: "ReplayController | None" = None
+        self._playback_timer: "Timer | None" = None
+        self._live_timer: "Timer | None" = None
 
     def compose(self) -> ComposeResult:
         """Compose the application layout."""
@@ -296,6 +298,9 @@ class OverwatchApp(App):
         """Start playback timer."""
         if self._playback_timer:
             self._playback_timer.stop()
+
+        if not self._replay_controller:
+            return
 
         interval = self._replay_controller.tick_interval_ms() / 1000.0
         self._playback_timer = self.set_interval(interval, self._playback_tick)

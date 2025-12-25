@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
+from typing import Any
 
 from esper.leyline import TelemetryEvent, TelemetryEventType
 from esper.leyline.telemetry import (
@@ -203,7 +204,8 @@ class BlueprintAnalytics(OutputBackend):
             sb.total_fossilized += 1
             sb.fossilized_by_blueprint[bp_id] += 1
             sb.params_added += params
-            sb.total_fossilize_age_epochs += int(epochs_total)
+            if epochs_total is not None:
+                sb.total_fossilize_age_epochs += int(epochs_total)
             sb.live_blueprint = None
 
             # Show total improvement, blending delta, and causal contribution
@@ -234,7 +236,8 @@ class BlueprintAnalytics(OutputBackend):
 
             sb = self._get_scoreboard(env_id)
             sb.total_pruned += 1
-            sb.total_prune_age_epochs += int(epochs_total)
+            if epochs_total is not None:
+                sb.total_prune_age_epochs += int(epochs_total)
             sb.live_blueprint = None
 
             # Show total improvement, blending delta, and causal contribution
@@ -247,9 +250,9 @@ class BlueprintAnalytics(OutputBackend):
         elif event.event_type == TelemetryEventType.ANALYTICS_SNAPSHOT:
             if isinstance(event.data, AnalyticsSnapshotPayload):
                 kind = event.data.kind
-                env_id = event.data.env_id
+                env_id_snapshot = event.data.env_id
                 if not self.quiet:
-                    _logger.debug(f"[env{env_id}] ANALYTICS_SNAPSHOT kind={kind}")
+                    _logger.debug(f"[env{env_id_snapshot}] ANALYTICS_SNAPSHOT kind={kind}")
             else:
                 _logger.warning(f"Unexpected ANALYTICS_SNAPSHOT payload type: {type(event.data)}")
                 return
@@ -370,7 +373,7 @@ class BlueprintAnalytics(OutputBackend):
         ]
         return "\n".join(lines)
 
-    def snapshot(self) -> dict:
+    def snapshot(self) -> dict[str, Any]:
         """Return serializable snapshot for history."""
         return {
             "stats": {

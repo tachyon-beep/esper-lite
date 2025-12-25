@@ -8,11 +8,12 @@ Triggered by left-clicking a row in the Best Runs scoreboard.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Iterator
 
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
+from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
@@ -98,7 +99,7 @@ class HistoricalEnvDetail(ModalScreen[None]):
     }
     """
 
-    def __init__(self, record: "BestRunRecord", **kwargs) -> None:
+    def __init__(self, record: "BestRunRecord", **kwargs: Any) -> None:
         """Initialize the historical detail screen.
 
         Args:
@@ -107,9 +108,9 @@ class HistoricalEnvDetail(ModalScreen[None]):
         super().__init__(**kwargs)
         self._record = record
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
         """Compose the modal layout."""
-        with Container(id="modal-container"):
+        with Container(id="modal-container") as container:
             # Header bar
             yield Static(self._render_header(), id="detail-header", classes="header-bar")
 
@@ -144,6 +145,8 @@ class HistoricalEnvDetail(ModalScreen[None]):
                 f"[dim]Press ESC or Q to close  │  {pin_status}[/dim]",
                 classes="footer-hint",
             )
+
+        yield container
 
     def _render_header(self) -> Text:
         """Render the header bar with record summary."""
@@ -254,7 +257,7 @@ class HistoricalEnvDetail(ModalScreen[None]):
         # Seed composition summary
         if record.seeds:
             seed_summary = Text()
-            stages = {}
+            stages: dict[str, int] = {}
             for seed in record.seeds.values():
                 stage = seed.stage if seed else "DORMANT"
                 stages[stage] = stages.get(stage, 0) + 1

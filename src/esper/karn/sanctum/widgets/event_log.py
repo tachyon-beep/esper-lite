@@ -12,9 +12,9 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from rich.console import Group
+from rich.console import Group, RenderableType
 from rich.text import Text
 from textual.message import Message
 from textual.widgets import Static
@@ -60,7 +60,7 @@ class EventLog(Static):
             super().__init__()
             self.events = events
 
-    def __init__(self, max_lines: int = 30, **kwargs) -> None:
+    def __init__(self, max_lines: int = 30, **kwargs: Any) -> None:
         """Initialize EventLog widget.
 
         Args:
@@ -189,7 +189,7 @@ class EventLog(Static):
             shown = " ".join(str(eid) for eid in real_ids[:_MAX_ENVS_SHOWN])
             return f"{shown} +"
 
-    def render(self):
+    def render(self) -> RenderableType:
         """Render the log with proper right-justification.
 
         Uses actual widget width to align env IDs to right edge.

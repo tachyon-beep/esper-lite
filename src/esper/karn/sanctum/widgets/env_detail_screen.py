@@ -7,14 +7,17 @@ Displays comprehensive diagnostics for a single environment including:
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
+from collections.abc import Iterable
+
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
+from textual.widget import Widget
 from textual.widgets import Static
 
 from esper.karn.sanctum.widgets.counterfactual_panel import CounterfactualPanel
@@ -53,7 +56,7 @@ STAGE_CSS_CLASSES = {
 class SeedCard(Static):
     """Individual seed card showing detailed seed state."""
 
-    def __init__(self, seed: "SeedState | None", slot_id: str, **kwargs) -> None:
+    def __init__(self, seed: "SeedState | None", slot_id: str, **kwargs: Any) -> None:
         """Initialize seed card.
 
         Args:
@@ -73,7 +76,7 @@ class SeedCard(Static):
         self._seed = seed
         self.refresh()
 
-    def compose(self):
+    def compose(self) -> Iterable[Widget]:
         """No child widgets - we render directly."""
         yield from []
 
@@ -98,6 +101,9 @@ class SeedCard(Static):
     def _render_active(self) -> Panel:
         """Render active seed with all metrics."""
         seed = self._seed
+        if seed is None:
+            return self._render_dormant()
+
         stage_color = STAGE_COLORS.get(seed.stage, "white")
 
         lines = []
@@ -255,7 +261,7 @@ class EnvDetailScreen(ModalScreen[None]):
         self,
         env_state: "EnvState",
         slot_ids: list[str],
-        **kwargs,
+        **kwargs: Any,
     ) -> None:
         """Initialize the detail screen.
 
@@ -273,7 +279,7 @@ class EnvDetailScreen(ModalScreen[None]):
         """Return the environment ID this screen is showing."""
         return self._env_id
 
-    def compose(self):
+    def compose(self) -> Iterable[Widget]:
         """Compose the modal layout."""
         with Container(id="modal-container"):
             # Header bar

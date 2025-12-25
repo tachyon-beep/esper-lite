@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Iterator
+from typing import Any, TYPE_CHECKING, Callable, Iterator
 
 if TYPE_CHECKING:
     from esper.karn.overwatch.schema import TuiSnapshot
@@ -55,7 +55,7 @@ class SnapshotWriter:
         """Context manager entry."""
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """Context manager exit."""
         self.close()
 

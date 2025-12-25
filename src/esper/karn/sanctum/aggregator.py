@@ -1079,6 +1079,14 @@ class SanctumAggregator:
             env.action_counts[action_name] = env.action_counts.get(action_name, 0) + 1
             env.total_actions += 1
 
+            # Update reward component breakdown (base_acc_delta from payload)
+            if payload.base_acc_delta is not None:
+                env.reward_components.base_acc_delta = payload.base_acc_delta
+                env.reward_components.total = total_reward
+                env.reward_components.last_action = action_name
+                env.reward_components.env_id = env_id
+                env.reward_components.val_acc = env.host_accuracy
+
             # Create decision snapshot
             now_dt = event.timestamp or datetime.now(timezone.utc)
             value_s = payload.value_estimate or 0.0

@@ -30,7 +30,7 @@ import logging
 import math
 from dataclasses import dataclass
 from enum import Enum
-from typing import NamedTuple, cast
+from typing import Any, NamedTuple, cast
 
 from esper.leyline import (
     DEFAULT_GAMMA,
@@ -342,7 +342,7 @@ class SeedInfo(NamedTuple):
     boost_received: float = 0.0  # Strongest single interaction
 
     @staticmethod
-    def from_seed_state(seed_state, seed_params: int = 0) -> "SeedInfo | None":
+    def from_seed_state(seed_state: Any, seed_params: int = 0) -> "SeedInfo | None":
         """Convert from kasmina.SeedState to SeedInfo.
 
         Args:
@@ -487,10 +487,12 @@ def compute_contribution_reward(
 
     # PBRS requires gamma_pbrs == gamma_ppo for policy invariance (Ng et al., 1999)
     # Runtime validation catches misconfiguration that would invalidate shaping guarantees
-    assert config.gamma == DEFAULT_GAMMA, (
-        f"PBRS gamma mismatch: config.gamma={config.gamma} != DEFAULT_GAMMA={DEFAULT_GAMMA}. "
-        "This breaks policy invariance guarantees. Use DEFAULT_GAMMA from leyline."
-    )
+    # NOTE: Using ValueError instead of assert ensures check runs even with python -O
+    if config.gamma != DEFAULT_GAMMA:
+        raise ValueError(
+            f"PBRS gamma mismatch: config.gamma={config.gamma} != DEFAULT_GAMMA={DEFAULT_GAMMA}. "
+            "This breaks policy invariance guarantees (Ng et al., 1999). Use DEFAULT_GAMMA from leyline."
+        )
 
     # Track components if requested (no import needed - already at module level)
     components = RewardComponentsTelemetry() if return_components else None
@@ -523,7 +525,9 @@ def compute_contribution_reward(
         # Attribution discount applies to all seeds with negative total_improvement
         # Sigmoid steepness controls how quickly discount kicks in for regressing seeds
         if total_imp < 0:
-            attribution_discount = 1.0 / (1.0 + math.exp(-config.attribution_sigmoid_steepness * total_imp))
+            # Clamp exponent to prevent overflow: exp(709) is the float64 limit
+            exp_arg = min(-config.attribution_sigmoid_steepness * total_imp, 700.0)
+            attribution_discount = 1.0 / (1.0 + math.exp(exp_arg))
 
         # Ratio penalty only for high contribution (> 1.0) to avoid noise
         # Only calculate when attribution_discount >= 0.5 (avoid penalty stacking)
@@ -1343,7 +1347,7 @@ def _contribution_prune_shaping(
 
 
 def _check_reward_hacking(
-    hub,
+    hub: Any,
     *,
     seed_contribution: float,
     total_improvement: float,
@@ -1375,7 +1379,7 @@ def _check_reward_hacking(
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.REWARD_HACKING_SUSPECTED,
         severity="warning",
-        data={
+        data={  # type: ignore[arg-type]
             "ratio": ratio,
             "seed_contribution": seed_contribution,
             "total_improvement": total_improvement,
@@ -1388,7 +1392,7 @@ def _check_reward_hacking(
 
 
 def _check_ransomware_signature(
-    hub,
+    hub: Any,
     *,
     seed_contribution: float,
     total_improvement: float,
@@ -1419,7 +1423,7 @@ def _check_ransomware_signature(
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.REWARD_HACKING_SUSPECTED,
         severity="critical",
-        data={
+        data={  # type: ignore[arg-type]
             "pattern": "ransomware_signature",
             "seed_contribution": seed_contribution,
             "total_improvement": total_improvement,
@@ -1455,7 +1459,7 @@ def compute_potential(val_acc: float, epoch: int, max_epochs: int) -> float:
     # Simple potential: higher accuracy = higher potential
     # Discounted by time remaining to encourage early improvement
     time_factor = (max_epochs - epoch) / max_epochs
-    return val_acc * time_factor * 0.1
+    return float(val_acc * time_factor * 0.1)
 
 
 def compute_pbrs_bonus(
@@ -1473,7 +1477,7 @@ def compute_pbrs_bonus(
     return gamma * potential_next - potential_prev
 
 
-def compute_seed_potential(obs: dict) -> float:
+def compute_seed_potential(obs: dict[str, Any]) -> float:
     """Compute potential value Phi(s) based on seed state.
 
     The potential captures the expected future value of having an active seed
@@ -1515,7 +1519,7 @@ def compute_seed_potential(obs: dict) -> float:
     # epoch_progress_bonus=0.3, max_progress_bonus=2.0
     progress_bonus = min(epochs_in_stage * 0.3, 2.0)
 
-    return base_potential + progress_bonus
+    return float(base_potential + progress_bonus)
 
 
 # =============================================================================

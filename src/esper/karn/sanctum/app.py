@@ -100,7 +100,7 @@ class HelpScreen(ModalScreen[None]):
             yield Static(HELP_TEXT)
 
 
-class SanctumApp(App):
+class SanctumApp(App[None]):
     """Sanctum diagnostic TUI for Esper training.
 
     Provides deep inspection of PPO training for debugging.

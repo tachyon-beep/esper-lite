@@ -19,11 +19,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal, Any
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 from pydantic import BaseModel, Field, field_validator
 
 
-def deep_merge(base: dict, override: dict) -> dict:
+def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     """Deep merge override into base dict."""
     result = base.copy()
     for key, value in override.items():

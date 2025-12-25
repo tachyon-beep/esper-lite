@@ -30,7 +30,7 @@ from typing import Any, TYPE_CHECKING
 from esper.karn.serialization import serialize_event as _serialize_event
 
 if TYPE_CHECKING:
-    from esper.leyline.telemetry import TelemetryEvent
+    from esper.karn.contracts import TelemetryEventLike
 
 _logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ class WebSocketOutput:
         if start_server:
             self.start()
 
-    def emit(self, event: "TelemetryEvent") -> None:
+    def emit(self, event: "TelemetryEventLike") -> None:
         """Queue event for async broadcast to WebSocket clients.
 
         This method is called from the synchronous training loop.
@@ -137,7 +137,7 @@ class WebSocketOutput:
     async def _serve(self) -> None:
         """Main async server loop."""
         try:
-            from websockets.server import serve
+            from websockets.server import serve  # type: ignore[import-not-found]
         except ImportError:
             _logger.error(
                 "websockets not installed. Install with: pip install esper-lite[dashboard]"

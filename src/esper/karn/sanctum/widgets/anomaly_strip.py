@@ -11,7 +11,7 @@ Layout:
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from rich.text import Text
 from textual.widgets import Static
@@ -27,7 +27,7 @@ class AnomalyStrip(Static):
     Red items are critical, yellow are warnings, green means OK.
     """
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
         # Computed anomaly counts
@@ -105,7 +105,7 @@ class AnomalyStrip(Static):
             return Text("ALL CLEAR ✓", style="bold green")
 
         # Build anomaly summary
-        parts = []
+        parts: list[tuple[str, int | None, str]] = []
 
         if self.stalled_count > 0:
             parts.append(("stalled", self.stalled_count, "yellow"))
