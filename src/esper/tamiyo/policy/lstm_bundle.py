@@ -14,7 +14,7 @@ from esper.tamiyo.policy.protocol import PolicyBundle
 from esper.tamiyo.policy.registry import register_policy
 from esper.tamiyo.policy.types import ActionResult, EvalResult, ForwardResult
 from esper.leyline.slot_config import SlotConfig
-from esper.leyline import HEAD_NAMES
+from esper.leyline import DEFAULT_LSTM_HIDDEN_DIM, HEAD_NAMES
 
 
 @register_policy("lstm")
@@ -34,7 +34,7 @@ class LSTMPolicyBundle:
     def __init__(
         self,
         feature_dim: int | None = None,
-        hidden_dim: int = 256,
+        hidden_dim: int = DEFAULT_LSTM_HIDDEN_DIM,
         num_lstm_layers: int = 1,
         slot_config: SlotConfig | None = None,
         dropout: float = 0.0,

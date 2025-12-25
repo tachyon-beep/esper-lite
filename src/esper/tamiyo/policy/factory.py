@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import torch
+
+from esper.leyline import DEFAULT_LSTM_HIDDEN_DIM
 
 if TYPE_CHECKING:
     from esper.tamiyo.policy.protocol import PolicyBundle
@@ -19,8 +21,8 @@ def create_policy(
     num_slots: int = 4,
     device: torch.device | str = "cpu",
     compile_mode: str = "off",
-    lstm_hidden_dim: int = 256,
-    **kwargs,
+    lstm_hidden_dim: int = DEFAULT_LSTM_HIDDEN_DIM,
+    **kwargs: Any,
 ) -> PolicyBundle:
     """Create a policy instance with optional torch.compile.
 
@@ -53,6 +55,9 @@ def create_policy(
         ...     compile_mode="default",
         ... )
     """
+    # Local imports to avoid circular dependency:
+    # factory.py imports from registry/features, which import from leyline,
+    # which is imported at module level here. Keep these local for clean loading.
     from esper.tamiyo.policy.registry import get_policy
     from esper.tamiyo.policy.features import get_feature_size
     from esper.leyline.slot_config import SlotConfig
@@ -86,13 +91,17 @@ def create_policy(
     policy = policy.to(device)
 
     # Compile the inner network (not the wrapper)
-    # PolicyBundle exposes .network property for this purpose
-    # Device placement must happen before compile for correct tracing
+    # Why direct _network assignment:
+    # 1. torch.compile returns a new OptimizedModule wrapper
+    # 2. We must replace the internal reference, not just wrap externally
+    # 3. PolicyBundle.network is a read-only property; _network is the backing store
+    # 4. Device placement MUST happen before compile for correct tracing
+    # WARNING: Do not call .to(device) after this - it would replace the compiled module
     if compile_mode != "off":
         policy._network = torch.compile(
-            policy.network,  # Use public property to get network
+            policy.network,
             mode=compile_mode,
-            dynamic=True,
+            dynamic=True,  # Batch/seq dimensions vary between rollout and training
         )
 
     return policy

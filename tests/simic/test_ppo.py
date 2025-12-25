@@ -204,8 +204,8 @@ def test_kl_early_stopping_with_single_epoch():
                 alpha_speed_mask=torch.ones(NUM_ALPHA_SPEEDS, dtype=torch.bool),
                 alpha_curve_mask=torch.ones(NUM_ALPHA_CURVES, dtype=torch.bool),
                 op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
-                hidden_h=torch.zeros(1, 1, 256),  # LSTM hidden dim
-                hidden_c=torch.zeros(1, 1, 256),
+                hidden_h=torch.zeros(1, 1, agent.policy.hidden_dim),
+                hidden_c=torch.zeros(1, 1, agent.policy.hidden_dim),
                 bootstrap_value=0.0,
             )
         agent.buffer.end_episode(env_id)
@@ -679,8 +679,8 @@ def test_ppo_agent_full_update_with_5_slots():
             alpha_speed_mask=torch.ones(NUM_ALPHA_SPEEDS, dtype=torch.bool),
             alpha_curve_mask=torch.ones(NUM_ALPHA_CURVES, dtype=torch.bool),
             op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
-            hidden_h=torch.zeros(1, 1, 256),  # LSTM hidden dim
-            hidden_c=torch.zeros(1, 1, 256),
+            hidden_h=torch.zeros(1, 1, agent.policy.hidden_dim),
+            hidden_c=torch.zeros(1, 1, agent.policy.hidden_dim),
         )
     agent.buffer.end_episode(env_id=0)
 
