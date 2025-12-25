@@ -12,7 +12,6 @@ analytics consume them, and outputs serialize them.
 from __future__ import annotations
 
 import logging
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -361,7 +360,7 @@ class DenseTrace:
 # =============================================================================
 
 
-@dataclass(slots=True, frozen=True)
+@dataclass(frozen=True)
 class EpisodeOutcome:
     """Multi-objective outcome for Pareto analysis.
 
@@ -371,19 +370,60 @@ class EpisodeOutcome:
     - stability_score: Training stability (higher = better)
     """
 
-    env_id: int
-    episode: int
-    reward_mode: str  # "shaped", "simplified", etc.
-
-    # Pareto objectives (all normalized 0-1)
+    env_idx: int
+    episode_idx: int
     final_accuracy: float
     param_ratio: float  # total_params / host_params
+    num_fossilized: int
+    num_contributing_fossilized: int  # Seeds that contributed to learning
+    episode_reward: float  # Total reward for the episode
     stability_score: float  # 1 - variance(recent_losses)
+    reward_mode: str  # "shaped", "simplified", etc.
+    timestamp: datetime = field(default_factory=_utc_now)
 
-    # Context
-    timestamp: float = field(default_factory=time.time)
-    slot_count: int = 0
-    fossilized_count: int = 0
+    def dominates(self, other: "EpisodeOutcome") -> bool:
+        """Pareto dominance check.
+
+        Returns True if self dominates other (better or equal on all objectives,
+        strictly better on at least one).
+
+        Objectives (higher is better):
+        - final_accuracy
+        - stability_score
+
+        Objectives (lower is better):
+        - param_ratio
+        """
+        # Check: self >= other on all objectives
+        geq_accuracy = self.final_accuracy >= other.final_accuracy
+        geq_stability = self.stability_score >= other.stability_score
+        leq_ratio = self.param_ratio <= other.param_ratio
+
+        all_geq = geq_accuracy and geq_stability and leq_ratio
+
+        # Check: self > other on at least one objective
+        gt_accuracy = self.final_accuracy > other.final_accuracy
+        gt_stability = self.stability_score > other.stability_score
+        lt_ratio = self.param_ratio < other.param_ratio
+
+        any_gt = gt_accuracy or gt_stability or lt_ratio
+
+        return all_geq and any_gt
+
+    def to_dict(self) -> dict:
+        """Convert to JSON-serializable dict."""
+        return {
+            "env_idx": self.env_idx,
+            "episode_idx": self.episode_idx,
+            "reward_mode": self.reward_mode,
+            "final_accuracy": self.final_accuracy,
+            "param_ratio": self.param_ratio,
+            "stability_score": self.stability_score,
+            "num_fossilized": self.num_fossilized,
+            "num_contributing_fossilized": self.num_contributing_fossilized,
+            "episode_reward": self.episode_reward,
+            "timestamp": self.timestamp.isoformat(),
+        }
 
 
 # =============================================================================
