@@ -33,6 +33,8 @@ import os
 import random
 import threading
 import time
+
+import numpy as np
 from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any, Callable, cast
 
@@ -123,6 +125,7 @@ from esper.leyline import DEFAULT_MIN_FOSSILIZE_CONTRIBUTION, MIN_PRUNE_AGE
 from esper.nissa import get_hub, BlueprintAnalytics, DirectoryOutput
 from esper.tolaria import TolariaGovernor
 from esper.karn.health import HealthMonitor
+from esper.karn.store import EpisodeOutcome
 from esper.simic.attribution import CounterfactualHelper
 from esper.simic.telemetry.emitters import (
     emit_with_env_context,
@@ -1616,6 +1619,7 @@ def train_ppo_vectorized(
 
     history = []
     episode_history = []  # Per-episode tracking for A/B testing
+    episode_outcomes: list[EpisodeOutcome] = []  # Pareto analysis outcomes
     best_avg_acc = 0.0
     best_state = None
     recent_accuracies = []
@@ -2860,6 +2864,28 @@ def train_ppo_vectorized(
                         "episode_reward": env_total_rewards[env_idx],
                         "final_accuracy": env_final_accs[env_idx],
                     })
+
+                    # Compute stability score from reward variance
+                    recent_ep_rewards = env_state.episode_rewards[-20:] if len(env_state.episode_rewards) >= 20 else env_state.episode_rewards
+                    if len(recent_ep_rewards) > 1:
+                        reward_var = float(np.var(recent_ep_rewards))
+                        stability = 1.0 / (1.0 + reward_var)
+                    else:
+                        stability = 1.0  # Default if insufficient data
+
+                    # Create EpisodeOutcome for Pareto analysis
+                    episode_outcome = EpisodeOutcome(
+                        env_idx=env_idx,
+                        episode_idx=episodes_completed + env_idx,
+                        final_accuracy=env_state.val_acc,
+                        param_ratio=(model.total_params - host_params_baseline) / max(1, host_params_baseline),
+                        num_fossilized=env_state.seeds_fossilized,
+                        num_contributing_fossilized=env_state.contributing_fossilized,
+                        episode_reward=env_total_rewards[env_idx],
+                        stability_score=stability,
+                        reward_mode=env_reward_configs[env_idx].reward_mode.value,
+                    )
+                    episode_outcomes.append(episode_outcome)
 
                     # Shapley contributions at episode end
                     if (
