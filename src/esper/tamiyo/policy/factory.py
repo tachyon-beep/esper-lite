@@ -9,6 +9,9 @@ import torch
 if TYPE_CHECKING:
     from esper.tamiyo.policy.protocol import PolicyBundle
 
+# Valid torch.compile modes
+VALID_COMPILE_MODES = frozenset({"off", "default", "reduce-overhead", "max-autotune"})
+
 
 def create_policy(
     policy_type: str = "lstm",
@@ -18,7 +21,7 @@ def create_policy(
     compile_mode: str = "off",
     lstm_hidden_dim: int = 256,
     **kwargs,
-) -> "PolicyBundle":
+) -> PolicyBundle:
     """Create a policy instance with optional torch.compile.
 
     This is the recommended entry point for creating policies. It handles:
@@ -38,6 +41,9 @@ def create_policy(
     Returns:
         Configured PolicyBundle instance on the target device
 
+    Raises:
+        ValueError: If compile_mode is not valid
+
     Example:
         >>> policy = create_policy(
         ...     policy_type="lstm",
@@ -50,6 +56,12 @@ def create_policy(
     from esper.tamiyo.policy.registry import get_policy
     from esper.tamiyo.policy.features import get_feature_size
     from esper.leyline.slot_config import SlotConfig
+
+    # Validate compile_mode
+    if compile_mode not in VALID_COMPILE_MODES:
+        raise ValueError(
+            f"compile_mode must be one of {sorted(VALID_COMPILE_MODES)}, got {compile_mode!r}"
+        )
 
     # Create slot config (single-row grid by default)
     slot_config = SlotConfig.for_grid(rows=1, cols=num_slots)
@@ -70,14 +82,15 @@ def create_policy(
     # Create policy via registry
     policy = get_policy(policy_type, config)
 
-    # Move to device
+    # Move to device (before compile - compile traces on target device)
     policy = policy.to(device)
 
     # Compile the inner network (not the wrapper)
-    # PolicyBundle is not nn.Module, so we compile the internal network
-    if compile_mode != "off" and hasattr(policy, "_network"):
+    # PolicyBundle exposes .network property for this purpose
+    # Device placement must happen before compile for correct tracing
+    if compile_mode != "off":
         policy._network = torch.compile(
-            policy._network,
+            policy.network,  # Use public property to get network
             mode=compile_mode,
             dynamic=True,
         )
