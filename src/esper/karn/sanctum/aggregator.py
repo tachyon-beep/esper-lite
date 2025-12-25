@@ -495,6 +495,12 @@ class SanctumAggregator:
         self._reward_mode = payload.reward_mode
 
         # Capture hyperparameters for run header display
+        if payload.entropy_anneal is None:
+            _logger.warning("TRAINING_STARTED missing entropy_anneal config")
+            entropy_anneal_config = {}
+        else:
+            entropy_anneal_config = payload.entropy_anneal
+
         self._run_config = RunConfig(
             seed=payload.seed,
             n_episodes=payload.n_episodes,
@@ -503,7 +509,7 @@ class SanctumAggregator:
             entropy_coef=payload.entropy_coef,
             param_budget=payload.param_budget,
             resume_path=payload.resume_path,
-            entropy_anneal=payload.entropy_anneal or {},
+            entropy_anneal=entropy_anneal_config,
         )
 
         # Capture slot configuration from event
@@ -717,7 +723,7 @@ class SanctumAggregator:
 
         payload = event.data
         env_id = payload.env_id
-        epoch = event.epoch or 0
+        epoch = event.epoch if event.epoch is not None else 0
 
         self._ensure_env(env_id)
         env = self._envs[env_id]

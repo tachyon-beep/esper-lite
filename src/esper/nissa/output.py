@@ -102,7 +102,7 @@ class ConsoleOutput(OutputBackend):
                     return
                 loss = event.data.get("val_loss", "?")
                 acc = event.data.get("val_accuracy", "?")
-            epoch = event.epoch or "?"
+            epoch = event.epoch if event.epoch is not None else "?"
             print(f"[{timestamp}] {seed_id} | Epoch {epoch}: loss={loss} acc={acc}")
         elif "COMMAND" in event_type:
             if event.data is None:
@@ -111,7 +111,10 @@ class ConsoleOutput(OutputBackend):
             action = event.data.get("action", "unknown")
             print(f"[{timestamp}] {seed_id} | Command: {action}")
         elif event_type.startswith("SEED_"):
-            data = event.data or {}
+            if event.data is None:
+                _logger.warning("SEED_%s event has no data payload", event_type)
+                return
+            data = event.data
             if event_type == "SEED_GERMINATED":
                 blueprint_id = data.get("blueprint_id", "?")
                 params = data.get("params")
@@ -143,7 +146,10 @@ class ConsoleOutput(OutputBackend):
                 msg = event.message or event_type
             print(f"[{timestamp}] {seed_id} | {msg}")
         elif event_type == "REWARD_COMPUTED":
-            data = event.data or {}
+            if event.data is None:
+                _logger.warning("REWARD_COMPUTED event has no data payload")
+                return
+            data = event.data
             env_id = data.get("env_id", "?")
             action = data.get("action_name", "?")
             total = data.get("total_reward", 0.0)
@@ -182,7 +188,10 @@ class ConsoleOutput(OutputBackend):
                 # Legacy shaped reward
                 print(f"[{timestamp}] env{env_id} | {action}: r={total:+.2f} (Δacc={base:+.2f}, rent={rent_display:.2f}{extra}) acc={val_acc:.1f}%")
         elif event_type == "GOVERNOR_ROLLBACK":
-            data = event.data or {}
+            if event.data is None:
+                _logger.warning("GOVERNOR_ROLLBACK event has no data payload")
+                return
+            data = event.data
             reason = data.get("reason", "unknown")
             loss = data.get("loss_at_panic", "?")
             threshold = data.get("loss_threshold", "?")
@@ -195,7 +204,10 @@ class ConsoleOutput(OutputBackend):
         elif event_type == "GOVERNOR_PANIC":
             # TODO: [DEAD CODE] - This formatting code for GOVERNOR_PANIC is unreachable
             # because these events are never emitted. See: leyline/telemetry.py dead event TODOs.
-            data = event.data or {}
+            if event.data is None:
+                _logger.warning("GOVERNOR_PANIC event has no data payload")
+                return
+            data = event.data
             loss = data.get("current_loss", "?")
             panics = data.get("consecutive_panics", 0)
             if isinstance(loss, float):
@@ -212,7 +224,10 @@ class ConsoleOutput(OutputBackend):
                 avg_reward = event.data.avg_reward
                 env_accs = event.data.env_accuracies or []
             else:
-                data = event.data or {}
+                if event.data is None:
+                    _logger.warning("BATCH_EPOCH_COMPLETED event has no data payload")
+                    return
+                data = event.data
                 batch_idx = data.get("batch_idx", "?")
                 episodes = data.get("episodes_completed", "?")
                 total = data.get("total_episodes", "?")
@@ -226,7 +241,10 @@ class ConsoleOutput(OutputBackend):
                 print(f"[{timestamp}]   Env accs: [{env_acc_str}]")
             print(f"[{timestamp}]   Avg: {avg_acc:.1f}% (rolling: {rolling_acc:.1f}%), reward: {avg_reward:.1f}")
         elif event_type == "COUNTERFACTUAL_COMPUTED":
-            data = event.data or {}
+            if event.data is None:
+                _logger.warning("COUNTERFACTUAL_COMPUTED event has no data payload")
+                return
+            data = event.data
             env_id = data.get("env_id", "?")
             slot_id = data.get("slot_id", "?")
             available = data.get("available", True)
@@ -241,12 +259,18 @@ class ConsoleOutput(OutputBackend):
         elif event_type == "CHECKPOINT_SAVED":
             # TODO: [DEAD CODE] - This formatting code for CHECKPOINT_SAVED is unreachable
             # because these events are never emitted. See: leyline/telemetry.py dead event TODOs.
-            data = event.data or {}
+            if event.data is None:
+                _logger.warning("CHECKPOINT_SAVED event has no data payload")
+                return
+            data = event.data
             path = data.get("path", "?")
             avg_acc = data.get("avg_accuracy", 0.0)
             print(f"[{timestamp}] CHECKPOINT | Saved to {path} (acc={avg_acc:.1f}%)")
         elif event_type == "CHECKPOINT_LOADED":
-            data = event.data or {}
+            if event.data is None:
+                _logger.warning("CHECKPOINT_LOADED event has no data payload")
+                return
+            data = event.data
             path = data.get("path", "?")
             episode = data.get("start_episode", 0)
             source = data.get("source", "")
@@ -255,7 +279,10 @@ class ConsoleOutput(OutputBackend):
             else:
                 print(f"[{timestamp}] CHECKPOINT | Loaded from {path} (resuming at episode {episode})")
         elif event_type == "TAMIYO_INITIATED":
-            data = event.data or {}
+            if event.data is None:
+                _logger.warning("TAMIYO_INITIATED event has no data payload")
+                return
+            data = event.data
             env_id = data.get("env_id")
             epoch = data.get("epoch", "?")
             stable_count = data.get("stable_count", 0)

@@ -304,7 +304,10 @@ class TelemetryAggregator:
         if isinstance(event.data, SeedGerminatedPayload):
             payload = event.data
             env_id = payload.env_id
-            slot_id = event.slot_id or payload.slot_id
+            # Event envelope slot_id is authoritative (set at emission time)
+            slot_id = event.slot_id
+            if not slot_id:
+                slot_id = payload.slot_id  # Fallback for legacy events
 
             self._ensure_env(env_id)
             self._envs[env_id].slots[slot_id] = SlotChipState(
@@ -328,7 +331,10 @@ class TelemetryAggregator:
         if isinstance(event.data, SeedStageChangedPayload):
             payload = event.data
             env_id = payload.env_id
-            slot_id = event.slot_id or payload.slot_id
+            # Event envelope slot_id is authoritative (set at emission time)
+            slot_id = event.slot_id
+            if not slot_id:
+                slot_id = payload.slot_id  # Fallback for legacy events
 
             self._ensure_env(env_id)
             if slot_id in self._envs[env_id].slots:
@@ -349,7 +355,10 @@ class TelemetryAggregator:
         if isinstance(event.data, SeedGateEvaluatedPayload):
             payload = event.data
             env_id = payload.env_id
-            slot_id = event.slot_id or payload.slot_id
+            # Event envelope slot_id is authoritative (set at emission time)
+            slot_id = event.slot_id
+            if not slot_id:
+                slot_id = payload.slot_id  # Fallback for legacy events
 
             self._ensure_env(env_id)
             if slot_id in self._envs[env_id].slots:
@@ -372,7 +381,10 @@ class TelemetryAggregator:
         if isinstance(event.data, SeedFossilizedPayload):
             payload = event.data
             env_id = payload.env_id
-            slot_id = event.slot_id or payload.slot_id
+            # Event envelope slot_id is authoritative (set at emission time)
+            slot_id = event.slot_id
+            if not slot_id:
+                slot_id = payload.slot_id  # Fallback for legacy events
 
             self._ensure_env(env_id)
             if slot_id in self._envs[env_id].slots:
@@ -392,7 +404,10 @@ class TelemetryAggregator:
         if isinstance(event.data, SeedPrunedPayload):
             payload = event.data
             env_id = payload.env_id
-            slot_id = event.slot_id or payload.slot_id
+            # Event envelope slot_id is authoritative (set at emission time)
+            slot_id = event.slot_id
+            if not slot_id:
+                slot_id = payload.slot_id  # Fallback for legacy events
 
             self._ensure_env(env_id)
             if slot_id in self._envs[env_id].slots:
