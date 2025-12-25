@@ -1014,6 +1014,11 @@ class SeedSlot(nn.Module):
         self._pending_prune_reason: str | None = None
         self._pending_prune_initiator: str | None = None
 
+        # Blending state (initialized to None, set when blending starts)
+        self._blend_algorithm_id: str | None = None
+        self._blend_alpha_target: float | None = None
+        self._blend_tempo_epochs: int | None = None
+
     def _get_shape_probe(self, topology: str) -> torch.Tensor:
         """Get cached shape probe for topology, creating if needed."""
         # Include channels in key to handle slot reuse/reconfiguration (BUG-014)
@@ -2029,7 +2034,7 @@ class SeedSlot(nn.Module):
         """
         from esper.kasmina.blending import BlendCatalog
 
-        algorithm_id = getattr(self, "_blend_algorithm_id", "sigmoid")
+        algorithm_id = self._blend_algorithm_id or "sigmoid"
 
         # Initialize blending progress tracking
         if self.state:
@@ -2065,7 +2070,7 @@ class SeedSlot(nn.Module):
                         f"Valid options: linear, sigmoid, gated"
                     )
             # Alpha amplitude scheduling is handled by AlphaController.
-            alpha_target = getattr(self, "_blend_alpha_target", None)
+            alpha_target = self._blend_alpha_target
             if alpha_target is None:
                 alpha_target = 1.0
             self.state.alpha_controller = AlphaController(alpha=self.state.alpha)
@@ -2113,7 +2118,7 @@ class SeedSlot(nn.Module):
 
             # Initialize blending schedule
             # Priority: stored tempo > TaskConfig > DEFAULT_BLENDING_TOTAL_STEPS
-            total_steps = getattr(self, '_blend_tempo_epochs', None)
+            total_steps = self._blend_tempo_epochs
             if total_steps is None:
                 total_steps = DEFAULT_BLENDING_TOTAL_STEPS
                 if self.task_config is not None:
@@ -2465,9 +2470,9 @@ class SeedSlot(nn.Module):
         """
         state_dict = {
             "isolate_gradients": self.isolate_gradients,
-            "blend_algorithm_id": getattr(self, "_blend_algorithm_id", None),
-            "blend_tempo_epochs": getattr(self, "_blend_tempo_epochs", None),
-            "blend_alpha_target": getattr(self, "_blend_alpha_target", None),
+            "blend_algorithm_id": self._blend_algorithm_id,
+            "blend_tempo_epochs": self._blend_tempo_epochs,
+            "blend_alpha_target": self._blend_alpha_target,
         }
 
         if self.state is not None:
