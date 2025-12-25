@@ -474,6 +474,9 @@ class MaskedCategorical:
         raw_entropy = -(probs * log_probs * self.mask).sum(dim=-1)
         num_valid = self.mask.sum(dim=-1).clamp(min=1)
         max_entropy = torch.log(num_valid.float())
-        normalized = raw_entropy / max_entropy.clamp(min=1e-8)
+        # Guard division to prevent FP16 overflow when num_valid == 1 (max_entropy = 0)
+        # Use 1.0 as safe divisor for single-action case; result is discarded by where().
+        safe_max_entropy = torch.where(num_valid > 1, max_entropy, torch.ones_like(max_entropy))
+        normalized = raw_entropy / safe_max_entropy.clamp(min=1e-8)
         # Single valid action = zero entropy (no choice = no uncertainty)
         return torch.where(num_valid == 1, torch.zeros_like(normalized), normalized)

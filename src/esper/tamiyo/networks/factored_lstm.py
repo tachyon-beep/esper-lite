@@ -26,6 +26,18 @@ from typing import TypedDict
 import torch
 import torch.nn as nn
 
+from esper.leyline import (
+    DEFAULT_LSTM_HIDDEN_DIM,
+    DEFAULT_FEATURE_DIM,
+    HEAD_NAMES,
+    MASKED_LOGIT_VALUE,
+)
+from esper.leyline.factored_actions import (
+    GerminationStyle,
+    LifecycleOp,
+    get_action_head_sizes,
+)
+from esper.leyline.slot_config import SlotConfig
 from esper.tamiyo.policy.action_masks import MaskedCategorical
 
 
@@ -63,19 +75,6 @@ class _ForwardOutput(TypedDict):
     op_logits: torch.Tensor
     value: torch.Tensor
     hidden: tuple[torch.Tensor, torch.Tensor]
-
-from esper.leyline import (
-    DEFAULT_LSTM_HIDDEN_DIM,
-    DEFAULT_FEATURE_DIM,
-    HEAD_NAMES,
-    MASKED_LOGIT_VALUE,
-)
-from esper.leyline.factored_actions import (
-    GerminationStyle,
-    LifecycleOp,
-    get_action_head_sizes,
-)
-from esper.leyline.slot_config import SlotConfig
 
 
 class FactoredRecurrentActorCritic(nn.Module):
@@ -208,7 +207,7 @@ class FactoredRecurrentActorCritic(nn.Module):
 
         self._init_weights()
 
-    def _init_weights(self):
+    def _init_weights(self) -> None:
         """Orthogonal initialization for stable training."""
         for module in self.modules():
             if isinstance(module, nn.Linear):
@@ -460,7 +459,8 @@ class FactoredRecurrentActorCritic(nn.Module):
                 dist = MaskedCategorical(logits=logits, mask=mask)
 
                 if deterministic:
-                    action = dist.probs.argmax(dim=-1)
+                    # Use masked_logits for argmax (more numerically stable than probs)
+                    action = dist.masked_logits.argmax(dim=-1)
                 else:
                     action = dist.sample()
 
@@ -516,7 +516,12 @@ class FactoredRecurrentActorCritic(nn.Module):
         alpha_curve_mask: torch.Tensor | None = None,
         op_mask: torch.Tensor | None = None,
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
-    ) -> tuple[dict[str, torch.Tensor], torch.Tensor, dict[str, torch.Tensor], tuple]:
+    ) -> tuple[
+        dict[str, torch.Tensor],
+        torch.Tensor,
+        dict[str, torch.Tensor],
+        tuple[torch.Tensor, torch.Tensor],
+    ]:
         """Evaluate actions for PPO update.
 
         Returns:
@@ -579,13 +584,19 @@ class FactoredRecurrentActorCritic(nn.Module):
             if mask is None:
                 mask = torch.ones_like(logits, dtype=torch.bool)
             if key == "style":
+                # When op is not GERMINATE or SET_ALPHA_TARGET, style is irrelevant.
+                # Force selection of SIGMOID_ADD (the default/no-op style).
                 style_irrelevant = (op_actions != LifecycleOp.GERMINATE) & (
                     op_actions != LifecycleOp.SET_ALPHA_TARGET
                 )
-                # Avoid `.any()` (CPU sync) by applying the override unconditionally.
-                mask = mask.clone()
-                mask[style_irrelevant] = False
-                mask[..., int(GerminationStyle.SIGMOID_ADD)][style_irrelevant] = True
+                # For 3D mask [batch, seq_len, num_styles], use masked_fill pattern
+                # to avoid incorrect advanced indexing. Expand style_irrelevant to match.
+                expanded_irrelevant = style_irrelevant.unsqueeze(-1).expand_as(mask)
+                mask = mask.masked_fill(expanded_irrelevant, False)
+                # Set SIGMOID_ADD column to True for irrelevant rows
+                sigmoid_add_idx = int(GerminationStyle.SIGMOID_ADD)
+                mask = mask.clone()  # Clone after masked_fill to enable in-place update
+                mask[..., sigmoid_add_idx] = mask[..., sigmoid_add_idx] | style_irrelevant
             mask_flat = mask.reshape(-1, action_dim)
 
             dist = MaskedCategorical(logits=logits_flat, mask=mask_flat)
@@ -595,4 +606,4 @@ class FactoredRecurrentActorCritic(nn.Module):
         return log_probs, output["value"], entropy, output["hidden"]
 
 
-__all__ = ["FactoredRecurrentActorCritic"]
+__all__ = ["FactoredRecurrentActorCritic", "GetActionResult"]
