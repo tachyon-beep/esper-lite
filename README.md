@@ -294,15 +294,28 @@ Gates enforce hard-coded thresholds for gradient ratios, improvement metrics, st
 | `param_budget` | `500000` | Parameter budget for seeds (penalty if exceeded) |
 | `param_penalty_weight` | `0.1` | Weight of parameter budget penalty in reward |
 
-#### A/B Testing
+#### A/B/n Testing
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `ab_reward_modes` | `null` | Per-environment reward mode override (list matching `n_envs` length) |
+| `reward_mode_per_env` | `null` | Per-environment reward mode override (tuple matching `n_envs` length) |
 
 ```json
 {
   "n_envs": 8,
-  "ab_reward_modes": ["shaped", "shaped", "shaped", "shaped", "simplified", "simplified", "simplified", "simplified"]
+  "reward_mode_per_env": ["shaped", "shaped", "shaped", "shaped", "simplified", "simplified", "simplified", "simplified"]
 }
+```
+
+For programmatic configuration, use the `with_reward_split()` factory:
+
+```python
+from esper.simic.training import TrainingConfig
+from esper.simic.rewards import RewardMode
+
+# A/B test: 4 envs each with SHAPED and SIMPLIFIED
+cfg = TrainingConfig.with_reward_split(8, [RewardMode.SHAPED, RewardMode.SIMPLIFIED])
+
+# A/B/C test: 3-way split across 6 envs
+cfg = TrainingConfig.with_reward_split(6, [RewardMode.SHAPED, RewardMode.SIMPLIFIED, RewardMode.SPARSE])
 ```

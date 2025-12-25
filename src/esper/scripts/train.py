@@ -498,13 +498,18 @@ def main() -> None:
 
                 # Handle A/B testing - set on config for validation
                 if args.ab_test:
+                    from esper.simic.rewards import RewardMode
                     if config.n_envs % 2 != 0:
                         raise ValueError("--ab-test requires even number of envs")
                     half = config.n_envs // 2
                     if args.ab_test == "shaped-vs-simplified":
-                        config.ab_reward_modes = ["shaped"] * half + ["simplified"] * half
+                        config.reward_mode_per_env = (
+                            (RewardMode.SHAPED,) * half + (RewardMode.SIMPLIFIED,) * half
+                        )
                     elif args.ab_test == "shaped-vs-sparse":
-                        config.ab_reward_modes = ["shaped"] * half + ["sparse"] * half
+                        config.reward_mode_per_env = (
+                            (RewardMode.SHAPED,) * half + (RewardMode.SPARSE,) * half
+                        )
                     print(f"[A/B Test] {half} envs SHAPED vs {half} envs {args.ab_test.split('-vs-')[1].upper()}")
 
                 # Handle dual-policy A/B testing

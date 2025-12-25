@@ -509,7 +509,7 @@ def train_ppo_vectorized(
     param_penalty_weight: float = 0.1,
     sparse_reward_scale: float = 1.0,
     reward_family: str = "contribution",
-    ab_reward_modes: list[str] | None = None,
+    reward_mode_per_env: tuple[RewardMode, ...] | None = None,
     permissive_gates: bool = True,
     quiet_analytics: bool = False,
     telemetry_dir: str | None = None,
@@ -680,15 +680,14 @@ def train_ppo_vectorized(
     )
     loss_reward_config = task_spec.loss_reward_config
 
-    # Per-environment reward configs for A/B testing
-    if ab_reward_modes is not None:
-        if len(ab_reward_modes) != n_envs:
+    # Per-environment reward configs for A/B/n testing
+    if reward_mode_per_env is not None:
+        if len(reward_mode_per_env) != n_envs:
             raise ValueError(
-                f"ab_reward_modes length ({len(ab_reward_modes)}) must match n_envs ({n_envs})"
+                f"reward_mode_per_env length ({len(reward_mode_per_env)}) must match n_envs ({n_envs})"
             )
         env_reward_configs = []
-        for env_idx, mode_str in enumerate(ab_reward_modes):
-            env_mode = RewardMode(mode_str)
+        for env_mode in reward_mode_per_env:
             env_config = ContributionRewardConfig(
                 reward_mode=env_mode,
                 param_budget=param_budget,
@@ -696,10 +695,10 @@ def train_ppo_vectorized(
                 sparse_reward_scale=sparse_reward_scale,
             )
             env_reward_configs.append(env_config)
-        _logger.info(
-            "A/B testing enabled: %s",
-            {mode: ab_reward_modes.count(mode) for mode in set(ab_reward_modes)},
-        )
+        mode_counts = {}
+        for mode in reward_mode_per_env:
+            mode_counts[mode.value] = mode_counts.get(mode.value, 0) + 1
+        _logger.info("A/B/n testing enabled: %s", mode_counts)
     else:
         env_reward_configs = [reward_config] * n_envs
 
@@ -3130,8 +3129,8 @@ def train_ppo_vectorized(
     if save_path:
         agent.save(save_path)
 
-    # A/B Test Summary
-    if ab_reward_modes is not None:
+    # A/B/n Test Summary
+    if reward_mode_per_env is not None:
         print("\n" + "=" * 60)
         print("A/B TEST RESULTS")
         print("=" * 60)
