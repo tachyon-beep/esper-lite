@@ -70,61 +70,6 @@ Legacy code and backwards compatibility create:
 - Claude Code MUST delete old code completely when making changes
 - Any legacy code patterns MUST be flagged and removed immediately
 
-## hasattr Usage Policy
-
-**STRICT REQUIREMENT:** The use of `hasattr()` must be explicitly authorized by the operator for every case without exception.
-
-### Authorization Requirements
-
-Every `hasattr()` call in the codebase MUST be accompanied by an inline comment containing:
-
-1. Explicit authorization from the operator
-2. Date and time of authorization (ISO 8601 format)
-3. Justification for why hasattr is necessary
-
-### Format
-
-```python
-# hasattr AUTHORIZED by [operator name] on [YYYY-MM-DD HH:MM:SS UTC]
-# Justification: [Specific reason why hasattr is required]
-if hasattr(obj, 'attribute'):
-    ...
-```
-
-### Example (Legitimate Use)
-
-```python
-# hasattr AUTHORIZED by John on 2025-11-30 14:23:00 UTC
-# Justification: Serialization - handle both enum and string event_type values from external sources
-event_type = event.event_type.name if hasattr(event.event_type, 'name') else str(event.event_type)
-```
-
-### Rationale
-
-The `hasattr()` function is often used to mask integration flaws:
-
-- Checking for attributes that should always exist (poor type contracts)
-- Checking for attributes that never exist (actual bugs)
-- Duck typing that should be formalized with Protocols or ABCs
-
-**Default stance:** If you need `hasattr()`, you probably have a design problem. Fix the design instead.
-
-### Enforcement
-
-- Any `hasattr()` without proper authorization MUST be flagged during code review
-- Claude Code MUST NOT introduce new `hasattr()` calls without explicit operator approval
-- Existing unauthorized `hasattr()` calls should be treated as technical debt to be removed
-
-### Exceptions
-
-The only legitimate uses of `hasattr()` are:
-
-1. **Serialization/Deserialization:** Handling polymorphic data from external sources
-2. **Cleanup Guards:** Defensive programming in `__del__`/`close()` methods
-3. **Feature Detection:** When integrating with external libraries where feature availability varies
-
-Even these cases require authorization and documentation.
-
 ## Archive Policy
 
 **The `docs/plans/archive/` directory contains completed or superseded implementation plans.**
@@ -230,19 +175,14 @@ The `leyline` module is the project's "DNA" — it defines the contracts that al
 
 #### 1. Body/Organism Metaphor — For System Architecture
 
-The seven domains are organs/systems within a single organism:
+The seven domains are organs/systems within a single organism. e.g.:
 
 | Domain | Biological Role | Description |
 |--------|-----------------|-------------|
 | **Kasmina** | Stem Cells | Pluripotent slots that differentiate into modules |
-| **Leyline** | DNA/Genome | Shared contracts, types, the "genetic code" |
 | **Tamiyo** | Brain/Cortex | Strategic decision-making, high-level control |
 | **Tolaria** | Metabolism | Energy conversion, training execution |
 | **Simic** | Evolution | Adaptation through reinforcement learning |
-| **Nissa** | Sensory Organs | Telemetry, observation, perception |
-| **Karn** | Memory | Historical records, analytics, recall |
-| **Narset** *(future)* | Endocrine System | Hormonal coordination between regions |
-| **Emrakul** *(future)* | Immune System | Identifying and removing parasitic components |
 
 #### 2. Plant/Botanical Metaphor — For Seed Lifecycle Only
 
@@ -255,16 +195,20 @@ The lifecycle of individual neural modules uses botanical terms:
 | **Training** | Growing, learning from host errors |
 | **Blending** | Being integrated into the host |
 | **Grafted/Fossilized** | Permanently fused with host |
-| **Culled** | Removed due to poor performance |
+| **Pruned** | Removed due to poor performance |
 
 #### The Framing
 
 Think of it as: **"The organism's stem cells undergo a botanical development process."** The body metaphor describes *what the system is*; the plant metaphor describes *how individual modules mature*.
 
-#### Enforcement
+#### Documentation Quality
 
 - Claude Code MUST NOT introduce new metaphors (no "factory", "pipeline", "machine" language)
 - Claude Code MUST NOT use body terms for seed states (no "seed is metabolizing")
 - Claude Code MUST NOT use plant terms for system architecture (no "Tamiyo is the gardener")
 - When in doubt, refer to the tables above
 - If you are being asked to deliver a telemetry component, do not defer or put it off; if you are working on a half finished telemetry component, do not remove it as 'incomplete' or 'deferred functionality'. This pattern of behaviour is why we are several months in and have no telemetry.
+
+## PROHIBITION ON "DEFENSIVE PROGRAMMING" PATTERNS
+
+No Bug-Hiding Patterns: This codebase prohibits defensive patterns that mask bugs instead of fixing them. Do not use .get(), getattr(), hasattr(), isinstance(), or silent exception handling to suppress errors from nonexistent attributes, malformed data, or incorrect types. A common anti-pattern is when an LLM hallucinates a variable or field name, the code fails, and the "fix" is wrapping it in getattr(obj, "hallucinated_field", None) to silence the error—this hides the real bug. When code fails, fix the actual cause: correct the field name, migrate the data source to emit proper types, or fix the broken integration. Typed dataclasses with discriminator fields serve as contracts; access fields directly (obj.field) not defensively (obj.get("field")). If code would fail without a defensive pattern, that failure is a bug to fix, not a symptom to suppress.
