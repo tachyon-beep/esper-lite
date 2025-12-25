@@ -15,6 +15,8 @@ import torch
 
 from esper.leyline.slot_config import SlotConfig
 from esper.simic.agent import PPOAgent, CHECKPOINT_VERSION
+from esper.tamiyo.policy.factory import create_policy
+from esper.tamiyo.policy.features import get_feature_size
 
 
 class TestPPOCheckpointRoundTrip:
@@ -22,10 +24,18 @@ class TestPPOCheckpointRoundTrip:
 
     def test_roundtrip_default_3_slot_config(self, tmp_path: Path):
         """Default 3-slot config survives round-trip."""
-        original = PPOAgent(
-            slot_config=SlotConfig.default(),
+        slot_config = SlotConfig.default()
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=get_feature_size(slot_config),
+            num_slots=slot_config.num_slots,
             device="cpu",
-            compile_network=False,
+            compile_mode="off",
+        )
+        original = PPOAgent(
+            policy=policy,
+            slot_config=slot_config,
+            device="cpu",
         )
         original.train_steps = 42
 
@@ -42,10 +52,17 @@ class TestPPOCheckpointRoundTrip:
     def test_roundtrip_custom_5_slot_config(self, tmp_path: Path):
         """Custom 5-slot config survives round-trip (the bug case)."""
         slot_config = SlotConfig(slot_ids=("r0c0", "r0c1", "r0c2", "r1c0", "r1c1"))
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=get_feature_size(slot_config),
+            num_slots=slot_config.num_slots,
+            device="cpu",
+            compile_mode="off",
+        )
         original = PPOAgent(
+            policy=policy,
             slot_config=slot_config,
             device="cpu",
-            compile_network=False,
         )
 
         original.save(tmp_path / "agent.pt")
@@ -56,10 +73,18 @@ class TestPPOCheckpointRoundTrip:
 
     def test_roundtrip_preserves_all_hyperparams(self, tmp_path: Path):
         """All hyperparameters survive round-trip."""
-        original = PPOAgent(
-            slot_config=SlotConfig.default(),
+        slot_config = SlotConfig.default()
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=get_feature_size(slot_config),
+            num_slots=slot_config.num_slots,
             device="cpu",
-            compile_network=False,
+            compile_mode="off",
+        )
+        original = PPOAgent(
+            policy=policy,
+            slot_config=slot_config,
+            device="cpu",
             # Non-default values
             gamma=0.99,
             gae_lambda=0.95,
@@ -93,7 +118,14 @@ class TestPPOCheckpointValidation:
         """Corrupted checkpoint (missing slot_ids) fails with clear error."""
         # Save 5-slot agent
         slot_config = SlotConfig(slot_ids=("r0c0", "r0c1", "r0c2", "r1c0", "r1c1"))
-        agent = PPOAgent(slot_config=slot_config, device="cpu", compile_network=False)
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=get_feature_size(slot_config),
+            num_slots=slot_config.num_slots,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(policy=policy, slot_config=slot_config, device="cpu")
         agent.save(tmp_path / "agent.pt")
 
         # Corrupt: remove slot_ids
@@ -112,7 +144,15 @@ class TestPPOCheckpointNoBackwardsCompatibility:
     def test_legacy_checkpoint_fails_fast(self, tmp_path: Path):
         """Legacy checkpoint (missing checkpoint_version) fails with clear error."""
         # Create checkpoint with current format
-        agent = PPOAgent(device="cpu", compile_network=False)
+        slot_config = SlotConfig.default()
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=get_feature_size(slot_config),
+            num_slots=slot_config.num_slots,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(policy=policy, device="cpu")
         agent.save(tmp_path / "agent.pt")
 
         # Strip to legacy format (missing required fields)
@@ -127,7 +167,15 @@ class TestPPOCheckpointNoBackwardsCompatibility:
     def test_wrong_checkpoint_version_fails(self, tmp_path: Path):
         """Checkpoint with wrong version fails with clear error."""
         # Create checkpoint with current format
-        agent = PPOAgent(device="cpu", compile_network=False)
+        slot_config = SlotConfig.default()
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=get_feature_size(slot_config),
+            num_slots=slot_config.num_slots,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(policy=policy, device="cpu")
         agent.save(tmp_path / "agent.pt")
 
         # Change version to invalid
@@ -145,7 +193,15 @@ class TestPPOCheckpointVersion:
 
     def test_checkpoint_contains_version(self, tmp_path: Path):
         """Checkpoint includes version field."""
-        agent = PPOAgent(device="cpu", compile_network=False)
+        slot_config = SlotConfig.default()
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=get_feature_size(slot_config),
+            num_slots=slot_config.num_slots,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(policy=policy, device="cpu")
         agent.save(tmp_path / "agent.pt")
 
         checkpoint = torch.load(tmp_path / "agent.pt", weights_only=False)
@@ -155,7 +211,14 @@ class TestPPOCheckpointVersion:
     def test_checkpoint_contains_slot_ids(self, tmp_path: Path):
         """Checkpoint includes slot_ids in architecture."""
         slot_config = SlotConfig(slot_ids=("r0c0", "r0c1", "r0c2", "r1c0", "r1c1"))
-        agent = PPOAgent(slot_config=slot_config, device="cpu", compile_network=False)
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=get_feature_size(slot_config),
+            num_slots=slot_config.num_slots,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(policy=policy, slot_config=slot_config, device="cpu")
         agent.save(tmp_path / "agent.pt")
 
         checkpoint = torch.load(tmp_path / "agent.pt", weights_only=False)

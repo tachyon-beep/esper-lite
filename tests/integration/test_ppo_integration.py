@@ -9,8 +9,10 @@ Tests that PPO components work together correctly:
 import torch
 
 from esper.simic.agent import PPOAgent, signals_to_features
-from esper.tamiyo.policy.features import MULTISLOT_FEATURE_SIZE
+from esper.tamiyo.policy.features import MULTISLOT_FEATURE_SIZE, get_feature_size
+from esper.tamiyo.policy.factory import create_policy
 from esper.leyline import TrainingSignals, SeedTelemetry
+from esper.leyline.slot_config import SlotConfig
 from esper.leyline.factored_actions import (
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
@@ -53,7 +55,14 @@ class TestPPOFeatureCompatibility:
         assert len(features) == MULTISLOT_FEATURE_SIZE, f"Expected {MULTISLOT_FEATURE_SIZE} features, got {len(features)}"
 
         # Create PPO agent with matching dimensions
-        agent = PPOAgent(state_dim=len(features), device='cpu', compile_network=False)
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=len(features),
+            num_slots=3,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(policy=policy, device="cpu")
 
         # Convert to tensor
         state_tensor = torch.tensor([features], dtype=torch.float32)
@@ -91,7 +100,14 @@ class TestPPOFeatureCompatibility:
         assert len(features) == expected_dim, f"Expected {expected_dim} features, got {len(features)}"
 
         # Create PPO agent with matching dimensions
-        agent = PPOAgent(state_dim=len(features), device='cpu', compile_network=False)
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=len(features),
+            num_slots=3,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(policy=policy, device="cpu")
 
         # Convert to tensor
         state_tensor = torch.tensor([features], dtype=torch.float32)
@@ -130,7 +146,14 @@ class TestPPOFeatureCompatibility:
         assert batch_tensor.shape == (batch_size, MULTISLOT_FEATURE_SIZE)
 
         # Create agent
-        agent = PPOAgent(state_dim=MULTISLOT_FEATURE_SIZE, device='cpu', compile_network=False)
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=MULTISLOT_FEATURE_SIZE,
+            num_slots=3,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(policy=policy, device="cpu")
         masks = _create_all_valid_masks(batch_size)
 
         # Should handle batch without errors
@@ -166,7 +189,14 @@ class TestPPOForwardPass:
 
     def test_forward_pass_returns_valid_outputs(self):
         """Forward pass should return valid factored outputs."""
-        agent = PPOAgent(state_dim=MULTISLOT_FEATURE_SIZE, device='cpu', compile_network=False)
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=MULTISLOT_FEATURE_SIZE,
+            num_slots=3,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(policy=policy, device="cpu")
         state = torch.randn(1, MULTISLOT_FEATURE_SIZE)
         masks = _create_all_valid_masks()
 
@@ -197,7 +227,14 @@ class TestPPOForwardPass:
 
     def test_forward_pass_value_is_scalar(self):
         """Value function should output scalar per state."""
-        agent = PPOAgent(state_dim=50, device='cpu', compile_network=False)
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=50,
+            num_slots=3,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(policy=policy, device="cpu")
         batch_size = 8
         states = torch.randn(batch_size, 50)
         masks = _create_all_valid_masks(batch_size)
@@ -219,7 +256,14 @@ class TestPPOForwardPass:
 
     def test_forward_pass_deterministic(self):
         """Same input should produce same output in deterministic mode."""
-        agent = PPOAgent(state_dim=50, device='cpu', compile_network=False)
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=50,
+            num_slots=3,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(policy=policy, device="cpu")
         state = torch.randn(1, 50)
         masks = _create_all_valid_masks()
 
@@ -269,7 +313,14 @@ class TestPPOActionSampling:
 
     def test_get_action_returns_valid_factored_actions(self):
         """get_action should return valid action indices for each head."""
-        agent = PPOAgent(state_dim=50, device='cpu', compile_network=False)
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=50,
+            num_slots=3,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(policy=policy, device="cpu")
         state = torch.randn(1, 50)
         masks = _create_all_valid_masks()
 
@@ -311,7 +362,14 @@ class TestPPOActionSampling:
 
     def test_deterministic_action_selects_argmax(self):
         """Deterministic action should select highest probability action."""
-        agent = PPOAgent(state_dim=50, device='cpu', compile_network=False)
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=50,
+            num_slots=3,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(policy=policy, device="cpu")
         state = torch.randn(1, 50)
         masks = _create_all_valid_masks()
 
@@ -349,7 +407,14 @@ class TestPPOActionSampling:
 
     def test_stochastic_action_samples_from_distribution(self):
         """Stochastic action should sample from distribution."""
-        agent = PPOAgent(state_dim=50, device='cpu', compile_network=False)
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=50,
+            num_slots=3,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(policy=policy, device="cpu")
         state = torch.randn(1, 50)
         masks = _create_all_valid_masks()
 
@@ -394,7 +459,14 @@ class TestPPOEndToEnd:
         features = signals_to_features(signals, slot_reports={}, use_telemetry=False, slots=["r0c1"])
 
         # Create agent
-        agent = PPOAgent(state_dim=len(features), device='cpu', compile_network=False)
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=len(features),
+            num_slots=3,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(policy=policy, device="cpu")
 
         # Get action
         state_tensor = torch.tensor([features], dtype=torch.float32)
@@ -430,7 +502,14 @@ class TestPPOEndToEnd:
         assert len(features) == expected_dim, f"Should have {expected_dim} features with telemetry"
 
         # Create agent
-        agent = PPOAgent(state_dim=expected_dim, device='cpu', compile_network=False)
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=expected_dim,
+            num_slots=3,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(policy=policy, device="cpu")
 
         # Get action
         state_tensor = torch.tensor([features], dtype=torch.float32)
@@ -452,7 +531,14 @@ class TestPPOEndToEnd:
 
     def test_hidden_state_continuity(self):
         """LSTM hidden states should be maintained across calls."""
-        agent = PPOAgent(state_dim=50, device='cpu', compile_network=False)
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=50,
+            num_slots=3,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(policy=policy, device="cpu")
         state = torch.randn(1, 50)
         masks = _create_all_valid_masks()
 

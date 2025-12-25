@@ -15,7 +15,7 @@ from esper.leyline.factored_actions import (
     NUM_TEMPO,
 )
 from esper.tamiyo.policy.action_masks import InvalidStateMachineError
-from esper.simic.agent import FactoredRecurrentActorCritic
+from esper.tamiyo.networks import FactoredRecurrentActorCritic
 
 
 class TestFactoredRecurrentActorCritic:
