@@ -22,13 +22,7 @@ import torch
 
 from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
 from esper.leyline.slot_config import SlotConfig
-
-# HOT PATH: ONLY leyline imports allowed!
-
-# Debug flag for paranoia stage validation (set ESPER_DEBUG_STAGE=1 to enable)
-_DEBUG_STAGE_VALIDATION = os.environ.get("ESPER_DEBUG_STAGE", "").lower() in ("1", "true", "yes")
-
-# Import stage schema for validation and one-hot encoding
+# Stage schema for validation and one-hot encoding
 # NOTE: Imported at module level since these are fast O(1) lookups used in hot path
 from esper.leyline.stage_schema import (
     VALID_STAGE_VALUES as _VALID_STAGE_VALUES,
@@ -36,6 +30,11 @@ from esper.leyline.stage_schema import (
     stage_to_one_hot as _stage_to_one_hot,
     STAGE_TO_INDEX as _STAGE_TO_INDEX,
 )
+
+# HOT PATH: ONLY leyline imports allowed!
+
+# Debug flag for paranoia stage validation (set ESPER_DEBUG_STAGE=1 to enable)
+_DEBUG_STAGE_VALIDATION = os.environ.get("ESPER_DEBUG_STAGE", "").lower() in ("1", "true", "yes")
 
 if TYPE_CHECKING:
     # Type hints only - not imported at runtime
@@ -367,7 +366,6 @@ def batch_obs_to_features(
     Replaces dict-based loops with vectorized torch operations.
     """
     n_envs = len(batch_signals)
-    num_slots = slot_config.num_slots
     state_dim = get_feature_size(slot_config)
     
     # Pre-allocate feature tensor
@@ -398,13 +396,15 @@ def batch_obs_to_features(
     # [11-15] Loss history (5 values)
     for i, s in enumerate(batch_signals):
         hist = list(s.loss_history[-5:])
-        while len(hist) < 5: hist.insert(0, 0.0)
+        while len(hist) < 5:
+            hist.insert(0, 0.0)
         features[i, 11:16] = torch.tensor(hist, device=device).clamp(-10, 10)
         
     # [16-20] Accuracy history (5 values)
     for i, s in enumerate(batch_signals):
         hist = list(s.accuracy_history[-5:])
-        while len(hist) < 5: hist.insert(0, 0.0)
+        while len(hist) < 5:
+            hist.insert(0, 0.0)
         features[i, 16:21] = torch.tensor(hist, device=device)
         
     # [21] Total params

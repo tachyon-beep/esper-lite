@@ -7,7 +7,6 @@ Tests the checkpoint round-trip functionality, including:
 - Backwards compatibility with legacy checkpoints
 """
 
-import warnings
 from pathlib import Path
 
 import pytest

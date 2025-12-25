@@ -33,17 +33,16 @@ import os
 import random
 import threading
 import time
-import warnings
-from contextlib import ExitStack, nullcontext
-from dataclasses import dataclass, field
-from typing import Any, Callable, Sequence
-
-_logger = logging.getLogger(__name__)
+from contextlib import nullcontext
+from typing import TYPE_CHECKING, Any, Callable
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.amp as torch_amp
+
+if TYPE_CHECKING:
+    from esper.leyline.reports import SeedStateReport
+    from esper.simic.contracts import SlottedHostProtocol
 
 # NOTE: get_task_spec imported lazily inside train_ppo_vectorized to avoid circular import:
 #   runtime -> simic.rewards -> simic -> simic.training -> vectorized -> runtime
@@ -74,10 +73,8 @@ from esper.leyline import (
     HEAD_NAMES,
 )
 from esper.leyline.factored_actions import (
-    FactoredAction,
     AlphaCurveAction,
     AlphaSpeedAction,
-    AlphaTargetAction,
     ALPHA_SPEED_TO_STEPS,
     ALPHA_TARGET_VALUES,
     LifecycleOp,
@@ -101,17 +98,14 @@ from esper.simic.telemetry import (
     AnomalyReport,
     collect_per_layer_gradients,
     check_numerical_stability,
-    LayerGradientStats,
     collect_host_gradients_async,
     collect_seed_gradients_only_async,
     materialize_dual_grad_stats,
     TelemetryConfig,
-    compute_lstm_health,  # P4-8
     GradientEMATracker,  # P4-9
 )
 from esper.simic.control import RunningMeanStd, RewardNormalizer
 from esper.tamiyo.policy.features import (
-    MULTISLOT_FEATURE_SIZE,
     get_feature_size,
     batch_obs_to_features,
 )
@@ -132,21 +126,14 @@ from esper.karn.health import HealthMonitor
 from esper.simic.attribution import CounterfactualHelper
 from esper.simic.telemetry.emitters import (
     emit_with_env_context,
-    emit_last_action,
     compute_grad_norm_surrogate,
-    aggregate_layer_gradient_health,
-    emit_ppo_update_event,
-    emit_action_distribution,
-    emit_cf_unavailable,
-    emit_throughput,
-    emit_reward_summary,
-    emit_mask_hit_rates,
-    check_performance_degradation,
     apply_slot_telemetry,
     VectorizedEmitter,
 )
 from .parallel_env_state import ParallelEnvState
 from .helpers import compute_rent_and_shock_inputs
+
+_logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -1180,7 +1167,7 @@ def train_ppo_vectorized(
 
     @torch.compiler.disable
     def _collect_gradient_telemetry_for_batch(
-        model: "HostWithSeeds",
+        model: Any,
         slots_with_active_seeds: list[str],
         env_dev: str,
     ) -> dict[str, dict[Any, Any]] | None:
@@ -1190,15 +1177,11 @@ def train_ppo_vectorized(
         data-dependent slot iteration and conditional logic.
 
         Args:
-            model: The HostWithSeeds model
+            model: The model with seed slots
             slots_with_active_seeds: Pre-filtered list of slots with active seeds
             env_dev: Device string
         """
         from esper.leyline import SeedStage
-        from esper.simic.telemetry.gradient_collector import (
-            collect_host_gradients_async,
-            collect_seed_gradients_only_async,
-        )
 
         slots_needing_grad_telemetry = []
         for slot_id in slots_with_active_seeds:

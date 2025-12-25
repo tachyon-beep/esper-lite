@@ -24,7 +24,6 @@ from esper.tamiyo.policy.protocol import PolicyBundle
 from esper.leyline import (
     DEFAULT_GAMMA,
     DEFAULT_EPISODE_LENGTH,
-    DEFAULT_LSTM_HIDDEN_DIM,
     DEFAULT_N_ENVS,
     DEFAULT_LEARNING_RATE,
     DEFAULT_CLIP_RATIO,
