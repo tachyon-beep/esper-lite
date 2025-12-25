@@ -75,6 +75,7 @@ from esper.leyline import (
 )
 
 if TYPE_CHECKING:
+    from esper.kasmina.blending import AlphaScheduleProtocol
     from esper.simic.features import TaskConfig
 
 # Debug flag for STE gradient assertions (set ESPER_DEBUG_STE=1 to enable)
@@ -987,7 +988,7 @@ class SeedSlot(nn.Module):
 
         self.seed: nn.Module | None = None
         self.state: SeedState | None = None
-        self.alpha_schedule = None
+        self.alpha_schedule: AlphaScheduleProtocol | None = None
         self.isolate_gradients: bool = False
 
         # Only create isolation monitor if not in fast mode
@@ -2481,10 +2482,11 @@ class SeedSlot(nn.Module):
         # Alpha schedule: save config only, not the nn.Module
         # The nn.Module weights are saved in state_dict() automatically
         if self.alpha_schedule is not None:
+            # Contract: all alpha_schedule objects must satisfy AlphaScheduleProtocol
             state_dict["alpha_schedule_config"] = {
-                "algorithm_id": getattr(self.alpha_schedule, "algorithm_id", None),
-                "total_steps": getattr(self.alpha_schedule, "total_steps", None),
-                "current_step": getattr(self.alpha_schedule, "_current_step", 0),
+                "algorithm_id": self.alpha_schedule.algorithm_id,
+                "total_steps": self.alpha_schedule.total_steps,
+                "current_step": self.alpha_schedule._current_step,
             }
         else:
             state_dict["alpha_schedule_config"] = None

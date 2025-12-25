@@ -17,9 +17,28 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 import math
 import threading
+from typing import Protocol
 
 import torch
 import torch.nn as nn
+
+
+class AlphaScheduleProtocol(Protocol):
+    """Protocol defining required attributes for alpha schedule objects.
+
+    When SeedSlot.alpha_schedule is not None, it MUST provide these attributes
+    to support serialization and lifecycle tracking. All BlendAlgorithm subclasses
+    satisfy this protocol.
+
+    Contract:
+        - algorithm_id: Identifies the blending algorithm type
+        - total_steps: Total number of steps for the blending schedule
+        - _current_step: Current step in the blending schedule
+    """
+
+    algorithm_id: str
+    total_steps: int
+    _current_step: int
 
 
 class BlendAlgorithm(nn.Module, ABC):
@@ -234,6 +253,7 @@ class BlendCatalog:
 
 
 __all__ = [
+    "AlphaScheduleProtocol",
     "BlendAlgorithm",
     "LinearBlend",
     "SigmoidBlend",

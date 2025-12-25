@@ -155,3 +155,35 @@ class TestGatedBlendSerialization:
             new_slot.load_state_dict(state_dict, strict=False)
 
         assert new_slot.alpha_schedule is None
+
+    def test_alpha_schedule_serialization_uses_protocol_attributes(self):
+        """Verify serialization accesses protocol attributes without getattr.
+
+        This test ensures that when alpha_schedule is set, it satisfies
+        AlphaScheduleProtocol and serialization can access attributes directly.
+        Lines 2485-2489 in slot.py now use direct attribute access instead of getattr.
+        """
+        slot = SeedSlot(slot_id="test", channels=64, device="cpu")
+        slot._blend_algorithm_id = "gated"
+        slot.seed = nn.Linear(64, 64)
+        slot.state = SeedState(seed_id="test_seed", blueprint_id="test_blueprint", slot_id="test")
+        slot.state.stage = SeedStage.BLENDING
+        slot.start_blending(total_steps=10)
+
+        assert slot.alpha_schedule is not None
+
+        # get_extra_state() should access attributes directly (no getattr fallbacks)
+        extra_state = slot.get_extra_state()
+
+        # Verify the alpha_schedule_config was serialized correctly
+        assert "alpha_schedule_config" in extra_state
+        config = extra_state["alpha_schedule_config"]
+        assert config is not None
+        assert config["algorithm_id"] == "gated"
+        assert config["total_steps"] == 10
+        assert config["current_step"] == 0  # Initial step
+
+        # Verify the attributes exist on the alpha_schedule object
+        assert slot.alpha_schedule.algorithm_id == "gated"
+        assert slot.alpha_schedule.total_steps == 10
+        assert slot.alpha_schedule._current_step == 0
