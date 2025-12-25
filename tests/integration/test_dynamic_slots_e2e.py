@@ -22,6 +22,7 @@ from esper.leyline.factored_actions import (
     NUM_TEMPO,
 )
 from esper.simic.agent import PPOAgent
+from esper.tamiyo.policy.factory import create_policy
 from esper.tamiyo.policy.features import get_feature_size
 from esper.tamiyo.policy.action_masks import compute_action_masks, MaskSeedInfo
 
@@ -34,17 +35,23 @@ class TestTrainingWithDifferentSlotCounts:
         config = SlotConfig(slot_ids=("r0c1",))
         state_dim = get_feature_size(config)
 
-        agent = PPOAgent(
+        policy = create_policy(
+            policy_type="lstm",
             state_dim=state_dim,
             slot_config=config,
             device="cpu",
-            compile_network=False,
+            compile_mode="off",
+        )
+        agent = PPOAgent(
+            policy=policy,
+            slot_config=config,
+            device="cpu",
             num_envs=1,
             max_steps_per_env=10,
         )
 
         assert agent.slot_config.num_slots == 1
-        assert agent.network.num_slots == 1
+        assert agent.policy.network.num_slots == 1
 
         # Verify forward pass works
         states = torch.randn(1, state_dim)
@@ -60,7 +67,7 @@ class TestTrainingWithDifferentSlotCounts:
         }
 
         with torch.no_grad():
-            result = agent.network.get_action(
+            result = agent.policy.network.get_action(
                 states,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -80,17 +87,23 @@ class TestTrainingWithDifferentSlotCounts:
         config = SlotConfig.for_grid(rows=1, cols=5)
         state_dim = get_feature_size(config)
 
-        agent = PPOAgent(
+        policy = create_policy(
+            policy_type="lstm",
             state_dim=state_dim,
             slot_config=config,
             device="cpu",
-            compile_network=False,
+            compile_mode="off",
+        )
+        agent = PPOAgent(
+            policy=policy,
+            slot_config=config,
+            device="cpu",
             num_envs=2,
             max_steps_per_env=10,
         )
 
         assert agent.slot_config.num_slots == 5
-        assert agent.network.num_slots == 5
+        assert agent.policy.network.num_slots == 5
 
         # Verify batched forward pass works
         n_envs = 2
@@ -107,7 +120,7 @@ class TestTrainingWithDifferentSlotCounts:
         }
 
         with torch.no_grad():
-            result = agent.network.get_action(
+            result = agent.policy.network.get_action(
                 states,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -128,17 +141,23 @@ class TestTrainingWithDifferentSlotCounts:
         config = SlotConfig.for_grid(rows=3, cols=3)
         state_dim = get_feature_size(config)
 
-        agent = PPOAgent(
+        policy = create_policy(
+            policy_type="lstm",
             state_dim=state_dim,
             slot_config=config,
             device="cpu",
-            compile_network=False,
+            compile_mode="off",
+        )
+        agent = PPOAgent(
+            policy=policy,
+            slot_config=config,
+            device="cpu",
             num_envs=2,
             max_steps_per_env=10,
         )
 
         assert agent.slot_config.num_slots == 9
-        assert agent.network.num_slots == 9
+        assert agent.policy.network.num_slots == 9
         assert agent.slot_config.slot_ids == (
             "r0c0", "r0c1", "r0c2",
             "r1c0", "r1c1", "r1c2",
@@ -160,7 +179,7 @@ class TestTrainingWithDifferentSlotCounts:
         }
 
         with torch.no_grad():
-            result = agent.network.get_action(
+            result = agent.policy.network.get_action(
                 states,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -360,17 +379,23 @@ class TestLargeSlotConfigurations:
         config = SlotConfig.for_grid(rows=5, cols=5)
         state_dim = get_feature_size(config)
 
-        agent = PPOAgent(
+        policy = create_policy(
+            policy_type="lstm",
             state_dim=state_dim,
             slot_config=config,
             device="cpu",
-            compile_network=False,
+            compile_mode="off",
+        )
+        agent = PPOAgent(
+            policy=policy,
+            slot_config=config,
+            device="cpu",
             num_envs=1,
             max_steps_per_env=10,
         )
 
         assert agent.slot_config.num_slots == 25
-        assert agent.network.num_slots == 25
+        assert agent.policy.network.num_slots == 25
 
         # Verify forward pass with 25 slots
         states = torch.randn(1, state_dim)
@@ -386,7 +411,7 @@ class TestLargeSlotConfigurations:
         }
 
         with torch.no_grad():
-            result = agent.network.get_action(
+            result = agent.policy.network.get_action(
                 states,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -430,10 +455,16 @@ class TestBufferWithDynamicSlots:
         config = SlotConfig.for_grid(rows=1, cols=5)
         state_dim = get_feature_size(config)
 
-        agent = PPOAgent(
+        policy = create_policy(
+            policy_type="lstm",
             state_dim=state_dim,
             slot_config=config,
-            compile_network=False,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(
+            policy=policy,
+            slot_config=config,
             device="cpu",
             num_envs=2,
             max_steps_per_env=10,
@@ -490,10 +521,16 @@ class TestBufferWithDynamicSlots:
         config = SlotConfig.for_grid(rows=1, cols=5)  # 5 slots
         state_dim = get_feature_size(config)
 
-        agent = PPOAgent(
+        policy = create_policy(
+            policy_type="lstm",
             state_dim=state_dim,
             slot_config=config,
-            compile_network=False,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(
+            policy=policy,
+            slot_config=config,
             device="cpu",
             num_envs=1,
             max_steps_per_env=10,

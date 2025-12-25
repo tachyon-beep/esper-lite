@@ -312,5 +312,32 @@ class LSTMPolicyBundle:
         """Access underlying network for torch.compile."""
         return self._network
 
+    # === torch.compile Integration ===
+
+    def compile(
+        self,
+        mode: str = "default",
+        dynamic: bool = True,
+    ) -> None:
+        """Compile the underlying network with torch.compile.
+
+        Must be called AFTER device placement (.to(device)).
+        Compilation is idempotent - calling twice is safe.
+
+        Args:
+            mode: Compilation mode ("default", "reduce-overhead", "max-autotune", "off")
+            dynamic: Enable dynamic shapes for varying batch/sequence lengths
+        """
+        if mode == "off" or self.is_compiled:
+            return
+        self._network = torch.compile(self._network, mode=mode, dynamic=dynamic)
+
+    @property
+    def is_compiled(self) -> bool:
+        """True if the network has been compiled with torch.compile."""
+        # hasattr AUTHORIZED by John on 2025-12-25 00:00:00 UTC
+        # Justification: torch.compile detection - OptimizedModule has _orig_mod attr
+        return hasattr(self._network, '_orig_mod')
+
 
 __all__ = ["LSTMPolicyBundle"]

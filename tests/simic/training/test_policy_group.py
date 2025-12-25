@@ -7,6 +7,7 @@ from esper.simic.agent import PPOAgent
 from esper.simic.rewards import ContributionRewardConfig
 from esper.simic.training import PolicyGroup
 from esper.tamiyo.policy.factory import create_policy
+from esper.leyline.slot_config import SlotConfig
 
 
 @pytest.fixture
@@ -15,7 +16,7 @@ def mock_agent():
     policy = create_policy(
         policy_type="lstm",
         state_dim=30,
-        num_slots=3,
+        slot_config=SlotConfig.default(),
         device="cpu",
         compile_mode="off",
     )
@@ -144,8 +145,8 @@ class TestPolicyGroupIndependence:
     def test_separate_groups_have_separate_histories(self):
         """Each group should maintain its own episode history."""
         # Create two separate agents to ensure independence
-        policy_a = create_policy(policy_type="lstm", state_dim=30, num_slots=3, device="cpu", compile_mode="off")
-        policy_b = create_policy(policy_type="lstm", state_dim=30, num_slots=3, device="cpu", compile_mode="off")
+        policy_a = create_policy(policy_type="lstm", state_dim=30, slot_config=SlotConfig.default(), device="cpu", compile_mode="off")
+        policy_b = create_policy(policy_type="lstm", state_dim=30, slot_config=SlotConfig.default(), device="cpu", compile_mode="off")
         agent_a = PPOAgent(policy=policy_a, device="cpu")
         agent_b = PPOAgent(policy=policy_b, device="cpu")
 
@@ -176,8 +177,8 @@ class TestPolicyGroupIndependence:
 
     def test_groups_can_have_different_devices(self):
         """Groups should be able to use different devices."""
-        policy_a = create_policy(policy_type="lstm", state_dim=30, num_slots=3, device="cpu", compile_mode="off")
-        policy_b = create_policy(policy_type="lstm", state_dim=30, num_slots=3, device="cpu", compile_mode="off")
+        policy_a = create_policy(policy_type="lstm", state_dim=30, slot_config=SlotConfig.default(), device="cpu", compile_mode="off")
+        policy_b = create_policy(policy_type="lstm", state_dim=30, slot_config=SlotConfig.default(), device="cpu", compile_mode="off")
         agent_a = PPOAgent(policy=policy_a, device="cpu")
         agent_b = PPOAgent(policy=policy_b, device="cpu")
 
@@ -220,8 +221,8 @@ class TestPolicyGroupRewardConfig:
             pbrs_weight=0.2,
         )
 
-        policy_a = create_policy(policy_type="lstm", state_dim=30, num_slots=3, device="cpu", compile_mode="off")
-        policy_b = create_policy(policy_type="lstm", state_dim=30, num_slots=3, device="cpu", compile_mode="off")
+        policy_a = create_policy(policy_type="lstm", state_dim=30, slot_config=SlotConfig.default(), device="cpu", compile_mode="off")
+        policy_b = create_policy(policy_type="lstm", state_dim=30, slot_config=SlotConfig.default(), device="cpu", compile_mode="off")
         agent_a = PPOAgent(policy=policy_a, device="cpu")
         agent_b = PPOAgent(policy=policy_b, device="cpu")
 
@@ -253,8 +254,8 @@ class TestPolicyGroupRewardConfig:
         from esper.simic.training.parallel_env_state import ParallelEnvState
         from unittest.mock import Mock
 
-        policy_a = create_policy(policy_type="lstm", state_dim=30, num_slots=3, device="cpu", compile_mode="off")
-        policy_b = create_policy(policy_type="lstm", state_dim=30, num_slots=3, device="cpu", compile_mode="off")
+        policy_a = create_policy(policy_type="lstm", state_dim=30, slot_config=SlotConfig.default(), device="cpu", compile_mode="off")
+        policy_b = create_policy(policy_type="lstm", state_dim=30, slot_config=SlotConfig.default(), device="cpu", compile_mode="off")
         agent_a = PPOAgent(policy=policy_a, device="cpu")
         agent_b = PPOAgent(policy=policy_b, device="cpu")
 

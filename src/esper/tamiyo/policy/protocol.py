@@ -262,5 +262,27 @@ class PolicyBundle(Protocol):
         """
         ...
 
+    # === torch.compile Integration ===
+    def compile(
+        self,
+        mode: str = "default",
+        dynamic: bool = True,
+    ) -> None:
+        """Compile the underlying network with torch.compile.
+
+        Must be called AFTER device placement (.to(device)).
+        Compilation is idempotent - calling twice is safe.
+
+        Args:
+            mode: Compilation mode ("default", "reduce-overhead", "max-autotune", "off")
+            dynamic: Enable dynamic shapes for varying batch/sequence lengths
+        """
+        ...
+
+    @property
+    def is_compiled(self) -> bool:
+        """True if the network has been compiled with torch.compile."""
+        ...
+
 
 __all__ = ["PolicyBundle"]

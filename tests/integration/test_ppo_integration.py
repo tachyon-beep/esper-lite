@@ -58,7 +58,7 @@ class TestPPOFeatureCompatibility:
         policy = create_policy(
             policy_type="lstm",
             state_dim=len(features),
-            num_slots=3,
+            slot_config=SlotConfig.default(),
             device="cpu",
             compile_mode="off",
         )
@@ -70,7 +70,7 @@ class TestPPOFeatureCompatibility:
 
         # Should work without errors
         with torch.no_grad():
-            result = agent.network.get_action(
+            result = agent.policy.network.get_action(
                 state_tensor,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -103,7 +103,7 @@ class TestPPOFeatureCompatibility:
         policy = create_policy(
             policy_type="lstm",
             state_dim=len(features),
-            num_slots=3,
+            slot_config=SlotConfig.default(),
             device="cpu",
             compile_mode="off",
         )
@@ -115,7 +115,7 @@ class TestPPOFeatureCompatibility:
 
         # Should work without errors
         with torch.no_grad():
-            result = agent.network.get_action(
+            result = agent.policy.network.get_action(
                 state_tensor,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -149,7 +149,7 @@ class TestPPOFeatureCompatibility:
         policy = create_policy(
             policy_type="lstm",
             state_dim=MULTISLOT_FEATURE_SIZE,
-            num_slots=3,
+            slot_config=SlotConfig.default(),
             device="cpu",
             compile_mode="off",
         )
@@ -158,7 +158,7 @@ class TestPPOFeatureCompatibility:
 
         # Should handle batch without errors
         with torch.no_grad():
-            result = agent.network.get_action(
+            result = agent.policy.network.get_action(
                 batch_tensor,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -192,7 +192,7 @@ class TestPPOForwardPass:
         policy = create_policy(
             policy_type="lstm",
             state_dim=MULTISLOT_FEATURE_SIZE,
-            num_slots=3,
+            slot_config=SlotConfig.default(),
             device="cpu",
             compile_mode="off",
         )
@@ -201,7 +201,7 @@ class TestPPOForwardPass:
         masks = _create_all_valid_masks()
 
         with torch.no_grad():
-            output = agent.network.forward(
+            output = agent.policy.network.forward(
                 state.unsqueeze(1),  # Add seq dim: [batch, seq, dim]
                 slot_mask=masks["slot"].unsqueeze(1),
                 blueprint_mask=masks["blueprint"].unsqueeze(1),
@@ -230,7 +230,7 @@ class TestPPOForwardPass:
         policy = create_policy(
             policy_type="lstm",
             state_dim=50,
-            num_slots=3,
+            slot_config=SlotConfig.default(),
             device="cpu",
             compile_mode="off",
         )
@@ -240,7 +240,7 @@ class TestPPOForwardPass:
         masks = _create_all_valid_masks(batch_size)
 
         with torch.no_grad():
-            result = agent.network.get_action(
+            result = agent.policy.network.get_action(
                 states,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -259,7 +259,7 @@ class TestPPOForwardPass:
         policy = create_policy(
             policy_type="lstm",
             state_dim=50,
-            num_slots=3,
+            slot_config=SlotConfig.default(),
             device="cpu",
             compile_mode="off",
         )
@@ -267,10 +267,10 @@ class TestPPOForwardPass:
         state = torch.randn(1, 50)
         masks = _create_all_valid_masks()
 
-        agent.network.eval()
+        agent.policy.network.eval()
 
         with torch.no_grad():
-            result1 = agent.network.get_action(
+            result1 = agent.policy.network.get_action(
                 state, deterministic=True,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -281,7 +281,7 @@ class TestPPOForwardPass:
                 alpha_curve_mask=masks["alpha_curve"],
                 op_mask=masks["op"],
             )
-            result2 = agent.network.get_action(
+            result2 = agent.policy.network.get_action(
                 state, deterministic=True,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -316,7 +316,7 @@ class TestPPOActionSampling:
         policy = create_policy(
             policy_type="lstm",
             state_dim=50,
-            num_slots=3,
+            slot_config=SlotConfig.default(),
             device="cpu",
             compile_mode="off",
         )
@@ -324,7 +324,7 @@ class TestPPOActionSampling:
         state = torch.randn(1, 50)
         masks = _create_all_valid_masks()
 
-        result = agent.network.get_action(
+        result = agent.policy.network.get_action(
             state,
             slot_mask=masks["slot"],
             blueprint_mask=masks["blueprint"],
@@ -365,7 +365,7 @@ class TestPPOActionSampling:
         policy = create_policy(
             policy_type="lstm",
             state_dim=50,
-            num_slots=3,
+            slot_config=SlotConfig.default(),
             device="cpu",
             compile_mode="off",
         )
@@ -387,7 +387,7 @@ class TestPPOActionSampling:
             ]
         }
         for _ in range(10):
-            result = agent.network.get_action(
+            result = agent.policy.network.get_action(
                 state, deterministic=True,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -410,7 +410,7 @@ class TestPPOActionSampling:
         policy = create_policy(
             policy_type="lstm",
             state_dim=50,
-            num_slots=3,
+            slot_config=SlotConfig.default(),
             device="cpu",
             compile_mode="off",
         )
@@ -421,7 +421,7 @@ class TestPPOActionSampling:
         # Sample multiple times
         all_op_actions = []
         for _ in range(100):
-            result = agent.network.get_action(
+            result = agent.policy.network.get_action(
                 state, deterministic=False,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -462,7 +462,7 @@ class TestPPOEndToEnd:
         policy = create_policy(
             policy_type="lstm",
             state_dim=len(features),
-            num_slots=3,
+            slot_config=SlotConfig.default(),
             device="cpu",
             compile_mode="off",
         )
@@ -471,7 +471,7 @@ class TestPPOEndToEnd:
         # Get action
         state_tensor = torch.tensor([features], dtype=torch.float32)
         masks = _create_all_valid_masks()
-        result = agent.network.get_action(
+        result = agent.policy.network.get_action(
             state_tensor,
             slot_mask=masks["slot"],
             blueprint_mask=masks["blueprint"],
@@ -505,7 +505,7 @@ class TestPPOEndToEnd:
         policy = create_policy(
             policy_type="lstm",
             state_dim=expected_dim,
-            num_slots=3,
+            slot_config=SlotConfig.default(),
             device="cpu",
             compile_mode="off",
         )
@@ -514,7 +514,7 @@ class TestPPOEndToEnd:
         # Get action
         state_tensor = torch.tensor([features], dtype=torch.float32)
         masks = _create_all_valid_masks()
-        result = agent.network.get_action(
+        result = agent.policy.network.get_action(
             state_tensor,
             slot_mask=masks["slot"],
             blueprint_mask=masks["blueprint"],
@@ -534,7 +534,7 @@ class TestPPOEndToEnd:
         policy = create_policy(
             policy_type="lstm",
             state_dim=50,
-            num_slots=3,
+            slot_config=SlotConfig.default(),
             device="cpu",
             compile_mode="off",
         )
@@ -543,7 +543,7 @@ class TestPPOEndToEnd:
         masks = _create_all_valid_masks()
 
         # First call - no hidden state
-        result1 = agent.network.get_action(
+        result1 = agent.policy.network.get_action(
             state,
             slot_mask=masks["slot"],
             blueprint_mask=masks["blueprint"],
@@ -556,7 +556,7 @@ class TestPPOEndToEnd:
         )
 
         # Second call - pass hidden state from first call
-        result2 = agent.network.get_action(
+        result2 = agent.policy.network.get_action(
             state,
             hidden=result1.hidden,
             slot_mask=masks["slot"],

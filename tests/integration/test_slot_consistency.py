@@ -36,7 +36,7 @@ class TestSlotConfigPropagation:
         policy = create_policy(
             policy_type="lstm",
             state_dim=get_feature_size(config),
-            num_slots=config.num_slots,
+            slot_config=config,
             device="cpu",
             compile_mode="off",
         )
@@ -51,7 +51,7 @@ class TestSlotConfigPropagation:
         policy = create_policy(
             policy_type="lstm",
             state_dim=get_feature_size(config),
-            num_slots=config.num_slots,
+            slot_config=config,
             device="cpu",
             compile_mode="off",
         )
@@ -67,7 +67,7 @@ class TestSlotConfigPropagation:
 
         network = FactoredRecurrentActorCritic(
             state_dim=state_dim,
-            num_slots=config.num_slots,
+            slot_config=config,
         )
 
         assert network.num_slots == 6
@@ -94,7 +94,7 @@ class TestFeatureDimensionConsistency:
         # Create network with correct state_dim
         network = FactoredRecurrentActorCritic(
             state_dim=state_dim,
-            num_slots=config.num_slots,
+            slot_config=config,
         )
 
         # Create sample input matching feature output
@@ -136,7 +136,7 @@ class TestMaskDimensionConsistency:
         # Create network
         network = FactoredRecurrentActorCritic(
             state_dim=get_feature_size(config),
-            num_slots=config.num_slots,
+            slot_config=config,
         )
 
         # Check dimensions match
@@ -252,7 +252,7 @@ class TestMultiSlotConsistency:
         # Verify network creation
         network = FactoredRecurrentActorCritic(
             state_dim=state_dim,
-            num_slots=config.num_slots,
+            slot_config=config,
         )
         assert network.num_slots == expected_slots
 
@@ -290,7 +290,7 @@ class TestMultiSlotConsistency:
         # Verify network creation works
         network = FactoredRecurrentActorCritic(
             state_dim=state_dim,
-            num_slots=config.num_slots,
+            slot_config=config,
         )
         assert network.num_slots == 3
 
@@ -307,7 +307,7 @@ class TestDimensionMismatchDetection:
         # Create network with correct dimensions
         network = FactoredRecurrentActorCritic(
             state_dim=correct_state_dim,
-            num_slots=config.num_slots,
+            slot_config=config,
         )
 
         # Create input with wrong dimensions
@@ -326,7 +326,7 @@ class TestDimensionMismatchDetection:
         policy = create_policy(
             policy_type="lstm",
             state_dim=get_feature_size(config),
-            num_slots=config.num_slots,
+            slot_config=config,
             device="cpu",
             compile_mode="off",
         )

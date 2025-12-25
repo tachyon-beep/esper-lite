@@ -227,9 +227,11 @@ class PPOAgent:
         chunk_length: int = DEFAULT_EPISODE_LENGTH,  # Must match max_epochs (from leyline)
         num_envs: int = DEFAULT_N_ENVS,  # For TamiyoRolloutBuffer
         max_steps_per_env: int = DEFAULT_EPISODE_LENGTH,  # For TamiyoRolloutBuffer (from leyline)
+        compile_mode: str = "off",  # For checkpoint persistence (policy may already be compiled)
     ):
         # Store policy and extract slot_config
         self.policy = policy
+        self.compile_mode = compile_mode  # Persisted in checkpoint for resume
         if slot_config is None:
             # Get slot_config from the PolicyBundle, not the inner network
             slot_config = policy.slot_config
@@ -820,6 +822,8 @@ class PPOAgent:
                 'batch_size': self.batch_size,
                 'max_grad_norm': self.max_grad_norm,
                 'weight_decay': self.weight_decay,
+                # torch.compile configuration (for resume)
+                'compile_mode': self.compile_mode,
             },
             # Architecture info for load-time reconstruction
             'architecture': {
@@ -901,7 +905,10 @@ class PPOAgent:
         # feature_net.0.weight has shape [hidden_dim, state_dim]
         state_dim = state_dict['feature_net.0.weight'].shape[1]
 
-        # === Create PolicyBundle ===
+        # === Extract compile_mode (default "off" for old checkpoints) ===
+        compile_mode = config.get('compile_mode', 'off')
+
+        # === Create PolicyBundle (uncompiled - compile AFTER loading weights) ===
         from esper.tamiyo.policy.factory import create_policy
         policy = create_policy(
             policy_type="lstm",
@@ -909,6 +916,7 @@ class PPOAgent:
             slot_config=slot_config,
             hidden_dim=config['lstm_hidden_dim'],
             device=device,
+            compile_mode="off",  # Defer compilation until weights loaded
         )
 
         # === Create agent with restored config ===
@@ -926,6 +934,12 @@ class PPOAgent:
         agent.policy.load_state_dict(state_dict)
         agent.optimizer.load_state_dict(optimizer_state_dict)
         agent.train_steps = train_steps
+
+        # === Apply torch.compile AFTER loading weights ===
+        # Critical: Compile must happen after state_dict to ensure graph traces
+        # the actual loaded weights, not random initialization.
+        if compile_mode != "off":
+            agent.policy.compile(mode=compile_mode, dynamic=True)
 
         return agent
 

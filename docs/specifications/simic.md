@@ -64,11 +64,22 @@ history = train_ppo_vectorized(
 )
 
 # PPO Agent (for custom training loops)
+from esper.leyline.slot_config import SlotConfig
 from esper.simic.agent import PPOAgent
+from esper.tamiyo.policy.factory import create_policy
+from esper.tamiyo.policy.features import get_feature_size
 
+slot_config = SlotConfig.default()
+policy = create_policy(
+    policy_type="lstm",
+    state_dim=get_feature_size(slot_config),
+    slot_config=slot_config,
+    device="cuda:0",
+    compile_mode="default",
+)
 agent = PPOAgent(
-    state_dim=80,  # 50 base + 30 telemetry (10 per slot × 3)
-    lstm_hidden_dim=128,
+    policy=policy,
+    slot_config=slot_config,
     device="cuda:0",
 )
 

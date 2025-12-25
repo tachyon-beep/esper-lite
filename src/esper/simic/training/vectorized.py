@@ -388,8 +388,8 @@ def _emit_anomaly_diagnostics(
     gradient_stats = None
     stability_report = None
     if collect_debug:
-        gradient_stats = collect_per_layer_gradients(agent.policy._network)
-        stability_report = check_numerical_stability(agent.policy._network)
+        gradient_stats = collect_per_layer_gradients(agent.policy.network)
+        stability_report = check_numerical_stability(agent.policy.network)
 
     for anomaly_type in anomaly_report.anomaly_types:
         event_type = event_type_map.get(
@@ -865,6 +865,7 @@ def train_ppo_vectorized(
             chunk_length=chunk_length,
             num_envs=n_envs,
             max_steps_per_env=max_epochs,
+            compile_mode=effective_compile_mode,  # Persisted for checkpoint resume
         )
 
     # Emit TRAINING_STARTED to activate Karn (Sanctum/Overwatch) and capture run config.
@@ -2877,7 +2878,7 @@ def train_ppo_vectorized(
                 amp_dtype=resolved_amp_dtype,
             )
             ppo_update_time_ms = (time.perf_counter() - update_start) * 1000.0
-            ppo_grad_norm = compute_grad_norm_surrogate(agent.policy._network)
+            ppo_grad_norm = compute_grad_norm_surrogate(agent.policy.network)
 
             metric_values = [v for v in metrics.values() if isinstance(v, (int, float))]
             anomaly_report = anomaly_detector.check_all(

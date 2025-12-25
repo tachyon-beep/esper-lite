@@ -98,19 +98,10 @@ def create_policy(
     # Move to device (before compile - compile traces on target device)
     policy = policy.to(device)
 
-    # Compile the inner network (not the wrapper)
-    # Why direct _network assignment:
-    # 1. torch.compile returns a new OptimizedModule wrapper
-    # 2. We must replace the internal reference, not just wrap externally
-    # 3. PolicyBundle.network is a read-only property; _network is the backing store
-    # 4. Device placement MUST happen before compile for correct tracing
+    # Compile the policy via the protocol method
+    # Note: Device placement MUST happen before compile for correct tracing
     # WARNING: Do not call .to(device) after this - it would replace the compiled module
-    if compile_mode != "off":
-        policy._network = torch.compile(
-            policy.network,
-            mode=compile_mode,
-            dynamic=True,  # Batch/seq dimensions vary between rollout and training
-        )
+    policy.compile(mode=compile_mode, dynamic=True)
 
     return policy
 

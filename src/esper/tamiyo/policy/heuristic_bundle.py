@@ -187,6 +187,21 @@ class HeuristicPolicyBundle:
         """No-op for heuristic."""
         pass
 
+    # === torch.compile Integration ===
+
+    def compile(
+        self,
+        mode: str = "default",
+        dynamic: bool = True,
+    ) -> None:
+        """No-op for heuristic (no neural network to compile)."""
+        pass
+
+    @property
+    def is_compiled(self) -> bool:
+        """Heuristic has no network - always returns False."""
+        return False
+
     # === Heuristic-specific ===
 
     @property

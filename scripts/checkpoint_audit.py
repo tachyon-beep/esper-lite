@@ -342,15 +342,27 @@ def generate_test_checkpoint() -> Path:
 
     # Import here to avoid dependency if just auditing
     try:
-        from esper.simic.ppo import PPOAgent
+        from esper.leyline.slot_config import SlotConfig
+        from esper.simic.agent import PPOAgent
+        from esper.tamiyo.policy.factory import create_policy
+        from esper.tamiyo.policy.features import get_feature_size
     except ImportError as e:
-        print(f"Cannot import PPOAgent: {e}")
+        print(f"Cannot import required modules: {e}")
         print("Make sure PYTHONPATH includes src/")
         sys.exit(1)
 
-    # Create a minimal agent
+    # Create a minimal agent with PolicyBundle
+    slot_config = SlotConfig.default()
+    policy = create_policy(
+        policy_type="lstm",
+        state_dim=get_feature_size(slot_config),
+        slot_config=slot_config,
+        device="cpu",
+        compile_mode="off",
+    )
     agent = PPOAgent(
-        state_dim=50,  # Approximate real state dim
+        policy=policy,
+        slot_config=slot_config,
         device="cpu",
     )
 

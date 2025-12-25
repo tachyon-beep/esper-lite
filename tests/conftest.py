@@ -12,6 +12,8 @@ import pytest
 import torch
 from hypothesis import HealthCheck, settings
 
+from esper.leyline.slot_config import SlotConfig
+
 # =============================================================================
 # Hypothesis Configuration
 # =============================================================================
@@ -132,7 +134,7 @@ def small_ppo_model_deterministic(tmp_path_factory):
     policy = create_policy(
         policy_type="lstm",
         state_dim=30,
-        num_slots=3,
+        slot_config=SlotConfig.default(),
         device="cpu",
         compile_mode="off",
     )

@@ -871,6 +871,9 @@ def test_emit_anomaly_diagnostics_skips_debug_when_disabled(monkeypatch):
                 pass
             def __init__(self):
                 self._network = _StubAgent._Policy._Net()
+            @property
+            def network(self):
+                return self._network
         def __init__(self):
             self.policy = self._Policy()
 
@@ -923,6 +926,9 @@ def test_emit_anomaly_diagnostics_collects_when_debug_enabled(monkeypatch):
                 pass
             def __init__(self):
                 self._network = _StubAgent._Policy._Net()
+            @property
+            def network(self):
+                return self._network
         def __init__(self):
             self.policy = self._Policy()
 

@@ -595,7 +595,6 @@ class FactoredRecurrentActorCritic(nn.Module):
                 mask = mask.masked_fill(expanded_irrelevant, False)
                 # Set SIGMOID_ADD column to True for irrelevant rows
                 sigmoid_add_idx = int(GerminationStyle.SIGMOID_ADD)
-                mask = mask.clone()  # Clone after masked_fill to enable in-place update
                 mask[..., sigmoid_add_idx] = mask[..., sigmoid_add_idx] | style_irrelevant
             mask_flat = mask.reshape(-1, action_dim)
 
