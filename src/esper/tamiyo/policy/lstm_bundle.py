@@ -70,7 +70,7 @@ class LSTMPolicyBundle:
         self.feature_dim = feature_dim
 
         # Lazy import to avoid circular dependency
-        from esper.simic.agent.network import FactoredRecurrentActorCritic
+        from esper.tamiyo.networks import FactoredRecurrentActorCritic
 
         # Create the network
         # Note: The network's first parameter is "state_dim" which is our feature_dim
