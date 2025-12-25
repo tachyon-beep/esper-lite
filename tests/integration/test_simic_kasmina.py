@@ -10,8 +10,7 @@ import pytest
 import torch
 
 from esper.kasmina import MorphogeneticModel, CNNHost
-from esper.leyline import SeedStage
-from esper.leyline.factored_actions import LifecycleOp
+from esper.leyline import LifecycleOp, SeedStage
 from esper.simic.rewards import (
     compute_contribution_reward,
     ContributionRewardConfig,

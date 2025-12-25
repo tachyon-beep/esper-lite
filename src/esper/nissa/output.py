@@ -147,48 +147,6 @@ class ConsoleOutput(OutputBackend):
             else:
                 msg = event.message or event_type
             print(f"[{timestamp}] {seed_id} | {msg}")
-        elif event_type == "REWARD_COMPUTED":
-            if event.data is None:
-                _logger.warning("REWARD_COMPUTED event has no data payload")
-                return
-            data = event.data
-            env_id = data.get("env_id", "?")
-            action = data.get("action_name", "?")
-            total = data.get("total_reward", 0.0)
-            # Show key components
-            bounded = data.get("bounded_attribution")
-            base = data.get("base_acc_delta", 0.0)
-            rent = data.get("compute_rent", 0.0)
-            val_acc = data.get("val_acc", 0.0)
-            # Warning signals telemetry
-            blending_warning = data.get("blending_warning", 0.0)
-            holding_warning = data.get("holding_warning", 0.0)
-            attribution_discount = data.get("attribution_discount", 1.0)
-            ratio_penalty = data.get("ratio_penalty", 0.0)
-            # Terminal bonus telemetry
-            fossilize_terminal_bonus = data.get("fossilize_terminal_bonus", 0.0)
-            num_fossilized_seeds = data.get("num_fossilized_seeds", 0)
-            # Format: env, action, total reward, and key breakdown
-            # Note: rent is stored as negative (penalty), display as positive cost
-            rent_display = abs(rent)
-            # Build extra info for warning signals
-            extra = ""
-            if blending_warning < 0:
-                extra += f" BLEND={blending_warning:.2f}"
-            if holding_warning < 0:
-                extra += f" HOLD={holding_warning:.2f}"
-            if attribution_discount < 1.0:
-                extra += f" disc={attribution_discount:.2f}"
-            if ratio_penalty < 0:
-                extra += f" ratio={ratio_penalty:.2f}"
-            if fossilize_terminal_bonus > 0:
-                extra += f" fossil_term={fossilize_terminal_bonus:+.1f}({num_fossilized_seeds})"
-            if bounded is not None:
-                # Contribution-primary reward
-                print(f"[{timestamp}] env{env_id} | {action}: r={total:+.2f} (attr={bounded:+.2f}, rent={rent_display:.2f}{extra}) acc={val_acc:.1f}%")
-            else:
-                # Legacy shaped reward
-                print(f"[{timestamp}] env{env_id} | {action}: r={total:+.2f} (Δacc={base:+.2f}, rent={rent_display:.2f}{extra}) acc={val_acc:.1f}%")
         elif event_type == "GOVERNOR_ROLLBACK":
             if event.data is None:
                 _logger.warning("GOVERNOR_ROLLBACK event has no data payload")

@@ -83,10 +83,6 @@ class TelemetryEventType(Enum):
     PPO_UPDATE_COMPLETED = auto()
     MEMORY_WARNING = auto()
     REWARD_HACKING_SUSPECTED = auto()
-    # TODO: [DEAD CODE] - REWARD_COMPUTED is defined, tested, and handled by Karn,
-    # but NEVER emitted in production. Reward data flows via ANALYTICS_SNAPSHOT instead.
-    # Either emit this event from vectorized.py or remove it. See: risk assessment 2024-12-24.
-    REWARD_COMPUTED = auto()  # Per-step reward breakdown for debugging
 
     # === NEW: Debug Events (triggered by anomalies) ===
     RATIO_EXPLOSION_DETECTED = auto()
@@ -685,68 +681,6 @@ class PPOUpdatePayload:
 
 
 @dataclass(slots=True, frozen=True)
-class RewardComputedPayload:
-    """Payload for REWARD_COMPUTED event. Emitted per RL step."""
-
-    # REQUIRED (DRL expert: value_estimate and action_confidence essential)
-    env_id: int
-    total_reward: float
-    action_name: str
-    value_estimate: float
-    action_confidence: float
-
-    # OPTIONAL - reward component breakdown (None = not computed, 0.0 = computed as zero)
-    base_acc_delta: float | None = None
-    bounded_attribution: float | None = None
-    seed_contribution: float | None = None
-    compute_rent: float | None = None
-    alpha_shock: float | None = None
-    ratio_penalty: float | None = None
-    stage_bonus: float | None = None
-    fossilize_terminal_bonus: float | None = None
-    blending_warning: float | None = None
-    holding_warning: float | None = None
-    val_acc: float | None = None
-
-    # Decision context
-    slot_states: dict[str, dict[str, Any]] | None = None
-    host_accuracy: float | None = None
-    alternatives: list[tuple[str, float]] | None = None
-    decision_entropy: float | None = None
-    ab_group: str | None = None
-    action_slot: str | None = None
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "RewardComputedPayload":
-        """Parse from dict. Raises KeyError on missing required fields."""
-        return cls(
-            env_id=data["env_id"],
-            total_reward=data["total_reward"],
-            action_name=data["action_name"],
-            value_estimate=data["value_estimate"],
-            action_confidence=data["action_confidence"],
-            # Optional fields (None = not provided, preserves "not computed" vs "zero")
-            base_acc_delta=data.get("base_acc_delta"),
-            bounded_attribution=data.get("bounded_attribution"),
-            seed_contribution=data.get("seed_contribution"),
-            compute_rent=data.get("compute_rent"),
-            alpha_shock=data.get("alpha_shock"),
-            ratio_penalty=data.get("ratio_penalty"),
-            stage_bonus=data.get("stage_bonus"),
-            fossilize_terminal_bonus=data.get("fossilize_terminal_bonus"),
-            blending_warning=data.get("blending_warning"),
-            holding_warning=data.get("holding_warning"),
-            val_acc=data.get("val_acc"),
-            slot_states=data.get("slot_states"),
-            host_accuracy=data.get("host_accuracy"),
-            alternatives=data.get("alternatives"),
-            decision_entropy=data.get("decision_entropy"),
-            ab_group=data.get("ab_group"),
-            action_slot=data.get("action_slot"),
-        )
-
-
-@dataclass(slots=True, frozen=True)
 class SeedGerminatedPayload:
     """Payload for SEED_GERMINATED event.
 
@@ -1206,7 +1140,6 @@ TelemetryPayload = (
     | EpochCompletedPayload
     | BatchEpochCompletedPayload
     | PPOUpdatePayload
-    | RewardComputedPayload
     | SeedGerminatedPayload
     | SeedStageChangedPayload
     | SeedGateEvaluatedPayload

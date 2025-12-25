@@ -6,8 +6,7 @@ new ops, reorders) but dependent subsystems are not updated atomically.
 
 from __future__ import annotations
 
-from esper.leyline import HEAD_NAMES
-from esper.leyline.factored_actions import (
+from esper.leyline import (
     ACTION_HEAD_NAMES,
     ACTION_HEAD_SPECS,
     AlphaCurveAction,
@@ -15,6 +14,7 @@ from esper.leyline.factored_actions import (
     AlphaTargetAction,
     BlueprintAction,
     GerminationStyle,
+    HEAD_NAMES,
     LifecycleOp,
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,

@@ -23,12 +23,9 @@ Usage:
 # Dashboard components (lazy import - fastapi may not be installed)
 try:
     from esper.karn.websocket_output import WebSocketOutput
-    from esper.karn.dashboard_server import create_app, run_dashboard_server
     from esper.karn.integrated_dashboard import DashboardServer
 except ImportError:
     WebSocketOutput = None  # type: ignore[misc, assignment]
-    create_app = None  # type: ignore[misc, assignment]
-    run_dashboard_server = None  # type: ignore[misc, assignment]
     DashboardServer = None  # type: ignore[misc, assignment]
 
 # Store (data models)
@@ -67,15 +64,6 @@ from esper.karn.triggers import (
     RollingStats,
 )
 
-# Analytics (research queries)
-from esper.karn.analytics import (
-    EpisodeAnalytics,
-    EpisodeSummary,
-    SlotSummary,
-    TrajectoryPoint,
-    ConvergenceInfo,
-)
-
 # Health (system monitoring)
 from esper.karn.health import (
     HealthMonitor,
@@ -96,8 +84,6 @@ __all__ = [
     # Dashboard
     "WebSocketOutput",
     "DashboardServer",
-    "create_app",
-    "run_dashboard_server",
     # Store
     "TelemetryStore",
     "EpisodeContext",
@@ -125,12 +111,6 @@ __all__ = [
     "AnomalyDetector",
     "PolicyAnomalyDetector",
     "RollingStats",
-    # Analytics
-    "EpisodeAnalytics",
-    "EpisodeSummary",
-    "SlotSummary",
-    "TrajectoryPoint",
-    "ConvergenceInfo",
     # Health
     "HealthMonitor",
     "SystemHealth",

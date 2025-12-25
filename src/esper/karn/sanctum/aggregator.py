@@ -41,7 +41,6 @@ from esper.leyline import (
     EpochCompletedPayload,
     BatchEpochCompletedPayload,
     PPOUpdatePayload,
-    RewardComputedPayload,
     SeedGerminatedPayload,
     SeedStageChangedPayload,
     SeedFossilizedPayload,
@@ -117,7 +116,7 @@ class SanctumAggregator:
     - TRAINING_STARTED: Initialize run context
     - EPOCH_COMPLETED: Update per-env accuracy/loss
     - PPO_UPDATE_COMPLETED: Update Tamiyo policy metrics
-    - REWARD_COMPUTED: Update per-env reward components
+    - ANALYTICS_SNAPSHOT(last_action): Update per-env reward/decision tracking
     - SEED_GERMINATED: Add seed to env
     - SEED_STAGE_CHANGED: Update seed stage
     - SEED_FOSSILIZED: Increment fossilized count
@@ -263,8 +262,6 @@ class SanctumAggregator:
             self._handle_epoch_completed(event)
         elif event_type == "PPO_UPDATE_COMPLETED":
             self._handle_ppo_update(event)
-        elif event_type == "REWARD_COMPUTED":
-            self._handle_reward_computed(event)
         elif event_type.startswith("SEED_"):
             self._handle_seed_event(event, event_type)
         elif event_type == "BATCH_EPOCH_COMPLETED":
@@ -328,9 +325,9 @@ class SanctumAggregator:
         # Update system vitals
         self._update_system_vitals()
 
-        # Aggregate action counts from per-step reward telemetry when available.
-        # If debug REWARD_COMPUTED telemetry is disabled, fall back to
-        # ANALYTICS_SNAPSHOT(action_distribution) which populates self._tamiyo directly.
+        # Aggregate action counts from per-step ANALYTICS_SNAPSHOT(last_action) telemetry.
+        # Falls back to ANALYTICS_SNAPSHOT(action_distribution) which populates
+        # self._tamiyo directly if per-step telemetry is unavailable.
         aggregated_actions: dict[str, int] = {
             "WAIT": 0,
             "GERMINATE": 0,
@@ -712,112 +709,6 @@ class SanctumAggregator:
         self._tamiyo.inner_epoch = payload.inner_epoch
         self._tamiyo.ppo_batch = payload.batch
 
-    def _handle_reward_computed(self, event: "TelemetryEvent") -> None:
-        """Handle REWARD_COMPUTED event with per-env routing."""
-        if not isinstance(event.data, RewardComputedPayload):
-            _logger.warning(
-                "Expected RewardComputedPayload for REWARD_COMPUTED, got %s",
-                type(event.data).__name__,
-            )
-            return
-
-        payload = event.data
-        env_id = payload.env_id
-        epoch = event.epoch if event.epoch is not None else 0
-
-        self._ensure_env(env_id)
-        env = self._envs[env_id]
-
-        # Update reward tracking
-        total_reward = payload.total_reward
-        env.reward_history.append(total_reward)
-        env.current_epoch = epoch
-
-        # Update action tracking (with normalization)
-        action_name = normalize_action(payload.action_name)
-        env.action_history.append(action_name)
-        env.action_counts[action_name] = env.action_counts.get(action_name, 0) + 1
-        env.total_actions += 1
-
-        # Capture A/B test cohort
-        if payload.ab_group:
-            env.reward_mode = payload.ab_group
-
-        # Store reward component breakdown - provide defaults for None values
-        env.reward_components = RewardComponents(
-            base_acc_delta=payload.base_acc_delta if payload.base_acc_delta is not None else 0.0,
-            bounded_attribution=payload.bounded_attribution if payload.bounded_attribution is not None else 0.0,
-            seed_contribution=payload.seed_contribution if payload.seed_contribution is not None else 0.0,
-            compute_rent=payload.compute_rent if payload.compute_rent is not None else 0.0,
-            alpha_shock=payload.alpha_shock if payload.alpha_shock is not None else 0.0,
-            ratio_penalty=payload.ratio_penalty if payload.ratio_penalty is not None else 0.0,
-            stage_bonus=payload.stage_bonus if payload.stage_bonus is not None else 0.0,
-            fossilize_terminal_bonus=payload.fossilize_terminal_bonus if payload.fossilize_terminal_bonus is not None else 0.0,
-            blending_warning=payload.blending_warning if payload.blending_warning is not None else 0.0,
-            holding_warning=payload.holding_warning if payload.holding_warning is not None else 0.0,
-            val_acc=payload.val_acc if payload.val_acc is not None else env.host_accuracy,
-            total=total_reward,
-            last_action=action_name,
-            env_id=env_id,
-        )
-
-        # Capture decision snapshot
-        now_dt = event.timestamp or datetime.now(timezone.utc)
-        value_s = payload.value_estimate
-
-        # Compute TD advantage for previous decision from this env
-        if env_id in self._pending_decisions:
-            pending = self._pending_decisions[env_id]
-            td_adv = pending.reward + DEFAULT_GAMMA * value_s - pending.value_s
-            pending.decision.td_advantage = td_adv
-            del self._pending_decisions[env_id]
-
-        # Convert slot_states from dict[str, dict[str, Any]] to dict[str, str] for display
-        slot_states_display: dict[str, str] = {}
-        if payload.slot_states:
-            for slot_id, state_dict in payload.slot_states.items():
-                # Format: "Training 12%" or "Empty" etc.
-                slot_states_display[slot_id] = str(state_dict)  # Simple string conversion for now
-
-        # Alternatives are already list[tuple[str, float]] from payload
-        alternatives_list: list[tuple[str, float]] = list(payload.alternatives) if payload.alternatives else []
-
-        decision = DecisionSnapshot(
-            timestamp=now_dt,
-            slot_states=slot_states_display,
-            host_accuracy=payload.host_accuracy or env.host_accuracy,
-            chosen_action=action_name,
-            chosen_slot=payload.action_slot,
-            confidence=payload.action_confidence,
-            expected_value=value_s,
-            actual_reward=total_reward,
-            alternatives=alternatives_list,
-            decision_id=str(uuid.uuid4())[:8],
-            decision_entropy=payload.decision_entropy if payload.decision_entropy is not None else 0.0,
-            env_id=env_id,
-            value_residual=total_reward - value_s,
-            td_advantage=None,
-        )
-
-        # Store as pending for TD advantage computation on next decision
-        self._pending_decisions[env_id] = PendingDecision(
-            decision=decision,
-            reward=total_reward,
-            value_s=value_s,
-            env_id=env_id,
-        )
-
-        # Add decision if room available
-        decisions = self._tamiyo.recent_decisions
-        if len(decisions) < MAX_DECISIONS:
-            decisions.insert(0, decision)
-            self._tamiyo.recent_decisions = decisions
-
-        # Track focused env for reward panel
-        self._focused_env_id = env_id
-
-        env.last_update = datetime.now(timezone.utc)
-
     def _handle_seed_event(self, event: "TelemetryEvent", event_type: str) -> None:
         """Handle seed lifecycle events with per-env tracking."""
         # Type-safe payload access with type switching based on event_type
@@ -1167,9 +1058,69 @@ class SanctumAggregator:
                 self._tamiyo.total_actions = sum(counts.values())
             return
 
-        # Per-step "last_action" snapshots - treat like REWARD_COMPUTED
+        # Per-step "last_action" snapshots - update env state and decision tracking
         if kind == "last_action" and payload.action_confidence is not None:
-            self._handle_reward_computed(event)
+            env_id = payload.env_id
+            if env_id is None:
+                return
+
+            self._ensure_env(env_id)
+            env = self._envs[env_id]
+            epoch = event.epoch if event.epoch is not None else 0
+
+            # Update reward tracking
+            total_reward = payload.total_reward or 0.0
+            env.reward_history.append(total_reward)
+            env.current_epoch = epoch
+
+            # Update action tracking (with normalization)
+            action_name = normalize_action(payload.action_name or "UNKNOWN")
+            env.action_history.append(action_name)
+            env.action_counts[action_name] = env.action_counts.get(action_name, 0) + 1
+            env.total_actions += 1
+
+            # Create decision snapshot
+            now_dt = event.timestamp or datetime.now(timezone.utc)
+            value_s = payload.value_estimate or 0.0
+
+            # Compute TD advantage for previous decision from this env
+            if env_id in self._pending_decisions:
+                pending = self._pending_decisions[env_id]
+                td_adv = pending.reward + DEFAULT_GAMMA * value_s - pending.value_s
+                pending.decision.td_advantage = td_adv
+                del self._pending_decisions[env_id]
+
+            decision = DecisionSnapshot(
+                timestamp=now_dt,
+                slot_states={},
+                host_accuracy=env.host_accuracy,
+                chosen_action=action_name,
+                chosen_slot=payload.slot_id,
+                confidence=payload.action_confidence,
+                expected_value=value_s,
+                actual_reward=total_reward,
+                alternatives=[],
+                decision_id=str(uuid.uuid4())[:8],
+                decision_entropy=0.0,
+                env_id=env_id,
+                value_residual=total_reward - value_s,
+                td_advantage=None,
+            )
+
+            # Store as pending for TD advantage computation on next decision
+            self._pending_decisions[env_id] = PendingDecision(
+                decision=decision,
+                reward=total_reward,
+                value_s=value_s,
+                env_id=env_id,
+            )
+
+            # Add decision if room available
+            decisions = self._tamiyo.recent_decisions
+            if len(decisions) < MAX_DECISIONS:
+                decisions.insert(0, decision)
+                self._tamiyo.recent_decisions = decisions
+
             return
 
     # =========================================================================
@@ -1210,15 +1161,7 @@ class SanctumAggregator:
         metadata: dict[str, str | int | float] = {}
         env_id: int | None = None
 
-        if event_type == "REWARD_COMPUTED":
-            if isinstance(event.data, RewardComputedPayload):
-                message = "Reward computed"
-                metadata["action"] = normalize_action(event.data.action_name)
-                metadata["reward"] = event.data.total_reward
-                env_id = event.data.env_id
-            else:
-                message = "Reward computed (unknown payload)"
-        elif event_type.startswith("SEED_"):
+        if event_type.startswith("SEED_"):
             if event_type == "SEED_GERMINATED" and isinstance(event.data, SeedGerminatedPayload):
                 message = "Germinated"
                 # Event envelope slot_id is authoritative (set at emission time)

@@ -1626,29 +1626,40 @@ class TamiyoBrain(Static):
         result.append("\n        ")
 
         # Second line: values (10-char segments to match bars)
+        # Non-op heads shifted right by 3 chars for alignment under bars
         for abbrev, field, head_key in heads:
             value = getattr(tamiyo, field, 0.0)
             is_tracked = head_key in self.TRACKED_HEADS
+            is_last_head = head_key == "op"
 
             if value == 0.0 and not is_tracked:
-                # 10-char segment: "   n/a    " (centered)
-                result.append("   n/a    ", style="dim italic")
+                # 10-char segment: n/a with appropriate alignment
+                if is_last_head:
+                    result.append("   n/a    ", style="dim italic")
+                else:
+                    result.append("     n/a  ", style="dim italic")
                 continue
 
             max_ent = self.HEAD_MAX_ENTROPIES[head_key]
             fill = value / max_ent if max_ent > 0 else 0
 
             # 10-char segment with indicators: critical (!), warning (*), normal
-            # Format: "  X.XX!   " = 2 spaces + 4.2f (4 chars) + indicator + 3 spaces = 10
-            if fill < 0.25:
-                # Critical: entropy collapsed (< 25% of max)
-                result.append(f"  {value:4.2f}!   ", style="red")
-            elif fill < 0.5:
-                # Warning: entropy converging (< 50% of max)
-                result.append(f"  {value:4.2f}*   ", style="yellow")
+            # Op head: "  X.XX!   " (2 leading, 3 trailing)
+            # Other heads: "    X.XX! " (4 leading, 1 trailing) - shifted right by 2
+            if is_last_head:
+                if fill < 0.25:
+                    result.append(f"  {value:4.2f}!   ", style="red")
+                elif fill < 0.5:
+                    result.append(f"  {value:4.2f}*   ", style="yellow")
+                else:
+                    result.append(f"  {value:4.2f}    ", style="dim")
             else:
-                # Normal: healthy exploration (>= 50% of max)
-                result.append(f"  {value:4.2f}    ", style="dim")
+                if fill < 0.25:
+                    result.append(f"    {value:4.2f}! ", style="red")
+                elif fill < 0.5:
+                    result.append(f"    {value:4.2f}* ", style="yellow")
+                else:
+                    result.append(f"    {value:4.2f}  ", style="dim")
 
         return result
 

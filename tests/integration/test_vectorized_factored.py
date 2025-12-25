@@ -10,7 +10,7 @@ from esper.tamiyo.policy.features import MULTISLOT_FEATURE_SIZE
 from esper.simic.agent import PPOAgent
 from esper.tamiyo.policy.factory import create_policy
 from esper.tamiyo.policy.action_masks import compute_action_masks
-from esper.leyline.factored_actions import (
+from esper.leyline import (
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
     NUM_ALPHA_TARGETS,
@@ -18,8 +18,8 @@ from esper.leyline.factored_actions import (
     NUM_OPS,
     NUM_STYLES,
     NUM_TEMPO,
+    SlotConfig,
 )
-from esper.leyline.slot_config import SlotConfig
 
 
 class TestFactoredActionMasksInVectorized:

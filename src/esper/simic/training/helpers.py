@@ -13,13 +13,14 @@ from typing import Callable, Iterator, Protocol, cast
 import torch
 import torch.nn as nn
 
-from esper.leyline.factored_actions import FactoredAction, LifecycleOp
 from esper.leyline import (
+    AnalyticsSnapshotPayload,
+    EpochCompletedPayload,
+    FactoredAction,
+    LifecycleOp,
     TelemetryEvent,
     TelemetryEventType,
     TrainingStartedPayload,
-    EpochCompletedPayload,
-    AnalyticsSnapshotPayload,
 )
 # NOTE: get_task_spec imported lazily inside functions to avoid circular import:
 #   runtime -> simic.rewards -> simic -> simic.training -> helpers -> runtime
@@ -301,7 +302,7 @@ def _convert_flat_to_factored(action, topology: str = "cnn") -> FactoredAction:
 
     Maps flat action names to factored action components.
     """
-    from esper.leyline.factored_actions import AlphaTargetAction, BlueprintAction
+    from esper.leyline import AlphaTargetAction, BlueprintAction
 
     action_name = action.name
 

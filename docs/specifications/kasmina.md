@@ -363,7 +363,7 @@ Kasmina is the biological machinery for growing new neural tissue. Just as stem 
 | `src/esper/kasmina/slot.py` | 1462 | SeedSlot, SeedState, QualityGates |
 | `src/esper/kasmina/host.py` | 668 | CNNHost, TransformerHost, MorphogeneticModel |
 | `src/esper/kasmina/isolation.py` | 201 | blend_with_isolation, STE, GradientIsolationMonitor |
-| `src/esper/kasmina/blending.py` | 177 | BlendAlgorithm, LinearBlend, SigmoidBlend, GatedBlend |
+| `src/esper/kasmina/blending.py` | 206 | BlendAlgorithm, GatedBlend, BlendCatalog |
 | `src/esper/kasmina/protocol.py` | 40 | HostProtocol (structural typing) |
 | `src/esper/kasmina/blueprints/` | ~300 | BlueprintRegistry, CNN/Transformer blueprints |
 

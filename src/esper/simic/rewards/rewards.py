@@ -12,7 +12,7 @@ The reward design follows these principles:
 
 Usage:
     from esper.simic.rewards import compute_contribution_reward, ContributionRewardConfig
-    from esper.leyline.factored_actions import LifecycleOp
+    from esper.leyline import LifecycleOp
 
     reward = compute_contribution_reward(
         action=LifecycleOp.GERMINATE,
@@ -32,9 +32,14 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import NamedTuple, cast
 
-from esper.leyline import SeedStage, MIN_PRUNE_AGE, MIN_HOLDING_EPOCHS, DEFAULT_GAMMA
-from esper.leyline import DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
-from esper.leyline.factored_actions import LifecycleOp
+from esper.leyline import (
+    DEFAULT_GAMMA,
+    DEFAULT_MIN_FOSSILIZE_CONTRIBUTION,
+    LifecycleOp,
+    MIN_HOLDING_EPOCHS,
+    MIN_PRUNE_AGE,
+    SeedStage,
+)
 from esper.nissa import get_hub
 from .reward_telemetry import RewardComponentsTelemetry
 

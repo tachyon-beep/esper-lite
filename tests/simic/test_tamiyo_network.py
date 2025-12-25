@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from esper.leyline.factored_actions import (
+from esper.leyline import (
     GerminationStyle,
     LifecycleOp,
     NUM_ALPHA_CURVES,

@@ -16,7 +16,6 @@ from esper.leyline.telemetry import (
     SeedStageChangedPayload,
     SeedFossilizedPayload,
     SeedPrunedPayload,
-    RewardComputedPayload,
     AnalyticsSnapshotPayload,
     CounterfactualMatrixPayload,
 )
@@ -160,28 +159,30 @@ class TestSanctumAggregator:
 
         reward0 = MagicMock()
         reward0.event_type = MagicMock()
-        reward0.event_type.name = "REWARD_COMPUTED"
+        reward0.event_type.name = "ANALYTICS_SNAPSHOT"
         reward0.timestamp = datetime.now(timezone.utc)
         reward0.epoch = 1
-        reward0.data = RewardComputedPayload(
+        reward0.data = AnalyticsSnapshotPayload(
+            kind="last_action",
             env_id=0,
             total_reward=1.0,
             action_name="WAIT",
             value_estimate=0.0,
-            action_confidence=0.0,
+            action_confidence=0.5,  # Must be non-None for handler to trigger
         )
 
         reward1 = MagicMock()
         reward1.event_type = MagicMock()
-        reward1.event_type.name = "REWARD_COMPUTED"
+        reward1.event_type.name = "ANALYTICS_SNAPSHOT"
         reward1.timestamp = datetime.now(timezone.utc)
         reward1.epoch = 1
-        reward1.data = RewardComputedPayload(
+        reward1.data = AnalyticsSnapshotPayload(
+            kind="last_action",
             env_id=1,
             total_reward=-0.5,
             action_name="WAIT",
             value_estimate=0.0,
-            action_confidence=0.0,
+            action_confidence=0.5,  # Must be non-None for handler to trigger
         )
 
         for ev in [epoch0, epoch1, reward0, reward1]:
@@ -354,24 +355,22 @@ class TestSanctumAggregator:
         snapshot = agg.get_snapshot()
         assert snapshot.envs[0].status == "excellent"
 
-    def test_reward_computed_updates_env_state(self):
-        """REWARD_COMPUTED should update per-env state."""
+    def test_last_action_updates_env_state(self):
+        """ANALYTICS_SNAPSHOT(last_action) should update per-env state."""
         agg = SanctumAggregator(num_envs=4)
 
         event = MagicMock()
         event.event_type = MagicMock()
-        event.event_type.name = "REWARD_COMPUTED"
+        event.event_type.name = "ANALYTICS_SNAPSHOT"
         event.timestamp = datetime.now(timezone.utc)
         event.epoch = 10
-        event.data = RewardComputedPayload(
+        event.data = AnalyticsSnapshotPayload(
+            kind="last_action",
             env_id=2,
             total_reward=0.5,
             action_name="GERMINATE_CONV_LIGHT",
             value_estimate=0.0,
-            action_confidence=0.0,
-            base_acc_delta=0.1,
-            compute_rent=-0.01,
-            val_acc=75.5,
+            action_confidence=0.8,  # Must be non-None for handler to trigger
         )
 
         agg.process_event(event)
@@ -381,8 +380,6 @@ class TestSanctumAggregator:
         assert len(env.reward_history) == 1
         assert env.reward_history[0] == 0.5
         assert env.action_counts["GERMINATE"] == 1  # Normalized
-        assert env.reward_components.base_acc_delta == 0.1
-        assert env.reward_components.compute_rent == -0.01
 
     def test_seed_germinated_adds_seed(self):
         """SEED_GERMINATED should add seed to env."""
@@ -453,15 +450,15 @@ class TestSanctumAggregator:
 
         event = MagicMock()
         event.event_type = MagicMock()
-        event.event_type.name = "REWARD_COMPUTED"
+        event.event_type.name = "SEED_GERMINATED"
         event.timestamp = datetime.now(timezone.utc)
+        event.slot_id = "r0c1"
         event.message = None
-        event.data = RewardComputedPayload(
+        event.data = SeedGerminatedPayload(
             env_id=0,
-            total_reward=0.5,
-            action_name="WAIT",
-            value_estimate=0.0,
-            action_confidence=0.0,
+            slot_id="r0c1",
+            blueprint_id="conv_light",
+            params=1000,
         )
 
         agg.process_event(event)
@@ -469,10 +466,10 @@ class TestSanctumAggregator:
 
         assert len(snapshot.event_log) == 1
         entry = snapshot.event_log[0]
-        assert entry.event_type == "REWARD_COMPUTED"
-        # Action and reward are now in metadata, not message
-        assert entry.metadata.get("action") == "WAIT"
-        assert entry.metadata.get("reward") == 0.5
+        assert entry.event_type == "SEED_GERMINATED"
+        # Seed events have slot_id and blueprint in metadata
+        assert entry.metadata.get("slot_id") == "r0c1"
+        assert entry.metadata.get("blueprint") == "conv_light"
 
     def test_event_log_populates_episode_and_relative_time(self):
         """Event log entries should include episode and relative_time fields."""
@@ -489,15 +486,15 @@ class TestSanctumAggregator:
 
         event = MagicMock()
         event.event_type = MagicMock()
-        event.event_type.name = "REWARD_COMPUTED"
+        event.event_type.name = "SEED_GERMINATED"
         event.timestamp = past_timestamp
+        event.slot_id = "r0c2"
         event.message = None
-        event.data = RewardComputedPayload(
+        event.data = SeedGerminatedPayload(
             env_id=2,
-            total_reward=0.75,
-            action_name="GERMINATE",
-            value_estimate=0.0,
-            action_confidence=0.0,
+            slot_id="r0c2",
+            blueprint_id="mlp",
+            params=2000,
         )
 
         agg.process_event(event)
@@ -1102,62 +1099,14 @@ class TestSanctumAggregator:
         assert snapshot2.tamiyo.dead_layers == 0  # Still original value
         assert snapshot2.tamiyo.exploding_layers == 1  # Still original value
 
-    def test_aggregator_captures_decision_snapshot(self):
-        """Aggregator should capture DecisionSnapshot from REWARD_COMPUTED events."""
+    def test_aggregator_captures_decision_snapshot_from_last_action(self):
+        """ANALYTICS_SNAPSHOT(kind=last_action) should populate Sanctum decision carousel."""
         from esper.karn.sanctum.aggregator import SanctumAggregator
         from esper.leyline import TelemetryEvent, TelemetryEventType
 
         agg = SanctumAggregator(num_envs=4)
 
-        # Simulate REWARD_COMPUTED with decision data
-        event = TelemetryEvent(
-            event_type=TelemetryEventType.REWARD_COMPUTED,
-            timestamp=datetime.now(timezone.utc),
-            epoch=10,
-            data=RewardComputedPayload(
-                env_id=0,
-                total_reward=0.38,
-                action_name="GERMINATE",
-                value_estimate=0.42,
-                action_confidence=0.73,
-                action_slot="r0c1",
-                slot_states={"r0c0": "Training 12%", "r0c1": "Empty"},
-                host_accuracy=67.0,
-                alternatives=[("WAIT", 0.15), ("SET_ALPHA_TARGET", 0.12)],
-            ),
-        )
-
-        agg.process_event(event)
-        snapshot = agg.get_snapshot()
-
-        # Decision should be captured in recent_decisions list
-        # (last_decision was removed - use recent_decisions[0] instead)
-        assert len(snapshot.tamiyo.recent_decisions) > 0
-        decision = snapshot.tamiyo.recent_decisions[0]
-        assert decision.chosen_action == "GERMINATE"
-        assert decision.confidence == 0.73
-        assert decision.expected_value == 0.42
-        assert decision.actual_reward == 0.38
-        assert decision.chosen_slot == "r0c1"
-        assert decision.host_accuracy == 67.0
-        assert decision.slot_states == {"r0c0": "Training 12%", "r0c1": "Empty"}
-        assert decision.alternatives == [("WAIT", 0.15), ("SET_ALPHA_TARGET", 0.12)]
-
-    def test_aggregator_captures_decision_snapshot_from_last_action_snapshot(self):
-        """ANALYTICS_SNAPSHOT(kind=last_action) should populate Sanctum decision carousel.
-
-        Note: This test demonstrates that with typed payloads, ANALYTICS_SNAPSHOT cannot
-        provide full decision context (action_slot, slot_states, alternatives) since
-        AnalyticsSnapshotPayload only has basic fields. For full decision context,
-        use REWARD_COMPUTED events instead (see test_aggregator_captures_decision_snapshot).
-        """
-        from esper.karn.sanctum.aggregator import SanctumAggregator
-        from esper.leyline import TelemetryEvent, TelemetryEventType
-
-        agg = SanctumAggregator(num_envs=4)
-
-        # Vectorized PPO can emit kind=last_action snapshots
-        # But AnalyticsSnapshotPayload lacks the full decision context fields
+        # Vectorized PPO emits kind=last_action snapshots
         event = TelemetryEvent(
             event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
             timestamp=datetime.now(timezone.utc),
@@ -1169,17 +1118,21 @@ class TestSanctumAggregator:
                 action_name="GERMINATE",
                 action_confidence=0.73,
                 value_estimate=0.42,
+                slot_id="r0c1",
             ),
         )
 
         agg.process_event(event)
         snapshot = agg.get_snapshot()
 
-        # With AnalyticsSnapshotPayload, _handle_reward_computed is called but can't access
-        # the missing fields (env_id, action_slot, etc.) so decision capture doesn't work.
-        # This is a known limitation - use REWARD_COMPUTED for full decision context.
-        # For now, just verify event was processed without error
-        assert snapshot.event_log[-1].event_type == "ANALYTICS_SNAPSHOT"
+        # Decision should be captured in recent_decisions list
+        assert len(snapshot.tamiyo.recent_decisions) > 0
+        decision = snapshot.tamiyo.recent_decisions[0]
+        assert decision.chosen_action == "GERMINATE"
+        assert decision.confidence == 0.73
+        assert decision.expected_value == 0.42
+        assert decision.actual_reward == 0.38
+        assert decision.chosen_slot == "r0c1"
 
 
 class TestSanctumBackend:

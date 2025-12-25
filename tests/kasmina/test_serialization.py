@@ -13,7 +13,7 @@ import torch
 from datetime import datetime
 
 from esper.kasmina.slot import SeedSlot, SeedState, SeedMetrics
-from esper.kasmina.blending import LinearBlend, SigmoidBlend, GatedBlend
+from esper.kasmina.blending import GatedBlend
 from esper.leyline import SeedStage
 from esper.leyline.alpha import AlphaCurve, AlphaMode
 
@@ -273,31 +273,6 @@ class TestSlotStateSerialization:
 
 class TestBlendAlgorithmSerialization:
     """Tests for blend algorithm state serialization."""
-
-    def test_linear_blend_state_preserves_step(self):
-        """LinearBlend current step should be reconstructable."""
-        blend = LinearBlend(total_steps=100)
-
-        # Advance to step 50
-        alpha = blend.get_alpha(50)
-        assert alpha == 0.5
-
-        # Create new blend and verify step behavior
-        blend2 = LinearBlend(total_steps=100)
-        alpha2 = blend2.get_alpha(50)
-
-        assert alpha2 == 0.5
-
-    def test_sigmoid_blend_state_preserves_step(self):
-        """SigmoidBlend current step should be reconstructable."""
-        blend = SigmoidBlend(total_steps=100)
-
-        alpha1 = blend.get_alpha(0)
-        alpha2 = blend.get_alpha(50)
-        alpha3 = blend.get_alpha(100)
-
-        # Sigmoid should be low at start, ~0.5 at middle, high at end
-        assert alpha1 < alpha2 < alpha3
 
     def test_gated_blend_module_state_dict(self):
         """GatedBlend should have state_dict for nn.Module compatibility."""

@@ -7,13 +7,13 @@ DRL Expert Review: These tests verify critical invariants for sparse rewards.
 import math
 from hypothesis import given, strategies as st, settings
 
+from esper.leyline import LifecycleOp
 from esper.simic.rewards import (
     RewardMode,
     ContributionRewardConfig,
     compute_sparse_reward,
     compute_minimal_reward,
 )
-from esper.leyline.factored_actions import LifecycleOp
 
 
 # Strategy for valid sparse inputs

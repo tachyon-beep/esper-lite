@@ -22,12 +22,13 @@ jobs:
       - name: Install dependencies
         run: |
           pip install ruff mypy
+          pip install -e .
 
       - name: Lint with ruff
         run: ruff check src/ tests/
 
       - name: Type check with mypy
-        run: mypy src/
+        run: MYPYPATH=src mypy -p esper
 
   property-tests:
     runs-on: ubuntu-latest

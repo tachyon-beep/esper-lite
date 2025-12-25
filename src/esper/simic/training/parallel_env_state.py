@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 
-from esper.leyline.factored_actions import LifecycleOp
+from esper.leyline import LifecycleOp
 
 if TYPE_CHECKING:
     from esper.tolaria import TolariaGovernor

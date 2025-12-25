@@ -2,8 +2,9 @@
 import pytest
 import torch
 
-from esper.leyline import DEFAULT_EPISODE_LENGTH, DEFAULT_VALUE_CLIP
-from esper.leyline.factored_actions import (
+from esper.leyline import (
+    DEFAULT_EPISODE_LENGTH,
+    DEFAULT_VALUE_CLIP,
     LifecycleOp,
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,

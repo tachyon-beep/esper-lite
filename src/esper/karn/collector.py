@@ -42,7 +42,6 @@ from esper.leyline.telemetry import (
     TrainingStartedPayload,
     EpochCompletedPayload,
     PPOUpdatePayload,
-    RewardComputedPayload,
     SeedGerminatedPayload,
     SeedStageChangedPayload,
     SeedGateEvaluatedPayload,
@@ -284,8 +283,6 @@ class KarnCollector:
             self._handle_seed_event(event)
         elif event_type == "PPO_UPDATE_COMPLETED":
             self._handle_ppo_update(event)
-        elif event_type == "REWARD_COMPUTED":
-            self._handle_reward_computed(event)
         elif event_type == "COUNTERFACTUAL_COMPUTED":
             self._handle_counterfactual_computed(event)
         elif event_type in _ANOMALY_EVENT_TYPES:
@@ -458,28 +455,6 @@ class KarnCollector:
         else:
             _logger.warning(
                 "Expected PPOUpdatePayload for PPO_UPDATE_COMPLETED, got %s",
-                type(event.data).__name__,
-            )
-            return
-
-    def _handle_reward_computed(self, event: "TelemetryEvent") -> None:
-        """Handle REWARD_COMPUTED event."""
-        if not self.store.current_epoch:
-            return
-
-        # Create policy snapshot if not exists
-        if not self.store.current_epoch.policy:
-            self.store.current_epoch.policy = PolicySnapshot()
-
-        policy = self.store.current_epoch.policy
-
-        # Typed payload path
-        if isinstance(event.data, RewardComputedPayload):
-            policy.reward_total = event.data.total_reward
-            policy.action_op = event.data.action_name
-        else:
-            _logger.warning(
-                "Expected RewardComputedPayload for REWARD_COMPUTED, got %s",
                 type(event.data).__name__,
             )
             return

@@ -47,10 +47,6 @@ def _load_dashboard_html() -> str:
     """.format(_DASHBOARD_PATH)
 
 
-# TODO: [DEAD CODE] - create_app() and run_dashboard_server() are exported but never called.
-# Production uses integrated_dashboard.DashboardServer instead (train.py line 309).
-# This appears to be superseded code. Either consolidate with integrated_dashboard.py
-# or delete these functions. See: architectural risk assessment 2024-12-24.
 def create_app(telemetry_queue: Queue[str] | None = None) -> FastAPI:
     """Create FastAPI app for Karn dashboard.
 

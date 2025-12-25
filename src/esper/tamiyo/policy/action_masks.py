@@ -26,14 +26,15 @@ from typing import TYPE_CHECKING
 import torch
 from torch.distributions import Categorical
 
-from esper.leyline import AlphaMode, SeedStage, MIN_PRUNE_AGE, MASKED_LOGIT_VALUE
-from esper.leyline.stages import VALID_TRANSITIONS
-from esper.leyline.slot_config import SlotConfig
-from esper.leyline.factored_actions import (
+from esper.leyline import (
+    AlphaMode,
     AlphaTargetAction,
     BlueprintAction,
+    CNN_BLUEPRINTS,
     GerminationStyle,
     LifecycleOp,
+    MASKED_LOGIT_VALUE,
+    MIN_PRUNE_AGE,
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
     NUM_ALPHA_TARGETS,
@@ -41,9 +42,11 @@ from esper.leyline.factored_actions import (
     NUM_OPS,
     NUM_STYLES,
     NUM_TEMPO,
-    CNN_BLUEPRINTS,
+    SeedStage,
     TRANSFORMER_BLUEPRINTS,
 )
+from esper.leyline.stages import VALID_TRANSITIONS
+from esper.leyline.slot_config import SlotConfig
 
 if TYPE_CHECKING:
     from esper.leyline import SeedStateReport

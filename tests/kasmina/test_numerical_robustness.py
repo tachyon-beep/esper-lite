@@ -14,7 +14,7 @@ import torch
 
 from esper.kasmina.slot import SeedSlot, SeedMetrics
 from esper.kasmina.isolation import blend_with_isolation, ste_forward
-from esper.kasmina.blending import LinearBlend, SigmoidBlend, GatedBlend
+from esper.kasmina.blending import GatedBlend
 
 
 class TestNaNDetection:
@@ -278,28 +278,6 @@ class TestFloatingPointAccumulation:
 
         # Should capture the improvement
         assert metrics.total_improvement == pytest.approx(tiny_improvement)
-
-    def test_linear_blend_at_boundaries(self):
-        """LinearBlend should hit exactly 0 and 1 at boundaries."""
-        blend = LinearBlend(total_steps=10)
-
-        # At step 0
-        assert blend.get_alpha(0) == 0.0
-
-        # At step 10
-        assert blend.get_alpha(10) == 1.0
-
-    def test_sigmoid_blend_approaches_boundaries(self):
-        """SigmoidBlend should approach but not exceed bounds."""
-        blend = SigmoidBlend(total_steps=10)
-
-        # At start
-        alpha_start = blend.get_alpha(0)
-        assert alpha_start >= 0.0
-
-        # At end
-        alpha_end = blend.get_alpha(10)
-        assert alpha_end <= 1.0
 
     def test_gated_blend_output_bounded(self):
         """GatedBlend gate output should be bounded [0, 1]."""

@@ -13,9 +13,7 @@ import tracemalloc
 import pytest
 import torch
 
-from esper.leyline.slot_config import SlotConfig
-from esper.leyline.stages import SeedStage
-from esper.leyline.factored_actions import (
+from esper.leyline import (
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
     NUM_ALPHA_TARGETS,
@@ -23,7 +21,9 @@ from esper.leyline.factored_actions import (
     NUM_OPS,
     NUM_STYLES,
     NUM_TEMPO,
+    SeedStage,
 )
+from esper.leyline.slot_config import SlotConfig
 from esper.simic.agent import PPOAgent
 from esper.tamiyo.policy import create_policy
 from esper.tamiyo.policy.features import get_feature_size

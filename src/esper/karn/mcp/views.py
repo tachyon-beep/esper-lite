@@ -141,11 +141,8 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.num_fossilized_seeds')::INTEGER as num_fossilized_seeds
         FROM raw_events
         WHERE
-            event_type = 'REWARD_COMPUTED'
-            OR (
-                event_type = 'ANALYTICS_SNAPSHOT'
-                AND json_extract_string(data, '$.kind') = 'last_action'
-            )
+            event_type = 'ANALYTICS_SNAPSHOT'
+            AND json_extract_string(data, '$.kind') = 'last_action'
     """,
     "anomalies": """
         CREATE OR REPLACE VIEW anomalies AS

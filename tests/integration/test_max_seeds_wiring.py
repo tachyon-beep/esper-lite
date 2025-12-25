@@ -3,7 +3,7 @@
 from esper.simic.agent import signals_to_features
 from esper.tamiyo.policy.action_masks import compute_action_masks
 from esper.tamiyo.policy.features import MULTISLOT_FEATURE_SIZE
-from esper.leyline.factored_actions import LifecycleOp
+from esper.leyline import LifecycleOp
 
 
 class TestMaxSeedsWiring:

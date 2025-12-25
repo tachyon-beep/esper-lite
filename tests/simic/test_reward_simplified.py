@@ -2,16 +2,16 @@
 
 import pytest
 
+from esper.leyline import LifecycleOp
 from esper.simic.rewards import (
-    RewardMode,
-    compute_simplified_reward,
-    ContributionRewardConfig,
-    SeedInfo,
-    STAGE_TRAINING,
     STAGE_HOLDING,
+    STAGE_TRAINING,
+    ContributionRewardConfig,
+    RewardMode,
+    SeedInfo,
     compute_reward,
+    compute_simplified_reward,
 )
-from esper.leyline.factored_actions import LifecycleOp
 from esper.simic.training.config import TrainingConfig
 
 

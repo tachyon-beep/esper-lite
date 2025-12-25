@@ -376,7 +376,7 @@ class TestTempoProperties:
 
     def test_tempo_to_epochs_mapping_consistency(self):
         """Property: TEMPO_TO_EPOCHS covers all TempoAction values."""
-        from esper.leyline.factored_actions import TempoAction, TEMPO_TO_EPOCHS
+        from esper.leyline import TEMPO_TO_EPOCHS, TempoAction
 
         # Every enum value should have a mapping
         for tempo in TempoAction:
@@ -388,7 +388,7 @@ class TestTempoProperties:
 
     def test_tempo_action_enum_bounds(self):
         """Property: TempoAction enum values are contiguous 0..N-1."""
-        from esper.leyline.factored_actions import TempoAction, NUM_TEMPO
+        from esper.leyline import NUM_TEMPO, TempoAction
 
         values = [t.value for t in TempoAction]
 

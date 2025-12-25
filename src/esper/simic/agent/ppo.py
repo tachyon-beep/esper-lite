@@ -22,25 +22,25 @@ from .types import PPOUpdateMetrics
 from esper.simic.telemetry import RatioExplosionDiagnostic
 from esper.tamiyo.policy.protocol import PolicyBundle
 from esper.leyline import (
-    DEFAULT_GAMMA,
-    DEFAULT_EPISODE_LENGTH,
-    DEFAULT_N_ENVS,
-    DEFAULT_LEARNING_RATE,
-    DEFAULT_CLIP_RATIO,
-    DEFAULT_GAE_LAMBDA,
-    DEFAULT_VALUE_COEF,
-    DEFAULT_MAX_GRAD_NORM,
-    DEFAULT_N_PPO_EPOCHS,
     DEFAULT_BATCH_SIZE,
+    DEFAULT_CLIP_RATIO,
     DEFAULT_ENTROPY_COEF,
     DEFAULT_ENTROPY_COEF_MIN,
-    DEFAULT_VALUE_CLIP,
-    DEFAULT_RATIO_EXPLOSION_THRESHOLD,
+    DEFAULT_EPISODE_LENGTH,
+    DEFAULT_GAE_LAMBDA,
+    DEFAULT_GAMMA,
+    DEFAULT_LEARNING_RATE,
+    DEFAULT_MAX_GRAD_NORM,
+    DEFAULT_N_ENVS,
+    DEFAULT_N_PPO_EPOCHS,
     DEFAULT_RATIO_COLLAPSE_THRESHOLD,
+    DEFAULT_RATIO_EXPLOSION_THRESHOLD,
+    DEFAULT_VALUE_CLIP,
+    DEFAULT_VALUE_COEF,
     HEAD_NAMES,
+    LifecycleOp,
 )
 from esper.leyline.slot_config import SlotConfig
-from esper.leyline.factored_actions import LifecycleOp
 import logging
 
 if TYPE_CHECKING:

@@ -1,8 +1,7 @@
 import pytest
 
 from esper.kasmina.slot import SeedSlot
-from esper.leyline.factored_actions import TempoAction, TEMPO_TO_EPOCHS
-from esper.leyline import HEAD_NAMES
+from esper.leyline import HEAD_NAMES, TEMPO_TO_EPOCHS, TempoAction
 
 
 @pytest.fixture

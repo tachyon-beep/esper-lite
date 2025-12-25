@@ -6,8 +6,7 @@ import torch
 from esper.tamiyo.policy import get_policy, list_policies
 from esper.tamiyo.policy.lstm_bundle import LSTMPolicyBundle
 from esper.tamiyo.policy.types import ActionResult, EvalResult, ForwardResult
-from esper.leyline.slot_config import SlotConfig
-from esper.leyline.factored_actions import (
+from esper.leyline import (
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
     NUM_ALPHA_TARGETS,
@@ -16,6 +15,7 @@ from esper.leyline.factored_actions import (
     NUM_STYLES,
     NUM_TEMPO,
 )
+from esper.leyline.slot_config import SlotConfig
 
 
 @pytest.fixture

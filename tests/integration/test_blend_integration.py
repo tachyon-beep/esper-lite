@@ -8,8 +8,9 @@ import torch
 
 from esper.kasmina.blending import BlendCatalog, GatedBlend
 from esper.kasmina.host import CNNHost, TransformerHost, MorphogeneticModel
-from esper.leyline.alpha import AlphaAlgorithm, AlphaCurve
-from esper.leyline.factored_actions import (
+from esper.leyline import (
+    AlphaAlgorithm,
+    AlphaCurve,
     AlphaCurveAction,
     AlphaSpeedAction,
     AlphaTargetAction,
@@ -24,19 +25,6 @@ from esper.tamiyo.policy.features import TaskConfig
 
 class TestBlendAlgorithmCreation:
     """Test BlendCatalog creates correct algorithm types."""
-
-    def test_linear_blend_creation(self):
-        """LinearBlend created with total_steps."""
-        blend = BlendCatalog.create("linear", total_steps=10)
-        assert blend.algorithm_id == "linear"
-        assert blend.get_alpha(5) == 0.5
-
-    def test_sigmoid_blend_creation(self):
-        """SigmoidBlend created with total_steps."""
-        blend = BlendCatalog.create("sigmoid", total_steps=10)
-        assert blend.algorithm_id == "sigmoid"
-        # Sigmoid at midpoint should be close to 0.5
-        assert 0.4 < blend.get_alpha(5) < 0.6
 
     def test_gated_blend_cnn_creation(self):
         """GatedBlend created with channels and topology=cnn."""
@@ -69,24 +57,6 @@ class TestGatedBlendForward:
         alpha = blend.get_alpha_for_blend(x)
         assert alpha.shape == (2, 1, 1)
         assert (alpha >= 0).all() and (alpha <= 1).all()
-
-    def test_linear_blend_unified_interface(self):
-        """LinearBlend implements get_alpha_for_blend returning scalar tensor."""
-        blend = BlendCatalog.create("linear", total_steps=10)
-        blend.step(5)  # Set current step
-        x = torch.randn(2, 64, 8, 8)
-        alpha = blend.get_alpha_for_blend(x)
-        assert alpha.shape == ()  # 0-dim tensor
-        assert alpha.item() == pytest.approx(0.5)
-
-    def test_sigmoid_blend_unified_interface(self):
-        """SigmoidBlend implements get_alpha_for_blend returning scalar tensor."""
-        blend = BlendCatalog.create("sigmoid", total_steps=10)
-        blend.step(5)  # Midpoint
-        x = torch.randn(2, 64, 8, 8)
-        alpha = blend.get_alpha_for_blend(x)
-        assert alpha.shape == ()  # 0-dim tensor
-        assert 0.4 < alpha.item() < 0.6  # Sigmoid at midpoint ≈ 0.5
 
 
 class TestBlendActionIntegration:

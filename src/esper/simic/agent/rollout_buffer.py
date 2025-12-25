@@ -21,8 +21,9 @@ from typing import NamedTuple
 
 import torch
 
-from esper.leyline import DEFAULT_GAMMA, DEFAULT_LSTM_HIDDEN_DIM
-from esper.leyline.factored_actions import (
+from esper.leyline import (
+    DEFAULT_GAMMA,
+    DEFAULT_LSTM_HIDDEN_DIM,
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
     NUM_ALPHA_TARGETS,

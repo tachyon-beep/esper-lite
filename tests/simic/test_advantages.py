@@ -2,8 +2,8 @@
 
 import torch
 
+from esper.leyline import LifecycleOp
 from esper.simic.agent import compute_per_head_advantages
-from esper.leyline.factored_actions import LifecycleOp
 
 
 class TestPerHeadAdvantages:

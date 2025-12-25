@@ -393,6 +393,39 @@ class TelemetryStore:
         """Get the most recent committed epoch."""
         return self.epoch_snapshots[-1] if self.epoch_snapshots else None
 
+    # =========================================================================
+    # TODO: [FUTURE] Store-Based Analytics
+    # =========================================================================
+    #
+    # The following research queries operate on stored epoch snapshots.
+    # Candidates for future TelemetryStore methods or a companion Analytics class.
+    #
+    # Trajectory Analysis:
+    #   - accuracy_trajectory() -> list[TrajectoryPoint]: Val accuracy over epochs
+    #   - loss_trajectory() -> list[TrajectoryPoint]: Val loss over epochs
+    #   - gradient_norm_trajectory() -> list[TrajectoryPoint]: Host grad norms
+    #
+    # Convergence Detection:
+    #   - detect_convergence(window, threshold) -> ConvergenceInfo: Plateau detection
+    #   - best_epoch() -> (epoch, accuracy): Peak performance point
+    #   - improvement_rate(window) -> list[float]: Rolling accuracy delta
+    #
+    # Per-Slot Aggregation:
+    #   - slot_summary(slot_id) -> SlotSummary: Stats for specific slot position
+    #   - slot_contributions() -> dict[slot_id, list[float]]: Counterfactual over time
+    #   - compare_slots() -> dict[slot_id, metrics]: Cross-slot comparison
+    #
+    # Stage Duration Analysis:
+    #   - stage_durations(slot_id) -> dict[stage, list[int]]: Time in each stage
+    #   - mean_stage_duration(stage) -> float: Average across all slots
+    #
+    # Episode Summary:
+    #   - episode_summary() -> EpisodeSummary: Comprehensive end-of-run stats
+    #
+    # Implementation note: Can be added as methods here or as a separate
+    # StoreAnalytics class that wraps TelemetryStore.
+    # =========================================================================
+
     def export_jsonl(self, path: Path | str) -> int:
         """Export store contents to JSONL file.
 

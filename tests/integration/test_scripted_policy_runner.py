@@ -6,20 +6,20 @@ import torch
 import torch.nn as nn
 
 from esper.kasmina import MorphogeneticModel
-from esper.leyline.factored_actions import (
+from esper.leyline import (
     AlphaCurveAction,
+    AlphaMode,
     AlphaSpeedAction,
     AlphaTargetAction,
     BlueprintAction,
     FactoredAction,
     GerminationStyle,
     LifecycleOp,
-    TempoAction,
+    SeedStage,
+    SlotConfig,
     TEMPO_TO_EPOCHS,
+    TempoAction,
 )
-from esper.leyline.slot_config import SlotConfig
-from esper.leyline.alpha import AlphaMode
-from esper.leyline.stages import SeedStage
 from esper.simic.training.vectorized import _resolve_target_slot
 from esper.tamiyo.policy.action_masks import build_slot_states, compute_action_masks
 

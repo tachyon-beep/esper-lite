@@ -29,12 +29,10 @@ import torch.nn as nn
 from esper.leyline import (
     DEFAULT_LSTM_HIDDEN_DIM,
     DEFAULT_FEATURE_DIM,
-    HEAD_NAMES,
-    MASKED_LOGIT_VALUE,
-)
-from esper.leyline.factored_actions import (
     GerminationStyle,
+    HEAD_NAMES,
     LifecycleOp,
+    MASKED_LOGIT_VALUE,
     get_action_head_sizes,
 )
 from esper.leyline.slot_config import SlotConfig

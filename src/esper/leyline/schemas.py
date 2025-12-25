@@ -1,6 +1,6 @@
-"""Leyline Schemas - Blueprint and gate specifications.
+"""Leyline Schemas - Gate specifications and seed operations.
 
-Defines specifications for seed blueprints and quality gates.
+Defines quality gate types and seed lifecycle operations.
 """
 
 from __future__ import annotations
@@ -8,7 +8,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, IntEnum, auto
-from typing import Any, Protocol, runtime_checkable
 
 from esper.leyline.stages import SeedStage
 
@@ -68,48 +67,3 @@ class GateResult:
     timestamp: datetime = field(default_factory=_utc_now)
 
 
-# TODO: [DEAD CODE] - BlueprintProtocol is defined and exported but never used in production.
-# Blueprint implementations in kasmina/blueprints/ do not reference this protocol.
-# Either enforce this protocol or delete it. See: architectural risk assessment 2024-12-24.
-@runtime_checkable
-class BlueprintProtocol(Protocol):
-    """Protocol that all blueprints must satisfy."""
-
-    @property
-    def blueprint_id(self) -> str:
-        """Unique identifier for this blueprint type."""
-        ...
-
-    @property
-    def required_channels(self) -> int | None:
-        """Number of input channels required, or None if flexible."""
-        ...
-
-    def create_module(self, in_channels: int, **kwargs) -> Any:
-        """Create a seed module instance."""
-        ...
-
-
-@dataclass(frozen=True)
-class BlueprintSpec:
-    """Specification for a blueprint in the catalog."""
-
-    blueprint_id: str
-    name: str
-    description: str = ""
-
-    # Requirements
-    min_channels: int = 1
-    max_channels: int | None = None
-
-    # Characteristics
-    parameter_count_estimate: int = 0  # Rough parameter count
-    compute_cost: float = 1.0  # Relative compute cost (1.0 = baseline)
-    memory_cost: float = 1.0  # Relative memory cost
-
-    # Recommended usage
-    recommended_training_epochs: int = 5
-    recommended_blending_epochs: int = 5
-
-    # Tags for categorization
-    tags: tuple[str, ...] = ()

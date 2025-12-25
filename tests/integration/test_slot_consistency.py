@@ -9,16 +9,16 @@ Tests verify that SlotConfig is correctly propagated through the entire stack:
 import pytest
 import torch
 
-from esper.leyline.slot_config import SlotConfig
-from esper.leyline.factored_actions import (
+from esper.leyline import (
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
     NUM_ALPHA_TARGETS,
-    NUM_OPS,
     NUM_BLUEPRINTS,
+    NUM_OPS,
     NUM_STYLES,
     NUM_TEMPO,
 )
+from esper.leyline.slot_config import SlotConfig
 from esper.tamiyo.policy.features import get_feature_size, BASE_FEATURE_SIZE, SLOT_FEATURE_SIZE
 from esper.simic.agent import PPOAgent
 from esper.tamiyo.networks import FactoredRecurrentActorCritic
