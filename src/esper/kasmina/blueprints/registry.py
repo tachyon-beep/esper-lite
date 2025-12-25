@@ -30,9 +30,8 @@ def _invalidate_action_cache(topology: str | None = None) -> None:
             leyline_actions._action_enum_cache.clear()
         else:
             leyline_actions._action_enum_cache.pop(topology, None)
-    except AttributeError:
-        _logger.debug("Cache invalidation skipped: cache not initialized")
-        pass
+    except AttributeError as e:
+        _logger.debug("Cache invalidation skipped: %s", e)
 
 
 @dataclass(frozen=True, slots=True)
