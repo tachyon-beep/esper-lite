@@ -191,6 +191,7 @@ class RewardComponents:
     holding_warning: float = 0.0
     ratio_penalty: float = 0.0
     terminal_bonus: float = 0.0
+    stage_bonus: float = 0.0
 
 
 @dataclass
