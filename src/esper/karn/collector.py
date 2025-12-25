@@ -491,7 +491,10 @@ class KarnCollector:
         if not self.store.current_epoch:
             return
 
-        data = event.data or {}
+        if event.data is None:
+            _logger.warning("Event %s has no data payload", event.event_type)
+            return
+        data = event.data
         if "env_id" not in data:
             return
         env_id = coerce_int(data.get("env_id"), field="env_id", default=-1, minimum=0)
