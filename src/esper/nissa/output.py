@@ -293,7 +293,10 @@ class ConsoleOutput(OutputBackend):
             else:
                 print(f"[{timestamp}] {env_str} | Host stabilized at epoch {epoch} ({stable_count}/{stabilization_epochs} stable) - germination now allowed")
         elif event_type == "PPO_UPDATE_COMPLETED":
-            data = event.data or {}
+            if event.data is None:
+                _logger.warning("PPO_UPDATE_COMPLETED event has no data payload")
+                return
+            data = event.data
             if data.get("skipped"):
                 reason = data.get("reason", "unknown")
                 print(f"[{timestamp}] PPO | Update skipped ({reason})")
