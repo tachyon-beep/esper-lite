@@ -116,6 +116,7 @@ from esper.tamiyo.policy.features import (
     batch_obs_to_features,
 )
 from esper.simic.agent import PPOAgent
+from esper.tamiyo.policy import create_policy
 from esper.simic.rewards import (
     compute_reward,
     compute_loss_reward,
@@ -387,8 +388,8 @@ def _emit_anomaly_diagnostics(
     gradient_stats = None
     stability_report = None
     if collect_debug:
-        gradient_stats = collect_per_layer_gradients(agent.network)
-        stability_report = check_numerical_stability(agent.network)
+        gradient_stats = collect_per_layer_gradients(agent.policy._network)
+        stability_report = check_numerical_stability(agent.policy._network)
 
     for anomaly_type in anomaly_report.anomaly_types:
         event_type = event_type_map.get(
@@ -833,9 +834,21 @@ def train_ppo_vectorized(
         # to recover from in an interactive session.
         # Determine effective compile mode: quiet_analytics disables compilation
         effective_compile_mode = compile_mode if not quiet_analytics else "off"
-        agent = PPOAgent(
+
+        # Create policy via Tamiyo factory
+        policy = create_policy(
+            policy_type="lstm",
             state_dim=state_dim,
-            hidden_dim=256,
+            num_slots=slot_config.num_slots,
+            device=device,
+            compile_mode=effective_compile_mode,
+            lstm_hidden_dim=lstm_hidden_dim,
+        )
+
+        # Create agent with injected policy
+        agent = PPOAgent(
+            policy=policy,
+            slot_config=slot_config,
             lr=lr,
             gamma=gamma,
             gae_lambda=gae_lambda,
@@ -847,12 +860,9 @@ def train_ppo_vectorized(
             adaptive_entropy_floor=adaptive_entropy_floor,
             entropy_anneal_steps=entropy_anneal_steps,
             device=device,
-            lstm_hidden_dim=lstm_hidden_dim,
             chunk_length=chunk_length,
             num_envs=n_envs,
             max_steps_per_env=max_epochs,
-            slot_config=slot_config,
-            compile_mode=effective_compile_mode,
         )
 
     # Emit TRAINING_STARTED to activate Karn (Sanctum/Overwatch) and capture run config.
@@ -2273,8 +2283,8 @@ def train_ppo_vectorized(
                     env_c = c_batch[:, env_idx : env_idx + 1, :].clone()
                     pre_step_hiddens.append((env_h, env_c))
             else:
-                batched_lstm_hidden = agent.network.get_initial_hidden(
-                    len(env_states), agent.device
+                batched_lstm_hidden = agent.policy.initial_hidden(
+                    len(env_states)
                 )
                 init_h, init_c = batched_lstm_hidden
                 for env_idx in range(len(env_states)):
@@ -2282,33 +2292,19 @@ def train_ppo_vectorized(
                     env_c = init_c[:, env_idx : env_idx + 1, :].clone()
                     pre_step_hiddens.append((env_h, env_c))
 
-            # get_action returns GetActionResult dataclass
-            action_result = agent.network.get_action(
+            # get_action returns ActionResult dataclass
+            action_result = agent.policy.get_action(
                 states_batch_normalized,
+                masks=masks_batch,
                 hidden=batched_lstm_hidden,
-                slot_mask=masks_batch["slot"],
-                blueprint_mask=masks_batch["blueprint"],
-                style_mask=masks_batch["style"],
-                tempo_mask=masks_batch["tempo"],
-                alpha_target_mask=masks_batch["alpha_target"],
-                alpha_speed_mask=masks_batch["alpha_speed"],
-                alpha_curve_mask=masks_batch["alpha_curve"],
-                op_mask=masks_batch["op"],
                 deterministic=False,
-                return_op_logits=ops_telemetry_enabled,
             )
+            # TODO: [FUTURE FUNCTIONALITY] - op_logits telemetry not yet supported in PolicyBundle interface
+            # Would require extending ActionResult to include optional logits field
             op_probs_cpu: list[list[float]] | None = None
-            if ops_telemetry_enabled and action_result.op_logits is not None:
-                # Small tensor ([n_envs, 6]) - safe to move to CPU for UI telemetry.
-                op_probs_cpu = (
-                    torch.softmax(action_result.op_logits, dim=-1)
-                    .detach()
-                    .cpu()
-                    .tolist()
-                )
-            actions_dict = action_result.actions
-            head_log_probs = action_result.log_probs
-            values_tensor = action_result.values
+            actions_dict = action_result.action
+            head_log_probs = action_result.log_prob
+            values_tensor = action_result.value
 
             # OPTIMIZATION: Update batched hidden state directly (eliminates per-env slice/cat)
             batched_lstm_hidden = action_result.hidden
@@ -2666,9 +2662,7 @@ def train_ppo_vectorized(
                     if batched_lstm_hidden is not None:
                         # P4-FIX: Inplace update to inference tensor not allowed.
                         # Reset this environment's hidden state in the batch for the next episode.
-                        init_h, init_c = agent._base_network.get_initial_hidden(
-                            1, agent.device
-                        )
+                        init_h, init_c = agent.policy.initial_hidden(1)
 
                         # Create new tensors to avoid inplace modification of inference tensors
                         new_h = batched_lstm_hidden[0].clone()
@@ -2803,20 +2797,13 @@ def train_ppo_vectorized(
                 }
 
                 with torch.inference_mode():
-                    bootstrap_result = agent.network.get_action(
+                    bootstrap_result = agent.policy.get_action(
                         post_action_features_normalized,
+                        masks=post_masks_batch,
                         hidden=batched_lstm_hidden,
-                        slot_mask=post_masks_batch["slot"],
-                        blueprint_mask=post_masks_batch["blueprint"],
-                        style_mask=post_masks_batch["style"],
-                        tempo_mask=post_masks_batch["tempo"],
-                        alpha_target_mask=post_masks_batch["alpha_target"],
-                        alpha_speed_mask=post_masks_batch["alpha_speed"],
-                        alpha_curve_mask=post_masks_batch["alpha_curve"],
-                        op_mask=post_masks_batch["op"],
                         deterministic=True,
                     )
-                bootstrap_values = bootstrap_result.values.tolist()
+                bootstrap_values = bootstrap_result.value.tolist()
 
             # PHASE 3: Store transitions
             bootstrap_idx = 0
@@ -2888,7 +2875,7 @@ def train_ppo_vectorized(
                 amp_dtype=resolved_amp_dtype,
             )
             ppo_update_time_ms = (time.perf_counter() - update_start) * 1000.0
-            ppo_grad_norm = compute_grad_norm_surrogate(agent.network)
+            ppo_grad_norm = compute_grad_norm_surrogate(agent.policy._network)
 
             metric_values = [v for v in metrics.values() if isinstance(v, (int, float))]
             anomaly_report = anomaly_detector.check_all(
@@ -2996,14 +2983,14 @@ def train_ppo_vectorized(
         if rolling_avg_acc > best_avg_acc:
             best_avg_acc = rolling_avg_acc
             best_state = {
-                k: v.cpu().clone() for k, v in agent.network.state_dict().items()
+                k: v.cpu().clone() for k, v in agent.policy.state_dict().items()
             }
 
         episodes_completed += envs_this_batch
         batch_idx += 1
 
     if best_state:
-        agent.network.load_state_dict(best_state)
+        agent.policy.load_state_dict(best_state)
 
     if save_path:
         agent.save(save_path)
