@@ -193,6 +193,8 @@ class VectorizedEmitter:
         alternatives: list[tuple[str, float]] | None = None,
         decision_entropy: float | None = None,
         base_acc_delta: float | None = None,
+        bounded_attribution: float | None = None,
+        compute_rent: float | None = None,
     ) -> None:
         """Emit last-action detail, offloading formatting to the hub thread."""
         if not self._should_emit("ops_normal"):
@@ -251,6 +253,10 @@ class VectorizedEmitter:
             data["decision_entropy"] = float(decision_entropy)
         if base_acc_delta is not None:
             data["base_acc_delta"] = float(base_acc_delta)
+        if bounded_attribution is not None:
+            data["bounded_attribution"] = float(bounded_attribution)
+        if compute_rent is not None:
+            data["compute_rent"] = float(compute_rent)
 
         self._emit(TelemetryEvent(
             event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
@@ -265,6 +271,8 @@ class VectorizedEmitter:
                 action_confidence=action_confidence,
                 value_estimate=value_estimate,
                 base_acc_delta=base_acc_delta,
+                bounded_attribution=bounded_attribution,
+                compute_rent=compute_rent,
             ),
         ))
 

@@ -951,6 +951,8 @@ class AnalyticsSnapshotPayload:
     alpha_curve_masked: bool | None = None
     # Reward component breakdown (for kind="last_action")
     base_acc_delta: float | None = None  # Legacy shaped signal from accuracy improvement
+    bounded_attribution: float | None = None  # Contribution-primary attribution signal
+    compute_rent: float | None = None  # Cost of active seeds (always negative)
 
     # For kind="throughput", includes performance metrics
     batch: int | None = None

@@ -1079,9 +1079,16 @@ class SanctumAggregator:
             env.action_counts[action_name] = env.action_counts.get(action_name, 0) + 1
             env.total_actions += 1
 
-            # Update reward component breakdown (base_acc_delta from payload)
+            # Update reward component breakdown from payload
+            # (migrated from removed REWARD_COMPUTED handler)
             if payload.base_acc_delta is not None:
                 env.reward_components.base_acc_delta = payload.base_acc_delta
+            if payload.bounded_attribution is not None:
+                env.reward_components.bounded_attribution = payload.bounded_attribution
+            if payload.compute_rent is not None:
+                env.reward_components.compute_rent = payload.compute_rent
+            # Always update context fields when we have any reward data
+            if payload.base_acc_delta is not None or payload.bounded_attribution is not None:
                 env.reward_components.total = total_reward
                 env.reward_components.last_action = action_name
                 env.reward_components.env_id = env_id

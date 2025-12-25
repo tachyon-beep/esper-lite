@@ -18,6 +18,12 @@
 - Added PBRS verification tests for SIMPLIFIED mode
 - **Generalized A/B → A/B/n**: Renamed `ab_reward_modes` → `reward_mode_per_env`, added `with_reward_split()` builder
 
+**Revision Notes (2025-12-26):** Pre-execution codebase review identified gaps:
+- **Added Task 1.5**: `store.py` RewardComponents lacks `stage_bonus` field (sanctum/schema.py has it)
+- **Added Task 4.5**: Ablation configs need `disable_pbrs`, `disable_terminal_reward`, `disable_anti_gaming` flags in TrainingConfig
+- **Fixed Task 0.5**: Removed incorrect "backwards-compatible property alias" from commit message
+- **Updated task count**: 11 → 13 tasks, ~3-3.5 hours estimated
+
 ---
 
 ## Phase 0: Foundation Fixes
@@ -308,7 +314,7 @@ Add TrainingConfig.with_reward_split() builder for ergonomic multi-group config:
         'sparse': 2,
     })
 
-Backwards-compatible: ab_reward_modes property alias retained.
+No backwards compatibility per No Legacy Code Policy (clean rename).
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
@@ -509,6 +515,56 @@ git commit -m "feat(karn): add EpisodeOutcome schema for multi-objective trackin
 Captures accuracy, param_ratio, stability_score for Pareto analysis.
 Includes dominates() method for frontier computation.
 Self-dominance correctly returns False.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 1.5: Add stage_bonus to store.py RewardComponents
+
+**Context:** The `sanctum/schema.py` RewardComponents has `stage_bonus` for PBRS tracking, but `store.py` RewardComponents does not. This creates an inconsistency when emitting telemetry from vectorized training. Add the field to store.py for consistency.
+
+**Files:**
+- Modify: `src/esper/karn/store.py`
+- Test: Existing tests should pass
+
+**Step 1: Add stage_bonus field to RewardComponents**
+
+In `src/esper/karn/store.py`, find the `RewardComponents` dataclass (line ~159) and add:
+
+```python
+@dataclass
+class RewardComponents:
+    """Breakdown of reward computation for debugging."""
+
+    total: float = 0.0
+    accuracy_delta: float = 0.0
+    bounded_attribution: float | None = None  # For contribution mode
+    compute_rent: float = 0.0
+    alpha_shock: float = 0.0
+    blending_warning: float = 0.0
+    holding_warning: float = 0.0
+    ratio_penalty: float = 0.0
+    terminal_bonus: float = 0.0
+    stage_bonus: float = 0.0  # PBRS shaping reward for stage advancement
+```
+
+**Step 2: Verify no tests break**
+
+Run: `PYTHONPATH=src uv run pytest tests/karn/ -v -k "not slow"`
+Expected: PASS
+
+**Step 3: Commit**
+
+```bash
+git add src/esper/karn/store.py
+git commit -m "feat(karn): add stage_bonus to store.py RewardComponents
+
+Aligns store.py with sanctum/schema.py for PBRS fraction tracking.
+Enables compute_reward_health() to compute PBRS contribution.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
@@ -1042,6 +1098,130 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 ---
 
 ## Phase 3: Ablation Configs
+
+### Task 4.5: Add Ablation Flags to TrainingConfig
+
+**Context:** The ablation configs (Task 5) use flags `disable_pbrs`, `disable_terminal_reward`, and `disable_anti_gaming` which don't exist in TrainingConfig. Add these before creating the config files.
+
+**Files:**
+- Modify: `src/esper/simic/training/config.py`
+- Modify: `src/esper/simic/rewards/rewards.py` (respect flags in reward computation)
+- Test: `tests/simic/test_ablation_flags.py`
+
+**Step 1: Write the failing test**
+
+```python
+# tests/simic/test_ablation_flags.py
+"""Tests for ablation configuration flags."""
+
+import pytest
+from esper.simic.training.config import TrainingConfig
+
+
+def test_ablation_flags_exist():
+    """TrainingConfig has ablation flags with correct defaults."""
+    config = TrainingConfig()
+    assert config.disable_pbrs is False
+    assert config.disable_terminal_reward is False
+    assert config.disable_anti_gaming is False
+
+
+def test_ablation_flags_settable():
+    """Ablation flags can be set via constructor."""
+    config = TrainingConfig(
+        disable_pbrs=True,
+        disable_terminal_reward=True,
+        disable_anti_gaming=True,
+    )
+    assert config.disable_pbrs is True
+    assert config.disable_terminal_reward is True
+    assert config.disable_anti_gaming is True
+
+
+def test_ablation_flags_in_to_train_kwargs():
+    """Ablation flags are passed through to_train_kwargs()."""
+    config = TrainingConfig(disable_pbrs=True)
+    kwargs = config.to_train_kwargs()
+    assert kwargs.get("disable_pbrs") is True
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `PYTHONPATH=src uv run pytest tests/simic/test_ablation_flags.py -v`
+Expected: FAIL with "has no attribute 'disable_pbrs'"
+
+**Step 3: Add ablation flags to TrainingConfig**
+
+In `src/esper/simic/training/config.py`, add to the TrainingConfig dataclass:
+
+```python
+# === Ablation Flags ===
+# Used for systematic reward function experiments.
+# These disable specific reward components to measure their contribution.
+disable_pbrs: bool = False  # Disable PBRS stage advancement shaping
+disable_terminal_reward: bool = False  # Disable terminal accuracy bonus
+disable_anti_gaming: bool = False  # Disable ratio_penalty and alpha_shock
+```
+
+**Step 4: Update to_train_kwargs() to include flags**
+
+```python
+def to_train_kwargs(self) -> dict[str, Any]:
+    return {
+        # ... existing fields ...
+        "disable_pbrs": self.disable_pbrs,
+        "disable_terminal_reward": self.disable_terminal_reward,
+        "disable_anti_gaming": self.disable_anti_gaming,
+    }
+```
+
+**Step 5: Wire flags into reward computation**
+
+In `src/esper/simic/rewards/rewards.py`, modify the reward computation to respect flags:
+
+```python
+# In compute_reward() or relevant method:
+if not config.disable_pbrs:
+    reward += stage_bonus
+else:
+    stage_bonus = 0.0  # Zero out for telemetry consistency
+
+if not config.disable_terminal_reward:
+    reward += terminal_bonus
+else:
+    terminal_bonus = 0.0
+
+if not config.disable_anti_gaming:
+    reward += ratio_penalty + alpha_shock
+else:
+    ratio_penalty = 0.0
+    alpha_shock = 0.0
+```
+
+**Step 6: Run tests**
+
+Run: `PYTHONPATH=src uv run pytest tests/simic/test_ablation_flags.py -v`
+Expected: PASS
+
+**Step 7: Commit**
+
+```bash
+git add src/esper/simic/training/config.py src/esper/simic/rewards/rewards.py tests/simic/test_ablation_flags.py
+git commit -m "feat(simic): add ablation flags to TrainingConfig
+
+Three flags for systematic reward function experiments:
+- disable_pbrs: Disable PBRS stage advancement shaping
+- disable_terminal_reward: Disable terminal accuracy bonus
+- disable_anti_gaming: Disable ratio_penalty and alpha_shock
+
+Enables configs/ablations/*.json files to work.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
+```
+
+---
 
 ### Task 5: Create Ablation Config Files
 
@@ -1822,15 +2002,18 @@ done
 |-------|-------|---------|
 | 0 | Task 0 | Foundation fixes (stability score design decision) |
 | 0 | Task 0.5 | Generalize A/B → A/B/n (`reward_mode_per_env` + builder) |
-| 1 | Tasks 1-2 | EpisodeOutcome schema + vectorized wiring |
+| 1 | Task 1 | EpisodeOutcome schema |
+| 1 | Task 1.5 | Add `stage_bonus` to store.py RewardComponents |
+| 1 | Task 2 | Wire EpisodeOutcome into vectorized training |
 | 2 | Tasks 3-4 | Pareto frontier computation + MCP view |
+| 3 | Task 4.5 | Add ablation flags to TrainingConfig |
 | 3 | Task 5 | Ablation config files (6 configs) |
 | 4 | Tasks 6-7 | Sanctum RewardHealthPanel |
 | 5 | Task 8 | Telemetry emission |
 | 6 | Task 9 | PBRS verification tests |
 | ✓ | Task 10 | End-to-end verification |
 
-**Total: 11 tasks, ~2.5-3 hours implementation time**
+**Total: 13 tasks, ~3-3.5 hours implementation time**
 
 *Note: Task 0.5 rename scope is ~44 occurrences in .py files (excluding docs/archives).
 Mechanical find-replace, but verify tests pass after each file.*
@@ -1861,13 +2044,25 @@ Mechanical find-replace, but verify tests pass after each file.*
     - `_latest_ppo` doesn't exist → use `self._tamiyo.explained_variance` directly
     - Added Step 2a/2b/2c with detailed wiring instructions
 
-12. **PBRS Fraction Source**: Clarified PBRS tracking via existing `stage_bonus` field
-    - `stage_bonus` in RewardComponents captures stage advancement bonuses (PBRS shaping)
-    - No schema extension needed
+12. **PBRS Fraction Source**: Clarified PBRS tracking via `stage_bonus` field
+    - `sanctum/schema.py` RewardComponents HAS `stage_bonus` ✓
+    - `store.py` RewardComponents does NOT have `stage_bonus` ✗
+    - **Added Task 1.5** to add `stage_bonus` to store.py for consistency
 
 13. **Anti-Gaming Sign Convention**: Fixed penalty detection logic
     - Changed `c.ratio_penalty < 0` to `c.ratio_penalty != 0 or c.alpha_shock != 0`
     - Penalties are non-zero when active (sign convention varies)
+
+## Pre-Execution Fixes (Risk Assessment 2025-12-26)
+
+14. **Missing Ablation Config Flags**: Added Task 4.5 for TrainingConfig flags
+    - Ablation configs reference `disable_pbrs`, `disable_terminal_reward`, `disable_anti_gaming`
+    - These flags don't exist in TrainingConfig
+    - **Added Task 4.5** before Task 5 to add these flags
+
+15. **Commit Message Correction**: Fixed Task 0.5 Step 9 commit message
+    - Original incorrectly said "Backwards-compatible: ab_reward_modes property alias retained"
+    - Changed to "No backwards compatibility per No Legacy Code Policy (clean rename)"
 
 ---
 

@@ -2497,9 +2497,11 @@ def train_ppo_vectorized(
                     telemetry_config is not None
                     and telemetry_config.should_collect("debug")
                 )
+                # Match ops_telemetry_enabled logic: default to True when no config
+                # This ensures reward_components are computed when on_last_action is called
                 collect_reward_summary = (
-                    telemetry_config is not None
-                    and telemetry_config.should_collect("ops_normal")
+                    telemetry_config is None
+                    or telemetry_config.should_collect("ops_normal")
                 )
 
                 seed_params_for_slot = (
@@ -2731,8 +2733,14 @@ def train_ppo_vectorized(
                                 entropy_sum -= p * math.log(p)
                         decision_entropy = entropy_sum
                     # Use signals.metrics.accuracy_delta directly - always available
-                    # (reward_components only exists when specific telemetry levels are enabled)
                     base_acc_delta_for_telemetry = signals.metrics.accuracy_delta
+                    # Extract bounded_attribution and compute_rent from reward_components
+                    # (now available since collect_reward_summary matches ops_telemetry_enabled)
+                    bounded_attribution_for_telemetry = None
+                    compute_rent_for_telemetry = None
+                    if "reward_components" in locals() and reward_components is not None:
+                        bounded_attribution_for_telemetry = reward_components.bounded_attribution
+                        compute_rent_for_telemetry = reward_components.compute_rent
                     emitters[env_idx].on_last_action(
                         epoch,
                         action_dict,
@@ -2748,6 +2756,8 @@ def train_ppo_vectorized(
                         alternatives=alternatives,
                         decision_entropy=decision_entropy,
                         base_acc_delta=base_acc_delta_for_telemetry,
+                        bounded_attribution=bounded_attribution_for_telemetry,
+                        compute_rent=compute_rent_for_telemetry,
                     )
 
                 # Store transition
