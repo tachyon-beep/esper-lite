@@ -47,6 +47,7 @@ from esper.leyline.telemetry import (
     RewardComputedPayload,
     SeedGerminatedPayload,
     SeedStageChangedPayload,
+    SeedGateEvaluatedPayload,
     SeedFossilizedPayload,
     SeedPrunedPayload,
     CounterfactualMatrixPayload,
@@ -395,17 +396,9 @@ class KarnCollector:
         slot_id: str = "unknown"
 
         # Typed payload path
-        if isinstance(event.data, (SeedGerminatedPayload, SeedStageChangedPayload, SeedFossilizedPayload, SeedPrunedPayload)):
+        if isinstance(event.data, (SeedGerminatedPayload, SeedStageChangedPayload, SeedGateEvaluatedPayload, SeedFossilizedPayload, SeedPrunedPayload)):
             env_id = event.data.env_id
             slot_id = event.data.slot_id
-        # SEED_GATE_EVALUATED has no typed payload yet - dict-only for now
-        elif event_type == "SEED_GATE_EVALUATED" and isinstance(event.data, dict):
-            data = event.data
-            if "env_id" not in data:
-                return
-            env_id = coerce_int(data.get("env_id"), field="env_id", default=-1, minimum=0)
-            raw_slot_id = event.slot_id if event.slot_id is not None else data.get("slot_id", "unknown")
-            slot_id = coerce_str(raw_slot_id, field="slot_id", default="unknown").strip() or "unknown"
         else:
             return
 
@@ -435,16 +428,13 @@ class KarnCollector:
                     slot.stage = new_stage
                     slot.epochs_in_stage = 0
         elif event_type == "SEED_GATE_EVALUATED":
-            # Dict-only handler until typed payload is created
-            if isinstance(event.data, dict):
-                data = event.data
-                slot.last_gate_attempted = coerce_str_or_none(data.get("gate"), field="gate")
-                slot.last_gate_passed = coerce_bool_or_none(data.get("passed"), field="passed")
-                slot.last_gate_reason = coerce_str_or_none(data.get("message"), field="message")
+            if isinstance(event.data, SeedGateEvaluatedPayload):
+                slot.last_gate_attempted = event.data.gate
+                slot.last_gate_passed = event.data.passed
+                slot.last_gate_reason = event.data.message
                 if not slot.last_gate_reason:
-                    checks_failed = data.get("checks_failed")
-                    if isinstance(checks_failed, list) and checks_failed:
-                        slot.last_gate_reason = ",".join(str(c) for c in checks_failed)
+                    if event.data.checks_failed:
+                        slot.last_gate_reason = ",".join(str(c) for c in event.data.checks_failed)
         elif event_type == "SEED_FOSSILIZED":
             slot.stage = SeedStage.FOSSILIZED
         elif event_type == "SEED_PRUNED":

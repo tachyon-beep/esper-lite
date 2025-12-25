@@ -33,6 +33,7 @@ from esper.leyline import (
     EpochCompletedPayload,
     SeedGerminatedPayload,
     SeedStageChangedPayload,
+    SeedGateEvaluatedPayload,
     SeedFossilizedPayload,
     SeedPrunedPayload,
     RewardComputedPayload,
@@ -344,40 +345,27 @@ class TelemetryAggregator:
             return
 
     def _handle_seed_gate_evaluated(self, event: "TelemetryEvent") -> None:
-        """Handle SEED_GATE_EVALUATED event.
+        """Handle SEED_GATE_EVALUATED event."""
+        if isinstance(event.data, SeedGateEvaluatedPayload):
+            payload = event.data
+            env_id = payload.env_id
+            slot_id = event.slot_id or payload.slot_id
 
-        Note: This event does not yet have a typed payload.
-        TODO: Create SeedGateEvaluatedPayload and migrate this handler.
-        """
-        # No typed payload yet - this event is sent with raw dict data
-        if event.data is None:
+            self._ensure_env(env_id)
+            if slot_id in self._envs[env_id].slots:
+                slot = self._envs[env_id].slots[slot_id]
+                slot.gate_last = payload.gate
+                slot.gate_passed = payload.passed
+
+            status = "PASS" if payload.passed else "FAIL"
+            self._add_feed_event(
+                event_type="GATE",
+                env_id=env_id,
+                message=f"{slot_id} {payload.gate}: {status}",
+                timestamp=event.timestamp,
+            )
+        else:
             return
-
-        # For now, treat as dict until typed payload is created
-        # This is legacy behavior that should be migrated
-        if not isinstance(event.data, dict):
-            return
-
-        data: dict[str, str | int | bool | None] = event.data
-        env_id = data.get("env_id")
-        slot_id = event.slot_id or data.get("slot_id")
-
-        if env_id is None or slot_id is None:
-            return
-
-        self._ensure_env(env_id)
-        if slot_id in self._envs[env_id].slots:
-            slot = self._envs[env_id].slots[slot_id]
-            slot.gate_last = data.get("gate")
-            slot.gate_passed = data.get("passed")
-
-        status = "PASS" if data.get("passed") else "FAIL"
-        self._add_feed_event(
-            event_type="GATE",
-            env_id=env_id,
-            message=f"{slot_id} {data.get('gate', '?')}: {status}",
-            timestamp=event.timestamp,
-        )
 
     def _handle_seed_fossilized(self, event: "TelemetryEvent") -> None:
         """Handle SEED_FOSSILIZED event."""

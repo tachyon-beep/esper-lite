@@ -905,6 +905,42 @@ class SeedPrunedPayload:
 
 
 @dataclass(slots=True, frozen=True)
+class SeedGateEvaluatedPayload:
+    """Payload for SEED_GATE_EVALUATED events.
+
+    Note: env_id may be -1 when emitted from slots (Kasmina), which don't
+    know their environment context. The sentinel is replaced by the actual
+    env_id in emit_with_env_context (simic/telemetry/emitters.py).
+    """
+
+    # REQUIRED
+    slot_id: str
+    env_id: int  # -1 = sentinel (replaced by emit_with_env_context)
+    gate: str  # Gate name (e.g., "G1", "G2", "G3", "G4", "G5")
+    passed: bool
+    target_stage: str
+    checks_passed: tuple[str, ...]
+    checks_failed: tuple[str, ...]
+
+    # OPTIONAL
+    message: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SeedGateEvaluatedPayload":
+        """Parse from dict. Raises KeyError on missing required fields."""
+        return cls(
+            slot_id=data["slot_id"],
+            env_id=data["env_id"],
+            gate=data["gate"],
+            passed=data["passed"],
+            target_stage=data["target_stage"],
+            checks_passed=_ensure_tuple(data["checks_passed"]),
+            checks_failed=_ensure_tuple(data["checks_failed"]),
+            message=data.get("message"),
+        )
+
+
+@dataclass(slots=True, frozen=True)
 class CounterfactualMatrixPayload:
     """Payload for COUNTERFACTUAL_MATRIX_COMPUTED event."""
 
@@ -1121,6 +1157,7 @@ TelemetryPayload = (
     | RewardComputedPayload
     | SeedGerminatedPayload
     | SeedStageChangedPayload
+    | SeedGateEvaluatedPayload
     | SeedFossilizedPayload
     | SeedPrunedPayload
     | CounterfactualMatrixPayload

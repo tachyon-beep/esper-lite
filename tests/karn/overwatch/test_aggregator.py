@@ -11,6 +11,7 @@ from esper.leyline.telemetry import (
     PPOUpdatePayload,
     SeedGerminatedPayload,
     SeedStageChangedPayload,
+    SeedGateEvaluatedPayload,
     SeedPrunedPayload,
     AnalyticsSnapshotPayload,
 )
@@ -533,11 +534,19 @@ class TestGateEvaluation:
                 params=1000,
             ),
         ))
-        # SEED_GATE_EVALUATED doesn't have a typed payload yet
+        # SEED_GATE_EVALUATED with typed payload
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.SEED_GATE_EVALUATED,
             slot_id="r0c0",
-            data={"env_id": 0, "gate": "G1", "passed": True},
+            data=SeedGateEvaluatedPayload(
+                slot_id="r0c0",
+                env_id=0,
+                gate="G1",
+                passed=True,
+                target_stage="TRAINING",
+                checks_passed=("stage_matches",),
+                checks_failed=(),
+            ),
         ))
 
         snapshot = agg.get_snapshot()

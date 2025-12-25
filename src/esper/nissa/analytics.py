@@ -267,7 +267,8 @@ class BlueprintAnalytics(OutputBackend):
                 return
 
         elif event.event_type == TelemetryEventType.SEED_GATE_EVALUATED:
-            _logger.warning(f"SEED_GATE_EVALUATED event not yet migrated to typed payload")
+            # SEED_GATE_EVALUATED uses typed payload (SeedGateEvaluatedPayload)
+            # No action needed - gates don't affect blueprint stats
             return
 
         elif event.event_type == TelemetryEventType.TAMIYO_INITIATED:

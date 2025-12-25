@@ -30,6 +30,9 @@ def test_gate_event_emitted_on_fail():
     assert result.passed is False
     gate_events = [e for e in events if e.event_type == TelemetryEventType.SEED_GATE_EVALUATED]
     assert gate_events, "Expected a gate-evaluated event on failure"
-    assert gate_events[-1].data["passed"] is False
-    assert gate_events[-1].data["target_stage"] == "BLENDING"
+
+    from esper.leyline.telemetry import SeedGateEvaluatedPayload
+    assert isinstance(gate_events[-1].data, SeedGateEvaluatedPayload)
+    assert gate_events[-1].data.passed is False
+    assert gate_events[-1].data.target_stage == "BLENDING"
 

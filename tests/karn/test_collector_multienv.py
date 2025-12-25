@@ -197,17 +197,21 @@ class TestMultiEnvSlotTracking:
             )
         )
 
+        from esper.leyline.telemetry import SeedGateEvaluatedPayload
+
         collector.emit(
             TelemetryEvent(
                 event_type=TelemetryEventType.SEED_GATE_EVALUATED,
                 slot_id="r0c1",
-                data={
-                    "env_id": 1,
-                    "gate": "G2",
-                    "passed": False,
-                    "target_stage": "BLENDING",
-                    "checks_failed": ["seed_not_ready"],
-                },
+                data=SeedGateEvaluatedPayload(
+                    slot_id="r0c1",
+                    env_id=1,
+                    gate="G2",
+                    passed=False,
+                    target_stage="BLENDING",
+                    checks_passed=(),
+                    checks_failed=("seed_not_ready",),
+                ),
             )
         )
 

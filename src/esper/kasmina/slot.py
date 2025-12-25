@@ -56,6 +56,7 @@ from esper.leyline import (
     # Telemetry Payloads
     SeedGerminatedPayload,
     SeedStageChangedPayload,
+    SeedGateEvaluatedPayload,
     SeedFossilizedPayload,
     SeedPrunedPayload,
     # Gate Thresholds (from leyline - single source of truth)
@@ -1353,14 +1354,16 @@ class SeedSlot(nn.Module):
 
         self._emit_telemetry(
             TelemetryEventType.SEED_GATE_EVALUATED,
-            data={
-                "gate": gate_result.gate.name,
-                "passed": gate_result.passed,
-                "target_stage": target_stage.name,
-                "checks_passed": list(gate_result.checks_passed),
-                "checks_failed": list(gate_result.checks_failed),
-                "message": gate_result.message,
-            },
+            data=SeedGateEvaluatedPayload(
+                slot_id=self.slot_id,
+                env_id=-1,  # Sentinel - replaced by emit_with_env_context in simic
+                gate=gate_result.gate.name,
+                passed=gate_result.passed,
+                target_stage=target_stage.name,
+                checks_passed=tuple(gate_result.checks_passed),
+                checks_failed=tuple(gate_result.checks_failed),
+                message=gate_result.message,
+            ),
         )
 
         if gate_result.passed:
@@ -2408,7 +2411,7 @@ class SeedSlot(nn.Module):
     def _emit_telemetry(
         self,
         event_type: TelemetryEventType,
-        data: dict | SeedGerminatedPayload | SeedStageChangedPayload | SeedFossilizedPayload | SeedPrunedPayload | None = None,
+        data: dict | SeedGerminatedPayload | SeedStageChangedPayload | SeedGateEvaluatedPayload | SeedFossilizedPayload | SeedPrunedPayload | None = None,
     ) -> None:
         """Emit a telemetry event.
 
