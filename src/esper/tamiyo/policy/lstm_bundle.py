@@ -17,13 +17,6 @@ from esper.leyline.slot_config import SlotConfig
 from esper.leyline import HEAD_NAMES
 
 
-# TODO: [DEAD CODE] - LSTMPolicyBundle is fully implemented and registered via
-# @register_policy("lstm"), but NEVER instantiated in production. The PPO training
-# loop in simic/training/vectorized.py uses its own embedded FactoredRecurrentActorCritic
-# network directly, bypassing this PolicyBundle abstraction entirely.
-# Production decisions come from HeuristicTamiyo.decide() only.
-# Either: (1) wire this into the training loop, or (2) delete this file.
-# See: architectural risk assessment 2024-12-24.
 @register_policy("lstm")
 class LSTMPolicyBundle:
     """LSTM-based recurrent policy for seed lifecycle control.
