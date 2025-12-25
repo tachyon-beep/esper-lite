@@ -79,16 +79,17 @@ def test_emit_with_env_context_includes_device():
 
     emitted = hub.emit.call_args[0][0]
     assert emitted.data.env_id == 2
-    # Device is not added to typed payloads (only in dict payloads)
 
-    # Test with dict payload - both env_id and device are added
+    # Dict payloads are no longer supported - they should raise TypeError
     hub.reset_mock()
     dict_event = TelemetryEvent(event_type=TelemetryEventType.SEED_GERMINATED, data={})
-    emit_with_env_context(hub, env_idx=2, device="cpu", event=dict_event)
+    with pytest.raises(TypeError, match="requires typed payload, got dict"):
+        emit_with_env_context(hub, env_idx=2, device="cpu", event=dict_event)
 
-    emitted_dict = hub.emit.call_args[0][0]
-    assert emitted_dict.data["env_id"] == 2
-    assert emitted_dict.data["device"] == "cpu"
+    # None payloads should also raise TypeError
+    none_event = TelemetryEvent(event_type=TelemetryEventType.SEED_GERMINATED, data=None)
+    with pytest.raises(TypeError, match="requires typed payload, got None"):
+        emit_with_env_context(hub, env_idx=2, device="cpu", event=none_event)
 
 
 def test_last_action_event_emitted():
@@ -977,24 +978,39 @@ class _StubHub:
         self.events.append(event)
 
 
-def test_emit_with_env_context_handles_none_and_copies():
-    """Callback should handle missing data and avoid mutating shared dicts."""
+def test_emit_with_env_context_requires_typed_payloads():
+    """emit_with_env_context rejects None and dict payloads, requires typed dataclasses."""
+    from esper.leyline.telemetry import SeedGerminatedPayload
+
     hub = _StubHub()
 
+    # None payload should raise TypeError
     event_none = TelemetryEvent(event_type=TelemetryEventType.SEED_GERMINATED, data=None)
-    emit_with_env_context(hub, 1, "cpu", event_none)
-    assert hub.events[0].data["env_id"] == 1
-    assert hub.events[0].data["device"] == "cpu"
+    with pytest.raises(TypeError, match="requires typed payload, got None"):
+        emit_with_env_context(hub, 1, "cpu", event_none)
 
-    shared = {"foo": "bar"}
-    event_shared = TelemetryEvent(event_type=TelemetryEventType.SEED_GERMINATED, data=shared)
-    emit_with_env_context(hub, 2, "cpu", event_shared)
-    # Original dict is untouched
-    assert "env_id" not in shared
-    assert "device" not in shared
-    assert hub.events[1].data["env_id"] == 2
-    assert hub.events[1].data["device"] == "cpu"
-    assert hub.events[1].data["foo"] == "bar"
+    # Dict payload should raise TypeError
+    event_dict = TelemetryEvent(event_type=TelemetryEventType.SEED_GERMINATED, data={"foo": "bar"})
+    with pytest.raises(TypeError, match="requires typed payload, got dict"):
+        emit_with_env_context(hub, 2, "cpu", event_dict)
+
+    # Typed payload should work and replace sentinel env_id
+    payload = SeedGerminatedPayload(
+        slot_id="r0c0",
+        env_id=-1,  # Sentinel
+        blueprint_id="conv",
+        params=100,
+    )
+    event_typed = TelemetryEvent(event_type=TelemetryEventType.SEED_GERMINATED, data=payload)
+    emit_with_env_context(hub, 3, "cpu", event_typed)
+
+    # Original payload untouched (immutable dataclass)
+    assert payload.env_id == -1
+
+    # Emitted event has env_id replaced
+    assert len(hub.events) == 1
+    assert hub.events[0].data.env_id == 3
+    assert hub.events[0].data.slot_id == "r0c0"
 
 
 def test_emit_batch_completed_is_resume_aware_and_clamped():

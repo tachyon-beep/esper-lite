@@ -9,7 +9,10 @@ Extracted from vectorized.py to reduce file size and improve clarity.
 from __future__ import annotations
 
 import dataclasses
+import logging
 from typing import TYPE_CHECKING, Any, Sequence
+
+_logger = logging.getLogger(__name__)
 
 import torch
 from torch import nn
@@ -295,8 +298,8 @@ class VectorizedEmitter:
                 layer_stats = collect_per_layer_gradients(agent._base_network)
                 layer_health = aggregate_layer_gradient_health(layer_stats)
                 payload.update(layer_health)
-            except Exception:
-                pass
+            except Exception as e:
+                _logger.warning("Failed to collect per-layer gradient stats: %s", e)
 
         emit_ppo_update_event(
             hub=self.hub,
@@ -464,24 +467,28 @@ def emit_with_env_context(hub, env_idx: int, device: str, event: TelemetryEvent)
     Creates a new event with the additional context rather than mutating the input.
 
     For typed payloads from slots (which don't know their env_id), replaces the
-    sentinel env_id=-1 with the actual env_id. For dict payloads, adds env_id/device.
+    sentinel env_id=-1 with the actual env_id.
 
     NOTE: Only use for per-env events (seed lifecycle, epoch completed, etc.).
     Batch-level events (PPO updates, batch completed) should use hub.emit() directly.
-    Passing a payload without env_id will raise TypeError - this is intentional.
-    """
-    if event.data is None or isinstance(event.data, dict):
-        # Legacy dict or None payload - add env_id and device
-        data = dict(event.data) if event.data else {}
-        data["env_id"] = env_idx
-        data["device"] = device
-        new_event = dataclasses.replace(event, data=data)
-    else:
-        # Typed payload - replace sentinel env_id with actual env_id
-        # TypeError here means caller is misusing this function with batch-level events
-        payload = dataclasses.replace(event.data, env_id=env_idx)
-        new_event = dataclasses.replace(event, data=payload)
 
+    Raises:
+        TypeError: If event.data is None, a dict, or missing env_id attribute.
+            This indicates a caller is emitting untyped payloads (fix the emitter).
+    """
+    if event.data is None:
+        raise TypeError(
+            f"emit_with_env_context requires typed payload, got None for {event.event_type}"
+        )
+    if isinstance(event.data, dict):
+        raise TypeError(
+            f"emit_with_env_context requires typed payload, got dict for {event.event_type}. "
+            "Migrate emitter to use typed dataclass payload."
+        )
+
+    # Typed payload - replace sentinel env_id with actual env_id
+    payload = dataclasses.replace(event.data, env_id=env_idx)
+    new_event = dataclasses.replace(event, data=payload)
     hub.emit(new_event)
 
 
