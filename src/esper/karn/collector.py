@@ -398,7 +398,8 @@ class KarnCollector:
         # Typed payload path
         if isinstance(event.data, (SeedGerminatedPayload, SeedStageChangedPayload, SeedGateEvaluatedPayload, SeedFossilizedPayload, SeedPrunedPayload)):
             env_id = event.data.env_id
-            slot_id = event.data.slot_id
+            # Event envelope slot_id is authoritative (set at emission time)
+            slot_id = event.slot_id if event.slot_id else event.data.slot_id
         else:
             return
 

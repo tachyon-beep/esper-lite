@@ -1221,26 +1221,30 @@ class SanctumAggregator:
         elif event_type.startswith("SEED_"):
             if event_type == "SEED_GERMINATED" and isinstance(event.data, SeedGerminatedPayload):
                 message = "Germinated"
-                slot_id = event.slot_id or event.data.slot_id
+                # Event envelope slot_id is authoritative (set at emission time)
+                slot_id = event.slot_id if event.slot_id else event.data.slot_id
                 metadata["slot_id"] = slot_id
                 metadata["blueprint"] = event.data.blueprint_id
                 env_id = event.data.env_id
             elif event_type == "SEED_STAGE_CHANGED" and isinstance(event.data, SeedStageChangedPayload):
                 message = "Stage changed"
-                slot_id = event.slot_id or event.data.slot_id
+                # Event envelope slot_id is authoritative (set at emission time)
+                slot_id = event.slot_id if event.slot_id else event.data.slot_id
                 metadata["slot_id"] = slot_id
                 metadata["from"] = event.data.from_stage
                 metadata["to"] = event.data.to_stage
                 env_id = event.data.env_id
             elif event_type == "SEED_FOSSILIZED" and isinstance(event.data, SeedFossilizedPayload):
                 message = "Fossilized"
-                slot_id = event.slot_id or event.data.slot_id
+                # Event envelope slot_id is authoritative (set at emission time)
+                slot_id = event.slot_id if event.slot_id else event.data.slot_id
                 metadata["slot_id"] = slot_id
                 metadata["improvement"] = event.data.improvement
                 env_id = event.data.env_id
             elif event_type == "SEED_PRUNED" and isinstance(event.data, SeedPrunedPayload):
                 message = "Pruned"
-                slot_id = event.slot_id or event.data.slot_id
+                # Event envelope slot_id is authoritative (set at emission time)
+                slot_id = event.slot_id if event.slot_id else event.data.slot_id
                 metadata["slot_id"] = slot_id
                 metadata["reason"] = event.data.reason
                 env_id = event.data.env_id
