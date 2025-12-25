@@ -1286,16 +1286,19 @@ class SanctumAggregator:
         # CPU (THE FIX - was collected but never displayed)
         try:
             self._vitals.cpu_percent = psutil.cpu_percent(interval=None)
-        except Exception:
-            pass
+        except Exception as e:
+            _logger.warning("Failed to collect CPU vitals: %s", e)
+            self._vitals.cpu_percent = None  # Explicit unavailable state
 
         # RAM
         try:
             mem = psutil.virtual_memory()
             self._vitals.ram_used_gb = mem.used / (1024**3)
             self._vitals.ram_total_gb = mem.total / (1024**3)
-        except Exception:
-            pass
+        except Exception as e:
+            _logger.warning("Failed to collect RAM vitals: %s", e)
+            self._vitals.ram_used_gb = None  # Explicit unavailable state
+            self._vitals.ram_total_gb = None  # Explicit unavailable state
 
         # GPU stats (multi-GPU support)
         try:
@@ -1318,8 +1321,8 @@ class SanctumAggregator:
                                 # Only set when actual utilization is available (e.g., via NVML).
                                 utilization=0.0,
                             )
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            _logger.warning("Failed to collect GPU stats for device %d: %s", device_idx, e)
                 self._vitals.gpu_stats = gpu_stats
                 if 0 in gpu_stats:
                     stats0 = gpu_stats[0]
@@ -1327,5 +1330,6 @@ class SanctumAggregator:
                     self._vitals.gpu_memory_total_gb = stats0.memory_total_gb
                     self._vitals.gpu_utilization = stats0.utilization
                     self._vitals.gpu_temperature = stats0.temperature
-        except ImportError:
-            pass
+        except ImportError as e:
+            _logger.warning("Failed to import torch for GPU vitals: %s", e)
+            self._vitals.gpu_stats = {}  # Explicit unavailable state
