@@ -12,6 +12,7 @@ import torch
 
 from esper.nissa import NissaHub, get_hub
 from esper.leyline import TelemetryEvent, TelemetryEventType
+from esper.leyline.telemetry import RewardComputedPayload
 from esper.simic.telemetry import AnomalyDetector
 from esper.simic.rewards import RewardComponentsTelemetry
 from esper.simic.rewards import (
@@ -146,11 +147,15 @@ class TestAnomalyDetection:
         """NissaHub should accept telemetry events."""
         event = TelemetryEvent(
             event_type=TelemetryEventType.REWARD_COMPUTED,
-            data={
-                "total_reward": 0.5,
-                "seed_contribution": 0.02,
-                "epoch": 5,
-            },
+            data=RewardComputedPayload(
+                env_id=0,
+                total_reward=0.5,
+                action_name="WAIT",
+                value_estimate=0.3,
+                action_confidence=0.8,
+                seed_contribution=0.02,
+            ),
+            epoch=5,
         )
 
         # Should not raise

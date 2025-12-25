@@ -675,6 +675,11 @@ class TestLiveModeIntegration:
     async def test_live_mode_full_workflow(self) -> None:
         """Test complete live mode workflow."""
         from esper.leyline import TelemetryEvent, TelemetryEventType
+        from esper.leyline.telemetry import (
+            TrainingStartedPayload,
+            SeedGerminatedPayload,
+            PPOUpdatePayload,
+        )
         from esper.karn.overwatch import OverwatchApp, OverwatchBackend
 
         backend = OverwatchBackend()
@@ -683,34 +688,49 @@ class TestLiveModeIntegration:
         # Simulate training startup
         backend.emit(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={
-                "episode_id": "integration-test",
-                "task": "cifar10",
-                "n_envs": 2,
-                "max_epochs": 75,
-            },
+            data=TrainingStartedPayload(
+                n_envs=2,
+                max_epochs=75,
+                task="cifar10",
+                host_params=1000,
+                slot_ids=("r0c0", "r0c1"),
+                seed=42,
+                n_episodes=100,
+                lr=3e-4,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=100000,
+                policy_device="cuda:0",
+                env_devices=("cuda:0", "cuda:1"),
+                episode_id="integration-test",
+            ),
         ))
 
         # Simulate seed germination
         backend.emit(TelemetryEvent(
             event_type=TelemetryEventType.SEED_GERMINATED,
             slot_id="r0c0",
-            data={
-                "env_id": 0,
-                "seed_id": "seed-001",
-                "blueprint_id": "conv3x3",
-            },
+            data=SeedGerminatedPayload(
+                slot_id="r0c0",
+                env_id=0,
+                blueprint_id="conv3x3",
+                params=1500,
+            ),
         ))
 
         # Simulate PPO update
         backend.emit(TelemetryEvent(
             event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
-            data={
-                "kl_divergence": 0.012,
-                "entropy": 1.5,
-                "clip_fraction": 0.05,
-                "explained_variance": 0.8,
-            },
+            data=PPOUpdatePayload(
+                policy_loss=-0.01,
+                value_loss=0.3,
+                entropy=1.5,
+                grad_norm=1.0,
+                kl_divergence=0.012,
+                clip_fraction=0.05,
+                nan_grad_count=0,
+                explained_variance=0.8,
+            ),
         ))
 
         app = OverwatchApp(backend=backend)
@@ -740,6 +760,7 @@ class TestLiveModeIntegration:
     async def test_live_mode_staleness_detection(self) -> None:
         """Test that staleness is tracked correctly."""
         from esper.leyline import TelemetryEvent, TelemetryEventType
+        from esper.leyline.telemetry import TrainingStartedPayload
         from esper.karn.overwatch import OverwatchApp, OverwatchBackend
 
         backend = OverwatchBackend()
@@ -747,7 +768,22 @@ class TestLiveModeIntegration:
 
         backend.emit(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"episode_id": "stale-test"},
+            data=TrainingStartedPayload(
+                n_envs=1,
+                max_epochs=75,
+                task="test",
+                host_params=1000,
+                slot_ids=("r0c0",),
+                seed=42,
+                n_episodes=100,
+                lr=3e-4,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=100000,
+                policy_device="cuda:0",
+                env_devices=("cuda:0",),
+                episode_id="stale-test",
+            ),
         ))
 
         app = OverwatchApp(backend=backend)

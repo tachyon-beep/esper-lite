@@ -10,7 +10,6 @@ Reference: Overwatch's run_header.py adapted for Sanctum schema.
 """
 from __future__ import annotations
 
-from datetime import datetime
 from typing import TYPE_CHECKING
 
 from rich.panel import Panel
@@ -44,6 +43,9 @@ class RunHeader(Static):
         Ep 5 | 150/500 epochs | Batch 3 | 1h 23m | Best: 82.3% (ep 4)
         ● Live | 4 healthy, 0 stalled | Train:8 Blend:2 Foss:12
 
+    In A/B mode, adds comparison info:
+        ... | A/B: +7.0% acc | Leading: A
+
     Provides at-a-glance training context that was in the old Rich TUI header.
     """
 
@@ -51,6 +53,56 @@ class RunHeader(Static):
         """Initialize RunHeader widget."""
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
+        # A/B comparison state
+        self._group_a_accuracy = 0.0
+        self._group_b_accuracy = 0.0
+        self._group_a_reward = 0.0
+        self._group_b_reward = 0.0
+        self._leader: str | None = None
+        self._ab_mode: bool = False
+
+    @property
+    def leader(self) -> str | None:
+        """Return group ID of current leader (A, B, or None if tied)."""
+        return self._leader
+
+    def update_comparison(
+        self,
+        group_a_accuracy: float,
+        group_b_accuracy: float,
+        group_a_reward: float,
+        group_b_reward: float,
+    ) -> None:
+        """Update A/B comparison metrics.
+
+        Args:
+            group_a_accuracy: Mean accuracy for policy A.
+            group_b_accuracy: Mean accuracy for policy B.
+            group_a_reward: Mean reward for policy A.
+            group_b_reward: Mean reward for policy B.
+        """
+        self._ab_mode = True
+        self._group_a_accuracy = group_a_accuracy
+        self._group_b_accuracy = group_b_accuracy
+        self._group_a_reward = group_a_reward
+        self._group_b_reward = group_b_reward
+
+        # Determine leader: reward-first (primary RL objective), accuracy as tiebreaker
+        reward_delta = group_a_reward - group_b_reward
+        mean_reward = (abs(group_a_reward) + abs(group_b_reward)) / 2
+
+        # Significant reward difference (>5% of mean) is decisive
+        if mean_reward > 0 and abs(reward_delta) > 0.05 * mean_reward:
+            self._leader = "A" if reward_delta > 0 else "B"
+        # Fallback to accuracy for close reward races
+        elif group_a_accuracy > group_b_accuracy:
+            self._leader = "A"
+        elif group_b_accuracy > group_a_accuracy:
+            self._leader = "B"
+        else:
+            self._leader = None
+
+        self.refresh()
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Update widget with new snapshot data."""
@@ -245,6 +297,27 @@ class RunHeader(Static):
             row1.append("Avg: ", style="dim")
             row1.append(f"{current_mean:.1f}%", style="cyan")
             row1.append(f" {sparkline}", style="cyan")
+
+        # A/B Comparison (only when in A/B testing mode)
+        if self._ab_mode:
+            row1.append("  |  ", style="dim")
+            delta_acc = self._group_a_accuracy - self._group_b_accuracy
+            sign = "+" if delta_acc >= 0 else ""
+            # Bold colors for significant differences (>5%)
+            if abs(delta_acc) > 5:
+                acc_style = "green bold" if delta_acc > 0 else "red bold"
+            else:
+                acc_style = "dim"
+            row1.append("A/B: ", style="dim")
+            row1.append(f"{sign}{delta_acc:.1f}%", style=acc_style)
+            row1.append(" acc", style="dim")
+            row1.append("  ", style="dim")
+            # Leader indicator
+            if self._leader:
+                color = "green" if self._leader == "A" else "cyan"
+                row1.append(f"Leading: {self._leader}", style=f"{color} bold")
+            else:
+                row1.append("Tied", style="dim italic")
 
         table.add_row(row1)
 

@@ -493,3 +493,1808 @@ async def test_tamiyo_brain_learning_vitals_gauges():
 
         advantage_gauge = widget._render_gauge("Advantage", 0.31, -1.0, 1.0, "Choices working")
         assert advantage_gauge is not None
+
+
+# ===========================
+# Decision Tree Tests (Task 2.1)
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_decision_tree_learning():
+    """Decision tree should return LEARNING when all metrics healthy."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            entropy=1.2,
+            explained_variance=0.6,  # > 0.3 warning threshold
+            clip_fraction=0.15,
+            kl_divergence=0.01,
+            advantage_std=1.0,  # Normal range
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+        status, label, style = widget._get_overall_status()
+        assert status == "ok"
+        assert label == "LEARNING"
+
+
+@pytest.mark.asyncio
+async def test_decision_tree_ev_warning():
+    """Decision tree should return CAUTION when EV between 0 and 0.3."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            entropy=1.2,
+            explained_variance=0.15,  # Between 0.0 and 0.3 = warning
+            clip_fraction=0.15,
+            kl_divergence=0.01,
+            advantage_std=1.0,  # Normal range (avoid collapsed trigger)
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+        status, label, style = widget._get_overall_status()
+        assert status == "warning"
+        assert label == "CAUTION"
+
+
+@pytest.mark.asyncio
+async def test_decision_tree_ev_critical():
+    """Decision tree should return FAILING when EV <= 0."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            entropy=1.2,
+            explained_variance=-0.1,  # < 0.0 = critical
+            clip_fraction=0.15,
+            kl_divergence=0.01,
+            advantage_std=1.0,  # Normal range
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+        status, label, style = widget._get_overall_status()
+        assert status == "critical"
+        assert label == "FAILING"
+
+
+@pytest.mark.asyncio
+async def test_decision_tree_entropy_collapsed():
+    """Decision tree should return FAILING when entropy collapsed."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            entropy=0.05,  # < 0.1 = collapsed
+            explained_variance=0.6,
+            clip_fraction=0.15,
+            kl_divergence=0.01,
+            advantage_std=1.0,  # Normal range
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+        status, label, style = widget._get_overall_status()
+        assert status == "critical"
+        assert label == "FAILING"
+
+
+@pytest.mark.asyncio
+async def test_decision_tree_kl_critical():
+    """Decision tree should return FAILING when KL > 0.03."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            entropy=1.2,
+            explained_variance=0.6,
+            clip_fraction=0.15,
+            kl_divergence=0.05,  # > 0.03 = critical
+            advantage_std=1.0,  # Normal range
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+        status, label, style = widget._get_overall_status()
+        assert status == "critical"
+        assert label == "FAILING"
+
+
+@pytest.mark.asyncio
+async def test_decision_tree_advantage_collapsed():
+    """Decision tree should return FAILING when advantage std collapsed."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            entropy=1.2,
+            explained_variance=0.6,
+            clip_fraction=0.15,
+            kl_divergence=0.01,
+            advantage_std=0.05,  # < 0.1 = collapsed
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+        status, label, style = widget._get_overall_status()
+        assert status == "critical"
+        assert label == "FAILING"
+
+
+@pytest.mark.asyncio
+async def test_decision_tree_grad_norm_critical():
+    """Decision tree should return FAILING when grad_norm > GRAD_NORM_CRITICAL."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            entropy=1.2,
+            explained_variance=0.6,
+            clip_fraction=0.15,
+            kl_divergence=0.01,
+            advantage_std=1.0,
+            grad_norm=15.0,  # > 10.0 = critical
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+        status, label, style = widget._get_overall_status()
+        assert status == "critical"
+        assert label == "FAILING"
+
+
+@pytest.mark.asyncio
+async def test_decision_tree_grad_norm_warning():
+    """Decision tree should return CAUTION when grad_norm > GRAD_NORM_WARNING."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            entropy=1.2,
+            explained_variance=0.6,
+            clip_fraction=0.15,
+            kl_divergence=0.01,
+            advantage_std=1.0,
+            grad_norm=7.0,  # Between 5.0 and 10.0 = warning
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+        status, label, style = widget._get_overall_status()
+        assert status == "warning"
+        assert label == "CAUTION"
+
+
+# ===========================
+# Task 2.2: Status Banner Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_status_banner_includes_all_metrics():
+    """Status banner should include EV, Clip, KL, Adv, GradHP, batch."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            entropy=1.2,
+            explained_variance=0.65,
+            clip_fraction=0.18,
+            kl_divergence=0.008,
+            advantage_mean=0.12,
+            advantage_std=0.94,
+            dead_layers=0,
+            exploding_layers=0,
+            ppo_data_received=True,
+        )
+        snapshot.current_batch = 47
+        snapshot.max_batches = 100
+
+        widget.update_snapshot(snapshot)
+        banner = widget._render_status_banner()
+
+        # Should contain all key metrics
+        plain = banner.plain
+        assert "EV:" in plain
+        assert "Clip:" in plain
+        assert "KL:" in plain
+        assert "Adv:" in plain
+        assert "GradHP:" in plain
+        assert "batch:" in plain
+
+
+# ===========================
+# Task 2.3: 4-Gauge Grid Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_four_gauge_grid_rendered():
+    """Learning vitals should render 4 gauges in 2x2 grid."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            entropy=1.2,
+            explained_variance=0.6,
+            clip_fraction=0.15,
+            kl_divergence=0.01,
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+
+        # Should have 4 gauges: EV, Entropy, Clip, KL
+        gauge_grid = widget._render_gauge_grid()
+        assert gauge_grid is not None
+
+
+# ===========================
+# Task 2.6: Dynamic Border Color Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_border_color_updates_on_status():
+    """Widget border should change color based on overall status."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        # Healthy state
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            entropy=1.2,
+            explained_variance=0.6,
+            clip_fraction=0.15,
+            kl_divergence=0.01,
+            advantage_std=1.0,
+            ppo_data_received=True,
+        )
+        widget.update_snapshot(snapshot)
+        assert widget.has_class("status-ok")
+
+        # Warning state (EV between 0 and 0.3)
+        snapshot.tamiyo.explained_variance = 0.2
+        widget.update_snapshot(snapshot)
+        assert widget.has_class("status-warning")
+        assert not widget.has_class("status-ok")
+
+
+# ===========================
+# Task 2.7: Compact Mode Detection Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_compact_mode_detected_for_narrow_terminal():
+    """Widget should detect 80-char terminals and switch to compact layout."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test(size=(80, 24)):
+        widget = app.query_one(TamiyoBrain)
+        assert widget._is_compact_mode() is True
+
+
+@pytest.mark.asyncio
+async def test_full_mode_for_wide_terminal():
+    """Widget should use full layout for 96+ char terminals."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test(size=(120, 24)):
+        widget = app.query_one(TamiyoBrain)
+        assert widget._is_compact_mode() is False
+
+
+@pytest.mark.asyncio
+async def test_compact_mode_separator_width_narrow():
+    """Compact mode should use 78-char separator for 80-char terminal."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test(size=(80, 24)):
+        widget = app.query_one(TamiyoBrain)
+        assert widget._get_separator_width() == 78  # 80 - 2 padding
+
+
+@pytest.mark.asyncio
+async def test_full_mode_separator_width_wide():
+    """Full mode should use 94-char separator for 96+ char terminal."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test(size=(120, 24)):
+        widget = app.query_one(TamiyoBrain)
+        assert widget._get_separator_width() == 94  # 96 - 2 padding
+
+
+# ===========================
+# Task 3.1: Sparkline Renderer Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_sparkline_rendering():
+    """Sparkline should render 10-value history as unicode blocks."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        # Test sparkline with known values
+        history = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+        sparkline = widget._render_sparkline(history, width=10)
+
+        # Should be 10 characters
+        assert len(sparkline.plain) == 10
+        # First char should be lowest block, last should be highest
+        assert "▁" in sparkline.plain
+        assert "█" in sparkline.plain
+
+
+@pytest.mark.asyncio
+async def test_sparkline_empty_history():
+    """Sparkline should show placeholder for empty history."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        # Empty history
+        sparkline = widget._render_sparkline([], width=10)
+        assert len(sparkline.plain) == 10
+        assert "─" in sparkline.plain
+
+
+@pytest.mark.asyncio
+async def test_sparkline_single_value():
+    """Sparkline should render single value as one block."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        # Single value
+        sparkline = widget._render_sparkline([0.5], width=10)
+        # Should have 9 placeholder chars and 1 block
+        assert len(sparkline.plain) == 10
+        assert sparkline.plain.count("─") == 9
+
+
+@pytest.mark.asyncio
+async def test_sparkline_all_same_values():
+    """Sparkline should handle all same values (flat line)."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        # All same values
+        history = [0.5, 0.5, 0.5, 0.5, 0.5]
+        sparkline = widget._render_sparkline(history, width=10)
+        # Should have 5 placeholder chars and 5 identical blocks
+        assert len(sparkline.plain) == 10
+        # When all values are the same, they should all use the same block character
+        # (the implementation will pick one based on normalization)
+
+
+@pytest.mark.asyncio
+async def test_sparkline_width_parameter():
+    """Sparkline should limit output to specified width."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        # 20 values but width=8
+        history = list(range(20))
+        sparkline = widget._render_sparkline(history, width=8)
+        # Should only show last 8 values
+        assert len(sparkline.plain) == 8
+
+
+@pytest.mark.asyncio
+async def test_sparkline_color_coding():
+    """Sparkline should apply color style to recent values."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        # Test with custom style
+        history = [0.1, 0.5, 0.9]
+        sparkline = widget._render_sparkline(history, width=5, style="yellow")
+        # Should have content (verify by checking it's not all placeholders)
+        assert len(sparkline.plain) == 5
+
+
+# ===========================
+# Task 3.2: Secondary Metrics Column Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_secondary_metrics_column():
+    """Secondary metrics should show Advantage, Ratio, losses with sparklines."""
+    from collections import deque
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+
+        tamiyo = TamiyoState(
+            advantage_mean=0.15,
+            advantage_std=0.95,
+            ratio_min=0.85,
+            ratio_max=1.15,
+            policy_loss=0.025,
+            value_loss=0.142,
+            grad_norm=1.5,
+            dead_layers=0,
+            exploding_layers=0,
+            ppo_data_received=True,
+        )
+        # Add history
+        for i in range(5):
+            tamiyo.policy_loss_history.append(0.03 - i * 0.001)
+            tamiyo.value_loss_history.append(0.2 - i * 0.01)
+            tamiyo.grad_norm_history.append(1.5 + i * 0.1)
+
+        snapshot.tamiyo = tamiyo
+        widget.update_snapshot(snapshot)
+
+        # Render metrics column
+        metrics = widget._render_metrics_column()
+        assert metrics is not None
+
+        # Should contain key metrics
+        plain = metrics.plain
+        assert "Advantage" in plain
+        assert "Ratio" in plain
+        assert "Policy" in plain or "Grad" in plain
+
+
+# ===========================
+# Task 3.3: Diagnostic Matrix Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_matrix_layout():
+    """Diagnostic matrix should have gauges left, metrics right."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            entropy=1.2,
+            explained_variance=0.6,
+            clip_fraction=0.15,
+            kl_divergence=0.01,
+            advantage_mean=0.15,
+            advantage_std=0.95,
+            ratio_min=0.85,
+            ratio_max=1.15,
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+
+        # Render diagnostic matrix
+        matrix = widget._render_diagnostic_matrix()
+        assert matrix is not None
+
+
+# ===========================
+# Task 4.1: Per-Head Entropy Heatmap Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_per_head_entropy_heatmap():
+    """Per-head heatmap should show 8 heads with correct max entropy values."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            head_slot_entropy=1.0,
+            head_blueprint_entropy=2.0,
+            head_style_entropy=1.2,
+            head_tempo_entropy=0.9,
+            head_alpha_target_entropy=0.8,
+            head_alpha_speed_entropy=1.1,
+            head_alpha_curve_entropy=0.7,
+            head_op_entropy=1.5,
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+
+        # Render heatmap
+        heatmap = widget._render_head_heatmap()
+        assert heatmap is not None
+        # Should contain all 8 head labels
+        plain = heatmap.plain
+        assert "sl" in plain.lower() or "slot" in plain.lower()
+        assert "bp" in plain.lower()
+
+
+@pytest.mark.asyncio
+async def test_per_head_heatmap_zero_entropy_critical():
+    """Heatmap should show critical indicator for zero-entropy heads.
+
+    All 8 heads are now tracked by PPO. When a head has 0.0 entropy
+    (fully collapsed), it should display "0.00!" with critical styling.
+    """
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        # Slot and blueprint have healthy entropy, others are collapsed (0.0)
+        snapshot.tamiyo = TamiyoState(
+            head_slot_entropy=1.0,
+            head_blueprint_entropy=2.0,
+            head_style_entropy=0.0,  # Collapsed
+            head_tempo_entropy=0.0,  # Collapsed
+            head_alpha_target_entropy=0.0,  # Collapsed
+            head_alpha_speed_entropy=0.0,  # Collapsed
+            head_alpha_curve_entropy=0.0,  # Collapsed
+            head_op_entropy=0.0,  # Collapsed
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+
+        # Render heatmap
+        heatmap = widget._render_head_heatmap()
+        plain = heatmap.plain.lower()
+
+        # Zero-entropy heads should show critical indicator (!)
+        # Multiple heads with 0.00! indicates exploration collapse
+        assert "0.00!" in plain
+
+
+# ===========================
+# Task 4.2: Wire Heatmap into render() Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_heatmap_appears_in_render():
+    """Heatmap should appear in widget render output."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            head_slot_entropy=1.0,
+            head_blueprint_entropy=2.0,
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+
+        # Force render and check output
+        rendered = widget.render()
+        assert rendered is not None
+
+        # Convert to plain text to verify heatmap is included
+        # Heatmap contains "Heads:" label and head abbreviations like "slot[" and "bpnt["
+        from rich.console import Console
+        from io import StringIO
+
+        console_io = StringIO()
+        console = Console(file=console_io, force_terminal=True, width=120)
+        console.print(rendered)
+        output = console_io.getvalue()
+
+        # Heatmap should be present with "Heads:" label
+        assert "heads:" in output.lower()
+
+        # Verify head abbreviations are present (expanded per UX review)
+        assert "slot[" in output  # slot head
+        assert "bpnt[" in output  # blueprint head
+
+
+# ===========================
+# Task 5.2: A/B/C Group Color Constants Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_ab_group_color_mapping():
+    """GROUP_COLORS should define colors for A/B/C groups."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        # Access GROUP_COLORS directly on class (no hasattr)
+        assert "A" in TamiyoBrain.GROUP_COLORS
+        assert "B" in TamiyoBrain.GROUP_COLORS
+        assert "C" in TamiyoBrain.GROUP_COLORS
+
+        # Verify color assignments
+        # A = Green (primary/control)
+        assert "green" in TamiyoBrain.GROUP_COLORS["A"]
+        # B = Cyan/Blue (variant)
+        color_b = TamiyoBrain.GROUP_COLORS["B"]
+        assert "cyan" in color_b or "blue" in color_b
+        # C = Magenta (second variant, NOT red)
+        assert "magenta" in TamiyoBrain.GROUP_COLORS["C"]
+
+
+@pytest.mark.asyncio
+async def test_ab_group_labels():
+    """GROUP_LABELS should define labels for A/B/C groups."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        # Access GROUP_LABELS directly on class (no hasattr)
+        assert "A" in TamiyoBrain.GROUP_LABELS
+        assert "B" in TamiyoBrain.GROUP_LABELS
+        assert "C" in TamiyoBrain.GROUP_LABELS
+
+        # Verify labels are non-empty
+        assert len(TamiyoBrain.GROUP_LABELS["A"]) > 0
+        assert len(TamiyoBrain.GROUP_LABELS["B"]) > 0
+        assert len(TamiyoBrain.GROUP_LABELS["C"]) > 0
+
+
+# ===========================
+# Task 5.3: Apply Group Color to Border and Title Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_group_a_has_green_border():
+    """Group A TamiyoBrain should have green border styling."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            group_id="A",
+            ppo_data_received=True,
+        )
+        widget.update_snapshot(snapshot)
+        assert widget.has_class("group-a")
+
+
+@pytest.mark.asyncio
+async def test_group_b_has_blue_border():
+    """Group B TamiyoBrain should have blue border styling."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            group_id="B",
+            ppo_data_received=True,
+        )
+        widget.update_snapshot(snapshot)
+        assert widget.has_class("group-b")
+
+
+# ===========================
+# Task 5.4: Group Label in Status Banner Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_status_banner_shows_group_label():
+    """Status banner should show group label when in A/B mode."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            group_id="A",
+            entropy=1.2,
+            explained_variance=0.6,
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+        banner = widget._render_status_banner()
+        plain = banner.plain
+
+        # Should show group indicator
+        assert "Policy A" in plain or "🟢" in plain or "[A]" in plain
+
+
+@pytest.mark.asyncio
+async def test_group_c_has_magenta_border():
+    """Group C should use magenta border color."""
+    from textual.app import App, ComposeResult
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
+
+    class TestApp(App):
+        CSS = """
+        TamiyoBrain.group-c { border: solid magenta; }
+        """
+        def compose(self) -> ComposeResult:
+            yield TamiyoBrain(id="tamiyo")
+
+    app = TestApp()
+    async with app.run_test():
+        widget = app.query_one("#tamiyo", TamiyoBrain)
+        snapshot = SanctumSnapshot()
+        snapshot.tamiyo = TamiyoState(group_id="C", ppo_data_received=True)
+        widget.update_snapshot(snapshot)
+
+        assert widget.has_class("group-c")
+
+
+@pytest.mark.asyncio
+async def test_unknown_group_shows_fallback_label():
+    """Unknown group_id should show [D] format in banner."""
+    from io import StringIO
+    from rich.console import Console
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
+
+    widget = TamiyoBrain()
+    snapshot = SanctumSnapshot()
+    snapshot.tamiyo = TamiyoState(group_id="D", ppo_data_received=True)
+    widget._snapshot = snapshot
+
+    banner = widget._render_status_banner()
+    console = Console(file=StringIO(), width=120, force_terminal=True)
+    console.print(banner)
+    output = console.file.getvalue()
+
+    # Should show [D] fallback format
+    assert "[D]" in output
+
+
+@pytest.mark.asyncio
+async def test_no_group_label_when_none():
+    """No group label should appear when group_id is None."""
+    from io import StringIO
+    from rich.console import Console
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
+
+    widget = TamiyoBrain()
+    snapshot = SanctumSnapshot()
+    snapshot.tamiyo = TamiyoState(group_id=None, ppo_data_received=True)
+    widget._snapshot = snapshot
+
+    banner = widget._render_status_banner()
+    console = Console(file=StringIO(), width=120, force_terminal=True)
+    console.print(banner)
+    output = console.file.getvalue()
+
+    # Should NOT contain group labels or separator before status
+    assert "Policy A" not in output
+    assert "Policy B" not in output
+    assert "Policy C" not in output
+
+
+@pytest.mark.asyncio
+async def test_border_title_includes_group_id():
+    """border_title should include group_id for accessibility."""
+    from textual.app import App, ComposeResult
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
+
+    class TestApp(App):
+        def compose(self) -> ComposeResult:
+            yield TamiyoBrain(id="tamiyo")
+
+    app = TestApp()
+    async with app.run_test():
+        widget = app.query_one("#tamiyo", TamiyoBrain)
+
+        # Without group_id
+        snapshot_single = SanctumSnapshot()
+        snapshot_single.tamiyo = TamiyoState(group_id=None, ppo_data_received=True)
+        widget.update_snapshot(snapshot_single)
+        assert widget.border_title == "TAMIYO"
+
+        # With group_id
+        snapshot_ab = SanctumSnapshot()
+        snapshot_ab.tamiyo = TamiyoState(group_id="A", ppo_data_received=True)
+        widget.update_snapshot(snapshot_ab)
+        assert widget.border_title == "TAMIYO [A]"
+
+
+# ===========================
+# Task 5: Enriched Decision Card Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_enriched_decision_card_format():
+    """Enriched decision card should be 24 chars wide with 6 lines."""
+    from esper.karn.sanctum.schema import DecisionSnapshot
+    from datetime import datetime, timezone
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        decision = DecisionSnapshot(
+            decision_id="test-1",
+            timestamp=datetime.now(timezone.utc),
+            slot_states={"r0c0": "TRAINING"},
+            host_accuracy=87.5,
+            chosen_action="WAIT",
+            chosen_slot="r0",
+            confidence=0.92,
+            expected_value=0.12,
+            actual_reward=0.08,
+            alternatives=[("GERMINATE", 0.05), ("FOSSILIZE", 0.03)],
+            pinned=False,
+            value_residual=-0.04,  # r - V(s) = 0.08 - 0.12
+            decision_entropy=0.85,
+        )
+
+        # Render enriched card
+        card = widget._render_enriched_decision(decision, index=0)
+        card_plain = card.plain
+        lines = card_plain.split('\n')
+
+        # Should have exactly 7 lines (title + 5 content + bottom border)
+        assert len(lines) == 7
+
+        # All lines should be exactly 30 chars
+        for i, line in enumerate(lines[:7]):
+            assert len(line) == 30, f"Line {i} has length {len(line)}, expected 30: '{line}'"
+
+        # Verify border structure
+        assert lines[0].startswith("┌─")
+        assert lines[0].endswith("┐")
+        assert lines[6].startswith("└")
+        assert lines[6].endswith("┘")
+
+        # Should contain enriched info
+        card_str = card_plain
+        assert "D1" in card_str  # Decision number
+        assert "WAIT" in card_str  # Action
+        assert "92%" in card_str  # Confidence
+        assert "H:87" in card_str or "H:88" in card_str  # Host accuracy
+        assert "V:" in card_str  # Value estimate V(s)
+        assert "δ:" in card_str  # Value residual δ = r - V(s)
+        assert "ent:" in card_str  # Decision entropy
+        assert "alt:" in card_str  # Alternatives
+
+
+@pytest.mark.asyncio
+async def test_enriched_decision_card_hit_miss():
+    """Enriched card should show HIT/MISS text based on prediction accuracy."""
+    from esper.karn.sanctum.schema import DecisionSnapshot
+    from datetime import datetime, timezone
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        # Test HIT (diff < 0.1)
+        decision_hit = DecisionSnapshot(
+            decision_id="test-hit",
+            timestamp=datetime.now(timezone.utc),
+            slot_states={"r0c0": "TRAINING"},
+            host_accuracy=87.5,
+            chosen_action="WAIT",
+            chosen_slot="r0",
+            confidence=0.92,
+            expected_value=0.12,
+            actual_reward=0.15,  # diff = 0.03 < 0.1
+            alternatives=[],
+            pinned=False,
+            value_residual=0.03,  # r - V(s) = 0.15 - 0.12
+            decision_entropy=0.85,
+        )
+        card = widget._render_enriched_decision(decision_hit, index=0)
+        # Note: HIT/MISS text removed from new format - just icon now
+        assert "✓" in card.plain
+
+        # Test MISS (diff >= 0.1)
+        decision_miss = DecisionSnapshot(
+            decision_id="test-miss",
+            timestamp=datetime.now(timezone.utc),
+            slot_states={"r0c0": "TRAINING"},
+            host_accuracy=87.5,
+            chosen_action="WAIT",
+            chosen_slot="r0",
+            confidence=0.92,
+            expected_value=0.12,
+            actual_reward=0.50,  # diff = 0.38 >= 0.1
+            alternatives=[],
+            pinned=False,
+            value_residual=0.38,  # r - V(s) = 0.50 - 0.12
+            decision_entropy=0.85,
+        )
+        card = widget._render_enriched_decision(decision_miss, index=0)
+        # Note: HIT/MISS text removed from new format - just icon now
+        assert "✗" in card.plain
+
+
+@pytest.mark.asyncio
+async def test_enriched_decision_card_uses_constant():
+    """Enriched card should use PREDICTION_EXCELLENT_THRESHOLD constant."""
+    from esper.karn.sanctum.schema import DecisionSnapshot
+    from datetime import datetime, timezone
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        # Verify constants exist
+        assert hasattr(TamiyoBrain, 'PREDICTION_EXCELLENT_THRESHOLD')
+        assert TamiyoBrain.PREDICTION_EXCELLENT_THRESHOLD == 0.1
+
+        # Test exact threshold boundary
+        decision = DecisionSnapshot(
+            decision_id="test-threshold",
+            timestamp=datetime.now(timezone.utc),
+            slot_states={"r0c0": "TRAINING"},
+            host_accuracy=87.5,
+            chosen_action="WAIT",
+            chosen_slot="r0",
+            confidence=0.92,
+            expected_value=0.12,
+            actual_reward=0.22,  # diff = 0.10 exactly at threshold
+            alternatives=[],
+            pinned=False,
+            value_residual=0.10,  # r - V(s) = 0.22 - 0.12
+            decision_entropy=0.85,
+        )
+        card = widget._render_enriched_decision(decision, index=0)
+        # diff = 0.10, which is NOT < 0.1, so should be MISS (✗ icon)
+        assert "✗" in card.plain
+
+
+@pytest.mark.asyncio
+async def test_decisions_column_uses_enriched_cards():
+    """Decisions column should use enriched cards with V(s) and δ (value residual)."""
+    from esper.karn.sanctum.schema import DecisionSnapshot, SanctumSnapshot, TamiyoState
+    from datetime import datetime, timezone
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        decision = DecisionSnapshot(
+            timestamp=datetime.now(timezone.utc),
+            slot_states={"r0": "Training 12%"},
+            host_accuracy=87.0,
+            chosen_action="WAIT",
+            chosen_slot="r0",
+            confidence=0.92,
+            expected_value=0.12,
+            actual_reward=0.08,
+            alternatives=[],
+            decision_id="test-1",
+            value_residual=-0.04,  # r - V(s) = 0.08 - 0.12
+            decision_entropy=0.85,
+        )
+
+        snapshot = SanctumSnapshot(
+            tamiyo=TamiyoState(
+                recent_decisions=[decision],
+                entropy=6.55,
+            )
+        )
+        widget._snapshot = snapshot
+
+        column = widget._render_decisions_column()
+        column_str = str(column)
+
+        assert "V:" in column_str, f"Decisions column should show V(s). Got: {column_str}"
+        assert "δ:" in column_str, f"Decisions column should show δ (value residual). Got: {column_str}"
+
+
+# ===========================
+# Task 2: Decisions Column Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_decisions_column_renders_three_cards():
+    """Decisions column should render 3 enriched decision cards vertically.
+
+    Note: The widget uses display throttling (one card swap per 30s).
+    For testing, we pre-populate the display buffer to bypass throttling.
+    """
+    from esper.karn.sanctum.schema import DecisionSnapshot, TamiyoState, SanctumSnapshot
+    from datetime import datetime, timezone, timedelta
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        # Create 3 decisions
+        now = datetime.now(timezone.utc)
+        decisions = [
+            DecisionSnapshot(
+                decision_id=f"test-{i}",
+                timestamp=now - timedelta(seconds=i * 15),
+                slot_states={"r0c0": "TRAINING"},
+                host_accuracy=85.0 + i,
+                chosen_action="WAIT" if i % 2 == 0 else "GERMINATE",
+                chosen_slot="r0",
+                confidence=0.90 - i * 0.05,
+                expected_value=0.1 * i,
+                actual_reward=0.1 * i + 0.02,
+                alternatives=[],
+                pinned=False,
+                value_residual=0.02,  # r - V(s) = +0.02 for all
+                decision_entropy=0.85,
+            )
+            for i in range(3)
+        ]
+
+        snapshot = SanctumSnapshot(
+            tamiyo=TamiyoState(
+                recent_decisions=decisions,
+                ppo_data_received=True,
+            )
+        )
+        widget.update_snapshot(snapshot)
+
+        # Pre-populate display buffer to bypass throttling (tests rendering, not throttling)
+        widget._displayed_decisions = decisions.copy()
+
+        # Render decisions column
+        column = widget._render_decisions_column()
+        column_str = str(column)
+
+        # Should have 3 decision cards
+        assert "D1" in column_str
+        assert "D2" in column_str
+        assert "D3" in column_str
+        assert "WAIT" in column_str
+        assert "GERM" in column_str
+
+
+# ===========================
+# Task 3: Vitals Column Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_vitals_column_contains_all_components():
+    """Vitals column should contain gauges, metrics, heads, and action bar."""
+    from esper.karn.sanctum.schema import TamiyoState, SanctumSnapshot
+    from rich.console import Console
+    from io import StringIO
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        snapshot = SanctumSnapshot(
+            tamiyo=TamiyoState(
+                ppo_data_received=True,
+                entropy=1.5,
+                explained_variance=0.7,
+                clip_fraction=0.1,
+                kl_divergence=0.005,
+                advantage_mean=0.15,
+                advantage_std=0.8,
+                policy_loss=0.03,
+                value_loss=0.09,
+                grad_norm=1.2,
+                action_counts={"WAIT": 60, "GERMINATE": 9, "SET_ALPHA_TARGET": 2, "FOSSILIZE": 0, "PRUNE": 6},
+                total_actions=77,
+            )
+        )
+        widget.update_snapshot(snapshot)
+
+        # Render vitals column
+        vitals = widget._render_vitals_column()
+
+        # Convert Rich Table to string for assertions
+        console_io = StringIO()
+        console = Console(file=console_io, force_terminal=True, width=120)
+        console.print(vitals)
+        vitals_str = console_io.getvalue()
+
+        # Should contain gauge labels
+        assert "Expl.Var" in vitals_str
+        assert "Entropy" in vitals_str
+        assert "Clip" in vitals_str
+        assert "KL" in vitals_str
+
+        # Should contain metrics
+        assert "Advantage" in vitals_str
+        assert "Policy Loss" in vitals_str
+        assert "Grad Norm" in vitals_str
+
+        # Should contain heads heatmap marker
+        assert "Heads:" in vitals_str
+
+        # Should contain action bar marker
+        assert "G=" in vitals_str or "W=" in vitals_str  # Action legend
+
+
+# ===========================
+# Task 4: Layout Mode Detection Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_layout_mode_horizontal_for_wide_terminal():
+    """Wide terminals (≥96 chars) should use horizontal layout."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test(size=(120, 30)):
+        widget = app.query_one(TamiyoBrain)
+        assert widget._get_layout_mode() == "horizontal"
+
+
+@pytest.mark.asyncio
+async def test_layout_mode_stacked_for_narrow_terminal():
+    """Narrow terminals (<85 chars) should use stacked layout."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test(size=(80, 30)):
+        widget = app.query_one(TamiyoBrain)
+        assert widget._get_layout_mode() == "stacked"
+
+
+@pytest.mark.asyncio
+async def test_layout_mode_compact_horizontal_for_medium_terminal():
+    """Medium terminals (85-95 chars) should use compact-horizontal layout."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test(size=(90, 30)):
+        widget = app.query_one(TamiyoBrain)
+        assert widget._get_layout_mode() == "compact-horizontal"
+
+
+# ===========================
+# Task 5: Horizontal Layout Integration Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_horizontal_layout_has_two_columns():
+    """Horizontal layout should have vitals (left) and decisions (right)."""
+    from esper.karn.sanctum.schema import TamiyoState, SanctumSnapshot, DecisionSnapshot
+    from datetime import datetime, timezone
+    from rich.console import Console
+    from io import StringIO
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test(size=(120, 30)):
+        widget = app.query_one(TamiyoBrain)
+
+        # Create snapshot with decisions
+        decisions = [
+            DecisionSnapshot(
+                decision_id="test-1",
+                timestamp=datetime.now(timezone.utc),
+                slot_states={"r0c0": "TRAINING"},
+                host_accuracy=87.0,
+                chosen_action="WAIT",
+                chosen_slot=None,
+                confidence=0.92,
+                expected_value=0.12,
+                actual_reward=0.08,
+                alternatives=[],
+                pinned=False,
+            )
+        ]
+        snapshot = SanctumSnapshot(
+            tamiyo=TamiyoState(
+                ppo_data_received=True,
+                entropy=1.5,
+                recent_decisions=decisions,
+            )
+        )
+        widget.update_snapshot(snapshot)
+
+        # Force render
+        rendered = widget.render()
+
+        # Convert to string for assertions
+        console_io = StringIO()
+        console = Console(file=console_io, force_terminal=True, width=120)
+        console.print(rendered)
+        rendered_str = console_io.getvalue()
+
+        # Should have both vitals and decisions visible
+        assert "Entropy" in rendered_str  # Vitals
+        assert "D1" in rendered_str  # Compact decision
+        assert "WAIT" in rendered_str  # Action in decision
+
+
+# ===========================
+# Task 6: Click Handling for New Layout Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_click_decision_in_horizontal_layout():
+    """Clicking on decision column should populate decision IDs."""
+    from esper.karn.sanctum.schema import TamiyoState, SanctumSnapshot, DecisionSnapshot
+    from datetime import datetime, timezone
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test(size=(120, 30)) as pilot:
+        widget = app.query_one(TamiyoBrain)
+
+        decisions = [
+            DecisionSnapshot(
+                decision_id="click-test-1",
+                timestamp=datetime.now(timezone.utc),
+                slot_states={},
+                host_accuracy=87.0,
+                chosen_action="WAIT",
+                chosen_slot=None,
+                confidence=0.92,
+                expected_value=0.12,
+                actual_reward=0.08,
+                alternatives=[],
+                pinned=False,
+            )
+        ]
+        snapshot = SanctumSnapshot(
+            tamiyo=TamiyoState(
+                ppo_data_received=True,
+                recent_decisions=decisions,
+            )
+        )
+        widget.update_snapshot(snapshot)
+        await pilot.pause()
+
+        # Decision IDs should be populated
+        assert widget._decision_ids == ["click-test-1"]
+
+
+# ===========================
+# Task 1: Sparkline Width Tests
+# ===========================
+
+
+def test_sparklines_are_twenty_chars():
+    """Sparklines should be 20 characters for meaningful trend visibility."""
+    from esper.karn.sanctum.schema import make_sparkline
+    from collections import deque
+
+    values = deque([float(i) for i in range(20)], maxlen=20)
+    sparkline = make_sparkline(values, width=20)
+
+    assert len(sparkline) == 20, f"Expected 20-char sparkline, got {len(sparkline)}"
+
+
+# ===========================
+# Task 3: Episode Return and Entropy at Top Tests
+# ===========================
+
+
+def test_episode_return_elevated_position():
+    """Episode Return should appear near the top, not buried at bottom."""
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
+    from collections import deque
+
+    widget = TamiyoBrain()
+    snapshot = SanctumSnapshot(
+        tamiyo=TamiyoState(
+            episode_return_history=deque([10.0, 20.0, 30.0, 40.0, 50.0], maxlen=20),
+            current_episode_return=50.0,
+            entropy_history=deque([6.0, 5.9, 5.8, 5.7, 5.6], maxlen=20),
+            entropy=5.6,
+            learning_rate=3e-4,
+            entropy_coef=0.01,
+        )
+    )
+    widget._snapshot = snapshot
+
+    # Render the primary metrics section (should be at top)
+    primary = widget._render_primary_metrics()
+    primary_str = str(primary)
+
+    assert "Ep.Return" in primary_str or "Episode" in primary_str, \
+        "Episode Return should be in primary metrics section"
+    assert "Entropy" in primary_str, \
+        "Entropy sparkline should be in primary metrics section"
+
+
+# ===========================
+# Task 4: Smart Action Pattern Detection Tests
+# ===========================
+
+
+def test_stuck_detection_checks_slot_availability():
+    """STUCK should only trigger when waiting despite actionable opportunities."""
+    from esper.karn.sanctum.widgets.tamiyo_brain import detect_action_patterns
+    from esper.karn.sanctum.schema import DecisionSnapshot
+    from datetime import datetime, timezone, timedelta
+
+    now = datetime.now(timezone.utc)
+
+    # All WAIT, but no dormant slots = NOT stuck (correct behavior)
+    decisions_no_dormant = [
+        DecisionSnapshot(
+            timestamp=now - timedelta(seconds=i),
+            slot_states={"r0": "Grafted", "r1": "Grafted", "r2": "Grafted"},
+            host_accuracy=80.0,
+            chosen_action="WAIT",
+            chosen_slot=None,
+            confidence=0.9,
+            expected_value=0.1,
+            actual_reward=0.1,
+            alternatives=[],
+            decision_id=f"test-{i}",
+        )
+        for i in range(12)
+    ]
+    slot_states_grafted = {"r0": "Grafted", "r1": "Grafted", "r2": "Grafted"}
+    patterns = detect_action_patterns(decisions_no_dormant, slot_states_grafted)
+    assert "STUCK" not in patterns, "Should NOT be stuck when all slots grafted"
+
+    # All WAIT with dormant slot = STUCK
+    decisions_with_dormant = [
+        DecisionSnapshot(
+            timestamp=now - timedelta(seconds=i),
+            slot_states={"r0": "Dormant", "r1": "Grafted", "r2": "Grafted"},
+            host_accuracy=80.0,
+            chosen_action="WAIT",
+            chosen_slot=None,
+            confidence=0.9,
+            expected_value=0.1,
+            actual_reward=0.1,
+            alternatives=[],
+            decision_id=f"test-{i}",
+        )
+        for i in range(12)
+    ]
+    slot_states_dormant = {"r0": "Dormant", "r1": "Grafted", "r2": "Grafted"}
+    patterns = detect_action_patterns(decisions_with_dormant, slot_states_dormant)
+    assert "STUCK" in patterns, "Should be STUCK when waiting with dormant slot available"
+
+
+def test_thrashing_detects_germinate_prune_cycles():
+    """THRASHING should detect germinate→prune cycles (wasted compute)."""
+    from esper.karn.sanctum.widgets.tamiyo_brain import detect_action_patterns
+    from esper.karn.sanctum.schema import DecisionSnapshot
+    from datetime import datetime, timezone, timedelta
+
+    now = datetime.now(timezone.utc)
+
+    # Germinate-Prune-Germinate-Prune cycle = THRASHING
+    # List is newest-first (index 0 = most recent). After reverse to chronological:
+    # [WAIT, WAIT, WAIT, WAIT, GERMINATE, PRUNE, GERMINATE, PRUNE] → detects GERM→PRUNE cycles
+    actions = ["PRUNE", "GERMINATE", "PRUNE", "GERMINATE", "WAIT", "WAIT", "WAIT", "WAIT"]
+    decisions = [
+        DecisionSnapshot(
+            timestamp=now - timedelta(seconds=i),
+            slot_states={},
+            host_accuracy=80.0,
+            chosen_action=actions[i] if i < len(actions) else "WAIT",
+            chosen_slot=None,
+            confidence=0.9,
+            expected_value=0.1,
+            actual_reward=0.1,
+            alternatives=[],
+            decision_id=f"test-{i}",
+        )
+        for i in range(8)
+    ]
+    patterns = detect_action_patterns(decisions, {})
+    assert "THRASH" in patterns, "Should detect germinate-prune thrashing"
+
+
+def test_alpha_oscillation_detection():
+    """ALPHA_OSC should detect excessive alpha target changes."""
+    from esper.karn.sanctum.widgets.tamiyo_brain import detect_action_patterns
+    from esper.karn.sanctum.schema import DecisionSnapshot
+    from datetime import datetime, timezone, timedelta
+
+    now = datetime.now(timezone.utc)
+
+    # 4+ SET_ALPHA_TARGET actions = ALPHA_OSC
+    actions = ["SET_ALPHA_TARGET", "WAIT", "SET_ALPHA_TARGET", "WAIT",
+               "SET_ALPHA_TARGET", "WAIT", "SET_ALPHA_TARGET", "WAIT"]
+    decisions = [
+        DecisionSnapshot(
+            timestamp=now - timedelta(seconds=i),
+            slot_states={},
+            host_accuracy=80.0,
+            chosen_action=actions[i] if i < len(actions) else "WAIT",
+            chosen_slot=None,
+            confidence=0.9,
+            expected_value=0.1,
+            actual_reward=0.1,
+            alternatives=[],
+            decision_id=f"test-{i}",
+        )
+        for i in range(8)
+    ]
+    patterns = detect_action_patterns(decisions, {})
+    assert "ALPHA_OSC" in patterns, "Should detect alpha oscillation with 4+ changes"
+
+
+# ===========================
+# Task 5: Enriched Decision Cards Tests
+# ===========================
+
+
+def test_decision_card_shows_value_and_advantage():
+    """Decision cards should show V(s) and δ (value residual) per DRL review."""
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.schema import DecisionSnapshot, SanctumSnapshot, TamiyoState
+    from datetime import datetime, timezone
+
+    decision = DecisionSnapshot(
+        timestamp=datetime.now(timezone.utc),
+        slot_states={"r0": "Training 12%", "r1": "Blending 45%"},
+        host_accuracy=87.0,
+        chosen_action="WAIT",
+        chosen_slot="r1",
+        confidence=0.92,
+        expected_value=0.12,  # V(s)
+        actual_reward=0.08,
+        alternatives=[("GERMINATE", 0.04), ("FOSSILIZE", 0.02)],
+        decision_id="test-1",
+        value_residual=-0.04,  # δ = r - V(s) = 0.08 - 0.12
+        decision_entropy=0.85,  # Decision entropy
+    )
+
+    widget = TamiyoBrain()
+    snapshot = SanctumSnapshot(
+        tamiyo=TamiyoState(
+            recent_decisions=[decision],
+            entropy=6.55,
+        )
+    )
+    widget._snapshot = snapshot
+
+    card = widget._render_enriched_decision(decision, index=0)
+    card_str = str(card)
+
+    # Should show V(s) and δ (value residual)
+    assert "V:" in card_str, f"Card should show value estimate V(s). Got: {card_str}"
+    assert "δ:" in card_str, f"Card should show value residual δ. Got: {card_str}"
+
+    # Should show outcome icon (per UX review - HIT/MISS text removed, just icon)
+    assert "✓" in card_str or "✗" in card_str, \
+        f"Card should show outcome icon. Got: {card_str}"
+
+
+@pytest.mark.asyncio
+async def test_decision_card_count_scales_with_height():
+    """More decision cards shown when widget is taller."""
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+
+    # Test with small height (24 lines) - minimum, should give 3 cards
+    app = TamiyoBrainTestApp()
+    async with app.run_test(size=(120, 24)) as pilot:
+        widget = app.query_one(TamiyoBrain)
+        await pilot.pause()
+
+        # The method should clamp to minimum of 3
+        max_cards = widget._get_max_decision_cards()
+        assert 3 <= max_cards <= 8, f"Expected 3-8 cards, got {max_cards}"
+
+    # Test with large height (50 lines)
+    app2 = TamiyoBrainTestApp()
+    async with app2.run_test(size=(120, 50)) as pilot:
+        widget2 = app2.query_one(TamiyoBrain)
+        await pilot.pause()
+
+        # With larger terminal, should allow more cards (but hard to predict exact number
+        # due to CSS layout, so just verify it's within reasonable bounds)
+        max_cards2 = widget2._get_max_decision_cards()
+        assert 3 <= max_cards2 <= 8, f"Expected 3-8 cards, got {max_cards2}"
+
+    # Test with very large height (70 lines) - should clamp to max of 8
+    app3 = TamiyoBrainTestApp()
+    async with app3.run_test(size=(120, 70)) as pilot:
+        widget3 = app3.query_one(TamiyoBrain)
+        await pilot.pause()
+
+        # Should clamp to maximum of 8
+        max_cards3 = widget3._get_max_decision_cards()
+        assert 3 <= max_cards3 <= 8, f"Expected 3-8 cards (with clamping), got {max_cards3}"
+
+
+# ===========================
+# Action Sequence Two-Row Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_action_sequence_shows_two_rows():
+    """Action sequence should show Recent and Prior rows."""
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.schema import DecisionSnapshot, SanctumSnapshot, TamiyoState
+    from datetime import datetime, timezone, timedelta
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        now = datetime.now(timezone.utc)
+        decisions = [
+            DecisionSnapshot(
+                timestamp=now - timedelta(seconds=i),
+                slot_states={},
+                host_accuracy=80.0,
+                chosen_action="WAIT" if i % 2 == 0 else "GERMINATE",
+                chosen_slot=None,
+                confidence=0.9,
+                expected_value=0.1,
+                actual_reward=0.1,
+                alternatives=[],
+                decision_id=f"test-{i}",
+            )
+            for i in range(24)
+        ]
+
+        snapshot = SanctumSnapshot(tamiyo=TamiyoState(recent_decisions=decisions))
+        widget.update_snapshot(snapshot)
+
+        rendered = widget._render_action_sequence()
+        rendered_str = rendered.plain
+
+        assert "Recent:" in rendered_str, "Should show Recent row"
+        assert "Prior:" in rendered_str, "Should show Prior row when 12+ decisions"
+
+
+@pytest.mark.asyncio
+async def test_action_sequence_prior_row_only_with_enough_history():
+    """Prior row should only appear when there are 12+ decisions."""
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.schema import DecisionSnapshot, SanctumSnapshot, TamiyoState
+    from datetime import datetime, timezone, timedelta
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        now = datetime.now(timezone.utc)
+        # Only 10 decisions - should NOT show Prior row
+        decisions = [
+            DecisionSnapshot(
+                timestamp=now - timedelta(seconds=i),
+                slot_states={},
+                host_accuracy=80.0,
+                chosen_action="WAIT",
+                chosen_slot=None,
+                confidence=0.9,
+                expected_value=0.1,
+                actual_reward=0.1,
+                alternatives=[],
+                decision_id=f"test-{i}",
+            )
+            for i in range(10)
+        ]
+
+        snapshot = SanctumSnapshot(tamiyo=TamiyoState(recent_decisions=decisions))
+        widget.update_snapshot(snapshot)
+
+        rendered = widget._render_action_sequence()
+        rendered_str = rendered.plain
+
+        assert "Recent:" in rendered_str, "Should show Recent row"
+        assert "Prior:" not in rendered_str, "Should NOT show Prior row with <12 decisions"
+
+
+@pytest.mark.asyncio
+async def test_action_sequence_pattern_detection_only_on_recent():
+    """Pattern detection should only apply to recent 12 actions, not prior."""
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.schema import DecisionSnapshot, SanctumSnapshot, TamiyoState
+    from datetime import datetime, timezone, timedelta
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        now = datetime.now(timezone.utc)
+        # First 12 (recent): all WAIT with dormant slot = STUCK
+        # Next 12 (prior): mixed actions
+        decisions = []
+
+        # Recent 12: all WAIT
+        for i in range(12):
+            decisions.append(
+                DecisionSnapshot(
+                    timestamp=now - timedelta(seconds=i),
+                    slot_states={"r0": "Dormant"},
+                    host_accuracy=80.0,
+                    chosen_action="WAIT",
+                    chosen_slot=None,
+                    confidence=0.9,
+                    expected_value=0.1,
+                    actual_reward=0.1,
+                    alternatives=[],
+                    decision_id=f"test-{i}",
+                )
+            )
+
+        # Prior 12: mixed
+        for i in range(12, 24):
+            decisions.append(
+                DecisionSnapshot(
+                    timestamp=now - timedelta(seconds=i),
+                    slot_states={"r0": "Training"},
+                    host_accuracy=80.0,
+                    chosen_action="GERMINATE" if i % 3 == 0 else "WAIT",
+                    chosen_slot=None,
+                    confidence=0.9,
+                    expected_value=0.1,
+                    actual_reward=0.1,
+                    alternatives=[],
+                    decision_id=f"test-{i}",
+                )
+            )
+
+        snapshot = SanctumSnapshot(tamiyo=TamiyoState(recent_decisions=decisions))
+        widget.update_snapshot(snapshot)
+
+        rendered = widget._render_action_sequence()
+        rendered_str = rendered.plain
+
+        # Should show STUCK pattern (because recent 12 are all WAIT with dormant slot)
+        assert "STUCK" in rendered_str, "Should detect STUCK pattern on recent actions"
+
+
+# ===========================
+# Episode Return History Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_return_history_shows_recent_episodes():
+    """Return history should show recent episode returns."""
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
+    from collections import deque
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(
+            tamiyo=TamiyoState(
+                episode_return_history=deque([10.5, -2.3, 15.0, 8.2, -1.5, 20.0], maxlen=20),
+                current_episode=47,
+            )
+        )
+        widget._snapshot = snapshot
+
+        rendered = widget._render_return_history()
+        rendered_str = str(rendered)
+
+        assert "Returns:" in rendered_str, "Should have Returns label"
+        assert "Ep47" in rendered_str or "Ep" in rendered_str, "Should show episode numbers"
+
+
+@pytest.mark.asyncio
+async def test_return_history_empty():
+    """Return history should show placeholder when no episodes yet."""
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
+    from collections import deque
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(
+            tamiyo=TamiyoState(
+                episode_return_history=deque([], maxlen=20),
+                current_episode=0,
+            )
+        )
+        widget._snapshot = snapshot
+
+        rendered = widget._render_return_history()
+        rendered_str = str(rendered)
+
+        assert "no episodes yet" in rendered_str, "Should show placeholder for empty history"
+
+
+@pytest.mark.asyncio
+async def test_return_history_color_coding():
+    """Return history should color positive returns green and negative red."""
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
+    from collections import deque
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(
+            tamiyo=TamiyoState(
+                episode_return_history=deque([10.5, -2.3], maxlen=20),
+                current_episode=5,
+            )
+        )
+        widget._snapshot = snapshot
+
+        rendered = widget._render_return_history()
+
+        # Check that it's a Rich Text object with styles
+        assert rendered is not None
+        # Verify formatting includes positive and negative values
+        rendered_plain = rendered.plain
+        assert "+10.5" in rendered_plain or "10.5" in rendered_plain, "Should show positive return"
+        assert "-2.3" in rendered_plain, "Should show negative return"
+
+
+# ===========================
+# Slot Summary Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_slot_summary_shows_stage_counts():
+    """Slot summary should show aggregate counts across all environments."""
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.schema import SanctumSnapshot, EnvState
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(
+            envs={0: EnvState(env_id=0), 1: EnvState(env_id=1)},
+            slot_stage_counts={
+                "DORMANT": 12,
+                "GERMINATED": 2,
+                "TRAINING": 8,
+                "BLENDING": 4,
+                "HOLDING": 2,
+                "FOSSILIZED": 0,
+            },
+            total_slots=28,
+            active_slots=16,
+            avg_epochs_in_stage=5.5,
+            cumulative_fossilized=10,
+            cumulative_pruned=5,
+        )
+        widget._snapshot = snapshot
+
+        rendered = widget._render_slot_summary()
+        rendered_plain = rendered.plain
+
+        # Verify key elements are present
+        assert "SLOTS" in rendered_plain, "Should have SLOTS header"
+        assert "DORM:12" in rendered_plain or "DORM:" in rendered_plain, "Should show DORMANT count"
+        assert "TRAIN:" in rendered_plain, "Should show TRAINING count"
+        assert "Foss:" in rendered_plain, "Should show fossilized count"
+        assert "Rate:" in rendered_plain, "Should show success rate"
+
+
+@pytest.mark.asyncio
+async def test_slot_summary_shows_constraint_when_no_dormant():
+    """Slot summary should show constraint message when no dormant slots."""
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.schema import SanctumSnapshot, EnvState
+
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(
+            envs={0: EnvState(env_id=0)},
+            slot_stage_counts={
+                "DORMANT": 0,
+                "GERMINATED": 3,
+                "TRAINING": 6,
+                "BLENDING": 3,
+                "HOLDING": 0,
+                "FOSSILIZED": 0,
+            },
+            total_slots=12,
+            active_slots=12,
+            avg_epochs_in_stage=4.0,
+            cumulative_fossilized=5,
+            cumulative_pruned=2,
+        )
+        widget._snapshot = snapshot
+
+        rendered = widget._render_slot_summary()
+        rendered_plain = rendered.plain
+
+        # Should show constraint message about no dormant slots
+        assert "GERMINATE blocked" in rendered_plain, \
+            "Should explain that GERMINATE is blocked when no dormant slots"

@@ -1,7 +1,14 @@
 """Tests for enriched Kasmina telemetry events."""
 
 
-from esper.leyline import SeedStage, TelemetryEvent, TelemetryEventType
+from esper.leyline import (
+    SeedStage,
+    TelemetryEvent,
+    TelemetryEventType,
+    SeedGerminatedPayload,
+    SeedFossilizedPayload,
+    SeedPrunedPayload,
+)
 from esper.kasmina.slot import SeedSlot
 
 
@@ -30,10 +37,11 @@ class TestEnrichedTelemetry:
         assert len(self.events) == 1
         event = self.events[0]
         assert event.event_type == TelemetryEventType.SEED_GERMINATED
-        assert event.data["blueprint_id"] == "depthwise"
-        assert event.data["seed_id"] == "seed_001"
-        assert "params" in event.data
-        assert event.data["params"] > 0
+        # Typed payload access
+        assert isinstance(event.data, SeedGerminatedPayload)
+        assert event.data.blueprint_id == "depthwise"
+        assert event.seed_id == "seed_001"  # seed_id is on the event, not payload
+        assert event.data.params > 0
 
     def test_fossilize_emits_improvement(self):
         """Fossilization event includes improvement and params."""
@@ -56,9 +64,11 @@ class TestEnrichedTelemetry:
         assert len(foss_events) == 1
 
         event = foss_events[0]
-        assert event.data["blueprint_id"] == "depthwise"
-        assert event.data["improvement"] == 5.0  # 75 - 70
-        assert "params_added" in event.data
+        # Typed payload access
+        assert isinstance(event.data, SeedFossilizedPayload)
+        assert event.data.blueprint_id == "depthwise"
+        assert event.data.improvement == 5.0  # 75 - 70
+        assert event.data.params_added >= 0
 
     def test_prune_emits_improvement(self):
         """Prune event includes improvement (churn metric)."""
@@ -76,6 +86,8 @@ class TestEnrichedTelemetry:
         assert len(prune_events) == 1
 
         event = prune_events[0]
-        assert event.data["blueprint_id"] == "attention"
-        assert event.data["improvement"] == -0.5
-        assert event.data["reason"] == "no_improvement"
+        # Typed payload access
+        assert isinstance(event.data, SeedPrunedPayload)
+        assert event.data.blueprint_id == "attention"
+        assert event.data.improvement == -0.5
+        assert event.data.reason == "no_improvement"

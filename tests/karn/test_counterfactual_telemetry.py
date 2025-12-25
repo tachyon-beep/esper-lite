@@ -54,11 +54,11 @@ def test_shapley_computed_event_emitted():
 
     # Check that event was emitted
     shapley_events = [e for e in events if e.event_type == TelemetryEventType.ANALYTICS_SNAPSHOT
-                      and e.data.get("kind") == "shapley_computed"]
+                      and getattr(e.data, "kind", None) == "shapley_computed"]
     assert len(shapley_events) == 1
-    assert "shapley_values" in shapley_events[0].data
-    assert "num_slots" in shapley_events[0].data
-    assert shapley_events[0].data["num_slots"] == 2
+    assert shapley_events[0].data.shapley_values is not None
+    assert shapley_events[0].data.num_slots is not None
+    assert shapley_events[0].data.num_slots == 2
 
 
 def test_no_shapley_event_when_telemetry_disabled():
@@ -126,13 +126,13 @@ def test_shapley_event_includes_all_slots():
     values = engine.compute_shapley_values(matrix)
 
     shapley_events = [e for e in events if e.event_type == TelemetryEventType.ANALYTICS_SNAPSHOT
-                      and e.data.get("kind") == "shapley_computed"]
+                      and getattr(e.data, "kind", None) == "shapley_computed"]
     assert len(shapley_events) == 1
 
     # Should have all three slots in the data
-    shapley_data = shapley_events[0].data["shapley_values"]
+    shapley_data = shapley_events[0].data.shapley_values
     assert len(shapley_data) >= 3  # At least the three slots (may have estimates)
-    assert shapley_events[0].data["num_slots"] == 3
+    assert shapley_events[0].data.num_slots == 3
 
 
 def test_counterfactual_helper_emits_shapley_telemetry():
@@ -173,10 +173,10 @@ def test_counterfactual_helper_emits_shapley_telemetry():
 
     # Check that Shapley telemetry was emitted
     shapley_events = [e for e in events if e.event_type == TelemetryEventType.ANALYTICS_SNAPSHOT
-                      and e.data.get("kind") == "shapley_computed"]
+                      and getattr(e.data, "kind", None) == "shapley_computed"]
     assert len(shapley_events) == 1
-    assert "shapley_values" in shapley_events[0].data
-    assert shapley_events[0].data["num_slots"] == 2
+    assert shapley_events[0].data.shapley_values is not None
+    assert shapley_events[0].data.num_slots == 2
 
 
 def test_counterfactual_helper_no_telemetry_when_disabled():
@@ -214,7 +214,7 @@ def test_counterfactual_helper_no_telemetry_when_disabled():
 
     # Check that NO Shapley telemetry was emitted
     shapley_events = [e for e in events if e.event_type == TelemetryEventType.ANALYTICS_SNAPSHOT
-                      and e.data.get("kind") == "shapley_computed"]
+                      and getattr(e.data, "kind", None) == "shapley_computed"]
     assert len(shapley_events) == 0
 
 
@@ -270,7 +270,7 @@ class TestCounterfactualEngineCallback:
         # Should have emitted ANALYTICS_SNAPSHOT
         assert len(emitted_events) == 1
         assert emitted_events[0].event_type.name == "ANALYTICS_SNAPSHOT"
-        assert emitted_events[0].data["kind"] == "shapley_computed"
+        assert emitted_events[0].data.kind == "shapley_computed"
 
     def test_no_emit_without_callback(self) -> None:
         """Without callback, Shapley still works but no emission."""

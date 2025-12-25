@@ -55,6 +55,7 @@ from esper.leyline import (
     SeedTelemetry,
     TelemetryEvent,
     TelemetryEventType,
+    TrainingStartedPayload,
     SlotConfig,
     DEFAULT_GAMMA,
     DEFAULT_GAE_LAMBDA,
@@ -374,6 +375,8 @@ def _emit_anomaly_diagnostics(
     if hub is None or anomaly_report is None or not anomaly_report.has_anomaly:
         return
 
+    from esper.leyline import AnomalyDetectedPayload
+
     event_type_map = {
         "ratio_explosion": TelemetryEventType.RATIO_EXPLOSION_DETECTED,
         "ratio_collapse": TelemetryEventType.RATIO_COLLAPSE_DETECTED,
@@ -393,28 +396,35 @@ def _emit_anomaly_diagnostics(
             TelemetryEventType.GRADIENT_ANOMALY,  # fallback
         )
 
-        data = {
-            "episode": batch_epoch_id,
-            "batch": batch_idx + 1,
-            "episodes_completed": batch_epoch_id,
-            "inner_epoch": max_epochs,
-            "detail": anomaly_report.details.get(anomaly_type, ""),
-            "total_episodes": total_episodes,
-        }
+        # Prepare gradient stats as tuple of dicts
+        gradient_stats_tuple = None
+        if collect_debug and gradient_stats is not None:
+            gradient_stats_tuple = tuple(gs.to_dict() for gs in gradient_stats[:5])
 
-        if collect_debug:
-            # gradient_stats/stability_report set when collect_debug=True above
-            data["gradient_stats"] = [gs.to_dict() for gs in gradient_stats[:5]]  # type: ignore[index,union-attr]
-            data["stability"] = stability_report.to_dict()  # type: ignore[union-attr]
-        if ratio_diagnostic is not None:
-            data["ratio_diagnostic"] = ratio_diagnostic
+        # Prepare stability report dict
+        stability_dict = None
+        if collect_debug and stability_report is not None:
+            stability_dict = stability_report.to_dict()
+
+        # Create typed payload
+        payload = AnomalyDetectedPayload(
+            anomaly_type=anomaly_type,
+            episode=batch_epoch_id,
+            batch=batch_idx + 1,
+            inner_epoch=max_epochs,
+            total_episodes=total_episodes,
+            detail=anomaly_report.details.get(anomaly_type, ""),
+            gradient_stats=gradient_stats_tuple,
+            stability=stability_dict,
+            ratio_diagnostic=ratio_diagnostic,
+        )
 
         hub.emit(
             TelemetryEvent(
                 event_type=event_type,
                 epoch=batch_epoch_id,  # Anomalies detected at batch boundary
                 group_id=group_id,
-                data=data,
+                data=payload,
                 severity="debug" if collect_debug else "warning",
             )
         )
@@ -559,10 +569,10 @@ def train_ppo_vectorized(
         from tqdm import tqdm
 
         tqdm.set_lock(RLock())
-    except Exception:
+    except (ImportError, AttributeError) as e:
         # Best-effort: tqdm isn't required, and compile should still work in
         # environments where multiprocessing locks are healthy.
-        pass
+        _logger.debug("tqdm lock configuration skipped: %s", e)
 
     from esper.tolaria import create_model
     from esper.tamiyo import SignalTracker
@@ -869,36 +879,27 @@ def train_ppo_vectorized(
             f"PPO vectorized training initialized: policy_device={device}, "
             f"env_device_counts={env_device_counts}"
         ),
-        data={
-            "episode_id": f"ppo_{seed}_{n_episodes}ep",
-            "seed": seed,
-            "start_episode": start_episode,
-            "task": task,
-            "topology": task_spec.topology,
-            "task_type": task_spec.task_type,
-            "reward_mode": reward_mode,
-            "max_epochs": max_epochs,
-            "n_envs": n_envs,
-            "n_episodes": n_episodes + start_episode,
-            "use_telemetry": use_telemetry,
-            "state_dim": state_dim,
-            "policy_device": device,
-            "env_devices": list(devices),
-            "env_device_counts": env_device_counts,
-            "env_device_map_strategy": "round_robin",
-            "resume_path": str(resume_path) if resume_path else "",
-            "lr": lr,
-            "clip_ratio": clip_ratio,
-            "entropy_coef": entropy_coef,
-            "entropy_anneal": entropy_anneal_summary,
-            "gpu_preload": gpu_preload,
-            "dataloader": dataloader_summary,
-            "param_budget": param_budget,
-            "param_penalty_weight": param_penalty_weight,
-            "sparse_reward_scale": sparse_reward_scale,
-            "host_params": host_params_baseline,
-            "slot_ids": list(slot_config.slot_ids),
-        },
+        data=TrainingStartedPayload(
+            n_envs=n_envs,
+            max_epochs=max_epochs,
+            task=task,
+            host_params=host_params_baseline,
+            slot_ids=tuple(slot_config.slot_ids),
+            seed=seed,
+            n_episodes=n_episodes + start_episode,
+            lr=lr,
+            clip_ratio=clip_ratio,
+            entropy_coef=entropy_coef,
+            param_budget=param_budget,
+            policy_device=device,
+            env_devices=tuple(devices),
+            # Optional fields
+            episode_id=f"ppo_{seed}_{n_episodes}ep",
+            resume_path=str(resume_path) if resume_path else "",
+            reward_mode=reward_mode,
+            start_episode=start_episode,
+            entropy_anneal=entropy_anneal_summary,
+        ),
     ))
 
     # Create SharedBatchIterator for parallel data loading
@@ -2599,6 +2600,7 @@ def train_ppo_vectorized(
 
                     action_confidence = None
                     alternatives: list[tuple[str, float]] | None = None
+                    decision_entropy = None
                     if op_probs_cpu is not None and env_idx < len(op_probs_cpu):
                         probs = op_probs_cpu[env_idx]
                         chosen_op = int(action_dict["op"])
@@ -2610,6 +2612,12 @@ def train_ppo_vectorized(
                             for op_idx, prob in ranked
                             if op_idx != chosen_op
                         ][:2]
+                        # Compute decision entropy: -sum(p * log(p)) for op head
+                        entropy_sum = 0.0
+                        for p in probs:
+                            if p > 1e-8:  # Avoid log(0)
+                                entropy_sum -= p * math.log(p)
+                        decision_entropy = entropy_sum
                     emitters[env_idx].on_last_action(
                         epoch,
                         action_dict,
@@ -2623,6 +2631,7 @@ def train_ppo_vectorized(
                         slot_states=decision_slot_states,
                         action_confidence=action_confidence,
                         alternatives=alternatives,
+                        decision_entropy=decision_entropy,
                     )
 
                 # Store transition

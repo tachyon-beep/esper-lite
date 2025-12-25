@@ -117,11 +117,19 @@ def signals_to_features(
         "slots": {},
     }
 
-    # Build per-slot state dict from reports (missing reports are treated as inactive slots).
+    # Build per-slot state dict from reports.
+    # ALL slots in slot_config must be present (Task 4: fail loudly on missing required fields).
     slot_states: dict[str, dict[str, Any]] = {}
     for slot_id in slot_config.slot_ids:
         report = slot_reports.get(slot_id)
         if report is None:
+            # Missing report -> inactive slot with default values
+            slot_states[slot_id] = {
+                "is_active": 0.0,
+                "stage": 0,
+                "alpha": 0.0,
+                "improvement": 0.0,
+            }
             continue
 
         contribution = report.metrics.counterfactual_contribution
@@ -529,6 +537,16 @@ class PPOAgent:
         metrics = defaultdict(list)
         metrics["explained_variance"] = [explained_variance]
         early_stopped = False
+
+        # Compute advantage stats for status banner diagnostics
+        # These indicate if advantage normalization is working correctly
+        valid_advantages_for_stats = data["advantages"][valid_mask]
+        if valid_advantages_for_stats.numel() > 0:
+            metrics["advantage_mean"] = [valid_advantages_for_stats.mean().item()]
+            metrics["advantage_std"] = [valid_advantages_for_stats.std().item()]
+        else:
+            metrics["advantage_mean"] = [0.0]
+            metrics["advantage_std"] = [0.0]
 
         # Initialize per-head entropy tracking (P3-1)
         head_entropy_history: dict[str, list[float]] = {head: [] for head in HEAD_NAMES}

@@ -23,6 +23,7 @@ from typing import Callable, Literal, TYPE_CHECKING
 import random
 
 from esper.leyline import TelemetryEvent, TelemetryEventType
+from esper.leyline.telemetry import AnalyticsSnapshotPayload
 
 _logger = logging.getLogger(__name__)
 
@@ -448,12 +449,13 @@ class CounterfactualEngine:
             }
             self._emit_callback(TelemetryEvent(
                 event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
-                data={
-                    "kind": "shapley_computed",
-                    "shapley_values": shapley_dict,
-                    "num_slots": len(result),
-                    "epoch": matrix.epoch,
-                }
+                data=AnalyticsSnapshotPayload(
+                    kind="shapley_computed",
+                    env_id=0,  # Shapley is computed across the full environment
+                    shapley_values=shapley_dict,
+                    num_slots=len(result),
+                    batch=matrix.epoch,
+                ),
             ))
 
         return result

@@ -15,7 +15,6 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
 
 
 @dataclass
@@ -390,27 +389,29 @@ class TamiyoState:
     ratio_std: float = 0.0  # Standard deviation of ratio
 
     # Advantage statistics (from PPO update)
+    # Post-normalization stats (should be ~0 mean, ~1 std if normalization working)
     advantage_mean: float = 0.0
     advantage_std: float = 0.0
     advantage_min: float = 0.0
     advantage_max: float = 0.0
+    # Pre-normalization stats (raw learning signal magnitude)
+    advantage_raw_mean: float = 0.0
+    advantage_raw_std: float = 0.0
 
     # Gradient health (shown in Vitals)
     dead_layers: int = 0
     exploding_layers: int = 0
     nan_grad_count: int = 0  # NaN gradient count
-    layer_gradient_health: float = 1.0  # GradHP percentage (0-1)
+    layer_gradient_health: dict[str, float] | None = None  # Per-layer gradient health metrics
     entropy_collapsed: bool = False  # Entropy collapse detected
 
     # Performance timing (for throughput monitoring)
     update_time_ms: float = 0.0  # PPO update duration in milliseconds
     early_stop_epoch: int | None = None  # KL early stopping triggered at this epoch
 
-    # Per-head entropy and gradient norms (for multi-head policy)
-    head_slot_entropy: float = 0.0  # Entropy for slot action head
-    head_slot_grad_norm: float = 0.0  # Gradient norm for slot head
-    head_blueprint_entropy: float = 0.0  # Entropy for blueprint action head
-    head_blueprint_grad_norm: float = 0.0  # Gradient norm for blueprint head
+    # Per-head entropy (for multi-head policy collapse detection)
+    head_slot_entropy: float = 0.0
+    head_blueprint_entropy: float = 0.0
     head_style_entropy: float = 0.0
     head_tempo_entropy: float = 0.0
     head_alpha_target_entropy: float = 0.0
@@ -418,12 +419,31 @@ class TamiyoState:
     head_alpha_curve_entropy: float = 0.0
     head_op_entropy: float = 0.0
 
+    # Per-head gradient norms (for multi-head gradient health)
+    head_slot_grad_norm: float = 0.0
+    head_blueprint_grad_norm: float = 0.0
+    head_style_grad_norm: float = 0.0
+    head_tempo_grad_norm: float = 0.0
+    head_alpha_target_grad_norm: float = 0.0
+    head_alpha_speed_grad_norm: float = 0.0
+    head_alpha_curve_grad_norm: float = 0.0
+    head_op_grad_norm: float = 0.0
+
+    # Episode return tracking (PRIMARY RL METRIC - per DRL review)
+    episode_return_history: deque[float] = field(
+        default_factory=lambda: deque(maxlen=20)
+    )
+    current_episode_return: float = 0.0
+    current_episode: int = 0  # Current episode number for return history display
+
     # History for trend sparklines (last 10 values)
     policy_loss_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
     value_loss_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
     grad_norm_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
     entropy_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
     explained_variance_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
+    kl_divergence_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
+    clip_fraction_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
 
     # PPO inner loop context
     inner_epoch: int = 0  # Current inner optimization epoch
@@ -437,12 +457,11 @@ class TamiyoState:
     # PPO data received flag
     ppo_data_received: bool = False
 
-    # Last decision snapshot (captured from REWARD_COMPUTED events)
-    # Deprecated: Use recent_decisions instead
-    last_decision: "DecisionSnapshot | None" = None
-
     # Recent decisions list (up to 3, each visible for at least 10 seconds)
     recent_decisions: list["DecisionSnapshot"] = field(default_factory=list)
+
+    # A/B testing identification (None when not in A/B mode)
+    group_id: str | None = None
 
 
 @dataclass
@@ -588,6 +607,16 @@ class DecisionSnapshot:
     decision_id: str = ""
     # Pinned decisions never get replaced
     pinned: bool = False
+    # Environment ID that made this decision (for TD advantage tracking)
+    env_id: int = 0
+
+    # Per-decision metrics (per DRL review)
+    # Note: expected_value (above) contains V(s), no need for separate value_estimate
+    value_residual: float = 0.0   # r - V(s): immediate reward minus value estimate
+    td_advantage: float | None = None  # r + γV(s') - V(s): true TD(0) advantage (None until next step)
+
+    # Decision-specific entropy (per DRL review - more useful than policy entropy)
+    decision_entropy: float = 0.0  # -sum(p*log(p)) for this action distribution
 
 
 @dataclass
@@ -603,7 +632,7 @@ class RunConfig:
     entropy_coef: float = 0.01  # Initial entropy coefficient
     param_budget: int = 0  # Seed parameter budget
     resume_path: str = ""  # Checkpoint resume path (empty if fresh run)
-    entropy_anneal: dict = field(default_factory=dict)  # Entropy schedule config
+    entropy_anneal: dict[str, float] = field(default_factory=dict)  # Entropy schedule config
 
 
 @dataclass
@@ -700,6 +729,7 @@ class SanctumSnapshot:
     # Run metadata
     current_episode: int = 0
     current_batch: int = 0
+    max_batches: int = 100  # Maximum batches per episode
     current_epoch: int = 0
     max_epochs: int = 0
     run_id: str = ""
@@ -741,6 +771,13 @@ class SanctumSnapshot:
     cumulative_blueprint_fossilized: dict[str, int] = field(default_factory=dict)
     cumulative_blueprint_prunes: dict[str, int] = field(default_factory=dict)
 
+    # Aggregate slot state across all environments (for TamiyoBrain slot summary)
+    # Keys: DORMANT, GERMINATED, TRAINING, BLENDING, HOLDING, FOSSILIZED
+    slot_stage_counts: dict[str, int] = field(default_factory=dict)
+    total_slots: int = 0  # n_envs * n_slots_per_env
+    active_slots: int = 0  # Slots not in DORMANT state
+    avg_epochs_in_stage: float = 0.0  # Mean epochs_in_stage for non-dormant slots
+
     # Timestamps for staleness detection
     last_ppo_update: datetime | None = None
     last_reward_update: datetime | None = None
@@ -755,6 +792,109 @@ class SanctumSnapshot:
         STALENESS THRESHOLD: 5 seconds (matches Overwatch behavior)
         """
         return self.staleness_seconds > 5.0
+
+
+# Metric-specific thresholds (per DRL review)
+# Higher threshold = more change needed to trigger improving/warning
+TREND_THRESHOLDS: dict[str, float] = {
+    "episode_return": 0.15,   # 15% - returns vary naturally
+    "entropy": 0.08,          # 8% - entropy changes are meaningful
+    "policy_loss": 0.20,      # 20% - policy loss is noisy
+    "value_loss": 0.20,       # 20% - value loss is noisy
+    "kl_divergence": 0.30,    # 30% - KL varies widely
+    "clip_fraction": 0.30,    # 30% - clip fraction is variable
+    "grad_norm": 0.25,        # 25% - gradients vary batch-to-batch
+    "expl_var": 0.15,         # 15% - explained variance
+    "default": 0.15,          # 15% - fallback
+}
+
+
+def detect_trend(
+    values: list[float] | deque[float],
+    metric_name: str = "default",
+    metric_type: str = "loss",
+) -> str:
+    """Detect trend pattern in metric values with RL-appropriate thresholds.
+
+    Uses 10-sample windows (not 5) because RL metrics are inherently noisy.
+    Uses variance ratio for volatility (not CV) per DRL review.
+
+    Args:
+        values: Recent metric values (oldest first).
+        metric_name: Specific metric for threshold lookup.
+        metric_type: "loss" (lower=better) or "accuracy" (higher=better).
+
+    Returns:
+        Trend label: "improving", "stable", "volatile", "warning"
+    """
+    if len(values) < 5:
+        return "stable"
+
+    values_list = list(values)
+
+    # Use 10-sample windows for RL (per DRL review)
+    window_size = min(10, len(values_list) // 2)
+    if window_size < 3:
+        return "stable"
+
+    recent = values_list[-window_size:]
+    # Use the window immediately before recent (non-overlapping)
+    if len(values_list) >= 2 * window_size:
+        older = values_list[-2*window_size:-window_size]
+    else:
+        # Not enough data for proper comparison - use what we have
+        older = values_list[:window_size]
+
+    if not recent or not older:
+        return "stable"
+
+    recent_mean = sum(recent) / len(recent)
+    older_mean = sum(older) / len(older)
+
+    # Volatility check: variance ratio > 3x (per DRL review, not CV > 50%)
+    recent_var = sum((v - recent_mean) ** 2 for v in recent) / len(recent)
+    older_var = sum((v - older_mean) ** 2 for v in older) / len(older)
+
+    VOLATILITY_EPSILON = 1e-8
+    if older_var > VOLATILITY_EPSILON and recent_var / older_var > 3.0:
+        return "volatile"
+
+    # Get metric-specific threshold
+    threshold_pct = TREND_THRESHOLDS.get(metric_name, TREND_THRESHOLDS["default"])
+    change_threshold = threshold_pct * abs(older_mean) if older_mean != 0 else 0.01
+    change = recent_mean - older_mean
+
+    if metric_type == "loss":
+        # For loss: decreasing is good, increasing is bad
+        if change <= -change_threshold:  # Include boundary
+            return "improving"
+        elif change >= change_threshold:  # Include boundary
+            return "warning"
+    else:
+        # For accuracy/return: increasing is good, decreasing is bad
+        if change >= change_threshold:  # Include boundary
+            return "improving"
+        elif change <= -change_threshold:  # Include boundary
+            return "warning"
+
+    return "stable"
+
+
+def trend_to_indicator(trend: str) -> tuple[str, str]:
+    """Convert trend label to display indicator and style.
+
+    Per UX review: No brackets, just single char with color.
+
+    Returns:
+        Tuple of (indicator_string, rich_style)
+    """
+    indicators = {
+        "improving": ("^", "green"),
+        "stable": ("-", "dim"),
+        "volatile": ("~", "yellow"),
+        "warning": ("v", "red"),
+    }
+    return indicators.get(trend, ("-", "dim"))
 
 
 def make_sparkline(values: list[float] | deque[float], width: int = 8) -> str:

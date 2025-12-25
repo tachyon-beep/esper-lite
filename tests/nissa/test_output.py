@@ -8,6 +8,10 @@ from pathlib import Path
 import pytest
 
 from esper.leyline import TelemetryEvent, TelemetryEventType
+from esper.leyline.telemetry import (
+    EpochCompletedPayload,
+    SeedGerminatedPayload,
+)
 from esper.nissa.output import DirectoryOutput, NissaHub, OutputBackend
 
 
@@ -35,7 +39,13 @@ class TestDirectoryOutput:
             seed_id="seed_0",
             epoch=5,
             message="Test event",
-            data={"val_accuracy": 85.5},
+            data=EpochCompletedPayload(
+                env_id=0,
+                inner_epoch=5,
+                val_loss=0.5,
+                val_accuracy=85.5,
+                seeds=None,
+            ),
         )
         backend.emit(event)
         backend.close()
@@ -95,7 +105,13 @@ class TestNissaHubWithDirectoryOutput:
             seed_id="seed_1",
             epoch=0,
             message="Germinated",
-            data={"blueprint_id": "test_bp"},
+            data=SeedGerminatedPayload(
+                slot_id="slot_0",
+                env_id=0,
+                blueprint_id="test_bp",
+                params=1000,
+                alpha=0.0,
+            ),
         )
         hub.emit(event)
         hub.close()
@@ -122,7 +138,13 @@ class TestNissaHubEmitAfterClose:
         event1 = TelemetryEvent(
             event_type=TelemetryEventType.EPOCH_COMPLETED,
             epoch=1,
-            data={"val_accuracy": 80.0},
+            data=EpochCompletedPayload(
+                env_id=0,
+                inner_epoch=1,
+                val_loss=0.5,
+                val_accuracy=80.0,
+                seeds=None,
+            ),
         )
         hub.emit(event1)
         hub.close()
@@ -131,7 +153,13 @@ class TestNissaHubEmitAfterClose:
         event2 = TelemetryEvent(
             event_type=TelemetryEventType.EPOCH_COMPLETED,
             epoch=2,
-            data={"val_accuracy": 90.0},
+            data=EpochCompletedPayload(
+                env_id=0,
+                inner_epoch=2,
+                val_loss=0.3,
+                val_accuracy=90.0,
+                seeds=None,
+            ),
         )
         hub.emit(event2)
 
@@ -151,6 +179,13 @@ class TestNissaHubEmitAfterClose:
         event = TelemetryEvent(
             event_type=TelemetryEventType.EPOCH_COMPLETED,
             epoch=1,
+            data=EpochCompletedPayload(
+                env_id=0,
+                inner_epoch=1,
+                val_loss=0.5,
+                val_accuracy=80.0,
+                seeds=None,
+            ),
         )
 
         with caplog.at_level(logging.WARNING, logger="esper.nissa.output"):
@@ -173,6 +208,13 @@ class TestNissaHubEmitAfterClose:
         event = TelemetryEvent(
             event_type=TelemetryEventType.EPOCH_COMPLETED,
             epoch=1,
+            data=EpochCompletedPayload(
+                env_id=0,
+                inner_epoch=1,
+                val_loss=0.5,
+                val_accuracy=80.0,
+                seeds=None,
+            ),
         )
 
         with caplog.at_level(logging.WARNING, logger="esper.nissa.output"):

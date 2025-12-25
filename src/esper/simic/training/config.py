@@ -125,16 +125,17 @@ class TrainingConfig:
     permissive_gates: bool = True
 
     def __post_init__(self):
-        """Validate and set defaults."""
+        """Validate and set defaults.
+
+        Note: String-to-enum coercion for reward_family/reward_mode is handled
+        by from_dict(), not here. Direct construction requires proper enum values.
+        Use TrainingConfig.from_dict() for external/JSON data.
+        """
         # Auto-match chunk_length to max_epochs if not set
         if self.chunk_length is None:
             self.chunk_length = self.max_epochs
 
-        if isinstance(self.reward_family, str):
-            self.reward_family = RewardFamily(self.reward_family)
-        if isinstance(self.reward_mode, str):
-            self.reward_mode = RewardMode(self.reward_mode)
-
+        # Normalize slots to list (allows tuple input for convenience)
         if not isinstance(self.slots, list):
             self.slots = list(self.slots)
 

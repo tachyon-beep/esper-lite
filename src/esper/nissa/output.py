@@ -24,6 +24,11 @@ from datetime import datetime
 from pathlib import Path
 
 from esper.leyline import TelemetryEvent
+from esper.leyline.telemetry import (
+    EpochCompletedPayload,
+    BatchEpochCompletedPayload,
+    AnomalyDetectedPayload,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -87,15 +92,29 @@ class ConsoleOutput(OutputBackend):
 
         # Format message based on event type
         if event_type == "EPOCH_COMPLETED":
-            loss = event.data.get("val_loss", "?")
-            acc = event.data.get("val_accuracy", "?")
-            epoch = event.epoch or "?"
+            # Handle typed payload or dict fallback
+            if isinstance(event.data, EpochCompletedPayload):
+                loss = event.data.val_loss
+                acc = event.data.val_accuracy
+            else:
+                if event.data is None:
+                    _logger.warning("EPOCH_COMPLETED event has no data payload")
+                    return
+                loss = event.data.get("val_loss", "?")
+                acc = event.data.get("val_accuracy", "?")
+            epoch = event.epoch if event.epoch is not None else "?"
             print(f"[{timestamp}] {seed_id} | Epoch {epoch}: loss={loss} acc={acc}")
         elif "COMMAND" in event_type:
+            if event.data is None:
+                _logger.warning("COMMAND event has no data payload")
+                return
             action = event.data.get("action", "unknown")
             print(f"[{timestamp}] {seed_id} | Command: {action}")
         elif event_type.startswith("SEED_"):
-            data = event.data or {}
+            if event.data is None:
+                _logger.warning("SEED_%s event has no data payload", event_type)
+                return
+            data = event.data
             if event_type == "SEED_GERMINATED":
                 blueprint_id = data.get("blueprint_id", "?")
                 params = data.get("params")
@@ -127,7 +146,10 @@ class ConsoleOutput(OutputBackend):
                 msg = event.message or event_type
             print(f"[{timestamp}] {seed_id} | {msg}")
         elif event_type == "REWARD_COMPUTED":
-            data = event.data or {}
+            if event.data is None:
+                _logger.warning("REWARD_COMPUTED event has no data payload")
+                return
+            data = event.data
             env_id = data.get("env_id", "?")
             action = data.get("action_name", "?")
             total = data.get("total_reward", 0.0)
@@ -166,7 +188,10 @@ class ConsoleOutput(OutputBackend):
                 # Legacy shaped reward
                 print(f"[{timestamp}] env{env_id} | {action}: r={total:+.2f} (Δacc={base:+.2f}, rent={rent_display:.2f}{extra}) acc={val_acc:.1f}%")
         elif event_type == "GOVERNOR_ROLLBACK":
-            data = event.data or {}
+            if event.data is None:
+                _logger.warning("GOVERNOR_ROLLBACK event has no data payload")
+                return
+            data = event.data
             reason = data.get("reason", "unknown")
             loss = data.get("loss_at_panic", "?")
             threshold = data.get("loss_threshold", "?")
@@ -177,28 +202,49 @@ class ConsoleOutput(OutputBackend):
                 threshold = f"{threshold:.4f}"
             print(f"[{timestamp}] GOVERNOR | 🚨 ROLLBACK: {reason} (loss={loss}, threshold={threshold}, panics={panics})")
         elif event_type == "GOVERNOR_PANIC":
-            data = event.data or {}
+            # TODO: [DEAD CODE] - This formatting code for GOVERNOR_PANIC is unreachable
+            # because these events are never emitted. See: leyline/telemetry.py dead event TODOs.
+            if event.data is None:
+                _logger.warning("GOVERNOR_PANIC event has no data payload")
+                return
+            data = event.data
             loss = data.get("current_loss", "?")
             panics = data.get("consecutive_panics", 0)
             if isinstance(loss, float):
                 loss = f"{loss:.4f}"
             print(f"[{timestamp}] GOVERNOR | ⚠️  PANIC #{panics}: loss={loss}")
         elif event_type == "BATCH_EPOCH_COMPLETED":
-            data = event.data or {}
-            batch_idx = data.get("batch_idx", "?")
-            episodes = data.get("episodes_completed", "?")
-            total = data.get("total_episodes", "?")
-            avg_acc = data.get("avg_accuracy", 0.0)
-            rolling_acc = data.get("rolling_accuracy", 0.0)
-            avg_reward = data.get("avg_reward", 0.0)
-            env_accs = data.get("env_accuracies", [])
+            # Handle typed payload or dict fallback
+            if isinstance(event.data, BatchEpochCompletedPayload):
+                batch_idx = event.data.batch_idx
+                episodes = event.data.episodes_completed
+                total = event.data.total_episodes
+                avg_acc = event.data.avg_accuracy
+                rolling_acc = event.data.rolling_accuracy
+                avg_reward = event.data.avg_reward
+                env_accs = event.data.env_accuracies or []
+            else:
+                if event.data is None:
+                    _logger.warning("BATCH_EPOCH_COMPLETED event has no data payload")
+                    return
+                data = event.data
+                batch_idx = data.get("batch_idx", "?")
+                episodes = data.get("episodes_completed", "?")
+                total = data.get("total_episodes", "?")
+                avg_acc = data.get("avg_accuracy", 0.0)
+                rolling_acc = data.get("rolling_accuracy", 0.0)
+                avg_reward = data.get("avg_reward", 0.0)
+                env_accs = data.get("env_accuracies", [])
             env_acc_str = ", ".join(f"{a:.1f}%" for a in env_accs) if env_accs else ""
             print(f"[{timestamp}] BATCH {batch_idx} | Episodes {episodes}/{total}")
             if env_acc_str:
                 print(f"[{timestamp}]   Env accs: [{env_acc_str}]")
             print(f"[{timestamp}]   Avg: {avg_acc:.1f}% (rolling: {rolling_acc:.1f}%), reward: {avg_reward:.1f}")
         elif event_type == "COUNTERFACTUAL_COMPUTED":
-            data = event.data or {}
+            if event.data is None:
+                _logger.warning("COUNTERFACTUAL_COMPUTED event has no data payload")
+                return
+            data = event.data
             env_id = data.get("env_id", "?")
             slot_id = data.get("slot_id", "?")
             available = data.get("available", True)
@@ -211,12 +257,20 @@ class ConsoleOutput(OutputBackend):
                 contribution = data.get("contribution", 0.0)
                 print(f"[{timestamp}] env{env_id} | Counterfactual {slot_id}: {real_acc:.1f}% real, {baseline_acc:.1f}% baseline, Δ={contribution:+.1f}%")
         elif event_type == "CHECKPOINT_SAVED":
-            data = event.data or {}
+            # TODO: [DEAD CODE] - This formatting code for CHECKPOINT_SAVED is unreachable
+            # because these events are never emitted. See: leyline/telemetry.py dead event TODOs.
+            if event.data is None:
+                _logger.warning("CHECKPOINT_SAVED event has no data payload")
+                return
+            data = event.data
             path = data.get("path", "?")
             avg_acc = data.get("avg_accuracy", 0.0)
             print(f"[{timestamp}] CHECKPOINT | Saved to {path} (acc={avg_acc:.1f}%)")
         elif event_type == "CHECKPOINT_LOADED":
-            data = event.data or {}
+            if event.data is None:
+                _logger.warning("CHECKPOINT_LOADED event has no data payload")
+                return
+            data = event.data
             path = data.get("path", "?")
             episode = data.get("start_episode", 0)
             source = data.get("source", "")
@@ -225,7 +279,10 @@ class ConsoleOutput(OutputBackend):
             else:
                 print(f"[{timestamp}] CHECKPOINT | Loaded from {path} (resuming at episode {episode})")
         elif event_type == "TAMIYO_INITIATED":
-            data = event.data or {}
+            if event.data is None:
+                _logger.warning("TAMIYO_INITIATED event has no data payload")
+                return
+            data = event.data
             env_id = data.get("env_id")
             epoch = data.get("epoch", "?")
             stable_count = data.get("stable_count", 0)
@@ -236,7 +293,10 @@ class ConsoleOutput(OutputBackend):
             else:
                 print(f"[{timestamp}] {env_str} | Host stabilized at epoch {epoch} ({stable_count}/{stabilization_epochs} stable) - germination now allowed")
         elif event_type == "PPO_UPDATE_COMPLETED":
-            data = event.data or {}
+            if event.data is None:
+                _logger.warning("PPO_UPDATE_COMPLETED event has no data payload")
+                return
+            data = event.data
             if data.get("skipped"):
                 reason = data.get("reason", "unknown")
                 print(f"[{timestamp}] PPO | Update skipped ({reason})")
@@ -248,12 +308,10 @@ class ConsoleOutput(OutputBackend):
                 print(f"[{timestamp}] PPO | policy={policy_loss:.4f}, value={value_loss:.4f}, entropy={entropy:.3f} (coef={entropy_coef:.4f})")
         elif event_type in ("RATIO_EXPLOSION_DETECTED", "RATIO_COLLAPSE_DETECTED",
                            "VALUE_COLLAPSE_DETECTED", "NUMERICAL_INSTABILITY_DETECTED",
-                           "GRADIENT_ANOMALY"):
-            data = event.data or {}
-            episode = data.get("episode", "?")
-            detail = data.get("detail", "")
-            anomaly_name = event_type.replace("_DETECTED", "").replace("_", " ").title()
-            print(f"[{timestamp}] ⚠️  ANOMALY | {anomaly_name} at episode {episode}: {detail}")
+                           "GRADIENT_ANOMALY", "GRADIENT_PATHOLOGY_DETECTED"):
+            if isinstance(event.data, AnomalyDetectedPayload):
+                anomaly_name = event_type.replace("_DETECTED", "").replace("_", " ").title()
+                print(f"[{timestamp}] ⚠️  ANOMALY | {anomaly_name} at episode {event.data.episode}: {event.data.detail}")
         else:
             msg = event.message or event_type
             print(f"[{timestamp}] {seed_id} | {msg}")

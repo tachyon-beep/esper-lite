@@ -68,6 +68,9 @@ class GateResult:
     timestamp: datetime = field(default_factory=_utc_now)
 
 
+# TODO: [DEAD CODE] - BlueprintProtocol is defined and exported but never used in production.
+# Blueprint implementations in kasmina/blueprints/ do not reference this protocol.
+# Either enforce this protocol or delete it. See: architectural risk assessment 2024-12-24.
 @runtime_checkable
 class BlueprintProtocol(Protocol):
     """Protocol that all blueprints must satisfy."""

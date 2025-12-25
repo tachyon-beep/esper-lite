@@ -98,6 +98,11 @@ class TUIThresholds:
 
     These control green/yellow/red status indicators.
     Entropy thresholds align with leyline for consistency.
+
+    Explained Variance thresholds follow DRL best practices:
+    - EV=1.0: Perfect value prediction
+    - EV=0.0: Value function explains nothing (useless)
+    - EV<0.0: Value function increases variance (harmful)
     """
 
     # Entropy (healthy starts near ln(4) ≈ 1.39 for 4 actions)
@@ -111,18 +116,25 @@ class TUIThresholds:
     CLIP_WARNING: float = 0.25
     CLIP_CRITICAL: float = 0.3
 
-    # Explained variance (value learning quality)
-    # In PPO, explained variance starts near 0 and improves as value function learns.
-    # Negative values mean value function increases variance (harmful).
-    EXPLAINED_VAR_WARNING: float = 0.0   # Value function not helping
-    EXPLAINED_VAR_CRITICAL: float = -0.5  # Value function actively harmful
+    # Explained variance (value learning quality) - DRL CORRECTED
+    # EV=0 means value function provides no advantage over REINFORCE
+    EXPLAINED_VAR_WARNING: float = 0.3   # Value function weak but learning
+    EXPLAINED_VAR_CRITICAL: float = 0.0   # Value function useless or harmful
 
     # Gradient norm
     GRAD_NORM_WARNING: float = 5.0
     GRAD_NORM_CRITICAL: float = 10.0
 
-    # KL divergence (policy change magnitude)
-    KL_WARNING: float = 0.05
+    # KL divergence (policy change magnitude) - ADDED per DRL review
+    KL_WARNING: float = 0.015   # Mild policy drift
+    KL_CRITICAL: float = 0.03   # Excessive policy change
+
+    # Advantage normalization thresholds - ADDED per DRL review
+    # Healthy advantage std is ~1.0 after normalization
+    ADVANTAGE_STD_WARNING: float = 2.0      # High variance
+    ADVANTAGE_STD_CRITICAL: float = 3.0     # Extreme variance
+    ADVANTAGE_STD_LOW_WARNING: float = 0.5  # Too little variance
+    ADVANTAGE_STD_COLLAPSED: float = 0.1    # Advantage normalization broken
 
     # Action distribution (WAIT dominance is suspicious)
     WAIT_DOMINANCE_WARNING: float = 0.7  # > 70% WAIT

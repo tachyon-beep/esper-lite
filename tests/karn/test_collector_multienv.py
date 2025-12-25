@@ -6,6 +6,10 @@ from typing import TYPE_CHECKING
 import pytest
 
 from esper.leyline import TelemetryEvent, TelemetryEventType
+from esper.leyline.telemetry import (
+    SeedGerminatedPayload,
+    TrainingStartedPayload,
+)
 
 if TYPE_CHECKING:
     from esper.karn.collector import OutputBackend
@@ -25,21 +29,46 @@ class TestMultiEnvSlotTracking:
         # Start episode - TRAINING_STARTED handler creates context and starts epoch
         collector.emit(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"episode_id": "test_multi", "max_epochs": 10, "n_envs": 2}
+            data=TrainingStartedPayload(
+                n_envs=2,
+                max_epochs=10,
+                task="test_task",
+                host_params=1000,
+                slot_ids=("r0c0", "r0c1"),
+                seed=42,
+                n_episodes=100,
+                lr=0.001,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=10000,
+                policy_device="cpu",
+                env_devices=("cpu", "cpu"),
+                episode_id="test_multi",
+            )
         ))
 
         # Germinate in slot "r0c1" for env 0
         collector.emit(TelemetryEvent(
             event_type=TelemetryEventType.SEED_GERMINATED,
             slot_id="r0c1",
-            data={"env_id": 0, "seed_id": "env0_seed_0", "blueprint_id": "conv"}
+            data=SeedGerminatedPayload(
+                slot_id="r0c1",
+                env_id=0,
+                blueprint_id="conv",
+                params=100,
+            )
         ))
 
         # Germinate in slot "r0c1" for env 1 (same slot_id, different env)
         collector.emit(TelemetryEvent(
             event_type=TelemetryEventType.SEED_GERMINATED,
             slot_id="r0c1",
-            data={"env_id": 1, "seed_id": "env1_seed_0", "blueprint_id": "norm"}
+            data=SeedGerminatedPayload(
+                slot_id="r0c1",
+                env_id=1,
+                blueprint_id="norm",
+                params=100,
+            )
         ))
 
         # Both should be tracked separately
@@ -63,14 +92,34 @@ class TestMultiEnvSlotTracking:
 
         collector.emit(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"episode_id": "test", "max_epochs": 5}
+            data=TrainingStartedPayload(
+                n_envs=1,
+                max_epochs=5,
+                task="test_task",
+                host_params=1000,
+                slot_ids=("r0c0",),
+                seed=42,
+                n_episodes=100,
+                lr=0.001,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=10000,
+                policy_device="cpu",
+                env_devices=("cpu",),
+                episode_id="test",
+            )
         ))
 
         # Event with env_id in data
         collector.emit(TelemetryEvent(
             event_type=TelemetryEventType.SEED_GERMINATED,
             slot_id="r0c0",
-            data={"env_id": 3, "seed_id": "env3_seed_0", "blueprint_id": "test"}
+            data=SeedGerminatedPayload(
+                slot_id="r0c0",
+                env_id=3,
+                blueprint_id="test",
+                params=100,
+            )
         ))
 
         # Should namespace by env_id
@@ -87,7 +136,22 @@ class TestMultiEnvSlotTracking:
         collector.emit(
             TelemetryEvent(
                 event_type=TelemetryEventType.TRAINING_STARTED,
-                data={"episode_id": "test_cf_env_idx", "max_epochs": 5, "n_envs": 2},
+                data=TrainingStartedPayload(
+                    n_envs=2,
+                    max_epochs=5,
+                    task="test_task",
+                    host_params=1000,
+                    slot_ids=("r0c0", "r0c1"),
+                    seed=42,
+                    n_episodes=100,
+                    lr=0.001,
+                    clip_ratio=0.2,
+                    entropy_coef=0.01,
+                    param_budget=10000,
+                    policy_device="cpu",
+                    env_devices=("cpu", "cpu"),
+                    episode_id="test_cf_env_idx",
+                )
             )
         )
 
@@ -114,21 +178,40 @@ class TestMultiEnvSlotTracking:
         collector.emit(
             TelemetryEvent(
                 event_type=TelemetryEventType.TRAINING_STARTED,
-                data={"episode_id": "test_gate_event", "max_epochs": 5, "n_envs": 2},
+                data=TrainingStartedPayload(
+                    n_envs=2,
+                    max_epochs=5,
+                    task="test_task",
+                    host_params=1000,
+                    slot_ids=("r0c0", "r0c1"),
+                    seed=42,
+                    n_episodes=100,
+                    lr=0.001,
+                    clip_ratio=0.2,
+                    entropy_coef=0.01,
+                    param_budget=10000,
+                    policy_device="cpu",
+                    env_devices=("cpu", "cpu"),
+                    episode_id="test_gate_event",
+                )
             )
         )
+
+        from esper.leyline.telemetry import SeedGateEvaluatedPayload
 
         collector.emit(
             TelemetryEvent(
                 event_type=TelemetryEventType.SEED_GATE_EVALUATED,
                 slot_id="r0c1",
-                data={
-                    "env_id": 1,
-                    "gate": "G2",
-                    "passed": False,
-                    "target_stage": "BLENDING",
-                    "checks_failed": ["seed_not_ready"],
-                },
+                data=SeedGateEvaluatedPayload(
+                    slot_id="r0c1",
+                    env_id=1,
+                    gate="G2",
+                    passed=False,
+                    target_stage="BLENDING",
+                    checks_passed=(),
+                    checks_failed=("seed_not_ready",),
+                ),
             )
         )
 
@@ -150,7 +233,22 @@ class TestKarnCollectorEmitAfterClose:
         # Start episode to enable event processing
         collector.emit(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"episode_id": "test_close", "max_epochs": 5}
+            data=TrainingStartedPayload(
+                n_envs=1,
+                max_epochs=5,
+                task="test_task",
+                host_params=1000,
+                slot_ids=("r0c0", "r0c1"),
+                seed=42,
+                n_episodes=100,
+                lr=0.001,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=10000,
+                policy_device="cpu",
+                env_devices=("cpu",),
+                episode_id="test_close",
+            )
         ))
 
         collector.close()
@@ -159,7 +257,12 @@ class TestKarnCollectorEmitAfterClose:
         collector.emit(TelemetryEvent(
             event_type=TelemetryEventType.SEED_GERMINATED,
             slot_id="r0c1",
-            data={"env_id": 0, "seed_id": "seed_0", "blueprint_id": "test"}
+            data=SeedGerminatedPayload(
+                slot_id="r0c1",
+                env_id=0,
+                blueprint_id="test",
+                params=100,
+            )
         ))
 
         # Event should not have been processed (no slot created)
@@ -307,3 +410,52 @@ class TestKarnCollectorAddBackendFailure:
         # Should work now
         collector.add_backend(MockBackend())  # type: ignore[arg-type]
         assert len(collector._backends) == 1
+
+
+class TestCounterfactualNoneDataHandling:
+    """Tests for counterfactual event with None data payload."""
+
+    def test_counterfactual_with_none_data_logs_warning(self, caplog: pytest.LogCaptureFixture):
+        """COUNTERFACTUAL_COMPUTED with None data should log warning and return early."""
+        from esper.karn.collector import KarnCollector
+
+        collector = KarnCollector()
+
+        # Start episode to enable event processing
+        collector.emit(TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data=TrainingStartedPayload(
+                n_envs=1,
+                max_epochs=5,
+                task="test_task",
+                host_params=1000,
+                slot_ids=("r0c0",),
+                seed=42,
+                n_episodes=100,
+                lr=0.001,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=10000,
+                policy_device="cpu",
+                env_devices=("cpu",),
+                episode_id="test_cf_none",
+            )
+        ))
+
+        with caplog.at_level(logging.WARNING, logger="esper.karn.collector"):
+            # Emit counterfactual event with None data
+            collector.emit(TelemetryEvent(
+                event_type=TelemetryEventType.COUNTERFACTUAL_COMPUTED,
+                slot_id="r0c0",
+                data=None,  # This should trigger the warning
+            ))
+
+        # Verify warning was logged
+        assert any(
+            "has no data payload" in record.message
+            for record in caplog.records
+        ), "Expected warning about missing data payload"
+
+        # Verify no slot was created (event was dropped after warning)
+        slots = collector.store.current_epoch.slots if collector.store.current_epoch else {}
+        assert len(slots) == 0, "No slots should be created when data is None"

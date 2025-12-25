@@ -9,11 +9,14 @@ access from training thread (emit) and UI thread (get_snapshot).
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
+
+_logger = logging.getLogger(__name__)
 
 from esper.karn.overwatch.schema import (
     TuiSnapshot,
@@ -22,6 +25,19 @@ from esper.karn.overwatch.schema import (
     EnvSummary,
     SlotChipState,
     FeedEvent,
+)
+from esper.leyline import (
+    TrainingStartedPayload,
+    BatchEpochCompletedPayload,
+    PPOUpdatePayload,
+    EpochCompletedPayload,
+    SeedGerminatedPayload,
+    SeedStageChangedPayload,
+    SeedGateEvaluatedPayload,
+    SeedFossilizedPayload,
+    SeedPrunedPayload,
+    RewardComputedPayload,
+    AnalyticsSnapshotPayload,
 )
 
 if TYPE_CHECKING:
@@ -87,7 +103,7 @@ class TelemetryAggregator:
     # Thread safety
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Initialize per-env state."""
         self._envs = {}
         self._feed = []
@@ -168,89 +184,99 @@ class TelemetryAggregator:
 
     def _handle_training_started(self, event: "TelemetryEvent") -> None:
         """Handle TRAINING_STARTED event."""
-        data = event.data or {}
-        self._run_id = data.get("episode_id", "")
-        self._task_name = data.get("task", "")
-        self._connected = True
-        self._start_time = time.time()
+        if isinstance(event.data, TrainingStartedPayload):
+            payload = event.data
+            self._run_id = payload.episode_id
+            self._task_name = payload.task
+            self._connected = True
+            self._start_time = time.time()
 
-        # Initialize env summaries
-        n_envs = data.get("n_envs", self.num_envs)
-        self.num_envs = n_envs
-        env_devices = data.get("env_devices", [])
-        for env_id in range(n_envs):
-            if env_id not in self._envs:
-                device_id = 0
-                if isinstance(env_devices, list) and env_id < len(env_devices):
-                    parsed_device_id = _parse_cuda_device_index(str(env_devices[env_id]))
-                    if parsed_device_id is not None:
-                        device_id = parsed_device_id
-                self._envs[env_id] = EnvSummary(
-                    env_id=env_id,
-                    device_id=device_id,
-                    status="OK",
-                )
+            # Initialize env summaries
+            n_envs = payload.n_envs
+            self.num_envs = n_envs
+            env_devices = payload.env_devices
+            for env_id in range(n_envs):
+                if env_id not in self._envs:
+                    device_id = 0
+                    if env_id < len(env_devices):
+                        parsed_device_id = _parse_cuda_device_index(str(env_devices[env_id]))
+                        if parsed_device_id is not None:
+                            device_id = parsed_device_id
+                    self._envs[env_id] = EnvSummary(
+                        env_id=env_id,
+                        device_id=device_id,
+                        status="OK",
+                    )
+        else:
+            return
 
     def _handle_batch_epoch_completed(self, event: "TelemetryEvent") -> None:
         """Handle BATCH_EPOCH_COMPLETED event."""
-        data = event.data or {}
-        self._batch = data.get("batch_idx", self._batch)
-        self._episode = data.get("episodes_completed", self._episode)
+        if isinstance(event.data, BatchEpochCompletedPayload):
+            payload = event.data
+            self._batch = payload.batch_idx
+            self._episode = payload.episodes_completed
 
-        # avg_accuracy comes as 0-100, store as 0-1 for consistency with run_header
-        avg_acc = data.get("avg_accuracy", 0.0)
-        avg_acc_normalized = avg_acc / 100.0 if avg_acc > 1.0 else avg_acc
-        if avg_acc_normalized > self._best_metric:
-            self._best_metric = avg_acc_normalized
+            # avg_accuracy comes as 0-100, store as 0-1 for consistency with run_header
+            avg_acc = payload.avg_accuracy
+            avg_acc_normalized = avg_acc / 100.0 if avg_acc > 1.0 else avg_acc
+            if avg_acc_normalized > self._best_metric:
+                self._best_metric = avg_acc_normalized
 
-        # Update per-env accuracies if provided
-        env_accs = data.get("env_accuracies", [])
-        for i, acc in enumerate(env_accs):
-            if i in self._envs:
-                self._envs[i].task_metric = acc
+            # Update per-env accuracies if provided
+            if payload.env_accuracies is not None:
+                for i, acc in enumerate(payload.env_accuracies):
+                    if i in self._envs:
+                        self._envs[i].task_metric = acc
+        else:
+            return
 
     def _handle_ppo_update_completed(self, event: "TelemetryEvent") -> None:
         """Handle PPO_UPDATE_COMPLETED event."""
-        data = event.data or {}
+        if isinstance(event.data, PPOUpdatePayload):
+            payload = event.data
 
-        if data.get("skipped"):
+            if payload.skipped:
+                return
+
+            self._tamiyo.kl_divergence = payload.kl_divergence
+            self._tamiyo.entropy = payload.entropy
+            self._tamiyo.clip_fraction = payload.clip_fraction
+            # Use explicit None checks to distinguish "not computed" from "zero"
+            self._tamiyo.explained_variance = (
+                payload.explained_variance if payload.explained_variance is not None else 0.0
+            )
+            self._tamiyo.grad_norm = payload.grad_norm
+            self._tamiyo.learning_rate = payload.lr if payload.lr is not None else 0.0
+            self._tamiyo.entropy_collapsed = payload.entropy_collapsed
+
+            # Add PPO feed event for significant updates
+            self._add_feed_event(
+                event_type="PPO",
+                env_id=None,
+                message=f"KL={self._tamiyo.kl_divergence:.4f} H={self._tamiyo.entropy:.2f}",
+                timestamp=event.timestamp,
+            )
+        else:
             return
-
-        self._tamiyo.kl_divergence = data.get("kl_divergence", 0.0)
-        self._tamiyo.entropy = data.get("entropy", 0.0)
-        self._tamiyo.clip_fraction = data.get("clip_fraction", 0.0)
-        self._tamiyo.explained_variance = data.get("explained_variance", 0.0)
-        self._tamiyo.grad_norm = data.get("grad_norm", 0.0)
-        self._tamiyo.learning_rate = data.get("lr", 0.0)
-        self._tamiyo.entropy_collapsed = data.get("entropy_collapsed", False)
-
-        # Add PPO feed event for significant updates
-        self._add_feed_event(
-            event_type="PPO",
-            env_id=None,
-            message=f"KL={self._tamiyo.kl_divergence:.4f} H={self._tamiyo.entropy:.2f}",
-            timestamp=event.timestamp,
-        )
 
     def _handle_epoch_completed(self, event: "TelemetryEvent") -> None:
         """Handle EPOCH_COMPLETED event."""
-        data = event.data or {}
-        env_id = data.get("env_id")
+        if isinstance(event.data, EpochCompletedPayload):
+            payload = event.data
+            env_id = payload.env_id
 
-        if env_id is None:
-            return
+            self._ensure_env(env_id)
+            env = self._envs[env_id]
+            env.task_metric = payload.val_accuracy
+            env.last_update_ts = self._last_event_ts
 
-        self._ensure_env(env_id)
-        env = self._envs[env_id]
-        env.task_metric = data.get("val_accuracy", 0.0)
-        env.last_update_ts = self._last_event_ts
+            # Per-slot telemetry (emitted in vectorized training) updates alpha/stage live.
+            # Type contract: payload.seeds is dict[str, dict[str, Any]] | None
+            if payload.seeds is None:
+                return
 
-        # Per-slot telemetry (emitted in vectorized training) updates alpha/stage live.
-        seeds = data.get("seeds")
-        if isinstance(seeds, dict):
-            for slot_id, info in seeds.items():
-                if not isinstance(slot_id, str) or not isinstance(info, dict):
-                    continue
+            for slot_id, info in payload.seeds.items():
                 stage = str(info.get("stage", "UNKNOWN"))
                 blueprint_id = str(info.get("blueprint_id", ""))
                 alpha = float(info.get("alpha", 0.0))
@@ -270,207 +296,224 @@ class TelemetryAggregator:
                     chip.blueprint_id = blueprint_id
                     chip.alpha = alpha
                     chip.epochs_in_stage = epochs_in_stage
+        else:
+            return
 
     def _handle_seed_germinated(self, event: "TelemetryEvent") -> None:
         """Handle SEED_GERMINATED event."""
-        data = event.data or {}
-        env_id = data.get("env_id")
-        slot_id = event.slot_id or data.get("slot_id", "unknown")
+        if isinstance(event.data, SeedGerminatedPayload):
+            payload = event.data
+            env_id = payload.env_id
+            # Event envelope slot_id is authoritative (set at emission time)
+            slot_id = event.slot_id
+            if not slot_id:
+                slot_id = payload.slot_id  # Fallback for legacy events
 
-        if env_id is None:
+            self._ensure_env(env_id)
+            self._envs[env_id].slots[slot_id] = SlotChipState(
+                slot_id=slot_id,
+                stage="GERMINATED",
+                blueprint_id=payload.blueprint_id,
+                alpha=payload.alpha,
+            )
+
+            self._add_feed_event(
+                event_type="GERM",
+                env_id=env_id,
+                message=f"{slot_id} germinated ({payload.blueprint_id})",
+                timestamp=event.timestamp,
+            )
+        else:
             return
-
-        self._ensure_env(env_id)
-        self._envs[env_id].slots[slot_id] = SlotChipState(
-            slot_id=slot_id,
-            stage="GERMINATED",
-            blueprint_id=data.get("blueprint_id", ""),
-            alpha=0.0,
-        )
-
-        self._add_feed_event(
-            event_type="GERM",
-            env_id=env_id,
-            message=f"{slot_id} germinated ({data.get('blueprint_id', '?')})",
-            timestamp=event.timestamp,
-        )
 
     def _handle_seed_stage_changed(self, event: "TelemetryEvent") -> None:
         """Handle SEED_STAGE_CHANGED event."""
-        data = event.data or {}
-        env_id = data.get("env_id")
-        slot_id = event.slot_id or data.get("slot_id")
+        if isinstance(event.data, SeedStageChangedPayload):
+            payload = event.data
+            env_id = payload.env_id
+            # Event envelope slot_id is authoritative (set at emission time)
+            slot_id = event.slot_id
+            if not slot_id:
+                slot_id = payload.slot_id  # Fallback for legacy events
 
-        if env_id is None or slot_id is None:
+            self._ensure_env(env_id)
+            if slot_id in self._envs[env_id].slots:
+                self._envs[env_id].slots[slot_id].stage = payload.to_stage
+                self._envs[env_id].slots[slot_id].epochs_in_stage = payload.epochs_in_stage
+
+            self._add_feed_event(
+                event_type="STAGE",
+                env_id=env_id,
+                message=f"{slot_id}: {payload.from_stage} -> {payload.to_stage}",
+                timestamp=event.timestamp,
+            )
+        else:
             return
-
-        self._ensure_env(env_id)
-        if slot_id in self._envs[env_id].slots:
-            self._envs[env_id].slots[slot_id].stage = data.get("to", "UNKNOWN")
-            self._envs[env_id].slots[slot_id].epochs_in_stage = 0
-
-        self._add_feed_event(
-            event_type="STAGE",
-            env_id=env_id,
-            message=f"{slot_id}: {data.get('from', '?')} -> {data.get('to', '?')}",
-            timestamp=event.timestamp,
-        )
 
     def _handle_seed_gate_evaluated(self, event: "TelemetryEvent") -> None:
         """Handle SEED_GATE_EVALUATED event."""
-        data = event.data or {}
-        env_id = data.get("env_id")
-        slot_id = event.slot_id or data.get("slot_id")
+        if isinstance(event.data, SeedGateEvaluatedPayload):
+            payload = event.data
+            env_id = payload.env_id
+            # Event envelope slot_id is authoritative (set at emission time)
+            slot_id = event.slot_id
+            if not slot_id:
+                slot_id = payload.slot_id  # Fallback for legacy events
 
-        if env_id is None or slot_id is None:
+            self._ensure_env(env_id)
+            if slot_id in self._envs[env_id].slots:
+                slot = self._envs[env_id].slots[slot_id]
+                slot.gate_last = payload.gate
+                slot.gate_passed = payload.passed
+
+            status = "PASS" if payload.passed else "FAIL"
+            self._add_feed_event(
+                event_type="GATE",
+                env_id=env_id,
+                message=f"{slot_id} {payload.gate}: {status}",
+                timestamp=event.timestamp,
+            )
+        else:
             return
-
-        self._ensure_env(env_id)
-        if slot_id in self._envs[env_id].slots:
-            slot = self._envs[env_id].slots[slot_id]
-            slot.gate_last = data.get("gate")
-            slot.gate_passed = data.get("passed")
-
-        status = "PASS" if data.get("passed") else "FAIL"
-        self._add_feed_event(
-            event_type="GATE",
-            env_id=env_id,
-            message=f"{slot_id} {data.get('gate', '?')}: {status}",
-            timestamp=event.timestamp,
-        )
 
     def _handle_seed_fossilized(self, event: "TelemetryEvent") -> None:
         """Handle SEED_FOSSILIZED event."""
-        data = event.data or {}
-        env_id = data.get("env_id")
-        slot_id = event.slot_id or data.get("slot_id")
+        if isinstance(event.data, SeedFossilizedPayload):
+            payload = event.data
+            env_id = payload.env_id
+            # Event envelope slot_id is authoritative (set at emission time)
+            slot_id = event.slot_id
+            if not slot_id:
+                slot_id = payload.slot_id  # Fallback for legacy events
 
-        if env_id is None or slot_id is None:
+            self._ensure_env(env_id)
+            if slot_id in self._envs[env_id].slots:
+                self._envs[env_id].slots[slot_id].stage = "FOSSILIZED"
+
+            self._add_feed_event(
+                event_type="STAGE",
+                env_id=env_id,
+                message=f"{slot_id} fossilized",
+                timestamp=event.timestamp,
+            )
+        else:
             return
-
-        self._ensure_env(env_id)
-        if slot_id in self._envs[env_id].slots:
-            self._envs[env_id].slots[slot_id].stage = "FOSSILIZED"
-
-        self._add_feed_event(
-            event_type="STAGE",
-            env_id=env_id,
-            message=f"{slot_id} fossilized",
-            timestamp=event.timestamp,
-        )
 
     def _handle_seed_pruned(self, event: "TelemetryEvent") -> None:
         """Handle SEED_PRUNED event."""
-        data = event.data or {}
-        env_id = data.get("env_id")
-        slot_id = event.slot_id or data.get("slot_id")
+        if isinstance(event.data, SeedPrunedPayload):
+            payload = event.data
+            env_id = payload.env_id
+            # Event envelope slot_id is authoritative (set at emission time)
+            slot_id = event.slot_id
+            if not slot_id:
+                slot_id = payload.slot_id  # Fallback for legacy events
 
-        if env_id is None or slot_id is None:
+            self._ensure_env(env_id)
+            if slot_id in self._envs[env_id].slots:
+                self._envs[env_id].slots[slot_id].stage = "PRUNED"
+
+            reason = payload.reason
+            self._add_feed_event(
+                event_type="PRUNE",
+                env_id=env_id,
+                message=f"{slot_id} pruned" + (f" ({reason})" if reason else ""),
+                timestamp=event.timestamp,
+            )
+        else:
             return
-
-        self._ensure_env(env_id)
-        if slot_id in self._envs[env_id].slots:
-            self._envs[env_id].slots[slot_id].stage = "PRUNED"
-
-        reason = data.get("reason", "")
-        self._add_feed_event(
-            event_type="PRUNE",
-            env_id=env_id,
-            message=f"{slot_id} pruned" + (f" ({reason})" if reason else ""),
-            timestamp=event.timestamp,
-        )
 
     def _handle_reward_computed(self, event: "TelemetryEvent") -> None:
         """Handle REWARD_COMPUTED event."""
-        data = event.data or {}
-        env_id = data.get("env_id")
+        if isinstance(event.data, RewardComputedPayload):
+            payload = event.data
+            env_id = payload.env_id
 
-        if env_id is None:
+            self._ensure_env(env_id)
+            self._envs[env_id].reward_last = payload.total_reward
+            if payload.val_acc is not None:
+                self._envs[env_id].task_metric = payload.val_acc
+        else:
             return
 
-        self._ensure_env(env_id)
-        self._envs[env_id].reward_last = data.get("total_reward", 0.0)
-        self._envs[env_id].task_metric = data.get("val_acc", 0.0)
-
     def _handle_governor_panic(self, event: "TelemetryEvent") -> None:
-        """Handle GOVERNOR_PANIC event."""
-        data = event.data or {}
-        self._add_feed_event(
-            event_type="CRIT",
-            env_id=None,
-            message=f"PANIC #{data.get('consecutive_panics', '?')}: loss={data.get('current_loss', '?')}",
-            timestamp=event.timestamp,
+        """Handle GOVERNOR_PANIC event.
+
+        Note: This event does not yet have a typed payload.
+        TODO: Create GovernorPanicPayload and migrate this handler.
+        """
+        # FAIL LOUDLY: Governor events need typed payloads
+        raise NotImplementedError(
+            "GOVERNOR_PANIC event received but GovernorPanicPayload not yet implemented. "
+            "This handler cannot process events until a typed payload is created."
         )
 
     def _handle_governor_rollback(self, event: "TelemetryEvent") -> None:
-        """Handle GOVERNOR_ROLLBACK event."""
-        data = event.data or {}
-        self._add_feed_event(
-            event_type="CRIT",
-            env_id=None,
-            message=f"ROLLBACK: {data.get('reason', 'unknown')}",
-            timestamp=event.timestamp,
+        """Handle GOVERNOR_ROLLBACK event.
+
+        Note: This event does not yet have a typed payload.
+        TODO: Create GovernorRollbackPayload and migrate this handler.
+        """
+        # FAIL LOUDLY: Governor events need typed payloads
+        raise NotImplementedError(
+            "GOVERNOR_ROLLBACK event received but GovernorRollbackPayload not yet implemented. "
+            "This handler cannot process events until a typed payload is created."
         )
 
     def _handle_analytics_snapshot(self, event: "TelemetryEvent") -> None:
         """Handle ANALYTICS_SNAPSHOT events (UI wiring for high-frequency metrics)."""
-        data = event.data or {}
-        kind = data.get("kind")
-
-        if kind == "throughput":
-            env_id = data.get("env_id")
-            if env_id is None:
-                return
-            self._ensure_env(env_id)
-            env = self._envs[env_id]
-            fps = data.get("fps")
-            if fps is not None:
-                env.throughput_fps = float(fps)
-            env.step_time_ms = float(data.get("step_time_ms", env.step_time_ms))
-            env.last_update_ts = self._last_event_ts
+        if not isinstance(event.data, AnalyticsSnapshotPayload):
+            _logger.warning(
+                "Expected AnalyticsSnapshotPayload for ANALYTICS_SNAPSHOT, got %s",
+                type(event.data).__name__,
+            )
             return
 
+        payload = event.data
+        kind = payload.kind
+
         if kind == "action_distribution":
-            action_counts = data.get("action_counts", {})
-            if isinstance(action_counts, dict):
+            if payload.action_counts is not None:
                 self._tamiyo.action_counts = {
-                    str(action): int(count) for action, count in action_counts.items()
+                    str(action): int(count) for action, count in payload.action_counts.items()
                 }
             return
 
         if kind == "last_action":
-            op = data.get("op")
-            if isinstance(op, str) and op:
-                code = op[0].upper()
-                if op.upper() == "WAIT":
-                    code = "W"
-                elif op.upper() == "GERMINATE":
-                    code = "G"
-                elif op.upper() == "PRUNE":
-                    code = "P"
-                elif op.upper() == "FOSSILIZE":
-                    code = "F"
-                elif op.upper() == "SET_ALPHA_TARGET":
-                    code = "A"
-                self._tamiyo.recent_actions.append(code)
-                self._tamiyo.recent_actions = self._tamiyo.recent_actions[-20:]
-                # Keep counts roughly in sync even before the batch-level summary arrives.
-                self._tamiyo.action_counts[op] = self._tamiyo.action_counts.get(op, 0) + 1
+            # Type contract: payload.action_name is str | None
+            if payload.action_name is None or not payload.action_name:
+                return
+
+            op = payload.action_name
+            code = op[0].upper()
+            if op.upper() == "WAIT":
+                code = "W"
+            elif op.upper() == "GERMINATE":
+                code = "G"
+            elif op.upper() == "PRUNE":
+                code = "P"
+            elif op.upper() == "FOSSILIZE":
+                code = "F"
+            elif op.upper() == "SET_ALPHA_TARGET":
+                code = "A"
+            self._tamiyo.recent_actions.append(code)
+            self._tamiyo.recent_actions = self._tamiyo.recent_actions[-20:]
+            # Keep counts roughly in sync even before the batch-level summary arrives.
+            self._tamiyo.action_counts[op] = self._tamiyo.action_counts.get(op, 0) + 1
             return
 
-        # Full-state sync snapshot (emitted even when PPO update is skipped).
-        if kind is None:
-            if "episodes_completed" in data:
-                self._episode = int(data.get("episodes_completed", self._episode))
-            if "batch" in data:
-                self._batch = int(data.get("batch", self._batch))
-
-            if "kl_divergence" in data:
-                self._tamiyo.kl_divergence = float(data.get("kl_divergence", 0.0))
-            if "entropy" in data:
-                self._tamiyo.entropy = float(data.get("entropy", 0.0))
-            if "value_variance" in data:
-                self._tamiyo.explained_variance = float(data.get("value_variance", 0.0))
+        if kind == "throughput":
+            env_id = payload.env_id
+            if env_id is not None:
+                self._ensure_env(env_id)
+                env = self._envs[env_id]
+                if payload.fps is not None:
+                    env.throughput_fps = payload.fps
+                if payload.step_time_ms is not None:
+                    env.step_time_ms = payload.step_time_ms
+                # Update staleness timestamp so flight-board shows fresh data
+                env.last_update_ts = self._last_event_ts
+            return
 
     # =========================================================================
     # Helpers

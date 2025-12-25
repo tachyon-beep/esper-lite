@@ -24,7 +24,13 @@ class _HasSeedParameters(Protocol):
         ...
 
 from esper.leyline.factored_actions import FactoredAction, LifecycleOp
-from esper.leyline import TelemetryEvent, TelemetryEventType
+from esper.leyline import (
+    TelemetryEvent,
+    TelemetryEventType,
+    TrainingStartedPayload,
+    EpochCompletedPayload,
+    AnalyticsSnapshotPayload,
+)
 # NOTE: get_task_spec imported lazily inside functions to avoid circular import:
 #   runtime -> simic.rewards -> simic -> simic.training -> helpers -> runtime
 from esper.simic.rewards import compute_contribution_reward, ContributionRewardConfig, SeedInfo
@@ -451,14 +457,22 @@ def run_heuristic_episode(
     # Emit TRAINING_STARTED to activate Karn (P1 fix)
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.TRAINING_STARTED,
-        data={
-            "episode_id": episode_id,
-            "seed": base_seed,
-            "max_epochs": max_epochs,
-            "task": task_spec.name,
-            "mode": "heuristic",
-            "host_params": host_params,
-        },
+        data=TrainingStartedPayload(
+            n_envs=1,
+            max_epochs=max_epochs,
+            task=task_spec.name,
+            host_params=host_params,
+            slot_ids=tuple(enabled_slots),
+            seed=base_seed,
+            n_episodes=1,
+            lr=task_spec.host_lr,
+            clip_ratio=0.2,
+            entropy_coef=0.01,
+            param_budget=0,
+            policy_device="cpu",
+            env_devices=("cpu",),
+            episode_id=episode_id,
+        ),
     ))
 
     criterion = nn.CrossEntropyLoss()
@@ -682,27 +696,12 @@ def run_heuristic_episode(
             event_type=TelemetryEventType.EPOCH_COMPLETED,
             epoch=epoch,
             seed_id=decision.target_seed_id,
-            data={
-                "env_id": 0,
-                "episode_id": episode_id,
-                "mode": "heuristic",
-                "task": task_spec.name,
-                "device": device,
-                "enabled_slots": enabled_slots,
-                "max_epochs": max_epochs,
-                "train_loss": train_loss,
-                "train_accuracy": train_acc,
-                "val_loss": val_loss,
-                "val_accuracy": val_acc,
-                "available_slots": available_slots,
-                "seeds_active": len(active_seeds),
-                "summary_seed_id": summary_seed_id,
-                "target_seed_id": decision.target_seed_id,
-                "action": decision.action.name,
-                "op": factored_action.op.name,
-                "reward": reward,
-                "plateau_detected": signals.metrics.plateau_epochs >= 3,
-            },
+            data=EpochCompletedPayload(
+                env_id=0,
+                val_accuracy=val_acc,
+                val_loss=val_loss,
+                inner_epoch=epoch,
+            ),
         ))
 
     return val_acc, action_counts, episode_rewards
@@ -754,30 +753,32 @@ def train_heuristic(
             event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
             severity="warning",
             message="Ops telemetry disabled; emitting lifecycle-only seed telemetry",
-            data={
-                "env_id": 0,
-                "mode": "heuristic",
-                "task": task_spec.name,
-                "device": device,
-                "telemetry_lifecycle_only": True,
-                "telemetry_level": telemetry_config.level.name if telemetry_config is not None else None,
-            },
+            data=AnalyticsSnapshotPayload(
+                kind="heuristic_warning",
+                env_id=0,
+                mode="heuristic",
+                task=task_spec.name,
+                device=device,
+                telemetry_lifecycle_only=True,
+                telemetry_level=telemetry_config.level.name if telemetry_config is not None else None,
+            ),
         ))
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
-        data={
-            "env_id": 0,
-            "mode": "heuristic",
-            "task": task_spec.name,
-            "topology": task_spec.topology,
-            "episodes": n_episodes,
-            "max_epochs": max_epochs,
-            "max_batches": max_batches,
-            "device": device,
-            "slots": slots,
-            "min_fossilize_improvement": min_fossilize_improvement,
-        },
         message="Heuristic training run configuration",
+        data=AnalyticsSnapshotPayload(
+            kind="heuristic_config",
+            env_id=0,
+            mode="heuristic",
+            task=task_spec.name,
+            topology=task_spec.topology,
+            episodes=n_episodes,
+            max_epochs=max_epochs,
+            max_batches=max_batches,
+            device=device,
+            slots=tuple(slots),
+            min_fossilize_improvement=min_fossilize_improvement,
+        ),
     ))
 
     trainloader, testloader = task_spec.create_dataloaders()
@@ -815,19 +816,20 @@ def train_heuristic(
         total_reward = sum(rewards)
         hub.emit(TelemetryEvent(
             event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
-            data={
-                "env_id": 0,
-                "mode": "heuristic",
-                "task": task_spec.name,
-                "episode_id": episode_id,
-                "episode": ep,
-                "episodes_total": n_episodes,
-                "base_seed": base_seed,
-                "final_accuracy": final_acc,
-                "total_reward": total_reward,
-                "action_counts": dict(action_counts),
-            },
             message="Heuristic episode completed",
+            data=AnalyticsSnapshotPayload(
+                kind="heuristic_episode",
+                env_id=0,
+                mode="heuristic",
+                task=task_spec.name,
+                episode_id=episode_id,
+                episode=ep,
+                episodes_total=n_episodes,
+                base_seed=base_seed,
+                final_accuracy=final_acc,
+                total_reward=total_reward,
+                action_counts={str(k): int(v) for k, v in action_counts.items()},
+            ),
         ))
 
         history.append({

@@ -1,6 +1,7 @@
 """Tests for OverwatchBackend."""
 
 from esper.leyline import TelemetryEvent, TelemetryEventType
+from esper.leyline.telemetry import TrainingStartedPayload
 from esper.karn.overwatch.backend import OverwatchBackend
 
 
@@ -23,7 +24,22 @@ class TestOverwatchBackend:
 
         event = TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"episode_id": "test-run", "task": "cifar10"},
+            data=TrainingStartedPayload(
+                n_envs=1,
+                max_epochs=75,
+                task="cifar10",
+                host_params=1000,
+                slot_ids=("r0c0",),
+                seed=42,
+                n_episodes=100,
+                lr=3e-4,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=100000,
+                policy_device="cuda:0",
+                env_devices=("cuda:0",),
+                episode_id="test-run",
+            ),
         )
         backend.emit(event)
 
@@ -38,7 +54,22 @@ class TestOverwatchBackend:
 
         backend.emit(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"episode_id": "test"},
+            data=TrainingStartedPayload(
+                n_envs=1,
+                max_epochs=75,
+                task="test",
+                host_params=1000,
+                slot_ids=("r0c0",),
+                seed=42,
+                n_episodes=100,
+                lr=3e-4,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=100000,
+                policy_device="cuda:0",
+                env_devices=("cuda:0",),
+                episode_id="test",
+            ),
         ))
 
         snapshot1 = backend.get_snapshot()

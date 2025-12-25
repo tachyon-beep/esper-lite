@@ -235,12 +235,39 @@ def obs_to_multislot_features(
         float(seed_utilization),  # New: resource management
     ]
 
+    # Slot field access patterns (P3 Audit 2025-12-25):
+    # REQUIRED (via direct access): obs["slots"], slots[slot_id]
+    # OPTIONAL (via .get() with defaults):
+    #   - alpha: 0.0 for inactive slots (safe default)
+    #   - alpha_target: defaults to current alpha (no transition)
+    #   - alpha_mode: HOLD (AlphaMode.HOLD.value) for no scheduled transition
+    #   - alpha_steps_total: 0 for no transition scheduled
+    #   - alpha_steps_done: 0 for no transition progress
+    #   - time_to_target: 0 for no transition
+    #   - alpha_velocity: 0.0 for static alpha
+    #   - alpha_algorithm: defaults to AlphaAlgorithm.ADD (min value) for composition mode
+    #   - interaction_sum: 0.0 for no topology/scaffolding
+    #   - boost_received: 0.0 for no topology/scaffolding
+    #   - upstream_alpha_sum: 0.0 for no topology/scaffolding
+    #   - downstream_alpha_sum: 0.0 for no topology/scaffolding
+    #   - stage: 0 for inactive (NOTE: active slots MUST have explicit stage from SeedStage enum)
+    #   - improvement: 0.0 for no contribution history
+    #   - contribution_velocity: 0.0 for no velocity history
+    #   - is_active: 0 for inactive slot
+    #   - blend_tempo_epochs: 5 default (safe fallback tempo)
+    #   - blueprint_id: None for no blueprint assignment
+    #
+    # DESIGN NOTE: All .get() defaults are safe for inactive/new slots. Active slots
+    # with missing required fields (stage, is_active=1) would indicate a bug in the
+    # slot state construction in kasmina/tamiyo, not a feature extraction issue.
+
     # Per-slot features (25 dims per slot, num_slots determined by slot_config)
     # 12 state features + 13 blueprint one-hot
     max_epochs_den = max(float(obs.get("max_epochs") or _DEFAULT_MAX_EPOCHS_DEN), 1.0)
     slot_features = []
+    slots = obs["slots"]  # KeyError if missing 'slots'
     for slot_id in slot_config.slot_ids:
-        slot = obs.get('slots', {}).get(slot_id, {})
+        slot = slots[slot_id]  # KeyError if slot_id missing
         alpha = safe(slot.get("alpha", 0.0), 0.0, max_val=1.0)
         alpha = max(0.0, alpha)  # safe() clamps symmetrically; alpha should be >= 0
         alpha_target = safe(slot.get("alpha_target", alpha), alpha, max_val=1.0)

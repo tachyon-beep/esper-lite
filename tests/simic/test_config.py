@@ -4,6 +4,7 @@ import inspect
 
 import pytest
 
+from esper.simic.rewards import RewardFamily, RewardMode
 from esper.simic.training import TrainingConfig
 from esper.simic.training.vectorized import train_ppo_vectorized
 
@@ -132,7 +133,32 @@ class TestTrainingConfigSerialization:
 
     def test_to_dict_roundtrip_preserves_enums(self):
         """Enum fields should serialize to values and back."""
-        original = TrainingConfig(reward_family="loss", reward_mode="shaped", slots=["r0c0", "r0c2"])
+        original = TrainingConfig(
+            reward_family=RewardFamily.LOSS,
+            reward_mode=RewardMode.SHAPED,
+            slots=["r0c0", "r0c2"],
+        )
         loaded = TrainingConfig.from_dict(original.to_dict())
         assert loaded.reward_family.value == "loss"
         assert loaded.slots == ["r0c0", "r0c2"]
+
+    def test_from_dict_coerces_strings_to_enums(self):
+        """from_dict should coerce string values to enums for external data."""
+        config = TrainingConfig.from_dict({
+            "reward_family": "loss",
+            "reward_mode": "shaped",
+        })
+        assert config.reward_family == RewardFamily.LOSS
+        assert config.reward_mode == RewardMode.SHAPED
+
+    def test_direct_construction_requires_enum_values(self):
+        """Direct TrainingConfig construction should not silently coerce strings.
+
+        This prevents bug-hiding: if you pass the wrong type, fail loudly.
+        Use from_dict() for external/JSON data that needs coercion.
+        """
+        # This will fail validation because strings don't have .value attribute
+        with pytest.raises((ValueError, AttributeError)):
+            config = TrainingConfig(reward_family="loss")
+            # _validate() checks reward_family.value, which fails on strings
+            _ = config.to_dict()  # Force access to trigger the error

@@ -57,3 +57,42 @@ class TestTUIThresholds:
 
     def test_entropy_critical_less_than_warning(self) -> None:
         assert TUIThresholds.ENTROPY_CRITICAL < TUIThresholds.ENTROPY_WARNING
+
+
+def test_explained_variance_thresholds_drl_correct():
+    """EV thresholds should follow DRL best practices.
+
+    Theory: EV=0 means value function explains nothing (useless baseline).
+    EV<0 means value function increases variance (actively harmful).
+    WARNING at 0.3, CRITICAL at 0.0 per DRL expert review.
+    """
+    from esper.karn.constants import TUIThresholds
+
+    # Warning: value function weak (not useless, but not helping much)
+    assert TUIThresholds.EXPLAINED_VAR_WARNING == 0.3
+
+    # Critical: value function useless or harmful
+    assert TUIThresholds.EXPLAINED_VAR_CRITICAL == 0.0
+
+
+def test_kl_thresholds_exist():
+    """KL divergence should have both warning and critical thresholds."""
+    from esper.karn.constants import TUIThresholds
+
+    assert hasattr(TUIThresholds, 'KL_WARNING')
+    assert hasattr(TUIThresholds, 'KL_CRITICAL')
+    assert TUIThresholds.KL_WARNING == 0.015
+    assert TUIThresholds.KL_CRITICAL == 0.03
+
+
+def test_advantage_thresholds_exist():
+    """Advantage std should have tiered thresholds."""
+    from esper.karn.constants import TUIThresholds
+
+    # Normal range: ~1.0 (normalized advantages)
+    # Warning: too high (>2.0) or too low (<0.5)
+    # Critical: extremely high (>3.0) or collapsed (<0.1)
+    assert TUIThresholds.ADVANTAGE_STD_WARNING == 2.0
+    assert TUIThresholds.ADVANTAGE_STD_CRITICAL == 3.0
+    assert TUIThresholds.ADVANTAGE_STD_LOW_WARNING == 0.5
+    assert TUIThresholds.ADVANTAGE_STD_COLLAPSED == 0.1

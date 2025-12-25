@@ -9,12 +9,11 @@ NOT embedded in right column. Event Log included at bottom-left.
 from __future__ import annotations
 
 import threading
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical
+from textual.containers import Container, Horizontal
 from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Input, Static
@@ -187,7 +186,7 @@ class SanctumApp(App):
         """Build the Sanctum layout.
 
         Layout structure:
-        - Run Header: Episode, Epoch, Batch, Runtime, Best Accuracy, Connection
+        - Run Header: Episode, Epoch, Batch, Runtime, Best Accuracy, Connection, A/B comparison
         - Anomaly Strip: Single-line automatic problem surfacing
         - Top row: EnvOverview (70%) | Scoreboard (30%)
         - Bottom row: TamiyoBrain (70%) | EventLog (30%)
@@ -211,9 +210,10 @@ class SanctumApp(App):
 
             # Bottom section: TamiyoBrain (left) | Event Log (right)
             with Horizontal(id="bottom-section"):
-                # Left side: TamiyoBrain (50%)
-                yield TamiyoBrain(id="tamiyo-brain")
-                # Right side: Event Log (50%)
+                # Left side: TamiyoBrain container (70%) - widgets created dynamically
+                with Horizontal(id="tamiyo-container"):
+                    pass  # TamiyoBrain widgets mounted dynamically
+                # Right side: Event Log (30%)
                 yield EventLog(id="event-log")
 
         yield Footer()
@@ -221,6 +221,79 @@ class SanctumApp(App):
     def on_mount(self) -> None:
         """Start refresh timer when app mounts."""
         self.set_interval(self._refresh_interval, self._poll_and_refresh)
+
+    def _get_or_create_tamiyo_widget(self, group_id: str) -> TamiyoBrain:
+        """Get or create TamiyoBrain widget for a policy group.
+
+        Args:
+            group_id: Policy group identifier (e.g., "A", "B", "default")
+
+        Returns:
+            TamiyoBrain widget for this group.
+        """
+        widget_id = f"tamiyo-{group_id.lower()}"
+        css_class = f"group-{group_id.lower()}"
+
+        try:
+            # Try to find existing widget
+            return self.query_one(f"#{widget_id}", TamiyoBrain)
+        except NoMatches:
+            # Create new widget and mount it
+            widget = TamiyoBrain(id=widget_id, classes=css_class)
+            try:
+                container = self.query_one("#tamiyo-container")
+                container.mount(widget)
+                return widget
+            except NoMatches:
+                self.log.warning(f"Cannot mount TamiyoBrain for {group_id}: container not found")
+                raise
+
+    def _refresh_tamiyo_widgets(self) -> None:
+        """Refresh TamiyoBrain widgets from backend's multi-group snapshots.
+
+        Creates widgets dynamically for each policy group. Handles both
+        single-policy mode (one widget) and A/B testing (two+ widgets).
+        """
+        snapshots = self._backend.get_all_snapshots()
+
+        # Handle empty case (no events yet) - create default widget
+        if not snapshots:
+            try:
+                widget = self._get_or_create_tamiyo_widget("default")
+                from esper.karn.sanctum.schema import SanctumSnapshot as SnapshotClass
+                widget.update_snapshot(SnapshotClass())
+            except NoMatches:
+                pass
+            return
+
+        # Create/update widget for each group
+        for group_id, group_snapshot in snapshots.items():
+            try:
+                widget = self._get_or_create_tamiyo_widget(group_id)
+                widget.update_snapshot(group_snapshot)
+            except NoMatches:
+                pass  # Container hasn't mounted yet
+            except Exception as e:
+                self.log.warning(f"Failed to update tamiyo widget for {group_id}: {e}")
+
+        # Update RunHeader with A/B comparison data when 2+ policies
+        if len(snapshots) >= 2:
+            try:
+                run_header = self.query_one("#run-header", RunHeader)
+                group_ids = sorted(snapshots.keys())
+                snapshot_a = snapshots[group_ids[0]]
+                snapshot_b = snapshots[group_ids[1]]
+
+                run_header.update_comparison(
+                    group_a_accuracy=snapshot_a.aggregate_mean_accuracy,
+                    group_b_accuracy=snapshot_b.aggregate_mean_accuracy,
+                    group_a_reward=snapshot_a.aggregate_mean_reward,
+                    group_b_reward=snapshot_b.aggregate_mean_reward,
+                )
+            except NoMatches:
+                pass
+            except Exception as e:
+                self.log.warning(f"Failed to update run header comparison: {e}")
 
     def _poll_and_refresh(self) -> None:
         """Poll backend for new snapshot and refresh all panels.
@@ -269,7 +342,7 @@ class SanctumApp(App):
         """Refresh all panels with new snapshot data.
 
         Args:
-            snapshot: The current telemetry snapshot.
+            snapshot: The current telemetry snapshot (for non-TamiyoBrain widgets).
         """
         # Update run header first (most important context)
         try:
@@ -302,12 +375,8 @@ class SanctumApp(App):
         except Exception as e:
             self.log.warning(f"Failed to update scoreboard: {e}")
 
-        try:
-            self.query_one("#tamiyo-brain", TamiyoBrain).update_snapshot(snapshot)
-        except NoMatches:
-            pass  # Widget hasn't mounted yet
-        except Exception as e:
-            self.log.warning(f"Failed to update tamiyo-brain: {e}")
+        # Update TamiyoBrain widgets using multi-group API
+        self._refresh_tamiyo_widgets()
 
         try:
             self.query_one("#event-log", EventLog).update_snapshot(snapshot)

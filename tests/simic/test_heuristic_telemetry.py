@@ -2,6 +2,7 @@
 
 
 from esper.leyline import TelemetryEvent, TelemetryEventType
+from esper.leyline.telemetry import TrainingStartedPayload
 
 
 class TestHeuristicTelemetry:
@@ -12,16 +13,27 @@ class TestHeuristicTelemetry:
         # This test documents the contract that heuristic training should emit
         # TRAINING_STARTED to activate Karn.
 
+        payload = TrainingStartedPayload(
+            n_envs=1,
+            max_epochs=75,
+            task="cifar10",
+            host_params=1000000,
+            slot_ids=("r0c0",),
+            seed=42,
+            n_episodes=100,
+            lr=0.0003,
+            clip_ratio=0.2,
+            entropy_coef=0.01,
+            param_budget=5000000,
+            policy_device="cpu",
+            env_devices=("cpu",),
+            episode_id="heur_42",
+        )
         event = TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={
-                "episode_id": "heur_42",
-                "seed": 42,
-                "max_epochs": 75,
-                "task": "cifar10",
-            }
+            data=payload,
         )
 
         assert event.event_type == TelemetryEventType.TRAINING_STARTED
-        assert "episode_id" in event.data
-        assert "max_epochs" in event.data
+        assert event.data.episode_id == "heur_42"
+        assert event.data.max_epochs == 75

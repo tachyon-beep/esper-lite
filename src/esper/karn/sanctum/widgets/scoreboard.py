@@ -15,7 +15,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from textual.binding import Binding
-from textual.containers import Vertical
 from textual.message import Message
 from textual.widgets import DataTable, Static
 

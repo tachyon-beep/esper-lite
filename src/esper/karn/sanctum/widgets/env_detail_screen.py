@@ -10,11 +10,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from rich.panel import Panel
-from rich.progress_bar import ProgressBar
 from rich.table import Table
 from rich.text import Text
 from textual.binding import Binding
-from textual.containers import Container, Grid, Horizontal, Vertical
+from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Static
 

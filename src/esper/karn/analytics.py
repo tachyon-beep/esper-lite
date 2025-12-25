@@ -21,6 +21,13 @@ Usage:
     contributions = analytics.slot_contributions()
 """
 
+# TODO: [DEAD CODE] - This entire module (500+ lines) is unused in production.
+# EpisodeAnalytics, EpisodeSummary, SlotSummary, TrajectoryPoint, ConvergenceInfo
+# are exported from karn/__init__.py but never imported anywhere else.
+# No training workflow instantiates EpisodeAnalytics. Either integrate into
+# post-training analysis workflow or delete this file entirely.
+# See: architectural risk assessment 2024-12-24.
+
 from __future__ import annotations
 
 import statistics
@@ -257,8 +264,11 @@ class EpisodeAnalytics:
             for slot_id, slot in snap.slots.items():
                 if slot_id not in contributions:
                     contributions[slot_id] = []
+                # Use explicit None check to distinguish "not computed" from "zero"
                 contributions[slot_id].append(
-                    slot.counterfactual_contribution or 0.0
+                    slot.counterfactual_contribution
+                    if slot.counterfactual_contribution is not None
+                    else 0.0
                 )
 
         return contributions

@@ -9,6 +9,7 @@ access from training thread (process_event) and UI thread (get_snapshot).
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 import uuid
@@ -18,6 +19,8 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 import psutil
+
+_logger = logging.getLogger(__name__)
 
 from esper.karn.sanctum.schema import (
     SanctumSnapshot,
@@ -34,9 +37,32 @@ from esper.karn.sanctum.schema import (
     CounterfactualConfig,
     CounterfactualSnapshot,
 )
+from esper.leyline import (
+    DEFAULT_GAMMA,
+    TrainingStartedPayload,
+    EpochCompletedPayload,
+    BatchEpochCompletedPayload,
+    PPOUpdatePayload,
+    RewardComputedPayload,
+    SeedGerminatedPayload,
+    SeedStageChangedPayload,
+    SeedFossilizedPayload,
+    SeedPrunedPayload,
+    CounterfactualMatrixPayload,
+    AnalyticsSnapshotPayload,
+)
 
 if TYPE_CHECKING:
     from esper.leyline import TelemetryEvent
+
+
+@dataclass
+class PendingDecision:
+    """Data needed to compute TD advantage when next V(s') arrives."""
+    decision: DecisionSnapshot
+    reward: float
+    value_s: float  # V(s) at decision time
+    env_id: int
 
 
 # Action normalization map: factored action names -> base action
@@ -73,6 +99,11 @@ def normalize_action(action: str) -> str:
         if action.startswith("WAIT"):
             return "WAIT"
     return normalized
+
+
+# Maximum decisions to keep for display
+# Must match TamiyoBrain._get_max_decision_cards() upper bound (8)
+MAX_DECISIONS = 8
 
 
 @dataclass
@@ -163,10 +194,14 @@ class SanctumAggregator:
     # Rolling average history (mean accuracy across all envs, updated per epoch)
     _mean_accuracy_history: deque[float] = field(default_factory=lambda: deque(maxlen=50))
 
+    # Pending decisions per env (for delayed TD advantage computation)
+    # When we get V(s') for env, we compute td_advantage for its pending decision
+    _pending_decisions: dict[int, PendingDecision] = field(default_factory=dict)
+
     # Thread safety
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Initialize state."""
         self._envs = {}
         self._event_log = deque(maxlen=self.max_event_log)
@@ -312,18 +347,18 @@ class SanctumAggregator:
             self._tamiyo.action_counts = aggregated_actions
             self._tamiyo.total_actions = total_actions
 
-        # Stable carousel: keep decisions for 30s minimum, never remove pinned
-        # Only expire if we have > 3 and oldest unpinned is > 30s old
+        # Carousel rotation: expire ONE oldest unpinned decision per cycle if > 30s old
+        # This runs every snapshot (250ms), creating natural stagger as each decision
+        # expires based on its individual timestamp, not batch replacement.
         decisions = self._tamiyo.recent_decisions
-        if len(decisions) > 3:
-            # Find oldest unpinned decision that's > 30s old
-            for i in range(len(decisions) - 1, -1, -1):
-                d = decisions[i]
+        for i in range(len(decisions) - 1, -1, -1):  # Iterate oldest-first
+            d = decisions[i]
+            if not d.pinned:
                 age = (now_dt - d.timestamp).total_seconds()
-                if not d.pinned and age > 30.0:
+                if age > 30.0:
                     decisions.pop(i)
-                    break
-            self._tamiyo.recent_decisions = decisions[:3]
+                    break  # Only expire ONE per cycle for smooth rotation
+        self._tamiyo.recent_decisions = decisions[:MAX_DECISIONS]
 
         # Get focused env's reward components for the detail panel
         focused_rewards = RewardComponents()
@@ -337,6 +372,38 @@ class SanctumAggregator:
         rewards = [e.current_reward for e in self._envs.values() if e.reward_history]
         mean_accuracy = sum(accuracies) / len(accuracies) if accuracies else 0.0
         mean_reward = sum(rewards) / len(rewards) if rewards else 0.0
+
+        # Aggregate slot states across all environments for TamiyoBrain slot summary
+        slot_stage_counts: dict[str, int] = {
+            "DORMANT": 0,
+            "GERMINATED": 0,
+            "TRAINING": 0,
+            "BLENDING": 0,
+            "HOLDING": 0,
+            "FOSSILIZED": 0,
+        }
+        total_epochs_in_stage = 0
+        non_dormant_count = 0
+
+        for env in self._envs.values():
+            for slot_id in self._slot_ids:
+                seed = env.seeds.get(slot_id)
+                if seed is None:
+                    slot_stage_counts["DORMANT"] += 1
+                else:
+                    stage = seed.stage
+                    if stage in slot_stage_counts:
+                        slot_stage_counts[stage] += 1
+                    else:
+                        # Handle transition states (PRUNED, EMBARGOED, RESETTING) as DORMANT
+                        slot_stage_counts["DORMANT"] += 1
+                    if stage != "DORMANT":
+                        total_epochs_in_stage += seed.epochs_in_stage
+                        non_dormant_count += 1
+
+        total_slots = len(self._envs) * len(self._slot_ids)
+        active_slots = total_slots - slot_stage_counts["DORMANT"]
+        avg_epochs = total_epochs_in_stage / non_dormant_count if non_dormant_count > 0 else 0.0
 
         return SanctumSnapshot(
             # Run context
@@ -379,6 +446,11 @@ class SanctumAggregator:
             cumulative_blueprint_spawns=dict(self._cumulative_blueprint_spawns),
             cumulative_blueprint_fossilized=dict(self._cumulative_blueprint_fossilized),
             cumulative_blueprint_prunes=dict(self._cumulative_blueprint_prunes),
+            # Aggregate slot state across all environments
+            slot_stage_counts=slot_stage_counts,
+            total_slots=total_slots,
+            active_slots=active_slots,
+            avg_epochs_in_stage=avg_epochs,
         )
 
     # =========================================================================
@@ -387,61 +459,62 @@ class SanctumAggregator:
 
     def _handle_training_started(self, event: "TelemetryEvent") -> None:
         """Handle TRAINING_STARTED event."""
-        data = event.data or {}
-        self._run_id = data.get("episode_id", "")
-        self._task_name = data.get("task", "")
-        self._max_epochs = data.get("max_epochs", 75)
+        if not isinstance(event.data, TrainingStartedPayload):
+            _logger.warning(
+                "Expected TrainingStartedPayload for TRAINING_STARTED, got %s",
+                type(event.data).__name__,
+            )
+            return
+
+        payload = event.data
+        self._run_id = payload.episode_id
+        self._task_name = payload.task
+        self._max_epochs = payload.max_epochs
         self._connected = True
         self._start_time = time.time()
-        start_episode = data.get("start_episode", 0)
-        self._current_episode = int(start_episode) if isinstance(start_episode, (int, float)) else 0
+        self._current_episode = payload.start_episode
         self._current_epoch = 0
 
         # Capture GPU devices
-        env_devices = data.get("env_devices", [])
-        policy_device = data.get("policy_device", "")
         all_devices = []
-        if policy_device:
-            all_devices.append(policy_device)
-        for dev in env_devices:
+        if payload.policy_device:
+            all_devices.append(payload.policy_device)
+        for dev in payload.env_devices:
             if dev not in all_devices:
                 all_devices.append(dev)
         self._gpu_devices = all_devices
 
         # Initialize num_envs from event
-        n_envs = data.get("n_envs", self.num_envs)
-        self.num_envs = n_envs
+        self.num_envs = payload.n_envs
 
         # Capture host params baseline (for growth_ratio calculation)
-        self._host_params = data.get("host_params", 0)
+        self._host_params = payload.host_params
         self._vitals.host_params = self._host_params
 
         # Capture reward mode for A/B test cohort display
-        self._reward_mode = data.get("reward_mode", "")
+        self._reward_mode = payload.reward_mode
 
         # Capture hyperparameters for run header display
+        if payload.entropy_anneal is None:
+            _logger.warning("TRAINING_STARTED missing entropy_anneal config")
+            entropy_anneal_config = {}
+        else:
+            entropy_anneal_config = payload.entropy_anneal
+
         self._run_config = RunConfig(
-            seed=data.get("seed"),
-            n_episodes=data.get("n_episodes", 0),
-            lr=data.get("lr", 0.0),
-            clip_ratio=data.get("clip_ratio", 0.2),
-            entropy_coef=data.get("entropy_coef", 0.01),
-            param_budget=data.get("param_budget", 0),
-            resume_path=data.get("resume_path", ""),
-            entropy_anneal=data.get("entropy_anneal") or {},
+            seed=payload.seed,
+            n_episodes=payload.n_episodes,
+            lr=payload.lr,
+            clip_ratio=payload.clip_ratio,
+            entropy_coef=payload.entropy_coef,
+            param_budget=payload.param_budget,
+            resume_path=payload.resume_path,
+            entropy_anneal=entropy_anneal_config,
         )
 
-        # Capture slot configuration from event (if provided)
-        # Falls back to default 2x2 grid if not specified
-        slot_ids = data.get("slot_ids")
-        if slot_ids and isinstance(slot_ids, (list, tuple)):
-            self._slot_ids = list(slot_ids)
-            self._slot_ids_locked = True  # Lock - don't add more dynamically
-        else:
-            # Default to 2x2 grid (r0c0, r0c1, r1c0, r1c1)
-            from esper.leyline.slot_id import format_slot_id
-            self._slot_ids = [format_slot_id(r, c) for r in range(2) for c in range(2)]
-            self._slot_ids_locked = False  # Allow dynamic discovery
+        # Capture slot configuration from event
+        self._slot_ids = list(payload.slot_ids)
+        self._slot_ids_locked = True  # Lock - don't add more dynamically
 
         # Reset and recreate env states
         self._envs.clear()
@@ -461,23 +534,23 @@ class SanctumAggregator:
         Batch-level events now use BATCH_EPOCH_COMPLETED, but we still skip
         any event missing env_id as a defensive measure.
         """
-        data = event.data or {}
-
-        # Belt-and-suspenders: skip events without env_id
-        # Batch-level events now use BATCH_EPOCH_COMPLETED, but if any legacy
-        # EPOCH_COMPLETED without env_id arrives, don't corrupt env 0's tracking
-        if "env_id" not in data:
+        if not isinstance(event.data, EpochCompletedPayload):
+            _logger.warning(
+                "Expected EpochCompletedPayload for EPOCH_COMPLETED, got %s",
+                type(event.data).__name__,
+            )
             return
 
-        env_id = data["env_id"]
+        payload = event.data
 
+        env_id = payload.env_id
         self._ensure_env(env_id)
         env = self._envs[env_id]
 
         # Update accuracy
-        val_acc = data.get("val_accuracy", 0.0)
-        val_loss = data.get("val_loss", 0.0)
-        inner_epoch = data.get("inner_epoch", data.get("epoch", 0))
+        val_acc = payload.val_accuracy
+        val_loss = payload.val_loss
+        inner_epoch = payload.inner_epoch
 
         env.host_loss = val_loss
         env.current_epoch = inner_epoch
@@ -486,15 +559,19 @@ class SanctumAggregator:
         self._current_epoch = inner_epoch
 
         # Update per-seed telemetry from EPOCH_COMPLETED event
-        # This provides per-tick accuracy_delta updates for all active seeds
-        seeds_data = data.get("seeds", {})
+        # Note: seeds is dict[str, dict[str, Any]] - inner dicts remain untyped
+        if payload.seeds is None:
+            _logger.warning("EPOCH_COMPLETED missing seeds telemetry")
+            seeds_data = {}
+        else:
+            seeds_data = payload.seeds
         for slot_id, seed_telemetry in seeds_data.items():
             # Ensure seed exists
             if slot_id not in env.seeds:
                 env.seeds[slot_id] = SeedState(slot_id=slot_id)
             seed = env.seeds[slot_id]
 
-            # Update from telemetry
+            # Update from telemetry (using .get() on inner dict is intentional)
             seed.stage = seed_telemetry.get("stage", seed.stage)
             seed.blueprint_id = seed_telemetry.get("blueprint_id", seed.blueprint_id)
             seed.accuracy_delta = seed_telemetry.get("accuracy_delta", seed.accuracy_delta)
@@ -509,9 +586,7 @@ class SanctumAggregator:
                 self._slot_ids.append(slot_id)
                 self._slot_ids.sort()
 
-        # Update accuracy AFTER seeds are refreshed so best_seeds snapshots are accurate.
-        # Episode numbering: BATCH_EPOCH_COMPLETED increments episodes_completed by envs_this_batch,
-        # so the absolute episode for this env is base + env_id.
+        # Update accuracy AFTER seeds are refreshed
         episode_id = self._current_episode + env_id
         env.add_accuracy(val_acc, inner_epoch, episode=episode_id)
 
@@ -525,149 +600,218 @@ class SanctumAggregator:
 
     def _handle_ppo_update(self, event: "TelemetryEvent") -> None:
         """Handle PPO_UPDATE_COMPLETED event."""
-        data = event.data or {}
+        if not isinstance(event.data, PPOUpdatePayload):
+            _logger.warning(
+                "Expected PPOUpdatePayload for PPO_UPDATE_COMPLETED, got %s",
+                type(event.data).__name__,
+            )
+            return
 
-        if data.get("skipped"):
+        payload = event.data
+
+        if payload.skipped:
             return
 
         # Mark that we've received PPO data (enables TamiyoBrain display)
         self._tamiyo.ppo_data_received = True
 
-        # Update Tamiyo state with all PPO metrics
-        self._tamiyo.entropy = data.get("entropy", 0.0)
-        self._tamiyo.clip_fraction = data.get("clip_fraction", 0.0)
-        self._tamiyo.explained_variance = data.get("explained_variance", 0.0)
-        self._tamiyo.kl_divergence = data.get("kl_divergence", 0.0)
+        # A/B testing group identification
+        group_id = event.group_id
+        if group_id and group_id != "default":
+            self._tamiyo.group_id = group_id
 
-        # Losses
-        self._tamiyo.policy_loss = data.get("policy_loss", 0.0)
-        self._tamiyo.value_loss = data.get("value_loss", 0.0)
-        self._tamiyo.entropy_loss = data.get("entropy_loss", 0.0)
-        self._tamiyo.grad_norm = data.get("grad_norm", 0.0)
+        # Update Tamiyo state with all PPO metrics AND append to history
+        policy_loss = payload.policy_loss
+        self._tamiyo.policy_loss = policy_loss
+        self._tamiyo.policy_loss_history.append(policy_loss)
 
-        # Advantage stats
-        self._tamiyo.advantage_mean = data.get("advantage_mean", 0.0)
-        self._tamiyo.advantage_std = data.get("advantage_std", 0.0)
+        value_loss = payload.value_loss
+        self._tamiyo.value_loss = value_loss
+        self._tamiyo.value_loss_history.append(value_loss)
 
-        # Ratio statistics (PPO importance sampling ratios)
-        self._tamiyo.ratio_mean = data.get("ratio_mean", 1.0)
-        self._tamiyo.ratio_min = data.get("ratio_min", 1.0)
-        self._tamiyo.ratio_max = data.get("ratio_max", 1.0)
-        self._tamiyo.ratio_std = data.get("ratio_std", 0.0)
+        entropy = payload.entropy
+        self._tamiyo.entropy = entropy
+        self._tamiyo.entropy_history.append(entropy)
 
-        # Learning rate and entropy coefficient
-        self._tamiyo.learning_rate = data.get("lr")
-        self._tamiyo.entropy_coef = data.get("entropy_coef", 0.0)
+        # Optional field with None - use explicit check to distinguish None from 0.0
+        explained_variance = (
+            payload.explained_variance if payload.explained_variance is not None else 0.0
+        )
+        self._tamiyo.explained_variance = explained_variance
+        self._tamiyo.explained_variance_history.append(explained_variance)
 
-        # Gradient health
-        self._tamiyo.dead_layers = data.get("dead_layers", 0)
-        self._tamiyo.exploding_layers = data.get("exploding_layers", 0)
-        self._tamiyo.nan_grad_count = data.get("nan_grad_count", 0)
-        layer_health = data.get("layer_gradient_health")
-        if layer_health is not None:
-            self._tamiyo.layer_gradient_health = layer_health
-        self._tamiyo.entropy_collapsed = data.get("entropy_collapsed", False)
+        grad_norm = payload.grad_norm
+        self._tamiyo.grad_norm = grad_norm
+        self._tamiyo.grad_norm_history.append(grad_norm)
 
-        # Performance timing
-        self._tamiyo.update_time_ms = data.get("update_time_ms", 0.0)
-        self._tamiyo.early_stop_epoch = data.get("early_stop_epoch")
+        kl_divergence = payload.kl_divergence
+        self._tamiyo.kl_divergence = kl_divergence
+        self._tamiyo.kl_divergence_history.append(kl_divergence)
 
-        # Per-head entropy and gradient norms
-        self._tamiyo.head_slot_entropy = data.get("head_slot_entropy", 0.0)
-        self._tamiyo.head_slot_grad_norm = data.get("head_slot_grad_norm", 0.0)
-        self._tamiyo.head_blueprint_entropy = data.get("head_blueprint_entropy", 0.0)
-        self._tamiyo.head_blueprint_grad_norm = data.get("head_blueprint_grad_norm", 0.0)
+        clip_fraction = payload.clip_fraction
+        self._tamiyo.clip_fraction = clip_fraction
+        self._tamiyo.clip_fraction_history.append(clip_fraction)
 
-        # PPO inner loop context
-        self._tamiyo.inner_epoch = data.get("inner_epoch", 0)
-        self._tamiyo.ppo_batch = data.get("batch", 0)
+        # Other losses (no history tracking) - has default
+        self._tamiyo.entropy_loss = payload.entropy_loss
+
+        # Advantage stats - have defaults
+        self._tamiyo.advantage_mean = payload.advantage_mean
+        self._tamiyo.advantage_std = payload.advantage_std
+
+        # Ratio statistics (PPO importance sampling ratios) - have defaults
+        self._tamiyo.ratio_mean = payload.ratio_mean
+        self._tamiyo.ratio_min = payload.ratio_min
+        self._tamiyo.ratio_max = payload.ratio_max
+        self._tamiyo.ratio_std = payload.ratio_std
+
+        # Learning rate and entropy coefficient - optional with None
+        if payload.lr is not None:
+            self._tamiyo.learning_rate = payload.lr
+
+        if payload.entropy_coef is not None:
+            self._tamiyo.entropy_coef = payload.entropy_coef
+
+        # Gradient health - have defaults
+        self._tamiyo.dead_layers = payload.dead_layers
+        self._tamiyo.exploding_layers = payload.exploding_layers
+        self._tamiyo.nan_grad_count = payload.nan_grad_count
+        if payload.layer_gradient_health is not None:
+            self._tamiyo.layer_gradient_health = payload.layer_gradient_health
+        self._tamiyo.entropy_collapsed = payload.entropy_collapsed
+
+        # Performance timing - have defaults
+        self._tamiyo.update_time_ms = payload.update_time_ms
+        self._tamiyo.early_stop_epoch = payload.early_stop_epoch
+
+        # Per-head entropy and gradient norms - optional with None
+        if payload.head_slot_entropy is not None:
+            self._tamiyo.head_slot_entropy = payload.head_slot_entropy
+        if payload.head_slot_grad_norm is not None:
+            self._tamiyo.head_slot_grad_norm = payload.head_slot_grad_norm
+        if payload.head_blueprint_entropy is not None:
+            self._tamiyo.head_blueprint_entropy = payload.head_blueprint_entropy
+        if payload.head_blueprint_grad_norm is not None:
+            self._tamiyo.head_blueprint_grad_norm = payload.head_blueprint_grad_norm
+
+        # Per-head entropies (for heatmap visualization) - optional with None
+        if payload.head_style_entropy is not None:
+            self._tamiyo.head_style_entropy = payload.head_style_entropy
+        if payload.head_tempo_entropy is not None:
+            self._tamiyo.head_tempo_entropy = payload.head_tempo_entropy
+        if payload.head_alpha_target_entropy is not None:
+            self._tamiyo.head_alpha_target_entropy = payload.head_alpha_target_entropy
+        if payload.head_alpha_speed_entropy is not None:
+            self._tamiyo.head_alpha_speed_entropy = payload.head_alpha_speed_entropy
+        if payload.head_alpha_curve_entropy is not None:
+            self._tamiyo.head_alpha_curve_entropy = payload.head_alpha_curve_entropy
+        if payload.head_op_entropy is not None:
+            self._tamiyo.head_op_entropy = payload.head_op_entropy
+
+        # PPO inner loop context - have defaults
+        self._tamiyo.inner_epoch = payload.inner_epoch
+        self._tamiyo.ppo_batch = payload.batch
 
     def _handle_reward_computed(self, event: "TelemetryEvent") -> None:
         """Handle REWARD_COMPUTED event with per-env routing."""
-        data = event.data or {}
-        env_id = data.get("env_id", 0)
-        epoch = event.epoch or 0
+        if not isinstance(event.data, RewardComputedPayload):
+            _logger.warning(
+                "Expected RewardComputedPayload for REWARD_COMPUTED, got %s",
+                type(event.data).__name__,
+            )
+            return
+
+        payload = event.data
+        env_id = payload.env_id
+        epoch = event.epoch if event.epoch is not None else 0
 
         self._ensure_env(env_id)
         env = self._envs[env_id]
 
         # Update reward tracking
-        total_reward = data.get("total_reward", 0.0)
+        total_reward = payload.total_reward
         env.reward_history.append(total_reward)
         env.current_epoch = epoch
 
         # Update action tracking (with normalization)
-        action_name = normalize_action(data.get("action_name", "WAIT"))
+        action_name = normalize_action(payload.action_name)
         env.action_history.append(action_name)
         env.action_counts[action_name] = env.action_counts.get(action_name, 0) + 1
         env.total_actions += 1
 
-        # Capture A/B test cohort (for color coding in TUI)
-        # ab_group is emitted by vectorized training when --ab-test is used
-        ab_group = data.get("ab_group")
-        if ab_group:
-            env.reward_mode = ab_group
+        # Capture A/B test cohort
+        if payload.ab_group:
+            env.reward_mode = payload.ab_group
 
-        # Store reward component breakdown
+        # Store reward component breakdown - provide defaults for None values
         env.reward_components = RewardComponents(
-            base_acc_delta=data.get("base_acc_delta", 0.0),
-            bounded_attribution=data.get("bounded_attribution", 0.0),
-            seed_contribution=data.get("seed_contribution", 0.0),
-            compute_rent=data.get("compute_rent", 0.0),
-            alpha_shock=data.get("alpha_shock", 0.0),
-            ratio_penalty=data.get("ratio_penalty", 0.0),
-            stage_bonus=data.get("stage_bonus", 0.0),
-            fossilize_terminal_bonus=data.get("fossilize_terminal_bonus", 0.0),
-            blending_warning=data.get("blending_warning", 0.0),
-            holding_warning=data.get("holding_warning", 0.0),
-            val_acc=data.get("val_acc", env.host_accuracy),
+            base_acc_delta=payload.base_acc_delta if payload.base_acc_delta is not None else 0.0,
+            bounded_attribution=payload.bounded_attribution if payload.bounded_attribution is not None else 0.0,
+            seed_contribution=payload.seed_contribution if payload.seed_contribution is not None else 0.0,
+            compute_rent=payload.compute_rent if payload.compute_rent is not None else 0.0,
+            alpha_shock=payload.alpha_shock if payload.alpha_shock is not None else 0.0,
+            ratio_penalty=payload.ratio_penalty if payload.ratio_penalty is not None else 0.0,
+            stage_bonus=payload.stage_bonus if payload.stage_bonus is not None else 0.0,
+            fossilize_terminal_bonus=payload.fossilize_terminal_bonus if payload.fossilize_terminal_bonus is not None else 0.0,
+            blending_warning=payload.blending_warning if payload.blending_warning is not None else 0.0,
+            holding_warning=payload.holding_warning if payload.holding_warning is not None else 0.0,
+            val_acc=payload.val_acc if payload.val_acc is not None else env.host_accuracy,
             total=total_reward,
             last_action=action_name,
             env_id=env_id,
         )
 
         # Capture decision snapshot
-        # Only capture if we have decision data (action_confidence present)
-        if "action_confidence" in data:
-            now_dt = event.timestamp or datetime.now(timezone.utc)
-            decision = DecisionSnapshot(
-                timestamp=now_dt,
-                slot_states=data.get("slot_states", {}),
-                host_accuracy=data.get("host_accuracy", env.host_accuracy),
-                chosen_action=action_name,
-                chosen_slot=data.get("action_slot"),
-                confidence=data.get("action_confidence", 0.0),
-                expected_value=data.get("value_estimate", 0.0),
-                actual_reward=total_reward,
-                alternatives=data.get("alternatives", []),
-                decision_id=str(uuid.uuid4())[:8],  # Short unique ID for pinning
-            )
+        now_dt = event.timestamp or datetime.now(timezone.utc)
+        value_s = payload.value_estimate
 
-            # Stable carousel: only add if we can make room
-            # - If < 3 decisions: always add
-            # - If 3 decisions: only replace oldest unpinned if > 30s old
-            decisions = self._tamiyo.recent_decisions
-            can_add = len(decisions) < 3
+        # Compute TD advantage for previous decision from this env
+        if env_id in self._pending_decisions:
+            pending = self._pending_decisions[env_id]
+            td_adv = pending.reward + DEFAULT_GAMMA * value_s - pending.value_s
+            pending.decision.td_advantage = td_adv
+            del self._pending_decisions[env_id]
 
-            if not can_add and len(decisions) >= 3:
-                # Find oldest unpinned decision
-                for i in range(len(decisions) - 1, -1, -1):
-                    d = decisions[i]
-                    if not d.pinned:
-                        age = (now_dt - d.timestamp).total_seconds()
-                        if age > 30.0:
-                            # Remove oldest unpinned, make room
-                            decisions.pop(i)
-                            can_add = True
-                        break
+        # Convert slot_states from dict[str, dict[str, Any]] to dict[str, str] for display
+        slot_states_display: dict[str, str] = {}
+        if payload.slot_states:
+            for slot_id, state_dict in payload.slot_states.items():
+                # Format: "Training 12%" or "Empty" etc.
+                slot_states_display[slot_id] = str(state_dict)  # Simple string conversion for now
 
-            if can_add:
-                decisions.insert(0, decision)
-                # Cap at 3 (shouldn't exceed, but safety)
-                self._tamiyo.recent_decisions = decisions[:3]
+        # Alternatives are already list[tuple[str, float]] from payload
+        alternatives_list: list[tuple[str, float]] = list(payload.alternatives) if payload.alternatives else []
 
-            # Also keep last_decision for backwards compatibility
-            self._tamiyo.last_decision = decision
+        decision = DecisionSnapshot(
+            timestamp=now_dt,
+            slot_states=slot_states_display,
+            host_accuracy=payload.host_accuracy or env.host_accuracy,
+            chosen_action=action_name,
+            chosen_slot=payload.action_slot,
+            confidence=payload.action_confidence,
+            expected_value=value_s,
+            actual_reward=total_reward,
+            alternatives=alternatives_list,
+            decision_id=str(uuid.uuid4())[:8],
+            decision_entropy=payload.decision_entropy if payload.decision_entropy is not None else 0.0,
+            env_id=env_id,
+            value_residual=total_reward - value_s,
+            td_advantage=None,
+        )
+
+        # Store as pending for TD advantage computation on next decision
+        self._pending_decisions[env_id] = PendingDecision(
+            decision=decision,
+            reward=total_reward,
+            value_s=value_s,
+            env_id=env_id,
+        )
+
+        # Add decision if room available
+        decisions = self._tamiyo.recent_decisions
+        if len(decisions) < MAX_DECISIONS:
+            decisions.insert(0, decision)
+            self._tamiyo.recent_decisions = decisions
 
         # Track focused env for reward panel
         self._focused_env_id = env_id
@@ -676,95 +820,139 @@ class SanctumAggregator:
 
     def _handle_seed_event(self, event: "TelemetryEvent", event_type: str) -> None:
         """Handle seed lifecycle events with per-env tracking."""
-        data = event.data or {}
-        slot_id = event.slot_id or data.get("slot_id", "unknown")
-        env_id = data.get("env_id", 0)
+        # Type-safe payload access with type switching based on event_type
+        if event_type == "SEED_GERMINATED" and isinstance(event.data, SeedGerminatedPayload):
+            germinated_payload = event.data
+            slot_id = event.slot_id or germinated_payload.slot_id
+            env_id = germinated_payload.env_id
 
-        self._ensure_env(env_id)
-        env = self._envs[env_id]
+            self._ensure_env(env_id)
+            env = self._envs[env_id]
 
-        # Dynamically track slot_ids (only if not locked by TRAINING_STARTED)
-        if not self._slot_ids_locked and slot_id and slot_id not in self._slot_ids and slot_id != "unknown":
-            self._slot_ids.append(slot_id)
-            # Keep sorted for consistent column order
-            self._slot_ids.sort()
+            # Dynamically track slot_ids
+            if not self._slot_ids_locked and slot_id and slot_id not in self._slot_ids and slot_id != "unknown":
+                self._slot_ids.append(slot_id)
+                self._slot_ids.sort()
 
-        # Get or create seed state
-        if slot_id not in env.seeds:
-            env.seeds[slot_id] = SeedState(slot_id=slot_id)
-        seed = env.seeds[slot_id]
+            # Get or create seed state
+            if slot_id not in env.seeds:
+                env.seeds[slot_id] = SeedState(slot_id=slot_id)
+            seed = env.seeds[slot_id]
 
-        # Capture alpha from ALL seed events
-        if "alpha" in data:
-            seed.alpha = data["alpha"]
-
-        if event_type == "SEED_GERMINATED":
+            # Update from payload - all have defaults
             seed.stage = "GERMINATED"
-            seed.blueprint_id = data.get("blueprint_id")
-            seed.seed_params = data.get("params", seed.seed_params)
-            seed.grad_ratio = data.get("grad_ratio", seed.grad_ratio)
-            seed.has_vanishing = data.get("has_vanishing", False)
-            seed.has_exploding = data.get("has_exploding", False)
-            seed.epochs_in_stage = data.get("epochs_in_stage", 0)
-            seed.blend_tempo_epochs = data.get("blend_tempo_epochs", 5)
+            seed.blueprint_id = germinated_payload.blueprint_id
+            seed.seed_params = germinated_payload.params
+            seed.grad_ratio = germinated_payload.grad_ratio
+            seed.has_vanishing = germinated_payload.has_vanishing
+            seed.has_exploding = germinated_payload.has_exploding
+            seed.epochs_in_stage = germinated_payload.epochs_in_stage
+            seed.blend_tempo_epochs = germinated_payload.blend_tempo_epochs
+            seed.alpha = germinated_payload.alpha
             env.active_seed_count += 1
-            # Track blueprint spawn for graveyard (per-episode and cumulative)
-            if seed.blueprint_id:
-                env.blueprint_spawns[seed.blueprint_id] = (
-                    env.blueprint_spawns.get(seed.blueprint_id, 0) + 1
-                )
-                self._cumulative_blueprint_spawns[seed.blueprint_id] = (
-                    self._cumulative_blueprint_spawns.get(seed.blueprint_id, 0) + 1
-                )
 
-        elif event_type == "SEED_STAGE_CHANGED":
-            seed.stage = data.get("to", seed.stage)
-            seed.grad_ratio = data.get("grad_ratio", seed.grad_ratio)
-            seed.has_vanishing = data.get("has_vanishing", seed.has_vanishing)
-            seed.has_exploding = data.get("has_exploding", seed.has_exploding)
-            seed.epochs_in_stage = data.get("epochs_in_stage", 0)
-            # Capture accuracy_delta from enhanced telemetry
-            if "accuracy_delta" in data:
-                seed.accuracy_delta = data["accuracy_delta"]
+            # Track blueprint spawn for graveyard
+            env.blueprint_spawns[seed.blueprint_id] = (
+                env.blueprint_spawns.get(seed.blueprint_id, 0) + 1
+            )
+            self._cumulative_blueprint_spawns[seed.blueprint_id] = (
+                self._cumulative_blueprint_spawns.get(seed.blueprint_id, 0) + 1
+            )
 
-        elif event_type == "SEED_FOSSILIZED":
+        elif event_type == "SEED_STAGE_CHANGED" and isinstance(event.data, SeedStageChangedPayload):
+            stage_changed_payload = event.data
+            slot_id = event.slot_id or stage_changed_payload.slot_id
+            env_id = stage_changed_payload.env_id
+
+            self._ensure_env(env_id)
+            env = self._envs[env_id]
+
+            # Dynamically track slot_ids
+            if not self._slot_ids_locked and slot_id and slot_id not in self._slot_ids and slot_id != "unknown":
+                self._slot_ids.append(slot_id)
+                self._slot_ids.sort()
+
+            # Get or create seed state
+            if slot_id not in env.seeds:
+                env.seeds[slot_id] = SeedState(slot_id=slot_id)
+            seed = env.seeds[slot_id]
+
+            # Update from payload - note: from_stage and to_stage field names
+            seed.stage = stage_changed_payload.to_stage
+            seed.grad_ratio = stage_changed_payload.grad_ratio
+            seed.has_vanishing = stage_changed_payload.has_vanishing
+            seed.has_exploding = stage_changed_payload.has_exploding
+            seed.epochs_in_stage = stage_changed_payload.epochs_in_stage
+            seed.accuracy_delta = stage_changed_payload.accuracy_delta
+            if stage_changed_payload.alpha is not None:
+                seed.alpha = stage_changed_payload.alpha
+
+        elif event_type == "SEED_FOSSILIZED" and isinstance(event.data, SeedFossilizedPayload):
+            fossilized_payload = event.data
+            slot_id = event.slot_id or fossilized_payload.slot_id
+            env_id = fossilized_payload.env_id
+
+            self._ensure_env(env_id)
+            env = self._envs[env_id]
+
+            # Dynamically track slot_ids
+            if not self._slot_ids_locked and slot_id and slot_id not in self._slot_ids and slot_id != "unknown":
+                self._slot_ids.append(slot_id)
+                self._slot_ids.sort()
+
+            # Get or create seed state
+            if slot_id not in env.seeds:
+                env.seeds[slot_id] = SeedState(slot_id=slot_id)
+            seed = env.seeds[slot_id]
+
+            # Update from payload
             seed.stage = "FOSSILIZED"
-            # Capture fossilization context (P1/P2 telemetry gap fix)
-            seed.improvement = data.get("improvement", 0.0)
-            seed.blueprint_id = data.get("blueprint_id") or seed.blueprint_id
-            seed.epochs_total = data.get("epochs_total", 0)
-            seed.counterfactual = data.get("counterfactual", 0.0)
-            # Preserve blend_tempo_epochs for fossilized display (already set at germination)
-            env.fossilized_params += int(data.get("params_added", 0) or 0)
+            seed.improvement = fossilized_payload.improvement
+            seed.blueprint_id = fossilized_payload.blueprint_id
+            seed.epochs_total = fossilized_payload.epochs_total
+            seed.counterfactual = fossilized_payload.counterfactual if fossilized_payload.counterfactual is not None else 0.0
+            seed.alpha = fossilized_payload.alpha
+            env.fossilized_params += fossilized_payload.params_added
             env.fossilized_count += 1
-            self._cumulative_fossilized += 1  # Never resets
+            self._cumulative_fossilized += 1
             env.active_seed_count = max(0, env.active_seed_count - 1)
-            # Track blueprint fossilization for graveyard (per-episode and cumulative)
-            if seed.blueprint_id:
-                env.blueprint_fossilized[seed.blueprint_id] = (
-                    env.blueprint_fossilized.get(seed.blueprint_id, 0) + 1
-                )
-                self._cumulative_blueprint_fossilized[seed.blueprint_id] = (
-                    self._cumulative_blueprint_fossilized.get(seed.blueprint_id, 0) + 1
-                )
 
-        elif event_type == "SEED_PRUNED":
-            # Capture prune context (P1/P2 telemetry gap fix).
-            #
-            # Phase 4 contract: PRUNED/EMBARGOED/RESETTING are first-class states
-            # after physical removal (seed module is gone), so we must NOT reset
-            # the slot to DORMANT here. Kasmina will emit subsequent
-            # SEED_STAGE_CHANGED events through the cooldown pipeline and finally
-            # return to DORMANT when the slot is reusable.
-            seed.prune_reason = data.get("reason", "")
-            seed.improvement = data.get("improvement", 0.0)
-            seed.auto_pruned = data.get("auto_pruned", False)
-            seed.epochs_total = data.get("epochs_total", 0)
-            seed.counterfactual = data.get("counterfactual", 0.0)
-            pruned_blueprint = data.get("blueprint_id") or seed.blueprint_id
+            # Track blueprint fossilization for graveyard
+            env.blueprint_fossilized[seed.blueprint_id] = (
+                env.blueprint_fossilized.get(seed.blueprint_id, 0) + 1
+            )
+            self._cumulative_blueprint_fossilized[seed.blueprint_id] = (
+                self._cumulative_blueprint_fossilized.get(seed.blueprint_id, 0) + 1
+            )
+
+        elif event_type == "SEED_PRUNED" and isinstance(event.data, SeedPrunedPayload):
+            pruned_payload = event.data
+            slot_id = event.slot_id or pruned_payload.slot_id
+            env_id = pruned_payload.env_id
+
+            self._ensure_env(env_id)
+            env = self._envs[env_id]
+
+            # Dynamically track slot_ids
+            if not self._slot_ids_locked and slot_id and slot_id not in self._slot_ids and slot_id != "unknown":
+                self._slot_ids.append(slot_id)
+                self._slot_ids.sort()
+
+            # Get or create seed state
+            if slot_id not in env.seeds:
+                env.seeds[slot_id] = SeedState(slot_id=slot_id)
+            seed = env.seeds[slot_id]
+
+            # Update from payload
+            seed.prune_reason = pruned_payload.reason
+            seed.improvement = pruned_payload.improvement
+            seed.auto_pruned = pruned_payload.auto_pruned
+            seed.epochs_total = pruned_payload.epochs_total
+            seed.counterfactual = pruned_payload.counterfactual if pruned_payload.counterfactual is not None else 0.0
+            pruned_blueprint = pruned_payload.blueprint_id or seed.blueprint_id
             seed.blueprint_id = pruned_blueprint
 
-            # Track blueprint prune for graveyard (per-episode and cumulative).
+            # Track blueprint prune for graveyard
             if pruned_blueprint:
                 env.blueprint_prunes[pruned_blueprint] = (
                     env.blueprint_prunes.get(pruned_blueprint, 0) + 1
@@ -773,7 +961,7 @@ class SanctumAggregator:
                     self._cumulative_blueprint_prunes.get(pruned_blueprint, 0) + 1
                 )
 
-            # Mark PRUNED (seed physically removed, slot unavailable until cooldown completes).
+            # Mark PRUNED
             seed.stage = "PRUNED"
             seed.seed_params = 0
             seed.alpha = 0.0
@@ -783,24 +971,33 @@ class SanctumAggregator:
             seed.has_exploding = False
             seed.epochs_in_stage = 0
             env.pruned_count += 1
-            self._cumulative_pruned += 1  # Never resets
+            self._cumulative_pruned += 1
             env.active_seed_count = max(0, env.active_seed_count - 1)
 
     def _handle_batch_epoch_completed(self, event: "TelemetryEvent") -> None:
         """Handle BATCH_EPOCH_COMPLETED event (episode completion)."""
-        data = event.data or {}
+        if not isinstance(event.data, BatchEpochCompletedPayload):
+            _logger.warning(
+                "Expected BatchEpochCompletedPayload for BATCH_EPOCH_COMPLETED, got %s",
+                type(event.data).__name__,
+            )
+            return
 
-        episodes_completed = data.get("episodes_completed")
-        if isinstance(episodes_completed, (int, float)):
-            self._current_episode = int(episodes_completed)
+        payload = event.data
+
+        self._current_episode = payload.episodes_completed
         self._batches_completed += 1
 
-        # Capture batch-level aggregates (P1 telemetry gap fix)
-        self._current_batch = data.get("batch_idx", self._batches_completed)
-        self._batch_avg_accuracy = data.get("avg_accuracy", 0.0)
-        self._batch_rolling_accuracy = data.get("rolling_accuracy", 0.0)
-        self._batch_avg_reward = data.get("avg_reward", 0.0)
-        self._batch_total_episodes = data.get("total_episodes", 0)
+        # Capture batch-level aggregates - all required fields
+        self._current_batch = payload.batch_idx
+        self._batch_avg_accuracy = payload.avg_accuracy
+        self._batch_rolling_accuracy = payload.rolling_accuracy
+        self._batch_avg_reward = payload.avg_reward
+        self._batch_total_episodes = payload.total_episodes
+
+        # Episode Return
+        self._tamiyo.current_episode_return = payload.avg_reward
+        self._tamiyo.episode_return_history.append(payload.avg_reward)
 
         # Calculate throughput
         now = time.time()
@@ -810,16 +1007,8 @@ class SanctumAggregator:
             self._vitals.epochs_per_second = total_epochs / elapsed
             self._vitals.batches_per_hour = (self._batches_completed / elapsed) * 3600
 
-        # Capture best_runs from current episode (before reset clears env.best_accuracy)
-        # Allow multiple entries per env to reflect distinct episodes; keep top 10 overall.
-        # PINNING: Pinned records are never removed from the leaderboard.
-        n_envs = data.get("n_envs")
-        if not isinstance(n_envs, int) or n_envs <= 0:
-            env_accuracies = data.get("env_accuracies")
-            if isinstance(env_accuracies, (list, tuple)):
-                n_envs = len(env_accuracies)
-            else:
-                n_envs = self.num_envs
+        # Capture best_runs
+        n_envs = payload.n_envs
         episode_start = self._current_episode - n_envs
         for env in self._envs.values():
             if env.best_accuracy > 0:
@@ -928,56 +1117,58 @@ class SanctumAggregator:
 
     def _handle_counterfactual_matrix(self, event: "TelemetryEvent") -> None:
         """Handle COUNTERFACTUAL_MATRIX_COMPUTED event."""
-        data = event.data or {}
-        env_id = data.get("env_id")
-
-        if env_id is None:
+        if not isinstance(event.data, CounterfactualMatrixPayload):
+            _logger.warning(
+                "Expected CounterfactualMatrixPayload for COUNTERFACTUAL_MATRIX_COMPUTED, got %s",
+                type(event.data).__name__,
+            )
             return
+
+        payload = event.data
+        env_id = payload.env_id
 
         env = self._envs.get(env_id)
         if env is None:
             return
 
         # Parse configs
-        slot_ids = tuple(data.get("slot_ids", []))
-        raw_configs = data.get("configs", [])
-
         configs = [
             CounterfactualConfig(
                 seed_mask=tuple(cfg.get("seed_mask", [])),
                 accuracy=cfg.get("accuracy", 0.0),
             )
-            for cfg in raw_configs
+            for cfg in payload.configs
         ]
 
         env.counterfactual_matrix = CounterfactualSnapshot(
-            slot_ids=slot_ids,
+            slot_ids=payload.slot_ids,
             configs=configs,
-            strategy=data.get("strategy", "unavailable"),
-            compute_time_ms=data.get("compute_time_ms", 0.0),
+            strategy=payload.strategy,
+            compute_time_ms=payload.compute_time_ms,
         )
 
     def _handle_analytics_snapshot(self, event: "TelemetryEvent") -> None:
         """Handle ANALYTICS_SNAPSHOT events used by Sanctum/Tamiyo UI."""
-        data = event.data or {}
-        kind = data.get("kind")
+        if not isinstance(event.data, AnalyticsSnapshotPayload):
+            _logger.warning(
+                "Expected AnalyticsSnapshotPayload for ANALYTICS_SNAPSHOT, got %s",
+                type(event.data).__name__,
+            )
+            return
 
-        # Batch-level action distribution is emitted at ops_normal and provides
-        # Tamiyo panel coverage even when debug REWARD_COMPUTED is disabled.
+        payload = event.data
+        kind = payload.kind
+
+        # Batch-level action distribution
         if kind == "action_distribution":
-            action_counts = data.get("action_counts", {})
-            if isinstance(action_counts, dict):
-                counts = {str(action): int(count) for action, count in action_counts.items()}
+            if payload.action_counts:
+                counts = {str(action): int(count) for action, count in payload.action_counts.items()}
                 self._tamiyo.action_counts = counts
                 self._tamiyo.total_actions = sum(counts.values())
             return
 
-        # Vectorized PPO emits per-step "last_action" snapshots at ops_normal.
-        # When these include decision fields (total_reward/action_confidence/etc),
-        # treat them like REWARD_COMPUTED so Sanctum can populate:
-        # - Recent Decisions carousel (TamiyoBrain)
-        # - RewardComponents panel
-        if kind == "last_action" and "action_confidence" in data:
+        # Per-step "last_action" snapshots - treat like REWARD_COMPUTED
+        if kind == "last_action" and payload.action_confidence is not None:
             self._handle_reward_computed(event)
             return
 
@@ -1003,8 +1194,6 @@ class SanctumAggregator:
         Messages are kept generic for proper rollup grouping.
         Specific values (slot_id, reward, blueprint) go in metadata.
         """
-        data = event.data or {}
-        env_id = data.get("env_id")
         timestamp = event.timestamp or datetime.now(timezone.utc)
 
         # Calculate relative time
@@ -1019,41 +1208,66 @@ class SanctumAggregator:
 
         # Generic message + structured metadata based on event type
         metadata: dict[str, str | int | float] = {}
+        env_id: int | None = None
 
         if event_type == "REWARD_COMPUTED":
-            message = "Reward computed"
-            metadata["action"] = normalize_action(data.get("action_name", "?"))
-            metadata["reward"] = data.get("total_reward", 0.0)
+            if isinstance(event.data, RewardComputedPayload):
+                message = "Reward computed"
+                metadata["action"] = normalize_action(event.data.action_name)
+                metadata["reward"] = event.data.total_reward
+                env_id = event.data.env_id
+            else:
+                message = "Reward computed (unknown payload)"
         elif event_type.startswith("SEED_"):
-            slot_id = event.slot_id or data.get("slot_id", "?")
-            metadata["slot_id"] = slot_id
-            if event_type == "SEED_GERMINATED":
+            if event_type == "SEED_GERMINATED" and isinstance(event.data, SeedGerminatedPayload):
                 message = "Germinated"
-                metadata["blueprint"] = data.get("blueprint_id", "?")
-            elif event_type == "SEED_STAGE_CHANGED":
+                # Event envelope slot_id is authoritative (set at emission time)
+                slot_id = event.slot_id if event.slot_id else event.data.slot_id
+                metadata["slot_id"] = slot_id
+                metadata["blueprint"] = event.data.blueprint_id
+                env_id = event.data.env_id
+            elif event_type == "SEED_STAGE_CHANGED" and isinstance(event.data, SeedStageChangedPayload):
                 message = "Stage changed"
-                metadata["from"] = data.get("from", "?")
-                metadata["to"] = data.get("to", "?")
-            elif event_type == "SEED_FOSSILIZED":
+                # Event envelope slot_id is authoritative (set at emission time)
+                slot_id = event.slot_id if event.slot_id else event.data.slot_id
+                metadata["slot_id"] = slot_id
+                metadata["from"] = event.data.from_stage
+                metadata["to"] = event.data.to_stage
+                env_id = event.data.env_id
+            elif event_type == "SEED_FOSSILIZED" and isinstance(event.data, SeedFossilizedPayload):
                 message = "Fossilized"
-                metadata["improvement"] = data.get("improvement", 0.0)
-            elif event_type == "SEED_PRUNED":
+                # Event envelope slot_id is authoritative (set at emission time)
+                slot_id = event.slot_id if event.slot_id else event.data.slot_id
+                metadata["slot_id"] = slot_id
+                metadata["improvement"] = event.data.improvement
+                env_id = event.data.env_id
+            elif event_type == "SEED_PRUNED" and isinstance(event.data, SeedPrunedPayload):
                 message = "Pruned"
-                metadata["reason"] = data.get("reason", "")
+                # Event envelope slot_id is authoritative (set at emission time)
+                slot_id = event.slot_id if event.slot_id else event.data.slot_id
+                metadata["slot_id"] = slot_id
+                metadata["reason"] = event.data.reason
+                env_id = event.data.env_id
             else:
                 message = event_type.replace("SEED_", "")
         elif event_type == "PPO_UPDATE_COMPLETED":
-            if data.get("skipped"):
-                message = "PPO skipped"
-                metadata["reason"] = "buffer rollback"
+            if isinstance(event.data, PPOUpdatePayload):
+                if event.data.skipped:
+                    message = "PPO skipped"
+                    metadata["reason"] = "buffer rollback"
+                else:
+                    message = "PPO update"
+                    metadata["entropy"] = event.data.entropy
+                    metadata["clip_fraction"] = event.data.clip_fraction
             else:
-                message = "PPO update"
-                metadata["entropy"] = data.get("entropy", 0.0)
-                metadata["clip_fraction"] = data.get("clip_fraction", 0.0)
+                message = "PPO update (unknown payload)"
         elif event_type == "BATCH_EPOCH_COMPLETED":
-            message = "Batch complete"
-            metadata["batch"] = data.get("batch_idx", 0)
-            metadata["episodes"] = data.get("episodes_completed", 0)
+            if isinstance(event.data, BatchEpochCompletedPayload):
+                message = "Batch complete"
+                metadata["batch"] = event.data.batch_idx
+                metadata["episodes"] = event.data.episodes_completed
+            else:
+                message = "Batch complete (unknown payload)"
         else:
             message = event.message or event_type
 
@@ -1072,16 +1286,19 @@ class SanctumAggregator:
         # CPU (THE FIX - was collected but never displayed)
         try:
             self._vitals.cpu_percent = psutil.cpu_percent(interval=None)
-        except Exception:
-            pass
+        except Exception as e:
+            _logger.warning("Failed to collect CPU vitals: %s", e)
+            self._vitals.cpu_percent = None  # Explicit unavailable state
 
         # RAM
         try:
             mem = psutil.virtual_memory()
             self._vitals.ram_used_gb = mem.used / (1024**3)
             self._vitals.ram_total_gb = mem.total / (1024**3)
-        except Exception:
-            pass
+        except Exception as e:
+            _logger.warning("Failed to collect RAM vitals: %s", e)
+            self._vitals.ram_used_gb = None  # Explicit unavailable state
+            self._vitals.ram_total_gb = None  # Explicit unavailable state
 
         # GPU stats (multi-GPU support)
         try:
@@ -1104,8 +1321,8 @@ class SanctumAggregator:
                                 # Only set when actual utilization is available (e.g., via NVML).
                                 utilization=0.0,
                             )
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            _logger.warning("Failed to collect GPU stats for device %d: %s", device_idx, e)
                 self._vitals.gpu_stats = gpu_stats
                 if 0 in gpu_stats:
                     stats0 = gpu_stats[0]
@@ -1113,5 +1330,6 @@ class SanctumAggregator:
                     self._vitals.gpu_memory_total_gb = stats0.memory_total_gb
                     self._vitals.gpu_utilization = stats0.utilization
                     self._vitals.gpu_temperature = stats0.temperature
-        except ImportError:
-            pass
+        except ImportError as e:
+            _logger.warning("Failed to import torch for GPU vitals: %s", e)
+            self._vitals.gpu_stats = {}  # Explicit unavailable state

@@ -23,6 +23,8 @@ from torch.utils.data import DataLoader
 from esper.utils.loss import compute_task_loss
 
 
+# TODO: [DEAD CODE] - AttributionResult is only used by validate_with_attribution(),
+# which is never called in production. Delete if validate_with_attribution is removed.
 @dataclass
 class AttributionResult:
     """Result of counterfactual validation for seed attribution.
@@ -38,6 +40,8 @@ class AttributionResult:
     baseline_loss: float
 
 
+# TODO: [DEAD CODE] - _run_validation_pass is only used by validate_with_attribution(),
+# which is never called in production. Delete if parent function is removed.
 def _run_validation_pass(
     model: nn.Module,
     testloader: DataLoader,
@@ -85,6 +89,9 @@ def _run_validation_pass(
     return avg_loss, accuracy
 
 
+# TODO: [DEAD CODE] - train_epoch_normal is tested but NEVER called in production.
+# vectorized.py reimplements training inline via process_train_batch().
+# Either wire this into production or delete. See: risk assessment 2024-12-24.
 def train_epoch_normal(
     model: nn.Module,
     trainloader: DataLoader,
@@ -125,6 +132,9 @@ def train_epoch_normal(
         optimizer.step()
 
 
+# TODO: [DEAD CODE] - train_epoch_incubator_mode is tested but NEVER called in production.
+# vectorized.py reimplements STE training inline. Either wire this into production
+# or delete. See: architectural risk assessment 2024-12-24.
 def train_epoch_incubator_mode(
     model: nn.Module,
     trainloader: DataLoader,
@@ -191,6 +201,9 @@ def train_epoch_incubator_mode(
         seed_optimizer.step()
 
 
+# TODO: [DEAD CODE] - train_epoch_blended is tested but NEVER called in production.
+# vectorized.py reimplements blended training inline. Either wire this into production
+# or delete. See: architectural risk assessment 2024-12-24.
 def train_epoch_blended(
     model: nn.Module,
     trainloader: DataLoader,
@@ -238,6 +251,9 @@ def train_epoch_blended(
             seed_optimizer.step()
 
 
+# TODO: [DEAD CODE] - validate_and_get_metrics is tested but NEVER called in production.
+# vectorized.py reimplements validation inline via process_val_batch().
+# Either wire this into production or delete. See: risk assessment 2024-12-24.
 def validate_and_get_metrics(
     model: nn.Module,
     trainloader: DataLoader,
@@ -351,6 +367,9 @@ def validate_and_get_metrics(
     return val_loss, val_accuracy, train_loss, train_accuracy, per_class_acc, perplexity
 
 
+# TODO: [DEAD CODE] - validate_with_attribution is tested but NEVER called in production.
+# Counterfactual attribution exists in vectorized.py but uses different implementation.
+# Either wire this into production or delete. See: risk assessment 2024-12-24.
 def validate_with_attribution(
     model: nn.Module,
     testloader: DataLoader,

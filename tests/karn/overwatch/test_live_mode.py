@@ -2,6 +2,8 @@
 
 import pytest
 
+from esper.leyline import TelemetryEvent, TelemetryEventType
+from esper.leyline.telemetry import TrainingStartedPayload
 from esper.karn.overwatch.app import OverwatchApp
 from esper.karn.overwatch.backend import OverwatchBackend
 
@@ -31,10 +33,24 @@ class TestLiveModePolling:
         backend.start()
 
         # Emit a training started event
-        from esper.leyline import TelemetryEvent, TelemetryEventType
         backend.emit(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"episode_id": "test-run", "task": "cifar10"},
+            data=TrainingStartedPayload(
+                n_envs=1,
+                max_epochs=75,
+                task="cifar10",
+                host_params=1000,
+                slot_ids=("r0c0",),
+                seed=42,
+                n_episodes=100,
+                lr=3e-4,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=100000,
+                policy_device="cuda:0",
+                env_devices=("cuda:0",),
+                episode_id="test-run",
+            ),
         ))
 
         app = OverwatchApp(backend=backend)
@@ -58,10 +74,24 @@ class TestLiveModeUpdates:
         backend.start()
 
         # Simulate some telemetry
-        from esper.leyline import TelemetryEvent, TelemetryEventType
         backend.emit(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"episode_id": "live-test", "task": "cifar10", "n_envs": 2},
+            data=TrainingStartedPayload(
+                n_envs=2,
+                max_epochs=75,
+                task="cifar10",
+                host_params=1000,
+                slot_ids=("r0c0", "r0c1"),
+                seed=42,
+                n_episodes=100,
+                lr=3e-4,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=100000,
+                policy_device="cuda:0",
+                env_devices=("cuda:0", "cuda:1"),
+                episode_id="live-test",
+            ),
         ))
 
         app = OverwatchApp(backend=backend)

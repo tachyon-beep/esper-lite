@@ -17,9 +17,28 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 import math
 import threading
+from typing import Protocol
 
 import torch
 import torch.nn as nn
+
+
+class AlphaScheduleProtocol(Protocol):
+    """Protocol defining required attributes for alpha schedule objects.
+
+    When SeedSlot.alpha_schedule is not None, it MUST provide these attributes
+    to support serialization and lifecycle tracking. All BlendAlgorithm subclasses
+    satisfy this protocol.
+
+    Contract:
+        - algorithm_id: Identifies the blending algorithm type
+        - total_steps: Total number of steps for the blending schedule
+        - _current_step: Current step in the blending schedule
+    """
+
+    algorithm_id: str
+    total_steps: int
+    _current_step: int
 
 
 class BlendAlgorithm(nn.Module, ABC):
@@ -101,6 +120,9 @@ class BlendAlgorithm(nn.Module, ABC):
         return 0.5
 
 
+# TODO: [DEAD CODE] - LinearBlend is registered in BlendCatalog but never instantiated.
+# Production only uses BlendCatalog.create("gated", ...). Either wire this into
+# production or delete it. See: architectural risk assessment 2024-12-24.
 class LinearBlend(BlendAlgorithm):
     """Linear ramp from 0 to 1 over total_steps."""
 
@@ -120,6 +142,9 @@ class LinearBlend(BlendAlgorithm):
         return self._get_cached_alpha_tensor(alpha, x)
 
 
+# TODO: [DEAD CODE] - SigmoidBlend is registered in BlendCatalog but never instantiated.
+# Production only uses BlendCatalog.create("gated", ...). Either wire this into
+# production or delete it. See: architectural risk assessment 2024-12-24.
 class SigmoidBlend(BlendAlgorithm):
     """Sigmoid curve for smooth transitions."""
 
@@ -208,6 +233,8 @@ class GatedBlend(BlendAlgorithm):
 class BlendCatalog:
     """Registry of blending algorithms."""
 
+    # TODO: [DEAD CODE] - "linear" and "sigmoid" catalog entries are never used.
+    # Only "gated" is instantiated in production. Consider removing these entries.
     _algorithms: dict[str, type] = {
         "linear": LinearBlend,
         "sigmoid": SigmoidBlend,
@@ -226,6 +253,7 @@ class BlendCatalog:
 
 
 __all__ = [
+    "AlphaScheduleProtocol",
     "BlendAlgorithm",
     "LinearBlend",
     "SigmoidBlend",

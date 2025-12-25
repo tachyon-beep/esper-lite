@@ -2,6 +2,12 @@
 
 from esper.nissa.analytics import BlueprintStats, SeedScoreboard
 from esper.leyline import TelemetryEvent, TelemetryEventType
+from esper.leyline.telemetry import (
+    SeedGerminatedPayload,
+    SeedFossilizedPayload,
+    SeedPrunedPayload,
+    EpochCompletedPayload,
+)
 from esper.nissa.analytics import BlueprintAnalytics
 
 
@@ -82,7 +88,13 @@ class TestBlueprintAnalytics:
         event = TelemetryEvent(
             event_type=TelemetryEventType.SEED_GERMINATED,
             seed_id="seed_001",
-            data={"blueprint_id": "depthwise", "env_id": 0, "params": 5000},
+            data=SeedGerminatedPayload(
+                slot_id="slot_0",
+                env_id=0,
+                blueprint_id="depthwise",
+                params=5000,
+                alpha=0.0,
+            ),
         )
         analytics.emit(event)
 
@@ -96,12 +108,15 @@ class TestBlueprintAnalytics:
         event = TelemetryEvent(
             event_type=TelemetryEventType.SEED_FOSSILIZED,
             seed_id="seed_001",
-            data={
-                "blueprint_id": "depthwise",
-                "env_id": 0,
-                "improvement": 2.5,
-                "params_added": 10000,
-            },
+            data=SeedFossilizedPayload(
+                slot_id="slot_0",
+                env_id=0,
+                blueprint_id="depthwise",
+                improvement=2.5,
+                params_added=10000,
+                epochs_total=0,
+                counterfactual=0.0,
+            ),
         )
         analytics.emit(event)
 
@@ -117,12 +132,15 @@ class TestBlueprintAnalytics:
         event = TelemetryEvent(
             event_type=TelemetryEventType.SEED_PRUNED,
             seed_id="seed_001",
-            data={
-                "blueprint_id": "attention",
-                "env_id": 1,
-                "improvement": -0.3,
-                "reason": "no_improvement",
-            },
+            data=SeedPrunedPayload(
+                slot_id="slot_0",
+                env_id=1,
+                blueprint_id="attention",
+                reason="no_improvement",
+                improvement=-0.3,
+                epochs_total=0,
+                counterfactual=0.0,
+            ),
         )
         analytics.emit(event)
 
@@ -136,7 +154,13 @@ class TestBlueprintAnalytics:
         event = TelemetryEvent(
             event_type=TelemetryEventType.EPOCH_COMPLETED,
             seed_id="seed_001",
-            data={"val_accuracy": 75.0},
+            data=EpochCompletedPayload(
+                env_id=0,
+                inner_epoch=0,
+                val_loss=1.0,
+                val_accuracy=75.0,
+                seeds=None,
+            ),
         )
         analytics.emit(event)
 
