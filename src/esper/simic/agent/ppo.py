@@ -17,10 +17,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .rollout_buffer import TamiyoRolloutBuffer
-from .network import FactoredRecurrentActorCritic
 from .advantages import compute_per_head_advantages
 from .types import PPOUpdateMetrics
 from esper.simic.telemetry import RatioExplosionDiagnostic
+from esper.tamiyo.policy.protocol import PolicyBundle
 from esper.leyline import (
     DEFAULT_GAMMA,
     DEFAULT_EPISODE_LENGTH,
@@ -192,9 +192,8 @@ class PPOAgent:
 
     def __init__(
         self,
-        state_dim: int | None = None,
-        action_dim: int = 7,
-        hidden_dim: int = 256,
+        policy: PolicyBundle,
+        slot_config: "SlotConfig | None" = None,
         lr: float = DEFAULT_LEARNING_RATE,
         gamma: float = DEFAULT_GAMMA,
         gae_lambda: float = DEFAULT_GAE_LAMBDA,
@@ -225,25 +224,18 @@ class PPOAgent:
         target_kl: float | None = 0.015,
         weight_decay: float = 0.0,  # Applied to critic only (RL best practice)
         device: str = "cuda:0",
-        # LSTM configuration (unified architecture always uses LSTM)
-        lstm_hidden_dim: int = DEFAULT_LSTM_HIDDEN_DIM,
         chunk_length: int = DEFAULT_EPISODE_LENGTH,  # Must match max_epochs (from leyline)
         num_envs: int = DEFAULT_N_ENVS,  # For TamiyoRolloutBuffer
         max_steps_per_env: int = DEFAULT_EPISODE_LENGTH,  # For TamiyoRolloutBuffer (from leyline)
-        # Compilation
-        compile_network: bool = True,  # DEPRECATED: use compile_mode instead
-        compile_mode: str = "default",  # "default", "max-autotune", "reduce-overhead", "off"
-        # Slot configuration (preferred over explicit state_dim)
-        slot_config: "SlotConfig | None" = None,
     ):
-        # Store slot_config and compute state_dim if needed
+        # Store policy and extract slot_config
+        self.policy = policy
         if slot_config is None:
-            slot_config = SlotConfig.default()
+            slot_config = policy.network.slot_config
         self.slot_config = slot_config
 
-        if state_dim is None:
-            from esper.tamiyo.policy.features import get_feature_size
-            state_dim = get_feature_size(slot_config)
+        # Extract state_dim from policy network
+        state_dim = policy.network.state_dim
 
         self.num_envs = num_envs
         self.max_steps_per_env = max_steps_per_env
@@ -285,7 +277,7 @@ class PPOAgent:
         self.clip_value = clip_value
         self.value_clip = value_clip
         self.max_grad_norm = max_grad_norm
-        self.lstm_hidden_dim = lstm_hidden_dim
+        self.lstm_hidden_dim = policy.network.lstm_hidden_dim
         self.n_epochs = n_epochs
         self.batch_size = batch_size
         self.target_kl = target_kl
@@ -314,52 +306,26 @@ class PPOAgent:
                     UserWarning,
                     stacklevel=2,
                 )
-
-        # Unified factored + recurrent mode
-        self.network = FactoredRecurrentActorCritic(
-            state_dim=state_dim,
-            num_slots=self.slot_config.num_slots,
-            lstm_hidden_dim=lstm_hidden_dim,
-        ).to(device)
         self.buffer = TamiyoRolloutBuffer(
             num_envs=num_envs,
             max_steps_per_env=max_steps_per_env,
             state_dim=state_dim,
-            lstm_hidden_dim=lstm_hidden_dim,
+            lstm_hidden_dim=self.lstm_hidden_dim,
             slot_config=self.slot_config,
             device=torch.device(device),
         )
         # Validate buffer and network use same hidden dim and slot config
-        assert self.buffer.lstm_hidden_dim == self.network.lstm_hidden_dim, (
+        assert self.buffer.lstm_hidden_dim == self.policy.network.lstm_hidden_dim, (
             f"Buffer lstm_hidden_dim ({self.buffer.lstm_hidden_dim}) != "
-            f"network lstm_hidden_dim ({self.network.lstm_hidden_dim})"
+            f"network lstm_hidden_dim ({self.policy.network.lstm_hidden_dim})"
         )
-        assert self.buffer.num_slots == self.network.num_slots, (
+        assert self.buffer.num_slots == self.policy.network.num_slots, (
             f"Buffer num_slots ({self.buffer.num_slots}) != "
-            f"network num_slots ({self.network.num_slots})"
+            f"network num_slots ({self.policy.network.num_slots})"
         )
         # M21: Ratio anomaly thresholds from leyline (single source of truth)
         self.ratio_explosion_threshold = DEFAULT_RATIO_EXPLOSION_THRESHOLD
         self.ratio_collapse_threshold = DEFAULT_RATIO_COLLAPSE_THRESHOLD
-
-        # [PyTorch 2.0+] Compile network for 10-30% speedup on forward/backward
-        # Modes: "default" (fast compile), "max-autotune" (slow compile, faster runtime),
-        #        "reduce-overhead" (minimal overhead), "off" (no compilation)
-        # MaskedCategorical._validate_action_mask has @torch.compiler.disable
-        # M22: dynamic=True handles varying sequence lengths without recompilation
-        #
-        # Resolve effective compile mode (backwards compat: compile_network=False -> "off")
-        effective_compile_mode = compile_mode
-        if not compile_network and compile_mode != "off":
-            effective_compile_mode = "off"  # compile_network=False overrides
-
-        if effective_compile_mode != "off":
-            # torch.compile returns OptimizedModule which wraps the network
-            self.network = torch.compile(
-                self.network,
-                mode=effective_compile_mode,
-                dynamic=True
-            )  # type: ignore[assignment]
 
         # [PyTorch 2.9] Use fused=True for CUDA, foreach=True for CPU
         use_cuda = device.startswith("cuda")
@@ -376,21 +342,22 @@ class PPOAgent:
             # Shared layers feed into actor, so they must also have wd=0.
             # Reference: SAC, TD3 implementations apply WD only to critic.
             # FactoredRecurrentActorCritic: slot/blueprint/style/tempo/alpha_* /op heads are actors
+            base_net = self.policy.network
             actor_params = (
-                list(self._base_network.slot_head.parameters()) +
-                list(self._base_network.blueprint_head.parameters()) +
-                list(self._base_network.style_head.parameters()) +
-                list(self._base_network.tempo_head.parameters()) +
-                list(self._base_network.alpha_target_head.parameters()) +
-                list(self._base_network.alpha_speed_head.parameters()) +
-                list(self._base_network.alpha_curve_head.parameters()) +
-                list(self._base_network.op_head.parameters())
+                list(base_net.slot_head.parameters()) +
+                list(base_net.blueprint_head.parameters()) +
+                list(base_net.style_head.parameters()) +
+                list(base_net.tempo_head.parameters()) +
+                list(base_net.alpha_target_head.parameters()) +
+                list(base_net.alpha_speed_head.parameters()) +
+                list(base_net.alpha_curve_head.parameters()) +
+                list(base_net.op_head.parameters())
             )
-            critic_params = list(self._base_network.value_head.parameters())
+            critic_params = list(base_net.value_head.parameters())
             shared_params = (
-                list(self._base_network.feature_net.parameters()) +
-                list(self._base_network.lstm.parameters()) +
-                list(self._base_network.lstm_ln.parameters())
+                list(base_net.feature_net.parameters()) +
+                list(base_net.lstm.parameters()) +
+                list(base_net.lstm_ln.parameters())
             )
 
             self.optimizer: torch.optim.Optimizer = torch.optim.AdamW([
@@ -400,23 +367,9 @@ class PPOAgent:
             ], **optimizer_kwargs)  # type: ignore[arg-type]
         else:
             self.optimizer = torch.optim.Adam(
-                self.network.parameters(), **optimizer_kwargs  # type: ignore[arg-type]
+                self.policy.network.parameters(), **optimizer_kwargs  # type: ignore[arg-type]
             )
         self.train_steps = 0
-
-    @property
-    def _base_network(self):
-        """Get the original (uncompiled) network module.
-
-        torch.compile() wraps the network in OptimizedModule. This property
-        provides consistent access to the underlying network for save/load
-        and architecture introspection.
-        """
-        # hasattr AUTHORIZED by John on 2025-12-10 21:30:00 UTC
-        # Justification: torch.compile() wraps modules in OptimizedModule which has _orig_mod
-        if hasattr(self.network, '_orig_mod'):
-            return self.network._orig_mod
-        return self.network
 
     def get_entropy_coef(self, action_mask: torch.Tensor | None = None) -> float:
         """Get current entropy coefficient with optional adaptive floor.
@@ -569,19 +522,25 @@ class PPOAgent:
                 "op": data["op_actions"],
             }
 
-            log_probs, values, entropy, _ = self.network.evaluate_actions(
+            masks = {
+                "slot": data["slot_masks"],
+                "blueprint": data["blueprint_masks"],
+                "style": data["style_masks"],
+                "tempo": data["tempo_masks"],
+                "alpha_target": data["alpha_target_masks"],
+                "alpha_speed": data["alpha_speed_masks"],
+                "alpha_curve": data["alpha_curve_masks"],
+                "op": data["op_masks"],
+            }
+            result = self.policy.evaluate_actions(
                 data["states"],
                 actions,
-                slot_mask=data["slot_masks"],
-                blueprint_mask=data["blueprint_masks"],
-                style_mask=data["style_masks"],
-                tempo_mask=data["tempo_masks"],
-                alpha_target_mask=data["alpha_target_masks"],
-                alpha_speed_mask=data["alpha_speed_masks"],
-                alpha_curve_mask=data["alpha_curve_masks"],
-                op_mask=data["op_masks"],
+                masks,
                 hidden=(data["initial_hidden_h"], data["initial_hidden_c"]),
             )
+            log_probs = result.log_prob
+            values = result.value
+            entropy = result.entropy
 
             # Extract valid timesteps
             for key in log_probs:
@@ -739,7 +698,7 @@ class PPOAgent:
             # Collect per-head gradient norms BEFORE clipping (P4-6)
             # Measures raw gradients to diagnose head dominance
             with torch.inference_mode():
-                base_net = self._base_network
+                base_net = self.policy.network
                 for head_name, head_module in [
                     ("slot", base_net.slot_head),
                     ("blueprint", base_net.blueprint_head),
@@ -760,7 +719,7 @@ class PPOAgent:
                         grad_norm = 0.0
                     head_grad_norm_history[head_name].append(grad_norm)
 
-            nn.utils.clip_grad_norm_(self.network.parameters(), self.max_grad_norm)
+            nn.utils.clip_grad_norm_(self.policy.network.parameters(), self.max_grad_norm)
             self.optimizer.step()
 
             # Track metrics
@@ -816,12 +775,12 @@ class PPOAgent:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Use _base_network to get uncompiled module for consistent state dict keys
-        base_net = self._base_network
+        # Get network state dict from policy
+        base_net = self.policy.network
         save_dict = {
             # Version for forward compatibility
             'checkpoint_version': CHECKPOINT_VERSION,
-            'network_state_dict': base_net.state_dict(),
+            'network_state_dict': self.policy.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'train_steps': self.train_steps,
             'config': {
@@ -931,16 +890,29 @@ class PPOAgent:
         # feature_net.0.weight has shape [hidden_dim, state_dim]
         state_dim = state_dict['feature_net.0.weight'].shape[1]
 
+        # === Create PolicyBundle ===
+        from esper.tamiyo.policy.factory import create_policy
+        policy = create_policy(
+            policy_type="lstm",
+            feature_dim=state_dim,
+            slot_config=slot_config,
+            hidden_dim=config['lstm_hidden_dim'],
+            device=device,
+        )
+
         # === Create agent with restored config ===
+        # Remove config params that are now part of PolicyBundle
+        agent_config = {k: v for k, v in config.items()
+                       if k not in ('lstm_hidden_dim',)}
         agent = cls(
-            state_dim=state_dim,
+            policy=policy,
             slot_config=slot_config,
             device=device,
-            **config
+            **agent_config
         )
 
         # === Load weights ===
-        agent._base_network.load_state_dict(state_dict)
+        agent.policy.load_state_dict(state_dict)
         agent.optimizer.load_state_dict(optimizer_state_dict)
         agent.train_steps = train_steps
 
