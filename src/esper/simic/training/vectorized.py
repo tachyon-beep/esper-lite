@@ -569,10 +569,10 @@ def train_ppo_vectorized(
         from tqdm import tqdm
 
         tqdm.set_lock(RLock())
-    except Exception:
+    except (ImportError, AttributeError) as e:
         # Best-effort: tqdm isn't required, and compile should still work in
         # environments where multiprocessing locks are healthy.
-        pass
+        _logger.debug("tqdm lock configuration skipped: %s", e)
 
     from esper.tolaria import create_model
     from esper.tamiyo import SignalTracker
