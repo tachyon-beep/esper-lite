@@ -272,30 +272,30 @@ class TelemetryAggregator:
             env.last_update_ts = self._last_event_ts
 
             # Per-slot telemetry (emitted in vectorized training) updates alpha/stage live.
-            seeds = payload.seeds
-            if isinstance(seeds, dict):
-                for slot_id, info in seeds.items():
-                    if not isinstance(slot_id, str) or not isinstance(info, dict):
-                        continue
-                    stage = str(info.get("stage", "UNKNOWN"))
-                    blueprint_id = str(info.get("blueprint_id", ""))
-                    alpha = float(info.get("alpha", 0.0))
-                    epochs_in_stage = int(info.get("epochs_in_stage", 0))
+            # Type contract: payload.seeds is dict[str, dict[str, Any]] | None
+            if payload.seeds is None:
+                return
 
-                    if slot_id not in env.slots:
-                        env.slots[slot_id] = SlotChipState(
-                            slot_id=slot_id,
-                            stage=stage,
-                            blueprint_id=blueprint_id,
-                            alpha=alpha,
-                            epochs_in_stage=epochs_in_stage,
-                        )
-                    else:
-                        chip = env.slots[slot_id]
-                        chip.stage = stage
-                        chip.blueprint_id = blueprint_id
-                        chip.alpha = alpha
-                        chip.epochs_in_stage = epochs_in_stage
+            for slot_id, info in payload.seeds.items():
+                stage = str(info.get("stage", "UNKNOWN"))
+                blueprint_id = str(info.get("blueprint_id", ""))
+                alpha = float(info.get("alpha", 0.0))
+                epochs_in_stage = int(info.get("epochs_in_stage", 0))
+
+                if slot_id not in env.slots:
+                    env.slots[slot_id] = SlotChipState(
+                        slot_id=slot_id,
+                        stage=stage,
+                        blueprint_id=blueprint_id,
+                        alpha=alpha,
+                        epochs_in_stage=epochs_in_stage,
+                    )
+                else:
+                    chip = env.slots[slot_id]
+                    chip.stage = stage
+                    chip.blueprint_id = blueprint_id
+                    chip.alpha = alpha
+                    chip.epochs_in_stage = epochs_in_stage
         else:
             return
 
@@ -427,19 +427,10 @@ class TelemetryAggregator:
         Note: This event does not yet have a typed payload.
         TODO: Create GovernorPanicPayload and migrate this handler.
         """
-        # No typed payload yet - this event is sent with raw dict data
-        if event.data is None:
-            data: dict[str, float | int] = {}
-        elif isinstance(event.data, dict):
-            data = event.data
-        else:
-            return
-
-        self._add_feed_event(
-            event_type="CRIT",
-            env_id=None,
-            message=f"PANIC #{data.get('consecutive_panics', '?')}: loss={data.get('current_loss', '?')}",
-            timestamp=event.timestamp,
+        # FAIL LOUDLY: Governor events need typed payloads
+        raise NotImplementedError(
+            "GOVERNOR_PANIC event received but GovernorPanicPayload not yet implemented. "
+            "This handler cannot process events until a typed payload is created."
         )
 
     def _handle_governor_rollback(self, event: "TelemetryEvent") -> None:
@@ -448,19 +439,10 @@ class TelemetryAggregator:
         Note: This event does not yet have a typed payload.
         TODO: Create GovernorRollbackPayload and migrate this handler.
         """
-        # No typed payload yet - this event is sent with raw dict data
-        if event.data is None:
-            data: dict[str, str] = {}
-        elif isinstance(event.data, dict):
-            data = event.data
-        else:
-            return
-
-        self._add_feed_event(
-            event_type="CRIT",
-            env_id=None,
-            message=f"ROLLBACK: {data.get('reason', 'unknown')}",
-            timestamp=event.timestamp,
+        # FAIL LOUDLY: Governor events need typed payloads
+        raise NotImplementedError(
+            "GOVERNOR_ROLLBACK event received but GovernorRollbackPayload not yet implemented. "
+            "This handler cannot process events until a typed payload is created."
         )
 
     def _handle_analytics_snapshot(self, event: "TelemetryEvent") -> None:
@@ -483,23 +465,26 @@ class TelemetryAggregator:
             return
 
         if kind == "last_action":
+            # Type contract: payload.action_name is str | None
+            if payload.action_name is None or not payload.action_name:
+                return
+
             op = payload.action_name
-            if isinstance(op, str) and op:
-                code = op[0].upper()
-                if op.upper() == "WAIT":
-                    code = "W"
-                elif op.upper() == "GERMINATE":
-                    code = "G"
-                elif op.upper() == "PRUNE":
-                    code = "P"
-                elif op.upper() == "FOSSILIZE":
-                    code = "F"
-                elif op.upper() == "SET_ALPHA_TARGET":
-                    code = "A"
-                self._tamiyo.recent_actions.append(code)
-                self._tamiyo.recent_actions = self._tamiyo.recent_actions[-20:]
-                # Keep counts roughly in sync even before the batch-level summary arrives.
-                self._tamiyo.action_counts[op] = self._tamiyo.action_counts.get(op, 0) + 1
+            code = op[0].upper()
+            if op.upper() == "WAIT":
+                code = "W"
+            elif op.upper() == "GERMINATE":
+                code = "G"
+            elif op.upper() == "PRUNE":
+                code = "P"
+            elif op.upper() == "FOSSILIZE":
+                code = "F"
+            elif op.upper() == "SET_ALPHA_TARGET":
+                code = "A"
+            self._tamiyo.recent_actions.append(code)
+            self._tamiyo.recent_actions = self._tamiyo.recent_actions[-20:]
+            # Keep counts roughly in sync even before the batch-level summary arrives.
+            self._tamiyo.action_counts[op] = self._tamiyo.action_counts.get(op, 0) + 1
             return
 
         if kind == "throughput":
