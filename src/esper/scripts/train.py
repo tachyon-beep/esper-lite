@@ -2,8 +2,11 @@
 """Training CLI for Simic RL algorithms."""
 
 import argparse
+import logging
 
 import torch
+
+_logger = logging.getLogger(__name__)
 
 from esper.nissa import ConsoleOutput, DirectoryOutput, FileOutput, get_hub
 from esper.simic.training import TrainingConfig
@@ -329,12 +332,12 @@ def main():
                         lan_ip = s.getsockname()[0]
                         if lan_ip not in interfaces:
                             interfaces.insert(2, lan_ip)  # Put after localhost
-                    except Exception:
-                        pass
+                    except OSError as e:
+                        _logger.debug("Network interface discovery failed: %s", e)
                     finally:
                         s.close()
-                except Exception:
-                    pass
+                except OSError as e:
+                    _logger.debug("Network interface discovery failed: %s", e)
                 return interfaces
 
             # Print clickable dashboard links (OSC 8 hyperlinks for modern terminals)
