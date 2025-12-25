@@ -415,6 +415,7 @@ from esper.leyline.telemetry import (
     SeedPrunedPayload,
     CounterfactualMatrixPayload,
     AnalyticsSnapshotPayload,
+    AnomalyDetectedPayload,
 )
 
 # Alpha controller contracts
@@ -593,6 +594,7 @@ __all__ = [
     "SeedPrunedPayload",
     "CounterfactualMatrixPayload",
     "AnalyticsSnapshotPayload",
+    "AnomalyDetectedPayload",
 
     # Alpha controller
     "AlphaMode",

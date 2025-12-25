@@ -375,6 +375,8 @@ def _emit_anomaly_diagnostics(
     if hub is None or anomaly_report is None or not anomaly_report.has_anomaly:
         return
 
+    from esper.leyline import AnomalyDetectedPayload
+
     event_type_map = {
         "ratio_explosion": TelemetryEventType.RATIO_EXPLOSION_DETECTED,
         "ratio_collapse": TelemetryEventType.RATIO_COLLAPSE_DETECTED,
@@ -394,28 +396,35 @@ def _emit_anomaly_diagnostics(
             TelemetryEventType.GRADIENT_ANOMALY,  # fallback
         )
 
-        data = {
-            "episode": batch_epoch_id,
-            "batch": batch_idx + 1,
-            "episodes_completed": batch_epoch_id,
-            "inner_epoch": max_epochs,
-            "detail": anomaly_report.details.get(anomaly_type, ""),
-            "total_episodes": total_episodes,
-        }
+        # Prepare gradient stats as tuple of dicts
+        gradient_stats_tuple = None
+        if collect_debug and gradient_stats is not None:
+            gradient_stats_tuple = tuple(gs.to_dict() for gs in gradient_stats[:5])
 
-        if collect_debug:
-            # gradient_stats/stability_report set when collect_debug=True above
-            data["gradient_stats"] = [gs.to_dict() for gs in gradient_stats[:5]]  # type: ignore[index,union-attr]
-            data["stability"] = stability_report.to_dict()  # type: ignore[union-attr]
-        if ratio_diagnostic is not None:
-            data["ratio_diagnostic"] = ratio_diagnostic
+        # Prepare stability report dict
+        stability_dict = None
+        if collect_debug and stability_report is not None:
+            stability_dict = stability_report.to_dict()
+
+        # Create typed payload
+        payload = AnomalyDetectedPayload(
+            anomaly_type=anomaly_type,
+            episode=batch_epoch_id,
+            batch=batch_idx + 1,
+            inner_epoch=max_epochs,
+            total_episodes=total_episodes,
+            detail=anomaly_report.details.get(anomaly_type, ""),
+            gradient_stats=gradient_stats_tuple,
+            stability=stability_dict,
+            ratio_diagnostic=ratio_diagnostic,
+        )
 
         hub.emit(
             TelemetryEvent(
                 event_type=event_type,
                 epoch=batch_epoch_id,  # Anomalies detected at batch boundary
                 group_id=group_id,
-                data=data,
+                data=payload,
                 severity="debug" if collect_debug else "warning",
             )
         )

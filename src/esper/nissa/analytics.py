@@ -293,10 +293,6 @@ class BlueprintAnalytics(OutputBackend):
             _logger.warning(f"MEMORY_WARNING event not yet migrated to typed payload")
             return
 
-        elif event.event_type == TelemetryEventType.GRADIENT_ANOMALY:
-            _logger.warning(f"GRADIENT_ANOMALY event not yet migrated to typed payload")
-            return
-
         elif event.event_type == TelemetryEventType.PERFORMANCE_DEGRADATION:
             _logger.warning(f"PERFORMANCE_DEGRADATION event not yet migrated to typed payload")
             return
@@ -305,21 +301,17 @@ class BlueprintAnalytics(OutputBackend):
             _logger.warning(f"REWARD_HACKING_SUSPECTED event not yet migrated to typed payload")
             return
 
-        # === PPO Anomaly Events ===
-        elif event.event_type == TelemetryEventType.RATIO_EXPLOSION_DETECTED:
-            _logger.warning(f"RATIO_EXPLOSION_DETECTED event not yet migrated to typed payload")
-            return
-
-        elif event.event_type == TelemetryEventType.RATIO_COLLAPSE_DETECTED:
-            _logger.warning(f"RATIO_COLLAPSE_DETECTED event not yet migrated to typed payload")
-            return
-
-        elif event.event_type == TelemetryEventType.VALUE_COLLAPSE_DETECTED:
-            _logger.warning(f"VALUE_COLLAPSE_DETECTED event not yet migrated to typed payload")
-            return
-
-        elif event.event_type == TelemetryEventType.NUMERICAL_INSTABILITY_DETECTED:
-            _logger.warning(f"NUMERICAL_INSTABILITY_DETECTED event not yet migrated to typed payload")
+        # === PPO Anomaly Events (use AnomalyDetectedPayload) ===
+        elif event.event_type in (
+            TelemetryEventType.GRADIENT_ANOMALY,
+            TelemetryEventType.RATIO_EXPLOSION_DETECTED,
+            TelemetryEventType.RATIO_COLLAPSE_DETECTED,
+            TelemetryEventType.VALUE_COLLAPSE_DETECTED,
+            TelemetryEventType.NUMERICAL_INSTABILITY_DETECTED,
+            TelemetryEventType.GRADIENT_PATHOLOGY_DETECTED,
+        ):
+            # All anomaly events now use AnomalyDetectedPayload
+            # No analytics processing needed - events are logged for debugging
             return
 
         # === Governor Events ===

@@ -1143,6 +1143,58 @@ class AnalyticsSnapshotPayload:
         )
 
 
+@dataclass(slots=True, frozen=True)
+class AnomalyDetectedPayload:
+    """Payload for all anomaly detection events.
+
+    Used by:
+    - RATIO_EXPLOSION_DETECTED
+    - RATIO_COLLAPSE_DETECTED
+    - VALUE_COLLAPSE_DETECTED
+    - NUMERICAL_INSTABILITY_DETECTED
+    - GRADIENT_ANOMALY
+    - GRADIENT_PATHOLOGY_DETECTED
+
+    All anomaly events share the same payload structure to eliminate
+    isinstance(event.data, dict) patterns and provide type safety.
+    """
+
+    # REQUIRED - core anomaly metadata
+    anomaly_type: str  # The specific anomaly type name (e.g., "ratio_explosion")
+    episode: int  # Episode number when anomaly detected
+    batch: int  # Batch number within episode
+    inner_epoch: int  # Max epochs for the episode
+    total_episodes: int  # Total episodes in training run
+
+    # OPTIONAL - anomaly details
+    detail: str = ""  # Human-readable description of the anomaly
+
+    # OPTIONAL - debug fields (only populated when collect_debug=True)
+    gradient_stats: tuple[dict[str, Any], ...] | None = None  # Per-layer gradient statistics
+    stability: dict[str, Any] | None = None  # Numerical stability report
+    ratio_diagnostic: dict[str, Any] | None = None  # PPO ratio diagnostic info
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "AnomalyDetectedPayload":
+        """Parse from dict. Raises KeyError on missing required fields."""
+        # Convert list to tuple for gradient_stats (JSON deserialization compatibility)
+        gradient_stats = data.get("gradient_stats")
+        if gradient_stats is not None:
+            gradient_stats = _ensure_tuple(gradient_stats)
+
+        return cls(
+            anomaly_type=data["anomaly_type"],
+            episode=data["episode"],
+            batch=data["batch"],
+            inner_epoch=data["inner_epoch"],
+            total_episodes=data["total_episodes"],
+            detail=data.get("detail", ""),
+            gradient_stats=gradient_stats,
+            stability=data.get("stability"),
+            ratio_diagnostic=data.get("ratio_diagnostic"),
+        )
+
+
 # =============================================================================
 # Telemetry Payload Type Union
 # =============================================================================
@@ -1162,4 +1214,5 @@ TelemetryPayload = (
     | SeedPrunedPayload
     | CounterfactualMatrixPayload
     | AnalyticsSnapshotPayload
+    | AnomalyDetectedPayload
 )

@@ -531,10 +531,13 @@ class KarnCollector:
             return
 
         # P1-06: Prefer epoch field over episode for trace windowing
-        # Anomaly events don't have specific typed payloads yet, but they may be dict or typed
+        # Anomaly events use AnomalyDetectedPayload with episode field
+        from esper.leyline import AnomalyDetectedPayload
+
         epoch = event.epoch
-        if epoch is None and isinstance(event.data, dict):
-            epoch = event.data.get("epoch", self.store.current_epoch.epoch)
+        if epoch is None and isinstance(event.data, AnomalyDetectedPayload):
+            # AnomalyDetectedPayload uses 'episode' field, not 'epoch'
+            epoch = event.data.episode
         elif epoch is None:
             epoch = self.store.current_epoch.epoch
 

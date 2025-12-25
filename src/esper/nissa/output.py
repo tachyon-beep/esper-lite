@@ -24,7 +24,11 @@ from datetime import datetime
 from pathlib import Path
 
 from esper.leyline import TelemetryEvent
-from esper.leyline.telemetry import EpochCompletedPayload, BatchEpochCompletedPayload
+from esper.leyline.telemetry import (
+    EpochCompletedPayload,
+    BatchEpochCompletedPayload,
+    AnomalyDetectedPayload,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -268,12 +272,10 @@ class ConsoleOutput(OutputBackend):
                 print(f"[{timestamp}] PPO | policy={policy_loss:.4f}, value={value_loss:.4f}, entropy={entropy:.3f} (coef={entropy_coef:.4f})")
         elif event_type in ("RATIO_EXPLOSION_DETECTED", "RATIO_COLLAPSE_DETECTED",
                            "VALUE_COLLAPSE_DETECTED", "NUMERICAL_INSTABILITY_DETECTED",
-                           "GRADIENT_ANOMALY"):
-            data = event.data or {}
-            episode = data.get("episode", "?")
-            detail = data.get("detail", "")
-            anomaly_name = event_type.replace("_DETECTED", "").replace("_", " ").title()
-            print(f"[{timestamp}] ⚠️  ANOMALY | {anomaly_name} at episode {episode}: {detail}")
+                           "GRADIENT_ANOMALY", "GRADIENT_PATHOLOGY_DETECTED"):
+            if isinstance(event.data, AnomalyDetectedPayload):
+                anomaly_name = event_type.replace("_DETECTED", "").replace("_", " ").title()
+                print(f"[{timestamp}] ⚠️  ANOMALY | {anomaly_name} at episode {event.data.episode}: {event.data.detail}")
         else:
             msg = event.message or event_type
             print(f"[{timestamp}] {seed_id} | {msg}")

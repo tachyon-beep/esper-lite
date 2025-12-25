@@ -896,9 +896,11 @@ def test_emit_anomaly_diagnostics_skips_debug_when_disabled(monkeypatch):
 
     # Event emitted with minimal payload, and expensive collectors not invoked
     assert len(hub.events) == 1
+    from esper.leyline import AnomalyDetectedPayload
     data = hub.events[0].data
-    assert "gradient_stats" not in data
-    assert "stability" not in data
+    assert isinstance(data, AnomalyDetectedPayload)
+    assert data.gradient_stats is None
+    assert data.stability is None
 
 
 def test_emit_anomaly_diagnostics_collects_when_debug_enabled(monkeypatch):
@@ -954,10 +956,12 @@ def test_emit_anomaly_diagnostics_collects_when_debug_enabled(monkeypatch):
 
     assert grad_called["count"] == 1
     assert stability_called["count"] == 1
+    from esper.leyline import AnomalyDetectedPayload
     data = hub.events[0].data
-    assert "gradient_stats" in data
-    assert "stability" in data
-    assert data["ratio_diagnostic"] == {"foo": "bar"}
+    assert isinstance(data, AnomalyDetectedPayload)
+    assert data.gradient_stats is not None
+    assert data.stability is not None
+    assert data.ratio_diagnostic == {"foo": "bar"}
 
 
 # =============================================================================
