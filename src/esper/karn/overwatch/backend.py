@@ -9,6 +9,7 @@ This module provides the Python backend that:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import threading
@@ -215,9 +216,17 @@ class OverwatchBackend:
                         except Empty:
                             pass
 
-                        # Wait for client messages (with timeout for broadcast check)
+                        # Check for client messages with short timeout
+                        # Dashboard is passive (receives only), so we use timeout
+                        # to continue polling broadcast queue
                         try:
-                            await websocket.receive_text()
+                            await asyncio.wait_for(
+                                websocket.receive_text(),
+                                timeout=0.1,
+                            )
+                        except TimeoutError:
+                            # No message from client - continue checking broadcasts
+                            continue
                         except WebSocketDisconnect:
                             break
                         except Exception:

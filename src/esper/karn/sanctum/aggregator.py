@@ -1128,6 +1128,11 @@ class SanctumAggregator:
                 env.reward_components.env_id = env_id
                 env.reward_components.val_acc = env.host_accuracy
 
+            # Track gaming rate (for per-env reward health)
+            env.total_reward_steps += 1
+            if env.reward_components.ratio_penalty != 0 or env.reward_components.alpha_shock != 0:
+                env.gaming_trigger_count += 1
+
             # Create decision snapshot
             now_dt = event.timestamp or datetime.now(timezone.utc)
             value_s = payload.value_estimate or 0.0
