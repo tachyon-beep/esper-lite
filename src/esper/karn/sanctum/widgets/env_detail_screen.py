@@ -487,22 +487,53 @@ class EnvDetailScreen(ModalScreen[None]):
                 action_text.append("  ")
             table.add_row("Action Distribution", action_text)
 
-        # Reward components
+        # Reward breakdown (semantic grouping per UX review)
         rc = env.reward_components
-        if rc.total is not None and rc.total != 0:
-            reward_text = Text()
-            reward_text.append(f"Total: {rc.total:+.3f}", style="bold")
-            if rc.base_acc_delta is not None and rc.base_acc_delta != 0:
+        if rc.total != 0:
+            # Total (standalone row for emphasis)
+            total_style = "bold green" if rc.total >= 0 else "bold red"
+            table.add_row("Reward Total", Text(f"{rc.total:+.3f}", style=total_style))
+
+            # Step-based signals
+            signals = Text()
+            if rc.base_acc_delta != 0:
                 style = "green" if rc.base_acc_delta > 0 else "red"
-                reward_text.append(f"  ΔAcc: {rc.base_acc_delta:+.3f}", style=style)
-            if rc.compute_rent is not None and rc.compute_rent != 0:
-                reward_text.append(f"  Rent: {rc.compute_rent:.3f}", style="red")
-            if rc.alpha_shock is not None and rc.alpha_shock != 0:
-                reward_text.append(f"  Shock: {rc.alpha_shock:.3f}", style="red")
-            if rc.bounded_attribution is not None and rc.bounded_attribution != 0:
+                signals.append(f"ΔAcc: {rc.base_acc_delta:+.3f}", style=style)
+            if rc.compute_rent != 0:
+                signals.append(f"  Rent: {rc.compute_rent:.3f}", style="red")
+            if rc.alpha_shock != 0:
+                signals.append(f"  Shock: {rc.alpha_shock:.3f}", style="red")
+            if rc.ratio_penalty != 0:
+                signals.append(f"  Ratio: {rc.ratio_penalty:.3f}", style="red")
+            if signals.plain:
+                table.add_row("  Signals", signals)
+
+            # Event-based credits/bonuses
+            credits = Text()
+            if rc.bounded_attribution != 0:
                 style = "green" if rc.bounded_attribution > 0 else "red"
-                reward_text.append(f"  Attr: {rc.bounded_attribution:+.3f}", style=style)
-            table.add_row("Reward Breakdown", reward_text)
+                credits.append(f"Attr: {rc.bounded_attribution:+.3f}", style=style)
+            if rc.hindsight_credit != 0:
+                hind_str = f"Hind: {rc.hindsight_credit:+.3f}"
+                # Append scaffold context only when credit is active
+                if rc.scaffold_count > 0:
+                    hind_str += f" ({rc.scaffold_count}x, {rc.avg_scaffold_delay:.1f}e)"
+                credits.append(f"  {hind_str}", style="blue")
+            if rc.stage_bonus != 0:
+                credits.append(f"  Stage: {rc.stage_bonus:+.3f}", style="blue")
+            if rc.fossilize_terminal_bonus != 0:
+                credits.append(f"  Foss: {rc.fossilize_terminal_bonus:+.3f}", style="blue")
+            if credits.plain:
+                table.add_row("  Credits", credits)
+
+            # Warnings (if any active)
+            warnings = Text()
+            if rc.blending_warning < 0:
+                warnings.append(f"Blend: {rc.blending_warning:.3f}", style="yellow")
+            if rc.holding_warning < 0:
+                warnings.append(f"  Hold: {rc.holding_warning:.3f}", style="yellow")
+            if warnings.plain:
+                table.add_row("  Warnings", warnings)
 
         # Recent actions
         if env.action_history:
