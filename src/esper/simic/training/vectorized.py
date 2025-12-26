@@ -1473,11 +1473,16 @@ def train_ppo_vectorized(
                         if has_grads:
                             env_state.scaler.unscale_(seed_opt)
 
-                # Clip all parameters (works for both AMP and non-AMP)
-                all_params = list(model.get_host_parameters())
+                # Clip host and each seed independently (preserves gradient isolation)
+                # Joint clipping would allow large host gradients to reduce seed budget and vice versa
+                host_params = list(model.get_host_parameters())
+                if host_params:
+                    torch.nn.utils.clip_grad_norm_(host_params, max_grad_norm)
+
                 for slot_id in slots_to_step:
-                    all_params.extend(model.get_seed_parameters(slot_id))
-                torch.nn.utils.clip_grad_norm_(all_params, max_grad_norm)
+                    seed_params = list(model.get_seed_parameters(slot_id))
+                    if seed_params:
+                        torch.nn.utils.clip_grad_norm_(seed_params, max_grad_norm)
 
             # Optimizer step (reuses has_grads computation)
             # H12: AMP GradScaler stream safety documentation

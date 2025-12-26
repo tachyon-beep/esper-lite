@@ -170,36 +170,96 @@ class TestGradientClippingDisabled:
 
 
 class TestGradientClippingWithSeeds:
-    """Test gradient clipping includes seed parameters."""
+    """Test gradient clipping for seed parameters with gradient isolation."""
 
-    def test_clips_both_host_and_seed_parameters(self):
-        """Gradient clipping should include both host and seed parameters."""
+    def test_clips_host_and_seed_independently(self):
+        """Host and seed gradients should be clipped independently (gradient isolation).
+
+        This verifies the key architectural principle: large host gradients should NOT
+        consume the clipping budget for seeds, and vice versa. This preserves the
+        Straight-Through Estimator (STE) gradient isolation used in the forward pass.
+        """
         model = MockSlottedModel()
 
-        # Create gradients for both host and seed
+        # Create large gradients for both host and seed
         x = torch.randn(2, 10) * 100
         y = model(x).sum() * 1000
         y.backward()
 
-        # Collect all parameters as done in process_train_batch
-        all_params = list(model.get_host_parameters())
-        all_params.extend(model.get_seed_parameters("slot_0"))
+        max_grad_norm = 0.5
 
-        # Get norm before clipping
-        grad_norm_before = torch.sqrt(
-            sum(p.grad.norm() ** 2 for p in all_params if p.grad is not None)
+        # Apply SEPARATE clipping as done in process_train_batch
+        host_params = list(model.get_host_parameters())
+        seed_params = list(model.get_seed_parameters("slot_0"))
+
+        torch.nn.utils.clip_grad_norm_(host_params, max_grad_norm)
+        torch.nn.utils.clip_grad_norm_(seed_params, max_grad_norm)
+
+        # Verify EACH component is clipped to max_grad_norm independently
+        host_norm = torch.sqrt(
+            sum(p.grad.norm() ** 2 for p in host_params if p.grad is not None)
+        ).item()
+        seed_norm = torch.sqrt(
+            sum(p.grad.norm() ** 2 for p in seed_params if p.grad is not None)
         ).item()
 
-        # Apply clipping
-        max_grad_norm = 0.1
-        torch.nn.utils.clip_grad_norm_(all_params, max_grad_norm)
+        assert host_norm <= max_grad_norm + 1e-6, f"Host norm {host_norm} exceeds max"
+        assert seed_norm <= max_grad_norm + 1e-6, f"Seed norm {seed_norm} exceeds max"
 
-        # Verify clipping worked on combined parameters
-        grad_norm_after = torch.sqrt(
-            sum(p.grad.norm() ** 2 for p in all_params if p.grad is not None)
+    def test_separate_clipping_preserves_gradient_isolation(self):
+        """Separate clipping allows each component its full budget.
+
+        With joint clipping, if host has large gradients, it would consume most of the
+        budget, leaving seeds with reduced gradients. Separate clipping ensures each
+        gets its full max_grad_norm budget independently.
+        """
+        model = MockSlottedModel()
+        max_grad_norm = 1.0
+
+        host_params = list(model.get_host_parameters())
+        seed_params = list(model.get_seed_parameters("slot_0"))
+
+        # Set gradients manually: large for host (10.0), moderate for seed (0.5)
+        # This simulates the asymmetric gradient scenario
+        with torch.no_grad():
+            for p in host_params:
+                p.grad = torch.full_like(p, 10.0 / (p.numel() ** 0.5))  # ~10.0 norm total
+            for p in seed_params:
+                p.grad = torch.full_like(p, 0.5 / (p.numel() ** 0.5))  # ~0.5 norm total
+
+        # Get original norms
+        original_host_norm = torch.sqrt(
+            sum(p.grad.norm() ** 2 for p in host_params if p.grad is not None)
+        ).item()
+        original_seed_norm = torch.sqrt(
+            sum(p.grad.norm() ** 2 for p in seed_params if p.grad is not None)
         ).item()
 
-        assert grad_norm_after <= max_grad_norm + 1e-6
+        # Host should have much larger gradients
+        assert original_host_norm > 5 * original_seed_norm, (
+            f"Test setup: host norm {original_host_norm} should be >> seed norm {original_seed_norm}"
+        )
+        # Seed should be below clipping threshold
+        assert original_seed_norm < max_grad_norm, (
+            f"Test setup: seed norm {original_seed_norm} should be < max_grad_norm {max_grad_norm}"
+        )
+
+        # Apply separate clipping
+        torch.nn.utils.clip_grad_norm_(host_params, max_grad_norm)
+        torch.nn.utils.clip_grad_norm_(seed_params, max_grad_norm)
+
+        # After clipping, BOTH should be at or below max_grad_norm
+        # Seed should NOT be over-clipped due to host's large gradients
+        final_seed_norm = torch.sqrt(
+            sum(p.grad.norm() ** 2 for p in seed_params if p.grad is not None)
+        ).item()
+
+        # Seed norm should be unchanged (was already below max_grad_norm)
+        # With joint clipping, seed would have been reduced due to host's large norm
+        assert abs(final_seed_norm - original_seed_norm) < 1e-4, (
+            f"Seed norm {final_seed_norm} should equal original {original_seed_norm}, "
+            "not reduced by host clipping"
+        )
 
 
 class TestGradientClippingNonAMPPath:
