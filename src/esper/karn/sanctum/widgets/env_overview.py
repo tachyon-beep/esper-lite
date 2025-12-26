@@ -123,6 +123,7 @@ class EnvOverview(Static):
         # Fixed columns - ordered: Identity → Performance → Trends → Reward breakdown
         self.table.add_column("Env", key="env")
         self.table.add_column("Acc", key="acc")
+        self.table.add_column("Loss", key="loss")  # Host loss (for overfitting detection)
         self.table.add_column("CF", key="cf")  # Counterfactual: synergy/interference
         self.table.add_column("Growth", key="growth")  # growth_ratio: (host+foss)/host
         self.table.add_column("Reward", key="reward")
@@ -261,6 +262,9 @@ class EnvOverview(Static):
         # Accuracy with color coding
         acc_cell = self._format_accuracy(env)
 
+        # Host loss (for overfitting detection)
+        loss_cell = self._format_host_loss(env)
+
         # Counterfactual: synergy/interference indicator
         cf_cell = self._format_counterfactual(env)
 
@@ -298,6 +302,7 @@ class EnvOverview(Static):
         row = [
             env_id_cell,
             acc_cell,
+            loss_cell,
             cf_cell,
             growth_cell,
             reward_cell,
@@ -345,6 +350,10 @@ class EnvOverview(Static):
         mean_delta = sum(deltas) / len(deltas) if deltas else 0.0
         mean_rent = sum(rents) / len(rents) if rents else 0.0
 
+        # Calculate mean loss
+        losses = [e.host_loss for e in self._snapshot.envs.values() if e.host_loss > 0]
+        mean_loss = sum(losses) / len(losses) if losses else 0.0
+
         # Calculate mean growth ratio
         growth_ratios = [e.growth_ratio for e in self._snapshot.envs.values()]
         mean_growth = sum(growth_ratios) / len(growth_ratios) if growth_ratios else 1.0
@@ -353,6 +362,7 @@ class EnvOverview(Static):
         agg_row = [
             "[bold]Σ[/bold]",
             f"[bold]{self._snapshot.aggregate_mean_accuracy:.1f}%[/bold]",
+            f"[dim]{mean_loss:.3f}[/dim]" if mean_loss > 0 else "─",  # Mean loss
             "",  # CF - not aggregated
             f"[dim]{mean_growth:.2f}x[/dim]",  # Growth ratio mean
             f"[bold]{self._snapshot.aggregate_mean_reward:+.2f}[/bold]",
@@ -387,6 +397,27 @@ class EnvOverview(Static):
             pip, color = _AB_STYLES[env.reward_mode]
             return f"[{color}]{pip}[/{color}]{env.env_id}"
         return str(env.env_id)
+
+    def _format_host_loss(self, env: "EnvState") -> str:
+        """Format host loss with color coding for overfitting detection.
+
+        Loss color coding:
+        - Green: loss < 0.1 (very low, good convergence)
+        - White: 0.1 <= loss < 0.5 (normal training range)
+        - Yellow: 0.5 <= loss < 1.0 (elevated, might be overfitting)
+        - Red: loss >= 1.0 (high, possible issues)
+        """
+        loss = env.host_loss
+        if loss <= 0:
+            return "[dim]─[/dim]"
+        elif loss < 0.1:
+            return f"[green]{loss:.3f}[/green]"
+        elif loss < 0.5:
+            return f"{loss:.3f}"
+        elif loss < 1.0:
+            return f"[yellow]{loss:.3f}[/yellow]"
+        else:
+            return f"[red]{loss:.3f}[/red]"
 
     def _format_growth_ratio(self, env: "EnvState") -> str:
         """Format growth ratio: (host+fossilized)/host.

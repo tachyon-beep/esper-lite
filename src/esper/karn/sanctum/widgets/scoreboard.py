@@ -204,7 +204,11 @@ class Scoreboard(Static):
             self.post_message(self.BestRunPinToggled(record.record_id))
 
     def _format_seeds(self, seeds: dict[str, "SeedState"]) -> str:
-        """Format seed composition at peak accuracy."""
+        """Format seed composition at peak accuracy with improvement annotations.
+
+        Shows blueprint names with stage colors, plus improvement delta if available.
+        Improvement is the accuracy delta when the seed was fossilized.
+        """
         contributing = [
             seed
             for seed in seeds.values()
@@ -221,7 +225,13 @@ class Scoreboard(Static):
         for seed in contributing[:3]:
             bp = (seed.blueprint_id or "?")[:6]
             color = stage_colors.get(seed.stage, "dim")
-            parts.append(f"[{color}]{bp}[/{color}]")
+            # Add improvement annotation for fossilized seeds
+            if seed.stage == "FOSSILIZED" and seed.improvement != 0:
+                # Show improvement as small delta indicator
+                imp_style = "green" if seed.improvement > 0 else "red"
+                parts.append(f"[{color}]{bp}[/{color}][{imp_style}]{seed.improvement:+.1f}[/{imp_style}]")
+            else:
+                parts.append(f"[{color}]{bp}[/{color}]")
 
         if len(contributing) > 3:
             parts.append(f"[dim]+{len(contributing) - 3}[/]")

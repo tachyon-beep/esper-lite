@@ -33,9 +33,13 @@ class AnomalyStrip(Static):
         # Computed anomaly counts
         self.stalled_count: int = 0
         self.degraded_count: int = 0
-        self.gradient_issues: int = 0
+        self.gradient_issues: int = 0  # Per-seed gradient issues (vanishing/exploding)
         self.ppo_issues: bool = False
         self.memory_alarm: bool = False
+        # Network-level gradient health (from TamiyoState)
+        self.dead_layers: int = 0
+        self.exploding_layers: int = 0
+        self.nan_grad_count: int = 0
 
     @property
     def has_anomalies(self) -> bool:
@@ -46,6 +50,9 @@ class AnomalyStrip(Static):
             or self.gradient_issues > 0
             or self.ppo_issues
             or self.memory_alarm
+            or self.dead_layers > 0
+            or self.exploding_layers > 0
+            or self.nan_grad_count > 0
         )
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
@@ -72,6 +79,9 @@ class AnomalyStrip(Static):
         self.gradient_issues = 0
         self.ppo_issues = False
         self.memory_alarm = False
+        self.dead_layers = 0
+        self.exploding_layers = 0
+        self.nan_grad_count = 0
 
         # Count env status issues
         for env in self._snapshot.envs.values():
@@ -93,6 +103,11 @@ class AnomalyStrip(Static):
         if tamiyo.kl_divergence > 0.05:
             self.ppo_issues = True
 
+        # Check network-level gradient health (from PPO update)
+        self.dead_layers = tamiyo.dead_layers
+        self.exploding_layers = tamiyo.exploding_layers
+        self.nan_grad_count = tamiyo.nan_grad_count
+
         # Check memory pressure
         self.memory_alarm = self._snapshot.vitals.has_memory_alarm
 
@@ -112,8 +127,15 @@ class AnomalyStrip(Static):
         if self.degraded_count > 0:
             parts.append(("degraded", self.degraded_count, "red"))
         if self.gradient_issues > 0:
-            label = "grad issue" if self.gradient_issues == 1 else "grad issues"
+            label = "seed grad" if self.gradient_issues == 1 else "seed grads"
             parts.append((label, self.gradient_issues, "red"))
+        # Network-level gradient health (critical issues)
+        if self.nan_grad_count > 0:
+            parts.append(("NaN grads", self.nan_grad_count, "red"))
+        if self.exploding_layers > 0:
+            parts.append(("exploding", self.exploding_layers, "red"))
+        if self.dead_layers > 0:
+            parts.append(("dead layers", self.dead_layers, "yellow"))
         if self.ppo_issues:
             parts.append(("PPO", None, "yellow"))
         if self.memory_alarm:

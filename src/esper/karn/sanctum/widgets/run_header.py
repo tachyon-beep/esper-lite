@@ -194,16 +194,19 @@ class RunHeader(Static):
         """Get system alarm indicator for header.
 
         Returns:
-            "OK" if no memory alarm, or alarm indicator like "cuda:0 95% │ RAM 92%"
+            "OK" if no alarms, or alarm indicator like "cuda:0 95% │ RAM 92% │ CPU 95%"
         """
         if self._snapshot is None:
             return "OK"
 
         vitals = self._snapshot.vitals
-        if not vitals.has_memory_alarm:
-            return "OK"
-
         alarms = []
+
+        # Check CPU utilization (>90% is concerning)
+        if vitals.cpu_percent is not None and vitals.cpu_percent > 90:
+            alarms.append(f"CPU {int(vitals.cpu_percent)}%")
+
+        # Check memory alarms
         for device in vitals.memory_alarm_devices:
             if device == "RAM":
                 if vitals.ram_used_gb is not None and vitals.ram_total_gb is not None and vitals.ram_total_gb > 0:
@@ -221,6 +224,20 @@ class RunHeader(Static):
                     alarms.append(f"cuda:0 {pct}%")
 
         return " │ ".join(alarms) if alarms else "OK"
+
+    @property
+    def has_system_alarm(self) -> bool:
+        """Check if any system alarm is active (memory or CPU)."""
+        if self._snapshot is None:
+            return False
+        vitals = self._snapshot.vitals
+        # Memory alarm
+        if vitals.has_memory_alarm:
+            return True
+        # CPU alarm (>90%)
+        if vitals.cpu_percent is not None and vitals.cpu_percent > 90:
+            return True
+        return False
 
     def render(self) -> Panel:
         """Render the run header panel."""
@@ -371,8 +388,8 @@ class RunHeader(Static):
         alarm_indicator = self._get_system_alarm_indicator()
         alarm_style = "green" if alarm_indicator == "OK" else "bold red"
 
-        # Dynamic border: red when memory alarm active
-        border_style = "bold red" if self._snapshot.vitals.has_memory_alarm else "blue"
+        # Dynamic border: red when any system alarm active (memory or CPU)
+        border_style = "bold red" if self.has_system_alarm else "blue"
 
         return Panel(
             table,

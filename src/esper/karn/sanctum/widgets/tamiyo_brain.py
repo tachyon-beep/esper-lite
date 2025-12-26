@@ -8,6 +8,7 @@ New layout focuses on answering:
 
 from __future__ import annotations
 
+import math
 from collections import deque
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -1858,6 +1859,135 @@ class TamiyoBrain(Static):
 
         return result
 
+    def _render_head_gradient_heatmap(self) -> Text:
+        """Render per-head gradient norm heatmap with 8 action heads.
+
+        Gradient norms indicate training health for each action head:
+        - Healthy: 0.1 - 2.0 (green) - gradients flowing well
+        - Warning: 0.01-0.1 or 2.0-5.0 (yellow) - weak or strong gradients
+        - Critical: <0.01 or >5.0 (red) - vanishing or exploding gradients
+
+        Layout mirrors the entropy heatmap for visual consistency.
+        """
+        if self._snapshot is None:
+            return Text(" Grads: (no data)", style="dim")
+
+        tamiyo = self._snapshot.tamiyo
+
+        # Head config: (abbrev, field_name)
+        # Same abbreviations as entropy heatmap for consistency
+        heads = [
+            ("slot", "head_slot_grad_norm"),
+            ("bpnt", "head_blueprint_grad_norm"),
+            ("styl", "head_style_grad_norm"),
+            ("temp", "head_tempo_grad_norm"),
+            ("atgt", "head_alpha_target_grad_norm"),
+            ("aspd", "head_alpha_speed_grad_norm"),
+            ("acrv", "head_alpha_curve_grad_norm"),
+            ("op", "head_op_grad_norm"),
+        ]
+
+        result = Text()
+        result.append(" Grads: ", style="dim")
+
+        # First line: bars (9-char segments)
+        for abbrev, field in heads:
+            value = getattr(tamiyo, field, 0.0)
+
+            # No data case
+            if value == 0.0:
+                result.append(f"{abbrev}[", style="dim")
+                result.append("---", style="dim italic")
+                result.append("] ")
+                continue
+
+            # Normalize to 0-1 for bar display
+            # Healthy range is 0.1-2.0, so we map 1.0 (ideal) to fill=0.5
+            # and use log scale to handle the wide range
+            if value < 0.01:
+                # Vanishing: very low fill
+                fill = 0.1
+                color = "red"
+            elif value < 0.1:
+                # Weak: low fill, warning
+                fill = 0.2
+                color = "yellow"
+            elif value <= 2.0:
+                # Healthy range: map 0.1-2.0 to fill 0.3-1.0
+                # Use log scale: log10(0.1)=-1, log10(2.0)≈0.3
+                log_val = math.log10(value)
+                fill = 0.5 + (log_val + 1) * 0.35  # Maps -1 to 0.15, 0.3 to 0.85
+                fill = max(0.3, min(1.0, fill))
+                color = "green"
+            elif value <= 5.0:
+                # Strong but not exploding: warning
+                fill = 0.8
+                color = "yellow"
+            else:
+                # Exploding: high fill, critical
+                fill = 1.0
+                color = "red"
+
+            # 3-char bar
+            bar_width = 3
+            filled = int(fill * bar_width)
+            empty = bar_width - filled
+
+            # Pad abbrev to 4 chars
+            label = f"{abbrev} " if len(abbrev) < 4 else abbrev
+
+            # 9-char segment: "abbr[███] "
+            result.append(f"{label[:4]}[")
+            result.append("█" * filled, style=color)
+            result.append("░" * empty, style="dim")
+            result.append("] ")
+
+        result.append("\n        ")
+
+        # Second line: values (aligned under bars)
+        for i, (abbrev, field) in enumerate(heads):
+            value = getattr(tamiyo, field, 0.0)
+            is_last_head = i == len(heads) - 1
+
+            if value == 0.0:
+                # No data
+                if is_last_head:
+                    result.append("   n/a    ", style="dim italic")
+                else:
+                    result.append("     n/a  ", style="dim italic")
+                continue
+
+            # Determine status indicator
+            if value < 0.01:
+                indicator = "↓"  # Vanishing
+                style = "red"
+            elif value < 0.1:
+                indicator = "*"  # Weak warning
+                style = "yellow"
+            elif value <= 2.0:
+                indicator = " "  # Healthy
+                style = "dim"
+            elif value <= 5.0:
+                indicator = "*"  # Strong warning
+                style = "yellow"
+            else:
+                indicator = "!"  # Exploding
+                style = "red"
+
+            # Format value - use scientific notation for very small/large
+            if value < 0.01 or value >= 100:
+                val_str = f"{value:.0e}"  # e.g., "1e-03" or "2e+02"
+                val_str = val_str[:5]  # Truncate to fit
+            else:
+                val_str = f"{value:4.2f}"
+
+            if is_last_head:
+                result.append(f"  {val_str}{indicator}   ", style=style)
+            else:
+                result.append(f"    {val_str}{indicator} ", style=style)
+
+        return result
+
     def _render_decisions_column(self) -> Text:
         """Render vertical stack of compact decision cards for right column.
 
@@ -2062,11 +2192,15 @@ class TamiyoBrain(Static):
         # Row 3: Separator
         content.add_row(self._render_separator())
 
-        # Row 4: Head heatmap
+        # Row 4: Head entropy heatmap
         head_heatmap = self._render_head_heatmap()
         content.add_row(head_heatmap)
 
-        # Row 5: Separator
+        # Row 5: Head gradient heatmap (training health per head)
+        grad_heatmap = self._render_head_gradient_heatmap()
+        content.add_row(grad_heatmap)
+
+        # Row 6: Separator
         content.add_row(self._render_separator())
 
         # Row 6: Action distribution bar
