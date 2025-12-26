@@ -178,7 +178,7 @@ const showTempWarning = computed(() => props.vitals.gpu_temperature > TEMP_WARNI
       data-testid="temp-warning"
       class="temp-warning"
     >
-      {{ vitals.gpu_temperature }}C
+      {{ vitals.gpu_temperature }}°C
     </div>
   </div>
 </template>
