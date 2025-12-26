@@ -12,7 +12,7 @@ from esper.leyline.telemetry import (
 )
 
 if TYPE_CHECKING:
-    from esper.karn.collector import OutputBackend
+    pass
 
 
 class TestMultiEnvSlotTracking:

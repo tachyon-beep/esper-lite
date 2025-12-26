@@ -141,11 +141,8 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.num_fossilized_seeds')::INTEGER as num_fossilized_seeds
         FROM raw_events
         WHERE
-            event_type = 'REWARD_COMPUTED'
-            OR (
-                event_type = 'ANALYTICS_SNAPSHOT'
-                AND json_extract_string(data, '$.kind') = 'last_action'
-            )
+            event_type = 'ANALYTICS_SNAPSHOT'
+            AND json_extract_string(data, '$.kind') = 'last_action'
     """,
     "anomalies": """
         CREATE OR REPLACE VIEW anomalies AS
@@ -166,6 +163,22 @@ VIEW_DEFINITIONS: dict[str, str] = {
             'GOVERNOR_ROLLBACK',
             'PLATEAU_DETECTED'
         )
+    """,
+    "episode_outcomes": """
+        CREATE OR REPLACE VIEW episode_outcomes AS
+        SELECT
+            timestamp,
+            json_extract(data, '$.env_idx')::INTEGER as env_idx,
+            json_extract(data, '$.episode_idx')::INTEGER as episode_idx,
+            json_extract(data, '$.final_accuracy')::DOUBLE as final_accuracy,
+            json_extract(data, '$.param_ratio')::DOUBLE as param_ratio,
+            json_extract(data, '$.num_fossilized')::INTEGER as num_fossilized,
+            json_extract(data, '$.num_contributing_fossilized')::INTEGER as num_contributing,
+            json_extract(data, '$.episode_reward')::DOUBLE as episode_reward,
+            json_extract(data, '$.stability_score')::DOUBLE as stability_score,
+            json_extract_string(data, '$.reward_mode') as reward_mode
+        FROM raw_events
+        WHERE event_type = 'EPISODE_OUTCOME'
     """,
 }
 

@@ -8,6 +8,7 @@ retargeting, checkpoint round-trips) without touching the runtime.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 import math
 
 from esper.leyline.alpha import AlphaCurve, AlphaMode
@@ -142,7 +143,7 @@ class AlphaController:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "AlphaController":
+    def from_dict(cls, data: dict[str, Any]) -> "AlphaController":
         return cls(
             alpha=float(data.get("alpha", 0.0)),
             alpha_start=float(data.get("alpha_start", 0.0)),

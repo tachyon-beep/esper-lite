@@ -8,7 +8,7 @@ Displays detailed context for the selected environment:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from textual.app import ComposeResult
 from textual.containers import Container
@@ -49,7 +49,7 @@ class ContextPanel(Container):
     }
     """
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         """Initialize the context panel."""
         super().__init__(**kwargs)
         self._env: EnvSummary | None = None

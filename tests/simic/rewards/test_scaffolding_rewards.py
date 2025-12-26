@@ -1,9 +1,7 @@
 """Tests for scaffolding reward shaping (Phase 3.1)."""
 
-import pytest
-from esper.simic.rewards import compute_contribution_reward, ContributionRewardConfig, SeedInfo
-from esper.leyline import SeedStage
-from esper.leyline.factored_actions import LifecycleOp
+from esper.leyline import LifecycleOp, SeedStage
+from esper.simic.rewards import ContributionRewardConfig, SeedInfo, compute_contribution_reward
 
 
 def test_synergy_bonus_added_for_positive_interaction():
@@ -140,4 +138,4 @@ def test_scaffold_credit_on_beneficiary_success():
     )
 
     assert credit > 0, f"Expected positive credit, got {credit}"
-    assert credit <= 0.2, f"Credit should be bounded by weight"
+    assert credit <= 0.2, "Credit should be bounded by weight"

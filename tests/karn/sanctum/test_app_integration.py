@@ -4,6 +4,7 @@ import pytest
 from unittest.mock import MagicMock
 
 from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState, EnvState
+from esper.karn.sanctum.widgets.reward_health import RewardHealthData
 from esper.leyline.telemetry import PPOUpdatePayload
 
 
@@ -17,10 +18,11 @@ class TestSanctumAppIntegration:
 
         mock_backend = MagicMock()
         mock_backend.get_snapshot.return_value = SanctumSnapshot()
+        mock_backend.compute_reward_health.return_value = RewardHealthData()
 
         app = SanctumApp(backend=mock_backend, num_envs=4)
 
-        async with app.run_test() as pilot:
+        async with app.run_test():
             # Verify all widgets exist
             assert app.query_one("#env-overview") is not None
             assert app.query_one("#scoreboard") is not None
@@ -38,6 +40,7 @@ class TestSanctumAppIntegration:
             envs={0: EnvState(env_id=0, host_accuracy=75.5)},
         )
         mock_backend.get_snapshot.return_value = snapshot
+        mock_backend.compute_reward_health.return_value = RewardHealthData()
 
         # Use a fast refresh rate so timer fires quickly
         app = SanctumApp(backend=mock_backend, num_envs=4, refresh_rate=10.0)
@@ -58,10 +61,11 @@ class TestSanctumAppIntegration:
 
         mock_backend = MagicMock()
         mock_backend.get_snapshot.return_value = SanctumSnapshot()
+        mock_backend.compute_reward_health.return_value = RewardHealthData()
 
         app = SanctumApp(backend=mock_backend, num_envs=16)
 
-        async with app.run_test() as pilot:
+        async with app.run_test():
             # Verify initial state
             assert app._focused_env_id == 0
 
@@ -83,6 +87,7 @@ class TestSanctumAppIntegration:
 
         mock_backend = MagicMock()
         mock_backend.get_snapshot.return_value = SanctumSnapshot()
+        mock_backend.compute_reward_health.return_value = RewardHealthData()
 
         app = SanctumApp(backend=mock_backend, num_envs=4)
 
@@ -103,7 +108,7 @@ async def test_new_layout_structure():
     backend = SanctumBackend()
     app = SanctumApp(backend=backend, num_envs=4)
 
-    async with app.run_test() as pilot:
+    async with app.run_test():
         # Should have EnvOverview and Scoreboard in top section
         assert app.query_one("#env-overview") is not None
         assert app.query_one("#scoreboard") is not None

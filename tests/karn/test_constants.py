@@ -1,6 +1,5 @@
 """Tests for Karn constants module."""
 
-import pytest
 from esper.karn.constants import (
     AnomalyThresholds,
     PolicyThresholds,

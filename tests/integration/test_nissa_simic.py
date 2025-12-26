@@ -8,11 +8,10 @@ Tests the core integration where:
 """
 
 import pytest
-import torch
 
-from esper.nissa import NissaHub, get_hub
-from esper.leyline import TelemetryEvent, TelemetryEventType
-from esper.leyline.telemetry import RewardComputedPayload
+from esper.nissa import NissaHub
+from esper.leyline import LifecycleOp, SeedStage, TelemetryEvent, TelemetryEventType
+from esper.leyline.telemetry import AnalyticsSnapshotPayload
 from esper.simic.telemetry import AnomalyDetector
 from esper.simic.rewards import RewardComponentsTelemetry
 from esper.simic.rewards import (
@@ -20,8 +19,6 @@ from esper.simic.rewards import (
     SeedInfo,
     ContributionRewardConfig,
 )
-from esper.leyline import SeedStage
-from esper.leyline.factored_actions import LifecycleOp
 
 
 # =============================================================================
@@ -146,14 +143,14 @@ class TestAnomalyDetection:
     def test_hub_can_emit_telemetry_event(self, hub):
         """NissaHub should accept telemetry events."""
         event = TelemetryEvent(
-            event_type=TelemetryEventType.REWARD_COMPUTED,
-            data=RewardComputedPayload(
+            event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+            data=AnalyticsSnapshotPayload(
+                kind="last_action",
                 env_id=0,
                 total_reward=0.5,
                 action_name="WAIT",
                 value_estimate=0.3,
                 action_confidence=0.8,
-                seed_contribution=0.02,
             ),
             epoch=5,
         )

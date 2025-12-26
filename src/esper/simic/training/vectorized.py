@@ -33,66 +33,65 @@ import os
 import random
 import threading
 import time
-import warnings
-from contextlib import ExitStack, nullcontext
-from dataclasses import dataclass, field
-from typing import Any, Callable, Sequence
 
-_logger = logging.getLogger(__name__)
+import numpy as np
+from contextlib import nullcontext
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.amp as torch_amp
+
+if TYPE_CHECKING:
+    from esper.leyline.reports import SeedStateReport
+
+from esper.simic.contracts import SeedSlotProtocol, SlottedHostProtocol
 
 # NOTE: get_task_spec imported lazily inside train_ppo_vectorized to avoid circular import:
 #   runtime -> simic.rewards -> simic -> simic.training -> vectorized -> runtime
 from esper.utils.data import SharedBatchIterator
 from esper.leyline import (
-    AlphaMode,
+    ALPHA_SPEED_TO_STEPS,
+    ALPHA_TARGET_VALUES,
     AlphaAlgorithm,
-    SeedStage,
-    SeedTelemetry,
-    TelemetryEvent,
-    TelemetryEventType,
-    TrainingStartedPayload,
-    SlotConfig,
-    DEFAULT_GAMMA,
-    DEFAULT_GAE_LAMBDA,
-    DEFAULT_EPISODE_LENGTH,
-    DEFAULT_LSTM_HIDDEN_DIM,
-    DEFAULT_N_ENVS,
-    DEFAULT_LEARNING_RATE,
+    AlphaCurveAction,
+    AlphaMode,
+    AlphaSpeedAction,
+    BLUEPRINT_IDS,
     DEFAULT_CLIP_RATIO,
     DEFAULT_ENTROPY_COEF,
     DEFAULT_ENTROPY_COEF_MIN,
-    DEFAULT_GOVERNOR_SENSITIVITY,
+    DEFAULT_EPISODE_LENGTH,
+    DEFAULT_GAE_LAMBDA,
+    DEFAULT_GAMMA,
     DEFAULT_GOVERNOR_ABSOLUTE_THRESHOLD,
     DEFAULT_GOVERNOR_DEATH_PENALTY,
     DEFAULT_GOVERNOR_HISTORY_WINDOW,
+    DEFAULT_GOVERNOR_SENSITIVITY,
+    DEFAULT_LEARNING_RATE,
+    DEFAULT_LSTM_HIDDEN_DIM,
     DEFAULT_MIN_PANICS_BEFORE_ROLLBACK,
+    DEFAULT_N_ENVS,
+    EpisodeOutcomePayload,
     HEAD_NAMES,
-)
-from esper.leyline.factored_actions import (
-    FactoredAction,
-    AlphaCurveAction,
-    AlphaSpeedAction,
-    AlphaTargetAction,
-    ALPHA_SPEED_TO_STEPS,
-    ALPHA_TARGET_VALUES,
     LifecycleOp,
+    OP_ADVANCE,
+    OP_FOSSILIZE,
+    OP_GERMINATE,
     OP_NAMES,
-    BLUEPRINT_IDS,
+    OP_PRUNE,
+    OP_SET_ALPHA_TARGET,
+    OP_WAIT,
+    SeedStage,
+    SeedTelemetry,
+    SlotConfig,
     STYLE_ALPHA_ALGORITHMS,
     STYLE_BLEND_IDS,
-    TempoAction,
     TEMPO_TO_EPOCHS,
-    OP_WAIT,
-    OP_GERMINATE,
-    OP_SET_ALPHA_TARGET,
-    OP_PRUNE,
-    OP_FOSSILIZE,
-    OP_ADVANCE,
+    TelemetryEvent,
+    TelemetryEventType,
+    TempoAction,
+    TrainingStartedPayload,
 )
 from esper.tamiyo.policy.action_masks import build_slot_states, compute_action_masks
 from esper.leyline.slot_id import validate_slot_ids
@@ -101,21 +100,20 @@ from esper.simic.telemetry import (
     AnomalyReport,
     collect_per_layer_gradients,
     check_numerical_stability,
-    LayerGradientStats,
     collect_host_gradients_async,
     collect_seed_gradients_only_async,
     materialize_dual_grad_stats,
     TelemetryConfig,
-    compute_lstm_health,  # P4-8
     GradientEMATracker,  # P4-9
 )
 from esper.simic.control import RunningMeanStd, RewardNormalizer
 from esper.tamiyo.policy.features import (
-    MULTISLOT_FEATURE_SIZE,
     get_feature_size,
     batch_obs_to_features,
 )
 from esper.simic.agent import PPOAgent
+from esper.simic.agent.types import PPOUpdateMetrics
+from esper.tamiyo.policy import create_policy
 from esper.simic.rewards import (
     compute_reward,
     compute_loss_reward,
@@ -128,24 +126,18 @@ from esper.leyline import DEFAULT_MIN_FOSSILIZE_CONTRIBUTION, MIN_PRUNE_AGE
 from esper.nissa import get_hub, BlueprintAnalytics, DirectoryOutput
 from esper.tolaria import TolariaGovernor
 from esper.karn.health import HealthMonitor
+from esper.karn.store import EpisodeOutcome
 from esper.simic.attribution import CounterfactualHelper
 from esper.simic.telemetry.emitters import (
     emit_with_env_context,
-    emit_last_action,
     compute_grad_norm_surrogate,
-    aggregate_layer_gradient_health,
-    emit_ppo_update_event,
-    emit_action_distribution,
-    emit_cf_unavailable,
-    emit_throughput,
-    emit_reward_summary,
-    emit_mask_hit_rates,
-    check_performance_degradation,
     apply_slot_telemetry,
     VectorizedEmitter,
 )
 from .parallel_env_state import ParallelEnvState
 from .helpers import compute_rent_and_shock_inputs
+
+_logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -166,15 +158,15 @@ class CUDATimer:
     def __init__(self, device: str = "cuda"):
         self.use_cuda = device.startswith("cuda") and torch.cuda.is_available()
         if self.use_cuda:
-            self.start_event = torch.cuda.Event(enable_timing=True)
-            self.end_event = torch.cuda.Event(enable_timing=True)
+            self.start_event = torch.cuda.Event(enable_timing=True)  # type: ignore[no-untyped-call]
+            self.end_event = torch.cuda.Event(enable_timing=True)  # type: ignore[no-untyped-call]
         else:
             self.start_time = 0.0
 
     def start(self) -> None:
         """Record start time."""
         if self.use_cuda:
-            self.start_event.record()
+            self.start_event.record()  # type: ignore[no-untyped-call]
         else:
             self.start_time = time.perf_counter()
 
@@ -184,9 +176,9 @@ class CUDATimer:
         For CUDA: synchronizes to ensure GPU work is complete before measuring.
         """
         if self.use_cuda:
-            self.end_event.record()
+            self.end_event.record()  # type: ignore[no-untyped-call]
             self.end_event.synchronize()
-            return self.start_event.elapsed_time(self.end_event)
+            return self.start_event.elapsed_time(self.end_event)  # type: ignore[no-untyped-call,no-any-return]
         else:
             return (time.perf_counter() - self.start_time) * 1000.0
 
@@ -196,7 +188,7 @@ class CUDATimer:
 # =============================================================================
 
 
-def _advance_active_seed(model, slot_id: str) -> bool:
+def _advance_active_seed(model: Any, slot_id: str) -> bool:
     """Advance lifecycle for the active seed in the specified slot.
 
     Args:
@@ -209,8 +201,10 @@ def _advance_active_seed(model, slot_id: str) -> bool:
     if not model.has_active_seed_in_slot(slot_id):
         return False
 
-    slot = model.seed_slots[slot_id]
+    slot = cast(SeedSlotProtocol, model.seed_slots[slot_id])
     seed_state = slot.state
+    if seed_state is None:
+        return False
     current_stage = seed_state.stage
 
     # Tamiyo only finalizes; mechanical blending/advancement handled by Kasmina.
@@ -261,18 +255,18 @@ def _calculate_entropy_anneal_steps(
     return batches_for_anneal * updates_per_batch
 
 
-def _aggregate_ppo_metrics(update_metrics: list[dict]) -> dict:
+def _aggregate_ppo_metrics(update_metrics: list[PPOUpdateMetrics]) -> dict[str, Any]:
     """Aggregate metrics across multiple PPO updates for a single batch."""
     if not update_metrics:
         return {}
 
-    aggregated: dict = {}
+    aggregated: dict[str, Any] = {}
     keys = {k for metrics in update_metrics for k in metrics.keys()}
     for key in keys:
-        values = [
-            metrics[key]
+        values: list[Any] = [
+            metrics.get(key)
             for metrics in update_metrics
-            if key in metrics and metrics[key] is not None
+            if key in metrics and metrics.get(key) is not None
         ]
         if not values:
             continue
@@ -299,7 +293,7 @@ def _run_ppo_updates(
     obs_normalizer: RunningMeanStd,
     use_amp: bool,
     amp_dtype: torch.dtype | None = None,  # None=float16 for backwards compat
-) -> dict:
+) -> dict[str, Any]:
     """Run one or more PPO updates on the current buffer and aggregate metrics."""
     # C5 FIX: Update observation normalizer BEFORE PPO update.
     # This ensures batch N's observations are normalized with stats that include batch N,
@@ -313,7 +307,7 @@ def _run_ppo_updates(
         all_raw_states = torch.cat(raw_states_for_normalizer_update, dim=0)
         obs_normalizer.update(all_raw_states)
 
-    update_metrics: list[dict] = []
+    update_metrics: list[PPOUpdateMetrics] = []
     buffer_cleared = False
     updates_to_run = max(1, ppo_updates_per_batch)
 
@@ -322,7 +316,7 @@ def _run_ppo_updates(
         if use_amp and torch.cuda.is_available():
             # Use provided dtype, default to float16 for backwards compatibility
             dtype = amp_dtype if amp_dtype is not None else torch.float16
-            with torch_amp.autocast(device_type="cuda", dtype=dtype):  # type: ignore[call-arg]
+            with torch_amp.autocast(device_type="cuda", dtype=dtype):  # type: ignore[attr-defined]
                 metrics = agent.update(clear_buffer=clear_buffer)
         else:
             metrics = agent.update(clear_buffer=clear_buffer)
@@ -332,6 +326,7 @@ def _run_ppo_updates(
 
         approx_kl = metrics.get("approx_kl") if metrics else None
         if agent.target_kl is not None and approx_kl is not None:
+            # approx_kl is already aggregated to float by PPOAgent.update()
             if approx_kl > 1.5 * agent.target_kl:
                 break
 
@@ -368,7 +363,7 @@ def _emit_anomaly_diagnostics(
     max_epochs: int,
     total_episodes: int,
     collect_debug: bool,
-    ratio_diagnostic: dict | None = None,
+    ratio_diagnostic: dict[str, Any] | None = None,
     group_id: str | None = None,
 ) -> None:
     """Emit anomaly telemetry, optionally with expensive diagnostics when debug is enabled."""
@@ -387,8 +382,8 @@ def _emit_anomaly_diagnostics(
     gradient_stats = None
     stability_report = None
     if collect_debug:
-        gradient_stats = collect_per_layer_gradients(agent.network)
-        stability_report = check_numerical_stability(agent.network)
+        gradient_stats = collect_per_layer_gradients(agent.policy.network)
+        stability_report = check_numerical_stability(agent.policy.network)
 
     for anomaly_type in anomaly_report.anomaly_types:
         event_type = event_type_map.get(
@@ -423,7 +418,7 @@ def _emit_anomaly_diagnostics(
             TelemetryEvent(
                 event_type=event_type,
                 epoch=batch_epoch_id,  # Anomalies detected at batch boundary
-                group_id=group_id,
+                group_id=group_id if group_id is not None else "",
                 data=payload,
                 severity="debug" if collect_debug else "warning",
             )
@@ -436,10 +431,15 @@ def loss_and_correct(
     criterion: nn.Module,
     task_type: str,
     elementwise: bool = False,
-):
+) -> tuple[torch.Tensor, torch.Tensor, int]:
     """Compute loss and correct counts for classification or LM.
 
     Compiled module-level function to avoid closure overhead and kernel launch stalls.
+
+    Returns:
+        Tuple of (loss tensor, correct tensor, total count).
+        When elementwise=False, correct is a 0-dimensional tensor (.sum() of booleans).
+        This always returns a tensor, not int - .sum() on tensors yields tensors.
     """
     if task_type == "lm":
         vocab = outputs.size(-1)
@@ -498,6 +498,7 @@ def train_ppo_vectorized(
     gpu_preload: bool = False,
     amp: bool = False,
     amp_dtype: str = "auto",  # "auto", "float16", "bfloat16", or "off"
+    max_grad_norm: float | None = None,  # Gradient clipping max norm (None disables)
     compile_mode: str = "default",  # "default", "max-autotune", "reduce-overhead", "off"
     lstm_hidden_dim: int = DEFAULT_LSTM_HIDDEN_DIM,
     chunk_length: int = DEFAULT_EPISODE_LENGTH,  # Must match max_epochs (from leyline)
@@ -513,13 +514,17 @@ def train_ppo_vectorized(
     param_penalty_weight: float = 0.1,
     sparse_reward_scale: float = 1.0,
     reward_family: str = "contribution",
-    ab_reward_modes: list[str] | None = None,
+    reward_mode_per_env: tuple[RewardMode, ...] | None = None,
     permissive_gates: bool = True,
+    # Ablation flags for systematic reward function experiments
+    disable_pbrs: bool = False,  # Disable PBRS stage advancement shaping
+    disable_terminal_reward: bool = False,  # Disable terminal accuracy bonus
+    disable_anti_gaming: bool = False,  # Disable ratio_penalty and alpha_shock
     quiet_analytics: bool = False,
     telemetry_dir: str | None = None,
     ready_event: "threading.Event | None" = None,
     group_id: str = "default",  # A/B testing group identifier
-) -> tuple[PPOAgent, list[dict]]:
+) -> tuple[PPOAgent, list[dict[str, Any]]]:
     """Train PPO with vectorized environments using INVERTED CONTROL FLOW.
 
     Key architecture: Instead of iterating environments then dataloaders,
@@ -566,7 +571,7 @@ def train_ppo_vectorized(
     try:
         from threading import RLock
 
-        from tqdm import tqdm
+        from tqdm import tqdm  # type: ignore[import-untyped]
 
         tqdm.set_lock(RLock())
     except (ImportError, AttributeError) as e:
@@ -622,10 +627,16 @@ def train_ppo_vectorized(
 
     # Derive slot_config from host's injection specs, filtered to requested slots
     # Create a temporary model to query the host's injection topology
+    from esper.kasmina.host import MorphogeneticModel
+
     temp_device = "cpu"  # Use CPU for temp model to avoid GPU allocation
-    temp_model = create_model(
+    temp_model_raw = create_model(
         task=task_spec, device=temp_device, slots=slots, permissive_gates=permissive_gates
     )
+    # Type assertion: create_model returns MorphogeneticModel
+    assert isinstance(temp_model_raw, MorphogeneticModel)
+    temp_model: MorphogeneticModel = temp_model_raw
+
     # Filter specs to only include requested slots (not all host injection points)
     enabled_specs = [
         spec for spec in temp_model.host.injection_specs()
@@ -634,7 +645,7 @@ def train_ppo_vectorized(
     slot_config = SlotConfig.from_specs(enabled_specs)
     # Calculate host_params while we have the model (constant across all envs)
     host_params_baseline = sum(
-        p.numel() for p in temp_model.host.parameters() if p.requires_grad
+        p.numel() for p in temp_model.get_host_parameters() if p.requires_grad
     )
     del temp_model  # Free memory immediately
 
@@ -675,29 +686,34 @@ def train_ppo_vectorized(
         param_budget=param_budget,
         param_penalty_weight=param_penalty_weight,
         sparse_reward_scale=sparse_reward_scale,
+        disable_pbrs=disable_pbrs,
+        disable_terminal_reward=disable_terminal_reward,
+        disable_anti_gaming=disable_anti_gaming,
     )
     loss_reward_config = task_spec.loss_reward_config
 
-    # Per-environment reward configs for A/B testing
-    if ab_reward_modes is not None:
-        if len(ab_reward_modes) != n_envs:
+    # Per-environment reward configs for A/B/n testing
+    if reward_mode_per_env is not None:
+        if len(reward_mode_per_env) != n_envs:
             raise ValueError(
-                f"ab_reward_modes length ({len(ab_reward_modes)}) must match n_envs ({n_envs})"
+                f"reward_mode_per_env length ({len(reward_mode_per_env)}) must match n_envs ({n_envs})"
             )
         env_reward_configs = []
-        for env_idx, mode_str in enumerate(ab_reward_modes):
-            env_mode = RewardMode(mode_str)
+        for env_mode in reward_mode_per_env:
             env_config = ContributionRewardConfig(
                 reward_mode=env_mode,
                 param_budget=param_budget,
                 param_penalty_weight=param_penalty_weight,
                 sparse_reward_scale=sparse_reward_scale,
+                disable_pbrs=disable_pbrs,
+                disable_terminal_reward=disable_terminal_reward,
+                disable_anti_gaming=disable_anti_gaming,
             )
             env_reward_configs.append(env_config)
-        _logger.info(
-            "A/B testing enabled: %s",
-            {mode: ab_reward_modes.count(mode) for mode in set(ab_reward_modes)},
-        )
+        mode_counts: dict[str, int] = {}
+        for mode in reward_mode_per_env:
+            mode_counts[mode.value] = mode_counts.get(mode.value, 0) + 1
+        _logger.info("A/B/n testing enabled: %s", mode_counts)
     else:
         env_reward_configs = [reward_config] * n_envs
 
@@ -816,15 +832,13 @@ def train_ppo_vectorized(
             start_episode = metadata["n_episodes"]
 
         # Emit checkpoint loaded event
+        # TODO: [FUTURE FUNCTIONALITY] - Create CheckpointLoadedPayload for type safety
         hub.emit(
             TelemetryEvent(
                 event_type=TelemetryEventType.CHECKPOINT_LOADED,
                 group_id=group_id,
-                data={
-                    "path": str(resume_path),
-                    "start_episode": start_episode,
-                    "source": "resume",
-                },
+                data=None,
+                message=f"Checkpoint loaded from {resume_path} at episode {start_episode}",
             )
         )
     else:
@@ -833,9 +847,23 @@ def train_ppo_vectorized(
         # to recover from in an interactive session.
         # Determine effective compile mode: quiet_analytics disables compilation
         effective_compile_mode = compile_mode if not quiet_analytics else "off"
-        agent = PPOAgent(
+
+        # Create policy via Tamiyo factory
+        # IMPORTANT: Pass actual slot_config to ensure action heads/masks align
+        # with environment slot ordering (critical for non-default slot layouts)
+        policy = create_policy(
+            policy_type="lstm",
             state_dim=state_dim,
-            hidden_dim=256,
+            slot_config=slot_config,
+            device=device,
+            compile_mode=effective_compile_mode,
+            lstm_hidden_dim=lstm_hidden_dim,
+        )
+
+        # Create agent with injected policy
+        agent = PPOAgent(
+            policy=policy,
+            slot_config=slot_config,
             lr=lr,
             gamma=gamma,
             gae_lambda=gae_lambda,
@@ -847,12 +875,10 @@ def train_ppo_vectorized(
             adaptive_entropy_floor=adaptive_entropy_floor,
             entropy_anneal_steps=entropy_anneal_steps,
             device=device,
-            lstm_hidden_dim=lstm_hidden_dim,
             chunk_length=chunk_length,
             num_envs=n_envs,
             max_steps_per_env=max_epochs,
-            slot_config=slot_config,
-            compile_mode=effective_compile_mode,
+            compile_mode=effective_compile_mode,  # Persisted for checkpoint resume
         )
 
     # Emit TRAINING_STARTED to activate Karn (Sanctum/Overwatch) and capture run config.
@@ -904,6 +930,10 @@ def train_ppo_vectorized(
 
     # Create SharedBatchIterator for parallel data loading
     trainset, testset = task_spec.get_datasets()
+
+    # Type annotation for shared iterators (union type to handle both branches)
+    shared_train_iter: SharedBatchIterator | Any
+    shared_test_iter: SharedBatchIterator | Any
 
     if gpu_preload:
         if "cifar10" not in task_spec.name.lower():
@@ -1051,12 +1081,16 @@ def train_ppo_vectorized(
         torch.manual_seed(base_seed + env_idx * 1000)
         random.seed(base_seed + env_idx * 1000)
 
-        model = create_model(
+        model_raw = create_model(
             task=task_spec, device=env_device, slots=slots, permissive_gates=permissive_gates
         )
+        # Type assertion: create_model returns MorphogeneticModel
+        assert isinstance(model_raw, MorphogeneticModel)
+        model: MorphogeneticModel = model_raw
 
         telemetry_cb = make_telemetry_callback(env_idx, env_device)
-        for slot in model.seed_slots.values():
+        for slot_module in model.seed_slots.values():
+            slot = cast(SeedSlotProtocol, slot_module)
             slot.on_telemetry = telemetry_cb
             # fast_mode toggled per epoch via apply_slot_telemetry (telemetry-enabled by default)
             slot.fast_mode = False
@@ -1067,7 +1101,7 @@ def train_ppo_vectorized(
             slot.isolate_gradients = True
 
         # Set host_params baseline for scoreboard via Nissa analytics
-        host_params = sum(p.numel() for p in model.host.parameters() if p.requires_grad)
+        host_params = sum(p.numel() for p in model.get_host_parameters() if p.requires_grad)
         analytics.set_host_params(env_idx, host_params)
 
         host_optimizer = torch.optim.SGD(
@@ -1080,7 +1114,7 @@ def train_ppo_vectorized(
         # Create CUDA stream for this environment
         env_device_obj = torch.device(env_device)
         stream = (
-            torch.cuda.Stream(device=env_device_obj)
+            torch.cuda.Stream(device=env_device_obj)  # type: ignore[no-untyped-call]
             if env_device_obj.type == "cuda"
             else None
         )
@@ -1089,7 +1123,7 @@ def train_ppo_vectorized(
         # Use new torch.amp.GradScaler API (torch.cuda.amp.GradScaler deprecated in PyTorch 2.4+)
         # Note: BF16 doesn't need GradScaler (same exponent range as FP32)
         env_scaler = (
-            torch.amp.GradScaler("cuda", enabled=use_grad_scaler)
+            torch_amp.GradScaler("cuda", enabled=use_grad_scaler)  # type: ignore[attr-defined]
             if env_device_obj.type == "cuda" and use_grad_scaler
             else None
         )
@@ -1165,9 +1199,9 @@ def train_ppo_vectorized(
         configure_slot_telemetry(env_state)
         return env_state
 
-    @torch.compiler.disable
+    @torch.compiler.disable  # type: ignore[untyped-decorator]
     def _collect_gradient_telemetry_for_batch(
-        model: "HostWithSeeds",
+        model: Any,
         slots_with_active_seeds: list[str],
         env_dev: str,
     ) -> dict[str, dict[Any, Any]] | None:
@@ -1177,15 +1211,11 @@ def train_ppo_vectorized(
         data-dependent slot iteration and conditional logic.
 
         Args:
-            model: The HostWithSeeds model
+            model: The model with seed slots
             slots_with_active_seeds: Pre-filtered list of slots with active seeds
             env_dev: Device string
         """
         from esper.leyline import SeedStage
-        from esper.simic.telemetry.gradient_collector import (
-            collect_host_gradients_async,
-            collect_seed_gradients_only_async,
-        )
 
         slots_needing_grad_telemetry = []
         for slot_id in slots_with_active_seeds:
@@ -1303,7 +1333,8 @@ def train_ppo_vectorized(
         use_telemetry: bool = False,
         slots: list[str] | None = None,
         use_amp: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor, int, dict[str, dict] | None]:
+        max_grad_norm: float | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, int, dict[str, dict[str, Any]] | None]:
         """Process a single training batch for one environment (runs in CUDA stream).
 
         Returns TENSORS (not floats) to avoid blocking .item() calls inside stream context.
@@ -1316,6 +1347,8 @@ def train_ppo_vectorized(
             criterion: Loss criterion
             use_telemetry: Whether to collect telemetry
             slots: Enabled slot IDs (train all active slots)
+            use_amp: Whether AMP is enabled
+            max_grad_norm: Maximum gradient norm for clipping. None disables clipping.
 
         Returns:
             Tuple of (loss_tensor, correct_tensor, total, grad_stats)
@@ -1347,13 +1380,9 @@ def train_ppo_vectorized(
             targets = targets.to(env_dev, non_blocking=True)
 
             if env_state.stream and inputs.is_cuda:
-                # CRITICAL: SharedGPUBatchIterator returns views on the default stream.
-                # Even with wait_stream, passing these views directly to kernels can cause
-                # race conditions (Nll_loss assertion failures). Cloning enforces a
-                # strong memory dependency on the current stream.
-                inputs = inputs.clone()
-                targets = targets.clone()
-                # Record the new tensors so they aren't freed prematurely
+                # Record stream usage for proper CUDA synchronization.
+                # Both SharedBatchIterator and SharedGPUBatchIterator now clone
+                # their tensors, so we don't need to clone here - just record.
                 inputs.record_stream(env_state.stream)
                 targets.record_stream(env_state.stream)
 
@@ -1362,7 +1391,8 @@ def train_ppo_vectorized(
             slots_to_step: list[str] = []
             for slot_id in slots_with_active_seeds:
                 # Already filtered to active slots via cache
-                seed_state = model.seed_slots[slot_id].state
+                slot = cast(SeedSlotProtocol, model.seed_slots[slot_id])
+                seed_state = slot.state
                 if seed_state is None:
                     continue
 
@@ -1374,11 +1404,12 @@ def train_ppo_vectorized(
                 if slot_id not in env_state.seed_optimizers:
                     seed_params = list(model.get_seed_parameters(slot_id))
                     if not seed_params:
+                        slot_for_debug = cast(SeedSlotProtocol, model.seed_slots[slot_id])
                         raise RuntimeError(
                             f"Seed in slot '{slot_id}' has no trainable parameters. "
                             f"Stage: {seed_state.stage.name}, "
                             f"Blueprint: {seed_state.blueprint_id}, "
-                            f"Slot.seed: {model.seed_slots[slot_id].seed is not None}"
+                            f"Slot.seed: {slot_for_debug.seed is not None}"
                         )
                     env_state.seed_optimizers[slot_id] = torch.optim.SGD(
                         seed_params, lr=task_spec.seed_lr, momentum=0.9
@@ -1391,21 +1422,29 @@ def train_ppo_vectorized(
             # Use pre-computed autocast decision from env_state
             # dtype comes from resolved_amp_dtype (BF16 on Ampere+, FP16 otherwise)
             autocast_ctx = (
-                torch_amp.autocast(device_type="cuda", dtype=resolved_amp_dtype)  # type: ignore[call-arg]
+                torch_amp.autocast(device_type="cuda", dtype=resolved_amp_dtype)  # type: ignore[attr-defined]
                 if env_state.autocast_enabled and resolved_amp_dtype is not None
                 else nullcontext()
             )
             with autocast_ctx:
                 outputs = model(inputs)
-                loss, correct_tensor, total = _compiled_loss_and_correct(
+                loss, correct_result, total = _compiled_loss_and_correct(
                     outputs, targets, criterion, task_type=task_spec.task_type
                 )
+                # loss_and_correct always returns a tensor for correct (see docstring)
+                # .sum() on boolean tensor yields 0-dim tensor, never Python int
+                correct_tensor = correct_result
 
-            # Use scaler.scale() only when using FP16 (BF16 doesn't need scaling)
+            # AMP backward path depends on dtype:
+            # - FP16 (scaler != None): Requires GradScaler to handle underflow.
+            #   scale() multiplies loss, unscale() before step() inverts it.
+            # - BF16 (scaler == None): Has 8 exponent bits (vs FP16's 5), so the
+            #   dynamic range matches FP32. No scaling needed; direct backward().
+            # Note: backward() is untyped in PyTorch stubs
             if env_state.scaler is not None:
                 env_state.scaler.scale(loss).backward()
             else:
-                loss.backward()
+                loss.backward()  # type: ignore[no-untyped-call]
             # Collect gradient telemetry (isolated from torch.compile)
             grad_stats_by_slot = None
             if use_telemetry:
@@ -1413,29 +1452,56 @@ def train_ppo_vectorized(
                     model, slots_with_active_seeds, env_dev
                 )
 
-            if env_state.scaler is not None:
-                # H12: AMP GradScaler stream safety documentation
-                # Each env has its own GradScaler (created at line 855) to avoid race conditions.
-                # GradScaler's internal state (_scale, _growth_tracker) is NOT stream-safe:
-                # - scale() reads _scale without sync
-                # - step() may write _found_inf_per_device
-                # - update() modifies _scale and _growth_tracker
-                #
-                # This is safe because:
-                # 1. Per-env scaler: No cross-env state sharing
-                # 2. Sequential within stream: scale() → step() → update() ordered by stream
-                # 3. No cross-batch state: Each env_state.scaler is isolated
-                #
-                # Note: scale factor update (update()) changes _scale for the NEXT batch,
-                # which is fine since each batch fully completes before the next starts.
-                env_state.scaler.step(env_state.host_optimizer)
+            # Compute grad presence once for each seed optimizer (avoid redundant checks)
+            # Guard: Only call scaler.step() if optimizer has gradients.
+            # With isolate_gradients=True, seeds may not have grads in the scaled backward.
+            seed_opts_with_grads: dict[str, tuple[torch.optim.Optimizer, bool]] = {}
+            for slot_id in slots_to_step:
+                seed_opt = env_state.seed_optimizers[slot_id]
+                has_grads = any(
+                    p.grad is not None for group in seed_opt.param_groups for p in group["params"]
+                )
+                seed_opts_with_grads[slot_id] = (seed_opt, has_grads)
+
+            # Gradient clipping (AMP-safe)
+            # AMP ordering: scale() -> backward() -> unscale_() -> clip_grad_norm_() -> step() -> update()
+            if max_grad_norm is not None and max_grad_norm > 0:
+                if env_state.scaler is not None:
+                    # Unscale before clipping (required for correct FP32 magnitude)
+                    env_state.scaler.unscale_(env_state.host_optimizer)
+                    for slot_id, (seed_opt, has_grads) in seed_opts_with_grads.items():
+                        if has_grads:
+                            env_state.scaler.unscale_(seed_opt)
+
+                # Clip host and each seed independently (preserves gradient isolation)
+                # Joint clipping would allow large host gradients to reduce seed budget and vice versa
+                host_params = list(model.get_host_parameters())
+                if host_params:
+                    torch.nn.utils.clip_grad_norm_(host_params, max_grad_norm)
+
                 for slot_id in slots_to_step:
-                    seed_opt = env_state.seed_optimizers[slot_id]
-                    # Guard: Only call scaler.step() if optimizer has gradients.
-                    # With isolate_gradients=True, seeds may not have grads in the scaled backward.
-                    has_grads = any(
-                        p.grad is not None for group in seed_opt.param_groups for p in group["params"]
-                    )
+                    seed_params = list(model.get_seed_parameters(slot_id))
+                    if seed_params:
+                        torch.nn.utils.clip_grad_norm_(seed_params, max_grad_norm)
+
+            # Optimizer step (reuses has_grads computation)
+            # H12: AMP GradScaler stream safety documentation
+            # Each env has its own GradScaler (created at line 855) to avoid race conditions.
+            # GradScaler's internal state (_scale, _growth_tracker) is NOT stream-safe:
+            # - scale() reads _scale without sync
+            # - step() may write _found_inf_per_device
+            # - update() modifies _scale and _growth_tracker
+            #
+            # This is safe because:
+            # 1. Per-env scaler: No cross-env state sharing
+            # 2. Sequential within stream: scale() → step() → update() ordered by stream
+            # 3. No cross-batch state: Each env_state.scaler is isolated
+            #
+            # Note: scale factor update (update()) changes _scale for the NEXT batch,
+            # which is fine since each batch fully completes before the next starts.
+            if env_state.scaler is not None:
+                env_state.scaler.step(env_state.host_optimizer)
+                for slot_id, (seed_opt, has_grads) in seed_opts_with_grads.items():
                     if has_grads:
                         env_state.scaler.step(seed_opt)
                     else:
@@ -1481,18 +1547,20 @@ def train_ppo_vectorized(
             targets = targets.to(env_dev, non_blocking=True)
 
             if env_state.stream and inputs.is_cuda:
-                # Resolve race condition (see process_train_batch)
-                inputs = inputs.clone()
-                targets = targets.clone()
+                # Record stream usage for proper CUDA synchronization.
+                # Both SharedBatchIterator and SharedGPUBatchIterator now clone
+                # their tensors, so we don't need to clone here - just record.
                 inputs.record_stream(env_state.stream)
                 targets.record_stream(env_state.stream)
 
             model.eval()
             with torch.inference_mode():
                 outputs = model(inputs)
-                loss, correct_tensor, total = _compiled_loss_and_correct(
+                loss, correct_result, total = _compiled_loss_and_correct(
                     outputs, targets, criterion, task_type=task_spec.task_type
                 )
+                # loss_and_correct always returns a tensor for correct (see docstring)
+                correct_tensor = correct_result
 
             # Return tensors - .item() called after stream sync
             return loss, correct_tensor, total
@@ -1559,12 +1627,14 @@ def train_ppo_vectorized(
 
             # Sum elementwise correctness per configuration
             # correct_fused shape is [K*B]
+            # elementwise=True guarantees correct_fused is a Tensor
+            assert isinstance(correct_fused, torch.Tensor)
             correct_per_config = correct_fused.view(num_configs, batch_size).sum(dim=1)
 
             return loss, correct_per_config, total
 
     def batch_signals_to_features(
-        batch_signals: list,
+        batch_signals: list[Any],
         batch_slot_reports: list[dict[str, "SeedStateReport"]],
         use_telemetry: bool,
         max_epochs: int,
@@ -1591,6 +1661,7 @@ def train_ppo_vectorized(
 
     history = []
     episode_history = []  # Per-episode tracking for A/B testing
+    episode_outcomes: list[EpisodeOutcome] = []  # Pareto analysis outcomes
     best_avg_acc = 0.0
     best_state = None
     recent_accuracies = []
@@ -1661,6 +1732,10 @@ def train_ppo_vectorized(
         # Track per-environment rollback (more sample-efficient than batch-level).
         # Only envs that experienced rollback have stale transitions.
         env_rollback_occurred = [False] * envs_this_batch
+
+        # Pre-compute ordered slots once per batch (not per-epoch)
+        # validate_slot_ids parses/sorts slot IDs - expensive to repeat 25x per episode
+        ordered_slots = validate_slot_ids(list(slots))
 
         # Run epochs with INVERTED CONTROL FLOW
         for epoch in range(1, max_epochs + 1):
@@ -1738,7 +1813,7 @@ def train_ppo_vectorized(
                             torch.cuda.synchronize(targets.device)
                         target_min = targets.min().item()
                         target_max = targets.max().item()
-                        if target_min < 0 or target_max >= 10:  # CIFAR-10 has 10 classes
+                        if target_min < 0 or target_max >= task_spec.num_classes:
                             raise RuntimeError(
                                 f"BUG-031: Invalid target values detected before loss computation. "
                                 f"targets.min()={target_min}, targets.max()={target_max}, "
@@ -1759,6 +1834,7 @@ def train_ppo_vectorized(
                             use_telemetry=collect_gradients,
                             slots=slots,
                             use_amp=amp_enabled,
+                            max_grad_norm=max_grad_norm,
                         )
                     )
                     if grad_stats is not None:
@@ -1781,11 +1857,13 @@ def train_ppo_vectorized(
             # NOW safe to call .item() - all GPU work done
             # Accumulators guaranteed non-None after init_accumulators()
             train_losses = [
-                env_state.train_loss_accum.item() for env_state in env_states
-            ]  # type: ignore[union-attr]
+                env_state.train_loss_accum.item() if env_state.train_loss_accum is not None else 0.0
+                for env_state in env_states
+            ]
             train_corrects = [
-                env_state.train_correct_accum.item() for env_state in env_states
-            ]  # type: ignore[union-attr]
+                env_state.train_correct_accum.item() if env_state.train_correct_accum is not None else 0.0
+                for env_state in env_states
+            ]
 
             # ===== VALIDATION + COUNTERFACTUAL (FUSED): Single pass over test data =====
             # Instead of iterating test data multiple times or performing sequential
@@ -1797,7 +1875,8 @@ def train_ppo_vectorized(
             for env_state in env_states:
                 for slot_id in slots:
                     if env_state.model.has_active_seed_in_slot(slot_id):
-                        seed_state = env_state.model.seed_slots[slot_id].state
+                        slot = cast(SeedSlotProtocol, env_state.model.seed_slots[slot_id])
+                        seed_state = slot.state
                         if seed_state and seed_state.metrics:
                             seed_state.metrics.interaction_sum = 0.0
                             seed_state.metrics.boost_received = 0.0
@@ -1805,15 +1884,15 @@ def train_ppo_vectorized(
                             seed_state.metrics.downstream_alpha_sum = 0.0
 
             # 1. Determine configurations per environment
-            env_configs: list[list[dict[str, float]]] = []
+            env_configs: list[list[dict[str, Any]]] = []
             for i, env_state in enumerate(env_states):
                 model = env_state.model
                 active_slot_list = [
                     sid
                     for sid in slots
                     if model.has_active_seed_in_slot(sid)
-                    and model.seed_slots[sid].state
-                    and model.seed_slots[sid].state.alpha > 0
+                    and cast(SeedSlotProtocol, model.seed_slots[sid]).state
+                    and cast(SeedSlotProtocol, model.seed_slots[sid]).alpha > 0
                 ]
 
                 # Config 0: Main (current alphas)
@@ -1822,14 +1901,13 @@ def train_ppo_vectorized(
                 if active_slot_list:
                     # Configs 1..N: Solo ablation (one slot off)
                     for slot_id in active_slot_list:
-                        configs.append(
-                            {"_kind": "solo", "_slot": slot_id, slot_id: 0.0}
-                        )
+                        solo_config: dict[str, Any] = {"_kind": "solo", "_slot": slot_id, slot_id: 0.0}
+                        configs.append(solo_config)
 
                     n_active = len(active_slot_list)
                     # Config N+1: All disabled (for 2-4 seeds)
                     if 2 <= n_active <= 4:
-                        all_off = {sid: 0.0 for sid in active_slot_list}
+                        all_off: dict[str, Any] = {sid: 0.0 for sid in active_slot_list}
                         all_off["_kind"] = "all_off"
                         configs.append(all_off)
 
@@ -1837,7 +1915,7 @@ def train_ppo_vectorized(
                     if 3 <= n_active <= 4:
                         for idx_i in range(n_active):
                             for idx_j in range(idx_i + 1, n_active):
-                                pair_config = {
+                                pair_config: dict[str, Any] = {
                                     sid: 0.0
                                     for k, sid in enumerate(active_slot_list)
                                     if k != idx_i and k != idx_j
@@ -1853,7 +1931,7 @@ def train_ppo_vectorized(
                     required_configs = env_state.counterfactual_helper.get_required_configs(active_slot_list)
                     for config_tuple in required_configs:
                         # Convert tuple[bool] to alpha dict
-                        shapley_cfg = {
+                        shapley_cfg: dict[str, Any] = {
                             sid: 1.0 if enabled else 0.0
                             for sid, enabled in zip(active_slot_list, config_tuple)
                         }
@@ -1864,7 +1942,7 @@ def train_ppo_vectorized(
                 env_configs.append(configs)
 
             # baseline_accs[env_idx][slot_id] = accuracy with that slot's seed disabled
-            baseline_accs: list[dict[str, float]] = [{} for _ in range(envs_this_batch)]
+            baseline_accs: list[dict[str, Any]] = [{} for _ in range(envs_this_batch)]
             all_disabled_accs: dict[int, float] = {}
             pair_accs: dict[int, dict[tuple[int, int], float]] = {}
             shapley_results: dict[int, dict[tuple[bool, ...], tuple[float, float]]] = {}
@@ -1893,9 +1971,22 @@ def train_ppo_vectorized(
                     if i >= len(env_batches):
                         continue
                     if env_state.stream:
-                        loader_stream = torch.cuda.current_stream(env_state.env_device)
+                        # CRITICAL: DataLoader .to(device, non_blocking=True) runs on the DEFAULT stream.
+                        # We must sync env_state.stream with default stream before using the data,
+                        # otherwise we may access partially-transferred data (race condition).
+                        # BUG FIX: Use default_stream(), NOT current_stream() - the transfer happens
+                        # on the default stream regardless of what stream is "current" in this context.
+                        loader_stream = torch.cuda.default_stream(torch.device(env_state.env_device))
                         env_state.stream.wait_stream(loader_stream)
                     inputs, targets = env_batches[i]
+
+                    # SharedGPUBatchIterator now returns clones (not views) to fix race conditions.
+                    # We still need record_stream to prevent premature deallocation when the
+                    # tensor is used asynchronously by env_state.stream.
+                    if env_state.stream and inputs.is_cuda:
+                        inputs.record_stream(env_state.stream)
+                        targets.record_stream(env_state.stream)
+
                     batch_size = inputs.size(0)
                     configs = env_configs[i]
                     num_configs = len(configs)
@@ -1907,37 +1998,41 @@ def train_ppo_vectorized(
                     # (e.g., alpha==0.0) forces SeedSlot.forward down the blending path
                     # and bypasses the TRAINING-stage STE shortcut, changing semantics
                     # and creating unnecessary alpha_schedule requirements.
-                    alpha_overrides = {}
+                    alpha_overrides: dict[str, torch.Tensor] = {}
                     for slot_id in env_state.model._active_slots:
                         needs_override = any(slot_id in cfg for cfg in configs)
                         if not needs_override:
                             continue
-                        slot = env_state.model.seed_slots[slot_id]
+                        slot = cast(SeedSlotProtocol, env_state.model.seed_slots[slot_id])
+                        # Access concrete SeedSlot for alpha_schedule assignment
+                        from esper.kasmina.slot import SeedSlot
+                        assert isinstance(slot, SeedSlot), "Expected SeedSlot for alpha_schedule manipulation"
+                        slot_concrete: SeedSlot = slot
 
                         # Enforce Phase 3 contract: alpha_schedule only valid for GATE.
-                        if slot.alpha_schedule is not None and (
+                        if slot_concrete.alpha_schedule is not None and (
                             slot.state is None
                             or slot.state.alpha_algorithm != AlphaAlgorithm.GATE
                         ):
-                            slot.alpha_schedule = None
+                            slot_concrete.alpha_schedule = None
 
                         # P4-FIX: Ensure alpha_schedule exists for GATE algorithm during fused pass.
                         # This can happen if a seed is in HOLD mode and its schedule was cleared.
                         if (
                             slot.state
                             and slot.state.alpha_algorithm == AlphaAlgorithm.GATE
-                            and slot.alpha_schedule is None
+                            and slot_concrete.alpha_schedule is None
                         ):
                             from esper.kasmina.blending import BlendCatalog
 
                             topology = task_spec.topology
                             # Use default tempo steps since it's already in HOLD
-                            slot.alpha_schedule = BlendCatalog.create(
+                            slot_concrete.alpha_schedule = BlendCatalog.create(
                                 "gated",
-                                channels=slot.channels,
+                                channels=slot_concrete.channels,
                                 topology=topology,
                                 total_steps=5,
-                            ).to(slot.device)
+                            ).to(slot_concrete.device)
 
                         current_alpha = slot.alpha
                         override_vec = torch.full(
@@ -1953,7 +2048,9 @@ def train_ppo_vectorized(
                                     cfg_idx * batch_size,
                                     (cfg_idx + 1) * batch_size,
                                 )
-                                override_vec[start:end].fill_(cfg[slot_id])
+                                alpha_value = cfg[slot_id]
+                                assert isinstance(alpha_value, (int, float))
+                                override_vec[start:end].fill_(alpha_value)
                         alpha_overrides[slot_id] = override_vec
 
                     # Run FUSED validation pass
@@ -1980,6 +2077,13 @@ def train_ppo_vectorized(
                 if env_state.stream:
                     env_state.stream.synchronize()
 
+            # PERF: Batch GPU→CPU transfer before iterating
+            # Moving tensors to CPU after sync is ~free (data already computed).
+            # But .tolist() on GPU tensor would force per-tensor sync without this.
+            env_cfg_correct_accums_cpu = [
+                accum.cpu() for accum in env_cfg_correct_accums
+            ]
+
             # Process results for each config
             val_losses = [
                 0.0
@@ -1987,7 +2091,7 @@ def train_ppo_vectorized(
             val_corrects = [0] * envs_this_batch
 
             for i, env_state in enumerate(env_states):
-                correct_counts = env_cfg_correct_accums[i].tolist()
+                correct_counts = env_cfg_correct_accums_cpu[i].tolist()
                 configs = env_configs[i]
                 total = val_totals[i]
 
@@ -2006,7 +2110,8 @@ def train_ppo_vectorized(
                         baseline_accs[i][slot_id] = acc
                         # Sync to metrics
                         if env_state.model.has_active_seed_in_slot(slot_id):
-                            seed_state = env_state.model.seed_slots[slot_id].state
+                            slot_for_state = cast(SeedSlotProtocol, env_state.model.seed_slots[slot_id])
+                            seed_state = slot_for_state.state
                             if seed_state and seed_state.metrics:
                                 new_contribution = env_state.val_acc - acc
                                 # Compute contribution velocity (EMA of delta)
@@ -2025,12 +2130,16 @@ def train_ppo_vectorized(
                     elif kind == "pair":
                         if i not in pair_accs:
                             pair_accs[i] = {}
-                        pair_accs[i][cfg["_pair"]] = acc
+                        pair_key = cfg["_pair"]
+                        assert isinstance(pair_key, tuple)
+                        pair_accs[i][pair_key] = acc
                     elif kind == "shapley":
                         if i not in shapley_results:
                             shapley_results[i] = {}
                         # Validation loss approximated as 0.0 since we only track acc here
-                        shapley_results[i][cfg["_tuple"]] = (0.0, acc)
+                        shapley_tuple = cfg["_tuple"]
+                        assert isinstance(shapley_tuple, tuple)
+                        shapley_results[i][shapley_tuple] = (0.0, acc)
 
                 # Consolidate matrix reporting
                 # CRITICAL: Sort active_slots for position-based topology computation.
@@ -2042,14 +2151,17 @@ def train_ppo_vectorized(
                         active_slots=active_slots,
                         baseline_accs=baseline_accs[i],
                         val_acc=env_state.val_acc,
-                        all_disabled_acc=all_disabled_accs.get(i),
-                        pair_accs=pair_accs.get(i),
+                        all_disabled_acc=all_disabled_accs.get(i, 0.0),
+                        pair_accs=pair_accs.get(i, {}),
                     )
 
                 # Compute interaction terms and populate scaffolding metrics
                 if len(active_slots) >= 2 and i in pair_accs:
                     all_off_acc = all_disabled_accs.get(i, 0.0)
-                    for (slot_a, slot_b), pair_acc in pair_accs[i].items():
+                    for (idx_a, idx_b), pair_acc in pair_accs[i].items():
+                        # Map indices to slot IDs
+                        slot_a = active_slots[idx_a]
+                        slot_b = active_slots[idx_b]
                         solo_a = baseline_accs[i].get(slot_a, 0.0)
                         solo_b = baseline_accs[i].get(slot_b, 0.0)
                         # I_ij = f({i,j}) - f({i}) - f({j}) + f(empty)
@@ -2057,7 +2169,8 @@ def train_ppo_vectorized(
 
                         # Update metrics for both seeds
                         if env_state.model.has_active_seed_in_slot(slot_a):
-                            seed_a = env_state.model.seed_slots[slot_a].state
+                            slot_obj_a = cast(SeedSlotProtocol, env_state.model.seed_slots[slot_a])
+                            seed_a = slot_obj_a.state
                             if seed_a and seed_a.metrics:
                                 seed_a.metrics.interaction_sum += interaction
                                 seed_a.metrics.boost_received = max(
@@ -2065,7 +2178,8 @@ def train_ppo_vectorized(
                                 )
 
                         if env_state.model.has_active_seed_in_slot(slot_b):
-                            seed_b = env_state.model.seed_slots[slot_b].state
+                            slot_obj_b = cast(SeedSlotProtocol, env_state.model.seed_slots[slot_b])
+                            seed_b = slot_obj_b.state
                             if seed_b and seed_b.metrics:
                                 seed_b.metrics.interaction_sum += interaction
                                 seed_b.metrics.boost_received = max(
@@ -2077,7 +2191,8 @@ def train_ppo_vectorized(
                 for slot_idx, slot_id in enumerate(active_slots):
                     if not env_state.model.has_active_seed_in_slot(slot_id):
                         continue
-                    seed_state = env_state.model.seed_slots[slot_id].state
+                    slot_obj = cast(SeedSlotProtocol, env_state.model.seed_slots[slot_id])
+                    seed_state = slot_obj.state
                     if seed_state is None or seed_state.metrics is None:
                         continue
 
@@ -2088,7 +2203,8 @@ def train_ppo_vectorized(
                             continue
                         if not env_state.model.has_active_seed_in_slot(other_id):
                             continue
-                        other_state = env_state.model.seed_slots[other_id].state
+                        other_slot_obj = cast(SeedSlotProtocol, env_state.model.seed_slots[other_id])
+                        other_state = other_slot_obj.state
                         if other_state is None:
                             continue
 
@@ -2129,7 +2245,6 @@ def train_ppo_vectorized(
             all_post_action_masks = []
 
             governor_panic_envs = []  # Track which envs need rollback
-            ordered_slots = validate_slot_ids(list(slots))
 
             for env_idx, env_state in enumerate(env_states):
                 model = env_state.model
@@ -2154,7 +2269,8 @@ def train_ppo_vectorized(
                 active_seeds = []
                 for slot_id in slots:
                     if model.has_active_seed_in_slot(slot_id):
-                        seed_state = model.seed_slots[slot_id].state
+                        slot_obj = cast(SeedSlotProtocol, model.seed_slots[slot_id])
+                        seed_state = slot_obj.state
                         if seed_state is not None:
                             active_seeds.append(seed_state)
 
@@ -2165,11 +2281,13 @@ def train_ppo_vectorized(
 
                 # Sync gradient telemetry after record_accuracy so telemetry reflects this epoch's metrics.
                 grad_stats_for_env = env_grad_stats[env_idx]
+                synced_slot_ids: set[str] = set()
                 if use_telemetry and grad_stats_for_env is not None:
                     for slot_id, async_stats in grad_stats_for_env.items():
                         if not model.has_active_seed_in_slot(slot_id):
                             continue
-                        seed_state = model.seed_slots[slot_id].state
+                        slot_obj_for_grad = cast(SeedSlotProtocol, model.seed_slots[slot_id])
+                        seed_state = slot_obj_for_grad.state
                         if seed_state is None or seed_state.metrics is None:
                             continue
 
@@ -2187,14 +2305,35 @@ def train_ppo_vectorized(
                         seed_state.metrics.seed_gradient_norm_ratio = ema
 
                         # Sync telemetry using seed gradient stats from dual collection
-                        seed_state.sync_telemetry(
-                            gradient_norm=dual_stats.seed_grad_norm,
-                            gradient_health=1.0,  # Simplified: dual stats don't compute health
-                            has_vanishing=dual_stats.seed_grad_norm < 1e-7,
-                            has_exploding=dual_stats.seed_grad_norm > 100.0,
-                            epoch=epoch,
-                            max_epochs=max_epochs,
-                        )
+                        # Access concrete SeedState for sync_telemetry with args
+                        from esper.kasmina.slot import SeedState
+                        if isinstance(seed_state, SeedState):
+                            seed_state.sync_telemetry(
+                                gradient_norm=dual_stats.seed_grad_norm,
+                                gradient_health=1.0,  # Simplified: dual stats don't compute health
+                                has_vanishing=dual_stats.seed_grad_norm < 1e-7,
+                                has_exploding=dual_stats.seed_grad_norm > 100.0,
+                                epoch=epoch,
+                                max_epochs=max_epochs,
+                            )
+                            synced_slot_ids.add(slot_id)
+
+                # Fallback: sync telemetry for active seeds that didn't get gradient stats
+                # This ensures accuracy_delta is always populated from metrics.improvement_since_stage_start
+                # Gradient parameters are omitted - sync_telemetry leaves gradient fields at defaults
+                from esper.kasmina.slot import SeedState as ConcreteSeedState
+                for slot_id in slots:
+                    if slot_id in synced_slot_ids:
+                        continue
+                    if not model.has_active_seed_in_slot(slot_id):
+                        continue
+                    slot_obj_fallback = cast(SeedSlotProtocol, model.seed_slots[slot_id])
+                    seed_state_fallback = slot_obj_fallback.state
+                    if seed_state_fallback is None:
+                        continue
+                    if isinstance(seed_state_fallback, ConcreteSeedState):
+                        # Only sync accuracy/stage telemetry - no gradient data available
+                        seed_state_fallback.sync_telemetry(epoch=epoch, max_epochs=max_epochs)
 
                 slot_reports = model.get_slot_reports()
 
@@ -2221,7 +2360,9 @@ def train_ppo_vectorized(
                 all_signals.append(signals)
                 all_slot_reports.append(slot_reports)
                 all_total_params.append(model.total_params if model else 0)
-                all_total_seeds.append(model.total_seeds() if model else 0)
+                # Cache total_seeds for this env (used in feature extraction AND action masking)
+                env_total_seeds = model.total_seeds() if model else 0
+                all_total_seeds.append(env_total_seeds)
 
                 # Compute action mask based on current state (physical constraints only)
                 # Build slot states for ALL enabled slots (multi-slot masking)
@@ -2229,7 +2370,7 @@ def train_ppo_vectorized(
                 mask = compute_action_masks(
                     slot_states=slot_states,
                     enabled_slots=ordered_slots,
-                    total_seeds=model.total_seeds() if model else 0,
+                    total_seeds=env_total_seeds,
                     max_seeds=effective_max_seeds,
                     slot_config=slot_config,
                     device=torch.device(device),
@@ -2273,53 +2414,49 @@ def train_ppo_vectorized(
                     env_c = c_batch[:, env_idx : env_idx + 1, :].clone()
                     pre_step_hiddens.append((env_h, env_c))
             else:
-                batched_lstm_hidden = agent.network.get_initial_hidden(
-                    len(env_states), agent.device
+                batched_lstm_hidden = agent.policy.initial_hidden(
+                    len(env_states)
                 )
-                init_h, init_c = batched_lstm_hidden
-                for env_idx in range(len(env_states)):
-                    env_h = init_h[:, env_idx : env_idx + 1, :].clone()
-                    env_c = init_c[:, env_idx : env_idx + 1, :].clone()
-                    pre_step_hiddens.append((env_h, env_c))
+                if batched_lstm_hidden is not None:
+                    init_h, init_c = batched_lstm_hidden
+                    for env_idx in range(len(env_states)):
+                        env_h = init_h[:, env_idx : env_idx + 1, :].clone()
+                        env_c = init_c[:, env_idx : env_idx + 1, :].clone()
+                        pre_step_hiddens.append((env_h, env_c))
 
-            # get_action returns GetActionResult dataclass
-            action_result = agent.network.get_action(
+            # get_action returns ActionResult dataclass
+            action_result = agent.policy.get_action(
                 states_batch_normalized,
+                masks=masks_batch,
                 hidden=batched_lstm_hidden,
-                slot_mask=masks_batch["slot"],
-                blueprint_mask=masks_batch["blueprint"],
-                style_mask=masks_batch["style"],
-                tempo_mask=masks_batch["tempo"],
-                alpha_target_mask=masks_batch["alpha_target"],
-                alpha_speed_mask=masks_batch["alpha_speed"],
-                alpha_curve_mask=masks_batch["alpha_curve"],
-                op_mask=masks_batch["op"],
                 deterministic=False,
-                return_op_logits=ops_telemetry_enabled,
             )
-            op_probs_cpu: list[list[float]] | None = None
-            if ops_telemetry_enabled and action_result.op_logits is not None:
-                # Small tensor ([n_envs, 6]) - safe to move to CPU for UI telemetry.
-                op_probs_cpu = (
-                    torch.softmax(action_result.op_logits, dim=-1)
-                    .detach()
-                    .cpu()
-                    .tolist()
-                )
-            actions_dict = action_result.actions
-            head_log_probs = action_result.log_probs
-            values_tensor = action_result.values
+            actions_dict = action_result.action
+            head_log_probs = action_result.log_prob
+            values_tensor = action_result.value
 
             # OPTIMIZATION: Update batched hidden state directly (eliminates per-env slice/cat)
             batched_lstm_hidden = action_result.hidden
 
             # Convert to list of dicts for per-env processing
+            # PERF NOTE: This does 9 separate GPU→CPU transfers (8 action heads + 1 value).
+            # Consolidating via torch.stack() before .cpu() would reduce to 1 transfer but:
+            #   1. Stack creates new allocation on GPU
+            #   2. Split/indexing on CPU adds overhead
+            # For small batch sizes (typical RL: 8-64 envs), separate transfers may be faster.
+            # TODO: [FUTURE OPTIMIZATION] - Benchmark stacked vs separate transfers for
+            # various batch sizes. If stacked is faster, use:
+            #   stacked = torch.stack([actions_dict[k] for k in HEAD_NAMES] + [values_tensor])
+            #   all_cpu = stacked.cpu().numpy()
+            #   actions_cpu = {k: all_cpu[i] for i, k in enumerate(HEAD_NAMES)}
+            #   values = all_cpu[-1].tolist()
             actions_cpu = {key: actions_dict[key].cpu().numpy() for key in HEAD_NAMES}
+            values_cpu = values_tensor.cpu()
             actions = [
                 {key: int(actions_cpu[key][i]) for key in HEAD_NAMES}
                 for i in range(len(env_states))
             ]
-            values = values_tensor.tolist()
+            values = values_cpu.tolist()  # .tolist() on CPU tensor is free
 
             # Batch compute mask stats for telemetry
             if ops_telemetry_enabled:
@@ -2334,7 +2471,7 @@ def train_ppo_vectorized(
                 masked_cpu = None
 
             # PHASE 1: Execute actions and collect data for bootstrap computation
-            bootstrap_data = []
+            bootstrap_data: list[dict[str, Any]] = []
             transitions_data = []  # Store transition data for buffer storage
 
             for env_idx, env_state in enumerate(env_states):
@@ -2406,13 +2543,15 @@ def train_ppo_vectorized(
                     telemetry_config is not None
                     and telemetry_config.should_collect("debug")
                 )
+                # Match ops_telemetry_enabled logic: default to True when no config
+                # This ensures reward_components are computed when on_last_action is called
                 collect_reward_summary = (
-                    telemetry_config is not None
-                    and telemetry_config.should_collect("ops_normal")
+                    telemetry_config is None
+                    or telemetry_config.should_collect("ops_normal")
                 )
 
                 seed_params_for_slot = (
-                    model.seed_slots[target_slot].active_seed_params
+                    cast(SeedSlotProtocol, model.seed_slots[target_slot]).active_seed_params
                     if slot_is_enabled
                     else 0
                 )
@@ -2440,9 +2579,11 @@ def train_ppo_vectorized(
                         "config": env_reward_configs[env_idx],
                     }
                     if emit_reward_components_event or collect_reward_summary:
-                        reward, reward_components = compute_reward(
+                        result = compute_reward(
                             **reward_args, return_components=True
                         )
+                        # compute_reward returns tuple[float, RewardComponents] when return_components=True
+                        reward, reward_components = result  # type: ignore[misc]
                         if target_slot in baseline_accs[env_idx]:
                             reward_components.host_baseline_acc = baseline_accs[
                                 env_idx
@@ -2488,8 +2629,10 @@ def train_ppo_vectorized(
                         and model.seed_slots[target_slot].state is None
                     ):
                         env_state.acc_at_germination[target_slot] = env_state.val_acc
+                        blueprint_id = BLUEPRINT_IDS[action_dict["blueprint"]]
+                        assert blueprint_id is not None, "NULL blueprint should not reach germination"
                         model.germinate_seed(
-                            BLUEPRINT_IDS[action_dict["blueprint"]],
+                            blueprint_id,
                             f"env{env_idx}_seed_{env_state.seeds_created}",
                             slot=target_slot,
                             blend_algorithm_id=blend_algorithm_id,
@@ -2506,7 +2649,7 @@ def train_ppo_vectorized(
                         action_success = _advance_active_seed(model, target_slot)
                         if action_success:
                             env_state.seeds_fossilized += 1
-                            if (
+                            if seed_info is not None and (
                                 seed_info.total_improvement
                                 >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
                             ):
@@ -2516,20 +2659,23 @@ def train_ppo_vectorized(
                         op_idx == OP_PRUNE
                         and model.has_active_seed_in_slot(target_slot)
                         # BUG-020 fix: enforce MIN_PRUNE_AGE at execution gate
+                        and seed_info is not None
                         and seed_info.seed_age_epochs >= MIN_PRUNE_AGE
                     ):
                         speed_steps = ALPHA_SPEED_TO_STEPS[
                             AlphaSpeedAction(action_dict["alpha_speed"])
                         ]
                         curve = AlphaCurveAction(action_dict["alpha_curve"]).to_curve()
+                        target_slot_obj = cast(SeedSlotProtocol, model.seed_slots[target_slot])
+                        # Access concrete SeedSlot for schedule_prune/prune
+                        from esper.kasmina.slot import SeedSlot
+                        assert isinstance(target_slot_obj, SeedSlot)
                         if speed_steps <= 0:
-                            action_success = model.seed_slots[target_slot].prune(
+                            action_success = target_slot_obj.prune(
                                 reason="policy_prune", initiator="policy"
                             )
                         else:
-                            action_success = model.seed_slots[
-                                target_slot
-                            ].schedule_prune(
+                            action_success = target_slot_obj.schedule_prune(
                                 steps=speed_steps, curve=curve, initiator="policy"
                             )
                         if action_success:
@@ -2539,7 +2685,10 @@ def train_ppo_vectorized(
                         op_idx == OP_SET_ALPHA_TARGET
                         and model.has_active_seed_in_slot(target_slot)
                     ):
-                        action_success = model.seed_slots[target_slot].set_alpha_target(
+                        target_slot_obj_alpha = cast(SeedSlotProtocol, model.seed_slots[target_slot])
+                        from esper.kasmina.slot import SeedSlot
+                        assert isinstance(target_slot_obj_alpha, SeedSlot)
+                        action_success = target_slot_obj_alpha.set_alpha_target(
                             alpha_target=ALPHA_TARGET_VALUES[
                                 action_dict["alpha_target"]
                             ],
@@ -2557,7 +2706,8 @@ def train_ppo_vectorized(
                     elif op_idx == OP_ADVANCE and model.has_active_seed_in_slot(
                         target_slot
                     ):
-                        gate_result = model.seed_slots[target_slot].advance_stage()
+                        target_slot_obj_advance = cast(SeedSlotProtocol, model.seed_slots[target_slot])
+                        gate_result = target_slot_obj_advance.advance_stage()
                         action_success = gate_result.passed
                         if action_success:
                             env_state.seed_optimizers.pop(target_slot, None)
@@ -2580,7 +2730,8 @@ def train_ppo_vectorized(
                         if m:
                             mask_hits[k] += 1
 
-                    post_slot_state = model.seed_slots[target_slot].state
+                    post_slot_obj = cast(SeedSlotProtocol, model.seed_slots[target_slot])
+                    post_slot_state = post_slot_obj.state
                     active_algo = (
                         post_slot_state.alpha_algorithm.name
                         if post_slot_state
@@ -2598,26 +2749,50 @@ def train_ppo_vectorized(
                             f"{stage_label} {report.metrics.total_improvement:.0f}%"
                         )
 
+                    # Compute action_confidence, alternatives, and decision_entropy from op_logits
+                    # PolicyBundle returns op_logits for telemetry when available
                     action_confidence = None
                     alternatives: list[tuple[str, float]] | None = None
                     decision_entropy = None
-                    if op_probs_cpu is not None and env_idx < len(op_probs_cpu):
-                        probs = op_probs_cpu[env_idx]
+                    if action_result.op_logits is not None and env_idx < action_result.op_logits.shape[0]:
+                        # Compute softmax probabilities from logits
+                        op_probs = torch.softmax(action_result.op_logits[env_idx], dim=-1)
+                        probs_cpu = op_probs.cpu().numpy()
                         chosen_op = int(action_dict["op"])
-                        if 0 <= chosen_op < len(probs):
-                            action_confidence = float(probs[chosen_op])
-                        ranked = sorted(enumerate(probs), key=lambda x: x[1], reverse=True)
+
+                        # action_confidence = P(chosen_op)
+                        if 0 <= chosen_op < len(probs_cpu):
+                            action_confidence = float(probs_cpu[chosen_op])
+
+                        # alternatives = top-2 ops excluding chosen
+                        ranked = sorted(enumerate(probs_cpu), key=lambda x: x[1], reverse=True)
                         alternatives = [
                             (OP_NAMES[op_idx], float(prob))
                             for op_idx, prob in ranked
                             if op_idx != chosen_op
                         ][:2]
-                        # Compute decision entropy: -sum(p * log(p)) for op head
+
+                        # decision_entropy = -sum(p * log(p)) for op head
                         entropy_sum = 0.0
-                        for p in probs:
+                        for p in probs_cpu:
                             if p > 1e-8:  # Avoid log(0)
                                 entropy_sum -= p * math.log(p)
                         decision_entropy = entropy_sum
+                    # Use signals.metrics.accuracy_delta directly - always available
+                    base_acc_delta_for_telemetry = signals.metrics.accuracy_delta
+                    # Extract reward components for telemetry
+                    # (now available since collect_reward_summary matches ops_telemetry_enabled)
+                    bounded_attribution_for_telemetry = None
+                    compute_rent_for_telemetry = None
+                    stage_bonus_for_telemetry = None
+                    ratio_penalty_for_telemetry = None
+                    alpha_shock_for_telemetry = None
+                    if "reward_components" in locals() and reward_components is not None:
+                        bounded_attribution_for_telemetry = reward_components.bounded_attribution
+                        compute_rent_for_telemetry = reward_components.compute_rent
+                        stage_bonus_for_telemetry = reward_components.stage_bonus
+                        ratio_penalty_for_telemetry = reward_components.ratio_penalty
+                        alpha_shock_for_telemetry = reward_components.alpha_shock
                     emitters[env_idx].on_last_action(
                         epoch,
                         action_dict,
@@ -2632,6 +2807,12 @@ def train_ppo_vectorized(
                         action_confidence=action_confidence,
                         alternatives=alternatives,
                         decision_entropy=decision_entropy,
+                        base_acc_delta=base_acc_delta_for_telemetry,
+                        bounded_attribution=bounded_attribution_for_telemetry,
+                        compute_rent=compute_rent_for_telemetry,
+                        stage_bonus=stage_bonus_for_telemetry,
+                        ratio_penalty=ratio_penalty_for_telemetry,
+                        alpha_shock=alpha_shock_for_telemetry,
                     )
 
                 # Store transition
@@ -2666,11 +2847,12 @@ def train_ppo_vectorized(
                     if batched_lstm_hidden is not None:
                         # P4-FIX: Inplace update to inference tensor not allowed.
                         # Reset this environment's hidden state in the batch for the next episode.
-                        init_h, init_c = agent._base_network.get_initial_hidden(
-                            1, agent.device
-                        )
+                        init_hidden = agent.policy.initial_hidden(1)
+                        assert init_hidden is not None, "initial_hidden should not return None"
+                        init_h, init_c = init_hidden
 
                         # Create new tensors to avoid inplace modification of inference tensors
+                        assert isinstance(batched_lstm_hidden, tuple) and len(batched_lstm_hidden) == 2
                         new_h = batched_lstm_hidden[0].clone()
                         new_c = batched_lstm_hidden[1].clone()
                         new_h[:, env_idx : env_idx + 1, :] = init_h
@@ -2679,7 +2861,8 @@ def train_ppo_vectorized(
 
                 # Mechanical lifecycle advance
                 for slot_id in slots:
-                    if model.seed_slots[slot_id].step_epoch():
+                    slot_for_step = cast(SeedSlotProtocol, model.seed_slots[slot_id])
+                    if slot_for_step.step_epoch():
                         env_state.pending_auto_prune_penalty += (
                             reward_config.auto_prune_penalty
                         )
@@ -2734,6 +2917,46 @@ def train_ppo_vectorized(
                         "final_accuracy": env_final_accs[env_idx],
                     })
 
+                    # Compute stability score from reward variance
+                    recent_ep_rewards = env_state.episode_rewards[-20:] if len(env_state.episode_rewards) >= 20 else env_state.episode_rewards
+                    if len(recent_ep_rewards) > 1:
+                        reward_var = float(np.var(recent_ep_rewards))
+                        stability = 1.0 / (1.0 + reward_var)
+                    else:
+                        stability = 1.0  # Default if insufficient data
+
+                    # Create EpisodeOutcome for Pareto analysis
+                    episode_outcome = EpisodeOutcome(
+                        env_idx=env_idx,
+                        episode_idx=episodes_completed + env_idx,
+                        final_accuracy=env_state.val_acc,
+                        param_ratio=(model.total_params - host_params_baseline) / max(1, host_params_baseline),
+                        num_fossilized=env_state.seeds_fossilized,
+                        num_contributing_fossilized=env_state.contributing_fossilized,
+                        episode_reward=env_total_rewards[env_idx],
+                        stability_score=stability,
+                        reward_mode=env_reward_configs[env_idx].reward_mode.value,
+                    )
+                    episode_outcomes.append(episode_outcome)
+
+                    # Emit EPISODE_OUTCOME telemetry for Pareto analysis
+                    if env_state.telemetry_cb:
+                        env_state.telemetry_cb(TelemetryEvent(
+                            event_type=TelemetryEventType.EPISODE_OUTCOME,
+                            epoch=episodes_completed + env_idx,
+                            data=EpisodeOutcomePayload(
+                                env_id=env_idx,
+                                episode_idx=episode_outcome.episode_idx,
+                                final_accuracy=episode_outcome.final_accuracy,
+                                param_ratio=episode_outcome.param_ratio,
+                                num_fossilized=episode_outcome.num_fossilized,
+                                num_contributing_fossilized=episode_outcome.num_contributing_fossilized,
+                                episode_reward=episode_outcome.episode_reward,
+                                stability_score=episode_outcome.stability_score,
+                                reward_mode=episode_outcome.reward_mode,
+                            ),
+                        ))
+
                     # Shapley contributions at episode end
                     if (
                         env_state.counterfactual_helper is not None
@@ -2743,7 +2966,7 @@ def train_ppo_vectorized(
                             sid
                             for sid in slots
                             if model.has_active_seed_in_slot(sid)
-                            and model.seed_slots[sid].alpha > 0
+                            and cast(SeedSlotProtocol, model.seed_slots[sid]).alpha > 0
                         ]
                         if active_slot_ids:
                             cached_baselines = baseline_accs[env_idx]
@@ -2803,20 +3026,14 @@ def train_ppo_vectorized(
                 }
 
                 with torch.inference_mode():
-                    bootstrap_result = agent.network.get_action(
+                    bootstrap_result = agent.policy.get_action(
                         post_action_features_normalized,
+                        masks=post_masks_batch,
                         hidden=batched_lstm_hidden,
-                        slot_mask=post_masks_batch["slot"],
-                        blueprint_mask=post_masks_batch["blueprint"],
-                        style_mask=post_masks_batch["style"],
-                        tempo_mask=post_masks_batch["tempo"],
-                        alpha_target_mask=post_masks_batch["alpha_target"],
-                        alpha_speed_mask=post_masks_batch["alpha_speed"],
-                        alpha_curve_mask=post_masks_batch["alpha_curve"],
-                        op_mask=post_masks_batch["op"],
                         deterministic=True,
                     )
-                bootstrap_values = bootstrap_result.values.tolist()
+                # PERF: Move to CPU before .tolist() to avoid per-value GPU sync
+                bootstrap_values = bootstrap_result.value.cpu().tolist()
 
             # PHASE 3: Store transitions
             bootstrap_idx = 0
@@ -2888,7 +3105,7 @@ def train_ppo_vectorized(
                 amp_dtype=resolved_amp_dtype,
             )
             ppo_update_time_ms = (time.perf_counter() - update_start) * 1000.0
-            ppo_grad_norm = compute_grad_norm_surrogate(agent.network)
+            ppo_grad_norm = compute_grad_norm_surrogate(agent.policy.network)
 
             metric_values = [v for v in metrics.values() if isinstance(v, (int, float))]
             anomaly_report = anomaly_detector.check_all(
@@ -2996,38 +3213,38 @@ def train_ppo_vectorized(
         if rolling_avg_acc > best_avg_acc:
             best_avg_acc = rolling_avg_acc
             best_state = {
-                k: v.cpu().clone() for k, v in agent.network.state_dict().items()
+                k: v.cpu().clone() for k, v in agent.policy.state_dict().items()
             }
 
         episodes_completed += envs_this_batch
         batch_idx += 1
 
     if best_state:
-        agent.network.load_state_dict(best_state)
+        agent.policy.load_state_dict(best_state)
 
     if save_path:
         agent.save(save_path)
 
-    # A/B Test Summary
-    if ab_reward_modes is not None:
+    # A/B/n Test Summary
+    if reward_mode_per_env is not None:
         print("\n" + "=" * 60)
         print("A/B TEST RESULTS")
         print("=" * 60)
 
         # Group episodes by reward mode
         from collections import defaultdict
-        ab_groups = defaultdict(list)
+        ab_groups: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
         for ep_data in episode_history:
-            env_idx = ep_data["env_idx"]
-            mode = env_reward_configs[env_idx].reward_mode.value
-            ab_groups[mode].append(ep_data)
+            env_idx = int(ep_data["env_idx"])
+            mode_name = env_reward_configs[env_idx].reward_mode.value
+            ab_groups[mode_name].append(ep_data)
 
-        for mode, episodes in sorted(ab_groups.items()):
+        for mode_name, episodes in sorted(ab_groups.items()):
             rewards = [ep.get("episode_reward", 0) for ep in episodes]
             accuracies = [ep.get("final_accuracy", 0) for ep in episodes]
             avg_reward = sum(rewards) / len(rewards) if rewards else 0
             avg_acc = sum(accuracies) / len(accuracies) if accuracies else 0
-            print(f"\n{mode.upper()} ({len(episodes)} episodes):")
+            print(f"\n{mode_name.upper()} ({len(episodes)} episodes):")
             print(f"  Avg Episode Reward: {avg_reward:.2f}")
             print(f"  Avg Final Accuracy: {avg_acc:.2f}%")
             print(f"  Reward Range: [{min(rewards):.2f}, {max(rewards):.2f}]")

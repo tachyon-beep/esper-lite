@@ -1,20 +1,19 @@
 """Tests for factored action lookup tables."""
 
-import pytest
 
-from esper.leyline.factored_actions import (
+from esper.leyline import (
+    BLUEPRINT_IDS,
     BlueprintAction,
     GerminationStyle,
     LifecycleOp,
-    OP_NAMES,
-    BLUEPRINT_IDS,
-    STYLE_BLEND_IDS,
-    STYLE_TO_KASMINA,
-    OP_GERMINATE,
+    OP_ADVANCE,
     OP_FOSSILIZE,
+    OP_GERMINATE,
+    OP_NAMES,
     OP_PRUNE,
     OP_WAIT,
-    OP_ADVANCE,
+    STYLE_BLEND_IDS,
+    STYLE_TO_KASMINA,
 )
 
 

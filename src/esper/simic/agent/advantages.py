@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import torch
 
-from esper.leyline.factored_actions import LifecycleOp
+from esper.leyline import LifecycleOp
 
 
 def compute_per_head_advantages(

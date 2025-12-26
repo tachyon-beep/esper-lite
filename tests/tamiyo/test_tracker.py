@@ -134,12 +134,12 @@ class TestTamiyoInitiatedEvent:
         # Check epoch field
         assert event.epoch == 10
 
-        # Check data fields
-        assert event.data["env_id"] == 42
-        assert event.data["epoch"] == 10
-        assert event.data["stable_count"] == 3  # After update, should be 3
-        assert event.data["stabilization_epochs"] == 3
-        assert event.data["val_loss"] == final_loss
+        # Check data fields (typed payload: TamiyoInitiatedPayload)
+        assert event.data.env_id == 42
+        assert event.data.epoch == 10
+        assert event.data.stable_count == 3  # After update, should be 3
+        assert event.data.stabilization_epochs == 3
+        assert event.data.val_loss == final_loss
 
         # Check message
         assert "Host stabilized" in event.message
@@ -180,8 +180,8 @@ class TestTamiyoInitiatedEvent:
                          if e.event_type == TelemetryEventType.TAMIYO_INITIATED]
         assert len(tamiyo_events) == 1
 
-    def test_no_env_id_uses_fallback(self):
-        """Tracker without env_id should still emit event (env_id=None in data)."""
+    def test_no_env_id_skips_event(self):
+        """Tracker without env_id should NOT emit event (typed payload requires env_id)."""
         tracker = SignalTracker(stabilization_epochs=3)
 
         # Fast path to stabilization
@@ -195,9 +195,10 @@ class TestTamiyoInitiatedEvent:
             active_seeds=[],
         )
 
+        # Should NOT emit event when env_id is None (typed payload requires it)
         tamiyo_events = [e for e in self.events
                          if e.event_type == TelemetryEventType.TAMIYO_INITIATED]
-        assert len(tamiyo_events) == 1
+        assert len(tamiyo_events) == 0
 
-        event = tamiyo_events[0]
-        assert event.data["env_id"] is None  # No env_id provided
+        # But stabilization should still be recorded internally
+        assert tracker._is_stabilized is True

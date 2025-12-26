@@ -1,5 +1,4 @@
 """Tests for AnomalyStrip widget."""
-import pytest
 from esper.karn.sanctum.widgets.anomaly_strip import AnomalyStrip
 from esper.karn.sanctum.schema import (
     SanctumSnapshot, EnvState, SeedState, TamiyoState, SystemVitals

@@ -48,9 +48,9 @@ def zero_init_final_layer(module: nn.Module, *, allow_missing: bool = False) -> 
     if layer.weight is None:
         raise ValueError(f"Final affine layer {found.name!r} has no weight tensor")
 
-    nn.init.zeros_(layer.weight)
+    nn.init.zeros_(layer.weight)  # type: ignore[arg-type]
     if getattr(layer, "bias", None) is not None:
-        nn.init.zeros_(layer.bias)
+        nn.init.zeros_(layer.bias)  # type: ignore[arg-type]
 
 
 __all__ = [

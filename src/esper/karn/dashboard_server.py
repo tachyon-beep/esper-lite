@@ -21,8 +21,8 @@ from pathlib import Path
 from queue import Queue, Empty
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect  # type: ignore[import-not-found]
+from fastapi.responses import HTMLResponse  # type: ignore[import-not-found]
 
 _logger = logging.getLogger(__name__)
 
@@ -47,10 +47,6 @@ def _load_dashboard_html() -> str:
     """.format(_DASHBOARD_PATH)
 
 
-# TODO: [DEAD CODE] - create_app() and run_dashboard_server() are exported but never called.
-# Production uses integrated_dashboard.DashboardServer instead (train.py line 309).
-# This appears to be superseded code. Either consolidate with integrated_dashboard.py
-# or delete these functions. See: architectural risk assessment 2024-12-24.
 def create_app(telemetry_queue: Queue[str] | None = None) -> FastAPI:
     """Create FastAPI app for Karn dashboard.
 
@@ -70,12 +66,12 @@ def create_app(telemetry_queue: Queue[str] | None = None) -> FastAPI:
     # Connected WebSocket clients
     clients: set[WebSocket] = set()
 
-    @app.get("/", response_class=HTMLResponse)
+    @app.get("/", response_class=HTMLResponse)  # type: ignore[untyped-decorator]
     async def get_dashboard() -> str:
         """Serve the dashboard HTML."""
         return _load_dashboard_html()
 
-    @app.websocket("/ws")
+    @app.websocket("/ws")  # type: ignore[untyped-decorator]
     async def websocket_endpoint(websocket: WebSocket) -> None:
         """WebSocket endpoint for telemetry stream."""
         await websocket.accept()
@@ -113,7 +109,7 @@ def create_app(telemetry_queue: Queue[str] | None = None) -> FastAPI:
             clients.discard(websocket)
             _logger.info(f"Dashboard client disconnected. Total: {len(clients)}")
 
-    @app.get("/api/health")
+    @app.get("/api/health")  # type: ignore[untyped-decorator]
     async def health_check() -> dict[str, Any]:
         """Health check endpoint."""
         return {
@@ -123,7 +119,7 @@ def create_app(telemetry_queue: Queue[str] | None = None) -> FastAPI:
         }
 
     # Background task to broadcast telemetry from queue
-    @app.on_event("startup")
+    @app.on_event("startup")  # type: ignore[untyped-decorator]
     async def start_broadcast_task() -> None:
         if telemetry_queue:
             asyncio.create_task(_broadcast_loop(clients, telemetry_queue))

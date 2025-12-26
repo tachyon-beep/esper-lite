@@ -16,11 +16,15 @@ class ActionResult:
         log_prob: Dict mapping head names to log probabilities
         value: State value estimate
         hidden: New hidden state tuple (h, c) or None for stateless policies
+        op_logits: Raw masked logits for op head [batch, num_ops].
+            Used by telemetry for decision snapshots (action confidence, alternatives).
+            Only populated if policy bundle supports it, otherwise None.
     """
     action: dict[str, torch.Tensor]
     log_prob: dict[str, torch.Tensor]
     value: torch.Tensor
     hidden: tuple[torch.Tensor, torch.Tensor] | None
+    op_logits: torch.Tensor | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -18,16 +18,25 @@ from __future__ import annotations
 
 import json
 import logging
+import queue
+import threading
 from abc import ABC, abstractmethod
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from esper.leyline import TelemetryEvent
 from esper.leyline.telemetry import (
     EpochCompletedPayload,
     BatchEpochCompletedPayload,
     AnomalyDetectedPayload,
+    SeedGerminatedPayload,
+    SeedStageChangedPayload,
+    SeedFossilizedPayload,
+    SeedPrunedPayload,
+    PPOUpdatePayload,
+    AnalyticsSnapshotPayload,
 )
 
 _logger = logging.getLogger(__name__)
@@ -92,129 +101,94 @@ class ConsoleOutput(OutputBackend):
 
         # Format message based on event type
         if event_type == "EPOCH_COMPLETED":
-            # Handle typed payload or dict fallback
+            if event.data is None:
+                _logger.warning("EPOCH_COMPLETED event has no data payload")
+                return
+            # Handle typed payload
             if isinstance(event.data, EpochCompletedPayload):
                 loss = event.data.val_loss
                 acc = event.data.val_accuracy
-            else:
-                if event.data is None:
-                    _logger.warning("EPOCH_COMPLETED event has no data payload")
-                    return
-                loss = event.data.get("val_loss", "?")
-                acc = event.data.get("val_accuracy", "?")
-            epoch = event.epoch if event.epoch is not None else "?"
-            print(f"[{timestamp}] {seed_id} | Epoch {epoch}: loss={loss} acc={acc}")
+                epoch = event.epoch if event.epoch is not None else "?"
+                print(f"[{timestamp}] {seed_id} | Epoch {epoch}: loss={loss} acc={acc}")
         elif "COMMAND" in event_type:
             if event.data is None:
                 _logger.warning("COMMAND event has no data payload")
                 return
-            action = event.data.get("action", "unknown")
-            print(f"[{timestamp}] {seed_id} | Command: {action}")
+            # COMMAND events not yet migrated to typed payloads
+            if isinstance(event.data, dict):
+                action = event.data.get("action", "unknown")
+                print(f"[{timestamp}] {seed_id} | Command: {action}")
         elif event_type.startswith("SEED_"):
             if event.data is None:
                 _logger.warning("SEED_%s event has no data payload", event_type)
                 return
-            data = event.data
+
             if event_type == "SEED_GERMINATED":
-                blueprint_id = data.get("blueprint_id", "?")
-                params = data.get("params")
-                if isinstance(params, (int, float)):
+                if isinstance(event.data, SeedGerminatedPayload):
+                    blueprint_id = event.data.blueprint_id
+                    params = event.data.params
                     msg = f"Germinated ({blueprint_id}, {params/1000:.1f}K params)"
                 else:
-                    msg = f"Germinated ({blueprint_id})"
+                    msg = event.message or event_type
             elif event_type == "SEED_STAGE_CHANGED":
-                from_stage = data.get("from", "?")
-                to_stage = data.get("to", "?")
-                msg = f"Stage transition: {from_stage} \u2192 {to_stage}"
+                if isinstance(event.data, SeedStageChangedPayload):
+                    from_stage = event.data.from_stage
+                    to_stage = event.data.to_stage
+                    msg = f"Stage transition: {from_stage} \u2192 {to_stage}"
+                else:
+                    msg = event.message or event_type
             elif event_type == "SEED_FOSSILIZED":
-                blueprint_id = data.get("blueprint_id", "?")
-                improvement = data.get("improvement")
-                if isinstance(improvement, (int, float)):
+                if isinstance(event.data, SeedFossilizedPayload):
+                    blueprint_id = event.data.blueprint_id
+                    improvement = event.data.improvement
                     msg = f"Fossilized ({blueprint_id}, \u0394acc {improvement:+.2f}%)"
                 else:
-                    msg = f"Fossilized ({blueprint_id})"
+                    msg = event.message or event_type
             elif event_type == "SEED_PRUNED":
-                blueprint_id = data.get("blueprint_id", "?")
-                improvement = data.get("improvement")
-                reason = data.get("reason")
-                reason_str = f" ({reason})" if reason else ""
-                if isinstance(improvement, (int, float)):
+                if isinstance(event.data, SeedPrunedPayload):
+                    blueprint_id = event.data.blueprint_id or "?"
+                    improvement = event.data.improvement
+                    reason = event.data.reason
+                    reason_str = f" ({reason})" if reason else ""
                     msg = f"Pruned ({blueprint_id}, \u0394acc {improvement:+.2f}%){reason_str}"
                 else:
-                    msg = f"Pruned ({blueprint_id}){reason_str}"
+                    msg = event.message or event_type
             else:
                 msg = event.message or event_type
             print(f"[{timestamp}] {seed_id} | {msg}")
-        elif event_type == "REWARD_COMPUTED":
-            if event.data is None:
-                _logger.warning("REWARD_COMPUTED event has no data payload")
-                return
-            data = event.data
-            env_id = data.get("env_id", "?")
-            action = data.get("action_name", "?")
-            total = data.get("total_reward", 0.0)
-            # Show key components
-            bounded = data.get("bounded_attribution")
-            base = data.get("base_acc_delta", 0.0)
-            rent = data.get("compute_rent", 0.0)
-            val_acc = data.get("val_acc", 0.0)
-            # Warning signals telemetry
-            blending_warning = data.get("blending_warning", 0.0)
-            holding_warning = data.get("holding_warning", 0.0)
-            attribution_discount = data.get("attribution_discount", 1.0)
-            ratio_penalty = data.get("ratio_penalty", 0.0)
-            # Terminal bonus telemetry
-            fossilize_terminal_bonus = data.get("fossilize_terminal_bonus", 0.0)
-            num_fossilized_seeds = data.get("num_fossilized_seeds", 0)
-            # Format: env, action, total reward, and key breakdown
-            # Note: rent is stored as negative (penalty), display as positive cost
-            rent_display = abs(rent)
-            # Build extra info for warning signals
-            extra = ""
-            if blending_warning < 0:
-                extra += f" BLEND={blending_warning:.2f}"
-            if holding_warning < 0:
-                extra += f" HOLD={holding_warning:.2f}"
-            if attribution_discount < 1.0:
-                extra += f" disc={attribution_discount:.2f}"
-            if ratio_penalty < 0:
-                extra += f" ratio={ratio_penalty:.2f}"
-            if fossilize_terminal_bonus > 0:
-                extra += f" fossil_term={fossilize_terminal_bonus:+.1f}({num_fossilized_seeds})"
-            if bounded is not None:
-                # Contribution-primary reward
-                print(f"[{timestamp}] env{env_id} | {action}: r={total:+.2f} (attr={bounded:+.2f}, rent={rent_display:.2f}{extra}) acc={val_acc:.1f}%")
-            else:
-                # Legacy shaped reward
-                print(f"[{timestamp}] env{env_id} | {action}: r={total:+.2f} (Δacc={base:+.2f}, rent={rent_display:.2f}{extra}) acc={val_acc:.1f}%")
         elif event_type == "GOVERNOR_ROLLBACK":
             if event.data is None:
                 _logger.warning("GOVERNOR_ROLLBACK event has no data payload")
                 return
-            data = event.data
-            reason = data.get("reason", "unknown")
-            loss = data.get("loss_at_panic", "?")
-            threshold = data.get("loss_threshold", "?")
-            panics = data.get("consecutive_panics", "?")
-            if isinstance(loss, float):
-                loss = f"{loss:.4f}"
-            if isinstance(threshold, float):
-                threshold = f"{threshold:.4f}"
-            print(f"[{timestamp}] GOVERNOR | 🚨 ROLLBACK: {reason} (loss={loss}, threshold={threshold}, panics={panics})")
+            # GOVERNOR_ROLLBACK not yet migrated to typed payload
+            if isinstance(event.data, dict):
+                reason = event.data.get("reason", "unknown")
+                loss = event.data.get("loss_at_panic", "?")
+                threshold = event.data.get("loss_threshold", "?")
+                panics = event.data.get("consecutive_panics", "?")
+                if isinstance(loss, float):
+                    loss = f"{loss:.4f}"
+                if isinstance(threshold, float):
+                    threshold = f"{threshold:.4f}"
+                print(f"[{timestamp}] GOVERNOR | 🚨 ROLLBACK: {reason} (loss={loss}, threshold={threshold}, panics={panics})")
         elif event_type == "GOVERNOR_PANIC":
             # TODO: [DEAD CODE] - This formatting code for GOVERNOR_PANIC is unreachable
             # because these events are never emitted. See: leyline/telemetry.py dead event TODOs.
             if event.data is None:
                 _logger.warning("GOVERNOR_PANIC event has no data payload")
                 return
-            data = event.data
-            loss = data.get("current_loss", "?")
-            panics = data.get("consecutive_panics", 0)
-            if isinstance(loss, float):
-                loss = f"{loss:.4f}"
-            print(f"[{timestamp}] GOVERNOR | ⚠️  PANIC #{panics}: loss={loss}")
+            # GOVERNOR_PANIC not yet migrated to typed payload
+            if isinstance(event.data, dict):
+                loss = event.data.get("current_loss", "?")
+                panics = event.data.get("consecutive_panics", 0)
+                if isinstance(loss, float):
+                    loss = f"{loss:.4f}"
+                print(f"[{timestamp}] GOVERNOR | ⚠️  PANIC #{panics}: loss={loss}")
         elif event_type == "BATCH_EPOCH_COMPLETED":
-            # Handle typed payload or dict fallback
+            if event.data is None:
+                _logger.warning("BATCH_EPOCH_COMPLETED event has no data payload")
+                return
+            # Handle typed payload
             if isinstance(event.data, BatchEpochCompletedPayload):
                 batch_idx = event.data.batch_idx
                 episodes = event.data.episodes_completed
@@ -222,90 +196,81 @@ class ConsoleOutput(OutputBackend):
                 avg_acc = event.data.avg_accuracy
                 rolling_acc = event.data.rolling_accuracy
                 avg_reward = event.data.avg_reward
-                env_accs = event.data.env_accuracies or []
-            else:
-                if event.data is None:
-                    _logger.warning("BATCH_EPOCH_COMPLETED event has no data payload")
-                    return
-                data = event.data
-                batch_idx = data.get("batch_idx", "?")
-                episodes = data.get("episodes_completed", "?")
-                total = data.get("total_episodes", "?")
-                avg_acc = data.get("avg_accuracy", 0.0)
-                rolling_acc = data.get("rolling_accuracy", 0.0)
-                avg_reward = data.get("avg_reward", 0.0)
-                env_accs = data.get("env_accuracies", [])
-            env_acc_str = ", ".join(f"{a:.1f}%" for a in env_accs) if env_accs else ""
-            print(f"[{timestamp}] BATCH {batch_idx} | Episodes {episodes}/{total}")
-            if env_acc_str:
-                print(f"[{timestamp}]   Env accs: [{env_acc_str}]")
-            print(f"[{timestamp}]   Avg: {avg_acc:.1f}% (rolling: {rolling_acc:.1f}%), reward: {avg_reward:.1f}")
+                env_accs = event.data.env_accuracies or ()
+                env_acc_str = ", ".join(f"{a:.1f}%" for a in env_accs) if env_accs else ""
+                print(f"[{timestamp}] BATCH {batch_idx} | Episodes {episodes}/{total}")
+                if env_acc_str:
+                    print(f"[{timestamp}]   Env accs: [{env_acc_str}]")
+                print(f"[{timestamp}]   Avg: {avg_acc:.1f}% (rolling: {rolling_acc:.1f}%), reward: {avg_reward:.1f}")
         elif event_type == "COUNTERFACTUAL_COMPUTED":
             if event.data is None:
                 _logger.warning("COUNTERFACTUAL_COMPUTED event has no data payload")
                 return
-            data = event.data
-            env_id = data.get("env_id", "?")
-            slot_id = data.get("slot_id", "?")
-            available = data.get("available", True)
-            if available is False:
-                reason = data.get("reason", "unknown")
-                print(f"[{timestamp}] env{env_id} | Counterfactual {slot_id}: unavailable ({reason})")
-            else:
-                real_acc = data.get("real_accuracy", 0.0)
-                baseline_acc = data.get("baseline_accuracy", 0.0)
-                contribution = data.get("contribution", 0.0)
-                print(f"[{timestamp}] env{env_id} | Counterfactual {slot_id}: {real_acc:.1f}% real, {baseline_acc:.1f}% baseline, Δ={contribution:+.1f}%")
+            # COUNTERFACTUAL_COMPUTED not yet migrated to typed payload
+            if isinstance(event.data, dict):
+                env_id = event.data.get("env_id", "?")
+                slot_id = event.data.get("slot_id", "?")
+                available = event.data.get("available", True)
+                if available is False:
+                    reason = event.data.get("reason", "unknown")
+                    print(f"[{timestamp}] env{env_id} | Counterfactual {slot_id}: unavailable ({reason})")
+                else:
+                    real_acc = event.data.get("real_accuracy", 0.0)
+                    baseline_acc = event.data.get("baseline_accuracy", 0.0)
+                    contribution = event.data.get("contribution", 0.0)
+                    print(f"[{timestamp}] env{env_id} | Counterfactual {slot_id}: {real_acc:.1f}% real, {baseline_acc:.1f}% baseline, Δ={contribution:+.1f}%")
         elif event_type == "CHECKPOINT_SAVED":
             # TODO: [DEAD CODE] - This formatting code for CHECKPOINT_SAVED is unreachable
             # because these events are never emitted. See: leyline/telemetry.py dead event TODOs.
             if event.data is None:
                 _logger.warning("CHECKPOINT_SAVED event has no data payload")
                 return
-            data = event.data
-            path = data.get("path", "?")
-            avg_acc = data.get("avg_accuracy", 0.0)
-            print(f"[{timestamp}] CHECKPOINT | Saved to {path} (acc={avg_acc:.1f}%)")
+            # CHECKPOINT_SAVED not yet migrated to typed payload
+            if isinstance(event.data, dict):
+                path = event.data.get("path", "?")
+                avg_acc = event.data.get("avg_accuracy", 0.0)
+                print(f"[{timestamp}] CHECKPOINT | Saved to {path} (acc={avg_acc:.1f}%)")
         elif event_type == "CHECKPOINT_LOADED":
             if event.data is None:
                 _logger.warning("CHECKPOINT_LOADED event has no data payload")
                 return
-            data = event.data
-            path = data.get("path", "?")
-            episode = data.get("start_episode", 0)
-            source = data.get("source", "")
-            if source:
-                print(f"[{timestamp}] CHECKPOINT | Loaded {source} (acc={data.get('avg_accuracy', 0.0):.1f}%)")
-            else:
-                print(f"[{timestamp}] CHECKPOINT | Loaded from {path} (resuming at episode {episode})")
+            # CHECKPOINT_LOADED not yet migrated to typed payload
+            if isinstance(event.data, dict):
+                path = event.data.get("path", "?")
+                episode = event.data.get("start_episode", 0)
+                source = event.data.get("source", "")
+                if source:
+                    print(f"[{timestamp}] CHECKPOINT | Loaded {source} (acc={event.data.get('avg_accuracy', 0.0):.1f}%)")
+                else:
+                    print(f"[{timestamp}] CHECKPOINT | Loaded from {path} (resuming at episode {episode})")
         elif event_type == "TAMIYO_INITIATED":
             if event.data is None:
                 _logger.warning("TAMIYO_INITIATED event has no data payload")
                 return
-            data = event.data
-            env_id = data.get("env_id")
-            epoch = data.get("epoch", "?")
-            stable_count = data.get("stable_count", 0)
-            stabilization_epochs = data.get("stabilization_epochs", 0)
-            env_str = f"env{env_id}" if env_id is not None else "Tamiyo"
-            if stabilization_epochs == 0:
-                print(f"[{timestamp}] {env_str} | Host stabilized at epoch {epoch} - germination now allowed")
-            else:
-                print(f"[{timestamp}] {env_str} | Host stabilized at epoch {epoch} ({stable_count}/{stabilization_epochs} stable) - germination now allowed")
+            # TAMIYO_INITIATED not yet migrated to typed payload
+            if isinstance(event.data, dict):
+                env_id = event.data.get("env_id")
+                epoch = event.data.get("epoch", "?")
+                stable_count = event.data.get("stable_count", 0)
+                stabilization_epochs = event.data.get("stabilization_epochs", 0)
+                env_str = f"env{env_id}" if env_id is not None else "Tamiyo"
+                if stabilization_epochs == 0:
+                    print(f"[{timestamp}] {env_str} | Host stabilized at epoch {epoch} - germination now allowed")
+                else:
+                    print(f"[{timestamp}] {env_str} | Host stabilized at epoch {epoch} ({stable_count}/{stabilization_epochs} stable) - germination now allowed")
         elif event_type == "PPO_UPDATE_COMPLETED":
             if event.data is None:
                 _logger.warning("PPO_UPDATE_COMPLETED event has no data payload")
                 return
-            data = event.data
-            if data.get("skipped"):
-                reason = data.get("reason", "unknown")
-                print(f"[{timestamp}] PPO | Update skipped ({reason})")
-            else:
-                policy_loss = data.get("policy_loss", 0.0)
-                value_loss = data.get("value_loss", 0.0)
-                entropy = data.get("entropy", 0.0)
-                entropy_coef = data.get("entropy_coef", 0.0)
-                print(f"[{timestamp}] PPO | policy={policy_loss:.4f}, value={value_loss:.4f}, entropy={entropy:.3f} (coef={entropy_coef:.4f})")
+            if isinstance(event.data, PPOUpdatePayload):
+                if event.data.skipped:
+                    print(f"[{timestamp}] PPO | Update skipped")
+                else:
+                    policy_loss = event.data.policy_loss
+                    value_loss = event.data.value_loss
+                    entropy = event.data.entropy
+                    entropy_coef = event.data.entropy_coef or 0.0
+                    print(f"[{timestamp}] PPO | policy={policy_loss:.4f}, value={value_loss:.4f}, entropy={entropy:.3f} (coef={entropy_coef:.4f})")
         elif event_type in ("RATIO_EXPLOSION_DETECTED", "RATIO_COLLAPSE_DETECTED",
                            "VALUE_COLLAPSE_DETECTED", "NUMERICAL_INSTABILITY_DETECTED",
                            "GRADIENT_ANOMALY", "GRADIENT_PATHOLOGY_DETECTED"):
@@ -322,7 +287,7 @@ class ConsoleOutput(OutputBackend):
         event_dict = self._event_to_dict(event)
         print(json.dumps(event_dict, indent=2, default=str))
 
-    def _event_to_dict(self, event: TelemetryEvent) -> dict:
+    def _event_to_dict(self, event: TelemetryEvent) -> dict[str, Any]:
         """Convert event to dictionary for serialization."""
         if is_dataclass(event):
             data = asdict(event)
@@ -355,7 +320,7 @@ class FileOutput(OutputBackend):
     def __init__(self, path: str | Path, buffer_size: int = 10):
         self.path = Path(path)
         self.buffer_size = buffer_size
-        self._buffer: list[dict] = []
+        self._buffer: list[dict[str, Any]] = []
 
         # Ensure parent directory exists
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -388,7 +353,7 @@ class FileOutput(OutputBackend):
             self.flush()
             self._file.close()
 
-    def _event_to_dict(self, event: TelemetryEvent) -> dict:
+    def _event_to_dict(self, event: TelemetryEvent) -> dict[str, Any]:
         """Convert event to dictionary for serialization."""
         if is_dataclass(event):
             data = asdict(event)
@@ -409,7 +374,7 @@ class FileOutput(OutputBackend):
 
         return data
 
-    def __del__(self):
+    def __del__(self) -> None:
         """Ensure file is closed on deletion."""
         # hasattr AUTHORIZED by operator on 2025-11-29 15:05:24 UTC
         # Justification: Cleanup guard - defensive check in __del__ to avoid errors during teardown
@@ -457,9 +422,6 @@ class DirectoryOutput(OutputBackend):
         """Close the directory backend."""
         self._file_output.close()
 
-
-import queue
-import threading
 
 class NissaHub:
     """Central telemetry hub that routes events to multiple backends.
@@ -655,7 +617,7 @@ class NissaHub:
             except Exception as e:
                 _logger.error(f"Error closing backend {backend.__class__.__name__}: {e}")
 
-    def __del__(self):
+    def __del__(self) -> None:
         """Ensure all backends are closed on deletion."""
         self.close()
 

@@ -1,7 +1,5 @@
 """Test transition handling between advance_stage() and step_epoch()."""
 
-import pytest
-import torch
 
 from esper.kasmina.slot import SeedSlot
 from esper.leyline.stages import SeedStage

@@ -3,8 +3,7 @@
 import pytest
 from enum import IntEnum
 
-from esper.leyline import MIN_PRUNE_AGE
-from esper.leyline.factored_actions import LifecycleOp
+from esper.leyline import LifecycleOp, MIN_PRUNE_AGE
 from esper.simic.rewards import (
     SeedInfo,
     STAGE_BLENDING,

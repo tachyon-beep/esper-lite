@@ -13,7 +13,7 @@ import torch
 import torch.nn as nn
 
 from esper.kasmina.host import CNNHost, TransformerHost, MorphogeneticModel
-from esper.kasmina.slot import SeedSlot, QualityGates
+from esper.kasmina.slot import SeedSlot
 from esper.leyline import (
     SeedStage,
     DEFAULT_MIN_TRAINING_IMPROVEMENT,
@@ -389,7 +389,7 @@ class TestCounterfactualValidation:
 
             # Forward pass at alpha=0
             x = torch.randn(4, 3, 32, 32)
-            output_baseline = model(x)
+            model(x)
 
         # Alpha restored
         assert slot.state.alpha == 0.8

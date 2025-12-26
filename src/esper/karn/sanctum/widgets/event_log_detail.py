@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from rich.table import Table
 from rich.text import Text
+from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, VerticalScroll
 from textual.screen import ModalScreen
@@ -67,7 +68,7 @@ class EventLogDetail(ModalScreen[None]):
         super().__init__()
         self._events = events
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
         """Compose the modal layout."""
         with Container(id="event-detail-container"):
             yield Static(self._render_header(), id="event-detail-header")

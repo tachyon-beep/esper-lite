@@ -8,8 +8,9 @@ import torch
 from esper.tamiyo.policy.features import MULTISLOT_FEATURE_SIZE
 
 from esper.simic.agent import PPOAgent
+from esper.tamiyo.policy.factory import create_policy
 from esper.tamiyo.policy.action_masks import compute_action_masks
-from esper.leyline.factored_actions import (
+from esper.leyline import (
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
     NUM_ALPHA_TARGETS,
@@ -17,8 +18,8 @@ from esper.leyline.factored_actions import (
     NUM_OPS,
     NUM_STYLES,
     NUM_TEMPO,
+    SlotConfig,
 )
-from esper.leyline.slot_config import SlotConfig
 
 
 class TestFactoredActionMasksInVectorized:
@@ -102,19 +103,26 @@ class TestPPOAgentFactoredInVectorized:
     def test_factored_agent_batched_action_selection(self):
         """PPOAgent should handle batched action selection with per-head masks."""
         n_envs = 4
+        slot_config = SlotConfig.default()
         state_dim = MULTISLOT_FEATURE_SIZE
 
-        agent = PPOAgent(
+        policy = create_policy(
+            policy_type="lstm",
             state_dim=state_dim,
+            slot_config=slot_config,
             device="cpu",
-            compile_network=False,
+            compile_mode="off",
+        )
+        agent = PPOAgent(
+            policy=policy,
+            slot_config=slot_config,
+            device="cpu",
         )
 
         # Batched states
         states = torch.randn(n_envs, state_dim)
 
         # Batched masks (dict of [n_envs, head_dim] tensors)
-        slot_config = SlotConfig.default()
         masks = {
             "slot": torch.ones(n_envs, slot_config.num_slots, dtype=torch.bool),
             "blueprint": torch.ones(n_envs, NUM_BLUEPRINTS, dtype=torch.bool),
@@ -128,7 +136,7 @@ class TestPPOAgentFactoredInVectorized:
 
         # Get batched actions via network.get_action
         with torch.no_grad():
-            result = agent.network.get_action(
+            result = agent.policy.network.get_action(
                 states,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -163,12 +171,20 @@ class TestPPOAgentFactoredInVectorized:
     def test_rollout_buffer_stores_factored_transitions(self):
         """TamiyoRolloutBuffer should store factored transitions from multiple envs."""
         n_envs = 4
+        slot_config = SlotConfig.default()
         state_dim = MULTISLOT_FEATURE_SIZE
 
-        agent = PPOAgent(
+        policy = create_policy(
+            policy_type="lstm",
             state_dim=state_dim,
+            slot_config=slot_config,
             device="cpu",
-            compile_network=False,
+            compile_mode="off",
+        )
+        agent = PPOAgent(
+            policy=policy,
+            slot_config=slot_config,
+            device="cpu",
             num_envs=n_envs,
             max_steps_per_env=10,
         )
@@ -178,7 +194,6 @@ class TestPPOAgentFactoredInVectorized:
             agent.buffer.start_episode(env_id=env_idx)
 
         # Store transitions from each env
-        slot_config = SlotConfig.default()
         for env_idx in range(n_envs):
             state = torch.randn(state_dim)
             # Hidden state: [num_layers, hidden_dim] (batch dim squeezed in add())

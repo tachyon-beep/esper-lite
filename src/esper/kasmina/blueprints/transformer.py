@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -32,7 +33,7 @@ def create_transformer_norm_seed(dim: int) -> nn.Module:
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             # Bound scale to [-1, 1] via tanh to prevent gradient explosion
-            return x + torch.tanh(self.scale) * (self.norm(x) - x)
+            return x + torch.tanh(self.scale) * (self.norm(x) - x)  # type: ignore[no-any-return]
 
     return TransformerNormSeed(dim)
 
@@ -49,7 +50,7 @@ def create_lora_seed(dim: int, rank: int = 8) -> nn.Module:
             nn.init.zeros_(self.up.weight)
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
-            return x + self.up(self.down(x))
+            return x + self.up(self.down(x))  # type: ignore[no-any-return]
 
     return LoRASeed(dim, rank)
 
@@ -79,7 +80,7 @@ def create_lora_large_seed(dim: int, rank: int = 32) -> nn.Module:
             nn.init.zeros_(self.up.weight)
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
-            return x + self.up(self.down(x))
+            return x + self.up(self.down(x))  # type: ignore[no-any-return]
 
     return LoRALargeSeed(dim, rank)
 
@@ -115,7 +116,7 @@ def create_transformer_attention_seed(dim: int, n_head: int = 4) -> nn.Module:
             out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
 
             out = out.transpose(1, 2).reshape(b, t, c)
-            return x + self.proj(out)
+            return x + self.proj(out)  # type: ignore[no-any-return]
 
     return TransformerAttentionSeed(dim, n_head)
 
@@ -147,11 +148,11 @@ def create_transformer_mlp_small_seed(dim: int, expansion: int = 2, checkpoint: 
             nn.init.zeros_(self.fc2.bias)
 
         def _mlp_forward(self, x: torch.Tensor) -> torch.Tensor:
-            return self.fc2(F.gelu(self.fc1(x)))
+            return self.fc2(F.gelu(self.fc1(x)))  # type: ignore[no-any-return]
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             if self.use_checkpoint and self.training and x.requires_grad:
-                return x + torch_checkpoint(self._mlp_forward, x, use_reentrant=False)
+                return x + torch_checkpoint(self._mlp_forward, x, use_reentrant=False)  # type: ignore[no-any-return]
             return x + self._mlp_forward(x)
 
     return TransformerMLPSmallSeed(dim, expansion, checkpoint)
@@ -173,11 +174,11 @@ def create_transformer_mlp_seed(dim: int, expansion: int = 4, checkpoint: bool =
             nn.init.zeros_(self.fc2.bias)
 
         def _mlp_forward(self, x: torch.Tensor) -> torch.Tensor:
-            return self.fc2(F.gelu(self.fc1(x)))
+            return self.fc2(F.gelu(self.fc1(x)))  # type: ignore[no-any-return]
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             if self.use_checkpoint and self.training and x.requires_grad:
-                return x + torch_checkpoint(self._mlp_forward, x, use_reentrant=False)
+                return x + torch_checkpoint(self._mlp_forward, x, use_reentrant=False)  # type: ignore[no-any-return]
             return x + self._mlp_forward(x)
 
     return TransformerMLPSeed(dim, expansion, checkpoint)
@@ -225,22 +226,30 @@ def create_flex_attention_seed(dim: int, n_head: int = 4) -> nn.Module:
                 nn.init.zeros_(self.proj.bias)
 
                 # LRU cache for block masks: (seq_len, device_str, dtype_str) -> BlockMask
+                # PERF NOTE: Cache lookup in forward() creates a function call boundary that
+                # prevents torch.compile from fusing block_mask creation with attention.
+                # This is acceptable because:
+                #   1. Block mask creation is expensive (~10ms) - caching is essential
+                #   2. The actual flex_attention kernel is fused internally
+                #   3. For fixed sequence lengths, the cache hit rate is 100% after warmup
+                # If profiling shows this as a bottleneck for known fixed seq_lens, consider
+                # pre-computing common masks in __init__:
+                #   self._precomputed_masks = {64: create_block_mask(...), 128: ..., etc}
                 self._block_mask_cache: OrderedDict[tuple[int, str, str], object] = OrderedDict()
 
-            def _apply(self, fn):
+            def _apply(self, fn: Any, recurse: bool = True) -> Any:
                 """Clear block mask cache on device/dtype transfer to prevent stale masks."""
                 self._block_mask_cache.clear()
-                return super()._apply(fn)
+                return super()._apply(fn, recurse)  # type: ignore[no-untyped-call]
 
-            @torch.compiler.disable
+            @torch._dynamo.disable  # type: ignore[untyped-decorator]
             def _get_causal_block_mask(
                 self, seq_len: int, device: torch.device, dtype: torch.dtype
-            ):
+            ) -> Any:
                 """Get or create cached causal block mask with LRU eviction.
 
-                Note: @torch.compiler.disable isolates OrderedDict cache operations
-                that cause graph breaks (move_to_end, popitem, dict mutations).
-                The forward() method remains compilable since mask lookup is excluded.
+                Note: OrderedDict cache operations cause graph breaks under torch.compile
+                (move_to_end, popitem, dict mutations). Disabled from Dynamo tracing.
                 """
                 # Use str(device) and str(dtype) for reliable dict equality
                 key = (seq_len, str(device), str(dtype))
@@ -253,7 +262,7 @@ def create_flex_attention_seed(dim: int, n_head: int = 4) -> nn.Module:
                         self._block_mask_cache.popitem(last=False)
 
                     # create_block_mask uses boolean mask function (no score param)
-                    def causal(b, h, q_idx, kv_idx):
+                    def causal(b: torch.Tensor, h: torch.Tensor, q_idx: torch.Tensor, kv_idx: torch.Tensor) -> torch.Tensor:
                         return q_idx >= kv_idx
 
                     self._block_mask_cache[key] = create_block_mask(
@@ -275,10 +284,15 @@ def create_flex_attention_seed(dim: int, n_head: int = 4) -> nn.Module:
 
                 # Use cached block mask for efficient causal attention
                 block_mask = self._get_causal_block_mask(t, x.device, x.dtype)
-                out = flex_attention(q, k, v, block_mask=block_mask)
+                attn_out = flex_attention(q, k, v, block_mask=block_mask)
+                # flex_attention returns Tensor | tuple - extract first element if tuple
+                if isinstance(attn_out, tuple):
+                    out = attn_out[0]
+                else:
+                    out = attn_out
 
                 out = out.transpose(1, 2).reshape(b, t, c)
-                return x + self.proj(out)
+                return x + self.proj(out)  # type: ignore[no-any-return]
 
         return FlexAttentionSeed(dim, n_head)
 
@@ -314,7 +328,7 @@ def create_flex_attention_seed(dim: int, n_head: int = 4) -> nn.Module:
                 out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
 
                 out = out.transpose(1, 2).reshape(b, t, c)
-                return x + self.proj(out)
+                return x + self.proj(out)  # type: ignore[no-any-return]
 
         return FlexAttentionFallback(dim, n_head)
 

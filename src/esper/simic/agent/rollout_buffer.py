@@ -21,8 +21,9 @@ from typing import NamedTuple
 
 import torch
 
-from esper.leyline import DEFAULT_GAMMA, DEFAULT_LSTM_HIDDEN_DIM
-from esper.leyline.factored_actions import (
+from esper.leyline import (
+    DEFAULT_GAMMA,
+    DEFAULT_LSTM_HIDDEN_DIM,
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
     NUM_ALPHA_TARGETS,
@@ -170,7 +171,7 @@ class TamiyoRolloutBuffer:
         """Number of slots from slot_config."""
         return self.slot_config.num_slots
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Allocate all tensors upfront."""
         self.step_counts = [0] * self.num_envs
         device = self.device
@@ -299,6 +300,10 @@ class TamiyoRolloutBuffer:
                 f"Call reset() or compute_advantages_and_returns() first."
             )
 
+        # Helper to detach tensors to prevent gradient graph retention
+        def _detach(x: float | torch.Tensor) -> float | torch.Tensor:
+            return x.detach() if isinstance(x, torch.Tensor) else x
+
         # Direct tensor assignment
         self.states[env_id, step_idx] = state.detach()
         self.slot_actions[env_id, step_idx] = slot_action
@@ -309,19 +314,21 @@ class TamiyoRolloutBuffer:
         self.alpha_speed_actions[env_id, step_idx] = alpha_speed_action
         self.alpha_curve_actions[env_id, step_idx] = alpha_curve_action
         self.op_actions[env_id, step_idx] = op_action
-        self.slot_log_probs[env_id, step_idx] = slot_log_prob
-        self.blueprint_log_probs[env_id, step_idx] = blueprint_log_prob
-        self.style_log_probs[env_id, step_idx] = style_log_prob
-        self.tempo_log_probs[env_id, step_idx] = tempo_log_prob
-        self.alpha_target_log_probs[env_id, step_idx] = alpha_target_log_prob
-        self.alpha_speed_log_probs[env_id, step_idx] = alpha_speed_log_prob
-        self.alpha_curve_log_probs[env_id, step_idx] = alpha_curve_log_prob
-        self.op_log_probs[env_id, step_idx] = op_log_prob
-        self.values[env_id, step_idx] = value
+        # CRITICAL: Detach log_probs to prevent gradient graph memory leak.
+        # Without detach, computation graphs accumulate unboundedly across rollout steps.
+        self.slot_log_probs[env_id, step_idx] = _detach(slot_log_prob)
+        self.blueprint_log_probs[env_id, step_idx] = _detach(blueprint_log_prob)
+        self.style_log_probs[env_id, step_idx] = _detach(style_log_prob)
+        self.tempo_log_probs[env_id, step_idx] = _detach(tempo_log_prob)
+        self.alpha_target_log_probs[env_id, step_idx] = _detach(alpha_target_log_prob)
+        self.alpha_speed_log_probs[env_id, step_idx] = _detach(alpha_speed_log_prob)
+        self.alpha_curve_log_probs[env_id, step_idx] = _detach(alpha_curve_log_prob)
+        self.op_log_probs[env_id, step_idx] = _detach(op_log_prob)
+        self.values[env_id, step_idx] = _detach(value)
         self.rewards[env_id, step_idx] = reward
         self.dones[env_id, step_idx] = done
         self.truncated[env_id, step_idx] = truncated
-        self.bootstrap_values[env_id, step_idx] = bootstrap_value
+        self.bootstrap_values[env_id, step_idx] = _detach(bootstrap_value)
         self.slot_masks[env_id, step_idx] = slot_mask.detach().bool()
         self.blueprint_masks[env_id, step_idx] = blueprint_mask.detach().bool()
         self.style_masks[env_id, step_idx] = style_mask.detach().bool()
@@ -337,7 +344,7 @@ class TamiyoRolloutBuffer:
 
         self.step_counts[env_id] = step_idx + 1
 
-    @torch.compiler.disable  # Python loops cause graph breaks; runs once per rollout
+    @torch.compiler.disable  # type: ignore[untyped-decorator]  # Python loops cause graph breaks; runs once per rollout
     def compute_advantages_and_returns(
         self,
         gamma: float = DEFAULT_GAMMA,
@@ -347,7 +354,24 @@ class TamiyoRolloutBuffer:
 
         This is the P0 bug fix: each environment's GAE is computed
         independently using only that environment's values and rewards.
+
+        PERF NOTE: The backward loop has inherent data dependencies (last_gae
+        depends on previous last_gae), making full vectorization complex.
+        The outer loop over environments could be parallelized if all envs
+        had the same step count (would require padding + masking).
+
+        TODO: [FUTURE OPTIMIZATION] - Vectorize across environments for
+        cases where all envs have similar step counts (common in fixed-length
+        rollouts). Would provide ~num_envs× speedup for this function.
         """
+        # PERF: Pre-allocate zero tensor once (avoid O(steps * envs) allocations)
+        zero_tensor = torch.tensor(0.0, device=self.device)
+
+        # PERF: Pre-compute constants as tensors to avoid Python/tensor type mixing
+        # in hot loop. This prevents type promotion overhead and ensures consistent dtype.
+        gamma_t = torch.tensor(gamma, device=self.device, dtype=self.values.dtype)
+        gamma_lambda_t = torch.tensor(gamma * gae_lambda, device=self.device, dtype=self.values.dtype)
+
         for env_id in range(self.num_envs):
             num_steps = self.step_counts[env_id]
             if num_steps == 0:
@@ -361,7 +385,7 @@ class TamiyoRolloutBuffer:
             bootstrap_values = self.bootstrap_values[env_id, :num_steps]
 
             advantages = torch.zeros(num_steps, device=self.device)
-            last_gae: torch.Tensor = torch.tensor(0.0, device=self.device)
+            last_gae = zero_tensor.clone()  # Clone to avoid in-place modification
 
             for t in reversed(range(num_steps)):
                 if t == num_steps - 1:
@@ -373,7 +397,7 @@ class TamiyoRolloutBuffer:
                         # bootstrap value contributes to delta and GAE propagates.
                         next_non_terminal = 1.0
                     else:
-                        next_value = torch.tensor(0.0, device=self.device)
+                        next_value = zero_tensor
                         next_non_terminal = 1.0 - float(dones[t])
                 else:
                     next_value = values[t + 1]
@@ -382,10 +406,10 @@ class TamiyoRolloutBuffer:
 
                 # Reset GAE at true terminal (not truncation)
                 if dones[t] and not truncated[t]:
-                    last_gae = torch.tensor(0.0, device=self.device)
+                    last_gae = zero_tensor.clone()
 
-                delta = rewards[t] + gamma * next_value * next_non_terminal - values[t]
-                last_gae = delta + gamma * gae_lambda * next_non_terminal * last_gae
+                delta = rewards[t] + gamma_t * next_value * next_non_terminal - values[t]
+                last_gae = delta + gamma_lambda_t * next_non_terminal * last_gae
                 advantages[t] = last_gae
 
             self.advantages[env_id, :num_steps] = advantages

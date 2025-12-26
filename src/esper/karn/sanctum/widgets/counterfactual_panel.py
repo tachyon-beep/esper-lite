@@ -5,7 +5,7 @@ Displays "detailed counterfactual analysis unavailable" if no full factorial dat
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from rich.console import Group
 from rich.panel import Panel
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 class CounterfactualPanel(Static):
     """Waterfall visualization of counterfactual analysis."""
 
-    def __init__(self, matrix: "CounterfactualSnapshot", **kwargs) -> None:
+    def __init__(self, matrix: "CounterfactualSnapshot", **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._matrix = matrix
 

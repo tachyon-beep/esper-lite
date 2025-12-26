@@ -4,7 +4,7 @@ import pytest
 import torch
 
 from esper.tamiyo.policy.protocol import PolicyBundle
-from esper.tamiyo.policy.types import ActionResult, EvalResult, ForwardResult
+from esper.tamiyo.policy.types import ActionResult, EvalResult
 
 
 def test_policy_bundle_is_runtime_checkable():

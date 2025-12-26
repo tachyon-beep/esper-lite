@@ -15,8 +15,7 @@ OWNERSHIP BOUNDARY:
     When in doubt: if it affects training outcomes, it belongs here.
 
 Example:
-    from esper.leyline import SeedStage, TrainingSignals
-    from esper.leyline.factored_actions import FactoredAction, LifecycleOp
+    from esper.leyline import SeedStage, TrainingSignals, FactoredAction, LifecycleOp
 """
 
 # ruff: noqa: E402  # Imports intentionally follow constant definitions for clarity
@@ -130,18 +129,52 @@ DEFAULT_RATIO_COLLAPSE_THRESHOLD = 0.1
 # Factored Action Space Constants
 # =============================================================================
 
-# TODO: [BROKEN CONTRACT] - The docstring example at line 19 shows importing FactoredAction
-# and LifecycleOp from esper.leyline, but these symbols are NOT imported into this module.
-# `from esper.leyline import FactoredAction` fails with ImportError.
-# All production code imports directly from esper.leyline.factored_actions instead.
-# Either: (1) add the missing imports and add to __all__, or (2) fix the docstring example.
-# See: architectural risk assessment 2024-12-24.
-
 # Head names for factored action space (slot selection, blueprint, blend algorithm, tempo,
 # alpha target/speed/curve/algorithm, lifecycle op).
 # Order matters: slot → blueprint → blend → tempo → alpha_target → alpha_speed → alpha_curve
 # → alpha_algorithm → op is the causal chain.
-from esper.leyline.factored_actions import ACTION_HEAD_NAMES
+from esper.leyline.factored_actions import (
+    ACTION_HEAD_NAMES,
+    ACTION_HEAD_SPECS,
+    ActionHeadSpec,
+    AlphaCurveAction,
+    AlphaSpeedAction,
+    AlphaTargetAction,
+    ALPHA_CURVE_NAMES,
+    ALPHA_SPEED_NAMES,
+    ALPHA_SPEED_TO_STEPS,
+    ALPHA_TARGET_NAMES,
+    ALPHA_TARGET_VALUES,
+    BLUEPRINT_IDS,
+    BlueprintAction,
+    CNN_BLUEPRINTS,
+    FactoredAction,
+    GerminationStyle,
+    LifecycleOp,
+    NUM_ALPHA_CURVES,
+    NUM_ALPHA_SPEEDS,
+    NUM_ALPHA_TARGETS,
+    NUM_BLUEPRINTS,
+    NUM_OPS,
+    NUM_STYLES,
+    NUM_TEMPO,
+    OP_ADVANCE,
+    OP_FOSSILIZE,
+    OP_GERMINATE,
+    OP_NAMES,
+    OP_PRUNE,
+    OP_SET_ALPHA_TARGET,
+    OP_WAIT,
+    STYLE_ALPHA_ALGORITHMS,
+    STYLE_BLEND_IDS,
+    STYLE_NAMES,
+    STYLE_TO_KASMINA,
+    TEMPO_NAMES,
+    TEMPO_TO_EPOCHS,
+    TRANSFORMER_BLUEPRINTS,
+    TempoAction,
+    get_action_head_sizes,
+)
 
 HEAD_NAMES: tuple[str, ...] = ACTION_HEAD_NAMES
 
@@ -383,8 +416,6 @@ from esper.leyline.schemas import (
     OPERATION_TARGET_STAGE,
     GateLevel,
     GateResult,
-    BlueprintProtocol,
-    BlueprintSpec,
 )
 
 # Reports
@@ -407,15 +438,18 @@ from esper.leyline.telemetry import (
     EpochCompletedPayload,
     BatchEpochCompletedPayload,
     PPOUpdatePayload,
-    RewardComputedPayload,
+    TamiyoInitiatedPayload,
     SeedGerminatedPayload,
     SeedStageChangedPayload,
     SeedGateEvaluatedPayload,
     SeedFossilizedPayload,
     SeedPrunedPayload,
     CounterfactualMatrixPayload,
+    CounterfactualUnavailablePayload,
     AnalyticsSnapshotPayload,
     AnomalyDetectedPayload,
+    PerformanceDegradationPayload,
+    EpisodeOutcomePayload,
 )
 
 # Alpha controller contracts
@@ -463,8 +497,48 @@ __all__ = [
     "DEFAULT_RATIO_COLLAPSE_THRESHOLD",
 
     # Factored Action Space
+    "ACTION_HEAD_NAMES",
+    "ACTION_HEAD_SPECS",
+    "ActionHeadSpec",
+    "AlphaCurveAction",
+    "AlphaSpeedAction",
+    "AlphaTargetAction",
+    "ALPHA_CURVE_NAMES",
+    "ALPHA_SPEED_NAMES",
+    "ALPHA_SPEED_TO_STEPS",
+    "ALPHA_TARGET_NAMES",
+    "ALPHA_TARGET_VALUES",
+    "BLUEPRINT_IDS",
+    "BlueprintAction",
+    "CNN_BLUEPRINTS",
+    "FactoredAction",
+    "GerminationStyle",
+    "get_action_head_sizes",
     "HEAD_NAMES",
+    "LifecycleOp",
     "MASKED_LOGIT_VALUE",
+    "NUM_ALPHA_CURVES",
+    "NUM_ALPHA_SPEEDS",
+    "NUM_ALPHA_TARGETS",
+    "NUM_BLUEPRINTS",
+    "NUM_OPS",
+    "NUM_STYLES",
+    "NUM_TEMPO",
+    "OP_ADVANCE",
+    "OP_FOSSILIZE",
+    "OP_GERMINATE",
+    "OP_NAMES",
+    "OP_PRUNE",
+    "OP_SET_ALPHA_TARGET",
+    "OP_WAIT",
+    "STYLE_ALPHA_ALGORITHMS",
+    "STYLE_BLEND_IDS",
+    "STYLE_NAMES",
+    "STYLE_TO_KASMINA",
+    "TEMPO_NAMES",
+    "TEMPO_TO_EPOCHS",
+    "TempoAction",
+    "TRANSFORMER_BLUEPRINTS",
 
     # Reward Shaping Constants
     "DEFAULT_CONTRIBUTION_WEIGHT",
@@ -566,8 +640,6 @@ __all__ = [
     "OPERATION_TARGET_STAGE",
     "GateLevel",
     "GateResult",
-    "BlueprintProtocol",
-    "BlueprintSpec",
 
     # Reports
     "SeedMetrics",
@@ -586,15 +658,18 @@ __all__ = [
     "EpochCompletedPayload",
     "BatchEpochCompletedPayload",
     "PPOUpdatePayload",
-    "RewardComputedPayload",
+    "TamiyoInitiatedPayload",
     "SeedGerminatedPayload",
     "SeedStageChangedPayload",
     "SeedGateEvaluatedPayload",
     "SeedFossilizedPayload",
     "SeedPrunedPayload",
     "CounterfactualMatrixPayload",
+    "CounterfactualUnavailablePayload",
     "AnalyticsSnapshotPayload",
     "AnomalyDetectedPayload",
+    "PerformanceDegradationPayload",
+    "EpisodeOutcomePayload",
 
     # Alpha controller
     "AlphaMode",

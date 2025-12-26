@@ -9,16 +9,11 @@ Tests verify correct behavior through complete lifecycles:
 """
 
 import pytest
-import torch
 
-from esper.kasmina.slot import SeedSlot, SeedState, SeedMetrics, QualityGates
-from esper.kasmina.host import CNNHost
+from esper.kasmina.slot import SeedSlot, SeedState, QualityGates
 from esper.leyline import (
     SeedStage,
-    GateLevel,
-    DEFAULT_MIN_TRAINING_IMPROVEMENT,
     DEFAULT_MIN_BLENDING_EPOCHS,
-    DEFAULT_ALPHA_COMPLETE_THRESHOLD,
     DEFAULT_MIN_FOSSILIZE_CONTRIBUTION,
     DEFAULT_GRADIENT_RATIO_THRESHOLD,
     DEFAULT_MAX_PROBATION_EPOCHS,

@@ -12,8 +12,7 @@ Tier 2: Semantic Invariants
 import pytest
 from hypothesis import given, settings
 
-from esper.leyline import SeedStage
-from esper.leyline.factored_actions import LifecycleOp
+from esper.leyline import LifecycleOp, SeedStage
 from esper.simic.rewards import (
     compute_contribution_reward,
     ContributionRewardConfig,

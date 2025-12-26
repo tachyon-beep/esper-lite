@@ -33,6 +33,29 @@ from esper.karn.ingest import (
     filter_dataclass_kwargs,
 )
 
+__all__ = [
+    # Tier 1
+    "EpisodeContext",
+    "HostBaseline",
+    # Tier 2
+    "SlotSnapshot",
+    "HostSnapshot",
+    "RewardComponents",
+    "PolicySnapshot",
+    "AdvantageStats",
+    "RatioStats",
+    "EpochSnapshot",
+    # Tier 3
+    "DenseTraceTrigger",
+    "BatchMetrics",
+    "GateEvaluationTrace",
+    "DenseTrace",
+    # Pareto Analysis
+    "EpisodeOutcome",
+    # Store
+    "TelemetryStore",
+]
+
 
 def _utc_now() -> datetime:
     """Return current UTC time (timezone-aware)."""
@@ -168,6 +191,7 @@ class RewardComponents:
     holding_warning: float = 0.0
     ratio_penalty: float = 0.0
     terminal_bonus: float = 0.0
+    stage_bonus: float = 0.0
 
 
 @dataclass
@@ -333,6 +357,77 @@ class DenseTrace:
 
 
 # =============================================================================
+# Episode Outcome (Pareto Analysis)
+# =============================================================================
+
+
+@dataclass(frozen=True)
+class EpisodeOutcome:
+    """Multi-objective outcome for Pareto analysis.
+
+    Captures the key metrics we're optimizing:
+    - final_accuracy: Task performance (higher = better)
+    - param_ratio: Parameter efficiency (lower = better)
+    - stability_score: Training stability (higher = better)
+    """
+
+    env_idx: int
+    episode_idx: int
+    final_accuracy: float
+    param_ratio: float  # total_params / host_params
+    num_fossilized: int
+    num_contributing_fossilized: int  # Seeds that contributed to learning
+    episode_reward: float  # Total reward for the episode
+    stability_score: float  # 1 - variance(recent_losses)
+    reward_mode: str  # "shaped", "simplified", etc.
+    timestamp: datetime = field(default_factory=_utc_now)
+
+    def dominates(self, other: "EpisodeOutcome") -> bool:
+        """Pareto dominance check.
+
+        Returns True if self dominates other (better or equal on all objectives,
+        strictly better on at least one).
+
+        Objectives (higher is better):
+        - final_accuracy
+        - stability_score
+
+        Objectives (lower is better):
+        - param_ratio
+        """
+        # Check: self >= other on all objectives
+        geq_accuracy = self.final_accuracy >= other.final_accuracy
+        geq_stability = self.stability_score >= other.stability_score
+        leq_ratio = self.param_ratio <= other.param_ratio
+
+        all_geq = geq_accuracy and geq_stability and leq_ratio
+
+        # Check: self > other on at least one objective
+        gt_accuracy = self.final_accuracy > other.final_accuracy
+        gt_stability = self.stability_score > other.stability_score
+        lt_ratio = self.param_ratio < other.param_ratio
+
+        any_gt = gt_accuracy or gt_stability or lt_ratio
+
+        return all_geq and any_gt
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to JSON-serializable dict."""
+        return {
+            "env_idx": self.env_idx,
+            "episode_idx": self.episode_idx,
+            "reward_mode": self.reward_mode,
+            "final_accuracy": self.final_accuracy,
+            "param_ratio": self.param_ratio,
+            "stability_score": self.stability_score,
+            "num_fossilized": self.num_fossilized,
+            "num_contributing_fossilized": self.num_contributing_fossilized,
+            "episode_reward": self.episode_reward,
+            "timestamp": self.timestamp.isoformat(),
+        }
+
+
+# =============================================================================
 # Telemetry Store (In-Memory)
 # =============================================================================
 
@@ -393,6 +488,39 @@ class TelemetryStore:
         """Get the most recent committed epoch."""
         return self.epoch_snapshots[-1] if self.epoch_snapshots else None
 
+    # =========================================================================
+    # TODO: [FUTURE] Store-Based Analytics
+    # =========================================================================
+    #
+    # The following research queries operate on stored epoch snapshots.
+    # Candidates for future TelemetryStore methods or a companion Analytics class.
+    #
+    # Trajectory Analysis:
+    #   - accuracy_trajectory() -> list[TrajectoryPoint]: Val accuracy over epochs
+    #   - loss_trajectory() -> list[TrajectoryPoint]: Val loss over epochs
+    #   - gradient_norm_trajectory() -> list[TrajectoryPoint]: Host grad norms
+    #
+    # Convergence Detection:
+    #   - detect_convergence(window, threshold) -> ConvergenceInfo: Plateau detection
+    #   - best_epoch() -> (epoch, accuracy): Peak performance point
+    #   - improvement_rate(window) -> list[float]: Rolling accuracy delta
+    #
+    # Per-Slot Aggregation:
+    #   - slot_summary(slot_id) -> SlotSummary: Stats for specific slot position
+    #   - slot_contributions() -> dict[slot_id, list[float]]: Counterfactual over time
+    #   - compare_slots() -> dict[slot_id, metrics]: Cross-slot comparison
+    #
+    # Stage Duration Analysis:
+    #   - stage_durations(slot_id) -> dict[stage, list[int]]: Time in each stage
+    #   - mean_stage_duration(stage) -> float: Average across all slots
+    #
+    # Episode Summary:
+    #   - episode_summary() -> EpisodeSummary: Comprehensive end-of-run stats
+    #
+    # Implementation note: Can be added as methods here or as a separate
+    # StoreAnalytics class that wraps TelemetryStore.
+    # =========================================================================
+
     def export_jsonl(self, path: Path | str) -> int:
         """Export store contents to JSONL file.
 
@@ -405,7 +533,7 @@ class TelemetryStore:
         import json
         from dataclasses import asdict, is_dataclass
 
-        def serialize(obj):
+        def serialize(obj: Any) -> Any:
             """Serialize dataclass or primitive to JSON-safe dict."""
             if is_dataclass(obj) and not isinstance(obj, type):
                 return asdict(obj)
@@ -413,7 +541,7 @@ class TelemetryStore:
                 return list(obj)
             return obj
 
-        def json_default(obj):
+        def json_default(obj: Any) -> str:
             """Handle non-serializable types for json.dumps."""
             if isinstance(obj, datetime):
                 return obj.isoformat()
@@ -422,7 +550,7 @@ class TelemetryStore:
             # hasattr AUTHORIZED by John on 2025-12-14 15:00:00 UTC
             # Justification: Serialization - handle Enum values in JSON export
             if hasattr(obj, "name") and hasattr(obj, "value"):
-                return obj.name  # Serialize enum as name string
+                return str(obj.name)  # Serialize enum as name string
             raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
         path = Path(path)
@@ -469,6 +597,7 @@ class TelemetryStore:
         def _coerce_tuple_pairs(value: Any, *, field: str) -> tuple[tuple[str, Any], ...]:
             if value is None:
                 return ()
+            seq: tuple[Any, ...] | list[Any]
             if isinstance(value, tuple):
                 seq = value
             elif isinstance(value, list):
@@ -477,17 +606,18 @@ class TelemetryStore:
                 _logger.warning("Invalid %s=%r (expected list/tuple of pairs); using empty tuple", field, value)
                 return ()
 
-            result: list[tuple[str, Any]] = []
+            result_list: list[tuple[str, Any]] = []
             for item in seq:
                 if isinstance(item, (list, tuple)) and len(item) == 2:
-                    result.append((str(item[0]), item[1]))
+                    result_list.append((str(item[0]), item[1]))
                 else:
                     _logger.warning("Invalid %s item=%r (expected pair); skipping", field, item)
-            return tuple(result)
+            return tuple(result_list)
 
         def _coerce_slot_config(value: Any) -> tuple[tuple[str, int], ...]:
             if value is None:
                 return ()
+            seq: tuple[Any, ...] | list[Any]
             if isinstance(value, tuple):
                 seq = value
             elif isinstance(value, list):
@@ -495,15 +625,15 @@ class TelemetryStore:
             else:
                 _logger.warning("Invalid slot_config=%r (expected list/tuple of pairs); using empty tuple", value)
                 return ()
-            result: list[tuple[str, int]] = []
+            result_list: list[tuple[str, int]] = []
             for item in seq:
                 if not (isinstance(item, (list, tuple)) and len(item) == 2):
                     _logger.warning("Invalid slot_config item=%r (expected pair); skipping", item)
                     continue
                 slot_id = str(item[0])
                 width = coerce_int(item[1], field="slot_config.width", default=0, minimum=0)
-                result.append((slot_id, width))
-            return tuple(result)
+                result_list.append((slot_id, width))
+            return tuple(result_list)
 
         def _parse_episode_context(raw: dict[str, Any]) -> EpisodeContext:
             data = filter_dataclass_kwargs(EpisodeContext, raw, context="EpisodeContext")
@@ -842,11 +972,25 @@ class TelemetryStore:
                         store.current_epoch.host.val_loss = data.get("val_loss", 0.0)
                         store.current_epoch.host.val_accuracy = data.get("val_accuracy", 0.0)
                 elif event_type == "REWARD_COMPUTED":
+                    # Legacy event type (kept for backwards compat with old JSONL files)
                     if store.current_epoch and not store.current_epoch.policy:
                         store.current_epoch.policy = PolicySnapshot()
                     if store.current_epoch and store.current_epoch.policy:
                         store.current_epoch.policy.reward_total = data.get("total_reward", 0.0)
                         store.current_epoch.policy.action_op = data.get("action_name", "")
+                elif event_type == "ANALYTICS_SNAPSHOT":
+                    # New event type: handle kind="last_action" for policy data
+                    kind = data.get("kind")
+                    if kind == "last_action" and store.current_epoch:
+                        if not store.current_epoch.policy:
+                            store.current_epoch.policy = PolicySnapshot()
+                        policy = store.current_epoch.policy
+                        if "total_reward" in data:
+                            policy.reward_total = data.get("total_reward", 0.0)
+                        if "action_name" in data:
+                            policy.action_op = data.get("action_name", "")
+                        if "value_estimate" in data:
+                            policy.value_estimate = data.get("value_estimate", 0.0)
 
         # Commit final epoch
         if store.current_epoch:

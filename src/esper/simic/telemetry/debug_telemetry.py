@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, asdict, field
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -34,7 +35,7 @@ class LayerGradientStats:
     nan_count: int
     inf_count: int
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dict for serialization."""
         return asdict(self)
 
@@ -151,7 +152,7 @@ class NumericalStabilityReport:
             or not self.loss_is_finite
         )
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dict for serialization."""
         return asdict(self)
 
@@ -164,6 +165,15 @@ def check_numerical_stability(
 
     Call after backward() but before optimizer.step() to catch issues
     before they propagate.
+
+    PERF NOTE: This function intentionally does O(num_params) GPU syncs via
+    torch.isnan().any() and torch.isinf().any() per parameter. This is
+    acceptable because:
+    1. This is a DEBUG function, not hot-path production code
+    2. We need to identify WHICH specific parameters have issues
+    3. Batching would require stacking all params (memory-expensive)
+
+    When debugging is disabled (the normal case), this function is not called.
 
     Args:
         model: Model to check
@@ -277,16 +287,29 @@ class RatioExplosionDiagnostic:
 
         # Find problematic indices
         bad_mask = (ratio > max_threshold) | (ratio < min_threshold)
-        bad_indices = bad_mask.nonzero(as_tuple=True)[0].tolist()
 
-        # Extract worst values
-        worst_values = ratio[bad_indices].tolist() if bad_indices else []
-        worst_actions = actions[bad_indices].tolist() if bad_indices else []
-
-        # Compute log prob divergence (batch into single sync)
+        # Compute log prob divergence (for diff_stats)
         logit_diff = (new_log_probs - old_log_probs).abs()
         diff_stats = torch.stack([logit_diff.mean(), logit_diff.max()])
-        logit_diff_mean, logit_diff_max = diff_stats.tolist()
+
+        # PERF: Batch GPU→CPU transfers before calling .tolist()
+        # Move all tensors to CPU together, then extract Python values.
+        bad_indices_tensor = bad_mask.nonzero(as_tuple=True)[0]
+        bad_indices_cpu = bad_indices_tensor.cpu()
+        diff_stats_cpu = diff_stats.cpu()
+
+        bad_indices = bad_indices_cpu.tolist()
+        logit_diff_mean, logit_diff_max = diff_stats_cpu.tolist()
+
+        # Extract worst values (already indexed, just need CPU transfer)
+        if bad_indices:
+            worst_values_cpu = ratio[bad_indices_tensor].cpu()
+            worst_actions_cpu = actions[bad_indices_tensor].cpu()
+            worst_values = worst_values_cpu.tolist()
+            worst_actions = worst_actions_cpu.tolist()
+        else:
+            worst_values = []
+            worst_actions = []
 
         return cls(
             worst_ratio_indices=bad_indices,
@@ -296,7 +319,7 @@ class RatioExplosionDiagnostic:
             logit_diff_max=logit_diff_max,
         )
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dict for serialization."""
         return asdict(self)
 

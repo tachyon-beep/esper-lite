@@ -65,7 +65,9 @@ class RunningMeanStd:
         GPU-native: operates entirely on the input tensor's device,
         avoiding CPU synchronization overhead.
         """
-        # Auto-migrate stats to input device (one-time cost)
+        # Auto-migrate stats to input device (one-time synchronous cost).
+        # WARNING: This triggers a GPU sync when stats move CPU→GPU or between GPUs.
+        # For best performance, initialize RunningMeanStd on the target device.
         if self.mean.device != x.device:
             self.to(x.device)
 
@@ -123,7 +125,9 @@ class RunningMeanStd:
 
         GPU-native: auto-migrates stats to input device if needed.
         """
-        # Auto-migrate stats to input device (one-time cost)
+        # Auto-migrate stats to input device (one-time synchronous cost).
+        # WARNING: This triggers a GPU sync when stats move CPU→GPU or between GPUs.
+        # For best performance, initialize RunningMeanStd on the target device.
         if self.mean.device != x.device:
             self.to(x.device)
 
@@ -206,21 +210,21 @@ class RewardNormalizer:
 
         # Need at least 2 samples to compute sample variance
         if self.count < 2:
-            return max(-self.clip, min(self.clip, reward))
+            return float(max(-self.clip, min(self.clip, reward)))
 
         # Normalize by std only (no mean subtraction)
         # variance = m2 / (count - 1) for sample variance
         std = max(self.epsilon, (self.m2 / (self.count - 1)) ** 0.5)
         normalized = reward / std
-        return max(-self.clip, min(self.clip, normalized))
+        return float(max(-self.clip, min(self.clip, normalized)))
 
     def normalize_only(self, reward: float) -> float:
         """Normalize without updating stats (for evaluation)."""
         if self.count < 2:
-            return max(-self.clip, min(self.clip, reward))
+            return float(max(-self.clip, min(self.clip, reward)))
         std = max(self.epsilon, (self.m2 / (self.count - 1)) ** 0.5)
         normalized = reward / std
-        return max(-self.clip, min(self.clip, normalized))
+        return float(max(-self.clip, min(self.clip, normalized)))
 
     def state_dict(self) -> dict[str, float | int]:
         """Return state dictionary for checkpointing."""

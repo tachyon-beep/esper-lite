@@ -6,12 +6,9 @@ Tests verify that training works correctly with various slot configurations:
 - Slot saturation and recovery after culling
 """
 
-import pytest
 import torch
 
-from esper.leyline.slot_config import SlotConfig
-from esper.leyline.stages import SeedStage
-from esper.leyline.factored_actions import (
+from esper.leyline import (
     LifecycleOp,
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
@@ -20,8 +17,11 @@ from esper.leyline.factored_actions import (
     NUM_OPS,
     NUM_STYLES,
     NUM_TEMPO,
+    SeedStage,
 )
+from esper.leyline.slot_config import SlotConfig
 from esper.simic.agent import PPOAgent
+from esper.tamiyo.policy.factory import create_policy
 from esper.tamiyo.policy.features import get_feature_size
 from esper.tamiyo.policy.action_masks import compute_action_masks, MaskSeedInfo
 
@@ -34,17 +34,23 @@ class TestTrainingWithDifferentSlotCounts:
         config = SlotConfig(slot_ids=("r0c1",))
         state_dim = get_feature_size(config)
 
-        agent = PPOAgent(
+        policy = create_policy(
+            policy_type="lstm",
             state_dim=state_dim,
             slot_config=config,
             device="cpu",
-            compile_network=False,
+            compile_mode="off",
+        )
+        agent = PPOAgent(
+            policy=policy,
+            slot_config=config,
+            device="cpu",
             num_envs=1,
             max_steps_per_env=10,
         )
 
         assert agent.slot_config.num_slots == 1
-        assert agent.network.num_slots == 1
+        assert agent.policy.network.num_slots == 1
 
         # Verify forward pass works
         states = torch.randn(1, state_dim)
@@ -60,7 +66,7 @@ class TestTrainingWithDifferentSlotCounts:
         }
 
         with torch.no_grad():
-            result = agent.network.get_action(
+            result = agent.policy.network.get_action(
                 states,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -80,17 +86,23 @@ class TestTrainingWithDifferentSlotCounts:
         config = SlotConfig.for_grid(rows=1, cols=5)
         state_dim = get_feature_size(config)
 
-        agent = PPOAgent(
+        policy = create_policy(
+            policy_type="lstm",
             state_dim=state_dim,
             slot_config=config,
             device="cpu",
-            compile_network=False,
+            compile_mode="off",
+        )
+        agent = PPOAgent(
+            policy=policy,
+            slot_config=config,
+            device="cpu",
             num_envs=2,
             max_steps_per_env=10,
         )
 
         assert agent.slot_config.num_slots == 5
-        assert agent.network.num_slots == 5
+        assert agent.policy.network.num_slots == 5
 
         # Verify batched forward pass works
         n_envs = 2
@@ -107,7 +119,7 @@ class TestTrainingWithDifferentSlotCounts:
         }
 
         with torch.no_grad():
-            result = agent.network.get_action(
+            result = agent.policy.network.get_action(
                 states,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -128,17 +140,23 @@ class TestTrainingWithDifferentSlotCounts:
         config = SlotConfig.for_grid(rows=3, cols=3)
         state_dim = get_feature_size(config)
 
-        agent = PPOAgent(
+        policy = create_policy(
+            policy_type="lstm",
             state_dim=state_dim,
             slot_config=config,
             device="cpu",
-            compile_network=False,
+            compile_mode="off",
+        )
+        agent = PPOAgent(
+            policy=policy,
+            slot_config=config,
+            device="cpu",
             num_envs=2,
             max_steps_per_env=10,
         )
 
         assert agent.slot_config.num_slots == 9
-        assert agent.network.num_slots == 9
+        assert agent.policy.network.num_slots == 9
         assert agent.slot_config.slot_ids == (
             "r0c0", "r0c1", "r0c2",
             "r1c0", "r1c1", "r1c2",
@@ -160,7 +178,7 @@ class TestTrainingWithDifferentSlotCounts:
         }
 
         with torch.no_grad():
-            result = agent.network.get_action(
+            result = agent.policy.network.get_action(
                 states,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -221,7 +239,7 @@ class TestMultiEnvMaskIndependence:
         assert masks_env0["op"][LifecycleOp.GERMINATE], "GERMINATE should be valid"
 
         # Env 1: Two slots empty, one occupied
-        assert masks_env1["slot"][0] == True  # r0c0 occupied, but slot selection is valid
+        assert masks_env1["slot"][0]  # r0c0 occupied, but slot selection is valid
         assert masks_env1["op"][LifecycleOp.GERMINATE], "GERMINATE valid with empty slots"
 
         # Env 2: All slots occupied - GERMINATE should be invalid
@@ -230,7 +248,6 @@ class TestMultiEnvMaskIndependence:
     def test_batched_masks_preserve_per_env_differences(self):
         """Batched mask computation should preserve per-environment differences."""
         config = SlotConfig.default()
-        n_envs = 4
 
         # Create different slot states for each environment
         slot_states_batch = [
@@ -326,7 +343,7 @@ class TestSlotSaturationAndRecovery:
             "r0c2": None,
         }
 
-        masks_before = compute_action_masks(
+        compute_action_masks(
             slot_states,
             enabled_slots=list(config.slot_ids),
             slot_config=config,
@@ -360,17 +377,23 @@ class TestLargeSlotConfigurations:
         config = SlotConfig.for_grid(rows=5, cols=5)
         state_dim = get_feature_size(config)
 
-        agent = PPOAgent(
+        policy = create_policy(
+            policy_type="lstm",
             state_dim=state_dim,
             slot_config=config,
             device="cpu",
-            compile_network=False,
+            compile_mode="off",
+        )
+        agent = PPOAgent(
+            policy=policy,
+            slot_config=config,
+            device="cpu",
             num_envs=1,
             max_steps_per_env=10,
         )
 
         assert agent.slot_config.num_slots == 25
-        assert agent.network.num_slots == 25
+        assert agent.policy.network.num_slots == 25
 
         # Verify forward pass with 25 slots
         states = torch.randn(1, state_dim)
@@ -386,7 +409,7 @@ class TestLargeSlotConfigurations:
         }
 
         with torch.no_grad():
-            result = agent.network.get_action(
+            result = agent.policy.network.get_action(
                 states,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -430,10 +453,16 @@ class TestBufferWithDynamicSlots:
         config = SlotConfig.for_grid(rows=1, cols=5)
         state_dim = get_feature_size(config)
 
-        agent = PPOAgent(
+        policy = create_policy(
+            policy_type="lstm",
             state_dim=state_dim,
             slot_config=config,
-            compile_network=False,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(
+            policy=policy,
+            slot_config=config,
             device="cpu",
             num_envs=2,
             max_steps_per_env=10,
@@ -490,10 +519,16 @@ class TestBufferWithDynamicSlots:
         config = SlotConfig.for_grid(rows=1, cols=5)  # 5 slots
         state_dim = get_feature_size(config)
 
-        agent = PPOAgent(
+        policy = create_policy(
+            policy_type="lstm",
             state_dim=state_dim,
             slot_config=config,
-            compile_network=False,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(
+            policy=policy,
+            slot_config=config,
             device="cpu",
             num_envs=1,
             max_steps_per_env=10,

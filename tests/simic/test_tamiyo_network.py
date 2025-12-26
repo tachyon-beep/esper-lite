@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from esper.leyline.factored_actions import (
+from esper.leyline import (
     GerminationStyle,
     LifecycleOp,
     NUM_ALPHA_CURVES,
@@ -15,7 +15,7 @@ from esper.leyline.factored_actions import (
     NUM_TEMPO,
 )
 from esper.tamiyo.policy.action_masks import InvalidStateMachineError
-from esper.simic.agent import FactoredRecurrentActorCritic
+from esper.tamiyo.networks import FactoredRecurrentActorCritic
 
 
 class TestFactoredRecurrentActorCritic:

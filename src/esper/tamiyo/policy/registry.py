@@ -2,19 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Type, TypeVar
+from typing import Any, Callable, Type, TypeVar
 
 from esper.tamiyo.policy.protocol import PolicyBundle
 
 T = TypeVar("T", bound=PolicyBundle)
 
-# TODO: [DEAD CODE] - Policy registry exists but get_policy() is never called in production.
-# The "lstm" policy is registered but never retrieved. Production uses HeuristicTamiyo
-# directly without going through this registry. See: architectural risk assessment 2024-12-24.
 _REGISTRY: dict[str, Type[PolicyBundle]] = {}
 
 
-def register_policy(name: str):
+def register_policy(name: str) -> Callable[[Type[PolicyBundle]], Type[PolicyBundle]]:
     """Decorator to register a PolicyBundle implementation.
 
     Usage:
@@ -91,7 +88,7 @@ def register_policy(name: str):
     return decorator
 
 
-def get_policy(name: str, config: dict) -> PolicyBundle:
+def get_policy(name: str, config: dict[str, Any]) -> PolicyBundle:
     """Factory function to instantiate a policy by name.
 
     Args:

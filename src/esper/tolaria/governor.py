@@ -10,6 +10,7 @@ import copy
 import math
 from collections import deque
 from dataclasses import dataclass
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -67,7 +68,7 @@ class TolariaGovernor:
         self.absolute_threshold = absolute_threshold
         self.death_penalty = death_penalty
         self.loss_history: deque[float] = deque(maxlen=history_window)
-        self.last_good_state: dict | None = None
+        self.last_good_state: dict[str, Any] | None = None
         self.consecutive_panics: int = 0
         self.min_panics_before_rollback = min_panics_before_rollback
         self._pending_panic: bool = False
@@ -92,15 +93,17 @@ class TolariaGovernor:
         This trades slightly slower rollback for significant GPU memory savings,
         especially for large models where snapshots could double GPU memory usage.
         """
-        # C7 FIX: Explicitly free old snapshot and release GPU memory
-        # PyTorch's caching allocator holds freed memory until empty_cache() is called.
-        # In long training runs, this fragmentation can accumulate and cause OOM.
+        # C7 FIX: Explicitly free old snapshot to allow garbage collection
+        # NOTE: We intentionally do NOT call torch.cuda.empty_cache() here.
+        # The CUDA caching allocator is designed to hold freed memory for fast
+        # reallocation. Calling empty_cache() forces:
+        #   1. Full GPU synchronization (blocking)
+        #   2. Memory returned to OS, then re-allocated on next use
+        #   3. Potential memory fragmentation
+        # The caching allocator handles memory efficiently on its own.
         if self.last_good_state is not None:
             del self.last_good_state
             self.last_good_state = None
-            # Release any GPU memory that was referenced by old state dict tensors
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
 
         # Get model state, filtering out experimental seed keys
         full_state = self.model.state_dict()
@@ -110,7 +113,7 @@ class TolariaGovernor:
         # Justification: Feature detection - MorphogeneticModel has seed_slots, base models don't
         if hasattr(self.model, 'seed_slots'):
             experimental_prefixes = []
-            for slot_id, slot in self.model.seed_slots.items():
+            for slot_id, slot in self.model.seed_slots.items():  # type: ignore[union-attr, operator]
                 if slot.state is not None and slot.state.stage != SeedStage.FOSSILIZED:
                     # This seed is experimental - exclude its keys from snapshot
                     experimental_prefixes.append(f"seed_slots.{slot_id}.seed.")
@@ -243,11 +246,13 @@ class TolariaGovernor:
         # Emit telemetry event (replaces print)
         hub = get_hub()
         panic_reason = self._panic_reason or "governor_rollback"
+        # GOVERNOR_ROLLBACK not yet migrated to typed payload
+        # TODO: Create GovernorRollbackPayload and remove this ignore
         hub.emit(TelemetryEvent(
             event_type=TelemetryEventType.GOVERNOR_ROLLBACK,
             severity="critical",
             message="Critical instability detected - initiating rollback",
-            data={
+            data={  # type: ignore[arg-type]
                 "env_id": env_id,
                 "device": str(device),
                 "reason": "Structural Collapse",
@@ -267,7 +272,7 @@ class TolariaGovernor:
         # hasattr AUTHORIZED by John on 2025-12-01 16:30:00 UTC
         # Justification: Feature detection - MorphogeneticModel has seed_slots, base models may not
         if hasattr(self.model, 'seed_slots'):
-            for slot in self.model.seed_slots.values():
+            for slot in self.model.seed_slots.values():  # type: ignore[operator]
                 slot.prune(panic_reason, initiator="governor")
 
         # Restore host + fossilized seeds from snapshot
@@ -292,11 +297,12 @@ class TolariaGovernor:
 
         # Log if there are key mismatches (diagnostic for snapshot filtering issues)
         if missing_keys or unexpected_keys:
+            # GOVERNOR_ROLLBACK not yet migrated to typed payload
             hub.emit(TelemetryEvent(
                 event_type=TelemetryEventType.GOVERNOR_ROLLBACK,
                 severity="warning",
                 message="Rollback load_state_dict had key mismatches",
-                data={
+                data={  # type: ignore[arg-type]
                     "missing_keys": list(missing_keys),
                     "unexpected_keys": list(unexpected_keys),
                     "env_id": env_id,

@@ -28,10 +28,10 @@
     padding: 0 1;
 }
 
-/* Top section: Env Overview + Scoreboard (~55% of main area) */
+/* Top section: Env Overview + Scoreboard (~52% of main area) */
 #top-section {
-    height: 55%;
-    min-height: 15;
+    height: 52%;
+    min-height: 14;
 }
 
 /* Environment Overview - main table (70% width) */
@@ -47,10 +47,15 @@
     border: double $accent;
 }
 
-/* Scoreboard - Best Runs (30% width) */
-#scoreboard {
+/* Metrics Column - contains Scoreboard and RewardHealth */
+#metrics-column {
     width: 30%;
     height: 1fr;
+}
+
+/* Scoreboard - Best Runs (top 50% of metrics column) */
+#scoreboard {
+    height: 50%;
     border: solid cyan;
     border-title-color: cyan;
     overflow-y: auto;
@@ -67,10 +72,15 @@
     margin-bottom: 1;
 }
 
-/* Bottom section: Event Log + TamiyoBrain (~45% of main area) */
+/* Reward Health Panel (bottom 50% of metrics column) */
+#reward-health {
+    height: 50%;
+}
+
+/* Bottom section: Event Log + TamiyoBrain (~48% of main area) */
 #bottom-section {
-    height: 45%;
-    min-height: 12;
+    height: 48%;
+    min-height: 14;
     width: 100%;
 }
 
@@ -85,7 +95,7 @@
     width: 1fr;
     margin: 0 1;
     height: 1fr;
-    min-height: 24;
+    min-height: 28;
     min-width: 96;
     border: solid magenta;
     border-title-color: magenta;

@@ -22,11 +22,16 @@ Design principles:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import torch
 from enum import IntEnum
 from hypothesis import strategies as st
 from hypothesis.extra.numpy import arrays
 import numpy as np
+
+if TYPE_CHECKING:
+    from esper.leyline import SeedStage
 
 # =============================================================================
 # Low-Level Primitives
@@ -150,7 +155,7 @@ def tempo_actions(draw):
         def test_tempo_property(tempo):
             assert tempo in TempoAction
     """
-    from esper.leyline.factored_actions import TempoAction
+    from esper.leyline import TempoAction
     return draw(st.sampled_from(list(TempoAction)))
 
 
@@ -166,7 +171,7 @@ def tempo_epochs(draw):
         def test_tempo_epochs(epochs):
             assert epochs in {3, 5, 8}
     """
-    from esper.leyline.factored_actions import TEMPO_TO_EPOCHS
+    from esper.leyline import TEMPO_TO_EPOCHS
     return draw(st.sampled_from(list(TEMPO_TO_EPOCHS.values())))
 
 
@@ -636,7 +641,7 @@ def seed_states_kasmina(draw, stage: "SeedStage | None" = None):
         def test_state_property(state):
             assert state.alpha >= 0.0
     """
-    from esper.kasmina.slot import SeedState, SeedMetrics
+    from esper.kasmina.slot import SeedState
     from esper.leyline import SeedStage
 
     if stage is None:

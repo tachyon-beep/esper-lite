@@ -6,7 +6,7 @@ It manages the injection points where seeds can be attached.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import Any, Generator, TYPE_CHECKING, cast
 
 import functools
 
@@ -19,7 +19,9 @@ from esper.kasmina.slot import QualityGates, SeedSlot
 from esper.kasmina.blueprints.cnn import ConvBlock  # Reuse shared building block
 
 if TYPE_CHECKING:
-    from esper.leyline import SeedStateReport
+    from esper.leyline import InjectionSpec, SeedStateReport
+    from esper.tamiyo.policy.features import TaskConfig
+    from esper.kasmina.protocol import HostProtocol
 
 
 class CNNHost(nn.Module):
@@ -85,10 +87,12 @@ class CNNHost(nn.Module):
 
         specs = []
         for i in range(self.n_blocks):
+            block = self.blocks[i]
+            assert isinstance(block, ConvBlock)  # Guaranteed by __init__
             specs.append(
                 InjectionSpec(
                     slot_id=format_slot_id(0, i),
-                    channels=self.blocks[i].conv.out_channels,
+                    channels=block.conv.out_channels,
                     position=(i + 1) / self.n_blocks,
                     layer_range=(i, i + 1),
                 )
@@ -182,11 +186,14 @@ class CNNHost(nn.Module):
 
         # Global average pooling and classification
         x = F.adaptive_avg_pool2d(x, 1).flatten(1)
-        return self.classifier(x)
+        return self.classifier(x)  # type: ignore[no-any-return]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through CNN backbone (no slot application)."""
         # Convert to channels_last ONCE before processing for Tensor Core optimization
+        # PERF NOTE: This is idempotent and cheap if tensor is already channels_last.
+        # For maximum throughput, configure data loaders to produce channels_last tensors
+        # directly (e.g., transforms.ConvertImageDtype() + memory_format arg).
         if self._memory_format == torch.channels_last:
             x = x.to(memory_format=torch.channels_last)
 
@@ -198,7 +205,7 @@ class CNNHost(nn.Module):
 
         # flatten() handles memory format conversion automatically (returns contiguous)
         x = F.adaptive_avg_pool2d(x, 1).flatten(1)
-        return self.classifier(x)
+        return self.classifier(x)  # type: ignore[no-any-return]
 
 
 # =============================================================================
@@ -242,7 +249,7 @@ class CausalSelfAttention(nn.Module):
         )
         y = y.transpose(1, 2).contiguous().view(B, T, C)
 
-        return self.resid_dropout(self.c_proj(y))
+        return self.resid_dropout(self.c_proj(y))  # type: ignore[no-any-return]
 
 
 class MLP(nn.Module):
@@ -257,7 +264,7 @@ class MLP(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = F.gelu(self.c_fc(x))
         x = self.c_proj(x)
-        return self.dropout(x)
+        return self.dropout(x)  # type: ignore[no-any-return]
 
 
 class TransformerBlock(nn.Module):
@@ -310,6 +317,7 @@ class TransformerHost(nn.Module):
 
         # Pre-allocate position indices buffer to avoid per-forward allocation
         # persistent=False excludes from state_dict (reconstructed from block_size)
+        self.pos_indices: torch.Tensor
         self.register_buffer('pos_indices', torch.arange(block_size), persistent=False)
 
         self.layers = nn.ModuleList(
@@ -414,7 +422,7 @@ class TransformerHost(nn.Module):
         for i in range(start_layer, end_layer):
             h = self.layers[i](h)
 
-        return h
+        return h  # type: ignore[no-any-return]
 
     def forward_from_segment(self, segment: str, h: torch.Tensor) -> torch.Tensor:
         """Forward from a segment boundary to output logits.
@@ -436,7 +444,7 @@ class TransformerHost(nn.Module):
 
         # Output
         h = self.ln_f(h)
-        return self.head(h)
+        return self.head(h)  # type: ignore[no-any-return]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through transformer backbone (no slot application)."""
@@ -453,7 +461,7 @@ class TransformerHost(nn.Module):
 
         # Output
         h = self.ln_f(h)
-        return self.head(h)
+        return self.head(h)  # type: ignore[no-any-return]
 
 
 # =============================================================================
@@ -470,17 +478,17 @@ class MorphogeneticModel(nn.Module):
 
     def __init__(
         self,
-        host: nn.Module,
+        host: "HostProtocol",
         device: str = "cpu",
         *,
         slots: list[str],
-        task_config=None,
+        task_config: "TaskConfig | None" = None,
         fast_mode: bool = False,
         permissive_gates: bool = False,
     ):
         super().__init__()
-        self.host = host
-        self._device = device
+        self.host: HostProtocol = host
+        self._device = torch.device(device) if isinstance(device, str) else device
         self.task_config = task_config
         self.permissive_gates = permissive_gates
 
@@ -491,7 +499,7 @@ class MorphogeneticModel(nn.Module):
         gates = QualityGates(permissive=permissive_gates)
 
         # Create seed slots as ModuleDict for proper submodule registration
-        slots_dict = {}
+        slots_dict: dict[str, SeedSlot] = {}
         for slot_id in slots:
             if slot_id not in segment_channels:
                 raise ValueError(
@@ -505,16 +513,17 @@ class MorphogeneticModel(nn.Module):
                 task_config=task_config,
                 fast_mode=fast_mode,
             )
-        self.seed_slots = nn.ModuleDict(slots_dict)
+        self.seed_slots: nn.ModuleDict = nn.ModuleDict(slots_dict)
 
         # Track slot order for forward pass (derived from host's injection_specs)
         self._slot_order = [spec.slot_id for spec in host.injection_specs()]
         self._active_slots = [s for s in self._slot_order if s in self.seed_slots]
 
         # Move host to device
-        self.host = self.host.to(device)
+        # Host must be an nn.Module (all HostProtocol implementers are nn.Module)
+        cast(nn.Module, self.host).to(device)
 
-    def to(self, *args, **kwargs):
+    def to(self, *args: Any, **kwargs: Any) -> "MorphogeneticModel":
         """Override to() to update device tracking after transfer."""
         result = super().to(*args, **kwargs)
 
@@ -525,8 +534,8 @@ class MorphogeneticModel(nn.Module):
             return result
 
         # Update tracking for all slots
-        for slot in self.seed_slots.values():
-            slot.device = actual_device
+        for slot_module in self.seed_slots.values():
+            cast(SeedSlot, slot_module).device = actual_device
         # Store as torch.device for type consistency with slot.device
         self._device = actual_device
 
@@ -540,15 +549,17 @@ class MorphogeneticModel(nn.Module):
         """
         # If no active slots, use host's forward directly
         if not self._active_slots:
-            return self.host(x)
+            return self.host.forward(x)
 
         # Process through active slots
         prev_segment = None
         for slot_id in self._active_slots:
             x = self.host.forward_to_segment(slot_id, x, from_segment=prev_segment)
             # Use __call__ to preserve hooks/wrappers (e.g., torch.compile, profilers).
-            x = self.seed_slots[slot_id](x)
+            slot_obj: SeedSlot = self.seed_slots[slot_id]  # type: ignore[assignment]
+            x = slot_obj(x)
             prev_segment = slot_id
+        assert prev_segment is not None
         return self.host.forward_from_segment(prev_segment, x)
 
     def fused_forward(self, x: torch.Tensor, alpha_overrides: dict[str, torch.Tensor]) -> torch.Tensor:
@@ -562,15 +573,17 @@ class MorphogeneticModel(nn.Module):
             Output logits for all configurations [K * B, num_classes].
         """
         if not self._active_slots:
-            return self.host(x)
+            return self.host.forward(x)
 
         prev_segment = None
         for slot_id in self._active_slots:
             x = self.host.forward_to_segment(slot_id, x, from_segment=prev_segment)
             # Call slot with alpha_override tensor
             override = alpha_overrides.get(slot_id)
-            x = self.seed_slots[slot_id](x, alpha_override=override)
+            slot_obj: SeedSlot = self.seed_slots[slot_id]  # type: ignore[assignment]
+            x = slot_obj(x, alpha_override=override)
             prev_segment = slot_id
+        assert prev_segment is not None
         return self.host.forward_from_segment(prev_segment, x)
 
     def germinate_seed(
@@ -598,10 +611,11 @@ class MorphogeneticModel(nn.Module):
         if slot not in self.seed_slots:
             raise ValueError(f"Unknown slot: {slot}. Available: {list(self.seed_slots.keys())}")
 
-        self.seed_slots[slot].germinate(
+        slot_obj: SeedSlot = self.seed_slots[slot]  # type: ignore[assignment]
+        slot_obj.germinate(
             blueprint_id=blueprint_id,
             seed_id=seed_id,
-            host_module=self.host,
+            host_module=cast(nn.Module, self.host),
             blend_algorithm_id=blend_algorithm_id,
             blend_tempo_epochs=blend_tempo_epochs,
             alpha_algorithm=alpha_algorithm,
@@ -612,21 +626,22 @@ class MorphogeneticModel(nn.Module):
         """Prune the seed in a specific slot (immediate removal)."""
         if slot not in self.seed_slots:
             raise ValueError(f"Unknown slot: {slot}. Available: {list(self.seed_slots.keys())}")
-        self.seed_slots[slot].prune()
+        slot_obj: SeedSlot = self.seed_slots[slot]  # type: ignore[assignment]
+        slot_obj.prune()
 
-    def get_seed_parameters(self, slot: str | None = None):
+    def get_seed_parameters(self, slot: str | None = None) -> Generator[torch.nn.Parameter, None, None]:
         """Get seed parameters from specific slot or all slots."""
         if slot:
             # Must use 'yield from' not 'return' - function with yield is a generator,
             # and 'return' in a generator doesn't return a value, it raises StopIteration
-            yield from self.seed_slots[slot].get_parameters()
+            yield from cast(SeedSlot, self.seed_slots[slot]).get_parameters()
         else:
-            for s in self.seed_slots.values():
-                yield from s.get_parameters()
+            for slot_module in self.seed_slots.values():
+                yield from cast(SeedSlot, slot_module).get_parameters()
 
-    def get_host_parameters(self):
+    def get_host_parameters(self) -> Generator[torch.nn.Parameter, None, None]:
         """Return host backbone parameters only (exclude seed slots)."""
-        for name, param in self.host.named_parameters():
+        for name, param in cast(nn.Module, self.host).named_parameters():
             if "slots" in name:
                 continue
             yield param
@@ -634,11 +649,15 @@ class MorphogeneticModel(nn.Module):
     @property
     def has_active_seed(self) -> bool:
         """Check if any slot has an active seed."""
-        return any(s.is_active for s in self.seed_slots.values())
+        return any(
+            cast(SeedSlot, slot).is_active
+            for slot in self.seed_slots.values()
+        )
 
     def has_active_seed_in_slot(self, slot: str) -> bool:
         """Check if specific slot has active seed."""
-        return self.seed_slots[slot].is_active
+        slot_obj: SeedSlot = self.seed_slots[slot]  # type: ignore[assignment]
+        return slot_obj.is_active
 
     def get_slot_reports(self) -> dict[str, SeedStateReport]:
         """Return per-slot SeedStateReport for all slots (active or not).
@@ -646,7 +665,8 @@ class MorphogeneticModel(nn.Module):
         Slots without an active state will not appear in the dict.
         """
         reports: dict[str, SeedStateReport] = {}
-        for slot_id, slot in self.seed_slots.items():
+        for slot_id, slot_module in self.seed_slots.items():
+            slot = cast(SeedSlot, slot_module)
             if slot.state is None:
                 continue
             reports[slot_id] = slot.state.to_report()
@@ -655,7 +675,10 @@ class MorphogeneticModel(nn.Module):
     @property
     def active_seed_params(self) -> int:
         """Total trainable params across all active seeds."""
-        return sum(s.active_seed_params for s in self.seed_slots.values())
+        return sum(
+            cast(SeedSlot, slot).active_seed_params
+            for slot in self.seed_slots.values()
+        )
 
     @property
     def total_params(self) -> int:
@@ -666,7 +689,7 @@ class MorphogeneticModel(nn.Module):
         Without deduplication, tied weights would be counted twice.
         """
         # Deduplicate to handle weight tying in TransformerHost
-        host_params = sum(p.numel() for p in set(self.host.parameters()) if p.requires_grad)
+        host_params = sum(p.numel() for p in set(cast(nn.Module, self.host).parameters()) if p.requires_grad)
         return host_params + self.active_seed_params
 
     def count_active_seeds(self) -> int:
@@ -676,15 +699,18 @@ class MorphogeneticModel(nn.Module):
         preventing double-counting in total_seeds().
         """
         return sum(
-            1 for s in self.seed_slots.values()
-            if s.is_active and s.state and not is_terminal_stage(s.state.stage)
+            1 for slot_module in self.seed_slots.values()
+            if (slot := cast(SeedSlot, slot_module)).is_active
+            and slot.state
+            and not is_terminal_stage(slot.state.stage)
         )
 
     def count_fossilized_seeds(self) -> int:
         """Count fossilized seeds across all slots."""
         return sum(
-            1 for s in self.seed_slots.values()
-            if s.state and s.state.stage == SeedStage.FOSSILIZED
+            1 for slot_module in self.seed_slots.values()
+            if (slot := cast(SeedSlot, slot_module)).state
+            and slot.state.stage == SeedStage.FOSSILIZED
         )
 
     def total_seeds(self) -> int:

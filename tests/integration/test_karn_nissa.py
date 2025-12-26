@@ -14,8 +14,6 @@ from esper.karn.store import (
     TelemetryStore,
     EpisodeContext,
 )
-from esper.nissa import NissaHub
-from esper.leyline import TelemetryEvent, TelemetryEventType
 
 
 # =============================================================================
@@ -61,7 +59,7 @@ class TestTelemetryStoreLifecycle:
 
         # Start and commit multiple epochs
         for epoch in range(3):
-            epoch_snap = store.start_epoch(epoch=epoch)
+            store.start_epoch(epoch=epoch)
             store.commit_epoch()
 
         # Query recent epochs

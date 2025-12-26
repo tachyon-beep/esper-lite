@@ -7,7 +7,6 @@ Tests the checkpoint round-trip functionality, including:
 - Backwards compatibility with legacy checkpoints
 """
 
-import warnings
 from pathlib import Path
 
 import pytest
@@ -15,6 +14,8 @@ import torch
 
 from esper.leyline.slot_config import SlotConfig
 from esper.simic.agent import PPOAgent, CHECKPOINT_VERSION
+from esper.tamiyo.policy.factory import create_policy
+from esper.tamiyo.policy.features import get_feature_size
 
 
 class TestPPOCheckpointRoundTrip:
@@ -22,10 +23,18 @@ class TestPPOCheckpointRoundTrip:
 
     def test_roundtrip_default_3_slot_config(self, tmp_path: Path):
         """Default 3-slot config survives round-trip."""
-        original = PPOAgent(
-            slot_config=SlotConfig.default(),
+        slot_config = SlotConfig.default()
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=get_feature_size(slot_config),
+            slot_config=slot_config,
             device="cpu",
-            compile_network=False,
+            compile_mode="off",
+        )
+        original = PPOAgent(
+            policy=policy,
+            slot_config=slot_config,
+            device="cpu",
         )
         original.train_steps = 42
 
@@ -35,31 +44,46 @@ class TestPPOCheckpointRoundTrip:
         assert loaded.slot_config == original.slot_config
         assert loaded.train_steps == 42
         assert torch.allclose(
-            original._base_network.slot_head[2].weight,
-            loaded._base_network.slot_head[2].weight,
+            original.policy.network.slot_head[2].weight,
+            loaded.policy.network.slot_head[2].weight,
         )
 
     def test_roundtrip_custom_5_slot_config(self, tmp_path: Path):
         """Custom 5-slot config survives round-trip (the bug case)."""
         slot_config = SlotConfig(slot_ids=("r0c0", "r0c1", "r0c2", "r1c0", "r1c1"))
-        original = PPOAgent(
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=get_feature_size(slot_config),
             slot_config=slot_config,
             device="cpu",
-            compile_network=False,
+            compile_mode="off",
+        )
+        original = PPOAgent(
+            policy=policy,
+            slot_config=slot_config,
+            device="cpu",
         )
 
         original.save(tmp_path / "agent.pt")
         loaded = PPOAgent.load(tmp_path / "agent.pt", device="cpu")
 
         assert loaded.slot_config == slot_config
-        assert loaded._base_network.num_slots == 5
+        assert loaded.policy.network.num_slots == 5
 
     def test_roundtrip_preserves_all_hyperparams(self, tmp_path: Path):
         """All hyperparameters survive round-trip."""
-        original = PPOAgent(
-            slot_config=SlotConfig.default(),
+        slot_config = SlotConfig.default()
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=get_feature_size(slot_config),
+            slot_config=slot_config,
             device="cpu",
-            compile_network=False,
+            compile_mode="off",
+        )
+        original = PPOAgent(
+            policy=policy,
+            slot_config=slot_config,
+            device="cpu",
             # Non-default values
             gamma=0.99,
             gae_lambda=0.95,
@@ -93,7 +117,14 @@ class TestPPOCheckpointValidation:
         """Corrupted checkpoint (missing slot_ids) fails with clear error."""
         # Save 5-slot agent
         slot_config = SlotConfig(slot_ids=("r0c0", "r0c1", "r0c2", "r1c0", "r1c1"))
-        agent = PPOAgent(slot_config=slot_config, device="cpu", compile_network=False)
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=get_feature_size(slot_config),
+            slot_config=slot_config,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(policy=policy, slot_config=slot_config, device="cpu")
         agent.save(tmp_path / "agent.pt")
 
         # Corrupt: remove slot_ids
@@ -112,7 +143,15 @@ class TestPPOCheckpointNoBackwardsCompatibility:
     def test_legacy_checkpoint_fails_fast(self, tmp_path: Path):
         """Legacy checkpoint (missing checkpoint_version) fails with clear error."""
         # Create checkpoint with current format
-        agent = PPOAgent(device="cpu", compile_network=False)
+        slot_config = SlotConfig.default()
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=get_feature_size(slot_config),
+            slot_config=slot_config,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(policy=policy, device="cpu")
         agent.save(tmp_path / "agent.pt")
 
         # Strip to legacy format (missing required fields)
@@ -127,7 +166,15 @@ class TestPPOCheckpointNoBackwardsCompatibility:
     def test_wrong_checkpoint_version_fails(self, tmp_path: Path):
         """Checkpoint with wrong version fails with clear error."""
         # Create checkpoint with current format
-        agent = PPOAgent(device="cpu", compile_network=False)
+        slot_config = SlotConfig.default()
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=get_feature_size(slot_config),
+            slot_config=slot_config,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(policy=policy, device="cpu")
         agent.save(tmp_path / "agent.pt")
 
         # Change version to invalid
@@ -145,7 +192,15 @@ class TestPPOCheckpointVersion:
 
     def test_checkpoint_contains_version(self, tmp_path: Path):
         """Checkpoint includes version field."""
-        agent = PPOAgent(device="cpu", compile_network=False)
+        slot_config = SlotConfig.default()
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=get_feature_size(slot_config),
+            slot_config=slot_config,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(policy=policy, device="cpu")
         agent.save(tmp_path / "agent.pt")
 
         checkpoint = torch.load(tmp_path / "agent.pt", weights_only=False)
@@ -155,10 +210,160 @@ class TestPPOCheckpointVersion:
     def test_checkpoint_contains_slot_ids(self, tmp_path: Path):
         """Checkpoint includes slot_ids in architecture."""
         slot_config = SlotConfig(slot_ids=("r0c0", "r0c1", "r0c2", "r1c0", "r1c1"))
-        agent = PPOAgent(slot_config=slot_config, device="cpu", compile_network=False)
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=get_feature_size(slot_config),
+            slot_config=slot_config,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(policy=policy, slot_config=slot_config, device="cpu")
         agent.save(tmp_path / "agent.pt")
 
         checkpoint = torch.load(tmp_path / "agent.pt", weights_only=False)
         assert 'slot_ids' in checkpoint['architecture']
         assert checkpoint['architecture']['slot_ids'] == ("r0c0", "r0c1", "r0c2", "r1c0", "r1c1")
         assert checkpoint['architecture']['num_slots'] == 5
+
+
+class TestPPOCheckpointCompileMode:
+    """Compile mode persistence in checkpoints."""
+
+    def test_compile_mode_persisted_in_checkpoint(self, tmp_path: Path):
+        """compile_mode is stored in checkpoint config."""
+        slot_config = SlotConfig.default()
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=get_feature_size(slot_config),
+            slot_config=slot_config,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(
+            policy=policy,
+            device="cpu",
+            compile_mode="default",  # Stored for checkpoint
+        )
+        agent.save(tmp_path / "agent.pt")
+
+        checkpoint = torch.load(tmp_path / "agent.pt", weights_only=False)
+        assert 'compile_mode' in checkpoint['config']
+        assert checkpoint['config']['compile_mode'] == "default"
+
+    def test_compile_mode_roundtrip_off(self, tmp_path: Path):
+        """compile_mode='off' survives round-trip."""
+        slot_config = SlotConfig.default()
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=get_feature_size(slot_config),
+            slot_config=slot_config,
+            device="cpu",
+            compile_mode="off",
+        )
+        original = PPOAgent(
+            policy=policy,
+            device="cpu",
+            compile_mode="off",
+        )
+
+        original.save(tmp_path / "agent.pt")
+        loaded = PPOAgent.load(tmp_path / "agent.pt", device="cpu")
+
+        assert loaded.compile_mode == "off"
+        assert not loaded.policy.is_compiled
+
+    def test_compile_mode_roundtrip_default(self, tmp_path: Path):
+        """compile_mode='default' survives round-trip and policy is compiled."""
+        slot_config = SlotConfig.default()
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=get_feature_size(slot_config),
+            slot_config=slot_config,
+            device="cpu",
+            compile_mode="default",  # Originally compiled
+        )
+        original = PPOAgent(
+            policy=policy,
+            device="cpu",
+            compile_mode="default",
+        )
+        assert original.policy.is_compiled  # Verify original is compiled
+
+        original.save(tmp_path / "agent.pt")
+        loaded = PPOAgent.load(tmp_path / "agent.pt", device="cpu")
+
+        assert loaded.compile_mode == "default"
+        assert loaded.policy.is_compiled  # Critical: resumed policy is also compiled
+
+    def test_compile_mode_defaults_to_off_for_old_checkpoints(self, tmp_path: Path):
+        """Old checkpoints without compile_mode default to 'off'."""
+        slot_config = SlotConfig.default()
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=get_feature_size(slot_config),
+            slot_config=slot_config,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(policy=policy, device="cpu")
+        agent.save(tmp_path / "agent.pt")
+
+        # Simulate old checkpoint by removing compile_mode
+        checkpoint = torch.load(tmp_path / "agent.pt", weights_only=False)
+        del checkpoint['config']['compile_mode']
+        torch.save(checkpoint, tmp_path / "old_checkpoint.pt")
+
+        # Should load without error, defaulting to "off"
+        loaded = PPOAgent.load(tmp_path / "old_checkpoint.pt", device="cpu")
+        assert loaded.compile_mode == "off"
+        assert not loaded.policy.is_compiled
+
+    def test_loaded_policy_forward_pass_works(self, tmp_path: Path):
+        """Loaded compiled policy produces valid outputs."""
+        slot_config = SlotConfig.default()
+        state_dim = get_feature_size(slot_config)
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=state_dim,
+            slot_config=slot_config,
+            device="cpu",
+            compile_mode="default",
+        )
+        original = PPOAgent(
+            policy=policy,
+            device="cpu",
+            compile_mode="default",
+        )
+
+        original.save(tmp_path / "agent.pt")
+        loaded = PPOAgent.load(tmp_path / "agent.pt", device="cpu")
+
+        # Create test input with correct action head sizes
+        state = torch.randn(1, state_dim)
+        masks = {
+            "slot": torch.ones(1, slot_config.num_slots, dtype=torch.bool),
+            "blueprint": torch.ones(1, 13, dtype=torch.bool),
+            "style": torch.ones(1, 4, dtype=torch.bool),
+            "tempo": torch.ones(1, 3, dtype=torch.bool),
+            "alpha_target": torch.ones(1, 3, dtype=torch.bool),
+            "alpha_speed": torch.ones(1, 4, dtype=torch.bool),
+            "alpha_curve": torch.ones(1, 3, dtype=torch.bool),
+            "op": torch.ones(1, 6, dtype=torch.bool),
+        }
+
+        # Should produce valid output
+        with torch.no_grad():
+            result = loaded.policy.network.get_action(
+                state,
+                slot_mask=masks["slot"],
+                blueprint_mask=masks["blueprint"],
+                style_mask=masks["style"],
+                tempo_mask=masks["tempo"],
+                alpha_target_mask=masks["alpha_target"],
+                alpha_speed_mask=masks["alpha_speed"],
+                alpha_curve_mask=masks["alpha_curve"],
+                op_mask=masks["op"],
+            )
+
+        assert result.values.shape == (1,)
+        assert 0 <= result.actions["slot"].item() < slot_config.num_slots

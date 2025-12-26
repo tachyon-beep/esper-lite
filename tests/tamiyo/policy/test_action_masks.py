@@ -23,17 +23,19 @@ from esper.tamiyo.policy.action_masks import (
     MaskedCategorical,
     InvalidStateMachineError,
 )
-from esper.leyline import AlphaMode, SeedStage, MIN_PRUNE_AGE
-from esper.leyline.factored_actions import (
+from esper.leyline import (
+    AlphaMode,
     AlphaTargetAction,
     GerminationStyle,
     LifecycleOp,
+    MIN_PRUNE_AGE,
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
     NUM_ALPHA_TARGETS,
-    NUM_OPS,
     NUM_BLUEPRINTS,
+    NUM_OPS,
     NUM_STYLES,
+    SeedStage,
 )
 
 
@@ -260,7 +262,7 @@ def test_compute_action_masks_wait_always_valid():
 
 def test_compute_action_masks_blueprint_style_masks():
     """Blueprint mask excludes NOOP (0 params); style mask is all-valid when GERMINATE possible."""
-    from esper.leyline.factored_actions import BlueprintAction
+    from esper.leyline import BlueprintAction
 
     slot_states = {"r0c0": None, "r0c1": None, "r0c2": None}
     masks = compute_action_masks(slot_states, enabled_slots=["r0c1"])

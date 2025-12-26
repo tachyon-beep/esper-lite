@@ -12,7 +12,7 @@ Supports filtering by event type and compact/expanded modes.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from textual.app import ComposeResult
 from textual.containers import ScrollableContainer
@@ -87,7 +87,7 @@ class EventFeed(ScrollableContainer):
     }
     """
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         """Initialize the event feed."""
         super().__init__(**kwargs)
         self._events: list[FeedEvent] = []

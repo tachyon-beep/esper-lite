@@ -8,8 +8,7 @@ input space.
 from hypothesis import strategies as st
 from hypothesis.strategies import composite, sampled_from
 
-from esper.leyline import SeedStage, MIN_PRUNE_AGE
-from esper.leyline.factored_actions import LifecycleOp
+from esper.leyline import LifecycleOp, MIN_PRUNE_AGE, SeedStage
 from esper.simic.rewards import SeedInfo
 
 # Stage values for strategies

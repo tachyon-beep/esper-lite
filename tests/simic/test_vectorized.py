@@ -170,8 +170,12 @@ def test_counterfactual_unavailable_event():
         reason="missing_baseline",
     )
     data = hub.emit.call_args[0][0].data
-    assert data["available"] is False
-    assert data["reason"] == "missing_baseline"
+    # CounterfactualUnavailablePayload is a typed dataclass (not dict)
+    # Its type indicates unavailability - no need for explicit "available" field
+    from esper.leyline import CounterfactualUnavailablePayload
+    assert isinstance(data, CounterfactualUnavailablePayload)
+    assert data.reason == "missing_baseline"
+    assert data.slot_id == "r0c1"
 
 
 def test_throughput_metrics_emitted():
@@ -254,9 +258,12 @@ def test_performance_degradation_emitted_on_accuracy_drop():
     assert hub.emit.called
     event = hub.emit.call_args[0][0]
     assert event.event_type == TelemetryEventType.PERFORMANCE_DEGRADATION
-    assert event.data["current_acc"] == 0.6
-    assert event.data["rolling_avg_acc"] == 0.8
-    assert event.data["training_progress"] == 0.5
+    # PerformanceDegradationPayload is a typed dataclass (not dict)
+    from esper.leyline import PerformanceDegradationPayload
+    assert isinstance(event.data, PerformanceDegradationPayload)
+    assert event.data.current_acc == 0.6
+    assert event.data.rolling_avg_acc == 0.8
+    assert event.data.training_progress == 0.5
 
 
 def test_no_degradation_event_when_stable():
@@ -866,10 +873,16 @@ def test_emit_anomaly_diagnostics_skips_debug_when_disabled(monkeypatch):
             self.events.append(event)
 
     class _StubAgent:
-        class _Net:
-            pass
+        class _Policy:
+            class _Net:
+                pass
+            def __init__(self):
+                self._network = _StubAgent._Policy._Net()
+            @property
+            def network(self):
+                return self._network
         def __init__(self):
-            self.network = self._Net()
+            self.policy = self._Policy()
 
     # Make gradient/stability collection fail if called
     def _fail_gradients(_):
@@ -915,10 +928,16 @@ def test_emit_anomaly_diagnostics_collects_when_debug_enabled(monkeypatch):
             self.events.append(event)
 
     class _StubAgent:
-        class _Net:
-            pass
+        class _Policy:
+            class _Net:
+                pass
+            def __init__(self):
+                self._network = _StubAgent._Policy._Net()
+            @property
+            def network(self):
+                return self._network
         def __init__(self):
-            self.network = self._Net()
+            self.policy = self._Policy()
 
     grad_called = {"count": 0}
     stability_called = {"count": 0}

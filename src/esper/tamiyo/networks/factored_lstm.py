@@ -26,6 +26,16 @@ from typing import TypedDict
 import torch
 import torch.nn as nn
 
+from esper.leyline import (
+    DEFAULT_LSTM_HIDDEN_DIM,
+    DEFAULT_FEATURE_DIM,
+    GerminationStyle,
+    HEAD_NAMES,
+    LifecycleOp,
+    MASKED_LOGIT_VALUE,
+    get_action_head_sizes,
+)
+from esper.leyline.slot_config import SlotConfig
 from esper.tamiyo.policy.action_masks import MaskedCategorical
 
 
@@ -63,19 +73,6 @@ class _ForwardOutput(TypedDict):
     op_logits: torch.Tensor
     value: torch.Tensor
     hidden: tuple[torch.Tensor, torch.Tensor]
-
-from esper.leyline import (
-    DEFAULT_LSTM_HIDDEN_DIM,
-    DEFAULT_FEATURE_DIM,
-    HEAD_NAMES,
-    MASKED_LOGIT_VALUE,
-)
-from esper.leyline.factored_actions import (
-    GerminationStyle,
-    LifecycleOp,
-    get_action_head_sizes,
-)
-from esper.leyline.slot_config import SlotConfig
 
 
 class FactoredRecurrentActorCritic(nn.Module):
@@ -208,7 +205,7 @@ class FactoredRecurrentActorCritic(nn.Module):
 
         self._init_weights()
 
-    def _init_weights(self):
+    def _init_weights(self) -> None:
         """Orthogonal initialization for stable training."""
         for module in self.modules():
             if isinstance(module, nn.Linear):
@@ -226,15 +223,24 @@ class FactoredRecurrentActorCritic(nn.Module):
             self.alpha_curve_head,
             self.op_head,
         ]:
-            nn.init.orthogonal_(head[-1].weight, gain=0.01)
-        nn.init.orthogonal_(self.value_head[-1].weight, gain=1.0)
+            # head[-1] is a Linear layer, access .weight.data to get Tensor
+            last_layer = head[-1]
+            if isinstance(last_layer, nn.Linear):
+                nn.init.orthogonal_(last_layer.weight.data, gain=0.01)
+        # value_head[-1] is also a Linear layer
+        last_value_layer = self.value_head[-1]
+        if isinstance(last_value_layer, nn.Linear):
+            nn.init.orthogonal_(last_value_layer.weight.data, gain=1.0)
 
         # LSTM-specific initialization
         for name, param in self.lstm.named_parameters():
             if "weight_ih" in name:
-                nn.init.orthogonal_(param)
+                # param is a Parameter, access .data to get the Tensor
+                weight_tensor: torch.Tensor = param.data
+                nn.init.orthogonal_(weight_tensor)
             elif "weight_hh" in name:
-                nn.init.orthogonal_(param)
+                weight_tensor = param.data
+                nn.init.orthogonal_(weight_tensor)
             elif "bias" in name:
                 nn.init.zeros_(param)
                 # M9: Set forget gate bias to 1 (helps with long-term memory)
@@ -255,7 +261,27 @@ class FactoredRecurrentActorCritic(nn.Module):
         batch_size: int,
         device: torch.device,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return zero-initialized hidden state."""
+        """Return zero-initialized hidden state.
+
+        MEMORY MANAGEMENT - Hidden State Detachment:
+        --------------------------------------------
+        LSTM hidden states carry gradient graphs. To prevent memory leaks during
+        training, callers MUST detach hidden states at episode boundaries:
+
+            hidden = (h.detach(), c.detach())  # Break gradient graph
+
+        Failure to detach causes:
+        1. Unbounded BPTT across episode boundaries (exploding memory)
+        2. Gradient graph accumulation proportional to total training steps
+        3. OOM after ~100-1000 episodes on typical GPU memory
+
+        The training loop (vectorized.py) handles this automatically when
+        resetting environments. If using this network directly, ensure you
+        call .detach() on hidden states when starting new episodes.
+
+        Returns:
+            Tuple of (h, c) zero tensors, each [num_layers, batch, hidden_dim]
+        """
         h = torch.zeros(self.lstm_layers, batch_size, self.lstm_hidden_dim, device=device)
         c = torch.zeros(self.lstm_layers, batch_size, self.lstm_hidden_dim, device=device)
         return h, c
@@ -460,7 +486,8 @@ class FactoredRecurrentActorCritic(nn.Module):
                 dist = MaskedCategorical(logits=logits, mask=mask)
 
                 if deterministic:
-                    action = dist.probs.argmax(dim=-1)
+                    # Use masked_logits for argmax (more numerically stable than probs)
+                    action = dist.masked_logits.argmax(dim=-1)
                 else:
                     action = dist.sample()
 
@@ -516,7 +543,12 @@ class FactoredRecurrentActorCritic(nn.Module):
         alpha_curve_mask: torch.Tensor | None = None,
         op_mask: torch.Tensor | None = None,
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
-    ) -> tuple[dict[str, torch.Tensor], torch.Tensor, dict[str, torch.Tensor], tuple]:
+    ) -> tuple[
+        dict[str, torch.Tensor],
+        torch.Tensor,
+        dict[str, torch.Tensor],
+        tuple[torch.Tensor, torch.Tensor],
+    ]:
         """Evaluate actions for PPO update.
 
         Returns:
@@ -579,13 +611,18 @@ class FactoredRecurrentActorCritic(nn.Module):
             if mask is None:
                 mask = torch.ones_like(logits, dtype=torch.bool)
             if key == "style":
+                # When op is not GERMINATE or SET_ALPHA_TARGET, style is irrelevant.
+                # Force selection of SIGMOID_ADD (the default/no-op style).
                 style_irrelevant = (op_actions != LifecycleOp.GERMINATE) & (
                     op_actions != LifecycleOp.SET_ALPHA_TARGET
                 )
-                # Avoid `.any()` (CPU sync) by applying the override unconditionally.
-                mask = mask.clone()
-                mask[style_irrelevant] = False
-                mask[..., int(GerminationStyle.SIGMOID_ADD)][style_irrelevant] = True
+                # For 3D mask [batch, seq_len, num_styles], use masked_fill pattern
+                # to avoid incorrect advanced indexing. Expand style_irrelevant to match.
+                expanded_irrelevant = style_irrelevant.unsqueeze(-1).expand_as(mask)
+                mask = mask.masked_fill(expanded_irrelevant, False)
+                # Set SIGMOID_ADD column to True for irrelevant rows
+                sigmoid_add_idx = int(GerminationStyle.SIGMOID_ADD)
+                mask[..., sigmoid_add_idx] = mask[..., sigmoid_add_idx] | style_irrelevant
             mask_flat = mask.reshape(-1, action_dim)
 
             dist = MaskedCategorical(logits=logits_flat, mask=mask_flat)
@@ -595,4 +632,4 @@ class FactoredRecurrentActorCritic(nn.Module):
         return log_probs, output["value"], entropy, output["hidden"]
 
 
-__all__ = ["FactoredRecurrentActorCritic"]
+__all__ = ["FactoredRecurrentActorCritic", "GetActionResult"]

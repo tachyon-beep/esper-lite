@@ -22,7 +22,6 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import threading
 from pathlib import Path
@@ -112,8 +111,8 @@ class DashboardServer:
         """Run the FastAPI server."""
         try:
             import uvicorn
-            from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-            from fastapi.responses import HTMLResponse
+            from fastapi import FastAPI, WebSocket, WebSocketDisconnect  # type: ignore[import-not-found]
+            from fastapi.responses import HTMLResponse  # type: ignore[import-not-found]
         except ImportError:
             _logger.error(
                 "Dashboard dependencies not installed. "
@@ -125,7 +124,7 @@ class DashboardServer:
         app = FastAPI(title="Karn Dashboard")
         clients: set[WebSocket] = set()
 
-        @app.get("/", response_class=HTMLResponse)
+        @app.get("/", response_class=HTMLResponse)  # type: ignore[untyped-decorator]
         async def get_dashboard() -> HTMLResponse:
             if _DASHBOARD_PATH.exists():
                 content = _DASHBOARD_PATH.read_text()
@@ -138,7 +137,7 @@ class DashboardServer:
                 headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
             )
 
-        @app.websocket("/ws")
+        @app.websocket("/ws")  # type: ignore[untyped-decorator]
         async def websocket_endpoint(websocket: WebSocket) -> None:
             await websocket.accept()
             clients.add(websocket)
@@ -167,11 +166,11 @@ class DashboardServer:
             finally:
                 clients.discard(websocket)
 
-        @app.get("/api/health")
+        @app.get("/api/health")  # type: ignore[untyped-decorator]
         async def health() -> dict[str, Any]:
             return {"status": "ok", "clients": len(clients)}
 
-        @app.on_event("startup")
+        @app.on_event("startup")  # type: ignore[untyped-decorator]
         async def start_broadcast() -> None:
             asyncio.create_task(self._broadcast_loop(clients))
             self._ready.set()

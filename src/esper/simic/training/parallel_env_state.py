@@ -14,15 +14,14 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import torch
-import torch.nn as nn
 
-from esper.leyline.factored_actions import LifecycleOp
+from esper.leyline import LifecycleOp
 
 if TYPE_CHECKING:
     from esper.tolaria import TolariaGovernor
     from esper.karn.health import HealthMonitor
     from esper.simic.attribution import CounterfactualHelper
-    from esper.simic.contracts import SlottedHostProtocol
+    from esper.kasmina.host import MorphogeneticModel
 
 
 @dataclass(slots=True)
@@ -32,7 +31,7 @@ class ParallelEnvState:
     DataLoaders are now SHARED via SharedBatchIterator - batches are pre-split
     and data is pre-moved to each env's device with non_blocking=True.
     """
-    model: "SlottedHostProtocol"
+    model: "MorphogeneticModel"
     host_optimizer: torch.optim.Optimizer
     signal_tracker: Any  # SignalTracker from tamiyo
     governor: "TolariaGovernor"  # Fail-safe watchdog for catastrophic failure detection
@@ -41,13 +40,13 @@ class ParallelEnvState:
     seed_optimizers: dict[str, torch.optim.Optimizer] = field(default_factory=dict)
     env_device: str = "cuda:0"  # Device this env runs on
     stream: torch.cuda.Stream | None = None  # CUDA stream for async execution
-    scaler: torch.amp.GradScaler | None = None  # Per-env AMP scaler (avoids stream race)
+    scaler: Any = None  # Per-env AMP scaler (torch.amp.GradScaler, but stubs inconsistent)
     seeds_created: int = 0
     seeds_fossilized: int = 0  # Total seeds fossilized this episode
     contributing_fossilized: int = 0  # Seeds with total_improvement >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
-    episode_rewards: list = field(default_factory=list)
-    action_counts: dict = field(default_factory=dict)
-    successful_action_counts: dict = field(default_factory=dict)
+    episode_rewards: list[float] = field(default_factory=list)
+    action_counts: dict[str, int] = field(default_factory=dict)
+    successful_action_counts: dict[str, int] = field(default_factory=dict)
     action_enum: type | None = None
     # Metrics for current batch step
     train_loss: float = 0.0

@@ -9,7 +9,7 @@ Row 2: Connection | Best Metric | Env Counts (OK/WARN/CRIT)
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from textual.app import ComposeResult
 from textual.containers import Container
@@ -67,7 +67,7 @@ class RunHeader(Container):
     }
     """
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         """Initialize the run header."""
         super().__init__(**kwargs)
         self._snapshot: TuiSnapshot | None = None

@@ -2,9 +2,8 @@
 
 import pytest
 from datetime import datetime, timezone
-from collections import deque
 
-from esper.kasmina.slot import SeedState, SeedMetrics
+from esper.kasmina.slot import SeedState
 from esper.leyline.stages import SeedStage
 
 
@@ -55,22 +54,23 @@ class TestSeedStateToDict:
         assert restored.alpha == original.alpha
         assert len(restored.stage_history) == len(original.stage_history)
 
-    def test_to_dict_handles_none_values(self):
-        """to_dict() handles None values gracefully."""
+    def test_to_dict_handles_unknown_previous_stage(self):
+        """to_dict() handles UNKNOWN previous_stage correctly."""
         state = SeedState(
             seed_id="test-seed",
             blueprint_id="norm",
             slot_id="r0c0",
             stage=SeedStage.GERMINATED,
-            previous_stage=None,  # None value
+            # previous_stage defaults to SeedStage.UNKNOWN (not None)
         )
 
         data = state.to_dict()
         restored = SeedState.from_dict(data)
 
-        # None previous_stage should be preserved
-        assert restored.previous_stage is None
-        assert data["previous_stage"] is None
+        # UNKNOWN previous_stage should be preserved through serialization
+        assert restored.previous_stage == SeedStage.UNKNOWN
+        # Serialized as integer 0 (UNKNOWN's enum value)
+        assert data["previous_stage"] == 0
 
     def test_to_dict_converts_deque_to_list(self):
         """to_dict() converts deque to list for stage_history."""

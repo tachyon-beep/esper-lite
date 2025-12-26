@@ -9,6 +9,8 @@ Renders a single training environment in the Flight Board:
 
 from __future__ import annotations
 
+from typing import Any
+
 from textual.app import ComposeResult
 from textual.containers import Container
 from textual.widgets import Static
@@ -85,7 +87,7 @@ class EnvRow(Container):
         env: EnvSummary,
         selected: bool = False,
         expanded: bool = False,
-        **kwargs,
+        **kwargs: Any,
     ) -> None:
         """Initialize the environment row.
 

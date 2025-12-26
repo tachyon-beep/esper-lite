@@ -27,7 +27,6 @@ from esper.karn.store import (
     SlotSnapshot,
     PolicySnapshot,
     DenseTraceTrigger,
-    SeedStage,
 )
 from esper.karn.triggers import AnomalyDetector, PolicyAnomalyDetector
 from esper.karn.ingest import (
@@ -37,21 +36,21 @@ from esper.karn.ingest import (
     coerce_int,
     coerce_seed_stage,
     coerce_str,
-    coerce_str_or_none,
 )
 from esper.leyline.telemetry import (
     TrainingStartedPayload,
     EpochCompletedPayload,
-    BatchEpochCompletedPayload,
     PPOUpdatePayload,
-    RewardComputedPayload,
     SeedGerminatedPayload,
     SeedStageChangedPayload,
     SeedGateEvaluatedPayload,
     SeedFossilizedPayload,
     SeedPrunedPayload,
-    CounterfactualMatrixPayload,
+    AnomalyDetectedPayload,
+    AnalyticsSnapshotPayload,
+    CounterfactualUnavailablePayload,
 )
+from esper.leyline import SeedStage
 
 if TYPE_CHECKING:
     from esper.leyline.telemetry import TelemetryEvent
@@ -287,12 +286,12 @@ class KarnCollector:
             self._handle_seed_event(event)
         elif event_type == "PPO_UPDATE_COMPLETED":
             self._handle_ppo_update(event)
-        elif event_type == "REWARD_COMPUTED":
-            self._handle_reward_computed(event)
         elif event_type == "COUNTERFACTUAL_COMPUTED":
             self._handle_counterfactual_computed(event)
         elif event_type in _ANOMALY_EVENT_TYPES:
             self._handle_anomaly_event(event, event_type)
+        elif event_type == "ANALYTICS_SNAPSHOT":
+            self._handle_analytics_snapshot(event)
 
     def _handle_training_started(self, event: "TelemetryEvent") -> None:
         """Handle TRAINING_STARTED event - auto-initialize episode AND first epoch."""
@@ -324,19 +323,24 @@ class KarnCollector:
             if not self.store.current_epoch:
                 self.store.start_epoch(epoch)
 
+            # Type narrowing: current_epoch is guaranteed non-None after start_epoch
+            current_epoch = self.store.current_epoch
+            if current_epoch is None:
+                return
+
             # Update host snapshot from typed payload
-            self.store.current_epoch.epoch = epoch
-            self.store.current_epoch.host.epoch = epoch
-            self.store.current_epoch.host.val_loss = event.data.val_loss
-            self.store.current_epoch.host.val_accuracy = event.data.val_accuracy
+            current_epoch.epoch = epoch
+            current_epoch.host.epoch = epoch
+            current_epoch.host.val_loss = event.data.val_loss
+            current_epoch.host.val_accuracy = event.data.val_accuracy
             # Use payload fields if provided, else default to 0.0
-            self.store.current_epoch.host.train_loss = (
+            current_epoch.host.train_loss = (
                 event.data.train_loss if event.data.train_loss is not None else 0.0
             )
-            self.store.current_epoch.host.train_accuracy = (
+            current_epoch.host.train_accuracy = (
                 event.data.train_accuracy if event.data.train_accuracy is not None else 0.0
             )
-            self.store.current_epoch.host.host_grad_norm = (
+            current_epoch.host.host_grad_norm = (
                 event.data.host_grad_norm if event.data.host_grad_norm is not None else 0.0
             )
         else:
@@ -346,15 +350,20 @@ class KarnCollector:
             )
             return
 
+        # Type narrowing for remaining operations
+        current_epoch = self.store.current_epoch
+        if current_epoch is None:
+            return
+
         # P0 Fix: Increment epochs_in_stage for all occupied slots
         # (includes EMBARGOED/RESETTING dwell while excluding PRUNED + terminal).
-        for slot in self.store.current_epoch.slots.values():
+        for slot in current_epoch.slots.values():
             if slot.stage not in (SeedStage.DORMANT, SeedStage.PRUNED, SeedStage.FOSSILIZED):
                 slot.epochs_in_stage += 1
 
         # Tier 3: Check for anomalies before committing
         if self.config.capture_dense_traces:
-            self._check_anomalies_and_capture(self.store.current_epoch)
+            self._check_anomalies_and_capture(current_epoch)
 
         # Commit the epoch
         self.store.commit_epoch()
@@ -465,9 +474,23 @@ class KarnCollector:
             )
             return
 
-    def _handle_reward_computed(self, event: "TelemetryEvent") -> None:
-        """Handle REWARD_COMPUTED event."""
+    def _handle_analytics_snapshot(self, event: "TelemetryEvent") -> None:
+        """Handle ANALYTICS_SNAPSHOT event for per-step policy data.
+
+        Specifically handles kind="last_action" to populate PolicySnapshot with
+        action/reward data. This replaces the removed REWARD_COMPUTED handler.
+        """
         if not self.store.current_epoch:
+            return
+
+        # Only handle typed AnalyticsSnapshotPayload
+        if not isinstance(event.data, AnalyticsSnapshotPayload):
+            return
+
+        payload = event.data
+
+        # Only handle kind="last_action" for policy snapshot updates
+        if payload.kind != "last_action":
             return
 
         # Create policy snapshot if not exists
@@ -476,25 +499,46 @@ class KarnCollector:
 
         policy = self.store.current_epoch.policy
 
-        # Typed payload path
-        if isinstance(event.data, RewardComputedPayload):
-            policy.reward_total = event.data.total_reward
-            policy.action_op = event.data.action_name
-        else:
-            _logger.warning(
-                "Expected RewardComputedPayload for REWARD_COMPUTED, got %s",
-                type(event.data).__name__,
-            )
-            return
+        # Populate fields from payload (mirrors old REWARD_COMPUTED handling)
+        if payload.total_reward is not None:
+            policy.reward_total = payload.total_reward
+        if payload.action_name:
+            policy.action_op = payload.action_name
+        if payload.value_estimate is not None:
+            policy.value_estimate = payload.value_estimate
 
     def _handle_counterfactual_computed(self, event: "TelemetryEvent") -> None:
-        """Handle COUNTERFACTUAL_COMPUTED event."""
+        """Handle COUNTERFACTUAL_COMPUTED event.
+
+        Note: This event currently uses dict payloads (not typed). A typed payload
+        should be added in the future for type safety.
+        """
         if not self.store.current_epoch:
             return
 
         if event.data is None:
             _logger.warning("Event %s has no data payload", event.event_type)
             return
+
+        # Handle typed CounterfactualUnavailablePayload (baseline unavailable)
+        if isinstance(event.data, CounterfactualUnavailablePayload):
+            payload = event.data
+            slot_key = f"env{payload.env_id}:{payload.slot_id}"
+            if slot_key not in self.store.current_epoch.slots:
+                self.store.current_epoch.slots[slot_key] = SlotSnapshot(slot_id=slot_key)
+            slot = self.store.current_epoch.slots[slot_key]
+            # Clear counterfactual contribution when unavailable
+            slot.counterfactual_contribution = None
+            return
+
+        # Handle dict payloads (successful counterfactual with contribution data)
+        if not isinstance(event.data, dict):
+            _logger.warning(
+                "Expected dict or CounterfactualUnavailablePayload for COUNTERFACTUAL_COMPUTED, got %s",
+                type(event.data).__name__,
+            )
+            return
+
         data = event.data
         if "env_id" not in data:
             return
@@ -536,8 +580,6 @@ class KarnCollector:
 
         # P1-06: Prefer epoch field over episode for trace windowing
         # Anomaly events use AnomalyDetectedPayload with episode field
-        from esper.leyline import AnomalyDetectedPayload
-
         epoch = event.epoch
         if epoch is None and isinstance(event.data, AnomalyDetectedPayload):
             # AnomalyDetectedPayload uses 'episode' field, not 'epoch'

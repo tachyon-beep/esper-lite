@@ -7,7 +7,7 @@ GatedBlend.get_alpha() now tracks step-based progress for lifecycle compatibilit
 import pytest
 import torch
 
-from esper.kasmina.blending import GatedBlend, LinearBlend, SigmoidBlend, BlendCatalog
+from esper.kasmina.blending import GatedBlend, BlendCatalog
 from esper.kasmina.slot import SeedSlot, SeedState, QualityGates
 from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
 from esper.leyline.stages import SeedStage
@@ -306,53 +306,6 @@ class TestGatedBlendParameterRegistration:
             "alpha_schedule SHOULD be a registered submodule "
             "(PyTorch auto-registers nn.Module attributes)"
         )
-
-
-class TestComparisonWithScheduleBasedBlends:
-    """Compare gated blend with linear/sigmoid for context."""
-
-    @pytest.mark.parametrize(
-        "algorithm_id,cls",
-        [
-            ("linear", LinearBlend),
-            ("sigmoid", SigmoidBlend),
-        ],
-    )
-    def test_schedule_based_get_alpha_is_consistent(self, algorithm_id, cls):
-        """Schedule-based blends: get_alpha() matches get_alpha_for_blend()."""
-        blend = BlendCatalog.create(algorithm_id, total_steps=10)
-
-        blend.step(5)
-
-        scalar = blend.get_alpha(5)
-        x = torch.randn(1, 64, 8, 8)
-        tensor = blend.get_alpha_for_blend(x)
-
-        # For linear/sigmoid, these should be consistent
-        assert abs(scalar - tensor.item()) < 1e-6
-
-        # Linear/Sigmoid are consistent (both use step-based progress)
-
-    def test_gated_has_different_purposes_for_alpha_methods(self):
-        """GatedBlend: get_alpha() and get_alpha_for_blend() serve different purposes."""
-        # Schedule-based: consistent
-        linear = BlendCatalog.create("linear", total_steps=10)
-        linear.step(5)
-        linear_scalar = linear.get_alpha(5)
-        linear_tensor = linear.get_alpha_for_blend(torch.randn(1, 64, 8, 8))
-        assert abs(linear_scalar - linear_tensor.item()) < 1e-6
-
-        # Gated: different purposes
-        gated = BlendCatalog.create("gated", channels=64, topology="cnn", total_steps=10)
-        gated_scalar = gated.get_alpha(5)
-        gated_tensor = gated.get_alpha_for_blend(torch.randn(1, 64, 8, 8))
-
-        # get_alpha returns step-based progress (for lifecycle)
-        assert gated_scalar == 0.5  # Step 5 of 10
-        # get_alpha_for_blend returns learned gate output (for forward pass)
-        # gated_tensor is computed from gate network, not step progress
-
-        # This is intentional: lifecycle uses step progress, forward uses learned gate
 
 
 # =============================================================================

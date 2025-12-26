@@ -1,7 +1,13 @@
 """Tests for reward mode enum and sparse reward functions."""
 
-from esper.leyline.factored_actions import LifecycleOp
-from esper.simic.rewards import RewardMode, RewardFamily, ContributionRewardConfig, compute_reward_for_family, LossRewardConfig
+from esper.leyline import LifecycleOp
+from esper.simic.rewards import (
+    ContributionRewardConfig,
+    LossRewardConfig,
+    RewardFamily,
+    RewardMode,
+    compute_reward_for_family,
+)
 
 
 def test_reward_mode_enum_exists():

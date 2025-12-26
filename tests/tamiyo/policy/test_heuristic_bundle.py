@@ -1,11 +1,9 @@
 """Tests for HeuristicPolicyBundle."""
 
-import pytest
 import torch
 
 from esper.tamiyo.policy import list_policies, create_heuristic_policy
 from esper.tamiyo.policy.heuristic_bundle import HeuristicPolicyBundle
-from esper.tamiyo.policy.types import ActionResult
 
 
 def test_heuristic_bundle_not_registered():

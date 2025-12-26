@@ -1,6 +1,18 @@
 """Tests for SIMPLIFIED reward mode."""
+
 import pytest
-from esper.simic.rewards import RewardMode
+
+from esper.leyline import LifecycleOp
+from esper.simic.rewards import (
+    STAGE_HOLDING,
+    STAGE_TRAINING,
+    ContributionRewardConfig,
+    RewardMode,
+    SeedInfo,
+    compute_reward,
+    compute_simplified_reward,
+)
+from esper.simic.training.config import TrainingConfig
 
 
 def test_simplified_mode_exists():
@@ -13,16 +25,6 @@ def test_simplified_mode_string_conversion():
     """SIMPLIFIED mode should round-trip through string."""
     mode = RewardMode("simplified")
     assert mode == RewardMode.SIMPLIFIED
-
-
-from esper.simic.rewards import (
-    compute_simplified_reward,
-    ContributionRewardConfig,
-    SeedInfo,
-    STAGE_TRAINING,
-    STAGE_HOLDING,
-)
-from esper.leyline.factored_actions import LifecycleOp
 
 
 class TestComputeSimplifiedReward:
@@ -43,7 +45,7 @@ class TestComputeSimplifiedReward:
         )
 
         # WAIT action: only PBRS, no intervention cost
-        reward_wait = compute_simplified_reward(
+        compute_simplified_reward(
             action=LifecycleOp.WAIT,
             seed_info=seed_info,
             epoch=10,
@@ -147,9 +149,6 @@ class TestComputeSimplifiedReward:
         assert reward > -2.0
 
 
-from esper.simic.rewards import compute_reward
-
-
 class TestComputeRewardDispatcher:
     """Test that compute_reward dispatches to SIMPLIFIED correctly."""
 
@@ -190,33 +189,32 @@ class TestComputeRewardDispatcher:
         assert -2.0 < reward < 2.0
 
 
-from esper.simic.training.config import TrainingConfig
+class TestPerEnvRewardModeConfig:
+    """Test per-environment reward mode configuration."""
 
-
-class TestABTestingConfig:
-    """Test A/B testing configuration."""
-
-    def test_ab_reward_modes_field_exists(self):
-        """TrainingConfig should have ab_reward_modes field."""
+    def test_reward_mode_per_env_field_exists(self):
+        """TrainingConfig should have reward_mode_per_env field."""
         config = TrainingConfig()
         # Default should be None (all envs use reward_mode)
-        assert config.ab_reward_modes is None
+        assert config.reward_mode_per_env is None
 
-    def test_ab_reward_modes_splits_envs(self):
-        """ab_reward_modes should specify per-env reward modes."""
+    def test_reward_mode_per_env_splits_envs(self):
+        """reward_mode_per_env should specify per-env reward modes."""
         config = TrainingConfig(
             n_envs=8,
-            ab_reward_modes=["shaped", "shaped", "shaped", "shaped",
-                            "simplified", "simplified", "simplified", "simplified"],
+            reward_mode_per_env=(
+                RewardMode.SHAPED, RewardMode.SHAPED, RewardMode.SHAPED, RewardMode.SHAPED,
+                RewardMode.SIMPLIFIED, RewardMode.SIMPLIFIED, RewardMode.SIMPLIFIED, RewardMode.SIMPLIFIED,
+            ),
         )
-        assert len(config.ab_reward_modes) == 8
-        assert config.ab_reward_modes[0] == "shaped"
-        assert config.ab_reward_modes[4] == "simplified"
+        assert len(config.reward_mode_per_env) == 8
+        assert config.reward_mode_per_env[0] == RewardMode.SHAPED
+        assert config.reward_mode_per_env[4] == RewardMode.SIMPLIFIED
 
-    def test_ab_reward_modes_validation(self):
-        """ab_reward_modes length must match n_envs."""
-        with pytest.raises(ValueError, match="ab_reward_modes.*must match.*n_envs"):
+    def test_reward_mode_per_env_validation(self):
+        """reward_mode_per_env length must match n_envs."""
+        with pytest.raises(ValueError, match="reward_mode_per_env.*must match.*n_envs"):
             TrainingConfig(
                 n_envs=8,
-                ab_reward_modes=["shaped", "simplified"],  # Wrong length
+                reward_mode_per_env=(RewardMode.SHAPED, RewardMode.SIMPLIFIED),  # Wrong length
             )

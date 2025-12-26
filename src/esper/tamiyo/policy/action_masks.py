@@ -26,14 +26,15 @@ from typing import TYPE_CHECKING
 import torch
 from torch.distributions import Categorical
 
-from esper.leyline import AlphaMode, SeedStage, MIN_PRUNE_AGE, MASKED_LOGIT_VALUE
-from esper.leyline.stages import VALID_TRANSITIONS
-from esper.leyline.slot_config import SlotConfig
-from esper.leyline.factored_actions import (
+from esper.leyline import (
+    AlphaMode,
     AlphaTargetAction,
     BlueprintAction,
+    CNN_BLUEPRINTS,
     GerminationStyle,
     LifecycleOp,
+    MASKED_LOGIT_VALUE,
+    MIN_PRUNE_AGE,
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
     NUM_ALPHA_TARGETS,
@@ -41,9 +42,11 @@ from esper.leyline.factored_actions import (
     NUM_OPS,
     NUM_STYLES,
     NUM_TEMPO,
-    CNN_BLUEPRINTS,
+    SeedStage,
     TRANSFORMER_BLUEPRINTS,
 )
+from esper.leyline.stages import VALID_TRANSITIONS
+from esper.leyline.slot_config import SlotConfig
 
 if TYPE_CHECKING:
     from esper.leyline import SeedStateReport
@@ -354,7 +357,7 @@ class InvalidStateMachineError(RuntimeError):
     pass
 
 
-@torch.compiler.disable
+@torch.compiler.disable  # type: ignore[untyped-decorator]
 def _validate_action_mask(mask: torch.Tensor) -> None:
     """Validate that at least one action is valid per batch element.
 
@@ -369,7 +372,7 @@ def _validate_action_mask(mask: torch.Tensor) -> None:
         )
 
 
-@torch.compiler.disable
+@torch.compiler.disable  # type: ignore[untyped-decorator]
 def _validate_logits(logits: torch.Tensor) -> None:
     """Validate that logits don't contain inf/nan (indicates network instability).
 
@@ -426,12 +429,9 @@ class MaskedCategorical:
             _validate_logits(logits)
 
         self.mask = mask
-        mask_value = torch.tensor(
-            MASKED_LOGIT_VALUE,
-            device=logits.device,
-            dtype=logits.dtype,
-        )
-        self.masked_logits = logits.masked_fill(~mask, mask_value)
+        # Use Python float directly - masked_fill broadcasts correctly
+        # Avoids tensor allocation on every __init__ (hot path optimization)
+        self.masked_logits = logits.masked_fill(~mask, MASKED_LOGIT_VALUE)
         self._dist = Categorical(logits=self.masked_logits)
 
     @property
@@ -441,11 +441,11 @@ class MaskedCategorical:
 
     def sample(self) -> torch.Tensor:
         """Sample actions from the masked distribution."""
-        return self._dist.sample()
+        return self._dist.sample()  # type: ignore[no-any-return,no-untyped-call]
 
     def log_prob(self, actions: torch.Tensor) -> torch.Tensor:
         """Compute log probability of actions."""
-        return self._dist.log_prob(actions)
+        return self._dist.log_prob(actions)  # type: ignore[no-any-return,no-untyped-call]
 
     def entropy(self) -> torch.Tensor:
         """Compute normalized entropy over valid actions.
@@ -474,6 +474,9 @@ class MaskedCategorical:
         raw_entropy = -(probs * log_probs * self.mask).sum(dim=-1)
         num_valid = self.mask.sum(dim=-1).clamp(min=1)
         max_entropy = torch.log(num_valid.float())
-        normalized = raw_entropy / max_entropy.clamp(min=1e-8)
+        # Guard division to prevent FP16 overflow when num_valid == 1 (max_entropy = 0)
+        # Use 1.0 as safe divisor for single-action case; result is discarded by where().
+        safe_max_entropy = torch.where(num_valid > 1, max_entropy, torch.ones_like(max_entropy))
+        normalized = raw_entropy / safe_max_entropy.clamp(min=1e-8)
         # Single valid action = zero entropy (no choice = no uncertainty)
         return torch.where(num_valid == 1, torch.zeros_like(normalized), normalized)

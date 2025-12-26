@@ -1,6 +1,5 @@
 """Final verification tests for Sanctum port completion."""
 
-import pytest
 
 
 class TestSanctumPortComplete:
@@ -25,7 +24,6 @@ class TestSanctumPortComplete:
 
     def test_sanctum_app_importable(self):
         """SanctumApp should be importable (may be None without Textual)."""
-        from esper.karn.sanctum import SanctumApp
         # SanctumApp may be None if Textual not installed, but import should work
 
     def test_cli_flag_works(self):

@@ -6,10 +6,10 @@ import logging
 
 import torch
 
-_logger = logging.getLogger(__name__)
-
 from esper.nissa import ConsoleOutput, DirectoryOutput, FileOutput, get_hub
 from esper.simic.training import TrainingConfig
+
+_logger = logging.getLogger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -230,7 +230,7 @@ def validate_slots(slot_ids: list[str]) -> list[str]:
     return slot_ids
 
 
-def main():
+def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
@@ -270,8 +270,8 @@ def main():
     # Warn about deprecated --tui-layout flag
     if args.tui_layout != "auto":
         print(
-            f"WARNING: --tui-layout is deprecated and ignored. "
-            f"Use --sanctum for the developer TUI or --overwatch for operator monitoring."
+            "WARNING: --tui-layout is deprecated and ignored. "
+            "Use --sanctum for the developer TUI or --overwatch for operator monitoring."
         )
 
     # Add console output if not using a TUI backend
@@ -297,7 +297,7 @@ def main():
     if args.export_karn:
         from esper.karn import KarnCollector
         karn_collector = KarnCollector()
-        hub.add_backend(karn_collector)
+        hub.add_backend(karn_collector)  # type: ignore[arg-type]
 
     # Add WebSocket dashboard if requested
     dashboard_backend = None
@@ -311,10 +311,10 @@ def main():
             # - Queues events from sync training loop
             dashboard_backend = DashboardServer(port=args.dashboard_port)
             dashboard_backend.start()
-            hub.add_backend(dashboard_backend)
+            hub.add_backend(dashboard_backend)  # type: ignore[arg-type]
 
             # Get all network interfaces for dashboard URLs
-            def get_network_interfaces():
+            def get_network_interfaces() -> list[str]:
                 """Get all network interface IPs."""
                 interfaces = ["localhost", "127.0.0.1"]
                 try:
@@ -322,7 +322,7 @@ def main():
                     hostname = socket.gethostname()
                     # Get all IPs for this host
                     for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
-                        ip = info[4][0]
+                        ip = str(info[4][0])
                         if ip not in interfaces and not ip.startswith("127."):
                             interfaces.append(ip)
                     # Also try to get the primary LAN IP
@@ -388,7 +388,7 @@ def main():
             num_envs = DEFAULT_N_ENVS
 
         overwatch_backend = OverwatchBackend(num_envs=num_envs)
-        hub.add_backend(overwatch_backend)
+        hub.add_backend(overwatch_backend)  # type: ignore[arg-type]
 
     # Setup Sanctum backend if requested
     sanctum_backend = None
@@ -421,13 +421,13 @@ def main():
             num_envs = DEFAULT_N_ENVS
 
         sanctum_backend = SanctumBackend(num_envs=num_envs)
-        hub.add_backend(sanctum_backend)
+        hub.add_backend(sanctum_backend)  # type: ignore[arg-type]
 
     # Add Karn research telemetry collector
     # KarnCollector captures events into typed store for research analytics
     from esper.karn import get_collector
     karn_collector = get_collector()
-    hub.add_backend(karn_collector)
+    hub.add_backend(karn_collector)  # type: ignore[arg-type]
 
     # Event to signal when DataLoader workers are spawned (for TUI synchronization)
     # When using TUI backends (Sanctum/Overwatch), main thread waits for this event
@@ -438,7 +438,7 @@ def main():
         dataloader_ready_event = threading.Event()
 
     # Define training function to enable background execution for Overwatch
-    def run_training():
+    def run_training() -> None:
         """Execute the training algorithm."""
         try:
             if args.algorithm == "heuristic":
@@ -498,13 +498,18 @@ def main():
 
                 # Handle A/B testing - set on config for validation
                 if args.ab_test:
+                    from esper.simic.rewards import RewardMode
                     if config.n_envs % 2 != 0:
                         raise ValueError("--ab-test requires even number of envs")
                     half = config.n_envs // 2
                     if args.ab_test == "shaped-vs-simplified":
-                        config.ab_reward_modes = ["shaped"] * half + ["simplified"] * half
+                        config.reward_mode_per_env = (
+                            (RewardMode.SHAPED,) * half + (RewardMode.SIMPLIFIED,) * half
+                        )
                     elif args.ab_test == "shaped-vs-sparse":
-                        config.ab_reward_modes = ["shaped"] * half + ["sparse"] * half
+                        config.reward_mode_per_env = (
+                            (RewardMode.SHAPED,) * half + (RewardMode.SPARSE,) * half
+                        )
                     print(f"[A/B Test] {half} envs SHAPED vs {half} envs {args.ab_test.split('-vs-')[1].upper()}")
 
                 # Handle dual-policy A/B testing
@@ -544,9 +549,9 @@ def main():
                         group_configs=group_configs,
                         devices=devices,
                         n_episodes=config.n_episodes,
-                        max_epochs=config.episode_length,
+                        max_epochs=config.max_epochs,
                         task=effective_task,
-                        lr=config.learning_rate,
+                        lr=config.lr,
                         clip_ratio=config.clip_ratio,
                         entropy_coef=config.entropy_coef,
                         entropy_coef_min=config.entropy_coef_min,
@@ -602,8 +607,8 @@ def main():
                     print("WARNING: DataLoader initialization timed out, starting TUI anyway")
 
             # Run Overwatch TUI in main thread (blocks until user quits)
-            app = OverwatchApp(backend=overwatch_backend)
-            app.run()
+            overwatch_app = OverwatchApp(backend=overwatch_backend)
+            overwatch_app.run()
         elif use_sanctum:
             # Sanctum mode: run training in background thread, Sanctum controls terminal
             import threading
@@ -611,13 +616,13 @@ def main():
             from esper.karn.sanctum import SanctumApp
 
             # Track training errors for debugging
-            training_error = [None]  # Use list to allow mutation from thread
+            training_error: list[str | None] = [None]  # Use list to allow mutation from thread
 
-            def training_wrapper():
+            def training_wrapper() -> None:
                 """Wrap training to capture exceptions."""
                 try:
                     run_training()
-                except Exception as e:
+                except Exception:
                     training_error[0] = traceback.format_exc()
                     # Log to stderr (visible in Textual console)
                     import sys
@@ -637,12 +642,12 @@ def main():
 
             # Run Sanctum TUI in main thread (blocks until user quits)
             # Pass training_thread so TUI can monitor if it's alive
-            app = SanctumApp(
-                backend=sanctum_backend,
+            sanctum_app = SanctumApp(
+                backend=sanctum_backend,  # type: ignore[arg-type]
                 num_envs=num_envs,
                 training_thread=training_thread,
             )
-            app.run()
+            sanctum_app.run()
 
             # After TUI exits, show any training error
             if training_error[0]:

@@ -10,6 +10,8 @@ Displays replay playback status:
 
 from __future__ import annotations
 
+from typing import Any
+
 from textual.widgets import Static
 
 
@@ -61,7 +63,7 @@ class ReplayStatusBar(Static):
     }
     """
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         """Initialize the replay status bar."""
         super().__init__("", **kwargs)
         self._playing = False

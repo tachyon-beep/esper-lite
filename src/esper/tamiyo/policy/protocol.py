@@ -7,13 +7,12 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 import torch
 
 if TYPE_CHECKING:
+    from torch import nn
+
+    from esper.leyline.slot_config import SlotConfig
     from esper.tamiyo.policy.types import ActionResult, EvalResult, ForwardResult
 
 
-# TODO: [DEAD CODE] - PolicyBundle protocol is defined but never used in production.
-# The only implementor (LSTMPolicyBundle) is never instantiated. HeuristicPolicyBundle
-# raises NotImplementedError for most methods. This abstraction layer is test-only.
-# See: architectural risk assessment 2024-12-24.
 @runtime_checkable
 class PolicyBundle(Protocol):
     """Interface for swappable Tamiyo policy implementations.
@@ -207,6 +206,53 @@ class PolicyBundle(Protocol):
         """Data type of policy parameters (for AMP compatibility)."""
         ...
 
+    # === Configuration Access ===
+    @property
+    def slot_config(self) -> "SlotConfig":
+        """Slot configuration for action masking.
+
+        Required by PPOAgent for buffer construction and action mask validation.
+        """
+        ...
+
+    @property
+    def feature_dim(self) -> int:
+        """Input feature dimension.
+
+        This is the observation feature size that the policy expects.
+        Used for buffer construction and network dimension validation.
+        """
+        ...
+
+    @property
+    def hidden_dim(self) -> int:
+        """Hidden state dimension (for recurrent policies).
+
+        For non-recurrent policies, return 0 or raise NotImplementedError.
+        Used by PPOAgent for buffer construction.
+        """
+        ...
+
+    # === Network Access (for training infrastructure) ===
+    @property
+    def network(self) -> "nn.Module":
+        """Access underlying nn.Module for training.
+
+        **Why exposed**: PPOAgent needs direct module access for:
+        - Creating optimizer: optimizer = Adam(policy.network.parameters())
+        - Gradient clipping: clip_grad_norm_(policy.network.parameters())
+        - torch.compile: torch.compile(policy.network)
+
+        **Warning**: This is an intentional abstraction leak. Training
+        infrastructure (Simic) may access the network directly, but
+        higher-level code (Tamiyo decision logic) should not.
+
+        Implementation note: If using torch.compile, the compiled module
+        wraps the original. Use getattr(network, '_orig_mod', network)
+        to access the original module when needed.
+        """
+        ...
+
     # === Optional: Gradient Checkpointing ===
     def enable_gradient_checkpointing(self, enabled: bool = True) -> None:
         """Enable/disable gradient checkpointing for memory efficiency.
@@ -214,6 +260,28 @@ class PolicyBundle(Protocol):
         Optional - policies that don't support this should no-op.
         Primarily useful for Transformer-based policies.
         """
+        ...
+
+    # === torch.compile Integration ===
+    def compile(
+        self,
+        mode: str = "default",
+        dynamic: bool = True,
+    ) -> None:
+        """Compile the underlying network with torch.compile.
+
+        Must be called AFTER device placement (.to(device)).
+        Compilation is idempotent - calling twice is safe.
+
+        Args:
+            mode: Compilation mode ("default", "reduce-overhead", "max-autotune", "off")
+            dynamic: Enable dynamic shapes for varying batch/sequence lengths
+        """
+        ...
+
+    @property
+    def is_compiled(self) -> bool:
+        """True if the network has been compiled with torch.compile."""
         ...
 
 

@@ -7,7 +7,7 @@ Reference: src/esper/karn/tui.py lines 1565-1637 (_render_reward_components meth
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from rich.panel import Panel
 from rich.table import Table
@@ -37,7 +37,7 @@ class RewardComponents(Static):
     Display rules follow Esper-specific reward component semantics.
     """
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         """Initialize RewardComponents widget."""
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None

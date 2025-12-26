@@ -16,7 +16,7 @@ Key invariants tested:
 from __future__ import annotations
 
 import torch
-from hypothesis import given, settings, assume
+from hypothesis import given, settings
 from hypothesis import strategies as st
 from hypothesis.stateful import (
     RuleBasedStateMachine,
@@ -26,8 +26,8 @@ from hypothesis.stateful import (
     precondition,
 )
 
-from esper.leyline import DEFAULT_LSTM_HIDDEN_DIM
-from esper.leyline.factored_actions import (
+from esper.leyline import (
+    DEFAULT_LSTM_HIDDEN_DIM,
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
     NUM_ALPHA_TARGETS,

@@ -8,8 +8,9 @@ New layout focuses on answering:
 
 from __future__ import annotations
 
+import math
 from collections import deque
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from rich.panel import Panel
 from rich.table import Table
@@ -44,7 +45,7 @@ def detect_action_patterns(
     Returns:
         List of pattern names: ["STUCK"], ["THRASH"], ["ALPHA_OSC"]
     """
-    patterns = []
+    patterns: list[str] = []
     if not decisions:
         return patterns
 
@@ -132,6 +133,24 @@ class TamiyoBrain(Static):
         "op": 1.792,  # ln(6) - LifecycleOp has 6 values
     }
 
+    # Conditional heads: only relevant for certain ops, masked to single option otherwise.
+    # When op != relevant_ops, the head is forced to a default value (entropy = 0).
+    # This causes average entropy to be diluted by samples where the head is irrelevant.
+    # Maps head_key -> tuple of (relevant_op_names, default_value_name)
+    CONDITIONAL_HEADS: ClassVar[dict[str, tuple[tuple[str, ...], str]]] = {
+        "style": (("GERMINATE", "SET_ALPHA_TARGET"), "SIGMOID_ADD"),
+        "blueprint": (("GERMINATE",), "NOOP"),
+        "tempo": (("GERMINATE",), "STANDARD"),
+        # alpha_target: SET_ALPHA_TARGET picks blend target, GERMINATE picks initial alpha
+        "alpha_target": (("GERMINATE", "SET_ALPHA_TARGET"), "FULL"),
+        # alpha_speed/curve: SET_ALPHA_TARGET for blending, PRUNE for fade-out speed
+        "alpha_speed": (("SET_ALPHA_TARGET", "PRUNE"), "MEDIUM"),
+        "alpha_curve": (("SET_ALPHA_TARGET", "PRUNE"), "LINEAR"),
+    }
+
+    # Minimum relevance ratio for displaying active entropy (avoid division by tiny numbers)
+    MIN_RELEVANCE_RATIO = 0.01
+
     # All 8 action heads are tracked by PPO (per-head entropy from factored policy)
     TRACKED_HEADS = {
         "slot",
@@ -169,7 +188,7 @@ class TamiyoBrain(Static):
     # Decision card display throttling: ONE card swap per interval, maximum
     CARD_SWAP_INTERVAL = 30.0  # Minimum seconds between card replacements
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
         self._decision_ids: list[str] = []  # IDs of currently displayed decisions
@@ -257,7 +276,7 @@ class TamiyoBrain(Static):
             group = self._snapshot.tamiyo.group_id.lower()
             self.add_class(f"group-{group}")
 
-    def on_click(self, event) -> None:
+    def on_click(self, event: Any) -> None:
         """Handle click to toggle decision pin.
 
         In horizontal layout: decisions are in right 1/3 column
@@ -299,7 +318,7 @@ class TamiyoBrain(Static):
             decision_id = self._decision_ids[decision_index]
             self.post_message(self.DecisionPinToggled(decision_id))
 
-    def render(self):
+    def render(self) -> Text | Table:
         """Render Tamiyo content with responsive layout.
 
         Layout modes:
@@ -352,6 +371,12 @@ class TamiyoBrain(Static):
 
         Preserves original vertical stack behavior for <85 char terminals.
         """
+        if self._snapshot is None:
+            content = Table.grid(expand=True)
+            content.add_column(ratio=1)
+            content.add_row(Text("No data", style="dim"))
+            return content
+
         tamiyo = self._snapshot.tamiyo
 
         content = Table.grid(expand=True)
@@ -389,6 +414,9 @@ class TamiyoBrain(Static):
 
     def _render_learning_vitals(self) -> Panel:
         """Render Learning Vitals section with action bar and gauges."""
+        if self._snapshot is None:
+            return Panel(Text("No data", style="dim"), title="LEARNING VITALS", border_style="dim")
+
         tamiyo = self._snapshot.tamiyo
 
         content = Table.grid(expand=True)
@@ -444,6 +472,9 @@ class TamiyoBrain(Static):
 
     def _render_action_distribution_bar(self) -> Text:
         """Render horizontal stacked bar for action distribution."""
+        if self._snapshot is None:
+            return Text("[no data]", style="dim")
+
         tamiyo = self._snapshot.tamiyo
         total = tamiyo.total_actions
 
@@ -505,6 +536,9 @@ class TamiyoBrain(Static):
 
         Format: Returns: Ep47:+12.3  Ep46:+8.1  Ep45:-2.4  ...
         """
+        if self._snapshot is None:
+            return Text("Returns: (no data)", style="dim italic")
+
         tamiyo = self._snapshot.tamiyo
         history = list(tamiyo.episode_return_history)
 
@@ -543,10 +577,12 @@ class TamiyoBrain(Static):
             └──────────┴──────────┴──────────┴──────────┴──────────┴──────────┘
             Fossilized: 14  Pruned: 6  Rate: 70%  AvgAge: 8.2 epochs
         """
+        if self._snapshot is None:
+            return Text("SLOTS: (no data)", style="dim italic")
+
         snapshot = self._snapshot
         counts = snapshot.slot_stage_counts
         total = snapshot.total_slots
-        active = snapshot.active_slots
 
         if total == 0:
             return Text("SLOTS: (no environments)", style="dim italic")
@@ -649,12 +685,15 @@ class TamiyoBrain(Static):
 
         Per UX review: Icons for accessibility (not just color).
         """
+        if self._snapshot is None:
+            return Text("Recent:  (no data)", style="dim italic")
+
         decisions = self._snapshot.tamiyo.recent_decisions[:24]
         if not decisions:
             return Text("Recent:  (no actions yet)", style="dim italic")
 
         # Get current slot states for pattern detection
-        slot_states = {}
+        slot_states: dict[str, str] = {}
         if decisions:
             slot_states = decisions[0].slot_states
 
@@ -938,7 +977,6 @@ class TamiyoBrain(Static):
             is_hit = diff < self.PREDICTION_EXCELLENT_THRESHOLD
             style = "green" if is_hit else "red"
             icon = "✓" if is_hit else "✗"
-            text = "HIT" if is_hit else "MISS"
             # Show reward
             card.append(f"r:{decision.actual_reward:+.2f}", style=style)
             # Show TD advantage if computed (requires next step's V(s'))
@@ -988,6 +1026,9 @@ class TamiyoBrain(Static):
         Format per UX spec:
         [OK] LEARNING   EV:0.72 Clip:0.18 KL:0.008 Adv:0.12±0.94 GradHP:OK 12/12 batch:47/100
         """
+        if self._snapshot is None:
+            return Text("[?] NO DATA", style="dim")
+
         status, label, style = self._get_overall_status()
         tamiyo = self._snapshot.tamiyo
 
@@ -1235,6 +1276,12 @@ class TamiyoBrain(Static):
         """Render 2x2 gauge grid: EV, Entropy, Clip, KL with trend indicators."""
         from esper.karn.sanctum.schema import detect_trend, trend_to_indicator
 
+        if self._snapshot is None:
+            grid = Table.grid(expand=True)
+            grid.add_column(ratio=1)
+            grid.add_row(Text("No data", style="dim"))
+            return grid
+
         tamiyo = self._snapshot.tamiyo
         batch = self._snapshot.current_batch
 
@@ -1439,6 +1486,9 @@ class TamiyoBrain(Static):
         """Render secondary metrics column with sparklines and trend indicators."""
         from esper.karn.sanctum.schema import detect_trend, trend_to_indicator
 
+        if self._snapshot is None:
+            return Text("No data", style="dim")
+
         tamiyo = self._snapshot.tamiyo
         result = Text()
 
@@ -1507,18 +1557,72 @@ class TamiyoBrain(Static):
         result.append(gn_indicator, style=gn_indicator_style)
         result.append("\n")
 
-        # Layer health
+        # Layer health with per-layer detail
         result.append(" Layers      ", style="dim")
         if tamiyo.dead_layers > 0 or tamiyo.exploding_layers > 0:
             result.append(
                 f"!! {tamiyo.dead_layers} dead, {tamiyo.exploding_layers} exploding",
                 style="red",
             )
+            # Show which layers are unhealthy (if per-layer data available)
+            if tamiyo.layer_gradient_health:
+                result.append("\n")
+                result.append("              ", style="dim")  # Indent to align
+                unhealthy_layers = [
+                    (name, health)
+                    for name, health in tamiyo.layer_gradient_health.items()
+                    if health < 0.5  # Dead (0.0) or exploding (0.1)
+                ]
+                # Show up to 4 layer names, truncated for TUI width
+                for name, health in unhealthy_layers[:4]:
+                    # Shorten layer name (e.g., "lstm.weight_ih_l0" -> "lstm.wih0")
+                    short_name = self._shorten_layer_name(name)
+                    if health == 0.0:
+                        result.append(f"{short_name}", style="red")
+                        result.append("(D) ", style="dim red")
+                    elif health <= 0.1:
+                        result.append(f"{short_name}", style="yellow")
+                        result.append("(E) ", style="dim yellow")
+                    else:
+                        result.append(f"{short_name}", style="yellow")
+                        result.append("(W) ", style="dim yellow")
+                if len(unhealthy_layers) > 4:
+                    result.append(f"+{len(unhealthy_layers) - 4} more", style="dim")
         else:
             healthy = self._TOTAL_LAYERS - tamiyo.dead_layers - tamiyo.exploding_layers
             result.append(f"OK {healthy}/{self._TOTAL_LAYERS} healthy", style="green")
 
         return result
+
+    def _shorten_layer_name(self, name: str) -> str:
+        """Shorten layer name for TUI display.
+
+        Examples:
+            lstm.weight_ih_l0 -> lstm.wih0
+            policy_net.fc1.weight -> pn.fc1.w
+            value_head.bias -> vh.b
+        """
+        # Common abbreviations
+        replacements = [
+            ("weight_ih", "wih"),
+            ("weight_hh", "whh"),
+            ("weight", "w"),
+            ("bias", "b"),
+            ("policy_net", "pn"),
+            ("value_head", "vh"),
+            ("actor_head", "ah"),
+            ("critic_head", "ch"),
+            ("_l0", "0"),
+            ("_l1", "1"),
+            ("layer", "L"),
+        ]
+        short = name
+        for old, new in replacements:
+            short = short.replace(old, new)
+        # Truncate if still too long
+        if len(short) > 12:
+            short = short[:10] + ".."
+        return short
 
     def _get_ratio_status(self, ratio_min: float, ratio_max: float) -> str:
         """Get status for PPO ratio bounds."""
@@ -1552,6 +1656,69 @@ class TamiyoBrain(Static):
     # Format: "abbr[███] " = 4-char abbrev + "[" + 3-char bar + "] " = 10 chars
     HEAD_SEGMENT_WIDTH = 10
 
+    def _compute_head_entropy_context(
+        self, head_key: str, observed_entropy: float
+    ) -> tuple[float, float, float]:
+        """Compute active entropy and relevance for conditional heads.
+
+        For heads that are only relevant for certain ops (e.g., style is only
+        relevant during GERMINATE/SET_ALPHA_TARGET), the average entropy is
+        diluted by samples where the head is masked to a single option.
+
+        This method computes:
+        1. relevance_ratio: fraction of actions where head is relevant
+        2. active_entropy: estimated entropy when head IS relevant
+        3. adjusted_threshold: warning threshold accounting for relevance
+
+        Args:
+            head_key: The head identifier (e.g., "style", "blueprint")
+            observed_entropy: The average entropy reported by PPO
+
+        Returns:
+            (active_entropy, relevance_ratio, adjusted_fill)
+            - active_entropy: Estimated entropy when head is relevant (0-1)
+            - relevance_ratio: Fraction of samples where head is relevant (0-1)
+            - adjusted_fill: Fill level adjusted for conditional relevance
+        """
+        if self._snapshot is None:
+            return observed_entropy, 1.0, observed_entropy
+
+        # Non-conditional heads: no adjustment needed
+        if head_key not in self.CONDITIONAL_HEADS:
+            max_ent = self.HEAD_MAX_ENTROPIES.get(head_key, 1.0)
+            fill = observed_entropy / max_ent if max_ent > 0 else 0
+            return observed_entropy, 1.0, fill
+
+        tamiyo = self._snapshot.tamiyo
+        action_counts = tamiyo.action_counts
+        total_actions = tamiyo.total_actions
+
+        if total_actions == 0:
+            max_ent = self.HEAD_MAX_ENTROPIES.get(head_key, 1.0)
+            fill = observed_entropy / max_ent if max_ent > 0 else 0
+            return observed_entropy, 1.0, fill
+
+        # Calculate relevance ratio from action distribution
+        relevant_ops, _ = self.CONDITIONAL_HEADS[head_key]
+        relevant_count = sum(action_counts.get(op, 0) for op in relevant_ops)
+        relevance_ratio = relevant_count / total_actions
+
+        # Compute active entropy (entropy when head is relevant)
+        # observed_entropy = relevance_ratio * active_entropy + (1-relevance) * 0
+        # Therefore: active_entropy = observed_entropy / relevance_ratio
+        if relevance_ratio < self.MIN_RELEVANCE_RATIO:
+            # Not enough relevant samples to estimate active entropy
+            active_entropy = 0.0
+        else:
+            active_entropy = min(observed_entropy / relevance_ratio, 1.0)
+
+        # Adjusted fill: use active_entropy for threshold comparison
+        # This prevents false alarms when a head is rarely used
+        max_ent = self.HEAD_MAX_ENTROPIES.get(head_key, 1.0)
+        adjusted_fill = active_entropy  # Already 0-1 normalized
+
+        return active_entropy, relevance_ratio, adjusted_fill
+
     def _render_head_heatmap(self) -> Text:
         """Render per-head entropy heatmap with 8 action heads.
 
@@ -1565,6 +1732,9 @@ class TamiyoBrain(Static):
         Per UX review: expanded abbreviations for readability.
         Per Code review: explicit width accounting prevents drift.
         """
+        if self._snapshot is None:
+            return Text("Heads: (no data)", style="dim")
+
         tamiyo = self._snapshot.tamiyo
 
         # Head config: (abbrev, field_name, head_key)
@@ -1587,10 +1757,15 @@ class TamiyoBrain(Static):
         result = Text()
         result.append(" Heads: ", style="dim")
 
+        # Pre-compute entropy context for all heads (for both bar and value rows)
+        head_contexts: dict[str, tuple[float, float, float]] = {}
+        for _, field, head_key in heads:
+            value = getattr(tamiyo, field, 0.0)
+            head_contexts[head_key] = self._compute_head_entropy_context(head_key, value)
+
         # First line: bars (9-char segments)
         for abbrev, field, head_key in heads:
             value = getattr(tamiyo, field, 0.0)
-            max_ent = self.HEAD_MAX_ENTROPIES[head_key]
             is_tracked = head_key in self.TRACKED_HEADS
 
             # Check for missing data (value=0.0 for untracked heads)
@@ -1602,25 +1777,31 @@ class TamiyoBrain(Static):
                 result.append("] ")
                 continue
 
-            # Normalize to 0-1
-            fill = value / max_ent if max_ent > 0 else 0
-            fill = max(0, min(1, fill))
+            # Use adjusted_fill for threshold decisions on conditional heads
+            # This uses active entropy (when head is relevant) for color decisions
+            _, _, adjusted_fill = head_contexts[head_key]
+            adjusted_fill = max(0, min(1, adjusted_fill))
 
             # 3-char bar (narrower for 80-char terminal compatibility)
             bar_width = 3
-            filled = int(fill * bar_width)
+            filled = int(adjusted_fill * bar_width)
             empty = bar_width - filled
 
-            # Color based on fill level (high entropy = exploring, low = converged)
-            if fill > 0.5:
+            # Color based on adjusted fill (accounts for conditional relevance)
+            # High entropy = exploring (green), low = converged/collapsed (red)
+            if adjusted_fill > 0.5:
                 color = "green"
-            elif fill > 0.25:
+            elif adjusted_fill > 0.25:
                 color = "yellow"
             else:
                 color = "red"
 
+            # Conditional head indicator: append ~ to abbrev
+            is_conditional = head_key in self.CONDITIONAL_HEADS
+            label = f"{abbrev}~" if is_conditional else f"{abbrev} " if len(abbrev) < 4 else abbrev
+
             # 9-char segment: "abbr[███] " = 4 + 1 + 3 + 1 + space = 9
-            result.append(f"{abbrev}[")
+            result.append(f"{label[:4]}[")
             result.append("█" * filled, style=color)
             result.append("░" * empty, style="dim")
             result.append("] ")
@@ -1628,29 +1809,182 @@ class TamiyoBrain(Static):
         result.append("\n        ")
 
         # Second line: values (10-char segments to match bars)
+        # Non-op heads shifted right by 3 chars for alignment under bars
         for abbrev, field, head_key in heads:
             value = getattr(tamiyo, field, 0.0)
             is_tracked = head_key in self.TRACKED_HEADS
+            is_last_head = head_key == "op"
 
             if value == 0.0 and not is_tracked:
-                # 10-char segment: "   n/a    " (centered)
-                result.append("   n/a    ", style="dim italic")
+                # 10-char segment: n/a with appropriate alignment
+                if is_last_head:
+                    result.append("   n/a    ", style="dim italic")
+                else:
+                    result.append("     n/a  ", style="dim italic")
                 continue
 
-            max_ent = self.HEAD_MAX_ENTROPIES[head_key]
-            fill = value / max_ent if max_ent > 0 else 0
+            # Use adjusted_fill for threshold decisions
+            active_entropy, relevance_ratio, adjusted_fill = head_contexts[head_key]
 
             # 10-char segment with indicators: critical (!), warning (*), normal
-            # Format: "  X.XX!   " = 2 spaces + 4.2f (4 chars) + indicator + 3 spaces = 10
-            if fill < 0.25:
-                # Critical: entropy collapsed (< 25% of max)
-                result.append(f"  {value:4.2f}!   ", style="red")
-            elif fill < 0.5:
-                # Warning: entropy converging (< 50% of max)
-                result.append(f"  {value:4.2f}*   ", style="yellow")
+            # Op head: "  X.XX!   " (2 leading, 3 trailing)
+            # Other heads: "    X.XX! " (4 leading, 1 trailing) - shifted right by 2
+            #
+            # Use adjusted_fill for threshold checks - this accounts for conditional
+            # heads where the observed entropy is diluted by samples where the head
+            # is irrelevant (masked to single option). The adjusted_fill uses the
+            # "active entropy" (entropy when head IS relevant) for threshold decisions.
+            is_conditional = head_key in self.CONDITIONAL_HEADS
+
+            if is_last_head:
+                if adjusted_fill < 0.25:
+                    result.append(f"  {value:4.2f}!   ", style="red")
+                elif adjusted_fill < 0.5:
+                    result.append(f"  {value:4.2f}*   ", style="yellow")
+                else:
+                    result.append(f"  {value:4.2f}    ", style="dim")
             else:
-                # Normal: healthy exploration (>= 50% of max)
-                result.append(f"  {value:4.2f}    ", style="dim")
+                # For conditional heads, show "~" suffix instead of warning indicators
+                # when the head is rarely used (low relevance) but active entropy is OK
+                if adjusted_fill < 0.25:
+                    result.append(f"    {value:4.2f}! ", style="red")
+                elif adjusted_fill < 0.5:
+                    result.append(f"    {value:4.2f}* ", style="yellow")
+                elif is_conditional and relevance_ratio < 0.3:
+                    # Conditional head with low usage but healthy active entropy
+                    # Show ~ to indicate "conditional, rarely used"
+                    result.append(f"    {value:4.2f}~ ", style="dim")
+                else:
+                    result.append(f"    {value:4.2f}  ", style="dim")
+
+        return result
+
+    def _render_head_gradient_heatmap(self) -> Text:
+        """Render per-head gradient norm heatmap with 8 action heads.
+
+        Gradient norms indicate training health for each action head:
+        - Healthy: 0.1 - 2.0 (green) - gradients flowing well
+        - Warning: 0.01-0.1 or 2.0-5.0 (yellow) - weak or strong gradients
+        - Critical: <0.01 or >5.0 (red) - vanishing or exploding gradients
+
+        Layout mirrors the entropy heatmap for visual consistency.
+        """
+        if self._snapshot is None:
+            return Text(" Grads: (no data)", style="dim")
+
+        tamiyo = self._snapshot.tamiyo
+
+        # Head config: (abbrev, field_name)
+        # Same abbreviations as entropy heatmap for consistency
+        heads = [
+            ("slot", "head_slot_grad_norm"),
+            ("bpnt", "head_blueprint_grad_norm"),
+            ("styl", "head_style_grad_norm"),
+            ("temp", "head_tempo_grad_norm"),
+            ("atgt", "head_alpha_target_grad_norm"),
+            ("aspd", "head_alpha_speed_grad_norm"),
+            ("acrv", "head_alpha_curve_grad_norm"),
+            ("op", "head_op_grad_norm"),
+        ]
+
+        result = Text()
+        result.append(" Grads: ", style="dim")
+
+        # First line: bars (9-char segments)
+        for abbrev, field in heads:
+            value = getattr(tamiyo, field, 0.0)
+
+            # No data case
+            if value == 0.0:
+                result.append(f"{abbrev}[", style="dim")
+                result.append("---", style="dim italic")
+                result.append("] ")
+                continue
+
+            # Normalize to 0-1 for bar display
+            # Healthy range is 0.1-2.0, so we map 1.0 (ideal) to fill=0.5
+            # and use log scale to handle the wide range
+            if value < 0.01:
+                # Vanishing: very low fill
+                fill = 0.1
+                color = "red"
+            elif value < 0.1:
+                # Weak: low fill, warning
+                fill = 0.2
+                color = "yellow"
+            elif value <= 2.0:
+                # Healthy range: map 0.1-2.0 to fill 0.3-1.0
+                # Use log scale: log10(0.1)=-1, log10(2.0)≈0.3
+                log_val = math.log10(value)
+                fill = 0.5 + (log_val + 1) * 0.35  # Maps -1 to 0.15, 0.3 to 0.85
+                fill = max(0.3, min(1.0, fill))
+                color = "green"
+            elif value <= 5.0:
+                # Strong but not exploding: warning
+                fill = 0.8
+                color = "yellow"
+            else:
+                # Exploding: high fill, critical
+                fill = 1.0
+                color = "red"
+
+            # 3-char bar
+            bar_width = 3
+            filled = int(fill * bar_width)
+            empty = bar_width - filled
+
+            # Pad abbrev to 4 chars
+            label = f"{abbrev} " if len(abbrev) < 4 else abbrev
+
+            # 9-char segment: "abbr[███] "
+            result.append(f"{label[:4]}[")
+            result.append("█" * filled, style=color)
+            result.append("░" * empty, style="dim")
+            result.append("] ")
+
+        result.append("\n        ")
+
+        # Second line: values (aligned under bars)
+        for i, (abbrev, field) in enumerate(heads):
+            value = getattr(tamiyo, field, 0.0)
+            is_last_head = i == len(heads) - 1
+
+            if value == 0.0:
+                # No data
+                if is_last_head:
+                    result.append("   n/a    ", style="dim italic")
+                else:
+                    result.append("     n/a  ", style="dim italic")
+                continue
+
+            # Determine status indicator
+            if value < 0.01:
+                indicator = "↓"  # Vanishing
+                style = "red"
+            elif value < 0.1:
+                indicator = "*"  # Weak warning
+                style = "yellow"
+            elif value <= 2.0:
+                indicator = " "  # Healthy
+                style = "dim"
+            elif value <= 5.0:
+                indicator = "*"  # Strong warning
+                style = "yellow"
+            else:
+                indicator = "!"  # Exploding
+                style = "red"
+
+            # Format value - use scientific notation for very small/large
+            if value < 0.01 or value >= 100:
+                val_str = f"{value:.0e}"  # e.g., "1e-03" or "2e+02"
+                val_str = val_str[:5]  # Truncate to fit
+            else:
+                val_str = f"{value:4.2f}"
+
+            if is_last_head:
+                result.append(f"  {val_str}{indicator}   ", style=style)
+            else:
+                result.append(f"    {val_str}{indicator} ", style=style)
 
         return result
 
@@ -1671,6 +2005,12 @@ class TamiyoBrain(Static):
             Rich Text with stacked compact decision cards.
         """
         import time
+
+        if self._snapshot is None:
+            result = Text()
+            result.append("DECISIONS\n", style="dim bold")
+            result.append("No data\n", style="dim italic")
+            return result
 
         tamiyo = self._snapshot.tamiyo
         incoming = tamiyo.recent_decisions
@@ -1752,6 +2092,9 @@ class TamiyoBrain(Static):
         """
         from esper.karn.sanctum.schema import detect_trend, trend_to_indicator
 
+        if self._snapshot is None:
+            return Text("No data", style="dim")
+
         tamiyo = self._snapshot.tamiyo
         result = Text()
 
@@ -1814,6 +2157,12 @@ class TamiyoBrain(Static):
         Returns:
             Rich Table with vertically stacked vitals components.
         """
+        if self._snapshot is None:
+            content = Table.grid(expand=True)
+            content.add_column(ratio=1)
+            content.add_row(Text("No data", style="dim"))
+            return content
+
         tamiyo = self._snapshot.tamiyo
 
         content = Table.grid(expand=True)
@@ -1843,11 +2192,15 @@ class TamiyoBrain(Static):
         # Row 3: Separator
         content.add_row(self._render_separator())
 
-        # Row 4: Head heatmap
+        # Row 4: Head entropy heatmap
         head_heatmap = self._render_head_heatmap()
         content.add_row(head_heatmap)
 
-        # Row 5: Separator
+        # Row 5: Head gradient heatmap (training health per head)
+        grad_heatmap = self._render_head_gradient_heatmap()
+        content.add_row(grad_heatmap)
+
+        # Row 6: Separator
         content.add_row(self._render_separator())
 
         # Row 6: Action distribution bar

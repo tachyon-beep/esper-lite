@@ -11,18 +11,19 @@ Tests invariants for action masks that must hold for ALL valid inputs:
 from hypothesis import given, assume, settings
 from hypothesis import strategies as st
 
-from esper.leyline import SeedStage, MIN_PRUNE_AGE
-from esper.leyline.slot_config import SlotConfig
-from esper.leyline.factored_actions import (
+from esper.leyline import (
     LifecycleOp,
+    MIN_PRUNE_AGE,
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
     NUM_ALPHA_TARGETS,
-    NUM_OPS,
     NUM_BLUEPRINTS,
+    NUM_OPS,
     NUM_STYLES,
     NUM_TEMPO,
+    SeedStage,
 )
+from esper.leyline.slot_config import SlotConfig
 from esper.tamiyo.policy.action_masks import (
     compute_action_masks,
     compute_batch_masks,
@@ -561,7 +562,7 @@ class TestBlueprintMask:
     @given(config=slot_configs())
     def test_noop_blueprint_always_disabled(self, config: SlotConfig):
         """Property: BlueprintAction.NOOP is always masked out."""
-        from esper.leyline.factored_actions import BlueprintAction
+        from esper.leyline import BlueprintAction
 
         slot_states = {slot_id: None for slot_id in config.slot_ids}
         enabled = list(config.slot_ids)
@@ -579,7 +580,7 @@ class TestBlueprintMask:
     @given(config=slot_configs())
     def test_non_noop_blueprints_enabled(self, config: SlotConfig):
         """Property: Topology-compatible non-NOOP blueprints are enabled."""
-        from esper.leyline.factored_actions import BlueprintAction, CNN_BLUEPRINTS
+        from esper.leyline import BlueprintAction, CNN_BLUEPRINTS
 
         slot_states = {slot_id: None for slot_id in config.slot_ids}
         enabled = list(config.slot_ids)
@@ -595,7 +596,7 @@ class TestBlueprintMask:
             if bp == BlueprintAction.NOOP:
                 # NOOP always disabled
                 assert masks["blueprint"][bp].item() is False, (
-                    f"NOOP blueprint should always be disabled"
+                    "NOOP blueprint should always be disabled"
                 )
             elif bp in CNN_BLUEPRINTS:
                 # CNN-compatible blueprints should be enabled
@@ -615,7 +616,6 @@ class TestTempoMaskDimensions:
     @given(config=slot_configs(max_slots=10))
     def test_tempo_mask_dimension_single_env(self, config: SlotConfig):
         """Property: tempo mask has NUM_TEMPO dimensions for single env."""
-        from esper.leyline.factored_actions import NUM_TEMPO
 
         slot_states = {slot_id: None for slot_id in config.slot_ids}
         enabled = list(config.slot_ids)
@@ -637,7 +637,6 @@ class TestTempoMaskDimensions:
     @settings(max_examples=50)
     def test_tempo_mask_dimension_batch(self, config: SlotConfig, n_envs: int):
         """Property: batched tempo mask has (n_envs, NUM_TEMPO) shape."""
-        from esper.leyline.factored_actions import NUM_TEMPO
 
         batch_states = [{slot_id: None for slot_id in config.slot_ids} for _ in range(n_envs)]
         enabled = list(config.slot_ids)
@@ -664,7 +663,7 @@ class TestTempoMaskInvariants:
         are always available. This is by design: tempo is a pure policy choice,
         not constrained by state.
         """
-        from esper.leyline.factored_actions import TempoAction
+        from esper.leyline import TempoAction
 
         slot_states = {slot_id: None for slot_id in config.slot_ids}
         enabled = list(config.slot_ids)
@@ -687,7 +686,6 @@ class TestTempoMaskInvariants:
     )
     def test_tempo_mask_independent_of_slot_state(self, config: SlotConfig, data):
         """Property: Tempo mask is independent of which slots are occupied."""
-        from esper.leyline.factored_actions import TempoAction
 
         # Generate random slot states
         slot_states = data.draw(slot_states_for_config(config))

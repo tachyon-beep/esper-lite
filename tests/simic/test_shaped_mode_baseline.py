@@ -7,8 +7,7 @@ to ensure the existing SHAPED mode behavior is preserved.
 Created as risk reduction before sparse-reward-experiment implementation.
 """
 
-from esper.leyline import SeedStage
-from esper.leyline.factored_actions import LifecycleOp
+from esper.leyline import LifecycleOp, SeedStage
 from esper.simic.rewards import (
     compute_contribution_reward,
     SeedInfo,

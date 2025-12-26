@@ -1,0 +1,13 @@
+{
+    "n_episodes": 100,
+    "n_envs": 8,
+    "max_epochs": 25,
+    "reward_mode": "sparse",
+    "reward_family": "contribution",
+    "sparse_reward_scale": 2.5,
+    "param_budget": 500000,
+    "param_penalty_weight": 0.1,
+    "entropy_coef": 0.1,
+    "lr": 1e-4,
+    "slots": ["r0c1"]
+}

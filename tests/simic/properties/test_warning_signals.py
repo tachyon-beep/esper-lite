@@ -9,8 +9,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from esper.leyline import SeedStage
-from esper.leyline.factored_actions import LifecycleOp
+from esper.leyline import LifecycleOp, SeedStage
 from esper.simic.rewards import (
     compute_contribution_reward,
     SeedInfo,

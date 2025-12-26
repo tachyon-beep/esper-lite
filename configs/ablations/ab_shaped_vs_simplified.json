@@ -1,0 +1,13 @@
+{
+    "n_episodes": 100,
+    "n_envs": 8,
+    "max_epochs": 25,
+    "reward_mode": "shaped",
+    "reward_family": "contribution",
+    "reward_mode_per_env": ["shaped", "shaped", "shaped", "shaped", "simplified", "simplified", "simplified", "simplified"],
+    "param_budget": 500000,
+    "param_penalty_weight": 0.1,
+    "entropy_coef": 0.1,
+    "lr": 3e-4,
+    "slots": ["r0c1"]
+}

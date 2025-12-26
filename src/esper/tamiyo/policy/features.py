@@ -16,19 +16,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 import os
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 import torch
 
 from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
 from esper.leyline.slot_config import SlotConfig
-
-# HOT PATH: ONLY leyline imports allowed!
-
-# Debug flag for paranoia stage validation (set ESPER_DEBUG_STAGE=1 to enable)
-_DEBUG_STAGE_VALIDATION = os.environ.get("ESPER_DEBUG_STAGE", "").lower() in ("1", "true", "yes")
-
-# Import stage schema for validation and one-hot encoding
+# Stage schema for validation and one-hot encoding
 # NOTE: Imported at module level since these are fast O(1) lookups used in hot path
 from esper.leyline.stage_schema import (
     VALID_STAGE_VALUES as _VALID_STAGE_VALUES,
@@ -36,6 +30,11 @@ from esper.leyline.stage_schema import (
     stage_to_one_hot as _stage_to_one_hot,
     STAGE_TO_INDEX as _STAGE_TO_INDEX,
 )
+
+# HOT PATH: ONLY leyline imports allowed!
+
+# Debug flag for paranoia stage validation (set ESPER_DEBUG_STAGE=1 to enable)
+_DEBUG_STAGE_VALIDATION = os.environ.get("ESPER_DEBUG_STAGE", "").lower() in ("1", "true", "yes")
 
 if TYPE_CHECKING:
     # Type hints only - not imported at runtime
@@ -58,7 +57,7 @@ __all__ = [
 # Safe Value Conversion
 # =============================================================================
 
-def safe(v, default: float = 0.0, max_val: float = 100.0) -> float:
+def safe(v: float | int | None, default: float = 0.0, max_val: float = 100.0) -> float:
     """Safely convert value to float, handling None/inf/nan.
 
     Args:
@@ -142,7 +141,7 @@ _NUM_BLUEPRINT_TYPES = 13
 
 
 def obs_to_multislot_features(
-    obs: dict,
+    obs: dict[str, Any],
     total_seeds: int = 0,
     max_seeds: int = 1,
     slot_config: SlotConfig | None = None,
@@ -352,7 +351,7 @@ def obs_to_multislot_features(
 
 
 def batch_obs_to_features(
-    batch_signals: list,
+    batch_signals: list[Any],
     batch_slot_reports: list[dict[str, "SeedStateReport"]],
     use_telemetry: bool,
     max_epochs: int,
@@ -362,12 +361,23 @@ def batch_obs_to_features(
     slot_config: SlotConfig,
     device: torch.device,
 ) -> torch.Tensor:
-    """Consolidated tensor-driven feature extraction for all environments.
-    
-    Replaces dict-based loops with vectorized torch operations.
+    """Batch feature extraction for all environments.
+
+    Base features (indices 0-22) use fully vectorized tensor construction.
+    Per-slot features (indices 23+) use nested loops due to conditional logic
+    (slot active/inactive, varying stage one-hot, optional telemetry).
+
+    PERF NOTE: The per-slot nested loops are O(num_slots × num_envs) with
+    individual tensor element writes. This is slower than full vectorization
+    but runs once per rollout step (not per training batch), limiting impact.
+
+    TODO: [FUTURE OPTIMIZATION] - Vectorize per-slot extraction by:
+    1. Pre-extracting all slot data into contiguous arrays
+    2. Using advanced indexing for stage one-hot encoding
+    3. Batch telemetry extraction with scatter operations
+    Would provide ~2-4× speedup for this function specifically.
     """
     n_envs = len(batch_signals)
-    num_slots = slot_config.num_slots
     state_dim = get_feature_size(slot_config)
     
     # Pre-allocate feature tensor
@@ -395,17 +405,18 @@ def batch_obs_to_features(
     features[:, 9] = torch.tensor([s.metrics.best_val_accuracy for s in batch_signals], device=device)
     features[:, 10] = torch.tensor([s.metrics.best_val_loss for s in batch_signals], device=device).clamp(-10, 10)
     
-    # [11-15] Loss history (5 values)
-    for i, s in enumerate(batch_signals):
-        hist = list(s.loss_history[-5:])
-        while len(hist) < 5: hist.insert(0, 0.0)
-        features[i, 11:16] = torch.tensor(hist, device=device).clamp(-10, 10)
-        
-    # [16-20] Accuracy history (5 values)
-    for i, s in enumerate(batch_signals):
-        hist = list(s.accuracy_history[-5:])
-        while len(hist) < 5: hist.insert(0, 0.0)
-        features[i, 16:21] = torch.tensor(hist, device=device)
+    # [11-15] Loss history (5 values) - VECTORIZED: single tensor creation
+    def _pad_history(hist: list[float], length: int = 5) -> list[float]:
+        """Left-pad history to fixed length with zeros."""
+        hist = list(hist[-length:])
+        return [0.0] * (length - len(hist)) + hist
+
+    loss_histories = [_pad_history(s.loss_history) for s in batch_signals]
+    features[:, 11:16] = torch.tensor(loss_histories, device=device, dtype=torch.float32).clamp(-10, 10)
+
+    # [16-20] Accuracy history (5 values) - VECTORIZED: single tensor creation
+    acc_histories = [_pad_history(s.accuracy_history) for s in batch_signals]
+    features[:, 16:21] = torch.tensor(acc_histories, device=device, dtype=torch.float32)
         
     # [21] Total params
     features[:, 21] = torch.tensor(total_params, device=device, dtype=torch.float32)

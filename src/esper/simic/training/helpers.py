@@ -8,29 +8,26 @@ from __future__ import annotations
 import functools
 import logging
 import random
-from typing import Callable, Iterator, Protocol, TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Protocol, cast
 
 import torch
 import torch.nn as nn
 
-logger = logging.getLogger(__name__)
-
-
-class _HasSeedParameters(Protocol):
-    """Protocol for models that have seed parameters (e.g., HostModel)."""
-
-    def get_seed_parameters(self, slot: str | None = None) -> Iterator[torch.nn.Parameter]:
-        """Yield seed parameters for gradient collection."""
-        ...
-
-from esper.leyline.factored_actions import FactoredAction, LifecycleOp
 from esper.leyline import (
+    AnalyticsSnapshotPayload,
+    EpochCompletedPayload,
+    FactoredAction,
+    LifecycleOp,
     TelemetryEvent,
     TelemetryEventType,
     TrainingStartedPayload,
-    EpochCompletedPayload,
-    AnalyticsSnapshotPayload,
 )
+
+if TYPE_CHECKING:
+    from torch.utils.data import DataLoader
+    from esper.runtime import TaskSpec
+    from esper.simic.contracts import SlottedHostProtocol
+    from esper.tamiyo.heuristic import HeuristicTamiyo
 # NOTE: get_task_spec imported lazily inside functions to avoid circular import:
 #   runtime -> simic.rewards -> simic -> simic.training -> helpers -> runtime
 from esper.simic.rewards import compute_contribution_reward, ContributionRewardConfig, SeedInfo
@@ -44,10 +41,20 @@ from esper.leyline.slot_id import validate_slot_ids
 from esper.nissa import get_hub
 from esper.utils.loss import compute_task_loss_with_metrics
 
+logger = logging.getLogger(__name__)
+
+
+class _HasSeedParameters(Protocol):
+    """Protocol for models that have seed parameters (e.g., HostModel)."""
+
+    def get_seed_parameters(self, slot: str | None = None) -> Iterator[torch.nn.Parameter]:
+        """Yield seed parameters for gradient collection."""
+        ...
+
 
 def compute_rent_and_shock_inputs(
     *,
-    model: object,
+    model: SlottedHostProtocol,
     slot_ids: list[str],
     host_params: int,
     base_slot_rent_ratio: float,
@@ -137,7 +144,10 @@ def _train_step_impl(
 
 
 @functools.cache
-def _get_compiled_train_step(use_compile: bool = True) -> Callable:
+def _get_compiled_train_step(use_compile: bool = True) -> Callable[
+    [nn.Module, torch.Tensor, torch.Tensor, nn.Module],
+    tuple[torch.Tensor, torch.Tensor]
+]:
     """Get train step function, optionally compiled (thread-safe via functools.cache).
 
     Uses functools.cache for thread-safe lazy initialization. The cache
@@ -202,14 +212,14 @@ def compiled_train_step(
 
 def _train_one_epoch(
     model: nn.Module,
-    trainloader: "torch.utils.data.DataLoader",
+    trainloader: "DataLoader[tuple[torch.Tensor, torch.Tensor]]",
     criterion: nn.Module,
     host_optimizer: torch.optim.Optimizer,
     seed_optimizer: torch.optim.Optimizer | None,
     device: str,
     task_type: str,
     collect_gradients: bool = False,
-) -> tuple[float, float, int, dict | None]:
+) -> tuple[float, float, int, dict[str, Any] | None]:
     """Unified training loop for all seed stages.
 
     This function extracts the repeated inline loop pattern. Callers use
@@ -261,9 +271,10 @@ def _train_one_epoch(
             correct_batch = predicted.eq(targets).sum()
             batch_total = targets.size(0)
         else:  # LM task
-            correct_batch = torch.tensor(0, device=outputs.device)
+            # Use zeros with dtype=long to match classification branch's .sum() output
+            correct_batch = torch.zeros((), device=outputs.device, dtype=torch.long)
             batch_total = targets.numel()
-        loss.backward()
+        loss.backward()  # type: ignore[no-untyped-call]
 
         # Collect gradient stats as tensors (async-safe, no .item() sync)
         # Overwrites each batch; final value materialized after loop
@@ -286,22 +297,23 @@ def _train_one_epoch(
     epoch_correct = running_correct.item()
 
     # Now safe to materialize gradient tensors (after implicit sync above)
+    materialized_grad_stats: dict[str, Any] | None = None
     if grad_stats is not None and not grad_stats.get('_empty', False):
-        grad_stats = materialize_grad_stats(grad_stats)
+        materialized_grad_stats = materialize_grad_stats(grad_stats)
 
-    return epoch_loss, epoch_correct, total, grad_stats
+    return epoch_loss, epoch_correct, total, materialized_grad_stats
 
 
 # =============================================================================
 # Heuristic Training
 # =============================================================================
 
-def _convert_flat_to_factored(action, topology: str = "cnn") -> FactoredAction:
+def _convert_flat_to_factored(action: Any, topology: str = "cnn") -> FactoredAction:
     """Convert flat action enum to FactoredAction for heuristic path.
 
     Maps flat action names to factored action components.
     """
-    from esper.leyline.factored_actions import AlphaTargetAction, BlueprintAction
+    from esper.leyline import AlphaTargetAction, BlueprintAction
 
     action_name = action.name
 
@@ -316,78 +328,73 @@ def _convert_flat_to_factored(action, topology: str = "cnn") -> FactoredAction:
         return FactoredAction.from_indices(
             slot_idx=0,  # Default to first slot
             blueprint_idx=blueprint.value,
-            blend_idx=0,  # Default blend
+            style_idx=0,  # Default style
             tempo_idx=0,
             alpha_target_idx=AlphaTargetAction.FULL.value,
             alpha_speed_idx=0,
             alpha_curve_idx=0,
-            alpha_algorithm_idx=0,
             op_idx=LifecycleOp.GERMINATE,
         )
     elif action_name == "FOSSILIZE":
         return FactoredAction.from_indices(
             slot_idx=0,
             blueprint_idx=0,
-            blend_idx=0,
+            style_idx=0,
             tempo_idx=0,
             alpha_target_idx=AlphaTargetAction.FULL.value,
             alpha_speed_idx=0,
             alpha_curve_idx=0,
-            alpha_algorithm_idx=0,
             op_idx=LifecycleOp.FOSSILIZE,
         )
     elif action_name == "PRUNE":
         return FactoredAction.from_indices(
             slot_idx=0,
             blueprint_idx=0,
-            blend_idx=0,
+            style_idx=0,
             tempo_idx=0,
             alpha_target_idx=AlphaTargetAction.FULL.value,
             alpha_speed_idx=0,
             alpha_curve_idx=0,
-            alpha_algorithm_idx=0,
             op_idx=LifecycleOp.PRUNE,
         )
     elif action_name == "ADVANCE":
         return FactoredAction.from_indices(
             slot_idx=0,
             blueprint_idx=0,
-            blend_idx=0,
+            style_idx=0,
             tempo_idx=0,
             alpha_target_idx=AlphaTargetAction.FULL.value,
             alpha_speed_idx=0,
             alpha_curve_idx=0,
-            alpha_algorithm_idx=0,
             op_idx=LifecycleOp.ADVANCE,
         )
     else:  # WAIT or unknown
         return FactoredAction.from_indices(
             slot_idx=0,
             blueprint_idx=0,
-            blend_idx=0,
+            style_idx=0,
             tempo_idx=0,
             alpha_target_idx=AlphaTargetAction.FULL.value,
             alpha_speed_idx=0,
             alpha_curve_idx=0,
-            alpha_algorithm_idx=0,
             op_idx=LifecycleOp.WAIT,
         )
 
 
 def run_heuristic_episode(
-    policy,
-    trainloader,
-    testloader,
+    policy: "HeuristicTamiyo",
+    trainloader: "DataLoader[tuple[torch.Tensor, torch.Tensor]]",
+    testloader: "DataLoader[tuple[torch.Tensor, torch.Tensor]]",
     max_epochs: int = 75,
     max_batches: int | None = None,
     base_seed: int = 42,
     device: str = "cuda:0",
-    task_spec=None,
+    task_spec: "TaskSpec | None" = None,
     slots: list[str] | None = None,
     telemetry_config: TelemetryConfig | None = None,
     telemetry_lifecycle_only: bool = False,
     gradient_telemetry_stride: int = 10,
-) -> tuple[float, dict[str, int], list[float]]:
+) -> tuple[float, dict[str, int], list[Any]]:
     """Run a single training episode with heuristic policy.
 
     Args:
@@ -421,7 +428,7 @@ def run_heuristic_episode(
     random.seed(base_seed)
 
     episode_id = f"heur_{base_seed}"
-    model = create_model(task=task_spec, device=device, slots=slots)
+    model = cast(SlottedHostProtocol, create_model(task=task_spec, device=device, slots=slots))
 
     if len(slots) != len(set(slots)):
         raise ValueError(f"slots contains duplicates: {slots}")
@@ -432,9 +439,10 @@ def run_heuristic_episode(
 
     ops_telemetry_enabled = telemetry_config is None or telemetry_config.should_collect("ops_normal")
 
-    def telemetry_callback(event):
-        event.data.setdefault("env_id", 0)
-        event.data.setdefault("device", device)
+    def telemetry_callback(event: TelemetryEvent) -> None:
+        # Note: Slot telemetry events already have properly typed payloads,
+        # we just emit them as-is. The env_id/device are set when creating
+        # EPOCH_COMPLETED and TRAINING_STARTED events.
         hub.emit(event)
 
     for slot_id in enabled_slots:
@@ -487,6 +495,12 @@ def run_heuristic_episode(
     action_counts = {op.name: 0 for op in LifecycleOp}
     episode_rewards = []
 
+    # Pre-allocate accumulators ONCE before epoch loop (avoid O(max_epochs) allocations)
+    running_loss = torch.zeros(1, device=device, dtype=torch.float32)
+    running_correct = torch.zeros(1, device=device, dtype=torch.long)
+    val_loss_accum = torch.zeros(1, device=device, dtype=torch.float32)
+    val_correct_accum = torch.zeros(1, device=device, dtype=torch.long)
+
     for epoch in range(1, max_epochs + 1):
         for slot_id in enabled_slots:
             slot = model.seed_slots[slot_id]
@@ -494,8 +508,8 @@ def run_heuristic_episode(
             slot.telemetry_global_epoch = epoch
         # Training phase - use tensor accumulation for deferred sync
         model.train()
-        running_loss = torch.zeros(1, device=device)
-        running_correct = torch.zeros(1, device=device, dtype=torch.long)
+        running_loss.zero_()
+        running_correct.zero_()
         total = 0
         batch_count = 0
 
@@ -512,7 +526,7 @@ def run_heuristic_episode(
 
             outputs = model(inputs)
             loss, correct_batch, batch_total = compute_task_loss_with_metrics(outputs, targets, criterion, task_type)
-            loss.backward()
+            loss.backward()  # type: ignore[no-untyped-call]
 
             host_optimizer.step()
             if seed_optimizer:
@@ -529,8 +543,8 @@ def run_heuristic_episode(
 
         # Validation - use tensor accumulation for deferred sync
         model.eval()
-        val_loss_accum = torch.zeros(1, device=device)
-        val_correct_accum = torch.zeros(1, device=device, dtype=torch.long)
+        val_loss_accum.zero_()
+        val_correct_accum.zero_()
         total = 0
         batch_count = 0
 
@@ -554,7 +568,7 @@ def run_heuristic_episode(
 
         # Gather active seeds across ALL enabled slots (multi-slot support).
         # Assert seed_id uniqueness - duplicate IDs would make target resolution ambiguous.
-        active_seeds = []
+        active_seeds: list[Any] = []  # List of SeedState (protocol doesn't match concrete type)
         seed_ids: set[str] = set()
         for slot_id in enabled_slots:
             if not model.has_active_seed_in_slot(slot_id):
@@ -598,8 +612,8 @@ def run_heuristic_episode(
         def resolve_slot_for_seed_id(seed_id: str) -> str:
             slot_matches = [
                 slot_id for slot_id in enabled_slots
-                if model.seed_slots[slot_id].state is not None
-                and model.seed_slots[slot_id].state.seed_id == seed_id
+                if (state := model.seed_slots[slot_id].state) is not None
+                and state.seed_id == seed_id
             ]
             if len(slot_matches) != 1:
                 raise RuntimeError(
@@ -658,12 +672,13 @@ def run_heuristic_episode(
         if factored_action.is_germinate:
             if germinate_slot is not None:
                 blueprint_id = factored_action.blueprint_id
-                seed_id = f"seed_{seeds_created}"
-                model.germinate_seed(blueprint_id, seed_id, slot=germinate_slot)
-                seeds_created += 1
-                seed_optimizer = torch.optim.SGD(
-                    model.get_seed_parameters(), lr=task_spec.seed_lr, momentum=0.9
-                )
+                if blueprint_id is not None:
+                    seed_id = f"seed_{seeds_created}"
+                    model.germinate_seed(blueprint_id, seed_id, slot=germinate_slot)
+                    seeds_created += 1
+                    seed_optimizer = torch.optim.SGD(
+                        model.get_seed_parameters(), lr=task_spec.seed_lr, momentum=0.9
+                    )
 
         elif factored_action.is_fossilize:
             if decision.target_seed_id:
@@ -691,7 +706,6 @@ def run_heuristic_episode(
                 if not gate_result.passed:
                     pass
 
-        summary_seed_id = signals.active_seeds[0] if signals.active_seeds else None
         hub.emit(TelemetryEvent(
             event_type=TelemetryEventType.EPOCH_COMPLETED,
             epoch=epoch,
@@ -719,7 +733,7 @@ def train_heuristic(
     telemetry_lifecycle_only: bool = False,
     min_fossilize_improvement: float | None = None,
     gradient_telemetry_stride: int = 10,
-):
+) -> list[dict[str, Any]]:
     """Train with heuristic policy.
 
     Args:

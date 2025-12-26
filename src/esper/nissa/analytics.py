@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
+from typing import Any
 
 from esper.leyline import TelemetryEvent, TelemetryEventType
 from esper.leyline.telemetry import (
@@ -203,7 +204,8 @@ class BlueprintAnalytics(OutputBackend):
             sb.total_fossilized += 1
             sb.fossilized_by_blueprint[bp_id] += 1
             sb.params_added += params
-            sb.total_fossilize_age_epochs += int(epochs_total)
+            if epochs_total is not None:
+                sb.total_fossilize_age_epochs += int(epochs_total)
             sb.live_blueprint = None
 
             # Show total improvement, blending delta, and causal contribution
@@ -234,7 +236,8 @@ class BlueprintAnalytics(OutputBackend):
 
             sb = self._get_scoreboard(env_id)
             sb.total_pruned += 1
-            sb.total_prune_age_epochs += int(epochs_total)
+            if epochs_total is not None:
+                sb.total_prune_age_epochs += int(epochs_total)
             sb.live_blueprint = None
 
             # Show total improvement, blending delta, and causal contribution
@@ -247,9 +250,9 @@ class BlueprintAnalytics(OutputBackend):
         elif event.event_type == TelemetryEventType.ANALYTICS_SNAPSHOT:
             if isinstance(event.data, AnalyticsSnapshotPayload):
                 kind = event.data.kind
-                env_id = event.data.env_id
+                env_id_snapshot = event.data.env_id
                 if not self.quiet:
-                    _logger.debug(f"[env{env_id}] ANALYTICS_SNAPSHOT kind={kind}")
+                    _logger.debug(f"[env{env_id_snapshot}] ANALYTICS_SNAPSHOT kind={kind}")
             else:
                 _logger.warning(f"Unexpected ANALYTICS_SNAPSHOT payload type: {type(event.data)}")
                 return
@@ -272,33 +275,33 @@ class BlueprintAnalytics(OutputBackend):
             return
 
         elif event.event_type == TelemetryEventType.TAMIYO_INITIATED:
-            _logger.warning(f"TAMIYO_INITIATED event not yet migrated to typed payload")
+            _logger.warning("TAMIYO_INITIATED event not yet migrated to typed payload")
             return
 
         # === Trend Detection Events ===
         elif event.event_type == TelemetryEventType.PLATEAU_DETECTED:
-            _logger.warning(f"PLATEAU_DETECTED event not yet migrated to typed payload")
+            _logger.warning("PLATEAU_DETECTED event not yet migrated to typed payload")
             return
 
         elif event.event_type == TelemetryEventType.DEGRADATION_DETECTED:
-            _logger.warning(f"DEGRADATION_DETECTED event not yet migrated to typed payload")
+            _logger.warning("DEGRADATION_DETECTED event not yet migrated to typed payload")
             return
 
         elif event.event_type == TelemetryEventType.IMPROVEMENT_DETECTED:
-            _logger.warning(f"IMPROVEMENT_DETECTED event not yet migrated to typed payload")
+            _logger.warning("IMPROVEMENT_DETECTED event not yet migrated to typed payload")
             return
 
         # === Health/Warning Events ===
         elif event.event_type == TelemetryEventType.MEMORY_WARNING:
-            _logger.warning(f"MEMORY_WARNING event not yet migrated to typed payload")
+            _logger.warning("MEMORY_WARNING event not yet migrated to typed payload")
             return
 
         elif event.event_type == TelemetryEventType.PERFORMANCE_DEGRADATION:
-            _logger.warning(f"PERFORMANCE_DEGRADATION event not yet migrated to typed payload")
+            _logger.warning("PERFORMANCE_DEGRADATION event not yet migrated to typed payload")
             return
 
         elif event.event_type == TelemetryEventType.REWARD_HACKING_SUSPECTED:
-            _logger.warning(f"REWARD_HACKING_SUSPECTED event not yet migrated to typed payload")
+            _logger.warning("REWARD_HACKING_SUSPECTED event not yet migrated to typed payload")
             return
 
         # === PPO Anomaly Events (use AnomalyDetectedPayload) ===
@@ -316,12 +319,12 @@ class BlueprintAnalytics(OutputBackend):
 
         # === Governor Events ===
         elif event.event_type == TelemetryEventType.GOVERNOR_ROLLBACK:
-            _logger.warning(f"GOVERNOR_ROLLBACK event not yet migrated to typed payload")
+            _logger.warning("GOVERNOR_ROLLBACK event not yet migrated to typed payload")
             return
 
         # === Counterfactual Events ===
         elif event.event_type == TelemetryEventType.COUNTERFACTUAL_COMPUTED:
-            _logger.warning(f"COUNTERFACTUAL_COMPUTED event not yet migrated to typed payload")
+            _logger.warning("COUNTERFACTUAL_COMPUTED event not yet migrated to typed payload")
             return
 
     def _get_scoreboard(self, env_id: int) -> SeedScoreboard:
@@ -370,7 +373,7 @@ class BlueprintAnalytics(OutputBackend):
         ]
         return "\n".join(lines)
 
-    def snapshot(self) -> dict:
+    def snapshot(self) -> dict[str, Any]:
         """Return serializable snapshot for history."""
         return {
             "stats": {

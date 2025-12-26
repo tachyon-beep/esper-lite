@@ -7,7 +7,7 @@ Reference: src/esper/karn/tui.py lines 1777-1959 (_render_env_overview method)
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Iterator
 
 from textual.widgets import DataTable, Static
 
@@ -42,7 +42,7 @@ class EnvOverview(Static):
     3. A/B cohort: Colored pip (●) next to env ID based on reward_mode
     """
 
-    def __init__(self, num_envs: int = 16, **kwargs) -> None:
+    def __init__(self, num_envs: int = 16, **kwargs: Any) -> None:
         """Initialize EnvOverview widget.
 
         Args:
@@ -50,7 +50,7 @@ class EnvOverview(Static):
         """
         super().__init__(**kwargs)
         self._num_envs = num_envs
-        self.table = DataTable(zebra_stripes=True, cursor_type="row")
+        self.table: DataTable[Any] = DataTable[Any](zebra_stripes=True, cursor_type="row")
         self._snapshot: SanctumSnapshot | None = None
         self._current_slot_ids: list[str] = []  # Track slot_ids to detect column changes
         self._filter_text: str = ""  # Filter text for env rows
@@ -91,7 +91,7 @@ class EnvOverview(Static):
 
         return False
 
-    def compose(self):
+    def compose(self) -> Iterator[DataTable[Any]]:
         """Compose the widget."""
         yield self.table
 
@@ -123,6 +123,7 @@ class EnvOverview(Static):
         # Fixed columns - ordered: Identity → Performance → Trends → Reward breakdown
         self.table.add_column("Env", key="env")
         self.table.add_column("Acc", key="acc")
+        self.table.add_column("Loss", key="loss")  # Host loss (for overfitting detection)
         self.table.add_column("CF", key="cf")  # Counterfactual: synergy/interference
         self.table.add_column("Growth", key="growth")  # growth_ratio: (host+foss)/host
         self.table.add_column("Reward", key="reward")
@@ -261,6 +262,9 @@ class EnvOverview(Static):
         # Accuracy with color coding
         acc_cell = self._format_accuracy(env)
 
+        # Host loss (for overfitting detection)
+        loss_cell = self._format_host_loss(env)
+
         # Counterfactual: synergy/interference indicator
         cf_cell = self._format_counterfactual(env)
 
@@ -271,8 +275,8 @@ class EnvOverview(Static):
         reward_cell = self._format_reward(env)
 
         # Sparklines
-        acc_spark = self._make_sparkline(env.accuracy_history)
-        rwd_spark = self._make_sparkline(env.reward_history)
+        acc_spark = self._make_sparkline(list(env.accuracy_history))
+        rwd_spark = self._make_sparkline(list(env.reward_history))
 
         # Reward components
         delta_acc_cell = self._format_delta_acc(env)
@@ -281,8 +285,9 @@ class EnvOverview(Static):
 
         # Dynamic slot cells
         slot_cells = []
-        for slot_id in self._snapshot.slot_ids:
-            slot_cells.append(self._format_slot_cell(env, slot_id))
+        if self._snapshot is not None:
+            for slot_id in self._snapshot.slot_ids:
+                slot_cells.append(self._format_slot_cell(env, slot_id))
 
         # Last action
         last_action = self._format_last_action(env)
@@ -297,6 +302,7 @@ class EnvOverview(Static):
         row = [
             env_id_cell,
             acc_cell,
+            loss_cell,
             cf_cell,
             growth_cell,
             reward_cell,
@@ -344,6 +350,10 @@ class EnvOverview(Static):
         mean_delta = sum(deltas) / len(deltas) if deltas else 0.0
         mean_rent = sum(rents) / len(rents) if rents else 0.0
 
+        # Calculate mean loss
+        losses = [e.host_loss for e in self._snapshot.envs.values() if e.host_loss > 0]
+        mean_loss = sum(losses) / len(losses) if losses else 0.0
+
         # Calculate mean growth ratio
         growth_ratios = [e.growth_ratio for e in self._snapshot.envs.values()]
         mean_growth = sum(growth_ratios) / len(growth_ratios) if growth_ratios else 1.0
@@ -352,6 +362,7 @@ class EnvOverview(Static):
         agg_row = [
             "[bold]Σ[/bold]",
             f"[bold]{self._snapshot.aggregate_mean_accuracy:.1f}%[/bold]",
+            f"[dim]{mean_loss:.3f}[/dim]" if mean_loss > 0 else "─",  # Mean loss
             "",  # CF - not aggregated
             f"[dim]{mean_growth:.2f}x[/dim]",  # Growth ratio mean
             f"[bold]{self._snapshot.aggregate_mean_reward:+.2f}[/bold]",
@@ -386,6 +397,27 @@ class EnvOverview(Static):
             pip, color = _AB_STYLES[env.reward_mode]
             return f"[{color}]{pip}[/{color}]{env.env_id}"
         return str(env.env_id)
+
+    def _format_host_loss(self, env: "EnvState") -> str:
+        """Format host loss with color coding for overfitting detection.
+
+        Loss color coding:
+        - Green: loss < 0.1 (very low, good convergence)
+        - White: 0.1 <= loss < 0.5 (normal training range)
+        - Yellow: 0.5 <= loss < 1.0 (elevated, might be overfitting)
+        - Red: loss >= 1.0 (high, possible issues)
+        """
+        loss = env.host_loss
+        if loss <= 0:
+            return "[dim]─[/dim]"
+        elif loss < 0.1:
+            return f"[green]{loss:.3f}[/green]"
+        elif loss < 0.5:
+            return f"{loss:.3f}"
+        elif loss < 1.0:
+            return f"[yellow]{loss:.3f}[/yellow]"
+        else:
+            return f"[red]{loss:.3f}[/red]"
 
     def _format_growth_ratio(self, env: "EnvState") -> str:
         """Format growth ratio: (host+fossilized)/host.
@@ -606,21 +638,36 @@ class EnvOverview(Static):
         return action_short
 
     def _format_stale_epochs(self, env: "EnvState") -> str:
-        """Format epochs since improvement with color coding.
+        """Format epochs since improvement with context-aware color coding.
+
+        Staleness is only concerning when stuck in a BAD state. Being stable
+        at "excellent" or "healthy" for many epochs is good, not bad.
 
         Returns the number of epochs since the last improvement, colored:
         - Green: 0 (currently improving) with + prefix
-        - White: 1-5 (normal) numbers only
-        - Yellow: 6-15 (stagnating) with ! prefix
-        - Red: >15 (severely stalled) with x prefix
+        - For healthy/excellent status: white numbers (stability is good)
+        - For stalled/degraded status: yellow/red warnings (stuck in bad state)
+        - For initializing: dim (neutral, still warming up)
 
-        Uses fixed-width ASCII prefixes for consistent column alignment
-        (emojis have variable width and break table formatting).
+        Uses fixed-width ASCII prefixes for consistent column alignment.
         """
         epochs = env.epochs_since_improvement
+        status = env.status
+
+        # Currently improving - always green
         if epochs == 0:
             return "[green]+0[/green]"
-        elif epochs <= 5:
+
+        # Good states: stability is a feature, not a bug
+        if status in ("excellent", "healthy"):
+            return f"[green] {epochs}[/green]"
+
+        # Initializing: neutral, still warming up
+        if status == "initializing":
+            return f"[dim] {epochs}[/dim]"
+
+        # Bad states (stalled, degraded): staleness is concerning
+        if epochs <= 5:
             return f"[white] {epochs}[/white]"
         elif epochs <= 15:
             return f"[yellow]!{epochs}[/yellow]"
@@ -649,7 +696,7 @@ class EnvOverview(Static):
         status_style = status_styles.get(env.status, "white")
         return f"[{status_style}]{status_short}[/{status_style}]"
 
-    def _make_sparkline(self, values, width: int = 8) -> str:
+    def _make_sparkline(self, values: list[float], width: int = 8) -> str:
         """Create sparkline from values using schema module."""
         from esper.karn.sanctum.schema import make_sparkline
         return make_sparkline(values, width)

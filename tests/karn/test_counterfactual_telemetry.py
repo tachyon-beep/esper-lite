@@ -1,8 +1,6 @@
 """Tests for counterfactual telemetry emission."""
 
-from unittest.mock import Mock, patch
-import pytest
-import numpy as np
+from unittest.mock import patch
 
 
 def test_shapley_computed_event_emitted():
@@ -50,7 +48,7 @@ def test_shapley_computed_event_emitted():
         )
 
         # Compute Shapley values (should emit telemetry)
-        values = engine.compute_shapley_values(matrix)
+        engine.compute_shapley_values(matrix)
 
     # Check that event was emitted
     shapley_events = [e for e in events if e.event_type == TelemetryEventType.ANALYTICS_SNAPSHOT
@@ -88,7 +86,7 @@ def test_no_shapley_event_when_telemetry_disabled():
     )
 
     # Compute Shapley values (should NOT emit telemetry)
-    values = engine.compute_shapley_values(matrix)
+    engine.compute_shapley_values(matrix)
 
     # Check that NO event was emitted
     assert len(events) == 0
@@ -123,7 +121,7 @@ def test_shapley_event_includes_all_slots():
         ]
     )
 
-    values = engine.compute_shapley_values(matrix)
+    engine.compute_shapley_values(matrix)
 
     shapley_events = [e for e in events if e.event_type == TelemetryEventType.ANALYTICS_SNAPSHOT
                       and getattr(e.data, "kind", None) == "shapley_computed"]
@@ -265,7 +263,7 @@ class TestCounterfactualEngineCallback:
             ]
         )
 
-        shapley = engine.compute_shapley_values(matrix)
+        engine.compute_shapley_values(matrix)
 
         # Should have emitted ANALYTICS_SNAPSHOT
         assert len(emitted_events) == 1

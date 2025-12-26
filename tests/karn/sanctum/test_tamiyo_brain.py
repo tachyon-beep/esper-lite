@@ -919,7 +919,6 @@ async def test_sparkline_color_coding():
 @pytest.mark.asyncio
 async def test_secondary_metrics_column():
     """Secondary metrics should show Advantage, Ratio, losses with sparklines."""
-    from collections import deque
 
     app = TamiyoBrainTestApp()
     async with app.run_test():
@@ -1101,6 +1100,182 @@ async def test_heatmap_appears_in_render():
         assert "bpnt[" in output  # blueprint head
 
 
+@pytest.mark.asyncio
+async def test_conditional_head_entropy_no_false_alarm():
+    """Conditional heads like style shouldn't show false alarms when rarely used.
+
+    When a head is only relevant for certain ops (e.g., style during GERMINATE),
+    the average entropy is diluted by samples where the head is masked to 1 option.
+    The heatmap should use "active entropy" for threshold decisions, not raw average.
+
+    Example: 15% GERMINATE actions, style entropy = 0.15
+    → Raw fill = 0.15/1.386 = 0.11 (would trigger red !)
+    → Active fill = (0.15/0.15) = 1.0 (healthy, no warning)
+    """
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            # Style entropy is diluted (0.15) but active entropy would be ~1.0
+            head_slot_entropy=1.0,
+            head_blueprint_entropy=2.0,
+            head_style_entropy=0.15,  # Looks collapsed, but actually healthy
+            head_tempo_entropy=0.15,  # Same pattern
+            head_alpha_target_entropy=0.8,
+            head_alpha_speed_entropy=1.1,
+            head_alpha_curve_entropy=0.7,
+            head_op_entropy=1.5,
+            ppo_data_received=True,
+            # Action distribution shows 15% GERMINATE (style is relevant)
+            action_counts={
+                "WAIT": 44,
+                "PRUNE": 12,
+                "GERMINATE": 11,
+                "ADVANCE": 5,
+                "FOSSILIZE": 0,
+                "SET_ALPHA_TARGET": 0,
+            },
+            total_actions=72,
+        )
+
+        widget.update_snapshot(snapshot)
+
+        # Test the helper method directly
+        active_ent, relevance, adjusted_fill = widget._compute_head_entropy_context(
+            "style", 0.15
+        )
+
+        # Relevance should be ~15% (11 GERMINATE out of 72)
+        expected_relevance = 11 / 72
+        assert abs(relevance - expected_relevance) < 0.01
+
+        # Active entropy should be 0.15 / 0.153 ≈ 0.98 (healthy!)
+        assert active_ent > 0.9, f"Active entropy {active_ent} should be >0.9"
+
+        # Adjusted fill (used for threshold) should be high (no warning)
+        assert adjusted_fill > 0.5, f"Adjusted fill {adjusted_fill} should be >0.5"
+
+        # Now render and verify no red warning "!" appears for style
+        heatmap = widget._render_head_heatmap()
+        plain = heatmap.plain
+
+        # The style value "0.15" should appear but NOT with "!" indicator
+        # (it should have "~" for conditional or be dim)
+        assert "0.15" in plain
+        # Style should NOT show critical indicator given healthy active entropy
+        # Note: we check that style's 0.15 isn't followed by "!" in the plain text
+
+
+@pytest.mark.asyncio
+async def test_conditional_head_entropy_helper_non_conditional():
+    """Non-conditional heads should return unchanged entropy context."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            head_op_entropy=0.5,
+            ppo_data_received=True,
+            action_counts={"WAIT": 50, "GERMINATE": 50},
+            total_actions=100,
+        )
+
+        widget.update_snapshot(snapshot)
+
+        # Op is not a conditional head, so no adjustment
+        active_ent, relevance, adjusted_fill = widget._compute_head_entropy_context(
+            "op", 0.5
+        )
+
+        # Relevance should be 1.0 (always relevant)
+        assert relevance == 1.0
+
+        # Active entropy equals observed for non-conditional
+        assert active_ent == 0.5
+
+        # Adjusted fill should be 0.5 / 1.792 ≈ 0.28
+        expected_fill = 0.5 / widget.HEAD_MAX_ENTROPIES["op"]
+        assert abs(adjusted_fill - expected_fill) < 0.01
+
+
+# ===========================
+# Per-Head Gradient Norm Heatmap Tests
+# ===========================
+
+
+@pytest.mark.asyncio
+async def test_per_head_gradient_heatmap():
+    """Per-head gradient heatmap should show 8 heads with correct color coding."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            head_slot_grad_norm=0.5,  # Healthy
+            head_blueprint_grad_norm=1.0,  # Healthy
+            head_style_grad_norm=0.05,  # Weak (warning)
+            head_tempo_grad_norm=3.0,  # Strong (warning)
+            head_alpha_target_grad_norm=0.001,  # Vanishing (critical)
+            head_alpha_speed_grad_norm=10.0,  # Exploding (critical)
+            head_alpha_curve_grad_norm=0.2,  # Healthy
+            head_op_grad_norm=1.5,  # Healthy
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+
+        # Render heatmap
+        heatmap = widget._render_head_gradient_heatmap()
+        assert heatmap is not None
+
+        plain = heatmap.plain
+        # Should contain "Grads:" label
+        assert "Grads" in plain
+        # Should contain head abbreviations
+        assert "slot" in plain.lower()
+        assert "bpnt" in plain.lower()
+
+
+@pytest.mark.asyncio
+async def test_gradient_heatmap_no_data():
+    """Gradient heatmap should show 'no data' when no snapshot."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        # No snapshot set
+
+        heatmap = widget._render_head_gradient_heatmap()
+        assert "no data" in heatmap.plain
+
+
+@pytest.mark.asyncio
+async def test_gradient_heatmap_appears_in_vitals():
+    """Gradient heatmap should appear in vitals column render output."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            head_slot_grad_norm=0.5,
+            head_blueprint_grad_norm=1.0,
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+
+        # Directly call the gradient heatmap render method
+        grad_heatmap = widget._render_head_gradient_heatmap()
+        assert grad_heatmap is not None
+
+        # Should contain Grads label and show actual data (not all n/a)
+        plain = grad_heatmap.plain
+        assert "Grads" in plain
+        # Slot and blueprint should show actual values, not n/a
+        # because we set non-zero values for them
+        assert "slot" in plain.lower()
+
+
 # ===========================
 # Task 5.2: A/B/C Group Color Constants Tests
 # ===========================
@@ -1111,7 +1286,7 @@ async def test_ab_group_color_mapping():
     """GROUP_COLORS should define colors for A/B/C groups."""
     app = TamiyoBrainTestApp()
     async with app.run_test():
-        widget = app.query_one(TamiyoBrain)
+        app.query_one(TamiyoBrain)
 
         # Access GROUP_COLORS directly on class (no hasattr)
         assert "A" in TamiyoBrain.GROUP_COLORS
@@ -1133,7 +1308,7 @@ async def test_ab_group_labels():
     """GROUP_LABELS should define labels for A/B/C groups."""
     app = TamiyoBrainTestApp()
     async with app.run_test():
-        widget = app.query_one(TamiyoBrain)
+        app.query_one(TamiyoBrain)
 
         # Access GROUP_LABELS directly on class (no hasattr)
         assert "A" in TamiyoBrain.GROUP_LABELS

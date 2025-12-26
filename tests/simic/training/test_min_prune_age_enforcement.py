@@ -10,10 +10,8 @@ This prevents early prunes when masks are bypassed in debug/testing scenarios.
 
 from __future__ import annotations
 
-import pytest
 
 from esper.leyline import MIN_PRUNE_AGE, SeedStage
-from esper.leyline.alpha import AlphaMode
 from esper.kasmina.slot import SeedSlot
 from esper.simic.rewards import SeedInfo
 

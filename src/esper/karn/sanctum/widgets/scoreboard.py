@@ -12,7 +12,7 @@ Interactive features:
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Iterator
 
 from textual.binding import Binding
 from textual.message import Message
@@ -53,15 +53,15 @@ class Scoreboard(Static):
             super().__init__()
             self.record_id = record_id
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         """Initialize Scoreboard widget."""
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
         self._displayed_records: list["BestRunRecord"] = []
         self.border_title = "BEST RUNS"
-        self.table = DataTable(zebra_stripes=True, cursor_type="row")
+        self.table: DataTable[Any] = DataTable[Any](zebra_stripes=True, cursor_type="row")
 
-    def compose(self):
+    def compose(self) -> Iterator[Static | DataTable[Any]]:
         """Compose the widget."""
         yield Static(id="scoreboard-stats")
         yield self.table
@@ -204,7 +204,11 @@ class Scoreboard(Static):
             self.post_message(self.BestRunPinToggled(record.record_id))
 
     def _format_seeds(self, seeds: dict[str, "SeedState"]) -> str:
-        """Format seed composition at peak accuracy."""
+        """Format seed composition at peak accuracy with improvement annotations.
+
+        Shows blueprint names with stage colors, plus improvement delta if available.
+        Improvement is the accuracy delta when the seed was fossilized.
+        """
         contributing = [
             seed
             for seed in seeds.values()
@@ -221,7 +225,13 @@ class Scoreboard(Static):
         for seed in contributing[:3]:
             bp = (seed.blueprint_id or "?")[:6]
             color = stage_colors.get(seed.stage, "dim")
-            parts.append(f"[{color}]{bp}[/{color}]")
+            # Add improvement annotation for fossilized seeds
+            if seed.stage == "FOSSILIZED" and seed.improvement != 0:
+                # Show improvement as small delta indicator
+                imp_style = "green" if seed.improvement > 0 else "red"
+                parts.append(f"[{color}]{bp}[/{color}][{imp_style}]{seed.improvement:+.1f}[/{imp_style}]")
+            else:
+                parts.append(f"[{color}]{bp}[/{color}]")
 
         if len(contributing) > 3:
             parts.append(f"[dim]+{len(contributing) - 3}[/]")

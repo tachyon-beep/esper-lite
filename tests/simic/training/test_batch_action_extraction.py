@@ -1,6 +1,6 @@
 """Test batched action extraction eliminates per-element .item() calls."""
 import torch
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 
 def test_batch_action_extraction_single_cpu_call():

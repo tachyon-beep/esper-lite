@@ -2,7 +2,7 @@
 import torch
 from unittest.mock import MagicMock
 
-from esper.leyline.factored_actions import (
+from esper.leyline import (
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
     NUM_ALPHA_TARGETS,

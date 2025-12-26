@@ -16,8 +16,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-_logger = logging.getLogger(__name__)
-
 from esper.karn.overwatch.schema import (
     TuiSnapshot,
     ConnectionStatus,
@@ -36,12 +34,13 @@ from esper.leyline import (
     SeedGateEvaluatedPayload,
     SeedFossilizedPayload,
     SeedPrunedPayload,
-    RewardComputedPayload,
     AnalyticsSnapshotPayload,
 )
 
 if TYPE_CHECKING:
     from esper.leyline import TelemetryEvent
+
+_logger = logging.getLogger(__name__)
 
 
 def _parse_cuda_device_index(device: str) -> int | None:
@@ -420,19 +419,6 @@ class TelemetryAggregator:
                 message=f"{slot_id} pruned" + (f" ({reason})" if reason else ""),
                 timestamp=event.timestamp,
             )
-        else:
-            return
-
-    def _handle_reward_computed(self, event: "TelemetryEvent") -> None:
-        """Handle REWARD_COMPUTED event."""
-        if isinstance(event.data, RewardComputedPayload):
-            payload = event.data
-            env_id = payload.env_id
-
-            self._ensure_env(env_id)
-            self._envs[env_id].reward_last = payload.total_reward
-            if payload.val_acc is not None:
-                self._envs[env_id].task_metric = payload.val_acc
         else:
             return
 

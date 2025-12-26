@@ -70,9 +70,11 @@ def serialize_event(event: "TelemetryEventLike") -> str:
     # Extract timestamp (handle datetime objects)
     # hasattr AUTHORIZED by John on 2025-12-17 15:00:00 UTC
     # Justification: Serialization - safely handle datetime objects
-    timestamp = event.timestamp
-    if hasattr(timestamp, "isoformat"):
-        timestamp = timestamp.isoformat()
+    timestamp_raw = event.timestamp
+    if hasattr(timestamp_raw, "isoformat"):
+        timestamp: str = timestamp_raw.isoformat()
+    else:
+        timestamp = str(timestamp_raw)
 
     data = {
         "event_type": event_type,

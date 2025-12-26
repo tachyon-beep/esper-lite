@@ -24,6 +24,7 @@ from esper.tamiyo.policy.registry import (
     get_policy,
     list_policies,
 )
+from esper.tamiyo.policy.factory import create_policy
 from esper.tamiyo.policy.features import (
     obs_to_multislot_features,
     get_feature_size,
@@ -75,6 +76,8 @@ __all__ = [
     "register_policy",
     "get_policy",
     "list_policies",
+    # Factory
+    "create_policy",
     # Neural policy bundles (via registry)
     # Note: LSTMPolicyBundle available via get_policy("lstm")
     # Heuristic adapter (NOT registered - use create_heuristic_policy())

@@ -12,6 +12,8 @@ import pytest
 import torch
 from hypothesis import HealthCheck, settings
 
+from esper.leyline.slot_config import SlotConfig
+
 # =============================================================================
 # Hypothesis Configuration
 # =============================================================================
@@ -126,9 +128,19 @@ def small_ppo_model_deterministic(tmp_path_factory):
     for testing that the model is "smart."
     """
     from esper.simic.agent import PPOAgent
+    from esper.tamiyo.policy.factory import create_policy
 
-    # Create agent with deterministic weights
-    agent = PPOAgent(state_dim=30, action_dim=7)
+    # Create policy with specific configuration for tests
+    policy = create_policy(
+        policy_type="lstm",
+        state_dim=30,
+        slot_config=SlotConfig.default(),
+        device="cpu",
+        compile_mode="off",
+    )
+
+    # Create agent with the policy
+    agent = PPOAgent(policy=policy, device="cpu")
 
     # Initialize all weights deterministically
     for param in agent.parameters():

@@ -83,10 +83,6 @@ class TelemetryEventType(Enum):
     PPO_UPDATE_COMPLETED = auto()
     MEMORY_WARNING = auto()
     REWARD_HACKING_SUSPECTED = auto()
-    # TODO: [DEAD CODE] - REWARD_COMPUTED is defined, tested, and handled by Karn,
-    # but NEVER emitted in production. Reward data flows via ANALYTICS_SNAPSHOT instead.
-    # Either emit this event from vectorized.py or remove it. See: risk assessment 2024-12-24.
-    REWARD_COMPUTED = auto()  # Per-step reward breakdown for debugging
 
     # === NEW: Debug Events (triggered by anomalies) ===
     RATIO_EXPLOSION_DETECTED = auto()
@@ -117,6 +113,9 @@ class TelemetryEventType(Enum):
 
     # === Analytics Events ===
     ANALYTICS_SNAPSHOT = auto()       # Full state snapshot for dashboard sync
+
+    # === Episode Events ===
+    EPISODE_OUTCOME = auto()  # Multi-objective outcome for Pareto analysis
 
 
 @dataclass
@@ -608,6 +607,12 @@ class PPOUpdatePayload:
     head_blueprint_entropy: float | None = None
     head_slot_grad_norm: float | None = None
     head_blueprint_grad_norm: float | None = None
+    head_style_grad_norm: float | None = None
+    head_tempo_grad_norm: float | None = None
+    head_alpha_target_grad_norm: float | None = None
+    head_alpha_speed_grad_norm: float | None = None
+    head_alpha_curve_grad_norm: float | None = None
+    head_op_grad_norm: float | None = None
     head_style_entropy: float | None = None
     head_tempo_entropy: float | None = None
     head_alpha_target_entropy: float | None = None
@@ -658,6 +663,12 @@ class PPOUpdatePayload:
             head_blueprint_entropy=data.get("head_blueprint_entropy"),
             head_slot_grad_norm=data.get("head_slot_grad_norm"),
             head_blueprint_grad_norm=data.get("head_blueprint_grad_norm"),
+            head_style_grad_norm=data.get("head_style_grad_norm"),
+            head_tempo_grad_norm=data.get("head_tempo_grad_norm"),
+            head_alpha_target_grad_norm=data.get("head_alpha_target_grad_norm"),
+            head_alpha_speed_grad_norm=data.get("head_alpha_speed_grad_norm"),
+            head_alpha_curve_grad_norm=data.get("head_alpha_curve_grad_norm"),
+            head_op_grad_norm=data.get("head_op_grad_norm"),
             head_style_entropy=data.get("head_style_entropy"),
             head_tempo_entropy=data.get("head_tempo_entropy"),
             head_alpha_target_entropy=data.get("head_alpha_target_entropy"),
@@ -685,64 +696,29 @@ class PPOUpdatePayload:
 
 
 @dataclass(slots=True, frozen=True)
-class RewardComputedPayload:
-    """Payload for REWARD_COMPUTED event. Emitted per RL step."""
+class TamiyoInitiatedPayload:
+    """Payload for TAMIYO_INITIATED event.
 
-    # REQUIRED (DRL expert: value_estimate and action_confidence essential)
+    Emitted when host network stabilizes and germination becomes allowed.
+    This marks the transition from warmup phase to active seed training.
+    """
+
+    # REQUIRED
     env_id: int
-    total_reward: float
-    action_name: str
-    value_estimate: float
-    action_confidence: float
-
-    # OPTIONAL - reward component breakdown (None = not computed, 0.0 = computed as zero)
-    base_acc_delta: float | None = None
-    bounded_attribution: float | None = None
-    seed_contribution: float | None = None
-    compute_rent: float | None = None
-    alpha_shock: float | None = None
-    ratio_penalty: float | None = None
-    stage_bonus: float | None = None
-    fossilize_terminal_bonus: float | None = None
-    blending_warning: float | None = None
-    holding_warning: float | None = None
-    val_acc: float | None = None
-
-    # Decision context
-    slot_states: dict[str, dict[str, Any]] | None = None
-    host_accuracy: float | None = None
-    alternatives: list[tuple[str, float]] | None = None
-    decision_entropy: float | None = None
-    ab_group: str | None = None
-    action_slot: str | None = None
+    epoch: int
+    stable_count: int  # Number of consecutive stable epochs
+    stabilization_epochs: int  # Required epochs for stabilization
+    val_loss: float  # Validation loss at stabilization
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "RewardComputedPayload":
+    def from_dict(cls, data: dict[str, Any]) -> "TamiyoInitiatedPayload":
         """Parse from dict. Raises KeyError on missing required fields."""
         return cls(
             env_id=data["env_id"],
-            total_reward=data["total_reward"],
-            action_name=data["action_name"],
-            value_estimate=data["value_estimate"],
-            action_confidence=data["action_confidence"],
-            # Optional fields (None = not provided, preserves "not computed" vs "zero")
-            base_acc_delta=data.get("base_acc_delta"),
-            bounded_attribution=data.get("bounded_attribution"),
-            seed_contribution=data.get("seed_contribution"),
-            compute_rent=data.get("compute_rent"),
-            alpha_shock=data.get("alpha_shock"),
-            ratio_penalty=data.get("ratio_penalty"),
-            stage_bonus=data.get("stage_bonus"),
-            fossilize_terminal_bonus=data.get("fossilize_terminal_bonus"),
-            blending_warning=data.get("blending_warning"),
-            holding_warning=data.get("holding_warning"),
-            val_acc=data.get("val_acc"),
-            slot_states=data.get("slot_states"),
-            host_accuracy=data.get("host_accuracy"),
-            alternatives=data.get("alternatives"),
-            decision_entropy=data.get("decision_entropy"),
-            ab_group=data.get("ab_group"),
-            action_slot=data.get("action_slot"),
+            epoch=data["epoch"],
+            stable_count=data["stable_count"],
+            stabilization_epochs=data["stabilization_epochs"],
+            val_loss=data["val_loss"],
         )
 
 
@@ -1015,6 +991,18 @@ class AnalyticsSnapshotPayload:
     alpha_target_masked: bool | None = None
     alpha_speed_masked: bool | None = None
     alpha_curve_masked: bool | None = None
+    # Reward component breakdown (for kind="last_action")
+    base_acc_delta: float | None = None  # Legacy shaped signal from accuracy improvement
+    bounded_attribution: float | None = None  # Contribution-primary attribution signal
+    compute_rent: float | None = None  # Cost of active seeds (always negative)
+    # Additional reward components for RewardHealthPanel (Sanctum)
+    stage_bonus: float | None = None  # PBRS shaping bonus for lifecycle stages
+    ratio_penalty: float | None = None  # Anti-gaming penalty for extreme ratios
+    alpha_shock: float | None = None  # Convex penalty on alpha deltas
+    # Decision context for TamiyoBrain Decision Cards
+    slot_states: dict[str, str] | None = None  # slot_id -> "Training 12%" or "Empty"
+    alternatives: list[tuple[str, float]] | None = None  # Top-2 alternative (action, prob)
+    decision_entropy: float | None = None  # -sum(p*log(p)) for action distribution
 
     # For kind="throughput", includes performance metrics
     batch: int | None = None
@@ -1195,6 +1183,101 @@ class AnomalyDetectedPayload:
         )
 
 
+@dataclass(slots=True, frozen=True)
+class CounterfactualUnavailablePayload:
+    """Payload for COUNTERFACTUAL_COMPUTED when baseline is unavailable.
+
+    Emitted when counterfactual computation cannot be performed for a slot,
+    e.g., due to missing baseline or invalid slot state.
+    """
+
+    # REQUIRED
+    env_id: int
+    slot_id: str
+    reason: str  # Why counterfactual is unavailable (e.g., "no_baseline", "dormant_slot")
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "CounterfactualUnavailablePayload":
+        """Parse from dict. Raises KeyError on missing required fields."""
+        return cls(
+            env_id=data["env_id"],
+            slot_id=data["slot_id"],
+            reason=data["reason"],
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class PerformanceDegradationPayload:
+    """Payload for PERFORMANCE_DEGRADATION event.
+
+    Emitted when current accuracy drops significantly below rolling average,
+    indicating potential training instability or policy collapse.
+    """
+
+    # REQUIRED
+    env_id: int
+    current_acc: float
+    rolling_avg_acc: float
+    drop_percent: float  # Relative drop as percentage (0-100)
+    threshold_percent: float  # Threshold that was exceeded
+
+    # OPTIONAL
+    training_progress: float = 0.0  # Progress through training (0.0 to 1.0)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "PerformanceDegradationPayload":
+        """Parse from dict. Raises KeyError on missing required fields."""
+        return cls(
+            env_id=data["env_id"],
+            current_acc=data["current_acc"],
+            rolling_avg_acc=data["rolling_avg_acc"],
+            drop_percent=data["drop_percent"],
+            threshold_percent=data["threshold_percent"],
+            training_progress=data.get("training_progress", 0.0),
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class EpisodeOutcomePayload:
+    """Payload for EPISODE_OUTCOME event.
+
+    Captures multi-objective outcomes for Pareto analysis:
+    - final_accuracy: Task performance (higher = better)
+    - param_ratio: Parameter efficiency (lower = better)
+    - stability_score: Training stability (higher = better)
+
+    Note: env_id may be -1 when emitted from slots (Kasmina), which don't
+    know their environment context. The sentinel is replaced by the actual
+    env_id in emit_with_env_context (simic/telemetry/emitters.py).
+    """
+
+    # REQUIRED
+    env_id: int  # -1 = sentinel (replaced by emit_with_env_context)
+    episode_idx: int
+    final_accuracy: float
+    param_ratio: float  # total_params / host_params
+    num_fossilized: int
+    num_contributing_fossilized: int  # Seeds that contributed to learning
+    episode_reward: float  # Total reward for the episode
+    stability_score: float  # 1 - variance(recent_losses)
+    reward_mode: str  # "shaped", "simplified", etc.
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "EpisodeOutcomePayload":
+        """Parse from dict. Raises KeyError on missing required fields."""
+        return cls(
+            env_id=data["env_id"],
+            episode_idx=data["episode_idx"],
+            final_accuracy=data["final_accuracy"],
+            param_ratio=data["param_ratio"],
+            num_fossilized=data["num_fossilized"],
+            num_contributing_fossilized=data["num_contributing_fossilized"],
+            episode_reward=data["episode_reward"],
+            stability_score=data["stability_score"],
+            reward_mode=data["reward_mode"],
+        )
+
+
 # =============================================================================
 # Telemetry Payload Type Union
 # =============================================================================
@@ -1206,13 +1289,16 @@ TelemetryPayload = (
     | EpochCompletedPayload
     | BatchEpochCompletedPayload
     | PPOUpdatePayload
-    | RewardComputedPayload
+    | TamiyoInitiatedPayload
     | SeedGerminatedPayload
     | SeedStageChangedPayload
     | SeedGateEvaluatedPayload
     | SeedFossilizedPayload
     | SeedPrunedPayload
     | CounterfactualMatrixPayload
+    | CounterfactualUnavailablePayload
     | AnalyticsSnapshotPayload
     | AnomalyDetectedPayload
+    | PerformanceDegradationPayload
+    | EpisodeOutcomePayload
 )

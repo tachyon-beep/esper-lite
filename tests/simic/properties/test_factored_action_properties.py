@@ -25,8 +25,10 @@ import torch
 from hypothesis import given, settings, assume
 from hypothesis import strategies as st
 
-from esper.leyline import HEAD_NAMES
-from esper.leyline.factored_actions import (
+from esper.leyline import (
+    GerminationStyle,
+    HEAD_NAMES,
+    LifecycleOp,
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
     NUM_ALPHA_TARGETS,
@@ -34,10 +36,8 @@ from esper.leyline.factored_actions import (
     NUM_OPS,
     NUM_STYLES,
     NUM_TEMPO,
-    GerminationStyle,
-    TempoAction,
     TEMPO_TO_EPOCHS,
-    LifecycleOp,
+    TempoAction,
 )
 
 

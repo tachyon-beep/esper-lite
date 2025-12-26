@@ -107,13 +107,14 @@ class TestABTestingCLI:
         args = parser.parse_args(["ppo", "--ab-test", "shaped-vs-sparse"])
         assert args.ab_test == "shaped-vs-sparse"
 
-    def test_ab_test_sets_config_ab_reward_modes(self):
-        """--ab-test should set config.ab_reward_modes, not pass separately.
+    def test_ab_test_sets_config_reward_mode_per_env(self):
+        """--ab-test should set config.reward_mode_per_env, not pass separately.
 
-        This test catches the bug where ab_reward_modes was passed both
+        This test catches the bug where reward_mode_per_env was passed both
         explicitly AND via config.to_train_kwargs(), causing duplicate
         keyword argument errors.
         """
+        from esper.simic.rewards import RewardMode
         from esper.simic.training import TrainingConfig
 
         # Simulate CLI logic from train.py
@@ -124,18 +125,22 @@ class TestABTestingCLI:
         if ab_test:
             half = config.n_envs // 2
             if ab_test == "shaped-vs-simplified":
-                config.ab_reward_modes = ["shaped"] * half + ["simplified"] * half
+                config.reward_mode_per_env = (
+                    (RewardMode.SHAPED,) * half + (RewardMode.SIMPLIFIED,) * half
+                )
             elif ab_test == "shaped-vs-sparse":
-                config.ab_reward_modes = ["shaped"] * half + ["sparse"] * half
+                config.reward_mode_per_env = (
+                    (RewardMode.SHAPED,) * half + (RewardMode.SPARSE,) * half
+                )
 
-        # Verify config has ab_reward_modes set
-        assert config.ab_reward_modes is not None
-        assert len(config.ab_reward_modes) == config.n_envs
+        # Verify config has reward_mode_per_env set
+        assert config.reward_mode_per_env is not None
+        assert len(config.reward_mode_per_env) == config.n_envs
 
-        # Verify to_train_kwargs() includes ab_reward_modes (no separate passing needed)
+        # Verify to_train_kwargs() includes reward_mode_per_env (no separate passing needed)
         kwargs = config.to_train_kwargs()
-        assert "ab_reward_modes" in kwargs
-        assert kwargs["ab_reward_modes"] == config.ab_reward_modes
+        assert "reward_mode_per_env" in kwargs
+        assert kwargs["reward_mode_per_env"] == config.reward_mode_per_env
 
     def test_ab_test_requires_even_envs(self):
         """--ab-test should require even n_envs for equal split."""
@@ -144,7 +149,7 @@ class TestABTestingCLI:
         config = TrainingConfig.for_cifar10()
         config.n_envs = 3  # Odd number
 
-        # This check happens in train.py before setting ab_reward_modes
+        # This check happens in train.py before setting reward_mode_per_env
         with pytest.raises(ValueError, match="even"):
             if config.n_envs % 2 != 0:
                 raise ValueError("--ab-test requires even number of envs")

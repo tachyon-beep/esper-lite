@@ -12,33 +12,26 @@ import dataclasses
 import logging
 from typing import TYPE_CHECKING, Any, Sequence
 
-_logger = logging.getLogger(__name__)
-
 import torch
 from torch import nn
 
 from esper.leyline import (
-    DEFAULT_ENTROPY_COLLAPSE_THRESHOLD,
-    HEAD_NAMES,
-    SeedStage,
-    TelemetryEvent,
-    TelemetryEventType,
-    EpochCompletedPayload,
-    BatchEpochCompletedPayload,
-    PPOUpdatePayload,
-    CounterfactualMatrixPayload,
-    AnalyticsSnapshotPayload,
-)
-from esper.leyline.factored_actions import (
     ALPHA_CURVE_NAMES,
     ALPHA_SPEED_NAMES,
     ALPHA_TARGET_VALUES,
+    AnalyticsSnapshotPayload,
+    BatchEpochCompletedPayload,
     BLUEPRINT_IDS,
-    LifecycleOp,
+    CounterfactualMatrixPayload,
+    DEFAULT_ENTROPY_COLLAPSE_THRESHOLD,
+    EpochCompletedPayload,
     OP_NAMES,
+    PPOUpdatePayload,
     STYLE_ALPHA_ALGORITHMS,
     STYLE_BLEND_IDS,
     STYLE_NAMES,
+    TelemetryEvent,
+    TelemetryEventType,
 )
 from esper.nissa import get_hub
 
@@ -48,6 +41,8 @@ if TYPE_CHECKING:
     from esper.simic.training.parallel_env_state import ParallelEnvState
 
     from .telemetry_config import TelemetryConfig
+
+_logger = logging.getLogger(__name__)
 
 
 class VectorizedEmitter:
@@ -61,7 +56,7 @@ class VectorizedEmitter:
         self,
         env_id: int,
         device: str,
-        hub=None,
+        hub: Any = None,
         telemetry_config: "TelemetryConfig | None" = None,
         quiet_analytics: bool = False,
     ):
@@ -80,8 +75,8 @@ class VectorizedEmitter:
 
     def _emit(self, event: TelemetryEvent) -> None:
         """Emit event with environment context injected."""
-        event.env_id = self.env_id
-        event.device = self.device
+        event.env_id = self.env_id  # type: ignore[attr-defined]
+        event.device = self.device  # type: ignore[attr-defined]
         self.hub.emit(event)
 
     def on_epoch_completed(
@@ -197,6 +192,13 @@ class VectorizedEmitter:
         action_confidence: float | None = None,
         alternatives: list[tuple[str, float]] | None = None,
         decision_entropy: float | None = None,
+        base_acc_delta: float | None = None,
+        bounded_attribution: float | None = None,
+        compute_rent: float | None = None,
+        # Additional reward components for RewardHealthPanel
+        stage_bonus: float | None = None,
+        ratio_penalty: float | None = None,
+        alpha_shock: float | None = None,
     ) -> None:
         """Emit last-action detail, offloading formatting to the hub thread."""
         if not self._should_emit("ops_normal"):
@@ -253,6 +255,12 @@ class VectorizedEmitter:
             data["alternatives"] = list(alternatives)
         if decision_entropy is not None:
             data["decision_entropy"] = float(decision_entropy)
+        if base_acc_delta is not None:
+            data["base_acc_delta"] = float(base_acc_delta)
+        if bounded_attribution is not None:
+            data["bounded_attribution"] = float(bounded_attribution)
+        if compute_rent is not None:
+            data["compute_rent"] = float(compute_rent)
 
         self._emit(TelemetryEvent(
             event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
@@ -266,12 +274,22 @@ class VectorizedEmitter:
                 action_name=data["action_name"],
                 action_confidence=action_confidence,
                 value_estimate=value_estimate,
+                base_acc_delta=base_acc_delta,
+                bounded_attribution=bounded_attribution,
+                compute_rent=compute_rent,
+                stage_bonus=stage_bonus,
+                ratio_penalty=ratio_penalty,
+                alpha_shock=alpha_shock,
+                # Decision context for TamiyoBrain Decision Cards
+                slot_states=slot_states,
+                alternatives=alternatives,
+                decision_entropy=decision_entropy,
             ),
         ))
 
     def on_ppo_update(
         self,
-        metrics: dict,
+        metrics: dict[str, Any],
         episodes_completed: int,
         batch_idx: int,
         epoch: int,
@@ -295,7 +313,8 @@ class VectorizedEmitter:
 
         if self._should_emit("debug"):
             try:
-                layer_stats = collect_per_layer_gradients(agent._base_network)
+                # Access network via policy bundle (Tamiyo migration renamed _base_network)
+                layer_stats = collect_per_layer_gradients(agent.policy.network)
                 layer_health = aggregate_layer_gradient_health(layer_stats)
                 payload.update(layer_health)
             except Exception as e:
@@ -318,7 +337,7 @@ class VectorizedEmitter:
         episodes_completed: int,
         rolling_avg_acc: float,
         avg_acc: float,
-        metrics: dict,
+        metrics: dict[str, Any],
         env_states: Sequence["ParallelEnvState"],
         update_skipped: bool,
         plateau_threshold: float,
@@ -379,7 +398,7 @@ class VectorizedEmitter:
             if event_type:
                 self.hub.emit(TelemetryEvent(
                     event_type=event_type,
-                    data={
+                    data={  # type: ignore[arg-type]
                         "batch": batch_idx + 1,
                         "rolling_delta": rolling_delta,
                         "rolling_avg_accuracy": rolling_avg_acc,
@@ -389,16 +408,6 @@ class VectorizedEmitter:
                 ))
 
         # BATCH_EPOCH_COMPLETED
-        total_train_correct = sum(train_corrects)
-        total_train_samples = sum(train_totals)
-        total_val_correct = sum(val_corrects)
-        total_val_samples = sum(val_totals)
-
-        plateau_detected = (
-            abs(rolling_avg_acc - prev_rolling_avg_acc) < 0.5 
-            if prev_rolling_avg_acc is not None else False
-        )
-
         self.hub.emit(TelemetryEvent(
             event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED,
             epoch=episodes_completed,
@@ -461,7 +470,7 @@ class VectorizedEmitter:
             ))
 
 
-def emit_with_env_context(hub, env_idx: int, device: str, event: TelemetryEvent) -> None:
+def emit_with_env_context(hub: Any, env_idx: int, device: str, event: TelemetryEvent) -> None:
     """Emit telemetry with env_id injected for per-environment events.
 
     Creates a new event with the additional context rather than mutating the input.
@@ -487,13 +496,15 @@ def emit_with_env_context(hub, env_idx: int, device: str, event: TelemetryEvent)
         )
 
     # Typed payload - replace sentinel env_id with actual env_id
-    payload = dataclasses.replace(event.data, env_id=env_idx)
+    # Type ignore: union type from TelemetryPayload doesn't expose env_id,
+    # but all seed-lifecycle payloads have it (checked at runtime above)
+    payload = dataclasses.replace(event.data, env_id=env_idx)  # type: ignore[arg-type]
     new_event = dataclasses.replace(event, data=payload)
     hub.emit(new_event)
 
 
 def emit_batch_completed(
-    hub,
+    hub: Any,
     *,
     batch_idx: int,
     episodes_completed: int,
@@ -542,7 +553,7 @@ def emit_last_action(
     masked: dict[str, bool],
     success: bool,
     active_alpha_algorithm: str | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Emit per-step last-action detail for debugging and UIs.
 
     Args:
@@ -641,7 +652,7 @@ def compute_grad_norm_surrogate(module: nn.Module) -> float | None:
 
 def aggregate_layer_gradient_health(
     layer_stats: list[LayerGradientStats],
-) -> dict[str, int | float]:
+) -> dict[str, int | float | dict[str, float]]:
     """Aggregate per-layer gradient stats into summary metrics.
 
     Args:
@@ -649,43 +660,58 @@ def aggregate_layer_gradient_health(
 
     Returns:
         Dict with dead_layers, exploding_layers, nan_grad_count, layer_gradient_health
+        layer_gradient_health is a dict mapping layer_name -> health_score (0-1)
     """
     if not layer_stats:
         return {
             "dead_layers": 0,
             "exploding_layers": 0,
             "nan_grad_count": 0,
-            "layer_gradient_health": 1.0,
+            "layer_gradient_health": {},
         }
 
-    n_layers = len(layer_stats)
     dead = sum(1 for s in layer_stats if s.zero_fraction > 0.9)
     exploding = sum(1 for s in layer_stats if s.large_fraction > 0.1)
     nan_count = sum(s.nan_count for s in layer_stats)
 
-    # Compute health score: 1.0 = perfect, penalize dead/exploding layers
-    health = 1.0
-    health -= (dead / n_layers) * 0.5  # Dead layers reduce health
-    health -= (exploding / n_layers) * 0.8  # Exploding is worse
-    health -= min(nan_count / 100, 0.5)  # NaNs are bad
-    health = max(0.0, min(1.0, health))
+    # Per-layer health scores: 1.0 = perfect, penalize based on stats
+    # Score indicates: 1.0=healthy, 0.5=warning, 0.0=dead/exploding
+    per_layer_health: dict[str, float] = {}
+    for s in layer_stats:
+        health = 1.0
+        # Dead layer: >90% zeros
+        if s.zero_fraction > 0.9:
+            health = 0.0
+        # Exploding layer: >10% large gradients
+        elif s.large_fraction > 0.1:
+            health = 0.1
+        # Warning: >50% zeros or >5% large
+        elif s.zero_fraction > 0.5 or s.large_fraction > 0.05:
+            health = 0.5
+        # Slight concern: >30% zeros
+        elif s.zero_fraction > 0.3:
+            health = 0.7
+        # NaN/Inf always critical
+        if s.nan_count > 0 or s.inf_count > 0:
+            health = 0.0
+        per_layer_health[s.layer_name] = health
 
     return {
         "dead_layers": dead,
         "exploding_layers": exploding,
         "nan_grad_count": nan_count,
-        "layer_gradient_health": health,
+        "layer_gradient_health": per_layer_health,
     }
 
 
 def emit_ppo_update_event(
     *,
-    hub,
-    metrics: dict,
+    hub: Any,
+    metrics: dict[str, Any],
     episodes_completed: int,
     batch_idx: int,
     epoch: int,
-    optimizer,
+    optimizer: Any,
     grad_norm: float | None,
     update_time_ms: float | None,
     group_id: str = "default",  # A/B testing identifier
@@ -746,6 +772,12 @@ def emit_ppo_update_event(
             head_blueprint_entropy=head_entropies_avg.get("head_blueprint_entropy"),
             head_slot_grad_norm=head_grad_norms_avg.get("head_slot_grad_norm"),
             head_blueprint_grad_norm=head_grad_norms_avg.get("head_blueprint_grad_norm"),
+            head_style_grad_norm=head_grad_norms_avg.get("head_style_grad_norm"),
+            head_tempo_grad_norm=head_grad_norms_avg.get("head_tempo_grad_norm"),
+            head_alpha_target_grad_norm=head_grad_norms_avg.get("head_alpha_target_grad_norm"),
+            head_alpha_speed_grad_norm=head_grad_norms_avg.get("head_alpha_speed_grad_norm"),
+            head_alpha_curve_grad_norm=head_grad_norms_avg.get("head_alpha_curve_grad_norm"),
+            head_op_grad_norm=head_grad_norms_avg.get("head_op_grad_norm"),
             head_style_entropy=head_entropies_avg.get("head_style_entropy"),
             head_tempo_entropy=head_entropies_avg.get("head_tempo_entropy"),
             head_alpha_target_entropy=head_entropies_avg.get("head_alpha_target_entropy"),
@@ -761,7 +793,7 @@ def emit_ppo_update_event(
 
 def emit_action_distribution(
     *,
-    hub,
+    hub: Any,
     batch_idx: int,
     episodes_completed: int,
     action_counts: dict[str, int],
@@ -779,29 +811,30 @@ def emit_action_distribution(
 
 
 def emit_cf_unavailable(
-    hub,
+    hub: Any,
     *,
     env_id: int,
     slot_id: str,
     reason: str,
 ) -> None:
     """Emit marker event when counterfactual baseline is unavailable."""
+    from esper.leyline import CounterfactualUnavailablePayload
+
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.COUNTERFACTUAL_COMPUTED,
         slot_id=slot_id,
         severity="warning",
-        data={
-            "env_id": env_id,
-            "slot_id": slot_id,
-            "available": False,
-            "reason": reason,
-        },
+        data=CounterfactualUnavailablePayload(
+            env_id=env_id,
+            slot_id=slot_id,
+            reason=reason,
+        ),
     ))
 
 
 def emit_throughput(
     *,
-    hub,
+    hub: Any,
     env_id: int,
     batch_idx: int,
     episodes_completed: int,
@@ -827,7 +860,7 @@ def emit_throughput(
 
 def emit_reward_summary(
     *,
-    hub,
+    hub: Any,
     env_id: int,
     batch_idx: int,
     summary: dict[str, float],
@@ -849,7 +882,7 @@ def emit_reward_summary(
 
 def emit_mask_hit_rates(
     *,
-    hub,
+    hub: Any,
     batch_idx: int,
     episodes_completed: int,
     mask_hits: dict[str, int],
@@ -872,7 +905,7 @@ def emit_mask_hit_rates(
 # TODO: [UNWIRED TELEMETRY] - Call check_performance_degradation() at end of each epoch
 # with current accuracy vs rolling average. See telemetry-phase3.md Task 5 for integration notes.
 def check_performance_degradation(
-    hub,
+    hub: Any,
     *,
     current_acc: float,
     rolling_avg_acc: float,
@@ -910,23 +943,25 @@ def check_performance_degradation(
     if drop < degradation_threshold:
         return False
 
+    from esper.leyline import PerformanceDegradationPayload
+
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.PERFORMANCE_DEGRADATION,
         severity="warning",
-        data={
-            "current_acc": current_acc,
-            "rolling_avg_acc": rolling_avg_acc,
-            "drop_percent": drop * 100,
-            "threshold_percent": degradation_threshold * 100,
-            "env_id": env_id,
-            "training_progress": training_progress,
-        },
+        data=PerformanceDegradationPayload(
+            env_id=env_id,
+            current_acc=current_acc,
+            rolling_avg_acc=rolling_avg_acc,
+            drop_percent=drop * 100,
+            threshold_percent=degradation_threshold * 100,
+            training_progress=training_progress,
+        ),
     ))
     return True
 
 
 def apply_slot_telemetry(
-    env_state,
+    env_state: Any,
     *,
     ops_telemetry_enabled: bool,
     lifecycle_only: bool,

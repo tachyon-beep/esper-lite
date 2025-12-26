@@ -9,20 +9,21 @@ Tests verify that SlotConfig is correctly propagated through the entire stack:
 import pytest
 import torch
 
-from esper.leyline.slot_config import SlotConfig
-from esper.leyline.factored_actions import (
+from esper.leyline import (
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
     NUM_ALPHA_TARGETS,
-    NUM_OPS,
     NUM_BLUEPRINTS,
+    NUM_OPS,
     NUM_STYLES,
     NUM_TEMPO,
 )
+from esper.leyline.slot_config import SlotConfig
 from esper.tamiyo.policy.features import get_feature_size, BASE_FEATURE_SIZE, SLOT_FEATURE_SIZE
 from esper.simic.agent import PPOAgent
-from esper.simic.agent import FactoredRecurrentActorCritic
+from esper.tamiyo.networks import FactoredRecurrentActorCritic
 from esper.tamiyo.policy.action_masks import compute_action_masks
+from esper.tamiyo.policy.factory import create_policy
 
 
 class TestSlotConfigPropagation:
@@ -32,23 +33,29 @@ class TestSlotConfigPropagation:
         """PPOAgent should store the provided SlotConfig."""
         config = SlotConfig.for_grid(rows=2, cols=2)  # 4 slots
 
-        agent = PPOAgent(
+        policy = create_policy(
+            policy_type="lstm",
             state_dim=get_feature_size(config),
             slot_config=config,
-            compile_network=False,  # Skip compilation for faster tests
             device="cpu",
+            compile_mode="off",
         )
+        agent = PPOAgent(policy=policy, slot_config=config, device="cpu")
 
         assert agent.slot_config == config
         assert agent.slot_config.num_slots == 4
 
     def test_ppo_agent_defaults_to_3_slots(self):
         """PPOAgent should default to 3-slot config when not specified."""
-        agent = PPOAgent(
-            state_dim=get_feature_size(SlotConfig.default()),
-            compile_network=False,
+        config = SlotConfig.default()
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=get_feature_size(config),
+            slot_config=config,
             device="cpu",
+            compile_mode="off",
         )
+        agent = PPOAgent(policy=policy, device="cpu")
 
         assert agent.slot_config.num_slots == 3
         assert agent.slot_config.slot_ids == ("r0c0", "r0c1", "r0c2")
@@ -60,7 +67,7 @@ class TestSlotConfigPropagation:
 
         network = FactoredRecurrentActorCritic(
             state_dim=state_dim,
-            num_slots=config.num_slots,
+            slot_config=config,
         )
 
         assert network.num_slots == 6
@@ -87,7 +94,7 @@ class TestFeatureDimensionConsistency:
         # Create network with correct state_dim
         network = FactoredRecurrentActorCritic(
             state_dim=state_dim,
-            num_slots=config.num_slots,
+            slot_config=config,
         )
 
         # Create sample input matching feature output
@@ -129,7 +136,7 @@ class TestMaskDimensionConsistency:
         # Create network
         network = FactoredRecurrentActorCritic(
             state_dim=get_feature_size(config),
-            num_slots=config.num_slots,
+            slot_config=config,
         )
 
         # Check dimensions match
@@ -245,7 +252,7 @@ class TestMultiSlotConsistency:
         # Verify network creation
         network = FactoredRecurrentActorCritic(
             state_dim=state_dim,
-            num_slots=config.num_slots,
+            slot_config=config,
         )
         assert network.num_slots == expected_slots
 
@@ -283,7 +290,7 @@ class TestMultiSlotConsistency:
         # Verify network creation works
         network = FactoredRecurrentActorCritic(
             state_dim=state_dim,
-            num_slots=config.num_slots,
+            slot_config=config,
         )
         assert network.num_slots == 3
 
@@ -300,7 +307,7 @@ class TestDimensionMismatchDetection:
         # Create network with correct dimensions
         network = FactoredRecurrentActorCritic(
             state_dim=correct_state_dim,
-            num_slots=config.num_slots,
+            slot_config=config,
         )
 
         # Create input with wrong dimensions
@@ -316,12 +323,14 @@ class TestDimensionMismatchDetection:
         """PPOAgent's network should derive num_slots from slot_config."""
         config = SlotConfig.for_grid(rows=2, cols=2)  # 4 slots
 
-        agent = PPOAgent(
+        policy = create_policy(
+            policy_type="lstm",
             state_dim=get_feature_size(config),
             slot_config=config,
-            compile_network=False,
             device="cpu",
+            compile_mode="off",
         )
+        agent = PPOAgent(policy=policy, slot_config=config, device="cpu")
 
         # Agent's slot_config and network should agree on num_slots
-        assert agent.slot_config.num_slots == agent.network.num_slots == 4
+        assert agent.slot_config.num_slots == agent.policy.network.num_slots == 4

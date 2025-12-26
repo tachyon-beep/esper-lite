@@ -1,5 +1,4 @@
 """Tests for ThreadDeathModal widget."""
-import pytest
 from textual.screen import ModalScreen
 
 

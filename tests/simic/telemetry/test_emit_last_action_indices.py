@@ -1,17 +1,14 @@
 """Test emit_last_action with raw indices instead of FactoredAction."""
 
-import pytest
-
-from esper.leyline.factored_actions import (
-    FactoredAction,
-    OP_NAMES,
-    BLUEPRINT_IDS,
-    NUM_OPS,
-    ALPHA_TARGET_VALUES,
-    ALPHA_SPEED_NAMES,
+from esper.leyline import (
     ALPHA_CURVE_NAMES,
-    STYLE_NAMES,
+    ALPHA_SPEED_NAMES,
+    ALPHA_TARGET_VALUES,
+    FactoredAction,
+    NUM_OPS,
+    OP_NAMES,
     STYLE_ALPHA_ALGORITHMS,
+    STYLE_NAMES,
 )
 from esper.leyline.alpha import AlphaAlgorithm
 from esper.simic.telemetry.emitters import emit_last_action

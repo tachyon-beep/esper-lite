@@ -12,7 +12,7 @@ The reward design follows these principles:
 
 Usage:
     from esper.simic.rewards import compute_contribution_reward, ContributionRewardConfig
-    from esper.leyline.factored_actions import LifecycleOp
+    from esper.leyline import LifecycleOp
 
     reward = compute_contribution_reward(
         action=LifecycleOp.GERMINATE,
@@ -30,11 +30,16 @@ import logging
 import math
 from dataclasses import dataclass
 from enum import Enum
-from typing import NamedTuple, cast
+from typing import Any, NamedTuple, cast
 
-from esper.leyline import SeedStage, MIN_PRUNE_AGE, MIN_HOLDING_EPOCHS, DEFAULT_GAMMA
-from esper.leyline import DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
-from esper.leyline.factored_actions import LifecycleOp
+from esper.leyline import (
+    DEFAULT_GAMMA,
+    DEFAULT_MIN_FOSSILIZE_CONTRIBUTION,
+    LifecycleOp,
+    MIN_HOLDING_EPOCHS,
+    MIN_PRUNE_AGE,
+    SeedStage,
+)
 from esper.nissa import get_hub
 from .reward_telemetry import RewardComponentsTelemetry
 
@@ -229,6 +234,13 @@ class ContributionRewardConfig:
     # === Experiment Mode ===
     reward_mode: RewardMode = RewardMode.SHAPED
 
+    # === Ablation Flags ===
+    # Used for systematic reward function experiments.
+    # These disable specific reward components to measure their contribution.
+    disable_pbrs: bool = False  # Disable PBRS stage advancement shaping
+    disable_terminal_reward: bool = False  # Disable terminal accuracy bonus
+    disable_anti_gaming: bool = False  # Disable ratio_penalty and alpha_shock
+
     # === Sparse Reward Parameters ===
     # Parameter budget for efficiency calculation (sparse/minimal modes)
     param_budget: int = 500_000
@@ -337,7 +349,7 @@ class SeedInfo(NamedTuple):
     boost_received: float = 0.0  # Strongest single interaction
 
     @staticmethod
-    def from_seed_state(seed_state, seed_params: int = 0) -> "SeedInfo | None":
+    def from_seed_state(seed_state: Any, seed_params: int = 0) -> "SeedInfo | None":
         """Convert from kasmina.SeedState to SeedInfo.
 
         Args:
@@ -482,10 +494,12 @@ def compute_contribution_reward(
 
     # PBRS requires gamma_pbrs == gamma_ppo for policy invariance (Ng et al., 1999)
     # Runtime validation catches misconfiguration that would invalidate shaping guarantees
-    assert config.gamma == DEFAULT_GAMMA, (
-        f"PBRS gamma mismatch: config.gamma={config.gamma} != DEFAULT_GAMMA={DEFAULT_GAMMA}. "
-        "This breaks policy invariance guarantees. Use DEFAULT_GAMMA from leyline."
-    )
+    # NOTE: Using ValueError instead of assert ensures check runs even with python -O
+    if config.gamma != DEFAULT_GAMMA:
+        raise ValueError(
+            f"PBRS gamma mismatch: config.gamma={config.gamma} != DEFAULT_GAMMA={DEFAULT_GAMMA}. "
+            "This breaks policy invariance guarantees (Ng et al., 1999). Use DEFAULT_GAMMA from leyline."
+        )
 
     # Track components if requested (no import needed - already at module level)
     components = RewardComponentsTelemetry() if return_components else None
@@ -518,11 +532,14 @@ def compute_contribution_reward(
         # Attribution discount applies to all seeds with negative total_improvement
         # Sigmoid steepness controls how quickly discount kicks in for regressing seeds
         if total_imp < 0:
-            attribution_discount = 1.0 / (1.0 + math.exp(-config.attribution_sigmoid_steepness * total_imp))
+            # Clamp exponent to prevent overflow: exp(709) is the float64 limit
+            exp_arg = min(-config.attribution_sigmoid_steepness * total_imp, 700.0)
+            attribution_discount = 1.0 / (1.0 + math.exp(exp_arg))
 
         # Ratio penalty only for high contribution (> 1.0) to avoid noise
         # Only calculate when attribution_discount >= 0.5 (avoid penalty stacking)
-        if seed_contribution > 1.0 and attribution_discount >= 0.5:
+        # Skip if disable_anti_gaming is True (ablation experiment)
+        if seed_contribution > 1.0 and attribution_discount >= 0.5 and not config.disable_anti_gaming:
             # Guard against division by very small values even if threshold is misconfigured
             safe_threshold = max(config.improvement_safe_threshold, 1e-8)
             if total_imp > safe_threshold:
@@ -683,8 +700,9 @@ def compute_contribution_reward(
 
     # === 2. PBRS: Stage Progression ===
     # Potential-based shaping preserves optimal policy (Ng et al., 1999)
+    # Skip if disable_pbrs is True (ablation experiment)
     pbrs_bonus = 0.0
-    if seed_info is not None:
+    if seed_info is not None and not config.disable_pbrs:
         pbrs_bonus = _contribution_pbrs_bonus(seed_info, config)
         reward += pbrs_bonus
     if components:
@@ -724,8 +742,9 @@ def compute_contribution_reward(
         components.growth_ratio = growth_ratio  # DRL Expert diagnostic field
 
     # === 3b. SHOCK: Convex penalty on alpha changes ===
+    # Skip if disable_anti_gaming is True (ablation experiment)
     alpha_shock = 0.0
-    if alpha_delta_sq_sum > 0 and config.alpha_shock_coef != 0.0:
+    if alpha_delta_sq_sum > 0 and config.alpha_shock_coef != 0.0 and not config.disable_anti_gaming:
         alpha_shock = -config.alpha_shock_coef * alpha_delta_sq_sum
         reward += alpha_shock
     if components:
@@ -738,9 +757,10 @@ def compute_contribution_reward(
     if action == LifecycleOp.GERMINATE:
         if seed_info is not None:
             action_shaping += config.germinate_with_seed_penalty
-        else:
+        elif not config.disable_pbrs:
             # PBRS bonus for successful germination (no existing seed)
             # Balances the PBRS penalty applied when pruning seeds
+            # Skip if disable_pbrs is True (ablation experiment)
             phi_germinated = STAGE_POTENTIALS.get(STAGE_GERMINATED, 0.0)
             phi_no_seed = 0.0
             pbrs_germinate = config.gamma * phi_germinated - phi_no_seed
@@ -764,9 +784,10 @@ def compute_contribution_reward(
         components.action_shaping = action_shaping
 
     # === 5. TERMINAL BONUS ===
+    # Skip if disable_terminal_reward is True (ablation experiment)
     terminal_bonus = 0.0
     fossilize_terminal_bonus = 0.0
-    if epoch == max_epochs:
+    if epoch == max_epochs and not config.disable_terminal_reward:
         # Base accuracy bonus
         terminal_bonus = val_acc * config.terminal_acc_weight
         # ASYMMETRIC TERMINAL BONUS: Only reward CONTRIBUTING fossilized seeds
@@ -931,7 +952,8 @@ def compute_simplified_reward(
 
     # === 1. PBRS: Stage Progression ===
     # This is the ONLY shaping that preserves optimal policy guarantees
-    if seed_info is not None:
+    # Skip if disable_pbrs is True (ablation experiment)
+    if seed_info is not None and not config.disable_pbrs:
         reward += _contribution_pbrs_bonus(seed_info, config)
 
     # === 2. Intervention Cost ===
@@ -942,7 +964,8 @@ def compute_simplified_reward(
 
     # === 3. Terminal Bonus ===
     # Scaled for 25-step credit assignment (DRL Expert recommendation)
-    if epoch == max_epochs:
+    # Skip if disable_terminal_reward is True (ablation experiment)
+    if epoch == max_epochs and not config.disable_terminal_reward:
         # Accuracy component: [0, 3] range
         accuracy_bonus = (val_acc / 100.0) * 3.0
         # Fossilize component: [0, 6] for 3 slots max
@@ -1338,7 +1361,7 @@ def _contribution_prune_shaping(
 
 
 def _check_reward_hacking(
-    hub,
+    hub: Any,
     *,
     seed_contribution: float,
     total_improvement: float,
@@ -1370,7 +1393,7 @@ def _check_reward_hacking(
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.REWARD_HACKING_SUSPECTED,
         severity="warning",
-        data={
+        data={  # type: ignore[arg-type]
             "ratio": ratio,
             "seed_contribution": seed_contribution,
             "total_improvement": total_improvement,
@@ -1383,7 +1406,7 @@ def _check_reward_hacking(
 
 
 def _check_ransomware_signature(
-    hub,
+    hub: Any,
     *,
     seed_contribution: float,
     total_improvement: float,
@@ -1414,7 +1437,7 @@ def _check_ransomware_signature(
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.REWARD_HACKING_SUSPECTED,
         severity="critical",
-        data={
+        data={  # type: ignore[arg-type]
             "pattern": "ransomware_signature",
             "seed_contribution": seed_contribution,
             "total_improvement": total_improvement,
@@ -1450,7 +1473,7 @@ def compute_potential(val_acc: float, epoch: int, max_epochs: int) -> float:
     # Simple potential: higher accuracy = higher potential
     # Discounted by time remaining to encourage early improvement
     time_factor = (max_epochs - epoch) / max_epochs
-    return val_acc * time_factor * 0.1
+    return float(val_acc * time_factor * 0.1)
 
 
 def compute_pbrs_bonus(
@@ -1468,7 +1491,7 @@ def compute_pbrs_bonus(
     return gamma * potential_next - potential_prev
 
 
-def compute_seed_potential(obs: dict) -> float:
+def compute_seed_potential(obs: dict[str, Any]) -> float:
     """Compute potential value Phi(s) based on seed state.
 
     The potential captures the expected future value of having an active seed
@@ -1510,7 +1533,7 @@ def compute_seed_potential(obs: dict) -> float:
     # epoch_progress_bonus=0.3, max_progress_bonus=2.0
     progress_bonus = min(epochs_in_stage * 0.3, 2.0)
 
-    return base_potential + progress_bonus
+    return float(base_potential + progress_bonus)
 
 
 # =============================================================================

@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import torch
 
@@ -54,9 +54,7 @@ from esper.leyline import (
     DEFAULT_ENTROPY_COEF_MIN,
 )
 from esper.simic.agent import PPOAgent
-from esper.simic.rewards import ContributionRewardConfig, RewardMode
-from esper.tamiyo.policy.features import get_feature_size
-from .policy_group import PolicyGroup
+from esper.simic.rewards import RewardMode
 from .vectorized import train_ppo_vectorized
 
 if TYPE_CHECKING:
@@ -82,8 +80,8 @@ def train_dual_policy_ab(
     seed: int = 42,
     use_telemetry: bool = True,
     slots: list[str] | None = None,
-    **kwargs,
-) -> dict[str, tuple[PPOAgent, list[dict]]]:
+    **kwargs: Any,
+) -> dict[str, tuple[PPOAgent, list[dict[str, Any]]]]:
     """Train multiple policies in parallel, one per GPU, for true A/B testing.
 
     This function creates one PolicyGroup per device, each with its own:
@@ -189,9 +187,6 @@ def train_dual_policy_ab(
             f"on device {device}"
         )
 
-        # Create reward config for this group
-        reward_config = ContributionRewardConfig(reward_mode=reward_mode)
-
         # Deterministic seed offset per group (for reproducibility across sessions)
         group_hash = int(hashlib.md5(group_id.encode()).hexdigest()[:8], 16)
         group_seed = seed + (group_hash % 10000)
@@ -236,7 +231,7 @@ def train_dual_policy_ab(
 
 def _print_dual_ab_comparison(
     group_configs: list[tuple[str, "RewardModeType"]],
-    results: dict[str, tuple[PPOAgent, list[dict]]],
+    results: dict[str, tuple[PPOAgent, list[dict[str, Any]]]],
 ) -> None:
     """Print final A/B comparison between groups.
 
@@ -262,13 +257,13 @@ def _print_dual_ab_comparison(
 
         # Compute statistics
         # history contains batch-level metrics with avg_accuracy
-        avg_accs = [batch["avg_accuracy"] for batch in history]
+        avg_accs = [cast(float, batch["avg_accuracy"]) for batch in history]
 
         final_acc = avg_accs[-1] if avg_accs else 0.0
         best_acc = max(avg_accs) if avg_accs else 0.0
         # Use rolling_avg_accuracy if available, otherwise avg_accuracy
         rolling_accs = [
-            batch.get("rolling_avg_accuracy", batch.get("avg_accuracy", 0.0))
+            cast(float, batch.get("rolling_avg_accuracy", batch.get("avg_accuracy", 0.0)))
             for batch in history
         ]
         avg_rolling = sum(rolling_accs) / len(rolling_accs) if rolling_accs else 0.0
@@ -291,8 +286,8 @@ def _print_dual_ab_comparison(
     # Winner determination
     if len(group_stats) == 2:
         a_stats, b_stats = group_stats
-        margin = abs(a_stats["final_acc"] - b_stats["final_acc"])
-        winner = a_stats if a_stats["final_acc"] > b_stats["final_acc"] else b_stats
+        margin = abs(cast(float, a_stats["final_acc"]) - cast(float, b_stats["final_acc"]))
+        winner = a_stats if cast(float, a_stats["final_acc"]) > cast(float, b_stats["final_acc"]) else b_stats
 
         print(f"\n>>> WINNER: {winner['group_id']} ({winner['reward_mode']}) by {margin:.2f}% <<<")
 

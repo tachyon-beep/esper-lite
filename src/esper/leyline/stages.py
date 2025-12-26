@@ -7,7 +7,7 @@ DORMANT -> GERMINATED -> TRAINING -> BLENDING -> HOLDING -> FOSSILIZED
                             PRUNED <- EMBARGOED <- RESETTING <- DORMANT
 """
 
-from enum import Enum, IntEnum, auto
+from enum import IntEnum
 
 
 class SeedStage(IntEnum):

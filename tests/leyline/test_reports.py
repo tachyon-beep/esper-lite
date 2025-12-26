@@ -1,6 +1,5 @@
 """Tests for leyline reports module - SeedMetrics, SeedStateReport, FieldReport."""
 
-import pytest
 from esper.leyline.reports import SeedMetrics
 
 

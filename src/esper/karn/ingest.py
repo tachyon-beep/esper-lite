@@ -270,6 +270,10 @@ def filter_dataclass_kwargs(cls: type[T], raw: dict[str, Any], *, context: str) 
 
     Unknown keys are ignored but logged to help detect schema drift.
     """
+    from dataclasses import is_dataclass
+    if not is_dataclass(cls):
+        _logger.warning("filter_dataclass_kwargs called on non-dataclass %s", cls.__name__)
+        return raw
     allowed = {field.name for field in fields(cls)}
     unknown = [key for key in raw.keys() if key not in allowed]
     if unknown:

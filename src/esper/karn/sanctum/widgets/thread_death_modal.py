@@ -6,6 +6,7 @@ This is a critical failure mode that requires operator attention.
 from __future__ import annotations
 
 from rich.text import Text
+from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container
 from textual.screen import ModalScreen
@@ -58,7 +59,7 @@ class ThreadDeathModal(ModalScreen[None]):
     }
     """
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
         """Compose the death modal."""
         with Container(id="death-container"):
             yield Static(

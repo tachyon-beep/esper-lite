@@ -7,6 +7,7 @@ with room to grow for ImageNet, synthetic datasets, etc.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, Iterator, cast
 import warnings
 
 import torch
@@ -44,7 +45,7 @@ class SharedBatchIterator:
 
     def __init__(
         self,
-        dataset: Dataset,
+        dataset: Dataset[tuple[torch.Tensor, torch.Tensor]],
         batch_size_per_env: int,
         n_envs: int,
         env_devices: list[str],
@@ -60,7 +61,7 @@ class SharedBatchIterator:
 
         # Single DataLoader with combined batch size
         total_batch = batch_size_per_env * n_envs
-        loader_kwargs = {
+        loader_kwargs: dict[str, Any] = {
             "batch_size": total_batch,
             "shuffle": shuffle,
             "num_workers": num_workers,
@@ -73,8 +74,8 @@ class SharedBatchIterator:
         if generator is not None:
             loader_kwargs["generator"] = generator
 
-        self.loader = DataLoader(dataset, **loader_kwargs)
-        self._iter = None
+        self.loader: DataLoader[tuple[torch.Tensor, torch.Tensor]] = DataLoader(dataset, **loader_kwargs)
+        self._iter: Iterator[tuple[torch.Tensor, torch.Tensor]] | None = None
 
     def __len__(self) -> int:
         return len(self.loader)
@@ -89,6 +90,7 @@ class SharedBatchIterator:
         Each tuple's tensors are already moved to the corresponding env's device
         with non_blocking=True for async transfer.
         """
+        assert self._iter is not None, "Iterator not initialized - call __iter__ first"
         inputs, targets = next(self._iter)
 
         # Split into per-env chunks (tensor_split preserves env count on partial batches)
@@ -96,14 +98,18 @@ class SharedBatchIterator:
         target_chunks = torch.tensor_split(targets, self.n_envs)
 
         # Move each chunk to its env's device (async)
+        # CRITICAL: Clone after tensor_split to prevent CUDA stream race conditions.
+        # tensor_split returns views, and multiple CUDA streams accessing the same
+        # underlying memory causes data corruption. This matches SharedGPUBatchIterator.
         batches = []
         for i, (inp, tgt) in enumerate(zip(input_chunks, target_chunks)):
             if inp.numel() == 0:
                 break
             device = self.env_devices[i % len(self.env_devices)]
+            # Clone AFTER moving to device for efficiency (clone on GPU is fast)
             batches.append((
-                inp.to(device, non_blocking=True),
-                tgt.to(device, non_blocking=True),
+                inp.to(device, non_blocking=True).clone(),
+                tgt.to(device, non_blocking=True).clone(),
             ))
 
         return batches
@@ -261,8 +267,8 @@ class SharedGPUBatchIterator:
                     torch.cuda.synchronize(torch.device(device))
 
         # Create ONE DataLoader per device with combined batch size
-        self._device_loaders: dict[str, DataLoader] = {}
-        self._device_iters: dict[str, object] = {}
+        self._device_loaders: dict[str, DataLoader[tuple[torch.Tensor, torch.Tensor]]] = {}
+        self._device_iters: dict[str, Iterator[tuple[torch.Tensor, torch.Tensor]]] = {}
 
         for device, env_indices in self._device_to_env_indices.items():
             n_envs_on_device = len(env_indices)
@@ -271,12 +277,13 @@ class SharedGPUBatchIterator:
             cache_key = _cifar10_cache_key(device, data_root)
             train_x, train_y, test_x, test_y = _GPU_DATASET_CACHE[cache_key]
 
+            dataset: Dataset[tuple[torch.Tensor, torch.Tensor]]
             if is_train:
-                dataset = TensorDataset(train_x, train_y)
+                dataset = cast(Dataset[tuple[torch.Tensor, torch.Tensor]], TensorDataset(train_x, train_y))
             else:
-                dataset = TensorDataset(test_x, test_y)
+                dataset = cast(Dataset[tuple[torch.Tensor, torch.Tensor]], TensorDataset(test_x, test_y))
 
-            loader_kwargs = {
+            loader_kwargs: dict[str, Any] = {
                 "batch_size": total_batch,
                 "shuffle": shuffle,
                 "num_workers": 0,  # Data already on GPU, no workers needed
@@ -314,8 +321,9 @@ class SharedGPUBatchIterator:
 
         for device, env_indices in self._device_to_env_indices.items():
             # Get combined batch from this device's DataLoader
+            device_iter = self._device_iters[device]
             try:
-                inputs, targets = next(self._device_iters[device])
+                inputs, targets = next(device_iter)
             except StopIteration:
                 raise StopIteration
 
@@ -325,12 +333,18 @@ class SharedGPUBatchIterator:
             target_chunks = torch.tensor_split(targets, n_envs_on_device)
 
             # Assign to correct environment indices
-            for local_idx, (inp, tgt) in enumerate(zip(input_chunks, target_chunks)):
+            # CRITICAL: Clone tensors to break view aliasing from tensor_split().
+            # tensor_split() returns views that share storage with the batch tensor.
+            # Without cloning, concurrent CUDA stream operations across environments
+            # or across multiple training runs cause data corruption (nll_loss assertion
+            # failures with targets outside valid class range). This is the source fix
+            # that eliminates the need for consumer-side cloning.
+            for local_idx, (inp, tgt) in enumerate(zip(input_chunks, target_chunks, strict=True)):
                 global_env_idx = env_indices[local_idx]
-                result[global_env_idx] = (inp, tgt)
+                result[global_env_idx] = (inp.clone(), tgt.clone())
 
         # Type narrowing - all slots should be filled
-        return [(inp, tgt) for inp, tgt in result if inp is not None and inp.numel() > 0]
+        return [item for item in result if item is not None and item[0].numel() > 0]
 
 
 def load_cifar10_gpu(
@@ -340,7 +354,7 @@ def load_cifar10_gpu(
     device: str = "cuda:0",
     *,
     refresh: bool = False,
-) -> tuple[DataLoader, DataLoader]:
+) -> tuple[DataLoader[tuple[torch.Tensor, torch.Tensor]], DataLoader[tuple[torch.Tensor, torch.Tensor]]]:
     """Load CIFAR-10 with data pre-loaded to GPU for maximum throughput.
 
     This eliminates DataLoader worker overhead by keeping the entire dataset
@@ -364,17 +378,21 @@ def load_cifar10_gpu(
     train_x, train_y, test_x, test_y = _GPU_DATASET_CACHE[cache_key]
 
     # Create GPU-resident DataLoaders (no workers needed - data already on GPU)
-    gpu_trainset = TensorDataset(train_x, train_y)
-    gpu_testset = TensorDataset(test_x, test_y)
+    gpu_trainset: Dataset[tuple[torch.Tensor, torch.Tensor]] = cast(
+        Dataset[tuple[torch.Tensor, torch.Tensor]], TensorDataset(train_x, train_y)
+    )
+    gpu_testset: Dataset[tuple[torch.Tensor, torch.Tensor]] = cast(
+        Dataset[tuple[torch.Tensor, torch.Tensor]], TensorDataset(test_x, test_y)
+    )
 
-    trainloader = DataLoader(
+    trainloader: DataLoader[tuple[torch.Tensor, torch.Tensor]] = DataLoader(
         gpu_trainset,
         batch_size=batch_size,
         shuffle=True,
         generator=generator,
         num_workers=0,  # Data already on GPU, no workers needed
     )
-    testloader = DataLoader(
+    testloader: DataLoader[tuple[torch.Tensor, torch.Tensor]] = DataLoader(
         gpu_testset,
         batch_size=batch_size,
         shuffle=False,
@@ -387,7 +405,7 @@ def load_cifar10_gpu(
 def get_cifar10_datasets(
     data_root: str = "./data",
     mock: bool = False,
-) -> tuple[Dataset, Dataset]:
+) -> tuple[Dataset[tuple[torch.Tensor, torch.Tensor]], Dataset[tuple[torch.Tensor, torch.Tensor]]]:
     """Get raw CIFAR-10 datasets (for SharedBatchIterator).
 
     Args:
@@ -402,7 +420,13 @@ def get_cifar10_datasets(
         train_y = torch.randint(0, 10, (1000,))
         test_x = torch.randn(200, 3, 32, 32)
         test_y = torch.randint(0, 10, (200,))
-        return TensorDataset(train_x, train_y), TensorDataset(test_x, test_y)
+        trainset: Dataset[tuple[torch.Tensor, torch.Tensor]] = cast(
+            Dataset[tuple[torch.Tensor, torch.Tensor]], TensorDataset(train_x, train_y)
+        )
+        testset: Dataset[tuple[torch.Tensor, torch.Tensor]] = cast(
+            Dataset[tuple[torch.Tensor, torch.Tensor]], TensorDataset(test_x, test_y)
+        )
+        return trainset, testset
 
     train_transform = transforms.Compose([
         transforms.RandomCrop(32, padding=4),
@@ -435,7 +459,7 @@ def load_cifar10(
     data_root: str = "./data",
     num_workers: int = 4,
     mock: bool = False,
-) -> tuple[DataLoader, DataLoader]:
+) -> tuple[DataLoader[tuple[torch.Tensor, torch.Tensor]], DataLoader[tuple[torch.Tensor, torch.Tensor]]]:
     """Load CIFAR-10 dataset.
 
     Args:
@@ -455,11 +479,19 @@ def load_cifar10(
         train_y = torch.randint(0, 10, (batch_size * 2,))
         test_x = torch.randn(batch_size * 2, 3, 32, 32)
         test_y = torch.randint(0, 10, (batch_size * 2,))
-        trainset = TensorDataset(train_x, train_y)
-        testset = TensorDataset(test_x, test_y)
-        trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=0)
-        testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=0)
-        return trainloader, testloader
+        mock_trainset: Dataset[tuple[torch.Tensor, torch.Tensor]] = cast(
+            Dataset[tuple[torch.Tensor, torch.Tensor]], TensorDataset(train_x, train_y)
+        )
+        mock_testset: Dataset[tuple[torch.Tensor, torch.Tensor]] = cast(
+            Dataset[tuple[torch.Tensor, torch.Tensor]], TensorDataset(test_x, test_y)
+        )
+        mock_trainloader: DataLoader[tuple[torch.Tensor, torch.Tensor]] = DataLoader(
+            mock_trainset, batch_size=batch_size, shuffle=True, num_workers=0
+        )
+        mock_testloader: DataLoader[tuple[torch.Tensor, torch.Tensor]] = DataLoader(
+            mock_testset, batch_size=batch_size, shuffle=False, num_workers=0
+        )
+        return mock_trainloader, mock_testloader
 
     train_transform = transforms.Compose([
         transforms.RandomCrop(32, padding=4),
@@ -490,7 +522,7 @@ def load_cifar10(
             mock=True,
         )
 
-    loader_kwargs = {
+    loader_kwargs: dict[str, Any] = {
         "batch_size": batch_size,
         "num_workers": num_workers,
         "pin_memory": True,
@@ -499,14 +531,14 @@ def load_cifar10(
         loader_kwargs["persistent_workers"] = True
         loader_kwargs["prefetch_factor"] = 2
 
-    trainloader = DataLoader(
+    trainloader: DataLoader[tuple[torch.Tensor, torch.Tensor]] = DataLoader(
         trainset,
         shuffle=True,
         generator=generator,
         **loader_kwargs,
     )
 
-    testloader = DataLoader(
+    testloader: DataLoader[tuple[torch.Tensor, torch.Tensor]] = DataLoader(
         testset,
         shuffle=False,
         **loader_kwargs,
@@ -520,7 +552,7 @@ def load_cifar10(
 # =============================================================================
 
 
-class TinyStoriesDataset(Dataset):
+class TinyStoriesDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
     """TinyStories for causal language modeling."""
 
     def __init__(
@@ -532,6 +564,7 @@ class TinyStoriesDataset(Dataset):
         vocab_size: int = 50257,
     ):
         self.block_size = block_size
+        self.examples: list[list[int]]
 
         if mock:
             # Synthetic token sequences for offline/testing use
@@ -560,7 +593,7 @@ class TinyStoriesDataset(Dataset):
         if max_samples:
             dataset = dataset.select(range(min(max_samples, len(dataset))))
 
-        self.examples: list[list[int]] = []
+        self.examples = []
         target_len = self.block_size + 1
         for example in dataset:
             tokens = self.tokenizer.encode(example["text"])
@@ -592,7 +625,7 @@ def load_tinystories(
     max_val_samples: int | None = None,
     num_workers: int = 0,
     mock: bool = False,
-) -> tuple[DataLoader, DataLoader]:
+) -> tuple[DataLoader[tuple[torch.Tensor, torch.Tensor]], DataLoader[tuple[torch.Tensor, torch.Tensor]]]:
     """Load TinyStories train and validation dataloaders."""
     train_dataset = TinyStoriesDataset(
         split="train",

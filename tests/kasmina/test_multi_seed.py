@@ -11,12 +11,11 @@ Tests verify correct behavior with multiple seeds:
 - All stages simultaneously across slots
 """
 
-import pytest
 import torch
 import torch.nn as nn
 
 from esper.kasmina.host import CNNHost, TransformerHost, MorphogeneticModel
-from esper.kasmina.slot import SeedSlot, SeedState, SeedMetrics
+from esper.kasmina.slot import SeedSlot, SeedState
 from esper.leyline import SeedStage, DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE
 
 

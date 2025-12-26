@@ -1,6 +1,5 @@
 """Tests for --sanctum CLI flag."""
 
-import pytest
 import subprocess
 import sys
 

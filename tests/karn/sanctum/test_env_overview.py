@@ -1,7 +1,6 @@
 """Tests for EnvOverview widget."""
 import pytest
 from collections import deque
-from datetime import datetime
 
 from textual.app import App
 
@@ -177,11 +176,11 @@ async def test_correct_columns(empty_snapshot):
         widget = app.query_one(EnvOverview)
         widget.update_snapshot(empty_snapshot)
 
-        # Expected columns: Env, Acc, CF, Growth, Reward, Acc▁▃▅, Rwd▁▃▅, ΔAcc, Seed Δ, Rent, [slots...], Last, Stale, Status
-        # Fixed: 10 + 3 slots + 3 (Last, Stale, Status) = 16 total
-        # Env, Acc, CF, Growth, Reward, Acc▁▃▅, Rwd▁▃▅, ΔAcc, Seed Δ, Rent (10) + R0C0, R0C1, R1C0 (3) + Last, Stale, Status (3) = 16
+        # Expected columns: Env, Acc, Loss, CF, Growth, Reward, Acc▁▃▅, Rwd▁▃▅, ΔAcc, Seed Δ, Rent, [slots...], Last, Stale, Status
+        # Fixed: 11 + 3 slots + 3 (Last, Stale, Status) = 17 total
+        # Env, Acc, Loss, CF, Growth, Reward, Acc▁▃▅, Rwd▁▃▅, ΔAcc, Seed Δ, Rent (11) + R0C0, R0C1, R1C0 (3) + Last, Stale, Status (3) = 17
         assert widget.table is not None
-        assert len(widget.table.columns) == 16
+        assert len(widget.table.columns) == 17
 
 
 @pytest.mark.asyncio
@@ -347,7 +346,7 @@ async def test_status_color_coding(populated_snapshot):
         # Statuses: EXCL, OK, STAL, DEGR, INIT
         row0 = get_row_text(widget.table, 0)
         row1 = get_row_text(widget.table, 1)
-        row2 = get_row_text(widget.table, 2)
+        get_row_text(widget.table, 2)
 
         assert "EXCL" in row0 or "excellent" in row0.lower()
         assert "STAL" in row1 or "stalled" in row1.lower()

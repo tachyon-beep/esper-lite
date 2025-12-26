@@ -7,7 +7,6 @@ See docs/plans/2025-12-16-tolaria-kasmina-remediation.md for full investigation.
 import tempfile
 import torch
 import torch.nn as nn
-import pytest
 
 from esper.kasmina.slot import SeedSlot, SeedState
 from esper.kasmina.blending import GatedBlend
@@ -111,32 +110,6 @@ class TestGatedBlendSerialization:
                 loaded_value, original_value,
                 msg=f"GatedBlend weight {key} was not restored correctly"
             )
-
-    def test_linear_blend_step_restored(self):
-        """Linear blend controller progress should round-trip correctly."""
-        slot = SeedSlot(slot_id="test", channels=64, device="cpu")
-        slot._blend_algorithm_id = "linear"
-        slot.seed = nn.Linear(64, 64)
-        slot.state = SeedState(seed_id="test_seed", blueprint_id="test_blueprint", slot_id="test")
-        slot.state.stage = SeedStage.BLENDING
-        slot.start_blending(total_steps=10)
-        for _ in range(5):
-            slot.state.alpha_controller.step()
-            slot.set_alpha(slot.state.alpha_controller.alpha)
-
-        with tempfile.NamedTemporaryFile(suffix=".pt") as f:
-            torch.save(slot.state_dict(), f.name)
-
-            new_slot = SeedSlot(slot_id="test", channels=64, device="cpu")
-            new_slot.seed = nn.Linear(64, 64)
-
-            state_dict = torch.load(f.name, weights_only=True)
-            new_slot.load_state_dict(state_dict, strict=False)
-
-        assert new_slot.state is not None
-        assert new_slot.alpha_schedule is None
-        assert new_slot.state.alpha_controller.alpha_steps_done == 5
-        assert new_slot.state.alpha_controller.alpha_steps_total == 10
 
     def test_non_blending_slot_loads_without_alpha_schedule(self):
         """Slot not in BLENDING stage should not create alpha_schedule on load."""

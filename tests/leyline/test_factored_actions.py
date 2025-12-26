@@ -1,10 +1,9 @@
 # tests/leyline/test_factored_actions.py
 # Removed: test_slot_action_enum - SlotAction enum deleted per No Legacy Code Policy
 
-import pytest
 from hypothesis import given, strategies as st
 
-from esper.leyline.factored_actions import (
+from esper.leyline import (
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
     NUM_ALPHA_TARGETS,
@@ -17,7 +16,7 @@ from esper.leyline.factored_actions import (
 
 def test_blueprint_action_enum():
     """BlueprintAction should enumerate blueprint choices."""
-    from esper.leyline.factored_actions import BlueprintAction
+    from esper.leyline import BlueprintAction
 
     assert BlueprintAction.NOOP.value == 0
     assert BlueprintAction.CONV_LIGHT.value == 1
@@ -26,7 +25,7 @@ def test_blueprint_action_enum():
 
 def test_germination_style_enum():
     """GerminationStyle should enumerate valid germination styles."""
-    from esper.leyline.factored_actions import GerminationStyle
+    from esper.leyline import GerminationStyle
 
     assert GerminationStyle.LINEAR_ADD.value == 0
     assert GerminationStyle.LINEAR_MULTIPLY.value == 1
@@ -36,7 +35,7 @@ def test_germination_style_enum():
 
 def test_lifecycle_op_enum():
     """LifecycleOp should enumerate lifecycle operations."""
-    from esper.leyline.factored_actions import LifecycleOp
+    from esper.leyline import LifecycleOp
 
     assert LifecycleOp.WAIT.value == 0
     assert LifecycleOp.GERMINATE.value == 1
@@ -49,15 +48,15 @@ def test_lifecycle_op_enum():
 
 def test_factored_action_composition():
     """FactoredAction should compose slot_idx, blueprint, style, tempo, alpha heads, op."""
-    from esper.leyline.factored_actions import (
-        FactoredAction,
-        BlueprintAction,
-        GerminationStyle,
-        TempoAction,
-        AlphaTargetAction,
-        AlphaSpeedAction,
+    from esper.leyline import (
         AlphaCurveAction,
+        AlphaSpeedAction,
+        AlphaTargetAction,
+        BlueprintAction,
+        FactoredAction,
+        GerminationStyle,
         LifecycleOp,
+        TempoAction,
     )
 
     action = FactoredAction(
@@ -80,15 +79,15 @@ def test_factored_action_composition():
 
 def test_factored_action_execution_properties():
     """FactoredAction properties should provide everything needed for execution."""
-    from esper.leyline.factored_actions import (
-        FactoredAction,
-        BlueprintAction,
-        GerminationStyle,
-        TempoAction,
-        AlphaTargetAction,
-        AlphaSpeedAction,
+    from esper.leyline import (
         AlphaCurveAction,
+        AlphaSpeedAction,
+        AlphaTargetAction,
+        BlueprintAction,
+        FactoredAction,
+        GerminationStyle,
         LifecycleOp,
+        TempoAction,
     )
 
     # GERMINATE action has all info for execution
@@ -154,7 +153,7 @@ def test_factored_action_execution_properties():
 
 def test_tempo_action_enum():
     """TempoAction has expected values."""
-    from esper.leyline.factored_actions import TempoAction
+    from esper.leyline import TempoAction
 
     assert len(TempoAction) == 3
     assert TempoAction.FAST.value == 0
@@ -164,8 +163,8 @@ def test_tempo_action_enum():
 
 def test_style_to_kasmina_mapping():
     """GerminationStyle mapping should only encode valid Kasmina germinate combos."""
+    from esper.leyline import GerminationStyle, STYLE_TO_KASMINA
     from esper.leyline.alpha import AlphaAlgorithm
-    from esper.leyline.factored_actions import GerminationStyle, STYLE_TO_KASMINA
 
     assert STYLE_TO_KASMINA[GerminationStyle.LINEAR_ADD] == ("linear", AlphaAlgorithm.ADD)
     assert STYLE_TO_KASMINA[GerminationStyle.LINEAR_MULTIPLY] == ("linear", AlphaAlgorithm.MULTIPLY)
@@ -175,14 +174,14 @@ def test_style_to_kasmina_mapping():
 
 def test_num_tempo_constant():
     """NUM_TEMPO matches enum length."""
-    from esper.leyline.factored_actions import NUM_TEMPO, TempoAction
+    from esper.leyline import NUM_TEMPO, TempoAction
 
     assert NUM_TEMPO == len(TempoAction)
 
 
 def test_tempo_to_epochs_mapping():
     """TEMPO_TO_EPOCHS maps correctly."""
-    from esper.leyline.factored_actions import TEMPO_TO_EPOCHS, TempoAction
+    from esper.leyline import TEMPO_TO_EPOCHS, TempoAction
 
     assert TEMPO_TO_EPOCHS[TempoAction.FAST] == 3
     assert TEMPO_TO_EPOCHS[TempoAction.STANDARD] == 5
@@ -191,7 +190,7 @@ def test_tempo_to_epochs_mapping():
 
 def test_tempo_names_lookup():
     """TEMPO_NAMES enables hot-path lookups."""
-    from esper.leyline.factored_actions import TEMPO_NAMES, TempoAction
+    from esper.leyline import TEMPO_NAMES, TempoAction
 
     assert TEMPO_NAMES == ("FAST", "STANDARD", "SLOW")
     assert TEMPO_NAMES[TempoAction.STANDARD.value] == "STANDARD"
@@ -218,7 +217,7 @@ def test_factored_action_roundtrip(
     op,
 ):
     """FactoredAction survives index conversion."""
-    from esper.leyline.factored_actions import FactoredAction, TempoAction
+    from esper.leyline import FactoredAction, TempoAction
 
     action = FactoredAction.from_indices(
         slot,
