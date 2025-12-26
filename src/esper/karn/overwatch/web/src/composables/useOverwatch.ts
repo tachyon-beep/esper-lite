@@ -20,6 +20,16 @@ export function useOverwatch(url: string): UseOverwatchReturn {
   let reconnectTimeout: ReturnType<typeof setTimeout> | null = null
   let stalenessInterval: ReturnType<typeof setInterval> | null = null
 
+  // Exponential backoff state
+  let reconnectAttempts = 0
+  const MAX_BACKOFF = 30000
+
+  function getBackoffDelay(): number {
+    const backoff = Math.min(MAX_BACKOFF, 2000 * Math.pow(2, reconnectAttempts))
+    const jitter = Math.random() * 1000
+    return backoff + jitter
+  }
+
   // Track staleness reactively
   const now = ref(Date.now())
   stalenessInterval = setInterval(() => {
@@ -37,6 +47,7 @@ export function useOverwatch(url: string): UseOverwatchReturn {
 
     ws.onopen = () => {
       connectionState.value = 'connected'
+      reconnectAttempts = 0 // Reset backoff on successful connection
     }
 
     ws.onmessage = (event) => {
@@ -53,8 +64,9 @@ export function useOverwatch(url: string): UseOverwatchReturn {
 
     ws.onclose = () => {
       connectionState.value = 'disconnected'
-      // Auto-reconnect after 2 seconds
-      reconnectTimeout = setTimeout(connect, 2000)
+      // Auto-reconnect with exponential backoff
+      reconnectAttempts++
+      reconnectTimeout = setTimeout(connect, getBackoffDelay())
     }
 
     ws.onerror = () => {
