@@ -182,10 +182,14 @@ class OverwatchBackend:
                 pass
         self._broadcast_queue.put(message)
 
-    def start(self) -> None:
-        """Start the WebSocket server in a background thread."""
+    def start(self) -> bool:
+        """Start the WebSocket server in a background thread.
+
+        Returns:
+            True if server started successfully, False if dependencies missing.
+        """
         if self._running:
-            return
+            return True
 
         # Try to import FastAPI/uvicorn (optional dependency)
         try:
@@ -278,15 +282,14 @@ class OverwatchBackend:
             self._server_thread.start()
 
             _logger.info("Overwatch backend started on port %d", self.port)
+            return True
 
         except ImportError:
             _logger.warning(
-                "FastAPI/uvicorn not installed. Install with: pip install esper[dashboard]"
+                "FastAPI/uvicorn not installed. Install with: pip install esper[overwatch]"
             )
             # _running stays False - emit() will skip broadcasts to avoid queue leak
-            _logger.info(
-                "Overwatch backend unavailable (no web server)"
-            )
+            return False
 
     def stop(self) -> None:
         """Stop the WebSocket server."""

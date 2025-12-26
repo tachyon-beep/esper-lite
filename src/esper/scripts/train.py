@@ -3,6 +3,7 @@
 
 import argparse
 import logging
+import sys
 
 import torch
 
@@ -401,9 +402,16 @@ def main() -> None:
         from esper.karn.overwatch import OverwatchBackend
 
         overwatch_backend = OverwatchBackend(port=args.overwatch_port)
-        overwatch_backend.start()
-        hub.add_backend(overwatch_backend)  # type: ignore[arg-type]
-        print(f"Overwatch dashboard: http://localhost:{args.overwatch_port}")
+        if overwatch_backend.start():
+            hub.add_backend(overwatch_backend)  # type: ignore[arg-type]
+            print(f"Overwatch dashboard: http://localhost:{args.overwatch_port}")
+        else:
+            print(
+                "ERROR: Overwatch dashboard unavailable - missing dependencies.\n"
+                "       Install with: pip install esper[overwatch]",
+                file=sys.stderr,
+            )
+            overwatch_backend = None
 
     # Add Karn research telemetry collector
     # KarnCollector captures events into typed store for research analytics

@@ -77,12 +77,13 @@ class TestOverwatchBackend:
         assert isinstance(snapshot, SanctumSnapshot)
 
     def test_backend_lifecycle_start_stop(self) -> None:
-        """Backend should start and stop cleanly without FastAPI."""
+        """Backend should start and stop cleanly, returning success status."""
         backend = OverwatchBackend(port=8080)
 
-        # Start should not raise even without FastAPI
-        # Note: _running stays False when FastAPI not installed (no server to run)
-        backend.start()
+        # Start should return bool indicating success
+        # Returns True if FastAPI available, False if missing dependencies
+        result = backend.start()
+        assert isinstance(result, bool)
 
         # Stop should clean up regardless of start state
         backend.stop()
