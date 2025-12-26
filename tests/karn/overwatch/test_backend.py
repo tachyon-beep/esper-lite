@@ -81,12 +81,61 @@ class TestOverwatchBackend:
         backend = OverwatchBackend(port=8080)
 
         # Start should not raise even without FastAPI
+        # Note: _running stays False when FastAPI not installed (no server to run)
         backend.start()
-        assert backend._running is True
 
-        # Stop should clean up
+        # Stop should clean up regardless of start state
         backend.stop()
         assert backend._running is False
+
+    def test_close_delegates_to_stop(self) -> None:
+        """close() should delegate to stop() for hub shutdown compatibility.
+
+        Regression test: Nissa hub calls backend.close() during shutdown,
+        but OverwatchBackend originally only had stop().
+        """
+        backend = OverwatchBackend(port=8080)
+        backend.stop = MagicMock()
+
+        backend.close()
+
+        backend.stop.assert_called_once()
+
+    def test_headless_mode_skips_broadcasts(self) -> None:
+        """When FastAPI not installed, emit() should not queue broadcasts.
+
+        Regression test: Prior to fix, _running was set True before import,
+        causing emit() to queue broadcasts with no consumer (memory leak).
+        """
+        backend = OverwatchBackend(port=8080)
+
+        # Start without FastAPI - _running should stay False
+        backend.start()
+
+        # Queue should start empty
+        assert backend._broadcast_queue.empty()
+
+        # Emit events - should NOT queue broadcasts since _running is False
+        backend.aggregator = MagicMock()
+        for _ in range(10):
+            backend.emit(MagicMock())
+
+        # Queue should still be empty (no leak)
+        assert backend._broadcast_queue.empty()
+
+    def test_close_clears_broadcast_queue(self) -> None:
+        """close() should clear any remaining queued messages."""
+        backend = OverwatchBackend(port=8080)
+
+        # Manually queue some messages
+        backend._broadcast_queue.put("message1")
+        backend._broadcast_queue.put("message2")
+        assert not backend._broadcast_queue.empty()
+
+        backend.close()
+
+        # Queue should be cleared
+        assert backend._broadcast_queue.empty()
 
     def test_snapshot_to_json_handles_special_types(self) -> None:
         """JSON serialization should handle enums, datetime, Path."""

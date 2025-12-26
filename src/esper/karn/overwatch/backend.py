@@ -174,14 +174,15 @@ class OverwatchBackend:
         if self._running:
             return
 
-        self._running = True
-
         # Try to import FastAPI/uvicorn (optional dependency)
         try:
             import uvicorn
             from fastapi import FastAPI, WebSocket, WebSocketDisconnect
             from fastapi.responses import FileResponse
             from fastapi.staticfiles import StaticFiles
+
+            # Mark as running only after successful import
+            self._running = True
 
             # Create FastAPI app
             app = FastAPI(title="Overwatch Dashboard")
@@ -261,9 +262,9 @@ class OverwatchBackend:
             _logger.warning(
                 "FastAPI/uvicorn not installed. Install with: pip install esper[dashboard]"
             )
-            # Still mark as running for testing without FastAPI
+            # _running stays False - emit() will skip broadcasts to avoid queue leak
             _logger.info(
-                "Overwatch backend running in headless mode (no web server)"
+                "Overwatch backend unavailable (no web server)"
             )
 
     def stop(self) -> None:
@@ -284,3 +285,17 @@ class OverwatchBackend:
             self._clients.clear()
 
         _logger.info("Overwatch backend stopped")
+
+    def close(self) -> None:
+        """Close the backend (called by Nissa hub on shutdown).
+
+        Delegates to stop() and clears any remaining broadcast queue items.
+        """
+        self.stop()
+
+        # Clear any remaining queued messages
+        while not self._broadcast_queue.empty():
+            try:
+                self._broadcast_queue.get_nowait()
+            except Empty:
+                break
