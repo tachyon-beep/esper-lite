@@ -2897,6 +2897,14 @@ def train_ppo_vectorized(
                     )
                     episode_outcomes.append(episode_outcome)
 
+                    # Emit EPISODE_OUTCOME telemetry for Pareto analysis
+                    if env_state.telemetry_cb:
+                        env_state.telemetry_cb(TelemetryEvent(
+                            event_type=TelemetryEventType.EPISODE_OUTCOME,
+                            epoch=episodes_completed + env_idx,
+                            data=episode_outcome.to_dict(),
+                        ))
+
                     # Shapley contributions at episode end
                     if (
                         env_state.counterfactual_helper is not None

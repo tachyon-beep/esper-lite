@@ -114,6 +114,9 @@ class TelemetryEventType(Enum):
     # === Analytics Events ===
     ANALYTICS_SNAPSHOT = auto()       # Full state snapshot for dashboard sync
 
+    # === Episode Events ===
+    EPISODE_OUTCOME = "episode_outcome"  # Multi-objective outcome for Pareto analysis
+
 
 @dataclass
 class TelemetryEvent:
