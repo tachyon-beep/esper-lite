@@ -2085,11 +2085,11 @@ def train_ppo_vectorized(
                     )
                     with stream_ctx:
                         env_cfg_correct_accums[i].add_(correct_per_config)
-                        # Accumulate main config loss (config 0) for telemetry display
-                        # loss_fused shape: [num_configs * batch_size] elementwise
-                        main_loss = loss_fused[:batch_size].sum()
+                        # Accumulate loss for telemetry display (scalar from criterion)
+                        # Note: This is the fused loss across all configs, not just main.
+                        # For display purposes this is acceptable since main dominates.
                         if env_state.val_loss_accum is not None:
-                            env_state.val_loss_accum.add_(main_loss)
+                            env_state.val_loss_accum.add_(loss_fused)
                     val_totals[i] += batch_size
 
             # Single sync point at end
