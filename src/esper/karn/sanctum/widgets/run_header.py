@@ -278,15 +278,14 @@ class RunHeader(Static):
         row1.append(runtime, style="cyan")
         row1.append("  |  ", style="dim")
 
-        # Throughput: epochs/sec and batches/min
+        # Throughput: epochs/sec and batches/min (always visible)
         eps = s.vitals.epochs_per_second
         bpm = s.vitals.batches_per_hour / 60  # Convert to per minute
-        if eps > 0 or bpm > 0:
-            row1.append(f"{eps:.1f}", style="cyan")
-            row1.append(" ep/s  ", style="dim")
-            row1.append(f"{bpm:.1f}", style="cyan")
-            row1.append(" batch/min", style="dim")
-            row1.append("  |  ", style="dim")
+        row1.append(f"{eps:.1f}", style="cyan")
+        row1.append(" ep/s  ", style="dim")
+        row1.append(f"{bpm:.1f}", style="cyan")
+        row1.append(" batch/min", style="dim")
+        row1.append("  |  ", style="dim")
 
         # Best accuracy (global)
         best_accs = [e.best_accuracy for e in s.envs.values() if e.best_accuracy > 0]
@@ -306,15 +305,17 @@ class RunHeader(Static):
             row1.append("Best: ", style="dim")
             row1.append("--", style="dim")
 
-        # Rolling average with sparkline
+        # Rolling average with sparkline (always visible)
+        row1.append("  |  ", style="dim")
+        row1.append("Avg: ", style="dim")
         if s.mean_accuracy_history:
             from esper.karn.sanctum.schema import make_sparkline
-            current_mean = s.mean_accuracy_history[-1] if s.mean_accuracy_history else 0
+            current_mean = s.mean_accuracy_history[-1]
             sparkline = make_sparkline(s.mean_accuracy_history, width=10)
-            row1.append("  |  ", style="dim")
-            row1.append("Avg: ", style="dim")
             row1.append(f"{current_mean:.1f}%", style="cyan")
             row1.append(f" {sparkline}", style="cyan")
+        else:
+            row1.append("--", style="dim")
 
         # A/B Comparison (only when in A/B testing mode)
         if self._ab_mode:

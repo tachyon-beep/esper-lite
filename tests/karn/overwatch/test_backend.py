@@ -137,6 +137,33 @@ class TestOverwatchBackend:
         # Queue should be cleared
         assert backend._broadcast_queue.empty()
 
+    def test_broadcast_skipped_when_no_clients(self) -> None:
+        """_broadcast() should skip queueing when no clients connected.
+
+        Regression test: Prior to fix, broadcasts were queued even with no
+        clients, causing unbounded memory growth and flooding first client.
+        """
+        backend = OverwatchBackend(port=8080)
+        backend._running = True  # Simulate running server
+
+        # No clients connected
+        assert len(backend._clients) == 0
+        assert backend._broadcast_queue.empty()
+
+        # Call _broadcast multiple times
+        for _ in range(100):
+            backend._broadcast()
+
+        # Queue should still be empty - no point queueing with no clients
+        assert backend._broadcast_queue.empty()
+
+    def test_broadcast_queue_is_bounded(self) -> None:
+        """Queue should have bounded size to prevent memory leaks."""
+        backend = OverwatchBackend(port=8080)
+
+        # Queue should have maxsize
+        assert backend._broadcast_queue.maxsize == 10
+
     def test_snapshot_to_json_handles_special_types(self) -> None:
         """JSON serialization should handle enums, datetime, Path."""
         from datetime import datetime, timezone

@@ -100,7 +100,8 @@ class OverwatchBackend:
         # Server lifecycle
         self._running = False
         self._server_thread: threading.Thread | None = None
-        self._broadcast_queue: Queue[str] = Queue()
+        # Bounded queue prevents memory leak if clients disconnect or lag
+        self._broadcast_queue: Queue[str] = Queue(maxsize=10)
 
         # Connected WebSocket clients
         self._clients: list[Any] = []
@@ -163,11 +164,22 @@ class OverwatchBackend:
         if not self._running:
             return
 
+        # Skip if no clients connected - avoids unbounded queue growth
+        with self._clients_lock:
+            if not self._clients:
+                return
+
         snapshot = self.get_snapshot()
         json_str = self.snapshot_to_json(snapshot)
         message = json.dumps({"type": "snapshot", "data": json.loads(json_str)})
 
-        # Queue for async broadcast
+        # Queue for async broadcast (bounded to prevent backlog on slow clients)
+        # If queue is full, drop oldest message to make room for latest
+        if self._broadcast_queue.full():
+            try:
+                self._broadcast_queue.get_nowait()
+            except Empty:
+                pass
         self._broadcast_queue.put(message)
 
     def start(self) -> None:

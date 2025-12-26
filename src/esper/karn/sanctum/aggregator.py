@@ -1015,6 +1015,10 @@ class SanctumAggregator:
             }
             env.total_actions = 0
 
+            # Gaming rate tracking (fresh per episode)
+            env.gaming_trigger_count = 0
+            env.total_reward_steps = 0
+
             # Reward components (stale from last step)
             env.reward_components = RewardComponents()
 

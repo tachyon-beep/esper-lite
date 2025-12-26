@@ -211,29 +211,37 @@ class HistoricalEnvDetail(ModalScreen[None]):
         return header
 
     def _render_metrics(self) -> Table:
-        """Render environment metrics section with historical data."""
+        """Render environment metrics section with historical data.
+
+        All rows are always visible to prevent jarring layout shifts.
+        Empty/zero values display as dim "--" placeholders.
+        """
         table = Table(show_header=False, box=None, expand=True)
         table.add_column("Metric", style="dim", width=20)
         table.add_column("Value", style="white")
 
         record = self._record
+        dim_placeholder = Text("--", style="dim")
 
-        # Accuracy history sparkline
+        # Accuracy history sparkline (always visible)
+        from esper.karn.sanctum.schema import make_sparkline
         if record.accuracy_history:
-            from esper.karn.sanctum.schema import make_sparkline
             acc_spark = make_sparkline(record.accuracy_history, width=40)
-            table.add_row("Accuracy History", acc_spark)
+            table.add_row("Accuracy History", acc_spark if acc_spark else dim_placeholder)
+        else:
+            table.add_row("Accuracy History", dim_placeholder)
 
-        # Reward history sparkline
+        # Reward history sparkline (always visible)
         if record.reward_history:
-            from esper.karn.sanctum.schema import make_sparkline
             rwd_spark = make_sparkline(record.reward_history, width=40)
-            table.add_row("Reward History", rwd_spark)
+            table.add_row("Reward History", rwd_spark if rwd_spark else dim_placeholder)
+        else:
+            table.add_row("Reward History", dim_placeholder)
 
-        # Reward components (if captured)
+        # Reward components (always visible)
         rc = record.reward_components
+        reward_text = Text()
         if rc is not None and rc.total is not None and rc.total != 0:
-            reward_text = Text()
             reward_text.append(f"Total: {rc.total:+.3f}", style="bold")
             if rc.base_acc_delta is not None and rc.base_acc_delta != 0:
                 style = "green" if rc.base_acc_delta > 0 else "red"
@@ -246,15 +254,19 @@ class HistoricalEnvDetail(ModalScreen[None]):
                 style = "green" if rc.bounded_attribution > 0 else "red"
                 reward_text.append(f"  Attr: {rc.bounded_attribution:+.3f}", style=style)
             table.add_row("Reward Breakdown", reward_text)
+        else:
+            table.add_row("Reward Breakdown", dim_placeholder)
 
-        # Recent actions (at time of snapshot)
+        # Final actions (always visible)
         if record.action_history:
             recent = " → ".join(list(record.action_history)[-5:])
             table.add_row("Final Actions", recent)
+        else:
+            table.add_row("Final Actions", dim_placeholder)
 
-        # Seed composition summary
+        # Seed composition summary (always visible)
+        seed_summary = Text()
         if record.seeds:
-            seed_summary = Text()
             stages: dict[str, int] = {}
             for seed in record.seeds.values():
                 stage = seed.stage if seed else "DORMANT"
@@ -264,10 +276,14 @@ class HistoricalEnvDetail(ModalScreen[None]):
                 color = STAGE_COLORS.get(stage, "dim")
                 seed_summary.append(f"{stage}: {count}  ", style=color)
             table.add_row("Seed States", seed_summary)
+        else:
+            table.add_row("Seed States", dim_placeholder)
 
-        # Host loss (if available)
+        # Host loss (always visible)
         if record.host_loss and record.host_loss > 0:
             table.add_row("Host Loss", f"{record.host_loss:.4f}")
+        else:
+            table.add_row("Host Loss", dim_placeholder)
 
         return table
 

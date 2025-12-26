@@ -402,3 +402,76 @@ def test_run_header_shows_leader_indicator():
 
     # Should show leader
     assert "A" in text  # Leading policy indicator
+
+
+# =============================================================================
+# Always-Visible Metrics Tests
+# =============================================================================
+
+
+def test_run_header_throughput_always_visible():
+    """Throughput should always be visible, even when zero."""
+    from esper.karn.sanctum.schema import SystemVitals
+
+    snapshot = SanctumSnapshot(connected=True, staleness_seconds=1.0)
+    # Zero throughput
+    snapshot.vitals = SystemVitals(
+        epochs_per_second=0.0,
+        batches_per_hour=0.0,
+    )
+
+    header = RunHeader()
+    header.update_snapshot(snapshot)
+    rendered = render_to_text(header.render())
+
+    # Should still show throughput labels
+    assert "ep/s" in rendered
+    assert "batch/min" in rendered
+    # Should show zero values
+    assert "0.0" in rendered
+
+
+def test_run_header_average_always_visible():
+    """Rolling average should always be visible, with placeholder when no history."""
+    snapshot = SanctumSnapshot(connected=True, staleness_seconds=1.0)
+    # No mean accuracy history
+    snapshot.mean_accuracy_history = []
+
+    header = RunHeader()
+    header.update_snapshot(snapshot)
+    rendered = render_to_text(header.render())
+
+    # Should still show "Avg:" label
+    assert "Avg:" in rendered
+    # Should show placeholder
+    assert "--" in rendered
+
+
+def test_run_header_average_shows_value_with_history():
+    """Rolling average should show value when history is available."""
+    snapshot = SanctumSnapshot(connected=True, staleness_seconds=1.0)
+    snapshot.mean_accuracy_history = [65.0, 70.0, 75.0]
+
+    header = RunHeader()
+    header.update_snapshot(snapshot)
+    rendered = render_to_text(header.render())
+
+    # Should show "Avg:" label
+    assert "Avg:" in rendered
+    # Should show current mean (last value)
+    assert "75.0%" in rendered
+
+
+def test_run_header_best_always_visible():
+    """Best accuracy should always be visible, with placeholder when no data."""
+    snapshot = SanctumSnapshot(connected=True, staleness_seconds=1.0)
+    # No envs, so no best accuracy
+
+    header = RunHeader()
+    header.update_snapshot(snapshot)
+    rendered = render_to_text(header.render())
+
+    # Should show "Best:" label
+    assert "Best:" in rendered
+    # Should show placeholder
+    assert "--" in rendered
