@@ -1702,17 +1702,47 @@ def compute_reward_health(self) -> "RewardHealthData":
 
 **Step 3: Mount panel in app.py**
 
+**Layout placement:** The RewardHealthPanel should be placed **underneath the Best Runs panel** (Scoreboard widget), which is currently only using half its vertical budget. This creates a natural grouping of "run-level metrics" in that column.
+
+```
+┌─────────────────┬──────────────────┐
+│  EnvOverview    │   Best Runs      │  ← Scoreboard (top half)
+│                 ├──────────────────┤
+│                 │  Reward Health   │  ← NEW (bottom half)
+├─────────────────┴──────────────────┤
+│         Detail Panels              │
+└────────────────────────────────────┘
+```
+
 Add to layout and wire update:
 
 ```python
 from esper.karn.sanctum.widgets import RewardHealthPanel
 
-# In compose():
-yield RewardHealthPanel(id="reward-health")
+# In compose(), place after Scoreboard in the same container:
+# The Scoreboard and RewardHealthPanel share the right column
+with Vertical(id="metrics-column"):
+    yield Scoreboard(id="scoreboard")
+    yield RewardHealthPanel(id="reward-health")
 
 # In update handler:
 health_data = self.aggregator.compute_reward_health()
 self.query_one("#reward-health", RewardHealthPanel).update_data(health_data)
+```
+
+**CSS adjustment** (in `styles.tcss`):
+```css
+#metrics-column {
+    width: 1fr;
+}
+
+#scoreboard {
+    height: 50%;
+}
+
+#reward-health {
+    height: 50%;
+}
 ```
 
 **Step 4: Verify widget renders**

@@ -72,6 +72,7 @@ from esper.leyline import (
     DEFAULT_LSTM_HIDDEN_DIM,
     DEFAULT_MIN_PANICS_BEFORE_ROLLBACK,
     DEFAULT_N_ENVS,
+    EpisodeOutcomePayload,
     HEAD_NAMES,
     LifecycleOp,
     OP_ADVANCE,
@@ -2902,7 +2903,17 @@ def train_ppo_vectorized(
                         env_state.telemetry_cb(TelemetryEvent(
                             event_type=TelemetryEventType.EPISODE_OUTCOME,
                             epoch=episodes_completed + env_idx,
-                            data=episode_outcome.to_dict(),
+                            data=EpisodeOutcomePayload(
+                                env_id=env_idx,
+                                episode_idx=episode_outcome.episode_idx,
+                                final_accuracy=episode_outcome.final_accuracy,
+                                param_ratio=episode_outcome.param_ratio,
+                                num_fossilized=episode_outcome.num_fossilized,
+                                num_contributing_fossilized=episode_outcome.num_contributing_fossilized,
+                                episode_reward=episode_outcome.episode_reward,
+                                stability_score=episode_outcome.stability_score,
+                                reward_mode=episode_outcome.reward_mode,
+                            ),
                         ))
 
                     # Shapley contributions at episode end

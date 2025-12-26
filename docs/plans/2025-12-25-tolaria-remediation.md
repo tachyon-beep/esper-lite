@@ -127,16 +127,19 @@ if env_state.scaler is not None:
 ## Task Dependency Chain
 
 ```
-Task 1 ──► Task 2 ──► Task 3 ──► Task 4 ──► Task 5 ──► Task 6
-  │           │           │           │           │
-  │           │           │           │           └── Integration verification
+Task 1 ──► Task 2 ──► Task 3 ──► Task 4 ──► Task 6
+  │           │           │           │         │
+  │           │           │           │         └── Integration verification
   │           │           │           └── Delete dead tests
   │           │           └── Delete trainer.py
   │           └── Implement gradient clipping
   └── Add TrainingConfig parameters
+
+Task 5 (Optional - can be done later)
+  └── Add perplexity to telemetry (nice-to-have)
 ```
 
-**IMPORTANT:** Tasks are strictly sequential. Do NOT parallelize.
+**IMPORTANT:** Tasks 1-4 and 6 are strictly sequential. Task 5 is optional and can be deferred.
 
 ---
 
@@ -336,14 +339,20 @@ __all__ = [
 Remove all tests that validate the dead trainer functions.
 
 **Files to DELETE entirely:**
-- `tests/tolaria/test_trainer.py` (937 lines)
-- `tests/tolaria/test_lm_validation.py` (~50 lines)
-- `tests/integration/test_tolaria_kasmina.py` (164 lines) - tests dead trainer+kasmina
-- `tests/integration/test_tolaria_simic.py` (158 lines) - tests dead trainer+simic
+- `tests/tolaria/test_trainer.py` (936 lines)
+- `tests/tolaria/test_lm_validation.py` (56 lines)
+- `tests/integration/test_tolaria_kasmina.py` (163 lines) - tests dead trainer+kasmina
+- `tests/integration/test_tolaria_simic.py` (157 lines) - tests dead trainer+simic
+- `tests/integration/test_tamiyo_tolaria.py` (224 lines) - all tests use dead trainer functions
 
-**Files to MODIFY (remove dead imports):**
-- `tests/integration/test_tamiyo_tolaria.py` - Remove trainer imports, or DELETE if all tests use dead code
-- `tests/integration/test_tamiyo_simic.py` - Remove trainer imports, keep SignalTracker tests
+**Files to AUDIT then MODIFY or DELETE:**
+- `tests/integration/test_tamiyo_simic.py` (599 lines) - imports dead trainer; audit for SignalTracker tests worth preserving
+
+**Audit procedure for test_tamiyo_simic.py:**
+1. Check which tests import `train_epoch_normal`/`validate_and_get_metrics`
+2. If test uses SignalTracker without dead trainer: KEEP and remove dead imports
+3. If test requires dead trainer to function: DELETE the test function
+4. If all tests require dead trainer: DELETE entire file
 
 **Verification:**
 ```bash
@@ -354,15 +363,15 @@ grep -r "from esper.tolaria import.*train" tests/
 # These should return empty
 ```
 
-**Total lines deleted:** ~1,350
+**Total lines deleted:** ~2,135 (minimum, depends on audit)
 
 **Test:** `uv run pytest tests/ -v --ignore=tests/karn`
 
 ---
 
-### Task 5: Add Perplexity to Telemetry (Nice-to-Have)
+### Task 5: Add Perplexity to Telemetry (OPTIONAL - Nice-to-Have)
 
-**Depends on:** Task 4 (dead code cleanup complete)
+**Depends on:** Task 4 (can be deferred to a future sprint)
 
 Add perplexity calculation for LM tasks to the production validation path.
 
@@ -385,7 +394,7 @@ if task_spec.task_type == "lm":
 
 ### Task 6: Integration Verification
 
-**Depends on:** Task 5 (all changes complete)
+**Depends on:** Task 4 (core remediation complete; Task 5 is optional)
 
 Full test suite and manual verification.
 
@@ -411,21 +420,23 @@ ls src/esper/tolaria/
 - [ ] Gradient clipping is active (check logs for gradient norms)
 - [ ] No imports from `esper.tolaria.trainer` remain
 - [ ] `trainer.py` is deleted
-- [ ] ~1,350 lines of dead tests deleted
+- [ ] ~2,135+ lines of dead tests deleted
 
 ---
 
 ## Files Summary
 
-### To DELETE (Total: ~1,750 lines)
+### To DELETE (Total: ~2,580 lines)
 
 | File | Lines | Reason |
 |------|-------|--------|
-| `src/esper/tolaria/trainer.py` | 433 | Dead training functions |
-| `tests/tolaria/test_trainer.py` | 937 | Tests dead code |
-| `tests/tolaria/test_lm_validation.py` | ~50 | Tests dead code |
-| `tests/integration/test_tolaria_kasmina.py` | 164 | Tests dead code |
-| `tests/integration/test_tolaria_simic.py` | 158 | Tests dead code (keep governor tests?) |
+| `src/esper/tolaria/trainer.py` | 444 | Dead training functions |
+| `tests/tolaria/test_trainer.py` | 936 | Tests dead code |
+| `tests/tolaria/test_lm_validation.py` | 56 | Tests dead code |
+| `tests/integration/test_tolaria_kasmina.py` | 163 | Tests dead trainer+kasmina |
+| `tests/integration/test_tolaria_simic.py` | 157 | Tests dead trainer+simic |
+| `tests/integration/test_tamiyo_tolaria.py` | 224 | All tests use dead trainer |
+| `tests/integration/test_tamiyo_simic.py` | ~599 | Audit first - may partially preserve |
 
 ### To MODIFY
 
@@ -434,7 +445,6 @@ ls src/esper/tolaria/
 | `src/esper/simic/training/config.py` | Add `max_grad_norm` parameter |
 | `src/esper/simic/training/vectorized.py` | Add gradient clipping with proper AMP ordering |
 | `src/esper/tolaria/__init__.py` | Remove trainer exports |
-| `tests/integration/test_tamiyo_*.py` | Remove dead trainer imports |
 
 ### To CREATE
 
@@ -498,7 +508,7 @@ No database migrations or external dependencies affected.
 3. No imports from `esper.tolaria.trainer` remain anywhere
 4. `trainer.py` file is deleted
 5. `TrainingConfig.max_grad_norm` controls host/seed gradient clipping
-6. ~1,750 lines of dead code removed
+6. ~2,580 lines of dead code removed
 
 ---
 

@@ -1190,6 +1190,47 @@ class PerformanceDegradationPayload:
         )
 
 
+@dataclass(slots=True, frozen=True)
+class EpisodeOutcomePayload:
+    """Payload for EPISODE_OUTCOME event.
+
+    Captures multi-objective outcomes for Pareto analysis:
+    - final_accuracy: Task performance (higher = better)
+    - param_ratio: Parameter efficiency (lower = better)
+    - stability_score: Training stability (higher = better)
+
+    Note: env_id may be -1 when emitted from slots (Kasmina), which don't
+    know their environment context. The sentinel is replaced by the actual
+    env_id in emit_with_env_context (simic/telemetry/emitters.py).
+    """
+
+    # REQUIRED
+    env_id: int  # -1 = sentinel (replaced by emit_with_env_context)
+    episode_idx: int
+    final_accuracy: float
+    param_ratio: float  # total_params / host_params
+    num_fossilized: int
+    num_contributing_fossilized: int  # Seeds that contributed to learning
+    episode_reward: float  # Total reward for the episode
+    stability_score: float  # 1 - variance(recent_losses)
+    reward_mode: str  # "shaped", "simplified", etc.
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "EpisodeOutcomePayload":
+        """Parse from dict. Raises KeyError on missing required fields."""
+        return cls(
+            env_id=data["env_id"],
+            episode_idx=data["episode_idx"],
+            final_accuracy=data["final_accuracy"],
+            param_ratio=data["param_ratio"],
+            num_fossilized=data["num_fossilized"],
+            num_contributing_fossilized=data["num_contributing_fossilized"],
+            episode_reward=data["episode_reward"],
+            stability_score=data["stability_score"],
+            reward_mode=data["reward_mode"],
+        )
+
+
 # =============================================================================
 # Telemetry Payload Type Union
 # =============================================================================
@@ -1211,4 +1252,5 @@ TelemetryPayload = (
     | AnalyticsSnapshotPayload
     | AnomalyDetectedPayload
     | PerformanceDegradationPayload
+    | EpisodeOutcomePayload
 )

@@ -10,7 +10,7 @@ from esper.karn.mcp.views import create_views, VIEW_DEFINITIONS
 
 def test_view_definitions_exist():
     """All expected views are defined."""
-    expected = {"raw_events", "runs", "epochs", "ppo_updates", "seed_lifecycle", "rewards", "anomalies"}
+    expected = {"raw_events", "runs", "epochs", "ppo_updates", "seed_lifecycle", "rewards", "anomalies", "episode_outcomes"}
     assert set(VIEW_DEFINITIONS.keys()) == expected
 
 

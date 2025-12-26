@@ -18,7 +18,8 @@ class TestLayerGradientAggregation:
         assert result["dead_layers"] == 0
         assert result["exploding_layers"] == 0
         assert result["nan_grad_count"] == 0
-        assert result["layer_gradient_health"] == 1.0
+        # Empty input returns empty per-layer dict
+        assert result["layer_gradient_health"] == {}
 
     def test_dead_layer_detection(self):
         """Layers with >90% zero gradients are dead."""
@@ -57,8 +58,10 @@ class TestLayerGradientAggregation:
         assert result["dead_layers"] == 1
         assert result["exploding_layers"] == 0
         assert result["nan_grad_count"] == 0
-        # Health reduced due to dead layer
-        assert result["layer_gradient_health"] < 1.0
+        # Per-layer health: dead layer gets 0.0, healthy layer gets 1.0
+        per_layer = result["layer_gradient_health"]
+        assert per_layer["dead_layer"] == 0.0
+        assert per_layer["healthy_layer"] == 1.0
 
     def test_exploding_layer_detection(self):
         """Layers with >10% large gradients are exploding."""
@@ -83,8 +86,9 @@ class TestLayerGradientAggregation:
         assert result["dead_layers"] == 0
         assert result["exploding_layers"] == 1
         assert result["nan_grad_count"] == 0
-        # Health reduced significantly due to exploding
-        assert result["layer_gradient_health"] < 0.5
+        # Per-layer health: exploding layer gets low score (0.1)
+        per_layer = result["layer_gradient_health"]
+        assert per_layer["exploding"] < 0.5
 
     def test_nan_count_aggregation(self):
         """NaN counts are summed across layers."""
@@ -146,7 +150,10 @@ class TestLayerGradientAggregation:
         assert result["dead_layers"] == 0
         assert result["exploding_layers"] == 0
         assert result["nan_grad_count"] == 0
-        assert result["layer_gradient_health"] == 1.0
+        # Per-layer health: all healthy layers get 1.0
+        per_layer = result["layer_gradient_health"]
+        assert all(v == 1.0 for v in per_layer.values())
+        assert len(per_layer) == 5
 
 
 class TestShapedRewardRatio:

@@ -132,6 +132,22 @@ class TamiyoBrain(Static):
         "op": 1.792,  # ln(6) - LifecycleOp has 6 values
     }
 
+    # Conditional heads: only relevant for certain ops, masked to single option otherwise.
+    # When op != relevant_ops, the head is forced to a default value (entropy = 0).
+    # This causes average entropy to be diluted by samples where the head is irrelevant.
+    # Maps head_key -> tuple of (relevant_op_names, default_value_name)
+    CONDITIONAL_HEADS: ClassVar[dict[str, tuple[tuple[str, ...], str]]] = {
+        "style": (("GERMINATE", "SET_ALPHA_TARGET"), "SIGMOID_ADD"),
+        "blueprint": (("GERMINATE",), "NOOP"),
+        "tempo": (("GERMINATE",), "STANDARD"),
+        "alpha_target": (("SET_ALPHA_TARGET",), "FULL"),
+        "alpha_speed": (("SET_ALPHA_TARGET",), "MEDIUM"),
+        "alpha_curve": (("SET_ALPHA_TARGET",), "LINEAR"),
+    }
+
+    # Minimum relevance ratio for displaying active entropy (avoid division by tiny numbers)
+    MIN_RELEVANCE_RATIO = 0.01
+
     # All 8 action heads are tracked by PPO (per-head entropy from factored policy)
     TRACKED_HEADS = {
         "slot",
@@ -1637,6 +1653,69 @@ class TamiyoBrain(Static):
     # Format: "abbr[███] " = 4-char abbrev + "[" + 3-char bar + "] " = 10 chars
     HEAD_SEGMENT_WIDTH = 10
 
+    def _compute_head_entropy_context(
+        self, head_key: str, observed_entropy: float
+    ) -> tuple[float, float, float]:
+        """Compute active entropy and relevance for conditional heads.
+
+        For heads that are only relevant for certain ops (e.g., style is only
+        relevant during GERMINATE/SET_ALPHA_TARGET), the average entropy is
+        diluted by samples where the head is masked to a single option.
+
+        This method computes:
+        1. relevance_ratio: fraction of actions where head is relevant
+        2. active_entropy: estimated entropy when head IS relevant
+        3. adjusted_threshold: warning threshold accounting for relevance
+
+        Args:
+            head_key: The head identifier (e.g., "style", "blueprint")
+            observed_entropy: The average entropy reported by PPO
+
+        Returns:
+            (active_entropy, relevance_ratio, adjusted_fill)
+            - active_entropy: Estimated entropy when head is relevant (0-1)
+            - relevance_ratio: Fraction of samples where head is relevant (0-1)
+            - adjusted_fill: Fill level adjusted for conditional relevance
+        """
+        if self._snapshot is None:
+            return observed_entropy, 1.0, observed_entropy
+
+        # Non-conditional heads: no adjustment needed
+        if head_key not in self.CONDITIONAL_HEADS:
+            max_ent = self.HEAD_MAX_ENTROPIES.get(head_key, 1.0)
+            fill = observed_entropy / max_ent if max_ent > 0 else 0
+            return observed_entropy, 1.0, fill
+
+        tamiyo = self._snapshot.tamiyo
+        action_counts = tamiyo.action_counts
+        total_actions = tamiyo.total_actions
+
+        if total_actions == 0:
+            max_ent = self.HEAD_MAX_ENTROPIES.get(head_key, 1.0)
+            fill = observed_entropy / max_ent if max_ent > 0 else 0
+            return observed_entropy, 1.0, fill
+
+        # Calculate relevance ratio from action distribution
+        relevant_ops, _ = self.CONDITIONAL_HEADS[head_key]
+        relevant_count = sum(action_counts.get(op, 0) for op in relevant_ops)
+        relevance_ratio = relevant_count / total_actions
+
+        # Compute active entropy (entropy when head is relevant)
+        # observed_entropy = relevance_ratio * active_entropy + (1-relevance) * 0
+        # Therefore: active_entropy = observed_entropy / relevance_ratio
+        if relevance_ratio < self.MIN_RELEVANCE_RATIO:
+            # Not enough relevant samples to estimate active entropy
+            active_entropy = 0.0
+        else:
+            active_entropy = min(observed_entropy / relevance_ratio, 1.0)
+
+        # Adjusted fill: use active_entropy for threshold comparison
+        # This prevents false alarms when a head is rarely used
+        max_ent = self.HEAD_MAX_ENTROPIES.get(head_key, 1.0)
+        adjusted_fill = active_entropy  # Already 0-1 normalized
+
+        return active_entropy, relevance_ratio, adjusted_fill
+
     def _render_head_heatmap(self) -> Text:
         """Render per-head entropy heatmap with 8 action heads.
 
@@ -1675,10 +1754,15 @@ class TamiyoBrain(Static):
         result = Text()
         result.append(" Heads: ", style="dim")
 
+        # Pre-compute entropy context for all heads (for both bar and value rows)
+        head_contexts: dict[str, tuple[float, float, float]] = {}
+        for _, field, head_key in heads:
+            value = getattr(tamiyo, field, 0.0)
+            head_contexts[head_key] = self._compute_head_entropy_context(head_key, value)
+
         # First line: bars (9-char segments)
         for abbrev, field, head_key in heads:
             value = getattr(tamiyo, field, 0.0)
-            max_ent = self.HEAD_MAX_ENTROPIES[head_key]
             is_tracked = head_key in self.TRACKED_HEADS
 
             # Check for missing data (value=0.0 for untracked heads)
@@ -1690,25 +1774,31 @@ class TamiyoBrain(Static):
                 result.append("] ")
                 continue
 
-            # Normalize to 0-1
-            fill = value / max_ent if max_ent > 0 else 0
-            fill = max(0, min(1, fill))
+            # Use adjusted_fill for threshold decisions on conditional heads
+            # This uses active entropy (when head is relevant) for color decisions
+            _, _, adjusted_fill = head_contexts[head_key]
+            adjusted_fill = max(0, min(1, adjusted_fill))
 
             # 3-char bar (narrower for 80-char terminal compatibility)
             bar_width = 3
-            filled = int(fill * bar_width)
+            filled = int(adjusted_fill * bar_width)
             empty = bar_width - filled
 
-            # Color based on fill level (high entropy = exploring, low = converged)
-            if fill > 0.5:
+            # Color based on adjusted fill (accounts for conditional relevance)
+            # High entropy = exploring (green), low = converged/collapsed (red)
+            if adjusted_fill > 0.5:
                 color = "green"
-            elif fill > 0.25:
+            elif adjusted_fill > 0.25:
                 color = "yellow"
             else:
                 color = "red"
 
+            # Conditional head indicator: append ~ to abbrev
+            is_conditional = head_key in self.CONDITIONAL_HEADS
+            label = f"{abbrev}~" if is_conditional else f"{abbrev} " if len(abbrev) < 4 else abbrev
+
             # 9-char segment: "abbr[███] " = 4 + 1 + 3 + 1 + space = 9
-            result.append(f"{abbrev}[")
+            result.append(f"{label[:4]}[")
             result.append("█" * filled, style=color)
             result.append("░" * empty, style="dim")
             result.append("] ")
@@ -1730,24 +1820,37 @@ class TamiyoBrain(Static):
                     result.append("     n/a  ", style="dim italic")
                 continue
 
-            max_ent = self.HEAD_MAX_ENTROPIES[head_key]
-            fill = value / max_ent if max_ent > 0 else 0
+            # Use adjusted_fill for threshold decisions
+            active_entropy, relevance_ratio, adjusted_fill = head_contexts[head_key]
 
             # 10-char segment with indicators: critical (!), warning (*), normal
             # Op head: "  X.XX!   " (2 leading, 3 trailing)
             # Other heads: "    X.XX! " (4 leading, 1 trailing) - shifted right by 2
+            #
+            # Use adjusted_fill for threshold checks - this accounts for conditional
+            # heads where the observed entropy is diluted by samples where the head
+            # is irrelevant (masked to single option). The adjusted_fill uses the
+            # "active entropy" (entropy when head IS relevant) for threshold decisions.
+            is_conditional = head_key in self.CONDITIONAL_HEADS
+
             if is_last_head:
-                if fill < 0.25:
+                if adjusted_fill < 0.25:
                     result.append(f"  {value:4.2f}!   ", style="red")
-                elif fill < 0.5:
+                elif adjusted_fill < 0.5:
                     result.append(f"  {value:4.2f}*   ", style="yellow")
                 else:
                     result.append(f"  {value:4.2f}    ", style="dim")
             else:
-                if fill < 0.25:
+                # For conditional heads, show "~" suffix instead of warning indicators
+                # when the head is rarely used (low relevance) but active entropy is OK
+                if adjusted_fill < 0.25:
                     result.append(f"    {value:4.2f}! ", style="red")
-                elif fill < 0.5:
+                elif adjusted_fill < 0.5:
                     result.append(f"    {value:4.2f}* ", style="yellow")
+                elif is_conditional and relevance_ratio < 0.3:
+                    # Conditional head with low usage but healthy active entropy
+                    # Show ~ to indicate "conditional, rarely used"
+                    result.append(f"    {value:4.2f}~ ", style="dim")
                 else:
                     result.append(f"    {value:4.2f}  ", style="dim")
 

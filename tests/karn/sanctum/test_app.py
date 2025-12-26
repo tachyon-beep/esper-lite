@@ -91,9 +91,12 @@ async def test_app_has_anomaly_strip():
 async def test_app_shows_thread_death_modal():
     """App should show ThreadDeathModal when thread dies."""
     import threading
+    from esper.karn.sanctum.widgets.reward_health import RewardHealthData
 
     mock_backend = MagicMock()
     mock_backend.get_snapshot.return_value = SanctumSnapshot()
+    # Ensure compute_reward_health returns proper data, not MagicMock
+    mock_backend.compute_reward_health.return_value = RewardHealthData()
 
     # Create a thread that immediately stops
     dead_thread = threading.Thread(target=lambda: None)
