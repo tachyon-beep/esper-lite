@@ -1,14 +1,33 @@
 <!-- src/esper/karn/overwatch/web/src/components/ContributionWaterfall.vue -->
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import type { RewardComponents } from '../types/sanctum'
 
 const props = defineProps<{
   rewards: RewardComponents
 }>()
 
+// Container ref for responsive sizing
+const containerRef = ref<HTMLElement | null>(null)
+const containerWidth = ref<number>(400)
+let resizeObserver: ResizeObserver | null = null
+
+onMounted(() => {
+  if (containerRef.value) {
+    containerWidth.value = containerRef.value.clientWidth
+    resizeObserver = new ResizeObserver((entries) => {
+      containerWidth.value = entries[0].contentRect.width
+    })
+    resizeObserver.observe(containerRef.value)
+  }
+})
+
+onUnmounted(() => {
+  resizeObserver?.disconnect()
+})
+
 // SVG dimensions and spacing
-const WIDTH = 400
+const MAX_WIDTH = 400
 const BAR_HEIGHT = 24
 const BAR_GAP = 8
 const LABEL_WIDTH = 100
@@ -17,9 +36,10 @@ const SECTION_GAP = 10 // Gap between label/chart/value sections
 const TOP_PADDING = 20 // Padding above first bar
 const BOTTOM_PADDING = 20 // Padding below last bar
 
-// Computed layout values
+// Computed layout values - responsive to container width
 const CHART_LEFT = LABEL_WIDTH + SECTION_GAP
-const CHART_WIDTH = WIDTH - CHART_LEFT - VALUE_WIDTH - SECTION_GAP
+const WIDTH = computed(() => Math.min(MAX_WIDTH, containerWidth.value))
+const CHART_WIDTH = computed(() => WIDTH.value - CHART_LEFT - VALUE_WIDTH - SECTION_GAP)
 
 interface WaterfallBar {
   id: string
@@ -92,7 +112,7 @@ const visibleBars = computed(() => bars.value.filter(bar => bar.show))
 const scale = computed(() => {
   const allValues = visibleBars.value.map(b => Math.abs(b.value))
   const maxValue = Math.max(...allValues, 0.01) // Prevent division by zero
-  return (CHART_WIDTH / 2) / maxValue
+  return (CHART_WIDTH.value / 2) / maxValue
 })
 
 // Calculate Y position for each bar
@@ -107,7 +127,7 @@ function getBarWidth(value: number): number {
 
 // Calculate bar X position (centered at midpoint for waterfall effect)
 function getBarX(value: number): number {
-  const midpoint = CHART_LEFT + CHART_WIDTH / 2
+  const midpoint = CHART_LEFT + CHART_WIDTH.value / 2
   if (value >= 0) {
     return midpoint
   }
@@ -143,11 +163,11 @@ const svgHeight = computed(() => {
 })
 
 // Midpoint line X position
-const midpointX = computed(() => CHART_LEFT + CHART_WIDTH / 2)
+const midpointX = computed(() => CHART_LEFT + CHART_WIDTH.value / 2)
 </script>
 
 <template>
-  <div class="contribution-waterfall">
+  <div ref="containerRef" class="contribution-waterfall">
     <svg
       :width="WIDTH"
       :height="svgHeight"
