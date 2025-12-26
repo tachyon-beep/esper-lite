@@ -135,3 +135,18 @@ class SanctumBackend:
         group_id = sorted(snapshots.keys())[0]
         aggregator = self._registry.get_or_create(group_id)
         return aggregator.toggle_best_run_pin(record_id)
+
+    def compute_reward_health(self) -> "RewardHealthData":
+        """Compute reward health metrics from first aggregator.
+
+        Returns:
+            RewardHealthData with computed metrics.
+        """
+        from esper.karn.sanctum.widgets.reward_health import RewardHealthData
+
+        snapshots = self._registry.get_all_snapshots()
+        if not snapshots:
+            return RewardHealthData()
+        group_id = sorted(snapshots.keys())[0]
+        aggregator = self._registry.get_or_create(group_id)
+        return aggregator.compute_reward_health()

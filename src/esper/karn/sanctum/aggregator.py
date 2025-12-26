@@ -35,6 +35,8 @@ from esper.karn.sanctum.schema import (
     CounterfactualConfig,
     CounterfactualSnapshot,
 )
+from esper.karn.sanctum.widgets.reward_health import RewardHealthData
+from esper.karn.pareto import extract_pareto_frontier, compute_hypervolume_2d
 from esper.leyline import (
     DEFAULT_GAMMA,
     TrainingStartedPayload,
@@ -222,6 +224,9 @@ class SanctumAggregator:
         self._cumulative_blueprint_fossilized = {}
         self._cumulative_blueprint_prunes = {}
 
+        # Episode outcomes for Pareto analysis (reward health panel)
+        self._episode_outcomes: list = []  # EpisodeOutcome instances
+
         # Pre-create env states
         for i in range(self.num_envs):
             self._ensure_env(i)
@@ -270,6 +275,8 @@ class SanctumAggregator:
             self._handle_counterfactual_matrix(event)
         elif event_type == "ANALYTICS_SNAPSHOT":
             self._handle_analytics_snapshot(event)
+        elif event_type == "EPISODE_OUTCOME":
+            self._handle_episode_outcome(event)
 
     def get_snapshot(self) -> SanctumSnapshot:
         """Get current SanctumSnapshot.
@@ -1137,6 +1144,88 @@ class SanctumAggregator:
                 self._tamiyo.recent_decisions = decisions
 
             return
+
+    def _handle_episode_outcome(self, event: "TelemetryEvent") -> None:
+        """Handle incoming episode outcome events."""
+        from esper.karn.store import EpisodeOutcome
+
+        data = event.data
+        if data is None:
+            return
+
+        # Handle dict-based data (from serialization) - this is the expected path
+        # since EPISODE_OUTCOME events are not currently emitted with typed payloads
+        if isinstance(data, dict):
+            outcome = EpisodeOutcome(
+                env_idx=data.get("env_idx", 0),
+                episode_idx=data.get("episode_idx", 0),
+                final_accuracy=data.get("final_accuracy", 0.0),
+                param_ratio=data.get("param_ratio", 0.0),
+                num_fossilized=data.get("num_fossilized", 0),
+                num_contributing_fossilized=data.get("num_contributing", 0),
+                episode_reward=data.get("episode_reward", 0.0),
+                stability_score=data.get("stability_score", 0.0),
+                reward_mode=data.get("reward_mode", ""),
+            )
+        elif isinstance(data, EpisodeOutcome):
+            outcome = data
+        else:
+            _logger.warning(
+                "Unexpected data type for EPISODE_OUTCOME: %s",
+                type(data).__name__,
+            )
+            return
+
+        self._episode_outcomes.append(outcome)
+
+        # Keep only last 100 outcomes to bound memory
+        if len(self._episode_outcomes) > 100:
+            self._episode_outcomes = self._episode_outcomes[-100:]
+
+    def _compute_hypervolume(self) -> float:
+        """Compute hypervolume indicator from recent episode outcomes."""
+        if not self._episode_outcomes:
+            return 0.0
+
+        frontier = extract_pareto_frontier(self._episode_outcomes)
+        ref_point = (0.0, 1.0)  # (min_accuracy, max_param_ratio)
+        return compute_hypervolume_2d(frontier, ref_point)
+
+    def compute_reward_health(self) -> RewardHealthData:
+        """Compute reward health metrics from recent telemetry."""
+        # Collect latest reward components from all envs
+        components = [
+            env.reward_components for env in self._envs.values()
+            if env.reward_components and env.reward_components.total != 0
+        ]
+
+        if not components:
+            return RewardHealthData()
+
+        # PBRS proxy: stage_bonus is the PBRS shaping reward
+        pbrs_total = sum(abs(c.stage_bonus) for c in components)
+        reward_total = sum(abs(c.total) for c in components)
+        pbrs_fraction = pbrs_total / max(1e-8, reward_total)
+
+        # Anti-gaming trigger rate
+        gaming_steps = sum(
+            1 for c in components
+            if c.ratio_penalty != 0 or c.alpha_shock != 0
+        )
+        gaming_rate = gaming_steps / max(1, len(components))
+
+        # Get latest EV from Tamiyo PPO state
+        ev = self._tamiyo.explained_variance
+
+        # Hypervolume from episode outcomes
+        hv = self._compute_hypervolume()
+
+        return RewardHealthData(
+            pbrs_fraction=pbrs_fraction,
+            anti_gaming_trigger_rate=gaming_rate,
+            ev_explained=ev,
+            hypervolume=hv,
+        )
 
     # =========================================================================
     # Helpers

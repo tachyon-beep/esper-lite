@@ -47,10 +47,15 @@
     border: double $accent;
 }
 
-/* Scoreboard - Best Runs (30% width) */
-#scoreboard {
+/* Metrics Column - contains Scoreboard and RewardHealth */
+#metrics-column {
     width: 30%;
     height: 1fr;
+}
+
+/* Scoreboard - Best Runs (top 50% of metrics column) */
+#scoreboard {
+    height: 50%;
     border: solid cyan;
     border-title-color: cyan;
     overflow-y: auto;
@@ -65,6 +70,11 @@
 #scoreboard-stats {
     height: auto;
     margin-bottom: 1;
+}
+
+/* Reward Health Panel (bottom 50% of metrics column) */
+#reward-health {
+    height: 50%;
 }
 
 /* Bottom section: Event Log + TamiyoBrain (~45% of main area) */

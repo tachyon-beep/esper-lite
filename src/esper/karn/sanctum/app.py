@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal
+from textual.containers import Container, Horizontal, Vertical
 from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Input, Static
@@ -25,6 +25,7 @@ from esper.karn.sanctum.widgets import (
     EventLog,
     EventLogDetail,
     HistoricalEnvDetail,
+    RewardHealthPanel,
     RunHeader,
     Scoreboard,
     TamiyoBrain,
@@ -203,10 +204,12 @@ class SanctumApp(App[None]):
         )
 
         with Container(id="sanctum-main"):
-            # Top section: Environment Overview and Scoreboard
+            # Top section: Environment Overview and Metrics Column (Scoreboard + Reward Health)
             with Horizontal(id="top-section"):
                 yield EnvOverview(num_envs=self._num_envs, id="env-overview")
-                yield Scoreboard(id="scoreboard")
+                with Vertical(id="metrics-column"):
+                    yield Scoreboard(id="scoreboard")
+                    yield RewardHealthPanel(id="reward-health")
 
             # Bottom section: TamiyoBrain (left) | Event Log (right)
             with Horizontal(id="bottom-section"):
@@ -374,6 +377,15 @@ class SanctumApp(App[None]):
             pass  # Widget hasn't mounted yet
         except Exception as e:
             self.log.warning(f"Failed to update scoreboard: {e}")
+
+        # Update reward health panel
+        try:
+            health_data = self._backend.compute_reward_health()
+            self.query_one("#reward-health", RewardHealthPanel).update_data(health_data)
+        except NoMatches:
+            pass  # Widget hasn't mounted yet
+        except Exception as e:
+            self.log.warning(f"Failed to update reward-health: {e}")
 
         # Update TamiyoBrain widgets using multi-group API
         self._refresh_tamiyo_widgets()
