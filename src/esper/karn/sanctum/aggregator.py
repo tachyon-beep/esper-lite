@@ -1114,6 +1114,13 @@ class SanctumAggregator:
                 env.reward_components.ratio_penalty = payload.ratio_penalty
             if payload.alpha_shock is not None:
                 env.reward_components.alpha_shock = payload.alpha_shock
+            # Hindsight credit (Phase 3.2 scaffold credit)
+            if payload.hindsight_credit is not None:
+                env.reward_components.hindsight_credit = payload.hindsight_credit
+            if payload.scaffold_count is not None:
+                env.reward_components.scaffold_count = payload.scaffold_count
+            if payload.avg_scaffold_delay is not None:
+                env.reward_components.avg_scaffold_delay = payload.avg_scaffold_delay
             # Always update context fields when we have any reward data
             if payload.base_acc_delta is not None or payload.bounded_attribution is not None:
                 env.reward_components.total = total_reward
