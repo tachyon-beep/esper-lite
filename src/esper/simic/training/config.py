@@ -132,6 +132,11 @@ class TrainingConfig:
     disable_terminal_reward: bool = False  # Disable terminal accuracy bonus
     disable_anti_gaming: bool = False  # Disable ratio_penalty and alpha_shock
 
+    # === Gradient Clipping ===
+    # Maximum gradient norm for host/seed training.
+    # Default 1.0 is standard for supervised training (PPO policy uses 0.5).
+    max_grad_norm: float = 1.0
+
     def __post_init__(self) -> None:
         """Validate and set defaults.
 
@@ -335,6 +340,7 @@ class TrainingConfig:
             "disable_pbrs": self.disable_pbrs,
             "disable_terminal_reward": self.disable_terminal_reward,
             "disable_anti_gaming": self.disable_anti_gaming,
+            "max_grad_norm": self.max_grad_norm,
         }
 
     # ------------------------------------------------------------------
@@ -414,6 +420,8 @@ class TrainingConfig:
             raise ValueError("param_penalty_weight must be non-negative")
         if self.sparse_reward_scale <= 0:
             raise ValueError("sparse_reward_scale must be positive")
+        if self.max_grad_norm <= 0:
+            raise ValueError("max_grad_norm must be positive")
 
         if (
             self.reward_family == RewardFamily.LOSS
