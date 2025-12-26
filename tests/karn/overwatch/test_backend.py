@@ -29,6 +29,21 @@ class TestOverwatchBackend:
 
         backend.aggregator.process_event.assert_called_once_with(mock_event)
 
+    def test_emit_triggers_broadcast(self) -> None:
+        """emit() should call maybe_broadcast() to notify WebSocket clients.
+
+        Regression test: Prior to fix, emit() processed events but never
+        triggered broadcasts, leaving WebSocket clients stuck on initial state.
+        """
+        backend = OverwatchBackend(port=8080)
+        backend.aggregator = MagicMock()
+        backend.maybe_broadcast = MagicMock()
+
+        mock_event = MagicMock()
+        backend.emit(mock_event)
+
+        backend.maybe_broadcast.assert_called_once()
+
     def test_snapshot_to_json_produces_valid_json(self) -> None:
         """Snapshots should serialize to valid JSON."""
         backend = OverwatchBackend(port=8080)

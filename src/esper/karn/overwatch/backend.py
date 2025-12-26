@@ -121,6 +121,7 @@ class OverwatchBackend:
             event: The telemetry event to process.
         """
         self.aggregator.process_event(event)
+        self.maybe_broadcast()
 
     def get_snapshot(self) -> SanctumSnapshot:
         """Get the current SanctumSnapshot.
