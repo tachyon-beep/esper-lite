@@ -1,4 +1,5 @@
 // src/esper/karn/overwatch/web/vite.config.ts
+/// <reference types="vitest" />
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
@@ -16,5 +17,9 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true
+  },
+  test: {
+    globals: true,
+    environment: 'jsdom'
   }
 })
