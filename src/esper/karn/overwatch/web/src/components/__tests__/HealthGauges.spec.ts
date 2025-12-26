@@ -189,6 +189,18 @@ describe('HealthGauges', () => {
     expect(clipGauge.classes()).toContain('health-warning')
   })
 
+  it('colors clip fraction gauge with critical when above 0.4', () => {
+    const wrapper = mount(HealthGauges, {
+      props: {
+        vitals: createVitals(),
+        tamiyo: createTamiyo({ clip_fraction: 0.5 })
+      }
+    })
+
+    const clipGauge = wrapper.find('[data-testid="gauge-clip-fraction"]')
+    expect(clipGauge.classes()).toContain('health-critical')
+  })
+
   it('colors explained variance gauge correctly for good values', () => {
     const wrapper = mount(HealthGauges, {
       props: {

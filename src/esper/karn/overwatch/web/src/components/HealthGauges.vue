@@ -64,11 +64,12 @@ const entropyHealth = computed<HealthStatus>(() => {
   return 'good'
 })
 
-// Clip fraction: lower is better, warning if above 0.2
+// Clip fraction: lower is better, warning if above 0.2, critical if above 0.4
+const CLIP_FRACTION_CRITICAL_THRESHOLD = 0.4
 const clipFractionPercent = computed(() => Math.round(props.tamiyo.clip_fraction * 100))
 const clipFractionHealth = computed<HealthStatus>(() => {
+  if (props.tamiyo.clip_fraction > CLIP_FRACTION_CRITICAL_THRESHOLD) return 'critical'
   if (props.tamiyo.clip_fraction > CLIP_FRACTION_WARNING_THRESHOLD) return 'warning'
-  if (props.tamiyo.clip_fraction > 0.4) return 'critical'
   return 'good'
 })
 
