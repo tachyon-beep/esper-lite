@@ -1157,15 +1157,15 @@ class SanctumAggregator:
         # since EPISODE_OUTCOME events are not currently emitted with typed payloads
         if isinstance(data, dict):
             outcome = EpisodeOutcome(
-                env_idx=data.get("env_idx", 0),
-                episode_idx=data.get("episode_idx", 0),
-                final_accuracy=data.get("final_accuracy", 0.0),
-                param_ratio=data.get("param_ratio", 0.0),
-                num_fossilized=data.get("num_fossilized", 0),
-                num_contributing_fossilized=data.get("num_contributing", 0),
-                episode_reward=data.get("episode_reward", 0.0),
-                stability_score=data.get("stability_score", 0.0),
-                reward_mode=data.get("reward_mode", ""),
+                env_idx=data["env_idx"],
+                episode_idx=data["episode_idx"],
+                final_accuracy=data["final_accuracy"],
+                param_ratio=data["param_ratio"],
+                num_fossilized=data["num_fossilized"],
+                num_contributing_fossilized=data["num_contributing_fossilized"],
+                episode_reward=data["episode_reward"],
+                stability_score=data["stability_score"],
+                reward_mode=data["reward_mode"],
             )
         elif isinstance(data, EpisodeOutcome):
             outcome = data
@@ -1193,39 +1193,40 @@ class SanctumAggregator:
 
     def compute_reward_health(self) -> RewardHealthData:
         """Compute reward health metrics from recent telemetry."""
-        # Collect latest reward components from all envs
-        components = [
-            env.reward_components for env in self._envs.values()
-            if env.reward_components and env.reward_components.total != 0
-        ]
+        with self._lock:
+            # Collect latest reward components from all envs
+            components = [
+                env.reward_components for env in self._envs.values()
+                if env.reward_components and env.reward_components.total != 0
+            ]
 
-        if not components:
-            return RewardHealthData()
+            if not components:
+                return RewardHealthData()
 
-        # PBRS proxy: stage_bonus is the PBRS shaping reward
-        pbrs_total = sum(abs(c.stage_bonus) for c in components)
-        reward_total = sum(abs(c.total) for c in components)
-        pbrs_fraction = pbrs_total / max(1e-8, reward_total)
+            # PBRS proxy: stage_bonus is the PBRS shaping reward
+            pbrs_total = sum(abs(c.stage_bonus) for c in components)
+            reward_total = sum(abs(c.total) for c in components)
+            pbrs_fraction = pbrs_total / max(1e-8, reward_total)
 
-        # Anti-gaming trigger rate
-        gaming_steps = sum(
-            1 for c in components
-            if c.ratio_penalty != 0 or c.alpha_shock != 0
-        )
-        gaming_rate = gaming_steps / max(1, len(components))
+            # Anti-gaming trigger rate
+            gaming_steps = sum(
+                1 for c in components
+                if c.ratio_penalty != 0 or c.alpha_shock != 0
+            )
+            gaming_rate = gaming_steps / max(1, len(components))
 
-        # Get latest EV from Tamiyo PPO state
-        ev = self._tamiyo.explained_variance
+            # Get latest EV from Tamiyo PPO state
+            ev = self._tamiyo.explained_variance
 
-        # Hypervolume from episode outcomes
-        hv = self._compute_hypervolume()
+            # Hypervolume from episode outcomes
+            hv = self._compute_hypervolume()
 
-        return RewardHealthData(
-            pbrs_fraction=pbrs_fraction,
-            anti_gaming_trigger_rate=gaming_rate,
-            ev_explained=ev,
-            hypervolume=hv,
-        )
+            return RewardHealthData(
+                pbrs_fraction=pbrs_fraction,
+                anti_gaming_trigger_rate=gaming_rate,
+                ev_explained=ev,
+                hypervolume=hv,
+            )
 
     # =========================================================================
     # Helpers
