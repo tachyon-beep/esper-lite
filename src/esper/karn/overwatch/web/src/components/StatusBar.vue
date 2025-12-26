@@ -31,6 +31,11 @@ const stalenessClass = computed(() => {
         :class="connectionState"
         data-testid="connection-status"
       >
+        <span class="status-icon" aria-hidden="true">
+          <template v-if="connectionState === 'connecting'">&#8987;</template>
+          <template v-else-if="connectionState === 'connected'">&#10003;</template>
+          <template v-else>&#10007;</template>
+        </span>
         {{ connectionState.toUpperCase() }}
       </span>
       <span
@@ -72,10 +77,16 @@ const stalenessClass = computed(() => {
 }
 
 .status-indicator {
+  display: inline-flex;
+  align-items: center;
   font-size: 10px;
   font-weight: 600;
   padding: 2px 8px;
   border-radius: 2px;
+}
+
+.status-icon {
+  margin-right: 0.25rem;
 }
 
 .status-indicator.connecting {
