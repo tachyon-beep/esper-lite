@@ -1,42 +1,98 @@
-/* Placeholder theme - Task 2 will implement the full design system */
+/* src/esper/karn/overwatch/web/src/styles/theme.css */
+/* Observatory Theme - extracted from dashboard.html */
+
 :root {
-  /* Background */
-  --bg-void: #0a0a0f;
-  --bg-panel: #12121a;
+  /* Deep observatory background */
+  --bg-void: #05080f;
+  --bg-primary: #0a1020;
+  --bg-panel: #0d1528;
+  --bg-elevated: #121d35;
 
-  /* Text */
-  --text-primary: #e4e4e7;
-  --text-secondary: #a1a1aa;
-
-  /* Borders */
-  --border-subtle: #27272a;
+  /* Bioluminescent accents */
+  --glow-cyan: #00e5ff;
+  --glow-cyan-dim: rgba(0, 229, 255, 0.15);
+  --glow-cyan-bright: rgba(0, 229, 255, 0.4);
 
   /* Status colors */
-  --status-win: #22c55e;
-  --status-loss: #ef4444;
-  --status-warn: #f59e0b;
+  --status-win: #00ff9d;
+  --status-win-glow: rgba(0, 255, 157, 0.3);
+  --status-loss: #ff5c5c;
+  --status-loss-glow: rgba(255, 92, 92, 0.3);
+  --status-warn: #ffb347;
+  --status-warn-glow: rgba(255, 179, 71, 0.3);
+  --status-neutral: #6b7c9e;
 
-  /* Glow effects */
-  --glow-cyan: #06b6d4;
+  /* Seed stage colors */
+  --stage-dormant: #3d4a66;
+  --stage-germinated: #7c4dff;
+  --stage-training: #00b8d4;
+  --stage-blending: #ffab00;
+  --stage-holding: #ff6d00;
+  --stage-fossilized: #00e676;
+  --stage-pruned: #ff5252;
+
+  /* Text hierarchy */
+  --text-bright: #f0f6ff;
+  --text-primary: #c8d4e8;
+  --text-secondary: #6b7c9e;
+  --text-dim: #3d4a66;
+
+  /* Borders */
+  --border-subtle: rgba(100, 130, 180, 0.15);
+  --border-glow: rgba(0, 229, 255, 0.3);
+
+  /* Typography */
+  --font-display: 'Oxanium', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
 
   /* Spacing */
+  --space-xs: 4px;
   --space-sm: 8px;
   --space-md: 16px;
   --space-lg: 24px;
-
-  /* Fonts */
-  --font-mono: 'JetBrains Mono', monospace;
-  --font-display: 'Oxanium', sans-serif;
+  --space-xl: 32px;
 }
 
 * {
+  box-sizing: border-box;
   margin: 0;
   padding: 0;
-  box-sizing: border-box;
 }
 
 body {
   font-family: var(--font-mono);
   background: var(--bg-void);
   color: var(--text-primary);
+  line-height: 1.5;
+
+  /* Subtle grid texture */
+  background-image:
+    linear-gradient(var(--bg-primary) 1px, transparent 1px),
+    linear-gradient(90deg, var(--bg-primary) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+/* Focus styles for accessibility */
+:focus-visible {
+  outline: 2px solid var(--glow-cyan);
+  outline-offset: 2px;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-primary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-dim);
 }
