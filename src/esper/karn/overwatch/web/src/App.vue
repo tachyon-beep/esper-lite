@@ -1,6 +1,6 @@
 <!-- src/esper/karn/overwatch/web/src/App.vue -->
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed } from 'vue'
 import { useOverwatch } from './composables/useOverwatch'
 import { useKeyboardNav, type PanelPosition } from './composables/useKeyboardNav'
 import StatusBar from './components/StatusBar.vue'
@@ -41,16 +41,6 @@ function handleEnvSelect(envId: number) {
 function handleClearSelection() {
   localFocusedEnvId.value = null
 }
-
-// Reset local selection when snapshot's focused env changes
-watch(
-  () => snapshot.value?.focused_env_id,
-  (newFocused) => {
-    if (newFocused !== undefined && localFocusedEnvId.value === null) {
-      // Don't override user selection
-    }
-  }
-)
 
 // Computed environment count for keyboard navigation
 const envCount = computed(() => {
@@ -111,7 +101,8 @@ const {
   onPanelChange: handlePanelChange,
   onLeaderboardNavigate: (rowIndex: number) => {
     // Scroll the leaderboard row into view if needed
-    const row = document.querySelector(`[data-testid^="leaderboard-row-"]:nth-child(${rowIndex + 1})`)
+    const rows = document.querySelectorAll('[data-testid^="leaderboard-row-"]')
+    const row = rows[rowIndex]
     if (row) {
       row.scrollIntoView({ block: 'nearest' })
     }
