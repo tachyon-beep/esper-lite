@@ -3,18 +3,14 @@
 Tests cover:
 - Credit computation on fossilization
 - Temporal discounting with gamma^delay
-- Credit cap at MAX_HINDSIGHT_CREDIT (0.2)
+- Credit cap at MAX_HINDSIGHT_CREDIT
 - Ledger lifecycle and reset
 - Multiple scaffolds contributing to same beneficiary
 """
 
-from esper.leyline import DEFAULT_GAMMA
+from esper.leyline import DEFAULT_GAMMA, MAX_HINDSIGHT_CREDIT
 from esper.simic.rewards import compute_scaffold_hindsight_credit
 from esper.simic.training.parallel_env_state import ParallelEnvState
-
-
-# Constants matching vectorized.py implementation
-MAX_HINDSIGHT_CREDIT = 0.2
 
 
 class TestHindsightCreditComputation:

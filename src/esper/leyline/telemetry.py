@@ -1014,6 +1014,12 @@ class AnalyticsSnapshotPayload:
     # For kind="reward_summary", includes reward breakdown
     summary: dict[str, float] | None = None
 
+    # Scaffold hindsight credit debugging fields (Phase 3.2)
+    # Populated when kind="reward_summary" and scaffolding occurred
+    hindsight_credit: float | None = None  # Credit applied (post-cap)
+    scaffold_count: int | None = None  # Number of scaffolds that contributed
+    avg_scaffold_delay: float | None = None  # Average epochs since scaffolding interactions
+
     # For kind="mask_hit_rates", includes per-head mask stats
     mask_hits: dict[str, int] | None = None
     mask_total: dict[str, int] | None = None
@@ -1095,6 +1101,10 @@ class AnalyticsSnapshotPayload:
             step_time_ms=data.get("step_time_ms"),
             dataloader_wait_ms=data.get("dataloader_wait_ms"),
             summary=data.get("summary"),
+            # Scaffold hindsight credit fields (Phase 3.2)
+            hindsight_credit=data.get("hindsight_credit"),
+            scaffold_count=data.get("scaffold_count"),
+            avg_scaffold_delay=data.get("avg_scaffold_delay"),
             mask_hits=data.get("mask_hits"),
             mask_total=data.get("mask_total"),
             inner_epoch=data.get("inner_epoch"),

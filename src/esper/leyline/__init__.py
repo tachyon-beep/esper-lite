@@ -202,6 +202,11 @@ DEFAULT_RENT_WEIGHT = 0.5
 # Higher values incentivize completion over seed farming.
 DEFAULT_FOSSILIZE_TERMINAL_SCALE = 3.0
 
+# Maximum scaffold hindsight credit per fossilization event.
+# Credit is capped at 2x synergy bonus (0.1) to prevent runaway values.
+# Used by Phase 3.2 scaffold hindsight credit mechanism.
+MAX_HINDSIGHT_CREDIT = 0.2
+
 # =============================================================================
 # Lifecycle Gate Thresholds (seed state machine gates)
 # =============================================================================
@@ -545,6 +550,7 @@ __all__ = [
     "DEFAULT_PBRS_WEIGHT",
     "DEFAULT_RENT_WEIGHT",
     "DEFAULT_FOSSILIZE_TERMINAL_SCALE",
+    "MAX_HINDSIGHT_CREDIT",
 
     # Lifecycle Gate Thresholds
     "DEFAULT_MIN_FOSSILIZE_CONTRIBUTION",

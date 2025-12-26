@@ -123,7 +123,7 @@ from esper.simic.rewards import (
     ContributionRewardConfig,
     SeedInfo,
 )
-from esper.leyline import DEFAULT_MIN_FOSSILIZE_CONTRIBUTION, MIN_PRUNE_AGE
+from esper.leyline import DEFAULT_MIN_FOSSILIZE_CONTRIBUTION, MAX_HINDSIGHT_CREDIT, MIN_PRUNE_AGE
 from esper.nissa import get_hub, BlueprintAnalytics, DirectoryOutput
 from esper.tolaria import TolariaGovernor
 from esper.karn.health import HealthMonitor
@@ -1720,6 +1720,9 @@ def train_ppo_vectorized(
                 "hindsight_credit": 0.0,
                 "total_reward": 0.0,
                 "count": 0,
+                # Scaffold hindsight credit debugging fields (Phase 3.2)
+                "scaffold_count": 0,
+                "scaffold_delay_total": 0.0,
             }
             for _ in range(envs_this_batch)
         ]
@@ -2631,6 +2634,9 @@ def train_ppo_vectorized(
                     hindsight_credit_applied = env_state.pending_hindsight_credit
                     reward += hindsight_credit_applied
                     env_state.pending_hindsight_credit = 0.0
+                    # Populate RewardComponentsTelemetry for shaped_reward_ratio calculation
+                    if collect_reward_summary and "reward_components" in locals():
+                        reward_components.hindsight_credit = hindsight_credit_applied
 
                 # Normalize reward for PPO stability (P1-6 fix)
                 normalized_reward = reward_normalizer.update_and_normalize(reward)
@@ -2688,6 +2694,8 @@ def train_ppo_vectorized(
                             if beneficiary_improvement > 0:
                                 current_epoch = env_state.current_epoch
                                 total_credit = 0.0
+                                scaffold_count = 0
+                                total_delay = 0
 
                                 # Find all scaffolds that boosted this beneficiary
                                 for scaffold_slot, boosts in env_state.scaffold_boost_ledger.items():
@@ -2701,15 +2709,22 @@ def train_ppo_vectorized(
                                             raw_credit = compute_scaffold_hindsight_credit(
                                                 boost_given=boost_given,
                                                 beneficiary_improvement=beneficiary_improvement,
-                                                credit_weight=0.2,
+                                                credit_weight=MAX_HINDSIGHT_CREDIT,
                                             )
                                             total_credit += raw_credit * discount
+                                            scaffold_count += 1
+                                            total_delay += delay
 
                                 # Cap total credit to prevent runaway values
-                                MAX_HINDSIGHT_CREDIT = 0.2
                                 total_credit = min(total_credit, MAX_HINDSIGHT_CREDIT)
 
                                 env_state.pending_hindsight_credit += total_credit
+
+                                # Track scaffold metrics for telemetry (per-environment)
+                                if collect_reward_summary:
+                                    summary = reward_summary_accum[env_idx]
+                                    summary["scaffold_count"] += scaffold_count
+                                    summary["scaffold_delay_total"] += total_delay
 
                                 # Clear this beneficiary from all ledgers (it's now fossilized)
                                 for scaffold_slot in list(env_state.scaffold_boost_ledger.keys()):
