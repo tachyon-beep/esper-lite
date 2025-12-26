@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
 import EnvironmentGrid from '../EnvironmentGrid.vue'
-import type { EnvState, SeedState, RewardComponents, CounterfactualSnapshot } from '../../types/sanctum'
+import type { EnvState, RewardComponents, CounterfactualSnapshot } from '../../types/sanctum'
 
 // Factory to create a valid EnvState for testing
 function createEnvState(overrides: Partial<EnvState> = {}): EnvState {

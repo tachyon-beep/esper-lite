@@ -2,6 +2,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { useOverwatch } from './composables/useOverwatch'
+import { useKeyboardNav, type PanelPosition } from './composables/useKeyboardNav'
 import StatusBar from './components/StatusBar.vue'
 import EnvironmentGrid from './components/EnvironmentGrid.vue'
 import AnomalySidebar from './components/AnomalySidebar.vue'
@@ -12,6 +13,7 @@ import GradientHeatmap from './components/GradientHeatmap.vue'
 import EventTimeline from './components/EventTimeline.vue'
 import SeedSwimlane from './components/SeedSwimlane.vue'
 import ContributionWaterfall from './components/ContributionWaterfall.vue'
+import KeyboardHelp from './components/KeyboardHelp.vue'
 
 // WebSocket URL - can be configured via environment variable
 const wsUrl = import.meta.env.VITE_WS_URL ?? 'ws://localhost:8765'
@@ -35,6 +37,11 @@ function handleEnvSelect(envId: number) {
   localFocusedEnvId.value = envId
 }
 
+// Clear environment selection (return to overview/default)
+function handleClearSelection() {
+  localFocusedEnvId.value = null
+}
+
 // Reset local selection when snapshot's focused env changes
 watch(
   () => snapshot.value?.focused_env_id,
@@ -44,6 +51,72 @@ watch(
     }
   }
 )
+
+// Computed environment count for keyboard navigation
+const envCount = computed(() => {
+  if (!snapshot.value) return 0
+  return Object.keys(snapshot.value.envs).length
+})
+
+// Computed leaderboard row count for keyboard navigation
+const leaderboardRowCount = computed(() => {
+  if (!snapshot.value) return 0
+  return Math.min(snapshot.value.best_runs.length, 10) // LeaderboardTable default maxRows
+})
+
+// Refs for panel elements (for focus management)
+const leftSidebarRef = ref<HTMLElement | null>(null)
+const mainContentRef = ref<HTMLElement | null>(null)
+const rightPanelRef = ref<HTMLElement | null>(null)
+
+// Handle panel focus changes
+function handlePanelChange(panel: PanelPosition) {
+  let targetRef: HTMLElement | null = null
+  switch (panel) {
+    case 'left':
+      targetRef = leftSidebarRef.value
+      break
+    case 'main':
+      targetRef = mainContentRef.value
+      break
+    case 'right':
+      targetRef = rightPanelRef.value
+      break
+  }
+  // Focus the first focusable element in the panel
+  if (targetRef) {
+    const focusable = targetRef.querySelector<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    )
+    if (focusable) {
+      focusable.focus()
+    } else {
+      // If no focusable child, focus the panel itself
+      targetRef.focus()
+    }
+  }
+}
+
+// Initialize keyboard navigation
+const {
+  helpVisible,
+  currentPanel,
+  currentLeaderboardRow,
+  closeHelp
+} = useKeyboardNav({
+  envCount,
+  leaderboardRowCount,
+  onSelectEnv: handleEnvSelect,
+  onClearSelection: handleClearSelection,
+  onPanelChange: handlePanelChange,
+  onLeaderboardNavigate: (rowIndex: number) => {
+    // Scroll the leaderboard row into view if needed
+    const row = document.querySelector(`[data-testid^="leaderboard-row-"]:nth-child(${rowIndex + 1})`)
+    if (row) {
+      row.scrollIntoView({ block: 'nearest' })
+    }
+  }
+})
 
 // Computed props for StatusBar
 const statusBarProps = computed(() => ({
@@ -100,7 +173,13 @@ const isLoading = computed(() => {
     <!-- Main Dashboard Layout -->
     <main v-else class="dashboard">
       <!-- Left Sidebar: Anomalies + Event Timeline -->
-      <aside class="left-sidebar" data-testid="left-sidebar">
+      <aside
+        ref="leftSidebarRef"
+        class="left-sidebar"
+        :class="{ 'panel-focused': currentPanel === 'left' }"
+        data-testid="left-sidebar"
+        tabindex="-1"
+      >
         <AnomalySidebar
           :events="snapshot!.event_log"
         />
@@ -111,7 +190,13 @@ const isLoading = computed(() => {
       </aside>
 
       <!-- Main Content: Environment Grid + Health Gauges + Leaderboard -->
-      <section class="main-content" data-testid="main-content">
+      <section
+        ref="mainContentRef"
+        class="main-content"
+        :class="{ 'panel-focused': currentPanel === 'main' }"
+        data-testid="main-content"
+        tabindex="-1"
+      >
         <HealthGauges
           :vitals="snapshot!.vitals"
           :tamiyo="snapshot!.tamiyo"
@@ -123,11 +208,18 @@ const isLoading = computed(() => {
         />
         <LeaderboardTable
           :runs="snapshot!.best_runs"
+          :selected-row-index="currentLeaderboardRow"
         />
       </section>
 
       <!-- Right Panel: Policy Diagnostics + Gradient Heatmap + Seed Swimlane + Contribution Waterfall -->
-      <aside class="right-panel" data-testid="right-panel">
+      <aside
+        ref="rightPanelRef"
+        class="right-panel"
+        :class="{ 'panel-focused': currentPanel === 'right' }"
+        data-testid="right-panel"
+        tabindex="-1"
+      >
         <div class="panel-section">
           <h3 class="panel-title">Policy Diagnostics</h3>
           <PolicyDiagnostics
@@ -160,6 +252,12 @@ const isLoading = computed(() => {
         </div>
       </aside>
     </main>
+
+    <!-- Keyboard Help Overlay -->
+    <KeyboardHelp
+      :visible="helpVisible"
+      @close="closeHelp"
+    />
   </div>
 </template>
 
@@ -221,6 +319,8 @@ const isLoading = computed(() => {
   gap: var(--space-md);
   overflow-y: auto;
   min-height: 0;
+  border-radius: 4px;
+  transition: box-shadow 0.15s ease;
 }
 
 /* Main Content Area */
@@ -230,6 +330,8 @@ const isLoading = computed(() => {
   gap: var(--space-md);
   overflow-y: auto;
   min-height: 0;
+  border-radius: 4px;
+  transition: box-shadow 0.15s ease;
 }
 
 /* Right Panel */
@@ -239,6 +341,13 @@ const isLoading = computed(() => {
   gap: var(--space-md);
   overflow-y: auto;
   min-height: 0;
+  border-radius: 4px;
+  transition: box-shadow 0.15s ease;
+}
+
+/* Panel focus indicator for keyboard navigation */
+.panel-focused {
+  box-shadow: inset 0 0 0 2px var(--glow-cyan-dim);
 }
 
 .panel-section {

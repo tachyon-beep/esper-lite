@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
 import LeaderboardTable from '../LeaderboardTable.vue'
-import type { BestRunRecord, SeedState, RewardComponents, CounterfactualSnapshot } from '../../types/sanctum'
+import type { BestRunRecord } from '../../types/sanctum'
 
 // Factory to create a valid BestRunRecord for testing
 function createBestRunRecord(overrides: Partial<BestRunRecord> = {}): BestRunRecord {
@@ -182,5 +182,39 @@ describe('LeaderboardTable', () => {
 
     expect(wrapper.find('[data-testid="fossilized-run-001"]').text()).toBe('5')
     expect(wrapper.find('[data-testid="pruned-run-001"]').text()).toBe('3')
+  })
+
+  it('highlights selected row via keyboard navigation', () => {
+    const runs: BestRunRecord[] = [
+      createBestRunRecord({ record_id: 'run-001', peak_accuracy: 0.95 }),
+      createBestRunRecord({ record_id: 'run-002', peak_accuracy: 0.90 }),
+      createBestRunRecord({ record_id: 'run-003', peak_accuracy: 0.85 })
+    ]
+
+    const wrapper = mount(LeaderboardTable, {
+      props: { runs, selectedRowIndex: 1 }
+    })
+
+    // Rows are sorted by peak_accuracy descending, so run-002 is at index 1
+    const rows = wrapper.findAll('[data-testid^="leaderboard-row-"]')
+    expect(rows[0].classes()).not.toContain('keyboard-selected')
+    expect(rows[1].classes()).toContain('keyboard-selected')
+    expect(rows[2].classes()).not.toContain('keyboard-selected')
+  })
+
+  it('does not highlight any row when selectedRowIndex is -1', () => {
+    const runs: BestRunRecord[] = [
+      createBestRunRecord({ record_id: 'run-001', peak_accuracy: 0.95 }),
+      createBestRunRecord({ record_id: 'run-002', peak_accuracy: 0.90 })
+    ]
+
+    const wrapper = mount(LeaderboardTable, {
+      props: { runs, selectedRowIndex: -1 }
+    })
+
+    const rows = wrapper.findAll('[data-testid^="leaderboard-row-"]')
+    rows.forEach(row => {
+      expect(row.classes()).not.toContain('keyboard-selected')
+    })
   })
 })

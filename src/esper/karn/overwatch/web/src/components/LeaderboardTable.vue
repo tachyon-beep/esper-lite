@@ -6,8 +6,11 @@ import type { BestRunRecord } from '../types/sanctum'
 const props = withDefaults(defineProps<{
   runs: BestRunRecord[]
   maxRows?: number
+  /** Currently selected row index (for keyboard navigation) */
+  selectedRowIndex?: number
 }>(), {
-  maxRows: 10
+  maxRows: 10,
+  selectedRowIndex: -1
 })
 
 const emit = defineEmits<{
@@ -112,7 +115,7 @@ function handleRowClick(recordId: string) {
         <tr
           v-for="(run, index) in sortedRuns"
           :key="run.record_id"
-          :class="{ pinned: run.pinned }"
+          :class="{ pinned: run.pinned, 'keyboard-selected': index === selectedRowIndex }"
           :data-testid="`leaderboard-row-${run.record_id}`"
           @click="handleRowClick(run.record_id)"
         >
@@ -205,6 +208,17 @@ tbody tr.pinned {
 tbody tr.pinned:nth-child(odd),
 tbody tr.pinned:nth-child(even) {
   background: rgba(0, 229, 255, 0.05);
+}
+
+tbody tr.keyboard-selected {
+  outline: 2px solid var(--glow-cyan);
+  outline-offset: -2px;
+  background: var(--bg-elevated);
+}
+
+tbody tr.keyboard-selected:nth-child(odd),
+tbody tr.keyboard-selected:nth-child(even) {
+  background: var(--bg-elevated);
 }
 
 td {
