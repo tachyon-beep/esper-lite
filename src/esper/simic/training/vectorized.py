@@ -498,6 +498,7 @@ def train_ppo_vectorized(
     gpu_preload: bool = False,
     amp: bool = False,
     amp_dtype: str = "auto",  # "auto", "float16", "bfloat16", or "off"
+    max_grad_norm: float | None = None,  # Gradient clipping max norm (None disables)
     compile_mode: str = "default",  # "default", "max-autotune", "reduce-overhead", "off"
     lstm_hidden_dim: int = DEFAULT_LSTM_HIDDEN_DIM,
     chunk_length: int = DEFAULT_EPISODE_LENGTH,  # Must match max_epochs (from leyline)
@@ -1332,6 +1333,7 @@ def train_ppo_vectorized(
         use_telemetry: bool = False,
         slots: list[str] | None = None,
         use_amp: bool = False,
+        max_grad_norm: float | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, int, dict[str, dict[str, Any]] | None]:
         """Process a single training batch for one environment (runs in CUDA stream).
 
@@ -1345,6 +1347,8 @@ def train_ppo_vectorized(
             criterion: Loss criterion
             use_telemetry: Whether to collect telemetry
             slots: Enabled slot IDs (train all active slots)
+            use_amp: Whether AMP is enabled
+            max_grad_norm: Maximum gradient norm for clipping. None disables clipping.
 
         Returns:
             Tuple of (loss_tensor, correct_tensor, total, grad_stats)
@@ -1448,29 +1452,51 @@ def train_ppo_vectorized(
                     model, slots_with_active_seeds, env_dev
                 )
 
-            if env_state.scaler is not None:
-                # H12: AMP GradScaler stream safety documentation
-                # Each env has its own GradScaler (created at line 855) to avoid race conditions.
-                # GradScaler's internal state (_scale, _growth_tracker) is NOT stream-safe:
-                # - scale() reads _scale without sync
-                # - step() may write _found_inf_per_device
-                # - update() modifies _scale and _growth_tracker
-                #
-                # This is safe because:
-                # 1. Per-env scaler: No cross-env state sharing
-                # 2. Sequential within stream: scale() → step() → update() ordered by stream
-                # 3. No cross-batch state: Each env_state.scaler is isolated
-                #
-                # Note: scale factor update (update()) changes _scale for the NEXT batch,
-                # which is fine since each batch fully completes before the next starts.
-                env_state.scaler.step(env_state.host_optimizer)
+            # Compute grad presence once for each seed optimizer (avoid redundant checks)
+            # Guard: Only call scaler.step() if optimizer has gradients.
+            # With isolate_gradients=True, seeds may not have grads in the scaled backward.
+            seed_opts_with_grads: dict[str, tuple[torch.optim.Optimizer, bool]] = {}
+            for slot_id in slots_to_step:
+                seed_opt = env_state.seed_optimizers[slot_id]
+                has_grads = any(
+                    p.grad is not None for group in seed_opt.param_groups for p in group["params"]
+                )
+                seed_opts_with_grads[slot_id] = (seed_opt, has_grads)
+
+            # Gradient clipping (AMP-safe)
+            # AMP ordering: scale() -> backward() -> unscale_() -> clip_grad_norm_() -> step() -> update()
+            if max_grad_norm is not None and max_grad_norm > 0:
+                if env_state.scaler is not None:
+                    # Unscale before clipping (required for correct FP32 magnitude)
+                    env_state.scaler.unscale_(env_state.host_optimizer)
+                    for slot_id, (seed_opt, has_grads) in seed_opts_with_grads.items():
+                        if has_grads:
+                            env_state.scaler.unscale_(seed_opt)
+
+                # Clip all parameters (works for both AMP and non-AMP)
+                all_params = list(model.get_host_parameters())
                 for slot_id in slots_to_step:
-                    seed_opt = env_state.seed_optimizers[slot_id]
-                    # Guard: Only call scaler.step() if optimizer has gradients.
-                    # With isolate_gradients=True, seeds may not have grads in the scaled backward.
-                    has_grads = any(
-                        p.grad is not None for group in seed_opt.param_groups for p in group["params"]
-                    )
+                    all_params.extend(model.get_seed_parameters(slot_id))
+                torch.nn.utils.clip_grad_norm_(all_params, max_grad_norm)
+
+            # Optimizer step (reuses has_grads computation)
+            # H12: AMP GradScaler stream safety documentation
+            # Each env has its own GradScaler (created at line 855) to avoid race conditions.
+            # GradScaler's internal state (_scale, _growth_tracker) is NOT stream-safe:
+            # - scale() reads _scale without sync
+            # - step() may write _found_inf_per_device
+            # - update() modifies _scale and _growth_tracker
+            #
+            # This is safe because:
+            # 1. Per-env scaler: No cross-env state sharing
+            # 2. Sequential within stream: scale() → step() → update() ordered by stream
+            # 3. No cross-batch state: Each env_state.scaler is isolated
+            #
+            # Note: scale factor update (update()) changes _scale for the NEXT batch,
+            # which is fine since each batch fully completes before the next starts.
+            if env_state.scaler is not None:
+                env_state.scaler.step(env_state.host_optimizer)
+                for slot_id, (seed_opt, has_grads) in seed_opts_with_grads.items():
                     if has_grads:
                         env_state.scaler.step(seed_opt)
                     else:
@@ -1803,6 +1829,7 @@ def train_ppo_vectorized(
                             use_telemetry=collect_gradients,
                             slots=slots,
                             use_amp=amp_enabled,
+                            max_grad_norm=max_grad_norm,
                         )
                     )
                     if grad_stats is not None:
