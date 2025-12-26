@@ -10,6 +10,7 @@ Displays DRL Expert recommended metrics:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from rich.panel import Panel
 from rich.text import Text
@@ -52,7 +53,7 @@ class RewardHealthPanel(Static):
     }
     """
 
-    def __init__(self, data: RewardHealthData | None = None, **kwargs) -> None:
+    def __init__(self, data: RewardHealthData | None = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._data = data or RewardHealthData()
 

@@ -710,7 +710,7 @@ def train_ppo_vectorized(
                 disable_anti_gaming=disable_anti_gaming,
             )
             env_reward_configs.append(env_config)
-        mode_counts = {}
+        mode_counts: dict[str, int] = {}
         for mode in reward_mode_per_env:
             mode_counts[mode.value] = mode_counts.get(mode.value, 0) + 1
         _logger.info("A/B/n testing enabled: %s", mode_counts)
@@ -2780,13 +2780,19 @@ def train_ppo_vectorized(
                         decision_entropy = entropy_sum
                     # Use signals.metrics.accuracy_delta directly - always available
                     base_acc_delta_for_telemetry = signals.metrics.accuracy_delta
-                    # Extract bounded_attribution and compute_rent from reward_components
+                    # Extract reward components for telemetry
                     # (now available since collect_reward_summary matches ops_telemetry_enabled)
                     bounded_attribution_for_telemetry = None
                     compute_rent_for_telemetry = None
+                    stage_bonus_for_telemetry = None
+                    ratio_penalty_for_telemetry = None
+                    alpha_shock_for_telemetry = None
                     if "reward_components" in locals() and reward_components is not None:
                         bounded_attribution_for_telemetry = reward_components.bounded_attribution
                         compute_rent_for_telemetry = reward_components.compute_rent
+                        stage_bonus_for_telemetry = reward_components.stage_bonus
+                        ratio_penalty_for_telemetry = reward_components.ratio_penalty
+                        alpha_shock_for_telemetry = reward_components.alpha_shock
                     emitters[env_idx].on_last_action(
                         epoch,
                         action_dict,
@@ -2804,6 +2810,9 @@ def train_ppo_vectorized(
                         base_acc_delta=base_acc_delta_for_telemetry,
                         bounded_attribution=bounded_attribution_for_telemetry,
                         compute_rent=compute_rent_for_telemetry,
+                        stage_bonus=stage_bonus_for_telemetry,
+                        ratio_penalty=ratio_penalty_for_telemetry,
+                        alpha_shock=alpha_shock_for_telemetry,
                     )
 
                 # Store transition
@@ -3224,18 +3233,18 @@ def train_ppo_vectorized(
 
         # Group episodes by reward mode
         from collections import defaultdict
-        ab_groups = defaultdict(list)
+        ab_groups: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
         for ep_data in episode_history:
             env_idx = int(ep_data["env_idx"])
-            mode = env_reward_configs[env_idx].reward_mode.value
-            ab_groups[mode].append(ep_data)
+            mode_name = env_reward_configs[env_idx].reward_mode.value
+            ab_groups[mode_name].append(ep_data)
 
-        for mode, episodes in sorted(ab_groups.items()):
+        for mode_name, episodes in sorted(ab_groups.items()):
             rewards = [ep.get("episode_reward", 0) for ep in episodes]
             accuracies = [ep.get("final_accuracy", 0) for ep in episodes]
             avg_reward = sum(rewards) / len(rewards) if rewards else 0
             avg_acc = sum(accuracies) / len(accuracies) if accuracies else 0
-            print(f"\n{mode.upper()} ({len(episodes)} episodes):")
+            print(f"\n{mode_name.upper()} ({len(episodes)} episodes):")
             print(f"  Avg Episode Reward: {avg_reward:.2f}")
             print(f"  Avg Final Accuracy: {avg_acc:.2f}%")
             print(f"  Reward Range: [{min(rewards):.2f}, {max(rewards):.2f}]")

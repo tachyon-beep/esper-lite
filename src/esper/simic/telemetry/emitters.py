@@ -195,6 +195,10 @@ class VectorizedEmitter:
         base_acc_delta: float | None = None,
         bounded_attribution: float | None = None,
         compute_rent: float | None = None,
+        # Additional reward components for RewardHealthPanel
+        stage_bonus: float | None = None,
+        ratio_penalty: float | None = None,
+        alpha_shock: float | None = None,
     ) -> None:
         """Emit last-action detail, offloading formatting to the hub thread."""
         if not self._should_emit("ops_normal"):
@@ -273,6 +277,13 @@ class VectorizedEmitter:
                 base_acc_delta=base_acc_delta,
                 bounded_attribution=bounded_attribution,
                 compute_rent=compute_rent,
+                stage_bonus=stage_bonus,
+                ratio_penalty=ratio_penalty,
+                alpha_shock=alpha_shock,
+                # Decision context for TamiyoBrain Decision Cards
+                slot_states=slot_states,
+                alternatives=alternatives,
+                decision_entropy=decision_entropy,
             ),
         ))
 
@@ -761,6 +772,12 @@ def emit_ppo_update_event(
             head_blueprint_entropy=head_entropies_avg.get("head_blueprint_entropy"),
             head_slot_grad_norm=head_grad_norms_avg.get("head_slot_grad_norm"),
             head_blueprint_grad_norm=head_grad_norms_avg.get("head_blueprint_grad_norm"),
+            head_style_grad_norm=head_grad_norms_avg.get("head_style_grad_norm"),
+            head_tempo_grad_norm=head_grad_norms_avg.get("head_tempo_grad_norm"),
+            head_alpha_target_grad_norm=head_grad_norms_avg.get("head_alpha_target_grad_norm"),
+            head_alpha_speed_grad_norm=head_grad_norms_avg.get("head_alpha_speed_grad_norm"),
+            head_alpha_curve_grad_norm=head_grad_norms_avg.get("head_alpha_curve_grad_norm"),
+            head_op_grad_norm=head_grad_norms_avg.get("head_op_grad_norm"),
             head_style_entropy=head_entropies_avg.get("head_style_entropy"),
             head_tempo_entropy=head_entropies_avg.get("head_tempo_entropy"),
             head_alpha_target_entropy=head_entropies_avg.get("head_alpha_target_entropy"),

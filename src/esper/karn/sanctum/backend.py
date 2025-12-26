@@ -12,8 +12,9 @@ from typing import TYPE_CHECKING
 from esper.karn.sanctum.registry import AggregatorRegistry
 
 if TYPE_CHECKING:
-    from esper.leyline import TelemetryEvent
+    from esper.karn.sanctum.widgets.reward_health import RewardHealthData
     from esper.karn.sanctum.schema import SanctumSnapshot
+    from esper.leyline import TelemetryEvent
 
 _logger = logging.getLogger(__name__)
 

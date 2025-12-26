@@ -411,7 +411,7 @@ class EpisodeOutcome:
 
         return all_geq and any_gt
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dict."""
         return {
             "env_idx": self.env_idx,

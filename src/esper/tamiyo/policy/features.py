@@ -406,7 +406,7 @@ def batch_obs_to_features(
     features[:, 10] = torch.tensor([s.metrics.best_val_loss for s in batch_signals], device=device).clamp(-10, 10)
     
     # [11-15] Loss history (5 values) - VECTORIZED: single tensor creation
-    def _pad_history(hist: list, length: int = 5) -> list:
+    def _pad_history(hist: list[float], length: int = 5) -> list[float]:
         """Left-pad history to fixed length with zeros."""
         hist = list(hist[-length:])
         return [0.0] * (length - len(hist)) + hist

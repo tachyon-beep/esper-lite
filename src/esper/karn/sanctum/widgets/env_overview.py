@@ -607,21 +607,36 @@ class EnvOverview(Static):
         return action_short
 
     def _format_stale_epochs(self, env: "EnvState") -> str:
-        """Format epochs since improvement with color coding.
+        """Format epochs since improvement with context-aware color coding.
+
+        Staleness is only concerning when stuck in a BAD state. Being stable
+        at "excellent" or "healthy" for many epochs is good, not bad.
 
         Returns the number of epochs since the last improvement, colored:
         - Green: 0 (currently improving) with + prefix
-        - White: 1-5 (normal) numbers only
-        - Yellow: 6-15 (stagnating) with ! prefix
-        - Red: >15 (severely stalled) with x prefix
+        - For healthy/excellent status: white numbers (stability is good)
+        - For stalled/degraded status: yellow/red warnings (stuck in bad state)
+        - For initializing: dim (neutral, still warming up)
 
-        Uses fixed-width ASCII prefixes for consistent column alignment
-        (emojis have variable width and break table formatting).
+        Uses fixed-width ASCII prefixes for consistent column alignment.
         """
         epochs = env.epochs_since_improvement
+        status = env.status
+
+        # Currently improving - always green
         if epochs == 0:
             return "[green]+0[/green]"
-        elif epochs <= 5:
+
+        # Good states: stability is a feature, not a bug
+        if status in ("excellent", "healthy"):
+            return f"[green] {epochs}[/green]"
+
+        # Initializing: neutral, still warming up
+        if status == "initializing":
+            return f"[dim] {epochs}[/dim]"
+
+        # Bad states (stalled, degraded): staleness is concerning
+        if epochs <= 5:
             return f"[white] {epochs}[/white]"
         elif epochs <= 15:
             return f"[yellow]!{epochs}[/yellow]"

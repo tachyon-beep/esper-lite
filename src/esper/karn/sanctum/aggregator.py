@@ -52,6 +52,7 @@ from esper.leyline import (
 )
 
 if TYPE_CHECKING:
+    from esper.karn.store import EpisodeOutcome
     from esper.leyline import TelemetryEvent
 
 _logger = logging.getLogger(__name__)
@@ -225,7 +226,7 @@ class SanctumAggregator:
         self._cumulative_blueprint_prunes = {}
 
         # Episode outcomes for Pareto analysis (reward health panel)
-        self._episode_outcomes: list = []  # EpisodeOutcome instances
+        self._episode_outcomes: list[EpisodeOutcome] = []
 
         # Pre-create env states
         for i in range(self.num_envs):
@@ -697,6 +698,18 @@ class SanctumAggregator:
             self._tamiyo.head_blueprint_entropy = payload.head_blueprint_entropy
         if payload.head_blueprint_grad_norm is not None:
             self._tamiyo.head_blueprint_grad_norm = payload.head_blueprint_grad_norm
+        if payload.head_style_grad_norm is not None:
+            self._tamiyo.head_style_grad_norm = payload.head_style_grad_norm
+        if payload.head_tempo_grad_norm is not None:
+            self._tamiyo.head_tempo_grad_norm = payload.head_tempo_grad_norm
+        if payload.head_alpha_target_grad_norm is not None:
+            self._tamiyo.head_alpha_target_grad_norm = payload.head_alpha_target_grad_norm
+        if payload.head_alpha_speed_grad_norm is not None:
+            self._tamiyo.head_alpha_speed_grad_norm = payload.head_alpha_speed_grad_norm
+        if payload.head_alpha_curve_grad_norm is not None:
+            self._tamiyo.head_alpha_curve_grad_norm = payload.head_alpha_curve_grad_norm
+        if payload.head_op_grad_norm is not None:
+            self._tamiyo.head_op_grad_norm = payload.head_op_grad_norm
 
         # Per-head entropies (for heatmap visualization) - optional with None
         if payload.head_style_entropy is not None:
@@ -1094,6 +1107,13 @@ class SanctumAggregator:
                 env.reward_components.bounded_attribution = payload.bounded_attribution
             if payload.compute_rent is not None:
                 env.reward_components.compute_rent = payload.compute_rent
+            # Reward health fields (for RewardHealthPanel)
+            if payload.stage_bonus is not None:
+                env.reward_components.stage_bonus = payload.stage_bonus
+            if payload.ratio_penalty is not None:
+                env.reward_components.ratio_penalty = payload.ratio_penalty
+            if payload.alpha_shock is not None:
+                env.reward_components.alpha_shock = payload.alpha_shock
             # Always update context fields when we have any reward data
             if payload.base_acc_delta is not None or payload.bounded_attribution is not None:
                 env.reward_components.total = total_reward
@@ -1114,16 +1134,16 @@ class SanctumAggregator:
 
             decision = DecisionSnapshot(
                 timestamp=now_dt,
-                slot_states={},
+                slot_states=payload.slot_states or {},
                 host_accuracy=env.host_accuracy,
                 chosen_action=action_name,
                 chosen_slot=payload.slot_id,
                 confidence=payload.action_confidence,
                 expected_value=value_s,
                 actual_reward=total_reward,
-                alternatives=[],
+                alternatives=payload.alternatives or [],
                 decision_id=str(uuid.uuid4())[:8],
-                decision_entropy=0.0,
+                decision_entropy=payload.decision_entropy or 0.0,
                 env_id=env_id,
                 value_residual=total_reward - value_s,
                 td_advantage=None,

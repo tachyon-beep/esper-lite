@@ -489,7 +489,6 @@ class SystemVitals:
     # Throughput
     epochs_per_second: float = 0.0
     batches_per_hour: float = 0.0
-    steps_per_second: float = 0.0
 
     # Host network
     host_params: int = 0

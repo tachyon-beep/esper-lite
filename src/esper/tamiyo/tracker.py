@@ -15,6 +15,7 @@ from esper.leyline import (
     TrainingMetrics,
     TelemetryEvent,
     TelemetryEventType,
+    TamiyoInitiatedPayload,
     DEFAULT_STABILIZATION_THRESHOLD,
     DEFAULT_STABILIZATION_EPOCHS,
 )
@@ -140,22 +141,24 @@ class SignalTracker:
                         self._is_stabilized = True
                         # Emit TAMIYO_INITIATED telemetry (console output via Nissa backend)
                         hub = get_hub()
-                        hub.emit(TelemetryEvent(
-                            event_type=TelemetryEventType.TAMIYO_INITIATED,
-                            epoch=epoch,
-                            message=(
-                                f"Host stabilized - germination now allowed "
-                                f"(env_id={self.env_id}, stable_count={self._stable_count}, "
-                                f"stabilization_epochs={self.stabilization_epochs}, val_loss={val_loss:.4f})"
-                            ),
-                            data={
-                                "env_id": self.env_id,
-                                "epoch": epoch,
-                                "stable_count": self._stable_count,
-                                "stabilization_epochs": self.stabilization_epochs,
-                                "val_loss": val_loss,
-                            },
-                        ))
+                        # Only emit if env_id is set (telemetry requires env context)
+                        if self.env_id is not None:
+                            hub.emit(TelemetryEvent(
+                                event_type=TelemetryEventType.TAMIYO_INITIATED,
+                                epoch=epoch,
+                                message=(
+                                    f"Host stabilized - germination now allowed "
+                                    f"(env_id={self.env_id}, stable_count={self._stable_count}, "
+                                    f"stabilization_epochs={self.stabilization_epochs}, val_loss={val_loss:.4f})"
+                                ),
+                                data=TamiyoInitiatedPayload(
+                                    env_id=self.env_id,
+                                    epoch=epoch,
+                                    stable_count=self._stable_count,
+                                    stabilization_epochs=self.stabilization_epochs,
+                                    val_loss=val_loss,
+                                ),
+                            ))
                 else:
                     self._stable_count = 0
 

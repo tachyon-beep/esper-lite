@@ -605,7 +605,7 @@ class SeedState:
             blueprint_id=data["blueprint_id"],  # Required
             slot_id=data["slot_id"],  # Required
             stage=SeedStage(data["stage"]),  # Required
-            previous_stage=SeedStage(data["previous_stage"]) if data["previous_stage"] is not None else None,
+            previous_stage=SeedStage(data["previous_stage"]) if data["previous_stage"] is not None else SeedStage.UNKNOWN,
             alpha_algorithm=AlphaAlgorithm(int(data["alpha_algorithm"])),
         )
         state.stage_entered_at = datetime.fromisoformat(data["stage_entered_at"])  # Required

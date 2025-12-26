@@ -607,6 +607,12 @@ class PPOUpdatePayload:
     head_blueprint_entropy: float | None = None
     head_slot_grad_norm: float | None = None
     head_blueprint_grad_norm: float | None = None
+    head_style_grad_norm: float | None = None
+    head_tempo_grad_norm: float | None = None
+    head_alpha_target_grad_norm: float | None = None
+    head_alpha_speed_grad_norm: float | None = None
+    head_alpha_curve_grad_norm: float | None = None
+    head_op_grad_norm: float | None = None
     head_style_entropy: float | None = None
     head_tempo_entropy: float | None = None
     head_alpha_target_entropy: float | None = None
@@ -657,6 +663,12 @@ class PPOUpdatePayload:
             head_blueprint_entropy=data.get("head_blueprint_entropy"),
             head_slot_grad_norm=data.get("head_slot_grad_norm"),
             head_blueprint_grad_norm=data.get("head_blueprint_grad_norm"),
+            head_style_grad_norm=data.get("head_style_grad_norm"),
+            head_tempo_grad_norm=data.get("head_tempo_grad_norm"),
+            head_alpha_target_grad_norm=data.get("head_alpha_target_grad_norm"),
+            head_alpha_speed_grad_norm=data.get("head_alpha_speed_grad_norm"),
+            head_alpha_curve_grad_norm=data.get("head_alpha_curve_grad_norm"),
+            head_op_grad_norm=data.get("head_op_grad_norm"),
             head_style_entropy=data.get("head_style_entropy"),
             head_tempo_entropy=data.get("head_tempo_entropy"),
             head_alpha_target_entropy=data.get("head_alpha_target_entropy"),
@@ -680,6 +692,33 @@ class PPOUpdatePayload:
             clip_fraction=0.0,
             nan_grad_count=0,
             skipped=True,
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class TamiyoInitiatedPayload:
+    """Payload for TAMIYO_INITIATED event.
+
+    Emitted when host network stabilizes and germination becomes allowed.
+    This marks the transition from warmup phase to active seed training.
+    """
+
+    # REQUIRED
+    env_id: int
+    epoch: int
+    stable_count: int  # Number of consecutive stable epochs
+    stabilization_epochs: int  # Required epochs for stabilization
+    val_loss: float  # Validation loss at stabilization
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "TamiyoInitiatedPayload":
+        """Parse from dict. Raises KeyError on missing required fields."""
+        return cls(
+            env_id=data["env_id"],
+            epoch=data["epoch"],
+            stable_count=data["stable_count"],
+            stabilization_epochs=data["stabilization_epochs"],
+            val_loss=data["val_loss"],
         )
 
 
@@ -956,6 +995,14 @@ class AnalyticsSnapshotPayload:
     base_acc_delta: float | None = None  # Legacy shaped signal from accuracy improvement
     bounded_attribution: float | None = None  # Contribution-primary attribution signal
     compute_rent: float | None = None  # Cost of active seeds (always negative)
+    # Additional reward components for RewardHealthPanel (Sanctum)
+    stage_bonus: float | None = None  # PBRS shaping bonus for lifecycle stages
+    ratio_penalty: float | None = None  # Anti-gaming penalty for extreme ratios
+    alpha_shock: float | None = None  # Convex penalty on alpha deltas
+    # Decision context for TamiyoBrain Decision Cards
+    slot_states: dict[str, str] | None = None  # slot_id -> "Training 12%" or "Empty"
+    alternatives: list[tuple[str, float]] | None = None  # Top-2 alternative (action, prob)
+    decision_entropy: float | None = None  # -sum(p*log(p)) for action distribution
 
     # For kind="throughput", includes performance metrics
     batch: int | None = None
@@ -1242,6 +1289,7 @@ TelemetryPayload = (
     | EpochCompletedPayload
     | BatchEpochCompletedPayload
     | PPOUpdatePayload
+    | TamiyoInitiatedPayload
     | SeedGerminatedPayload
     | SeedStageChangedPayload
     | SeedGateEvaluatedPayload

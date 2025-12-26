@@ -110,7 +110,7 @@ class HistoricalEnvDetail(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         """Compose the modal layout."""
-        with Container(id="modal-container") as container:
+        with Container(id="modal-container"):
             # Header bar
             yield Static(self._render_header(), id="detail-header", classes="header-bar")
 
@@ -145,8 +145,6 @@ class HistoricalEnvDetail(ModalScreen[None]):
                 f"[dim]Press ESC or Q to close  │  {pin_status}[/dim]",
                 classes="footer-hint",
             )
-
-        yield container
 
     def _render_header(self) -> Text:
         """Render the header bar with record summary."""

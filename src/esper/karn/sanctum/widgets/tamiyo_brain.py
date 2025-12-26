@@ -140,9 +140,11 @@ class TamiyoBrain(Static):
         "style": (("GERMINATE", "SET_ALPHA_TARGET"), "SIGMOID_ADD"),
         "blueprint": (("GERMINATE",), "NOOP"),
         "tempo": (("GERMINATE",), "STANDARD"),
-        "alpha_target": (("SET_ALPHA_TARGET",), "FULL"),
-        "alpha_speed": (("SET_ALPHA_TARGET",), "MEDIUM"),
-        "alpha_curve": (("SET_ALPHA_TARGET",), "LINEAR"),
+        # alpha_target: SET_ALPHA_TARGET picks blend target, GERMINATE picks initial alpha
+        "alpha_target": (("GERMINATE", "SET_ALPHA_TARGET"), "FULL"),
+        # alpha_speed/curve: SET_ALPHA_TARGET for blending, PRUNE for fade-out speed
+        "alpha_speed": (("SET_ALPHA_TARGET", "PRUNE"), "MEDIUM"),
+        "alpha_curve": (("SET_ALPHA_TARGET", "PRUNE"), "LINEAR"),
     }
 
     # Minimum relevance ratio for displaying active entropy (avoid division by tiny numbers)
