@@ -176,7 +176,7 @@ class OverwatchBackend:
 
         self._running = True
 
-        # Try to import FastAPI/uvicorn
+        # Try to import FastAPI/uvicorn (optional dependency)
         try:
             import uvicorn
             from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -186,7 +186,7 @@ class OverwatchBackend:
             # Create FastAPI app
             app = FastAPI(title="Overwatch Dashboard")
 
-            @app.websocket("/ws")
+            @app.websocket("/ws")  # type: ignore[untyped-decorator]
             async def websocket_endpoint(websocket: WebSocket) -> None:
                 await websocket.accept()
 
@@ -227,7 +227,7 @@ class OverwatchBackend:
                             self._clients.remove(websocket)
 
             # Serve index.html at root
-            @app.get("/")
+            @app.get("/")  # type: ignore[untyped-decorator]
             async def serve_index() -> FileResponse:
                 return FileResponse(self._static_path / "index.html")
 

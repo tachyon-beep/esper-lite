@@ -100,5 +100,9 @@ module = [
     "textual.*",
     "duckdb.*",
     "mcp.*",
+    "fastapi",
+    "fastapi.*",
+    "uvicorn",
+    "uvicorn.*",
 ]
 ignore_missing_imports = true

@@ -8,7 +8,7 @@ Triggered by left-clicking a row in the Best Runs scoreboard.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import TYPE_CHECKING, Any
 
 from rich.panel import Panel
 from rich.table import Table
