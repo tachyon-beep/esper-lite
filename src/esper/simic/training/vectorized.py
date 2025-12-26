@@ -2180,15 +2180,10 @@ def train_ppo_vectorized(
                         # Track positive synergy in scaffold boost ledger for hindsight credit
                         if interaction > 0:
                             # Seed A boosted Seed B (symmetric relationship)
-                            if slot_a not in env_state.scaffold_boost_ledger:
-                                env_state.scaffold_boost_ledger[slot_a] = []
                             env_state.scaffold_boost_ledger[slot_a].append(
                                 (interaction, slot_b, epoch)
                             )
-
                             # Seed B boosted Seed A
-                            if slot_b not in env_state.scaffold_boost_ledger:
-                                env_state.scaffold_boost_ledger[slot_b] = []
                             env_state.scaffold_boost_ledger[slot_b].append(
                                 (interaction, slot_a, epoch)
                             )

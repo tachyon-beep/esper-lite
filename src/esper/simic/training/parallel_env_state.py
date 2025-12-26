@@ -10,8 +10,9 @@ for a single parallel training environment, including:
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, DefaultDict
 
 import torch
 
@@ -89,8 +90,10 @@ class ParallelEnvState:
     prev_slot_params: dict[str, int] = field(default_factory=dict)
     # Scaffold hindsight credit tracking (Phase 3.2)
     # Maps scaffold_slot -> list of (boost_given, beneficiary_slot, epoch_of_boost)
-    # Using list instead of set to track each boost interaction with its epoch
-    scaffold_boost_ledger: dict[str, list[tuple[float, str, int]]] = field(default_factory=dict)
+    # Using defaultdict to auto-create empty lists on first access
+    scaffold_boost_ledger: DefaultDict[str, list[tuple[float, str, int]]] = field(
+        default_factory=lambda: defaultdict(list)
+    )
     # Pending hindsight credit to add to next transition (BEFORE normalization)
     pending_hindsight_credit: float = 0.0
     # Pre-computed autocast decision for hot path performance
