@@ -139,6 +139,10 @@
     border: solid $error;
 }
 
+#tamiyo-container TamiyoBrain.status-warmup {
+    border: solid cyan;
+}
+
 #tamiyo-container TamiyoBrain:focus {
     border: double $accent;
 }

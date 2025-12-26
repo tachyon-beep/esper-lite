@@ -264,7 +264,7 @@ class TamiyoBrain(Static):
         status, _, _ = self._get_overall_status()
 
         # Remove all status classes
-        self.remove_class("status-ok", "status-warning", "status-critical")
+        self.remove_class("status-ok", "status-warning", "status-critical", "status-warmup")
 
         # Add current status class
         self.add_class(f"status-{status}")
@@ -1032,7 +1032,7 @@ class TamiyoBrain(Static):
         status, label, style = self._get_overall_status()
         tamiyo = self._snapshot.tamiyo
 
-        icons = {"ok": "[OK]", "warning": "[!]", "critical": "[X]"}
+        icons = {"ok": "[OK]", "warning": "[!]", "critical": "[X]", "warmup": "[~]"}
         icon = icons.get(status, "?")
 
         banner = Text()
@@ -1046,6 +1046,9 @@ class TamiyoBrain(Static):
 
         banner.append(f"{icon} ", style=style)
         banner.append(f"{label}   ", style=style)
+
+        # Track if we're in warmup period (first 50 batches)
+        is_warmup = status == "warmup"
 
         if tamiyo.ppo_data_received:
             # EV with warning indicator
@@ -1126,7 +1129,7 @@ class TamiyoBrain(Static):
         Returns:
             Tuple of (status, label, style) where:
             - status: "ok", "warning", or "critical"
-            - label: "LEARNING", "CAUTION", or "FAILING"
+            - label: "LEARNING", "CAUTION", "FAILING", or "WARMING UP (x/50)"
             - style: Rich style string for coloring
         """
         if self._snapshot is None:
@@ -1136,6 +1139,13 @@ class TamiyoBrain(Static):
 
         if not tamiyo.ppo_data_received:
             return "ok", "WAITING", "dim"
+
+        # === WARMUP CHECK (first 50 batches) ===
+        # During warmup, metrics are noisy and thresholds don't apply
+        warmup_batches = 50
+        current_batch = self._snapshot.current_batch
+        if current_batch < warmup_batches:
+            return "warmup", f"WARMING UP ({current_batch}/{warmup_batches})", "cyan"
 
         # === CRITICAL CHECKS (immediate FAILING) ===
 
@@ -1285,6 +1295,11 @@ class TamiyoBrain(Static):
         tamiyo = self._snapshot.tamiyo
         batch = self._snapshot.current_batch
 
+        # Check if we're in warmup period (first 50 batches)
+        warmup_batches = 50
+        is_warmup = batch < warmup_batches
+        warmup_label = "WARMING UP"
+
         grid = Table.grid(expand=True)
         grid.add_column(ratio=1)
         grid.add_column(ratio=1)
@@ -1323,7 +1338,7 @@ class TamiyoBrain(Static):
             min_val=-1.0,
             max_val=1.0,
             status=self._get_ev_status(tamiyo.explained_variance),
-            label_text=self._get_ev_label(tamiyo.explained_variance),
+            label_text=warmup_label if is_warmup else self._get_ev_label(tamiyo.explained_variance),
             trend_indicator=ev_indicator,
             trend_style=ev_indicator_style,
         )
@@ -1333,7 +1348,7 @@ class TamiyoBrain(Static):
             min_val=0.0,
             max_val=2.0,
             status=self._get_entropy_status(tamiyo.entropy),
-            label_text=self._get_entropy_label(tamiyo.entropy, batch),
+            label_text=warmup_label if is_warmup else self._get_entropy_label(tamiyo.entropy, batch),
             trend_indicator=entropy_indicator,
             trend_style=entropy_indicator_style,
         )
@@ -1346,7 +1361,7 @@ class TamiyoBrain(Static):
             min_val=0.0,
             max_val=0.5,
             status=self._get_clip_status(tamiyo.clip_fraction),
-            label_text=self._get_clip_label(tamiyo.clip_fraction),
+            label_text=warmup_label if is_warmup else self._get_clip_label(tamiyo.clip_fraction),
             trend_indicator=clip_indicator,
             trend_style=clip_indicator_style,
         )
@@ -1356,7 +1371,7 @@ class TamiyoBrain(Static):
             min_val=0.0,
             max_val=0.1,
             status=self._get_kl_status(tamiyo.kl_divergence),
-            label_text=self._get_kl_label(tamiyo.kl_divergence, batch),
+            label_text=warmup_label if is_warmup else self._get_kl_label(tamiyo.kl_divergence, batch),
             trend_indicator=kl_indicator,
             trend_style=kl_indicator_style,
         )
