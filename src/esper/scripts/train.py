@@ -81,6 +81,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Launch Sanctum TUI for developer debugging (replaces Rich TUI)",
     )
+    telemetry_parent.add_argument(
+        "--overwatch",
+        action="store_true",
+        help="Launch Overwatch web dashboard (mutually exclusive with --sanctum)",
+    )
+    telemetry_parent.add_argument(
+        "--overwatch-port",
+        type=int,
+        default=8080,
+        help="Overwatch dashboard port (default: 8080)",
+    )
 
     subparsers = parser.add_subparsers(dest="algorithm", required=True)
 
@@ -228,6 +239,10 @@ def validate_slots(slot_ids: list[str]) -> list[str]:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+
+    # Mutual exclusion check for UI modes
+    if args.sanctum and args.overwatch:
+        parser.error("--sanctum and --overwatch are mutually exclusive")
 
     # Create TelemetryConfig from CLI argument
     from esper.simic.telemetry import TelemetryConfig, TelemetryLevel
@@ -379,6 +394,16 @@ def main() -> None:
 
         sanctum_backend = SanctumBackend(num_envs=num_envs)
         hub.add_backend(sanctum_backend)  # type: ignore[arg-type]
+
+    # Setup Overwatch backend if requested
+    overwatch_backend = None
+    if args.overwatch:
+        from esper.karn.overwatch import OverwatchBackend
+
+        overwatch_backend = OverwatchBackend(port=args.overwatch_port)
+        overwatch_backend.start()
+        hub.add_backend(overwatch_backend)  # type: ignore[arg-type]
+        print(f"Overwatch dashboard: http://localhost:{args.overwatch_port}")
 
     # Add Karn research telemetry collector
     # KarnCollector captures events into typed store for research analytics
