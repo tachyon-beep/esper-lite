@@ -205,4 +205,87 @@ describe('ContributionWaterfall', () => {
     const totalLabel = wrapper.find('[data-testid="label-total"]')
     expect(totalLabel.text()).toContain('-0.15')
   })
+
+  // SVG Positioning Tests
+
+  it('calculates SVG height based on visible bars', () => {
+    // With fossilize_terminal_bonus = 0, we have 6 visible bars
+    const wrapper = mount(ContributionWaterfall, {
+      props: {
+        rewards: createRewardComponents({ fossilize_terminal_bonus: 0 })
+      }
+    })
+
+    const svg = wrapper.find('svg')
+    // Height = TOP_PADDING(20) + BOTTOM_PADDING(20) + 6 bars * (BAR_HEIGHT(24) + BAR_GAP(8))
+    // = 40 + 6 * 32 = 40 + 192 = 232
+    expect(svg.attributes('height')).toBe('232')
+  })
+
+  it('increases SVG height when fossilize bonus is shown', () => {
+    // With fossilize_terminal_bonus > 0, we have 7 visible bars
+    const wrapper = mount(ContributionWaterfall, {
+      props: {
+        rewards: createRewardComponents({ fossilize_terminal_bonus: 0.1 })
+      }
+    })
+
+    const svg = wrapper.find('svg')
+    // Height = 40 + 7 bars * 32 = 40 + 224 = 264
+    expect(svg.attributes('height')).toBe('264')
+  })
+
+  it('positions positive bar rect starting at midpoint', () => {
+    const wrapper = mount(ContributionWaterfall, {
+      props: {
+        rewards: createRewardComponents({ base_acc_delta: 0.5 })
+      }
+    })
+
+    const barRect = wrapper.find('[data-testid="bar-base-acc-delta"] rect')
+    const x = parseFloat(barRect.attributes('x') || '0')
+
+    // Midpoint = CHART_LEFT(110) + CHART_WIDTH(220) / 2 = 110 + 110 = 220
+    // Positive bars start at midpoint
+    expect(x).toBe(220)
+  })
+
+  it('positions negative bar rect ending at midpoint', () => {
+    const wrapper = mount(ContributionWaterfall, {
+      props: {
+        rewards: createRewardComponents({
+          compute_rent: -0.5,
+          base_acc_delta: 0.5 // Need positive value to set scale
+        })
+      }
+    })
+
+    const barRect = wrapper.find('[data-testid="bar-compute-rent"] rect')
+    const x = parseFloat(barRect.attributes('x') || '0')
+    const width = parseFloat(barRect.attributes('width') || '0')
+
+    // Negative bars should end at midpoint (220)
+    // x + width should equal midpoint
+    expect(x + width).toBe(220)
+  })
+
+  it('positions bars at correct Y offsets', () => {
+    const wrapper = mount(ContributionWaterfall, {
+      props: {
+        rewards: createRewardComponents({ fossilize_terminal_bonus: 0 })
+      }
+    })
+
+    // First bar at TOP_PADDING = 20
+    const firstBar = wrapper.find('[data-testid="bar-base-acc-delta"] rect')
+    expect(firstBar.attributes('y')).toBe('20')
+
+    // Second bar at 20 + (24 + 8) = 52
+    const secondBar = wrapper.find('[data-testid="bar-seed-contribution"] rect')
+    expect(secondBar.attributes('y')).toBe('52')
+
+    // Third bar at 20 + 2 * 32 = 84
+    const thirdBar = wrapper.find('[data-testid="bar-stage-bonus"] rect')
+    expect(thirdBar.attributes('y')).toBe('84')
+  })
 })

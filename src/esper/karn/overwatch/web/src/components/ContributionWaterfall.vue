@@ -7,15 +7,19 @@ const props = defineProps<{
   rewards: RewardComponents
 }>()
 
-// SVG dimensions
+// SVG dimensions and spacing
 const WIDTH = 400
-const HEIGHT = 200
 const BAR_HEIGHT = 24
 const BAR_GAP = 8
 const LABEL_WIDTH = 100
 const VALUE_WIDTH = 60
-const CHART_LEFT = LABEL_WIDTH + 10
-const CHART_WIDTH = WIDTH - CHART_LEFT - VALUE_WIDTH - 10
+const SECTION_GAP = 10 // Gap between label/chart/value sections
+const TOP_PADDING = 20 // Padding above first bar
+const BOTTOM_PADDING = 20 // Padding below last bar
+
+// Computed layout values
+const CHART_LEFT = LABEL_WIDTH + SECTION_GAP
+const CHART_WIDTH = WIDTH - CHART_LEFT - VALUE_WIDTH - SECTION_GAP
 
 interface WaterfallBar {
   id: string
@@ -25,6 +29,9 @@ interface WaterfallBar {
 }
 
 // Define the bars to display in order
+// Note: bounded_attribution is intentionally excluded from visualization.
+// It represents a clipped summary for normalization, not a separate contribution.
+// The individual components (seed_contribution, base_acc_delta) are shown instead.
 const bars = computed<WaterfallBar[]>(() => {
   const combinedPenalties =
     props.rewards.alpha_shock +
@@ -90,7 +97,7 @@ const scale = computed(() => {
 
 // Calculate Y position for each bar
 function getBarY(index: number): number {
-  return 20 + index * (BAR_HEIGHT + BAR_GAP)
+  return TOP_PADDING + index * (BAR_HEIGHT + BAR_GAP)
 }
 
 // Calculate bar width based on value
@@ -132,7 +139,7 @@ function getBarClass(bar: WaterfallBar): string[] {
 
 // Calculate SVG height based on number of visible bars
 const svgHeight = computed(() => {
-  return 40 + visibleBars.value.length * (BAR_HEIGHT + BAR_GAP)
+  return TOP_PADDING + BOTTOM_PADDING + visibleBars.value.length * (BAR_HEIGHT + BAR_GAP)
 })
 
 // Midpoint line X position
