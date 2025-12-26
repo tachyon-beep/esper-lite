@@ -1717,6 +1717,7 @@ def train_ppo_vectorized(
                 "bounded_attribution": 0.0,
                 "compute_rent": 0.0,
                 "alpha_shock": 0.0,
+                "hindsight_credit": 0.0,
                 "total_reward": 0.0,
                 "count": 0,
             }
@@ -2625,8 +2626,10 @@ def train_ppo_vectorized(
 
                 # Add any pending hindsight credit BEFORE normalization
                 # (DRL Specialist review: credit should go through normalizer for scale consistency)
+                hindsight_credit_applied = 0.0
                 if env_state.pending_hindsight_credit > 0:
-                    reward += env_state.pending_hindsight_credit
+                    hindsight_credit_applied = env_state.pending_hindsight_credit
+                    reward += hindsight_credit_applied
                     env_state.pending_hindsight_credit = 0.0
 
                 # Normalize reward for PPO stability (P1-6 fix)
@@ -2642,6 +2645,7 @@ def train_ppo_vectorized(
                         )
                     summary["compute_rent"] += reward_components.compute_rent
                     summary["alpha_shock"] += reward_components.alpha_shock
+                    summary["hindsight_credit"] += hindsight_credit_applied
                     summary["count"] += 1
 
                 # Execute action

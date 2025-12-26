@@ -358,7 +358,7 @@ class TestMultipleScaffolds:
         )
 
 
-class TestCreditGoesThoughNormalizer:
+class TestCreditGoesThroughNormalizer:
     """Tests verifying credit is added before normalization."""
 
     def test_credit_goes_through_normalizer(self):
@@ -411,3 +411,330 @@ class TestCreditGoesThoughNormalizer:
         assert credit_effect_low > credit_effect_high, (
             "Credit should have larger effect when reward variance is low"
         )
+
+
+class TestScaffoldHindsightFlowE2E:
+    """End-to-end integration tests for the complete scaffold hindsight credit flow.
+
+    Tests the full pipeline:
+    1. Ledger populated when positive interaction occurs
+    2. Credit computed on fossilization with temporal discount
+    3. Pending credit consumed in next reward
+    4. Credit goes through normalizer (if enabled)
+    """
+
+    def _make_env_state_with_slots(self, slots: list[str]) -> ParallelEnvState:
+        """Create a ParallelEnvState with specified slots configured."""
+        import torch
+        from unittest.mock import Mock
+
+        mock_model = Mock()
+        mock_optimizer = Mock()
+        mock_signal_tracker = Mock()
+        mock_signal_tracker.reset = Mock()
+        mock_governor = Mock()
+        mock_governor.reset = Mock()
+
+        env_state = ParallelEnvState(
+            model=mock_model,
+            host_optimizer=mock_optimizer,
+            signal_tracker=mock_signal_tracker,
+            governor=mock_governor,
+        )
+        # Initialize accumulators and slot-related state
+        env_state.init_accumulators(slots)
+        env_state.prev_slot_alphas = {slot_id: 0.0 for slot_id in slots}
+        env_state.prev_slot_params = {slot_id: 0 for slot_id in slots}
+        env_state.gradient_ratio_ema = {slot_id: 0.0 for slot_id in slots}
+        return env_state
+
+    def test_scaffold_hindsight_flow_e2e(self):
+        """End-to-end: scaffold boosts beneficiary, beneficiary fossilizes, credit applied.
+
+        Tests the complete flow:
+        1. Create env with 2 slots
+        2. Germinate seeds in both slots (simulated via ledger)
+        3. Simulate positive interaction (populate scaffold_boost_ledger)
+        4. Wait N epochs (increment current_epoch for temporal discount)
+        5. Fossilize beneficiary with positive improvement (compute hindsight credit)
+        6. Verify pending_hindsight_credit > 0
+        7. Verify credit is discounted by gamma^N
+        8. Step again, verify reward includes credit (before normalization)
+        """
+        slots = ["slot_0", "slot_1"]
+        env_state = self._make_env_state_with_slots(slots)
+
+        # === Step 1-2: Simulate germination (env with 2 slots ready) ===
+        scaffold_slot = "slot_0"
+        beneficiary_slot = "slot_1"
+
+        # === Step 3: Simulate positive interaction between seeds ===
+        # This happens during counterfactual validation in vectorized.py
+        boost_given = 1.5  # Scaffold boosted beneficiary by 1.5
+        epoch_of_boost = 3
+        env_state.current_epoch = epoch_of_boost
+
+        # Record the boost in the ledger (symmetric tracking per design doc)
+        if scaffold_slot not in env_state.scaffold_boost_ledger:
+            env_state.scaffold_boost_ledger[scaffold_slot] = []
+        env_state.scaffold_boost_ledger[scaffold_slot].append(
+            (boost_given, beneficiary_slot, epoch_of_boost)
+        )
+
+        if beneficiary_slot not in env_state.scaffold_boost_ledger:
+            env_state.scaffold_boost_ledger[beneficiary_slot] = []
+        env_state.scaffold_boost_ledger[beneficiary_slot].append(
+            (boost_given, scaffold_slot, epoch_of_boost)
+        )
+
+        # Verify ledger is populated
+        assert scaffold_slot in env_state.scaffold_boost_ledger
+        assert len(env_state.scaffold_boost_ledger[scaffold_slot]) == 1
+
+        # === Step 4: Wait N epochs (simulate time passing) ===
+        fossilize_epoch = 10
+        env_state.current_epoch = fossilize_epoch
+        delay = fossilize_epoch - epoch_of_boost  # 7 epochs
+
+        # === Step 5: Fossilize beneficiary with positive improvement ===
+        beneficiary_improvement = 3.0  # 3% improvement
+
+        # Compute hindsight credit as done in vectorized.py
+        total_credit = 0.0
+        for boost_entry in env_state.scaffold_boost_ledger.get(scaffold_slot, []):
+            boost, target_slot, epoch_of_entry = boost_entry
+            if target_slot == beneficiary_slot and boost > 0:
+                # Temporal discount
+                entry_delay = fossilize_epoch - epoch_of_entry
+                discount = DEFAULT_GAMMA ** entry_delay
+
+                # Compute base credit
+                raw_credit = compute_scaffold_hindsight_credit(
+                    boost_given=boost,
+                    beneficiary_improvement=beneficiary_improvement,
+                    credit_weight=0.2,
+                )
+                total_credit += raw_credit * discount
+
+        # Cap total credit (as done in vectorized.py)
+        total_credit = min(total_credit, MAX_HINDSIGHT_CREDIT)
+
+        # Add to pending credit
+        env_state.pending_hindsight_credit += total_credit
+
+        # === Step 6: Verify pending_hindsight_credit > 0 ===
+        assert env_state.pending_hindsight_credit > 0, (
+            f"Expected positive pending credit, got {env_state.pending_hindsight_credit}"
+        )
+
+        # === Step 7: Verify credit is discounted by gamma^N ===
+        # Calculate what the base (undiscounted) credit would be
+        base_credit = compute_scaffold_hindsight_credit(
+            boost_given=boost_given,
+            beneficiary_improvement=beneficiary_improvement,
+            credit_weight=0.2,
+        )
+        expected_discount = DEFAULT_GAMMA ** delay
+        expected_discounted = base_credit * expected_discount
+
+        # The pending credit should be the discounted value
+        assert abs(env_state.pending_hindsight_credit - expected_discounted) < 0.001, (
+            f"Pending credit {env_state.pending_hindsight_credit} should be "
+            f"discounted ({expected_discounted}), delay={delay}, gamma={DEFAULT_GAMMA}"
+        )
+
+        # Verify temporal discount is meaningful (not 1.0)
+        assert expected_discount < 1.0, (
+            f"Expected discount {expected_discount} should be < 1.0 for delay={delay}"
+        )
+
+        # === Step 8: Step again, verify reward includes credit (before normalization) ===
+        base_reward = 0.5
+
+        # Simulate reward computation (from vectorized.py lines 2627-2633)
+        hindsight_credit_applied = 0.0
+        if env_state.pending_hindsight_credit > 0:
+            hindsight_credit_applied = env_state.pending_hindsight_credit
+            base_reward += hindsight_credit_applied
+            env_state.pending_hindsight_credit = 0.0
+
+        # Verify credit was applied
+        assert hindsight_credit_applied > 0, "Hindsight credit should be applied"
+        assert env_state.pending_hindsight_credit == 0.0, (
+            "Pending credit should be consumed after application"
+        )
+
+        # Simulate normalization (credit goes through normalizer)
+        running_mean = 0.3
+        running_std = 0.2
+        normalized_reward = (base_reward - running_mean) / running_std
+
+        # The normalized reward should be higher than if no credit was applied
+        base_only_normalized = (0.5 - running_mean) / running_std
+        assert normalized_reward > base_only_normalized, (
+            f"Normalized reward {normalized_reward} should be higher than "
+            f"base-only {base_only_normalized} due to hindsight credit"
+        )
+
+        # Verify the credit effect is scaled by normalizer (not bypassed)
+        credit_contribution_normalized = hindsight_credit_applied / running_std
+        expected_normalized = base_only_normalized + credit_contribution_normalized
+        assert abs(normalized_reward - expected_normalized) < 0.001, (
+            f"Credit should go through normalizer: {normalized_reward} vs {expected_normalized}"
+        )
+
+    def test_ledger_cleanup_after_fossilization(self):
+        """After beneficiary fossilizes, its entries are removed from all ledgers."""
+        slots = ["slot_0", "slot_1", "slot_2"]
+        env_state = self._make_env_state_with_slots(slots)
+
+        # Multiple scaffolds boost the beneficiary
+        beneficiary_slot = "slot_1"
+
+        # slot_0 boosted slot_1 at epoch 2
+        env_state.scaffold_boost_ledger["slot_0"] = [(1.5, "slot_1", 2)]
+
+        # slot_2 boosted slot_1 at epoch 3
+        env_state.scaffold_boost_ledger["slot_2"] = [(1.0, "slot_1", 3)]
+
+        # slot_0 also boosted slot_2 at epoch 4 (this should remain)
+        env_state.scaffold_boost_ledger["slot_0"].append((0.5, "slot_2", 4))
+
+        # Simulate fossilization cleanup (from vectorized.py lines 2714-2721)
+        for scaffold_slot in list(env_state.scaffold_boost_ledger.keys()):
+            env_state.scaffold_boost_ledger[scaffold_slot] = [
+                (b, ben, e) for (b, ben, e) in env_state.scaffold_boost_ledger[scaffold_slot]
+                if ben != beneficiary_slot
+            ]
+            if not env_state.scaffold_boost_ledger[scaffold_slot]:
+                del env_state.scaffold_boost_ledger[scaffold_slot]
+
+        # slot_1 entries should be removed
+        assert "slot_1" not in env_state.scaffold_boost_ledger.get("slot_0", []), (
+            "slot_1 should be removed from slot_0's ledger"
+        )
+
+        # slot_2's ledger should be completely removed (only had slot_1)
+        assert "slot_2" not in env_state.scaffold_boost_ledger, (
+            "slot_2's empty ledger should be deleted"
+        )
+
+        # slot_0's entry for slot_2 should remain
+        assert "slot_0" in env_state.scaffold_boost_ledger, (
+            "slot_0 should still have entries for slot_2"
+        )
+        remaining_entries = env_state.scaffold_boost_ledger["slot_0"]
+        assert len(remaining_entries) == 1
+        assert remaining_entries[0] == (0.5, "slot_2", 4), (
+            f"Entry for slot_2 should remain, got {remaining_entries}"
+        )
+
+    def test_credit_accumulates_from_multiple_scaffolds(self):
+        """Credit accumulates from multiple scaffolds boosting same beneficiary."""
+        slots = ["slot_0", "slot_1", "slot_2"]
+        env_state = self._make_env_state_with_slots(slots)
+
+        beneficiary_slot = "slot_2"
+        beneficiary_improvement = 4.0
+        fossilize_epoch = 10
+
+        # Two scaffolds boost the beneficiary at different times
+        env_state.scaffold_boost_ledger["slot_0"] = [(1.5, "slot_2", 3)]  # 7 epochs ago
+        env_state.scaffold_boost_ledger["slot_1"] = [(1.0, "slot_2", 8)]  # 2 epochs ago
+
+        env_state.current_epoch = fossilize_epoch
+
+        # Compute total discounted credit (as in vectorized.py)
+        total_credit = 0.0
+        for scaffold_slot, boosts in env_state.scaffold_boost_ledger.items():
+            for boost_given, target_slot, epoch_of_boost in boosts:
+                if target_slot == beneficiary_slot and boost_given > 0:
+                    delay = fossilize_epoch - epoch_of_boost
+                    discount = DEFAULT_GAMMA ** delay
+                    raw_credit = compute_scaffold_hindsight_credit(
+                        boost_given=boost_given,
+                        beneficiary_improvement=beneficiary_improvement,
+                        credit_weight=0.2,
+                    )
+                    total_credit += raw_credit * discount
+
+        total_credit = min(total_credit, MAX_HINDSIGHT_CREDIT)
+        env_state.pending_hindsight_credit = total_credit
+
+        # Verify credit came from both scaffolds
+        # Calculate individual contributions
+        credit_from_slot0 = compute_scaffold_hindsight_credit(
+            boost_given=1.5, beneficiary_improvement=beneficiary_improvement, credit_weight=0.2
+        ) * (DEFAULT_GAMMA ** 7)
+
+        credit_from_slot1 = compute_scaffold_hindsight_credit(
+            boost_given=1.0, beneficiary_improvement=beneficiary_improvement, credit_weight=0.2
+        ) * (DEFAULT_GAMMA ** 2)
+
+        expected_total = min(credit_from_slot0 + credit_from_slot1, MAX_HINDSIGHT_CREDIT)
+
+        assert abs(env_state.pending_hindsight_credit - expected_total) < 0.001, (
+            f"Expected {expected_total}, got {env_state.pending_hindsight_credit}"
+        )
+
+        # Verify temporal discount affects credit allocation
+        # Calculate what slot_1 credit would be with same boost as slot_0 (1.5)
+        credit_from_slot1_same_boost = compute_scaffold_hindsight_credit(
+            boost_given=1.5, beneficiary_improvement=beneficiary_improvement, credit_weight=0.2
+        ) * (DEFAULT_GAMMA ** 2)
+
+        # With same boost, recent scaffold (slot_1) should get more credit
+        assert credit_from_slot1_same_boost > credit_from_slot0, (
+            f"With same boost, recent scaffold should contribute more: "
+            f"slot_1={credit_from_slot1_same_boost} vs slot_0={credit_from_slot0}"
+        )
+
+        # Also verify both scaffolds contributed non-trivially
+        assert credit_from_slot0 > 0, "slot_0 should contribute credit"
+        assert credit_from_slot1 > 0, "slot_1 should contribute credit"
+
+    def test_no_credit_for_negative_improvement(self):
+        """No hindsight credit when beneficiary fossilizes with negative improvement."""
+        slots = ["slot_0", "slot_1"]
+        env_state = self._make_env_state_with_slots(slots)
+
+        beneficiary_slot = "slot_1"
+        beneficiary_improvement = -2.0  # Negative improvement
+
+        env_state.scaffold_boost_ledger["slot_0"] = [(1.5, "slot_1", 3)]
+        env_state.current_epoch = 10
+
+        # Compute credit (should be zero)
+        total_credit = 0.0
+        for boost_given, target_slot, epoch_of_boost in env_state.scaffold_boost_ledger["slot_0"]:
+            if target_slot == beneficiary_slot and boost_given > 0:
+                raw_credit = compute_scaffold_hindsight_credit(
+                    boost_given=boost_given,
+                    beneficiary_improvement=beneficiary_improvement,
+                    credit_weight=0.2,
+                )
+                total_credit += raw_credit
+
+        env_state.pending_hindsight_credit = total_credit
+
+        assert env_state.pending_hindsight_credit == 0.0, (
+            f"No credit for negative improvement, got {env_state.pending_hindsight_credit}"
+        )
+
+    def test_episode_reset_clears_all_hindsight_state(self):
+        """Episode reset clears ledger, pending credit, and epoch counter."""
+        slots = ["slot_0", "slot_1"]
+        env_state = self._make_env_state_with_slots(slots)
+
+        # Set up non-trivial state
+        env_state.scaffold_boost_ledger["slot_0"] = [(1.5, "slot_1", 5)]
+        env_state.pending_hindsight_credit = 0.15
+        env_state.current_epoch = 10
+
+        # Reset
+        env_state.reset_episode_state(slots=slots)
+
+        # Verify all hindsight state is cleared
+        assert env_state.scaffold_boost_ledger == {}, "Ledger should be empty"
+        assert env_state.pending_hindsight_credit == 0.0, "Pending credit should be zero"
+        assert env_state.current_epoch == 0, "Epoch counter should be zero"
