@@ -518,11 +518,17 @@ class EnvDetailScreen(ModalScreen[None]):
                 # Append scaffold context only when credit is active
                 if rc.scaffold_count > 0:
                     hind_str += f" ({rc.scaffold_count}x, {rc.avg_scaffold_delay:.1f}e)"
-                credits.append(f"  {hind_str}", style="blue")
+                if credits.plain:
+                    credits.append("  ")
+                credits.append(hind_str, style="blue")
             if rc.stage_bonus != 0:
-                credits.append(f"  Stage: {rc.stage_bonus:+.3f}", style="blue")
+                if credits.plain:
+                    credits.append("  ")
+                credits.append(f"Stage: {rc.stage_bonus:+.3f}", style="blue")
             if rc.fossilize_terminal_bonus != 0:
-                credits.append(f"  Foss: {rc.fossilize_terminal_bonus:+.3f}", style="blue")
+                if credits.plain:
+                    credits.append("  ")
+                credits.append(f"Foss: {rc.fossilize_terminal_bonus:+.3f}", style="blue")
             if credits.plain:
                 table.add_row("  Credits", credits)
 
@@ -531,7 +537,9 @@ class EnvDetailScreen(ModalScreen[None]):
             if rc.blending_warning < 0:
                 warnings.append(f"Blend: {rc.blending_warning:.3f}", style="yellow")
             if rc.holding_warning < 0:
-                warnings.append(f"  Hold: {rc.holding_warning:.3f}", style="yellow")
+                if warnings.plain:
+                    warnings.append("  ")
+                warnings.append(f"Hold: {rc.holding_warning:.3f}", style="yellow")
             if warnings.plain:
                 table.add_row("  Warnings", warnings)
 
