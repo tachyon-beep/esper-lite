@@ -1875,6 +1875,11 @@ def train_ppo_vectorized(
                 for env_state in env_states
             ]
 
+            # Sync train metrics to env_state for telemetry (Sanctum TUI display)
+            for i, env_state in enumerate(env_states):
+                env_state.train_loss = train_losses[i] / max(1, train_totals[i])
+                env_state.train_acc = 100.0 * train_corrects[i] / max(1, train_totals[i])
+
             # ===== VALIDATION + COUNTERFACTUAL (FUSED): Single pass over test data =====
             # Instead of iterating test data multiple times or performing sequential
             # forward passes, we stack all configurations into a single fused pass.
@@ -2064,7 +2069,7 @@ def train_ppo_vectorized(
                         alpha_overrides[slot_id] = override_vec
 
                     # Run FUSED validation pass
-                    _, correct_per_config, _ = process_fused_val_batch(
+                    loss_fused, correct_per_config, _ = process_fused_val_batch(
                         env_state,
                         inputs,
                         targets,
@@ -2080,6 +2085,11 @@ def train_ppo_vectorized(
                     )
                     with stream_ctx:
                         env_cfg_correct_accums[i].add_(correct_per_config)
+                        # Accumulate main config loss (config 0) for telemetry display
+                        # loss_fused shape: [num_configs * batch_size] elementwise
+                        main_loss = loss_fused[:batch_size].sum()
+                        if env_state.val_loss_accum is not None:
+                            env_state.val_loss_accum.add_(main_loss)
                     val_totals[i] += batch_size
 
             # Single sync point at end
@@ -2094,10 +2104,14 @@ def train_ppo_vectorized(
                 accum.cpu() for accum in env_cfg_correct_accums
             ]
 
+            # Sync val_loss to env_state (for Sanctum TUI display)
+            for i, env_state in enumerate(env_states):
+                if env_state.val_loss_accum is not None and val_totals[i] > 0:
+                    env_state.val_loss = env_state.val_loss_accum.item() / val_totals[i]
+                else:
+                    env_state.val_loss = 0.0
+
             # Process results for each config
-            val_losses = [
-                0.0
-            ] * envs_this_batch  # Placeholder, losses not used for rewards
             val_corrects = [0] * envs_this_batch
 
             for i, env_state in enumerate(env_states):
@@ -3247,7 +3261,7 @@ def train_ppo_vectorized(
                 agent.buffer.step_counts[i] for i in range(envs_this_batch)
             ]
 
-            batch_val_losses = [0.0] * envs_this_batch
+            batch_val_losses = [es.val_loss for es in env_states]
             batch_val_corrects = val_corrects
             batch_val_totals = val_totals
 
