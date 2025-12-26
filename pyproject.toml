@@ -31,9 +31,6 @@ dashboard = [
     "uvicorn[standard]>=0.32.0",
     "websockets>=14.0",
 ]
-overwatch = [
-    "textual>=0.47.0",
-]
 
 [build-system]
 requires = ["setuptools>=61.0"]
@@ -91,9 +88,6 @@ strict = true  # Typed payloads must be fully strict
 module = "esper.karn.sanctum.*"
 strict = true  # Sanctum aggregator must be strict
 
-[[tool.mypy.overrides]]
-module = "esper.karn.overwatch.*"
-strict = true  # Overwatch aggregator must be strict
 
 # Third-party libraries without stubs
 [[tool.mypy.overrides]]

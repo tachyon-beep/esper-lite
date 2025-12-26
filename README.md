@@ -189,14 +189,13 @@ limited to picking a preset and runtime wiring:
 | `--telemetry-level` | `normal` | Verbosity: `off`, `minimal`, `normal`, `debug` |
 | `--telemetry-lifecycle-only` | off | Keep lightweight seed lifecycle telemetry even when ops telemetry is disabled |
 | `--no-tui` | off | Disable Rich terminal UI (uses console output instead) |
-| `--overwatch` | off | Launch Overwatch TUI for real-time monitoring (replaces Rich TUI) |
 | `--sanctum` | off | Launch Sanctum TUI for developer debugging (replaces Rich TUI) |
 | `--dashboard` | off | Enable real-time WebSocket dashboard (requires `pip install esper-lite[dashboard]`) |
 | `--dashboard-port` | 8000 | Dashboard server port |
 
 **Monitoring Interfaces:**
 - **Rich TUI (default)**: Full-screen terminal dashboard showing rewards, policy health (entropy, clip fraction, explained variance, KL divergence), seed states, action distribution, reward components, and losses. Disable with `--no-tui`.
-- **`--overwatch` / `--sanctum`**: Textual TUIs for monitoring and developer debugging (mutually exclusive).
+- **`--sanctum`**: Textual TUI for developer debugging.
 - **`--dashboard`**: Web-based dashboard accessible at `http://localhost:8000`. Listens on all network interfaces for remote access (e.g., `http://192.168.1.x:8000` on LAN). Displays clickable links for all available interfaces on startup.
 
 ### Heuristic Training (`esper.scripts.train heuristic`)
