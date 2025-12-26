@@ -135,6 +135,22 @@ src/esper/
 uv run pytest -q
 ```
 
+**Overwatch Dashboard Development:**
+
+```bash
+# Navigate to Overwatch web directory
+cd src/esper/karn/overwatch/web
+
+# Install dependencies
+npm install
+
+# Run dev server with hot reload (default: http://localhost:5173)
+npm run dev
+
+# Run tests
+npm test
+```
+
 ---
 
 ## 📖 CLI Reference
@@ -190,12 +206,15 @@ limited to picking a preset and runtime wiring:
 | `--telemetry-lifecycle-only` | off | Keep lightweight seed lifecycle telemetry even when ops telemetry is disabled |
 | `--no-tui` | off | Disable Rich terminal UI (uses console output instead) |
 | `--sanctum` | off | Launch Sanctum TUI for developer debugging (replaces Rich TUI) |
+| `--overwatch` | off | Launch Overwatch web dashboard (mutually exclusive with --sanctum) |
+| `--overwatch-port` | 8080 | Overwatch dashboard port |
 | `--dashboard` | off | Enable real-time WebSocket dashboard (requires `pip install esper-lite[dashboard]`) |
 | `--dashboard-port` | 8000 | Dashboard server port |
 
 **Monitoring Interfaces:**
 - **Rich TUI (default)**: Full-screen terminal dashboard showing rewards, policy health (entropy, clip fraction, explained variance, KL divergence), seed states, action distribution, reward components, and losses. Disable with `--no-tui`.
 - **`--sanctum`**: Textual TUI for developer debugging.
+- **`--overwatch`**: Vue 3 web dashboard for training monitoring. Access at `http://localhost:8080` (or custom port). Features environment grid, seed swimlanes, health gauges, contribution waterfall, and policy diagnostics. Keyboard shortcuts: `1-9` (select env), `j/k` (navigate leaderboard), `h/l` (switch panels), `?` (help).
 - **`--dashboard`**: Web-based dashboard accessible at `http://localhost:8000`. Listens on all network interfaces for remote access (e.g., `http://192.168.1.x:8000` on LAN). Displays clickable links for all available interfaces on startup.
 
 ### Heuristic Training (`esper.scripts.train heuristic`)
@@ -251,6 +270,11 @@ PYTHONPATH=src python -m esper.scripts.train ppo \
     --preset cifar10 \
     --dashboard \
     --dashboard-port 8080
+
+# Training with Overwatch monitoring dashboard
+PYTHONPATH=src python -m esper.scripts.train ppo \
+    --preset cifar10 \
+    --overwatch
 ```
 
 ### TrainingConfig Reference
