@@ -207,6 +207,11 @@ DEFAULT_FOSSILIZE_TERMINAL_SCALE = 3.0
 # Used by Phase 3.2 scaffold hindsight credit mechanism.
 MAX_HINDSIGHT_CREDIT = 0.2
 
+# Per-scaffold credit weight (half of max to allow 2+ scaffolds to contribute).
+# When multiple scaffolds help a beneficiary, each receives this weight,
+# allowing meaningful contribution from multiple helpers before hitting the cap.
+HINDSIGHT_CREDIT_WEIGHT = 0.1
+
 # =============================================================================
 # Lifecycle Gate Thresholds (seed state machine gates)
 # =============================================================================
@@ -551,6 +556,7 @@ __all__ = [
     "DEFAULT_RENT_WEIGHT",
     "DEFAULT_FOSSILIZE_TERMINAL_SCALE",
     "MAX_HINDSIGHT_CREDIT",
+    "HINDSIGHT_CREDIT_WEIGHT",
 
     # Lifecycle Gate Thresholds
     "DEFAULT_MIN_FOSSILIZE_CONTRIBUTION",

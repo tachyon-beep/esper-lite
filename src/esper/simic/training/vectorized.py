@@ -123,7 +123,12 @@ from esper.simic.rewards import (
     ContributionRewardConfig,
     SeedInfo,
 )
-from esper.leyline import DEFAULT_MIN_FOSSILIZE_CONTRIBUTION, MAX_HINDSIGHT_CREDIT, MIN_PRUNE_AGE
+from esper.leyline import (
+    DEFAULT_MIN_FOSSILIZE_CONTRIBUTION,
+    HINDSIGHT_CREDIT_WEIGHT,
+    MAX_HINDSIGHT_CREDIT,
+    MIN_PRUNE_AGE,
+)
 from esper.nissa import get_hub, BlueprintAnalytics, DirectoryOutput
 from esper.tolaria import TolariaGovernor
 from esper.karn.health import HealthMonitor
@@ -2710,7 +2715,7 @@ def train_ppo_vectorized(
                                             raw_credit = compute_scaffold_hindsight_credit(
                                                 boost_given=boost_given,
                                                 beneficiary_improvement=beneficiary_improvement,
-                                                credit_weight=MAX_HINDSIGHT_CREDIT,
+                                                credit_weight=HINDSIGHT_CREDIT_WEIGHT,
                                             )
                                             total_credit += raw_credit * discount
                                             scaffold_count += 1

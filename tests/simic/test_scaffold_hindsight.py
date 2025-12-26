@@ -8,7 +8,7 @@ Tests cover:
 - Multiple scaffolds contributing to same beneficiary
 """
 
-from esper.leyline import DEFAULT_GAMMA, MAX_HINDSIGHT_CREDIT
+from esper.leyline import DEFAULT_GAMMA, HINDSIGHT_CREDIT_WEIGHT, MAX_HINDSIGHT_CREDIT
 from esper.simic.rewards import compute_scaffold_hindsight_credit
 from esper.simic.training.parallel_env_state import ParallelEnvState
 
@@ -279,6 +279,27 @@ class TestMultipleScaffolds:
         assert credit_a > credit_b, (
             f"Larger boost {credit_a} should get more credit than {credit_b}"
         )
+
+    def test_multiple_scaffolds_can_contribute_meaningfully(self):
+        """Two scaffolds should each contribute, not have second discarded by cap."""
+        # Two identical scaffolds providing boosts
+        credit_1 = compute_scaffold_hindsight_credit(
+            boost_given=5.0,
+            beneficiary_improvement=2.0,
+            credit_weight=HINDSIGHT_CREDIT_WEIGHT,
+        )
+        credit_2 = compute_scaffold_hindsight_credit(
+            boost_given=5.0,
+            beneficiary_improvement=2.0,
+            credit_weight=HINDSIGHT_CREDIT_WEIGHT,
+        )
+
+        # Each should contribute, total should be more than single
+        assert credit_1 > 0
+        assert credit_2 > 0
+        combined = min(credit_1 + credit_2, MAX_HINDSIGHT_CREDIT)
+        assert combined > credit_1, "Second scaffold should add value"
+        assert combined <= MAX_HINDSIGHT_CREDIT, "Still respects cap"
 
     def test_total_credit_capped_when_summed(self):
         """Total credit from multiple scaffolds is capped at MAX_HINDSIGHT_CREDIT."""
