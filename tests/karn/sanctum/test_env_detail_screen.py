@@ -407,3 +407,27 @@ def test_env_detail_screen_update_env_state():
     # Verify internal state was updated
     assert screen._env == env2
     assert screen._env.best_accuracy == 85.0
+
+
+def test_reward_breakdown_shows_hindsight_credit():
+    """Hindsight credit displays with scaffold context when active."""
+    env = EnvState(
+        env_id=0,
+        reward_components=RewardComponents(
+            total=0.25,
+            bounded_attribution=0.10,
+            hindsight_credit=0.08,
+            scaffold_count=3,
+            avg_scaffold_delay=12.5,
+        ),
+    )
+
+    # Create screen and render metrics
+    screen = EnvDetailScreen(env_state=env, slot_ids=[])
+    table = screen._render_metrics()
+
+    # Convert to string and check for hindsight credit
+    rendered = render_to_text(table)
+    assert "Hind:" in rendered
+    assert "0.08" in rendered or "+0.080" in rendered
+    assert "(3x, 12.5e)" in rendered
