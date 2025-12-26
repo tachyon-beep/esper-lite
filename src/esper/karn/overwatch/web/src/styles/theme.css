@@ -1,0 +1,42 @@
+/* Placeholder theme - Task 2 will implement the full design system */
+:root {
+  /* Background */
+  --bg-void: #0a0a0f;
+  --bg-panel: #12121a;
+
+  /* Text */
+  --text-primary: #e4e4e7;
+  --text-secondary: #a1a1aa;
+
+  /* Borders */
+  --border-subtle: #27272a;
+
+  /* Status colors */
+  --status-win: #22c55e;
+  --status-loss: #ef4444;
+  --status-warn: #f59e0b;
+
+  /* Glow effects */
+  --glow-cyan: #06b6d4;
+
+  /* Spacing */
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+
+  /* Fonts */
+  --font-mono: 'JetBrains Mono', monospace;
+  --font-display: 'Oxanium', sans-serif;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: var(--font-mono);
+  background: var(--bg-void);
+  color: var(--text-primary);
+}
