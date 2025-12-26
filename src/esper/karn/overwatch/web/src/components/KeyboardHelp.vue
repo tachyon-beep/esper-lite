@@ -30,7 +30,7 @@ const sections: ShortcutSection[] = [
   {
     title: 'Navigation',
     shortcuts: [
-      { keys: ['j / k'], description: 'Navigate up/down in leaderboard' },
+      { keys: ['j / k'], description: 'Navigate down/up in leaderboard' },
       { keys: ['h / l'], description: 'Navigate between panels' },
       { keys: ['Tab'], description: 'Move focus forward' },
       { keys: ['Shift', 'Tab'], description: 'Move focus backward' }
