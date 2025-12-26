@@ -1,0 +1,14 @@
+{
+    "_comment": "Ablation: SIMPLIFIED without anti-gaming penalties - tests reward exploitation",
+    "n_episodes": 100,
+    "n_envs": 4,
+    "max_epochs": 25,
+    "reward_mode": "simplified",
+    "reward_family": "contribution",
+    "disable_anti_gaming": true,
+    "param_budget": 500000,
+    "param_penalty_weight": 0.1,
+    "entropy_coef": 0.1,
+    "lr": 3e-4,
+    "slots": ["r0c1"]
+}
