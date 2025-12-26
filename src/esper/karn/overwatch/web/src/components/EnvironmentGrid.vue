@@ -46,7 +46,6 @@ function handleCardClick(envId: number) {
       class="env-card"
       :class="{ focused: env.env_id === focusedEnvId }"
       :data-testid="`env-card-${env.env_id}`"
-      data-testid-base="env-card"
       @click="handleCardClick(env.env_id)"
     >
       <div class="env-badge" :data-testid="`env-badge-${env.env_id}`">
