@@ -2,7 +2,8 @@
 // Test environment setup for Vitest
 
 // Mock ResizeObserver for JSDOM environment
-global.ResizeObserver = class ResizeObserver {
+// (JSDOM doesn't implement ResizeObserver natively)
+globalThis.ResizeObserver = class ResizeObserver {
   observe() {}
   unobserve() {}
   disconnect() {}

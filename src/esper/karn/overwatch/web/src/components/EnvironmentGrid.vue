@@ -61,7 +61,7 @@ function handleCardClick(envId: number) {
           Epoch {{ env.current_epoch }}
         </div>
 
-        <div class="env-seed-counts" :data-testid="`env-seed-counts-${env.env_id}`">
+        <div class="env-seed-counts" :data-testid="`env-seed-counts-${env.env_id}`" title="Active / Fossilized / Pruned">
           <span class="seed-active">{{ env.active_seed_count }}</span>
           <span class="seed-separator">/</span>
           <span class="seed-fossilized">{{ env.fossilized_count }}</span>
