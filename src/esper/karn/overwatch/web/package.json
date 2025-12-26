@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "test": "vitest",
     "test:e2e": "playwright test",
-    "generate:types": "cd ../../../.. && python scripts/generate_overwatch_types.py > src/esper/karn/overwatch/web/src/types/sanctum.ts"
+    "generate:types": "cd ../../../../.. && python scripts/generate_overwatch_types.py > src/esper/karn/overwatch/web/src/types/sanctum.ts"
   },
   "dependencies": {
     "echarts": "^5.5.0",

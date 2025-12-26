@@ -55,6 +55,9 @@ export interface RewardComponents {
   fossilize_terminal_bonus: number;
   blending_warning: number;
   holding_warning: number;
+  hindsight_credit: number;
+  scaffold_count: number;
+  avg_scaffold_delay: number;
   env_id: number;
   val_acc: number;
   last_action: string;
@@ -229,6 +232,8 @@ export interface EnvState {
   action_history: string[];
   action_counts: Record<string, number>;
   total_actions: number;
+  gaming_trigger_count: number;
+  total_reward_steps: number;
   status: string;
   last_update: string | null;
   epochs_since_improvement: number;
