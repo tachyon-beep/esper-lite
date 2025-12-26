@@ -2692,7 +2692,8 @@ def train_ppo_vectorized(
                             # Compute temporally-discounted hindsight credit for scaffolds
                             beneficiary_improvement = seed_info.total_improvement if seed_info else 0.0
                             if beneficiary_improvement > 0:
-                                current_epoch = env_state.current_epoch
+                                # Use outer loop epoch variable (not per-env counter)
+                                current_epoch = epoch
                                 total_credit = 0.0
                                 scaffold_count = 0
                                 total_delay = 0
@@ -2949,9 +2950,6 @@ def train_ppo_vectorized(
                         env_state.seed_optimizers.pop(slot_id, None)
                         env_state.acc_at_germination.pop(slot_id, None)
                         env_state.gradient_ratio_ema.pop(slot_id, None)
-
-                # Increment epoch counter for temporal discount tracking
-                env_state.current_epoch += 1
 
                 # Fix BUG-022: Collect bootstrap state AFTER mechanical advance
                 if truncated:

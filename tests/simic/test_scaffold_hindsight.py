@@ -247,22 +247,6 @@ class TestScaffoldLedger:
         entry = env_state.scaffold_boost_ledger["slot_0"][0]
         assert entry == (1.5, "slot_1", 5), f"Entry should be (boost, beneficiary, epoch), got {entry}"
 
-    def test_current_epoch_tracks_time(self):
-        """current_epoch field enables temporal discount calculation."""
-        env_state = self._make_minimal_env_state()
-
-        assert env_state.current_epoch == 0, "Epoch should start at 0"
-
-        # Simulate epoch progression
-        env_state.current_epoch = 10
-
-        assert env_state.current_epoch == 10, "Epoch should update"
-
-        # Reset clears epoch
-        env_state.reset_episode_state(slots=["slot_0"])
-
-        assert env_state.current_epoch == 0, "Epoch should reset to 0"
-
 
 class TestMultipleScaffolds:
     """Tests for multiple scaffolds contributing to same beneficiary."""
@@ -468,7 +452,6 @@ class TestScaffoldHindsightFlowE2E:
         # This happens during counterfactual validation in vectorized.py
         boost_given = 1.5  # Scaffold boosted beneficiary by 1.5
         epoch_of_boost = 3
-        env_state.current_epoch = epoch_of_boost
 
         # Record the boost in the ledger (symmetric tracking per design doc)
         if scaffold_slot not in env_state.scaffold_boost_ledger:
@@ -489,7 +472,6 @@ class TestScaffoldHindsightFlowE2E:
 
         # === Step 4: Wait N epochs (simulate time passing) ===
         fossilize_epoch = 10
-        env_state.current_epoch = fossilize_epoch
         delay = fossilize_epoch - epoch_of_boost  # 7 epochs
 
         # === Step 5: Fossilize beneficiary with positive improvement ===
@@ -638,8 +620,6 @@ class TestScaffoldHindsightFlowE2E:
         env_state.scaffold_boost_ledger["slot_0"] = [(1.5, "slot_2", 3)]  # 7 epochs ago
         env_state.scaffold_boost_ledger["slot_1"] = [(1.0, "slot_2", 8)]  # 2 epochs ago
 
-        env_state.current_epoch = fossilize_epoch
-
         # Compute total discounted credit (as in vectorized.py)
         total_credit = 0.0
         for scaffold_slot, boosts in env_state.scaffold_boost_ledger.items():
@@ -698,7 +678,6 @@ class TestScaffoldHindsightFlowE2E:
         beneficiary_improvement = -2.0  # Negative improvement
 
         env_state.scaffold_boost_ledger["slot_0"] = [(1.5, "slot_1", 3)]
-        env_state.current_epoch = 10
 
         # Compute credit (should be zero)
         total_credit = 0.0
@@ -718,14 +697,13 @@ class TestScaffoldHindsightFlowE2E:
         )
 
     def test_episode_reset_clears_all_hindsight_state(self):
-        """Episode reset clears ledger, pending credit, and epoch counter."""
+        """Episode reset clears ledger and pending credit."""
         slots = ["slot_0", "slot_1"]
         env_state = self._make_env_state_with_slots(slots)
 
         # Set up non-trivial state
         env_state.scaffold_boost_ledger["slot_0"] = [(1.5, "slot_1", 5)]
         env_state.pending_hindsight_credit = 0.15
-        env_state.current_epoch = 10
 
         # Reset
         env_state.reset_episode_state(slots=slots)
@@ -733,4 +711,3 @@ class TestScaffoldHindsightFlowE2E:
         # Verify all hindsight state is cleared
         assert env_state.scaffold_boost_ledger == {}, "Ledger should be empty"
         assert env_state.pending_hindsight_credit == 0.0, "Pending credit should be zero"
-        assert env_state.current_epoch == 0, "Epoch counter should be zero"
