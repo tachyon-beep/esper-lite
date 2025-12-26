@@ -552,6 +552,9 @@ class RewardComponents:
     - fossilize_terminal_bonus: Large terminal bonus for successful fossilization
     - blending_warning: Warning signal during blending phase (negative)
     - holding_warning: Warning signal during holding period
+    - hindsight_credit: Retroactive credit when beneficiary fossilizes (blue bonus)
+    - scaffold_count: Number of scaffolds that contributed (debugging)
+    - avg_scaffold_delay: Average epochs since scaffolding interactions (debugging)
     - val_acc: Validation accuracy context (not a reward component, metadata)
     """
     # Total reward
@@ -576,6 +579,11 @@ class RewardComponents:
     # Warnings
     blending_warning: float = 0.0
     holding_warning: float = 0.0
+
+    # Hindsight credit (scaffold contribution bonus) - Phase 3.2
+    hindsight_credit: float = 0.0
+    scaffold_count: int = 0  # Number of scaffolds that contributed
+    avg_scaffold_delay: float = 0.0  # Average epochs since scaffolding
 
     # Context
     env_id: int = 0
