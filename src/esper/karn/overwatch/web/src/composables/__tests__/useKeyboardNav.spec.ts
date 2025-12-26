@@ -281,6 +281,58 @@ describe('useKeyboardNav', () => {
     })
   })
 
+  describe('Enter key - leaderboard selection', () => {
+    it('calls onLeaderboardSelect callback with current row on Enter key', async () => {
+      const onLeaderboardSelect = vi.fn()
+      const { currentLeaderboardRow } = useKeyboardNav({
+        envCount: ref(4),
+        leaderboardRowCount: ref(5),
+        onLeaderboardSelect
+      })
+
+      // Navigate to row 2
+      currentLeaderboardRow.value = 2
+
+      simulateKeydown('Enter')
+      await nextTick()
+
+      expect(onLeaderboardSelect).toHaveBeenCalledWith(2)
+    })
+
+    it('does not call onLeaderboardSelect when row is out of bounds', async () => {
+      const onLeaderboardSelect = vi.fn()
+      const { currentLeaderboardRow } = useKeyboardNav({
+        envCount: ref(4),
+        leaderboardRowCount: ref(5),
+        onLeaderboardSelect
+      })
+
+      // Set to out of bounds row
+      currentLeaderboardRow.value = 10
+
+      simulateKeydown('Enter')
+      await nextTick()
+
+      expect(onLeaderboardSelect).not.toHaveBeenCalled()
+    })
+
+    it('does not call onLeaderboardSelect when row is negative', async () => {
+      const onLeaderboardSelect = vi.fn()
+      const { currentLeaderboardRow } = useKeyboardNav({
+        envCount: ref(4),
+        leaderboardRowCount: ref(5),
+        onLeaderboardSelect
+      })
+
+      currentLeaderboardRow.value = -1
+
+      simulateKeydown('Enter')
+      await nextTick()
+
+      expect(onLeaderboardSelect).not.toHaveBeenCalled()
+    })
+  })
+
   describe('h/l keys - panel navigation', () => {
     it('navigates left with h key', async () => {
       const { currentPanel } = useKeyboardNav({ envCount: ref(4) })

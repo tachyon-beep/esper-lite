@@ -106,6 +106,13 @@ const {
     if (row) {
       row.scrollIntoView({ block: 'nearest' })
     }
+  },
+  onLeaderboardSelect: (rowIndex: number) => {
+    // Select the environment corresponding to the leaderboard row
+    const run = snapshot.value?.best_runs[rowIndex]
+    if (run) {
+      handleEnvSelect(run.env_id)
+    }
   }
 })
 

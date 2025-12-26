@@ -14,6 +14,8 @@ export interface UseKeyboardNavOptions {
   onClearSelection?: () => void
   /** Callback when leaderboard row changes via j/k */
   onLeaderboardNavigate?: (rowIndex: number) => void
+  /** Callback when leaderboard row is selected via Enter */
+  onLeaderboardSelect?: (rowIndex: number) => void
   /** Callback when panel focus changes via h/l */
   onPanelChange?: (panel: PanelPosition) => void
 }
@@ -54,6 +56,7 @@ export function useKeyboardNav(options: UseKeyboardNavOptions): UseKeyboardNavRe
     onSelectEnv,
     onClearSelection,
     onLeaderboardNavigate,
+    onLeaderboardSelect,
     onPanelChange
   } = options
 
@@ -177,6 +180,15 @@ export function useKeyboardNav(options: UseKeyboardNavOptions): UseKeyboardNavRe
     if (key === 'k') {
       event.preventDefault()
       navigateLeaderboard('up')
+      return
+    }
+
+    // Enter to select current leaderboard row
+    if (key === 'Enter') {
+      if (currentLeaderboardRow.value >= 0 && currentLeaderboardRow.value < leaderboardRowCount.value) {
+        event.preventDefault()
+        onLeaderboardSelect?.(currentLeaderboardRow.value)
+      }
       return
     }
 
