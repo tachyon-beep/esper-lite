@@ -234,6 +234,13 @@ class ContributionRewardConfig:
     # === Experiment Mode ===
     reward_mode: RewardMode = RewardMode.SHAPED
 
+    # === Ablation Flags ===
+    # Used for systematic reward function experiments.
+    # These disable specific reward components to measure their contribution.
+    disable_pbrs: bool = False  # Disable PBRS stage advancement shaping
+    disable_terminal_reward: bool = False  # Disable terminal accuracy bonus
+    disable_anti_gaming: bool = False  # Disable ratio_penalty and alpha_shock
+
     # === Sparse Reward Parameters ===
     # Parameter budget for efficiency calculation (sparse/minimal modes)
     param_budget: int = 500_000
@@ -531,7 +538,8 @@ def compute_contribution_reward(
 
         # Ratio penalty only for high contribution (> 1.0) to avoid noise
         # Only calculate when attribution_discount >= 0.5 (avoid penalty stacking)
-        if seed_contribution > 1.0 and attribution_discount >= 0.5:
+        # Skip if disable_anti_gaming is True (ablation experiment)
+        if seed_contribution > 1.0 and attribution_discount >= 0.5 and not config.disable_anti_gaming:
             # Guard against division by very small values even if threshold is misconfigured
             safe_threshold = max(config.improvement_safe_threshold, 1e-8)
             if total_imp > safe_threshold:
@@ -692,8 +700,9 @@ def compute_contribution_reward(
 
     # === 2. PBRS: Stage Progression ===
     # Potential-based shaping preserves optimal policy (Ng et al., 1999)
+    # Skip if disable_pbrs is True (ablation experiment)
     pbrs_bonus = 0.0
-    if seed_info is not None:
+    if seed_info is not None and not config.disable_pbrs:
         pbrs_bonus = _contribution_pbrs_bonus(seed_info, config)
         reward += pbrs_bonus
     if components:
@@ -733,8 +742,9 @@ def compute_contribution_reward(
         components.growth_ratio = growth_ratio  # DRL Expert diagnostic field
 
     # === 3b. SHOCK: Convex penalty on alpha changes ===
+    # Skip if disable_anti_gaming is True (ablation experiment)
     alpha_shock = 0.0
-    if alpha_delta_sq_sum > 0 and config.alpha_shock_coef != 0.0:
+    if alpha_delta_sq_sum > 0 and config.alpha_shock_coef != 0.0 and not config.disable_anti_gaming:
         alpha_shock = -config.alpha_shock_coef * alpha_delta_sq_sum
         reward += alpha_shock
     if components:
@@ -747,9 +757,10 @@ def compute_contribution_reward(
     if action == LifecycleOp.GERMINATE:
         if seed_info is not None:
             action_shaping += config.germinate_with_seed_penalty
-        else:
+        elif not config.disable_pbrs:
             # PBRS bonus for successful germination (no existing seed)
             # Balances the PBRS penalty applied when pruning seeds
+            # Skip if disable_pbrs is True (ablation experiment)
             phi_germinated = STAGE_POTENTIALS.get(STAGE_GERMINATED, 0.0)
             phi_no_seed = 0.0
             pbrs_germinate = config.gamma * phi_germinated - phi_no_seed
@@ -773,9 +784,10 @@ def compute_contribution_reward(
         components.action_shaping = action_shaping
 
     # === 5. TERMINAL BONUS ===
+    # Skip if disable_terminal_reward is True (ablation experiment)
     terminal_bonus = 0.0
     fossilize_terminal_bonus = 0.0
-    if epoch == max_epochs:
+    if epoch == max_epochs and not config.disable_terminal_reward:
         # Base accuracy bonus
         terminal_bonus = val_acc * config.terminal_acc_weight
         # ASYMMETRIC TERMINAL BONUS: Only reward CONTRIBUTING fossilized seeds
@@ -940,7 +952,8 @@ def compute_simplified_reward(
 
     # === 1. PBRS: Stage Progression ===
     # This is the ONLY shaping that preserves optimal policy guarantees
-    if seed_info is not None:
+    # Skip if disable_pbrs is True (ablation experiment)
+    if seed_info is not None and not config.disable_pbrs:
         reward += _contribution_pbrs_bonus(seed_info, config)
 
     # === 2. Intervention Cost ===
@@ -951,7 +964,8 @@ def compute_simplified_reward(
 
     # === 3. Terminal Bonus ===
     # Scaled for 25-step credit assignment (DRL Expert recommendation)
-    if epoch == max_epochs:
+    # Skip if disable_terminal_reward is True (ablation experiment)
+    if epoch == max_epochs and not config.disable_terminal_reward:
         # Accuracy component: [0, 3] range
         accuracy_bonus = (val_acc / 100.0) * 3.0
         # Fossilize component: [0, 6] for 3 slots max

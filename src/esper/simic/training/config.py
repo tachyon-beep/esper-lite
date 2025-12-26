@@ -125,6 +125,13 @@ class TrainingConfig:
     # hard-coded thresholds for gradient ratios, contribution levels, and stability metrics.
     permissive_gates: bool = True
 
+    # === Ablation Flags ===
+    # Used for systematic reward function experiments.
+    # These disable specific reward components to measure their contribution.
+    disable_pbrs: bool = False  # Disable PBRS stage advancement shaping
+    disable_terminal_reward: bool = False  # Disable terminal accuracy bonus
+    disable_anti_gaming: bool = False  # Disable ratio_penalty and alpha_shock
+
     def __post_init__(self) -> None:
         """Validate and set defaults.
 
@@ -325,6 +332,9 @@ class TrainingConfig:
             "seed": self.seed,
             "reward_mode_per_env": self.reward_mode_per_env,
             "permissive_gates": self.permissive_gates,
+            "disable_pbrs": self.disable_pbrs,
+            "disable_terminal_reward": self.disable_terminal_reward,
+            "disable_anti_gaming": self.disable_anti_gaming,
         }
 
     # ------------------------------------------------------------------

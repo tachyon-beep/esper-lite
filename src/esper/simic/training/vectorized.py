@@ -514,6 +514,10 @@ def train_ppo_vectorized(
     reward_family: str = "contribution",
     reward_mode_per_env: tuple[RewardMode, ...] | None = None,
     permissive_gates: bool = True,
+    # Ablation flags for systematic reward function experiments
+    disable_pbrs: bool = False,  # Disable PBRS stage advancement shaping
+    disable_terminal_reward: bool = False,  # Disable terminal accuracy bonus
+    disable_anti_gaming: bool = False,  # Disable ratio_penalty and alpha_shock
     quiet_analytics: bool = False,
     telemetry_dir: str | None = None,
     ready_event: "threading.Event | None" = None,
@@ -680,6 +684,9 @@ def train_ppo_vectorized(
         param_budget=param_budget,
         param_penalty_weight=param_penalty_weight,
         sparse_reward_scale=sparse_reward_scale,
+        disable_pbrs=disable_pbrs,
+        disable_terminal_reward=disable_terminal_reward,
+        disable_anti_gaming=disable_anti_gaming,
     )
     loss_reward_config = task_spec.loss_reward_config
 
@@ -696,6 +703,9 @@ def train_ppo_vectorized(
                 param_budget=param_budget,
                 param_penalty_weight=param_penalty_weight,
                 sparse_reward_scale=sparse_reward_scale,
+                disable_pbrs=disable_pbrs,
+                disable_terminal_reward=disable_terminal_reward,
+                disable_anti_gaming=disable_anti_gaming,
             )
             env_reward_configs.append(env_config)
         mode_counts = {}
