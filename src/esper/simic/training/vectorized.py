@@ -117,6 +117,7 @@ from esper.tamiyo.policy import create_policy
 from esper.simic.rewards import (
     compute_reward,
     compute_loss_reward,
+    compute_scaffold_hindsight_credit,
     RewardMode,
     RewardFamily,
     ContributionRewardConfig,
@@ -2622,6 +2623,12 @@ def train_ppo_vectorized(
                 reward += env_state.pending_auto_prune_penalty
                 env_state.pending_auto_prune_penalty = 0.0
 
+                # Add any pending hindsight credit BEFORE normalization
+                # (DRL Specialist review: credit should go through normalizer for scale consistency)
+                if env_state.pending_hindsight_credit > 0:
+                    reward += env_state.pending_hindsight_credit
+                    env_state.pending_hindsight_credit = 0.0
+
                 # Normalize reward for PPO stability (P1-6 fix)
                 normalized_reward = reward_normalizer.update_and_normalize(reward)
                 env_state.episode_rewards.append(reward)
@@ -2671,6 +2678,43 @@ def train_ppo_vectorized(
                             ):
                                 env_state.contributing_fossilized += 1
                             env_state.acc_at_germination.pop(target_slot, None)
+
+                            # Compute temporally-discounted hindsight credit for scaffolds
+                            beneficiary_improvement = seed_info.total_improvement if seed_info else 0.0
+                            if beneficiary_improvement > 0:
+                                current_epoch = env_state.current_epoch
+                                total_credit = 0.0
+
+                                # Find all scaffolds that boosted this beneficiary
+                                for scaffold_slot, boosts in env_state.scaffold_boost_ledger.items():
+                                    for boost_given, beneficiary_slot, epoch_of_boost in boosts:
+                                        if beneficiary_slot == target_slot and boost_given > 0:
+                                            # Temporal discount: credit decays with distance
+                                            delay = current_epoch - epoch_of_boost
+                                            discount = DEFAULT_GAMMA ** delay
+
+                                            # Compute discounted hindsight credit
+                                            raw_credit = compute_scaffold_hindsight_credit(
+                                                boost_given=boost_given,
+                                                beneficiary_improvement=beneficiary_improvement,
+                                                credit_weight=0.2,
+                                            )
+                                            total_credit += raw_credit * discount
+
+                                # Cap total credit to prevent runaway values
+                                MAX_HINDSIGHT_CREDIT = 0.2
+                                total_credit = min(total_credit, MAX_HINDSIGHT_CREDIT)
+
+                                env_state.pending_hindsight_credit += total_credit
+
+                                # Clear this beneficiary from all ledgers (it's now fossilized)
+                                for scaffold_slot in list(env_state.scaffold_boost_ledger.keys()):
+                                    env_state.scaffold_boost_ledger[scaffold_slot] = [
+                                        (b, ben, e) for (b, ben, e) in env_state.scaffold_boost_ledger[scaffold_slot]
+                                        if ben != target_slot
+                                    ]
+                                    if not env_state.scaffold_boost_ledger[scaffold_slot]:
+                                        del env_state.scaffold_boost_ledger[scaffold_slot]
                     elif (
                         op_idx == OP_PRUNE
                         and model.has_active_seed_in_slot(target_slot)
@@ -2886,6 +2930,9 @@ def train_ppo_vectorized(
                         env_state.seed_optimizers.pop(slot_id, None)
                         env_state.acc_at_germination.pop(slot_id, None)
                         env_state.gradient_ratio_ema.pop(slot_id, None)
+
+                # Increment epoch counter for temporal discount tracking
+                env_state.current_epoch += 1
 
                 # Fix BUG-022: Collect bootstrap state AFTER mechanical advance
                 if truncated:
