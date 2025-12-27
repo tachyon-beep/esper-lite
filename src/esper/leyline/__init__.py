@@ -280,6 +280,33 @@ DEFAULT_GOVERNOR_LOSS_MULTIPLIER = 3.0
 DEFAULT_GROWTH_RATIO_GREEN_MAX = 2.0   # <2x = green (efficient)
 DEFAULT_GROWTH_RATIO_YELLOW_MAX = 5.0  # 2-5x = yellow (moderate), >5x = red (heavy)
 
+# Seed lifecycle stage colors (Rich markup)
+# Used across all Sanctum widgets for consistent visual language
+STAGE_COLORS: dict[str, str] = {
+    "DORMANT": "dim",
+    "GERMINATED": "bright_blue",
+    "TRAINING": "cyan",
+    "HOLDING": "magenta",
+    "BLENDING": "yellow",
+    "FOSSILIZED": "green",
+    "PRUNED": "red",
+    "EMBARGOED": "bright_red",
+    "RESETTING": "dim",
+}
+
+# Stage abbreviations for compact display
+STAGE_ABBREVIATIONS: dict[str, str] = {
+    "DORMANT": "Dorm",
+    "GERMINATED": "Germ",
+    "TRAINING": "Train",
+    "HOLDING": "Hold",
+    "BLENDING": "Blend",
+    "FOSSILIZED": "Foss",
+    "PRUNED": "Prune",
+    "EMBARGOED": "Embar",
+    "RESETTING": "Reset",
+}
+
 # =============================================================================
 # Heuristic Policy (Tamiyo) Constants
 # =============================================================================
@@ -594,6 +621,8 @@ __all__ = [
     # Display Thresholds (Karn UI)
     "DEFAULT_GROWTH_RATIO_GREEN_MAX",
     "DEFAULT_GROWTH_RATIO_YELLOW_MAX",
+    "STAGE_COLORS",
+    "STAGE_ABBREVIATIONS",
 
     # Heuristic Policy (Tamiyo)
     "DEFAULT_PLATEAU_EPOCHS_TO_GERMINATE",
