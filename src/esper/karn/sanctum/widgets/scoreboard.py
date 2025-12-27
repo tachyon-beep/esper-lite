@@ -18,6 +18,8 @@ from textual.binding import Binding
 from textual.message import Message
 from textual.widgets import DataTable, Static
 
+from esper.leyline import STAGE_COLORS
+
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import BestRunRecord, SanctumSnapshot, SeedState
 
@@ -218,13 +220,13 @@ class Scoreboard(Static):
             return "─"
 
         stage_order = {"FOSSILIZED": 0, "BLENDING": 1, "HOLDING": 2}
-        stage_colors = {"FOSSILIZED": "green", "BLENDING": "magenta", "HOLDING": "yellow"}
+        # Use leyline STAGE_COLORS for consistency
         contributing.sort(key=lambda s: (stage_order.get(s.stage, 9), s.blueprint_id or ""))
 
         parts = []
         for seed in contributing[:3]:
             bp = (seed.blueprint_id or "?")[:6]
-            color = stage_colors.get(seed.stage, "dim")
+            color = STAGE_COLORS.get(seed.stage, "dim")
             # Add improvement annotation for fossilized seeds
             if seed.stage == "FOSSILIZED" and seed.improvement != 0:
                 # Show improvement as small delta indicator
