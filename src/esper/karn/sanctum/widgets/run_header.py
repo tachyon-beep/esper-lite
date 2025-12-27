@@ -17,6 +17,8 @@ from rich.table import Table
 from rich.text import Text
 from textual.widgets import Static
 
+from esper.leyline import STAGE_COLORS
+
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot
 
@@ -182,11 +184,11 @@ class RunHeader(Static):
 
         parts = []
         if training > 0:
-            parts.append(f"[yellow]T:{training}[/]")
+            parts.append(f"[{STAGE_COLORS['TRAINING']}]T:{training}[/]")
         if blending > 0:
-            parts.append(f"[cyan]B:{blending}[/]")
+            parts.append(f"[{STAGE_COLORS['BLENDING']}]B:{blending}[/]")
         if fossilized > 0:
-            parts.append(f"[magenta]F:{fossilized}[/]")
+            parts.append(f"[{STAGE_COLORS['FOSSILIZED']}]F:{fossilized}[/]")
 
         return " ".join(parts) if parts else "[dim]No seeds[/]"
 
