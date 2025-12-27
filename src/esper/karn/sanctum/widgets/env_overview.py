@@ -11,6 +11,11 @@ from typing import TYPE_CHECKING, Any, Iterator
 
 from textual.widgets import DataTable, Static
 
+from esper.leyline import (
+    DEFAULT_GROWTH_RATIO_GREEN_MAX,
+    DEFAULT_GROWTH_RATIO_YELLOW_MAX,
+)
+
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import EnvState, SanctumSnapshot
 
@@ -424,15 +429,19 @@ class EnvOverview(Static):
 
         Shows how much larger the mutated model is vs baseline.
         - 1.0x = no growth (baseline or no fossilized seeds)
-        - 1.2x = 20% larger due to fossilized seeds
-        - Green if efficient (<1.3x), yellow if moderate (1.3-1.5x), red if heavy (>1.5x)
+        - Green if < DEFAULT_GROWTH_RATIO_GREEN_MAX
+        - Yellow if < DEFAULT_GROWTH_RATIO_YELLOW_MAX
+        - Red otherwise
+
+        Thresholds are configurable via leyline constants. Generous defaults
+        because small host models can easily double with a single attention seed.
         """
         ratio = env.growth_ratio
         if ratio <= 1.0:
             return "[dim]1.0x[/dim]"
-        elif ratio < 1.3:
+        elif ratio < DEFAULT_GROWTH_RATIO_GREEN_MAX:
             return f"[green]{ratio:.2f}x[/green]"
-        elif ratio < 1.5:
+        elif ratio < DEFAULT_GROWTH_RATIO_YELLOW_MAX:
             return f"[yellow]{ratio:.2f}x[/yellow]"
         else:
             return f"[red]{ratio:.2f}x[/red]"

@@ -267,6 +267,19 @@ DEFAULT_GOVERNOR_HISTORY_WINDOW = 20
 # Higher = more conservative (avoids false positives from transients).
 DEFAULT_MIN_PANICS_BEFORE_ROLLBACK = 3
 
+# Loss multiplier threshold for statistical anomaly detection.
+# Loss must be Nx the rolling average to trigger panic.
+DEFAULT_GOVERNOR_LOSS_MULTIPLIER = 3.0
+
+# =============================================================================
+# Display Thresholds (Karn UI)
+# =============================================================================
+
+# Growth ratio: (host+fossilized_params) / host_params
+# Controls color coding in env_overview and scoreboard widgets
+DEFAULT_GROWTH_RATIO_GREEN_MAX = 2.0   # <2x = green (efficient)
+DEFAULT_GROWTH_RATIO_YELLOW_MAX = 5.0  # 2-5x = yellow (moderate), >5x = red (heavy)
+
 # =============================================================================
 # Heuristic Policy (Tamiyo) Constants
 # =============================================================================
@@ -576,6 +589,11 @@ __all__ = [
     "DEFAULT_GOVERNOR_DEATH_PENALTY",
     "DEFAULT_GOVERNOR_HISTORY_WINDOW",
     "DEFAULT_MIN_PANICS_BEFORE_ROLLBACK",
+    "DEFAULT_GOVERNOR_LOSS_MULTIPLIER",
+
+    # Display Thresholds (Karn UI)
+    "DEFAULT_GROWTH_RATIO_GREEN_MAX",
+    "DEFAULT_GROWTH_RATIO_YELLOW_MAX",
 
     # Heuristic Policy (Tamiyo)
     "DEFAULT_PLATEAU_EPOCHS_TO_GERMINATE",
