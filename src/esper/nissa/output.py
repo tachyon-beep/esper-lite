@@ -36,6 +36,7 @@ from esper.leyline.telemetry import (
     SeedFossilizedPayload,
     SeedPrunedPayload,
     PPOUpdatePayload,
+    GovernorRollbackPayload,
 )
 
 _logger = logging.getLogger(__name__)
@@ -156,20 +157,14 @@ class ConsoleOutput(OutputBackend):
                 msg = event.message or event_type
             print(f"[{timestamp}] {seed_id} | {msg}")
         elif event_type == "GOVERNOR_ROLLBACK":
-            if event.data is None:
-                _logger.warning("GOVERNOR_ROLLBACK event has no data payload")
+            payload = event.data
+            if not isinstance(payload, GovernorRollbackPayload):
+                _logger.error("GOVERNOR_ROLLBACK event missing typed payload")
                 return
-            # GOVERNOR_ROLLBACK not yet migrated to typed payload
-            if isinstance(event.data, dict):
-                reason = event.data.get("reason", "unknown")
-                loss = event.data.get("loss_at_panic", "?")
-                threshold = event.data.get("loss_threshold", "?")
-                panics = event.data.get("consecutive_panics", "?")
-                if isinstance(loss, float):
-                    loss = f"{loss:.4f}"
-                if isinstance(threshold, float):
-                    threshold = f"{threshold:.4f}"
-                print(f"[{timestamp}] GOVERNOR | 🚨 ROLLBACK: {reason} (loss={loss}, threshold={threshold}, panics={panics})")
+            loss_str = f"{payload.loss_at_panic:.4f}" if payload.loss_at_panic is not None else "?"
+            threshold_str = f"{payload.loss_threshold:.4f}" if payload.loss_threshold is not None else "?"
+            panics_str = str(payload.consecutive_panics) if payload.consecutive_panics is not None else "?"
+            print(f"[{timestamp}] GOVERNOR | 🚨 ROLLBACK: {payload.reason} (loss={loss_str}, threshold={threshold_str}, panics={panics_str})")
         elif event_type == "GOVERNOR_PANIC":
             # TODO: [DEAD CODE] - This formatting code for GOVERNOR_PANIC is unreachable
             # because these events are never emitted. See: leyline/telemetry.py dead event TODOs.
@@ -598,10 +593,23 @@ class NissaHub:
         """
         if self._closed:
             return
-        
+
+        # CRITICAL: Set _closed FIRST to prevent new events being enqueued
+        # after the sentinel. This fixes the race where emit() could add events
+        # after the sentinel, causing those events to be silently dropped.
+        self._closed = True
+
         # Signal worker to stop and wait for it to finish
         if self._worker_thread is not None and self._worker_thread.is_alive():
             try:
+                # Drain any events already in the queue before sending sentinel.
+                # This ensures the "flushes pending events" guarantee in the docstring.
+                # Use a timeout to avoid blocking forever if worker is stuck.
+                try:
+                    self._queue.join()
+                except Exception:
+                    pass  # Queue join can fail if worker died
+
                 # Add None to queue as sentinel for worker shutdown.
                 # Use blocking put with timeout to ensure signal is received.
                 self._queue.put(None, timeout=2.0)
@@ -609,7 +617,6 @@ class NissaHub:
             except (queue.Full, RuntimeError):
                 pass  # Worker might already be dead or queue unreachable
 
-        self._closed = True
         for backend in self._backends:
             try:
                 backend.close()

@@ -317,3 +317,106 @@ class TestNissaHubAddBackendFailure:
         # Should work now
         hub.add_backend(MockBackend())
         assert len(hub._backends) == 1
+
+
+class TestNissaHubShutdownRace:
+    """Tests for the shutdown race condition fix.
+
+    Regression tests for the race where emit() could add events after the
+    sentinel was placed in the queue, causing those events to be silently
+    dropped.
+    """
+
+    def test_close_processes_all_pending_events(self):
+        """close() should process all events enqueued before close() was called.
+
+        Regression test: Prior to fix, setting _closed after join() meant events
+        could be enqueued after the sentinel and never processed.
+        """
+        import threading
+        import time
+
+        received_events: list[TelemetryEvent] = []
+        lock = threading.Lock()
+
+        class CountingBackend(OutputBackend):
+            def start(self) -> None:
+                pass
+
+            def emit(self, event: TelemetryEvent) -> None:
+                # Simulate slow processing to increase race window
+                time.sleep(0.001)
+                with lock:
+                    received_events.append(event)
+
+            def close(self) -> None:
+                pass
+
+        hub = NissaHub()
+        hub.add_backend(CountingBackend())
+
+        # Emit a batch of events
+        num_events = 50
+        for i in range(num_events):
+            event = TelemetryEvent(
+                event_type=TelemetryEventType.EPOCH_COMPLETED,
+                epoch=i,
+                data=EpochCompletedPayload(
+                    env_id=0,
+                    val_accuracy=0.5,
+                    val_loss=0.1,
+                    inner_epoch=i,
+                ),
+            )
+            hub.emit(event)
+
+        # Close should wait for all pending events
+        hub.close()
+
+        # All events emitted before close() should have been processed
+        with lock:
+            assert len(received_events) == num_events, (
+                f"Expected {num_events} events, got {len(received_events)}. "
+                "Events were lost during shutdown."
+            )
+
+    def test_emit_after_close_is_rejected(self):
+        """Events emitted after close() starts should be rejected, not silently lost.
+
+        The fix sets _closed early to prevent enqueueing after the sentinel.
+        """
+
+        class MockBackend(OutputBackend):
+            def start(self) -> None:
+                pass
+
+            def emit(self, event: TelemetryEvent) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        hub = NissaHub()
+        hub.add_backend(MockBackend())
+
+        # Emit one event to ensure worker is processing
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            epoch=0,
+            data=EpochCompletedPayload(
+                env_id=0,
+                val_accuracy=0.5,
+                val_loss=0.1,
+                inner_epoch=0,
+            ),
+        )
+        hub.emit(event)
+
+        # Close the hub
+        hub.close()
+
+        # Verify _closed is True (events after this are dropped, not silently lost)
+        assert hub._closed is True
+
+        # Emitting now should not raise, but event should be dropped
+        hub.emit(event)  # Should not raise
