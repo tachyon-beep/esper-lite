@@ -14,6 +14,7 @@ from textual.widgets import DataTable, Static
 from esper.leyline import (
     DEFAULT_GROWTH_RATIO_GREEN_MAX,
     DEFAULT_GROWTH_RATIO_YELLOW_MAX,
+    STAGE_COLORS,
 )
 
 if TYPE_CHECKING:
@@ -596,17 +597,8 @@ class EnvOverview(Static):
         if len(blueprint) > 6:
             blueprint = blueprint[:6]
 
-        # Stage-specific styling
-        style_map = {
-            "TRAINING": "cyan",
-            "BLENDING": "yellow",
-            "HOLDING": "magenta",
-            "FOSSILIZED": "green",
-            "PRUNED": "red",
-            "EMBARGOED": "bright_red",
-            "RESETTING": "dim",
-        }
-        style = style_map.get(seed.stage, "white")
+        # Stage-specific styling from leyline
+        style = STAGE_COLORS.get(seed.stage, "white")
 
         # Gradient health indicator
         grad_indicator = ""
