@@ -10,7 +10,7 @@ import copy
 import math
 from collections import deque
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import torch
 import torch.nn as nn
@@ -18,6 +18,7 @@ import torch.nn as nn
 from esper.leyline import (
     TelemetryEvent,
     TelemetryEventType,
+    GovernorRollbackPayload,
     DEFAULT_GOVERNOR_SENSITIVITY,
     DEFAULT_GOVERNOR_ABSOLUTE_THRESHOLD,
     DEFAULT_GOVERNOR_DEATH_PENALTY,
@@ -26,6 +27,7 @@ from esper.leyline import (
     DEFAULT_GOVERNOR_LOSS_MULTIPLIER,
     SeedStage,
 )
+from esper.leyline.telemetry import GovernorPanicReason
 from esper.nissa import get_hub
 
 
@@ -243,25 +245,10 @@ class TolariaGovernor:
         std = math.sqrt(variance) if variance > 0 else 0.0
         threshold = avg + (self.sensitivity * std)
 
-        # Emit telemetry event (replaces print)
+        # Prepare telemetry data (emitted after rollback completes)
         hub = get_hub()
-        panic_reason = self._panic_reason or "governor_rollback"
-        # GOVERNOR_ROLLBACK not yet migrated to typed payload
-        # TODO: Create GovernorRollbackPayload and remove this ignore
-        hub.emit(TelemetryEvent(
-            event_type=TelemetryEventType.GOVERNOR_ROLLBACK,
-            severity="critical",
-            message="Critical instability detected - initiating rollback",
-            data={  # type: ignore[arg-type]
-                "env_id": env_id,
-                "device": str(device),
-                "reason": "Structural Collapse",
-                "loss_at_panic": self._panic_loss,
-                "loss_threshold": threshold,
-                "consecutive_panics": self.consecutive_panics,
-                "panic_reason": panic_reason,
-            },
-        ))
+        # Cast is safe: _panic_reason is only set to valid GovernorPanicReason values
+        panic_reason = cast(GovernorPanicReason, self._panic_reason or "governor_rollback")
 
         if self.last_good_state is None:
             raise RuntimeError("Governor panic before first snapshot!")
@@ -295,21 +282,24 @@ class TolariaGovernor:
 
         missing_keys, unexpected_keys = self.model.load_state_dict(state_on_device, strict=False)
 
-        # Log if there are key mismatches (diagnostic for snapshot filtering issues)
-        if missing_keys or unexpected_keys:
-            # GOVERNOR_ROLLBACK not yet migrated to typed payload
-            hub.emit(TelemetryEvent(
-                event_type=TelemetryEventType.GOVERNOR_ROLLBACK,
-                severity="warning",
-                message="Rollback load_state_dict had key mismatches",
-                data={  # type: ignore[arg-type]
-                    "missing_keys": list(missing_keys),
-                    "unexpected_keys": list(unexpected_keys),
-                    "env_id": env_id,
-                    "device": str(device),
-                    "reason": "State Dict Key Mismatch",
-                },
-            ))
+        # Emit single rollback event with all context (B1-CR-02: no duplicate emissions)
+        hub.emit(TelemetryEvent(
+            event_type=TelemetryEventType.GOVERNOR_ROLLBACK,
+            severity="critical",
+            message="Critical instability detected - rollback complete",
+            data=GovernorRollbackPayload(
+                env_id=env_id,
+                device=str(device),
+                reason="Structural Collapse",
+                loss_at_panic=self._panic_loss,
+                loss_threshold=threshold,
+                consecutive_panics=self.consecutive_panics,
+                panic_reason=panic_reason,
+                # Include key mismatch info if present (diagnostic context)
+                missing_keys=list(missing_keys) if missing_keys else None,
+                unexpected_keys=list(unexpected_keys) if unexpected_keys else None,
+            ),
+        ))
 
         # Reset optimizer momentum (BUG-015 fix)
         # If we don't clear momentum, the optimizer will push the restored weights

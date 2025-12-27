@@ -460,6 +460,8 @@ from esper.leyline.telemetry import (
     AnomalyDetectedPayload,
     PerformanceDegradationPayload,
     EpisodeOutcomePayload,
+    GovernorRollbackPayload,
+    GovernorPanicReason,
 )
 
 # Alpha controller contracts
@@ -682,6 +684,8 @@ __all__ = [
     "AnomalyDetectedPayload",
     "PerformanceDegradationPayload",
     "EpisodeOutcomePayload",
+    "GovernorRollbackPayload",
+    "GovernorPanicReason",
 
     # Alpha controller
     "AlphaMode",

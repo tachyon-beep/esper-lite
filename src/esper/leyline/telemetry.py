@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, auto
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
@@ -1288,6 +1288,58 @@ class EpisodeOutcomePayload:
         )
 
 
+# Valid panic reasons from TolariaGovernor
+GovernorPanicReason = Literal[
+    "governor_nan",        # NaN or Inf detected in loss
+    "governor_lobotomy",   # Loss below random guessing threshold
+    "governor_divergence", # Loss exceeding statistical threshold
+    "governor_rollback",   # Default fallback reason
+]
+
+
+@dataclass(slots=True, frozen=True)
+class GovernorRollbackPayload:
+    """Payload for GOVERNOR_ROLLBACK telemetry events.
+
+    Emitted when the TolariaGovernor detects catastrophic instability
+    and initiates a rollback to the last known good state.
+
+    Two emission contexts:
+    1. Initial panic detection (has loss_at_panic, loss_threshold, etc.)
+    2. State dict key mismatch warning (has missing_keys, unexpected_keys)
+    """
+
+    # REQUIRED - always present
+    env_id: int
+    device: str
+    reason: str
+
+    # Panic context (present for initial rollback trigger)
+    loss_at_panic: float | None = None
+    loss_threshold: float | None = None
+    consecutive_panics: int | None = None
+    panic_reason: GovernorPanicReason | None = None
+
+    # State dict mismatch context (present for key mismatch warnings)
+    missing_keys: list[str] | None = None
+    unexpected_keys: list[str] | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "GovernorRollbackPayload":
+        """Parse from dict. Raises KeyError on missing required fields."""
+        return cls(
+            env_id=data["env_id"],
+            device=data["device"],
+            reason=data["reason"],
+            loss_at_panic=data.get("loss_at_panic"),
+            loss_threshold=data.get("loss_threshold"),
+            consecutive_panics=data.get("consecutive_panics"),
+            panic_reason=data.get("panic_reason"),
+            missing_keys=list(data["missing_keys"]) if data.get("missing_keys") else None,
+            unexpected_keys=list(data["unexpected_keys"]) if data.get("unexpected_keys") else None,
+        )
+
+
 # =============================================================================
 # Telemetry Payload Type Union
 # =============================================================================
@@ -1311,4 +1363,5 @@ TelemetryPayload = (
     | AnomalyDetectedPayload
     | PerformanceDegradationPayload
     | EpisodeOutcomePayload
+    | GovernorRollbackPayload
 )
