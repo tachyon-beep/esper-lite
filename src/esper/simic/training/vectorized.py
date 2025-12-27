@@ -1767,6 +1767,13 @@ def train_ppo_vectorized(
             for env_state in env_states:
                 env_state.zero_accumulators()
 
+            # Ensure models are in training mode before training phase.
+            # CRITICAL: process_val_batch/process_fused_val_batch call model.eval(), and without
+            # this explicit model.train() call, all epochs after the first validation would run
+            # with eval-mode semantics (frozen BatchNorm stats, disabled Dropout).
+            for env_state in env_states:
+                env_state.model.train()
+
             # ===== TRAINING: Iterate batches first, launch all envs via CUDA streams =====
             # SharedBatchIterator: single DataLoader, batches pre-split and moved to devices
             # SharedGPUBatchIterator: GPU-resident data, one DataLoader per device
