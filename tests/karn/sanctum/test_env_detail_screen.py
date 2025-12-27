@@ -11,8 +11,8 @@ from esper.karn.sanctum.schema import (
 from esper.karn.sanctum.widgets.env_detail_screen import (
     EnvDetailScreen,
     SeedCard,
-    STAGE_COLORS,
 )
+from esper.leyline import STAGE_COLORS
 
 
 def render_to_text(renderable) -> str:

@@ -21,25 +21,13 @@ from textual.widget import Widget
 from textual.widgets import Static
 
 from esper.karn.sanctum.widgets.counterfactual_panel import CounterfactualPanel
+from esper.leyline import STAGE_COLORS
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import EnvState, SeedState
 
 
-# Stage color mapping
-STAGE_COLORS = {
-    "DORMANT": "dim",
-    "GERMINATED": "bright_blue",
-    "TRAINING": "cyan",
-    "HOLDING": "magenta",
-    "BLENDING": "yellow",
-    "FOSSILIZED": "green",
-    "PRUNED": "red",
-    "EMBARGOED": "bright_red",
-    "RESETTING": "dim",
-}
-
-# Stage border styles for CSS classes
+# Stage border styles for CSS classes (different from leyline STAGE_COLORS - these map to Textual CSS)
 STAGE_CSS_CLASSES = {
     "DORMANT": "dormant",
     "GERMINATED": "training",  # Use training style for germinated
