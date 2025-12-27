@@ -19,6 +19,7 @@ from textual.message import Message
 from textual.widgets import Static
 
 from esper.karn.constants import TUIThresholds
+from esper.leyline import STAGE_COLORS, STAGE_ABBREVIATIONS
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import DecisionSnapshot, SanctumSnapshot
@@ -603,28 +604,14 @@ class TamiyoBrain(Static):
             "HOLDING",
             "FOSSILIZED",
         ]
-        stage_colors = {
-            "DORMANT": "dim",
-            "GERMINATED": "green",
-            "TRAINING": "cyan",
-            "BLENDING": "yellow",
-            "HOLDING": "bright_cyan",
-            "FOSSILIZED": "blue",
-        }
-        stage_abbrevs = {
-            "DORMANT": "DORM",
-            "GERMINATED": "GERM",
-            "TRAINING": "TRAIN",
-            "BLENDING": "BLEND",
-            "HOLDING": "HOLD",
-            "FOSSILIZED": "FOSS",
-        }
+        # Use leyline constants (uppercase abbrevs for this widget's style)
+        stage_abbrevs = {k: v.upper() for k, v in STAGE_ABBREVIATIONS.items()}
 
         # Build distribution line: "DORM:48 ░░░░ │ GERM:4 ░ │ TRAIN:28 ████ │ ..."
         for i, stage in enumerate(stages):
             count = counts.get(stage, 0)
             abbrev = stage_abbrevs[stage]
-            color = stage_colors[stage]
+            color = STAGE_COLORS.get(stage, "dim")
 
             # Proportional bar (max 4 chars)
             bar_width = min(4, int((count / max(1, total)) * 16)) if total > 0 else 0
