@@ -286,7 +286,7 @@ class OverwatchBackend:
 
         except ImportError:
             _logger.warning(
-                "FastAPI/uvicorn not installed. Install with: pip install esper[overwatch]"
+                "FastAPI/uvicorn not installed. Install with: pip install esper-lite[dashboard]"
             )
             # _running stays False - emit() will skip broadcasts to avoid queue leak
             return False

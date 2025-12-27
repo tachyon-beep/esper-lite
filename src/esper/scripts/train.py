@@ -266,9 +266,20 @@ def main() -> None:
     hub = get_hub()
 
     # Determine UI mode
-    import sys
     is_tty = sys.stdout.isatty()
     use_sanctum = args.sanctum
+
+    # Check Textual availability for Sanctum TUI
+    if use_sanctum:
+        try:
+            import textual  # noqa: F401
+        except ImportError:
+            print(
+                "ERROR: Sanctum TUI unavailable - missing dependencies.\n"
+                "       Install with: pip install esper-lite[tui]",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     if not is_tty and not args.no_tui:
         print("Non-TTY detected, using console output instead of TUI")
@@ -408,7 +419,7 @@ def main() -> None:
         else:
             print(
                 "ERROR: Overwatch dashboard unavailable - missing dependencies.\n"
-                "       Install with: pip install esper[overwatch]",
+                "       Install with: pip install esper-lite[dashboard]",
                 file=sys.stderr,
             )
             overwatch_backend = None
