@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B1-DRL-05` |
 | **Severity** | `P2` |
-| **Status** | `open` |
+| **Status** | `wont-fix` |
 | **Batch** | 1 |
 | **Agent** | `drl` |
 | **Domain** | `tolaria` |
@@ -110,6 +110,25 @@ self.last_good_state = new_snapshot
 | **DRL** | NEUTRAL | The explicit `del` before reassignment is stylistic noise, not a performance bottleneck - Python's refcount handles this within the same bytecode sequence. No impact on RL training; memory release timing for state_dict snapshots is not on the critical path for gradient computation or rollout collection. |
 | **PyTorch** | ENDORSE | The explicit `del` before reassignment pattern can interfere with torch.compile's graph tracing and adds unnecessary Python bytecode. For CUDA tensors, PyTorch's memory allocator handles deallocation; explicit `del` does not trigger synchronous cudaFree and only adds overhead. |
 | **CodeReview** | NEUTRAL | The explicit `del` before reassignment is indeed unnecessary since Python handles reference counting automatically. However, the intent is clear from comments and the overhead is negligible; cleaning it up is worthwhile but not urgent. |
+
+---
+
+## Resolution
+
+**Status:** Won't Fix
+**Resolved:** 2024-12-28
+**Rationale:** The ticket mischaracterizes the code as having "immediate" reassignment. In reality, there is significant work between the `del` and reassignment:
+
+```
+Line 112-113: del self.last_good_state  # Release old
+Line 116:     model.state_dict()        # Allocate new (large)
+Lines 121-135: Filtering logic
+Lines 140-143: New snapshot created
+```
+
+The explicit `del` releases the old snapshot BEFORE calling `state_dict()`, reducing peak memory from `(old_snapshot + state_dict + new_snapshot)` to `(state_dict + new_snapshot)`. This is an intentional memory optimization, not unnecessary code.
+
+The comment "C7 FIX: Explicitly free old snapshot to allow garbage collection" documents the intent. Removing this pattern would increase peak memory usage during snapshot operations.
 
 ---
 

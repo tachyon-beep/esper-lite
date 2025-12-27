@@ -1,6 +1,7 @@
 """CounterfactualPanel - Waterfall visualization of factorial counterfactual analysis.
 
 Shows baseline → individuals → pairs → combined with synergy calculation.
+Also shows per-seed interaction metrics when available.
 Displays "detailed counterfactual analysis unavailable" if no full factorial data.
 """
 from __future__ import annotations
@@ -13,19 +14,31 @@ from rich.text import Text
 from textual.widgets import Static
 
 if TYPE_CHECKING:
-    from esper.karn.sanctum.schema import CounterfactualSnapshot
+    from esper.karn.sanctum.schema import CounterfactualSnapshot, SeedState
 
 
 class CounterfactualPanel(Static):
     """Waterfall visualization of counterfactual analysis."""
 
-    def __init__(self, matrix: "CounterfactualSnapshot", **kwargs: Any) -> None:
+    def __init__(
+        self,
+        matrix: "CounterfactualSnapshot",
+        seeds: dict[str, "SeedState"] | None = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
         self._matrix = matrix
+        self._seeds = seeds or {}
 
-    def update_matrix(self, matrix: "CounterfactualSnapshot") -> None:
+    def update_matrix(
+        self,
+        matrix: "CounterfactualSnapshot",
+        seeds: dict[str, "SeedState"] | None = None,
+    ) -> None:
         """Update the matrix and refresh display."""
         self._matrix = matrix
+        if seeds is not None:
+            self._seeds = seeds
         self.refresh()
 
     def render(self) -> Panel:
@@ -35,8 +48,43 @@ class CounterfactualPanel(Static):
         return self._render_waterfall()
 
     def _render_unavailable(self) -> Panel:
-        """Render unavailable state."""
-        content = Text("Detailed counterfactual analysis unavailable", style="dim italic")
+        """Render unavailable state with same structure as waterfall.
+
+        All rows are always visible to prevent jarring layout shifts.
+        Uses dim "--" placeholders to match waterfall structure.
+        """
+        lines = []
+        dim_placeholder = "--"
+
+        # Baseline (always visible)
+        lines.append(Text(f"Baseline (Host only)     {dim_placeholder}", style="dim"))
+        lines.append(Text(""))
+
+        # Individual section (always visible)
+        lines.append(Text("Individual:", style="bold"))
+        lines.append(Text(f"  {dim_placeholder}", style="dim"))
+
+        # Pairs section placeholder
+        lines.append(Text(""))
+        lines.append(Text("Pairs:", style="bold"))
+        lines.append(Text(f"  {dim_placeholder}", style="dim"))
+
+        # Combined (always visible)
+        lines.append(Text(""))
+        lines.append(Text("Combined:", style="bold"))
+        lines.append(Text(f"  All seeds              {dim_placeholder}", style="dim"))
+
+        # Synergy summary (always visible)
+        lines.append(Text(""))
+        lines.append(Text(f"Expected (sum of solo): {dim_placeholder}", style="dim"))
+        lines.append(Text(f"Actual improvement:     {dim_placeholder}", style="dim"))
+        lines.append(Text(f"  Interaction:          {dim_placeholder}", style="dim"))
+
+        # Seed Dynamics section (always visible)
+        lines.append(Text(""))
+        lines.extend(self._render_interaction_metrics())
+
+        content = Group(*lines)
         return Panel(content, title="Counterfactual Analysis", border_style="dim")
 
     def _render_waterfall(self) -> Panel:
@@ -119,9 +167,12 @@ class CounterfactualPanel(Static):
         # Interference is MORE critical to surface than synergy - seeds hurting each other
         # Use loud visual treatment for negative cases
         # Show "available at episode end" only when we don't have pair data yet
+        # NOTE: Only show interference when n_seeds >= 2 - single seed cannot interfere
+        # with itself (mathematically synergy=0). Stale matrix data from pruned seeds
+        # can show non-zero synergy but it's misleading for single-seed scenarios.
         if is_ablation and not pairs:
             lines.append(Text("(Pair interactions available at episode end)", style="dim italic"))
-        elif synergy < -0.5:
+        elif synergy < -0.5 and n_seeds >= 2:
             # INTERFERENCE: Seeds are hurting each other - make this LOUD
             lines.append(Text(""))
             lines.append(Text("✗ INTERFERENCE DETECTED", style="bold red reverse"))
@@ -132,6 +183,10 @@ class CounterfactualPanel(Static):
         else:
             # Neutral: Seeds are independent
             lines.append(Text(f"  Interaction:          {synergy:+.1f}%", style="dim"))
+
+        # Per-seed interaction metrics section (always visible, greyed out if no data)
+        lines.append(Text(""))
+        lines.extend(self._render_interaction_metrics())
 
         content = Group(*lines)
         return Panel(content, title="Counterfactual Analysis", border_style="cyan")
@@ -166,3 +221,65 @@ class CounterfactualPanel(Static):
             line.append(f"  ({delta:+.1f})", style=delta_style)
 
         return line
+
+    def _render_interaction_metrics(self) -> list[Text]:
+        """Render aggregate interaction metrics from seeds.
+
+        All rows are always visible to prevent jarring layout shifts.
+        Empty/zero values display as dim "--" placeholders.
+
+        Shows:
+        - Network synergy: total interaction_sum across all seeds
+        - Best partnership: seed with highest boost_received
+        - Contribution trends: seeds with positive/negative velocity
+        """
+        lines: list[Text] = []
+        lines.append(Text("Seed Dynamics:", style="bold"))
+        dim_placeholder = "--"
+
+        # Filter to active seeds (not DORMANT or PRUNED)
+        active_seeds = [
+            (slot_id, seed)
+            for slot_id, seed in self._seeds.items()
+            if seed.stage not in ("DORMANT", "PRUNED", "EMBARGOED", "RESETTING")
+        ] if self._seeds else []
+
+        # Network synergy: sum of all interaction_sums (positive = synergy network)
+        if active_seeds:
+            total_synergy = sum(seed.interaction_sum for _, seed in active_seeds)
+            synergy_style = "green" if total_synergy > 0.5 else "red" if total_synergy < -0.5 else "dim"
+            synergy_icon = "▲" if total_synergy > 0 else "▼" if total_synergy < 0 else "─"
+            lines.append(Text(f"  Network synergy: {synergy_icon} {total_synergy:+.2f}", style=synergy_style))
+        else:
+            lines.append(Text(f"  Network synergy: {dim_placeholder}", style="dim"))
+
+        # Best partnership: seed receiving highest boost
+        best_boost_seed = max(active_seeds, key=lambda x: x[1].boost_received, default=None) if active_seeds else None
+        if best_boost_seed and best_boost_seed[1].boost_received > 0.1:
+            slot_id, seed = best_boost_seed
+            lines.append(Text(
+                f"  Best partner: {slot_id} (+{seed.boost_received:.1f}% boost)",
+                style="cyan",
+            ))
+        else:
+            lines.append(Text(f"  Best partner: {dim_placeholder}", style="dim"))
+
+        # Contribution trends: show seeds with notable velocity
+        trending_up = [(s, sd) for s, sd in active_seeds if sd.contribution_velocity > 0.01]
+        trending_down = [(s, sd) for s, sd in active_seeds if sd.contribution_velocity < -0.01]
+
+        trend_line = Text("  Trends: ")
+        if trending_up or trending_down:
+            if trending_up:
+                up_slots = ", ".join(s for s, _ in trending_up[:3])
+                trend_line.append(f"↗ {up_slots}", style="green")
+            if trending_up and trending_down:
+                trend_line.append("  ")
+            if trending_down:
+                down_slots = ", ".join(s for s, _ in trending_down[:3])
+                trend_line.append(f"↘ {down_slots}", style="yellow")
+        else:
+            trend_line.append(dim_placeholder, style="dim")
+        lines.append(trend_line)
+
+        return lines

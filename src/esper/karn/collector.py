@@ -146,6 +146,7 @@ class KarnCollector:
         # We commit when len(buffer for epoch X) == n_envs.
         self._pending_epoch_metrics: dict[tuple[int, int], EpochCompletedPayload] = {}
         self._n_envs: int = 1  # Set by TRAINING_STARTED, default 1 for single-env
+        self._saw_epoch_completed_since_batch: bool = False
 
     # =========================================================================
     # Backend Management (mirrors NissaHub interface)
@@ -229,6 +230,7 @@ class KarnCollector:
         self._emit_after_close_warned = False
         self._anomaly_detector.reset()
         self._policy_detector.reset()
+        self._saw_epoch_completed_since_batch = False
 
     # =========================================================================
     # Event Emission (primary interface)
@@ -311,6 +313,7 @@ class KarnCollector:
             # Capture n_envs for multi-env epoch commit logic
             self._n_envs = event.data.n_envs or 1
             self._pending_epoch_metrics.clear()  # Reset buffer for new training run
+            self._saw_epoch_completed_since_batch = False
             self.start_episode(
                 episode_id=episode_id,
                 seed=event.data.seed,
@@ -350,6 +353,7 @@ class KarnCollector:
 
         # Buffer per-env metrics keyed by (inner_epoch, env_id)
         self._pending_epoch_metrics[(inner_epoch, env_id)] = payload
+        self._saw_epoch_completed_since_batch = True
 
         # Auto-start epoch if none exists (first event)
         if not self.store.current_epoch:
@@ -442,6 +446,7 @@ class KarnCollector:
             return
 
         payload = event.data
+        did_flush = False
 
         # Case 1: Flush any remaining buffered epochs (partial batch)
         if self._pending_epoch_metrics:
@@ -449,29 +454,33 @@ class KarnCollector:
             buffered_epochs = sorted(set(key[0] for key in self._pending_epoch_metrics))
             for inner_epoch in buffered_epochs:
                 self._commit_epoch_from_buffer(inner_epoch)
-            return
+            did_flush = True
 
         # Case 2: Minimal telemetry fallback - no EPOCH_COMPLETED events received
         # Create a single epoch snapshot from BATCH aggregate metrics
-        if self.store.current_epoch is None:
-            return
+        if not did_flush and not self._saw_epoch_completed_since_batch:
+            if self.store.current_epoch is None:
+                self._saw_epoch_completed_since_batch = False
+                return
 
-        current_epoch = self.store.current_epoch
-        # Use batch_idx as epoch number (1-indexed for display)
-        epoch_num = payload.batch_idx + 1
-        current_epoch.epoch = epoch_num
-        current_epoch.host.epoch = epoch_num
-        current_epoch.host.val_accuracy = payload.avg_accuracy
-        # BATCH doesn't have val_loss - leave at default 0.0
+            current_epoch = self.store.current_epoch
+            # batch_idx is emitted 1-indexed
+            epoch_num = payload.batch_idx
+            current_epoch.epoch = epoch_num
+            current_epoch.host.epoch = epoch_num
+            current_epoch.host.val_accuracy = payload.avg_accuracy
+            # BATCH doesn't have val_loss - leave at default 0.0
 
-        # Increment epochs_in_stage for active slots
-        for slot in current_epoch.slots.values():
-            if slot.stage not in (SeedStage.DORMANT, SeedStage.PRUNED, SeedStage.FOSSILIZED):
-                slot.epochs_in_stage += 1
+            # Increment epochs_in_stage for active slots
+            for slot in current_epoch.slots.values():
+                if slot.stage not in (SeedStage.DORMANT, SeedStage.PRUNED, SeedStage.FOSSILIZED):
+                    slot.epochs_in_stage += 1
 
-        # Commit and start next
-        self.store.commit_epoch()
-        self.store.start_epoch(epoch_num + 1)
+            # Commit and start next
+            self.store.commit_epoch()
+            self.store.start_epoch(epoch_num + 1)
+
+        self._saw_epoch_completed_since_batch = False
 
     def _check_anomalies_and_capture(self, snapshot: EpochSnapshot) -> None:
         """Check for anomalies and manage dense trace capture."""

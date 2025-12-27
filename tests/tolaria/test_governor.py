@@ -1,6 +1,8 @@
 """Tests for TolariaGovernor - the fail-safe watchdog mechanism."""
 
 import math
+
+import pytest
 import torch
 import torch.nn as nn
 
@@ -788,3 +790,52 @@ class TestTolariaGovernor:
         # Check r0c2 (dormant) - no seed parameters to check
         r0c2_keys = {k for k in snapshot_keys if "seed_slots.r0c2.seed." in k}
         assert len(r0c2_keys) == 0, "Dormant slot (r0c2) should have no seed parameters"
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_rollback_multi_stream_safety(self):
+        """Verify rollback is safe when multiple CUDA streams are active.
+
+        This test verifies that torch.cuda.synchronize(device) properly
+        serializes all stream operations before load_state_dict. See B1-PT-05.
+        """
+        from esper.tolaria import TolariaGovernor
+
+        device = torch.device("cuda:0")
+        model = nn.Sequential(
+            nn.Linear(100, 100),
+            nn.ReLU(),
+            nn.Linear(100, 10)
+        ).to(device)
+        governor = TolariaGovernor(model)
+
+        # Snapshot clean state
+        governor.snapshot()
+
+        # Create secondary stream
+        secondary_stream = torch.cuda.Stream(device)
+
+        # Start async operation on secondary stream
+        with torch.cuda.stream(secondary_stream):
+            # Long-running operation that might be in-flight during rollback
+            large_tensor = torch.randn(1000, 1000, device=device)
+            for _ in range(10):
+                large_tensor = large_tensor @ large_tensor.T
+
+        # Build minimal history
+        for i in range(5):
+            governor.loss_history.append(1.0)
+
+        # Trigger rollback while secondary stream may still be running
+        # This should NOT corrupt the model due to device-level sync
+        report = governor.execute_rollback(env_id=0)
+
+        # Verify model is functional after rollback
+        test_input = torch.randn(4, 100, device=device)
+        output = model(test_input)
+
+        # Should not contain NaN/Inf
+        assert not torch.isnan(output).any(), "Output contains NaN after multi-stream rollback"
+        assert not torch.isinf(output).any(), "Output contains Inf after multi-stream rollback"
+
+        # Verify rollback report
+        assert report.rollback_occurred is True

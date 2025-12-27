@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from rich.console import Group
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -71,21 +72,27 @@ class HistoricalEnvDetail(ModalScreen[None]):
         min-height: 10;
     }
 
-    HistoricalEnvDetail .metrics-section {
+    HistoricalEnvDetail .metrics-graveyard-row {
         height: auto;
         margin-top: 1;
         border-top: solid $secondary-lighten-2;
         padding-top: 1;
     }
 
-    HistoricalEnvDetail .counterfactual-section {
+    HistoricalEnvDetail .metrics-section {
+        width: 1fr;
         height: auto;
-        margin-top: 1;
-        border-top: solid $secondary-lighten-2;
-        padding-top: 1;
+        padding-right: 1;
     }
 
     HistoricalEnvDetail .graveyard-section {
+        width: 1fr;
+        height: auto;
+        padding-left: 1;
+        border-left: solid $secondary-lighten-2;
+    }
+
+    HistoricalEnvDetail .counterfactual-section {
         height: auto;
         margin-top: 1;
         border-top: solid $secondary-lighten-2;
@@ -123,21 +130,24 @@ class HistoricalEnvDetail(ModalScreen[None]):
                         seed = self._record.seeds.get(slot_id)  # None for DORMANT
                         yield SeedCard(seed, slot_id, id=f"seed-card-{slot_id}")
 
-            # Metrics section
-            with Vertical(classes="metrics-section"):
-                yield Static(self._render_metrics(), id="detail-metrics")
+            # Metrics + Graveyard side by side
+            with Horizontal(classes="metrics-graveyard-row"):
+                with Vertical(classes="metrics-section"):
+                    yield Static(self._render_metrics(), id="detail-metrics")
+                with Vertical(classes="graveyard-section"):
+                    yield Static(self._render_graveyard(), id="seed-graveyard")
 
-            # Counterfactual analysis section (if available)
-            if self._record.counterfactual_matrix is not None:
-                with Vertical(classes="counterfactual-section"):
-                    yield CounterfactualPanel(
-                        self._record.counterfactual_matrix,
-                        id="counterfactual-panel"
-                    )
-
-            # Seed graveyard section
-            with Vertical(classes="graveyard-section"):
-                yield Static(self._render_graveyard(), id="seed-graveyard")
+            # Counterfactual analysis section (always visible for stable layout)
+            from esper.karn.sanctum.schema import CounterfactualSnapshot
+            matrix = self._record.counterfactual_matrix or CounterfactualSnapshot(
+                strategy="unavailable"
+            )
+            with Vertical(classes="counterfactual-section"):
+                yield CounterfactualPanel(
+                    matrix,
+                    seeds=self._record.seeds,
+                    id="counterfactual-panel",
+                )
 
             # Footer hint
             pin_status = "📌 Pinned" if self._record.pinned else "Not pinned (right-click to pin)"
@@ -214,6 +224,7 @@ class HistoricalEnvDetail(ModalScreen[None]):
         """Render environment metrics section with historical data.
 
         All rows are always visible to prevent jarring layout shifts.
+        Matches the same row structure as live EnvDetailScreen for consistency.
         Empty/zero values display as dim "--" placeholders.
         """
         table = Table(show_header=False, box=None, expand=True)
@@ -221,6 +232,7 @@ class HistoricalEnvDetail(ModalScreen[None]):
         table.add_column("Value", style="white")
 
         record = self._record
+        rc = record.reward_components
         dim_placeholder = Text("--", style="dim")
 
         # Accuracy history sparkline (always visible)
@@ -238,52 +250,121 @@ class HistoricalEnvDetail(ModalScreen[None]):
         else:
             table.add_row("Reward History", dim_placeholder)
 
-        # Reward components (always visible)
-        rc = record.reward_components
-        reward_text = Text()
-        if rc is not None and rc.total is not None and rc.total != 0:
-            reward_text.append(f"Total: {rc.total:+.3f}", style="bold")
-            if rc.base_acc_delta is not None and rc.base_acc_delta != 0:
-                style = "green" if rc.base_acc_delta > 0 else "red"
-                reward_text.append(f"  ΔAcc: {rc.base_acc_delta:+.3f}", style=style)
-            if rc.compute_rent is not None and rc.compute_rent != 0:
-                reward_text.append(f"  Rent: {rc.compute_rent:.3f}", style="red")
-            if rc.alpha_shock is not None and rc.alpha_shock != 0:
-                reward_text.append(f"  Shock: {rc.alpha_shock:.3f}", style="red")
-            if rc.bounded_attribution is not None and rc.bounded_attribution != 0:
-                style = "green" if rc.bounded_attribution > 0 else "red"
-                reward_text.append(f"  Attr: {rc.bounded_attribution:+.3f}", style=style)
-            table.add_row("Reward Breakdown", reward_text)
-        else:
-            table.add_row("Reward Breakdown", dim_placeholder)
+        # Seed counts (always visible - compute from record data)
+        seed_counts = Text()
+        # Count active seeds from the seeds dict
+        active_count = sum(
+            1 for s in record.seeds.values()
+            if s and s.stage not in ("DORMANT", "FOSSILIZED", "PRUNED")
+        )
+        seed_counts.append(f"Active: {active_count}", style="cyan")
+        seed_counts.append("  ")
+        seed_counts.append(f"Fossilized: {record.fossilized_count}", style="green")
+        seed_counts.append("  ")
+        seed_counts.append(f"Pruned: {record.pruned_count}", style="red")
+        table.add_row("Seed Counts", seed_counts)
 
-        # Final actions (always visible)
+        # Fossilized params (always visible - not tracked in historical, show --)
+        table.add_row("Fossilized Params", dim_placeholder)
+
+        # Action distribution (always visible - not tracked in historical, show --)
+        table.add_row("Action Distribution", dim_placeholder)
+
+        # Reward Total with PBRS fraction (always visible)
+        reward_text = Text()
+        if rc is not None and rc.total != 0:
+            total_style = "bold green" if rc.total >= 0 else "bold red"
+            reward_text.append(f"{rc.total:+.3f}", style=total_style)
+            # Add PBRS fraction
+            pbrs_fraction = abs(rc.stage_bonus) / abs(rc.total) if rc.total != 0 else 0.0
+            pbrs_healthy = 0.1 <= pbrs_fraction <= 0.4
+            pbrs_icon = "✓" if pbrs_healthy else "⚠" if pbrs_fraction > 0 else ""
+            pbrs_style = "green" if pbrs_healthy else "yellow"
+            reward_text.append(f"  PBRS: {pbrs_fraction:.0%} ", style="dim")
+            if pbrs_icon:
+                reward_text.append(pbrs_icon, style=pbrs_style)
+        else:
+            reward_text.append("0.000", style="dim")
+            reward_text.append("  PBRS: --", style="dim")
+        table.add_row("Reward Total", reward_text)
+
+        # Signals (always visible)
+        signals = Text()
+        has_signals = False
+        if rc is not None:
+            if rc.base_acc_delta != 0:
+                style = "green" if rc.base_acc_delta > 0 else "red"
+                signals.append(f"ΔAcc: {rc.base_acc_delta:+.3f}", style=style)
+                has_signals = True
+            if rc.compute_rent != 0:
+                if has_signals:
+                    signals.append("  ")
+                signals.append(f"Rent: {rc.compute_rent:.3f}", style="red")
+                has_signals = True
+            if rc.alpha_shock != 0:
+                if has_signals:
+                    signals.append("  ")
+                signals.append(f"Shock: {rc.alpha_shock:.3f}", style="red")
+                has_signals = True
+            if rc.ratio_penalty != 0:
+                if has_signals:
+                    signals.append("  ")
+                signals.append(f"Ratio: {rc.ratio_penalty:.3f}", style="red")
+                has_signals = True
+        # Gaming rate not tracked in historical
+        if has_signals:
+            signals.append("  │  ")
+        signals.append("Gaming: --", style="dim")
+        table.add_row("  Signals", signals if has_signals else dim_placeholder)
+
+        # Credits (always visible)
+        credits = Text()
+        has_credits = False
+        if rc is not None:
+            if rc.bounded_attribution != 0:
+                style = "green" if rc.bounded_attribution > 0 else "red"
+                credits.append(f"Attr: {rc.bounded_attribution:+.3f}", style=style)
+                has_credits = True
+            if rc.hindsight_credit != 0:
+                hind_str = f"Hind: {rc.hindsight_credit:+.3f}"
+                if rc.scaffold_count > 0:
+                    hind_str += f" ({rc.scaffold_count}x, {rc.avg_scaffold_delay:.1f}e)"
+                if has_credits:
+                    credits.append("  ")
+                credits.append(hind_str, style="blue")
+                has_credits = True
+            if rc.stage_bonus != 0:
+                if has_credits:
+                    credits.append("  ")
+                credits.append(f"Stage: {rc.stage_bonus:+.3f}", style="blue")
+                has_credits = True
+            if rc.fossilize_terminal_bonus != 0:
+                if has_credits:
+                    credits.append("  ")
+                credits.append(f"Foss: {rc.fossilize_terminal_bonus:+.3f}", style="blue")
+                has_credits = True
+        table.add_row("  Credits", credits if has_credits else dim_placeholder)
+
+        # Warnings (always visible)
+        warnings = Text()
+        has_warnings = False
+        if rc is not None:
+            if rc.blending_warning < 0:
+                warnings.append(f"Blend: {rc.blending_warning:.3f}", style="yellow")
+                has_warnings = True
+            if rc.holding_warning < 0:
+                if has_warnings:
+                    warnings.append("  ")
+                warnings.append(f"Hold: {rc.holding_warning:.3f}", style="yellow")
+                has_warnings = True
+        table.add_row("  Warnings", warnings if has_warnings else dim_placeholder)
+
+        # Recent actions (always visible)
         if record.action_history:
             recent = " → ".join(list(record.action_history)[-5:])
-            table.add_row("Final Actions", recent)
+            table.add_row("Recent Actions", recent)
         else:
-            table.add_row("Final Actions", dim_placeholder)
-
-        # Seed composition summary (always visible)
-        seed_summary = Text()
-        if record.seeds:
-            stages: dict[str, int] = {}
-            for seed in record.seeds.values():
-                stage = seed.stage if seed else "DORMANT"
-                stages[stage] = stages.get(stage, 0) + 1
-
-            for stage, count in sorted(stages.items()):
-                color = STAGE_COLORS.get(stage, "dim")
-                seed_summary.append(f"{stage}: {count}  ", style=color)
-            table.add_row("Seed States", seed_summary)
-        else:
-            table.add_row("Seed States", dim_placeholder)
-
-        # Host loss (always visible)
-        if record.host_loss and record.host_loss > 0:
-            table.add_row("Host Loss", f"{record.host_loss:.4f}")
-        else:
-            table.add_row("Host Loss", dim_placeholder)
+            table.add_row("Recent Actions", dim_placeholder)
 
         return table
 
@@ -294,8 +375,22 @@ class HistoricalEnvDetail(ModalScreen[None]):
         - Spawned (germinated)
         - Fossilized (successfully integrated)
         - Pruned (removed due to poor performance)
+
+        All rows are always visible to prevent jarring layout shifts.
+        Empty state shows header + placeholder row with "--" values.
         """
         record = self._record
+        lines = []
+        dim_placeholder = "--"
+
+        # Header row (always visible)
+        header = Text()
+        header.append("Blueprint       ", style="dim")
+        header.append("  spawn", style="dim")
+        header.append("  foss", style="dim")
+        header.append("  prun", style="dim")
+        header.append("  rate", style="dim")
+        lines.append(header)
 
         # Combine all blueprints seen across spawns, fossilized, pruned
         all_blueprints = set(record.blueprint_spawns.keys())
@@ -303,30 +398,37 @@ class HistoricalEnvDetail(ModalScreen[None]):
         all_blueprints.update(record.blueprint_prunes.keys())
 
         if not all_blueprints:
-            content = Text("No seeds germinated in this episode", style="dim italic")
-            return Panel(content, title="Seed Graveyard", border_style="dim")
+            # Placeholder row when no seeds spawned (matches column structure)
+            placeholder = Text()
+            placeholder.append("(none)          ", style="dim italic")
+            placeholder.append("     --", style="dim")
+            placeholder.append("    --", style="dim")
+            placeholder.append("    --", style="dim")
+            placeholder.append("    --", style="dim")
+            lines.append(placeholder)
+        else:
+            # Build graveyard display (no prefixes - header has column labels)
+            for blueprint in sorted(all_blueprints):
+                spawned = record.blueprint_spawns.get(blueprint, 0)
+                fossilized = record.blueprint_fossilized.get(blueprint, 0)
+                pruned = record.blueprint_prunes.get(blueprint, 0)
 
-        # Build graveyard display
-        lines = []
-        for blueprint in sorted(all_blueprints):
-            spawned = record.blueprint_spawns.get(blueprint, 0)
-            fossilized = record.blueprint_fossilized.get(blueprint, 0)
-            pruned = record.blueprint_prunes.get(blueprint, 0)
+                line = Text()
+                line.append(f"{blueprint:15s} ", style="white")
+                line.append(f"    {spawned:2d}", style="cyan")
+                line.append(f"    {fossilized:2d}", style="green")
+                line.append(f"    {pruned:2d}", style="red")
 
-            line = Text()
-            line.append(f"{blueprint:15s}", style="white")
-            line.append(f"  spawn:{spawned:2d}", style="cyan")
-            line.append(f"  foss:{fossilized:2d}", style="green")
-            line.append(f"  prun:{pruned:2d}", style="red")
+                # Calculate success rate if any have terminated
+                terminated = fossilized + pruned
+                if terminated > 0:
+                    success_rate = fossilized / terminated * 100
+                    rate_style = "green" if success_rate >= 50 else "yellow" if success_rate >= 25 else "red"
+                    line.append(f"  {success_rate:3.0f}%", style=rate_style)
+                else:
+                    line.append("    --", style="dim")
 
-            # Calculate success rate if any have terminated
-            terminated = fossilized + pruned
-            if terminated > 0:
-                success_rate = fossilized / terminated * 100
-                rate_style = "green" if success_rate >= 50 else "yellow" if success_rate >= 25 else "red"
-                line.append(f"  ({success_rate:.0f}% success)", style=rate_style)
+                lines.append(line)
 
-            lines.append(line)
-
-        content = Text("\n").join(lines) if lines else Text("No activity", style="dim")
+        content = Group(*lines)
         return Panel(content, title="Seed Graveyard", border_style="dim")

@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B1-DRL-03` |
 | **Severity** | `P3` |
-| **Status** | `open` |
+| **Status** | `wont-fix` |
 | **Batch** | 1 |
 | **Agent** | `drl` |
 | **Domain** | `tolaria` |
@@ -107,6 +107,14 @@ def _compute_statistical_threshold(self) -> float:
 | **DRL** | NEUTRAL | DRY violation is a valid maintenance concern, but the threshold formula (mean + k*std) is standard statistical practice unlikely to diverge. From an RL training stability perspective, this has no impact on gradient flow, reward signals, or learning dynamics. |
 | **PyTorch** | NEUTRAL | Pure Python code refactoring with no tensor operations involved - the threshold calculation uses standard Python math on a list of floats. No torch.compile, CUDA, or memory management implications; straightforward DRY improvement with no PyTorch engineering concerns. |
 | **CodeReview** | NEUTRAL | The DRY violation is real but trivial--it is a one-liner formula that is semantically clear in both contexts. Extracting to a helper method adds indirection for minimal benefit; low priority unless threshold logic becomes more complex. |
+
+---
+
+## Resolution
+
+**Status:** Won't Fix
+**Resolved:** 2024-12-28
+**Rationale:** All three reviewing agents (DRL, PyTorch, CodeReview) were NEUTRAL. The DRY violation is technically real but trivial—a one-liner formula (`avg + sensitivity * std`) that is standard statistical practice and unlikely to diverge. Extracting a helper method would add indirection for minimal benefit, violating the project's "avoid over-engineering" principle. No impact on correctness, performance, or RL training dynamics.
 
 ---
 

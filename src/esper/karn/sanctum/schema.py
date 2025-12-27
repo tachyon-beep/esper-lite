@@ -98,10 +98,11 @@ class CounterfactualSnapshot:
         return combined - expected
 
 
-@dataclass
+@dataclass(slots=True)
 class SeedState:
     """State of a single seed slot.
 
+    Uses slots=True for memory efficiency (saves ~100 bytes per instance).
     Reference: tui.py lines 87-100 (SeedState dataclass)
     """
     slot_id: str
@@ -124,6 +125,14 @@ class SeedState:
     counterfactual: float = 0.0  # Causal attribution score
     # Blend tempo - Tamiyo's chosen integration speed (3=FAST, 5=STANDARD, 8=SLOW)
     blend_tempo_epochs: int = 5
+
+    # Inter-slot interaction metrics (from counterfactual engine)
+    # These show how this seed synergizes with others in the ensemble
+    contribution_velocity: float = 0.0  # EMA of contribution changes (trend direction)
+    interaction_sum: float = 0.0  # Σ I_ij for all j ≠ i (total synergy from interactions)
+    boost_received: float = 0.0  # max(I_ij) for j ≠ i (strongest interaction partner)
+    upstream_alpha_sum: float = 0.0  # Σ alpha_j for slots j < i (position-aware blending)
+    downstream_alpha_sum: float = 0.0  # Σ alpha_j for slots j > i (position-aware blending)
 
 
 @dataclass

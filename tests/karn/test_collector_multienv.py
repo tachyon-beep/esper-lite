@@ -917,7 +917,7 @@ class TestMinimalTelemetryFallback:
             epoch=1,
             data=BatchEpochCompletedPayload(
                 episodes_completed=4,
-                batch_idx=0,  # First batch
+                batch_idx=1,  # First batch (1-indexed)
                 avg_accuracy=0.75,  # This is all we have
                 avg_reward=2.5,
                 total_episodes=100,
@@ -934,8 +934,8 @@ class TestMinimalTelemetryFallback:
         assert snapshot.host.val_accuracy == 0.75, (
             f"val_accuracy should come from BATCH avg_accuracy, got {snapshot.host.val_accuracy}"
         )
-        # batch_idx is 0, so epoch should be 1 (1-indexed)
-        assert snapshot.epoch == 1, f"Epoch should be 1 (batch_idx+1), got {snapshot.epoch}"
+        # batch_idx is 1 (1-indexed), so epoch should be 1
+        assert snapshot.epoch == 1, f"Epoch should be 1 (batch_idx), got {snapshot.epoch}"
 
     def test_batch_fallback_does_not_trigger_when_buffer_has_data(self):
         """Minimal fallback only triggers when buffer is empty.
@@ -984,7 +984,7 @@ class TestMinimalTelemetryFallback:
             epoch=1,
             data=BatchEpochCompletedPayload(
                 episodes_completed=4,
-                batch_idx=0,
+                batch_idx=1,
                 avg_accuracy=0.50,  # Different from EPOCH_COMPLETED
                 avg_reward=2.5,
                 total_episodes=100,

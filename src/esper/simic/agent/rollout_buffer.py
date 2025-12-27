@@ -535,6 +535,37 @@ class TamiyoRolloutBuffer:
         self.hidden_h[env_id].zero_()
         self.hidden_c[env_id].zero_()
 
+    def mark_terminal_with_penalty(self, env_id: int, penalty: float) -> bool:
+        """Mark the last transition as terminal with penalty reward.
+
+        Used when governor rollback occurs - the last action led to catastrophic
+        failure and should receive a negative reward signal. This enables the
+        RL agent to learn to avoid actions that cause rollback.
+
+        Unlike clear_env(), this PRESERVES transitions so PPO can learn from
+        the failure episode. GAE will properly handle the terminal state via
+        dones[t]=True.
+
+        Args:
+            env_id: Environment index
+            penalty: Reward to assign (typically negative death penalty)
+
+        Returns:
+            True if a transition was modified, False if env had no transitions
+        """
+        if env_id < 0 or env_id >= self.num_envs:
+            raise ValueError(f"env_id {env_id} out of range [0, {self.num_envs})")
+
+        step_count = self.step_counts[env_id]
+        if step_count == 0:
+            return False  # No transitions to modify
+
+        last_idx = step_count - 1
+        self.rewards[env_id, last_idx] = penalty
+        self.dones[env_id, last_idx] = True
+        self.truncated[env_id, last_idx] = False  # True terminal, not truncation
+        return True
+
     def __len__(self) -> int:
         """Total transitions across all environments."""
         return sum(self.step_counts)

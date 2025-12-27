@@ -102,6 +102,13 @@ class VectorizedEmitter:
                     "grad_ratio": report.telemetry.gradient_health,
                     "has_vanishing": report.telemetry.has_vanishing,
                     "has_exploding": report.telemetry.has_exploding,
+                    # Inter-slot interaction metrics (from SeedMetrics - always present via default_factory)
+                    # Note: These are zero for n>3 seeds due to factorial complexity limits
+                    "contribution_velocity": report.metrics.contribution_velocity,
+                    "interaction_sum": report.metrics.interaction_sum,
+                    "boost_received": report.metrics.boost_received,
+                    "upstream_alpha_sum": report.metrics.upstream_alpha_sum,
+                    "downstream_alpha_sum": report.metrics.downstream_alpha_sum,
                 }
 
         self._emit(TelemetryEvent(

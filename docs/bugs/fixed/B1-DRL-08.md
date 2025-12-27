@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B1-DRL-08` |
 | **Severity** | `P4` |
-| **Status** | `open` |
+| **Status** | `fixed` |
 | **Batch** | 1 |
 | **Agent** | `drl` |
 | **Domain** | `tolaria` |
@@ -105,6 +105,18 @@ Add docstring explaining that NaN means "no panic preceded this rollback".
 | **DRL** | NEUTRAL | NaN vs None for loss_at_panic is a serialization/telemetry concern with no impact on RL training dynamics. Recommend Option B (document the NaN behavior) as the lowest-friction fix; this does not affect reward signals or learning stability. |
 | **PyTorch** | NEUTRAL | Using NaN for missing panic loss is semantically defensible and does not affect tensor operations or torch.compile. The choice between None and NaN is a data modeling decision with no PyTorch correctness implications. |
 | **CodeReview** | NEUTRAL | The finding is valid - NaN vs None for missing data is a legitimate design question. However, NaN is often the pragmatic choice for numeric fields in telemetry to avoid Optional complications in downstream aggregation. Given P4 severity and the fact that consumers can check isnan(), this is low-priority polish. |
+
+---
+
+## Resolution
+
+**Status:** Fixed
+**Resolved:** 2024-12-28
+**Sign-off:** DRL Expert
+
+**Fix applied:** Option B (document the behavior) - Added docstring note to GovernorReport explaining that `loss_at_panic` is NaN when rollback occurs without a preceding panic.
+
+Note: `GovernorRollbackPayload` uses proper `float | None` typing which is self-documenting.
 
 ---
 

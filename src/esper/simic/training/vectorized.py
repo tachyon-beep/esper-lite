@@ -2505,6 +2505,15 @@ def train_ppo_vectorized(
             else:
                 masked_cpu = None
 
+            # PERF: Pre-compute op_probs for telemetry ONCE before env loop.
+            # Previous code called .cpu() per-env inside the loop, causing N GPU syncs
+            # per step instead of 1. This was the root cause of 90% throughput drop.
+            op_probs_cpu: np.ndarray | None = None
+            if ops_telemetry_enabled and action_result.op_logits is not None:
+                # Batch softmax over all envs, single GPU->CPU transfer
+                op_probs_all = torch.softmax(action_result.op_logits, dim=-1)
+                op_probs_cpu = op_probs_all.cpu().numpy()
+
             # PHASE 1: Execute actions and collect data for bootstrap computation
             bootstrap_data: list[dict[str, Any]] = []
             transitions_data = []  # Store transition data for buffer storage
@@ -2546,10 +2555,20 @@ def train_ppo_vectorized(
 
                 # Governor rollback
                 if env_idx in governor_panic_envs:
-                    env_state.governor.execute_rollback(
-                        env_id=env_idx, optimizer=env_state.host_optimizer
-                    )
+                    env_state.governor.execute_rollback(env_id=env_idx)
                     env_rollback_occurred[env_idx] = True
+
+                    # CRITICAL: Clear optimizer momentum after rollback.
+                    # PyTorch's load_state_dict() copies weights IN-PLACE, so
+                    # Parameter objects retain their identity (same id()). The
+                    # optimizer's state dict is keyed by Parameter objects, so
+                    # momentum/variance buffers SURVIVE the rollback. Without
+                    # clearing, SGD momentum continues pushing toward the
+                    # diverged state that caused the panic, risking immediate
+                    # re-divergence. See B1-PT-01 correction notes.
+                    env_state.host_optimizer.state.clear()
+                    for seed_opt in env_state.seed_optimizers.values():
+                        seed_opt.state.clear()
 
                 # Compute reward
                 scoreboard = analytics._get_scoreboard(env_idx)
@@ -2845,13 +2864,12 @@ def train_ppo_vectorized(
 
                     # Compute action_confidence, alternatives, and decision_entropy from op_logits
                     # PolicyBundle returns op_logits for telemetry when available
+                    # PERF: op_probs_cpu is pre-computed BEFORE the env loop to avoid N GPU syncs
                     action_confidence = None
                     alternatives: list[tuple[str, float]] | None = None
                     decision_entropy = None
-                    if action_result.op_logits is not None and env_idx < action_result.op_logits.shape[0]:
-                        # Compute softmax probabilities from logits
-                        op_probs = torch.softmax(action_result.op_logits[env_idx], dim=-1)
-                        probs_cpu = op_probs.cpu().numpy()
+                    if op_probs_cpu is not None and env_idx < op_probs_cpu.shape[0]:
+                        probs_cpu = op_probs_cpu[env_idx]
                         chosen_op = int(action_dict["op"])
 
                         # action_confidence = P(chosen_op)
@@ -3185,7 +3203,10 @@ def train_ppo_vectorized(
         ]
         if rollback_env_indices:
             for env_idx in rollback_env_indices:
-                agent.buffer.clear_env(env_idx)
+                # B1-DRL-01 fix: Inject death penalty so PPO learns to avoid
+                # catastrophic actions. Previously get_punishment_reward() was dead code.
+                penalty = env_states[env_idx].governor.get_punishment_reward()
+                agent.buffer.mark_terminal_with_penalty(env_idx, penalty)
 
         update_skipped = len(agent.buffer) == 0
         if not update_skipped:

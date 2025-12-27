@@ -95,7 +95,7 @@ class SeedCard(Static):
             content,
             title=self._slot_id,
             border_style="dim",
-            height=10,
+            height=12,
         )
 
     def _render_active(self) -> Panel:
@@ -115,7 +115,7 @@ class SeedCard(Static):
         blueprint = seed.blueprint_id or "unknown"
         lines.append(Text(f"Blueprint: {blueprint}", style="white"))
 
-        # Parameters
+        # Parameters (always visible)
         if seed.seed_params and seed.seed_params > 0:
             if seed.seed_params >= 1_000_000:
                 params_str = f"{seed.seed_params / 1_000_000:.1f}M"
@@ -124,13 +124,17 @@ class SeedCard(Static):
             else:
                 params_str = str(seed.seed_params)
             lines.append(Text(f"Params: {params_str}", style="dim"))
+        else:
+            lines.append(Text("Params: --", style="dim"))
 
-        # Alpha (blending progress)
+        # Alpha (always visible - shows progress bar when blending, placeholder otherwise)
         if (seed.alpha and seed.alpha > 0) or seed.stage in ("BLENDING", "HOLDING"):
             alpha_bar = self._make_alpha_bar(seed.alpha)
             lines.append(Text(f"Alpha: {seed.alpha:.2f} {alpha_bar}"))
+        else:
+            lines.append(Text("Alpha: --", style="dim"))
 
-        # Blend tempo (shown during BLENDING and for FOSSILIZED to show how they were blended)
+        # Blend tempo (always visible - shows tempo during blending, placeholder otherwise)
         if seed.stage in ("BLENDING", "FOSSILIZED") and seed.blend_tempo_epochs is not None:
             tempo = seed.blend_tempo_epochs
             tempo_name = "FAST" if tempo <= 3 else ("STANDARD" if tempo <= 5 else "SLOW")
@@ -140,6 +144,8 @@ class SeedCard(Static):
                 lines.append(Text(f"Blended: {tempo_arrows} {tempo_name}", style="dim"))
             else:
                 lines.append(Text(f"Tempo: {tempo_arrows} {tempo_name} ({tempo} epochs)"))
+        else:
+            lines.append(Text("Tempo: --", style="dim"))
 
         # Accuracy delta (stage-aware display)
         # TRAINING/GERMINATED seeds have alpha=0 and cannot affect output
@@ -166,6 +172,34 @@ class SeedCard(Static):
         # Epochs in stage
         lines.append(Text(f"Epochs: {seed.epochs_in_stage}", style="dim"))
 
+        # Inter-slot interaction metrics (always visible, greyed out when not applicable)
+        interaction_text = Text("Synergy: ")
+        if seed.stage in ("BLENDING", "HOLDING") and (
+            seed.interaction_sum != 0 or seed.boost_received > 0.1
+        ):
+            if seed.interaction_sum > 0.5:
+                interaction_text.append(f"+{seed.interaction_sum:.1f}", style="green")
+            elif seed.interaction_sum < -0.5:
+                interaction_text.append(f"{seed.interaction_sum:.1f}", style="red")
+            else:
+                interaction_text.append(f"{seed.interaction_sum:.1f}", style="dim")
+            # Add boost indicator if significant
+            if seed.boost_received > 0.1:
+                interaction_text.append(f" (↗{seed.boost_received:.1f})", style="cyan")
+        else:
+            interaction_text.append("--", style="dim")
+        lines.append(interaction_text)
+
+        # Contribution velocity (trend indicator - always visible)
+        trend_text = Text("Trend: ")
+        if seed.contribution_velocity > 0.01:
+            trend_text.append("↗ improving", style="green")
+        elif seed.contribution_velocity < -0.01:
+            trend_text.append("↘ declining", style="yellow")
+        else:
+            trend_text.append("--", style="dim")
+        lines.append(trend_text)
+
         # Combine into panel content
         content = Text("\n").join(lines)
 
@@ -173,7 +207,7 @@ class SeedCard(Static):
             content,
             title=f"[{stage_color}]{self._slot_id}[/{stage_color}]",
             border_style=stage_color,
-            height=10,
+            height=12,  # Increased height to accommodate new metrics
         )
 
     def _make_alpha_bar(self, alpha: float, width: int = 10) -> str:
@@ -226,24 +260,30 @@ class EnvDetailScreen(ModalScreen[None]):
     EnvDetailScreen SeedCard {
         width: 1fr;
         height: auto;
-        min-height: 10;
+        min-height: 12;
+    }
+
+    EnvDetailScreen .metrics-graveyard-row {
+        height: auto;
+        margin-top: 1;
+        border-top: solid $primary-lighten-2;
+        padding-top: 1;
     }
 
     EnvDetailScreen .metrics-section {
+        width: 1fr;
         height: auto;
-        margin-top: 1;
-        border-top: solid $primary-lighten-2;
-        padding-top: 1;
-    }
-
-    EnvDetailScreen .counterfactual-section {
-        height: auto;
-        margin-top: 1;
-        border-top: solid $primary-lighten-2;
-        padding-top: 1;
+        padding-right: 1;
     }
 
     EnvDetailScreen .graveyard-section {
+        width: 1fr;
+        height: auto;
+        padding-left: 1;
+        border-left: solid $primary-lighten-2;
+    }
+
+    EnvDetailScreen .counterfactual-section {
         height: auto;
         margin-top: 1;
         border-top: solid $primary-lighten-2;
@@ -291,20 +331,20 @@ class EnvDetailScreen(ModalScreen[None]):
                     seed = self._env.seeds.get(slot_id)
                     yield SeedCard(seed, slot_id, id=f"seed-card-{slot_id}")
 
-            # Metrics section
-            with Vertical(classes="metrics-section"):
-                yield Static(self._render_metrics(), id="detail-metrics")
+            # Metrics + Graveyard side by side
+            with Horizontal(classes="metrics-graveyard-row"):
+                with Vertical(classes="metrics-section"):
+                    yield Static(self._render_metrics(), id="detail-metrics")
+                with Vertical(classes="graveyard-section"):
+                    yield Static(self._render_graveyard(), id="seed-graveyard")
 
-            # Counterfactual analysis section
+            # Counterfactual analysis section (full width below)
             with Vertical(classes="counterfactual-section"):
                 yield CounterfactualPanel(
                     self._env.counterfactual_matrix,
-                    id="counterfactual-panel"
+                    seeds=self._env.seeds,
+                    id="counterfactual-panel",
                 )
-
-            # Seed graveyard section
-            with Vertical(classes="graveyard-section"):
-                yield Static(self._render_graveyard(), id="seed-graveyard")
 
             # Footer hint
             yield Static(
@@ -339,7 +379,7 @@ class EnvDetailScreen(ModalScreen[None]):
         # Update counterfactual panel
         try:
             cf_panel = self.query_one("#counterfactual-panel", CounterfactualPanel)
-            cf_panel.update_matrix(env_state.counterfactual_matrix)
+            cf_panel.update_matrix(env_state.counterfactual_matrix, seeds=env_state.seeds)
         except Exception:
             pass
 
@@ -609,12 +649,23 @@ class EnvDetailScreen(ModalScreen[None]):
     def _render_graveyard(self) -> Panel:
         """Render the seed graveyard showing per-blueprint lifecycle stats.
 
+        All rows are always visible to prevent jarring layout shifts.
         Shows how many seeds of each blueprint type have been:
         - Spawned (germinated)
         - Fossilized (successfully integrated)
         - Pruned (removed due to poor performance)
         """
         env = self._env
+        lines = []
+
+        # Header row (always visible)
+        header = Text()
+        header.append("Blueprint       ", style="dim")
+        header.append("  spawn", style="dim")
+        header.append("  foss", style="dim")
+        header.append("  prun", style="dim")
+        header.append("  rate", style="dim")
+        lines.append(header)
 
         # Combine all blueprints seen across spawns, fossilized, pruned
         all_blueprints = set(env.blueprint_spawns.keys())
@@ -622,30 +673,37 @@ class EnvDetailScreen(ModalScreen[None]):
         all_blueprints.update(env.blueprint_prunes.keys())
 
         if not all_blueprints:
-            content = Text("No seeds germinated yet", style="dim italic")
-            return Panel(content, title="Seed Graveyard", border_style="dim")
+            # Placeholder row when no seeds spawned (matches column structure)
+            placeholder = Text()
+            placeholder.append("(none)          ", style="dim italic")
+            placeholder.append("     --", style="dim")
+            placeholder.append("    --", style="dim")
+            placeholder.append("    --", style="dim")
+            placeholder.append("    --", style="dim")
+            lines.append(placeholder)
+        else:
+            # Build graveyard display (no prefixes - header has column labels)
+            for blueprint in sorted(all_blueprints):
+                spawned = env.blueprint_spawns.get(blueprint, 0)
+                fossilized = env.blueprint_fossilized.get(blueprint, 0)
+                pruned = env.blueprint_prunes.get(blueprint, 0)
 
-        # Build graveyard display
-        lines = []
-        for blueprint in sorted(all_blueprints):
-            spawned = env.blueprint_spawns.get(blueprint, 0)
-            fossilized = env.blueprint_fossilized.get(blueprint, 0)
-            pruned = env.blueprint_prunes.get(blueprint, 0)
+                line = Text()
+                line.append(f"{blueprint:15s} ", style="white")
+                line.append(f"    {spawned:2d}", style="cyan")
+                line.append(f"    {fossilized:2d}", style="green")
+                line.append(f"    {pruned:2d}", style="red")
 
-            line = Text()
-            line.append(f"{blueprint:15s}", style="white")
-            line.append(f"  spawn:{spawned:2d}", style="cyan")
-            line.append(f"  foss:{fossilized:2d}", style="green")
-            line.append(f"  prun:{pruned:2d}", style="red")
+                # Calculate success rate if any have terminated
+                terminated = fossilized + pruned
+                if terminated > 0:
+                    success_rate = fossilized / terminated * 100
+                    rate_style = "green" if success_rate >= 50 else "yellow" if success_rate >= 25 else "red"
+                    line.append(f"  {success_rate:3.0f}%", style=rate_style)
+                else:
+                    line.append("    --", style="dim")
 
-            # Calculate success rate if any have terminated
-            terminated = fossilized + pruned
-            if terminated > 0:
-                success_rate = fossilized / terminated * 100
-                rate_style = "green" if success_rate >= 50 else "yellow" if success_rate >= 25 else "red"
-                line.append(f"  ({success_rate:.0f}% success)", style=rate_style)
+                lines.append(line)
 
-            lines.append(line)
-
-        content = Text("\n").join(lines) if lines else Text("No activity", style="dim")
+        content = Text("\n").join(lines)
         return Panel(content, title="Seed Graveyard", border_style="dim")

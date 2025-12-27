@@ -19,6 +19,7 @@ from esper.leyline.telemetry import (
     SeedPrunedPayload,
     SeedStageChangedPayload,
     AnalyticsSnapshotPayload,
+    GovernorRollbackPayload,
 )
 from esper.nissa.output import OutputBackend
 
@@ -319,7 +320,17 @@ class BlueprintAnalytics(OutputBackend):
 
         # === Governor Events ===
         elif event.event_type == TelemetryEventType.GOVERNOR_ROLLBACK:
-            _logger.warning("GOVERNOR_ROLLBACK event not yet migrated to typed payload")
+            # Governor rollbacks are operational safety events, not blueprint performance metrics.
+            # The event is logged/output by ConsoleOutput; no aggregation needed here.
+            if not isinstance(event.data, GovernorRollbackPayload):
+                _logger.error("GOVERNOR_ROLLBACK event missing typed payload")
+                return
+            _logger.debug(
+                "Governor rollback on env %d: %s (loss=%.4f)",
+                event.data.env_id,
+                event.data.reason,
+                event.data.loss_at_panic if event.data.loss_at_panic is not None else float('nan'),
+            )
             return
 
         # === Counterfactual Events ===

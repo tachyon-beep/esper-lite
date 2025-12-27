@@ -14,7 +14,7 @@ import threading
 import time
 import uuid
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
@@ -585,6 +585,12 @@ class SanctumAggregator:
             seed.grad_ratio = seed_telemetry.get("grad_ratio", seed.grad_ratio)
             seed.has_vanishing = seed_telemetry.get("has_vanishing", seed.has_vanishing)
             seed.has_exploding = seed_telemetry.get("has_exploding", seed.has_exploding)
+            # Inter-slot interaction metrics (from counterfactual engine)
+            seed.contribution_velocity = seed_telemetry.get("contribution_velocity", seed.contribution_velocity)
+            seed.interaction_sum = seed_telemetry.get("interaction_sum", seed.interaction_sum)
+            seed.boost_received = seed_telemetry.get("boost_received", seed.boost_received)
+            seed.upstream_alpha_sum = seed_telemetry.get("upstream_alpha_sum", seed.upstream_alpha_sum)
+            seed.downstream_alpha_sum = seed_telemetry.get("downstream_alpha_sum", seed.downstream_alpha_sum)
 
             # Track slot_ids dynamically (only if not locked by TRAINING_STARTED)
             if not self._slot_ids_locked and slot_id not in self._slot_ids and slot_id != "unknown":
@@ -939,7 +945,7 @@ class SanctumAggregator:
                     peak_accuracy=env.best_accuracy,
                     final_accuracy=env.host_accuracy,
                     epoch=env.best_accuracy_epoch,
-                    seeds={k: SeedState(**v.__dict__) for k, v in env.best_seeds.items()},
+                    seeds={k: replace(v) for k, v in env.best_seeds.items()},
                     slot_ids=list(self._slot_ids),  # All slots for showing DORMANT in detail
                     growth_ratio=growth_ratio,
                     # Interactive features

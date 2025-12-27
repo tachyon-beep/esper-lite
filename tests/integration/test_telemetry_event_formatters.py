@@ -8,6 +8,7 @@ import pytest
 from esper.leyline import TelemetryEvent, TelemetryEventType
 from esper.leyline.telemetry import (
     BatchEpochCompletedPayload,
+    GovernorRollbackPayload,
 )
 from esper.nissa.output import ConsoleOutput, NissaHub
 
@@ -96,15 +97,16 @@ class TestConsoleOutputFormatters:
     def test_formats_governor_rollback(self, capsys: pytest.CaptureFixture[str]) -> None:
         """Verify ConsoleOutput formats GOVERNOR_ROLLBACK correctly."""
         console = ConsoleOutput()
-        # Note: GOVERNOR_ROLLBACK does not yet have a typed payload (Governor events still use dict)
         event = TelemetryEvent(
             event_type=TelemetryEventType.GOVERNOR_ROLLBACK,
-            data={
-                "reason": "Structural Collapse",
-                "loss_at_panic": 15.3,
-                "loss_threshold": 5.2,
-                "consecutive_panics": 2,
-            },
+            data=GovernorRollbackPayload(
+                env_id=0,
+                device="cpu",
+                reason="Structural Collapse",
+                loss_at_panic=15.3,
+                loss_threshold=5.2,
+                consecutive_panics=2,
+            ),
         )
         console.emit(event)
         captured = capsys.readouterr()

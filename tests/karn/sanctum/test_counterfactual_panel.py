@@ -83,11 +83,17 @@ class TestCounterfactualPanel:
     """Test CounterfactualPanel widget rendering."""
 
     def test_renders_unavailable_when_no_data(self):
-        """Panel shows unavailable message when strategy is unavailable."""
+        """Panel shows stable layout with placeholders when unavailable.
+
+        The unavailable state uses a dim border and shows the same structure
+        as the waterfall view but with '--' placeholders to prevent layout shifts.
+        """
         matrix = CounterfactualSnapshot(strategy="unavailable")
         panel = CounterfactualPanel(matrix)
         rendered = panel.render()
-        assert "unavailable" in str(rendered.renderable).lower()
+        # Unavailable state has dim border (vs cyan for available)
+        assert rendered.border_style == "dim"
+        assert rendered.title == "Counterfactual Analysis"
 
     def test_renders_waterfall_with_data(self):
         """Panel renders waterfall when data available."""
@@ -175,3 +181,63 @@ class TestCounterfactualPanel:
         assert "Top Combinations" not in content
         # Should show episode end message (pairs not available)
         assert "episode end" in content
+
+    def test_single_seed_never_shows_interference(self):
+        """Single seed should never show interference, even with stale data.
+
+        This guards against stale matrix data from when there were 2+ seeds.
+        With 1 seed, synergy is mathematically 0 - any non-zero value is from
+        stale data and should not trigger interference warnings.
+        """
+        from io import StringIO
+        from rich.console import Console
+
+        # Single seed with artificially negative "synergy" (stale data scenario)
+        # This shouldn't happen mathematically, but could if matrix is stale
+        matrix = CounterfactualSnapshot(
+            slot_ids=("r0c0",),  # Single seed
+            configs=[
+                CounterfactualConfig(seed_mask=(False,), accuracy=25.0),
+                CounterfactualConfig(seed_mask=(True,), accuracy=30.0),
+            ],
+            strategy="full_factorial",
+        )
+        panel = CounterfactualPanel(matrix)
+        rendered = panel.render()
+
+        console = Console(file=StringIO(), force_terminal=True, width=100)
+        console.print(rendered)
+        content = console.file.getvalue()
+
+        # Single seed should NEVER show interference - mathematically impossible
+        assert "INTERFERENCE" not in content
+        assert "Seeds are hurting each other" not in content
+        # But it should still show the synergy calculation (which should be 0)
+        assert "Interaction:" in content
+
+    def test_two_seeds_with_interference_shows_warning(self):
+        """Two seeds with negative synergy should show interference warning."""
+        from io import StringIO
+        from rich.console import Console
+
+        # Two seeds where combined is WORSE than sum of individuals (interference)
+        matrix = CounterfactualSnapshot(
+            slot_ids=("r0c0", "r0c1"),
+            configs=[
+                CounterfactualConfig(seed_mask=(False, False), accuracy=25.0),
+                CounterfactualConfig(seed_mask=(True, False), accuracy=35.0),  # +10
+                CounterfactualConfig(seed_mask=(False, True), accuracy=35.0),  # +10
+                CounterfactualConfig(seed_mask=(True, True), accuracy=40.0),   # +15 total (interference!)
+            ],
+            strategy="full_factorial",
+        )
+        panel = CounterfactualPanel(matrix)
+        rendered = panel.render()
+
+        console = Console(file=StringIO(), force_terminal=True, width=100)
+        console.print(rendered)
+        content = console.file.getvalue()
+
+        # Two seeds with interference SHOULD show the warning
+        assert "INTERFERENCE" in content
+        assert "Seeds are hurting each other" in content

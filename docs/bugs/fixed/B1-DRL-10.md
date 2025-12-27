@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B1-DRL-10` |
 | **Severity** | `P4` |
-| **Status** | `open` |
+| **Status** | `fixed` |
 | **Batch** | 1 |
 | **Agent** | `drl` |
 | **Domain** | `tolaria` |
@@ -115,6 +115,27 @@ Or if a default is needed:
 | **DRL** | NEUTRAL | Type hint inconsistency is a static analysis concern only; the runtime ValueError raises correctly. Fix is good hygiene but has no impact on PPO training, reward computation, or value estimation. |
 | **PyTorch** | NEUTRAL | Type hint accuracy is good practice but has no runtime effect on tensor operations or torch.compile behavior. Fixing the signature to require `list[str]` is cleaner but this is a typing hygiene issue, not a PyTorch concern. |
 | **CodeReview** | ENDORSE | This is a legitimate type safety issue - the signature claims to accept None (via default) but immediately raises on None, violating the principle of least surprise. Recommend the fix: remove the None default and make slots a required positional parameter. Callers should be explicit about slot configuration; the current signature is API misrepresentation. |
+
+---
+
+## Resolution
+
+**Status:** Fixed
+**Resolved:** 2024-12-28
+**Sign-off:** DRL Expert
+
+**Fix applied:** Made `slots` a required keyword-only parameter using `*` marker:
+```python
+def create_model(
+    task: TaskSpec | str = "cifar10",
+    device: str = "cuda",
+    *,  # Force keyword-only
+    slots: list[str],  # Now required
+    permissive_gates: bool = True,
+) -> torch.nn.Module:
+```
+
+All existing callers already used keyword form `slots=...`, so no changes needed elsewhere.
 
 ---
 

@@ -156,6 +156,22 @@ uv run python -m esper.scripts.train ppo --episodes 100
 uv run pytest
 ```
 
+### Playwright Tests (Overwatch Web)
+
+The Overwatch web dashboard has Playwright tests located in `src/esper/karn/overwatch/web/`.
+
+```bash
+# Install npm dependencies (from the web directory)
+cd src/esper/karn/overwatch/web
+npm install
+
+# Install Playwright browsers (run once after npm install)
+npx playwright install
+
+# Run Playwright tests
+npx playwright test
+```
+
 ### Leyline: The Shared Contracts Module
 
 **All new constants, enums, and shared types MUST be placed in `leyline`.**

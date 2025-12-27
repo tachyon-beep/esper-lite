@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B1-DRL-06` |
 | **Severity** | `P3` |
-| **Status** | `open` |
+| **Status** | `fixed` |
 | **Batch** | 1 |
 | **Agent** | `drl` |
 | **Domain** | `tolaria` |
@@ -100,6 +100,21 @@ See `B1-CR-01` for the recommended typed payload implementation.
 | **DRL** | NEUTRAL | Typed telemetry payloads are good engineering hygiene, but this is observability infrastructure, not training-loop code. RL training stability is unaffected by payload typing; the fix belongs in a code quality sweep, not an urgent RL correctness pass. |
 | **PyTorch** | NEUTRAL | Telemetry typing is a code quality concern unrelated to PyTorch compilation, tensor operations, or CUDA correctness. Type safety for telemetry payloads is valuable for maintainability but has no impact on training performance or memory management. |
 | **CodeReview** | ENDORSE | Untyped dict payloads with `type: ignore` undermine the project's typed contract philosophy and violate leyline conventions. Should be deduplicated with B1-CR-01 and resolved with a proper typed dataclass payload in leyline. |
+
+---
+
+## Resolution
+
+**Status:** Fixed
+**Resolved:** 2024-12-28
+**Sign-off:** DRL Expert
+
+**Changes made:**
+1. **output.py:159-167** - Updated handler to use typed `GovernorRollbackPayload` with direct field access
+2. **analytics.py:322-334** - Updated handler to validate and log typed payload
+3. **test_telemetry_event_formatters.py** - Updated test to use typed payload
+
+**Verification:** All 17 integration tests pass including `test_formats_governor_rollback`.
 
 ---
 

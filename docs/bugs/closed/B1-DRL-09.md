@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B1-DRL-09` |
 | **Severity** | `P4` |
-| **Status** | `open` |
+| **Status** | `wont-fix` |
 | **Batch** | 1 |
 | **Agent** | `drl` |
 | **Domain** | `tolaria` |
@@ -80,6 +80,14 @@ This is working correctly and is a common pattern. Could consider using a Protoc
 | **DRL** | NEUTRAL | This is pure type annotation housekeeping with zero bearing on RL training correctness or numerical stability. The forward-reference pattern is standard Python; no RL-relevant changes needed here. |
 | **PyTorch** | NEUTRAL | TYPE_CHECKING imports with string-quoted forward references are a standard Python pattern with no PyTorch impact. This is purely a static typing ergonomics question unrelated to CUDA, memory, or compilation. |
 | **CodeReview** | OBJECT | This ticket identifies standard Python practice as a potential issue. TYPE_CHECKING imports with string-quoted annotations is the correct, idiomatic pattern for avoiding circular imports. The suggestion to consider Protocol for runtime type checking is unnecessary - there is no indication runtime type introspection is needed here. This ticket should be closed as "works as intended." |
+
+---
+
+## Resolution
+
+**Status:** Won't Fix
+**Resolved:** 2024-12-28
+**Rationale:** The ticket identifies standard Python practice (TYPE_CHECKING imports with string-quoted forward references) as a potential issue. This is the correct, idiomatic pattern for avoiding circular imports. No changes needed - works as intended.
 
 ---
 
