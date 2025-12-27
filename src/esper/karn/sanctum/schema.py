@@ -210,6 +210,11 @@ class EnvState:
     })
     total_actions: int = 0
 
+    # Gaming rate tracking (for per-env reward health)
+    # Resets each episode to show recent behavior
+    gaming_trigger_count: int = 0   # Steps where ratio_penalty or alpha_shock fired
+    total_reward_steps: int = 0     # Total steps with reward computed
+
     # Status tracking
     status: str = "initializing"
     last_update: datetime | None = None
@@ -236,6 +241,13 @@ class EnvState:
         if not self.reward_history:
             return 0.0
         return sum(self.reward_history) / len(self.reward_history)
+
+    @property
+    def gaming_rate(self) -> float:
+        """Fraction of steps with anti-gaming penalties (ratio_penalty or alpha_shock)."""
+        if self.total_reward_steps == 0:
+            return 0.0
+        return self.gaming_trigger_count / self.total_reward_steps
 
     @property
     def growth_ratio(self) -> float:
@@ -552,6 +564,9 @@ class RewardComponents:
     - fossilize_terminal_bonus: Large terminal bonus for successful fossilization
     - blending_warning: Warning signal during blending phase (negative)
     - holding_warning: Warning signal during holding period
+    - hindsight_credit: Retroactive credit when beneficiary fossilizes (blue bonus)
+    - scaffold_count: Number of scaffolds that contributed (debugging)
+    - avg_scaffold_delay: Average epochs since scaffolding interactions (debugging)
     - val_acc: Validation accuracy context (not a reward component, metadata)
     """
     # Total reward
@@ -576,6 +591,11 @@ class RewardComponents:
     # Warnings
     blending_warning: float = 0.0
     holding_warning: float = 0.0
+
+    # Hindsight credit (scaffold contribution bonus) - Phase 3.2
+    hindsight_credit: float = 0.0
+    scaffold_count: int = 0  # Number of scaffolds that contributed
+    avg_scaffold_delay: float = 0.0  # Average epochs since scaffolding
 
     # Context
     env_id: int = 0

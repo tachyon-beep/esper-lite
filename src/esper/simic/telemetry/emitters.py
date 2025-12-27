@@ -866,7 +866,21 @@ def emit_reward_summary(
     summary: dict[str, float],
     episodes_completed: int = 0,
 ) -> None:
-    """Emit compact reward summary for this batch."""
+    """Emit compact reward summary for this batch.
+
+    Includes scaffold hindsight credit debugging fields (Phase 3.2):
+    - hindsight_credit: Total credit applied (post-cap)
+    - scaffold_count: Number of scaffolds that contributed
+    - avg_scaffold_delay: Average epochs since scaffolding interactions
+    """
+    # Extract scaffold metrics for telemetry (Phase 3.2)
+    scaffold_count = int(summary.get("scaffold_count", 0))
+    scaffold_delay_total = summary.get("scaffold_delay_total", 0.0)
+    avg_scaffold_delay = (
+        scaffold_delay_total / scaffold_count if scaffold_count > 0 else None
+    )
+    hindsight_credit = summary.get("hindsight_credit", 0.0)
+
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
         epoch=episodes_completed,
@@ -876,6 +890,10 @@ def emit_reward_summary(
             batch=batch_idx,
             episodes_completed=episodes_completed,
             summary=dict(summary),
+            # Scaffold hindsight credit debugging (Phase 3.2)
+            hindsight_credit=hindsight_credit if hindsight_credit > 0 else None,
+            scaffold_count=scaffold_count if scaffold_count > 0 else None,
+            avg_scaffold_delay=avg_scaffold_delay,
         ),
     ))
 

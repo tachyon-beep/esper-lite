@@ -111,8 +111,8 @@ class DashboardServer:
         """Run the FastAPI server."""
         try:
             import uvicorn
-            from fastapi import FastAPI, WebSocket, WebSocketDisconnect  # type: ignore[import-not-found]
-            from fastapi.responses import HTMLResponse  # type: ignore[import-not-found]
+            from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+            from fastapi.responses import HTMLResponse
         except ImportError:
             _logger.error(
                 "Dashboard dependencies not installed. "

@@ -74,9 +74,6 @@ from esper.karn.health import (
     VitalSigns,
 )
 
-# Overwatch (live telemetry backend for operators)
-from esper.karn.overwatch.backend import OverwatchBackend
-
 # Sanctum (developer diagnostic TUI backend)
 from esper.karn.sanctum.backend import SanctumBackend
 
@@ -118,8 +115,6 @@ __all__ = [
     "GradientHealth",
     "VitalSignsMonitor",
     "VitalSigns",
-    # Overwatch (operator monitoring)
-    "OverwatchBackend",
     # Sanctum (developer diagnostics)
     "SanctumBackend",
 ]

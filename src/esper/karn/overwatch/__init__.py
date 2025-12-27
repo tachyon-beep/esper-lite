@@ -1,48 +1,15 @@
-"""Overwatch - Textual TUI for Esper training monitoring.
+"""Overwatch - Web-based training monitoring dashboard.
 
-Provides real-time visibility into training environments, seed lifecycle,
-and Tamiyo decision-making.
+Overwatch provides a Vue 3 web interface for real-time training monitoring,
+mirroring Sanctum TUI functionality with enhanced visualizations.
+
+Usage:
+    from esper.karn.overwatch import OverwatchBackend
+
+    backend = OverwatchBackend(port=8080)
+    hub.add_backend(backend)
 """
 
-from esper.karn.overwatch.schema import (
-    TuiSnapshot,
-    EnvSummary,
-    SlotChipState,
-    TamiyoState,
-    ConnectionStatus,
-    DeviceVitals,
-    FeedEvent,
-)
-
-from esper.karn.overwatch.replay import (
-    SnapshotWriter,
-    SnapshotReader,
-)
-
-from esper.karn.overwatch.aggregator import TelemetryAggregator
 from esper.karn.overwatch.backend import OverwatchBackend
 
-# Lazy import for OverwatchApp - Textual may not be installed
-try:
-    from esper.karn.overwatch.app import OverwatchApp
-except ImportError:
-    OverwatchApp = None  # type: ignore[misc, assignment]
-
-__all__ = [
-    # Schema
-    "TuiSnapshot",
-    "EnvSummary",
-    "SlotChipState",
-    "TamiyoState",
-    "ConnectionStatus",
-    "DeviceVitals",
-    "FeedEvent",
-    # Replay
-    "SnapshotWriter",
-    "SnapshotReader",
-    # Aggregator & Backend
-    "TelemetryAggregator",
-    "OverwatchBackend",
-    # App (may be None if Textual not installed)
-    "OverwatchApp",
-]
+__all__ = ["OverwatchBackend"]

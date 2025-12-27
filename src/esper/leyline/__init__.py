@@ -202,6 +202,16 @@ DEFAULT_RENT_WEIGHT = 0.5
 # Higher values incentivize completion over seed farming.
 DEFAULT_FOSSILIZE_TERMINAL_SCALE = 3.0
 
+# Maximum scaffold hindsight credit per fossilization event.
+# Credit is capped at 2x synergy bonus (0.1) to prevent runaway values.
+# Used by Phase 3.2 scaffold hindsight credit mechanism.
+MAX_HINDSIGHT_CREDIT = 0.2
+
+# Per-scaffold credit weight (half of max to allow 2+ scaffolds to contribute).
+# When multiple scaffolds help a beneficiary, each receives this weight,
+# allowing meaningful contribution from multiple helpers before hitting the cap.
+HINDSIGHT_CREDIT_WEIGHT = 0.1
+
 # =============================================================================
 # Lifecycle Gate Thresholds (seed state machine gates)
 # =============================================================================
@@ -450,6 +460,8 @@ from esper.leyline.telemetry import (
     AnomalyDetectedPayload,
     PerformanceDegradationPayload,
     EpisodeOutcomePayload,
+    GovernorRollbackPayload,
+    GovernorPanicReason,
 )
 
 # Alpha controller contracts
@@ -545,6 +557,8 @@ __all__ = [
     "DEFAULT_PBRS_WEIGHT",
     "DEFAULT_RENT_WEIGHT",
     "DEFAULT_FOSSILIZE_TERMINAL_SCALE",
+    "MAX_HINDSIGHT_CREDIT",
+    "HINDSIGHT_CREDIT_WEIGHT",
 
     # Lifecycle Gate Thresholds
     "DEFAULT_MIN_FOSSILIZE_CONTRIBUTION",
@@ -670,6 +684,8 @@ __all__ = [
     "AnomalyDetectedPayload",
     "PerformanceDegradationPayload",
     "EpisodeOutcomePayload",
+    "GovernorRollbackPayload",
+    "GovernorPanicReason",
 
     # Alpha controller
     "AlphaMode",

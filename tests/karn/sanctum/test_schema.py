@@ -87,6 +87,31 @@ class TestEnvState:
         env_no_host = EnvState(env_id=0, host_params=0, fossilized_params=0)
         assert env_no_host.growth_ratio == 1.0
 
+    def test_gaming_rate_property(self):
+        """Gaming rate shows fraction of steps with anti-gaming penalties."""
+        # Standard case: 5 gaming triggers out of 100 steps = 5%
+        env = EnvState(env_id=0, gaming_trigger_count=5, total_reward_steps=100)
+        assert abs(env.gaming_rate - 0.05) < 1e-9
+
+        # No gaming triggers = 0%
+        env_clean = EnvState(env_id=0, gaming_trigger_count=0, total_reward_steps=50)
+        assert env_clean.gaming_rate == 0.0
+
+        # Edge case: no reward steps = 0 (avoid division by zero)
+        env_no_steps = EnvState(env_id=0, gaming_trigger_count=0, total_reward_steps=0)
+        assert env_no_steps.gaming_rate == 0.0
+
+        # High gaming rate
+        env_problematic = EnvState(env_id=0, gaming_trigger_count=20, total_reward_steps=100)
+        assert abs(env_problematic.gaming_rate - 0.20) < 1e-9
+
+    def test_gaming_fields_default_to_zero(self):
+        """Gaming tracking fields should default to zero."""
+        env = EnvState(env_id=0)
+        assert env.gaming_trigger_count == 0
+        assert env.total_reward_steps == 0
+        assert env.gaming_rate == 0.0
+
 
 class TestTamiyoState:
     """TamiyoState must capture all policy agent metrics."""

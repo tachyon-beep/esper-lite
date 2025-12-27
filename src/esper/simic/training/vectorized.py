@@ -117,12 +117,18 @@ from esper.tamiyo.policy import create_policy
 from esper.simic.rewards import (
     compute_reward,
     compute_loss_reward,
+    compute_scaffold_hindsight_credit,
     RewardMode,
     RewardFamily,
     ContributionRewardConfig,
     SeedInfo,
 )
-from esper.leyline import DEFAULT_MIN_FOSSILIZE_CONTRIBUTION, MIN_PRUNE_AGE
+from esper.leyline import (
+    DEFAULT_MIN_FOSSILIZE_CONTRIBUTION,
+    HINDSIGHT_CREDIT_WEIGHT,
+    MAX_HINDSIGHT_CREDIT,
+    MIN_PRUNE_AGE,
+)
 from esper.nissa import get_hub, BlueprintAnalytics, DirectoryOutput
 from esper.tolaria import TolariaGovernor
 from esper.karn.health import HealthMonitor
@@ -1716,8 +1722,12 @@ def train_ppo_vectorized(
                 "bounded_attribution": 0.0,
                 "compute_rent": 0.0,
                 "alpha_shock": 0.0,
+                "hindsight_credit": 0.0,
                 "total_reward": 0.0,
                 "count": 0,
+                # Scaffold hindsight credit debugging fields (Phase 3.2)
+                "scaffold_count": 0,
+                "scaffold_delay_total": 0.0,
             }
             for _ in range(envs_this_batch)
         ]
@@ -1864,6 +1874,11 @@ def train_ppo_vectorized(
                 env_state.train_correct_accum.item() if env_state.train_correct_accum is not None else 0.0
                 for env_state in env_states
             ]
+
+            # Sync train metrics to env_state for telemetry (Sanctum TUI display)
+            for i, env_state in enumerate(env_states):
+                env_state.train_loss = train_losses[i] / max(1, train_totals[i])
+                env_state.train_acc = 100.0 * train_corrects[i] / max(1, train_totals[i])
 
             # ===== VALIDATION + COUNTERFACTUAL (FUSED): Single pass over test data =====
             # Instead of iterating test data multiple times or performing sequential
@@ -2054,7 +2069,7 @@ def train_ppo_vectorized(
                         alpha_overrides[slot_id] = override_vec
 
                     # Run FUSED validation pass
-                    _, correct_per_config, _ = process_fused_val_batch(
+                    loss_fused, correct_per_config, _ = process_fused_val_batch(
                         env_state,
                         inputs,
                         targets,
@@ -2070,6 +2085,11 @@ def train_ppo_vectorized(
                     )
                     with stream_ctx:
                         env_cfg_correct_accums[i].add_(correct_per_config)
+                        # Accumulate loss for telemetry display (scalar from criterion)
+                        # Note: This is the fused loss across all configs, not just main.
+                        # For display purposes this is acceptable since main dominates.
+                        if env_state.val_loss_accum is not None:
+                            env_state.val_loss_accum.add_(loss_fused)
                     val_totals[i] += batch_size
 
             # Single sync point at end
@@ -2084,10 +2104,14 @@ def train_ppo_vectorized(
                 accum.cpu() for accum in env_cfg_correct_accums
             ]
 
+            # Sync val_loss to env_state (for Sanctum TUI display)
+            for i, env_state in enumerate(env_states):
+                if env_state.val_loss_accum is not None and val_totals[i] > 0:
+                    env_state.val_loss = env_state.val_loss_accum.item() / val_totals[i]
+                else:
+                    env_state.val_loss = 0.0
+
             # Process results for each config
-            val_losses = [
-                0.0
-            ] * envs_this_batch  # Placeholder, losses not used for rewards
             val_corrects = [0] * envs_this_batch
 
             for i, env_state in enumerate(env_states):
@@ -2166,6 +2190,17 @@ def train_ppo_vectorized(
                         solo_b = baseline_accs[i].get(slot_b, 0.0)
                         # I_ij = f({i,j}) - f({i}) - f({j}) + f(empty)
                         interaction = pair_acc - solo_a - solo_b + all_off_acc
+
+                        # Track positive synergy in scaffold boost ledger for hindsight credit
+                        if interaction > 0:
+                            # Seed A boosted Seed B (symmetric relationship)
+                            env_state.scaffold_boost_ledger[slot_a].append(
+                                (interaction, slot_b, epoch)
+                            )
+                            # Seed B boosted Seed A
+                            env_state.scaffold_boost_ledger[slot_b].append(
+                                (interaction, slot_a, epoch)
+                            )
 
                         # Update metrics for both seeds
                         if env_state.model.has_active_seed_in_slot(slot_a):
@@ -2606,6 +2641,17 @@ def train_ppo_vectorized(
                 reward += env_state.pending_auto_prune_penalty
                 env_state.pending_auto_prune_penalty = 0.0
 
+                # Add any pending hindsight credit BEFORE normalization
+                # (DRL Specialist review: credit should go through normalizer for scale consistency)
+                hindsight_credit_applied = 0.0
+                if env_state.pending_hindsight_credit > 0:
+                    hindsight_credit_applied = env_state.pending_hindsight_credit
+                    reward += hindsight_credit_applied
+                    env_state.pending_hindsight_credit = 0.0
+                    # Populate RewardComponentsTelemetry for shaped_reward_ratio calculation
+                    if collect_reward_summary and "reward_components" in locals():
+                        reward_components.hindsight_credit = hindsight_credit_applied
+
                 # Normalize reward for PPO stability (P1-6 fix)
                 normalized_reward = reward_normalizer.update_and_normalize(reward)
                 env_state.episode_rewards.append(reward)
@@ -2619,6 +2665,7 @@ def train_ppo_vectorized(
                         )
                     summary["compute_rent"] += reward_components.compute_rent
                     summary["alpha_shock"] += reward_components.alpha_shock
+                    summary["hindsight_credit"] += hindsight_credit_applied
                     summary["count"] += 1
 
                 # Execute action
@@ -2655,6 +2702,53 @@ def train_ppo_vectorized(
                             ):
                                 env_state.contributing_fossilized += 1
                             env_state.acc_at_germination.pop(target_slot, None)
+
+                            # Compute temporally-discounted hindsight credit for scaffolds
+                            beneficiary_improvement = seed_info.total_improvement if seed_info else 0.0
+                            if beneficiary_improvement > 0:
+                                # Use outer loop epoch variable (not per-env counter)
+                                current_epoch = epoch
+                                total_credit = 0.0
+                                scaffold_count = 0
+                                total_delay = 0
+
+                                # Find all scaffolds that boosted this beneficiary
+                                for scaffold_slot, boosts in env_state.scaffold_boost_ledger.items():
+                                    for boost_given, beneficiary_slot, epoch_of_boost in boosts:
+                                        if beneficiary_slot == target_slot and boost_given > 0:
+                                            # Temporal discount: credit decays with distance
+                                            delay = current_epoch - epoch_of_boost
+                                            discount = DEFAULT_GAMMA ** delay
+
+                                            # Compute discounted hindsight credit
+                                            raw_credit = compute_scaffold_hindsight_credit(
+                                                boost_given=boost_given,
+                                                beneficiary_improvement=beneficiary_improvement,
+                                                credit_weight=HINDSIGHT_CREDIT_WEIGHT,
+                                            )
+                                            total_credit += raw_credit * discount
+                                            scaffold_count += 1
+                                            total_delay += delay
+
+                                # Cap total credit to prevent runaway values
+                                total_credit = min(total_credit, MAX_HINDSIGHT_CREDIT)
+
+                                env_state.pending_hindsight_credit += total_credit
+
+                                # Track scaffold metrics for telemetry (per-environment)
+                                if collect_reward_summary:
+                                    summary = reward_summary_accum[env_idx]
+                                    summary["scaffold_count"] += scaffold_count
+                                    summary["scaffold_delay_total"] += total_delay
+
+                                # Clear this beneficiary from all ledgers (it's now fossilized)
+                                for scaffold_slot in list(env_state.scaffold_boost_ledger.keys()):
+                                    env_state.scaffold_boost_ledger[scaffold_slot] = [
+                                        (b, ben, e) for (b, ben, e) in env_state.scaffold_boost_ledger[scaffold_slot]
+                                        if ben != target_slot
+                                    ]
+                                    if not env_state.scaffold_boost_ledger[scaffold_slot]:
+                                        del env_state.scaffold_boost_ledger[scaffold_slot]
                     elif (
                         op_idx == OP_PRUNE
                         and model.has_active_seed_in_slot(target_slot)
@@ -3167,7 +3261,7 @@ def train_ppo_vectorized(
                 agent.buffer.step_counts[i] for i in range(envs_this_batch)
             ]
 
-            batch_val_losses = [0.0] * envs_this_batch
+            batch_val_losses = [es.val_loss for es in env_states]
             batch_val_corrects = val_corrects
             batch_val_totals = val_totals
 

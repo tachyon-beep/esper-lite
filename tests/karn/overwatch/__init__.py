@@ -1,1 +1,1 @@
-"""Tests for Overwatch TUI."""
+"""Tests for Overwatch web dashboard."""

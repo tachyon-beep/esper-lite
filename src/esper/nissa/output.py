@@ -36,7 +36,6 @@ from esper.leyline.telemetry import (
     SeedFossilizedPayload,
     SeedPrunedPayload,
     PPOUpdatePayload,
-    AnalyticsSnapshotPayload,
 )
 
 _logger = logging.getLogger(__name__)

@@ -1246,10 +1246,17 @@ def compute_scaffold_hindsight_credit(
     This implements Hindsight Credit Assignment for scaffolding:
     the scaffold's value is only known after the beneficiary succeeds.
 
+    The 0.1 scaling factor controls tanh saturation:
+    - boost * improvement = 10 → tanh(1.0) = 0.76 (moderate credit)
+    - boost * improvement = 50 → tanh(5.0) ≈ 1.0 (saturated)
+
+    This ensures credit saturates gracefully for large contributions
+    while remaining sensitive to smaller improvements.
+
     Args:
         boost_given: The interaction term I_ij that scaffold provided
         beneficiary_improvement: The improvement the beneficiary achieved
-        credit_weight: Maximum credit amount (default 0.2)
+        credit_weight: Maximum credit per scaffold (typically HINDSIGHT_CREDIT_WEIGHT)
 
     Returns:
         Credit in [0, credit_weight]

@@ -31,7 +31,7 @@ dashboard = [
     "uvicorn[standard]>=0.32.0",
     "websockets>=14.0",
 ]
-overwatch = [
+tui = [
     "textual>=0.47.0",
 ]
 
@@ -41,6 +41,10 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+# Include built frontend assets for Overwatch dashboard
+"esper.karn.overwatch" = ["web/dist/**/*"]
 
 [tool.mutmut]
 # Mutmut v3: Configure paths here, run with: uv run mutmut run
@@ -91,9 +95,6 @@ strict = true  # Typed payloads must be fully strict
 module = "esper.karn.sanctum.*"
 strict = true  # Sanctum aggregator must be strict
 
-[[tool.mypy.overrides]]
-module = "esper.karn.overwatch.*"
-strict = true  # Overwatch aggregator must be strict
 
 # Third-party libraries without stubs
 [[tool.mypy.overrides]]
@@ -106,5 +107,9 @@ module = [
     "textual.*",
     "duckdb.*",
     "mcp.*",
+    "fastapi",
+    "fastapi.*",
+    "uvicorn",
+    "uvicorn.*",
 ]
 ignore_missing_imports = true

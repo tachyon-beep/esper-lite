@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, auto
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
@@ -1014,6 +1014,12 @@ class AnalyticsSnapshotPayload:
     # For kind="reward_summary", includes reward breakdown
     summary: dict[str, float] | None = None
 
+    # Scaffold hindsight credit debugging fields (Phase 3.2)
+    # Populated when kind="reward_summary" and scaffolding occurred
+    hindsight_credit: float | None = None  # Credit applied (post-cap)
+    scaffold_count: int | None = None  # Number of scaffolds that contributed
+    avg_scaffold_delay: float | None = None  # Average epochs since scaffolding interactions
+
     # For kind="mask_hit_rates", includes per-head mask stats
     mask_hits: dict[str, int] | None = None
     mask_total: dict[str, int] | None = None
@@ -1095,6 +1101,10 @@ class AnalyticsSnapshotPayload:
             step_time_ms=data.get("step_time_ms"),
             dataloader_wait_ms=data.get("dataloader_wait_ms"),
             summary=data.get("summary"),
+            # Scaffold hindsight credit fields (Phase 3.2)
+            hindsight_credit=data.get("hindsight_credit"),
+            scaffold_count=data.get("scaffold_count"),
+            avg_scaffold_delay=data.get("avg_scaffold_delay"),
             mask_hits=data.get("mask_hits"),
             mask_total=data.get("mask_total"),
             inner_epoch=data.get("inner_epoch"),
@@ -1278,6 +1288,58 @@ class EpisodeOutcomePayload:
         )
 
 
+# Valid panic reasons from TolariaGovernor
+GovernorPanicReason = Literal[
+    "governor_nan",        # NaN or Inf detected in loss
+    "governor_lobotomy",   # Loss below random guessing threshold
+    "governor_divergence", # Loss exceeding statistical threshold
+    "governor_rollback",   # Default fallback reason
+]
+
+
+@dataclass(slots=True, frozen=True)
+class GovernorRollbackPayload:
+    """Payload for GOVERNOR_ROLLBACK telemetry events.
+
+    Emitted when the TolariaGovernor detects catastrophic instability
+    and initiates a rollback to the last known good state.
+
+    Two emission contexts:
+    1. Initial panic detection (has loss_at_panic, loss_threshold, etc.)
+    2. State dict key mismatch warning (has missing_keys, unexpected_keys)
+    """
+
+    # REQUIRED - always present
+    env_id: int
+    device: str
+    reason: str
+
+    # Panic context (present for initial rollback trigger)
+    loss_at_panic: float | None = None
+    loss_threshold: float | None = None
+    consecutive_panics: int | None = None
+    panic_reason: GovernorPanicReason | None = None
+
+    # State dict mismatch context (present for key mismatch warnings)
+    missing_keys: list[str] | None = None
+    unexpected_keys: list[str] | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "GovernorRollbackPayload":
+        """Parse from dict. Raises KeyError on missing required fields."""
+        return cls(
+            env_id=data["env_id"],
+            device=data["device"],
+            reason=data["reason"],
+            loss_at_panic=data.get("loss_at_panic"),
+            loss_threshold=data.get("loss_threshold"),
+            consecutive_panics=data.get("consecutive_panics"),
+            panic_reason=data.get("panic_reason"),
+            missing_keys=list(data["missing_keys"]) if data.get("missing_keys") else None,
+            unexpected_keys=list(data["unexpected_keys"]) if data.get("unexpected_keys") else None,
+        )
+
+
 # =============================================================================
 # Telemetry Payload Type Union
 # =============================================================================
@@ -1301,4 +1363,5 @@ TelemetryPayload = (
     | AnomalyDetectedPayload
     | PerformanceDegradationPayload
     | EpisodeOutcomePayload
+    | GovernorRollbackPayload
 )

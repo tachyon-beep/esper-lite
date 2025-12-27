@@ -1015,6 +1015,10 @@ class SanctumAggregator:
             }
             env.total_actions = 0
 
+            # Gaming rate tracking (fresh per episode)
+            env.gaming_trigger_count = 0
+            env.total_reward_steps = 0
+
             # Reward components (stale from last step)
             env.reward_components = RewardComponents()
 
@@ -1114,12 +1118,24 @@ class SanctumAggregator:
                 env.reward_components.ratio_penalty = payload.ratio_penalty
             if payload.alpha_shock is not None:
                 env.reward_components.alpha_shock = payload.alpha_shock
+            # Hindsight credit (Phase 3.2 scaffold credit)
+            if payload.hindsight_credit is not None:
+                env.reward_components.hindsight_credit = payload.hindsight_credit
+            if payload.scaffold_count is not None:
+                env.reward_components.scaffold_count = payload.scaffold_count
+            if payload.avg_scaffold_delay is not None:
+                env.reward_components.avg_scaffold_delay = payload.avg_scaffold_delay
             # Always update context fields when we have any reward data
             if payload.base_acc_delta is not None or payload.bounded_attribution is not None:
                 env.reward_components.total = total_reward
                 env.reward_components.last_action = action_name
                 env.reward_components.env_id = env_id
                 env.reward_components.val_acc = env.host_accuracy
+
+            # Track gaming rate (for per-env reward health)
+            env.total_reward_steps += 1
+            if env.reward_components.ratio_penalty != 0 or env.reward_components.alpha_shock != 0:
+                env.gaming_trigger_count += 1
 
             # Create decision snapshot
             now_dt = event.timestamp or datetime.now(timezone.utc)

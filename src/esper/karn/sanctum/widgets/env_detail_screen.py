@@ -432,23 +432,29 @@ class EnvDetailScreen(ModalScreen[None]):
         return header
 
     def _render_metrics(self) -> Table:
-        """Render environment metrics section."""
+        """Render environment metrics section.
+
+        All rows are always visible to prevent jarring layout shifts.
+        Empty/zero values display as dim "--" placeholders.
+        """
         table = Table(show_header=False, box=None, expand=True)
         table.add_column("Metric", style="dim", width=20)
         table.add_column("Value", style="white")
 
         env = self._env
+        rc = env.reward_components
+        dim_placeholder = Text("--", style="dim")
 
         # Accuracy history sparkline
         from esper.karn.sanctum.schema import make_sparkline
         acc_spark = make_sparkline(env.accuracy_history, width=40)
-        table.add_row("Accuracy History", acc_spark)
+        table.add_row("Accuracy History", acc_spark if acc_spark else dim_placeholder)
 
         # Reward history sparkline
         rwd_spark = make_sparkline(env.reward_history, width=40)
-        table.add_row("Reward History", rwd_spark)
+        table.add_row("Reward History", rwd_spark if rwd_spark else dim_placeholder)
 
-        # Seed counts
+        # Seed counts (always has structure)
         seed_counts = Text()
         seed_counts.append(f"Active: {env.active_seed_count}", style="cyan")
         seed_counts.append("  ")
@@ -457,7 +463,7 @@ class EnvDetailScreen(ModalScreen[None]):
         seed_counts.append(f"Pruned: {env.pruned_count}", style="red")
         table.add_row("Seed Counts", seed_counts)
 
-        # Fossilized params
+        # Fossilized params (always visible)
         foss_params = env.fossilized_params or 0
         if foss_params > 0:
             if foss_params >= 1_000_000:
@@ -467,47 +473,136 @@ class EnvDetailScreen(ModalScreen[None]):
             else:
                 params_str = str(foss_params)
             table.add_row("Fossilized Params", params_str)
+        else:
+            table.add_row("Fossilized Params", dim_placeholder)
 
-        # Action distribution
+        # Action distribution (always visible)
         total_actions = env.total_actions or 0
         if total_actions > 0:
             action_text = Text()
+            action_colors = {
+                "WAIT": "dim",
+                "GERMINATE": "cyan",
+                "SET_ALPHA_TARGET": "yellow",
+                "FOSSILIZE": "green",
+                "PRUNE": "red",
+            }
             for action, count in sorted(env.action_counts.items()):
                 pct = (count / total_actions) * 100
-                # Color coding by action type
-                action_colors = {
-                    "WAIT": "dim",
-                    "GERMINATE": "cyan",
-                    "SET_ALPHA_TARGET": "yellow",
-                    "FOSSILIZE": "green",
-                    "PRUNE": "red",
-                }
                 color = action_colors.get(action, "white")
                 action_text.append(f"{action}: {pct:.0f}%", style=color)
                 action_text.append("  ")
             table.add_row("Action Distribution", action_text)
+        else:
+            table.add_row("Action Distribution", dim_placeholder)
 
-        # Reward components
-        rc = env.reward_components
-        if rc.total is not None and rc.total != 0:
-            reward_text = Text()
-            reward_text.append(f"Total: {rc.total:+.3f}", style="bold")
-            if rc.base_acc_delta is not None and rc.base_acc_delta != 0:
-                style = "green" if rc.base_acc_delta > 0 else "red"
-                reward_text.append(f"  ΔAcc: {rc.base_acc_delta:+.3f}", style=style)
-            if rc.compute_rent is not None and rc.compute_rent != 0:
-                reward_text.append(f"  Rent: {rc.compute_rent:.3f}", style="red")
-            if rc.alpha_shock is not None and rc.alpha_shock != 0:
-                reward_text.append(f"  Shock: {rc.alpha_shock:.3f}", style="red")
-            if rc.bounded_attribution is not None and rc.bounded_attribution != 0:
-                style = "green" if rc.bounded_attribution > 0 else "red"
-                reward_text.append(f"  Attr: {rc.bounded_attribution:+.3f}", style=style)
-            table.add_row("Reward Breakdown", reward_text)
+        # Reward Total with PBRS fraction (always visible)
+        reward_text = Text()
+        if rc.total != 0:
+            total_style = "bold green" if rc.total >= 0 else "bold red"
+            reward_text.append(f"{rc.total:+.3f}", style=total_style)
+            # Add PBRS fraction
+            pbrs_fraction = abs(rc.stage_bonus) / abs(rc.total) if rc.total != 0 else 0.0
+            pbrs_healthy = 0.1 <= pbrs_fraction <= 0.4
+            pbrs_icon = "✓" if pbrs_healthy else "⚠" if pbrs_fraction > 0 else ""
+            pbrs_style = "green" if pbrs_healthy else "yellow"
+            reward_text.append(f"  PBRS: {pbrs_fraction:.0%} ", style="dim")
+            if pbrs_icon:
+                reward_text.append(pbrs_icon, style=pbrs_style)
+        else:
+            reward_text.append("0.000", style="dim")
+            reward_text.append("  PBRS: --", style="dim")
+        table.add_row("Reward Total", reward_text)
 
-        # Recent actions
+        # Signals with gaming rate (always visible)
+        signals = Text()
+        has_signals = False
+
+        if rc.base_acc_delta != 0:
+            style = "green" if rc.base_acc_delta > 0 else "red"
+            signals.append(f"ΔAcc: {rc.base_acc_delta:+.3f}", style=style)
+            has_signals = True
+        if rc.compute_rent != 0:
+            if has_signals:
+                signals.append("  ")
+            signals.append(f"Rent: {rc.compute_rent:.3f}", style="red")
+            has_signals = True
+        if rc.alpha_shock != 0:
+            if has_signals:
+                signals.append("  ")
+            signals.append(f"Shock: {rc.alpha_shock:.3f}", style="red")
+            has_signals = True
+        if rc.ratio_penalty != 0:
+            if has_signals:
+                signals.append("  ")
+            signals.append(f"Ratio: {rc.ratio_penalty:.3f}", style="red")
+            has_signals = True
+
+        # Add gaming rate
+        if has_signals:
+            signals.append("  │  ")
+        gaming_rate = env.gaming_rate
+        gaming_active = rc.ratio_penalty != 0 or rc.alpha_shock != 0
+        gaming_healthy = gaming_rate < 0.05
+        if gaming_active:
+            gaming_state = "SHOCK" if rc.alpha_shock != 0 else "RATIO"
+            signals.append(f"Gaming: {gaming_rate:.1%} ({gaming_state})", style="red")
+        else:
+            gaming_style = "green" if gaming_healthy else "yellow"
+            signals.append(f"Gaming: {gaming_rate:.1%} (CLEAN)", style=gaming_style)
+
+        table.add_row("  Signals", signals)
+
+        # Credits (always visible)
+        credits = Text()
+        has_credits = False
+
+        if rc.bounded_attribution != 0:
+            style = "green" if rc.bounded_attribution > 0 else "red"
+            credits.append(f"Attr: {rc.bounded_attribution:+.3f}", style=style)
+            has_credits = True
+        if rc.hindsight_credit != 0:
+            hind_str = f"Hind: {rc.hindsight_credit:+.3f}"
+            if rc.scaffold_count > 0:
+                hind_str += f" ({rc.scaffold_count}x, {rc.avg_scaffold_delay:.1f}e)"
+            if has_credits:
+                credits.append("  ")
+            credits.append(hind_str, style="blue")
+            has_credits = True
+        if rc.stage_bonus != 0:
+            if has_credits:
+                credits.append("  ")
+            credits.append(f"Stage: {rc.stage_bonus:+.3f}", style="blue")
+            has_credits = True
+        if rc.fossilize_terminal_bonus != 0:
+            if has_credits:
+                credits.append("  ")
+            credits.append(f"Foss: {rc.fossilize_terminal_bonus:+.3f}", style="blue")
+            has_credits = True
+
+        table.add_row("  Credits", credits if has_credits else dim_placeholder)
+
+        # Warnings (always visible)
+        warnings = Text()
+        has_warnings = False
+
+        if rc.blending_warning < 0:
+            warnings.append(f"Blend: {rc.blending_warning:.3f}", style="yellow")
+            has_warnings = True
+        if rc.holding_warning < 0:
+            if has_warnings:
+                warnings.append("  ")
+            warnings.append(f"Hold: {rc.holding_warning:.3f}", style="yellow")
+            has_warnings = True
+
+        table.add_row("  Warnings", warnings if has_warnings else dim_placeholder)
+
+        # Recent actions (always visible)
         if env.action_history:
             recent = " → ".join(list(env.action_history)[-5:])
             table.add_row("Recent Actions", recent)
+        else:
+            table.add_row("Recent Actions", dim_placeholder)
 
         return table
 

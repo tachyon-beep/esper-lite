@@ -40,6 +40,7 @@ class RewardComponentsTelemetry:
     action_shaping: float = 0.0
     terminal_bonus: float = 0.0
     fossilize_terminal_bonus: float = 0.0  # Terminal bonus from fossilized seed count
+    hindsight_credit: float = 0.0  # Scaffold contribution credit applied at fossilization
     num_fossilized_seeds: int = 0  # Total fossilized seeds for debugging
     num_contributing_fossilized: int = 0  # Seeds with total_improvement >= MIN_FOSSILIZE_CONTRIBUTION
 
@@ -88,6 +89,7 @@ class RewardComponentsTelemetry:
             + self.action_shaping
             + self.terminal_bonus
             + self.fossilize_terminal_bonus
+            + self.hindsight_credit
             # Penalties (these shape behavior, so include in total)
             + self.compute_rent
             + self.alpha_shock
@@ -120,6 +122,7 @@ class RewardComponentsTelemetry:
             "action_shaping": self.action_shaping,
             "terminal_bonus": self.terminal_bonus,
             "fossilize_terminal_bonus": self.fossilize_terminal_bonus,
+            "hindsight_credit": self.hindsight_credit,
             "num_fossilized_seeds": self.num_fossilized_seeds,
             "num_contributing_fossilized": self.num_contributing_fossilized,
             "action_name": self.action_name,

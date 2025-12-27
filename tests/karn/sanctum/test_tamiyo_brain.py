@@ -506,7 +506,7 @@ async def test_decision_tree_learning():
     app = TamiyoBrainTestApp()
     async with app.run_test():
         widget = app.query_one(TamiyoBrain)
-        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"], current_batch=50)
         snapshot.tamiyo = TamiyoState(
             entropy=1.2,
             explained_variance=0.6,  # > 0.3 warning threshold
@@ -528,7 +528,7 @@ async def test_decision_tree_ev_warning():
     app = TamiyoBrainTestApp()
     async with app.run_test():
         widget = app.query_one(TamiyoBrain)
-        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"], current_batch=50)
         snapshot.tamiyo = TamiyoState(
             entropy=1.2,
             explained_variance=0.15,  # Between 0.0 and 0.3 = warning
@@ -550,7 +550,7 @@ async def test_decision_tree_ev_critical():
     app = TamiyoBrainTestApp()
     async with app.run_test():
         widget = app.query_one(TamiyoBrain)
-        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"], current_batch=50)
         snapshot.tamiyo = TamiyoState(
             entropy=1.2,
             explained_variance=-0.1,  # < 0.0 = critical
@@ -572,7 +572,7 @@ async def test_decision_tree_entropy_collapsed():
     app = TamiyoBrainTestApp()
     async with app.run_test():
         widget = app.query_one(TamiyoBrain)
-        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"], current_batch=50)
         snapshot.tamiyo = TamiyoState(
             entropy=0.05,  # < 0.1 = collapsed
             explained_variance=0.6,
@@ -594,7 +594,7 @@ async def test_decision_tree_kl_critical():
     app = TamiyoBrainTestApp()
     async with app.run_test():
         widget = app.query_one(TamiyoBrain)
-        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"], current_batch=50)
         snapshot.tamiyo = TamiyoState(
             entropy=1.2,
             explained_variance=0.6,
@@ -616,7 +616,7 @@ async def test_decision_tree_advantage_collapsed():
     app = TamiyoBrainTestApp()
     async with app.run_test():
         widget = app.query_one(TamiyoBrain)
-        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"], current_batch=50)
         snapshot.tamiyo = TamiyoState(
             entropy=1.2,
             explained_variance=0.6,
@@ -638,7 +638,7 @@ async def test_decision_tree_grad_norm_critical():
     app = TamiyoBrainTestApp()
     async with app.run_test():
         widget = app.query_one(TamiyoBrain)
-        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"], current_batch=50)
         snapshot.tamiyo = TamiyoState(
             entropy=1.2,
             explained_variance=0.6,
@@ -661,7 +661,7 @@ async def test_decision_tree_grad_norm_warning():
     app = TamiyoBrainTestApp()
     async with app.run_test():
         widget = app.query_one(TamiyoBrain)
-        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"], current_batch=50)
         snapshot.tamiyo = TamiyoState(
             entropy=1.2,
             explained_variance=0.6,
@@ -689,7 +689,8 @@ async def test_status_banner_includes_all_metrics():
     app = TamiyoBrainTestApp()
     async with app.run_test():
         widget = app.query_one(TamiyoBrain)
-        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        # Use current_batch >= 50 to skip warmup period
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"], current_batch=50)
         snapshot.tamiyo = TamiyoState(
             entropy=1.2,
             explained_variance=0.65,
@@ -701,7 +702,6 @@ async def test_status_banner_includes_all_metrics():
             exploding_layers=0,
             ppo_data_received=True,
         )
-        snapshot.current_batch = 47
         snapshot.max_batches = 100
 
         widget.update_snapshot(snapshot)
@@ -756,8 +756,8 @@ async def test_border_color_updates_on_status():
     async with app.run_test():
         widget = app.query_one(TamiyoBrain)
 
-        # Healthy state
-        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        # Healthy state (current_batch >= 50 to skip warmup period)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"], current_batch=50)
         snapshot.tamiyo = TamiyoState(
             entropy=1.2,
             explained_variance=0.6,
@@ -774,6 +774,40 @@ async def test_border_color_updates_on_status():
         widget.update_snapshot(snapshot)
         assert widget.has_class("status-warning")
         assert not widget.has_class("status-ok")
+
+
+@pytest.mark.asyncio
+async def test_warmup_status_during_first_50_batches():
+    """Widget should show warmup status during first 50 batches."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+
+        # During warmup (batch < 50)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"], current_batch=25)
+        snapshot.tamiyo = TamiyoState(
+            entropy=1.2,
+            explained_variance=0.6,
+            clip_fraction=0.15,
+            kl_divergence=0.01,
+            advantage_std=1.0,
+            ppo_data_received=True,
+        )
+        widget.update_snapshot(snapshot)
+        assert widget.has_class("status-warmup")
+
+        # Verify warmup message format
+        status, label, style = widget._get_overall_status()
+        assert status == "warmup"
+        assert "WARMING UP" in label
+        assert "25/50" in label
+        assert style == "cyan"
+
+        # After warmup (batch >= 50) should be status-ok
+        snapshot.current_batch = 50
+        widget.update_snapshot(snapshot)
+        assert widget.has_class("status-ok")
+        assert not widget.has_class("status-warmup")
 
 
 # ===========================

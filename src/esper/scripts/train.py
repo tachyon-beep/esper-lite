@@ -3,6 +3,7 @@
 
 import argparse
 import logging
+import sys
 
 import torch
 
@@ -77,14 +78,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Export Karn telemetry store to JSONL file after training",
     )
     telemetry_parent.add_argument(
-        "--overwatch",
-        action="store_true",
-        help="Launch Overwatch TUI for real-time monitoring (replaces Rich TUI)",
-    )
-    telemetry_parent.add_argument(
         "--sanctum",
         action="store_true",
-        help="Launch Sanctum TUI for developer debugging (replaces Rich TUI, mutually exclusive with --overwatch)",
+        help="Launch Sanctum TUI for developer debugging (replaces Rich TUI)",
+    )
+    telemetry_parent.add_argument(
+        "--overwatch",
+        action="store_true",
+        help="Launch Overwatch web dashboard (mutually exclusive with --sanctum)",
+    )
+    telemetry_parent.add_argument(
+        "--overwatch-port",
+        type=int,
+        default=8080,
+        help="Overwatch dashboard port (default: 8080)",
     )
 
     subparsers = parser.add_subparsers(dest="algorithm", required=True)
@@ -234,6 +241,10 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
+    # Mutual exclusion check for UI modes
+    if args.sanctum and args.overwatch:
+        parser.error("--sanctum and --overwatch are mutually exclusive")
+
     # Create TelemetryConfig from CLI argument
     from esper.simic.telemetry import TelemetryConfig, TelemetryLevel
 
@@ -254,15 +265,21 @@ def main() -> None:
     # alongside training logs.
     hub = get_hub()
 
-    # Check mutual exclusion
-    if args.overwatch and args.sanctum:
-        parser.error("--overwatch and --sanctum are mutually exclusive. Choose one.")
-
     # Determine UI mode
-    import sys
     is_tty = sys.stdout.isatty()
-    use_overwatch = args.overwatch
     use_sanctum = args.sanctum
+
+    # Check Textual availability for Sanctum TUI
+    if use_sanctum:
+        try:
+            import textual  # noqa: F401
+        except ImportError:
+            print(
+                "ERROR: Sanctum TUI unavailable - missing dependencies.\n"
+                "       Install with: pip install esper-lite[tui]",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     if not is_tty and not args.no_tui:
         print("Non-TTY detected, using console output instead of TUI")
@@ -271,11 +288,11 @@ def main() -> None:
     if args.tui_layout != "auto":
         print(
             "WARNING: --tui-layout is deprecated and ignored. "
-            "Use --sanctum for the developer TUI or --overwatch for operator monitoring."
+            "Use --sanctum for the developer TUI."
         )
 
     # Add console output if not using a TUI backend
-    if not use_overwatch and not use_sanctum:
+    if not use_sanctum:
         hub.add_backend(ConsoleOutput(min_severity=console_min_severity))
 
     # Add file output if requested
@@ -357,46 +374,13 @@ def main() -> None:
             print("Warning: Dashboard dependencies not installed.")
             print("  Install with: pip install esper-lite[dashboard]")
 
-    # Setup Overwatch backend if requested
-    overwatch_backend = None
-    if use_overwatch:
-        from esper.karn import OverwatchBackend
-        from esper.leyline import DEFAULT_N_ENVS
-
-        # Determine num_envs for Overwatch display
-        if args.algorithm == "ppo":
-            # For PPO, get from config
-            if args.config_json:
-                temp_config = TrainingConfig.from_json_path(args.config_json)
-            else:
-                if args.preset == "cifar10":
-                    temp_config = TrainingConfig.for_cifar10()
-                elif args.preset == "cifar10_stable":
-                    temp_config = TrainingConfig.for_cifar10_stable()
-                elif args.preset == "cifar10_deep":
-                    temp_config = TrainingConfig.for_cifar10_deep()
-                elif args.preset == "cifar10_blind":
-                    temp_config = TrainingConfig.for_cifar10_blind()
-                else:
-                    temp_config = TrainingConfig.for_tinystories()
-            num_envs = temp_config.n_envs
-        elif args.algorithm == "heuristic":
-            # For heuristic, use number of slots
-            num_envs = len(args.slots)
-        else:
-            # Fallback for unknown algorithms
-            num_envs = DEFAULT_N_ENVS
-
-        overwatch_backend = OverwatchBackend(num_envs=num_envs)
-        hub.add_backend(overwatch_backend)  # type: ignore[arg-type]
-
     # Setup Sanctum backend if requested
     sanctum_backend = None
     if use_sanctum:
         from esper.karn.sanctum import SanctumBackend
         from esper.leyline import DEFAULT_N_ENVS
 
-        # Determine num_envs for Sanctum display (same logic as Overwatch)
+        # Determine num_envs for Sanctum display
         if args.algorithm == "ppo":
             # For PPO, get from config
             if args.config_json:
@@ -423,6 +407,23 @@ def main() -> None:
         sanctum_backend = SanctumBackend(num_envs=num_envs)
         hub.add_backend(sanctum_backend)  # type: ignore[arg-type]
 
+    # Setup Overwatch backend if requested
+    overwatch_backend = None
+    if args.overwatch:
+        from esper.karn.overwatch import OverwatchBackend
+
+        overwatch_backend = OverwatchBackend(port=args.overwatch_port)
+        if overwatch_backend.start():
+            hub.add_backend(overwatch_backend)  # type: ignore[arg-type]
+            print(f"Overwatch dashboard: http://localhost:{args.overwatch_port}")
+        else:
+            print(
+                "ERROR: Overwatch dashboard unavailable - missing dependencies.\n"
+                "       Install with: pip install esper-lite[dashboard]",
+                file=sys.stderr,
+            )
+            overwatch_backend = None
+
     # Add Karn research telemetry collector
     # KarnCollector captures events into typed store for research analytics
     from esper.karn import get_collector
@@ -430,14 +431,14 @@ def main() -> None:
     hub.add_backend(karn_collector)  # type: ignore[arg-type]
 
     # Event to signal when DataLoader workers are spawned (for TUI synchronization)
-    # When using TUI backends (Sanctum/Overwatch), main thread waits for this event
-    # before starting Textual, ensuring workers spawn while terminal FDs are valid.
+    # When using Sanctum TUI, main thread waits for this event before starting
+    # Textual, ensuring workers spawn while terminal FDs are valid.
     import threading
     dataloader_ready_event: threading.Event | None = None
-    if use_overwatch or use_sanctum:
+    if use_sanctum:
         dataloader_ready_event = threading.Event()
 
-    # Define training function to enable background execution for Overwatch
+    # Define training function to enable background execution for Sanctum
     def run_training() -> None:
         """Execute the training algorithm."""
         try:
@@ -579,7 +580,7 @@ def main() -> None:
                         gpu_preload=args.gpu_preload,
                         telemetry_config=telemetry_config,
                         telemetry_lifecycle_only=args.telemetry_lifecycle_only,
-                        quiet_analytics=use_overwatch or use_sanctum,
+                        quiet_analytics=use_sanctum,
                         ready_event=dataloader_ready_event,
                         **config.to_train_kwargs(),
                     )
@@ -589,27 +590,7 @@ def main() -> None:
             raise
 
     try:
-        if use_overwatch:
-            # Overwatch mode: run training in background thread, Overwatch controls terminal
-            import threading
-            from esper.karn.overwatch import OverwatchApp
-
-            training_thread = threading.Thread(target=run_training, daemon=True)
-            training_thread.start()
-
-            # CRITICAL: Wait for DataLoader workers to spawn BEFORE starting Textual.
-            # Textual modifies terminal file descriptors, which breaks multiprocessing spawn.
-            # By waiting here, workers spawn while FDs are still valid.
-            if dataloader_ready_event is not None:
-                print("Waiting for DataLoader workers to initialize...")
-                dataloader_ready_event.wait(timeout=60.0)  # 60s timeout for slow datasets
-                if not dataloader_ready_event.is_set():
-                    print("WARNING: DataLoader initialization timed out, starting TUI anyway")
-
-            # Run Overwatch TUI in main thread (blocks until user quits)
-            overwatch_app = OverwatchApp(backend=overwatch_backend)
-            overwatch_app.run()
-        elif use_sanctum:
+        if use_sanctum:
             # Sanctum mode: run training in background thread, Sanctum controls terminal
             import threading
             import traceback
@@ -663,14 +644,14 @@ def main() -> None:
             count = karn_collector.store.export_jsonl(export_path)
             print(f"Exported {count} Karn records to {export_path}")
 
-        # Close all hub backends (includes Overwatch/Sanctum if used)
+        # Close all hub backends (includes Sanctum if used)
         hub.close()
 
 if __name__ == "__main__":
     # CRITICAL: Set spawn method before main() to avoid fork issues with
     # Textual TUI + PyTorch DataLoader workers. The 'fork' method fails
-    # when the main process runs a TUI (Textual/Overwatch/Sanctum) because
-    # forked workers inherit state that can't be safely duplicated.
+    # when the main process runs a TUI (Textual/Sanctum) because forked
+    # workers inherit state that can't be safely duplicated.
     import multiprocessing
     multiprocessing.set_start_method("spawn")
     main()

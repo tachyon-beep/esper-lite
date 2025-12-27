@@ -338,8 +338,9 @@ class TestTolariaGovernor:
 
             event = hub.emit.call_args[0][0]
             assert event.event_type == TelemetryEventType.GOVERNOR_ROLLBACK
-            assert event.data["env_id"] == 7
-            assert event.data["device"] == "cpu"
+            # Payload is now a typed GovernorRollbackPayload dataclass
+            assert event.data.env_id == 7
+            assert event.data.device == "cpu"
 
     def test_execute_rollback_resets_consecutive_panics_each_time(self):
         """Test that each rollback resets panic counter (not increments)."""

@@ -94,7 +94,7 @@ class EsperStatus(Static):
                 table.add_row(f"{short}:", Text(str(count), style=style))
             table.add_row("", "")
 
-        # Host network params
+        # Host network params (always visible)
         vitals = self._snapshot.vitals
         if vitals.host_params > 0:
             if vitals.host_params >= 1_000_000:
@@ -104,7 +104,9 @@ class EsperStatus(Static):
             else:
                 params_str = str(vitals.host_params)
             table.add_row("Host Params:", params_str)
-            table.add_row("", "")
+        else:
+            table.add_row("Host Params:", Text("--", style="dim"))
+        table.add_row("", "")
 
         # Throughput
         table.add_row("Epochs/sec:", f"{vitals.epochs_per_second:.2f}")
@@ -158,7 +160,7 @@ class EsperStatus(Static):
         else:
             table.add_row("GPU:", "-")
 
-        # RAM
+        # RAM (always visible)
         if vitals.ram_total_gb is not None and vitals.ram_used_gb is not None and vitals.ram_total_gb > 0:
             ram_pct = (vitals.ram_used_gb / vitals.ram_total_gb) * 100
             ram_style = "red" if ram_pct > 90 else "yellow" if ram_pct > 75 else "dim"
@@ -166,10 +168,13 @@ class EsperStatus(Static):
                 "RAM:",
                 Text(f"{vitals.ram_used_gb:.1f}/{vitals.ram_total_gb:.0f}GB", style=ram_style)
             )
+        else:
+            table.add_row("RAM:", Text("--", style="dim"))
 
-        # FIX: CPU percentage (was collected but never displayed in old TUI)
+        # CPU percentage (always visible)
         if vitals.cpu_percent is not None and vitals.cpu_percent > 0:
-            # No color thresholds for CPU (unlike GPU/RAM)
             table.add_row("CPU:", f"{vitals.cpu_percent:.1f}%")
+        else:
+            table.add_row("CPU:", Text("--", style="dim"))
 
         return Panel(table, title="[bold]ESPER STATUS[/bold]", border_style="cyan")

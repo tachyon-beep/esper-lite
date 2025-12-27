@@ -10,8 +10,9 @@ for a single parallel training environment, including:
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, DefaultDict
 
 import torch
 
@@ -87,6 +88,14 @@ class ParallelEnvState:
     # Previous alpha/param snapshots for convex shock penalty (Phase 5)
     prev_slot_alphas: dict[str, float] = field(default_factory=dict)
     prev_slot_params: dict[str, int] = field(default_factory=dict)
+    # Scaffold hindsight credit tracking (Phase 3.2)
+    # Maps scaffold_slot -> list of (boost_given, beneficiary_slot, epoch_of_boost)
+    # Using defaultdict to auto-create empty lists on first access
+    scaffold_boost_ledger: DefaultDict[str, list[tuple[float, str, int]]] = field(
+        default_factory=lambda: defaultdict(list)
+    )
+    # Pending hindsight credit to add to next transition (BEFORE normalization)
+    pending_hindsight_credit: float = 0.0
     # Pre-computed autocast decision for hot path performance
     # Avoids repeated device type checks and amp flag evaluation per batch
     autocast_enabled: bool = False
@@ -173,6 +182,8 @@ class ParallelEnvState:
         self.prev_slot_alphas = {slot_id: 0.0 for slot_id in slots}
         self.prev_slot_params = {slot_id: 0 for slot_id in slots}
         self.gradient_ratio_ema = {slot_id: 0.0 for slot_id in slots}
+        self.scaffold_boost_ledger.clear()
+        self.pending_hindsight_credit = 0.0
         self.signal_tracker.reset()
         self.governor.reset()
         if self.health_monitor is not None:
