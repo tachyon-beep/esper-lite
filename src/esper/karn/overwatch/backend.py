@@ -194,7 +194,7 @@ class OverwatchBackend:
         # Try to import FastAPI/uvicorn (optional dependency)
         try:
             import uvicorn
-            from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+            from fastapi import FastAPI, Response, WebSocket, WebSocketDisconnect
             from fastapi.responses import FileResponse
             from fastapi.staticfiles import StaticFiles
 
@@ -254,8 +254,23 @@ class OverwatchBackend:
 
             # Serve index.html at root
             @app.get("/")  # type: ignore[untyped-decorator]
-            async def serve_index() -> FileResponse:
-                return FileResponse(self._static_path / "index.html")
+            async def serve_index() -> FileResponse | Response:
+                index_path = self._static_path / "index.html"
+                if not index_path.exists():
+                    # Return helpful error when frontend assets not built/packaged
+                    return Response(
+                        content=(
+                            "<html><body style='font-family: sans-serif; padding: 2em;'>"
+                            "<h1>Overwatch Dashboard Not Available</h1>"
+                            "<p>Frontend assets not found. To build them:</p>"
+                            "<pre>cd src/esper/karn/overwatch/web && npm install && npm run build</pre>"
+                            "<p>WebSocket endpoint is still available at <code>/ws</code></p>"
+                            "</body></html>"
+                        ),
+                        media_type="text/html",
+                        status_code=503,
+                    )
+                return FileResponse(index_path)
 
             # Serve static assets
             if self._static_path.exists():

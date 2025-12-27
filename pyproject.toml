@@ -42,6 +42,10 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+# Include built frontend assets for Overwatch dashboard
+"esper.karn.overwatch" = ["web/dist/**/*"]
+
 [tool.mutmut]
 # Mutmut v3: Configure paths here, run with: uv run mutmut run
 # Default: Tamiyo + Kasmina state engine (slot.py). Expand to full Kasmina if needed.
