@@ -714,3 +714,288 @@ class TestMultiEnvEpochCommitBug:
             f"With {len(collector.store.epoch_snapshots)} committed epochs, "
             f"last committed has val_accuracy={host.val_accuracy}."
         )
+
+
+class TestPartialBatchFlush:
+    """Tests for partial final batch handling.
+
+    The last batch of an episode may have fewer envs than n_envs (e.g., 10 total
+    episodes with n_envs=4 means last batch has 2 envs). BATCH_EPOCH_COMPLETED
+    flushes any remaining buffered epochs that didn't reach the n_envs barrier.
+    """
+
+    def test_partial_batch_commits_on_batch_event(self):
+        """Partial batch (fewer envs than n_envs) should commit on BATCH_EPOCH_COMPLETED.
+
+        Regression test: Without flush, partial batches never reach the n_envs
+        barrier and remain buffered forever.
+        """
+        from esper.karn.collector import KarnCollector
+
+        collector = KarnCollector()
+        n_envs = 4  # Original batch size
+
+        collector.emit(TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data=TrainingStartedPayload(
+                n_envs=n_envs,
+                max_epochs=10,
+                task="test_task",
+                host_params=1000,
+                slot_ids=("r0c0",),
+                seed=42,
+                n_episodes=10,  # 10 episodes with n_envs=4 means last batch has 2
+                lr=0.001,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=10000,
+                policy_device="cpu",
+                env_devices=tuple("cpu" for _ in range(n_envs)),
+                episode_id="test_partial_batch",
+            )
+        ))
+
+        # Simulate a partial batch: only 2 envs report (last batch of 10 episodes)
+        partial_batch_size = 2
+        for env_id in range(partial_batch_size):
+            collector.emit(TelemetryEvent(
+                event_type=TelemetryEventType.EPOCH_COMPLETED,
+                epoch=1,
+                data=EpochCompletedPayload(
+                    env_id=env_id,
+                    val_accuracy=0.5,
+                    val_loss=0.5,
+                    inner_epoch=1,
+                ),
+            ))
+
+        # Buffer should have data but NOT be committed (only 2 of 4 envs reported)
+        assert len(collector._pending_epoch_metrics) == 2, (
+            "Should have 2 buffered metrics awaiting commit"
+        )
+        committed_before = len(collector.store.epoch_snapshots)
+
+        # BATCH_EPOCH_COMPLETED triggers flush of partial batch
+        collector.emit(TelemetryEvent(
+            event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED,
+            epoch=1,
+            data=BatchEpochCompletedPayload(
+                episodes_completed=10,
+                batch_idx=2,  # Third batch (0-indexed)
+                avg_accuracy=0.5,
+                avg_reward=1.0,
+                total_episodes=10,
+                n_envs=partial_batch_size,  # Actual envs in this batch
+            ),
+        ))
+
+        # After BATCH event, buffered epochs should be committed
+        committed_after = len(collector.store.epoch_snapshots)
+        assert committed_after > committed_before, (
+            f"BATCH_EPOCH_COMPLETED should flush buffered epochs. "
+            f"Had {committed_before} before, {committed_after} after."
+        )
+
+        # Buffer should be empty after flush
+        assert len(collector._pending_epoch_metrics) == 0, (
+            "Buffer should be cleared after BATCH_EPOCH_COMPLETED flush"
+        )
+
+    def test_partial_batch_metrics_are_aggregated(self):
+        """Partial batch flush should still aggregate per-env metrics."""
+        from esper.karn.collector import KarnCollector
+
+        collector = KarnCollector()
+        n_envs = 4
+
+        collector.emit(TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data=TrainingStartedPayload(
+                n_envs=n_envs,
+                max_epochs=10,
+                task="test_task",
+                host_params=1000,
+                slot_ids=("r0c0",),
+                seed=42,
+                n_episodes=10,
+                lr=0.001,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=10000,
+                policy_device="cpu",
+                env_devices=tuple("cpu" for _ in range(n_envs)),
+                episode_id="test_partial_agg",
+            )
+        ))
+
+        # Partial batch: 2 envs with distinct metrics
+        collector.emit(TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            epoch=1,
+            data=EpochCompletedPayload(
+                env_id=0,
+                val_accuracy=0.40,
+                val_loss=0.60,
+                inner_epoch=1,
+            ),
+        ))
+        collector.emit(TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            epoch=1,
+            data=EpochCompletedPayload(
+                env_id=1,
+                val_accuracy=0.60,
+                val_loss=0.40,
+                inner_epoch=1,
+            ),
+        ))
+
+        # Flush via BATCH_EPOCH_COMPLETED
+        collector.emit(TelemetryEvent(
+            event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED,
+            epoch=1,
+            data=BatchEpochCompletedPayload(
+                episodes_completed=10,
+                batch_idx=2,
+                avg_accuracy=0.5,
+                avg_reward=1.0,
+                total_episodes=10,
+                n_envs=2,
+            ),
+        ))
+
+        # Check aggregated metrics
+        assert len(collector.store.epoch_snapshots) == 1
+        host = collector.store.epoch_snapshots[0].host
+        assert abs(host.val_accuracy - 0.50) < 0.01, f"Expected ~0.50, got {host.val_accuracy}"
+        assert abs(host.val_loss - 0.50) < 0.01, f"Expected ~0.50, got {host.val_loss}"
+
+
+class TestMinimalTelemetryFallback:
+    """Tests for minimal telemetry mode fallback.
+
+    When EPOCH_COMPLETED is gated (ops_normal off), BATCH_EPOCH_COMPLETED still
+    fires. The collector creates a minimal epoch snapshot from BATCH data.
+    """
+
+    def test_batch_only_creates_epoch_snapshot(self):
+        """BATCH_EPOCH_COMPLETED with empty buffer creates minimal snapshot.
+
+        Regression test: With ops_normal gated, no EPOCH_COMPLETED events fire.
+        BATCH_EPOCH_COMPLETED should create a minimal snapshot from its aggregate data.
+        """
+        from esper.karn.collector import KarnCollector
+
+        collector = KarnCollector()
+
+        collector.emit(TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data=TrainingStartedPayload(
+                n_envs=4,
+                max_epochs=10,
+                task="test_task",
+                host_params=1000,
+                slot_ids=("r0c0",),
+                seed=42,
+                n_episodes=100,
+                lr=0.001,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=10000,
+                policy_device="cpu",
+                env_devices=("cpu", "cpu", "cpu", "cpu"),
+                episode_id="test_minimal",
+            )
+        ))
+
+        # No EPOCH_COMPLETED events (ops_normal gated) - buffer stays empty
+        assert len(collector._pending_epoch_metrics) == 0
+
+        # Only BATCH_EPOCH_COMPLETED fires
+        collector.emit(TelemetryEvent(
+            event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED,
+            epoch=1,
+            data=BatchEpochCompletedPayload(
+                episodes_completed=4,
+                batch_idx=0,  # First batch
+                avg_accuracy=0.75,  # This is all we have
+                avg_reward=2.5,
+                total_episodes=100,
+                n_envs=4,
+            ),
+        ))
+
+        # Should have created a minimal epoch snapshot
+        assert len(collector.store.epoch_snapshots) == 1, (
+            "BATCH_EPOCH_COMPLETED should create epoch snapshot when buffer is empty"
+        )
+
+        snapshot = collector.store.epoch_snapshots[0]
+        assert snapshot.host.val_accuracy == 0.75, (
+            f"val_accuracy should come from BATCH avg_accuracy, got {snapshot.host.val_accuracy}"
+        )
+        # batch_idx is 0, so epoch should be 1 (1-indexed)
+        assert snapshot.epoch == 1, f"Epoch should be 1 (batch_idx+1), got {snapshot.epoch}"
+
+    def test_batch_fallback_does_not_trigger_when_buffer_has_data(self):
+        """Minimal fallback only triggers when buffer is empty.
+
+        If there's buffered data, the flush path handles it, not the fallback.
+        """
+        from esper.karn.collector import KarnCollector
+
+        collector = KarnCollector()
+
+        collector.emit(TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data=TrainingStartedPayload(
+                n_envs=4,
+                max_epochs=10,
+                task="test_task",
+                host_params=1000,
+                slot_ids=("r0c0",),
+                seed=42,
+                n_episodes=100,
+                lr=0.001,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=10000,
+                policy_device="cpu",
+                env_devices=("cpu", "cpu", "cpu", "cpu"),
+                episode_id="test_no_fallback",
+            )
+        ))
+
+        # One EPOCH_COMPLETED - buffer has data
+        collector.emit(TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            epoch=1,
+            data=EpochCompletedPayload(
+                env_id=0,
+                val_accuracy=0.90,  # High accuracy from EPOCH_COMPLETED
+                val_loss=0.10,
+                inner_epoch=1,
+            ),
+        ))
+
+        # BATCH_EPOCH_COMPLETED should flush buffer, not use fallback
+        collector.emit(TelemetryEvent(
+            event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED,
+            epoch=1,
+            data=BatchEpochCompletedPayload(
+                episodes_completed=4,
+                batch_idx=0,
+                avg_accuracy=0.50,  # Different from EPOCH_COMPLETED
+                avg_reward=2.5,
+                total_episodes=100,
+                n_envs=4,
+            ),
+        ))
+
+        # Should have one epoch with EPOCH_COMPLETED data, not BATCH data
+        assert len(collector.store.epoch_snapshots) == 1
+        snapshot = collector.store.epoch_snapshots[0]
+        assert snapshot.host.val_accuracy == 0.90, (
+            f"Should use EPOCH_COMPLETED data (0.90), not BATCH fallback (0.50). "
+            f"Got {snapshot.host.val_accuracy}"
+        )

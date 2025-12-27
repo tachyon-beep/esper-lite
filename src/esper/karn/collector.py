@@ -428,19 +428,50 @@ class KarnCollector:
             del self._pending_epoch_metrics[key]
 
     def _handle_batch_epoch_completed(self, event: "TelemetryEvent") -> None:
-        """Handle BATCH_EPOCH_COMPLETED - per-episode progress event.
+        """Handle BATCH_EPOCH_COMPLETED - flush any remaining buffered epochs.
 
-        BATCH_EPOCH_COMPLETED is emitted once per episode (batch of N episodes),
-        NOT once per inner epoch. It tracks episode-level progress and best-run
-        leaderboards, but does NOT trigger epoch commits.
-
-        Epoch commits are handled by _handle_epoch_completed when all n_envs
-        have reported for a given inner_epoch.
+        BATCH_EPOCH_COMPLETED is emitted once per episode (batch of N envs).
+        It serves two purposes:
+        1. Flush partial batches: The last batch may have fewer envs than n_envs,
+           so the barrier in _handle_epoch_completed never triggers. This handler
+           commits any remaining buffered epochs.
+        2. Minimal telemetry fallback: If EPOCH_COMPLETED was gated (ops_normal off),
+           create a single epoch snapshot from BATCH aggregate metrics.
         """
-        # This event is for progress tracking, not epoch commits.
-        # The Sanctum aggregator and other backends use it for episode-level updates.
-        # No action needed in the collector - backends receive it via emit() routing.
-        pass
+        if not isinstance(event.data, BatchEpochCompletedPayload):
+            return
+
+        payload = event.data
+
+        # Case 1: Flush any remaining buffered epochs (partial batch)
+        if self._pending_epoch_metrics:
+            # Get unique inner_epochs that have buffered data
+            buffered_epochs = sorted(set(key[0] for key in self._pending_epoch_metrics))
+            for inner_epoch in buffered_epochs:
+                self._commit_epoch_from_buffer(inner_epoch)
+            return
+
+        # Case 2: Minimal telemetry fallback - no EPOCH_COMPLETED events received
+        # Create a single epoch snapshot from BATCH aggregate metrics
+        if self.store.current_epoch is None:
+            return
+
+        current_epoch = self.store.current_epoch
+        # Use batch_idx as epoch number (1-indexed for display)
+        epoch_num = payload.batch_idx + 1
+        current_epoch.epoch = epoch_num
+        current_epoch.host.epoch = epoch_num
+        current_epoch.host.val_accuracy = payload.avg_accuracy
+        # BATCH doesn't have val_loss - leave at default 0.0
+
+        # Increment epochs_in_stage for active slots
+        for slot in current_epoch.slots.values():
+            if slot.stage not in (SeedStage.DORMANT, SeedStage.PRUNED, SeedStage.FOSSILIZED):
+                slot.epochs_in_stage += 1
+
+        # Commit and start next
+        self.store.commit_epoch()
+        self.store.start_epoch(epoch_num + 1)
 
     def _check_anomalies_and_capture(self, snapshot: EpochSnapshot) -> None:
         """Check for anomalies and manage dense trace capture."""
