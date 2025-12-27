@@ -7,6 +7,8 @@ import pytest
 
 from esper.leyline import TelemetryEvent, TelemetryEventType
 from esper.leyline.telemetry import (
+    BatchEpochCompletedPayload,
+    EpochCompletedPayload,
     SeedGerminatedPayload,
     TrainingStartedPayload,
 )
@@ -459,3 +461,256 @@ class TestCounterfactualNoneDataHandling:
         # Verify no slot was created (event was dropped after warning)
         slots = collector.store.current_epoch.slots if collector.store.current_epoch else {}
         assert len(slots) == 0, "No slots should be created when data is None"
+
+
+class TestMultiEnvEpochCommitBug:
+    """Tests for the multi-env epoch commit race condition.
+
+    Regression tests for the bug where EPOCH_COMPLETED (per-env) was treated
+    as a global epoch commit, causing:
+    - epochs_in_stage to inflate by n_envs per epoch
+    - Multiple epoch commits per actual epoch
+    - Host metrics overwritten by last env to emit
+    """
+
+    def test_epochs_in_stage_incremented_once_per_epoch(self):
+        """epochs_in_stage should increment once per epoch, not once per env.
+
+        Bug: Prior to fix, each per-env EPOCH_COMPLETED incremented epochs_in_stage,
+        so with 4 envs, epochs_in_stage would be 4 after one inner epoch.
+        """
+        from esper.karn.collector import KarnCollector
+        from esper.leyline import SeedStage
+
+        collector = KarnCollector()
+        n_envs = 4
+
+        # Start training with 4 environments
+        collector.emit(TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data=TrainingStartedPayload(
+                n_envs=n_envs,
+                max_epochs=10,
+                task="test_task",
+                host_params=1000,
+                slot_ids=("r0c0",),
+                seed=42,
+                n_episodes=100,
+                lr=0.001,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=10000,
+                policy_device="cpu",
+                env_devices=tuple("cpu" for _ in range(n_envs)),
+                episode_id="test_epoch_inflation",
+            )
+        ))
+
+        # Germinate a seed so we have something to track
+        collector.emit(TelemetryEvent(
+            event_type=TelemetryEventType.SEED_GERMINATED,
+            slot_id="r0c0",
+            data=SeedGerminatedPayload(
+                slot_id="r0c0",
+                env_id=0,
+                blueprint_id="test_bp",
+                params=100,
+            )
+        ))
+
+        # Move seed to TRAINING stage so epochs_in_stage is tracked
+        from esper.leyline.telemetry import SeedStageChangedPayload
+        collector.emit(TelemetryEvent(
+            event_type=TelemetryEventType.SEED_STAGE_CHANGED,
+            slot_id="r0c0",
+            data=SeedStageChangedPayload(
+                slot_id="r0c0",
+                env_id=0,
+                from_stage="GERMINATED",
+                to_stage="TRAINING",
+            )
+        ))
+
+        # Emit EPOCH_COMPLETED for each environment (this is what Simic does)
+        for env_id in range(n_envs):
+            collector.emit(TelemetryEvent(
+                event_type=TelemetryEventType.EPOCH_COMPLETED,
+                epoch=1,
+                data=EpochCompletedPayload(
+                    env_id=env_id,
+                    val_accuracy=0.5 + env_id * 0.01,  # Slightly different per env
+                    val_loss=0.5 - env_id * 0.01,
+                    inner_epoch=1,
+                ),
+            ))
+
+        # Note: BATCH_EPOCH_COMPLETED is per-episode, not per-inner-epoch.
+        # The collector commits when all n_envs have reported for an inner_epoch.
+        # At this point, all 4 envs have reported for inner_epoch=1, so it's committed.
+        #
+        # BUG (prior to fix): Each EPOCH_COMPLETED committed, causing 4 commits per epoch.
+        # CORRECT: One commit per inner_epoch when all envs have reported.
+
+        # First, verify we can find the slot somewhere (in committed epochs)
+        slot = None
+        for snapshot in collector.store.epoch_snapshots:
+            slot = snapshot.slots.get("env0:r0c0")
+            if slot:
+                break
+
+        assert slot is not None, (
+            f"Slot 'env0:r0c0' should exist in committed epochs. "
+            f"Got {len(collector.store.epoch_snapshots)} committed epochs with slots: "
+            f"{[list(s.slots.keys()) for s in collector.store.epoch_snapshots]}"
+        )
+
+        # BUG demonstration: epochs_in_stage is inflated because the increment
+        # happens on every EPOCH_COMPLETED (per-env) instead of once per batch.
+        # With 4 envs, if all increments hit the same slot, it would be 4.
+        # But due to the commit-per-event bug, only the first env sees this slot.
+        # After fix: epochs_in_stage should be 1 (once per epoch).
+        assert slot.epochs_in_stage == 1, (
+            f"epochs_in_stage should be 1 (one per epoch), got {slot.epochs_in_stage}. "
+            f"Bug: incrementing once per env instead of once per epoch."
+        )
+
+    def test_only_one_epoch_committed_per_batch(self):
+        """Only one epoch should be committed when all envs complete.
+
+        Bug: Prior to fix, each EPOCH_COMPLETED committed and started a new epoch,
+        so with 4 envs, we'd have 4 committed epochs after one inner epoch.
+        """
+        from esper.karn.collector import KarnCollector
+
+        collector = KarnCollector()
+        n_envs = 4
+
+        collector.emit(TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data=TrainingStartedPayload(
+                n_envs=n_envs,
+                max_epochs=10,
+                task="test_task",
+                host_params=1000,
+                slot_ids=("r0c0",),
+                seed=42,
+                n_episodes=100,
+                lr=0.001,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=10000,
+                policy_device="cpu",
+                env_devices=tuple("cpu" for _ in range(n_envs)),
+                episode_id="test_epoch_commit",
+            )
+        ))
+
+        # Emit EPOCH_COMPLETED for each environment
+        for env_id in range(n_envs):
+            collector.emit(TelemetryEvent(
+                event_type=TelemetryEventType.EPOCH_COMPLETED,
+                epoch=1,
+                data=EpochCompletedPayload(
+                    env_id=env_id,
+                    val_accuracy=0.5,
+                    val_loss=0.5,
+                    inner_epoch=1,
+                ),
+            ))
+
+        # Commit happens when all n_envs have reported for inner_epoch=1.
+        # At this point, all 4 envs have reported, so 1 epoch should be committed.
+        committed_count = len(collector.store.epoch_snapshots)
+
+        # BUG (prior to fix): Each EPOCH_COMPLETED committed, giving 4 epochs.
+        # CORRECT: One commit when all envs have reported for an inner_epoch.
+        assert committed_count == 1, (
+            f"Should have 1 committed epoch, got {committed_count}. "
+            f"Bug: committing once per env instead of once per batch."
+        )
+
+    def test_host_metrics_aggregated_across_envs(self):
+        """Host metrics should be aggregated across envs, not last-env-wins.
+
+        Bug: Prior to fix, each EPOCH_COMPLETED overwrote host metrics,
+        so only the last env's metrics were preserved.
+        """
+        from esper.karn.collector import KarnCollector
+
+        collector = KarnCollector()
+        n_envs = 4
+
+        collector.emit(TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data=TrainingStartedPayload(
+                n_envs=n_envs,
+                max_epochs=10,
+                task="test_task",
+                host_params=1000,
+                slot_ids=("r0c0",),
+                seed=42,
+                n_episodes=100,
+                lr=0.001,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=10000,
+                policy_device="cpu",
+                env_devices=tuple("cpu" for _ in range(n_envs)),
+                episode_id="test_host_metrics",
+            )
+        ))
+
+        # Emit EPOCH_COMPLETED with distinct metrics per env
+        # env0: val_accuracy=0.40, env1: 0.50, env2: 0.60, env3: 0.70
+        # Average should be 0.55
+        per_env_accuracies = [0.40, 0.50, 0.60, 0.70]
+        for env_id, val_acc in enumerate(per_env_accuracies):
+            collector.emit(TelemetryEvent(
+                event_type=TelemetryEventType.EPOCH_COMPLETED,
+                epoch=1,
+                data=EpochCompletedPayload(
+                    env_id=env_id,
+                    val_accuracy=val_acc,
+                    val_loss=1.0 - val_acc,
+                    inner_epoch=1,
+                ),
+            ))
+
+        # Emit batch barrier
+        expected_avg = sum(per_env_accuracies) / len(per_env_accuracies)
+        collector.emit(TelemetryEvent(
+            event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED,
+            epoch=1,
+            data=BatchEpochCompletedPayload(
+                episodes_completed=1,
+                batch_idx=1,
+                avg_accuracy=expected_avg,
+                avg_reward=1.0,
+                total_episodes=10,
+                n_envs=n_envs,
+            ),
+        ))
+
+        # With the bug, 4 epochs get committed (one per EPOCH_COMPLETED).
+        # Each epoch has the host metrics from just that one env.
+        # The current_epoch is empty (epoch 5, fresh start).
+        #
+        # BUG: Multiple epochs with per-env metrics (last one has env3's 0.70)
+        # CORRECT: One epoch with aggregated metrics (~0.55)
+
+        # Get the last committed epoch (this is where the final metrics should be)
+        assert len(collector.store.epoch_snapshots) > 0, "Should have committed epochs"
+        last_committed = collector.store.epoch_snapshots[-1]
+        host = last_committed.host
+
+        # With the bug, we have 4 separate epochs. The last one has env3's metrics.
+        # After fix, we should have 1 epoch with aggregated metrics.
+        #
+        # For the bug demonstration: if we get per_env_accuracies[-1] (0.70),
+        # it means last-env-wins. If we get 0.55, aggregation is working.
+        assert abs(host.val_accuracy - expected_avg) < 0.01, (
+            f"Host val_accuracy should be ~{expected_avg:.2f} (mean), got {host.val_accuracy}. "
+            f"Bug: last env's value overwrites instead of aggregating. "
+            f"With {len(collector.store.epoch_snapshots)} committed epochs, "
+            f"last committed has val_accuracy={host.val_accuracy}."
+        )
