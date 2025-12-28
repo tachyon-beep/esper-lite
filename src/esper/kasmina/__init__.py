@@ -35,6 +35,9 @@ from esper.kasmina.isolation import blend_with_isolation, GradientHealthMonitor
 from esper.kasmina.protocol import HostProtocol
 from esper.kasmina.host import CNNHost, TransformerHost, TransformerBlock, MorphogeneticModel
 
+# Alpha scheduling
+from esper.kasmina.alpha_controller import AlphaController
+
 __all__ = [
     # Re-exported Leyline types
     "SeedStage",
@@ -63,4 +66,6 @@ __all__ = [
     "TransformerHost",
     "TransformerBlock",
     "MorphogeneticModel",
+    # Alpha scheduling
+    "AlphaController",
 ]
