@@ -565,7 +565,10 @@ class MorphogeneticModel(nn.Module):
             slot_obj: SeedSlot = self.seed_slots[slot_id]  # type: ignore[assignment]
             x = slot_obj(x)
             prev_segment = slot_id
-        assert prev_segment is not None
+        assert prev_segment is not None, (
+            "prev_segment unexpectedly None after processing _active_slots. "
+            "This indicates a control flow bug - the early return should handle empty slots."
+        )
         return self.host.forward_from_segment(prev_segment, x)
 
     def fused_forward(self, x: torch.Tensor, alpha_overrides: dict[str, torch.Tensor]) -> torch.Tensor:
@@ -589,7 +592,10 @@ class MorphogeneticModel(nn.Module):
             slot_obj: SeedSlot = self.seed_slots[slot_id]  # type: ignore[assignment]
             x = slot_obj(x, alpha_override=override)
             prev_segment = slot_id
-        assert prev_segment is not None
+        assert prev_segment is not None, (
+            "prev_segment unexpectedly None after processing _active_slots. "
+            "This indicates a control flow bug - the early return should handle empty slots."
+        )
         return self.host.forward_from_segment(prev_segment, x)
 
     def germinate_seed(
