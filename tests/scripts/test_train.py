@@ -230,6 +230,8 @@ class TestTamiyoCentricFlags:
         assert args.rounds is None
         assert args.envs is None
         assert args.episode_length is None
+        assert args.ppo_epochs is None
+        assert args.memory_size is None
 
     def test_positive_int_validator_rejects_zero(self):
         """_positive_int should reject zero."""
@@ -296,4 +298,16 @@ class TestTamiyoCentricFlags:
 
         # Verify validation still passes
         config._validate()  # Should not raise
+
+    def test_ppo_epochs_flag_accepted(self):
+        """--ppo-epochs should set ppo_updates_per_batch."""
+        parser = build_parser()
+        args = parser.parse_args(["ppo", "--ppo-epochs", "3"])
+        assert args.ppo_epochs == 3
+
+    def test_memory_size_flag_accepted(self):
+        """--memory-size should set lstm_hidden_dim."""
+        parser = build_parser()
+        args = parser.parse_args(["ppo", "--memory-size", "256"])
+        assert args.memory_size == 256
 

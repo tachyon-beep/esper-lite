@@ -239,6 +239,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Timesteps per environment per round. Each round produces envs × episode_length "
              "transitions for Tamiyo. (Maps to max_epochs. Default: 25)",
     )
+    ppo_parser.add_argument(
+        "--ppo-epochs",
+        type=_positive_int,
+        default=None,
+        metavar="E",
+        help="Gradient steps per round (passes over rollout data). Higher = more sample-efficient "
+             "but risks overfitting. (Maps to ppo_updates_per_batch. Default: 1)",
+    )
+    ppo_parser.add_argument(
+        "--memory-size",
+        type=_positive_int,
+        default=None,
+        metavar="H",
+        help="Tamiyo's LSTM hidden dimension (temporal reasoning capacity). "
+             "Smaller = faster but less temporal memory. (Maps to lstm_hidden_dim. Default: 128)",
+    )
 
     return parser
 
@@ -543,6 +559,10 @@ def main() -> None:
                     # chunk_length MUST equal max_epochs per TrainingConfig validation
                     config.max_epochs = args.episode_length
                     config.chunk_length = args.episode_length
+                if args.ppo_epochs is not None:
+                    config.ppo_updates_per_batch = args.ppo_epochs
+                if args.memory_size is not None:
+                    config.lstm_hidden_dim = args.memory_size
 
                 # Handle A/B testing - set on config for validation
                 if args.ab_test:
