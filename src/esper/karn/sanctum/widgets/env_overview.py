@@ -635,13 +635,13 @@ class EnvOverview(Static):
         # BLENDING shows tempo arrows and alpha
         if seed.stage == "BLENDING" and seed.alpha > 0:
             tempo_arrows = _tempo_arrows(seed.blend_tempo_epochs)
-            base = f"[{style}]{stage_short}:{blueprint} {tempo_arrows} {seed.alpha:.1f}[/{style}]"
+            base = f"[{style}]{stage_short}:{blueprint} {tempo_arrows} {seed.alpha:.1f} [/{style}]"
             return f"{base}{grad_indicator}{curve_suffix}"
 
         # HOLDING shows tempo arrows + alpha (blend tempo was used, still relevant)
         if seed.stage == "HOLDING":
             tempo_arrows = _tempo_arrows(seed.blend_tempo_epochs)
-            base = f"[{style}]{stage_short}:{blueprint} {tempo_arrows} {seed.alpha:.1f}[/{style}]"
+            base = f"[{style}]{stage_short}:{blueprint} {tempo_arrows} {seed.alpha:.1f} [/{style}]"
             return f"{base}{grad_indicator}{curve_suffix}"
 
         # FOSSILIZED shows historical tempo + curve (how it blended)
