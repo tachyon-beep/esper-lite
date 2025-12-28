@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B3-DRL-10` |
 | **Severity** | `P1` |
-| **Status** | `open` |
+| **Status** | `closed` |
 | **Batch** | 3 |
 | **Agent** | `drl` |
 | **Domain** | `kasmina` |
@@ -123,6 +123,24 @@ out = flex_attention(q, k, v, block_mask=block_mask)
 | **OBJECT** | PyTorch 2.7+ `flex_attention` returns `Tuple[Tensor, AuxOutputs]` when `return_lse=True` is passed; this is forward-compatible handling for an API that *can* return tuples. The isinstance check is unnecessary for current usage but not technically dead code. |
 
 **Recommendation:** Downgrade to P3. The check is defensive but harmless for RL training correctness; if removal is desired for torch.compile, add an assertion instead: `assert not isinstance(attn_out, tuple), "aux outputs not expected"`.
+
+---
+
+## Resolution
+
+### Final Disposition: Already Fixed
+
+**Fixed by:** B3-PT-02
+
+The isinstance check was removed as part of fixing B3-PT-02 (torch.compile graph break issue). The current code at lines 287-289 now reads:
+
+```python
+# B3-PT-02: flex_attention returns Tensor in PyTorch 2.5+
+# Removed isinstance check that caused torch.compile graph break
+out = flex_attention(q, k, v, block_mask=block_mask)
+```
+
+Both tickets identified the same code issue from different perspectives (dead code vs graph break). B3-PT-02 was the primary fix ticket.
 
 ---
 

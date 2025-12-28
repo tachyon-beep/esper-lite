@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B3-DRL-21` |
 | **Severity** | `P1` |
-| **Status** | `open` |
+| **Status** | `closed` |
 | **Batch** | 3 |
 | **Agent** | `drl` |
 | **Domain** | `kasmina` |
@@ -118,6 +118,29 @@ if "contribution_velocity" in data:
 | DRL Expert | **NEUTRAL** | The 0.0 default for `contribution_velocity` is semantically correct (no history = zero velocity), but adding type validation would catch schema corruption. This is a genuine optional field with a meaningful default, not a bug-hiding pattern. |
 | PyTorch Specialist | **OBJECT** | Not a P1 correctness bug. The `.get()` with 0.0 default is legitimate initialization of a derived metric -- zero is the correct cold-start value for velocity. Comments on lines 359-365 explicitly document why each field is optional. Downgrade to P4 or close. |
 | Code Review Specialist | **OBJECT** | The `.get()` usage here is **legitimate** per CLAUDE.md's "Legitimate Uses" section. These are genuinely optional fields (counterfactual engine may not have run yet); the docstring at line 326-328 explicitly states "Raises KeyError if required fields are missing" and required fields use direct indexing. Downgrade to P3 documentation-only. |
+
+---
+
+## Resolution
+
+### Final Disposition: Won't Fix (Duplicate of B3-CR-01)
+
+**Reason:** The `.get()` usage is legitimate per CLAUDE.md's "Legitimate Uses" clause.
+
+**Analysis (2025-12-29):**
+
+The `from_dict()` pattern correctly distinguishes required vs optional fields:
+
+1. **Required fields (lines 340-357):** Use direct `data["key"]` access → KeyError on missing data (fail-fast)
+2. **Optional fields (lines 361-365):** Use `.get()` with documented semantic reasons
+
+The 0.0 default for `contribution_velocity` is semantically correct:
+- Zero velocity = "no history yet" (cold-start)
+- This is the mathematically correct initial value for a velocity metric
+
+This matches CLAUDE.md's "Numeric field type guards" legitimate use case.
+
+**See also:** B3-CR-01 (primary ticket, same resolution)
 
 ---
 
