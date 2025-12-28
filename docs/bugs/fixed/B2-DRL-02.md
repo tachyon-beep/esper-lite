@@ -183,4 +183,4 @@ Option B (infer from ndim) risks masking genuine shape errors; prefer explicit c
 
 **Sign-off:** Approved by `feature-dev:code-reviewer`
 
-**Commits:** (pending)
+**Commits:** `84d88bfe`
