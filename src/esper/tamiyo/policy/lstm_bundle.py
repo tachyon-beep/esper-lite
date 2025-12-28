@@ -298,9 +298,58 @@ class LSTMPolicyBundle:
         """Get device of network parameters."""
         return next(self._network.parameters()).device
 
+    def _check_not_compiled(self, method_name: str) -> None:
+        """Raise if policy is compiled (device/dtype mutations break compiled graphs)."""
+        if self.is_compiled:
+            raise RuntimeError(
+                f"Cannot call .{method_name}() on a compiled policy. "
+                "Create a new policy on the target device and compile after placement."
+            )
+
     def to(self, device: torch.device | str) -> "LSTMPolicyBundle":
-        """Move network to device."""
+        """Move network to device.
+
+        Compiled policies cannot be moved; create a new policy on the target
+        device and compile after placement.
+        """
+        self._check_not_compiled("to")
         self._network = self._network.to(device)
+        return self
+
+    def cuda(self, device: int | torch.device | None = None) -> "LSTMPolicyBundle":
+        """Move network to CUDA device. Raises if compiled."""
+        self._check_not_compiled("cuda")
+        self._network = self._network.cuda(device)
+        return self
+
+    def cpu(self) -> "LSTMPolicyBundle":
+        """Move network to CPU. Raises if compiled."""
+        self._check_not_compiled("cpu")
+        self._network = self._network.cpu()
+        return self
+
+    def half(self) -> "LSTMPolicyBundle":
+        """Convert network to float16. Raises if compiled."""
+        self._check_not_compiled("half")
+        self._network = self._network.half()
+        return self
+
+    def float(self) -> "LSTMPolicyBundle":
+        """Convert network to float32. Raises if compiled."""
+        self._check_not_compiled("float")
+        self._network = self._network.float()
+        return self
+
+    def double(self) -> "LSTMPolicyBundle":
+        """Convert network to float64. Raises if compiled."""
+        self._check_not_compiled("double")
+        self._network = self._network.double()
+        return self
+
+    def bfloat16(self) -> "LSTMPolicyBundle":
+        """Convert network to bfloat16. Raises if compiled."""
+        self._check_not_compiled("bfloat16")
+        self._network = self._network.bfloat16()
         return self
 
     # === Introspection ===
