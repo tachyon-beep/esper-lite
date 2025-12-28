@@ -60,6 +60,7 @@ class CounterfactualHelper:
         strategy: Literal["auto", "full_factorial", "shapley", "ablation_only"] = "auto",
         shapley_samples: int = 20,
         emit_events: bool = True,
+        seed: int | None = None,
     ):
         """Initialize helper.
 
@@ -67,10 +68,12 @@ class CounterfactualHelper:
             strategy: "auto", "full_factorial", "shapley", or "ablation_only"
             shapley_samples: Number of permutation samples for Shapley
             emit_events: Whether to emit telemetry events
+            seed: RNG seed for reproducible Shapley value computation (B5-CR-01)
         """
         config = CounterfactualConfig(
             strategy=strategy,
             shapley_samples=shapley_samples,
+            seed=seed,
         )
         # Convert emit_events bool to callback
         emit_callback = None

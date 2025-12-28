@@ -51,6 +51,10 @@ class CounterfactualConfig:
     max_configurations: int | None = None  # Hard cap, None = unlimited
     timeout_seconds: float | None = None  # Abort if exceeded
 
+    # B5-CR-01: Reproducibility seed for Shapley permutation sampling
+    # If None, uses unseeded RNG (non-reproducible but varied across runs)
+    seed: int | None = None
+
     def effective_strategy(self, n_active_seeds: int) -> str:
         """Determine strategy based on config and seed count."""
         if self.force_full_factorial:
@@ -195,6 +199,8 @@ class CounterfactualEngine:
     ):
         self.config = config or CounterfactualConfig()
         self._emit_callback = emit_callback
+        # B5-CR-01: Local RNG for reproducible Shapley permutation sampling
+        self._rng = random.Random(self.config.seed)
 
     def generate_configs(self, slot_ids: list[str]) -> list[tuple[bool, ...]]:
         """Generate the list of configurations required for the current strategy."""
@@ -350,7 +356,7 @@ class CounterfactualEngine:
         # Add random permutation-based samples
         for _ in range(n_samples // 2):  # Antithetic: each perm generates 2
             perm = list(range(n))
-            random.shuffle(perm)
+            self._rng.shuffle(perm)  # B5-CR-01: Use local RNG for reproducibility
 
             # Forward: add slots one by one
             for k in range(n + 1):
@@ -399,7 +405,7 @@ class CounterfactualEngine:
         # but random sampling is still safe and avoids branching logic.
         for _ in range(n_perms):
             perm = list(range(n))
-            random.shuffle(perm)
+            self._rng.shuffle(perm)  # B5-CR-01: Use local RNG for reproducibility
             
             for i, slot_idx in enumerate(perm):
                 # Coalition before adding this slot

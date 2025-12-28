@@ -1173,11 +1173,13 @@ def train_ppo_vectorized(
         )
 
         # Create CounterfactualHelper for Shapley value analysis at episode end
+        # Use base_seed for reproducible Shapley permutation sampling (B5-CR-01)
         counterfactual_helper = (
             CounterfactualHelper(
                 strategy="auto",  # Full factorial for <=4 slots, Shapley sampling otherwise
                 shapley_samples=20,
                 emit_events=use_telemetry,
+                seed=base_seed,
             )
             if use_telemetry
             else None
