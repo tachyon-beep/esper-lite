@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B2-DRL-01` |
 | **Severity** | `P2` |
-| **Status** | `open` |
+| **Status** | `closed` |
 | **Batch** | 2 |
 | **Agent** | `drl` |
 | **Domain** | `kasmina` |
@@ -168,3 +168,32 @@ If the two-level control (policy controls amplitude, gate controls per-sample) i
 
 **Evaluation:** The gate network is correctly structured as an nn.Module submodule with proper registration - parameters will serialize and train correctly.
 The credit assignment concern is valid RL design critique but has no PyTorch-level correctness implications; Option A (gate statistics) would require negligible compute overhead via `detach()`.
+
+---
+
+## Resolution
+
+**Status:** Already Fixed (Option B)
+
+**Evidence:** The design trade-off is already documented in `src/esper/kasmina/slot.py` lines 143-148:
+
+```python
+# Note on alpha semantics (DRL Expert review 2025-12-17):
+# current_alpha represents "blending progress" (step/total_steps), not actual
+# blend values. For GatedBlend, actual per-sample alpha is learned and input-
+# dependent. The agent controls blending TIMELINE, not per-sample gates.
+# This is intentional for credit assignment - observations should reflect
+# controllable state, not emergent gate behavior.
+```
+
+**Why Option A (gate_mean/gate_std) is NOT needed:**
+- `counterfactual_contribution` already provides causal attribution (real_acc - baseline_acc with alpha=0)
+- The policy needs to know *what contribution resulted*, not *how the gate achieved it*
+- Gate statistics would create observation noise without improving credit assignment
+
+**Enhancement Applied:**
+- Added "Credit Assignment Note" docstring to `GatedBlend` class cross-referencing the SeedMetrics design
+
+**Sign-off:** Approved by `drl-expert`
+
+**Commits:** (pending)

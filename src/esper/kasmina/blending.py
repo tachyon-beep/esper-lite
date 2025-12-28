@@ -138,6 +138,13 @@ class GatedBlend(BlendAlgorithm):
 
     Supports both CNN (B, C, H, W) and transformer (B, T, C) inputs.
     The gate network operates on pooled (B, C) features.
+
+    Credit Assignment Note:
+        The gate's per-sample decisions are NOT exposed to the RL policy.
+        The policy observes blending *timeline* (step/total_steps) via
+        SeedMetrics.current_alpha, not gate outputs. Causal attribution
+        uses SeedMetrics.counterfactual_contribution instead.
+        See SeedMetrics docstring for design rationale.
     """
 
     algorithm_id = "gated"
