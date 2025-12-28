@@ -915,46 +915,43 @@ class TamiyoBrain(Static):
         index: int,
         total_cards: int = 3,
     ) -> Text:
-        """Render an enriched 7-line decision card (24 chars wide).
+        """Render an 8-line decision card (65 chars wide) with semantic sections.
 
-        All cards show all 7 lines for consistent layout. Fields not
-        applicable to the action type are shown dim grey with "-".
+        New redesigned format with dashed separator dividing "what happened"
+        from "outcome" section.
 
         Age-based border colors (per UX review):
         - Newest (index 0): cyan border - fresh, actionable
         - Middle: dim grey border - intermediate
         - Oldest (index == total-1): yellow border - aging out soon
 
-        Format per DRL + UX specialist reviews:
-        ┌─ D1 16s ──────────────┐
-        │ GERM s:1 92%          │  Action, slot, confidence
-        │ H:25% ent:0.85        │  Host accuracy, decision entropy
-        │ V:+0.45 δ:-0.12       │  Value estimate, advantage
-        │ r:+0.30 TD:+0.22 ✓    │  Reward, TD advantage, HIT/MISS
-        │ alt: W:6% P:2%        │  Alternatives
-        │ bpnt:conv_l(87%) STD  │  Head choices (GERMINATE only)
-        └───────────────────────┘
+        Format:
+        ┌─ #1 GERMINATE ──────────────────────────────────────── 16s ───┐
+        │  slot:1  confidence:92%                                       │
+        │  blueprint:conv_light(87%)  STD  sigmoid+add  ╱               │
+        │ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─│
+        │  host:25%  entropy:0.85 [balanced]                      [HIT] │
+        │  expect:+0.45  reward:+0.30  TD:+0.22                         │
+        │  also: WAIT 6%  PRUNE 2%                                      │
+        └───────────────────────────────────────────────────────────────┘
         """
         from datetime import datetime, timezone
 
-        CONTENT_WIDTH = self.DECISION_CARD_WIDTH - 4  # "│ " + content + " │"
+        CARD_WIDTH = self.DECISION_CARD_WIDTH  # 65
+        CONTENT_WIDTH = CARD_WIDTH - 4  # 61 inner chars (│ + space + content + space + │)
 
-        # Age-based border colors (per UX review):
-        # - Newest (index 0): cyan - fresh, actionable
-        # - Middle: dim grey - intermediate
-        # - Oldest (index == total-1): yellow - aging out soon
+        # Age-based border colors
         if total_cards <= 1:
-            border_style = "cyan"  # Single card is always "newest"
+            border_style = "cyan"
         elif index == 0:
-            border_style = "cyan"  # Newest
+            border_style = "cyan"
         elif index == total_cards - 1:
-            border_style = "yellow"  # Oldest
+            border_style = "yellow"
         else:
-            border_style = "dim"  # Middle
+            border_style = "dim"
 
         now = datetime.now(timezone.utc)
         age = (now - decision.timestamp).total_seconds()
-        # Precise formatting: "45s" for <60s, "1:35" for >=60s (no rounding confusion)
         if age < 60:
             age_str = f"{age:.0f}s"
         else:
@@ -974,145 +971,175 @@ class TamiyoBrain(Static):
 
         card = Text()
 
-        # Title: ┌─ D1 16s ──────────────┐
-        title = f"D{index + 1} {age_str}"
-        fill = self.DECISION_CARD_WIDTH - 4 - len(title)
-        card.append(f"┌─ {title}{'─' * fill}┐\n", style=border_style)
+        # === Title line: ┌─ #1 GERMINATE ───────────────────────── 16s ───┐ ===
+        # Format: "┌─ " + title_left + fill + " " + age_str + " ───┐"
+        title_left = f"#{index + 1} {decision.chosen_action}"
+        # We want: ┌─ #1 ACTION ─────...───── XXs ───┐
+        # Total: 65 chars
+        # Left side: "┌─ " = 3 chars
+        # Right side: " ───┐" = 5 chars
+        # Age: " XXs" or " X:XX" (up to 6 chars with space)
+        age_part = f" {age_str} "
+        left_part = f"┌─ {title_left} "
+        right_part = f"{age_part}───┐"
+        fill_len = CARD_WIDTH - len(left_part) - len(right_part)
+        card.append("┌─ ", style=border_style)
+        card.append(f"#{index + 1} ", style="bright_white")
+        card.append(decision.chosen_action, style=action_style)
+        card.append(" ", style=border_style)
+        card.append("─" * max(0, fill_len), style=border_style)
+        card.append(f" {age_str} ", style="dim")
+        card.append("───┐\n", style=border_style)
 
-        # Line 1: ACTION s:N CONF%
-        action_abbrev = decision.chosen_action[:4].upper()
+        # === Line 1: slot:N  confidence:XX% ===
         slot_num = decision.chosen_slot[-1] if decision.chosen_slot else "-"
-        line1 = f"{action_abbrev} s:{slot_num} {decision.confidence:.0%}"
-        card.append("│", style=border_style)
-        card.append(" ")
-        card.append(action_abbrev, style=action_style)
-        card.append(f" s:{slot_num}", style="cyan")
-        card.append(f" {decision.confidence:.0%}", style="dim")
-        card.append(" " * max(0, CONTENT_WIDTH - len(line1)) + " ")
-        card.append("│", style=border_style)
-        card.append("\n")
+        line1_content = f"slot:{slot_num}  confidence:{decision.confidence:.0%}"
+        line1_padding = CONTENT_WIDTH - len(line1_content)
+        card.append("│ ", style=border_style)
+        card.append(f"slot:{slot_num}", style="cyan")
+        card.append("  ", style="dim")
+        card.append(f"confidence:{decision.confidence:.0%}", style="dim")
+        card.append(" " * max(0, line1_padding) + " ", style="dim")
+        card.append("│\n", style=border_style)
 
-        # Line 2: H:XX% ent:X.XX (decision entropy, per DRL review)
-        line2 = f"H:{decision.host_accuracy:.0f}% ent:{decision.decision_entropy:.2f}"
-        card.append("│", style=border_style)
-        card.append(" ")
-        card.append(f"H:{decision.host_accuracy:.0f}%", style="cyan")
-        card.append(f" ent:{decision.decision_entropy:.2f}", style="dim")
-        card.append(" " * max(0, CONTENT_WIDTH - len(line2)) + " ")
-        card.append("│", style=border_style)
-        card.append("\n")
-
-        # Line 3: V:+X.XX δ:+X.XX (per DRL review)
-        # V = expected_value = V(s) value function estimate
-        # δ = value_residual = r - V(s) = prediction error
-        line3 = (
-            f"V:{decision.expected_value:+.2f} \u03b4:{decision.value_residual:+.2f}"
-        )
-        card.append("│", style=border_style)
-        card.append(" ")
-        card.append(f"V:{decision.expected_value:+.2f}", style="cyan")
-        card.append(f" \u03b4:{decision.value_residual:+.2f}", style="magenta")
-        card.append(" " * max(0, CONTENT_WIDTH - len(line3)) + " ")
-        card.append("│", style=border_style)
-        card.append("\n")
-
-        # Line 4: r:+X.XX TD:+X.XX ✓ HIT / ✗ MISS (per DRL + UX review)
-        # r = actual_reward = immediate reward received
-        # TD = td_advantage = r + γV(s') - V(s) = true TD(0) advantage
-        # HIT/MISS based on prediction accuracy |r - V(s)|
-        card.append("│", style=border_style)
-        card.append(" ")
-        if decision.actual_reward is not None:
-            diff = abs(decision.actual_reward - decision.expected_value)
-            is_hit = diff < self.PREDICTION_EXCELLENT_THRESHOLD
-            style = "green" if is_hit else "red"
-            icon = "✓" if is_hit else "✗"
-            # Show reward
-            card.append(f"r:{decision.actual_reward:+.2f}", style=style)
-            # Show TD advantage if computed (requires next step's V(s'))
-            if decision.td_advantage is not None:
-                card.append(f" TD:{decision.td_advantage:+.2f}", style="bright_cyan")
-                line4 = f"r:{decision.actual_reward:+.2f} TD:{decision.td_advantage:+.2f} {icon}"
-            else:
-                card.append(" TD:...", style="dim italic")
-                line4 = f"r:{decision.actual_reward:+.2f} TD:... {icon}"
-            card.append(f" {icon}", style=style)
-        else:
-            card.append("r:... TD:...", style="dim italic")
-            line4 = "r:... TD:..."
-        card.append(" " * max(0, CONTENT_WIDTH - len(line4)) + " ")
-        card.append("│", style=border_style)
-        card.append("\n")
-
-        # Line 5: alt: G:12% P:8%
-        card.append("│", style=border_style)
-        card.append(" ")
-        if decision.alternatives:
-            alt_strs = [f"{a[0]}:{p:.0%}" for a, p in decision.alternatives[:2]]
-            line5 = "alt: " + " ".join(alt_strs)
-            card.append("alt: ", style="dim")
-            for i, (alt_action, prob) in enumerate(decision.alternatives[:2]):
-                if i > 0:
-                    card.append(" ", style="dim")
-                alt_style = action_colors.get(alt_action, "dim")
-                card.append(f"{alt_action[0]}:{prob:.0%}", style=alt_style)
-        else:
-            line5 = "alt: -"
-            card.append("alt: -", style="dim")
-        card.append(" " * max(0, CONTENT_WIDTH - len(line5)) + " ")
-        card.append("│", style=border_style)
-        card.append("\n")
-
-        # Line 6: Head choices (per DRL/UX specialist review)
-        # Format: "bpnt:conv_l(87%) tmp:STD" for GERMINATE, dim "-" for others
-        card.append("│", style=border_style)
-        card.append(" ")
+        # === Line 2: Blueprint info for GERMINATE, OR contextual note for others ===
+        card.append("│ ", style=border_style)
         if decision.chosen_action == "GERMINATE" and decision.chosen_blueprint:
-            # Abbreviate blueprint name (first 8 chars with wider card)
-            bp_abbrev = decision.chosen_blueprint[:8] if decision.chosen_blueprint else "?"
+            # Format: "blueprint:conv_light(87%)  STD  sigmoid+add  ╱"
+            bp_name = decision.chosen_blueprint[:10]  # Max 10 chars
             bp_conf = f"({decision.blueprint_confidence:.0%})" if decision.blueprint_confidence else ""
 
-            # Tempo arrows (FAST→▸▸▸, STANDARD→▸▸, SLOW→▸) - dim "-" if not set
-            tempo_arrow_map = {"FAST": "▸▸▸", "STANDARD": "▸▸", "SLOW": "▸"}
-            has_tempo = decision.chosen_tempo in tempo_arrow_map
-            tempo_arrows = tempo_arrow_map.get(decision.chosen_tempo or "", "-")
-            tempo_style = "magenta" if has_tempo else "dim"
+            # Tempo: FAST→▸▸▸, STANDARD→▸▸ (STD), SLOW→▸
+            tempo_map = {"FAST": "▸▸▸", "STANDARD": "▸▸", "SLOW": "▸"}
+            tempo_display = tempo_map.get(decision.chosen_tempo or "", "-")
+            tempo_style = "magenta" if decision.chosen_tempo in tempo_map else "dim"
 
-            # Style: leyline blend names - dim "-" if not set
-            style_blend_map = {
+            # Style: blend style abbreviation
+            style_map = {
                 "LINEAR_ADD": "linear+add",
                 "LINEAR_MULTIPLY": "linear×mul",
                 "SIGMOID_ADD": "sigmoid+add",
                 "GATED_GATE": "gated⊙gate",
             }
-            has_style = decision.chosen_style in style_blend_map
-            style_display = style_blend_map.get(decision.chosen_style or "", "-")
-            style_style = "yellow" if has_style else "dim"
+            style_display = style_map.get(decision.chosen_style or "", "-")
+            style_style = "yellow" if decision.chosen_style in style_map else "dim"
 
-            # Curve glyph (╱ ∿ ⌒ ⌢ ⊐) - dim "-" if not set
-            has_curve = decision.chosen_curve in ALPHA_CURVE_GLYPHS
+            # Curve glyph
             curve_glyph = ALPHA_CURVE_GLYPHS.get(decision.chosen_curve or "", "-")
-            curve_style = "green" if has_curve else "dim"
+            curve_style = "green" if decision.chosen_curve in ALPHA_CURVE_GLYPHS else "dim"
 
-            line6 = f"bp:{bp_abbrev}{bp_conf} {tempo_arrows} {style_display} {curve_glyph}"
-            card.append("bp:", style="dim")
-            card.append(bp_abbrev, style="cyan")
+            line2_content = f"blueprint:{bp_name}{bp_conf}  {tempo_display}  {style_display}  {curve_glyph}"
+            line2_padding = CONTENT_WIDTH - len(line2_content)
+
+            card.append("blueprint:", style="dim")
+            card.append(bp_name, style="cyan")
             card.append(bp_conf, style="dim")
-            card.append(f" {tempo_arrows}", style=tempo_style)
-            card.append(f" {style_display}", style=style_style)
-            card.append(f" {curve_glyph}", style=curve_style)
+            card.append("  ", style="dim")
+            card.append(tempo_display, style=tempo_style)
+            card.append("  ", style="dim")
+            card.append(style_display, style=style_style)
+            card.append("  ", style="dim")
+            card.append(curve_glyph, style=curve_style)
+            card.append(" " * max(0, line2_padding) + " ")
         else:
-            # Non-GERMINATE: show dim placeholder
-            line6 = "bp:- - - -"
-            card.append(line6, style="dim")
-        card.append(" " * max(0, CONTENT_WIDTH - len(line6)) + " ")
-        card.append("│", style=border_style)
-        card.append("\n")
+            # Non-GERMINATE: show contextual note
+            context_note = self._action_context_note(decision)
+            line2_content = context_note if context_note else ""
+            line2_padding = CONTENT_WIDTH - len(line2_content)
+            card.append(context_note, style="dim italic")
+            card.append(" " * max(0, line2_padding) + " ")
+        card.append("│\n", style=border_style)
 
-        # Bottom border
-        card.append(
-            "└" + "─" * (self.DECISION_CARD_WIDTH - 2) + "┘", style=border_style
+        # === Separator line: │ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─│ ===
+        # Pattern: "│ " (2) + separator_content (61) + " │" (2) = 65 chars
+        # CONTENT_WIDTH = 61, so pattern is 61 chars of "─ " repeating
+        separator_content = "─ " * (CONTENT_WIDTH // 2)
+        if CONTENT_WIDTH % 2 == 1:
+            separator_content += "─"
+        # Trim to exact content width
+        separator_content = separator_content[:CONTENT_WIDTH]
+        card.append("│ ", style=border_style)
+        card.append(separator_content, style="dim")
+        card.append(" │\n", style=border_style)
+
+        # === Line 3: host:XX%  entropy:X.XX [label]                      [BADGE] ===
+        entropy_label, entropy_style = self._entropy_label(decision.decision_entropy)
+        outcome_badge, badge_style = self._outcome_badge(
+            decision.expected_value, decision.actual_reward
         )
+
+        # Build content: "host:XX%  entropy:X.XX [label]" then right-align "[BADGE]"
+        left_content = f"host:{decision.host_accuracy:.0f}%  entropy:{decision.decision_entropy:.2f} {entropy_label}"
+        right_content = outcome_badge
+        # Calculate padding between left and right
+        middle_padding = CONTENT_WIDTH - len(left_content) - len(right_content)
+
+        card.append("│ ", style=border_style)
+        card.append(f"host:{decision.host_accuracy:.0f}%", style="cyan")
+        card.append("  ", style="dim")
+        card.append(f"entropy:{decision.decision_entropy:.2f}", style="dim")
+        card.append(" ", style="dim")
+        card.append(entropy_label, style=entropy_style)
+        card.append(" " * max(0, middle_padding), style="dim")
+        card.append(outcome_badge, style=badge_style)
+        card.append(" │\n", style=border_style)
+
+        # === Line 4: expect:+X.XX  reward:+X.XX  TD:+X.XX ===
+        card.append("│ ", style=border_style)
+        if decision.actual_reward is not None:
+            if decision.td_advantage is not None:
+                line4_content = f"expect:{decision.expected_value:+.2f}  reward:{decision.actual_reward:+.2f}  TD:{decision.td_advantage:+.2f}"
+                line4_padding = CONTENT_WIDTH - len(line4_content)
+                card.append(f"expect:{decision.expected_value:+.2f}", style="cyan")
+                card.append("  ", style="dim")
+                card.append(f"reward:{decision.actual_reward:+.2f}", style="magenta")
+                card.append("  ", style="dim")
+                card.append(f"TD:{decision.td_advantage:+.2f}", style="bright_cyan")
+            else:
+                line4_content = f"expect:{decision.expected_value:+.2f}  reward:{decision.actual_reward:+.2f}  TD:..."
+                line4_padding = CONTENT_WIDTH - len(line4_content)
+                card.append(f"expect:{decision.expected_value:+.2f}", style="cyan")
+                card.append("  ", style="dim")
+                card.append(f"reward:{decision.actual_reward:+.2f}", style="magenta")
+                card.append("  ", style="dim")
+                card.append("TD:...", style="dim italic")
+        else:
+            line4_content = f"expect:{decision.expected_value:+.2f}  reward:...  TD:..."
+            line4_padding = CONTENT_WIDTH - len(line4_content)
+            card.append(f"expect:{decision.expected_value:+.2f}", style="cyan")
+            card.append("  ", style="dim")
+            card.append("reward:...", style="dim italic")
+            card.append("  ", style="dim")
+            card.append("TD:...", style="dim italic")
+        card.append(" " * max(0, line4_padding) + " ", style="dim")
+        card.append("│\n", style=border_style)
+
+        # === Line 5: also: ACTION X%  ACTION X% ===
+        card.append("│ ", style=border_style)
+        if decision.alternatives:
+            # Format: "also: WAIT 6%  PRUNE 2%"
+            alt_parts = []
+            for alt_action, prob in decision.alternatives[:2]:
+                alt_parts.append(f"{alt_action} {prob:.0%}")
+            line5_content = "also: " + "  ".join(alt_parts)
+            line5_padding = CONTENT_WIDTH - len(line5_content)
+
+            card.append("also: ", style="dim")
+            for i, (alt_action, prob) in enumerate(decision.alternatives[:2]):
+                if i > 0:
+                    card.append("  ", style="dim")
+                alt_style = action_colors.get(alt_action, "dim")
+                card.append(alt_action, style=alt_style)
+                card.append(f" {prob:.0%}", style="dim")
+        else:
+            line5_content = "also: -"
+            line5_padding = CONTENT_WIDTH - len(line5_content)
+            card.append("also: -", style="dim")
+        card.append(" " * max(0, line5_padding) + " ", style="dim")
+        card.append("│\n", style=border_style)
+
+        # === Bottom border ===
+        card.append("└" + "─" * (CARD_WIDTH - 2) + "┘", style=border_style)
 
         return card
 

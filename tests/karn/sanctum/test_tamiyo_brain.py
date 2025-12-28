@@ -1702,7 +1702,7 @@ async def test_border_title_includes_group_id():
 
 @pytest.mark.asyncio
 async def test_enriched_decision_card_format():
-    """Enriched decision card should be 45 chars wide with 8 lines."""
+    """Enriched decision card should be 65 chars wide with 8 lines."""
     from esper.karn.sanctum.schema import DecisionSnapshot
     from datetime import datetime, timezone
 
@@ -1732,12 +1732,12 @@ async def test_enriched_decision_card_format():
         lines = card_plain.split('\n')
 
         # Should have exactly 8 lines (title + 6 content + bottom border)
-        # Line 6 shows head choices (dim "-" for non-GERMINATE actions)
+        # New format: title, slot/conf, blueprint/context, separator, host/entropy, expect/reward, also, bottom
         assert len(lines) == 8
 
-        # All lines should be exactly 45 chars (widened to show head choices)
+        # All lines should be exactly 65 chars (redesigned wider format)
         for i, line in enumerate(lines[:8]):
-            assert len(line) == 45, f"Line {i} has length {len(line)}, expected 45: '{line}'"
+            assert len(line) == 65, f"Line {i} has length {len(line)}, expected 65: '{line}'"
 
         # Verify border structure
         assert lines[0].startswith("┌─")
@@ -1745,21 +1745,20 @@ async def test_enriched_decision_card_format():
         assert lines[7].startswith("└")
         assert lines[7].endswith("┘")
 
-        # Should contain enriched info
+        # Should contain enriched info (new format uses expanded labels)
         card_str = card_plain
-        assert "D1" in card_str  # Decision number
+        assert "#1" in card_str  # Decision number (new format: #N)
         assert "WAIT" in card_str  # Action
         assert "92%" in card_str  # Confidence
-        assert "H:87" in card_str or "H:88" in card_str  # Host accuracy
-        assert "V:" in card_str  # Value estimate V(s)
-        assert "δ:" in card_str  # Value residual δ = r - V(s)
-        assert "ent:" in card_str  # Decision entropy
-        assert "alt:" in card_str  # Alternatives
+        assert "host:87" in card_str or "host:88" in card_str  # Host accuracy (new label)
+        assert "expect:" in card_str  # Value estimate (new: expect: instead of V:)
+        assert "entropy:" in card_str  # Decision entropy (new: entropy: instead of ent:)
+        assert "also:" in card_str  # Alternatives (new: also: instead of alt:)
 
 
 @pytest.mark.asyncio
 async def test_enriched_decision_card_hit_miss():
-    """Enriched card should show HIT/MISS text based on prediction accuracy."""
+    """Enriched card should show [HIT]/[MISS] badge based on prediction accuracy."""
     from esper.karn.sanctum.schema import DecisionSnapshot
     from datetime import datetime, timezone
 
@@ -1784,10 +1783,10 @@ async def test_enriched_decision_card_hit_miss():
             decision_entropy=0.85,
         )
         card = widget._render_enriched_decision(decision_hit, index=0)
-        # Note: HIT/MISS text removed from new format - just icon now
-        assert "✓" in card.plain
+        # New format uses [HIT] badge instead of checkmark icon
+        assert "[HIT]" in card.plain
 
-        # Test MISS (diff >= 0.1)
+        # Test MISS (diff >= 0.3)
         decision_miss = DecisionSnapshot(
             decision_id="test-miss",
             timestamp=datetime.now(timezone.utc),
@@ -1797,15 +1796,15 @@ async def test_enriched_decision_card_hit_miss():
             chosen_slot="r0",
             confidence=0.92,
             expected_value=0.12,
-            actual_reward=0.50,  # diff = 0.38 >= 0.1
+            actual_reward=0.50,  # diff = 0.38 >= 0.3
             alternatives=[],
             pinned=False,
             value_residual=0.38,  # r - V(s) = 0.50 - 0.12
             decision_entropy=0.85,
         )
         card = widget._render_enriched_decision(decision_miss, index=0)
-        # Note: HIT/MISS text removed from new format - just icon now
-        assert "✗" in card.plain
+        # New format uses [MISS] badge instead of X icon
+        assert "[MISS]" in card.plain
 
 
 @pytest.mark.asyncio
@@ -1839,13 +1838,14 @@ async def test_enriched_decision_card_uses_constant():
             decision_entropy=0.85,
         )
         card = widget._render_enriched_decision(decision, index=0)
-        # diff = 0.10, which is NOT < 0.1, so should be MISS (✗ icon)
-        assert "✗" in card.plain
+        # diff = 0.10, which is NOT < 0.1, so should be [~OK] (in the acceptable range)
+        # Redesigned format uses badges: [HIT] (< 0.1), [~OK] (0.1-0.3), [MISS] (>= 0.3)
+        assert "[~OK]" in card.plain
 
 
 @pytest.mark.asyncio
 async def test_decisions_column_uses_enriched_cards():
-    """Decisions column should use enriched cards with V(s) and δ (value residual)."""
+    """Decisions column should use enriched cards with expect: and reward: labels."""
     from esper.karn.sanctum.schema import DecisionSnapshot, SanctumSnapshot, TamiyoState
     from datetime import datetime, timezone
 
@@ -1879,8 +1879,9 @@ async def test_decisions_column_uses_enriched_cards():
         column = widget._render_decisions_column()
         column_str = str(column)
 
-        assert "V:" in column_str, f"Decisions column should show V(s). Got: {column_str}"
-        assert "δ:" in column_str, f"Decisions column should show δ (value residual). Got: {column_str}"
+        # Redesigned format uses expanded labels: expect:, reward: instead of V:, δ:
+        assert "expect:" in column_str, f"Decisions column should show expect:. Got: {column_str}"
+        assert "reward:" in column_str, f"Decisions column should show reward:. Got: {column_str}"
 
 
 # ===========================
@@ -1938,12 +1939,12 @@ async def test_decisions_column_renders_three_cards():
         column = widget._render_decisions_column()
         column_str = str(column)
 
-        # Should have 3 decision cards
-        assert "D1" in column_str
-        assert "D2" in column_str
-        assert "D3" in column_str
+        # Should have 3 decision cards (redesigned format uses #N instead of DN)
+        assert "#1" in column_str
+        assert "#2" in column_str
+        assert "#3" in column_str
         assert "WAIT" in column_str
-        assert "GERM" in column_str
+        assert "GERMINATE" in column_str  # Full action name in new format
 
 
 # ===========================
@@ -2092,7 +2093,7 @@ async def test_horizontal_layout_has_two_columns():
 
         # Should have both vitals and decisions visible
         assert "Entropy" in rendered_str  # Vitals
-        assert "D1" in rendered_str  # Compact decision
+        assert "#1" in rendered_str  # Redesigned decision format uses #N
         assert "WAIT" in rendered_str  # Action in decision
 
 
@@ -2310,7 +2311,7 @@ def test_alpha_oscillation_detection():
 
 
 def test_decision_card_shows_value_and_advantage():
-    """Decision cards should show V(s) and δ (value residual) per DRL review."""
+    """Decision cards should show expect: and reward: per redesigned format."""
     from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
     from esper.karn.sanctum.schema import DecisionSnapshot, SanctumSnapshot, TamiyoState
     from datetime import datetime, timezone
@@ -2342,13 +2343,13 @@ def test_decision_card_shows_value_and_advantage():
     card = widget._render_enriched_decision(decision, index=0)
     card_str = str(card)
 
-    # Should show V(s) and δ (value residual)
-    assert "V:" in card_str, f"Card should show value estimate V(s). Got: {card_str}"
-    assert "δ:" in card_str, f"Card should show value residual δ. Got: {card_str}"
+    # Redesigned format uses expanded labels: expect:, reward: instead of V:, δ:
+    assert "expect:" in card_str, f"Card should show value estimate expect:. Got: {card_str}"
+    assert "reward:" in card_str, f"Card should show reward:. Got: {card_str}"
 
-    # Should show outcome icon (per UX review - HIT/MISS text removed, just icon)
-    assert "✓" in card_str or "✗" in card_str, \
-        f"Card should show outcome icon. Got: {card_str}"
+    # Should show outcome badge (redesigned format uses [HIT], [~OK], [MISS])
+    assert "[HIT]" in card_str or "[~OK]" in card_str or "[MISS]" in card_str, \
+        f"Card should show outcome badge. Got: {card_str}"
 
 
 @pytest.mark.asyncio
@@ -2779,3 +2780,169 @@ def test_head_heatmap_uses_5_char_bars():
 def test_decision_card_width_is_65():
     """Decision card should be 65 chars wide for improved readability."""
     assert TamiyoBrain.DECISION_CARD_WIDTH == 65
+
+
+# =============================================================================
+# REDESIGNED DECISION CARD TESTS (Task 4)
+# =============================================================================
+
+
+def test_redesigned_decision_card_structure():
+    """Redesigned card should have semantic sections with dashed separator."""
+    from datetime import datetime, timezone
+
+    widget = TamiyoBrain()
+    decision = DecisionSnapshot(
+        timestamp=datetime.now(timezone.utc),
+        slot_states={},
+        host_accuracy=25.0,
+        chosen_action="WAIT",
+        chosen_slot="r0c0",
+        confidence=0.98,
+        expected_value=0.80,
+        actual_reward=-0.10,
+        alternatives=[("GERMINATE", 0.01), ("PRUNE", 0.01)],
+        decision_id="test",
+        decision_entropy=0.12,
+        value_residual=-0.90,
+        td_advantage=0.05,
+    )
+
+    card = widget._render_enriched_decision(decision, index=0)
+    text = card.plain
+
+    # Should be 65 chars wide
+    lines = text.split('\n')
+    for line in lines:
+        if line:
+            assert len(line) == 65, f"Line length {len(line)} != 65: '{line}'"
+
+    # Should contain dashed separator
+    assert "─ ─ ─" in text, "Expected dashed separator in card"
+
+    # Should use expanded labels instead of abbreviations
+    assert "host:" in text, "Expected 'host:' instead of 'H:'"
+    assert "entropy:" in text, "Expected 'entropy:' instead of 'ent:'"
+    assert "expect:" in text, "Expected 'expect:' instead of 'V:'"
+    assert "reward:" in text, "Expected 'reward:' instead of 'r:'"
+
+    # Should NOT contain Greek delta
+    assert "δ:" not in text, "Should not contain Greek delta"
+
+    # Should contain entropy label
+    assert "[collapsed]" in text or "[confident]" in text or "[balanced]" in text or "[exploring]" in text
+
+    # Should contain outcome badge
+    assert "[HIT]" in text or "[~OK]" in text or "[MISS]" in text or "[...]" in text
+
+
+def test_redesigned_card_contextual_note_for_wait():
+    """Non-GERMINATE cards should show contextual note on line 2."""
+    from datetime import datetime, timezone
+
+    widget = TamiyoBrain()
+    decision = DecisionSnapshot(
+        timestamp=datetime.now(timezone.utc),
+        slot_states={},
+        host_accuracy=50.0,
+        chosen_action="WAIT",
+        chosen_slot=None,
+        confidence=0.95,
+        expected_value=0.0,
+        actual_reward=0.0,
+        alternatives=[],
+        decision_id="test",
+        decision_entropy=0.5,
+    )
+
+    card = widget._render_enriched_decision(decision, index=0)
+    text = card.plain
+
+    assert "waiting" in text.lower(), f"Expected contextual note in card: {text}"
+    assert "bp:- - - -" not in text, "Should not have placeholder bp line"
+
+
+def test_redesigned_card_germinate_shows_blueprint():
+    """GERMINATE cards should show blueprint info on line 2."""
+    from datetime import datetime, timezone
+
+    widget = TamiyoBrain()
+    decision = DecisionSnapshot(
+        timestamp=datetime.now(timezone.utc),
+        slot_states={},
+        host_accuracy=50.0,
+        chosen_action="GERMINATE",
+        chosen_slot="r0c0",
+        confidence=0.92,
+        expected_value=0.5,
+        actual_reward=0.3,
+        alternatives=[("WAIT", 0.06)],
+        decision_id="test",
+        decision_entropy=1.2,
+        value_residual=0.1,
+        chosen_blueprint="conv_light",
+        chosen_tempo="STANDARD",
+        chosen_style="LINEAR_ADD",
+        chosen_curve="LINEAR",
+        blueprint_confidence=0.87,
+    )
+
+    card = widget._render_enriched_decision(decision, index=0)
+    text = card.plain
+
+    assert "blueprint:" in text or "conv" in text.lower()
+    assert "▸▸" in text  # STANDARD tempo
+    assert "╱" in text  # LINEAR curve
+
+
+def test_redesigned_card_title_format():
+    """Title should show #N ACTION on left, age on right."""
+    from datetime import datetime, timezone, timedelta
+
+    widget = TamiyoBrain()
+    decision = DecisionSnapshot(
+        timestamp=datetime.now(timezone.utc) - timedelta(seconds=30),
+        slot_states={},
+        host_accuracy=50.0,
+        chosen_action="GERMINATE",
+        chosen_slot="r0c0",
+        confidence=0.92,
+        expected_value=0.5,
+        actual_reward=0.3,
+        alternatives=[],
+        decision_id="test",
+        decision_entropy=1.0,
+    )
+
+    card = widget._render_enriched_decision(decision, index=0)
+    text = card.plain
+    first_line = text.split('\n')[0]
+
+    assert "#1" in first_line, f"Expected '#1' in title: {first_line}"
+    assert "GERMINATE" in first_line, f"Expected 'GERMINATE' in title: {first_line}"
+    assert "30s" in first_line or "31s" in first_line or "29s" in first_line, f"Expected age in title: {first_line}"
+
+
+def test_redesigned_card_also_line():
+    """Alternatives line should use 'also:' prefix."""
+    from datetime import datetime, timezone
+
+    widget = TamiyoBrain()
+    decision = DecisionSnapshot(
+        timestamp=datetime.now(timezone.utc),
+        slot_states={},
+        host_accuracy=50.0,
+        chosen_action="WAIT",
+        chosen_slot=None,
+        confidence=0.90,
+        expected_value=0.0,
+        actual_reward=0.0,
+        alternatives=[("GERMINATE", 0.06), ("PRUNE", 0.04)],
+        decision_id="test",
+        decision_entropy=0.5,
+    )
+
+    card = widget._render_enriched_decision(decision, index=0)
+    text = card.plain
+
+    assert "also:" in text, f"Expected 'also:' in card: {text}"
