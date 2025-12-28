@@ -34,7 +34,10 @@ from esper.karn.sanctum.schema import (
     RunConfig,
     CounterfactualConfig,
     CounterfactualSnapshot,
+    compute_entropy_velocity,
+    compute_collapse_risk,
 )
+from esper.karn.constants import TUIThresholds
 from esper.karn.sanctum.widgets.reward_health import RewardHealthData
 from esper.karn.pareto import extract_pareto_frontier, compute_hypervolume_2d
 from esper.leyline import (
@@ -744,6 +747,18 @@ class SanctumAggregator:
         # PPO inner loop context - have defaults
         self._tamiyo.inner_epoch = payload.inner_epoch
         self._tamiyo.ppo_batch = payload.batch
+
+        # Compute entropy velocity and collapse risk (after entropy_history is updated)
+        self._tamiyo.entropy_velocity = compute_entropy_velocity(
+            self._tamiyo.entropy_history
+        )
+        self._tamiyo.collapse_risk_score = compute_collapse_risk(
+            self._tamiyo.entropy_history,
+            critical_threshold=TUIThresholds.ENTROPY_CRITICAL,
+            warning_threshold=TUIThresholds.ENTROPY_WARNING,
+            previous_risk=self._tamiyo._previous_risk,
+        )
+        self._tamiyo._previous_risk = self._tamiyo.collapse_risk_score
 
     def _handle_seed_event(self, event: "TelemetryEvent", event_type: str) -> None:
         """Handle seed lifecycle events with per-env tracking."""

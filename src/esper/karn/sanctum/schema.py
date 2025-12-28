@@ -16,6 +16,106 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 
+import numpy as np
+
+
+def compute_entropy_velocity(entropy_history: deque[float] | list[float]) -> float:
+    """Compute rate of entropy change (d(entropy)/d(batch)).
+
+    Uses numpy linear regression over last 10 samples for performance and stability.
+
+    Args:
+        entropy_history: Recent entropy values (oldest first).
+
+    Returns:
+        Velocity in entropy units per batch. Negative = declining.
+    """
+    if len(entropy_history) < 5:
+        return 0.0
+
+    values = np.array(list(entropy_history)[-10:])
+    n = len(values)
+    x = np.arange(n)
+
+    # Least squares slope using numpy (10x faster than pure Python)
+    slope, _ = np.polyfit(x, values, 1)
+    return float(slope)
+
+
+def compute_collapse_risk(
+    entropy_history: deque[float] | list[float],
+    critical_threshold: float = 0.3,
+    warning_threshold: float = 0.5,
+    previous_risk: float = 0.0,
+    hysteresis: float = 0.08,
+) -> float:
+    """Compute entropy collapse risk score (0.0 to 1.0).
+
+    Risk is based on:
+    - Current distance from critical threshold (proximity)
+    - Velocity (rate of decline)
+    - Hysteresis to prevent risk score flapping
+
+    Args:
+        entropy_history: Recent entropy values (oldest first).
+        critical_threshold: Entropy below this is collapsed.
+        warning_threshold: Entropy below this is concerning.
+        previous_risk: Previous risk score for hysteresis.
+        hysteresis: Risk change must exceed this to update.
+
+    Returns:
+        0.0 = no risk, 1.0 = imminent/active collapse
+    """
+    if len(entropy_history) < 5:
+        return 0.0
+
+    values = list(entropy_history)
+    current = values[-1]
+    velocity = compute_entropy_velocity(entropy_history)
+
+    # Already collapsed
+    if current <= critical_threshold:
+        return 1.0
+
+    # Calculate proximity-based risk (being near critical is risky even if stable)
+    max_entropy = warning_threshold + 0.5  # Assume ~1.0 is healthy
+    proximity = 1.0 - (current - critical_threshold) / (max_entropy - critical_threshold)
+    proximity = max(0.0, min(1.0, proximity))
+    proximity_risk = proximity * 0.3  # Cap proximity contribution at 0.3
+
+    # Rising or stable entropy = minimal risk (just proximity)
+    EPSILON = 1e-6
+    if velocity >= -EPSILON:
+        base_risk = proximity_risk
+    else:
+        # Declining entropy - calculate time to collapse
+        distance = current - critical_threshold
+        time_to_collapse = distance / abs(velocity)
+
+        # Time-based risk thresholds
+        if time_to_collapse > 100:
+            time_risk = 0.1
+        elif time_to_collapse > 50:
+            time_risk = 0.25
+        elif time_to_collapse > 20:
+            time_risk = 0.5
+        elif time_to_collapse > 10:
+            time_risk = 0.7
+        else:
+            time_risk = 0.9
+
+        # Combine time and proximity risks
+        if current < warning_threshold:
+            base_risk = 0.5 * time_risk + 0.5 * proximity_risk
+        else:
+            base_risk = 0.7 * time_risk + 0.3 * proximity_risk
+
+    # Apply hysteresis to prevent flapping
+    if abs(base_risk - previous_risk) < hysteresis:
+        return previous_risk
+
+    return min(1.0, max(0.0, base_risk))
+
 
 @dataclass
 class CounterfactualConfig:
@@ -487,6 +587,11 @@ class TamiyoState:
 
     # A/B testing identification (None when not in A/B mode)
     group_id: str | None = None
+
+    # Entropy prediction (computed from entropy_history)
+    entropy_velocity: float = 0.0          # d(entropy)/d(batch), negative = declining
+    collapse_risk_score: float = 0.0       # 0.0-1.0, >0.7 = high risk
+    _previous_risk: float = 0.0            # For hysteresis (not serialized)
 
 
 @dataclass

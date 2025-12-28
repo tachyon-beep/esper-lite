@@ -53,9 +53,17 @@ class PPOHealthPanel(Container):
         """Update with new snapshot data."""
         self._snapshot = snapshot
 
-        # Update border title with warmup status
+        # Update border title with collapse risk or warmup status
         batch = snapshot.current_batch
-        if batch < self.WARMUP_BATCHES:
+        if snapshot.tamiyo.collapse_risk_score > 0.7:
+            velocity = snapshot.tamiyo.entropy_velocity
+            if velocity < 0:
+                distance = snapshot.tamiyo.entropy - TUIThresholds.ENTROPY_CRITICAL
+                batches = int(distance / abs(velocity)) if velocity != 0 else 999
+                self.border_title = f"PPO HEALTH !! COLLAPSE ~{batches}b"
+            else:
+                self.border_title = "PPO HEALTH"
+        elif batch < self.WARMUP_BATCHES:
             self.border_title = f"PPO HEALTH ─ WARMING UP [{batch}/{self.WARMUP_BATCHES}]"
         else:
             self.border_title = "PPO HEALTH"
@@ -241,6 +249,57 @@ class PPOHealthPanel(Container):
             )
         else:
             result.append(f"{healthy}/{self.TOTAL_LAYERS} ✓", style="green")
+        result.append("\n")
+
+        # Entropy trend (velocity and collapse countdown)
+        result.append(self._render_entropy_trend())
+
+        return result
+
+    def _render_entropy_trend(self) -> Text:
+        """Render entropy trend with velocity and countdown."""
+        if self._snapshot is None:
+            return Text()
+
+        tamiyo = self._snapshot.tamiyo
+        velocity = tamiyo.entropy_velocity
+        risk = tamiyo.collapse_risk_score
+
+        result = Text()
+        result.append("Entropy D    ", style="dim")
+
+        EPSILON = 1e-6
+        if abs(velocity) < 0.005:
+            result.append("stable [--]", style="green")
+            return result
+
+        # Trend arrows
+        if velocity < -0.03:
+            arrow = "[vv]"
+            arrow_style = "red bold"
+        elif velocity < -0.01:
+            arrow = "[v]"
+            arrow_style = "yellow"
+        elif velocity > 0.01:
+            arrow = "[^]"
+            arrow_style = "green"
+        else:
+            arrow = "[~]"
+            arrow_style = "dim"
+
+        result.append(f"{velocity:+.3f}/b ", style=arrow_style)
+        result.append(arrow, style=arrow_style)
+
+        # Countdown (only if declining toward critical)
+        if velocity < -EPSILON and tamiyo.entropy > TUIThresholds.ENTROPY_CRITICAL:
+            distance = tamiyo.entropy - TUIThresholds.ENTROPY_CRITICAL
+            batches_to_collapse = int(distance / abs(velocity))
+
+            if batches_to_collapse < 100:
+                result.append(f" ~{batches_to_collapse}b", style="yellow")
+
+            if risk > 0.7:
+                result.append(" [ALERT]", style="red bold")
 
         return result
 

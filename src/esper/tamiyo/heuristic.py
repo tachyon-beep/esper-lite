@@ -92,6 +92,12 @@ class HeuristicTamiyo:
     - Fossilize when seed reaches HOLDING with improvement
     - Prune when seed is failing
     - Wait otherwise
+
+    Multi-Environment Usage:
+        In vectorized training, each environment should have its own HeuristicTamiyo
+        instance. The internal `_blueprint_index` state is not thread-safe for shared
+        access. With separate instances, blueprint diversity emerges naturally as
+        penalty states diverge across environments.
     """
 
     def __init__(self, config: HeuristicPolicyConfig | None = None, topology: str = "cnn") -> None:
@@ -316,19 +322,36 @@ class HeuristicTamiyo:
                 del self._blueprint_penalties[bp]
 
     def _get_next_blueprint(self) -> str:
-        """Get next blueprint, avoiding heavily penalized ones."""
+        """Get next blueprint, avoiding heavily penalized ones.
+
+        Selection logic:
+        1. Round-robin through blueprints, returning first below penalty threshold
+        2. If all exceed threshold, rotate through penalty-sorted list (lowest first)
+
+        The fallback maintains rotation for diversity in multi-env training.
+        (B9-DRL-01: previously used deterministic min() which caused exploration collapse)
+        """
         blueprints = self.config.blueprint_rotation
+        n = len(blueprints)
+        start_idx = self._blueprint_index  # Remember starting position
 
         # Find blueprint below penalty threshold
-        for _ in range(len(blueprints)):
-            blueprint_id = blueprints[self._blueprint_index % len(blueprints)]
+        for _ in range(n):
+            blueprint_id = blueprints[self._blueprint_index % n]
             self._blueprint_index += 1
             penalty = self._blueprint_penalties.get(blueprint_id, 0.0)
             if penalty < self.config.blueprint_penalty_threshold:
                 return blueprint_id
 
-        # All penalized - pick lowest
-        return min(blueprints, key=lambda bp: self._blueprint_penalties.get(bp, 0.0))
+        # All penalized - rotate through penalty-sorted list for diversity
+        # Tiebreak by name for deterministic ordering when penalties are equal
+        sorted_by_penalty = sorted(
+            blueprints,
+            key=lambda bp: (self._blueprint_penalties.get(bp, 0.0), bp)
+        )
+        # Advance index by 1 for next call (loop advanced by n, rewind to start+1)
+        self._blueprint_index = start_idx + 1
+        return sorted_by_penalty[start_idx % n]
 
     def _apply_blueprint_penalty(self, blueprint_id: str) -> None:
         """Penalize a blueprint that was pruned."""
