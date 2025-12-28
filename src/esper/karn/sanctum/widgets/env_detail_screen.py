@@ -133,22 +133,23 @@ class SeedCard(Static):
             lines.append(Text("Alpha: --", style="dim"))
 
         # Blend tempo + curve (always visible - UX policy: data points don't disappear)
-        # Curve glyph: bright when causally active (BLENDING), dim otherwise
-        curve_glyph = CURVE_GLYPHS.get(seed.alpha_curve, "−")
+        # Curve glyph: shown for BLENDING/HOLDING/FOSSILIZED, dim "-" otherwise
         if seed.stage in ("BLENDING", "HOLDING") and seed.blend_tempo_epochs is not None:
             tempo = seed.blend_tempo_epochs
             tempo_name = "FAST" if tempo <= 3 else ("STANDARD" if tempo <= 5 else "SLOW")
             tempo_arrows = "▸▸▸" if tempo <= 3 else ("▸▸" if tempo <= 5 else "▸")
-            lines.append(Text(f"Tempo: {tempo_arrows} {tempo_name} {curve_glyph} ({tempo} epochs)"))
+            curve_glyph = CURVE_GLYPHS.get(seed.alpha_curve, "−")
+            lines.append(Text(f"Tempo: {tempo_arrows} {tempo_name} ({tempo} epochs) {curve_glyph}"))
         elif seed.stage == "FOSSILIZED" and seed.blend_tempo_epochs is not None:
-            # Historical - show what was used, dimmed
+            # Historical - show what was used, dimmed (but curve still visible for curiosity)
             tempo = seed.blend_tempo_epochs
             tempo_name = "FAST" if tempo <= 3 else ("STANDARD" if tempo <= 5 else "SLOW")
             tempo_arrows = "▸▸▸" if tempo <= 3 else ("▸▸" if tempo <= 5 else "▸")
+            curve_glyph = CURVE_GLYPHS.get(seed.alpha_curve, "−")
             lines.append(Text(f"Blended: {tempo_arrows} {tempo_name} {curve_glyph}", style="dim"))
         else:
-            # Not yet blending - show placeholder with dim curve
-            lines.append(Text(f"Tempo: -- {curve_glyph}", style="dim"))
+            # Not yet blending - show placeholder with dim "-"
+            lines.append(Text("Tempo: -- −", style="dim"))
 
         # Accuracy delta (stage-aware display)
         # TRAINING/GERMINATED seeds have alpha=0 and cannot affect output

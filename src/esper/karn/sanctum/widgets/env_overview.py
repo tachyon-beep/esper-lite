@@ -617,26 +617,36 @@ class EnvOverview(Static):
         elif seed.has_vanishing:
             grad_indicator = "[yellow]▼[/yellow]"
 
-        # BLENDING shows tempo arrows, curve glyph, and alpha
+        # Curve glyph: shown for BLENDING/HOLDING/FOSSILIZED, dim "-" for other stages
+        # Position: after gradient indicator (▲▼) at the end
+        if seed.stage in ("BLENDING", "HOLDING", "FOSSILIZED"):
+            curve_glyph = _CURVE_GLYPHS.get(seed.alpha_curve, "−")
+            curve_suffix = curve_glyph
+        else:
+            curve_suffix = "[dim]−[/dim]"
+
+        # BLENDING shows tempo arrows and alpha
         # Tempo: ▸▸▸ = FAST (3), ▸▸ = STANDARD (5), ▸ = SLOW (8)
-        # Curve: ╱∿⌒∫⊐ (bright when active)
         if seed.stage == "BLENDING" and seed.alpha > 0:
             tempo = seed.blend_tempo_epochs
             tempo_arrows = "▸▸▸" if tempo <= 3 else ("▸▸" if tempo <= 5 else "▸")
-            curve_glyph = _CURVE_GLYPHS.get(seed.alpha_curve, "−")
-            base = f"[{style}]{stage_short}:{blueprint} {tempo_arrows}{curve_glyph} {seed.alpha:.1f}[/{style}]"
-            return f"{base}{grad_indicator}" if grad_indicator else base
+            base = f"[{style}]{stage_short}:{blueprint} {tempo_arrows} {seed.alpha:.1f}[/{style}]"
+            return f"{base}{grad_indicator}{curve_suffix}"
 
-        # FOSSILIZED shows curve glyph (dimmed, historical) - UX policy: data doesn't disappear
+        # HOLDING shows alpha (curve was used, still relevant)
+        if seed.stage == "HOLDING":
+            base = f"[{style}]{stage_short}:{blueprint} {seed.alpha:.1f}[/{style}]"
+            return f"{base}{grad_indicator}{curve_suffix}"
+
+        # FOSSILIZED shows historical curve (how it blended)
         if seed.stage == "FOSSILIZED":
-            curve_glyph = _CURVE_GLYPHS.get(seed.alpha_curve, "−")
-            base = f"[{style}]{stage_short}:{blueprint} {curve_glyph}[/{style}]"
-            return f"{base}{grad_indicator}" if grad_indicator else base
+            base = f"[{style}]{stage_short}:{blueprint}[/{style}]"
+            return f"{base}{grad_indicator}[dim]{curve_suffix}[/dim]"
 
-        # Active seeds show epochs in stage (no curve yet - TRAINING/GERMINATED haven't selected one)
+        # Other stages show epochs in stage with dim "-" for curve
         epochs_str = f" e{seed.epochs_in_stage}" if seed.epochs_in_stage > 0 else ""
         base = f"[{style}]{stage_short}:{blueprint}{epochs_str}[/{style}]"
-        return f"{base}{grad_indicator}" if grad_indicator else base
+        return f"{base}{grad_indicator}{curve_suffix}"
 
     def _format_last_action(self, env: "EnvState") -> str:
         """Format last action taken."""
