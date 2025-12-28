@@ -652,17 +652,22 @@ def emit_last_action(
 
 
 def compute_grad_norm_surrogate(module: nn.Module) -> float | None:
-    """Compute a cheap grad-norm surrogate (single device sync)."""
-    grad_norm_sq = None
-    for param in module.parameters():
-        if param.grad is None:
-            continue
-        g = param.grad.detach()
-        g_sq = (g.float() * g.float()).sum()
-        grad_norm_sq = g_sq if grad_norm_sq is None else grad_norm_sq + g_sq
-    if grad_norm_sq is None:
+    """Compute gradient L2 norm with float64 overflow protection.
+
+    Uses fused _foreach_norm for minimal GPU-CPU sync overhead (single sync).
+    Float64 prevents overflow: float32 overflows at ~1e19 due to squaring,
+    float64 handles up to ~1e154.
+    """
+    grads = [p.grad for p in module.parameters() if p.grad is not None]
+    if not grads:
         return None
-    return float(torch.sqrt(grad_norm_sq).item())
+    # Upcast to float64 for overflow protection on large norms
+    grads_double = [g.double() for g in grads]
+    # Fused kernel: computes all per-tensor norms in one launch
+    per_param_norms = torch._foreach_norm(grads_double, ord=2)
+    # Single reduction via vector_norm (fused) and sync point
+    total_norm = torch.linalg.vector_norm(torch.stack(per_param_norms))
+    return total_norm.item()
 
 
 def aggregate_layer_gradient_health(

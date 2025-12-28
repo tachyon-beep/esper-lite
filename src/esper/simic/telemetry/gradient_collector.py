@@ -151,13 +151,17 @@ class SeedGradientCollector:
         # This is a fused CUDA kernel that computes all norms in a single kernel launch,
         # avoiding Python iteration overhead. If this breaks in future versions, fall back
         # to: [g.norm(2) for g in grads] (slower, O(n) kernels).
-        per_param_norms = torch._foreach_norm(grads, ord=2)
+        #
+        # B7-PT-01: Convert to float64 BEFORE _foreach_norm to prevent internal overflow.
+        # _foreach_norm squares values internally, so 1e20^2 = 1e40 overflows float32.
+        grads_double = [g.double() for g in grads]
+        per_param_norms = torch._foreach_norm(grads_double, ord=2)
 
-        # Stack for vectorized comparisons
+        # Stack for vectorized comparisons (now in float64)
         all_norms = torch.stack(per_param_norms)
         n_grads = len(grads)
 
-        # Total norm via Pythagorean theorem (avoids large tensor allocation)
+        # Total norm via Pythagorean theorem (already float64, safe to square)
         total_squared_norm = (all_norms ** 2).sum()
 
         return {
@@ -277,10 +281,13 @@ def collect_seed_gradients(
     # [PyTorch 2.0+] _foreach_norm is a stable internal API used by clip_grad_norm_.
     # This avoids O(n) .item() calls that cause GPU-CPU sync per gradient.
     # If this breaks in future versions, fall back to: [g.norm(2) for g in grads]
-    per_param_norms = torch._foreach_norm(grads, ord=2)
+    #
+    # B7-PT-01: Convert to float64 BEFORE _foreach_norm to prevent internal overflow.
+    grads_double = [g.double() for g in grads]
+    per_param_norms = torch._foreach_norm(grads_double, ord=2)
     all_norms = torch.stack(per_param_norms)
 
-    # Compute all stats on GPU before any .item() calls
+    # Compute all stats on GPU before any .item() calls (already float64)
     total_squared = (all_norms ** 2).sum()
     min_norm_t = all_norms.min()
     max_norm_t = all_norms.max()
@@ -485,7 +492,9 @@ def collect_host_gradients_async(
     host_grads = [p.grad for p in host_parameters if p.grad is not None]
     if host_grads:
         # [PyTorch 2.0+] _foreach_norm is stable internal API (used by clip_grad_norm_)
-        host_norms = torch._foreach_norm(host_grads, ord=2)
+        # B7-PT-01: Convert to float64 BEFORE _foreach_norm to prevent internal overflow
+        host_grads_double = [g.double() for g in host_grads]
+        host_norms = torch._foreach_norm(host_grads_double, ord=2)
         host_squared_sum = torch.stack(host_norms).pow(2).sum()
         host_param_count = sum(g.numel() for g in host_grads)
     else:
@@ -521,7 +530,9 @@ def collect_seed_gradients_only_async(
     seed_grads = [p.grad for p in seed_parameters if p.grad is not None]
     if seed_grads:
         # [PyTorch 2.0+] _foreach_norm is stable internal API (used by clip_grad_norm_)
-        seed_norms = torch._foreach_norm(seed_grads, ord=2)
+        # B7-PT-01: Convert to float64 BEFORE _foreach_norm to prevent internal overflow
+        seed_grads_double = [g.double() for g in seed_grads]
+        seed_norms = torch._foreach_norm(seed_grads_double, ord=2)
         seed_squared_sum = torch.stack(seed_norms).pow(2).sum()
         seed_param_count = sum(g.numel() for g in seed_grads)
     else:
