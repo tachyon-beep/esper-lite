@@ -8,13 +8,13 @@
 |-------|-------|
 | **Ticket ID** | `B8-DRL-01` |
 | **Severity** | `P1` |
-| **Status** | `open` |
+| **Status** | `closed` |
 | **Batch** | 8 |
 | **Agent** | `drl` |
 | **Domain** | `simic/training` |
 | **Assignee** | |
 | **Created** | 2025-12-27 |
-| **Updated** | 2025-12-27 |
+| **Updated** | 2025-12-29 |
 
 ---
 
@@ -39,8 +39,8 @@
 - [ ] Performance bottleneck
 - [ ] Numerical stability
 - [ ] torch.compile compatibility
-- [ ] Dead code / unwired functionality
-- [x] API design / contract violation
+- [x] Dead code / unwired functionality
+- [ ] API design / contract violation
 - [ ] Test coverage gap
 - [ ] Documentation / naming
 - [ ] Defensive programming violation
@@ -95,9 +95,9 @@ def reset_episode_state(self) -> None:
 
 ### How to Verify the Fix
 
-- [ ] Add `self.lstm_hidden = None` to `reset_episode_state()`
-- [ ] Verify LSTM policy training still converges
-- [ ] Add test for hidden state reset behavior
+- [x] ~~Add `self.lstm_hidden = None` to `reset_episode_state()`~~ N/A - field removed
+- [x] Verify LSTM policy training still converges
+- [x] ~~Add test for hidden state reset behavior~~ N/A - dead code removed
 
 ---
 
@@ -115,3 +115,45 @@ def reset_episode_state(self) -> None:
 **Section:** "C8-11 - lstm_hidden not reset in reset_episode_state()"
 
 **Mitigation Note:** The DRL specialist notes this is mitigated by batch-level environment recreation, but the API contract should still be fixed for correctness.
+
+---
+
+## Resolution
+
+| Field | Value |
+|-------|-------|
+| **Fixed By** | Claude Code |
+| **Fixed Date** | 2025-12-29 |
+| **Resolution** | `closed - dead code removed` |
+
+### Investigation Findings
+
+Deep investigation revealed that **this was not a bug but dead code**:
+
+1. **`ParallelEnvState.lstm_hidden`** was declared but **never used** in the codebase
+2. The actual LSTM hidden state is managed via `batched_lstm_hidden` (a local variable in `vectorized.py`)
+3. The batched implementation correctly resets hidden state on episode boundaries (lines 2977-2990)
+4. There was **no credit leakage** in practice
+
+### Evidence
+
+```bash
+# Searching for actual usage of the field
+$ grep -r "env_state\.lstm_hidden\|state\.lstm_hidden" src/
+# No matches found - field was never read or written
+```
+
+### Fix Applied
+
+Per the project's **No Legacy Code Policy**, the dead code was removed rather than "fixed":
+
+1. **Removed** `lstm_hidden` field from `ParallelEnvState` (lines 75-79)
+2. **Removed** `tests/simic/test_recurrent_vectorized.py` (tested dead code)
+3. **Updated** module docstring to remove LSTM reference
+
+### Architectural Note
+
+The `lstm_hidden` field represented an earlier per-environment hidden state design that was superseded by a more efficient batched approach (`batched_lstm_hidden`). The batched implementation:
+- Avoids per-step slice/cat overhead
+- Correctly resets individual env hidden state on `done=True`
+- Follows standard LSTM-PPO practice
