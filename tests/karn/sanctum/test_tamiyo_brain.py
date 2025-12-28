@@ -2774,3 +2774,8 @@ def test_head_heatmap_uses_5_char_bars():
     assert len(bars) > 0, f"Expected bar patterns in output, got: {text}"
     for bar in bars:
         assert len(bar) == 5, f"Expected 5-char bar, got {len(bar)}-char bar: [{bar}]"
+
+
+def test_decision_card_width_is_65():
+    """Decision card should be 65 chars wide for improved readability."""
+    assert TamiyoBrain.DECISION_CARD_WIDTH == 65

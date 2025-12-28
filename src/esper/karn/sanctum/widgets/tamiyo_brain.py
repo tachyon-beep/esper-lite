@@ -115,8 +115,8 @@ class TamiyoBrain(Static):
     PREDICTION_EXCELLENT_THRESHOLD = 0.1  # Green checkmark: |actual - expected| < 0.1
     PREDICTION_ACCEPTABLE_THRESHOLD = 0.3  # Yellow warning: |actual - expected| < 0.3
 
-    # Enriched decision card width (Task 5)
-    DECISION_CARD_WIDTH = 45  # 50% wider to show head choices (blueprint, tempo, style)
+    # Enriched decision card width (widened from 45 for improved readability)
+    DECISION_CARD_WIDTH = 65
 
     # Decision card height for dynamic count calculation
     DECISION_CARD_HEIGHT = 7  # 6 lines (title + 5 content) + 1 gap
