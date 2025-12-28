@@ -78,6 +78,21 @@ class StatusBanner(Static):
 
         banner = Text()
 
+        # NaN/Inf indicator FIRST - leftmost position for F-pattern visibility
+        if tamiyo.nan_grad_count > 0 or tamiyo.inf_grad_count > 0:
+            # Severity graduation: >5 issues = reverse video for maximum visibility
+            if tamiyo.nan_grad_count > 5 or tamiyo.inf_grad_count > 5:
+                nan_inf_style = "red bold reverse"
+            else:
+                nan_inf_style = "red bold"
+
+            if tamiyo.nan_grad_count > 0:
+                banner.append(f"NaN:{tamiyo.nan_grad_count}", style=nan_inf_style)
+                banner.append(" ")
+            if tamiyo.inf_grad_count > 0:
+                banner.append(f"Inf:{tamiyo.inf_grad_count}", style=nan_inf_style)
+                banner.append(" ")
+
         # Group label for A/B testing
         if tamiyo.group_id:
             group_color = self.GROUP_COLORS.get(tamiyo.group_id, "white")
@@ -167,6 +182,13 @@ class StatusBanner(Static):
 
         if not tamiyo.ppo_data_received:
             return "ok", "WAITING", "dim"
+
+        # NaN/Inf check (HIGHEST PRIORITY - before all other checks)
+        # These indicate numerical instability and should always be surfaced first
+        if tamiyo.nan_grad_count > 0:
+            return "critical", "NaN DETECTED", "red bold"
+        if tamiyo.inf_grad_count > 0:
+            return "critical", "Inf DETECTED", "red bold"
 
         # Warmup period
         current_batch = self._snapshot.current_batch
