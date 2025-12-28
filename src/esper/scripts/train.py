@@ -534,6 +534,16 @@ def main() -> None:
                 elif args.telemetry_level == "debug":
                     config.gradient_telemetry_stride = 1
 
+                # === Tamiyo-centric CLI overrides ===
+                if args.rounds is not None:
+                    config.n_episodes = args.rounds
+                if args.envs is not None:
+                    config.n_envs = args.envs
+                if args.episode_length is not None:
+                    # chunk_length MUST equal max_epochs per TrainingConfig validation
+                    config.max_epochs = args.episode_length
+                    config.chunk_length = args.episode_length
+
                 # Handle A/B testing - set on config for validation
                 if args.ab_test:
                     from esper.simic.rewards import RewardMode

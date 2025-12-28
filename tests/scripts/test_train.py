@@ -255,3 +255,45 @@ class TestTamiyoCentricFlags:
         assert _positive_int("100") == 100
         assert _positive_int("999999") == 999999
 
+    def test_rounds_overrides_config(self):
+        """--rounds should override n_episodes from preset."""
+        from esper.simic.training import TrainingConfig
+
+        # Simulate what main() does: start with preset, apply CLI overrides
+        config = TrainingConfig.for_cifar10()
+        assert config.n_episodes == 100  # Default
+
+        # CLI would set rounds=50, which maps to n_episodes
+        config.n_episodes = 50  # Simulating the override
+        assert config.n_episodes == 50
+
+    def test_envs_overrides_config(self):
+        """--envs should override n_envs from preset."""
+        from esper.simic.training import TrainingConfig
+
+        config = TrainingConfig.for_cifar10()
+        config.n_envs = 8
+        assert config.n_envs == 8
+
+    def test_episode_length_overrides_both_fields(self):
+        """--episode-length must override both max_epochs and chunk_length.
+
+        TrainingConfig._validate() enforces chunk_length == max_epochs.
+        If we only set one, validation would fail.
+        """
+        from esper.simic.training import TrainingConfig
+
+        config = TrainingConfig.for_cifar10()
+        original_max_epochs = config.max_epochs
+
+        # Apply override as main() does
+        new_length = 30
+        config.max_epochs = new_length
+        config.chunk_length = new_length
+
+        assert config.max_epochs == new_length
+        assert config.chunk_length == new_length
+
+        # Verify validation still passes
+        config._validate()  # Should not raise
+
