@@ -4,6 +4,7 @@
 import argparse
 import logging
 import sys
+from textwrap import dedent
 
 import torch
 
@@ -264,6 +265,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Rounds over which to anneal entropy coefficient. 0 = no annealing. "
              "(Maps to entropy_anneal_episodes. Default: 0)",
     )
+
+    ppo_parser.epilog = dedent("""
+        Tamiyo Training Parameters:
+          Esper has a two-level RL structure:
+
+          Inner loop: CIFAR environments train small neural networks
+          Outer loop: Tamiyo (policy network) learns to control them via PPO
+
+          Each "round" runs all --envs environments for --episode-length timesteps,
+          then performs one PPO update on Tamiyo using the collected experience.
+
+          Total Tamiyo transitions per round: envs × episode_length
+
+          Example:
+            --rounds 100 --envs 4 --episode-length 25
+            = 100 PPO updates, each using 4 × 25 = 100 transitions
+    """).strip()
+    ppo_parser.formatter_class = argparse.RawDescriptionHelpFormatter
 
     return parser
 
