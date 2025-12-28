@@ -2,7 +2,7 @@
 
 import torch
 
-from esper.leyline import LifecycleOp
+from esper.leyline import HEAD_NAMES, LifecycleOp, compute_causal_masks
 from esper.simic.agent import compute_per_head_advantages
 
 
@@ -184,3 +184,45 @@ class TestPerHeadAdvantages:
         assert torch.allclose(per_head["alpha_target"], expected_blueprint)
         assert torch.allclose(per_head["alpha_speed"], torch.tensor([[0.0, 0.0], [3.0, 0.0]]))
         assert torch.allclose(per_head["alpha_curve"], torch.tensor([[0.0, 0.0], [3.0, 0.0]]))
+
+
+class TestComputeCausalMasks:
+    """Tests for compute_causal_masks (B4-DRL-01: single source of truth)."""
+
+    def test_mask_keys_match_head_names(self):
+        """Mask dictionary must contain exactly HEAD_NAMES (B4-DRL-01).
+
+        This ensures the causal mask contract stays synchronized with
+        the canonical action head list from leyline.
+        """
+        op_actions = torch.tensor([LifecycleOp.WAIT])
+        masks = compute_causal_masks(op_actions)
+
+        assert set(masks.keys()) == set(HEAD_NAMES), (
+            f"Mask keys {set(masks.keys())} != HEAD_NAMES {set(HEAD_NAMES)}"
+        )
+
+    def test_all_ops_produce_valid_masks(self):
+        """compute_causal_masks produces valid boolean tensors for all ops."""
+        all_ops = torch.tensor([op.value for op in LifecycleOp])
+        masks = compute_causal_masks(all_ops)
+
+        for head, mask in masks.items():
+            assert mask.dtype == torch.bool, f"{head} mask should be bool"
+            assert mask.shape == all_ops.shape, f"{head} mask shape mismatch"
+
+    def test_advantages_and_masks_use_same_keys(self):
+        """Both compute_per_head_advantages and compute_causal_masks use HEAD_NAMES.
+
+        This is the critical invariant that B4-DRL-01 establishes: both
+        advantages.py and ppo.py must use identical mask definitions.
+        """
+        op_actions = torch.tensor([LifecycleOp.GERMINATE, LifecycleOp.PRUNE])
+        base_advantages = torch.tensor([1.0, 2.0])
+
+        masks = compute_causal_masks(op_actions)
+        advantages = compute_per_head_advantages(base_advantages, op_actions)
+
+        assert set(masks.keys()) == set(advantages.keys()), (
+            "compute_causal_masks and compute_per_head_advantages must return same keys"
+        )

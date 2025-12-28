@@ -38,7 +38,7 @@ from esper.leyline import (
     DEFAULT_VALUE_CLIP,
     DEFAULT_VALUE_COEF,
     HEAD_NAMES,
-    LifecycleOp,
+    compute_causal_masks,
 )
 from esper.leyline.slot_config import SlotConfig
 import logging
@@ -599,34 +599,9 @@ class PPOAgent:
                 valid_advantages, valid_op_actions
             )
 
-            # Compute causal masks for masked mean computation
-            # (avoid bias from averaging zeros with real values)
-            #
-            # Causal structure (see advantages.py for full documentation):
-            #   WAIT:           only op head
-            #   GERMINATE:      slot, blueprint, style, tempo, alpha_target
-            #   SET_ALPHA:      slot, style, alpha_target, alpha_speed, alpha_curve
-            #   PRUNE:          slot, alpha_speed, alpha_curve
-            #   FOSSILIZE:      slot only (implicit via ~is_wait)
-            #   ADVANCE:        slot only (implicit via ~is_wait)
-            #
-            # Note: ADVANCE and FOSSILIZE are handled implicitly by ~is_wait for slot
-            # and by NOT appearing in any other mask's OR conditions. This is intentional
-            # and more maintainable than explicit enumeration.
-            is_wait = valid_op_actions == LifecycleOp.WAIT
-            is_germinate = valid_op_actions == LifecycleOp.GERMINATE
-            is_set_alpha = valid_op_actions == LifecycleOp.SET_ALPHA_TARGET
-            is_prune = valid_op_actions == LifecycleOp.PRUNE
-            head_masks = {
-                "op": torch.ones_like(is_wait),  # op always relevant
-                "slot": ~is_wait,  # All non-WAIT ops (incl. ADVANCE, FOSSILIZE)
-                "blueprint": is_germinate,  # only for GERMINATE
-                "style": is_germinate | is_set_alpha,  # GERMINATE + SET_ALPHA_TARGET
-                "tempo": is_germinate,  # only for GERMINATE
-                "alpha_target": is_set_alpha | is_germinate,
-                "alpha_speed": is_set_alpha | is_prune,
-                "alpha_curve": is_set_alpha | is_prune,
-            }
+            # B4-DRL-01: Use single source of truth for causal masks (from leyline)
+            # Causal structure documented in esper/leyline/causal_masks.py
+            head_masks = compute_causal_masks(valid_op_actions)
 
             # Compute per-head ratios
             old_log_probs = {

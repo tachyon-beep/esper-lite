@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import torch
 
-from esper.leyline import LifecycleOp
+from esper.leyline import compute_causal_masks
 
 
 def compute_per_head_advantages(
@@ -56,52 +56,22 @@ def compute_per_head_advantages(
     Returns:
         Dict with per-head advantages, causally masked.
     """
-    # Create causal masks based on op type
-    is_wait = op_actions == LifecycleOp.WAIT
-    is_germinate = op_actions == LifecycleOp.GERMINATE
-    is_set_alpha = op_actions == LifecycleOp.SET_ALPHA_TARGET
-    is_prune = op_actions == LifecycleOp.PRUNE
+    # B4-DRL-01: Use single source of truth for causal masks
+    masks = compute_causal_masks(op_actions)
 
+    # Apply causal masks to advantages
     # op head: always gets advantage (always causally relevant)
     # M8: No clone needed - we're not modifying the tensor, just returning it.
     # Other heads use multiplication which creates new tensors anyway.
-    op_advantages = base_advantages
-
-    # slot head: relevant for GERMINATE, FOSSILIZE, PRUNE, ADVANCE (not WAIT)
-    slot_mask = ~is_wait
-    slot_advantages = base_advantages * slot_mask.float()
-
-    # blueprint head: only relevant for GERMINATE
-    blueprint_mask = is_germinate
-    blueprint_advantages = base_advantages * blueprint_mask.float()
-
-    # style head: relevant for GERMINATE and SET_ALPHA_TARGET (alpha_algorithm selection)
-    style_mask = is_germinate | is_set_alpha
-    style_advantages = base_advantages * style_mask.float()
-
-    # tempo head: only relevant for GERMINATE (same as blueprint/style)
-    tempo_mask = is_germinate
-    tempo_advantages = base_advantages * tempo_mask.float()
-
-    # alpha_target head: relevant for GERMINATE and SET_ALPHA_TARGET
-    alpha_target_mask = is_set_alpha | is_germinate
-    alpha_target_advantages = base_advantages * alpha_target_mask.float()
-
-    # alpha_speed/alpha_curve: relevant for SET_ALPHA_TARGET and PRUNE
-    alpha_speed_mask = is_set_alpha | is_prune
-    alpha_speed_advantages = base_advantages * alpha_speed_mask.float()
-    alpha_curve_mask = is_set_alpha | is_prune
-    alpha_curve_advantages = base_advantages * alpha_curve_mask.float()
-
     return {
-        "op": op_advantages,
-        "slot": slot_advantages,
-        "blueprint": blueprint_advantages,
-        "style": style_advantages,
-        "tempo": tempo_advantages,
-        "alpha_target": alpha_target_advantages,
-        "alpha_speed": alpha_speed_advantages,
-        "alpha_curve": alpha_curve_advantages,
+        "op": base_advantages,
+        "slot": base_advantages * masks["slot"].float(),
+        "blueprint": base_advantages * masks["blueprint"].float(),
+        "style": base_advantages * masks["style"].float(),
+        "tempo": base_advantages * masks["tempo"].float(),
+        "alpha_target": base_advantages * masks["alpha_target"].float(),
+        "alpha_speed": base_advantages * masks["alpha_speed"].float(),
+        "alpha_curve": base_advantages * masks["alpha_curve"].float(),
     }
 
 

@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B4-DRL-01` |
 | **Severity** | `P1` |
-| **Status** | `open` |
+| **Status** | `closed` |
 | **Batch** | 4 |
 | **Agent** | `drl` |
 | **Domain** | `simic` |
@@ -178,3 +178,38 @@ The proposed `compute_causal_masks()` extraction follows project conventions and
 
 Confirmed duplication at advantages.py:60-94 and ppo.py:616-629. Extraction to `compute_causal_masks()` is torch.compile-friendly (pure tensor comparison ops, no graph breaks).
 Single source of truth prevents inconsistent gradient attribution between advantage masking and entropy weighting. The refactor has zero performance cost under TorchInductor.
+
+---
+
+## Resolution
+
+### Final Fix Description
+
+Extracted causal mask computation to `esper/leyline/causal_masks.py` as the single source of truth, per Code Reviewer recommendation to place shared contracts in leyline (rather than advantages.py).
+
+Key changes:
+1. Created `compute_causal_masks(op_actions)` → `dict[str, torch.Tensor]` in leyline
+2. Both `advantages.py` and `ppo.py` now import and call `compute_causal_masks()` from leyline
+3. Shared `alpha_schedule_mask` reference for `alpha_speed` and `alpha_curve` (PyTorch Expert refinement)
+4. Added 3 tests verifying mask keys == `HEAD_NAMES` contract
+
+### Files Changed
+
+- `src/esper/leyline/causal_masks.py` — NEW: Single source of truth for causal masks
+- `src/esper/leyline/__init__.py` — Export `compute_causal_masks`
+- `src/esper/simic/agent/advantages.py` — Import from leyline, simplified to 18 lines
+- `src/esper/simic/agent/ppo.py` — Import from leyline, removed 27 lines of duplicate logic
+- `tests/simic/test_advantages.py` — Added `TestComputeCausalMasks` with 3 contract tests
+
+### Verification
+
+- [x] 11 advantage tests pass (8 existing + 3 new)
+- [x] 589 simic tests pass with no regressions
+- [x] mypy passes: `Success: no issues found in 3 source files`
+- [x] Test ensures mask keys == `HEAD_NAMES` (guards against future drift)
+
+### Sign-off
+
+**Code Reviewer:** APPROVED — "Placement in leyline follows CLAUDE.md guidance for shared contracts. Test verifying mask keys == HEAD_NAMES ensures synchronization with canonical head list."
+
+**PyTorch Expert:** APPROVED — "No graph break concerns. Dict return has <1% overhead vs tensor ops. Shared alpha_schedule_mask reference is a nice touch."

@@ -518,6 +518,9 @@ from esper.leyline.alpha import (
     AlphaAlgorithm,
 )
 
+# Causal masks (single source of truth for factored action masking)
+from esper.leyline.causal_masks import compute_causal_masks
+
 # Type contracts for observations
 from esper.leyline.types import (
     SeedObservationFields,
@@ -747,6 +750,9 @@ __all__ = [
     "AlphaMode",
     "AlphaCurve",
     "AlphaAlgorithm",
+
+    # Causal masks
+    "compute_causal_masks",
 
     # Type contracts
     "SeedObservationFields",
