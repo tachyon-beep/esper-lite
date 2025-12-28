@@ -664,11 +664,13 @@ def compute_contribution_reward(
     if components:
         components.blending_warning = blending_warning
 
-    # === 1c. HOLDING INDECISION PENALTY ===
-    # Exponential escalation for WAITing too long in HOLDING
-    # Creates urgency to make FOSSILIZE/PRUNE decision before timeout
-    # DRL Expert review 2025-12-10: steepened to overcome +7.5 attribution
-    # Note: Orthogonal to blending_warning (different stage, different pathology)
+    # === 1. Holding Warning ===
+    # Linear "rent" penalty for WAIT in HOLDING with positive attribution.
+    # Prevents seed farming (staying in HOLDING indefinitely to collect rewards).
+    #
+    # DRL Expert review 2025-12-28: Exponential penalty (-1, -3, -9, -27) created
+    # massive reward spikes that destabilized value function learning (EV < 0).
+    # Linear model caps at -0.3/epoch with cumulative 5-epoch cost of -0.7.
     #
     # IMPORTANT: Only apply when bounded_attribution > 0 (legitimate seed being farmed).
     # For ransomware seeds (attr ~= 0 due to discount), the agent's correct action is
@@ -688,12 +690,16 @@ def compute_contribution_reward(
                     or seed_info.improvement_since_stage_start is not None
                 )
                 if has_counterfactual:
-                    # Exponential: epoch 2 -> -1.0, epoch 3 -> -3.0, epoch 4 -> -9.0
-                    # Formula: -1.0 * (3 ** (epochs_waiting - 1))
+                    # Linear "rent" model: gentle pressure to make a decision
+                    # Schedule: epoch 2: -0.1, epoch 3: -0.15, epoch 4: -0.2, ...
+                    # Cumulative over 5 epochs: -0.7 (vs -23.0 with exponential)
+                    # DRL Expert design 2025-12-28: prevents reward spikes that
+                    # destabilize value function while maintaining decision pressure
                     epochs_waiting = seed_info.epochs_in_stage - 1
-                    holding_warning = -1.0 * (3 ** (epochs_waiting - 1))
-                    # Cap at -10.0 (clip boundary) to avoid extreme penalties
-                    holding_warning = max(holding_warning, -10.0)
+                    base_penalty = 0.1
+                    ramp_penalty = max(0, epochs_waiting - 1) * 0.05
+                    per_epoch_penalty = min(base_penalty + ramp_penalty, 0.3)
+                    holding_warning = -per_epoch_penalty
                     reward += holding_warning
     if components:
         components.holding_warning = holding_warning
