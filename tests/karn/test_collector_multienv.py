@@ -999,3 +999,150 @@ class TestMinimalTelemetryFallback:
             f"Should use EPOCH_COMPLETED data (0.90), not BATCH fallback (0.50). "
             f"Got {snapshot.host.val_accuracy}"
         )
+
+
+class TestResetClearsMultiEnvState:
+    """Tests that reset() clears multi-env aggregation state.
+
+    Regression test for bug where reset() left _pending_epoch_metrics and
+    _n_envs dirty, causing incorrect barrier logic when reusing a collector.
+    """
+
+    def test_reset_clears_pending_epoch_metrics(self):
+        """reset() should clear buffered epoch metrics from previous run."""
+        from esper.karn.collector import KarnCollector
+
+        collector = KarnCollector()
+
+        # Start a 4-env run and buffer some epochs (but don't complete)
+        collector.emit(TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data=TrainingStartedPayload(
+                n_envs=4,
+                max_epochs=10,
+                task="test_task",
+                host_params=1000,
+                slot_ids=("r0c0",),
+                seed=42,
+                n_episodes=100,
+                lr=0.001,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=10000,
+                policy_device="cpu",
+                env_devices=("cpu",) * 4,
+                episode_id="run1",
+            )
+        ))
+
+        # Emit 2 of 4 envs (partial batch, never committed)
+        for env_id in [0, 1]:
+            collector.emit(TelemetryEvent(
+                event_type=TelemetryEventType.EPOCH_COMPLETED,
+                epoch=1,
+                data=EpochCompletedPayload(
+                    inner_epoch=1,
+                    env_id=env_id,
+                    val_loss=0.5,
+                    val_accuracy=0.80,
+                ),
+            ))
+
+        # Verify buffer has stale data
+        assert len(collector._pending_epoch_metrics) == 2
+
+        # Reset collector
+        collector.reset()
+
+        # Buffer should be cleared
+        assert len(collector._pending_epoch_metrics) == 0
+
+    def test_reset_clears_n_envs_to_default(self):
+        """reset() should reset _n_envs to 1 (single-env default)."""
+        from esper.karn.collector import KarnCollector
+
+        collector = KarnCollector()
+
+        # Start a 4-env run
+        collector.emit(TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data=TrainingStartedPayload(
+                n_envs=4,
+                max_epochs=10,
+                task="test_task",
+                host_params=1000,
+                slot_ids=("r0c0",),
+                seed=42,
+                n_episodes=100,
+                lr=0.001,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=10000,
+                policy_device="cpu",
+                env_devices=("cpu",) * 4,
+                episode_id="run1",
+            )
+        ))
+
+        assert collector._n_envs == 4
+
+        # Reset collector
+        collector.reset()
+
+        # Should reset to single-env default
+        assert collector._n_envs == 1
+
+    def test_reset_prevents_stale_barrier_logic(self):
+        """After reset(), single-env run should commit immediately, not wait for old n_envs."""
+        from esper.karn.collector import KarnCollector
+
+        collector = KarnCollector()
+
+        # Run 1: 4-env training
+        collector.emit(TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data=TrainingStartedPayload(
+                n_envs=4,
+                max_epochs=10,
+                task="test_task",
+                host_params=1000,
+                slot_ids=("r0c0",),
+                seed=42,
+                n_episodes=100,
+                lr=0.001,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=10000,
+                policy_device="cpu",
+                env_devices=("cpu",) * 4,
+                episode_id="run1",
+            )
+        ))
+
+        # Reset between runs
+        collector.reset()
+
+        # Run 2: Single-env training (no TRAINING_STARTED, simulating test scenario)
+        # Manually start episode to enable event processing
+        collector.start_episode(episode_id="run2")
+        collector.store.start_epoch(1)
+
+        # Emit single EPOCH_COMPLETED
+        collector.emit(TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            epoch=1,
+            data=EpochCompletedPayload(
+                inner_epoch=1,
+                env_id=0,
+                val_loss=0.3,
+                val_accuracy=0.95,
+            ),
+        ))
+
+        # With fix: should commit immediately (n_envs=1)
+        # Without fix: would wait forever for 3 more envs (n_envs=4 from run1)
+        assert len(collector.store.epoch_snapshots) == 1, (
+            "Single-env epoch should commit immediately after reset(). "
+            "If this fails, reset() may not be clearing _n_envs."
+        )
+        assert collector.store.epoch_snapshots[0].host.val_accuracy == 0.95

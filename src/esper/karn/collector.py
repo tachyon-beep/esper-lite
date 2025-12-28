@@ -230,6 +230,9 @@ class KarnCollector:
         self._emit_after_close_warned = False
         self._anomaly_detector.reset()
         self._policy_detector.reset()
+        # Multi-env aggregation state
+        self._pending_epoch_metrics.clear()  # Clear stale buffered epochs
+        self._n_envs = 1  # Reset to default single-env
         self._saw_epoch_completed_since_batch = False
 
     # =========================================================================
