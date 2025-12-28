@@ -40,7 +40,8 @@ function getSeedForSlot(slotId: string): SeedState {
     auto_pruned: false,
     epochs_total: 0,
     counterfactual: 0.0,
-    blend_tempo_epochs: 0
+    blend_tempo_epochs: 0,
+    alpha_curve: 'LINEAR'
   }
 }
 
