@@ -480,6 +480,7 @@ def run_heuristic_episode(
             policy_device="cpu",
             env_devices=("cpu",),
             episode_id=episode_id,
+            reward_mode="shaped",  # Heuristic mode uses shaped rewards
         ),
     ))
 

@@ -529,6 +529,7 @@ def train_ppo_vectorized(
     quiet_analytics: bool = False,
     telemetry_dir: str | None = None,
     ready_event: "threading.Event | None" = None,
+    shutdown_event: "threading.Event | None" = None,
     group_id: str = "default",  # A/B testing group identifier
 ) -> tuple[PPOAgent, list[dict[str, Any]]]:
     """Train PPO with vectorized environments using INVERTED CONTROL FLOW.
@@ -3207,6 +3208,15 @@ def train_ppo_vectorized(
                     bootstrap_value=bootstrap_val,
                 )
 
+            # Check for graceful shutdown at end of each epoch (not just batch end)
+            # This gives user faster response (~seconds) instead of waiting for full batch
+            if shutdown_event is not None and shutdown_event.is_set():
+                print(
+                    f"\n[Shutdown requested] Stopping at epoch {epoch}/{max_epochs} "
+                    f"(batch {batch_idx + 1}, {episodes_completed}/{total_episodes} episodes)"
+                )
+                break  # Exit epoch loop; batch-level break below will handle cleanup
+
         throughput_step_time_ms_sum += step_timer.stop()
         throughput_dataloader_wait_ms_sum += dataloader_wait_ms_epoch
 
@@ -3220,8 +3230,11 @@ def train_ppo_vectorized(
             for env_idx in rollback_env_indices:
                 # B1-DRL-01 fix: Inject death penalty so PPO learns to avoid
                 # catastrophic actions. Previously get_punishment_reward() was dead code.
+                # P1-NORM fix: Normalize penalty to match other rewards' scale.
+                # Use normalize_only to avoid polluting running stats with rare outliers.
                 penalty = env_states[env_idx].governor.get_punishment_reward()
-                agent.buffer.mark_terminal_with_penalty(env_idx, penalty)
+                normalized_penalty = reward_normalizer.normalize_only(penalty)
+                agent.buffer.mark_terminal_with_penalty(env_idx, normalized_penalty)
 
         update_skipped = len(agent.buffer) == 0
         if not update_skipped:
@@ -3348,6 +3361,11 @@ def train_ppo_vectorized(
 
         episodes_completed += envs_this_batch
         batch_idx += 1
+
+        # Check for graceful shutdown request (e.g., user quit TUI)
+        # Per-epoch check already printed progress; just break here
+        if shutdown_event is not None and shutdown_event.is_set():
+            break
 
     if best_state:
         agent.policy.load_state_dict(best_state)

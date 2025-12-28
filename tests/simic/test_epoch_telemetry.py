@@ -126,6 +126,7 @@ class TestEpochTelemetryContract:
             policy_device="cpu",
             env_devices=("cpu",),
             episode_id="test",
+            reward_mode="shaped",
         )
         collector.emit(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,

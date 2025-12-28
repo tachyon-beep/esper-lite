@@ -31,6 +31,7 @@ class TestCollectorIngestValidation:
                 policy_device="cpu",
                 env_devices=("cpu",),
                 episode_id="test",
+                reward_mode="shaped",
             )
         ))
 
@@ -75,6 +76,7 @@ class TestCollectorIngestValidation:
                 policy_device="cpu",
                 env_devices=("cpu",),
                 episode_id="test",
+                reward_mode="shaped",
             )
         ))
 
@@ -121,6 +123,7 @@ class TestCollectorIngestValidation:
                 policy_device="cpu",
                 env_devices=("cpu",),
                 episode_id="test",
+                reward_mode="shaped",
             )
         ))
 
@@ -163,6 +166,7 @@ class TestCollectorIngestValidation:
                     policy_device="cpu",
                     env_devices=("cpu",),
                     episode_id="test",
+                    reward_mode="shaped",
                 )
             )
         )

@@ -193,6 +193,7 @@ class TestTypedPayloadSerialization:
             param_budget=100000,
             policy_device="cuda:0",
             env_devices=("cuda:0", "cuda:1"),
+            reward_mode="shaped",
         )
         event = MockEventWithTypedPayload(payload)
         result = serialize_event(event)

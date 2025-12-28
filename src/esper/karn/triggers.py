@@ -131,7 +131,7 @@ class AnomalyDetector:
                 reasons.append(f"accuracy_drop:{acc_drop:.1f}pp")
                 _logger.warning(
                     f"Accuracy drop detected: {acc_drop:.1f}pp "
-                    f"(acc={snapshot.host.val_accuracy:.2%})"
+                    f"(acc={snapshot.host.val_accuracy:.1f}%)"
                 )
 
         # Check gradient explosion

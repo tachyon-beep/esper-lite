@@ -3,7 +3,8 @@
 ## Start Here
 
 - YOU MUST NOT JUST REVERT CHANGES YOU DID NOT MAKE YOURSELF. IF YOU SPOT A NEW OR CHANGED FILE, THE USER CHANGED THAT FILE FOR A REASON. ASK FIRST. ALL DESTRUCTIVE GIT OPERATIONS REQUIRE APPROVAL.
-- Read `CLAUDE.md` first: it contains the project intro, required reading (e.g., `README.md`, `ROADMAP.md`), and the mandatory coding standards/policies for this repo.
+- STOP AND READ `CLAUDE.md` FIRST. Do not proceed without it. It contains the project intro, required reading (e.g., `README.md`, `ROADMAP.md`), and mandatory coding standards/policies.
+- `CLAUDE.md` is the source of truth for non-negotiables (e.g., no legacy/backwards-compat code, no defensive programming, and required metaphors). If anything conflicts, `CLAUDE.md` wins.
 
 ## Project Structure & Module Organization
 

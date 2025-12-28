@@ -162,6 +162,7 @@ class SanctumApp(App[None]):
         num_envs: int = 16,
         refresh_rate: float = 4.0,
         training_thread: threading.Thread | None = None,
+        shutdown_event: threading.Event | None = None,
     ):
         """Initialize Sanctum app.
 
@@ -170,6 +171,7 @@ class SanctumApp(App[None]):
             num_envs: Number of training environments.
             refresh_rate: Snapshot refresh rate in Hz.
             training_thread: Optional training thread to monitor.
+            shutdown_event: Event to signal training to stop gracefully.
         """
         super().__init__()
         self._backend = backend
@@ -180,8 +182,10 @@ class SanctumApp(App[None]):
         self._lock = threading.Lock()
         self._poll_count = 0  # Debug: track timer fires
         self._training_thread = training_thread  # Monitor thread status
+        self._shutdown_event = shutdown_event  # Signal graceful shutdown
         self._filter_active = False  # Track filter input visibility
         self._thread_death_shown = False  # Track if we've shown death modal
+        self._shutdown_requested = False  # Track if shutdown was requested
 
     def compose(self) -> ComposeResult:
         """Build the Sanctum layout.
@@ -552,6 +556,36 @@ class SanctumApp(App[None]):
                 slot_ids=self._snapshot.slot_ids,
             )
         )
+
+    def action_quit(self) -> None:
+        """Handle quit with graceful shutdown.
+
+        Signals the training thread to stop at the end of the current batch,
+        then waits for it to finish before exiting the TUI.
+        """
+        if self._shutdown_requested:
+            # Already shutting down, force quit
+            self.exit()
+            return
+
+        self._shutdown_requested = True
+
+        # Signal training to stop gracefully
+        if self._shutdown_event is not None:
+            self._shutdown_event.set()
+
+        # Update title to show shutdown in progress
+        self.sub_title = "Shutting down... (waiting for batch to complete)"
+
+        # If training thread is alive, let the main script handle the wait
+        # Just exit the TUI - the main script will wait for the thread
+        if self._training_thread is not None and self._training_thread.is_alive():
+            self.notify("Signaling graceful shutdown...", severity="warning")
+            # Small delay so user sees the notification
+            self.set_timer(0.5, lambda: self.exit())
+        else:
+            # Training already done, exit immediately
+            self.exit()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Handle Enter key on DataTable row to show detail modal.

@@ -28,6 +28,7 @@ class TestHeuristicTelemetry:
             policy_device="cpu",
             env_devices=("cpu",),
             episode_id="heur_42",
+            reward_mode="shaped",
         )
         event = TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,

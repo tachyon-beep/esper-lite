@@ -68,6 +68,7 @@ class TestSanctumAggregator:
             param_budget=100000,
             policy_device="cuda:0",
             env_devices=("cuda:0",),
+            reward_mode="shaped",
         )
 
         agg.process_event(event)
@@ -224,6 +225,7 @@ class TestSanctumAggregator:
             param_budget=100000,
             policy_device="cuda:0",
             env_devices=("cuda:0",),
+            reward_mode="shaped",
         )
         agg.process_event(start)
 
@@ -1217,6 +1219,7 @@ class TestSanctumBackend:
             param_budget=100000,
             policy_device="cuda:0",
             env_devices=("cuda:0",),
+            reward_mode="shaped",
         )
 
         backend.emit(event)
@@ -1249,6 +1252,7 @@ class TestSanctumBackend:
             param_budget=100000,
             policy_device="cuda:0",
             env_devices=("cuda:0",),
+            reward_mode="shaped",
         )
 
         backend.emit(event)
