@@ -125,6 +125,9 @@ class SeedState:
     counterfactual: float = 0.0  # Causal attribution score
     # Blend tempo - Tamiyo's chosen integration speed (3=FAST, 5=STANDARD, 8=SLOW)
     blend_tempo_epochs: int = 5
+    # Alpha curve shape - always present, but only displayed during BLENDING
+    # (when the curve is causally active). See design rationale in plan.
+    alpha_curve: str = "LINEAR"
 
     # Inter-slot interaction metrics (from counterfactual engine)
     # These show how this seed synergizes with others in the ensemble
