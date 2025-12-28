@@ -13,6 +13,14 @@ from esper.simic.training import TrainingConfig
 _logger = logging.getLogger(__name__)
 
 
+def _positive_int(value: str) -> int:
+    """Argparse type for positive integers (>= 1)."""
+    ivalue = int(value)
+    if ivalue < 1:
+        raise argparse.ArgumentTypeError(f"must be >= 1 (got {ivalue})")
+    return ivalue
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train Simic RL agents")
 
@@ -203,6 +211,33 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["shaped-vs-simplified", "shaped-vs-sparse", "simplified-vs-sparse"],
         default=None,
         help="True A/B test: train separate policies on separate GPUs",
+    )
+
+    # === Tamiyo Training Scale ===
+    # These control how much and how Tamiyo learns, exposed with Tamiyo-centric names.
+    ppo_parser.add_argument(
+        "--rounds",
+        type=_positive_int,
+        default=None,
+        metavar="N",
+        help="Tamiyo training iterations. Each round = one PPO update using data from all envs. "
+             "(Maps to n_episodes in config. Default: 100)",
+    )
+    ppo_parser.add_argument(
+        "--envs",
+        type=_positive_int,
+        default=None,
+        metavar="K",
+        help="Parallel CIFAR environments per round. More envs = richer/more diverse data per "
+             "Tamiyo update, but same number of updates. (Maps to n_envs. Default: 4)",
+    )
+    ppo_parser.add_argument(
+        "--episode-length",
+        type=_positive_int,
+        default=None,
+        metavar="L",
+        help="Timesteps per environment per round. Each round produces envs × episode_length "
+             "transitions for Tamiyo. (Maps to max_epochs. Default: 25)",
     )
 
     return parser

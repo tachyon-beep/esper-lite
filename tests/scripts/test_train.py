@@ -1,5 +1,7 @@
 import pytest
 
+from esper.scripts.train import build_parser
+
 
 def test_telemetry_lifecycle_only_flag_wired():
     import esper.scripts.train as train
@@ -198,4 +200,58 @@ class TestDualABTestingCLI:
         assert args.ab_test == "shaped-vs-simplified"
         assert args.dual_ab == "shaped-vs-sparse"
         # In actual training, dual_ab would take precedence (checked first in if statement)
+
+
+class TestTamiyoCentricFlags:
+    """Tests for Tamiyo-centric CLI flags."""
+
+    def test_rounds_flag_accepted(self):
+        """--rounds should set n_episodes in config."""
+        parser = build_parser()
+        args = parser.parse_args(["ppo", "--rounds", "50"])
+        assert args.rounds == 50
+
+    def test_envs_flag_accepted(self):
+        """--envs should set n_envs in config."""
+        parser = build_parser()
+        args = parser.parse_args(["ppo", "--envs", "8"])
+        assert args.envs == 8
+
+    def test_episode_length_flag_accepted(self):
+        """--episode-length should set max_epochs in config."""
+        parser = build_parser()
+        args = parser.parse_args(["ppo", "--episode-length", "30"])
+        assert args.episode_length == 30
+
+    def test_flags_default_to_none(self):
+        """Tamiyo flags should default to None (config takes precedence)."""
+        parser = build_parser()
+        args = parser.parse_args(["ppo"])
+        assert args.rounds is None
+        assert args.envs is None
+        assert args.episode_length is None
+
+    def test_positive_int_validator_rejects_zero(self):
+        """_positive_int should reject zero."""
+        from esper.scripts.train import _positive_int
+        import argparse
+
+        with pytest.raises(argparse.ArgumentTypeError, match="must be >= 1"):
+            _positive_int("0")
+
+    def test_positive_int_validator_rejects_negative(self):
+        """_positive_int should reject negative values."""
+        from esper.scripts.train import _positive_int
+        import argparse
+
+        with pytest.raises(argparse.ArgumentTypeError, match="must be >= 1"):
+            _positive_int("-5")
+
+    def test_positive_int_validator_accepts_positive(self):
+        """_positive_int should accept positive integers."""
+        from esper.scripts.train import _positive_int
+
+        assert _positive_int("1") == 1
+        assert _positive_int("100") == 100
+        assert _positive_int("999999") == 999999
 
