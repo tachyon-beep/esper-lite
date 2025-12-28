@@ -144,14 +144,19 @@ class AlphaController:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AlphaController":
+        """Deserialize from checkpoint dict.
+
+        Raises:
+            KeyError: If required fields are missing (corrupt checkpoint).
+        """
         return cls(
-            alpha=float(data.get("alpha", 0.0)),
-            alpha_start=float(data.get("alpha_start", 0.0)),
-            alpha_target=float(data.get("alpha_target", 0.0)),
-            alpha_mode=AlphaMode(int(data.get("alpha_mode", AlphaMode.HOLD))),
-            alpha_curve=AlphaCurve(int(data.get("alpha_curve", AlphaCurve.LINEAR))),
-            alpha_steps_total=int(data.get("alpha_steps_total", 0)),
-            alpha_steps_done=int(data.get("alpha_steps_done", 0)),
+            alpha=float(data["alpha"]),
+            alpha_start=float(data["alpha_start"]),
+            alpha_target=float(data["alpha_target"]),
+            alpha_mode=AlphaMode(int(data["alpha_mode"])),
+            alpha_curve=AlphaCurve(int(data["alpha_curve"])),
+            alpha_steps_total=int(data["alpha_steps_total"]),
+            alpha_steps_done=int(data["alpha_steps_done"]),
         )
 
 

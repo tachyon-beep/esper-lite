@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B2-DRL-06` |
 | **Severity** | `P3` |
-| **Status** | `open` |
+| **Status** | `closed` |
 | **Batch** | 2 |
 | **Agent** | `drl` |
 | **Domain** | `kasmina` |
@@ -124,6 +124,16 @@ def from_dict(cls, data: dict[str, Any]) -> "AlphaController":
 |-----------|--------------|-------|
 | `B2-CR-04` | `duplicate` | Primary ticket from CodeReview perspective |
 | `B2-PT-09` | `related` | PT noted this as "acceptable" for compatibility (disagree) |
+
+---
+
+## Resolution
+
+**Status:** Fixed by B2-CR-04
+
+**Fix:** Primary ticket B2-CR-04 addressed this issue by replacing all `.get(key, default)` calls with direct key access.
+
+See B2-CR-04 for full resolution details.
 
 ---
 
