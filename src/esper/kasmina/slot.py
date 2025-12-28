@@ -1594,6 +1594,7 @@ class SeedSlot(nn.Module):
         *,
         steps: int,
         curve: AlphaCurve | None = None,
+        steepness: float = 12.0,
         reason: str = "",
         initiator: str = "policy",
     ) -> bool:
@@ -1658,6 +1659,7 @@ class SeedSlot(nn.Module):
             alpha_target=0.0,
             alpha_steps_total=steps,
             alpha_curve=curve,
+            alpha_steepness=steepness,
         )
         self._set_blend_out_freeze(True)
         return True
@@ -1668,6 +1670,7 @@ class SeedSlot(nn.Module):
         alpha_target: float,
         steps: int,
         curve: AlphaCurve | None = None,
+        steepness: float = 12.0,
         alpha_algorithm: AlphaAlgorithm | None = None,
         initiator: str = "policy",
     ) -> bool:
@@ -1761,6 +1764,7 @@ class SeedSlot(nn.Module):
             alpha_target=alpha_target,
             alpha_steps_total=steps,
             alpha_curve=curve,
+            alpha_steepness=steepness,
         )
 
         # Freeze learnable params when blending down.
@@ -2057,7 +2061,7 @@ class SeedSlot(nn.Module):
         self._blend_out_frozen_params.clear()
         self._blend_out_freeze_active = False
 
-    def start_blending(self, total_steps: int) -> None:
+    def start_blending(self, total_steps: int, steepness: float = 12.0) -> None:
         """Initialize blending with selected algorithm.
 
         Uses blend_algorithm_id set during germinate(). Falls back to sigmoid
@@ -2113,6 +2117,7 @@ class SeedSlot(nn.Module):
                 alpha_target=alpha_target,
                 alpha_steps_total=total_steps,
                 alpha_curve=curve,
+                alpha_steepness=steepness,
             )
 
         topology = self.task_config.topology if self.task_config else "cnn"
