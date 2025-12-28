@@ -2015,29 +2015,34 @@ class TamiyoBrain(Static):
 
         tamiyo = self._snapshot.tamiyo
 
-        # Head config: (abbrev, field_name)
+        # Head config: (abbrev, field_name, head_key)
         # Same abbreviations as entropy heatmap for consistency
+        # head_key is used to check if head is conditional (for ~ suffix alignment)
         heads = [
-            ("slot", "head_slot_grad_norm"),
-            ("bpnt", "head_blueprint_grad_norm"),
-            ("styl", "head_style_grad_norm"),
-            ("temp", "head_tempo_grad_norm"),
-            ("atgt", "head_alpha_target_grad_norm"),
-            ("aspd", "head_alpha_speed_grad_norm"),
-            ("acrv", "head_alpha_curve_grad_norm"),
-            ("op", "head_op_grad_norm"),
+            ("slot", "head_slot_grad_norm", "slot"),
+            ("bpnt", "head_blueprint_grad_norm", "blueprint"),
+            ("styl", "head_style_grad_norm", "style"),
+            ("temp", "head_tempo_grad_norm", "tempo"),
+            ("atgt", "head_alpha_target_grad_norm", "alpha_target"),
+            ("aspd", "head_alpha_speed_grad_norm", "alpha_speed"),
+            ("acrv", "head_alpha_curve_grad_norm", "alpha_curve"),
+            ("op", "head_op_grad_norm", "op"),
         ]
 
         result = Text()
         result.append(" Grads: ", style="dim")
 
         # First line: bars (12-char segments for non-op, 10-char for op)
-        for abbrev, field in heads:
+        for abbrev, field, head_key in heads:
             value = getattr(tamiyo, field, 0.0)
+
+            # Conditional head indicator: append ~ to abbrev (matches entropy heatmap)
+            is_conditional = head_key in self.CONDITIONAL_HEADS
+            label = f"{abbrev}~" if is_conditional else abbrev
 
             # No data case - use 5 dashes to match 5-char bars
             if value == 0.0:
-                result.append(f"{abbrev}[", style="dim")
+                result.append(f"{label}[", style="dim")
                 result.append("-----", style="dim italic")
                 result.append("] ")
                 continue
@@ -2074,9 +2079,9 @@ class TamiyoBrain(Static):
             filled = int(fill * bar_width)
             empty = bar_width - filled
 
-            # No padding - just use abbrev as-is
+            # No padding - use label (includes ~ for conditional heads)
             # (12-char segment for 4-char abbrevs, 10-char for "op")
-            result.append(f"{abbrev}[")
+            result.append(f"{label}[")
             result.append("█" * filled, style=color)
             result.append("░" * empty, style="dim")
             result.append("] ")
@@ -2084,9 +2089,9 @@ class TamiyoBrain(Static):
         result.append("\n          ")  # 10 spaces to align under wider bars
 
         # Second line: values (aligned under bars)
-        for i, (abbrev, field) in enumerate(heads):
+        for abbrev, field, head_key in heads:
             value = getattr(tamiyo, field, 0.0)
-            is_last_head = i == len(heads) - 1
+            is_last_head = head_key == "op"
 
             if value == 0.0:
                 # No data - match bar segment widths (12 for non-op, 10 for op)
