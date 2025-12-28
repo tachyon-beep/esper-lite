@@ -49,6 +49,7 @@ from esper.leyline import (
     SeedPrunedPayload,
     CounterfactualMatrixPayload,
     AnalyticsSnapshotPayload,
+    TEMPO_NAMES,
 )
 
 if TYPE_CHECKING:
@@ -1167,6 +1168,11 @@ class SanctumAggregator:
                 pending.decision.td_advantage = td_adv
                 del self._pending_decisions[env_id]
 
+            # Map tempo index to tempo name (FAST/STANDARD/SLOW)
+            chosen_tempo: str | None = None
+            if payload.tempo_idx is not None and 0 <= payload.tempo_idx < len(TEMPO_NAMES):
+                chosen_tempo = TEMPO_NAMES[payload.tempo_idx]
+
             decision = DecisionSnapshot(
                 timestamp=now_dt,
                 slot_states=payload.slot_states or {},
@@ -1182,6 +1188,11 @@ class SanctumAggregator:
                 env_id=env_id,
                 value_residual=total_reward - value_s,
                 td_advantage=None,
+                # Head choice fields (from AnalyticsSnapshotPayload)
+                chosen_blueprint=payload.blueprint_id,
+                chosen_tempo=chosen_tempo,
+                chosen_style=payload.style,
+                chosen_curve=payload.alpha_curve,
             )
 
             # Store as pending for TD advantage computation on next decision

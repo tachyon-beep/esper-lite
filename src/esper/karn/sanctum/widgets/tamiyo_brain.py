@@ -19,7 +19,7 @@ from textual.message import Message
 from textual.widgets import Static
 
 from esper.karn.constants import TUIThresholds
-from esper.leyline import STAGE_COLORS, STAGE_ABBREVIATIONS
+from esper.leyline import ALPHA_CURVE_GLYPHS, STAGE_COLORS, STAGE_ABBREVIATIONS
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import DecisionSnapshot, SanctumSnapshot
@@ -116,7 +116,7 @@ class TamiyoBrain(Static):
     PREDICTION_ACCEPTABLE_THRESHOLD = 0.3  # Yellow warning: |actual - expected| < 0.3
 
     # Enriched decision card width (Task 5)
-    DECISION_CARD_WIDTH = 30
+    DECISION_CARD_WIDTH = 45  # 50% wider to show head choices (blueprint, tempo, style)
 
     # Decision card height for dynamic count calculation
     DECISION_CARD_HEIGHT = 7  # 6 lines (title + 5 content) + 1 gap
@@ -1009,24 +1009,42 @@ class TamiyoBrain(Static):
         card.append("│", style=border_style)
         card.append(" ")
         if decision.chosen_action == "GERMINATE" and decision.chosen_blueprint:
-            # Abbreviate blueprint name (first 6 chars)
-            bp_abbrev = decision.chosen_blueprint[:6] if decision.chosen_blueprint else "?"
+            # Abbreviate blueprint name (first 8 chars with wider card)
+            bp_abbrev = decision.chosen_blueprint[:8] if decision.chosen_blueprint else "?"
             bp_conf = f"({decision.blueprint_confidence:.0%})" if decision.blueprint_confidence else ""
-            # Abbreviate tempo (FAST→FST, STANDARD→STD, SLOW→SLO)
-            tempo_abbrev_map = {"FAST": "FST", "STANDARD": "STD", "SLOW": "SLO"}
-            tempo_abbrev = tempo_abbrev_map.get(
-                decision.chosen_tempo or "", decision.chosen_tempo[:3] if decision.chosen_tempo else "?"
-            )
 
-            line6 = f"bpnt:{bp_abbrev}{bp_conf} tmp:{tempo_abbrev}"
-            card.append("bpnt:", style="dim")
+            # Tempo arrows (FAST→▸▸▸, STANDARD→▸▸, SLOW→▸) - dim "-" if not set
+            tempo_arrow_map = {"FAST": "▸▸▸", "STANDARD": "▸▸", "SLOW": "▸"}
+            has_tempo = decision.chosen_tempo in tempo_arrow_map
+            tempo_arrows = tempo_arrow_map.get(decision.chosen_tempo or "", "-")
+            tempo_style = "magenta" if has_tempo else "dim"
+
+            # Style: leyline blend names - dim "-" if not set
+            style_blend_map = {
+                "LINEAR_ADD": "linear+add",
+                "LINEAR_MULTIPLY": "linear×mul",
+                "SIGMOID_ADD": "sigmoid+add",
+                "GATED_GATE": "gated⊙gate",
+            }
+            has_style = decision.chosen_style in style_blend_map
+            style_display = style_blend_map.get(decision.chosen_style or "", "-")
+            style_style = "yellow" if has_style else "dim"
+
+            # Curve glyph (╱ ∿ ⌒ ⌢ ⊐) - dim "-" if not set
+            has_curve = decision.chosen_curve in ALPHA_CURVE_GLYPHS
+            curve_glyph = ALPHA_CURVE_GLYPHS.get(decision.chosen_curve or "", "-")
+            curve_style = "green" if has_curve else "dim"
+
+            line6 = f"bp:{bp_abbrev}{bp_conf} {tempo_arrows} {style_display} {curve_glyph}"
+            card.append("bp:", style="dim")
             card.append(bp_abbrev, style="cyan")
             card.append(bp_conf, style="dim")
-            card.append(" tmp:", style="dim")
-            card.append(tempo_abbrev, style="magenta")
+            card.append(f" {tempo_arrows}", style=tempo_style)
+            card.append(f" {style_display}", style=style_style)
+            card.append(f" {curve_glyph}", style=curve_style)
         else:
             # Non-GERMINATE: show dim placeholder
-            line6 = "bpnt:- tmp:-"
+            line6 = "bp:- - - -"
             card.append(line6, style="dim")
         card.append(" " * max(0, CONTENT_WIDTH - len(line6)) + " ")
         card.append("│", style=border_style)
@@ -1805,9 +1823,9 @@ class TamiyoBrain(Static):
             # Check for missing data (value=0.0 for untracked heads)
             if value == 0.0 and not is_tracked:
                 # Visual distinction for awaiting telemetry (per risk assessor)
-                # 9-char segment: "abbr[---] "
+                # Use 5 dashes to match 5-char bars
                 result.append(f"{abbrev}[", style="dim")
-                result.append("---", style="dim italic")
+                result.append("-----", style="dim italic")
                 result.append("] ")
                 continue
 
@@ -1833,10 +1851,10 @@ class TamiyoBrain(Static):
 
             # Conditional head indicator: append ~ to abbrev
             is_conditional = head_key in self.CONDITIONAL_HEADS
-            label = f"{abbrev}~" if is_conditional else f"{abbrev} " if len(abbrev) < 4 else abbrev
+            label = f"{abbrev}~" if is_conditional else abbrev
 
-            # 11-char segment: "abbr[█████] " = 4 + 1 + 5 + 1 + space = 11
-            result.append(f"{label[:4]}[")
+            # 12-char segment: "abbr[█████] " = 4 + 1 + 5 + 1 + space = 12
+            result.append(f"{label}[")
             result.append("█" * filled, style=color)
             result.append("░" * empty, style="dim")
             result.append("] ")
@@ -1851,19 +1869,19 @@ class TamiyoBrain(Static):
             is_last_head = head_key == "op"
 
             if value == 0.0 and not is_tracked:
-                # 10-char segment: n/a with appropriate alignment
+                # n/a segment: match bar segment widths (12 for non-op, 10 for op)
                 if is_last_head:
-                    result.append("   n/a    ", style="dim italic")
+                    result.append("   n/a    ", style="dim italic")  # 10 chars
                 else:
-                    result.append("     n/a  ", style="dim italic")
+                    result.append("      n/a   ", style="dim italic")  # 12 chars
                 continue
 
             # Use adjusted_fill for threshold decisions
             active_entropy, relevance_ratio, adjusted_fill = head_contexts[head_key]
 
-            # 10-char segment with indicators: critical (!), warning (*), normal
-            # Op head: "  X.XX!   " (2 leading, 3 trailing)
-            # Other heads: "    X.XX! " (4 leading, 1 trailing) - shifted right by 2
+            # Segment widths match bar row:
+            # - Non-op heads: 12 chars (abbr[█████] )
+            # - Op head: 10 chars (op[█████] )
             #
             # Use adjusted_fill for threshold checks - this accounts for conditional
             # heads where the observed entropy is diluted by samples where the head
@@ -1872,6 +1890,7 @@ class TamiyoBrain(Static):
             is_conditional = head_key in self.CONDITIONAL_HEADS
 
             if is_last_head:
+                # Op head: 10-char segment "  X.XX!   "
                 if adjusted_fill < 0.25:
                     result.append(f"  {value:4.2f}!   ", style="red")
                 elif adjusted_fill < 0.5:
@@ -1879,18 +1898,19 @@ class TamiyoBrain(Static):
                 else:
                     result.append(f"  {value:4.2f}    ", style="dim")
             else:
+                # Other heads: 12-char segment "     X.XX!  " (5 leading, 2 trailing)
                 # For conditional heads, show "~" suffix instead of warning indicators
                 # when the head is rarely used (low relevance) but active entropy is OK
                 if adjusted_fill < 0.25:
-                    result.append(f"    {value:4.2f}! ", style="red")
+                    result.append(f"     {value:4.2f}!  ", style="red")
                 elif adjusted_fill < 0.5:
-                    result.append(f"    {value:4.2f}* ", style="yellow")
+                    result.append(f"     {value:4.2f}*  ", style="yellow")
                 elif is_conditional and relevance_ratio < 0.3:
                     # Conditional head with low usage but healthy active entropy
                     # Show ~ to indicate "conditional, rarely used"
-                    result.append(f"    {value:4.2f}~ ", style="dim")
+                    result.append(f"     {value:4.2f}~  ", style="dim")
                 else:
-                    result.append(f"    {value:4.2f}  ", style="dim")
+                    result.append(f"     {value:4.2f}   ", style="dim")
 
         return result
 
@@ -1925,14 +1945,14 @@ class TamiyoBrain(Static):
         result = Text()
         result.append(" Grads: ", style="dim")
 
-        # First line: bars (9-char segments)
+        # First line: bars (12-char segments for non-op, 10-char for op)
         for abbrev, field in heads:
             value = getattr(tamiyo, field, 0.0)
 
-            # No data case
+            # No data case - use 5 dashes to match 5-char bars
             if value == 0.0:
                 result.append(f"{abbrev}[", style="dim")
-                result.append("---", style="dim italic")
+                result.append("-----", style="dim italic")
                 result.append("] ")
                 continue
 
@@ -1968,11 +1988,9 @@ class TamiyoBrain(Static):
             filled = int(fill * bar_width)
             empty = bar_width - filled
 
-            # Pad abbrev to 4 chars
-            label = f"{abbrev} " if len(abbrev) < 4 else abbrev
-
-            # 11-char segment: "abbr[█████] "
-            result.append(f"{label[:4]}[")
+            # No padding - just use abbrev as-is
+            # (12-char segment for 4-char abbrevs, 10-char for "op")
+            result.append(f"{abbrev}[")
             result.append("█" * filled, style=color)
             result.append("░" * empty, style="dim")
             result.append("] ")
@@ -1985,11 +2003,11 @@ class TamiyoBrain(Static):
             is_last_head = i == len(heads) - 1
 
             if value == 0.0:
-                # No data
+                # No data - match bar segment widths (12 for non-op, 10 for op)
                 if is_last_head:
-                    result.append("   n/a    ", style="dim italic")
+                    result.append("   n/a    ", style="dim italic")  # 10 chars
                 else:
-                    result.append("     n/a  ", style="dim italic")
+                    result.append("      n/a   ", style="dim italic")  # 12 chars
                 continue
 
             # Determine status indicator
@@ -2017,9 +2035,11 @@ class TamiyoBrain(Static):
                 val_str = f"{value:4.2f}"
 
             if is_last_head:
+                # Op head: 10-char segment
                 result.append(f"  {val_str}{indicator}   ", style=style)
             else:
-                result.append(f"    {val_str}{indicator} ", style=style)
+                # Other heads: 12-char segment (5 leading + 5 value/indicator + 2 trailing)
+                result.append(f"     {val_str}{indicator}  ", style=style)
 
         return result
 

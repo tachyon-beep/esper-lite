@@ -292,6 +292,11 @@ class VectorizedEmitter:
                 slot_states=slot_states,
                 alternatives=alternatives,
                 decision_entropy=decision_entropy,
+                # Head choice fields (for decision card sub-decision display)
+                slot_id=data["slot_id"],
+                blueprint_id=data["blueprint_id"],
+                tempo_idx=data["tempo_idx"],
+                style=data["style"],
             ),
         ))
 

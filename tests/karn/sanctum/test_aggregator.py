@@ -295,3 +295,69 @@ def test_snapshot_tracks_last_action_env_id():
     snapshot = agg.get_snapshot()
     assert snapshot.last_action_env_id == 2
     assert snapshot.last_action_timestamp is not None
+
+
+def test_decision_snapshot_populates_head_choices():
+    """DecisionSnapshot should include blueprint, tempo, style, curve from payload."""
+    from esper.leyline.telemetry import AnalyticsSnapshotPayload
+
+    agg = SanctumAggregator(num_envs=4)
+
+    # Simulate a GERMINATE action with head choice details
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+        data=AnalyticsSnapshotPayload(
+            kind="last_action",
+            env_id=0,
+            action_name="GERMINATE",
+            action_confidence=0.92,
+            slot_id="slot_0",
+            blueprint_id="conv_light",
+            tempo_idx=1,  # STANDARD (index 1 in TEMPO_NAMES)
+            style="LINEAR_ADD",
+            alpha_curve="LINEAR",
+        ),
+    )
+    agg.process_event(event)
+
+    snapshot = agg.get_snapshot()
+    decisions = snapshot.tamiyo.recent_decisions
+    assert len(decisions) == 1
+
+    decision = decisions[0]
+    assert decision.chosen_action == "GERMINATE"
+    assert decision.chosen_blueprint == "conv_light"
+    assert decision.chosen_tempo == "STANDARD"
+    assert decision.chosen_style == "LINEAR_ADD"
+    assert decision.chosen_curve == "LINEAR"
+
+
+def test_decision_snapshot_handles_missing_head_choices():
+    """DecisionSnapshot should handle None head choice fields gracefully."""
+    from esper.leyline.telemetry import AnalyticsSnapshotPayload
+
+    agg = SanctumAggregator(num_envs=4)
+
+    # Simulate a WAIT action (no head choices)
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+        data=AnalyticsSnapshotPayload(
+            kind="last_action",
+            env_id=0,
+            action_name="WAIT",
+            action_confidence=0.85,
+            # No blueprint_id, tempo_idx, style, or alpha_curve
+        ),
+    )
+    agg.process_event(event)
+
+    snapshot = agg.get_snapshot()
+    decisions = snapshot.tamiyo.recent_decisions
+    assert len(decisions) == 1
+
+    decision = decisions[0]
+    assert decision.chosen_action == "WAIT"
+    assert decision.chosen_blueprint is None
+    assert decision.chosen_tempo is None
+    assert decision.chosen_style is None
+    assert decision.chosen_curve is None

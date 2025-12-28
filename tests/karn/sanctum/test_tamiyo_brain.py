@@ -1130,8 +1130,9 @@ async def test_heatmap_appears_in_render():
         assert "heads:" in output.lower()
 
         # Verify head abbreviations are present (expanded per UX review)
-        assert "slot[" in output  # slot head
-        assert "bpnt[" in output  # blueprint head
+        # Note: conditional heads get ~ suffix (e.g., bpnt~ for blueprint)
+        assert "slot[" in output  # slot head (non-conditional)
+        assert "bpnt~[" in output  # blueprint head (conditional)
 
 
 @pytest.mark.asyncio
@@ -1522,7 +1523,7 @@ async def test_border_title_includes_group_id():
 
 @pytest.mark.asyncio
 async def test_enriched_decision_card_format():
-    """Enriched decision card should be 24 chars wide with 7 lines."""
+    """Enriched decision card should be 45 chars wide with 8 lines."""
     from esper.karn.sanctum.schema import DecisionSnapshot
     from datetime import datetime, timezone
 
@@ -1555,9 +1556,9 @@ async def test_enriched_decision_card_format():
         # Line 6 shows head choices (dim "-" for non-GERMINATE actions)
         assert len(lines) == 8
 
-        # All lines should be exactly 30 chars
+        # All lines should be exactly 45 chars (widened to show head choices)
         for i, line in enumerate(lines[:8]):
-            assert len(line) == 30, f"Line {i} has length {len(line)}, expected 30: '{line}'"
+            assert len(line) == 45, f"Line {i} has length {len(line)}, expected 45: '{line}'"
 
         # Verify border structure
         assert lines[0].startswith("┌─")
@@ -2516,7 +2517,7 @@ async def test_slot_summary_shows_constraint_when_no_dormant():
 
 
 def test_decision_card_shows_head_choices():
-    """Decision cards should display blueprint and tempo for GERMINATE.
+    """Decision cards should display blueprint, tempo arrows, style, and curve for GERMINATE.
 
     Per DRL/UX specialist review: surfaces sub-decisions without dashboard clutter.
     """
@@ -2538,6 +2539,8 @@ def test_decision_card_shows_head_choices():
         value_residual=0.1,
         chosen_blueprint="conv_light",
         chosen_tempo="STANDARD",
+        chosen_style="LINEAR_ADD",
+        chosen_curve="LINEAR",
         blueprint_confidence=0.87,
         tempo_confidence=0.65,
     )
@@ -2549,10 +2552,10 @@ def test_decision_card_shows_head_choices():
     text = str(card)
 
     # Should contain head choice info for GERMINATE
-    assert "conv" in text.lower() or "bpnt" in text.lower(), \
-        f"Expected blueprint in card: {text}"
-    assert "std" in text.lower() or "tempo" in text.lower(), \
-        f"Expected tempo in card: {text}"
+    assert "conv" in text.lower(), f"Expected blueprint in card: {text}"
+    assert "▸▸" in text, f"Expected tempo arrows in card: {text}"  # STANDARD = ▸▸
+    assert "linear" in text.lower(), f"Expected style in card: {text}"
+    assert "╱" in text, f"Expected curve glyph (╱ for LINEAR) in card: {text}"
 
 
 # =============================================================================
