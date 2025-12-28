@@ -1654,9 +1654,9 @@ class TamiyoBrain(Static):
         matrix.add_row(gauge_grid, separator, metrics_col)
         return matrix
 
-    # Head segment width: 10 chars per head for alignment
-    # Format: "abbr[███] " = 4-char abbrev + "[" + 3-char bar + "] " = 10 chars
-    HEAD_SEGMENT_WIDTH = 10
+    # Head segment width: 12 chars per head for alignment (expanded for 80% layout)
+    # Format: "abbr[█████] " = 4-char abbrev + "[" + 5-char bar + "] " = 12 chars
+    HEAD_SEGMENT_WIDTH = 12
 
     def _compute_head_entropy_context(
         self, head_key: str, observed_entropy: float
@@ -1784,8 +1784,9 @@ class TamiyoBrain(Static):
             _, _, adjusted_fill = head_contexts[head_key]
             adjusted_fill = max(0, min(1, adjusted_fill))
 
-            # 3-char bar (narrower for 80-char terminal compatibility)
-            bar_width = 3
+            # 5-char bar (expanded for 80% width layout - better granularity)
+            # Per DRL specialist: helps detect entropy collapse earlier
+            bar_width = 5
             filled = int(adjusted_fill * bar_width)
             empty = bar_width - filled
 
@@ -1802,13 +1803,13 @@ class TamiyoBrain(Static):
             is_conditional = head_key in self.CONDITIONAL_HEADS
             label = f"{abbrev}~" if is_conditional else f"{abbrev} " if len(abbrev) < 4 else abbrev
 
-            # 9-char segment: "abbr[███] " = 4 + 1 + 3 + 1 + space = 9
+            # 11-char segment: "abbr[█████] " = 4 + 1 + 5 + 1 + space = 11
             result.append(f"{label[:4]}[")
             result.append("█" * filled, style=color)
             result.append("░" * empty, style="dim")
             result.append("] ")
 
-        result.append("\n        ")
+        result.append("\n          ")  # 10 spaces to align under wider bars
 
         # Second line: values (10-char segments to match bars)
         # Non-op heads shifted right by 3 chars for alignment under bars
@@ -1930,21 +1931,21 @@ class TamiyoBrain(Static):
                 fill = 1.0
                 color = "red"
 
-            # 3-char bar
-            bar_width = 3
+            # 5-char bar (expanded for 80% width layout - matches entropy heatmap)
+            bar_width = 5
             filled = int(fill * bar_width)
             empty = bar_width - filled
 
             # Pad abbrev to 4 chars
             label = f"{abbrev} " if len(abbrev) < 4 else abbrev
 
-            # 9-char segment: "abbr[███] "
+            # 11-char segment: "abbr[█████] "
             result.append(f"{label[:4]}[")
             result.append("█" * filled, style=color)
             result.append("░" * empty, style="dim")
             result.append("] ")
 
-        result.append("\n        ")
+        result.append("\n          ")  # 10 spaces to align under wider bars
 
         # Second line: values (aligned under bars)
         for i, (abbrev, field) in enumerate(heads):

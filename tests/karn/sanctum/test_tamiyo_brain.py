@@ -2507,3 +2507,42 @@ async def test_slot_summary_shows_constraint_when_no_dormant():
         # Should show constraint message about no dormant slots
         assert "GERMINATE blocked" in rendered_plain, \
             "Should explain that GERMINATE is blocked when no dormant slots"
+
+
+# =============================================================================
+# HEAD HEATMAP BAR WIDTH TESTS (per specialist review)
+# =============================================================================
+
+
+def test_head_heatmap_uses_5_char_bars():
+    """Head heatmap should use 5-char bars for improved granularity.
+
+    Per DRL specialist: 5-char bars show visible difference between
+    60% and 80% fill levels, helping operators catch head collapse earlier.
+    """
+    snapshot = SanctumSnapshot(slot_ids=["R0C0", "R0C1"])
+    tamiyo = TamiyoState(
+        head_slot_entropy=1.5,  # ~75% of max entropy
+        head_blueprint_entropy=1.8,
+        head_op_entropy=1.2,
+    )
+    snapshot.tamiyo = tamiyo
+
+    widget = TamiyoBrain()
+    widget._snapshot = snapshot
+
+    result = widget._render_head_heatmap()
+    text = str(result)
+
+    # 5-char bar should have 3-4 filled blocks at 75%
+    # Pattern: abbrev[█████] or abbrev[████░] - 5 chars between brackets
+    # Count consecutive block characters to verify bar width
+    import re
+
+    # Find all bar patterns like [█████] or [███░░]
+    bar_pattern = r"\[([█░]+)\]"
+    bars = re.findall(bar_pattern, text)
+
+    assert len(bars) > 0, f"Expected bar patterns in output, got: {text}"
+    for bar in bars:
+        assert len(bar) == 5, f"Expected 5-char bar, got {len(bar)}-char bar: [{bar}]"
