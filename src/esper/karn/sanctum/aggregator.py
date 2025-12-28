@@ -1223,7 +1223,7 @@ class SanctumAggregator:
         # Handle typed payload (preferred)
         if isinstance(data, EpisodeOutcomePayload):
             outcome = EpisodeOutcome(
-                env_idx=data.env_id,  # Payload uses env_id, store uses env_idx
+                env_id=data.env_id,
                 episode_idx=data.episode_idx,
                 final_accuracy=data.final_accuracy,
                 param_ratio=data.param_ratio,
@@ -1236,7 +1236,7 @@ class SanctumAggregator:
         elif isinstance(data, dict):
             # Legacy dict format (from deserialization)
             outcome = EpisodeOutcome(
-                env_idx=data.get("env_idx", data.get("env_id", 0)),  # Handle both conventions
+                env_id=data["env_id"],
                 episode_idx=data["episode_idx"],
                 final_accuracy=data["final_accuracy"],
                 param_ratio=data["param_ratio"],

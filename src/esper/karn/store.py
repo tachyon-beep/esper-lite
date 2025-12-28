@@ -371,7 +371,7 @@ class EpisodeOutcome:
     - stability_score: Training stability (higher = better)
     """
 
-    env_idx: int
+    env_id: int
     episode_idx: int
     final_accuracy: float
     param_ratio: float  # total_params / host_params
@@ -414,7 +414,7 @@ class EpisodeOutcome:
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dict."""
         return {
-            "env_idx": self.env_idx,
+            "env_id": self.env_id,
             "episode_idx": self.episode_idx,
             "reward_mode": self.reward_mode,
             "final_accuracy": self.final_accuracy,

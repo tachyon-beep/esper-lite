@@ -3040,7 +3040,7 @@ def train_ppo_vectorized(
 
                     # Track episode completion for A/B testing
                     episode_history.append({
-                        "env_idx": env_idx,
+                        "env_id": env_idx,
                         "episode_reward": env_total_rewards[env_idx],
                         "final_accuracy": env_final_accs[env_idx],
                     })
@@ -3055,7 +3055,7 @@ def train_ppo_vectorized(
 
                     # Create EpisodeOutcome for Pareto analysis
                     episode_outcome = EpisodeOutcome(
-                        env_idx=env_idx,
+                        env_id=env_idx,
                         episode_idx=episodes_completed + env_idx,
                         final_accuracy=env_state.val_acc,
                         param_ratio=(model.total_params - host_params_baseline) / max(1, host_params_baseline),
@@ -3406,7 +3406,7 @@ def train_ppo_vectorized(
         from collections import defaultdict
         ab_groups: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
         for ep_data in episode_history:
-            env_idx = int(ep_data["env_idx"])
+            env_idx = int(ep_data["env_id"])
             mode_name = env_reward_configs[env_idx].reward_mode.value
             ab_groups[mode_name].append(ep_data)
 

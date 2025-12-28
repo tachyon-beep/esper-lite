@@ -168,7 +168,7 @@ VIEW_DEFINITIONS: dict[str, str] = {
         CREATE OR REPLACE VIEW episode_outcomes AS
         SELECT
             timestamp,
-            json_extract(data, '$.env_idx')::INTEGER as env_idx,
+            json_extract(data, '$.env_id')::INTEGER as env_id,
             json_extract(data, '$.episode_idx')::INTEGER as episode_idx,
             json_extract(data, '$.final_accuracy')::DOUBLE as final_accuracy,
             json_extract(data, '$.param_ratio')::DOUBLE as param_ratio,
