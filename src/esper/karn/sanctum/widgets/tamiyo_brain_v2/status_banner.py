@@ -185,6 +185,7 @@ class StatusBanner(Static):
 
         # NaN/Inf check (HIGHEST PRIORITY - before all other checks)
         # These indicate numerical instability and should always be surfaced first
+        # These return immediately without counting - they are special cases
         if tamiyo.nan_grad_count > 0:
             return "critical", "NaN DETECTED", "red bold"
         if tamiyo.inf_grad_count > 0:
@@ -195,37 +196,55 @@ class StatusBanner(Static):
         if current_batch < self.WARMUP_BATCHES:
             return "warmup", f"WARMING UP [{current_batch}/{self.WARMUP_BATCHES}]", "cyan"
 
-        # Critical checks
+        # Collect all critical issues
+        critical_issues: list[str] = []
         if tamiyo.entropy < TUIThresholds.ENTROPY_CRITICAL:
-            return "critical", "FAILING", "red bold"
+            critical_issues.append("Entropy")
         if tamiyo.explained_variance <= TUIThresholds.EXPLAINED_VAR_CRITICAL:
-            return "critical", "FAILING", "red bold"
+            critical_issues.append("Value")
         if tamiyo.advantage_std < TUIThresholds.ADVANTAGE_STD_COLLAPSED:
-            return "critical", "FAILING", "red bold"
+            critical_issues.append("AdvLow")
         if tamiyo.advantage_std > TUIThresholds.ADVANTAGE_STD_CRITICAL:
-            return "critical", "FAILING", "red bold"
+            critical_issues.append("AdvHigh")
         if tamiyo.kl_divergence > TUIThresholds.KL_CRITICAL:
-            return "critical", "FAILING", "red bold"
+            critical_issues.append("KL")
         if tamiyo.clip_fraction > TUIThresholds.CLIP_CRITICAL:
-            return "critical", "FAILING", "red bold"
+            critical_issues.append("Clip")
         if tamiyo.grad_norm > TUIThresholds.GRAD_NORM_CRITICAL:
-            return "critical", "FAILING", "red bold"
+            critical_issues.append("Grad")
 
-        # Warning checks
+        if critical_issues:
+            primary = critical_issues[0]
+            if len(critical_issues) > 1:
+                label = f"FAIL:{primary} (+{len(critical_issues) - 1})"
+            else:
+                label = f"FAIL:{primary}"
+            return "critical", label, "red bold"
+
+        # Collect all warning issues
+        warning_issues: list[str] = []
         if tamiyo.explained_variance < TUIThresholds.EXPLAINED_VAR_WARNING:
-            return "warning", "CAUTION", "yellow"
+            warning_issues.append("Value")
         if tamiyo.entropy < TUIThresholds.ENTROPY_WARNING:
-            return "warning", "CAUTION", "yellow"
+            warning_issues.append("Entropy")
         if tamiyo.kl_divergence > TUIThresholds.KL_WARNING:
-            return "warning", "CAUTION", "yellow"
+            warning_issues.append("KL")
         if tamiyo.clip_fraction > TUIThresholds.CLIP_WARNING:
-            return "warning", "CAUTION", "yellow"
+            warning_issues.append("Clip")
         if tamiyo.advantage_std > TUIThresholds.ADVANTAGE_STD_WARNING:
-            return "warning", "CAUTION", "yellow"
+            warning_issues.append("AdvHigh")
         if tamiyo.advantage_std < TUIThresholds.ADVANTAGE_STD_LOW_WARNING:
-            return "warning", "CAUTION", "yellow"
+            warning_issues.append("AdvLow")
         if tamiyo.grad_norm > TUIThresholds.GRAD_NORM_WARNING:
-            return "warning", "CAUTION", "yellow"
+            warning_issues.append("Grad")
+
+        if warning_issues:
+            primary = warning_issues[0]
+            if len(warning_issues) > 1:
+                label = f"WARN:{primary} (+{len(warning_issues) - 1})"
+            else:
+                label = f"WARN:{primary}"
+            return "warning", label, "yellow"
 
         return "ok", "LEARNING", "green"
 

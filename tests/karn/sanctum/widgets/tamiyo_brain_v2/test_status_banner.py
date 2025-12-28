@@ -163,3 +163,173 @@ class TestNaNInfDisplay:
         assert nan_pos != -1, "NaN indicator should be present"
         assert bracket_pos != -1, "Status icon should be present"
         assert nan_pos < bracket_pos, "NaN should appear before status icon"
+
+
+# =============================================================================
+# TRIGGERING CONDITION DISPLAY TESTS
+# =============================================================================
+
+
+class TestTriggeringCondition:
+    """Test that status banner shows which metric triggered the warning/critical status."""
+
+    @pytest.fixture
+    def banner(self):
+        """Create a StatusBanner widget."""
+        return StatusBanner()
+
+    @pytest.fixture
+    def healthy_snapshot(self):
+        """Snapshot with healthy PPO metrics (past warmup period)."""
+        tamiyo = TamiyoState(
+            ppo_data_received=True,
+            entropy=1.0,
+            explained_variance=0.5,
+            clip_fraction=0.1,
+            kl_divergence=0.01,
+            advantage_std=1.0,
+            grad_norm=0.5,
+            nan_grad_count=0,
+            inf_grad_count=0,
+        )
+        return SanctumSnapshot(
+            tamiyo=tamiyo,
+            current_batch=100,  # Past warmup period (>50)
+        )
+
+    def test_entropy_warning_shows_reason(self, banner, healthy_snapshot):
+        """Low entropy (warning level) should show 'Entropy' in label."""
+        # Set entropy below WARNING threshold (0.3) but above CRITICAL (0.1)
+        healthy_snapshot.tamiyo.entropy = 0.2
+        banner._snapshot = healthy_snapshot
+        status, label, style = banner._get_overall_status()
+
+        assert status == "warning"
+        assert "Entropy" in label
+        assert "WARN" in label
+
+    def test_clip_critical_shows_reason(self, banner, healthy_snapshot):
+        """High clip fraction (critical level) should show 'Clip' in label."""
+        # Set clip above CRITICAL threshold (0.3)
+        healthy_snapshot.tamiyo.clip_fraction = 0.35
+        banner._snapshot = healthy_snapshot
+        status, label, style = banner._get_overall_status()
+
+        assert status == "critical"
+        assert "Clip" in label
+        assert "FAIL" in label
+
+    def test_multiple_issues_shows_count(self, banner, healthy_snapshot):
+        """Multiple critical issues should show count like 'FAIL:Entropy (+2)'."""
+        # Set multiple critical conditions:
+        # 1. Entropy critical (<0.1)
+        # 2. Clip critical (>0.3)
+        # 3. KL critical (>0.03)
+        healthy_snapshot.tamiyo.entropy = 0.05  # Below ENTROPY_CRITICAL
+        healthy_snapshot.tamiyo.clip_fraction = 0.35  # Above CLIP_CRITICAL
+        healthy_snapshot.tamiyo.kl_divergence = 0.04  # Above KL_CRITICAL
+        banner._snapshot = healthy_snapshot
+        status, label, style = banner._get_overall_status()
+
+        assert status == "critical"
+        assert "FAIL" in label
+        # First issue should be named, +2 indicates 2 additional issues
+        assert "(+2)" in label
+
+    def test_single_critical_no_count(self, banner, healthy_snapshot):
+        """Single critical issue should not show count."""
+        healthy_snapshot.tamiyo.entropy = 0.05  # Below ENTROPY_CRITICAL
+        banner._snapshot = healthy_snapshot
+        status, label, style = banner._get_overall_status()
+
+        assert status == "critical"
+        assert "FAIL:Entropy" in label
+        assert "(+" not in label
+
+    def test_single_warning_no_count(self, banner, healthy_snapshot):
+        """Single warning should not show count."""
+        healthy_snapshot.tamiyo.entropy = 0.2  # Below WARNING (0.3), above CRITICAL (0.1)
+        banner._snapshot = healthy_snapshot
+        status, label, style = banner._get_overall_status()
+
+        assert status == "warning"
+        assert "WARN:Entropy" in label
+        assert "(+" not in label
+
+    def test_multiple_warnings_shows_count(self, banner, healthy_snapshot):
+        """Multiple warnings should show count."""
+        # Set multiple warning conditions (but not critical):
+        # 1. Entropy warning (<0.3)
+        # 2. Clip warning (>0.25)
+        healthy_snapshot.tamiyo.entropy = 0.2  # Below ENTROPY_WARNING (0.3)
+        healthy_snapshot.tamiyo.clip_fraction = 0.27  # Above CLIP_WARNING (0.25)
+        banner._snapshot = healthy_snapshot
+        status, label, style = banner._get_overall_status()
+
+        assert status == "warning"
+        assert "WARN" in label
+        assert "(+1)" in label
+
+    def test_healthy_shows_learning(self, banner, healthy_snapshot):
+        """Healthy metrics should show 'LEARNING' with no condition name."""
+        banner._snapshot = healthy_snapshot
+        status, label, style = banner._get_overall_status()
+
+        assert status == "ok"
+        assert label == "LEARNING"
+        assert "FAIL" not in label
+        assert "WARN" not in label
+
+    def test_nan_still_takes_priority(self, banner, healthy_snapshot):
+        """NaN/Inf should still take priority over other conditions."""
+        # Set both NaN and other critical conditions
+        healthy_snapshot.tamiyo.nan_grad_count = 1
+        healthy_snapshot.tamiyo.entropy = 0.05
+        banner._snapshot = healthy_snapshot
+        status, label, style = banner._get_overall_status()
+
+        # NaN should still win
+        assert status == "critical"
+        assert "NaN" in label
+        # The new format should not apply to NaN/Inf
+        assert "FAIL:" not in label
+
+    def test_value_critical_shows_reason(self, banner, healthy_snapshot):
+        """Explained variance critical should show 'Value' in label."""
+        healthy_snapshot.tamiyo.explained_variance = -0.1  # Below CRITICAL (0.0)
+        banner._snapshot = healthy_snapshot
+        status, label, style = banner._get_overall_status()
+
+        assert status == "critical"
+        assert "Value" in label
+        assert "FAIL" in label
+
+    def test_grad_warning_shows_reason(self, banner, healthy_snapshot):
+        """High grad norm warning should show 'Grad' in label."""
+        healthy_snapshot.tamiyo.grad_norm = 6.0  # Above WARNING (5.0), below CRITICAL (10.0)
+        banner._snapshot = healthy_snapshot
+        status, label, style = banner._get_overall_status()
+
+        assert status == "warning"
+        assert "Grad" in label
+        assert "WARN" in label
+
+    def test_adv_low_warning_shows_reason(self, banner, healthy_snapshot):
+        """Low advantage std warning should show 'AdvLow' in label."""
+        healthy_snapshot.tamiyo.advantage_std = 0.3  # Below LOW_WARNING (0.5), above COLLAPSED (0.1)
+        banner._snapshot = healthy_snapshot
+        status, label, style = banner._get_overall_status()
+
+        assert status == "warning"
+        assert "AdvLow" in label
+        assert "WARN" in label
+
+    def test_adv_high_warning_shows_reason(self, banner, healthy_snapshot):
+        """High advantage std warning should show 'AdvHigh' in label."""
+        healthy_snapshot.tamiyo.advantage_std = 2.5  # Above WARNING (2.0), below CRITICAL (3.0)
+        banner._snapshot = healthy_snapshot
+        status, label, style = banner._get_overall_status()
+
+        assert status == "warning"
+        assert "AdvHigh" in label
+        assert "WARN" in label
