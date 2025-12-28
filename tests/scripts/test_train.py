@@ -232,6 +232,7 @@ class TestTamiyoCentricFlags:
         assert args.episode_length is None
         assert args.ppo_epochs is None
         assert args.memory_size is None
+        assert args.entropy_anneal_rounds is None
 
     def test_positive_int_validator_rejects_zero(self):
         """_positive_int should reject zero."""
@@ -333,4 +334,36 @@ class TestTamiyoCentricFlags:
         # CLI would set entropy_anneal_rounds=50, which maps to entropy_anneal_episodes
         config.entropy_anneal_episodes = 50  # Simulating the override
         assert config.entropy_anneal_episodes == 50
+
+    def test_full_tamiyo_cli_integration(self):
+        """All Tamiyo-centric flags should work together."""
+        parser = build_parser()
+        args = parser.parse_args([
+            "ppo",
+            "--rounds", "50",
+            "--envs", "8",
+            "--episode-length", "30",
+            "--ppo-epochs", "2",
+            "--memory-size", "256",
+            "--entropy-anneal-rounds", "25",
+        ])
+
+        assert args.rounds == 50
+        assert args.envs == 8
+        assert args.episode_length == 30
+        assert args.ppo_epochs == 2
+        assert args.memory_size == 256
+        assert args.entropy_anneal_rounds == 25
+
+    def test_invalid_rounds_rejected(self):
+        """--rounds 0 should fail with clear error at parse time."""
+        parser = build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["ppo", "--rounds", "0"])
+
+    def test_negative_envs_rejected(self):
+        """--envs -1 should fail with clear error at parse time."""
+        parser = build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["ppo", "--envs", "-1"])
 
