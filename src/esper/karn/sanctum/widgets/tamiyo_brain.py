@@ -255,6 +255,43 @@ class TamiyoBrain(Static):
             return self.COMPACT_WIDTH - 2  # 78 chars
         return self.FULL_WIDTH - 2  # 94 chars
 
+    def _entropy_label(self, entropy: float) -> tuple[str, str]:
+        """Return (label, style) for entropy value.
+
+        Semantic labels help operators understand policy health at a glance:
+        - collapsed: Policy stuck, needs intervention
+        - confident: Exploiting known strategy
+        - balanced: Healthy exploration/exploitation
+        - exploring: High exploration mode
+        """
+        if entropy < 0.3:
+            return "[collapsed]", "red"
+        elif entropy < 0.7:
+            return "[confident]", "yellow"
+        elif entropy < 1.2:
+            return "[balanced]", "green"
+        else:
+            return "[exploring]", "cyan"
+
+    def _outcome_badge(self, expect: float, reward: float | None) -> tuple[str, str]:
+        """Return (badge, style) for prediction accuracy.
+
+        Badges provide quick visual feedback on value function quality:
+        - [HIT]: Prediction was accurate (error < 0.1)
+        - [~OK]: Prediction was acceptable (error < 0.3)
+        - [MISS]: Prediction was poor (error >= 0.3)
+        - [...]: Reward not yet received
+        """
+        if reward is None:
+            return "[...]", "dim"
+        diff = abs(reward - expect)
+        if diff < 0.1:
+            return "[HIT]", "bright_green"
+        elif diff < 0.3:
+            return "[~OK]", "yellow"
+        else:
+            return "[MISS]", "red"
+
     def _render_separator(self) -> Text:
         """Render horizontal separator at correct width."""
         width = self._get_separator_width()

@@ -7,6 +7,75 @@ from esper.karn.sanctum.schema import DecisionSnapshot, SanctumSnapshot, TamiyoS
 from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
 
 
+# =============================================================================
+# ENTROPY LABEL AND OUTCOME BADGE HELPER TESTS
+# =============================================================================
+
+
+def test_entropy_label_collapsed():
+    """Entropy < 0.3 should return [collapsed] in red."""
+    widget = TamiyoBrain()
+    label, style = widget._entropy_label(0.1)
+    assert label == "[collapsed]"
+    assert style == "red"
+
+
+def test_entropy_label_confident():
+    """Entropy 0.3-0.7 should return [confident] in yellow."""
+    widget = TamiyoBrain()
+    label, style = widget._entropy_label(0.5)
+    assert label == "[confident]"
+    assert style == "yellow"
+
+
+def test_entropy_label_balanced():
+    """Entropy 0.7-1.2 should return [balanced] in green."""
+    widget = TamiyoBrain()
+    label, style = widget._entropy_label(0.9)
+    assert label == "[balanced]"
+    assert style == "green"
+
+
+def test_entropy_label_exploring():
+    """Entropy > 1.2 should return [exploring] in cyan."""
+    widget = TamiyoBrain()
+    label, style = widget._entropy_label(1.5)
+    assert label == "[exploring]"
+    assert style == "cyan"
+
+
+def test_outcome_badge_hit():
+    """Prediction error < 0.1 should return [HIT] in bright_green."""
+    widget = TamiyoBrain()
+    badge, style = widget._outcome_badge(expect=0.5, reward=0.55)
+    assert badge == "[HIT]"
+    assert style == "bright_green"
+
+
+def test_outcome_badge_ok():
+    """Prediction error 0.1-0.3 should return [~OK] in yellow."""
+    widget = TamiyoBrain()
+    badge, style = widget._outcome_badge(expect=0.5, reward=0.7)
+    assert badge == "[~OK]"
+    assert style == "yellow"
+
+
+def test_outcome_badge_miss():
+    """Prediction error >= 0.3 should return [MISS] in red."""
+    widget = TamiyoBrain()
+    badge, style = widget._outcome_badge(expect=0.5, reward=1.0)
+    assert badge == "[MISS]"
+    assert style == "red"
+
+
+def test_outcome_badge_pending():
+    """None reward should return [...] in dim."""
+    widget = TamiyoBrain()
+    badge, style = widget._outcome_badge(expect=0.5, reward=None)
+    assert badge == "[...]"
+    assert style == "dim"
+
+
 class TamiyoBrainTestApp(App):
     """Test app for TamiyoBrain widget."""
 
