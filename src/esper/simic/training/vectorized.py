@@ -2791,7 +2791,9 @@ def train_ppo_vectorized(
                         speed_steps = ALPHA_SPEED_TO_STEPS[
                             AlphaSpeedAction(action_dict["alpha_speed"])
                         ]
-                        curve = AlphaCurveAction(action_dict["alpha_curve"]).to_curve()
+                        curve_action = AlphaCurveAction(action_dict["alpha_curve"])
+                        curve = curve_action.to_curve()
+                        steepness = curve_action.to_steepness()
                         target_slot_obj = cast(SeedSlotProtocol, model.seed_slots[target_slot])
                         # Access concrete SeedSlot for schedule_prune/prune
                         from esper.kasmina.slot import SeedSlot
@@ -2802,7 +2804,7 @@ def train_ppo_vectorized(
                             )
                         else:
                             action_success = target_slot_obj.schedule_prune(
-                                steps=speed_steps, curve=curve, initiator="policy"
+                                steps=speed_steps, curve=curve, steepness=steepness, initiator="policy"
                             )
                         if action_success:
                             env_state.seed_optimizers.pop(target_slot, None)
@@ -2814,6 +2816,7 @@ def train_ppo_vectorized(
                         target_slot_obj_alpha = cast(SeedSlotProtocol, model.seed_slots[target_slot])
                         from esper.kasmina.slot import SeedSlot
                         assert isinstance(target_slot_obj_alpha, SeedSlot)
+                        curve_action_alpha = AlphaCurveAction(action_dict["alpha_curve"])
                         action_success = target_slot_obj_alpha.set_alpha_target(
                             alpha_target=ALPHA_TARGET_VALUES[
                                 action_dict["alpha_target"]
@@ -2821,9 +2824,8 @@ def train_ppo_vectorized(
                             steps=ALPHA_SPEED_TO_STEPS[
                                 AlphaSpeedAction(action_dict["alpha_speed"])
                             ],
-                            curve=AlphaCurveAction(
-                                action_dict["alpha_curve"]
-                            ).to_curve(),
+                            curve=curve_action_alpha.to_curve(),
+                            steepness=curve_action_alpha.to_steepness(),
                             alpha_algorithm=alpha_algorithm,
                             initiator="policy",
                         )
