@@ -164,3 +164,106 @@ class TestMorphogeneticModelDynamicSlots:
 
         # Verify active slots are filtered correctly
         assert model._active_slots == ["r0c1", "r0c3"]
+
+
+class TestFusedForwardAlphaShapeValidation:
+    """Test fused_forward() alpha_override shape validation (B2-DRL-03)."""
+
+    def test_cnn_correct_shape_accepted(self):
+        """CNN topology should accept 4D alpha_override [B, 1, 1, 1]."""
+        host = CNNHost(num_classes=10)
+        model = MorphogeneticModel(host, device="cpu", slots=["r0c1"])
+        model.germinate_seed("noop", "seed_1", slot="r0c1")
+
+        # Correct CNN shape: [B, 1, 1, 1]
+        x = torch.randn(4, 3, 32, 32)
+        alpha = torch.full((4, 1, 1, 1), 0.5)
+
+        # Should not raise
+        out = model.fused_forward(x, {"r0c1": alpha})
+        assert out.shape == (4, 10)
+
+    def test_cnn_wrong_shape_rejected(self):
+        """CNN topology should reject 3D alpha_override [B, 1, 1]."""
+        host = CNNHost(num_classes=10)
+        model = MorphogeneticModel(host, device="cpu", slots=["r0c1"])
+        model.germinate_seed("noop", "seed_1", slot="r0c1")
+
+        # Wrong shape: [B, 1, 1] (transformer shape for CNN topology)
+        x = torch.randn(4, 3, 32, 32)
+        alpha_wrong = torch.full((4, 1, 1), 0.5)
+
+        with pytest.raises(AssertionError, match="expected.*cnn topology"):
+            model.fused_forward(x, {"r0c1": alpha_wrong})
+
+    def test_transformer_correct_shape_accepted(self):
+        """Transformer topology should accept 3D alpha_override [B, 1, 1]."""
+        from esper.tamiyo.policy.features import TaskConfig
+
+        host = TransformerHost(vocab_size=100, n_embd=64, n_head=2, n_layer=6, block_size=32)
+        task_config = TaskConfig(
+            task_type="classification",
+            topology="transformer",
+            baseline_loss=2.3,
+            target_loss=0.5,
+            typical_loss_delta_std=0.1,
+            max_epochs=100,
+        )
+        model = MorphogeneticModel(host, device="cpu", slots=["r0c1"], task_config=task_config)
+        model.germinate_seed("noop", "seed_1", slot="r0c1")
+
+        # Correct transformer shape: [B, 1, 1]
+        x = torch.randint(0, 100, (4, 16))
+        alpha = torch.full((4, 1, 1), 0.5)
+
+        # Should not raise
+        out = model.fused_forward(x, {"r0c1": alpha})
+        assert out.shape == (4, 16, 100)
+
+    def test_transformer_wrong_shape_rejected(self):
+        """Transformer topology should reject 4D alpha_override [B, 1, 1, 1]."""
+        from esper.tamiyo.policy.features import TaskConfig
+
+        host = TransformerHost(vocab_size=100, n_embd=64, n_head=2, n_layer=6, block_size=32)
+        task_config = TaskConfig(
+            task_type="classification",
+            topology="transformer",
+            baseline_loss=2.3,
+            target_loss=0.5,
+            typical_loss_delta_std=0.1,
+            max_epochs=100,
+        )
+        model = MorphogeneticModel(host, device="cpu", slots=["r0c1"], task_config=task_config)
+        model.germinate_seed("noop", "seed_1", slot="r0c1")
+
+        # Wrong shape: [B, 1, 1, 1] (CNN shape for transformer topology)
+        x = torch.randint(0, 100, (4, 16))
+        alpha_wrong = torch.full((4, 1, 1, 1), 0.5)
+
+        with pytest.raises(AssertionError, match="expected.*transformer topology"):
+            model.fused_forward(x, {"r0c1": alpha_wrong})
+
+    def test_batch_size_mismatch_rejected(self):
+        """Alpha with wrong batch size should be rejected."""
+        host = CNNHost(num_classes=10)
+        model = MorphogeneticModel(host, device="cpu", slots=["r0c1"])
+        model.germinate_seed("noop", "seed_1", slot="r0c1")
+
+        # Mismatched batch: input is 4, alpha is 2
+        x = torch.randn(4, 3, 32, 32)
+        alpha_wrong_batch = torch.full((2, 1, 1, 1), 0.5)
+
+        with pytest.raises(AssertionError, match="expected"):
+            model.fused_forward(x, {"r0c1": alpha_wrong_batch})
+
+    def test_empty_alpha_overrides_allowed(self):
+        """Empty alpha_overrides dict should be allowed (no validation needed)."""
+        host = CNNHost(num_classes=10)
+        model = MorphogeneticModel(host, device="cpu", slots=["r0c1"])
+        model.germinate_seed("noop", "seed_1", slot="r0c1")
+
+        x = torch.randn(4, 3, 32, 32)
+
+        # Empty dict - slots use their default alpha
+        out = model.fused_forward(x, {})
+        assert out.shape == (4, 10)

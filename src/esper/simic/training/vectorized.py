@@ -1588,7 +1588,7 @@ def train_ppo_vectorized(
             inputs: Original input tensor [B, ...]
             targets: Original target tensor [B, ...]
             criterion: Loss criterion
-            alpha_overrides: Dict mapping slot_id -> override tensor [K*B, 1, 1, 1]
+            alpha_overrides: Dict mapping slot_id -> override tensor [K*B, 1, 1, 1] (CNN) or [K*B, 1, 1] (transformer)
             num_configs: Number of configurations K
 
         Returns:
@@ -2013,7 +2013,8 @@ def train_ppo_vectorized(
                     configs = env_configs[i]
                     num_configs = len(configs)
 
-                    # Build alpha_overrides tensors for the fused pass: [K*B, 1, 1, 1]
+                    # Build alpha_overrides tensors for the fused pass
+                    # Shape is topology-aware: [K*B, 1, 1, 1] for CNN, [K*B, 1, 1] for transformer
                     #
                     # IMPORTANT: Only pass alpha_override when at least one config
                     # actually overrides that slot's alpha. Passing a no-op override
@@ -2057,8 +2058,13 @@ def train_ppo_vectorized(
                             ).to(slot_concrete.device)
 
                         current_alpha = slot.alpha
+                        # Topology-aware shape for alpha_overrides
+                        if task_spec.topology == "cnn":
+                            alpha_shape = (num_configs * batch_size, 1, 1, 1)
+                        else:  # transformer
+                            alpha_shape = (num_configs * batch_size, 1, 1)
                         override_vec = torch.full(
-                            (num_configs * batch_size, 1, 1, 1),
+                            alpha_shape,
                             current_alpha,
                             device=env_state.env_device,
                             dtype=inputs.dtype,
