@@ -66,7 +66,7 @@ HELP_TEXT = """\
   [green]★[/green] Excellent   [green]✓[/green] Improving
   [yellow]⚠[/yellow] Stalling    [red]✗[/red] Severely stalled
 
-[dim]Press Esc or ? to close this help[/dim]
+[dim]Press Esc, ?, Q, or click to close[/dim]
 """
 
 
@@ -99,6 +99,10 @@ class HelpScreen(ModalScreen[None]):
         """Compose the help screen."""
         with Container(id="help-container"):
             yield Static(HELP_TEXT)
+
+    def on_click(self) -> None:
+        """Dismiss help screen on click."""
+        self.dismiss()
 
 
 class SanctumApp(App[None]):

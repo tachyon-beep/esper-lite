@@ -352,9 +352,13 @@ class EnvDetailScreen(ModalScreen[None]):
 
             # Footer hint
             yield Static(
-                "[dim]Press ESC or Q to close[/dim]",
+                "[dim]Press ESC, Q, or click to close[/dim]",
                 classes="footer-hint",
             )
+
+    def on_click(self) -> None:
+        """Dismiss modal on click."""
+        self.dismiss()
 
     def update_env_state(self, env_state: "EnvState") -> None:
         """Update the displayed environment state.

@@ -152,9 +152,13 @@ class HistoricalEnvDetail(ModalScreen[None]):
             # Footer hint
             pin_status = "📌 Pinned" if self._record.pinned else "Not pinned (right-click to pin)"
             yield Static(
-                f"[dim]Press ESC or Q to close  │  {pin_status}[/dim]",
+                f"[dim]Press ESC, Q, or click to close  │  {pin_status}[/dim]",
                 classes="footer-hint",
             )
+
+    def on_click(self) -> None:
+        """Dismiss modal on click."""
+        self.dismiss()
 
     def _render_header(self) -> Text:
         """Render the header bar with record summary."""
