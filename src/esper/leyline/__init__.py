@@ -93,8 +93,9 @@ DEFAULT_GAE_LAMBDA = 0.98
 DEFAULT_VALUE_COEF = 0.5
 
 # Maximum gradient norm for clipping (prevents exploding gradients).
-# 0.5 is standard; lower = more aggressive clipping.
-DEFAULT_MAX_GRAD_NORM = 0.5
+# 1.0 allows critic learning with normalized returns; 0.5 was too aggressive
+# for 12-layer LSTM, causing 100% gradient saturation and negative EV.
+DEFAULT_MAX_GRAD_NORM = 1.0
 
 # Number of PPO epochs per batch of experience.
 # More epochs = more sample efficiency, but risks overfitting.
