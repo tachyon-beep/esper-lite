@@ -766,6 +766,7 @@ class SanctumAggregator:
             seed.epochs_in_stage = germinated_payload.epochs_in_stage
             seed.blend_tempo_epochs = germinated_payload.blend_tempo_epochs
             seed.alpha = germinated_payload.alpha
+            seed.alpha_curve = germinated_payload.alpha_curve
             env.active_seed_count += 1
 
             # Track blueprint spawn for graveyard
@@ -803,6 +804,7 @@ class SanctumAggregator:
             seed.accuracy_delta = stage_changed_payload.accuracy_delta
             if stage_changed_payload.alpha is not None:
                 seed.alpha = stage_changed_payload.alpha
+            seed.alpha_curve = stage_changed_payload.alpha_curve
 
         elif event_type == "SEED_FOSSILIZED" and isinstance(event.data, SeedFossilizedPayload):
             fossilized_payload = event.data
