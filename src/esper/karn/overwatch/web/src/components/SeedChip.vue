@@ -3,14 +3,15 @@
 import { computed } from 'vue'
 import type { SeedStage } from '../types/sanctum'
 
-// Curve glyph mapping for visual display (matches Python TUI)
+// Curve glyph mapping for visual display (matches leyline ALPHA_CURVE_GLYPHS)
 // Always shown (UX policy: data points don't disappear) - bright when active, dim otherwise.
+// Source of truth: src/esper/leyline/factored_actions.py ALPHA_CURVE_GLYPHS
 const CURVE_GLYPHS: Record<string, string> = {
-  'LINEAR': '\u2571',        // ╱
-  'COSINE': '\u223F',        // ∿
-  'SIGMOID_GENTLE': '\u2312', // ⌒
-  'SIGMOID': '\u222B',       // ∫
-  'SIGMOID_SHARP': '\u2290', // ⊐
+  'LINEAR': '\u2571',        // ╱ - diagonal line (constant rate)
+  'COSINE': '\u223F',        // ∿ - wave (ease-in/ease-out)
+  'SIGMOID_GENTLE': '\u2312', // ⌒ - wide top arc (gradual S)
+  'SIGMOID': '\u2322',       // ⌢ - narrow bottom arc (standard S)
+  'SIGMOID_SHARP': '\u2290', // ⊐ - squared bracket (near-step)
 }
 
 const props = defineProps<{

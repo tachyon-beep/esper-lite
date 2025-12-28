@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Iterator
 from textual.widgets import DataTable, Static
 
 from esper.leyline import (
+    ALPHA_CURVE_GLYPHS,
     DEFAULT_GROWTH_RATIO_GREEN_MAX,
     DEFAULT_GROWTH_RATIO_YELLOW_MAX,
     STAGE_COLORS,
@@ -26,16 +27,6 @@ _AB_STYLES: dict[str, tuple[str, str]] = {
     "shaped": ("●", "bright_blue"),      # Blue pip for shaped
     "simplified": ("●", "bright_yellow"), # Yellow pip for simplified
     "sparse": ("●", "bright_cyan"),       # Cyan pip for sparse
-}
-
-# Curve glyph mapping for compact display
-# Always shown when curve is relevant (BLENDING/FOSSILIZED) - UX policy: data points don't disappear
-_CURVE_GLYPHS: dict[str, str] = {
-    "LINEAR": "╱",
-    "COSINE": "∿",
-    "SIGMOID_GENTLE": "⌒",
-    "SIGMOID": "∫",
-    "SIGMOID_SHARP": "⊐",
 }
 
 
@@ -618,9 +609,9 @@ class EnvOverview(Static):
             grad_indicator = "[yellow]▼[/yellow]"
 
         # Curve glyph: shown for BLENDING/HOLDING/FOSSILIZED, dim "-" for other stages
-        # Position: right after stage:blueprint (e.g., "Blend:conv_l⌒")
+        # Position: after stage:blueprint with space (e.g., "Blend:conv_l ⌢")
         if seed.stage in ("BLENDING", "HOLDING", "FOSSILIZED"):
-            curve_glyph = _CURVE_GLYPHS.get(seed.alpha_curve, "−")
+            curve_glyph = ALPHA_CURVE_GLYPHS.get(seed.alpha_curve, "−")
         else:
             curve_glyph = "[dim]−[/dim]"
 
@@ -634,24 +625,24 @@ class EnvOverview(Static):
         # BLENDING shows tempo arrows and alpha
         if seed.stage == "BLENDING" and seed.alpha > 0:
             tempo_arrows = _tempo_arrows(seed.blend_tempo_epochs)
-            base = f"[{style}]{stage_short}:{blueprint}{curve_glyph} {tempo_arrows} {seed.alpha:.1f} [/{style}]"
+            base = f"[{style}]{stage_short}:{blueprint} {curve_glyph} {tempo_arrows} {seed.alpha:.1f}[/{style}]"
             return f"{base}{grad_indicator}"
 
         # HOLDING shows tempo arrows + alpha (blend tempo was used, still relevant)
         if seed.stage == "HOLDING":
             tempo_arrows = _tempo_arrows(seed.blend_tempo_epochs)
-            base = f"[{style}]{stage_short}:{blueprint}{curve_glyph} {tempo_arrows} {seed.alpha:.1f} [/{style}]"
+            base = f"[{style}]{stage_short}:{blueprint} {curve_glyph} {tempo_arrows} {seed.alpha:.1f}[/{style}]"
             return f"{base}{grad_indicator}"
 
         # FOSSILIZED shows historical tempo + curve (how it blended)
         if seed.stage == "FOSSILIZED":
             tempo_arrows = _tempo_arrows(seed.blend_tempo_epochs)
-            base = f"[{style}]{stage_short}:{blueprint}[dim]{curve_glyph}[/dim] {tempo_arrows}[/{style}]"
+            base = f"[{style}]{stage_short}:{blueprint} [dim]{curve_glyph}[/dim] {tempo_arrows}[/{style}]"
             return f"{base}{grad_indicator}"
 
         # Other stages show epochs in stage with dim "-" for curve
         epochs_str = f" e{seed.epochs_in_stage}" if seed.epochs_in_stage > 0 else ""
-        base = f"[{style}]{stage_short}:{blueprint}{curve_glyph}{epochs_str}[/{style}]"
+        base = f"[{style}]{stage_short}:{blueprint} {curve_glyph}{epochs_str}[/{style}]"
         return f"{base}{grad_indicator}"
 
     def _format_last_action(self, env: "EnvState") -> str:

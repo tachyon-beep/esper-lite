@@ -164,8 +164,8 @@ describe('SeedChip', () => {
       }
     })
 
-    // SIGMOID = ∫ (U+222B)
-    expect(wrapper.find('[data-testid="curve-glyph"]').text()).toBe('\u222B')
+    // SIGMOID = ⌢ (U+2322) - bottom arc for standard S-curve
+    expect(wrapper.find('[data-testid="curve-glyph"]').text()).toBe('\u2322')
   })
 
   it('displays COSINE curve glyph when specified', () => {

@@ -21,17 +21,7 @@ from textual.widget import Widget
 from textual.widgets import Static
 
 from esper.karn.sanctum.widgets.counterfactual_panel import CounterfactualPanel
-from esper.leyline import STAGE_COLORS
-
-# Curve glyph mapping for visual display.
-# Always shown (UX policy: data points don't disappear) - bright when active, dim otherwise.
-CURVE_GLYPHS = {
-    "LINEAR": "╱",
-    "COSINE": "∿",
-    "SIGMOID_GENTLE": "⌒",
-    "SIGMOID": "∫",
-    "SIGMOID_SHARP": "⊐",
-}
+from esper.leyline import ALPHA_CURVE_GLYPHS, STAGE_COLORS
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import EnvState, SeedState
@@ -138,14 +128,14 @@ class SeedCard(Static):
             tempo = seed.blend_tempo_epochs
             tempo_name = "FAST" if tempo <= 3 else ("STANDARD" if tempo <= 5 else "SLOW")
             tempo_arrows = "▸▸▸" if tempo <= 3 else ("▸▸" if tempo <= 5 else "▸")
-            curve_glyph = CURVE_GLYPHS.get(seed.alpha_curve, "−")
+            curve_glyph = ALPHA_CURVE_GLYPHS.get(seed.alpha_curve, "−")
             lines.append(Text(f"Tempo: {tempo_arrows} {tempo_name} ({tempo} epochs) {curve_glyph}"))
         elif seed.stage == "FOSSILIZED" and seed.blend_tempo_epochs is not None:
             # Historical - show what was used, dimmed (but curve still visible for curiosity)
             tempo = seed.blend_tempo_epochs
             tempo_name = "FAST" if tempo <= 3 else ("STANDARD" if tempo <= 5 else "SLOW")
             tempo_arrows = "▸▸▸" if tempo <= 3 else ("▸▸" if tempo <= 5 else "▸")
-            curve_glyph = CURVE_GLYPHS.get(seed.alpha_curve, "−")
+            curve_glyph = ALPHA_CURVE_GLYPHS.get(seed.alpha_curve, "−")
             lines.append(Text(f"Blended: {tempo_arrows} {tempo_name} {curve_glyph}", style="dim"))
         else:
             # Not yet blending - show placeholder with dim "-"

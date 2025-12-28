@@ -183,6 +183,23 @@ ALPHA_CURVE_TO_STEEPNESS: dict[AlphaCurveAction, float] = {
     AlphaCurveAction.SIGMOID_SHARP: 24.0,
 }
 
+# Alpha curve display glyphs for TUI/dashboard rendering.
+# Single source of truth - UI components should import from here.
+# Glyph design rationale:
+#   LINEAR: diagonal line = constant rate ramp
+#   COSINE: wave = ease-in/ease-out oscillation
+#   SIGMOID family: arc progression shows transition sharpness
+#     - GENTLE: wide top arc (⌒) = slow start/end
+#     - STANDARD: narrow bottom arc (⌢) = moderate S-curve
+#     - SHARP: squared bracket (⊐) = near-step function
+ALPHA_CURVE_GLYPHS: dict[str, str] = {
+    "LINEAR": "╱",
+    "COSINE": "∿",
+    "SIGMOID_GENTLE": "⌒",
+    "SIGMOID": "⌢",
+    "SIGMOID_SHARP": "⊐",
+}
+
 
 # =============================================================================
 # Lookup Tables for Hot Path Optimization
@@ -464,6 +481,7 @@ __all__ = [
     "ALPHA_TARGET_NAMES",
     "ALPHA_SPEED_NAMES",
     "ALPHA_CURVE_NAMES",
+    "ALPHA_CURVE_GLYPHS",
     "TEMPO_TO_EPOCHS",
     "ALPHA_TARGET_VALUES",
     "ALPHA_SPEED_TO_STEPS",
