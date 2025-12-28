@@ -567,3 +567,45 @@ def test_detect_trend_uses_deque():
     values = deque([1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1], maxlen=20)
     trend = detect_trend(values, metric_name="policy_loss", metric_type="loss")
     assert trend == "improving"
+
+
+# =============================================================================
+# DECISION SNAPSHOT HEAD CHOICE FIELDS (per DRL specialist review)
+# =============================================================================
+
+
+def test_decision_snapshot_has_head_choice_fields():
+    """DecisionSnapshot should include blueprint, style, tempo head choices.
+
+    Per DRL specialist: understanding which heads drive decisions helps
+    diagnose credit assignment issues.
+    """
+    from esper.karn.sanctum.schema import DecisionSnapshot
+    from datetime import datetime, timezone
+
+    decision = DecisionSnapshot(
+        timestamp=datetime.now(timezone.utc),
+        slot_states={},
+        host_accuracy=75.0,
+        chosen_action="GERMINATE",
+        chosen_slot="slot_0",
+        confidence=0.92,
+        expected_value=0.5,
+        actual_reward=None,
+        alternatives=[],
+        decision_id="test-1",
+        # New fields (per DRL specialist review)
+        chosen_blueprint="conv_light",
+        chosen_tempo="STANDARD",
+        chosen_style="LINEAR_ADD",
+        blueprint_confidence=0.87,
+        tempo_confidence=0.65,
+        op_confidence=0.92,
+    )
+
+    assert decision.chosen_blueprint == "conv_light"
+    assert decision.chosen_tempo == "STANDARD"
+    assert decision.chosen_style == "LINEAR_ADD"
+    assert decision.blueprint_confidence == 0.87
+    assert decision.tempo_confidence == 0.65
+    assert decision.op_confidence == 0.92

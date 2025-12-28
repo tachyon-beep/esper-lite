@@ -651,6 +651,15 @@ class DecisionSnapshot:
     # Decision-specific entropy (per DRL review - more useful than policy entropy)
     decision_entropy: float = 0.0  # -sum(p*log(p)) for this action distribution
 
+    # Head choice details for GERMINATE actions (per DRL/UX specialist review)
+    # These enable decision cards to show sub-decisions like 'bpnt:conv_l(87%) tmp:STD'
+    chosen_blueprint: str | None = None  # e.g., "conv_light", "attention"
+    chosen_tempo: str | None = None  # "FAST", "STANDARD", "SLOW"
+    chosen_style: str | None = None  # "LINEAR_ADD", "GATED_GATE", etc. (replaces alpha_curve)
+    blueprint_confidence: float = 0.0  # Probability of chosen blueprint
+    tempo_confidence: float = 0.0  # Probability of chosen tempo
+    op_confidence: float = 0.0  # Probability of chosen operation (per DRL review)
+
 
 @dataclass
 class RunConfig:
