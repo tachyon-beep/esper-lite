@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B2-DRL-03` |
 | **Severity** | `P2` |
-| **Status** | `open` |
+| **Status** | `closed` |
 | **Batch** | 2 |
 | **Agent** | `drl` |
 | **Domain** | `kasmina` |
@@ -109,9 +109,9 @@ def _get_alpha_override_shape(self, batch_size: int) -> tuple[int, ...]:
 
 ### How to Verify the Fix
 
-- [ ] Add test for shape validation error on mismatch
-- [ ] Test both CNN and Transformer topologies with fused_forward
-- [ ] Verify broadcasting is correct for both topologies
+- [x] Add test for shape validation error on mismatch
+- [x] Test both CNN and Transformer topologies with fused_forward
+- [x] Verify broadcasting is correct for both topologies
 
 ---
 
@@ -163,3 +163,32 @@ def _get_alpha_override_shape(self, batch_size: int) -> tuple[int, ...]:
 
 **Evaluation:** Shape mismatches in alpha broadcasting can cause silent semantic errors (wrong samples get wrong alphas) without runtime exceptions when shapes happen to broadcast.
 The proposed validation is essential - use `assert` for compile-time elimination or explicit `if` check with `raise ValueError` for production diagnostics.
+
+---
+
+## Resolution
+
+**Status:** Fixed
+
+**Fix:** Implemented topology-aware shape validation in `fused_forward()` and fixed caller site in `vectorized.py`.
+
+**Changes:**
+1. `src/esper/kasmina/host.py`:
+   - Added `_get_expected_alpha_shape(batch_size)` helper returning `(B, 1, 1, 1)` for CNN, `(B, 1, 1)` for transformer
+   - Added validation loop in `fused_forward()` with fail-fast assertions and clear error messages
+
+2. `src/esper/simic/training/vectorized.py`:
+   - Made `alpha_shape` topology-aware based on `task_spec.topology`
+   - Updated comment and docstring to document both CNN and transformer shapes
+
+3. `tests/kasmina/test_morphogenetic_model.py`:
+   - Added `TestFusedForwardAlphaShapeValidation` class with 6 tests
+
+**Verification:**
+- mypy passes on all modified files
+- 6/6 shape validation tests pass
+- Assertions are torch.compile compatible (elided in optimized mode)
+
+**Sign-off:** Approved by `pytorch-expert`
+
+**Commits:** `45ddfdc7`
