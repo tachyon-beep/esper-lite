@@ -18,7 +18,18 @@ def _clamp01(value: float) -> float:
     return max(0.0, min(1.0, value))
 
 
-def _curve_progress(t: float, curve: AlphaCurve) -> float:
+def _curve_progress(t: float, curve: AlphaCurve, steepness: float = 12.0) -> float:
+    """Apply easing curve to linear progress t.
+
+    Args:
+        t: Linear progress in [0, 1].
+        curve: Which easing curve to apply.
+        steepness: Sigmoid steepness (only affects SIGMOID curve).
+            Higher values = sharper transition. Default 12.0.
+
+    Returns:
+        Eased progress in [0, 1].
+    """
     t = max(0.0, min(1.0, t))
     match curve:
         case AlphaCurve.LINEAR:
@@ -28,13 +39,11 @@ def _curve_progress(t: float, curve: AlphaCurve) -> float:
             return 0.5 * (1.0 - math.cos(math.pi * t))
         case AlphaCurve.SIGMOID:
             # Logistic curve normalized to [0, 1] at t in [0, 1].
-            # We intentionally keep a fixed steepness to start; if we want a knob,
-            # add it as a separate field on AlphaController later.
-            steepness = 12.0
             raw = 1.0 / (1.0 + math.exp(-steepness * (t - 0.5)))
             raw0 = 1.0 / (1.0 + math.exp(-steepness * (0.0 - 0.5)))
             raw1 = 1.0 / (1.0 + math.exp(-steepness * (1.0 - 0.5)))
             if raw1 == raw0:
+                # Guard against division by zero if steepness -> 0
                 return t
             return (raw - raw0) / (raw1 - raw0)
         case _:
@@ -50,6 +59,7 @@ class AlphaController:
     alpha_target: float = 0.0
     alpha_mode: AlphaMode = AlphaMode.HOLD
     alpha_curve: AlphaCurve = AlphaCurve.LINEAR
+    alpha_steepness: float = 12.0  # Sigmoid steepness (default matches original)
     alpha_steps_total: int = 0
     alpha_steps_done: int = 0
 
@@ -57,6 +67,7 @@ class AlphaController:
         self.alpha = _clamp01(self.alpha)
         self.alpha_start = _clamp01(self.alpha_start)
         self.alpha_target = _clamp01(self.alpha_target)
+        self.alpha_steepness = max(0.1, float(self.alpha_steepness))  # Prevent div-by-zero
         self.alpha_steps_total = max(0, int(self.alpha_steps_total))
         self.alpha_steps_done = max(0, int(self.alpha_steps_done))
         self.alpha_steps_done = min(self.alpha_steps_done, self.alpha_steps_total)
@@ -67,8 +78,15 @@ class AlphaController:
         alpha_target: float,
         alpha_steps_total: int,
         alpha_curve: AlphaCurve | None = None,
+        alpha_steepness: float | None = None,
     ) -> None:
         """Set a new target and schedule from the current alpha.
+
+        Args:
+            alpha_target: Target alpha value in [0, 1].
+            alpha_steps_total: Number of controller ticks to reach target.
+            alpha_curve: Easing curve (None to keep current).
+            alpha_steepness: Sigmoid steepness (None to keep current).
 
         Contract: retargeting is only allowed from HOLD to prevent alpha dithering
         during a transition.
@@ -83,6 +101,8 @@ class AlphaController:
         self.alpha_target = target
         if alpha_curve is not None:
             self.alpha_curve = alpha_curve
+        if alpha_steepness is not None:
+            self.alpha_steepness = max(0.1, float(alpha_steepness))
 
         self.alpha_steps_total = steps_total
         self.alpha_steps_done = 0
@@ -117,7 +137,7 @@ class AlphaController:
             return True
 
         t = self.alpha_steps_done / max(self.alpha_steps_total, 1)
-        progress = _curve_progress(t, self.alpha_curve)
+        progress = _curve_progress(t, self.alpha_curve, self.alpha_steepness)
         value = self.alpha_start + (self.alpha_target - self.alpha_start) * progress
         self.alpha = _clamp01(value)
 
@@ -138,6 +158,7 @@ class AlphaController:
             "alpha_target": self.alpha_target,
             "alpha_mode": int(self.alpha_mode),
             "alpha_curve": int(self.alpha_curve),
+            "alpha_steepness": self.alpha_steepness,
             "alpha_steps_total": self.alpha_steps_total,
             "alpha_steps_done": self.alpha_steps_done,
         }
@@ -155,6 +176,7 @@ class AlphaController:
             alpha_target=float(data["alpha_target"]),
             alpha_mode=AlphaMode(int(data["alpha_mode"])),
             alpha_curve=AlphaCurve(int(data["alpha_curve"])),
+            alpha_steepness=float(data.get("alpha_steepness", 12.0)),  # Default for old checkpoints
             alpha_steps_total=int(data["alpha_steps_total"]),
             alpha_steps_done=int(data["alpha_steps_done"]),
         )
