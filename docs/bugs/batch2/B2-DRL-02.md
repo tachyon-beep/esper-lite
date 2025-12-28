@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B2-DRL-02` |
 | **Severity** | `P2` |
-| **Status** | `open` |
+| **Status** | `closed` |
 | **Batch** | 2 |
 | **Agent** | `drl` |
 | **Domain** | `kasmina` |
@@ -110,8 +110,8 @@ def _pool_features(self, x: torch.Tensor) -> torch.Tensor:
 
 ### How to Verify the Fix
 
-- [ ] Add test for topology mismatch detection
-- [ ] Verify assertion catches misuse in tests
+- [x] Add test for topology mismatch detection
+- [x] Verify assertion catches misuse in tests
 
 ---
 
@@ -164,3 +164,23 @@ def _pool_features(self, x: torch.Tensor) -> torch.Tensor:
 
 **Evaluation:** Option A (explicit assertions) is strongly preferred - it fails fast with clear diagnostics and is torch.compile compatible with zero overhead (assertions are elided in optimized mode).
 Option B (infer from ndim) risks masking genuine shape errors; prefer explicit contracts over implicit inference in nn.Module forward paths.
+
+---
+
+## Resolution
+
+**Status:** Fixed
+
+**Fix:** Implemented Option A - added assertions to validate input ndim matches expected topology.
+
+**Changes:**
+- `src/esper/kasmina/blending.py`: Added assertions in `_pool_features()` for CNN (4D) and transformer (3D) input validation
+- `tests/kasmina/test_gated_blend_fixed.py`: Added `TestGatedBlendTopologyMismatchDetection` with 2 tests
+
+**Verification:**
+- 15/15 gated blend tests pass (13 original + 2 new topology mismatch tests)
+- Assertions are torch.compile compatible (elided in optimized mode)
+
+**Sign-off:** Approved by `feature-dev:code-reviewer`
+
+**Commits:** (pending)

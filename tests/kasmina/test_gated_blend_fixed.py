@@ -101,3 +101,27 @@ class TestGatedBlendFixed:
 
         # At completion: G3 should pass (alpha >= 0.95)
         assert gate.get_alpha(10) >= 0.95
+
+
+class TestGatedBlendTopologyMismatchDetection:
+    """Test that topology mismatches are caught early with clear errors."""
+
+    def test_cnn_topology_rejects_transformer_input(self):
+        """CNN topology should reject 3D transformer input."""
+        import pytest
+
+        gate = GatedBlend(channels=64, topology="cnn", total_steps=10)
+        x_transformer = torch.randn(2, 16, 64)  # (B, T, C) - wrong for CNN
+
+        with pytest.raises(AssertionError, match="CNN topology expects 4D input"):
+            gate.get_alpha_for_blend(x_transformer)
+
+    def test_transformer_topology_rejects_cnn_input(self):
+        """Transformer topology should reject 4D CNN input."""
+        import pytest
+
+        gate = GatedBlend(channels=64, topology="transformer", total_steps=10)
+        x_cnn = torch.randn(2, 64, 8, 8)  # (B, C, H, W) - wrong for transformer
+
+        with pytest.raises(AssertionError, match="Transformer topology expects 3D input"):
+            gate.get_alpha_for_blend(x_cnn)

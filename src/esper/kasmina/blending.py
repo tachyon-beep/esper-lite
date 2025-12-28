@@ -168,9 +168,17 @@ class GatedBlend(BlendAlgorithm):
     def _pool_features(self, x: torch.Tensor) -> torch.Tensor:
         """Pool to (B, C) regardless of topology."""
         if self.topology == "cnn":
+            assert x.ndim == 4, (
+                f"CNN topology expects 4D input [B,C,H,W], got {x.ndim}D. "
+                f"Topology mismatch - check GatedBlend construction."
+            )
             # (B, C, H, W) -> (B, C)
             return x.mean(dim=[2, 3])
         else:
+            assert x.ndim == 3, (
+                f"Transformer topology expects 3D input [B,T,C], got {x.ndim}D. "
+                f"Topology mismatch - check GatedBlend construction."
+            )
             # (B, T, C) -> (B, C)
             return x.mean(dim=1)
 
