@@ -255,6 +255,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Tamiyo's LSTM hidden dimension (temporal reasoning capacity). "
              "Smaller = faster but less temporal memory. (Maps to lstm_hidden_dim. Default: 128)",
     )
+    # Note: Uses type=int (not _positive_int) since 0 is valid (no annealing)
+    ppo_parser.add_argument(
+        "--entropy-anneal-rounds",
+        type=int,
+        default=None,
+        metavar="R",
+        help="Rounds over which to anneal entropy coefficient. 0 = no annealing. "
+             "(Maps to entropy_anneal_episodes. Default: 0)",
+    )
 
     return parser
 
@@ -563,6 +572,8 @@ def main() -> None:
                     config.ppo_updates_per_batch = args.ppo_epochs
                 if args.memory_size is not None:
                     config.lstm_hidden_dim = args.memory_size
+                if args.entropy_anneal_rounds is not None:
+                    config.entropy_anneal_episodes = args.entropy_anneal_rounds
 
                 # Handle A/B testing - set on config for validation
                 if args.ab_test:

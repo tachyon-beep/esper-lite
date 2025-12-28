@@ -162,3 +162,23 @@ class TestTrainingConfigSerialization:
             config = TrainingConfig(reward_family="loss")
             # _validate() checks reward_family.value, which fails on strings
             _ = config.to_dict()  # Force access to trigger the error
+
+
+def test_entropy_anneal_rounds_alias():
+    """entropy_anneal_rounds should be an alias for entropy_anneal_episodes."""
+    # Old name still works
+    config = TrainingConfig(entropy_anneal_episodes=50)
+    assert config.entropy_anneal_episodes == 50
+
+    # New name also works (via from_dict for JSON compat)
+    config2 = TrainingConfig.from_dict({"entropy_anneal_rounds": 75})
+    assert config2.entropy_anneal_episodes == 75
+
+
+def test_entropy_anneal_alias_conflict_rejected():
+    """Specifying both entropy_anneal_rounds and entropy_anneal_episodes should fail."""
+    with pytest.raises(ValueError, match="Cannot specify both"):
+        TrainingConfig.from_dict({
+            "entropy_anneal_rounds": 50,
+            "entropy_anneal_episodes": 100,
+        })

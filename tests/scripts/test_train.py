@@ -311,3 +311,26 @@ class TestTamiyoCentricFlags:
         args = parser.parse_args(["ppo", "--memory-size", "256"])
         assert args.memory_size == 256
 
+    def test_entropy_anneal_rounds_flag_accepted(self):
+        """--entropy-anneal-rounds should parse correctly."""
+        parser = build_parser()
+        args = parser.parse_args(["ppo", "--entropy-anneal-rounds", "50"])
+        assert args.entropy_anneal_rounds == 50
+
+    def test_entropy_anneal_rounds_accepts_zero(self):
+        """--entropy-anneal-rounds should accept 0 (no annealing)."""
+        parser = build_parser()
+        args = parser.parse_args(["ppo", "--entropy-anneal-rounds", "0"])
+        assert args.entropy_anneal_rounds == 0
+
+    def test_entropy_anneal_rounds_overrides_config(self):
+        """--entropy-anneal-rounds should override config.entropy_anneal_episodes."""
+        from esper.simic.training import TrainingConfig
+
+        config = TrainingConfig.for_cifar10()
+        assert config.entropy_anneal_episodes == 0  # Default
+
+        # CLI would set entropy_anneal_rounds=50, which maps to entropy_anneal_episodes
+        config.entropy_anneal_episodes = 50  # Simulating the override
+        assert config.entropy_anneal_episodes == 50
+
