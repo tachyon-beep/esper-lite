@@ -119,7 +119,7 @@ class TamiyoBrain(Static):
     DECISION_CARD_WIDTH = 65
 
     # Decision card height for dynamic count calculation
-    DECISION_CARD_HEIGHT = 7  # 6 lines (title + 5 content) + 1 gap
+    DECISION_CARD_HEIGHT = 8  # 7 lines (title + separator + 5 content + bottom) + 1 gap
 
     # Per-head max entropy values from factored_actions.py (DRL CORRECTED)
     # These are ln(N) where N is the number of actions for each head

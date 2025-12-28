@@ -297,6 +297,8 @@ class VectorizedEmitter:
                 blueprint_id=data["blueprint_id"],
                 tempo_idx=data["tempo_idx"],
                 style=data["style"],
+                alpha_curve=data["alpha_curve"],
+                alpha_curve_masked=data["alpha_curve_masked"],
             ),
         ))
 
