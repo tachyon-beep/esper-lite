@@ -28,6 +28,16 @@ _AB_STYLES: dict[str, tuple[str, str]] = {
     "sparse": ("●", "bright_cyan"),       # Cyan pip for sparse
 }
 
+# Curve glyph mapping for compact display
+# Always shown when curve is relevant (BLENDING/FOSSILIZED) - UX policy: data points don't disappear
+_CURVE_GLYPHS: dict[str, str] = {
+    "LINEAR": "╱",
+    "COSINE": "∿",
+    "SIGMOID_GENTLE": "⌒",
+    "SIGMOID": "∫",
+    "SIGMOID_SHARP": "⊐",
+}
+
 
 class EnvOverview(Static):
     """Per-environment overview table.
@@ -607,15 +617,23 @@ class EnvOverview(Static):
         elif seed.has_vanishing:
             grad_indicator = "[yellow]▼[/yellow]"
 
-        # BLENDING shows tempo arrows and alpha
+        # BLENDING shows tempo arrows, curve glyph, and alpha
         # Tempo: ▸▸▸ = FAST (3), ▸▸ = STANDARD (5), ▸ = SLOW (8)
+        # Curve: ╱∿⌒∫⊐ (bright when active)
         if seed.stage == "BLENDING" and seed.alpha > 0:
             tempo = seed.blend_tempo_epochs
             tempo_arrows = "▸▸▸" if tempo <= 3 else ("▸▸" if tempo <= 5 else "▸")
-            base = f"[{style}]{stage_short}:{blueprint} {tempo_arrows} {seed.alpha:.1f}[/{style}]"
+            curve_glyph = _CURVE_GLYPHS.get(seed.alpha_curve, "−")
+            base = f"[{style}]{stage_short}:{blueprint} {tempo_arrows}{curve_glyph} {seed.alpha:.1f}[/{style}]"
             return f"{base}{grad_indicator}" if grad_indicator else base
 
-        # Active seeds show epochs in stage
+        # FOSSILIZED shows curve glyph (dimmed, historical) - UX policy: data doesn't disappear
+        if seed.stage == "FOSSILIZED":
+            curve_glyph = _CURVE_GLYPHS.get(seed.alpha_curve, "−")
+            base = f"[{style}]{stage_short}:{blueprint} {curve_glyph}[/{style}]"
+            return f"{base}{grad_indicator}" if grad_indicator else base
+
+        # Active seeds show epochs in stage (no curve yet - TRAINING/GERMINATED haven't selected one)
         epochs_str = f" e{seed.epochs_in_stage}" if seed.epochs_in_stage > 0 else ""
         base = f"[{style}]{stage_short}:{blueprint}{epochs_str}[/{style}]"
         return f"{base}{grad_indicator}" if grad_indicator else base
