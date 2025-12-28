@@ -1,0 +1,460 @@
+/* TamiyoBrainV2 - CSS Stylesheet
+ *
+ * Design principles:
+ * - Value-first layout (numbers before bars)
+ * - Consolidated status indicators
+ * - Clear visual grouping with borders
+ * - Responsive via CSS, not Python code
+ */
+
+/* ============================================================
+ * ROOT CONTAINER
+ * ============================================================ */
+
+TamiyoBrainV2 {
+    layout: vertical;
+    height: 100%;
+    border: round $surface-lighten-2;
+    border-title-color: $text;
+    border-title-style: bold;
+}
+
+/* ============================================================
+ * STATUS BANNER
+ * ============================================================ */
+
+#status-banner {
+    height: 1;
+    width: 100%;
+    padding: 0 1;
+    background: $surface;
+}
+
+StatusBanner.status-ok {
+    background: $success-darken-3;
+}
+
+StatusBanner.status-warning {
+    background: $warning-darken-3;
+}
+
+StatusBanner.status-critical {
+    background: $error-darken-2;
+}
+
+StatusBanner.status-warmup {
+    background: $primary-darken-3;
+}
+
+/* A/B Group styling */
+StatusBanner.group-a {
+    border-left: wide $success;
+}
+
+StatusBanner.group-b {
+    border-left: wide $primary;
+}
+
+StatusBanner.group-c {
+    border-left: wide $secondary;
+}
+
+/* ============================================================
+ * MAIN CONTENT LAYOUT
+ * ============================================================ */
+
+#main-content {
+    height: 1fr;
+    width: 100%;
+}
+
+#vitals-column {
+    width: 2fr;
+    height: 100%;
+    padding: 0 1;
+}
+
+#decisions-column {
+    width: 1fr;
+    min-width: 50;
+    height: 100%;
+    border-left: solid $surface-lighten-1;
+    padding: 0 1;
+}
+
+/* ============================================================
+ * PANELS (Boxed sections)
+ * ============================================================ */
+
+.panel {
+    border: round $surface-lighten-2;
+    margin: 0 0 1 0;
+    padding: 0 1;
+    height: auto;
+}
+
+.panel-title {
+    text-style: bold;
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+/* ============================================================
+ * PRIMARY METRICS (Sparklines)
+ * ============================================================ */
+
+#primary-metrics {
+    height: auto;
+    padding: 0;
+}
+
+.metric-row {
+    layout: horizontal;
+    height: 1;
+    width: 100%;
+}
+
+.metric-label {
+    width: 11;
+    text-style: bold;
+    color: $primary-lighten-2;
+}
+
+.metric-sparkline {
+    width: 1fr;
+    min-width: 20;
+}
+
+.metric-value {
+    width: 10;
+    text-align: right;
+}
+
+.metric-trend {
+    width: 3;
+    text-align: center;
+}
+
+.metric-hyperparam {
+    width: 20;
+    text-align: right;
+    color: $text-muted;
+}
+
+/* ============================================================
+ * PPO HEALTH PANEL
+ * ============================================================ */
+
+#ppo-health {
+    height: auto;
+}
+
+#ppo-health .panel-header {
+    layout: horizontal;
+    height: 1;
+}
+
+#ppo-health .panel-status {
+    width: 1fr;
+    text-align: right;
+    color: $primary;
+}
+
+.gauge-grid {
+    layout: grid;
+    grid-size: 2 2;
+    grid-gutter: 0 2;
+    height: auto;
+}
+
+.gauge-row {
+    layout: horizontal;
+    height: 1;
+}
+
+.gauge-label {
+    width: 10;
+    color: $text-muted;
+}
+
+.gauge-value {
+    width: 8;
+    text-align: right;
+}
+
+.gauge-bar {
+    width: 12;
+    margin: 0 1;
+}
+
+.gauge-status {
+    width: 2;
+}
+
+/* Gauge status colors */
+.gauge-ok .gauge-bar {
+    color: $success;
+}
+
+.gauge-warning .gauge-bar {
+    color: $warning;
+}
+
+.gauge-critical .gauge-bar {
+    color: $error;
+}
+
+.metrics-column {
+    padding-left: 2;
+    border-left: solid $surface-lighten-1;
+}
+
+.metrics-row {
+    layout: horizontal;
+    height: 1;
+}
+
+.metrics-label {
+    width: 13;
+    color: $text-muted;
+}
+
+.metrics-value {
+    width: 1fr;
+}
+
+/* ============================================================
+ * HEADS PANEL (Entropy + Gradients)
+ * ============================================================ */
+
+#heads-panel {
+    height: auto;
+}
+
+.heads-table {
+    width: 100%;
+}
+
+.heads-header {
+    color: $text-muted;
+    text-style: bold;
+}
+
+.head-cell {
+    width: 9;
+    text-align: center;
+}
+
+.head-bar {
+    width: 5;
+}
+
+.head-value {
+    width: 5;
+    text-align: right;
+}
+
+/* Head status colors */
+.head-ok {
+    color: $success;
+}
+
+.head-warning {
+    color: $warning;
+}
+
+.head-critical {
+    color: $error;
+}
+
+.head-conditional {
+    text-style: italic;
+}
+
+/* ============================================================
+ * ACTION CONTEXT PANEL
+ * ============================================================ */
+
+#action-context {
+    height: auto;
+}
+
+.action-bar {
+    height: 1;
+}
+
+.action-bar-fill {
+    height: 1;
+}
+
+.action-legend {
+    layout: horizontal;
+    height: 1;
+}
+
+.action-legend-item {
+    margin-right: 1;
+}
+
+.action-sequence {
+    height: 2;
+    margin: 1 0;
+}
+
+.slot-summary {
+    height: auto;
+}
+
+.slot-distribution {
+    layout: horizontal;
+    height: 1;
+}
+
+.slot-stage {
+    margin-right: 2;
+}
+
+.slot-stats {
+    height: 1;
+    color: $text-muted;
+}
+
+/* Action colors */
+.action-germinate { color: $success; }
+.action-wait { color: $text-muted; }
+.action-fossilize { color: $primary; }
+.action-prune { color: $error; }
+.action-alpha { color: $secondary; }
+
+/* ============================================================
+ * DECISIONS COLUMN
+ * ============================================================ */
+
+#decisions-column {
+    padding: 0 1;
+}
+
+.decisions-header {
+    height: 1;
+    text-style: bold;
+    color: $text-muted;
+    border-bottom: solid $surface-lighten-1;
+    margin-bottom: 1;
+}
+
+/* ============================================================
+ * DECISION CARDS
+ * ============================================================ */
+
+DecisionCard {
+    height: auto;
+    border: round $surface-lighten-2;
+    padding: 0 1;
+    margin-bottom: 1;
+}
+
+DecisionCard.newest {
+    border: round $primary;
+}
+
+DecisionCard.oldest {
+    border: round $warning-darken-1;
+}
+
+DecisionCard.pinned {
+    border: double $success;
+}
+
+.card-header {
+    layout: horizontal;
+    height: 1;
+}
+
+.card-action {
+    width: 1fr;
+    text-style: bold;
+}
+
+.card-age {
+    width: auto;
+    color: $text-muted;
+}
+
+.card-separator {
+    height: 1;
+    border-bottom: dashed $surface-lighten-1;
+    margin: 0;
+}
+
+.card-content {
+    height: auto;
+    padding: 0;
+}
+
+.card-row {
+    layout: horizontal;
+    height: 1;
+}
+
+.card-label {
+    color: $text-muted;
+}
+
+.card-value {
+    margin-left: 1;
+}
+
+.card-badge {
+    width: auto;
+    text-style: bold;
+}
+
+.card-badge-hit {
+    color: $success;
+}
+
+.card-badge-ok {
+    color: $warning;
+}
+
+.card-badge-miss {
+    color: $error;
+}
+
+.card-badge-pending {
+    color: $text-muted;
+}
+
+/* ============================================================
+ * RESPONSIVE BREAKPOINTS
+ * ============================================================ */
+
+/* Narrow terminals: stack vertically */
+@media (width < 100) {
+    #main-content {
+        layout: vertical;
+    }
+
+    #vitals-column {
+        width: 100%;
+        height: auto;
+    }
+
+    #decisions-column {
+        width: 100%;
+        min-width: auto;
+        border-left: none;
+        border-top: solid $surface-lighten-1;
+    }
+}
+
+/* Very narrow: hide some elements */
+@media (width < 80) {
+    .metric-hyperparam {
+        display: none;
+    }
+
+    .gauge-bar {
+        width: 8;
+    }
+}

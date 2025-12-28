@@ -93,6 +93,34 @@ class TestPerHeadAdvantages:
         assert torch.allclose(per_head["alpha_speed"], torch.zeros(1))
         assert torch.allclose(per_head["alpha_curve"], torch.zeros(1))
 
+    def test_set_alpha_target_correct_masking(self):
+        """When op=SET_ALPHA_TARGET, slot/style/alpha heads get advantage (B4-CR-01).
+
+        SET_ALPHA_TARGET is the only operation that activates:
+        - slot (target selection)
+        - style (blend mode selection)
+        - alpha_target, alpha_speed, alpha_curve (alpha schedule control)
+
+        blueprint and tempo are masked because SET_ALPHA_TARGET doesn't
+        involve selecting a new seed architecture.
+        """
+        op_actions = torch.tensor([LifecycleOp.SET_ALPHA_TARGET])
+        base_advantages = torch.tensor([2.0])
+
+        per_head = compute_per_head_advantages(base_advantages, op_actions)
+
+        # Active heads for SET_ALPHA_TARGET
+        assert torch.allclose(per_head["op"], base_advantages)
+        assert torch.allclose(per_head["slot"], base_advantages)
+        assert torch.allclose(per_head["style"], base_advantages)
+        assert torch.allclose(per_head["alpha_target"], base_advantages)
+        assert torch.allclose(per_head["alpha_speed"], base_advantages)
+        assert torch.allclose(per_head["alpha_curve"], base_advantages)
+
+        # Masked heads (not causally relevant for alpha adjustment)
+        assert torch.allclose(per_head["blueprint"], torch.zeros(1))
+        assert torch.allclose(per_head["tempo"], torch.zeros(1))
+
     def test_mixed_ops_correct_masking(self):
         """Mixed op types should apply correct masking per timestep."""
         op_actions = torch.tensor([

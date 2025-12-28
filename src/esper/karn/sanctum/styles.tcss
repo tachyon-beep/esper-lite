@@ -28,9 +28,9 @@
     padding: 0 1;
 }
 
-/* Top section: Env Overview + Scoreboard (~52% of main area) */
+/* Top section: Env Overview + Scoreboard (~49% of main area) */
 #top-section {
-    height: 52%;
+    height: 49%;
     min-height: 14;
 }
 
@@ -77,9 +77,9 @@
     height: 50%;
 }
 
-/* Bottom section: Event Log + TamiyoBrain (~48% of main area) */
+/* Bottom section: Event Log + TamiyoBrain (~51% of main area) */
 #bottom-section {
-    height: 48%;
+    height: 51%;
     min-height: 14;
     width: 100%;
 }

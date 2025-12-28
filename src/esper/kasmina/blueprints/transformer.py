@@ -242,7 +242,7 @@ def create_flex_attention_seed(dim: int, n_head: int = 4) -> nn.Module:
                 self._block_mask_cache.clear()
                 return super()._apply(fn, recurse)  # type: ignore[no-untyped-call]
 
-            @torch._dynamo.disable  # type: ignore[untyped-decorator]
+            @torch.compiler.disable  # type: ignore[untyped-decorator]  # B3-PT-03: public API
             def _get_causal_block_mask(
                 self, seq_len: int, device: torch.device, dtype: torch.dtype
             ) -> Any:

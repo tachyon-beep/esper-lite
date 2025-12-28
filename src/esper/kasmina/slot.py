@@ -2548,12 +2548,13 @@ class SeedSlot(nn.Module):
     def set_extra_state(self, state: dict[str, Any]) -> None:
         """Restore SeedState from primitive dict."""
         self.isolate_gradients = state.get("isolate_gradients", False)
+        # B3-CR-02: Use direct indexing after membership check (not redundant .get())
         if "blend_algorithm_id" in state:
-            self._blend_algorithm_id = state.get("blend_algorithm_id")
+            self._blend_algorithm_id = state["blend_algorithm_id"]
         if "blend_tempo_epochs" in state:
-            self._blend_tempo_epochs = state.get("blend_tempo_epochs")
+            self._blend_tempo_epochs = state["blend_tempo_epochs"]
         if "blend_alpha_target" in state:
-            self._blend_alpha_target = state.get("blend_alpha_target")
+            self._blend_alpha_target = state["blend_alpha_target"]
 
         if state.get("seed_state"):
             self.state = SeedState.from_dict(state["seed_state"])
