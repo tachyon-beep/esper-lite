@@ -569,6 +569,35 @@ class BatchEpochCompletedPayload:
 
 
 @dataclass(slots=True, frozen=True)
+class TrendDetectedPayload:
+    """Payload for trend detection events (PLATEAU/DEGRADATION/IMPROVEMENT_DETECTED).
+
+    Emitted when rolling accuracy crosses threshold between batches.
+    All three event types use the same payload structure.
+    """
+
+    # REQUIRED - identifies where in training this occurred
+    batch_idx: int
+    episodes_completed: int
+
+    # REQUIRED - the trend detection data
+    rolling_delta: float  # Change from previous rolling avg
+    rolling_avg_accuracy: float  # Current rolling avg
+    prev_rolling_avg_accuracy: float  # Previous rolling avg
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "TrendDetectedPayload":
+        """Parse from dict. Raises KeyError on missing required fields."""
+        return cls(
+            batch_idx=data["batch"],  # Note: emitter uses "batch" not "batch_idx"
+            episodes_completed=data["episodes_completed"],
+            rolling_delta=data["rolling_delta"],
+            rolling_avg_accuracy=data["rolling_avg_accuracy"],
+            prev_rolling_avg_accuracy=data["prev_rolling_avg_accuracy"],
+        )
+
+
+@dataclass(slots=True, frozen=True)
 class PPOUpdatePayload:
     """Payload for PPO_UPDATE_COMPLETED event. Emitted after each PPO update."""
 
@@ -1366,6 +1395,7 @@ TelemetryPayload = (
     TrainingStartedPayload
     | EpochCompletedPayload
     | BatchEpochCompletedPayload
+    | TrendDetectedPayload
     | PPOUpdatePayload
     | TamiyoInitiatedPayload
     | SeedGerminatedPayload

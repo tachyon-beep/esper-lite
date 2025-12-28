@@ -32,6 +32,7 @@ from esper.leyline import (
     STYLE_NAMES,
     TelemetryEvent,
     TelemetryEventType,
+    TrendDetectedPayload,
 )
 from esper.nissa import get_hub
 
@@ -405,13 +406,13 @@ class VectorizedEmitter:
             if event_type:
                 self.hub.emit(TelemetryEvent(
                     event_type=event_type,
-                    data={  # type: ignore[arg-type]
-                        "batch": batch_idx + 1,
-                        "rolling_delta": rolling_delta,
-                        "rolling_avg_accuracy": rolling_avg_acc,
-                        "prev_rolling_avg_accuracy": prev_rolling_avg_acc,
-                        "episodes_completed": episodes_completed,
-                    },
+                    data=TrendDetectedPayload(
+                        batch_idx=batch_idx + 1,
+                        episodes_completed=episodes_completed,
+                        rolling_delta=rolling_delta,
+                        rolling_avg_accuracy=rolling_avg_acc,
+                        prev_rolling_avg_accuracy=prev_rolling_avg_acc,
+                    ),
                 ))
 
         # BATCH_EPOCH_COMPLETED
