@@ -37,6 +37,7 @@ from esper.leyline.telemetry import (
     SeedPrunedPayload,
     PPOUpdatePayload,
     GovernorRollbackPayload,
+    TamiyoInitiatedPayload,
 )
 
 _logger = logging.getLogger(__name__)
@@ -241,8 +242,16 @@ class ConsoleOutput(OutputBackend):
             if event.data is None:
                 _logger.warning("TAMIYO_INITIATED event has no data payload")
                 return
-            # TAMIYO_INITIATED not yet migrated to typed payload
-            if isinstance(event.data, dict):
+            # Handle typed payload
+            if isinstance(event.data, TamiyoInitiatedPayload):
+                payload = event.data
+                env_str = f"env{payload.env_id}"
+                if payload.stabilization_epochs == 0:
+                    print(f"[{timestamp}] {env_str} | Host stabilized at epoch {payload.epoch} - germination now allowed")
+                else:
+                    print(f"[{timestamp}] {env_str} | Host stabilized at epoch {payload.epoch} ({payload.stable_count}/{payload.stabilization_epochs} stable) - germination now allowed")
+            elif isinstance(event.data, dict):
+                # Legacy dict format (from deserialization)
                 env_id = event.data.get("env_id")
                 epoch = event.data.get("epoch", "?")
                 stable_count = event.data.get("stable_count", 0)

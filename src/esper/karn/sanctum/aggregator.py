@@ -49,6 +49,7 @@ from esper.leyline import (
     SeedPrunedPayload,
     CounterfactualMatrixPayload,
     AnalyticsSnapshotPayload,
+    EpisodeOutcomePayload,
     TEMPO_NAMES,
 )
 
@@ -1219,11 +1220,23 @@ class SanctumAggregator:
         if data is None:
             return
 
-        # Handle dict-based data (from serialization) - this is the expected path
-        # since EPISODE_OUTCOME events are not currently emitted with typed payloads
-        if isinstance(data, dict):
+        # Handle typed payload (preferred)
+        if isinstance(data, EpisodeOutcomePayload):
             outcome = EpisodeOutcome(
-                env_idx=data["env_idx"],
+                env_idx=data.env_id,  # Payload uses env_id, store uses env_idx
+                episode_idx=data.episode_idx,
+                final_accuracy=data.final_accuracy,
+                param_ratio=data.param_ratio,
+                num_fossilized=data.num_fossilized,
+                num_contributing_fossilized=data.num_contributing_fossilized,
+                episode_reward=data.episode_reward,
+                stability_score=data.stability_score,
+                reward_mode=data.reward_mode,
+            )
+        elif isinstance(data, dict):
+            # Legacy dict format (from deserialization)
+            outcome = EpisodeOutcome(
+                env_idx=data.get("env_idx", data.get("env_id", 0)),  # Handle both conventions
                 episode_idx=data["episode_idx"],
                 final_accuracy=data["final_accuracy"],
                 param_ratio=data["param_ratio"],

@@ -21,6 +21,7 @@ from esper.leyline.telemetry import (
     AnalyticsSnapshotPayload,
     GovernorRollbackPayload,
     TrendDetectedPayload,
+    TamiyoInitiatedPayload,
 )
 from esper.nissa.output import OutputBackend
 
@@ -277,7 +278,10 @@ class BlueprintAnalytics(OutputBackend):
             return
 
         elif event.event_type == TelemetryEventType.TAMIYO_INITIATED:
-            _logger.warning("TAMIYO_INITIATED event not yet migrated to typed payload")
+            # TAMIYO_INITIATED signals host stabilization - no analytics aggregation needed.
+            # Just validate the payload type and return.
+            if not isinstance(event.data, TamiyoInitiatedPayload):
+                _logger.warning(f"TAMIYO_INITIATED unexpected payload: {type(event.data).__name__}")
             return
 
         # === Trend Detection Events ===
