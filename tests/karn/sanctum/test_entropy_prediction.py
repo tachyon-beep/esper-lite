@@ -63,7 +63,7 @@ class TestCollapseRisk:
         """Entropy already at critical should have risk=1.0."""
         history = deque([0.25, 0.24, 0.23, 0.22, 0.21, 0.20, 0.19, 0.18, 0.17, 0.16])
         risk = compute_collapse_risk(history, critical_threshold=0.3)
-        assert risk >= 0.95
+        assert risk == 1.0  # Exactly 1.0 when already collapsed
 
     def test_rising_entropy_low_risk(self):
         """Rising entropy should have minimal risk (just proximity-based)."""
@@ -76,3 +76,30 @@ class TestCollapseRisk:
         history = deque([0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5])
         risk = compute_collapse_risk(history, critical_threshold=0.3)
         assert risk < 0.3  # Just proximity risk, no velocity component
+
+    def test_hysteresis_prevents_minor_fluctuation(self):
+        """Risk score should not change if delta < hysteresis threshold."""
+        history = deque([0.6, 0.58, 0.56, 0.54, 0.52, 0.50, 0.48, 0.46, 0.44, 0.42])
+
+        # First call establishes baseline
+        risk1 = compute_collapse_risk(history, previous_risk=0.0, hysteresis=0.08)
+
+        # Slightly modified history (should produce similar but not identical base_risk)
+        history2 = deque([0.6, 0.58, 0.56, 0.54, 0.52, 0.50, 0.48, 0.46, 0.44, 0.41])
+        risk2 = compute_collapse_risk(history2, previous_risk=risk1, hysteresis=0.08)
+
+        # Risk should be sticky due to hysteresis (returns previous_risk)
+        assert risk2 == risk1
+
+    def test_hysteresis_allows_significant_change(self):
+        """Risk score should update if delta > hysteresis threshold."""
+        # Start with moderate decline
+        history1 = deque([0.8, 0.78, 0.76, 0.74, 0.72, 0.70, 0.68, 0.66, 0.64, 0.62])
+        risk1 = compute_collapse_risk(history1, previous_risk=0.0, hysteresis=0.08)
+
+        # Significant change - now rapidly approaching critical
+        history2 = deque([0.45, 0.42, 0.39, 0.36, 0.34, 0.33, 0.32, 0.31, 0.30, 0.29])
+        risk2 = compute_collapse_risk(history2, previous_risk=risk1, hysteresis=0.08)
+
+        # Risk should have increased significantly (>0.08 change)
+        assert risk2 > risk1 + 0.08

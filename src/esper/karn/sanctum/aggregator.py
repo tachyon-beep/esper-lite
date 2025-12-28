@@ -756,6 +756,7 @@ class SanctumAggregator:
             self._tamiyo.entropy_history,
             critical_threshold=TUIThresholds.ENTROPY_CRITICAL,
             warning_threshold=TUIThresholds.ENTROPY_WARNING,
+            max_healthy_entropy=TUIThresholds.ENTROPY_MAX,
             previous_risk=self._tamiyo._previous_risk,
         )
         self._tamiyo._previous_risk = self._tamiyo.collapse_risk_score

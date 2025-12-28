@@ -46,6 +46,7 @@ def compute_collapse_risk(
     entropy_history: deque[float] | list[float],
     critical_threshold: float = 0.3,
     warning_threshold: float = 0.5,
+    max_healthy_entropy: float = 1.39,
     previous_risk: float = 0.0,
     hysteresis: float = 0.08,
 ) -> float:
@@ -60,6 +61,7 @@ def compute_collapse_risk(
         entropy_history: Recent entropy values (oldest first).
         critical_threshold: Entropy below this is collapsed.
         warning_threshold: Entropy below this is concerning.
+        max_healthy_entropy: Expected healthy entropy level (default ~ln(4)).
         previous_risk: Previous risk score for hysteresis.
         hysteresis: Risk change must exceed this to update.
 
@@ -78,9 +80,14 @@ def compute_collapse_risk(
         return 1.0
 
     # Calculate proximity-based risk (being near critical is risky even if stable)
-    max_entropy = warning_threshold + 0.5  # Assume ~1.0 is healthy
-    proximity = 1.0 - (current - critical_threshold) / (max_entropy - critical_threshold)
-    proximity = max(0.0, min(1.0, proximity))
+    # max_healthy_entropy is the expected healthy entropy level (default ~ln(4))
+    denominator = max_healthy_entropy - critical_threshold
+    if denominator <= 0:
+        # Invalid threshold configuration - treat as critical proximity
+        proximity = 1.0
+    else:
+        proximity = 1.0 - (current - critical_threshold) / denominator
+        proximity = max(0.0, min(1.0, proximity))
     proximity_risk = proximity * 0.3  # Cap proximity contribution at 0.3
 
     # Rising or stable entropy = minimal risk (just proximity)
