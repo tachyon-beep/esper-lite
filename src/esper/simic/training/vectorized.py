@@ -3250,6 +3250,18 @@ def train_ppo_vectorized(
             ppo_update_time_ms = (time.perf_counter() - update_start) * 1000.0
             ppo_grad_norm = compute_grad_norm_surrogate(agent.policy.network)
 
+            # B7-DRL-01: Wire up gradient EMA tracking for drift detection
+            # Compute gradient health heuristic from norm (vanishing/exploding detection)
+            drift_metrics: dict[str, float] | None = None
+            if grad_ema_tracker is not None and ppo_grad_norm is not None:
+                if ppo_grad_norm < 1e-7:
+                    grad_health = 0.3  # Vanishing gradients
+                elif ppo_grad_norm > 100.0:
+                    grad_health = 0.3  # Exploding gradients
+                else:
+                    grad_health = 1.0  # Healthy range
+                drift_metrics = grad_ema_tracker.update(ppo_grad_norm, grad_health)
+
             metric_values = [v for v in metrics.values() if isinstance(v, (int, float))]
             anomaly_report = anomaly_detector.check_all(
                 ratio_max=metrics.get("ratio_max", 1.0),
@@ -3260,6 +3272,17 @@ def train_ppo_vectorized(
                 current_episode=batch_epoch_id,
                 total_episodes=total_episodes,
             )
+
+            # B7-DRL-01: Check gradient drift and merge into anomaly report
+            if drift_metrics is not None:
+                drift_report = anomaly_detector.check_gradient_drift(
+                    norm_drift=drift_metrics["norm_drift"],
+                    health_drift=drift_metrics["health_drift"],
+                )
+                if drift_report.has_anomaly:
+                    anomaly_report.has_anomaly = True
+                    anomaly_report.anomaly_types.extend(drift_report.anomaly_types)
+                    anomaly_report.details.update(drift_report.details)
             _handle_telemetry_escalation(anomaly_report, telemetry_config)
             _emit_anomaly_diagnostics(
                 hub,

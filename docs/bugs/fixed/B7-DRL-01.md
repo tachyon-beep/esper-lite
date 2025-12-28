@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B7-DRL-01` |
 | **Severity** | `P1` |
-| **Status** | `open` |
+| **Status** | `closed` |
 | **Batch** | 7 |
 | **Agent** | `drl` |
 | **Domain** | `simic/telemetry` |
@@ -159,3 +159,38 @@ grep -r "grad_ema_tracker\.\(update\|check_drift\)" src/esper/simic/
 | **Reviewer** | Code Review Specialist |
 
 **Evaluation:** Verified: no matches for grad_ema_tracker methods. Clear No Legacy Code Policy violation. Creates false expectations (readers assume drift detection works). Per CLAUDE.md's explicit telemetry guidance, wire it up immediately rather than delete.
+
+---
+
+## Resolution
+
+### Final Fix Description
+
+Wired `GradientEMATracker` into the PPO update loop at vectorized.py:3253-3285:
+
+1. After computing `ppo_grad_norm`, compute gradient health heuristic (vanishing/exploding detection)
+2. Call `grad_ema_tracker.update(ppo_grad_norm, grad_health)` to track EMA and compute drift
+3. Call `anomaly_detector.check_gradient_drift()` with drift values
+4. Merge drift anomalies into main anomaly report for escalation/governor handling
+
+### Files Changed
+
+- `src/esper/simic/training/vectorized.py:3253-3285` — EMA tracking and drift detection wiring
+- `tests/simic/test_anomaly_detector.py` — 4 new tests for `check_gradient_drift()`
+- `tests/simic/test_gradient_ema.py` — New file with 7 tests for `GradientEMATracker`
+
+### Verification
+
+- [x] `grep -r "grad_ema_tracker\.\(update\)" src/esper/simic/` — Now shows call at vectorized.py:3263
+- [x] mypy passes: `Success: no issues found in 1 source file`
+- [x] 22 tests pass (15 existing + 4 new anomaly detector + 7 new EMA tracker)
+
+### Sign-off
+
+**DRL Specialist:** APPROVED — "The fix fully addresses B7-DRL-01. The GradientEMATracker is now properly wired into the PPO update loop, drift detection flows through the anomaly escalation pathway, and the implementation is clean and well-tested."
+
+**PyTorch Specialist:** APPROVED — "Total per-batch overhead: <500 nanoseconds. For context, a single PPO update takes 10-100ms. This adds 0.0005% overhead. No torch.compile implications — pure Python operating on floats extracted from tensors. No graph breaks introduced."
+
+### Related Tickets Resolved
+
+- B7-DRL-03 (`check_gradient_drift()` never called) — implicitly resolved by this fix

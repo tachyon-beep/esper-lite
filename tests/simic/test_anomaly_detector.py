@@ -130,3 +130,45 @@ class TestAnomalyDetector:
                 current_episode=10,
                 total_episodes=0,
             )
+
+    def test_detect_gradient_norm_drift(self):
+        """Detects gradient norm drift exceeding threshold (B7-DRL-01)."""
+        detector = AnomalyDetector()
+        report = detector.check_gradient_drift(
+            norm_drift=0.6,  # > 0.5 threshold
+            health_drift=0.1,
+        )
+        assert report.has_anomaly is True
+        assert "gradient_norm_drift" in report.anomaly_types
+
+    def test_detect_gradient_health_drift(self):
+        """Detects gradient health drift exceeding threshold (B7-DRL-01)."""
+        detector = AnomalyDetector()
+        report = detector.check_gradient_drift(
+            norm_drift=0.1,
+            health_drift=0.7,  # > 0.5 threshold
+        )
+        assert report.has_anomaly is True
+        assert "gradient_health_drift" in report.anomaly_types
+
+    def test_no_gradient_drift_below_threshold(self):
+        """No anomaly when drift is within acceptable range (B7-DRL-01)."""
+        detector = AnomalyDetector()
+        report = detector.check_gradient_drift(
+            norm_drift=0.3,  # Below 0.5 threshold
+            health_drift=0.2,  # Below 0.5 threshold
+        )
+        assert report.has_anomaly is False
+        assert len(report.anomaly_types) == 0
+
+    def test_gradient_drift_custom_threshold(self):
+        """Custom threshold works for gradient drift (B7-DRL-01)."""
+        detector = AnomalyDetector()
+        # With stricter threshold of 0.2
+        report = detector.check_gradient_drift(
+            norm_drift=0.3,  # > 0.2 threshold
+            health_drift=0.1,
+            drift_threshold=0.2,
+        )
+        assert report.has_anomaly is True
+        assert "gradient_norm_drift" in report.anomaly_types
