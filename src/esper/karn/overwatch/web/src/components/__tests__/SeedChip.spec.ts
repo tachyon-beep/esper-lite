@@ -130,4 +130,137 @@ describe('SeedChip', () => {
     const chip = wrapper.find('[data-testid="seed-chip"]')
     expect(chip.classes()).toContain('stage-unknown')
   })
+
+  // Curve glyph tests
+  it('always displays curve glyph element', () => {
+    const wrapper = mount(SeedChip, {
+      props: {
+        slotId: 'slot_0',
+        stage: 'DORMANT' as SeedStage
+      }
+    })
+
+    expect(wrapper.find('[data-testid="curve-glyph"]').exists()).toBe(true)
+  })
+
+  it('displays LINEAR curve glyph by default', () => {
+    const wrapper = mount(SeedChip, {
+      props: {
+        slotId: 'slot_0',
+        stage: 'TRAINING' as SeedStage
+      }
+    })
+
+    // LINEAR = ╱ (U+2571)
+    expect(wrapper.find('[data-testid="curve-glyph"]').text()).toBe('\u2571')
+  })
+
+  it('displays SIGMOID curve glyph when specified', () => {
+    const wrapper = mount(SeedChip, {
+      props: {
+        slotId: 'slot_0',
+        stage: 'BLENDING' as SeedStage,
+        alphaCurve: 'SIGMOID'
+      }
+    })
+
+    // SIGMOID = ∫ (U+222B)
+    expect(wrapper.find('[data-testid="curve-glyph"]').text()).toBe('\u222B')
+  })
+
+  it('displays COSINE curve glyph when specified', () => {
+    const wrapper = mount(SeedChip, {
+      props: {
+        slotId: 'slot_0',
+        stage: 'HOLDING' as SeedStage,
+        alphaCurve: 'COSINE'
+      }
+    })
+
+    // COSINE = ∿ (U+223F)
+    expect(wrapper.find('[data-testid="curve-glyph"]').text()).toBe('\u223F')
+  })
+
+  it('applies curve-active class during BLENDING stage', () => {
+    const wrapper = mount(SeedChip, {
+      props: {
+        slotId: 'slot_0',
+        stage: 'BLENDING' as SeedStage,
+        alphaCurve: 'SIGMOID'
+      }
+    })
+
+    const curve = wrapper.find('[data-testid="curve-glyph"]')
+    expect(curve.classes()).toContain('curve-active')
+    expect(curve.classes()).not.toContain('curve-dim')
+    expect(curve.classes()).not.toContain('curve-historical')
+  })
+
+  it('applies curve-active class during HOLDING stage', () => {
+    const wrapper = mount(SeedChip, {
+      props: {
+        slotId: 'slot_0',
+        stage: 'HOLDING' as SeedStage,
+        alphaCurve: 'LINEAR'
+      }
+    })
+
+    const curve = wrapper.find('[data-testid="curve-glyph"]')
+    expect(curve.classes()).toContain('curve-active')
+  })
+
+  it('applies curve-historical class during FOSSILIZED stage', () => {
+    const wrapper = mount(SeedChip, {
+      props: {
+        slotId: 'slot_0',
+        stage: 'FOSSILIZED' as SeedStage,
+        alphaCurve: 'SIGMOID_GENTLE'
+      }
+    })
+
+    const curve = wrapper.find('[data-testid="curve-glyph"]')
+    expect(curve.classes()).toContain('curve-historical')
+    expect(curve.classes()).not.toContain('curve-active')
+    expect(curve.classes()).not.toContain('curve-dim')
+  })
+
+  it('applies curve-dim class during other stages (TRAINING)', () => {
+    const wrapper = mount(SeedChip, {
+      props: {
+        slotId: 'slot_0',
+        stage: 'TRAINING' as SeedStage,
+        alphaCurve: 'LINEAR'
+      }
+    })
+
+    const curve = wrapper.find('[data-testid="curve-glyph"]')
+    expect(curve.classes()).toContain('curve-dim')
+    expect(curve.classes()).not.toContain('curve-active')
+    expect(curve.classes()).not.toContain('curve-historical')
+  })
+
+  it('applies curve-dim class during DORMANT stage', () => {
+    const wrapper = mount(SeedChip, {
+      props: {
+        slotId: 'slot_0',
+        stage: 'DORMANT' as SeedStage
+      }
+    })
+
+    const curve = wrapper.find('[data-testid="curve-glyph"]')
+    expect(curve.classes()).toContain('curve-dim')
+  })
+
+  it('falls back to minus sign for unknown curve type', () => {
+    const wrapper = mount(SeedChip, {
+      props: {
+        slotId: 'slot_0',
+        stage: 'BLENDING' as SeedStage,
+        alphaCurve: 'UNKNOWN_CURVE'
+      }
+    })
+
+    // Fallback = − (U+2212 minus sign)
+    expect(wrapper.find('[data-testid="curve-glyph"]').text()).toBe('\u2212')
+  })
 })
