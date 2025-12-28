@@ -292,6 +292,28 @@ class TamiyoBrain(Static):
         else:
             return "[MISS]", "red"
 
+    def _action_context_note(self, decision: "DecisionSnapshot") -> str:
+        """Return contextual note for non-GERMINATE actions.
+
+        Replaces the empty head-choices line with meaningful context
+        explaining WHY the action was taken.
+        """
+        action = decision.chosen_action
+        slot = decision.chosen_slot or "?"
+
+        if action == "GERMINATE":
+            return ""  # GERMINATE uses head choices line instead
+        elif action == "WAIT":
+            return "(waiting for training progress)"
+        elif action == "PRUNE":
+            return f"(removing underperformer from {slot})"
+        elif action == "FOSSILIZE":
+            return f"(fusing trained module in {slot})"
+        elif action == "SET_ALPHA_TARGET":
+            return "(adjusting blend parameters)"
+        else:
+            return ""
+
     def _render_separator(self) -> Text:
         """Render horizontal separator at correct width."""
         width = self._get_separator_width()

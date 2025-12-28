@@ -76,6 +76,116 @@ def test_outcome_badge_pending():
     assert style == "dim"
 
 
+# =============================================================================
+# ACTION CONTEXT NOTE HELPER TESTS
+# =============================================================================
+
+
+def test_action_context_note_wait():
+    """WAIT action should have contextual note."""
+    from datetime import datetime, timezone
+
+    widget = TamiyoBrain()
+    decision = DecisionSnapshot(
+        timestamp=datetime.now(timezone.utc),
+        slot_states={},
+        host_accuracy=50.0,
+        chosen_action="WAIT",
+        chosen_slot=None,
+        confidence=0.9,
+        expected_value=0.0,
+        actual_reward=None,
+        alternatives=[],
+        decision_id="test",
+    )
+    note = widget._action_context_note(decision)
+    assert "waiting" in note.lower()
+
+
+def test_action_context_note_prune():
+    """PRUNE action should mention removing underperformer."""
+    from datetime import datetime, timezone
+
+    widget = TamiyoBrain()
+    decision = DecisionSnapshot(
+        timestamp=datetime.now(timezone.utc),
+        slot_states={},
+        host_accuracy=50.0,
+        chosen_action="PRUNE",
+        chosen_slot="r0c1",
+        confidence=0.9,
+        expected_value=0.0,
+        actual_reward=None,
+        alternatives=[],
+        decision_id="test",
+    )
+    note = widget._action_context_note(decision)
+    assert "removing" in note.lower() or "prune" in note.lower()
+
+
+def test_action_context_note_fossilize():
+    """FOSSILIZE action should mention fusing module."""
+    from datetime import datetime, timezone
+
+    widget = TamiyoBrain()
+    decision = DecisionSnapshot(
+        timestamp=datetime.now(timezone.utc),
+        slot_states={},
+        host_accuracy=50.0,
+        chosen_action="FOSSILIZE",
+        chosen_slot="r0c0",
+        confidence=0.9,
+        expected_value=0.0,
+        actual_reward=None,
+        alternatives=[],
+        decision_id="test",
+    )
+    note = widget._action_context_note(decision)
+    assert "fusing" in note.lower() or "fossiliz" in note.lower()
+
+
+def test_action_context_note_set_alpha():
+    """SET_ALPHA_TARGET action should mention blend adjustment."""
+    from datetime import datetime, timezone
+
+    widget = TamiyoBrain()
+    decision = DecisionSnapshot(
+        timestamp=datetime.now(timezone.utc),
+        slot_states={},
+        host_accuracy=50.0,
+        chosen_action="SET_ALPHA_TARGET",
+        chosen_slot="r0c0",
+        confidence=0.9,
+        expected_value=0.0,
+        actual_reward=None,
+        alternatives=[],
+        decision_id="test",
+    )
+    note = widget._action_context_note(decision)
+    assert "blend" in note.lower() or "alpha" in note.lower()
+
+
+def test_action_context_note_germinate_empty():
+    """GERMINATE action should return empty string (uses head choices instead)."""
+    from datetime import datetime, timezone
+
+    widget = TamiyoBrain()
+    decision = DecisionSnapshot(
+        timestamp=datetime.now(timezone.utc),
+        slot_states={},
+        host_accuracy=50.0,
+        chosen_action="GERMINATE",
+        chosen_slot="r0c0",
+        confidence=0.9,
+        expected_value=0.0,
+        actual_reward=None,
+        alternatives=[],
+        decision_id="test",
+    )
+    note = widget._action_context_note(decision)
+    assert note == ""
+
+
 class TamiyoBrainTestApp(App):
     """Test app for TamiyoBrain widget."""
 
