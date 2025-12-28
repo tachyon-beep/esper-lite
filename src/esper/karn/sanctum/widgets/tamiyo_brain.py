@@ -1947,56 +1947,52 @@ class TamiyoBrain(Static):
 
         result.append("\n          ")  # 10 spaces to align under wider bars
 
-        # Second line: values (10-char segments to match bars)
-        # Non-op heads shifted right by 3 chars for alignment under bars
+        # Second line: values with per-head alignment offsets
+        # Bar labels have variable widths (conditional heads add ~), causing cumulative drift.
+        # These offsets correct for the drift to align values under their bars.
+        # Offsets: slot=-2, bpnt=-1, styl=0, temp=+1, atgt=+2, aspd=+3, acrv=+5, op=+6
+        head_offsets = {
+            "slot": -2, "blueprint": -1, "style": 0, "tempo": 1,
+            "alpha_target": 2, "alpha_speed": 3, "alpha_curve": 5, "op": 6,
+        }
+
         for abbrev, field, head_key in heads:
             value = getattr(tamiyo, field, 0.0)
             is_tracked = head_key in self.TRACKED_HEADS
             is_last_head = head_key == "op"
+            offset = head_offsets.get(head_key, 0)
 
             if value == 0.0 and not is_tracked:
-                # n/a segment: match bar segment widths (12 for non-op, 10 for op)
-                if is_last_head:
-                    result.append("   n/a    ", style="dim italic")  # 10 chars
-                else:
-                    result.append("      n/a   ", style="dim italic")  # 12 chars
+                # n/a segment with per-head offset
+                base_lead = 8 if is_last_head else 6
+                lead = " " * (base_lead + offset)
+                trail = " " * max(0, 4 - offset)
+                result.append(f"{lead}n/a{trail}", style="dim italic")
                 continue
 
             # Use adjusted_fill for threshold decisions
             active_entropy, relevance_ratio, adjusted_fill = head_contexts[head_key]
-
-            # Segment widths match bar row:
-            # - Non-op heads: 12 chars (abbr[█████] )
-            # - Op head: 10 chars (op[█████] )
-            #
-            # Use adjusted_fill for threshold checks - this accounts for conditional
-            # heads where the observed entropy is diluted by samples where the head
-            # is irrelevant (masked to single option). The adjusted_fill uses the
-            # "active entropy" (entropy when head IS relevant) for threshold decisions.
             is_conditional = head_key in self.CONDITIONAL_HEADS
 
-            if is_last_head:
-                # Op head: 10-char segment "  X.XX!   "
-                if adjusted_fill < 0.25:
-                    result.append(f"  {value:4.2f}!   ", style="red")
-                elif adjusted_fill < 0.5:
-                    result.append(f"  {value:4.2f}*   ", style="yellow")
-                else:
-                    result.append(f"  {value:4.2f}    ", style="dim")
+            # Determine value string and indicator
+            if adjusted_fill < 0.25:
+                val_str = f"{value:4.2f}!"
+                style = "red"
+            elif adjusted_fill < 0.5:
+                val_str = f"{value:4.2f}*"
+                style = "yellow"
+            elif is_conditional and relevance_ratio < 0.3:
+                val_str = f"{value:4.2f}~"
+                style = "dim"
             else:
-                # Other heads: 12-char segment "     X.XX!  " (5 leading, 2 trailing)
-                # For conditional heads, show "~" suffix instead of warning indicators
-                # when the head is rarely used (low relevance) but active entropy is OK
-                if adjusted_fill < 0.25:
-                    result.append(f"     {value:4.2f}!  ", style="red")
-                elif adjusted_fill < 0.5:
-                    result.append(f"     {value:4.2f}*  ", style="yellow")
-                elif is_conditional and relevance_ratio < 0.3:
-                    # Conditional head with low usage but healthy active entropy
-                    # Show ~ to indicate "conditional, rarely used"
-                    result.append(f"     {value:4.2f}~  ", style="dim")
-                else:
-                    result.append(f"     {value:4.2f}   ", style="dim")
+                val_str = f"{value:4.2f} "
+                style = "dim"
+
+            # Apply per-head offset: adjust leading spaces
+            base_lead = 2 if is_last_head else 5
+            lead = " " * (base_lead + offset)
+            trail = " " * max(0, (3 if is_last_head else 2) - offset)
+            result.append(f"{lead}{val_str}{trail}", style=style)
 
         return result
 
@@ -2088,17 +2084,24 @@ class TamiyoBrain(Static):
 
         result.append("\n          ")  # 10 spaces to align under wider bars
 
-        # Second line: values (aligned under bars)
+        # Second line: values with per-head alignment offsets (same as entropy heatmap)
+        # Offsets: slot=-2, bpnt=-1, styl=0, temp=+1, atgt=+2, aspd=+3, acrv=+5, op=+6
+        head_offsets = {
+            "slot": -2, "blueprint": -1, "style": 0, "tempo": 1,
+            "alpha_target": 2, "alpha_speed": 3, "alpha_curve": 5, "op": 6,
+        }
+
         for abbrev, field, head_key in heads:
             value = getattr(tamiyo, field, 0.0)
             is_last_head = head_key == "op"
+            offset = head_offsets.get(head_key, 0)
 
             if value == 0.0:
-                # No data - match bar segment widths (12 for non-op, 10 for op)
-                if is_last_head:
-                    result.append("   n/a    ", style="dim italic")  # 10 chars
-                else:
-                    result.append("      n/a   ", style="dim italic")  # 12 chars
+                # n/a segment with per-head offset
+                base_lead = 8 if is_last_head else 6
+                lead = " " * (base_lead + offset)
+                trail = " " * max(0, 4 - offset)
+                result.append(f"{lead}n/a{trail}", style="dim italic")
                 continue
 
             # Determine status indicator
@@ -2125,12 +2128,11 @@ class TamiyoBrain(Static):
             else:
                 val_str = f"{value:4.2f}"
 
-            if is_last_head:
-                # Op head: 10-char segment
-                result.append(f"  {val_str}{indicator}   ", style=style)
-            else:
-                # Other heads: 12-char segment (5 leading + 5 value/indicator + 2 trailing)
-                result.append(f"     {val_str}{indicator}  ", style=style)
+            # Apply per-head offset: adjust leading spaces
+            base_lead = 2 if is_last_head else 5
+            lead = " " * (base_lead + offset)
+            trail = " " * max(0, (3 if is_last_head else 2) - offset)
+            result.append(f"{lead}{val_str}{indicator}{trail}", style=style)
 
         return result
 
