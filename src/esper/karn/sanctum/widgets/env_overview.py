@@ -644,10 +644,8 @@ class EnvOverview(Static):
 
         # Curve glyph: shown for BLENDING/HOLDING/FOSSILIZED, dim "-" for other stages
         # Position: after stage:blueprint with space (e.g., "Blend:conv_l ⌢")
-        if seed.stage in ("BLENDING", "HOLDING", "FOSSILIZED"):
-            curve_glyph = ALPHA_CURVE_GLYPHS.get(seed.alpha_curve, "−")
-        else:
-            curve_glyph = "[dim]−[/dim]"
+        # Always use raw glyph character - dim styling applied in format strings where needed
+        curve_glyph = ALPHA_CURVE_GLYPHS.get(seed.alpha_curve, "−") if seed.stage in ("BLENDING", "HOLDING", "FOSSILIZED") else "−"
 
         # Helper: tempo arrows based on blend_tempo_epochs
         # Tempo: ▸▸▸ = FAST (3), ▸▸ = STANDARD (5), ▸ = SLOW (8)
@@ -676,7 +674,7 @@ class EnvOverview(Static):
 
         # Other stages show epochs in stage with dim "-" for curve
         epochs_str = f" e{seed.epochs_in_stage}" if seed.epochs_in_stage > 0 else ""
-        base = f"[{style}]{stage_short}:{blueprint} {curve_glyph}{epochs_str}[/{style}]"
+        base = f"[{style}]{stage_short}:{blueprint} [dim]{curve_glyph}[/dim]{epochs_str}[/{style}]"
         return f"{base}{grad_indicator}"
 
     def _format_last_action(self, env: "EnvState") -> str:
