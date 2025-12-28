@@ -185,6 +185,10 @@ class SanctumAggregator:
     # Focused env for reward panel
     _focused_env_id: int = 0
 
+    # Last action target (for EnvOverview row highlighting)
+    _last_action_env_id: int | None = None
+    _last_action_timestamp: datetime | None = None
+
     # Historical best runs leaderboard (updated at batch end)
     _best_runs: list[BestRunRecord] = field(default_factory=list)
 
@@ -430,6 +434,9 @@ class SanctumAggregator:
             # Per-env state
             envs=dict(self._envs),
             focused_env_id=self._focused_env_id,
+            # Last action target (for EnvOverview row highlighting)
+            last_action_env_id=self._last_action_env_id,
+            last_action_timestamp=self._last_action_timestamp,
             # Focused env's reward breakdown (for RewardComponents widget)
             rewards=focused_rewards,
             # Tamiyo state
@@ -1110,6 +1117,10 @@ class SanctumAggregator:
             env.action_history.append(action_name)
             env.action_counts[action_name] = env.action_counts.get(action_name, 0) + 1
             env.total_actions += 1
+
+            # Track last action target for EnvOverview row highlighting (with timestamp for hysteresis)
+            self._last_action_env_id = env_id
+            self._last_action_timestamp = datetime.now(timezone.utc)
 
             # Update reward component breakdown from payload
             # (migrated from removed REWARD_COMPUTED handler)

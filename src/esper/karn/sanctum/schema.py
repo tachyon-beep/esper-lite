@@ -827,6 +827,10 @@ class SanctumSnapshot:
     # Focused env for detail panel
     focused_env_id: int = 0
 
+    # Last action target (for row highlighting in EnvOverview)
+    last_action_env_id: int | None = None  # None if no actions yet
+    last_action_timestamp: datetime | None = None  # For hysteresis (5s decay)
+
     @property
     def is_stale(self) -> bool:
         """Check if data is stale (>5s since last update).

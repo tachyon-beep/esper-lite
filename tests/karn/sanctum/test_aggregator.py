@@ -270,3 +270,28 @@ def test_ppo_update_unknown_group_id():
 
     snapshot = agg.get_snapshot()
     assert snapshot.tamiyo.group_id == "experiment_42"
+
+
+def test_snapshot_tracks_last_action_env_id():
+    """Snapshot should track which env received the last action."""
+    from esper.leyline.telemetry import AnalyticsSnapshotPayload
+
+    agg = SanctumAggregator(num_envs=4)
+
+    # Simulate an action on env 2 via ANALYTICS_SNAPSHOT(last_action)
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+        data=AnalyticsSnapshotPayload(
+            kind="last_action",
+            env_id=2,
+            action_name="GERMINATE",
+            action_confidence=0.85,
+            slot_id="slot_0",
+            blueprint_id="conv_light",
+        ),
+    )
+    agg.process_event(event)
+
+    snapshot = agg.get_snapshot()
+    assert snapshot.last_action_env_id == 2
+    assert snapshot.last_action_timestamp is not None
