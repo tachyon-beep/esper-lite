@@ -23,6 +23,16 @@ from textual.widgets import Static
 from esper.karn.sanctum.widgets.counterfactual_panel import CounterfactualPanel
 from esper.leyline import STAGE_COLORS
 
+# Curve glyph mapping for visual display.
+# Always shown (UX policy: data points don't disappear) - bright when active, dim otherwise.
+CURVE_GLYPHS = {
+    "LINEAR": "╱",
+    "COSINE": "∿",
+    "SIGMOID_GENTLE": "⌒",
+    "SIGMOID": "∫",
+    "SIGMOID_SHARP": "⊐",
+}
+
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import EnvState, SeedState
 
@@ -122,18 +132,23 @@ class SeedCard(Static):
         else:
             lines.append(Text("Alpha: --", style="dim"))
 
-        # Blend tempo (always visible - shows tempo during blending, placeholder otherwise)
-        if seed.stage in ("BLENDING", "FOSSILIZED") and seed.blend_tempo_epochs is not None:
+        # Blend tempo + curve (always visible - UX policy: data points don't disappear)
+        # Curve glyph: bright when causally active (BLENDING), dim otherwise
+        curve_glyph = CURVE_GLYPHS.get(seed.alpha_curve, "−")
+        if seed.stage in ("BLENDING", "HOLDING") and seed.blend_tempo_epochs is not None:
             tempo = seed.blend_tempo_epochs
             tempo_name = "FAST" if tempo <= 3 else ("STANDARD" if tempo <= 5 else "SLOW")
             tempo_arrows = "▸▸▸" if tempo <= 3 else ("▸▸" if tempo <= 5 else "▸")
-            # For fossilized, show "was blended" in past tense
-            if seed.stage == "FOSSILIZED":
-                lines.append(Text(f"Blended: {tempo_arrows} {tempo_name}", style="dim"))
-            else:
-                lines.append(Text(f"Tempo: {tempo_arrows} {tempo_name} ({tempo} epochs)"))
+            lines.append(Text(f"Tempo: {tempo_arrows} {tempo_name} {curve_glyph} ({tempo} epochs)"))
+        elif seed.stage == "FOSSILIZED" and seed.blend_tempo_epochs is not None:
+            # Historical - show what was used, dimmed
+            tempo = seed.blend_tempo_epochs
+            tempo_name = "FAST" if tempo <= 3 else ("STANDARD" if tempo <= 5 else "SLOW")
+            tempo_arrows = "▸▸▸" if tempo <= 3 else ("▸▸" if tempo <= 5 else "▸")
+            lines.append(Text(f"Blended: {tempo_arrows} {tempo_name} {curve_glyph}", style="dim"))
         else:
-            lines.append(Text("Tempo: --", style="dim"))
+            # Not yet blending - show placeholder with dim curve
+            lines.append(Text(f"Tempo: -- {curve_glyph}", style="dim"))
 
         # Accuracy delta (stage-aware display)
         # TRAINING/GERMINATED seeds have alpha=0 and cannot affect output
