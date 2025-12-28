@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B2-DRL-05` |
 | **Severity** | `P2` |
-| **Status** | `open` |
+| **Status** | `closed` |
 | **Batch** | 2 |
 | **Agent** | `drl` |
 | **Domain** | `kasmina` |
@@ -114,6 +114,23 @@ Add explicit documentation that data loaders must produce the same number of bat
 | Ticket ID | Relationship | Notes |
 |-----------|--------------|-------|
 | `B2-CR-03` | `related` | DDP gate synchronization ordering |
+
+---
+
+## Resolution
+
+**Status:** Already Fixed
+
+**Evidence:** The documentation at `src/esper/kasmina/slot.py` lines 21-37 already addresses this concern:
+
+- Line 27: "Call advance_stage() / step_epoch() in identical order"
+- This documents the contract that the training loop must ensure symmetric calls
+
+Per the DRL cross-review recommendation: "Document the assumption rather than add synchronization overhead." The documentation already exists.
+
+Adding explicit alpha sync barriers would add unnecessary overhead and deadlock if ranks actually call `step_epoch()` different numbers of times (which would be a training loop bug, not a slot bug).
+
+**Sign-off:** Confirmed by `drl-expert`
 
 ---
 
