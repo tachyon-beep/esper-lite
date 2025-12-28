@@ -222,6 +222,11 @@ class SeedTelemetry:
     blend_tempo_epochs: int = 5
     blending_velocity: float = 0.0  # d(alpha) / d(epoch)
 
+    # Alpha curve shape (from AlphaCurveAction enum name).
+    # Always present because policy always samples a curve; causal relevance
+    # is handled by advantage masking in simic/agent/advantages.py.
+    alpha_curve: str = "LINEAR"
+
     def to_features(self) -> list[float]:
         """Convert to 26-dim feature vector for RL policies.
 
@@ -314,6 +319,7 @@ class SeedTelemetry:
             "captured_at": self.captured_at.isoformat() if self.captured_at else None,
             "blend_tempo_epochs": self.blend_tempo_epochs,
             "blending_velocity": self.blending_velocity,
+            "alpha_curve": self.alpha_curve,
         }
 
     @classmethod
@@ -399,6 +405,7 @@ class SeedTelemetry:
             captured_at=datetime.fromisoformat(data["captured_at"]),
             blend_tempo_epochs=data["blend_tempo_epochs"],
             blending_velocity=data["blending_velocity"],
+            alpha_curve=data["alpha_curve"],
         )
 
 
@@ -431,10 +438,12 @@ class TrainingStartedPayload:
     policy_device: str
     env_devices: tuple[str, ...]
 
+    # REQUIRED - training context
+    reward_mode: str  # e.g. "shaped", "sparse", "minimal", "simplified"
+
     # OPTIONAL - legitimate defaults
     episode_id: str = ""
     resume_path: str = ""
-    reward_mode: str = ""
     start_episode: int = 0
     entropy_anneal: dict[str, float] | None = None
 
@@ -469,10 +478,11 @@ class TrainingStartedPayload:
             param_budget=data["param_budget"],
             policy_device=data["policy_device"],
             env_devices=_ensure_tuple(data["env_devices"]),
+            # Required field
+            reward_mode=data["reward_mode"],
             # Optional fields with defaults
             episode_id=data.get("episode_id", ""),
             resume_path=data.get("resume_path", ""),
-            reward_mode=data.get("reward_mode", ""),
             start_episode=data.get("start_episode", 0),
             entropy_anneal=data.get("entropy_anneal"),
             world_size=data.get("world_size", 1),
@@ -511,10 +521,10 @@ class EpochCompletedPayload:
             env_id=data["env_id"],
             val_accuracy=data["val_accuracy"],
             val_loss=data["val_loss"],
-            inner_epoch=data.get("inner_epoch", data.get("epoch", 0)),
+            inner_epoch=data["inner_epoch"],
             train_loss=data.get("train_loss"),
             train_accuracy=data.get("train_accuracy"),
-            host_grad_norm=data.get("grad_norm"),  # Note: dict uses "grad_norm"
+            host_grad_norm=data.get("host_grad_norm"),
             seeds=data.get("seeds"),
         )
 
@@ -744,6 +754,7 @@ class SeedGerminatedPayload:
     has_exploding: bool = False
     epochs_in_stage: int = 0
     blend_tempo_epochs: int = 5
+    alpha_curve: str = "LINEAR"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SeedGerminatedPayload":
@@ -759,6 +770,7 @@ class SeedGerminatedPayload:
             has_exploding=data.get("has_exploding", False),
             epochs_in_stage=data.get("epochs_in_stage", 0),
             blend_tempo_epochs=data.get("blend_tempo_epochs", 5),
+            alpha_curve=data["alpha_curve"],
         )
 
 
@@ -784,6 +796,9 @@ class SeedStageChangedPayload:
     grad_ratio: float = 0.0
     has_vanishing: bool = False
     has_exploding: bool = False
+    # Alpha curve - always present (policy always samples), but only causally
+    # relevant during BLENDING. See simic/agent/advantages.py for causal masking.
+    alpha_curve: str = "LINEAR"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SeedStageChangedPayload":
@@ -799,6 +814,7 @@ class SeedStageChangedPayload:
             grad_ratio=data.get("grad_ratio", 0.0),
             has_vanishing=data.get("has_vanishing", False),
             has_exploding=data.get("has_exploding", False),
+            alpha_curve=data["alpha_curve"],
         )
 
 
