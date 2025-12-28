@@ -55,8 +55,10 @@ DEFAULT_GAMMA = 0.995
 # Episode & Architecture Constants (MUST sync across simic modules)
 # =============================================================================
 
-# Episode length in epochs - determines LSTM sequence length and max_steps_per_env.
-# CRITICAL: Must sync with chunk_length (BPTT window) for proper credit assignment.
+# Episode length for CIFAR environments.
+# This is the "rollout length" for Tamiyo - how many timesteps each env
+# contributes to one Tamiyo training batch. Longer = more temporal context
+# but slower iteration.
 # Used by: config.py, vectorized.py, ppo.py (chunk_length, max_steps_per_env)
 DEFAULT_EPISODE_LENGTH = 25
 
@@ -66,7 +68,9 @@ DEFAULT_EPISODE_LENGTH = 25
 DEFAULT_LSTM_HIDDEN_DIM = 128
 
 # Parallel environments for vectorized training.
-# Affects batch size (n_envs * episode_length) and GPU utilization.
+# This controls sample DIVERSITY per Tamiyo update, not training quantity.
+# More envs = richer/more varied experience per PPO batch, but same number
+# of Tamiyo gradient updates. Affects GPU memory usage.
 # Used by: config.py, vectorized.py, ppo.py, train.py CLI
 DEFAULT_N_ENVS = 4
 
