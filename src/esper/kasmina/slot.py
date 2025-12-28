@@ -1340,6 +1340,7 @@ class SeedSlot(nn.Module):
                 params=sum(p.numel() for p in self.seed.parameters() if p.requires_grad),
                 alpha=self.state.alpha if self.state else 0.0,
                 blend_tempo_epochs=blend_tempo_epochs,
+                alpha_curve=self.state.alpha_controller.alpha_curve.name,
                 # Optional gradient health fields - will be zero/false at germination
                 grad_ratio=0.0,
                 has_vanishing=False,
@@ -1431,6 +1432,7 @@ class SeedSlot(nn.Module):
                         alpha=self.state.alpha,
                         accuracy_delta=improvement,
                         epochs_in_stage=epochs_in_stage,
+                        alpha_curve=self.state.alpha_controller.alpha_curve.name,
                         # Optional gradient health fields
                         grad_ratio=(
                             self.state.metrics.seed_gradient_norm_ratio
@@ -1526,6 +1528,7 @@ class SeedSlot(nn.Module):
                 alpha=self.state.alpha,
                 accuracy_delta=improvement,
                 epochs_in_stage=epochs_in_stage,
+                alpha_curve=self.state.alpha_controller.alpha_curve.name,
                 # Optional gradient health fields
                 grad_ratio=(
                     self.state.metrics.seed_gradient_norm_ratio
@@ -1632,6 +1635,7 @@ class SeedSlot(nn.Module):
                     alpha=self.state.alpha,
                     accuracy_delta=improvement,
                     epochs_in_stage=epochs_in_stage,
+                    alpha_curve=self.state.alpha_controller.alpha_curve.name,
                     # Optional gradient health fields
                     grad_ratio=(
                         self.state.metrics.seed_gradient_norm_ratio
@@ -1717,6 +1721,7 @@ class SeedSlot(nn.Module):
                     alpha=self.state.alpha,
                     accuracy_delta=improvement,
                     epochs_in_stage=epochs_in_stage,
+                    alpha_curve=self.state.alpha_controller.alpha_curve.name,
                     # Optional gradient health fields
                     grad_ratio=(
                         self.state.metrics.seed_gradient_norm_ratio
@@ -2333,6 +2338,7 @@ class SeedSlot(nn.Module):
                     alpha=self.state.alpha,
                     accuracy_delta=0.0,
                     epochs_in_stage=epochs_in_stage,
+                    alpha_curve=self.state.alpha_controller.alpha_curve.name,
                     # Optional gradient health fields
                     grad_ratio=(
                         self.state.metrics.seed_gradient_norm_ratio
@@ -2381,6 +2387,7 @@ class SeedSlot(nn.Module):
                     alpha=self.state.alpha,
                     accuracy_delta=0.0,
                     epochs_in_stage=epochs_in_stage,
+                    alpha_curve=self.state.alpha_controller.alpha_curve.name,
                     # Optional gradient health fields
                     grad_ratio=(
                         self.state.metrics.seed_gradient_norm_ratio
@@ -2425,6 +2432,7 @@ class SeedSlot(nn.Module):
                     alpha=self.state.alpha,
                     accuracy_delta=0.0,
                     epochs_in_stage=epochs_in_stage,
+                    alpha_curve=self.state.alpha_controller.alpha_curve.name,
                     # Optional gradient health fields
                     grad_ratio=(
                         self.state.metrics.seed_gradient_norm_ratio
