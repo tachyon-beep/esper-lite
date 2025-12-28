@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B2-DRL-07` |
 | **Severity** | `P3` |
-| **Status** | `open` |
+| **Status** | `fixed` |
 | **Batch** | 2 |
 | **Agent** | `drl` |
 | **Domain** | `kasmina` |
@@ -139,3 +139,23 @@ If steepness will never be configurable, remove the guard.
 | Verdict | **NEUTRAL** |
 |---------|-------------|
 | **Evaluation** | The dead code is harmless and the comment documents intent ("we intentionally keep a fixed steepness"). If steepness becomes configurable later (e.g., for adaptive curriculum), the guard prevents NaN. Per CLAUDE.md's "no legacy code" policy, either remove the guard (if steepness stays fixed) or add a comment explaining future-proofing. Either way, P3 is appropriate. |
+
+---
+
+## Resolution
+
+**Fixed in commit:** `09384b0f` (feat(kasmina): add alpha_steepness to AlphaController)
+
+**Resolution approach:** We implemented **Option A** by making steepness configurable rather than removing the guard. The guard is now reachable and serves a legitimate purpose:
+
+1. Added `alpha_steepness` field to `AlphaController` (default 12.0)
+2. Added `steepness` parameter to `_curve_progress()`
+3. Expanded `AlphaCurveAction` enum to include `SIGMOID_GENTLE` (steepness=6), `SIGMOID` (steepness=12), and `SIGMOID_SHARP` (steepness=24)
+4. Wired steepness through `SeedSlot` and vectorized training
+
+**Why the guard is now legitimate:** With `steepness` as a parameter (minimum clamped to 0.1 in `__post_init__`), very small steepness values would cause `raw1` and `raw0` to approach each other, making the guard a valid numerical stability protection rather than dead code.
+
+**Commits:**
+- `09384b0f`: feat(kasmina): add alpha_steepness to AlphaController
+- `2f2e4b7f`: feat(kasmina): wire alpha_steepness through SeedSlot
+- `d07c36e0`: feat(simic): extract alpha_steepness from AlphaCurveAction in vectorized training

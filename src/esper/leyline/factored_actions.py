@@ -132,17 +132,26 @@ class AlphaSpeedAction(IntEnum):
 
 
 class AlphaCurveAction(IntEnum):
-    """Alpha schedule curve selection."""
+    """Alpha schedule curve selection.
+
+    Sigmoid variants control steepness (transition sharpness):
+    - SIGMOID_GENTLE (steepness=6): Gradual S-curve, smooth transition
+    - SIGMOID (steepness=12): Standard S-curve (default)
+    - SIGMOID_SHARP (steepness=24): Steep S-curve, near-step transition
+    """
     LINEAR = 0
     COSINE = 1
-    SIGMOID = 2
+    SIGMOID_GENTLE = 2
+    SIGMOID = 3
+    SIGMOID_SHARP = 4
 
     def to_curve(self) -> AlphaCurve:
-        return {
-            AlphaCurveAction.LINEAR: AlphaCurve.LINEAR,
-            AlphaCurveAction.COSINE: AlphaCurve.COSINE,
-            AlphaCurveAction.SIGMOID: AlphaCurve.SIGMOID,
-        }[self]
+        """Return the underlying AlphaCurve enum value."""
+        return ALPHA_CURVE_TO_CURVE[self]
+
+    def to_steepness(self) -> float:
+        """Return sigmoid steepness (only meaningful for SIGMOID variants)."""
+        return ALPHA_CURVE_TO_STEEPNESS[self]
 
 
 # Alpha target values (non-zero targets only; removal uses PRUNE)
@@ -154,6 +163,24 @@ ALPHA_SPEED_TO_STEPS: dict[AlphaSpeedAction, int] = {
     AlphaSpeedAction.FAST: 3,
     AlphaSpeedAction.MEDIUM: 5,
     AlphaSpeedAction.SLOW: 8,
+}
+
+# Alpha curve mapping (action -> AlphaCurve enum)
+ALPHA_CURVE_TO_CURVE: dict[AlphaCurveAction, AlphaCurve] = {
+    AlphaCurveAction.LINEAR: AlphaCurve.LINEAR,
+    AlphaCurveAction.COSINE: AlphaCurve.COSINE,
+    AlphaCurveAction.SIGMOID_GENTLE: AlphaCurve.SIGMOID,
+    AlphaCurveAction.SIGMOID: AlphaCurve.SIGMOID,
+    AlphaCurveAction.SIGMOID_SHARP: AlphaCurve.SIGMOID,
+}
+
+# Alpha curve steepness mapping (only meaningful for SIGMOID)
+ALPHA_CURVE_TO_STEEPNESS: dict[AlphaCurveAction, float] = {
+    AlphaCurveAction.LINEAR: 12.0,  # Unused, but consistent default
+    AlphaCurveAction.COSINE: 12.0,  # Unused, but consistent default
+    AlphaCurveAction.SIGMOID_GENTLE: 6.0,
+    AlphaCurveAction.SIGMOID: 12.0,
+    AlphaCurveAction.SIGMOID_SHARP: 24.0,
 }
 
 
