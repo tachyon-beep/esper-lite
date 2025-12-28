@@ -625,22 +625,29 @@ class EnvOverview(Static):
         else:
             curve_suffix = "[dim]−[/dim]"
 
-        # BLENDING shows tempo arrows and alpha
+        # Helper: tempo arrows based on blend_tempo_epochs
         # Tempo: ▸▸▸ = FAST (3), ▸▸ = STANDARD (5), ▸ = SLOW (8)
+        def _tempo_arrows(tempo: int | None) -> str:
+            if tempo is None:
+                return ""
+            return "▸▸▸" if tempo <= 3 else ("▸▸" if tempo <= 5 else "▸")
+
+        # BLENDING shows tempo arrows and alpha
         if seed.stage == "BLENDING" and seed.alpha > 0:
-            tempo = seed.blend_tempo_epochs
-            tempo_arrows = "▸▸▸" if tempo <= 3 else ("▸▸" if tempo <= 5 else "▸")
+            tempo_arrows = _tempo_arrows(seed.blend_tempo_epochs)
             base = f"[{style}]{stage_short}:{blueprint} {tempo_arrows} {seed.alpha:.1f}[/{style}]"
             return f"{base}{grad_indicator}{curve_suffix}"
 
-        # HOLDING shows alpha (curve was used, still relevant)
+        # HOLDING shows tempo arrows + alpha (blend tempo was used, still relevant)
         if seed.stage == "HOLDING":
-            base = f"[{style}]{stage_short}:{blueprint} {seed.alpha:.1f}[/{style}]"
+            tempo_arrows = _tempo_arrows(seed.blend_tempo_epochs)
+            base = f"[{style}]{stage_short}:{blueprint} {tempo_arrows} {seed.alpha:.1f}[/{style}]"
             return f"{base}{grad_indicator}{curve_suffix}"
 
-        # FOSSILIZED shows historical curve (how it blended)
+        # FOSSILIZED shows historical tempo + curve (how it blended)
         if seed.stage == "FOSSILIZED":
-            base = f"[{style}]{stage_short}:{blueprint}[/{style}]"
+            tempo_arrows = _tempo_arrows(seed.blend_tempo_epochs)
+            base = f"[{style}]{stage_short}:{blueprint} {tempo_arrows}[/{style}]"
             return f"{base}{grad_indicator}[dim]{curve_suffix}[/dim]"
 
         # Other stages show epochs in stage with dim "-" for curve
