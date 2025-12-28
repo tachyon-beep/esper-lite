@@ -647,3 +647,51 @@ def test_growth_ratio_respects_leyline_thresholds():
     assert env_red.growth_ratio == 5.0
     result = widget._format_growth_ratio(env_red)
     assert "[red]" in result
+
+
+def test_env_overview_highlights_last_action_env():
+    """EnvOverview should show ▶ pip indicator for last-action env."""
+    from datetime import datetime, timezone
+
+    widget = EnvOverview(num_envs=3)
+
+    # Env 2 is the last action target (recent timestamp)
+    env = EnvState(env_id=2, host_accuracy=75.0, status="healthy")
+    now = datetime.now(timezone.utc)
+
+    result = widget._format_env_id(env, last_action_env_id=2, last_action_timestamp=now)
+
+    # Should have action indicator pip (▶ per UX accessibility review)
+    assert "▶" in result, f"Expected action indicator ▶ in: {result}"
+
+
+def test_env_overview_no_highlight_for_other_env():
+    """EnvOverview should NOT show ▶ for envs that aren't the last-action target."""
+    from datetime import datetime, timezone
+
+    widget = EnvOverview(num_envs=3)
+
+    # Env 1 is NOT the last action target (env 2 is)
+    env = EnvState(env_id=1, host_accuracy=72.0, status="healthy")
+    now = datetime.now(timezone.utc)
+
+    result = widget._format_env_id(env, last_action_env_id=2, last_action_timestamp=now)
+
+    # Should NOT have action indicator
+    assert "▶" not in result, f"Expected no ▶ for non-target env: {result}"
+
+
+def test_env_overview_no_highlight_after_hysteresis():
+    """EnvOverview should NOT show ▶ after 5-second hysteresis expires."""
+    from datetime import datetime, timezone, timedelta
+
+    widget = EnvOverview(num_envs=3)
+
+    # Env 2 was the last action target but 10 seconds ago
+    env = EnvState(env_id=2, host_accuracy=75.0, status="healthy")
+    old_timestamp = datetime.now(timezone.utc) - timedelta(seconds=10)
+
+    result = widget._format_env_id(env, last_action_env_id=2, last_action_timestamp=old_timestamp)
+
+    # Should NOT have action indicator (hysteresis expired)
+    assert "▶" not in result, f"Expected no ▶ after hysteresis: {result}"

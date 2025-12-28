@@ -263,8 +263,14 @@ class EnvOverview(Static):
             env: Environment state to display.
             dim: If True, apply dim styling for visual quieting.
         """
-        # Env ID with A/B test cohort pip
-        env_id_cell = self._format_env_id(env)
+        # Env ID with A/B test cohort pip and action target indicator
+        last_action_env_id = self._snapshot.last_action_env_id if self._snapshot else None
+        last_action_timestamp = self._snapshot.last_action_timestamp if self._snapshot else None
+        env_id_cell = self._format_env_id(
+            env,
+            last_action_env_id=last_action_env_id,
+            last_action_timestamp=last_action_timestamp,
+        )
 
         # Accuracy with color coding
         acc_cell = self._format_accuracy(env)
@@ -398,12 +404,40 @@ class EnvOverview(Static):
 
         self.table.add_row(*agg_row)
 
-    def _format_env_id(self, env: "EnvState") -> str:
-        """Format env ID with A/B test cohort pip."""
+    def _format_env_id(
+        self,
+        env: "EnvState",
+        last_action_env_id: int | None = None,
+        last_action_timestamp: "datetime | None" = None,
+    ) -> str:
+        """Format env ID with A/B test cohort pip and action target indicator.
+
+        Args:
+            env: Environment state.
+            last_action_env_id: ID of env that received last action (for highlighting).
+            last_action_timestamp: When the last action occurred (for hysteresis).
+
+        Returns:
+            Formatted env ID string with indicators.
+        """
+        from datetime import datetime, timezone
+
+        # Action target indicator (cyan ▶ prefix) - per UX accessibility review
+        # Only show if action was within last 5 seconds (hysteresis prevents jitter)
+        action_pip = ""
+        if last_action_env_id is not None and env.env_id == last_action_env_id:
+            show_indicator = True
+            if last_action_timestamp is not None:
+                age = (datetime.now(timezone.utc) - last_action_timestamp).total_seconds()
+                show_indicator = age < 5.0  # 5-second hysteresis
+            if show_indicator:
+                action_pip = "[cyan]▶[/cyan]"
+
+        # A/B cohort pip (existing logic)
         if env.reward_mode and env.reward_mode in _AB_STYLES:
             pip, color = _AB_STYLES[env.reward_mode]
-            return f"[{color}]{pip}[/{color}]{env.env_id}"
-        return str(env.env_id)
+            return f"{action_pip}[{color}]{pip}[/{color}]{env.env_id}"
+        return f"{action_pip}{env.env_id}"
 
     def _format_host_loss(self, env: "EnvState") -> str:
         """Format host loss with color coding for overfitting detection.
