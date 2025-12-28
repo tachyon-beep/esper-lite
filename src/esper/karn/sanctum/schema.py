@@ -426,6 +426,7 @@ class TamiyoState:
     dead_layers: int = 0
     exploding_layers: int = 0
     nan_grad_count: int = 0  # NaN gradient count
+    inf_grad_count: int = 0  # Inf gradient count
     layer_gradient_health: dict[str, float] | None = None  # Per-layer gradient health metrics
     entropy_collapsed: bool = False  # Entropy collapse detected
 

@@ -696,6 +696,7 @@ class SanctumAggregator:
         self._tamiyo.dead_layers = payload.dead_layers
         self._tamiyo.exploding_layers = payload.exploding_layers
         self._tamiyo.nan_grad_count = payload.nan_grad_count
+        self._tamiyo.inf_grad_count = payload.inf_grad_count
         if payload.layer_gradient_health is not None:
             self._tamiyo.layer_gradient_health = payload.layer_gradient_health
         self._tamiyo.entropy_collapsed = payload.entropy_collapsed
