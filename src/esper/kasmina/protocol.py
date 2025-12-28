@@ -26,6 +26,13 @@ class HostProtocol(Protocol):
     - forward: Standard backbone forward pass (no slot application)
 
     Slot management is handled by MorphogeneticModel, not hosts directly.
+
+    Architecture Immutability:
+        Implementers must ensure network topology (layers, blocks, channel
+        dimensions) is fixed after __init__. Cached properties derived from
+        architecture may assume this invariant. This aligns with standard
+        nn.Module conventions where architecture modification after construction
+        would corrupt parameter registration, state_dict, and gradient tracking.
     """
 
     def injection_specs(self) -> list["InjectionSpec"]:

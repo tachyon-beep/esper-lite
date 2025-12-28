@@ -31,6 +31,12 @@ class CNNHost(nn.Module):
     The host itself performs no slot application - it routes activations
     between segment boundaries.
 
+    Architecture Immutability:
+        Following standard nn.Module conventions, the network topology
+        (blocks, layers, channel dimensions) is fixed after __init__.
+        Properties derived from architecture (segment_channels, _segment_to_block)
+        are cached and remain valid for the module's lifetime.
+
     Args:
         num_classes: Number of output classes (default 10 for CIFAR-10)
         n_blocks: Number of conv blocks (default 3, minimum 2)
@@ -101,15 +107,12 @@ class CNNHost(nn.Module):
 
     @functools.cached_property
     def segment_channels(self) -> dict[str, int]:
-        """Map of slot_id -> channel dimension (derived from injection_specs).
-
-        Cached to avoid repeated object creation on each access.
-        """
+        """Slot ID to channel dimension mapping (cached; architecture-derived)."""
         return {spec.slot_id: spec.channels for spec in self.injection_specs()}
 
     @functools.cached_property
     def _segment_to_block(self) -> dict[str, int]:
-        """Map segment ID to block index (cached)."""
+        """Slot ID to block index mapping (cached; architecture-derived)."""
         return {spec.slot_id: spec.layer_range[0] for spec in self.injection_specs()}
 
     @property
@@ -289,6 +292,12 @@ class TransformerHost(nn.Module):
     Provides segment boundaries for MorphogeneticModel to attach SeedSlots.
     The host itself performs no slot application - it routes hidden states
     between segment boundaries.
+
+    Architecture Immutability:
+        Following standard nn.Module conventions, the network topology
+        (layers, embedding dimensions, segment boundaries) is fixed after __init__.
+        Properties derived from architecture (segment_channels) are cached and
+        remain valid for the module's lifetime.
     """
 
     def __init__(
@@ -365,10 +374,7 @@ class TransformerHost(nn.Module):
 
     @functools.cached_property
     def segment_channels(self) -> dict[str, int]:
-        """Map of slot_id -> channel dimension (derived from injection_specs).
-
-        Cached to avoid repeated object creation on each access.
-        """
+        """Slot ID to embedding dimension mapping (cached; architecture-derived)."""
         return {spec.slot_id: spec.channels for spec in self.injection_specs()}
 
     @property

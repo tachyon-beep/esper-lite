@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B2-DRL-04` |
 | **Severity** | `P2` |
-| **Status** | `open` |
+| **Status** | `closed` |
 | **Batch** | 2 |
 | **Agent** | `drl` |
 | **Domain** | `kasmina` |
@@ -123,6 +123,16 @@ def _invalidate_caches(self) -> None:
 | Ticket ID | Relationship | Notes |
 |-----------|--------------|-------|
 | `B2-CR-02` | `duplicate` | Primary ticket from CodeReview perspective |
+
+---
+
+## Resolution
+
+**Status:** Fixed by B2-CR-02
+
+**Fix:** Documented architecture immutability invariant at protocol, class, and property levels.
+
+See B2-CR-02 for full resolution details.
 
 ---
 
