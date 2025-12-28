@@ -91,12 +91,15 @@ class BlendAlgorithm(nn.Module, ABC):
         self._current_step = step
 
     def reset_cache(self) -> None:
-        """Clear thread-local alpha tensor cache.
+        """Clear this thread's alpha tensor cache.
 
         Call at epoch boundaries to prevent memory accumulation in long-running
         training with DataParallel. Each worker thread creates its own cache
-        entry that persists until thread death. In very long training runs,
-        this can accumulate memory.
+        entry that persists until thread death.
+
+        IMPORTANT: In DataParallel, this only clears the CALLING THREAD's cache.
+        To clear all worker caches, call this method from within each worker's
+        context (e.g., via a custom collate_fn hook at epoch boundaries).
 
         Note: Clearing the cache has minimal performance impact - the tensor
         will be re-created on the next forward pass (single allocation).
