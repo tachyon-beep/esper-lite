@@ -856,20 +856,24 @@ class TamiyoBrain(Static):
         index: int,
         total_cards: int = 3,
     ) -> Text:
-        """Render an enriched 6-line decision card (24 chars wide).
+        """Render an enriched 7-line decision card (24 chars wide).
+
+        All cards show all 7 lines for consistent layout. Fields not
+        applicable to the action type are shown dim grey with "-".
 
         Age-based border colors (per UX review):
         - Newest (index 0): cyan border - fresh, actionable
         - Middle: dim grey border - intermediate
         - Oldest (index == total-1): yellow border - aging out soon
 
-        Format per DRL + UX reviews:
+        Format per DRL + UX specialist reviews:
         ┌─ D1 16s ──────────────┐
-        │ WAIT s:1 100%         │  Action, slot, confidence
+        │ GERM s:1 92%          │  Action, slot, confidence
         │ H:25% ent:0.85        │  Host accuracy, decision entropy
-        │ V:+0.45 A:-0.12       │  Value estimate, advantage (NEW)
-        │ -0.68→+0.00 ✓ HIT     │  Expected vs actual + text (NEW)
-        │ alt: G:12% P:8%       │  Alternatives
+        │ V:+0.45 δ:-0.12       │  Value estimate, advantage
+        │ r:+0.30 TD:+0.22 ✓    │  Reward, TD advantage, HIT/MISS
+        │ alt: W:6% P:2%        │  Alternatives
+        │ bpnt:conv_l(87%) STD  │  Head choices (GERMINATE only)
         └───────────────────────┘
         """
         from datetime import datetime, timezone
@@ -997,6 +1001,34 @@ class TamiyoBrain(Static):
             line5 = "alt: -"
             card.append("alt: -", style="dim")
         card.append(" " * max(0, CONTENT_WIDTH - len(line5)) + " ")
+        card.append("│", style=border_style)
+        card.append("\n")
+
+        # Line 6: Head choices (per DRL/UX specialist review)
+        # Format: "bpnt:conv_l(87%) tmp:STD" for GERMINATE, dim "-" for others
+        card.append("│", style=border_style)
+        card.append(" ")
+        if decision.chosen_action == "GERMINATE" and decision.chosen_blueprint:
+            # Abbreviate blueprint name (first 6 chars)
+            bp_abbrev = decision.chosen_blueprint[:6] if decision.chosen_blueprint else "?"
+            bp_conf = f"({decision.blueprint_confidence:.0%})" if decision.blueprint_confidence else ""
+            # Abbreviate tempo (FAST→FST, STANDARD→STD, SLOW→SLO)
+            tempo_abbrev_map = {"FAST": "FST", "STANDARD": "STD", "SLOW": "SLO"}
+            tempo_abbrev = tempo_abbrev_map.get(
+                decision.chosen_tempo or "", decision.chosen_tempo[:3] if decision.chosen_tempo else "?"
+            )
+
+            line6 = f"bpnt:{bp_abbrev}{bp_conf} tmp:{tempo_abbrev}"
+            card.append("bpnt:", style="dim")
+            card.append(bp_abbrev, style="cyan")
+            card.append(bp_conf, style="dim")
+            card.append(" tmp:", style="dim")
+            card.append(tempo_abbrev, style="magenta")
+        else:
+            # Non-GERMINATE: show dim placeholder
+            line6 = "bpnt:- tmp:-"
+            card.append(line6, style="dim")
+        card.append(" " * max(0, CONTENT_WIDTH - len(line6)) + " ")
         card.append("│", style=border_style)
         card.append("\n")
 

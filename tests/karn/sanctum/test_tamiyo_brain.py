@@ -3,7 +3,7 @@ import pytest
 from textual.app import App
 
 from esper.karn.constants import TUIThresholds
-from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
+from esper.karn.sanctum.schema import DecisionSnapshot, SanctumSnapshot, TamiyoState
 from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
 
 
@@ -1522,7 +1522,7 @@ async def test_border_title_includes_group_id():
 
 @pytest.mark.asyncio
 async def test_enriched_decision_card_format():
-    """Enriched decision card should be 24 chars wide with 6 lines."""
+    """Enriched decision card should be 24 chars wide with 7 lines."""
     from esper.karn.sanctum.schema import DecisionSnapshot
     from datetime import datetime, timezone
 
@@ -1551,18 +1551,19 @@ async def test_enriched_decision_card_format():
         card_plain = card.plain
         lines = card_plain.split('\n')
 
-        # Should have exactly 7 lines (title + 5 content + bottom border)
-        assert len(lines) == 7
+        # Should have exactly 8 lines (title + 6 content + bottom border)
+        # Line 6 shows head choices (dim "-" for non-GERMINATE actions)
+        assert len(lines) == 8
 
         # All lines should be exactly 30 chars
-        for i, line in enumerate(lines[:7]):
+        for i, line in enumerate(lines[:8]):
             assert len(line) == 30, f"Line {i} has length {len(line)}, expected 30: '{line}'"
 
         # Verify border structure
         assert lines[0].startswith("┌─")
         assert lines[0].endswith("┐")
-        assert lines[6].startswith("└")
-        assert lines[6].endswith("┘")
+        assert lines[7].startswith("└")
+        assert lines[7].endswith("┘")
 
         # Should contain enriched info
         card_str = card_plain
@@ -2507,6 +2508,51 @@ async def test_slot_summary_shows_constraint_when_no_dormant():
         # Should show constraint message about no dormant slots
         assert "GERMINATE blocked" in rendered_plain, \
             "Should explain that GERMINATE is blocked when no dormant slots"
+
+
+# =============================================================================
+# DECISION CARD HEAD CHOICE TESTS (per specialist review)
+# =============================================================================
+
+
+def test_decision_card_shows_head_choices():
+    """Decision cards should display blueprint and tempo for GERMINATE.
+
+    Per DRL/UX specialist review: surfaces sub-decisions without dashboard clutter.
+    """
+    from datetime import datetime, timezone
+
+    snapshot = SanctumSnapshot(slot_ids=["R0C0", "R0C1"])
+    decision = DecisionSnapshot(
+        timestamp=datetime.now(timezone.utc),
+        slot_states={},
+        host_accuracy=75.0,
+        chosen_action="GERMINATE",
+        chosen_slot="slot_0",
+        confidence=0.92,
+        expected_value=0.5,
+        actual_reward=0.3,
+        alternatives=[("WAIT", 0.06)],
+        decision_id="test-1",
+        decision_entropy=1.2,
+        value_residual=0.1,
+        chosen_blueprint="conv_light",
+        chosen_tempo="STANDARD",
+        blueprint_confidence=0.87,
+        tempo_confidence=0.65,
+    )
+
+    widget = TamiyoBrain()
+    widget._snapshot = snapshot
+
+    card = widget._render_enriched_decision(decision, index=0, total_cards=1)
+    text = str(card)
+
+    # Should contain head choice info for GERMINATE
+    assert "conv" in text.lower() or "bpnt" in text.lower(), \
+        f"Expected blueprint in card: {text}"
+    assert "std" in text.lower() or "tempo" in text.lower(), \
+        f"Expected tempo in card: {text}"
 
 
 # =============================================================================
