@@ -19,6 +19,7 @@ from esper.leyline.telemetry import (
     AnalyticsSnapshotPayload,
     CounterfactualMatrixPayload,
 )
+from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
 
 
 class TestActionNormalization:
@@ -384,8 +385,13 @@ class TestSanctumAggregator:
         assert env.action_counts["GERMINATE"] == 1  # Normalized
 
     def test_last_action_populates_base_acc_delta(self):
-        """ANALYTICS_SNAPSHOT(last_action) with base_acc_delta should populate reward_components."""
+        """ANALYTICS_SNAPSHOT(last_action) with reward_components should populate env state."""
         agg = SanctumAggregator(num_envs=4)
+
+        rc = RewardComponentsTelemetry(
+            base_acc_delta=0.12,
+            total_reward=0.75,
+        )
 
         event = MagicMock()
         event.event_type = MagicMock()
@@ -399,14 +405,14 @@ class TestSanctumAggregator:
             action_name="WAIT",
             value_estimate=0.5,
             action_confidence=0.9,
-            base_acc_delta=0.12,  # This should populate reward_components
+            reward_components=rc,
         )
 
         agg.process_event(event)
         snapshot = agg.get_snapshot()
 
         env = snapshot.envs[1]
-        # Verify base_acc_delta was populated
+        # Verify base_acc_delta was populated from reward_components
         assert env.reward_components.base_acc_delta == 0.12
         assert env.reward_components.total == 0.75
         assert env.reward_components.last_action == "WAIT"
