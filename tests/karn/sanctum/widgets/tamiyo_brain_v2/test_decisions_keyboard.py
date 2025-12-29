@@ -163,3 +163,62 @@ class TestDecisionCardKeyboard:
             cards[0].focus()
             await pilot.pause()
             assert app.focused == cards[0]
+
+    @pytest.mark.asyncio
+    async def test_j_k_single_card_stays_focused(self):
+        """j/k with single card should keep focus on that card."""
+        from textual.app import App, ComposeResult
+
+        class TestApp(App):
+            def compose(self) -> ComposeResult:
+                yield DecisionsColumn(id="decisions")
+
+        app = TestApp()
+        async with app.run_test() as pilot:
+            col = app.query_one(DecisionsColumn)
+
+            decision = _make_decision("test-single")
+            col._displayed_decisions = [decision]
+            col._render_cards()
+            await pilot.pause()
+
+            cards = list(col.query(DecisionCard))
+            assert len(cards) == 1
+
+            cards[0].focus()
+            await pilot.pause()
+
+            # j should keep focus on same card
+            await pilot.press("j")
+            await pilot.pause()
+            assert app.focused == cards[0]
+
+            # k should also keep focus on same card
+            await pilot.press("k")
+            await pilot.pause()
+            assert app.focused == cards[0]
+
+    @pytest.mark.asyncio
+    async def test_j_k_with_no_cards_is_noop(self):
+        """j/k with no cards should be a no-op (not crash)."""
+        from textual.app import App, ComposeResult
+
+        class TestApp(App):
+            def compose(self) -> ComposeResult:
+                yield DecisionsColumn(id="decisions")
+
+        app = TestApp()
+        async with app.run_test() as pilot:
+            col = app.query_one(DecisionsColumn)
+
+            # Ensure no cards
+            assert len(list(col.query(DecisionCard))) == 0
+
+            # j and k should not crash
+            await pilot.press("j")
+            await pilot.pause()
+
+            await pilot.press("k")
+            await pilot.pause()
+
+            # Test passes if no exception was raised

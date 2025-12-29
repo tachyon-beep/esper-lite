@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, ClassVar
 
 from rich.text import Text
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Vertical
@@ -78,7 +79,7 @@ class DecisionCard(Static):
         """Handle click to toggle pin."""
         self.post_message(self.Pinned(self.decision.decision_id))
 
-    def on_key(self, event) -> None:
+    def on_key(self, event: events.Key) -> None:
         """Handle keyboard input on focused card."""
         if event.key == "p":
             self.post_message(self.Pinned(self.decision.decision_id))
