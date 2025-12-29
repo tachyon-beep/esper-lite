@@ -389,6 +389,12 @@ class EnvState:
     # Values: "shaped", "simplified", "sparse", or None if not A/B testing
     reward_mode: str | None = None
 
+    # Governor rollback state (catastrophic failure indicator)
+    # When True, env row shows red alert overlay instead of normal content
+    rolled_back: bool = False
+    rollback_reason: str = ""  # "nan", "lobotomy", "divergence"
+    rollback_timestamp: datetime | None = None
+
     @property
     def current_reward(self) -> float:
         """Get most recent reward."""
@@ -563,6 +569,8 @@ class TamiyoState:
     # Post-normalization stats (should be ~0 mean, ~1 std if normalization working)
     advantage_mean: float = 0.0
     advantage_std: float = 0.0
+    advantage_skewness: float = 0.0  # >0 right-skewed (few big wins), <0 left-skewed (few big losses)
+    advantage_kurtosis: float = 0.0  # >0 heavy tails (outliers), <0 light tails; >3 is super-Gaussian
     advantage_min: float = 0.0
     advantage_max: float = 0.0
     # Pre-normalization stats (raw learning signal magnitude)

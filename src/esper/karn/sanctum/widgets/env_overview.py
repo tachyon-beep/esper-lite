@@ -263,6 +263,11 @@ class EnvOverview(Static):
             env: Environment state to display.
             dim: If True, apply dim styling for visual quieting.
         """
+        # Check for rollback state - show red alert instead of normal row
+        if env.rolled_back:
+            self._add_rollback_alert_row(env)
+            return
+
         # Env ID with A/B test cohort pip and action target indicator
         last_action_env_id = self._snapshot.last_action_env_id if self._snapshot else None
         last_action_timestamp = self._snapshot.last_action_timestamp if self._snapshot else None
@@ -335,6 +340,41 @@ class EnvOverview(Static):
             row = [self._apply_dim(cell) for cell in row]
 
         # Add row with key=env_id for row selection event handling
+        self.table.add_row(*row, key=str(env.env_id))
+
+    def _add_rollback_alert_row(self, env: "EnvState") -> None:
+        """Add a red alert row for an env that has rolled back.
+
+        Shows a prominent CATASTROPHIC FAILURE message instead of normal metrics.
+        This row persists until training resumes for this env.
+
+        Args:
+            env: Environment state with rolled_back=True.
+        """
+        # Format reason for display
+        reason_display = {
+            "governor_nan": "NaN DETECTED",
+            "governor_lobotomy": "LOBOTOMY",
+            "governor_divergence": "DIVERGENCE",
+        }.get(env.rollback_reason, env.rollback_reason.upper() if env.rollback_reason else "UNKNOWN")
+
+        # Build the alert row
+        # First cell: env ID
+        env_id_cell = f"[bold red]{env.env_id}[/bold red]"
+
+        # Calculate how many columns we need to fill
+        num_cols = len(self.table.columns)
+
+        # Alert message spans most columns
+        alert_msg = f"[bold white on red] ⚠ CATASTROPHIC FAILURE - ROLLED BACK ({reason_display}) [/bold white on red]"
+
+        # Build row: env_id, then alert message, then empty cells
+        row = [env_id_cell, alert_msg]
+
+        # Fill remaining columns with empty cells styled red
+        for _ in range(num_cols - 2):
+            row.append("[on red] [/on red]")
+
         self.table.add_row(*row, key=str(env.env_id))
 
     def _add_separator_row(self) -> None:

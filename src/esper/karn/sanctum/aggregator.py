@@ -54,6 +54,7 @@ from esper.leyline import (
     CounterfactualMatrixPayload,
     AnalyticsSnapshotPayload,
     EpisodeOutcomePayload,
+    GovernorRollbackPayload,
     TEMPO_NAMES,
 )
 
@@ -288,6 +289,8 @@ class SanctumAggregator:
             self._handle_analytics_snapshot(event)
         elif event_type == "EPISODE_OUTCOME":
             self._handle_episode_outcome(event)
+        elif event_type == "GOVERNOR_ROLLBACK":
+            self._handle_governor_rollback(event)
 
     def get_snapshot(self) -> SanctumSnapshot:
         """Get current SanctumSnapshot.
@@ -565,6 +568,11 @@ class SanctumAggregator:
         self._ensure_env(env_id)
         env = self._envs[env_id]
 
+        # Clear rollback state - training has resumed for this env
+        if env.rolled_back:
+            env.rolled_back = False
+            env.rollback_reason = ""
+
         # Update accuracy
         val_acc = payload.val_accuracy
         val_loss = payload.val_loss
@@ -682,6 +690,8 @@ class SanctumAggregator:
         # Advantage stats - have defaults
         self._tamiyo.advantage_mean = payload.advantage_mean
         self._tamiyo.advantage_std = payload.advantage_std
+        self._tamiyo.advantage_skewness = payload.advantage_skewness
+        self._tamiyo.advantage_kurtosis = payload.advantage_kurtosis
 
         # Ratio statistics (PPO importance sampling ratios) - have defaults
         self._tamiyo.ratio_mean = payload.ratio_mean
@@ -1289,6 +1299,36 @@ class SanctumAggregator:
         # Keep only last 100 outcomes to bound memory
         if len(self._episode_outcomes) > 100:
             self._episode_outcomes = self._episode_outcomes[-100:]
+
+    def _handle_governor_rollback(self, event: "TelemetryEvent") -> None:
+        """Handle GOVERNOR_ROLLBACK event - catastrophic failure indicator.
+
+        Sets rollback state on the affected env, which triggers a red alert
+        overlay in the env row widget. The flag is cleared when the next
+        EPOCH_COMPLETED event arrives for that env (training resumed).
+        """
+        if not isinstance(event.data, GovernorRollbackPayload):
+            _logger.warning(
+                "Expected GovernorRollbackPayload for GOVERNOR_ROLLBACK, got %s",
+                type(event.data).__name__,
+            )
+            return
+
+        payload = event.data
+        env_id = payload.env_id
+        self._ensure_env(env_id)
+        env = self._envs[env_id]
+
+        # Set rollback state - will show red alert until training resumes
+        env.rolled_back = True
+        env.rollback_reason = payload.reason
+        env.rollback_timestamp = event.timestamp or datetime.now(timezone.utc)
+
+        _logger.info(
+            "Governor rollback for env %d: %s",
+            env_id,
+            payload.reason,
+        )
 
     def _compute_hypervolume(self) -> float:
         """Compute hypervolume indicator from recent episode outcomes."""
