@@ -777,6 +777,15 @@ def emit_ppo_update_event(
             head_alpha_speed_entropy=head_entropies_avg.get("head_alpha_speed_entropy"),
             head_alpha_curve_entropy=head_entropies_avg.get("head_alpha_curve_entropy"),
             head_op_entropy=head_entropies_avg.get("head_op_entropy"),
+            # Gradient quality metrics (per DRL expert)
+            clip_fraction_positive=metrics.get("clip_fraction_positive", 0.0),
+            clip_fraction_negative=metrics.get("clip_fraction_negative", 0.0),
+            gradient_cv=metrics.get("gradient_cv", 0.0),
+            # Infrastructure metrics (per PyTorch expert)
+            cuda_memory_allocated_gb=metrics.get("cuda_memory_allocated_gb", 0.0),
+            cuda_memory_reserved_gb=metrics.get("cuda_memory_reserved_gb", 0.0),
+            cuda_memory_peak_gb=metrics.get("cuda_memory_peak_gb", 0.0),
+            cuda_memory_fragmentation=metrics.get("cuda_memory_fragmentation", 0.0),
             inner_epoch=epoch,
             batch=batch_idx + 1,
         ),
