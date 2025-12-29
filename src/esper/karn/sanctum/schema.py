@@ -537,6 +537,34 @@ class EnvState:
 
 
 @dataclass
+class InfrastructureMetrics:
+    """PyTorch infrastructure health metrics.
+
+    Grouped separately to prevent TamiyoState bloat (per code review).
+    Collected every N batches to amortize CPU-GPU sync overhead.
+    """
+    # CUDA Memory (PyTorch expert recommendation)
+    cuda_memory_allocated_gb: float = 0.0   # torch.cuda.memory_allocated()
+    cuda_memory_reserved_gb: float = 0.0    # torch.cuda.memory_reserved()
+    cuda_memory_peak_gb: float = 0.0        # torch.cuda.max_memory_allocated()
+    cuda_memory_fragmentation: float = 0.0  # 1 - (allocated/reserved), >0.3 = pressure
+
+    # torch.compile Status (captured at training start - static session metadata)
+    # Note: graph_break_count/compile_healthy removed - not accessible via PyTorch API
+    # Compile issues will surface in throughput metrics (fps, step_time_ms)
+    compile_enabled: bool = False
+    compile_backend: str = ""    # "inductor", "eager", etc.
+    compile_mode: str = ""       # "default", "reduce-overhead", "max-autotune"
+
+    @property
+    def memory_usage_percent(self) -> float:
+        """Memory usage as percentage for compact display."""
+        if self.cuda_memory_reserved_gb <= 0:
+            return 0.0
+        return (self.cuda_memory_allocated_gb / self.cuda_memory_reserved_gb) * 100
+
+
+@dataclass
 class TamiyoState:
     """Tamiyo policy agent state - ALL metrics from existing TUI.
 

@@ -609,3 +609,45 @@ def test_decision_snapshot_has_head_choice_fields():
     assert decision.blueprint_confidence == 0.87
     assert decision.tempo_confidence == 0.65
     assert decision.op_confidence == 0.92
+
+
+# =============================================================================
+# INFRASTRUCTURE METRICS (per PyTorch expert review)
+# =============================================================================
+
+
+def test_infrastructure_metrics_dataclass():
+    """InfrastructureMetrics should contain CUDA memory and compile status."""
+    from esper.karn.sanctum.schema import InfrastructureMetrics
+
+    metrics = InfrastructureMetrics()
+
+    # Memory fields
+    assert metrics.cuda_memory_allocated_gb == 0.0
+    assert metrics.cuda_memory_reserved_gb == 0.0
+    assert metrics.cuda_memory_peak_gb == 0.0
+    assert metrics.cuda_memory_fragmentation == 0.0
+
+    # Compile status (static session metadata - no runtime health detection)
+    assert metrics.compile_enabled is False
+    assert metrics.compile_backend == ""
+    assert metrics.compile_mode == ""
+
+
+def test_infrastructure_metrics_memory_usage_percent():
+    """memory_usage_percent property should compute (allocated/reserved) * 100."""
+    from esper.karn.sanctum.schema import InfrastructureMetrics
+
+    # Standard case: 4.2 / 8.0 = 52.5%
+    metrics = InfrastructureMetrics(
+        cuda_memory_allocated_gb=4.2,
+        cuda_memory_reserved_gb=8.0,
+    )
+    assert abs(metrics.memory_usage_percent - 52.5) < 0.1
+
+    # Edge case: no reserved memory = 0%
+    metrics_empty = InfrastructureMetrics(
+        cuda_memory_allocated_gb=0.0,
+        cuda_memory_reserved_gb=0.0,
+    )
+    assert metrics_empty.memory_usage_percent == 0.0
