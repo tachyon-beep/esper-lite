@@ -253,6 +253,10 @@ class PPOHealthPanel(Container):
 
         # Entropy trend (velocity and collapse countdown)
         result.append(self._render_entropy_trend())
+        result.append("\n")
+
+        # Policy state based on entropy-clip correlation
+        result.append(self._render_policy_state())
 
         return result
 
@@ -300,6 +304,47 @@ class PPOHealthPanel(Container):
 
             if risk > 0.7:
                 result.append(" [ALERT]", style="red bold")
+
+        return result
+
+    def _render_policy_state(self) -> Text:
+        """Render policy state based on entropy/clip correlation.
+
+        Interpretation (per DRL review):
+        - Negative correlation + low entropy + high clip = COLLAPSE RISK
+        - Negative correlation + low entropy = collapsing
+        - Negative correlation + low clip = healthy convergence (NARROWING)
+        - Low correlation = stable
+        """
+        if self._snapshot is None:
+            return Text()
+
+        tamiyo = self._snapshot.tamiyo
+        corr = tamiyo.entropy_clip_correlation
+        entropy = tamiyo.entropy
+        clip = tamiyo.clip_fraction
+
+        result = Text()
+        result.append("Policy       ", style="dim")
+
+        # The dangerous pattern: entropy falling + clip rising + both concerning
+        if (corr < -0.5 and
+            entropy < TUIThresholds.ENTROPY_WARNING and
+            clip > TUIThresholds.CLIP_WARNING):
+            result.append("COLLAPSE RISK", style="red bold")
+            result.append(f" (r={corr:.2f})", style="dim")
+        elif corr < -0.6 and entropy < TUIThresholds.ENTROPY_WARNING:
+            # Entropy low and correlated with clip - concerning
+            result.append("collapsing", style="yellow")
+            result.append(f" (r={corr:.2f})", style="dim")
+        elif corr < -0.4 and clip < 0.15:
+            # Negative correlation but low clip = healthy convergence
+            result.append("narrowing", style="green")
+        elif abs(corr) < 0.3:
+            result.append("stable", style="green")
+        else:
+            result.append("drifting", style="yellow")
+            result.append(f" (r={corr:.2f})", style="dim")
 
         return result
 

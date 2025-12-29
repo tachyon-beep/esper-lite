@@ -42,6 +42,42 @@ def compute_entropy_velocity(entropy_history: deque[float] | list[float]) -> flo
     return float(slope)
 
 
+def compute_correlation(
+    x_values: deque[float] | list[float],
+    y_values: deque[float] | list[float],
+) -> float:
+    """Compute Pearson correlation between two metric histories.
+
+    Returns:
+        Correlation coefficient (-1 to +1), or 0.0 if insufficient data
+        or zero variance (to avoid NaN).
+    """
+    if len(x_values) < 5 or len(y_values) < 5:
+        return 0.0
+
+    x = list(x_values)[-10:]
+    y = list(y_values)[-10:]
+
+    n = min(len(x), len(y))
+    x, y = x[-n:], y[-n:]
+
+    x_mean = sum(x) / n
+    y_mean = sum(y) / n
+
+    numerator = sum((xi - x_mean) * (yi - y_mean) for xi, yi in zip(x, y))
+    x_var = sum((xi - x_mean) ** 2 for xi in x)
+    y_var = sum((yi - y_mean) ** 2 for yi in y)
+
+    denominator = (x_var * y_var) ** 0.5
+
+    # Epsilon check to prevent divide-by-zero
+    EPSILON = 1e-10
+    if denominator < EPSILON:
+        return 0.0
+
+    return numerator / denominator
+
+
 def compute_collapse_risk(
     entropy_history: deque[float] | list[float],
     critical_threshold: float = 0.3,
@@ -599,6 +635,10 @@ class TamiyoState:
     entropy_velocity: float = 0.0          # d(entropy)/d(batch), negative = declining
     collapse_risk_score: float = 0.0       # 0.0-1.0, >0.7 = high risk
     _previous_risk: float = 0.0            # For hysteresis (not serialized)
+
+    # Entropy-clip correlation (for policy collapse pattern detection)
+    # Negative correlation + low entropy + high clip = COLLAPSE RISK
+    entropy_clip_correlation: float = 0.0
 
 
 @dataclass

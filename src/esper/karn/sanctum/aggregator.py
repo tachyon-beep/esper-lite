@@ -36,6 +36,7 @@ from esper.karn.sanctum.schema import (
     CounterfactualSnapshot,
     compute_entropy_velocity,
     compute_collapse_risk,
+    compute_correlation,
 )
 from esper.karn.constants import TUIThresholds
 from esper.karn.sanctum.widgets.reward_health import RewardHealthData
@@ -760,6 +761,12 @@ class SanctumAggregator:
             previous_risk=self._tamiyo._previous_risk,
         )
         self._tamiyo._previous_risk = self._tamiyo.collapse_risk_score
+
+        # Compute entropy-clip correlation (for policy collapse pattern detection)
+        self._tamiyo.entropy_clip_correlation = compute_correlation(
+            self._tamiyo.entropy_history,
+            self._tamiyo.clip_fraction_history,
+        )
 
     def _handle_seed_event(self, event: "TelemetryEvent", event_type: str) -> None:
         """Handle seed lifecycle events with per-env tracking."""
