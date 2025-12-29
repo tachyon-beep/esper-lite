@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 from rich.text import Text
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Container, Vertical
 from textual.css.query import NoMatches
 from textual.message import Message
@@ -38,6 +39,9 @@ class DecisionCard(Static):
     """Individual decision card widget with CSS-driven styling."""
 
     CARD_WIDTH: ClassVar[int] = 42
+
+    # Enable keyboard focus for card navigation
+    can_focus = True
 
     class Pinned(Message):
         """Posted when user clicks to toggle pin status."""
@@ -73,6 +77,12 @@ class DecisionCard(Static):
     def on_click(self) -> None:
         """Handle click to toggle pin."""
         self.post_message(self.Pinned(self.decision.decision_id))
+
+    def on_key(self, event) -> None:
+        """Handle keyboard input on focused card."""
+        if event.key == "p":
+            self.post_message(self.Pinned(self.decision.decision_id))
+            event.stop()
 
     def render(self) -> Text:
         """Render the decision card content."""
@@ -234,6 +244,11 @@ class DecisionsColumn(Container):
     CARD_SWAP_INTERVAL: ClassVar[float] = 30.0
     MAX_CARDS: ClassVar[int] = 3
 
+    BINDINGS = [
+        Binding("j", "focus_next", "Next card", show=False),
+        Binding("k", "focus_prev", "Previous card", show=False),
+    ]
+
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
@@ -244,7 +259,7 @@ class DecisionsColumn(Container):
 
     def compose(self) -> ComposeResult:
         """Compose the decisions column."""
-        yield Static("DECISIONS", id="decisions-header", classes="decisions-header")
+        yield Static("DECISIONS [j/k:nav p:pin]", id="decisions-header", classes="decisions-header")
         yield Vertical(id="cards-container")
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
@@ -358,3 +373,29 @@ class DecisionsColumn(Container):
                 card._update_classes()
                 card.refresh()
                 break
+
+    def action_focus_next(self) -> None:
+        """Move focus to next decision card."""
+        cards = list(self.query(DecisionCard))
+        if not cards:
+            return
+        focused = self.app.focused
+        if focused in cards:
+            idx = cards.index(focused)
+            next_idx = (idx + 1) % len(cards)
+            cards[next_idx].focus()
+        else:
+            cards[0].focus()
+
+    def action_focus_prev(self) -> None:
+        """Move focus to previous decision card."""
+        cards = list(self.query(DecisionCard))
+        if not cards:
+            return
+        focused = self.app.focused
+        if focused in cards:
+            idx = cards.index(focused)
+            prev_idx = (idx - 1) % len(cards)
+            cards[prev_idx].focus()
+        else:
+            cards[-1].focus()

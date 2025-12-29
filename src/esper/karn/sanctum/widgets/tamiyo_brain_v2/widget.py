@@ -155,6 +155,16 @@ class TamiyoBrainV2(Container):
     DecisionCard.pinned {
         border: double $success;
     }
+
+    DecisionCard:focus {
+        border: thick $accent;
+        background: $panel-darken-1;
+    }
+
+    DecisionCard.pinned:focus {
+        border: thick $success;
+        background: $panel-darken-1;
+    }
     """
 
     # Enable keyboard focus for Tab navigation
