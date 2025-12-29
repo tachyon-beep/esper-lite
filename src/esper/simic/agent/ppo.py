@@ -460,6 +460,36 @@ class PPOAgent:
 
         return self.entropy_coef_min * scale_factor
 
+    def _collect_cuda_memory_metrics(self) -> dict[str, float]:
+        """Collect CUDA memory statistics for infrastructure monitoring.
+
+        Called once per PPO update (not per inner epoch) to amortize sync overhead.
+        Returns empty dict if CUDA is not available.
+        """
+        if not torch.cuda.is_available():
+            return {}
+
+        # Get device index from policy device string
+        device_str = str(self.device)
+        if device_str == "cpu":
+            return {}
+
+        # torch.cuda.memory_allocated() and friends trigger CPU-GPU sync
+        # Calling once per update() is acceptable overhead (~1ms)
+        allocated = torch.cuda.memory_allocated(self.device) / (1024**3)  # GB
+        reserved = torch.cuda.memory_reserved(self.device) / (1024**3)  # GB
+        peak = torch.cuda.max_memory_allocated(self.device) / (1024**3)  # GB
+
+        # Fragmentation: 1 - (allocated/reserved), >0.3 indicates memory pressure
+        fragmentation = 1.0 - (allocated / reserved) if reserved > 0 else 0.0
+
+        return {
+            "cuda_memory_allocated_gb": allocated,
+            "cuda_memory_reserved_gb": reserved,
+            "cuda_memory_peak_gb": peak,
+            "cuda_memory_fragmentation": fragmentation,
+        }
+
     def update(
         self,
         clear_buffer: bool = True,
@@ -519,6 +549,9 @@ class PPOAgent:
         metrics: dict[str, Any] = defaultdict(list)
         metrics["explained_variance"] = [explained_variance]
         early_stopped = False
+
+        # Collect CUDA memory metrics once per update (amortize sync overhead)
+        cuda_memory_metrics = self._collect_cuda_memory_metrics()
 
         # Compute advantage stats for status banner diagnostics
         # These indicate if advantage normalization is working correctly
@@ -700,6 +733,13 @@ class PPOAgent:
                 # Defer .item() - will be synced with approx_kl check anyway
                 metrics["clip_fraction"].append(clip_fraction_t.cpu().item())
 
+                # Directional clip fractions (per DRL expert recommendation)
+                # Tracks WHERE clipping occurs: asymmetry indicates directional policy drift
+                clip_pos = (joint_ratio > 1.0 + self.clip_ratio).float().mean()
+                clip_neg = (joint_ratio < 1.0 - self.clip_ratio).float().mean()
+                metrics["clip_fraction_positive"].append(clip_pos.cpu().item())
+                metrics["clip_fraction_negative"].append(clip_neg.cpu().item())
+
                 # Early stopping: if KL exceeds threshold, skip this update entirely
                 # 1.5x multiplier is standard (OpenAI baselines, Stable-Baselines3)
                 if self.target_kl is not None and approx_kl > 1.5 * self.target_kl:
@@ -805,6 +845,15 @@ class PPOAgent:
                 for head_name, grad_norm in zip(head_names, all_norms):
                     head_grad_norm_history[head_name].append(grad_norm)
 
+                # Gradient CV: coefficient of variation = std/|mean| (per DRL expert)
+                # Low CV (<0.5) = high signal quality, High CV (>2.0) = noisy gradients
+                grad_norm_tensor = torch.stack(head_norm_tensors)
+                grad_mean = grad_norm_tensor.mean()
+                grad_std = grad_norm_tensor.std()
+                # Avoid division by zero (if mean is 0, CV is 0 - no gradient signal)
+                grad_cv = (grad_std / grad_mean.abs().clamp(min=1e-8)).item()
+                metrics["gradient_cv"].append(grad_cv)
+
             nn.utils.clip_grad_norm_(self.policy.network.parameters(), self.max_grad_norm)
             self.optimizer.step()
 
@@ -885,6 +934,11 @@ class PPOAgent:
             log_prob_max_across_epochs = float("nan")
         aggregated_result["log_prob_min"] = log_prob_min_across_epochs
         aggregated_result["log_prob_max"] = log_prob_max_across_epochs
+
+        # Add CUDA memory metrics (collected once per update, not averaged)
+        if cuda_memory_metrics:
+            for k, v in cuda_memory_metrics.items():
+                aggregated_result[k] = v  # type: ignore[literal-required]
 
         return aggregated_result
 
