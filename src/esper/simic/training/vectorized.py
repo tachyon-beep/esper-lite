@@ -2795,6 +2795,10 @@ def train_ppo_vectorized(
                                     ]
                                     if not env_state.scaffold_boost_ledger[scaffold_slot]:
                                         del env_state.scaffold_boost_ledger[scaffold_slot]
+
+                            # B8-DRL-02 FIX: Clean up seed optimizer after fossilization
+                            # (was missing - memory leak for fossilized seed optimizers)
+                            env_state.seed_optimizers.pop(target_slot, None)
                     elif (
                         op_idx == OP_PRUNE
                         and model.has_active_seed_in_slot(target_slot)
@@ -2843,15 +2847,18 @@ def train_ppo_vectorized(
                             alpha_algorithm=alpha_algorithm,
                             initiator="policy",
                         )
-                        if action_success:
-                            env_state.seed_optimizers.pop(target_slot, None)
+                        # B8-DRL-02 FIX: Removed incorrect seed_optimizers.pop() here.
+                        # SET_ALPHA_TARGET doesn't terminate the seed - it's still active.
                     elif op_idx == OP_ADVANCE and model.has_active_seed_in_slot(
                         target_slot
                     ):
                         target_slot_obj_advance = cast(SeedSlotProtocol, model.seed_slots[target_slot])
                         gate_result = target_slot_obj_advance.advance_stage()
                         action_success = gate_result.passed
-                        if action_success:
+                        # B8-DRL-02 FIX: Only pop optimizer if seed terminated.
+                        # ADVANCE can move to non-terminal stages (TRAINING, BLENDING, etc.)
+                        # where the seed is still active and needs its optimizer.
+                        if action_success and not model.has_active_seed_in_slot(target_slot):
                             env_state.seed_optimizers.pop(target_slot, None)
                 elif op_idx == OP_WAIT:
                     action_success = True
