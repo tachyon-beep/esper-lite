@@ -64,8 +64,12 @@ class TamiyoBrainV2(Container):
     #status-banner {
         height: 1;
         width: 100%;
+        background: $surface-lighten-1;
+    }
+
+    #banner-content {
+        width: 100%;
         padding: 0 1;
-        background: $surface;
     }
 
     #main-content {
@@ -89,8 +93,8 @@ class TamiyoBrainV2(Container):
 
     .panel {
         border: round $surface-lighten-2;
-        margin: 0 0 1 0;
-        padding: 0 1;
+        margin: 0;
+        padding: 0;
         height: auto;
     }
 

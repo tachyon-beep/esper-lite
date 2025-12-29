@@ -12,6 +12,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, ClassVar
 
 from rich.text import Text
+from textual.app import ComposeResult
+from textual.containers import Container
 from textual.widgets import Static
 
 from esper.karn.constants import TUIThresholds
@@ -20,7 +22,7 @@ if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot
 
 
-class StatusBanner(Static):
+class StatusBanner(Container):
     """One-line status banner with key metrics."""
 
     WARMUP_BATCHES: ClassVar[int] = 50
@@ -47,12 +49,20 @@ class StatusBanner(Static):
         self._snapshot: SanctumSnapshot | None = None
         self._spinner_frame: int = 0
 
+    def compose(self) -> ComposeResult:
+        """Compose the banner layout."""
+        yield Static(id="banner-content")
+
+    def on_mount(self) -> None:
+        """Set initial content when widget mounts."""
+        self.query_one("#banner-content", Static).update(self._render_content())
+
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Update with new snapshot and refresh display."""
         self._snapshot = snapshot
         self._update_status_classes()
         self._spinner_frame = (self._spinner_frame + 1) % len(self.SPINNER_CHARS)
-        self.update(self._render_content())
+        self.query_one("#banner-content", Static).update(self._render_content())
 
     def _update_status_classes(self) -> None:
         """Update CSS classes based on current status."""
