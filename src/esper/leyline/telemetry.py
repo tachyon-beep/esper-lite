@@ -666,6 +666,12 @@ class PPOUpdatePayload:
     # Skipped update flag (for buffer rollback scenarios)
     skipped: bool = False
 
+    # Value function statistics (for divergence detection)
+    value_mean: float = 0.0
+    value_std: float = 0.0
+    value_min: float = 0.0
+    value_max: float = 0.0
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "PPOUpdatePayload":
         """Parse from dict. Raises KeyError on missing required fields."""
@@ -717,6 +723,11 @@ class PPOUpdatePayload:
             inner_epoch=data.get("inner_epoch", 0),
             batch=data.get("batch", 0),
             skipped=data.get("skipped", False),
+            # Value function statistics
+            value_mean=data.get("value_mean", 0.0),
+            value_std=data.get("value_std", 0.0),
+            value_min=data.get("value_min", 0.0),
+            value_max=data.get("value_max", 0.0),
         )
 
     @classmethod

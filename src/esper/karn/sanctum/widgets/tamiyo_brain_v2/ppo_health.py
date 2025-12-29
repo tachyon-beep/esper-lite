@@ -27,7 +27,7 @@ from esper.karn.constants import TUIThresholds
 from .primary_metrics import render_sparkline, detect_trend, trend_style
 
 if TYPE_CHECKING:
-    from esper.karn.sanctum.schema import SanctumSnapshot
+    from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
 
 
 class PPOHealthPanel(Container):
@@ -257,8 +257,70 @@ class PPOHealthPanel(Container):
 
         # Policy state based on entropy-clip correlation
         result.append(self._render_policy_state())
+        result.append("\n")
+
+        # Value function statistics
+        result.append(self._render_value_stats())
 
         return result
+
+    def _render_value_stats(self) -> Text:
+        """Render value function statistics with relative thresholds."""
+        if self._snapshot is None:
+            return Text()
+
+        tamiyo = self._snapshot.tamiyo
+        result = Text()
+
+        value_status = self._get_value_status(tamiyo)
+        value_style = self._status_style(value_status)
+
+        result.append("Value Range  ", style="dim")
+        result.append(f"[{tamiyo.value_min:.1f}, {tamiyo.value_max:.1f}]", style=value_style)
+
+        if tamiyo.value_std > 0:
+            result.append(f" s={tamiyo.value_std:.2f}", style="dim")
+
+        if value_status != "ok":
+            result.append(" !", style=value_style)
+
+        return result
+
+    def _get_value_status(self, tamiyo: "TamiyoState") -> str:
+        """Check if value function is healthy using relative thresholds."""
+        v_range = tamiyo.value_max - tamiyo.value_min
+        v_mean = tamiyo.value_mean
+        v_std = tamiyo.value_std
+        initial = tamiyo.initial_value_spread
+
+        # Collapse detection: values stuck at constant
+        if v_range < 0.1 and v_std < 0.01:
+            return "critical"
+
+        # Coefficient of variation check (relative instability)
+        if abs(v_mean) > 0.1:
+            cov = v_std / abs(v_mean)
+            if cov > 3.0:
+                return "critical"  # Extreme instability
+            if cov > 2.0:
+                return "warning"
+
+        # Relative threshold (if initial spread known)
+        if initial is not None and initial > 0.1:
+            ratio = v_range / initial
+            if ratio > 10:
+                return "critical"  # 10x initial spread
+            if ratio > 5:
+                return "warning"  # 5x initial spread
+            return "ok"
+
+        # Absolute fallback (during warmup or if initial unknown)
+        if v_range > 1000 or abs(tamiyo.value_max) > 10000:
+            return "critical"
+        if v_range > 500 or abs(tamiyo.value_max) > 5000:
+            return "warning"
+
+        return "ok"
 
     def _render_entropy_trend(self) -> Text:
         """Render entropy trend with velocity and countdown."""

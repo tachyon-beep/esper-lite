@@ -773,7 +773,7 @@ class PPOAgent:
             self.optimizer.step()
 
             # Track metrics
-            # PERF: Batch all 6 logging metrics into single GPU→CPU transfer
+            # PERF: Batch all 10 logging metrics into single GPU→CPU transfer
             joint_ratio = per_head_ratios["op"]  # Use op ratio as representative
             logging_tensors = torch.stack([
                 policy_loss,
@@ -782,6 +782,11 @@ class PPOAgent:
                 joint_ratio.mean(),
                 joint_ratio.max(),
                 joint_ratio.min(),
+                # Value function stats (single GPU sync with rest)
+                values.mean(),
+                values.std(),
+                values.min(),
+                values.max(),
             ]).cpu().tolist()
             metrics["policy_loss"].append(logging_tensors[0])
             metrics["value_loss"].append(logging_tensors[1])
@@ -789,6 +794,10 @@ class PPOAgent:
             metrics["ratio_mean"].append(logging_tensors[3])
             metrics["ratio_max"].append(logging_tensors[4])
             metrics["ratio_min"].append(logging_tensors[5])
+            metrics["value_mean"].append(logging_tensors[6])
+            metrics["value_std"].append(logging_tensors[7])
+            metrics["value_min"].append(logging_tensors[8])
+            metrics["value_max"].append(logging_tensors[9])
             if (
                 joint_ratio.max() > self.ratio_explosion_threshold
                 or joint_ratio.min() < self.ratio_collapse_threshold

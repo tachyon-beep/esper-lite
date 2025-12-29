@@ -749,6 +749,19 @@ class SanctumAggregator:
         self._tamiyo.inner_epoch = payload.inner_epoch
         self._tamiyo.ppo_batch = payload.batch
 
+        # Value function statistics (for divergence detection)
+        self._tamiyo.value_mean = payload.value_mean
+        self._tamiyo.value_std = payload.value_std
+        self._tamiyo.value_min = payload.value_min
+        self._tamiyo.value_max = payload.value_max
+
+        # Set initial spread after warmup for relative thresholds
+        WARMUP_BATCHES = 50
+        if self._tamiyo.initial_value_spread is None and self._current_batch >= WARMUP_BATCHES:
+            spread = self._tamiyo.value_max - self._tamiyo.value_min
+            if spread > 0.1:  # Only set if non-trivial
+                self._tamiyo.initial_value_spread = spread
+
         # Compute entropy velocity and collapse risk (after entropy_history is updated)
         self._tamiyo.entropy_velocity = compute_entropy_velocity(
             self._tamiyo.entropy_history

@@ -644,6 +644,13 @@ class TamiyoState:
     # Negative correlation + low entropy + high clip = COLLAPSE RISK
     entropy_clip_correlation: float = 0.0
 
+    # Value function statistics (for divergence detection)
+    value_mean: float = 0.0
+    value_std: float = 0.0
+    value_min: float = 0.0
+    value_max: float = 0.0
+    initial_value_spread: float | None = None  # Set after warmup for relative thresholds
+
 
 @dataclass
 class SystemVitals:

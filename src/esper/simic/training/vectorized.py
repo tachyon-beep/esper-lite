@@ -281,6 +281,10 @@ def _aggregate_ppo_metrics(update_metrics: list[PPOUpdateMetrics]) -> dict[str, 
             aggregated[key] = max(values)
         elif key == "ratio_min":
             aggregated[key] = min(values)
+        elif key == "value_min":
+            aggregated[key] = min(values)
+        elif key == "value_max":
+            aggregated[key] = max(values)
         elif key == "early_stop_epoch":
             aggregated[key] = min(values)
         elif key == "head_entropies":
