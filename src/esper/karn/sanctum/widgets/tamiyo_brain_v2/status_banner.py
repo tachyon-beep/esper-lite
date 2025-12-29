@@ -71,7 +71,7 @@ class StatusBanner(Static):
     def _render_content(self) -> Text:
         """Render the banner content."""
         if self._snapshot is None:
-            return Text("[?] NO DATA", style="dim")
+            return Text("[?] NO DATA", style="cyan")
 
         status, label, style = self._get_overall_status()
         tamiyo = self._snapshot.tamiyo
@@ -115,7 +115,7 @@ class StatusBanner(Static):
         if tamiyo.ppo_data_received:
             self._append_metrics(banner, tamiyo)
         else:
-            banner.append("Waiting for PPO data...", style="dim italic")
+            banner.append("Waiting for PPO data...", style="cyan italic")
 
         return banner
 
@@ -176,12 +176,12 @@ class StatusBanner(Static):
             (status, label, style) tuple
         """
         if self._snapshot is None:
-            return "ok", "WAITING", "dim"
+            return "ok", "WAITING", "cyan"
 
         tamiyo = self._snapshot.tamiyo
 
         if not tamiyo.ppo_data_received:
-            return "ok", "WAITING", "dim"
+            return "ok", "WAITING", "cyan"
 
         # NaN/Inf check (HIGHEST PRIORITY - before all other checks)
         # These indicate numerical instability and should always be surfaced first
