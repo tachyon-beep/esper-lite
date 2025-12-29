@@ -1613,6 +1613,9 @@ def train_ppo_vectorized(
             # B8-PT-01 FIX: Protect source tensors from premature deallocation.
             # The .to() may create new tensors via async copy. Without record_stream(),
             # the allocator might reclaim this memory before repeat() finishes reading.
+            # When tensors are already on env_dev (SharedGPUBatchIterator path), .to() is
+            # a no-op returning the same tensor; record_stream() is harmless but redundant
+            # since the caller already protected them.
             if env_state.stream and inputs.is_cuda:
                 inputs.record_stream(env_state.stream)
                 targets.record_stream(env_state.stream)
