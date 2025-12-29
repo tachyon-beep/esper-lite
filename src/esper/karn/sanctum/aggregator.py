@@ -1161,34 +1161,26 @@ class SanctumAggregator:
             self._last_action_env_id = env_id
             self._last_action_timestamp = datetime.now(timezone.utc)
 
-            # Update reward component breakdown from payload
-            # (migrated from removed REWARD_COMPUTED handler)
-            if payload.base_acc_delta is not None:
-                env.reward_components.base_acc_delta = payload.base_acc_delta
-            if payload.bounded_attribution is not None:
-                env.reward_components.bounded_attribution = payload.bounded_attribution
-            if payload.compute_rent is not None:
-                env.reward_components.compute_rent = payload.compute_rent
-            # Reward health fields (for RewardHealthPanel)
-            if payload.stage_bonus is not None:
-                env.reward_components.stage_bonus = payload.stage_bonus
-            if payload.ratio_penalty is not None:
-                env.reward_components.ratio_penalty = payload.ratio_penalty
-            if payload.alpha_shock is not None:
-                env.reward_components.alpha_shock = payload.alpha_shock
-            # Hindsight credit (Phase 3.2 scaffold credit)
-            if payload.hindsight_credit is not None:
-                env.reward_components.hindsight_credit = payload.hindsight_credit
-            if payload.scaffold_count is not None:
-                env.reward_components.scaffold_count = payload.scaffold_count
-            if payload.avg_scaffold_delay is not None:
-                env.reward_components.avg_scaffold_delay = payload.avg_scaffold_delay
-            # Always update context fields when we have any reward data
-            if payload.base_acc_delta is not None or payload.bounded_attribution is not None:
-                env.reward_components.total = total_reward
+            # Update reward component breakdown from typed dataclass
+            rc = payload.reward_components
+            if rc is not None:
+                env.reward_components.base_acc_delta = rc.base_acc_delta
+                # bounded_attribution is None for LOSS family (not computed) - leave at default
+                if rc.bounded_attribution is not None:
+                    env.reward_components.bounded_attribution = rc.bounded_attribution
+                env.reward_components.compute_rent = rc.compute_rent
+                env.reward_components.stage_bonus = rc.stage_bonus
+                env.reward_components.ratio_penalty = rc.ratio_penalty
+                env.reward_components.alpha_shock = rc.alpha_shock
+                env.reward_components.hindsight_credit = rc.hindsight_credit
+                env.reward_components.total = rc.total_reward
                 env.reward_components.last_action = action_name
                 env.reward_components.env_id = env_id
                 env.reward_components.val_acc = env.host_accuracy
+                # New fields now available
+                if rc.num_fossilized_seeds is not None:
+                    env.reward_components.scaffold_count = rc.num_fossilized_seeds
+                # avg_scaffold_delay is not in RewardComponentsTelemetry, leave as default
 
             # Track gaming rate (for per-env reward health)
             env.total_reward_steps += 1

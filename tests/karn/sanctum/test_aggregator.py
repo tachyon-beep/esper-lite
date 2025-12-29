@@ -361,3 +361,50 @@ def test_decision_snapshot_handles_missing_head_choices():
     assert decision.chosen_tempo is None
     assert decision.chosen_style is None
     assert decision.chosen_curve is None
+
+
+def test_aggregator_reads_reward_components_dataclass():
+    """Aggregator should read from nested RewardComponentsTelemetry."""
+    from datetime import datetime, timezone
+    from esper.karn.sanctum.aggregator import SanctumAggregator
+    from esper.leyline.telemetry import AnalyticsSnapshotPayload, TelemetryEvent, TelemetryEventType
+    from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
+
+    agg = SanctumAggregator(num_envs=1)
+    agg._connected = True
+    agg._ensure_env(0)
+
+    rc = RewardComponentsTelemetry(
+        bounded_attribution=0.3,
+        compute_rent=-0.05,
+        stage_bonus=0.1,
+        ratio_penalty=0.0,
+        alpha_shock=0.0,
+        base_acc_delta=0.02,
+        hindsight_credit=0.05,
+        total_reward=0.42,
+    )
+
+    payload = AnalyticsSnapshotPayload(
+        kind="last_action",
+        env_id=0,
+        total_reward=0.42,
+        action_name="WAIT",
+        action_confidence=0.8,
+        reward_components=rc,
+    )
+
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+        timestamp=datetime.now(timezone.utc),
+        data=payload,
+        epoch=10,
+    )
+
+    agg.process_event(event)
+
+    env = agg._envs[0]
+    assert env.reward_components.bounded_attribution == 0.3
+    assert env.reward_components.compute_rent == -0.05
+    assert env.reward_components.stage_bonus == 0.1
+    assert env.reward_components.hindsight_credit == 0.05
