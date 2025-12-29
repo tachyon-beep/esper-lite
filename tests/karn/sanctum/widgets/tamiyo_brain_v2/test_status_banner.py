@@ -333,3 +333,88 @@ class TestTriggeringCondition:
         assert status == "warning"
         assert "AdvHigh" in label
         assert "WARN" in label
+
+
+# =============================================================================
+# MEMORY PERCENTAGE DISPLAY TESTS
+# =============================================================================
+
+
+class TestMemoryPercentageDisplay:
+    """Test memory percentage display in status banner (per UX review)."""
+
+    @pytest.fixture
+    def banner(self):
+        """Create a StatusBanner widget."""
+        return StatusBanner()
+
+    def test_status_banner_shows_memory_percentage(self):
+        """Status banner should display memory as percentage, not absolute."""
+        from esper.karn.sanctum.schema import InfrastructureMetrics
+
+        snapshot = SanctumSnapshot()
+        snapshot.tamiyo = TamiyoState(ppo_data_received=True)
+        snapshot.tamiyo.infrastructure = InfrastructureMetrics(
+            cuda_memory_allocated_gb=4.2,
+            cuda_memory_reserved_gb=8.0,
+        )
+        snapshot.current_batch = 60
+
+        banner = StatusBanner()
+        banner._snapshot = snapshot
+        content = banner._render_banner_text()
+
+        content_str = content.plain
+        # Should show percentage (52%), not absolute values
+        assert "52%" in content_str or "53%" in content_str  # Allow rounding
+        # Should NOT show absolute GB values in banner
+        assert "4.2/8.0" not in content_str
+
+
+# =============================================================================
+# COMPILE IN TITLE TESTS
+# =============================================================================
+
+
+class TestCompileInTitle:
+    """Test compile indicator in border title (per UX review)."""
+
+    @pytest.fixture
+    def banner(self):
+        """Create a StatusBanner widget."""
+        return StatusBanner()
+
+    def test_status_banner_compile_in_title(self):
+        """Compile indicator should be in border title, not banner content."""
+        from esper.karn.sanctum.schema import InfrastructureMetrics
+
+        snapshot = SanctumSnapshot()
+        snapshot.tamiyo = TamiyoState(ppo_data_received=True)
+        snapshot.tamiyo.infrastructure = InfrastructureMetrics(compile_enabled=True)
+        snapshot.current_batch = 60
+
+        banner = StatusBanner()
+        banner._snapshot = snapshot
+        banner._update_status_classes()
+
+        # Compile indicator should be in border_title
+        # Note: Textual escapes [ as [[ in markup, so border_title contains [[compiled]]
+        assert "compiled" in banner.border_title.lower()
+
+    def test_status_banner_no_compile_in_title_when_disabled(self):
+        """No compile indicator when compile is disabled."""
+        from esper.karn.sanctum.schema import InfrastructureMetrics
+
+        snapshot = SanctumSnapshot()
+        snapshot.tamiyo = TamiyoState(ppo_data_received=True)
+        snapshot.tamiyo.infrastructure = InfrastructureMetrics(compile_enabled=False)
+        snapshot.current_batch = 60
+
+        banner = StatusBanner()
+        banner._snapshot = snapshot
+        banner._update_status_classes()
+
+        # Should not have compile indicator
+        assert "compiled" not in banner.border_title.lower()
+        # Should still have TAMIYO title
+        assert "tamiyo" in banner.border_title.lower()

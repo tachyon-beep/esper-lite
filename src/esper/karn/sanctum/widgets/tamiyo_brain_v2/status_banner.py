@@ -68,12 +68,19 @@ class StatusBanner(Container):
         self.query_one("#banner-content", Static).update(self._render_banner_text())
 
     def _update_status_classes(self) -> None:
-        """Update CSS classes based on current status."""
+        """Update CSS classes and border title based on current status."""
         status, _, _ = self._get_overall_status()
 
         # Remove all status classes
         self.remove_class("status-ok", "status-warning", "status-critical", "status-warmup")
         self.add_class(f"status-{status}")
+
+        # Update border title with compile status (per UX review)
+        # Note: [[ escapes to [ in Textual markup
+        if self._snapshot and self._snapshot.tamiyo.infrastructure.compile_enabled:
+            self.border_title = "TAMIYO [[compiled]]"
+        else:
+            self.border_title = "TAMIYO"
 
         # Add group class if in A/B mode
         if self._snapshot and self._snapshot.tamiyo.group_id:
@@ -197,6 +204,17 @@ class StatusBanner(Container):
         batch = self._snapshot.current_batch
         max_batches = self._snapshot.max_batches
         banner.append(f"batch:{batch}/{max_batches}", style="dim")
+
+        # Memory as percentage (per UX review - more scannable than absolute)
+        mem_pct = self._snapshot.tamiyo.infrastructure.memory_usage_percent
+        if mem_pct > 0:
+            if mem_pct > 90:
+                mem_style = "red bold"
+            elif mem_pct > 75:
+                mem_style = "yellow"
+            else:
+                mem_style = "dim"
+            banner.append(f"  [Mem:{mem_pct:.0f}%]", style=mem_style)
 
     def _get_overall_status(self) -> tuple[str, str, str]:
         """Determine overall status using DRL decision tree.
