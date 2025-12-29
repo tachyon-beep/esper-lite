@@ -135,9 +135,10 @@ from esper.karn.health import HealthMonitor
 from esper.karn.store import EpisodeOutcome
 from esper.simic.attribution import CounterfactualHelper
 from esper.simic.telemetry.emitters import (
-    emit_with_env_context,
-    compute_grad_norm_surrogate,
     apply_slot_telemetry,
+    check_performance_degradation,
+    compute_grad_norm_surrogate,
+    emit_with_env_context,
     VectorizedEmitter,
 )
 from .parallel_env_state import ParallelEnvState
@@ -3377,6 +3378,17 @@ def train_ppo_vectorized(
                 epoch=epoch,
             )
             prev_rolling_avg_acc = rolling_avg_acc
+
+            # B7-DRL-02: Check for performance degradation (was previously unwired)
+            # Detects catastrophic forgetting, reward hacking, and training decay
+            training_progress = (episodes_completed + envs_this_batch) / total_episodes
+            check_performance_degradation(
+                hub,
+                current_acc=avg_acc,
+                rolling_avg_acc=rolling_avg_acc,
+                env_id=0,  # Aggregate metric across all envs
+                training_progress=training_progress,
+            )
 
         history.append(
             {

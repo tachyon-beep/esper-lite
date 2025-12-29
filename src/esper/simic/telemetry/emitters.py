@@ -940,8 +940,6 @@ def emit_mask_hit_rates(
     ))
 
 
-# TODO: [UNWIRED TELEMETRY] - Call check_performance_degradation() at end of each epoch
-# with current accuracy vs rolling average. See telemetry-phase3.md Task 5 for integration notes.
 def check_performance_degradation(
     hub: Any,
     *,
