@@ -3251,6 +3251,9 @@ def train_ppo_vectorized(
                 penalty = env_states[env_idx].governor.get_punishment_reward()
                 normalized_penalty = reward_normalizer.normalize_only(penalty)
                 agent.buffer.mark_terminal_with_penalty(env_idx, normalized_penalty)
+                # B-METRIC-01 fix: Reflect penalty in episode_rewards so metrics
+                # (EpisodeOutcome, A/B history, stability) match what PPO learned.
+                env_states[env_idx].episode_rewards.append(normalized_penalty)
 
         update_skipped = len(agent.buffer) == 0
         if not update_skipped:
