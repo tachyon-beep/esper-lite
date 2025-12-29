@@ -4,12 +4,16 @@ Consolidates warmup status to panel header (not repeated per-gauge).
 
 Layout:
     ┌─ PPO HEALTH ─────────────────────────── WARMING UP [5/50] ─┐
-    │ Expl.Var   -0.005  [██░░░░░░░░]    Advantage  +0.00±1.00  │
-    │ Entropy     7.89   [██████████]    Ratio   0.98 < r < 1.02│
-    │ Clip Frac   0.000  [░░░░░░░░░░]    Policy Loss   -0.350   │
-    │ KL Div      0.000  [░░░░░░░░░░]    Value Loss    33.757   │
+    │ Expl.Var   -0.005  [██░░░░░░░░]    Ep.Return ▁▂▃▅█  -9.8 ↘│
+    │ Entropy     7.89   [██████████]    Advantage  +0.00±1.00  │
+    │ Clip Frac   0.000  [░░░░░░░░░░]    Ratio   0.98 < r < 1.02│
+    │ KL Div      0.000  [░░░░░░░░░░]    Policy Loss   -0.350   │
+    │                                    Value Loss    33.757   │
     │                                    Grad Norm      1.00    │
     │                                    Layers       12/12 ✓   │
+    │                                    Entropy D  stable [--] │
+    │                                    Policy       stable    │
+    │                                    Value Range [...]      │
     └────────────────────────────────────────────────────────────┘
 """
 
@@ -187,6 +191,18 @@ class PPOHealthPanel(Container):
 
         tamiyo = self._snapshot.tamiyo
         result = Text()
+
+        # Episode Return sparkline (primary metric, top position)
+        result.append("Ep.Return    ", style="bold cyan")
+        if tamiyo.episode_return_history:
+            sparkline = render_sparkline(tamiyo.episode_return_history, width=15)
+            ep_trend = detect_trend(list(tamiyo.episode_return_history))
+            result.append(sparkline)
+            result.append(f" {tamiyo.current_episode_return:>6.1f} ", style="white")
+            result.append(ep_trend, style=trend_style(ep_trend, "accuracy"))
+        else:
+            result.append("─" * 15, style="dim")
+        result.append("\n")
 
         # Advantage stats
         adv_status = self._get_advantage_status(tamiyo.advantage_std)

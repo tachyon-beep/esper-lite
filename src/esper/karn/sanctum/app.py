@@ -197,7 +197,7 @@ class SanctumApp(App[None]):
         Layout structure:
         - Run Header: Episode, Epoch, Batch, Runtime, Best Accuracy, Connection, A/B comparison
         - Anomaly Strip: Single-line automatic problem surfacing
-        - Top row: EnvOverview (80%) | Scoreboard + RewardHealth (20%)
+        - Top row: EnvOverview (80%) | Scoreboard (20%)
         - Bottom row: TamiyoBrain (80%) | EventLog (20%)
         - Footer: Keybindings
         """
@@ -212,12 +212,11 @@ class SanctumApp(App[None]):
         )
 
         with Container(id="sanctum-main"):
-            # Top section: Environment Overview and Metrics Column (Scoreboard + Reward Health)
+            # Top section: Environment Overview and Scoreboard
             with Horizontal(id="top-section"):
                 yield EnvOverview(num_envs=self._num_envs, id="env-overview")
                 with Vertical(id="metrics-column"):
                     yield Scoreboard(id="scoreboard")
-                    yield RewardHealthPanel(id="reward-health")
 
             # Bottom section: TamiyoBrain (left) | Event Log (right)
             with Horizontal(id="bottom-section"):

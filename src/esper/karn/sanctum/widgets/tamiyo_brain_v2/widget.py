@@ -8,10 +8,9 @@ Layout:
     │ StatusBanner (1 line)                                           │
     ├─────────────────────────────────────────┬───────────────────────┤
     │ VitalsColumn (2/3 width)                │ DecisionsColumn (1/3) │
-    │ ├── PrimaryMetrics (sparklines)         │ ├── DecisionCard      │
     │ ├── PPOHealthPanel (gauges + metrics)   │ ├── DecisionCard      │
-    │ ├── HeadsPanel (entropy + gradients)    │ └── DecisionCard      │
-    │ └── ActionContext (bar + slots)         │                       │
+    │ ├── HeadsPanel (entropy + gradients)    │ ├── DecisionCard      │
+    │ └── ActionContext | RewardHealth        │ └── DecisionCard      │
     └─────────────────────────────────────────┴───────────────────────┘
 """
 
@@ -26,11 +25,11 @@ from textual.message import Message
 from textual.widgets import Static
 
 from .status_banner import StatusBanner
-from .primary_metrics import PrimaryMetrics
 from .ppo_health import PPOHealthPanel
 from .heads_grid import HeadsPanel
 from .action_context import ActionContext
 from .decisions_column import DecisionCard, DecisionsColumn
+from ..reward_health import RewardHealthPanel
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot
@@ -96,27 +95,46 @@ class TamiyoBrainV2(Container):
     }
 
     /* Sub-panels - no padding or margin between them */
-    #primary-metrics {
-        margin: 0;
-    }
-
     #ppo-health {
-        height: 13;
-        max-height: 13;
+        height: 14;
+        max-height: 14;
         padding: 0;
         margin: 0;
     }
 
-    #heads-panel, #action-context {
+    #heads-panel, #action-context, #reward-health {
         padding: 0;
         margin: 0;
+    }
+
+    #action-row {
+        height: auto;
+        width: 100%;
+    }
+
+    #action-row #action-context {
+        width: 2fr;
+    }
+
+    #action-row #reward-health {
+        width: 1fr;
+        height: auto;
+        border: solid $primary;
+        padding: 0 1;
     }
 
     #ppo-content {
         height: auto;
+        width: 100%;
     }
 
-    #gauge-column, #metrics-column {
+    #gauge-column {
+        width: 36;
+        height: auto;
+    }
+
+    #metrics-column {
+        width: 1fr;
         height: auto;
     }
 
@@ -183,10 +201,12 @@ class TamiyoBrainV2(Container):
         # Main content: vitals left, decisions right
         with Horizontal(id="main-content"):
             with VerticalScroll(id="vitals-column"):
-                yield PrimaryMetrics(id="primary-metrics")
                 yield PPOHealthPanel(id="ppo-health")
                 yield HeadsPanel(id="heads-panel")
-                yield ActionContext(id="action-context")
+                # ActionContext and RewardHealth side by side
+                with Horizontal(id="action-row"):
+                    yield ActionContext(id="action-context")
+                    yield RewardHealthPanel(id="reward-health")
 
             yield DecisionsColumn(id="decisions-column")
 
@@ -207,11 +227,6 @@ class TamiyoBrainV2(Container):
         # Use try-except to handle case where widgets haven't mounted yet
         try:
             self.query_one("#status-banner", StatusBanner).update_snapshot(snapshot)
-        except NoMatches:
-            pass
-
-        try:
-            self.query_one("#primary-metrics", PrimaryMetrics).update_snapshot(snapshot)
         except NoMatches:
             pass
 

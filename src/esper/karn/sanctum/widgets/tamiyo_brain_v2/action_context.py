@@ -90,6 +90,7 @@ class ActionContext(Container):
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
         self.classes = "panel"
+        self.border_title = "ACTION CONTEXT"
 
     def compose(self) -> ComposeResult:
         """Compose the panel layout."""

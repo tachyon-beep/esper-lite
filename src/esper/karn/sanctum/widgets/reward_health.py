@@ -47,7 +47,7 @@ class RewardHealthPanel(Static):
 
     DEFAULT_CSS = """
     RewardHealthPanel {
-        height: 6;
+        height: 2;
         border: solid $primary;
         padding: 0 1;
     }
