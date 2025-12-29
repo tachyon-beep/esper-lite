@@ -262,15 +262,17 @@ class LSTMPolicyBundle:
     def initial_hidden(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor]:
         """Get initial LSTM hidden state for rollout collection.
 
-        WARNING: Returns inference-mode tensors that are NOT differentiable.
-        These are suitable ONLY for rollout collection (action sampling).
+        Returns inference-mode tensors (is_inference()=True) for performance.
+        These CANNOT be used directly in autograd - would cause RuntimeError.
 
-        For PPO training (evaluate_actions), pass hidden=None instead.
-        The network will create fresh gradient-compatible hidden states
-        internally, ensuring proper backpropagation through the LSTM.
+        The RolloutBuffer pattern makes this safe:
+        1. Buffer pre-allocates regular tensors at initialization
+        2. add() copies VALUES to buffer (inference flag not transferred)
+        3. get_batched_sequences() returns regular tensors
+        4. evaluate_actions() receives gradient-compatible hidden states
 
-        Passing these tensors to evaluate_actions() will NOT cause errors,
-        but gradients will not flow through the initial hidden state.
+        Do NOT bypass the buffer by passing these tensors directly to
+        evaluate_actions() - this would cause RuntimeError.
         """
         return self._network.get_initial_hidden(batch_size, self.device)
 
