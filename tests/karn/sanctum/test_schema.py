@@ -651,3 +651,25 @@ def test_infrastructure_metrics_memory_usage_percent():
         cuda_memory_reserved_gb=0.0,
     )
     assert metrics_empty.memory_usage_percent == 0.0
+
+
+# =============================================================================
+# GRADIENT QUALITY METRICS (per DRL expert review)
+# =============================================================================
+
+
+def test_gradient_quality_metrics_dataclass():
+    """GradientQualityMetrics should contain gradient CV and directional clip."""
+    from esper.karn.sanctum.schema import GradientQualityMetrics
+
+    metrics = GradientQualityMetrics()
+
+    # Gradient coefficient of variation (NOT SNR - per DRL review)
+    # Low CV (<0.5) = high signal quality, High CV (>2.0) = noisy
+    assert metrics.gradient_cv == 0.0
+
+    # Directional clip fraction (per DRL expert)
+    # clip+ = probability increases capped (r > 1+ε)
+    # clip- = probability decreases capped (r < 1-ε)
+    assert metrics.clip_fraction_positive == 0.0
+    assert metrics.clip_fraction_negative == 0.0

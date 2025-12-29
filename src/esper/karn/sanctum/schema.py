@@ -537,6 +537,36 @@ class EnvState:
 
 
 @dataclass
+class GradientQualityMetrics:
+    """Gradient quality diagnostics for DRL training health.
+
+    Grouped separately to prevent TamiyoState bloat (per code review).
+
+    Note: Uses Coefficient of Variation (CV) not SNR per DRL expert review.
+    The original plan had inverted SNR (var/mean² is noise-to-signal).
+    CV = sqrt(var)/|mean| is standard and self-explanatory.
+    """
+    # Gradient Coefficient of Variation (per DRL expert - replaces inverted SNR)
+    # Low CV (<0.5) = high signal quality, High CV (>2.0) = noisy gradients
+    gradient_cv: float = 0.0
+
+    # Directional Clip Fraction (per DRL expert recommendation)
+    # These track WHERE clipping occurs, not WHETHER policy improved:
+    # clip+ = r > 1+ε (probability increases were capped)
+    # clip- = r < 1-ε (probability decreases were capped)
+    # Asymmetry indicates directional policy drift; symmetric high values are normal
+    clip_fraction_positive: float = 0.0
+    clip_fraction_negative: float = 0.0
+
+    # Note: param_update_magnitude REMOVED per PyTorch expert review
+    # - Conflates gradient magnitude with learning rate
+    # - Existing grad_norm, dead_layers, exploding_layers already provide this signal
+
+    # Note: minibatch_gradient_variance REMOVED per PyTorch expert review
+    # - Not applicable to recurrent PPO (single-batch processing due to LSTM coherence)
+
+
+@dataclass
 class InfrastructureMetrics:
     """PyTorch infrastructure health metrics.
 
