@@ -48,7 +48,7 @@ HEAD_MAX_ENTROPIES: dict[str, float] = {
     "temp": 1.099,      # ln(3)
     "atgt": 1.099,      # ln(3)
     "aspd": 1.386,      # ln(4)
-    "acrv": 1.099,      # ln(3)
+    "acrv": 1.609,      # ln(5) - LINEAR, COSINE, SIGMOID_{GENTLE,STD,SHARP}
     "op": 1.792,        # ln(6)
 }
 
