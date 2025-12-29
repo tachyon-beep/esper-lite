@@ -1610,6 +1610,13 @@ def train_ppo_vectorized(
             inputs = inputs.to(env_dev, non_blocking=True)
             targets = targets.to(env_dev, non_blocking=True)
 
+            # B8-PT-01 FIX: Protect source tensors from premature deallocation.
+            # The .to() may create new tensors via async copy. Without record_stream(),
+            # the allocator might reclaim this memory before repeat() finishes reading.
+            if env_state.stream and inputs.is_cuda:
+                inputs.record_stream(env_state.stream)
+                targets.record_stream(env_state.stream)
+
             # Expand inputs/targets: [K*B, ...]
             # Using repeat() is safe here as data is small and we want contiguous chunks
             fused_inputs = inputs.repeat(num_configs, *([1] * (inputs.dim() - 1)))
