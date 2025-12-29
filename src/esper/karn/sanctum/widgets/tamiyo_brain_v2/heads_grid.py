@@ -140,6 +140,29 @@ class HeadsPanel(Static):
             state, style = self._head_state(abbrev, entropy, grad)
             result.append(f"{state:^{self.CELL_WIDTH}}", style=style)
 
+        # Row 6: Gradient Flow Footer (per UX review - keeps bars, adds flow as footer)
+        result.append("\n")
+        result.append("─ Flow: ", style="dim")
+
+        # Gradient CV with status
+        cv = tamiyo.gradient_quality.gradient_cv
+        cv_status = "stable" if cv < 0.5 else ("warn" if cv < 2.0 else "BAD")
+        cv_style = "green" if cv < 0.5 else ("yellow" if cv < 2.0 else "red")
+        result.append(f"CV:{cv:.2f} ", style=cv_style)
+        result.append(f"{cv_status}   ", style="dim")
+
+        # Dead/Exploding layers (use existing TamiyoState fields)
+        dead = tamiyo.dead_layers
+        exploding = tamiyo.exploding_layers
+        total = 12  # TOTAL_LAYERS constant
+        layers_style = "green" if (dead == 0 and exploding == 0) else "red"
+        result.append(f"Dead:{dead}/{total}   Exploding:{exploding}/{total}   ", style=layers_style)
+
+        # Directional clip (asymmetry indicator)
+        clip_pos = tamiyo.gradient_quality.clip_fraction_positive
+        clip_neg = tamiyo.gradient_quality.clip_fraction_negative
+        result.append(f"Clip:\u2191{clip_pos:.0%}/\u2193{clip_neg:.0%}", style="dim")
+
         return result
 
     def _entropy_color(self, head: str, entropy: float) -> str:
