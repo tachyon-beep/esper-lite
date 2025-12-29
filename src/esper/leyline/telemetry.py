@@ -592,7 +592,7 @@ class TrendDetectedPayload:
     def from_dict(cls, data: dict[str, Any]) -> "TrendDetectedPayload":
         """Parse from dict. Raises KeyError on missing required fields."""
         return cls(
-            batch_idx=data["batch"],  # Note: emitter uses "batch" not "batch_idx"
+            batch_idx=data["batch_idx"],
             episodes_completed=data["episodes_completed"],
             rolling_delta=data["rolling_delta"],
             rolling_avg_accuracy=data["rolling_avg_accuracy"],

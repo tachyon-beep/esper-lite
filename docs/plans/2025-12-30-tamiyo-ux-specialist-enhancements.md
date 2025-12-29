@@ -1,4 +1,4 @@
-# Tamiyo UX Specialist Enhancements Implementation Plan (v5)
+# Tamiyo UX Specialist Enhancements Implementation Plan (v6)
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
@@ -7,6 +7,75 @@
 **Architecture:** Extend existing TamiyoState schema using nested dataclasses for new metrics, update telemetry emitters to collect them, modify existing widgets to display new metrics, and add gradient flow as a footer row in the Attention Heads panel (preserving bar visualizations).
 
 **Tech Stack:** Python 3.11+, Textual (TUI framework), Rich (text rendering), PyTorch (metric collection), dataclasses (schema)
+
+---
+
+## Risk Reduction Findings (v6 Pre-Implementation Audit)
+
+**Audit Date:** 2025-12-30
+
+This section documents findings from a pre-implementation code audit to reduce integration risk.
+
+### ✅ PPOAgent.update() Structure Verified
+
+| Item | Status | Location | Notes |
+|------|--------|----------|-------|
+| `self.train_steps` | ✅ EXISTS | `ppo.py:398` (init), `ppo.py:853` (increment) | Counter incremented at end of each update |
+| Ratio computation | ✅ FOUND | `ppo.py:654-661` | Uses `per_head_ratios[key] = torch.exp(log_ratio_clamped)` |
+| Joint ratio | ✅ FOUND | `ppo.py:698, 813` | Uses `per_head_ratios["op"]` as representative |
+| clip_fraction | ✅ FOUND | `ppo.py:699-701` | Existing computation location |
+| Integration point | ✅ IDENTIFIED | After `ppo.py:701` | Add directional clip here |
+
+**Key Insight:** The plan's Task 3.1 uses simplified pseudo-code. Actual integration must use `per_head_ratios["op"]`, not a generic `ratio` tensor.
+
+### ✅ TrainingStartedPayload Already Has compile_* Fields
+
+| Field | Status | Location |
+|-------|--------|----------|
+| `compile_enabled` | ✅ EXISTS | `telemetry.py:463` |
+| `compile_backend` | ✅ EXISTS | `telemetry.py:464` |
+| `compile_mode` | ✅ EXISTS | `telemetry.py:465` |
+
+**Impact:** Task 5.2 remains valid (it's about the aggregator reading these fields, not adding them).
+
+### ✅ PPOUpdatePayload Needs New Fields
+
+The following fields are **CONFIRMED MISSING** and must be added:
+- `clip_fraction_positive: float = 0.0`
+- `clip_fraction_negative: float = 0.0`
+- `gradient_cv: float = 0.0`
+- `cuda_memory_allocated_gb: float = 0.0`
+- `cuda_memory_reserved_gb: float = 0.0`
+- `cuda_memory_peak_gb: float = 0.0`
+- `cuda_memory_fragmentation: float = 0.0`
+
+### ✅ emit_ppo_update_event Structure Verified
+
+- Uses `.get()` on metrics dict at boundary (acceptable per CLAUDE.md)
+- Will need to add mappings for the 7 new fields
+
+### ✅ Correction Applied: Task 3.4 Now Uses per_head_ratios["op"]
+
+**Previous version (v5)** had incorrect pseudo-code:
+```python
+ratio = (new_log_probs - old_log_probs).exp()  # WRONG - variable doesn't exist
+```
+
+**Corrected in v6** to use existing `joint_ratio` tensor:
+```python
+clip_pos, clip_neg = compute_directional_clip_fraction(joint_ratio, self.clip_ratio)
+# joint_ratio is per_head_ratios["op"] - already exists at line 698
+```
+
+> **Note:** All issues identified in this audit have been addressed in the v6 pseudo-code below.
+
+---
+
+**Revision Notes (v6):** Addresses pre-implementation risk reduction audit:
+- Added "Risk Reduction Findings" section documenting code audit results
+- Corrected Task 3.4 to use `per_head_ratios["op"]` instead of non-existent `ratio` variable
+- Added specific line references for integration points
+- Confirmed TrainingStartedPayload already has compile_* fields
 
 **Revision Notes (v5):** Addresses code reviewer feedback from v4:
 - Task 3.3: `collect_cuda_memory_metrics()` now returns ALL fields even when no CUDA (0.0 defaults), not empty dict
@@ -527,6 +596,7 @@ def test_compute_gradient_cv():
     from esper.simic.agent.ppo import compute_gradient_cv
     import torch
     import torch.nn as nn
+    import math
 
     # Simple model with known gradients
     model = nn.Linear(10, 2)
@@ -535,16 +605,33 @@ def test_compute_gradient_cv():
 
     cv = compute_gradient_cv(model)
 
-    # CV should be non-negative
-    assert cv >= 0.0
-    # CV should be finite
-    assert not (cv != cv)  # Not NaN
+    # CV should be non-negative (or NaN if undefined)
+    assert cv >= 0.0 or math.isnan(cv)
+
+
+def test_compute_gradient_cv_undefined_returns_nan():
+    """Gradient CV should return NaN when mean ≈ 0 (undefined)."""
+    from esper.simic.agent.ppo import compute_gradient_cv
+    import torch
+    import torch.nn as nn
+    import math
+
+    # Create model with near-zero mean gradients
+    model = nn.Linear(2, 2, bias=False)
+    # Manually set gradients to sum to ~0 but have variance
+    model.weight.grad = torch.tensor([[1.0, -1.0], [-1.0, 1.0]])
+    # Mean = 0, but std > 0 → CV undefined
+
+    cv = compute_gradient_cv(model)
+
+    # Should return NaN for undefined CV, not 0.0
+    assert math.isnan(cv), f"Expected NaN for undefined CV, got {cv}"
 ```
 
-**Step 2: Run test to verify it fails**
+**Step 2: Run tests to verify they fail**
 
-Run: `PYTHONPATH=src uv run pytest tests/simic/agent/test_ppo.py::test_compute_gradient_cv -v`
-Expected: FAIL
+Run: `PYTHONPATH=src uv run pytest tests/simic/agent/test_ppo.py::test_compute_gradient_cv tests/simic/agent/test_ppo.py::test_compute_gradient_cv_undefined_returns_nan -v`
+Expected: FAIL (function doesn't exist yet)
 
 **Step 3: Write minimal implementation**
 
@@ -558,11 +645,12 @@ def compute_gradient_cv(model: torch.nn.Module) -> float:
     - CV < 0.5: High signal quality (gradients are consistent)
     - CV 0.5-2.0: Normal range
     - CV > 2.0: Noisy gradients (high variance relative to mean)
+    - NaN: Undefined (mean ≈ 0, CV mathematically undefined)
 
     Note: This is O(params) and requires a sync. Only compute every N updates.
 
     Returns:
-        Coefficient of variation, or 0.0 if no gradients.
+        Coefficient of variation, NaN if undefined (mean ≈ 0), or 0.0 if no gradients.
     """
     grads = [p.grad.flatten() for p in model.parameters() if p.grad is not None]
     if not grads:
@@ -572,9 +660,11 @@ def compute_gradient_cv(model: torch.nn.Module) -> float:
     mean = all_grads.mean()
     std = all_grads.std()
 
-    # Avoid division by zero
+    # When mean ≈ 0, CV is mathematically undefined (approaches infinity)
+    # Return NaN to signal "undefined" rather than 0.0 which would misleadingly
+    # suggest "excellent signal quality". Consistent with PPO's log_prob handling.
     if abs(mean.item()) < 1e-10:
-        return 0.0
+        return float('nan')
 
     cv = (std / mean.abs()).item()
     return cv
@@ -588,9 +678,9 @@ if batch_idx % 10 == 0:  # Every 10 updates
     metrics["gradient_cv"] = compute_gradient_cv(self.policy.network)
 ```
 
-**Step 4: Run test to verify it passes**
+**Step 4: Run tests to verify they pass**
 
-Run: `PYTHONPATH=src uv run pytest tests/simic/agent/test_ppo.py::test_compute_gradient_cv -v`
+Run: `PYTHONPATH=src uv run pytest tests/simic/agent/test_ppo.py::test_compute_gradient_cv tests/simic/agent/test_ppo.py::test_compute_gradient_cv_undefined_returns_nan -v`
 Expected: PASS
 
 **Step 5: Commit**
@@ -600,6 +690,7 @@ git add src/esper/simic/agent/ppo.py tests/simic/agent/test_ppo.py
 git commit -m "feat(ppo): compute gradient coefficient of variation
 
 Add compute_gradient_cv() using sqrt(var)/|mean| formula per DRL expert.
+Returns NaN when mean ≈ 0 (undefined CV) per PyTorch expert review.
 Computed every 10 updates to amortize O(params) cost.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
@@ -760,60 +851,60 @@ Expected: FAIL (metrics dict missing gradient quality keys)
 
 **Step 3: Write minimal implementation**
 
-In `PPOAgent.update()` method in `src/esper/simic/agent/ppo.py`, wire the metric collection:
+In `PPOAgent.update()` method in `src/esper/simic/agent/ppo.py`, wire the metric collection.
+
+**CRITICAL:** The existing PPO code uses `per_head_ratios["op"]` as the joint ratio (see Risk Reduction Findings). Use this existing tensor, NOT a new `ratio` variable.
+
+**Integration Location:** After line 701 where `clip_fraction` is computed (inside the epoch loop).
 
 ```python
-def update(self, batch: TamiyoRolloutBuffer) -> dict[str, Any]:
-    """Run PPO update on collected batch."""
-    metrics: dict[str, Any] = {}
+# In PPOAgent.update(), after existing clip_fraction computation (around line 701):
+# EXISTING CODE:
+#   joint_ratio = per_head_ratios["op"]
+#   clip_fraction_t = ((joint_ratio - 1.0).abs() > self.clip_ratio).float().mean()
+#   metrics["clip_fraction"].append(clip_fraction_t.cpu().item())
 
-    # ... existing PPO loss computation ...
+# === NEW: Compute directional clip fraction (Task 3.1) ===
+# Uses per_head_ratios["op"] which already exists (line 698)
+clip_pos, clip_neg = compute_directional_clip_fraction(joint_ratio, self.clip_ratio)
+metrics["clip_fraction_positive"].append(clip_pos)
+metrics["clip_fraction_negative"].append(clip_neg)
 
-    # After computing ratio tensor (existing code):
-    ratio = (new_log_probs - old_log_probs).exp()
+# === Integration Location 2: After backward pass (around line 808), before optimizer.step() ===
+# === NEW: Throttled metric collection (every 10 batches) ===
+# Per CLAUDE.md: ALWAYS populate fields so emitter can use direct access
+# Throttling controls WHEN we compute, not WHETHER we include the field
+if self.train_steps % 10 == 0:
+    # Gradient CV (Task 3.2) - after backward, before optimizer step
+    gradient_cv_value = compute_gradient_cv(self.policy.network)
+    # CUDA memory (Task 3.3) - uses DIRECT ACCESS per CLAUDE.md
+    # collect_cuda_memory_metrics() guarantees all fields present (even when no CUDA)
+    cuda_metrics = collect_cuda_memory_metrics()
+else:
+    # Non-throttle batches: populate with 0.0 defaults
+    # This ensures emitter can always use metrics["field"] not metrics.get()
+    gradient_cv_value = 0.0
+    cuda_metrics = {
+        "cuda_memory_allocated_gb": 0.0,
+        "cuda_memory_reserved_gb": 0.0,
+        "cuda_memory_peak_gb": 0.0,
+        "cuda_memory_fragmentation": 0.0,
+    }
 
-    # === NEW: Compute directional clip fraction (Task 3.1) ===
-    # Always computed (cheap operation on existing ratio tensor)
-    clip_pos, clip_neg = compute_directional_clip_fraction(ratio, self.clip_ratio)
-    metrics["clip_fraction_positive"] = clip_pos
-    metrics["clip_fraction_negative"] = clip_neg
-
-    # ... existing backward pass ...
-    loss.backward()
-
-    # === NEW: Throttled metric collection (every 10 batches) ===
-    # Per CLAUDE.md: ALWAYS populate fields so emitter can use direct access
-    # Throttling controls WHEN we compute, not WHETHER we include the field
-    if self.train_steps % 10 == 0:
-        # Gradient CV (Task 3.2) - after backward, before optimizer step
-        metrics["gradient_cv"] = compute_gradient_cv(self.policy.network)
-        # CUDA memory (Task 3.3) - uses DIRECT ACCESS per CLAUDE.md
-        # collect_cuda_memory_metrics() guarantees all fields present (even when no CUDA)
-        cuda_metrics = collect_cuda_memory_metrics()
-        metrics["cuda_memory_allocated_gb"] = cuda_metrics["cuda_memory_allocated_gb"]
-        metrics["cuda_memory_reserved_gb"] = cuda_metrics["cuda_memory_reserved_gb"]
-        metrics["cuda_memory_peak_gb"] = cuda_metrics["cuda_memory_peak_gb"]
-        metrics["cuda_memory_fragmentation"] = cuda_metrics["cuda_memory_fragmentation"]
-    else:
-        # Non-throttle batches: populate with 0.0 defaults
-        # This ensures emitter can always use metrics["field"] not metrics.get()
-        metrics["gradient_cv"] = 0.0
-        metrics["cuda_memory_allocated_gb"] = 0.0
-        metrics["cuda_memory_reserved_gb"] = 0.0
-        metrics["cuda_memory_peak_gb"] = 0.0
-        metrics["cuda_memory_fragmentation"] = 0.0
-
-    # ... existing optimizer step ...
-    self.optimizer.step()
-    self.train_steps += 1  # Use existing counter, not new _update_count
-
-    return metrics
+# === Integration Location 3: In aggregated_result construction (around line 862) ===
+# Add new fields to the final metrics dict:
+aggregated_result["gradient_cv"] = gradient_cv_value
+aggregated_result["cuda_memory_allocated_gb"] = cuda_metrics["cuda_memory_allocated_gb"]
+aggregated_result["cuda_memory_reserved_gb"] = cuda_metrics["cuda_memory_reserved_gb"]
+aggregated_result["cuda_memory_peak_gb"] = cuda_metrics["cuda_memory_peak_gb"]
+aggregated_result["cuda_memory_fragmentation"] = cuda_metrics["cuda_memory_fragmentation"]
+# Note: clip_fraction_positive/negative are already in metrics dict, will be averaged like other metrics
 ```
 
 **Key wiring points:**
-1. Directional clip: Computed inline after ratio calculation (always available, always computed)
-2. Gradient CV: Computed every 10 batches but ALWAYS populated (0.0 on non-throttle)
-3. CUDA memory: Computed every 10 batches but ALWAYS populated (0.0 on non-throttle or no CUDA)
+1. **Directional clip:** Computed inline after existing clip_fraction (line ~701), using `joint_ratio` which is `per_head_ratios["op"]`
+2. **Gradient CV:** Computed every 10 batches but ALWAYS populated (0.0 on non-throttle)
+3. **CUDA memory:** Computed every 10 batches but ALWAYS populated (0.0 on non-throttle or no CUDA)
 
 **Why always populate:** Per CLAUDE.md prohibition on defensive programming, the emitter must use direct access `metrics["field"]` not `metrics.get("field", 0.0)`. This requires fields to always be present.
 
