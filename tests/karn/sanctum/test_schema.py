@@ -673,3 +673,22 @@ def test_gradient_quality_metrics_dataclass():
     # clip- = probability decreases capped (r < 1-ε)
     assert metrics.clip_fraction_positive == 0.0
     assert metrics.clip_fraction_negative == 0.0
+
+
+def test_tamiyo_state_has_nested_metrics():
+    """TamiyoState should have infrastructure and gradient_quality nested fields."""
+    from esper.karn.sanctum.schema import (
+        TamiyoState,
+        InfrastructureMetrics,
+        GradientQualityMetrics,
+    )
+
+    state = TamiyoState()
+
+    # Nested dataclasses should be present with defaults
+    assert isinstance(state.infrastructure, InfrastructureMetrics)
+    assert isinstance(state.gradient_quality, GradientQualityMetrics)
+
+    # Access nested fields
+    assert state.infrastructure.cuda_memory_allocated_gb == 0.0
+    assert state.gradient_quality.gradient_cv == 0.0

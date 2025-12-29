@@ -726,6 +726,10 @@ class TamiyoState:
     value_max: float = 0.0
     initial_value_spread: float | None = None  # Set after warmup for relative thresholds
 
+    # === Nested Metric Groups (per code review - prevents schema bloat) ===
+    infrastructure: InfrastructureMetrics = field(default_factory=InfrastructureMetrics)
+    gradient_quality: GradientQualityMetrics = field(default_factory=GradientQualityMetrics)
+
 
 @dataclass
 class SystemVitals:
