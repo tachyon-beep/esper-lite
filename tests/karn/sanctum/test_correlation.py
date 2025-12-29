@@ -70,6 +70,13 @@ class TestCorrelation:
         # Should still be close to -1 since we use last 10 samples
         assert corr < -0.95
 
+    def test_mismatched_lengths_one_short(self):
+        """When sequences have different lengths and one is too short, return 0."""
+        entropy = deque([1.0, 0.9, 0.8, 0.7])  # 4 samples
+        clip = deque([0.1, 0.2, 0.3, 0.4, 0.5, 0.6])  # 6 samples
+        corr = compute_correlation(entropy, clip)
+        assert corr == 0.0  # Should return 0 since aligned length is 4
+
 
 class TestAggregatorCorrelation:
     """Test aggregator computes entropy-clip correlation."""

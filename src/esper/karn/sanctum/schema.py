@@ -61,6 +61,10 @@ def compute_correlation(
     n = min(len(x), len(y))
     x, y = x[-n:], y[-n:]
 
+    # Re-check after alignment (n could be < 5 if sequences have different lengths)
+    if n < 5:
+        return 0.0
+
     x_mean = sum(x) / n
     y_mean = sum(y) / n
 
@@ -68,13 +72,13 @@ def compute_correlation(
     x_var = sum((xi - x_mean) ** 2 for xi in x)
     y_var = sum((yi - y_mean) ** 2 for yi in y)
 
-    denominator = (x_var * y_var) ** 0.5
-
-    # Epsilon check to prevent divide-by-zero
+    # Check variance product BEFORE square root for better numerical stability
     EPSILON = 1e-10
-    if denominator < EPSILON:
+    variance_product = x_var * y_var
+    if variance_product < EPSILON * EPSILON:
         return 0.0
 
+    denominator = variance_product ** 0.5
     return numerator / denominator
 
 
