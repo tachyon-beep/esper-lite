@@ -1,9 +1,9 @@
-"""ActionContext - Action distribution, sequence, and slot summary.
+"""ActionContext - Action distribution and sequence display.
 
 Combines:
 - Action distribution bar (stacked bar showing G/A/F/P/W proportions)
 - Recent action sequence with pattern detection (STUCK, THRASH, ALPHA_OSC)
-- Slot stage summary across all environments
+- Episode return history
 """
 
 from __future__ import annotations
@@ -11,11 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, ClassVar
 
 from rich.text import Text
-from textual.app import ComposeResult
-from textual.containers import Container
 from textual.widgets import Static
-
-from esper.leyline import STAGE_COLORS, STAGE_ABBREVIATIONS
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import DecisionSnapshot, SanctumSnapshot
@@ -81,8 +77,12 @@ def detect_action_patterns(
     return patterns
 
 
-class ActionContext(Container):
-    """Action context panel with distribution, sequence, and slots."""
+class ActionContext(Static):
+    """Action context panel with distribution, sequence, and returns.
+
+    Extends Static directly (like DecisionCard) to eliminate Container
+    layout overhead that causes whitespace issues.
+    """
 
     BAR_WIDTH: ClassVar[int] = 30
 
@@ -92,21 +92,21 @@ class ActionContext(Container):
         self.classes = "panel"
         self.border_title = "ACTION CONTEXT"
 
-    def compose(self) -> ComposeResult:
-        """Compose the panel layout."""
-        yield Static(id="action-bar")
-        yield Static(id="action-sequence")
-        yield Static(id="return-history")
-        yield Static(id="slot-summary")
-
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Update with new snapshot data."""
         self._snapshot = snapshot
+        self.refresh()  # Trigger render()
 
-        self.query_one("#action-bar", Static).update(self._render_action_bar())
-        self.query_one("#action-sequence", Static).update(self._render_action_sequence())
-        self.query_one("#return-history", Static).update(self._render_return_history())
-        self.query_one("#slot-summary", Static).update(self._render_slot_summary())
+    def render(self) -> Text:
+        """Render all action context sections."""
+        result = Text()
+        result.append(self._render_action_bar())
+        result.append("\n")
+        result.append(self._render_action_sequence())
+        result.append("\n")
+        result.append(self._render_return_history())
+        result.append("\n")  # Extra line for visual balance
+        return result
 
     def _render_action_bar(self) -> Text:
         """Render horizontal stacked bar for action distribution."""
@@ -211,66 +211,5 @@ class ActionContext(Container):
             result.append(f"{ret:+.1f}", style=style)
             if i < len(recent_returns) - 1:
                 result.append("  ")
-
-        return result
-
-    def _render_slot_summary(self) -> Text:
-        """Render aggregate slot state across all environments."""
-        if self._snapshot is None:
-            return Text("SLOTS: (no data)", style="dim")
-
-        snapshot = self._snapshot
-        counts = snapshot.slot_stage_counts
-        total = snapshot.total_slots
-
-        if total == 0:
-            return Text("SLOTS: (no environments)", style="dim")
-
-        result = Text()
-
-        # Header line
-        n_envs = len(snapshot.envs) if snapshot.envs else 0
-        result.append(f"SLOTS ({total} across {n_envs} envs)\n", style="bold dim")
-
-        # Stage distribution with mini-bars
-        stages = ["DORMANT", "GERMINATED", "TRAINING", "BLENDING", "HOLDING", "FOSSILIZED"]
-        stage_abbrevs = {k: v.upper() for k, v in STAGE_ABBREVIATIONS.items()}
-
-        for i, stage in enumerate(stages):
-            count = counts.get(stage, 0)
-            abbrev = stage_abbrevs.get(stage, stage[:4])
-            color = STAGE_COLORS.get(stage, "dim")
-
-            # Proportional bar (max 4 chars)
-            bar_width = min(4, int((count / max(1, total)) * 16)) if total > 0 else 0
-            bar_char = "█" if stage != "DORMANT" else "░"
-            bar = bar_char * bar_width
-
-            result.append(f"{abbrev}:", style="dim")
-            result.append(f"{count}", style=color)
-            if bar:
-                result.append(f" {bar}", style=color)
-
-            if i < len(stages) - 1:
-                result.append("  ")
-
-        result.append("\n")
-
-        # Summary stats
-        foss = snapshot.cumulative_fossilized
-        pruned = snapshot.cumulative_pruned
-        rate = (foss / max(1, foss + pruned)) * 100 if (foss + pruned) > 0 else 0
-        avg_epochs = snapshot.avg_epochs_in_stage
-
-        result.append("Foss:", style="dim")
-        result.append(f"{foss}", style="blue")
-        result.append("  Prune:", style="dim")
-        result.append(f"{pruned}", style="red" if pruned > foss else "dim")
-        result.append("  Rate:", style="dim")
-        rate_color = "green" if rate >= 70 else "yellow" if rate >= 50 else "red"
-        result.append(f"{rate:.0f}%", style=rate_color)
-        result.append("  AvgAge:", style="dim")
-        result.append(f"{avg_epochs:.1f}", style="cyan")
-        result.append(" epochs", style="dim")
 
         return result

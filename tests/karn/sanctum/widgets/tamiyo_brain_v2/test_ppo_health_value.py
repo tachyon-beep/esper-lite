@@ -1,4 +1,4 @@
-"""Tests for value function statistics display in PPOHealthPanel.
+"""Tests for value function statistics display in HealthStatusPanel.
 
 These tests verify the value function divergence detection logic, including:
 - Healthy values showing ok status
@@ -10,7 +10,7 @@ These tests verify the value function divergence detection logic, including:
 import pytest
 
 from esper.karn.sanctum.schema import TamiyoState, SanctumSnapshot
-from esper.karn.sanctum.widgets.tamiyo_brain_v2.ppo_health import PPOHealthPanel
+from esper.karn.sanctum.widgets.tamiyo_brain_v2.health_status_panel import HealthStatusPanel
 
 
 class TestValueFunctionDisplay:
@@ -18,7 +18,7 @@ class TestValueFunctionDisplay:
 
     def test_healthy_values_show_ok(self) -> None:
         """Normal value range should show ok status."""
-        panel = PPOHealthPanel()
+        panel = HealthStatusPanel()
         snapshot = SanctumSnapshot(
             tamiyo=TamiyoState(
                 ppo_data_received=True,
@@ -36,7 +36,7 @@ class TestValueFunctionDisplay:
 
     def test_exploding_values_show_critical(self) -> None:
         """Values 10x initial spread should show critical."""
-        panel = PPOHealthPanel()
+        panel = HealthStatusPanel()
         snapshot = SanctumSnapshot(
             tamiyo=TamiyoState(
                 ppo_data_received=True,
@@ -54,7 +54,7 @@ class TestValueFunctionDisplay:
 
     def test_collapsed_values_show_critical(self) -> None:
         """Constant values should show critical (collapsed)."""
-        panel = PPOHealthPanel()
+        panel = HealthStatusPanel()
         snapshot = SanctumSnapshot(
             tamiyo=TamiyoState(
                 ppo_data_received=True,
@@ -72,7 +72,7 @@ class TestValueFunctionDisplay:
 
     def test_high_cov_shows_warning(self) -> None:
         """High coefficient of variation should show warning."""
-        panel = PPOHealthPanel()
+        panel = HealthStatusPanel()
         snapshot = SanctumSnapshot(
             tamiyo=TamiyoState(
                 ppo_data_received=True,
@@ -90,7 +90,7 @@ class TestValueFunctionDisplay:
 
     def test_extreme_cov_shows_critical(self) -> None:
         """Extreme coefficient of variation (>3.0) should show critical."""
-        panel = PPOHealthPanel()
+        panel = HealthStatusPanel()
         snapshot = SanctumSnapshot(
             tamiyo=TamiyoState(
                 ppo_data_received=True,
@@ -108,7 +108,7 @@ class TestValueFunctionDisplay:
 
     def test_warning_at_5x_spread(self) -> None:
         """Values 5x initial spread should show warning."""
-        panel = PPOHealthPanel()
+        panel = HealthStatusPanel()
         snapshot = SanctumSnapshot(
             tamiyo=TamiyoState(
                 ppo_data_received=True,
@@ -126,7 +126,7 @@ class TestValueFunctionDisplay:
 
     def test_absolute_fallback_critical(self) -> None:
         """Absolute fallback: range >1000 or max >10000 is critical."""
-        panel = PPOHealthPanel()
+        panel = HealthStatusPanel()
         snapshot = SanctumSnapshot(
             tamiyo=TamiyoState(
                 ppo_data_received=True,
@@ -144,7 +144,7 @@ class TestValueFunctionDisplay:
 
     def test_absolute_fallback_warning(self) -> None:
         """Absolute fallback: range >500 or max >5000 is warning."""
-        panel = PPOHealthPanel()
+        panel = HealthStatusPanel()
         snapshot = SanctumSnapshot(
             tamiyo=TamiyoState(
                 ppo_data_received=True,
@@ -162,7 +162,7 @@ class TestValueFunctionDisplay:
 
     def test_zero_mean_avoids_cov_division(self) -> None:
         """When mean is near zero, CoV check should be skipped."""
-        panel = PPOHealthPanel()
+        panel = HealthStatusPanel()
         snapshot = SanctumSnapshot(
             tamiyo=TamiyoState(
                 ppo_data_received=True,
@@ -181,7 +181,7 @@ class TestValueFunctionDisplay:
 
     def test_render_value_stats_shows_range_and_std(self) -> None:
         """_render_value_stats should show range and std deviation."""
-        panel = PPOHealthPanel()
+        panel = HealthStatusPanel()
         snapshot = SanctumSnapshot(
             tamiyo=TamiyoState(
                 ppo_data_received=True,
@@ -204,7 +204,7 @@ class TestValueFunctionDisplay:
 
     def test_render_value_stats_critical_shows_alert(self) -> None:
         """Critical value status should show alert indicator."""
-        panel = PPOHealthPanel()
+        panel = HealthStatusPanel()
         snapshot = SanctumSnapshot(
             tamiyo=TamiyoState(
                 ppo_data_received=True,

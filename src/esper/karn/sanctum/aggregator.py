@@ -692,6 +692,11 @@ class SanctumAggregator:
         self._tamiyo.advantage_std = payload.advantage_std
         self._tamiyo.advantage_skewness = payload.advantage_skewness
         self._tamiyo.advantage_kurtosis = payload.advantage_kurtosis
+        self._tamiyo.advantage_positive_ratio = payload.advantage_positive_ratio
+
+        # Log prob extremes (NaN predictor) - have defaults
+        self._tamiyo.log_prob_min = payload.log_prob_min
+        self._tamiyo.log_prob_max = payload.log_prob_max
 
         # Ratio statistics (PPO importance sampling ratios) - have defaults
         self._tamiyo.ratio_mean = payload.ratio_mean

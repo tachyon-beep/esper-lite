@@ -620,10 +620,16 @@ class PPOUpdatePayload:
     entropy_loss: float = 0.0
     advantage_mean: float = 0.0
     advantage_std: float = 0.0
+    advantage_skewness: float = 0.0  # Asymmetry: >0 right-skewed, <0 left-skewed
+    advantage_kurtosis: float = 0.0  # Tail heaviness: >0 heavy tails (more outliers), <0 light tails
+    advantage_positive_ratio: float = 0.5  # Fraction positive (healthy: 0.4-0.6)
     ratio_mean: float = 1.0
     ratio_min: float = 1.0
     ratio_max: float = 1.0
     ratio_std: float = 0.0
+    # Log prob extremes (NaN predictor: <-50 warning, <-100 critical)
+    log_prob_min: float = 0.0
+    log_prob_max: float = 0.0
     lr: float | None = None
     entropy_coef: float | None = None
 
@@ -691,10 +697,15 @@ class PPOUpdatePayload:
             entropy_loss=data.get("entropy_loss", 0.0),
             advantage_mean=data.get("advantage_mean", 0.0),
             advantage_std=data.get("advantage_std", 0.0),
+            advantage_skewness=data.get("advantage_skewness", 0.0),
+            advantage_kurtosis=data.get("advantage_kurtosis", 0.0),
+            advantage_positive_ratio=data.get("advantage_positive_ratio", 0.5),
             ratio_mean=data.get("ratio_mean", 1.0),
             ratio_min=data.get("ratio_min", 1.0),
             ratio_max=data.get("ratio_max", 1.0),
             ratio_std=data.get("ratio_std", 0.0),
+            log_prob_min=data.get("log_prob_min", 0.0),
+            log_prob_max=data.get("log_prob_max", 0.0),
             lr=data.get("lr"),
             entropy_coef=data.get("entropy_coef"),
             inf_grad_count=data.get("inf_grad_count", 0),

@@ -738,10 +738,16 @@ def emit_ppo_update_event(
             entropy_loss=0.0,
             advantage_mean=metrics.get("advantage_mean", 0.0),
             advantage_std=metrics.get("advantage_std", 0.0),
+            advantage_skewness=metrics.get("advantage_skewness", 0.0),
+            advantage_kurtosis=metrics.get("advantage_kurtosis", 0.0),
+            advantage_positive_ratio=metrics.get("advantage_positive_ratio", 0.5),
             ratio_mean=metrics.get("ratio_mean", 1.0),
             ratio_min=metrics.get("ratio_min", 1.0),
             ratio_max=metrics.get("ratio_max", 1.0),
             ratio_std=metrics.get("ratio_std", 0.0),
+            # Log prob extremes (NaN predictor)
+            log_prob_min=metrics.get("log_prob_min", 0.0),
+            log_prob_max=metrics.get("log_prob_max", 0.0),
             # Value function statistics for drift monitoring
             value_mean=metrics.get("value_mean", 0.0),
             value_std=metrics.get("value_std", 0.0),

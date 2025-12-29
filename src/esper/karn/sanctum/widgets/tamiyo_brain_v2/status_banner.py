@@ -17,6 +17,7 @@ from textual.containers import Container
 from textual.widgets import Static
 
 from esper.karn.constants import TUIThresholds
+from esper.karn.sanctum.schema import detect_trend
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot
@@ -130,24 +131,39 @@ class StatusBanner(Container):
         return banner
 
     def _append_metrics(self, banner: Text, tamiyo) -> None:
-        """Append metric values to the banner."""
-        # Explained Variance
+        """Append metric values to the banner with trend arrows."""
+        # Explained Variance (higher is better = "accuracy" type)
         ev_style = self._metric_style(self._get_ev_status(tamiyo.explained_variance))
         banner.append(f"EV:{tamiyo.explained_variance:.2f}", style=ev_style)
+        ev_arrow, ev_arrow_style = self._trend_arrow(
+            tamiyo.explained_variance_history, "expl_var", "accuracy"
+        )
+        if ev_arrow:
+            banner.append(ev_arrow, style=ev_arrow_style)
         if tamiyo.explained_variance <= 0:
             banner.append("!", style="red")
         banner.append("  ")
 
-        # Clip Fraction
+        # Clip Fraction (lower is better = "loss" type)
         clip_style = self._metric_style(self._get_clip_status(tamiyo.clip_fraction))
         banner.append(f"Clip:{tamiyo.clip_fraction:.2f}", style=clip_style)
+        clip_arrow, clip_arrow_style = self._trend_arrow(
+            tamiyo.clip_fraction_history, "clip_fraction", "loss"
+        )
+        if clip_arrow:
+            banner.append(clip_arrow, style=clip_arrow_style)
         if tamiyo.clip_fraction > TUIThresholds.CLIP_WARNING:
             banner.append("!", style=clip_style)
         banner.append("  ")
 
-        # KL Divergence
+        # KL Divergence (lower is better = "loss" type)
         kl_style = self._metric_style(self._get_kl_status(tamiyo.kl_divergence))
         banner.append(f"KL:{tamiyo.kl_divergence:.3f}", style=kl_style)
+        kl_arrow, kl_arrow_style = self._trend_arrow(
+            tamiyo.kl_divergence_history, "kl_divergence", "loss"
+        )
+        if kl_arrow:
+            banner.append(kl_arrow, style=kl_arrow_style)
         if tamiyo.kl_divergence > TUIThresholds.KL_WARNING:
             banner.append("!", style=kl_style)
         banner.append("  ")
@@ -293,3 +309,30 @@ class StatusBanner(Container):
     def _metric_style(self, status: str) -> str:
         """Convert status to Rich style."""
         return {"ok": "green", "warning": "yellow", "critical": "red bold"}[status]
+
+    def _trend_arrow(
+        self, history: list | None, metric_name: str, metric_type: str
+    ) -> tuple[str, str]:
+        """Get trend arrow and style for a metric.
+
+        Args:
+            history: Recent metric values (oldest first).
+            metric_name: Name for threshold lookup (e.g., "expl_var").
+            metric_type: "loss" (lower=better) or "accuracy" (higher=better).
+
+        Returns:
+            Tuple of (arrow_char, style).
+        """
+        if not history or len(history) < 5:
+            return "", "dim"
+
+        trend = detect_trend(list(history), metric_name, metric_type)
+
+        # Map trend to compact arrow characters
+        arrows = {
+            "improving": ("↑", "green"),
+            "stable": ("→", "dim"),
+            "volatile": ("~", "yellow"),
+            "warning": ("↓", "red"),
+        }
+        return arrows.get(trend, ("→", "dim"))

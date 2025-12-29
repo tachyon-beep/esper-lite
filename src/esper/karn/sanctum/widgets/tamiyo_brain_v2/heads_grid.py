@@ -17,8 +17,6 @@ import math
 from typing import TYPE_CHECKING, ClassVar
 
 from rich.text import Text
-from textual.app import ComposeResult
-from textual.containers import Container
 from textual.widgets import Static
 
 if TYPE_CHECKING:
@@ -53,8 +51,12 @@ HEAD_MAX_ENTROPIES: dict[str, float] = {
 }
 
 
-class HeadsPanel(Container):
-    """Attention head entropy and gradient display panel."""
+class HeadsPanel(Static):
+    """Attention head entropy and gradient display panel.
+
+    Extends Static directly (like DecisionCard) to eliminate Container
+    layout overhead that causes whitespace issues.
+    """
 
     CELL_WIDTH: ClassVar[int] = 7  # Width per head column
     BAR_WIDTH: ClassVar[int] = 4   # Width of mini-bar
@@ -65,16 +67,14 @@ class HeadsPanel(Container):
         self.classes = "panel"
         self.border_title = "ATTENTION HEADS"
 
-    def compose(self) -> ComposeResult:
-        """Compose the panel layout."""
-        yield Static(id="heads-content")
-
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Update with new snapshot data."""
         self._snapshot = snapshot
+        self.refresh()  # Trigger render()
 
-        content = self.query_one("#heads-content", Static)
-        content.update(self._render_heads())
+    def render(self) -> Text:
+        """Render the heads grid."""
+        return self._render_heads()
 
     def _render_heads(self) -> Text:
         """Render the heads grid with vertical alignment."""
@@ -93,9 +93,10 @@ class HeadsPanel(Container):
         result.append("\n")
 
         # Row 1: Entropy values
+        # Note: getattr without default - AttributeError if HEAD_CONFIG has typo
         result.append("Entr  ", style="dim")
         for abbrev, ent_field, _ in HEAD_CONFIG:
-            entropy = getattr(tamiyo, ent_field, 0.0)
+            entropy: float = getattr(tamiyo, ent_field)
             color = self._entropy_color(abbrev, entropy)
             result.append(f"{entropy:^{self.CELL_WIDTH}.2f}", style=color)
         result.append("\n")
@@ -103,7 +104,7 @@ class HeadsPanel(Container):
         # Row 2: Entropy bars
         result.append("      ", style="dim")  # Indent
         for abbrev, ent_field, _ in HEAD_CONFIG:
-            entropy = getattr(tamiyo, ent_field, 0.0)
+            entropy = getattr(tamiyo, ent_field)
             bar = self._render_entropy_bar(abbrev, entropy)
             # Center the bar in the cell
             padding = (self.CELL_WIDTH - self.BAR_WIDTH) // 2
@@ -115,7 +116,7 @@ class HeadsPanel(Container):
         # Row 3: Gradient values
         result.append("Grad  ", style="dim")
         for abbrev, _, grad_field in HEAD_CONFIG:
-            grad = getattr(tamiyo, grad_field, 0.0)
+            grad: float = getattr(tamiyo, grad_field)
             color = self._gradient_color(grad)
             result.append(f"{grad:^{self.CELL_WIDTH}.2f}", style=color)
         result.append("\n")
@@ -123,12 +124,21 @@ class HeadsPanel(Container):
         # Row 4: Gradient bars
         result.append("      ", style="dim")  # Indent
         for abbrev, _, grad_field in HEAD_CONFIG:
-            grad = getattr(tamiyo, grad_field, 0.0)
+            grad = getattr(tamiyo, grad_field)
             bar = self._render_gradient_bar(grad)
             padding = (self.CELL_WIDTH - self.BAR_WIDTH) // 2
             result.append(" " * padding)
             result.append(bar)
             result.append(" " * (self.CELL_WIDTH - self.BAR_WIDTH - padding))
+        result.append("\n")
+
+        # Row 5: Head state indicators (per DRL expert recommendation)
+        result.append("State ", style="dim")
+        for abbrev, ent_field, grad_field in HEAD_CONFIG:
+            entropy = getattr(tamiyo, ent_field)
+            grad = getattr(tamiyo, grad_field)
+            state, style = self._head_state(abbrev, entropy, grad)
+            result.append(f"{state:^{self.CELL_WIDTH}}", style=style)
 
         return result
 
@@ -176,6 +186,53 @@ class HeadsPanel(Container):
             return "yellow"  # Strong
         else:
             return "red"  # Exploding
+
+    def _head_state(self, head: str, entropy: float, grad_norm: float) -> tuple[str, str]:
+        """Classify head state based on entropy and gradient.
+
+        States (per DRL expert):
+        - ● healthy: Active learning (moderate entropy, normal gradients)
+        - ○ dead: Collapsed and not learning (low entropy + vanishing gradients)
+        - ◐ confused: Can't discriminate (very high entropy, normal gradients)
+        - ◇ deterministic: Converged to specific choice (low entropy, normal gradients)
+
+        Returns:
+            Tuple of (indicator_char, style).
+        """
+        max_ent = HEAD_MAX_ENTROPIES.get(head, 1.0)
+        normalized_ent = entropy / max_ent if max_ent > 0 else 0
+
+        # Gradient health check
+        grad_is_dead = grad_norm < 0.01
+        grad_is_normal = 0.1 <= grad_norm <= 2.0
+        grad_is_exploding = grad_norm > 5.0
+
+        # State classification
+        if grad_is_dead and normalized_ent < 0.1:
+            # Dead: collapsed entropy AND vanishing gradients
+            return "○", "red"
+
+        if grad_is_exploding:
+            # Exploding gradients - always bad
+            return "▲", "red bold"
+
+        if normalized_ent < 0.1:
+            # Very low entropy with normal gradients = deterministic (may be OK)
+            # Conditional heads often have low entropy when their op isn't selected
+            if head in CONDITIONAL_HEADS:
+                return "◇", "dim"  # Expected for conditional heads
+            return "◇", "yellow"  # Concerning for always-active heads
+
+        if normalized_ent > 0.9 and grad_is_normal:
+            # High entropy with normal gradients = confused (can't decide)
+            return "◐", "yellow"
+
+        if 0.3 <= normalized_ent <= 0.7 and grad_is_normal:
+            # Ideal: moderate entropy with healthy gradients
+            return "●", "green"
+
+        # Default: acceptable but not ideal
+        return "●", "dim"
 
     def _render_gradient_bar(self, grad_norm: float) -> Text:
         """Render mini-bar for gradient norm.

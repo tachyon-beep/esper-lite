@@ -576,6 +576,13 @@ class TamiyoState:
     # Pre-normalization stats (raw learning signal magnitude)
     advantage_raw_mean: float = 0.0
     advantage_raw_std: float = 0.0
+    # Advantage distribution health
+    advantage_positive_ratio: float = 0.5  # Fraction of positive advantages (healthy: 0.4-0.6)
+
+    # Log probability extremes (NaN predictor)
+    # Values < -50 warning, < -100 critical (numerical underflow imminent)
+    log_prob_min: float = 0.0  # Most negative log prob this update
+    log_prob_max: float = 0.0  # Highest log prob (should be <= 0)
 
     # Gradient health (shown in Vitals)
     dead_layers: int = 0

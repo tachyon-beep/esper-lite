@@ -525,20 +525,44 @@ class PPOAgent:
         # PERF: Batch mean/std into single GPU→CPU transfer
         valid_advantages_for_stats = data["advantages"][valid_mask]
         if valid_advantages_for_stats.numel() > 0:
-            adv_stats = torch.stack([
-                valid_advantages_for_stats.mean(),
-                valid_advantages_for_stats.std(),
-            ]).cpu().tolist()
+            adv_mean = valid_advantages_for_stats.mean()
+            adv_std = valid_advantages_for_stats.std()
+            # Compute skewness and kurtosis (both use same std threshold)
+            # Use 0.05 threshold to match UI "low warning" - below this, σ^n division unstable
+            if adv_std > 0.05:
+                centered = valid_advantages_for_stats - adv_mean
+                # Skewness: E[(X-μ)³] / σ³ - asymmetry indicator
+                adv_skewness = (centered ** 3).mean() / (adv_std ** 3)
+                # Excess kurtosis: E[(X-μ)⁴] / σ⁴ - 3 (0 = normal, >0 = heavy tails)
+                adv_kurtosis = (centered ** 4).mean() / (adv_std ** 4) - 3.0
+            else:
+                adv_skewness = torch.tensor(0.0, device=adv_mean.device)
+                adv_kurtosis = torch.tensor(0.0, device=adv_mean.device)
+            adv_stats = torch.stack([adv_mean, adv_std, adv_skewness, adv_kurtosis]).cpu().tolist()
             metrics["advantage_mean"] = [adv_stats[0]]
             metrics["advantage_std"] = [adv_stats[1]]
+            metrics["advantage_skewness"] = [adv_stats[2]]
+            metrics["advantage_kurtosis"] = [adv_stats[3]]
+            # Fraction of positive advantages (healthy: 40-60%)
+            # Imbalanced ratios suggest reward design issues or easy/hard regions
+            adv_positive_ratio = (valid_advantages_for_stats > 0).float().mean().item()
+            metrics["advantage_positive_ratio"] = [adv_positive_ratio]
         else:
             metrics["advantage_mean"] = [0.0]
             metrics["advantage_std"] = [0.0]
+            metrics["advantage_skewness"] = [0.0]
+            metrics["advantage_kurtosis"] = [0.0]
+            metrics["advantage_positive_ratio"] = [0.5]
 
         # Initialize per-head entropy tracking (P3-1)
         head_entropy_history: dict[str, list[float]] = {head: [] for head in HEAD_NAMES}
         # Initialize per-head gradient norm tracking (P4-6)
         head_grad_norm_history: dict[str, list[float]] = {head: [] for head in HEAD_NAMES + ("value",)}
+        # Initialize log prob extremes tracking (NaN predictor)
+        # Very negative log probs (<-50 warning, <-100 critical) predict numerical underflow
+        # Use inf/-inf for proper min/max tracking (log probs are always <= 0)
+        log_prob_min_across_epochs: float = float("inf")
+        log_prob_max_across_epochs: float = float("-inf")
 
         for epoch_i in range(self.recurrent_n_epochs):
             if early_stopped:
@@ -582,6 +606,16 @@ class PPOAgent:
             values = values[valid_mask]
             for key in entropy:
                 entropy[key] = entropy[key][valid_mask]
+
+            # Track log prob extremes across all heads (NaN predictor)
+            # Use HEAD_NAMES for consistent ordering
+            all_log_probs = torch.cat([log_probs[k] for k in HEAD_NAMES])
+            if all_log_probs.numel() > 0:
+                # Batch min/max into single GPU->CPU transfer
+                epoch_extremes = torch.stack([all_log_probs.min(), all_log_probs.max()]).cpu().tolist()
+                epoch_log_prob_min, epoch_log_prob_max = epoch_extremes
+                log_prob_min_across_epochs = min(log_prob_min_across_epochs, epoch_log_prob_min)
+                log_prob_max_across_epochs = max(log_prob_max_across_epochs, epoch_log_prob_max)
 
             # Track per-head entropy (P3-1)
             # PERF: Batch all 8 head entropies into single GPU→CPU transfer
@@ -840,6 +874,14 @@ class PPOAgent:
         aggregated_result["head_entropies"] = head_entropy_history
         # Add per-head gradient norm tracking (P4-6)
         aggregated_result["head_grad_norms"] = head_grad_norm_history
+        # Add log prob extremes (NaN predictor)
+        # Guard against no valid data (inf values indicate no updates occurred)
+        if log_prob_min_across_epochs == float("inf"):
+            log_prob_min_across_epochs = 0.0
+        if log_prob_max_across_epochs == float("-inf"):
+            log_prob_max_across_epochs = 0.0
+        aggregated_result["log_prob_min"] = log_prob_min_across_epochs
+        aggregated_result["log_prob_max"] = log_prob_max_across_epochs
 
         return aggregated_result
 

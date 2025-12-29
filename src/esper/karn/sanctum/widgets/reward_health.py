@@ -12,7 +12,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from rich.panel import Panel
 from rich.text import Text
 from textual.widgets import Static
 
@@ -43,69 +42,53 @@ class RewardHealthData:
 
 
 class RewardHealthPanel(Static):
-    """Compact reward health display for Sanctum."""
+    """Compact reward health display for Sanctum.
 
-    DEFAULT_CSS = """
-    RewardHealthPanel {
-        height: 2;
-        border: solid $primary;
-        padding: 0 1;
-    }
+    Uses Textual CSS for border/title instead of Rich Panel to avoid
+    double-nesting appearance.
     """
 
     def __init__(self, data: RewardHealthData | None = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._data = data or RewardHealthData()
+        self.border_title = "REWARD HEALTH"
 
     def update_data(self, data: RewardHealthData) -> None:
         """Update health data and refresh display."""
         self._data = data
         self.refresh()
 
-    def render(self) -> Panel:
-        """Render health indicators."""
-        lines = []
+    def render(self) -> Text:
+        """Render health indicators as plain Text."""
+        result = Text()
 
         # PBRS fraction
         pbrs_color = "green" if self._data.is_pbrs_healthy else "red"
-        lines.append(
-            Text.assemble(
-                ("PBRS: ", "bold"),
-                (f"{self._data.pbrs_fraction:.0%}", pbrs_color),
-                (" (10-40%)", "dim"),
-            )
-        )
+        result.append("PBRS: ", style="bold")
+        result.append(f"{self._data.pbrs_fraction:.0%}", style=pbrs_color)
+        result.append(" (10-40%)", style="dim")
+        result.append("\n")
 
         # Anti-gaming
         gaming_color = "green" if self._data.is_gaming_healthy else "red"
-        lines.append(
-            Text.assemble(
-                ("Gaming: ", "bold"),
-                (f"{self._data.anti_gaming_trigger_rate:.1%}", gaming_color),
-                (" (<5%)", "dim"),
-            )
-        )
+        result.append("Gaming: ", style="bold")
+        result.append(f"{self._data.anti_gaming_trigger_rate:.1%}", style=gaming_color)
+        result.append(" (<5%)", style="dim")
+        result.append("\n")
 
         # Explained variance
         ev_color = "green" if self._data.is_ev_healthy else "yellow"
-        lines.append(
-            Text.assemble(
-                ("EV: ", "bold"),
-                (f"{self._data.ev_explained:.2f}", ev_color),
-                (" (>0.5)", "dim"),
-            )
-        )
+        result.append("EV: ", style="bold")
+        result.append(f"{self._data.ev_explained:.2f}", style=ev_color)
+        result.append(" (>0.5)", style="dim")
+        result.append("\n")
 
         # Hypervolume
-        lines.append(
-            Text.assemble(
-                ("HV: ", "bold"),
-                (f"{self._data.hypervolume:.1f}", "cyan"),
-            )
-        )
+        result.append("HV: ", style="bold")
+        result.append(f"{self._data.hypervolume:.1f}", style="cyan")
+        result.append("\n")  # Extra line for visual balance
 
-        content = Text("\n").join(lines)
-        return Panel(content, title="[bold]Reward Health[/]", border_style="blue")
+        return result
 
 
 __all__ = ["RewardHealthPanel", "RewardHealthData"]

@@ -149,7 +149,13 @@ class DecisionCard(Static):
         result.append("─" * self.CARD_WIDTH, style="dim")
         result.append("\n")
 
-        # Line 4: Host + Entropy + Badge
+        # Line 4: WHY - inferred reasoning
+        why_text = self._infer_why(decision)
+        result.append("WHY: ", style="bold yellow")
+        result.append(why_text, style="italic")
+        result.append("\n")
+
+        # Line 5: Host + Entropy + Badge
         entropy_label, entropy_style = self._entropy_label(decision.decision_entropy)
         outcome_badge, badge_style = self._outcome_badge(
             decision.expected_value, decision.actual_reward
@@ -216,6 +222,66 @@ class DecisionCard(Static):
         elif action == "SET_ALPHA_TARGET":
             return "(adjusting blend parameters)"
         return ""
+
+    def _infer_why(self, decision: "DecisionSnapshot") -> str:
+        """Infer the reasoning behind a decision from context.
+
+        Returns a short explanation of WHY Tamiyo made this choice.
+        """
+        action = decision.chosen_action
+        slot_states = decision.slot_states
+        confidence = decision.confidence
+        entropy = decision.decision_entropy
+        host_acc = decision.host_accuracy
+
+        # Count slot states
+        dormant_count = sum(1 for s in slot_states.values() if "Dormant" in s or "Empty" in s)
+        training_count = sum(1 for s in slot_states.values() if "Training" in s)
+        blending_count = sum(1 for s in slot_states.values() if "Blending" in s or "Holding" in s)
+
+        if action == "GERMINATE":
+            reasons = []
+            if dormant_count > 0:
+                reasons.append("dormant slot available")
+            if host_acc < 30:
+                reasons.append("host accuracy low")
+            elif host_acc < 50:
+                reasons.append("host needs help")
+            if confidence > 0.8:
+                reasons.append("high confidence")
+            return " + ".join(reasons[:2]) if reasons else "opportunity to grow"
+
+        elif action == "WAIT":
+            if training_count > 0:
+                return f"{training_count} slot{'s' if training_count > 1 else ''} still training"
+            if entropy > 1.0:
+                return "high uncertainty, gathering data"
+            if dormant_count == 0:
+                return "all slots occupied"
+            if confidence > 0.7:
+                return "deliberate pause"
+            return "monitoring progress"
+
+        elif action == "PRUNE":
+            if confidence > 0.8:
+                return "clear underperformer"
+            return "removing low contributor"
+
+        elif action == "FOSSILIZE":
+            slot = decision.chosen_slot or "?"
+            slot_state = slot_states.get(slot, "")
+            if "Blending" in slot_state:
+                return "module ready to fuse"
+            if "Holding" in slot_state:
+                return "stable, ready to commit"
+            return "matured module"
+
+        elif action == "SET_ALPHA_TARGET":
+            if confidence > 0.8:
+                return "alpha adjustment needed"
+            return "tuning blend ratio"
+
+        return "policy decision"
 
     def _entropy_label(self, entropy: float) -> tuple[str, str]:
         """Return (label, style) for entropy value."""

@@ -8,9 +8,9 @@ Layout:
     │ StatusBanner (1 line)                                           │
     ├─────────────────────────────────────────┬───────────────────────┤
     │ VitalsColumn (2/3 width)                │ DecisionsColumn (1/3) │
-    │ ├── PPOHealthPanel (gauges + metrics)   │ ├── DecisionCard      │
+    │ ├── PPOHealth | Losses | Health         │ ├── DecisionCard      │
     │ ├── HeadsPanel (entropy + gradients)    │ ├── DecisionCard      │
-    │ └── ActionContext | RewardHealth        │ └── DecisionCard      │
+    │ └── ActionContext | Slots | RewardHealth│ └── DecisionCard      │
     └─────────────────────────────────────────┴───────────────────────┘
 """
 
@@ -26,8 +26,11 @@ from textual.widgets import Static
 
 from .status_banner import StatusBanner
 from .ppo_health import PPOHealthPanel
+from .losses_panel import LossesPanel
+from .health_status_panel import HealthStatusPanel
 from .heads_grid import HeadsPanel
 from .action_context import ActionContext
+from .slots_panel import SlotsPanel
 from .decisions_column import DecisionCard, DecisionsColumn
 from ..reward_health import RewardHealthPanel
 
@@ -94,19 +97,43 @@ class TamiyoBrainV2(Container):
     .panel {
         border: round $surface-lighten-2;
         margin: 0;
-        padding: 0;
+        padding: 0 1;
         height: auto;
     }
 
-    /* Sub-panels - no padding or margin between them */
-    #ppo-health {
-        height: 14;
-        max-height: 14;
+    /* Sub-panels - now Static-based, height sizes to content */
+    #ppo-health, #losses-panel, #health-panel, #heads-panel, #action-context, #slots-panel {
+        height: auto;
         padding: 0;
         margin: 0;
     }
 
-    #heads-panel, #action-context, #reward-health {
+    /* PPO row - three panels */
+    #ppo-row {
+        height: auto;
+        width: 100%;
+    }
+
+    #ppo-row #ppo-health {
+        width: 0.9fr;
+    }
+
+    #ppo-row #losses-panel {
+        width: 0.9fr;
+        border: round $surface-lighten-2;
+        border-title-color: $text-muted;
+        padding: 0 1;
+    }
+
+    #ppo-row #health-panel {
+        width: 1.2fr;
+        border: round $surface-lighten-2;
+        border-title-color: $text-muted;
+        padding: 0 1;
+    }
+
+    #reward-health {
+        height: auto;
         padding: 0;
         margin: 0;
     }
@@ -116,30 +143,25 @@ class TamiyoBrainV2(Container):
         width: 100%;
     }
 
+    /* Action row: ActionContext and Slots wider, RewardHealth half-width */
     #action-row #action-context {
-        width: 2fr;
+        width: 1.25fr;
     }
 
-    #action-row #reward-health {
-        width: 1fr;
+    #action-row #slots-panel {
+        width: 1.25fr;
         height: auto;
-        border: solid $primary;
+        border: round $surface-lighten-2;
+        border-title-color: $text-muted;
         padding: 0 1;
     }
 
-    #ppo-content {
+    #action-row #reward-health {
+        width: 0.5fr;
         height: auto;
-        width: 100%;
-    }
-
-    #gauge-column {
-        width: 36;
-        height: auto;
-    }
-
-    #metrics-column {
-        width: 1fr;
-        height: auto;
+        border: round $surface-lighten-2;
+        border-title-color: $text-muted;
+        padding: 0 1;
     }
 
     .panel-header {
@@ -187,6 +209,12 @@ class TamiyoBrainV2(Container):
         border: thick $success;
         background: $panel-darken-1;
     }
+
+    /* Remove padding from decision column internals */
+    #decisions-header, #cards-container {
+        padding: 0;
+        margin: 0;
+    }
     """
 
     # Enable keyboard focus for Tab navigation
@@ -205,11 +233,16 @@ class TamiyoBrainV2(Container):
         # Main content: vitals left, decisions right
         with Horizontal(id="main-content"):
             with VerticalScroll(id="vitals-column"):
-                yield PPOHealthPanel(id="ppo-health")
+                # PPO row - three panels
+                with Horizontal(id="ppo-row"):
+                    yield PPOHealthPanel(id="ppo-health")
+                    yield LossesPanel(id="losses-panel")
+                    yield HealthStatusPanel(id="health-panel")
                 yield HeadsPanel(id="heads-panel")
-                # ActionContext and RewardHealth side by side
+                # ActionContext, Slots, and RewardHealth side by side
                 with Horizontal(id="action-row"):
                     yield ActionContext(id="action-context")
+                    yield SlotsPanel(id="slots-panel")
                     yield RewardHealthPanel(id="reward-health")
 
             yield DecisionsColumn(id="decisions-column")
@@ -240,12 +273,27 @@ class TamiyoBrainV2(Container):
             pass
 
         try:
+            self.query_one("#losses-panel", LossesPanel).update_snapshot(snapshot)
+        except NoMatches:
+            pass
+
+        try:
+            self.query_one("#health-panel", HealthStatusPanel).update_snapshot(snapshot)
+        except NoMatches:
+            pass
+
+        try:
             self.query_one("#heads-panel", HeadsPanel).update_snapshot(snapshot)
         except NoMatches:
             pass
 
         try:
             self.query_one("#action-context", ActionContext).update_snapshot(snapshot)
+        except NoMatches:
+            pass
+
+        try:
+            self.query_one("#slots-panel", SlotsPanel).update_snapshot(snapshot)
         except NoMatches:
             pass
 

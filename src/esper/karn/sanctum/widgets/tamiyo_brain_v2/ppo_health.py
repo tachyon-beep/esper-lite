@@ -1,20 +1,10 @@
-"""PPOHealthPanel - Gauges and metrics for PPO training health.
+"""PPOHealthPanel - Gauges for PPO training health.
 
-Consolidates warmup status to panel header (not repeated per-gauge).
-
-Layout:
-    ┌─ PPO HEALTH ─────────────────────────── WARMING UP [5/50] ─┐
-    │ Expl.Var   -0.005  [██░░░░░░░░]    Ep.Return ▁▂▃▅█  -9.8 ↘│
-    │ Entropy     7.89   [██████████]    Advantage  +0.00±1.00  │
-    │ Clip Frac   0.000  [░░░░░░░░░░]    Ratio   0.98 < r < 1.02│
-    │ KL Div      0.000  [░░░░░░░░░░]    Policy Loss   -0.350   │
-    │                                    Value Loss    33.757   │
-    │                                    Grad Norm      1.00    │
-    │                                    Layers       12/12 ✓   │
-    │                                    Entropy D  stable [--] │
-    │                                    Policy       stable    │
-    │                                    Value Range [...]      │
-    └────────────────────────────────────────────────────────────┘
+Displays core PPO metrics with visual gauges:
+- Explained Variance
+- Entropy
+- Clip Fraction
+- KL Divergence
 """
 
 from __future__ import annotations
@@ -22,23 +12,21 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, ClassVar
 
 from rich.text import Text
-from textual.app import ComposeResult
-from textual.containers import Container, Horizontal
 from textual.widgets import Static
 
 from esper.karn.constants import TUIThresholds
 
-from .primary_metrics import render_sparkline, detect_trend, trend_style
-
 if TYPE_CHECKING:
-    from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
+    from esper.karn.sanctum.schema import SanctumSnapshot
 
 
-class PPOHealthPanel(Container):
-    """PPO training health panel with gauges and metrics."""
+class PPOHealthPanel(Static):
+    """PPO training gauges panel.
+
+    Extends Static directly for minimal layout overhead.
+    """
 
     WARMUP_BATCHES: ClassVar[int] = 50
-    TOTAL_LAYERS: ClassVar[int] = 12
     GAUGE_WIDTH: ClassVar[int] = 10
 
     def __init__(self, **kwargs) -> None:
@@ -46,12 +34,6 @@ class PPOHealthPanel(Container):
         self._snapshot: SanctumSnapshot | None = None
         self.classes = "panel"
         self.border_title = "PPO HEALTH"
-
-    def compose(self) -> ComposeResult:
-        """Compose the panel layout."""
-        with Horizontal(id="ppo-content"):
-            yield Static(id="gauge-column")
-            yield Static(id="metrics-column", classes="metrics-column")
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Update with new snapshot data."""
@@ -72,13 +54,13 @@ class PPOHealthPanel(Container):
         else:
             self.border_title = "PPO HEALTH"
 
-        # Update gauge column
-        gauge_col = self.query_one("#gauge-column", Static)
-        gauge_col.update(self._render_gauges())
+        self.refresh()  # Trigger render()
 
-        # Update metrics column
-        metrics_col = self.query_one("#metrics-column", Static)
-        metrics_col.update(self._render_metrics())
+    def render(self) -> Text:
+        """Render the gauges panel."""
+        result = self._render_gauges()
+        result.append("\n\n\n")  # Extra lines to match Health panel height
+        return result
 
     def _render_gauges(self) -> Text:
         """Render the 2x2 gauge grid with value-first layout."""
@@ -184,248 +166,6 @@ class PPOHealthPanel(Container):
 
         return result
 
-    def _render_metrics(self) -> Text:
-        """Render the metrics column."""
-        if self._snapshot is None:
-            return Text("No data", style="dim")
-
-        tamiyo = self._snapshot.tamiyo
-        result = Text()
-
-        # Episode Return sparkline (primary metric, top position)
-        result.append("Ep.Return    ", style="bold cyan")
-        if tamiyo.episode_return_history:
-            sparkline = render_sparkline(tamiyo.episode_return_history, width=15)
-            ep_trend = detect_trend(list(tamiyo.episode_return_history))
-            result.append(sparkline)
-            result.append(f" {tamiyo.current_episode_return:>6.1f} ", style="white")
-            result.append(ep_trend, style=trend_style(ep_trend, "accuracy"))
-        else:
-            result.append("─" * 15, style="dim")
-        result.append("\n")
-
-        # Advantage stats
-        adv_status = self._get_advantage_status(tamiyo.advantage_std)
-        adv_style = self._status_style(adv_status)
-        result.append("Advantage    ", style="dim")
-        result.append(f"{tamiyo.advantage_mean:+.2f} ± {tamiyo.advantage_std:.2f}", style=adv_style)
-        if adv_status != "ok":
-            result.append(" !", style=adv_style)
-        result.append("\n")
-
-        # Ratio bounds
-        ratio_status = self._get_ratio_status(tamiyo.ratio_min, tamiyo.ratio_max)
-        ratio_style = self._status_style(ratio_status)
-        result.append("Ratio        ", style="dim")
-        result.append(f"{tamiyo.ratio_min:.2f} < r < {tamiyo.ratio_max:.2f}", style=ratio_style)
-        result.append("\n")
-
-        # Policy loss with sparkline
-        if tamiyo.policy_loss_history:
-            pl_sparkline = render_sparkline(tamiyo.policy_loss_history, width=15)
-            pl_trend = detect_trend(list(tamiyo.policy_loss_history))
-            result.append("Policy Loss  ", style="dim")
-            result.append(pl_sparkline)
-            result.append(f" {tamiyo.policy_loss:>7.3f} ", style="bright_cyan")
-            result.append(pl_trend, style=trend_style(pl_trend, "loss"))
-        else:
-            result.append("Policy Loss  ", style="dim")
-            result.append(f"{tamiyo.policy_loss:>7.3f}", style="bright_cyan")
-        result.append("\n")
-
-        # Value loss with sparkline
-        if tamiyo.value_loss_history:
-            vl_sparkline = render_sparkline(tamiyo.value_loss_history, width=15)
-            vl_trend = detect_trend(list(tamiyo.value_loss_history))
-            result.append("Value Loss   ", style="dim")
-            result.append(vl_sparkline)
-            result.append(f" {tamiyo.value_loss:>7.3f} ", style="bright_cyan")
-            result.append(vl_trend, style=trend_style(vl_trend, "loss"))
-        else:
-            result.append("Value Loss   ", style="dim")
-            result.append(f"{tamiyo.value_loss:>7.3f}", style="bright_cyan")
-        result.append("\n")
-
-        # Grad norm
-        gn_status = self._get_grad_norm_status(tamiyo.grad_norm)
-        gn_style = self._status_style(gn_status)
-        result.append("Grad Norm    ", style="dim")
-        result.append(f"{tamiyo.grad_norm:>7.2f}", style=gn_style)
-        if gn_status != "ok":
-            result.append(" !", style=gn_style)
-        result.append("\n")
-
-        # Layer health
-        result.append("Layers       ", style="dim")
-        healthy = self.TOTAL_LAYERS - tamiyo.dead_layers - tamiyo.exploding_layers
-        if tamiyo.dead_layers > 0 or tamiyo.exploding_layers > 0:
-            result.append(
-                f"{tamiyo.dead_layers}D/{tamiyo.exploding_layers}E",
-                style="red",
-            )
-        else:
-            result.append(f"{healthy}/{self.TOTAL_LAYERS} ✓", style="green")
-        result.append("\n")
-
-        # Entropy trend (velocity and collapse countdown)
-        result.append(self._render_entropy_trend())
-        result.append("\n")
-
-        # Policy state based on entropy-clip correlation
-        result.append(self._render_policy_state())
-        result.append("\n")
-
-        # Value function statistics
-        result.append(self._render_value_stats())
-
-        return result
-
-    def _render_value_stats(self) -> Text:
-        """Render value function statistics with relative thresholds."""
-        if self._snapshot is None:
-            return Text()
-
-        tamiyo = self._snapshot.tamiyo
-        result = Text()
-
-        value_status = self._get_value_status(tamiyo)
-        value_style = self._status_style(value_status)
-
-        result.append("Value Range  ", style="dim")
-        result.append(f"[{tamiyo.value_min:.1f}, {tamiyo.value_max:.1f}]", style=value_style)
-
-        if tamiyo.value_std > 0:
-            result.append(f" s={tamiyo.value_std:.2f}", style="dim")
-
-        if value_status != "ok":
-            result.append(" !", style=value_style)
-
-        return result
-
-    def _get_value_status(self, tamiyo: "TamiyoState") -> str:
-        """Check if value function is healthy using relative thresholds."""
-        v_range = tamiyo.value_max - tamiyo.value_min
-        v_mean = tamiyo.value_mean
-        v_std = tamiyo.value_std
-        initial = tamiyo.initial_value_spread
-
-        # Collapse detection: values stuck at constant
-        if v_range < 0.1 and v_std < 0.01:
-            return "critical"
-
-        # Coefficient of variation check (relative instability)
-        if abs(v_mean) > 0.1:
-            cov = v_std / abs(v_mean)
-            if cov > 3.0:
-                return "critical"  # Extreme instability
-            if cov > 2.0:
-                return "warning"
-
-        # Relative threshold (if initial spread known)
-        if initial is not None and initial > 0.1:
-            ratio = v_range / initial
-            if ratio > 10:
-                return "critical"  # 10x initial spread
-            if ratio > 5:
-                return "warning"  # 5x initial spread
-            return "ok"
-
-        # Absolute fallback (during warmup or if initial unknown)
-        if v_range > 1000 or abs(tamiyo.value_max) > 10000:
-            return "critical"
-        if v_range > 500 or abs(tamiyo.value_max) > 5000:
-            return "warning"
-
-        return "ok"
-
-    def _render_entropy_trend(self) -> Text:
-        """Render entropy trend with velocity and countdown."""
-        if self._snapshot is None:
-            return Text()
-
-        tamiyo = self._snapshot.tamiyo
-        velocity = tamiyo.entropy_velocity
-        risk = tamiyo.collapse_risk_score
-
-        result = Text()
-        result.append("Entropy D    ", style="dim")
-
-        EPSILON = 1e-6
-        if abs(velocity) < 0.005:
-            result.append("stable [--]", style="green")
-            return result
-
-        # Trend arrows
-        if velocity < -0.03:
-            arrow = "[vv]"
-            arrow_style = "red bold"
-        elif velocity < -0.01:
-            arrow = "[v]"
-            arrow_style = "yellow"
-        elif velocity > 0.01:
-            arrow = "[^]"
-            arrow_style = "green"
-        else:
-            arrow = "[~]"
-            arrow_style = "dim"
-
-        result.append(f"{velocity:+.3f}/b ", style=arrow_style)
-        result.append(arrow, style=arrow_style)
-
-        # Countdown (only if declining toward critical)
-        if velocity < -EPSILON and tamiyo.entropy > TUIThresholds.ENTROPY_CRITICAL:
-            distance = tamiyo.entropy - TUIThresholds.ENTROPY_CRITICAL
-            batches_to_collapse = int(distance / abs(velocity))
-
-            if batches_to_collapse < 100:
-                result.append(f" ~{batches_to_collapse}b", style="yellow")
-
-            if risk > 0.7:
-                result.append(" [ALERT]", style="red bold")
-
-        return result
-
-    def _render_policy_state(self) -> Text:
-        """Render policy state based on entropy/clip correlation.
-
-        Interpretation (per DRL review):
-        - Negative correlation + low entropy + high clip = COLLAPSE RISK
-        - Negative correlation + low entropy = collapsing
-        - Negative correlation + low clip = healthy convergence (NARROWING)
-        - Low correlation = stable
-        """
-        if self._snapshot is None:
-            return Text()
-
-        tamiyo = self._snapshot.tamiyo
-        corr = tamiyo.entropy_clip_correlation
-        entropy = tamiyo.entropy
-        clip = tamiyo.clip_fraction
-
-        result = Text()
-        result.append("Policy       ", style="dim")
-
-        # The dangerous pattern: entropy falling + clip rising + both concerning
-        if (corr < -0.5 and
-            entropy < TUIThresholds.ENTROPY_WARNING and
-            clip > TUIThresholds.CLIP_WARNING):
-            result.append("COLLAPSE RISK", style="red bold")
-            result.append(f" (r={corr:.2f})", style="dim")
-        elif corr < -0.6 and entropy < TUIThresholds.ENTROPY_WARNING:
-            # Entropy low and correlated with clip - concerning
-            result.append("collapsing", style="yellow")
-            result.append(f" (r={corr:.2f})", style="dim")
-        elif corr < -0.4 and clip < 0.15:
-            # Negative correlation but low clip = healthy convergence
-            result.append("narrowing", style="green")
-        elif abs(corr) < 0.3:
-            result.append("stable", style="green")
-        else:
-            result.append("drifting", style="yellow")
-            result.append(f" (r={corr:.2f})", style="dim")
-
-        return result
-
     # Status helpers
     def _get_ev_status(self, ev: float) -> str:
         if ev < TUIThresholds.EXPLAINED_VAR_CRITICAL:
@@ -452,31 +192,6 @@ class PPOHealthPanel(Container):
         if kl > TUIThresholds.KL_CRITICAL:
             return "critical"
         if kl > TUIThresholds.KL_WARNING:
-            return "warning"
-        return "ok"
-
-    def _get_advantage_status(self, adv_std: float) -> str:
-        if adv_std < TUIThresholds.ADVANTAGE_STD_COLLAPSED:
-            return "critical"
-        if adv_std > TUIThresholds.ADVANTAGE_STD_CRITICAL:
-            return "critical"
-        if adv_std > TUIThresholds.ADVANTAGE_STD_WARNING:
-            return "warning"
-        if adv_std < TUIThresholds.ADVANTAGE_STD_LOW_WARNING:
-            return "warning"
-        return "ok"
-
-    def _get_ratio_status(self, ratio_min: float, ratio_max: float) -> str:
-        if ratio_max > TUIThresholds.RATIO_MAX_CRITICAL or ratio_min < TUIThresholds.RATIO_MIN_CRITICAL:
-            return "critical"
-        if ratio_max > TUIThresholds.RATIO_MAX_WARNING or ratio_min < TUIThresholds.RATIO_MIN_WARNING:
-            return "warning"
-        return "ok"
-
-    def _get_grad_norm_status(self, grad_norm: float) -> str:
-        if grad_norm > TUIThresholds.GRAD_NORM_CRITICAL:
-            return "critical"
-        if grad_norm > TUIThresholds.GRAD_NORM_WARNING:
             return "warning"
         return "ok"
 
