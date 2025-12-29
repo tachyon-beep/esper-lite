@@ -1,7 +1,6 @@
 """Tests for sigmoid steepness parameterization in AlphaController."""
 
 import math
-import pytest
 
 from esper.kasmina.alpha_controller import AlphaController, _curve_progress
 from esper.leyline.alpha import AlphaCurve

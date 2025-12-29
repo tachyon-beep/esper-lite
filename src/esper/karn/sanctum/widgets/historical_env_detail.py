@@ -21,7 +21,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Static
 
 from esper.karn.sanctum.widgets.counterfactual_panel import CounterfactualPanel
-from esper.karn.sanctum.widgets.env_detail_screen import SeedCard, STAGE_COLORS
+from esper.karn.sanctum.widgets.env_detail_screen import SeedCard
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import BestRunRecord
@@ -385,7 +385,6 @@ class HistoricalEnvDetail(ModalScreen[None]):
         """
         record = self._record
         lines = []
-        dim_placeholder = "--"
 
         # Header row (always visible)
         header = Text()

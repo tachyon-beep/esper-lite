@@ -1,6 +1,5 @@
 """Tests for alpha_curve propagation through aggregator."""
 
-import pytest
 from esper.karn.sanctum.aggregator import SanctumAggregator
 from esper.leyline.telemetry import (
     SeedGerminatedPayload,

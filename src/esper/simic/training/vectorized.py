@@ -912,13 +912,6 @@ def train_ppo_vectorized(
             "steps": entropy_anneal_steps,
         }
 
-    dataloader_summary = {
-        "mode": "gpu_preload" if gpu_preload else "shared_batch_iterator",
-        "batch_size_per_env": effective_batch_size_per_env,
-        "num_workers": None if gpu_preload else effective_workers,
-        "pin_memory": not gpu_preload,
-    }
-
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.TRAINING_STARTED,
         group_id=group_id,
@@ -2555,7 +2548,6 @@ def train_ppo_vectorized(
                 op_probs_cpu = op_probs_all.cpu().numpy()
 
             # PHASE 1: Execute actions and collect data for bootstrap computation
-            bootstrap_data: list[dict[str, Any]] = []
             transitions_data = []  # Store transition data for buffer storage
 
             for env_idx, env_state in enumerate(env_states):

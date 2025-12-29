@@ -244,7 +244,7 @@ def main():
 
     # Without stride (worst case)
     worst_case_overhead = overhead * total_batches / 1000
-    print(f"\nWithout stride (worst case):")
+    print("\nWithout stride (worst case):")
     print(f"  Total overhead: {worst_case_overhead:.1f} seconds")
 
     if total_overhead_sec < 5:

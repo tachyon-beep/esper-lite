@@ -22,7 +22,6 @@ from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, VerticalScroll
 from textual.css.query import NoMatches
 from textual.message import Message
-from textual.widgets import Static
 
 from .status_banner import StatusBanner
 from .ppo_health import PPOHealthPanel

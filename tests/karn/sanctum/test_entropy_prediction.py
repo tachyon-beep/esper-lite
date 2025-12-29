@@ -4,7 +4,6 @@ Task 3 of the Tamiyo debugging enhancements plan.
 These functions help operators detect entropy collapse before it happens.
 """
 
-import pytest
 from collections import deque
 
 from esper.karn.sanctum.schema import compute_entropy_velocity, compute_collapse_risk

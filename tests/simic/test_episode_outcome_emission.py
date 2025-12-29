@@ -1,6 +1,5 @@
 """Tests that EpisodeOutcome is emitted at episode end."""
 
-import pytest
 import numpy as np
 from esper.karn.store import EpisodeOutcome
 

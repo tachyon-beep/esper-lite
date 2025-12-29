@@ -15,7 +15,6 @@ from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Vertical
-from textual.css.query import NoMatches
 from textual.message import Message
 from textual.widgets import Static
 
@@ -237,7 +236,6 @@ class DecisionCard(Static):
         # Count slot states
         dormant_count = sum(1 for s in slot_states.values() if "Dormant" in s or "Empty" in s)
         training_count = sum(1 for s in slot_states.values() if "Training" in s)
-        blending_count = sum(1 for s in slot_states.values() if "Blending" in s or "Holding" in s)
 
         if action == "GERMINATE":
             reasons = []

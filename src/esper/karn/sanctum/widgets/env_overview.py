@@ -19,6 +19,8 @@ from esper.leyline import (
 )
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from esper.karn.sanctum.schema import EnvState, SanctumSnapshot
 
 

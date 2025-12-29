@@ -161,7 +161,6 @@ class TestScaffoldLedger:
 
     def _make_minimal_env_state(self) -> ParallelEnvState:
         """Create a minimal ParallelEnvState for testing ledger behavior."""
-        import torch
         from unittest.mock import Mock
 
         # Create minimal mocks for required fields
@@ -426,7 +425,6 @@ class TestScaffoldHindsightFlowE2E:
 
     def _make_env_state_with_slots(self, slots: list[str]) -> ParallelEnvState:
         """Create a ParallelEnvState with specified slots configured."""
-        import torch
         from unittest.mock import Mock
 
         mock_model = Mock()

@@ -486,7 +486,6 @@ class TestMultiEnvEpochCommitBug:
         so with 4 envs, epochs_in_stage would be 4 after one inner epoch.
         """
         from esper.karn.collector import KarnCollector
-        from esper.leyline import SeedStage
 
         collector = KarnCollector()
         n_envs = 4

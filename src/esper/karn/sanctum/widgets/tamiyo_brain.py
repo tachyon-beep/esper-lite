@@ -1170,9 +1170,6 @@ class TamiyoBrain(Static):
         banner.append(f"{icon} ", style=style)
         banner.append(f"{label}   ", style=style)
 
-        # Track if we're in warmup period (first 50 batches)
-        is_warmup = status == "warmup"
-
         if tamiyo.ppo_data_received:
             # EV with warning indicator
             ev_style = self._status_style(

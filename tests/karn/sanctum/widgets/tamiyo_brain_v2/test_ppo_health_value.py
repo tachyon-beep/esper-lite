@@ -7,7 +7,6 @@ These tests verify the value function divergence detection logic, including:
 - High coefficient of variation showing warning
 """
 
-import pytest
 
 from esper.karn.sanctum.schema import TamiyoState, SanctumSnapshot
 from esper.karn.sanctum.widgets.tamiyo_brain_v2.health_status_panel import HealthStatusPanel

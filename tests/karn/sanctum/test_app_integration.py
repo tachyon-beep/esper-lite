@@ -172,7 +172,6 @@ async def test_sanctum_app_shows_multiple_tamiyo_widgets():
 @pytest.mark.asyncio
 async def test_keyboard_switches_between_policies():
     """Tab key should cycle focus between policy widgets."""
-    import asyncio
     from esper.karn.sanctum.app import SanctumApp
     from esper.karn.sanctum.backend import SanctumBackend
     from esper.karn.sanctum.widgets.tamiyo_brain_v2 import TamiyoBrainV2

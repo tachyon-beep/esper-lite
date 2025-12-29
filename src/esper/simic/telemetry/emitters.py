@@ -229,7 +229,6 @@ class VectorizedEmitter:
         # for now just creating the event object here is much faster than
         # the original unrolled logic in vectorized.py.
 
-        selected_alpha_algorithm = STYLE_ALPHA_ALGORITHMS[action_indices["style"]].name
         action_name = OP_NAMES[action_indices["op"]]
         blueprint_id = BLUEPRINT_IDS[action_indices["blueprint"]]
         style = STYLE_NAMES[action_indices["style"]]

@@ -1,10 +1,8 @@
 """Tests for OverwatchBackend WebSocket server."""
 
 import json
-import time
 from unittest.mock import MagicMock
 
-import pytest
 
 from esper.karn.overwatch.backend import OverwatchBackend
 from esper.karn.sanctum.schema import SanctumSnapshot
@@ -168,7 +166,6 @@ class TestOverwatchBackend:
     def test_snapshot_to_json_handles_special_types(self) -> None:
         """JSON serialization should handle enums, datetime, Path."""
         from datetime import datetime, timezone
-        from pathlib import Path
 
         backend = OverwatchBackend(port=8080)
 

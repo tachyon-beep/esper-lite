@@ -1,6 +1,5 @@
 """Tests for entropy-clip correlation tracking for policy collapse detection."""
 
-import pytest
 from collections import deque
 from datetime import datetime, timezone
 
