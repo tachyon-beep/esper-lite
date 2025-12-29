@@ -21,8 +21,8 @@ from pathlib import Path
 from queue import Queue, Empty
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect  # type: ignore[import-not-found]
-from fastapi.responses import HTMLResponse  # type: ignore[import-not-found]
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse
 
 _logger = logging.getLogger(__name__)
 

@@ -14,7 +14,7 @@ Uses vertical layout to ensure values align directly under their labels:
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from rich.text import Text
 from textual.widgets import Static
@@ -61,7 +61,7 @@ class HeadsPanel(Static):
     CELL_WIDTH: ClassVar[int] = 7  # Width per head column
     BAR_WIDTH: ClassVar[int] = 4   # Width of mini-bar
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
         self.classes = "panel"

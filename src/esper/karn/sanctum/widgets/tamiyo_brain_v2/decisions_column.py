@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from rich.text import Text
 from textual import events
@@ -55,7 +55,7 @@ class DecisionCard(Static):
         decision: "DecisionSnapshot",
         index: int,
         total_cards: int,
-        **kwargs,
+        **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self.decision = decision
@@ -314,7 +314,7 @@ class DecisionsColumn(Container):
         Binding("k", "focus_prev", "Previous card", show=False),
     ]
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
         self._displayed_decisions: list["DecisionSnapshot"] = []
@@ -445,7 +445,7 @@ class DecisionsColumn(Container):
         if not cards:
             return
         focused = self.app.focused
-        if focused in cards:
+        if isinstance(focused, DecisionCard) and focused in cards:
             idx = cards.index(focused)
             next_idx = (idx + 1) % len(cards)
             cards[next_idx].focus()
@@ -458,7 +458,7 @@ class DecisionsColumn(Container):
         if not cards:
             return
         focused = self.app.focused
-        if focused in cards:
+        if isinstance(focused, DecisionCard) and focused in cards:
             idx = cards.index(focused)
             prev_idx = (idx - 1) % len(cards)
             cards[prev_idx].focus()

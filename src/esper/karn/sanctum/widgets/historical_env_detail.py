@@ -257,10 +257,10 @@ class HistoricalEnvDetail(ModalScreen[None]):
         # Seed counts (always visible - compute from record data)
         seed_counts = Text()
         # Count active seeds from the seeds dict
-        active_count = sum(
-            1 for s in record.seeds.values()
+        active_count = len([
+            s for s in record.seeds.values()
             if s and s.stage not in ("DORMANT", "FOSSILIZED", "PRUNED")
-        )
+        ])
         seed_counts.append(f"Active: {active_count}", style="cyan")
         seed_counts.append("  ")
         seed_counts.append(f"Fossilized: {record.fossilized_count}", style="green")

@@ -153,9 +153,9 @@ class RewardComponentsTelemetry:
         """
         return cls(
             base_acc_delta=float(data["base_acc_delta"]),  # type: ignore[arg-type]
-            seed_contribution=float(data["seed_contribution"]) if data["seed_contribution"] is not None else None,  # type: ignore[arg-type]
-            bounded_attribution=float(data["bounded_attribution"]) if data["bounded_attribution"] is not None else None,  # type: ignore[arg-type]
-            progress_since_germination=float(data["progress_since_germination"]) if data["progress_since_germination"] is not None else None,  # type: ignore[arg-type]
+            seed_contribution=float(data["seed_contribution"]) if data["seed_contribution"] is not None else None,
+            bounded_attribution=float(data["bounded_attribution"]) if data["bounded_attribution"] is not None else None,
+            progress_since_germination=float(data["progress_since_germination"]) if data["progress_since_germination"] is not None else None,
             attribution_discount=float(data["attribution_discount"]),  # type: ignore[arg-type]
             ratio_penalty=float(data["ratio_penalty"]),  # type: ignore[arg-type]
             compute_rent=float(data["compute_rent"]),  # type: ignore[arg-type]
@@ -173,11 +173,11 @@ class RewardComponentsTelemetry:
             num_contributing_fossilized=int(data["num_contributing_fossilized"]),  # type: ignore[arg-type]
             action_name=str(data["action_name"]),
             action_success=bool(data["action_success"]),
-            seed_stage=int(data["seed_stage"]) if data["seed_stage"] is not None else None,  # type: ignore[arg-type]
+            seed_stage=int(data["seed_stage"]) if data["seed_stage"] is not None else None,
             epoch=int(data["epoch"]),  # type: ignore[arg-type]
             val_acc=float(data["val_acc"]),  # type: ignore[arg-type]
-            acc_at_germination=float(data["acc_at_germination"]) if data["acc_at_germination"] is not None else None,  # type: ignore[arg-type]
-            host_baseline_acc=float(data["host_baseline_acc"]) if data["host_baseline_acc"] is not None else None,  # type: ignore[arg-type]
+            acc_at_germination=float(data["acc_at_germination"]) if data["acc_at_germination"] is not None else None,
+            host_baseline_acc=float(data["host_baseline_acc"]) if data["host_baseline_acc"] is not None else None,
             growth_ratio=float(data["growth_ratio"]),  # type: ignore[arg-type]
             total_reward=float(data["total_reward"]),  # type: ignore[arg-type]
         )

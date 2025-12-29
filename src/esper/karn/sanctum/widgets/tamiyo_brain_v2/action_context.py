@@ -8,7 +8,7 @@ Combines:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from rich.text import Text
 from textual.widgets import Static
@@ -86,7 +86,7 @@ class ActionContext(Static):
 
     BAR_WIDTH: ClassVar[int] = 30
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
         self.classes = "panel"

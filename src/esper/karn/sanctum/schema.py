@@ -68,9 +68,9 @@ def compute_correlation(
     x_mean = sum(x) / n
     y_mean = sum(y) / n
 
-    numerator = sum((xi - x_mean) * (yi - y_mean) for xi, yi in zip(x, y))
-    x_var = sum((xi - x_mean) ** 2 for xi in x)
-    y_var = sum((yi - y_mean) ** 2 for yi in y)
+    numerator: float = sum((xi - x_mean) * (yi - y_mean) for xi, yi in zip(x, y))
+    x_var: float = sum((xi - x_mean) ** 2 for xi in x)
+    y_var: float = sum((yi - y_mean) ** 2 for yi in y)
 
     # Check variance product BEFORE square root for better numerical stability
     EPSILON = 1e-10
@@ -78,7 +78,7 @@ def compute_correlation(
     if variance_product < EPSILON * EPSILON:
         return 0.0
 
-    denominator = variance_product ** 0.5
+    denominator: float = variance_product ** 0.5
     return numerator / denominator
 
 
@@ -569,20 +569,22 @@ class TamiyoState:
     # Post-normalization stats (should be ~0 mean, ~1 std if normalization working)
     advantage_mean: float = 0.0
     advantage_std: float = 0.0
-    advantage_skewness: float = 0.0  # >0 right-skewed (few big wins), <0 left-skewed (few big losses)
-    advantage_kurtosis: float = 0.0  # >0 heavy tails (outliers), <0 light tails; >3 is super-Gaussian
+    # NaN = no data (std too low or no valid advantages); 0 = symmetric/normal
+    advantage_skewness: float = float("nan")  # >0 right-skewed (few big wins), <0 left-skewed (few big losses)
+    advantage_kurtosis: float = float("nan")  # >0 heavy tails (outliers), <0 light tails; >3 is super-Gaussian
     advantage_min: float = 0.0
     advantage_max: float = 0.0
     # Pre-normalization stats (raw learning signal magnitude)
     advantage_raw_mean: float = 0.0
     advantage_raw_std: float = 0.0
-    # Advantage distribution health
-    advantage_positive_ratio: float = 0.5  # Fraction of positive advantages (healthy: 0.4-0.6)
+    # Advantage distribution health (NaN = no data)
+    advantage_positive_ratio: float = float("nan")  # Fraction of positive advantages (healthy: 0.4-0.6)
 
     # Log probability extremes (NaN predictor)
     # Values < -50 warning, < -100 critical (numerical underflow imminent)
-    log_prob_min: float = 0.0  # Most negative log prob this update
-    log_prob_max: float = 0.0  # Highest log prob (should be <= 0)
+    # NaN = no data (no PPO updates yet); 0.0 = deterministic action (valid but rare)
+    log_prob_min: float = float("nan")  # Most negative log prob this update
+    log_prob_max: float = float("nan")  # Highest log prob (should be <= 0)
 
     # Gradient health (shown in Vitals)
     dead_layers: int = 0

@@ -9,7 +9,7 @@ Or during warmup:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from rich.text import Text
 from textual.app import ComposeResult
@@ -20,7 +20,9 @@ from esper.karn.constants import TUIThresholds
 from esper.karn.sanctum.schema import detect_trend
 
 if TYPE_CHECKING:
-    from esper.karn.sanctum.schema import SanctumSnapshot
+    from collections import deque
+
+    from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
 
 
 class StatusBanner(Container):
@@ -45,7 +47,7 @@ class StatusBanner(Container):
         "C": "🟣 C",
     }
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
         self._spinner_frame: int = 0
@@ -56,14 +58,14 @@ class StatusBanner(Container):
 
     def on_mount(self) -> None:
         """Set initial content when widget mounts."""
-        self.query_one("#banner-content", Static).update(self._render_content())
+        self.query_one("#banner-content", Static).update(self._render_banner_text())
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Update with new snapshot and refresh display."""
         self._snapshot = snapshot
         self._update_status_classes()
         self._spinner_frame = (self._spinner_frame + 1) % len(self.SPINNER_CHARS)
-        self.query_one("#banner-content", Static).update(self._render_content())
+        self.query_one("#banner-content", Static).update(self._render_banner_text())
 
     def _update_status_classes(self) -> None:
         """Update CSS classes based on current status."""
@@ -79,7 +81,7 @@ class StatusBanner(Container):
             group = self._snapshot.tamiyo.group_id.lower()
             self.add_class(f"group-{group}")
 
-    def _render_content(self) -> Text:
+    def _render_banner_text(self) -> Text:
         """Render the banner content."""
         if self._snapshot is None:
             return Text("[?] NO DATA", style="cyan")
@@ -130,7 +132,7 @@ class StatusBanner(Container):
 
         return banner
 
-    def _append_metrics(self, banner: Text, tamiyo) -> None:
+    def _append_metrics(self, banner: Text, tamiyo: "TamiyoState") -> None:
         """Append metric values to the banner with trend arrows."""
         # Explained Variance (higher is better = "accuracy" type)
         ev_style = self._metric_style(self._get_ev_status(tamiyo.explained_variance))
@@ -190,7 +192,8 @@ class StatusBanner(Container):
             banner.append(f"GradHP:{healthy}/{self.TOTAL_LAYERS}✓", style="green")
         banner.append("  ")
 
-        # Batch progress
+        # Batch progress (snapshot is non-None when this method is called)
+        assert self._snapshot is not None
         batch = self._snapshot.current_batch
         max_batches = self._snapshot.max_batches
         banner.append(f"batch:{batch}/{max_batches}", style="dim")
@@ -311,7 +314,10 @@ class StatusBanner(Container):
         return {"ok": "green", "warning": "yellow", "critical": "red bold"}[status]
 
     def _trend_arrow(
-        self, history: list | None, metric_name: str, metric_type: str
+        self,
+        history: "list[float] | deque[float] | None",
+        metric_name: str,
+        metric_type: str,
     ) -> tuple[str, str]:
         """Get trend arrow and style for a metric.
 

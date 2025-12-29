@@ -287,6 +287,8 @@ def create_flex_attention_seed(dim: int, n_head: int = 4) -> nn.Module:
                 # B3-PT-02: flex_attention returns Tensor in PyTorch 2.5+
                 # Removed isinstance check that caused torch.compile graph break
                 out = flex_attention(q, k, v, block_mask=block_mask)
+                # Type narrowing: flex_attention returns Tensor when return_lse=False (default)
+                assert isinstance(out, torch.Tensor)
 
                 out = out.transpose(1, 2).reshape(b, t, c)
                 return x + self.proj(out)  # type: ignore[no-any-return]

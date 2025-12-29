@@ -9,7 +9,7 @@ Displays core PPO metrics with visual gauges:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from rich.text import Text
 from textual.widgets import Static
@@ -29,7 +29,7 @@ class PPOHealthPanel(Static):
     WARMUP_BATCHES: ClassVar[int] = 50
     GAUGE_WIDTH: ClassVar[int] = 10
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
         self.classes = "panel"

@@ -12,7 +12,8 @@ Displays:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
+import math
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from rich.text import Text
 from textual.widgets import Static
@@ -31,7 +32,7 @@ class HealthStatusPanel(Static):
 
     TOTAL_LAYERS: ClassVar[int] = 12
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
         self.classes = "panel"
@@ -63,13 +64,23 @@ class HealthStatusPanel(Static):
         result.append("Advantage    ", style="dim")
         result.append(f"{tamiyo.advantage_mean:+.2f}±{tamiyo.advantage_std:.2f}", style=self._status_style(adv_status))
         result.append(" sk:", style="dim")
-        result.append(f"{tamiyo.advantage_skewness:+.1f}", style=self._status_style(skew_status))
+        # Show "---" for NaN skewness/kurtosis/positive_ratio (no data yet)
+        if math.isnan(tamiyo.advantage_skewness):
+            result.append("---", style="dim")
+        else:
+            result.append(f"{tamiyo.advantage_skewness:+.1f}", style=self._status_style(skew_status))
         result.append(self._skewness_hint(tamiyo.advantage_skewness), style="dim")
         result.append(" kt:", style="dim")
-        result.append(f"{tamiyo.advantage_kurtosis:+.1f}", style=self._status_style(kurt_status))
+        if math.isnan(tamiyo.advantage_kurtosis):
+            result.append("---", style="dim")
+        else:
+            result.append(f"{tamiyo.advantage_kurtosis:+.1f}", style=self._status_style(kurt_status))
         # Adv+ percentage (healthy: 40-60%)
         result.append(" +:", style="dim")
-        result.append(f"{tamiyo.advantage_positive_ratio:.0%}", style=self._status_style(adv_pos_status))
+        if math.isnan(tamiyo.advantage_positive_ratio):
+            result.append("---", style="dim")
+        else:
+            result.append(f"{tamiyo.advantage_positive_ratio:.0%}", style=self._status_style(adv_pos_status))
         if worst_status != "ok":
             result.append(" !", style=self._status_style(worst_status))
         result.append("\n")
@@ -91,11 +102,14 @@ class HealthStatusPanel(Static):
         # Log prob extremes (NaN predictor)
         lp_status = self._get_log_prob_status(tamiyo.log_prob_min)
         result.append("Log Prob     ", style="dim")
-        result.append(f"[{tamiyo.log_prob_min:.1f},{tamiyo.log_prob_max:.1f}]", style=self._status_style(lp_status))
-        if lp_status == "critical":
-            result.append(" NaN RISK", style="red bold")
-        elif lp_status == "warning":
-            result.append(" !", style="yellow")
+        if math.isnan(tamiyo.log_prob_min):
+            result.append("[---,---]", style="dim")
+        else:
+            result.append(f"[{tamiyo.log_prob_min:.1f},{tamiyo.log_prob_max:.1f}]", style=self._status_style(lp_status))
+            if lp_status == "critical":
+                result.append(" NaN RISK", style="red bold")
+            elif lp_status == "warning":
+                result.append(" !", style="yellow")
         result.append("\n")
 
         # Layer health
@@ -270,6 +284,8 @@ class HealthStatusPanel(Static):
         return "ok"
 
     def _get_skewness_status(self, skewness: float) -> str:
+        if math.isnan(skewness):
+            return "ok"  # No data yet - neutral status
         if skewness < -1.0 or skewness > 2.0:
             return "critical"
         if skewness < -0.5 or skewness > 1.0:
@@ -277,6 +293,8 @@ class HealthStatusPanel(Static):
         return "ok"
 
     def _get_kurtosis_status(self, kurtosis: float) -> str:
+        if math.isnan(kurtosis):
+            return "ok"  # No data yet - neutral status
         if kurtosis < -2.0 or kurtosis > 6.0:
             return "critical"
         if kurtosis < -1.0 or kurtosis > 3.0:
@@ -285,6 +303,8 @@ class HealthStatusPanel(Static):
 
     def _get_adv_positive_status(self, ratio: float) -> str:
         """Check if advantage positive ratio is healthy (40-60%)."""
+        if math.isnan(ratio):
+            return "ok"  # No data yet - neutral status
         if ratio < 0.2 or ratio > 0.8:
             return "critical"  # Severely imbalanced
         if ratio < 0.4 or ratio > 0.6:
@@ -297,6 +317,8 @@ class HealthStatusPanel(Static):
         Very negative log probs indicate actions becoming nearly impossible,
         which leads to numerical underflow and eventually NaN gradients.
         """
+        if math.isnan(log_prob_min):
+            return "ok"  # No data yet - neutral status
         if log_prob_min < -100:
             return "critical"  # Numerical underflow imminent
         if log_prob_min < -50:
@@ -304,6 +326,8 @@ class HealthStatusPanel(Static):
         return "ok"
 
     def _skewness_hint(self, skewness: float) -> str:
+        if math.isnan(skewness):
+            return ""  # No hint for missing data
         if abs(skewness) < 0.3:
             return "~"
         elif skewness > 1.0:

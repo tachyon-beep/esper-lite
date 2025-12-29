@@ -536,8 +536,9 @@ class PPOAgent:
                 # Excess kurtosis: E[(X-μ)⁴] / σ⁴ - 3 (0 = normal, >0 = heavy tails)
                 adv_kurtosis = (centered ** 4).mean() / (adv_std ** 4) - 3.0
             else:
-                adv_skewness = torch.tensor(0.0, device=adv_mean.device)
-                adv_kurtosis = torch.tensor(0.0, device=adv_mean.device)
+                # NaN signals "undefined" - std too low for meaningful higher moments
+                adv_skewness = torch.tensor(float("nan"), device=adv_mean.device, dtype=adv_mean.dtype)
+                adv_kurtosis = torch.tensor(float("nan"), device=adv_mean.device, dtype=adv_mean.dtype)
             adv_stats = torch.stack([adv_mean, adv_std, adv_skewness, adv_kurtosis]).cpu().tolist()
             metrics["advantage_mean"] = [adv_stats[0]]
             metrics["advantage_std"] = [adv_stats[1]]
@@ -548,11 +549,12 @@ class PPOAgent:
             adv_positive_ratio = (valid_advantages_for_stats > 0).float().mean().item()
             metrics["advantage_positive_ratio"] = [adv_positive_ratio]
         else:
-            metrics["advantage_mean"] = [0.0]
-            metrics["advantage_std"] = [0.0]
-            metrics["advantage_skewness"] = [0.0]
-            metrics["advantage_kurtosis"] = [0.0]
-            metrics["advantage_positive_ratio"] = [0.5]
+            # No valid advantages - use NaN to signal "no data" (not "balanced" or "zero")
+            metrics["advantage_mean"] = [float("nan")]
+            metrics["advantage_std"] = [float("nan")]
+            metrics["advantage_skewness"] = [float("nan")]
+            metrics["advantage_kurtosis"] = [float("nan")]
+            metrics["advantage_positive_ratio"] = [float("nan")]
 
         # Initialize per-head entropy tracking (P3-1)
         head_entropy_history: dict[str, list[float]] = {head: [] for head in HEAD_NAMES}
@@ -876,10 +878,11 @@ class PPOAgent:
         aggregated_result["head_grad_norms"] = head_grad_norm_history
         # Add log prob extremes (NaN predictor)
         # Guard against no valid data (inf values indicate no updates occurred)
+        # Use NaN (not 0.0) to signal "no data" - 0.0 means "probability=1" which is misleading
         if log_prob_min_across_epochs == float("inf"):
-            log_prob_min_across_epochs = 0.0
+            log_prob_min_across_epochs = float("nan")
         if log_prob_max_across_epochs == float("-inf"):
-            log_prob_max_across_epochs = 0.0
+            log_prob_max_across_epochs = float("nan")
         aggregated_result["log_prob_min"] = log_prob_min_across_epochs
         aggregated_result["log_prob_max"] = log_prob_max_across_epochs
 

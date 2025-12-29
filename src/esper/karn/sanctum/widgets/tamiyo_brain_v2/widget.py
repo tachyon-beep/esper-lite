@@ -16,7 +16,7 @@ Layout:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, VerticalScroll
@@ -219,7 +219,7 @@ class TamiyoBrainV2(Container):
     # Enable keyboard focus for Tab navigation
     can_focus = True
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
         self.border_title = "TAMIYO"

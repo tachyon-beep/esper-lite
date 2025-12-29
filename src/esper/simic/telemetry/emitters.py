@@ -629,7 +629,7 @@ def compute_grad_norm_surrogate(module: nn.Module) -> float | None:
     per_param_norms = torch._foreach_norm(grads_double, ord=2)
     # Single reduction via vector_norm (fused) and sync point
     total_norm = torch.linalg.vector_norm(torch.stack(per_param_norms))
-    return total_norm.item()
+    return float(total_norm.item())
 
 
 def aggregate_layer_gradient_health(

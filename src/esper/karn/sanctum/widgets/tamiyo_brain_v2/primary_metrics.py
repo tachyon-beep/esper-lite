@@ -7,7 +7,7 @@ Displays the two most important RL metrics prominently at the top:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from rich.text import Text
 from textual.app import ComposeResult
@@ -17,7 +17,7 @@ from textual.widgets import Static
 if TYPE_CHECKING:
     from collections import deque
 
-    from esper.karn.sanctum.schema import SanctumSnapshot
+    from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
 
 
 # Sparkline block characters (8 levels)
@@ -117,7 +117,7 @@ class PrimaryMetrics(Container):
 
     SPARKLINE_WIDTH: ClassVar[int] = 35
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
 
@@ -139,7 +139,7 @@ class PrimaryMetrics(Container):
         entropy_widget = self.query_one("#entropy-row", Static)
         entropy_widget.update(self._render_entropy(tamiyo))
 
-    def _render_episode_return(self, tamiyo) -> Text:
+    def _render_episode_return(self, tamiyo: "TamiyoState") -> Text:
         """Render Episode Return sparkline row."""
         result = Text()
 
@@ -166,7 +166,7 @@ class PrimaryMetrics(Container):
 
         return result
 
-    def _render_entropy(self, tamiyo) -> Text:
+    def _render_entropy(self, tamiyo: "TamiyoState") -> Text:
         """Render Entropy sparkline row."""
         result = Text()
 

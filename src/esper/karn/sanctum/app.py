@@ -559,7 +559,7 @@ class SanctumApp(App[None]):
             )
         )
 
-    def action_quit(self) -> None:
+    async def action_quit(self) -> None:
         """Handle quit with graceful shutdown.
 
         Signals the training thread to stop at the end of the current batch,
