@@ -408,3 +408,44 @@ def test_aggregator_reads_reward_components_dataclass():
     assert env.reward_components.compute_rent == -0.05
     assert env.reward_components.stage_bonus == 0.1
     assert env.reward_components.hindsight_credit == 0.05
+
+
+def test_aggregator_populates_nested_metrics():
+    """Aggregator should populate infrastructure and gradient_quality nested fields."""
+    agg = SanctumAggregator(num_envs=4)
+
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        data=PPOUpdatePayload(
+            policy_loss=0.1,
+            value_loss=0.2,
+            entropy=1.0,
+            grad_norm=0.5,
+            kl_divergence=0.01,
+            clip_fraction=0.15,
+            nan_grad_count=0,
+            # Gradient quality fields
+            clip_fraction_positive=0.10,
+            clip_fraction_negative=0.05,
+            gradient_cv=0.42,
+            # Infrastructure fields
+            cuda_memory_allocated_gb=4.2,
+            cuda_memory_reserved_gb=8.0,
+            cuda_memory_peak_gb=6.5,
+            cuda_memory_fragmentation=0.475,
+        ),
+    )
+
+    agg.process_event(event)
+    snapshot = agg.get_snapshot()
+
+    # Gradient quality (nested)
+    assert snapshot.tamiyo.gradient_quality.clip_fraction_positive == 0.10
+    assert snapshot.tamiyo.gradient_quality.clip_fraction_negative == 0.05
+    assert snapshot.tamiyo.gradient_quality.gradient_cv == 0.42
+
+    # Infrastructure (nested)
+    assert snapshot.tamiyo.infrastructure.cuda_memory_allocated_gb == 4.2
+    assert snapshot.tamiyo.infrastructure.cuda_memory_reserved_gb == 8.0
+    assert snapshot.tamiyo.infrastructure.cuda_memory_peak_gb == 6.5
+    assert snapshot.tamiyo.infrastructure.cuda_memory_fragmentation == 0.475

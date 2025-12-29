@@ -796,6 +796,17 @@ class SanctumAggregator:
             self._tamiyo.clip_fraction_history,
         )
 
+        # Gradient quality metrics (nested dataclass)
+        self._tamiyo.gradient_quality.clip_fraction_positive = payload.clip_fraction_positive
+        self._tamiyo.gradient_quality.clip_fraction_negative = payload.clip_fraction_negative
+        self._tamiyo.gradient_quality.gradient_cv = payload.gradient_cv
+
+        # Infrastructure metrics (nested dataclass)
+        self._tamiyo.infrastructure.cuda_memory_allocated_gb = payload.cuda_memory_allocated_gb
+        self._tamiyo.infrastructure.cuda_memory_reserved_gb = payload.cuda_memory_reserved_gb
+        self._tamiyo.infrastructure.cuda_memory_peak_gb = payload.cuda_memory_peak_gb
+        self._tamiyo.infrastructure.cuda_memory_fragmentation = payload.cuda_memory_fragmentation
+
     def _handle_seed_event(self, event: "TelemetryEvent", event_type: str) -> None:
         """Handle seed lifecycle events with per-env tracking."""
         # Type-safe payload access with type switching based on event_type
