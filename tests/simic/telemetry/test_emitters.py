@@ -3,10 +3,13 @@
 import math
 from unittest.mock import MagicMock
 
+import pytest
 import torch
 from torch import nn
 
+from esper.leyline import TelemetryEventType
 from esper.simic.telemetry.emitters import (
+    VectorizedEmitter,
     compute_grad_norm_surrogate,
     emit_ppo_update_event,
 )
@@ -97,3 +100,75 @@ class TestComputeGradNormSurrogate:
         assert not math.isnan(result)
         # Result should be dominated by the large gradients
         assert result > 1e14
+
+
+class TestVectorizedEmitterRewardComponents:
+    """Tests for VectorizedEmitter.on_last_action reward_components parameter."""
+
+    @pytest.fixture
+    def mock_hub(self):
+        """Create a mock hub that captures emitted events."""
+        hub = MagicMock()
+        hub.events = []
+        def capture_event(event):
+            hub.events.append(event)
+        hub.emit.side_effect = capture_event
+        return hub
+
+    def test_on_last_action_accepts_reward_components_dataclass(self, mock_hub):
+        """on_last_action should accept RewardComponentsTelemetry directly."""
+        from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
+
+        emitter = VectorizedEmitter(env_id=0, device="cpu", hub=mock_hub)
+
+        rc = RewardComponentsTelemetry(
+            bounded_attribution=0.5,
+            compute_rent=-0.1,
+            seed_stage=2,
+            total_reward=0.35,
+        )
+
+        # Should not raise
+        emitter.on_last_action(
+            epoch=10,
+            action_indices={"op": 0, "slot": 0, "blueprint": 0, "style": 0, "tempo": 0, "alpha_target": 0, "alpha_speed": 0, "alpha_curve": 0},
+            slot_id="G0",
+            masked={},
+            success=True,
+            active_alpha_algorithm="curiosity",
+            total_reward=0.35,
+            value_estimate=0.3,
+            host_accuracy=0.75,
+            reward_components=rc,
+        )
+
+        # Verify event was emitted with typed dataclass
+        events = [e for e in mock_hub.events if e.event_type == TelemetryEventType.ANALYTICS_SNAPSHOT]
+        assert len(events) >= 1
+        payload = events[-1].data
+        assert payload.reward_components is rc
+        assert payload.reward_components.seed_stage == 2
+
+    def test_on_last_action_accepts_none_reward_components(self, mock_hub):
+        """on_last_action should accept None for reward_components (LOSS family)."""
+        emitter = VectorizedEmitter(env_id=0, device="cpu", hub=mock_hub)
+
+        # Should not raise when reward_components is None
+        emitter.on_last_action(
+            epoch=10,
+            action_indices={"op": 0, "slot": 0, "blueprint": 0, "style": 0, "tempo": 0, "alpha_target": 0, "alpha_speed": 0, "alpha_curve": 0},
+            slot_id="G0",
+            masked={},
+            success=True,
+            active_alpha_algorithm=None,
+            total_reward=0.0,
+            value_estimate=0.0,
+            host_accuracy=0.5,
+            reward_components=None,
+        )
+
+        # Verify event was emitted
+        events = [e for e in mock_hub.events if e.event_type == TelemetryEventType.ANALYTICS_SNAPSHOT]
+        assert len(events) >= 1
+        payload = events[-1].data
+        assert payload.reward_components is None

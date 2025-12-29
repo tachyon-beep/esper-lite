@@ -44,6 +44,7 @@ import torch.amp as torch_amp
 
 if TYPE_CHECKING:
     from esper.leyline.reports import SeedStateReport
+    from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
 
 from esper.simic.contracts import SeedSlotProtocol, SlottedHostProtocol
 
@@ -2650,6 +2651,9 @@ def train_ppo_vectorized(
                 )
                 seed_info = SeedInfo.from_seed_state(seed_state, seed_params_for_slot)
 
+                # Initialize reward_components to None (only populated for CONTRIBUTION family)
+                reward_components: RewardComponentsTelemetry | None = None
+
                 if reward_family_enum == RewardFamily.CONTRIBUTION:
                     reward_args = {
                         "action": action_for_reward,
@@ -2707,14 +2711,14 @@ def train_ppo_vectorized(
                     reward += hindsight_credit_applied
                     env_state.pending_hindsight_credit = 0.0
                     # Populate RewardComponentsTelemetry for shaped_reward_ratio calculation
-                    if collect_reward_summary and "reward_components" in locals():
+                    if collect_reward_summary and reward_components is not None:
                         reward_components.hindsight_credit = hindsight_credit_applied
 
                 # Normalize reward for PPO stability (P1-6 fix)
                 normalized_reward = reward_normalizer.update_and_normalize(reward)
                 env_state.episode_rewards.append(reward)
 
-                if collect_reward_summary and "reward_components" in locals():
+                if collect_reward_summary and reward_components is not None:
                     summary = reward_summary_accum[env_idx]
                     summary["total_reward"] += reward
                     if reward_components.bounded_attribution is not None:
@@ -2938,21 +2942,6 @@ def train_ppo_vectorized(
                             if p > 1e-8:  # Avoid log(0)
                                 entropy_sum -= p * math.log(p)
                         decision_entropy = entropy_sum
-                    # Use signals.metrics.accuracy_delta directly - always available
-                    base_acc_delta_for_telemetry = signals.metrics.accuracy_delta
-                    # Extract reward components for telemetry
-                    # (now available since collect_reward_summary matches ops_telemetry_enabled)
-                    bounded_attribution_for_telemetry = None
-                    compute_rent_for_telemetry = None
-                    stage_bonus_for_telemetry = None
-                    ratio_penalty_for_telemetry = None
-                    alpha_shock_for_telemetry = None
-                    if "reward_components" in locals() and reward_components is not None:
-                        bounded_attribution_for_telemetry = reward_components.bounded_attribution
-                        compute_rent_for_telemetry = reward_components.compute_rent
-                        stage_bonus_for_telemetry = reward_components.stage_bonus
-                        ratio_penalty_for_telemetry = reward_components.ratio_penalty
-                        alpha_shock_for_telemetry = reward_components.alpha_shock
                     emitters[env_idx].on_last_action(
                         epoch,
                         action_dict,
@@ -2967,12 +2956,7 @@ def train_ppo_vectorized(
                         action_confidence=action_confidence,
                         alternatives=alternatives,
                         decision_entropy=decision_entropy,
-                        base_acc_delta=base_acc_delta_for_telemetry,
-                        bounded_attribution=bounded_attribution_for_telemetry,
-                        compute_rent=compute_rent_for_telemetry,
-                        stage_bonus=stage_bonus_for_telemetry,
-                        ratio_penalty=ratio_penalty_for_telemetry,
-                        alpha_shock=alpha_shock_for_telemetry,
+                        reward_components=reward_components,  # Pass directly (may be None for LOSS family)
                     )
 
                 # Store transition

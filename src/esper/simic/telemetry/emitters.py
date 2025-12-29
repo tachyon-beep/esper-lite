@@ -39,6 +39,7 @@ from esper.nissa import get_hub
 from .debug_telemetry import LayerGradientStats, collect_per_layer_gradients
 
 if TYPE_CHECKING:
+    from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
     from esper.simic.training.parallel_env_state import ParallelEnvState
 
     from .telemetry_config import TelemetryConfig
@@ -200,75 +201,41 @@ class VectorizedEmitter:
         action_confidence: float | None = None,
         alternatives: list[tuple[str, float]] | None = None,
         decision_entropy: float | None = None,
-        base_acc_delta: float | None = None,
-        bounded_attribution: float | None = None,
-        compute_rent: float | None = None,
-        # Additional reward components for RewardHealthPanel
-        stage_bonus: float | None = None,
-        ratio_penalty: float | None = None,
-        alpha_shock: float | None = None,
+        reward_components: "RewardComponentsTelemetry | None" = None,
     ) -> None:
-        """Emit last-action detail, offloading formatting to the hub thread."""
+        """Emit last-action detail, offloading formatting to the hub thread.
+
+        Args:
+            epoch: Current training epoch
+            action_indices: Dict mapping head names to action indices
+            slot_id: Target slot for the action
+            masked: Dict mapping head names to mask flags
+            success: Whether the action executed successfully
+            active_alpha_algorithm: Current alpha algorithm for the slot
+            total_reward: Total reward for this step
+            value_estimate: Value function estimate
+            host_accuracy: Current host model validation accuracy
+            slot_states: Dict mapping slot IDs to state descriptions
+            action_confidence: Confidence (probability) of the chosen action
+            alternatives: Top-2 alternative actions with probabilities
+            decision_entropy: Entropy of the action distribution
+            reward_components: Typed dataclass with full reward breakdown (may be None for LOSS family)
+        """
         if not self._should_emit("ops_normal"):
             return
 
         # Pass raw indices + mapping info in the data dict
-        # The background thread could theoretically do the mapping, but 
-        # for now just creating the event object here is much faster than 
+        # The background thread could theoretically do the mapping, but
+        # for now just creating the event object here is much faster than
         # the original unrolled logic in vectorized.py.
-        
-        selected_alpha_algorithm = STYLE_ALPHA_ALGORITHMS[action_indices["style"]].name
-        data: dict[str, Any] = {
-            "kind": "last_action",
-            "env_id": self.env_id,
-            "inner_epoch": epoch,
-            "op": OP_NAMES[action_indices["op"]],
-            # REWARD_COMPUTED-compatible fields (used by Sanctum decision carousel)
-            "action_name": OP_NAMES[action_indices["op"]],
-            "slot_id": slot_id,
-            "action_slot": slot_id if OP_NAMES[action_indices["op"]] != "WAIT" else None,
-            "blueprint_id": BLUEPRINT_IDS[action_indices["blueprint"]],
-            "style": STYLE_NAMES[action_indices["style"]],
-            "blend_id": STYLE_BLEND_IDS[action_indices["style"]],
-            "tempo_idx": action_indices["tempo"],
-            "alpha_target": ALPHA_TARGET_VALUES[action_indices["alpha_target"]],
-            "alpha_speed": ALPHA_SPEED_NAMES[action_indices["alpha_speed"]],
-            "alpha_curve": ALPHA_CURVE_NAMES[action_indices["alpha_curve"]],
-            "alpha_algorithm": active_alpha_algorithm or selected_alpha_algorithm,
-            "alpha_algorithm_selected": selected_alpha_algorithm,
-            "op_masked": bool(masked.get("op", False)),
-            "slot_masked": bool(masked.get("slot", False)),
-            "blueprint_masked": bool(masked.get("blueprint", False)),
-            "style_masked": bool(masked.get("style", False)),
-            "tempo_masked": bool(masked.get("tempo", False)),
-            "alpha_target_masked": bool(masked.get("alpha_target", False)),
-            "alpha_speed_masked": bool(masked.get("alpha_speed", False)),
-            "alpha_curve_masked": bool(masked.get("alpha_curve", False)),
-            "action_success": success,
-        }
 
-        if total_reward is not None:
-            data["total_reward"] = float(total_reward)
-        if value_estimate is not None:
-            data["value_estimate"] = float(value_estimate)
-        if host_accuracy is not None:
-            data["host_accuracy"] = float(host_accuracy)
-            # Reward components use val_acc key, decision uses host_accuracy.
-            data["val_acc"] = float(host_accuracy)
-        if slot_states is not None:
-            data["slot_states"] = dict(slot_states)
-        if action_confidence is not None:
-            data["action_confidence"] = float(action_confidence)
-        if alternatives is not None:
-            data["alternatives"] = list(alternatives)
-        if decision_entropy is not None:
-            data["decision_entropy"] = float(decision_entropy)
-        if base_acc_delta is not None:
-            data["base_acc_delta"] = float(base_acc_delta)
-        if bounded_attribution is not None:
-            data["bounded_attribution"] = float(bounded_attribution)
-        if compute_rent is not None:
-            data["compute_rent"] = float(compute_rent)
+        selected_alpha_algorithm = STYLE_ALPHA_ALGORITHMS[action_indices["style"]].name
+        action_name = OP_NAMES[action_indices["op"]]
+        blueprint_id = BLUEPRINT_IDS[action_indices["blueprint"]]
+        style = STYLE_NAMES[action_indices["style"]]
+        tempo_idx = action_indices["tempo"]
+        alpha_curve = ALPHA_CURVE_NAMES[action_indices["alpha_curve"]]
+        alpha_curve_masked = bool(masked.get("alpha_curve", False))
 
         self._emit(TelemetryEvent(
             event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
@@ -279,26 +246,22 @@ class VectorizedEmitter:
                 kind="last_action",
                 env_id=self.env_id,
                 total_reward=total_reward,
-                action_name=data["action_name"],
+                action_name=action_name,
                 action_confidence=action_confidence,
                 value_estimate=value_estimate,
-                base_acc_delta=base_acc_delta,
-                bounded_attribution=bounded_attribution,
-                compute_rent=compute_rent,
-                stage_bonus=stage_bonus,
-                ratio_penalty=ratio_penalty,
-                alpha_shock=alpha_shock,
+                # Pass typed dataclass directly - replaces individual component fields
+                reward_components=reward_components,
                 # Decision context for TamiyoBrain Decision Cards
                 slot_states=slot_states,
                 alternatives=alternatives,
                 decision_entropy=decision_entropy,
                 # Head choice fields (for decision card sub-decision display)
-                slot_id=data["slot_id"],
-                blueprint_id=data["blueprint_id"],
-                tempo_idx=data["tempo_idx"],
-                style=data["style"],
-                alpha_curve=data["alpha_curve"],
-                alpha_curve_masked=data["alpha_curve_masked"],
+                slot_id=slot_id,
+                blueprint_id=blueprint_id,
+                tempo_idx=tempo_idx,
+                style=style,
+                alpha_curve=alpha_curve,
+                alpha_curve_masked=alpha_curve_masked,
             ),
         ))
 
