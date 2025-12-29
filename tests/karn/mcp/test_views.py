@@ -111,6 +111,8 @@ def test_rewards_view_extracts_all_fields(tmp_path):
                 "acc_at_germination": 0.60,
                 "host_baseline_acc": 0.55,
                 "growth_ratio": 0.12,
+                # Computed diagnostic (from to_dict() serialization)
+                "shaped_reward_ratio": 0.25,
             }
         }
     }
@@ -136,7 +138,9 @@ def test_rewards_view_extracts_all_fields(tmp_path):
             terminal_bonus, fossilize_terminal_bonus, hindsight_credit,
             num_fossilized_seeds, num_contributing_fossilized,
             -- Context fields
-            seed_stage, val_acc, acc_at_germination, host_baseline_acc, growth_ratio
+            seed_stage, val_acc, acc_at_germination, host_baseline_acc, growth_ratio,
+            -- Computed diagnostic
+            shaped_reward_ratio
         FROM rewards
     """).fetchone()
 
@@ -184,3 +188,6 @@ def test_rewards_view_extracts_all_fields(tmp_path):
     assert result[28] == 0.60  # acc_at_germination
     assert result[29] == 0.55  # host_baseline_acc
     assert result[30] == 0.12  # growth_ratio
+
+    # Computed diagnostic
+    assert result[31] == 0.25  # shaped_reward_ratio
