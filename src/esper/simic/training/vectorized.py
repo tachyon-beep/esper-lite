@@ -285,6 +285,14 @@ def _aggregate_ppo_metrics(update_metrics: list[PPOUpdateMetrics]) -> dict[str, 
             aggregated[key] = min(values)
         elif key == "value_max":
             aggregated[key] = max(values)
+        elif key == "value_mean":
+            # Average of means across environments
+            aggregated[key] = sum(values) / len(values)
+        elif key == "value_std":
+            # Cannot simply average std - take max as conservative approximation
+            # (proper solution requires pooled variance with means, but max ensures
+            # we don't underestimate variance which could mask instability)
+            aggregated[key] = max(values)
         elif key == "early_stop_epoch":
             aggregated[key] = min(values)
         elif key == "head_entropies":

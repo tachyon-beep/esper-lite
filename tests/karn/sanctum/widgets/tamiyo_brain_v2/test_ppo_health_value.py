@@ -178,3 +178,46 @@ class TestValueFunctionDisplay:
         status = panel._get_value_status(snapshot.tamiyo)
         # Should not trigger CoV check, falls through to absolute check
         assert status == "ok"  # Range=10, max=5, both below thresholds
+
+    def test_render_value_stats_shows_range_and_std(self) -> None:
+        """_render_value_stats should show range and std deviation."""
+        panel = PPOHealthPanel()
+        snapshot = SanctumSnapshot(
+            tamiyo=TamiyoState(
+                ppo_data_received=True,
+                value_mean=5.0,
+                value_std=2.5,
+                value_min=-3.0,
+                value_max=15.0,
+                initial_value_spread=10.0,
+            ),
+            current_batch=60,
+        )
+        panel._snapshot = snapshot
+        output = panel._render_value_stats()
+        output_str = str(output)
+
+        assert "Value Range" in output_str
+        assert "-3.0" in output_str  # min
+        assert "15.0" in output_str  # max
+        assert "s=" in output_str  # std indicator
+
+    def test_render_value_stats_critical_shows_alert(self) -> None:
+        """Critical value status should show alert indicator."""
+        panel = PPOHealthPanel()
+        snapshot = SanctumSnapshot(
+            tamiyo=TamiyoState(
+                ppo_data_received=True,
+                value_mean=50.0,
+                value_std=30.0,
+                value_min=-50.0,
+                value_max=150.0,  # 200 range vs initial 10 = 20x -> critical
+                initial_value_spread=10.0,
+            ),
+            current_batch=60,
+        )
+        panel._snapshot = snapshot
+        output = panel._render_value_stats()
+        output_str = str(output)
+
+        assert "!" in output_str  # Alert indicator for critical status

@@ -788,6 +788,8 @@ class PPOAgent:
                 values.min(),
                 values.max(),
             ]).cpu().tolist()
+            # NOTE: logging_tensors is now a Python list[float]. Indexed access below
+            # avoids 10 separate GPU→CPU syncs (one per .item() call).
             metrics["policy_loss"].append(logging_tensors[0])
             metrics["value_loss"].append(logging_tensors[1])
             metrics["entropy"].append(logging_tensors[2])
