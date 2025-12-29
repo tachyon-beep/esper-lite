@@ -545,6 +545,11 @@ class SanctumAggregator:
         # Reset Tamiyo state
         self._tamiyo = TamiyoState()
 
+        # Compile status (static configuration from training start)
+        self._tamiyo.infrastructure.compile_enabled = payload.compile_enabled
+        self._tamiyo.infrastructure.compile_backend = payload.compile_backend or ""
+        self._tamiyo.infrastructure.compile_mode = payload.compile_mode or ""
+
         # Reset best runs for new training session
         self._best_runs = []
 

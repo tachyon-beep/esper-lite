@@ -449,3 +449,44 @@ def test_aggregator_populates_nested_metrics():
     assert snapshot.tamiyo.infrastructure.cuda_memory_reserved_gb == 8.0
     assert snapshot.tamiyo.infrastructure.cuda_memory_peak_gb == 6.5
     assert snapshot.tamiyo.infrastructure.cuda_memory_fragmentation == 0.475
+
+
+def test_aggregator_populates_compile_status():
+    """Aggregator should populate compile status from TrainingStartedPayload."""
+    from esper.karn.sanctum.aggregator import SanctumAggregator
+    from esper.leyline import TelemetryEvent, TelemetryEventType, TrainingStartedPayload
+
+    aggregator = SanctumAggregator()
+
+    # TrainingStartedPayload has many required fields - must include all
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.TRAINING_STARTED,
+        data=TrainingStartedPayload(
+            # Required fields (from leyline/telemetry.py TrainingStartedPayload)
+            n_envs=4,
+            max_epochs=25,
+            task="mnist",
+            host_params=1000000,
+            slot_ids=("slot_0", "slot_1", "slot_2"),
+            seed=42,
+            n_episodes=100,
+            lr=3e-4,
+            clip_ratio=0.2,
+            entropy_coef=0.01,
+            param_budget=500000,
+            policy_device="cuda:0",
+            env_devices=("cuda:0", "cuda:0", "cuda:0", "cuda:0"),
+            reward_mode="shaped",
+            # The fields we're testing
+            compile_enabled=True,
+            compile_backend="inductor",
+            compile_mode="reduce-overhead",
+        ),
+    )
+
+    aggregator.process_event(event)
+    snapshot = aggregator.get_snapshot()
+
+    assert snapshot.tamiyo.infrastructure.compile_enabled is True
+    assert snapshot.tamiyo.infrastructure.compile_backend == "inductor"
+    assert snapshot.tamiyo.infrastructure.compile_mode == "reduce-overhead"
