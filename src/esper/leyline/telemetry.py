@@ -15,7 +15,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, auto
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
 from uuid import uuid4
 
 from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
@@ -1055,6 +1058,8 @@ class AnalyticsSnapshotPayload:
     stage_bonus: float | None = None  # PBRS shaping bonus for lifecycle stages
     ratio_penalty: float | None = None  # Anti-gaming penalty for extreme ratios
     alpha_shock: float | None = None  # Convex penalty on alpha deltas
+    # Full reward components dataclass (replaces individual fields)
+    reward_components: "RewardComponentsTelemetry | None" = None
     # Decision context for TamiyoBrain Decision Cards
     slot_states: dict[str, str] | None = None  # slot_id -> "Training 12%" or "Empty"
     alternatives: list[tuple[str, float]] | None = None  # Top-2 alternative (action, prob)
