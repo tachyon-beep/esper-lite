@@ -174,3 +174,86 @@ class TestTrainOneEpoch:
         assert correct == 0.0
         assert total == 0
         assert grad_stats is None
+
+
+class TestCompiledTrainStepCache:
+    """Tests for _get_compiled_train_step caching behavior (B8-PT-03)."""
+
+    def test_compile_retry_after_transient_failure(self, monkeypatch):
+        """Verify compilation retries after transient failure instead of caching fallback.
+
+        This tests the fix for B8-PT-03: if torch.compile fails once (e.g., GPU memory
+        pressure), subsequent calls should retry compilation rather than being stuck
+        with the uncompiled fallback for the process lifetime.
+        """
+        import esper.simic.training.helpers as helpers
+
+        # Reset the module-level cache
+        helpers._compiled_train_step_cache = None
+
+        call_count = 0
+        original_impl = helpers._train_step_impl
+
+        def mock_compile(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("Simulated transient GPU memory pressure")
+            # Second call succeeds - return the original impl as "compiled"
+            return original_impl
+
+        monkeypatch.setattr("torch.compile", mock_compile)
+
+        # First call - fails, returns uncompiled fallback
+        fn1 = helpers._get_compiled_train_step(use_compile=True)
+        assert fn1 is original_impl, "Should return uncompiled impl on failure"
+        assert helpers._compiled_train_step_cache is None, "Should NOT cache failures"
+
+        # Second call - should retry and succeed
+        fn2 = helpers._get_compiled_train_step(use_compile=True)
+        assert helpers._compiled_train_step_cache is not None, "Should cache success"
+        assert call_count == 2, "Should have retried compilation"
+
+        # Third call - should use cached version, not recompile
+        fn3 = helpers._get_compiled_train_step(use_compile=True)
+        assert call_count == 2, "Should use cache, not recompile"
+        assert fn3 is fn2, "Should return same cached callable"
+
+    def test_use_compile_false_bypasses_compilation(self, monkeypatch):
+        """When use_compile=False, should return uncompiled impl without trying."""
+        import esper.simic.training.helpers as helpers
+
+        helpers._compiled_train_step_cache = None
+        compile_called = False
+
+        def mock_compile(*args, **kwargs):
+            nonlocal compile_called
+            compile_called = True
+            return args[0]
+
+        monkeypatch.setattr("torch.compile", mock_compile)
+
+        fn = helpers._get_compiled_train_step(use_compile=False)
+        assert fn is helpers._train_step_impl
+        assert not compile_called, "Should not attempt compilation when use_compile=False"
+
+    def test_successful_compile_is_cached(self, monkeypatch):
+        """Successful compilation should be cached and reused."""
+        import esper.simic.training.helpers as helpers
+
+        helpers._compiled_train_step_cache = None
+        call_count = 0
+
+        def mock_compile(fn, *args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return fn  # Return the function as "compiled"
+
+        monkeypatch.setattr("torch.compile", mock_compile)
+
+        # Multiple calls should only compile once
+        helpers._get_compiled_train_step(use_compile=True)
+        helpers._get_compiled_train_step(use_compile=True)
+        helpers._get_compiled_train_step(use_compile=True)
+
+        assert call_count == 1, "Should compile only once, then use cache"
