@@ -1199,7 +1199,23 @@ class AnalyticsSnapshotPayload:
             # Shapley fields
             shapley_values=data.get("shapley_values"),
             num_slots=data.get("num_slots"),
+            # Reward components (nested dataclass)
+            reward_components=cls._parse_reward_components(data.get("reward_components")),
         )
+
+    @staticmethod
+    def _parse_reward_components(
+        data: dict[str, Any] | None,
+    ) -> "RewardComponentsTelemetry | None":
+        """Parse reward_components from dict if present.
+
+        Uses late import to avoid circular dependency at module load time.
+        """
+        if data is None:
+            return None
+        from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
+
+        return RewardComponentsTelemetry.from_dict(data)
 
 
 @dataclass(slots=True, frozen=True)
