@@ -60,6 +60,9 @@ class SignalTracker:
     # Stabilization parameters (from leyline, task-specific overrides allowed)
     stabilization_threshold: float = DEFAULT_STABILIZATION_THRESHOLD
     stabilization_epochs: int = DEFAULT_STABILIZATION_EPOCHS
+    # B9-DRL-02: Max allowed regression (pct) to still count as stable/noise
+    # Prevents divergence (>5%) from counting, but allows PPO noise (<5%)
+    regression_threshold: float = 0.05
 
     # History windows (initialized in __post_init__ with history_window)
     _loss_history: deque[float] = field(default_factory=deque)
@@ -127,13 +130,17 @@ class SignalTracker:
         if not self._is_stabilized and self._prev_loss < float('inf'):
             if self._prev_loss > EPS:
                 relative_improvement = loss_delta / self._prev_loss
-                # Check: improvement is small AND loss didn't spike (not diverging)
-                # P1-A fix: loss_delta >= 0 ensures regression epochs don't count as stable
-                # (negative delta means loss got worse, which shouldn't trigger stabilization)
+                # B9-DRL-02 FIX: Symmetric Stability Window
+                # Old logic: loss_delta >= 0 was too strict (rejected normal PPO noise)
+                # and val_loss < prev * 1.5 was too loose (50% regression allowed)
+                #
+                # New logic uses symmetric thresholds:
+                # 1. Block explosive growth: rel_imp >= stabilization_threshold (>3%)
+                # 2. Block divergence: rel_imp <= -regression_threshold (<-5%)
+                # 3. Allow plateau/noise: -5% < rel_imp < 3%
                 is_stable_epoch = (
-                    loss_delta >= 0 and  # Must not be regressing
-                    relative_improvement < self.stabilization_threshold and
-                    val_loss < self._prev_loss * 1.5  # Sanity: not diverging
+                    relative_improvement > -self.regression_threshold and
+                    relative_improvement < self.stabilization_threshold
                 )
                 if is_stable_epoch:
                     self._stable_count += 1
