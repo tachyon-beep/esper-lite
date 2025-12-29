@@ -158,9 +158,7 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.reward_components.val_acc')::DOUBLE as val_acc,
             json_extract(data, '$.reward_components.acc_at_germination')::DOUBLE as acc_at_germination,
             json_extract(data, '$.reward_components.host_baseline_acc')::DOUBLE as host_baseline_acc,
-            json_extract(data, '$.reward_components.growth_ratio')::DOUBLE as growth_ratio,
-            -- Computed property (stored in telemetry)
-            json_extract(data, '$.reward_components.shaped_reward_ratio')::DOUBLE as shaped_reward_ratio
+            json_extract(data, '$.reward_components.growth_ratio')::DOUBLE as growth_ratio
         FROM raw_events
         WHERE
             event_type = 'ANALYTICS_SNAPSHOT'
