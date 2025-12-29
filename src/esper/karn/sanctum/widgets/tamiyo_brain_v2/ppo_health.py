@@ -95,7 +95,7 @@ class PPOHealthPanel(Static):
         ))
         result.append("\n")
 
-        # Row 3: Clip Fraction
+        # Row 3: Clip Fraction (with directional breakdown per UX review)
         result.append(self._render_gauge_row(
             label="Clip Frac",
             value=tamiyo.clip_fraction,
@@ -104,6 +104,12 @@ class PPOHealthPanel(Static):
             status=self._get_clip_status(tamiyo.clip_fraction),
             is_warmup=is_warmup,
         ))
+        # Add directional breakdown with arrows (per UX review)
+        # Arrows match semantic meaning: up=probability increases capped, down=decreases capped
+        clip_pos = tamiyo.gradient_quality.clip_fraction_positive
+        clip_neg = tamiyo.gradient_quality.clip_fraction_negative
+        if clip_pos > 0 or clip_neg > 0:
+            result.append(f" (↑{clip_pos:.0%} ↓{clip_neg:.0%})", style="dim")
         result.append("\n")
 
         # Row 4: KL Divergence
