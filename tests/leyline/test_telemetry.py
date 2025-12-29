@@ -70,3 +70,109 @@ def test_telemetry_event_serializes_nested_reward_components():
 
     # Critical: shaped_reward_ratio should be included (from to_dict())
     assert "shaped_reward_ratio" in parsed["data"]["reward_components"]
+
+
+# =============================================================================
+# PPOUpdatePayload Extensions (per UX specialist enhancements plan)
+# =============================================================================
+
+
+def test_ppo_update_payload_has_gradient_quality_metrics():
+    """PPOUpdatePayload should include directional clip and gradient CV fields."""
+    from esper.leyline.telemetry import PPOUpdatePayload
+
+    # Create with gradient quality fields
+    payload = PPOUpdatePayload(
+        policy_loss=0.1,
+        value_loss=0.2,
+        entropy=1.5,
+        grad_norm=0.5,
+        kl_divergence=0.01,
+        clip_fraction=0.15,
+        nan_grad_count=0,
+        # New gradient quality fields
+        clip_fraction_positive=0.10,
+        clip_fraction_negative=0.05,
+        gradient_cv=0.35,
+    )
+
+    assert payload.clip_fraction_positive == 0.10
+    assert payload.clip_fraction_negative == 0.05
+    assert payload.gradient_cv == 0.35
+
+
+def test_ppo_update_payload_gradient_quality_defaults():
+    """New gradient quality fields should default to 0.0."""
+    from esper.leyline.telemetry import PPOUpdatePayload
+
+    payload = PPOUpdatePayload(
+        policy_loss=0.1,
+        value_loss=0.2,
+        entropy=1.5,
+        grad_norm=0.5,
+        kl_divergence=0.01,
+        clip_fraction=0.15,
+        nan_grad_count=0,
+    )
+
+    assert payload.clip_fraction_positive == 0.0
+    assert payload.clip_fraction_negative == 0.0
+    assert payload.gradient_cv == 0.0
+
+
+def test_ppo_update_payload_has_infrastructure_metrics():
+    """PPOUpdatePayload should include CUDA memory fields."""
+    from esper.leyline.telemetry import PPOUpdatePayload
+
+    payload = PPOUpdatePayload(
+        policy_loss=0.1,
+        value_loss=0.2,
+        entropy=1.5,
+        grad_norm=0.5,
+        kl_divergence=0.01,
+        clip_fraction=0.15,
+        nan_grad_count=0,
+        # New infrastructure fields
+        cuda_memory_allocated_gb=4.2,
+        cuda_memory_reserved_gb=8.0,
+        cuda_memory_peak_gb=6.5,
+        cuda_memory_fragmentation=0.25,
+    )
+
+    assert payload.cuda_memory_allocated_gb == 4.2
+    assert payload.cuda_memory_reserved_gb == 8.0
+    assert payload.cuda_memory_peak_gb == 6.5
+    assert payload.cuda_memory_fragmentation == 0.25
+
+
+def test_ppo_update_payload_from_dict_parses_new_fields():
+    """PPOUpdatePayload.from_dict should parse the new fields."""
+    from esper.leyline.telemetry import PPOUpdatePayload
+
+    data = {
+        "policy_loss": 0.1,
+        "value_loss": 0.2,
+        "entropy": 1.5,
+        "grad_norm": 0.5,
+        "kl_divergence": 0.01,
+        "clip_fraction": 0.15,
+        "nan_grad_count": 0,
+        # New fields
+        "clip_fraction_positive": 0.12,
+        "clip_fraction_negative": 0.08,
+        "gradient_cv": 0.45,
+        "cuda_memory_allocated_gb": 5.0,
+        "cuda_memory_reserved_gb": 10.0,
+        "cuda_memory_peak_gb": 7.5,
+        "cuda_memory_fragmentation": 0.30,
+    }
+
+    payload = PPOUpdatePayload.from_dict(data)
+
+    assert payload.clip_fraction_positive == 0.12
+    assert payload.clip_fraction_negative == 0.08
+    assert payload.gradient_cv == 0.45
+    assert payload.cuda_memory_allocated_gb == 5.0
+    assert payload.cuda_memory_reserved_gb == 10.0
+    assert payload.cuda_memory_peak_gb == 7.5
+    assert payload.cuda_memory_fragmentation == 0.30

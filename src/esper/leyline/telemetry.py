@@ -681,6 +681,21 @@ class PPOUpdatePayload:
     value_min: float = 0.0
     value_max: float = 0.0
 
+    # === Gradient Quality Metrics (per DRL expert review) ===
+    # Directional clip: WHERE clipping occurs (not WHETHER policy improved)
+    clip_fraction_positive: float = 0.0  # r > 1+ε (probability increases capped)
+    clip_fraction_negative: float = 0.0  # r < 1-ε (probability decreases capped)
+    # Gradient CV: coefficient of variation = std/|mean|
+    # Low (<0.5) = high signal quality, High (>2.0) = noisy gradients
+    gradient_cv: float = 0.0
+
+    # === Infrastructure Metrics (per PyTorch expert review) ===
+    # CUDA memory collected every N batches to amortize sync overhead
+    cuda_memory_allocated_gb: float = 0.0  # torch.cuda.memory_allocated()
+    cuda_memory_reserved_gb: float = 0.0   # torch.cuda.memory_reserved()
+    cuda_memory_peak_gb: float = 0.0       # torch.cuda.max_memory_allocated()
+    cuda_memory_fragmentation: float = 0.0 # 1 - (allocated/reserved), >0.3 = pressure
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "PPOUpdatePayload":
         """Parse from dict. Raises KeyError on missing required fields."""
@@ -742,6 +757,15 @@ class PPOUpdatePayload:
             value_std=data.get("value_std", 0.0),
             value_min=data.get("value_min", 0.0),
             value_max=data.get("value_max", 0.0),
+            # Gradient quality metrics
+            clip_fraction_positive=data.get("clip_fraction_positive", 0.0),
+            clip_fraction_negative=data.get("clip_fraction_negative", 0.0),
+            gradient_cv=data.get("gradient_cv", 0.0),
+            # Infrastructure metrics
+            cuda_memory_allocated_gb=data.get("cuda_memory_allocated_gb", 0.0),
+            cuda_memory_reserved_gb=data.get("cuda_memory_reserved_gb", 0.0),
+            cuda_memory_peak_gb=data.get("cuda_memory_peak_gb", 0.0),
+            cuda_memory_fragmentation=data.get("cuda_memory_fragmentation", 0.0),
         )
 
     @classmethod
