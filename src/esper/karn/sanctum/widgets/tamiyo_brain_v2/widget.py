@@ -101,8 +101,8 @@ class TamiyoBrainV2(Container):
     }
 
     #ppo-health {
-        height: 6;
-        max-height: 6;
+        height: 13;
+        max-height: 13;
         padding: 0;
         margin: 0;
     }
