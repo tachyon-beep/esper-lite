@@ -39,6 +39,41 @@ def test_emit_ppo_update_event_propagates_group_id():
     assert event.group_id == "B"
 
 
+def test_emit_ppo_update_event_includes_value_stats():
+    """emit_ppo_update_event should include value_mean/std/min/max in PPOUpdatePayload."""
+    hub = MagicMock()
+
+    emit_ppo_update_event(
+        hub=hub,
+        metrics={
+            "policy_loss": 0.1,
+            "value_loss": 0.2,
+            "entropy": 1.5,
+            # Value function statistics
+            "value_mean": 5.5,
+            "value_std": 1.2,
+            "value_min": 2.1,
+            "value_max": 9.8,
+        },
+        episodes_completed=10,
+        batch_idx=5,
+        epoch=100,
+        optimizer=None,
+        grad_norm=1.0,
+        update_time_ms=50.0,
+    )
+
+    hub.emit.assert_called_once()
+    event = hub.emit.call_args[0][0]
+    payload = event.data
+
+    # Verify value stats were populated (not zeros)
+    assert payload.value_mean == 5.5
+    assert payload.value_std == 1.2
+    assert payload.value_min == 2.1
+    assert payload.value_max == 9.8
+
+
 class TestComputeGradNormSurrogate:
     """Tests for compute_grad_norm_surrogate numerical stability."""
 

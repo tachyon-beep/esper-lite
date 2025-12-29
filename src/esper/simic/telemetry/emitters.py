@@ -742,6 +742,11 @@ def emit_ppo_update_event(
             ratio_min=metrics.get("ratio_min", 1.0),
             ratio_max=metrics.get("ratio_max", 1.0),
             ratio_std=metrics.get("ratio_std", 0.0),
+            # Value function statistics for drift monitoring
+            value_mean=metrics.get("value_mean", 0.0),
+            value_std=metrics.get("value_std", 0.0),
+            value_min=metrics.get("value_min", 0.0),
+            value_max=metrics.get("value_max", 0.0),
             lr=lr,
             entropy_coef=metrics.get("entropy_coef"),
             inf_grad_count=0,
