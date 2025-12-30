@@ -326,19 +326,17 @@ Post-LSTM LayerNorm(256)
 - **API change:** Value head forward requires op conditioning
 - **Observation size:** 117 → 124 dims
 
-## V1 Retention (Temporary)
+## Clean Replacement Strategy
 
-Similar to Obs V3, keep V1 code paths until V2 is validated:
+Per `CLAUDE.md` no-legacy policy, we do **clean replacement**—no dual paths:
 
 ```python
-# In leyline/__init__.py
-_POLICY_VERSION = "v2"  # Toggle for testing
-
-DEFAULT_LSTM_HIDDEN_DIM = 256 if _POLICY_VERSION == "v2" else 128
-DEFAULT_FEATURE_DIM = 256 if _POLICY_VERSION == "v2" else 128
-
-# TODO(policy-v2): Delete V1 code paths after validation
+# In leyline/__init__.py - direct values, no conditionals
+DEFAULT_LSTM_HIDDEN_DIM = 256
+DEFAULT_FEATURE_DIM = 256
 ```
+
+Delete old network code as you implement V2. Rollback via git branch if needed.
 
 ## Success Criteria
 

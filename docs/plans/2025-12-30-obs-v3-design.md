@@ -222,34 +222,25 @@ def _extract_slot_arrays(batch_reports, slot_config) -> dict[str, np.ndarray]:
 - Learning curve comparison: V2 vs V3
 - Performance profiling
 
-## V2 Retention (Temporary)
+## Clean Replacement Strategy
 
-Per discussion: keep V2 code paths until V3 is validated.
+Per `CLAUDE.md` no-legacy policy, we do **clean replacement**—no dual paths:
 
-```python
-# In features.py
-_OBS_VERSION = "v3"  # Toggle for testing
+- Delete old feature extraction code as you implement V3
+- No `_OBS_VERSION` toggle
+- Rollback via git branch if needed
 
-def batch_obs_to_features(version: str = _OBS_VERSION, ...):
-    if version == "v2":
-        return _batch_obs_to_features_v2(...)  # Legacy
-    return batch_obs_to_features_v3(...)
-
-# TODO(obs-v3): Delete V2 code paths after validation
-# Target: Once V3 learning curves match or exceed V2
-```
-
-Easy cutout: single constant controls version, grep for `TODO(obs-v3)` to find all V2 code.
+**The old observation space is part of why Tamiyo doesn't work.** No value in keeping it.
 
 ## Files to Modify
 
 | File | Changes |
 |------|---------|
-| `src/esper/tamiyo/policy/features.py` | Add V3 functions, keep V2 temporarily |
-| `src/esper/tamiyo/policy/network.py` | Add `BlueprintEmbedding`, `...V3` network |
+| `src/esper/tamiyo/policy/features.py` | Replace feature extraction functions |
+| `src/esper/tamiyo/networks/factored_lstm.py` | Add `BlueprintEmbedding`, new network |
+| `src/esper/simic/agent/rollout_buffer.py` | Add `blueprint_indices` storage |
 | `src/esper/simic/training/vectorized.py` | Update extraction calls, pass blueprint_idx |
-| `src/esper/leyline/telemetry.py` | Mark `to_features()` as V2-only |
-| CLI args | Remove `--use-telemetry` (or ignore in V3) |
+| CLI args | Remove `--use-telemetry` flag |
 
 ## Breaking Changes
 
@@ -262,7 +253,7 @@ Easy cutout: single constant controls version, grep for `TODO(obs-v3)` to find a
 1. V3 learning curves match or exceed V2 sample efficiency
 2. Feature extraction 5x+ faster than V2 (profiled)
 3. All features in documented ranges (unit tested)
-4. Clean V2 deletion possible with single constant change
+4. No stale V2 code paths remain (clean replacement)
 
 ## Expert Reviews
 

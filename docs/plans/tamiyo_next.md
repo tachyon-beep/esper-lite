@@ -9,6 +9,27 @@
 
 YOU MUST READ BOTH THIS DOCUMENT AND THE RELEVANT PRERESQUISITE DESIGNS IN FULL BEFORE IMPLEMENTING. DO IT NOW. NO EXCEPTIONS.
 
+---
+
+## Risk Assessment
+
+| Phase | Risk | Complexity | Key Hazards |
+|-------|------|------------|-------------|
+| 1: Leyline Constants | Low | Low | Most constants already exist; mainly dimension updates |
+| 2: Obs V3 Extraction | **High** | **High** | Feature spec correctness, enum cardinalities, inactive-slot masking, CPU↔GPU copies |
+| 3: Blueprint Embedding | Med | Med | dtype/int64, -1 handling, shape flattening |
+| 4: Policy V2 + Q(s,op) | **High** | **High** | Critic semantics become SARSA-like Q(s,op); bootstrap + GAE consistency |
+| 5: PPO Entropy | Med | Med-High | Stability tuning, per-head causal masking/entropy |
+| 6: Vectorized Integration | **Very High** | **Very High** | Rollout buffer schema changes, (obs, blueprint_indices) tuple through hot path |
+| 7: Validation | Med | Risk-reducing | Verifies correctness; surface area for catching bugs |
+| 8: Cleanup | Med | Med | Risk of leaving stale code; follow CLAUDE.md no-legacy policy |
+
+**Top Technical Risks:**
+1. **Op-conditioned value head:** Rollout value, truncation bootstrap_value, and PPO update must all condition on the same op
+2. **Feature vectorization/perf:** Cached one-hot tables with `.to(device)` can accidentally allocate per-step
+3. **Enum/cardinality drift:** Hard-coding `torch.eye(10)` for stages assumes fixed cardinality—use leyline constants
+4. **API propagation:** `(obs, blueprint_indices)` touches network forward, rollout collection, buffer storage, PPO update
+
 ## Summary
 
 | Aspect | Before | After |
@@ -48,19 +69,16 @@ All tests should pass before starting. Any failures are pre-existing issues.
 git checkout -b tamiyo-v2 quality-sprint
 ```
 
-### 4. Understand the Version Toggle Pattern
+### 4. Clean Replacement Strategy (No Dual Paths)
 
-Both Obs V3 and Policy V2 use a version toggle for safe rollback:
+Per `CLAUDE.md` no-legacy policy, we do **clean replacement**, NOT dual-path version toggles:
 
-```python
-# In features.py
-_OBS_VERSION = "v3"  # Toggle between "v2" and "v3"
+- **Delete** old Tamiyo network/feature code as you implement V2
+- **No** `_OBS_VERSION` or `_POLICY_VERSION` toggles
+- **No** backwards compatibility shims
+- Rollback via git branch, not code toggles
 
-# In leyline/__init__.py
-_POLICY_VERSION = "v2"  # Toggle between "v1" and "v2"
-```
-
-Keep V1/V2 code paths until V3/V2 is validated. Delete after validation.
+**The old Tamiyo doesn't work.** That's why we're here. There's no value in keeping it.
 
 ### 5. Key Files to Read First
 
@@ -84,25 +102,27 @@ Keep V1/V2 code paths until V3/V2 is validated. Delete after validation.
 
 - `src/esper/leyline/__init__.py`
 
+**What already exists (don't re-add):**
+
+- `NUM_OPS = 6` ✓ (in `leyline/factored_actions.py`, re-exported from `__init__.py`)
+- `NUM_BLUEPRINTS`, `NUM_STYLES`, `NUM_TEMPO`, etc. ✓
+
 **Changes:**
 
 ```python
-# Add version toggle
-_POLICY_VERSION = "v2"
+# Update dimension constants (clean replacement, no conditionals)
+DEFAULT_LSTM_HIDDEN_DIM = 256  # Was 128
+DEFAULT_FEATURE_DIM = 256      # Was 128 (add if missing)
 
-# Update defaults (conditional on version)
-DEFAULT_LSTM_HIDDEN_DIM = 256 if _POLICY_VERSION == "v2" else 128
-DEFAULT_FEATURE_DIM = 256 if _POLICY_VERSION == "v2" else 128
-
-# Add new constants for action feedback
-NUM_OPS = 6  # For one-hot encoding
+# Add stage count for vectorized one-hot (if not present)
+NUM_STAGES = 10  # len(SeedStage)
 ```
 
 **Validation:**
 
 ```bash
-python -c "from esper.leyline import DEFAULT_LSTM_HIDDEN_DIM; print(DEFAULT_LSTM_HIDDEN_DIM)"
-# Should print: 256
+PYTHONPATH=src python -c "from esper.leyline import DEFAULT_LSTM_HIDDEN_DIM, NUM_OPS; print(f'LSTM={DEFAULT_LSTM_HIDDEN_DIM}, OPS={NUM_OPS}')"
+# Should print: LSTM=256, OPS=6
 ```
 
 ---
@@ -117,13 +137,13 @@ python -c "from esper.leyline import DEFAULT_LSTM_HIDDEN_DIM; print(DEFAULT_LSTM
 
 **Sub-phases:**
 
-#### 2a. Add Version Toggle and Imports
+#### 2a. Replace Imports (Clean Replacement)
+
+Delete old V2 feature functions as you implement V3. No version toggle.
 
 ```python
-_OBS_VERSION = "v3"
-
-# Add for blueprint embedding support
-from esper.leyline import NUM_OPS
+# In features.py - ensure these imports exist
+from esper.leyline import NUM_OPS, NUM_STAGES
 ```
 
 #### 2b. Implement Base Feature Extraction V3
@@ -195,9 +215,11 @@ def batch_obs_to_features_v3(
 
 #### 2f. Update get_feature_size()
 
+Replace existing function (no `_v3` suffix—this is the new implementation):
+
 ```python
-def get_feature_size_v3(slot_config: SlotConfig) -> int:
-    """V3 feature size: 25 base + 29*slots = 112 for 3 slots.
+def get_feature_size(slot_config: SlotConfig) -> int:
+    """Feature size: 25 base + 29*slots = 112 for 3 slots.
 
     Note: Blueprint embeddings (4*slots=12) added by network, not here.
     Total input to network: 112 + 12 = 124.
@@ -209,11 +231,11 @@ def get_feature_size_v3(slot_config: SlotConfig) -> int:
 
 ```bash
 PYTHONPATH=src python -c "
-from esper.tamiyo.policy.features import get_feature_size_v3
-from esper.leyline import SlotConfig
+from esper.tamiyo.policy.features import get_feature_size
+from esper.leyline.slot_config import SlotConfig
 config = SlotConfig.default()
-print(f'Feature size: {get_feature_size_v3(config)}')  # Should be 112
-print(f'With embeddings: {get_feature_size_v3(config) + 4 * config.num_slots}')  # Should be 124
+print(f'Feature size: {get_feature_size(config)}')  # Should be 112
+print(f'With embeddings: {get_feature_size(config) + 4 * config.num_slots}')  # Should be 124
 "
 ```
 
@@ -421,11 +443,38 @@ result = self.policy.evaluate_actions(
 
 **Goal:** Wire up the new feature extraction and network in the training loop.
 
+**⚠️ RISK: VERY HIGH** — This phase threads new tuple obs + blueprint indices through the hottest, largest module.
+
 **Files:**
 
 - `src/esper/simic/training/vectorized.py`
+- `src/esper/simic/agent/rollout_buffer.py` (schema change!)
+- `src/esper/simic/agent/ppo.py` (buffer consumption)
 
-#### 6a. Track Action Feedback State
+#### 6a. Rollout Buffer Schema Changes
+
+**Current state:** `TamiyoRolloutBuffer` stores `states: torch.Tensor` as a single `[num_envs, max_steps, state_dim]` tensor.
+
+**Required change:** Add `blueprint_indices` storage:
+
+```python
+# In TamiyoRolloutBuffer.__post_init__()
+self.blueprint_indices = torch.zeros(
+    n, m, self.num_slots, dtype=torch.int64, device=device
+)
+
+# In add() method - new parameter
+blueprint_indices: torch.Tensor,  # [num_slots], int64
+# ...
+self.blueprint_indices[env_id, step_idx] = blueprint_indices
+
+# In get_batched_sequences() - add to return dict
+"blueprint_indices": self.blueprint_indices.to(device, non_blocking=nb),
+```
+
+**Also update:** `TamiyoRolloutStep` NamedTuple to include `blueprint_indices` field.
+
+#### 6b. Track Action Feedback State
 
 Add to environment state:
 
@@ -439,23 +488,59 @@ class EnvState:
 
 Update after each action execution.
 
-#### 6b. Update Feature Extraction Call
+#### 6c. Update Feature Extraction Call
 
 ```python
 # Was:
 obs = batch_obs_to_features(signals, reports, use_telemetry=True, ...)
 
-# Now:
-obs, blueprint_indices = batch_obs_to_features_v3(signals, reports, slot_config, device)
+# Now (clean replacement, not new function name):
+obs, blueprint_indices = batch_obs_to_features(signals, reports, slot_config, device)
 ```
 
-#### 6c. Update Policy Forward Calls
+Note: The function signature changes from returning `Tensor` to returning `tuple[Tensor, Tensor]`.
 
-Pass `blueprint_indices` to all `policy.forward()` and `policy.get_action()` calls.
+#### 6d. Update Policy Forward Calls
 
-#### 6d. Store Blueprint Indices in Rollout Buffer
+Pass `blueprint_indices` to all `policy.forward()` and `policy.get_action()` calls:
 
-Add `blueprint_indices` to the rollout buffer alongside states.
+```python
+# Was:
+action, value, log_probs, hidden = policy(state, hidden, masks)
+
+# Now:
+action, value, log_probs, hidden = policy(state, blueprint_indices, hidden, masks)
+```
+
+#### 6e. Update Buffer add() Calls
+
+Thread blueprint_indices through the rollout collection loop:
+
+```python
+buffer.add(
+    env_id=env_id,
+    state=obs[env_id],
+    blueprint_indices=blueprint_indices[env_id],  # NEW
+    slot_action=action["slot"],
+    # ... rest unchanged ...
+)
+```
+
+#### 6f. Update PPO Consumption
+
+In `ppo.py`, the `_ppo_update()` method must pass blueprint_indices from buffer to `evaluate_actions()`:
+
+```python
+batch = buffer.get_batched_sequences(device)
+# ...
+result = policy.evaluate_actions(
+    batch["states"],
+    batch["blueprint_indices"],  # NEW
+    actions,
+    masks,
+    initial_hidden,
+    sampled_op=batch["op_actions"],
+)
 
 ---
 
@@ -466,14 +551,17 @@ Add `blueprint_indices` to the rollout buffer alongside states.
 #### 7a. Unit Tests
 
 ```bash
-# Feature extraction
+# Feature extraction (update test file for new API)
 PYTHONPATH=src uv run pytest tests/tamiyo/policy/test_features.py -v
 
 # Network architecture
-PYTHONPATH=src uv run pytest tests/tamiyo/networks/test_factored_lstm.py -v
+PYTHONPATH=src uv run pytest tests/simic/test_tamiyo_network.py -v
 
 # PPO updates
-PYTHONPATH=src uv run pytest tests/simic/agent/test_ppo.py -v
+PYTHONPATH=src uv run pytest tests/simic/test_ppo.py -v
+
+# Buffer schema
+PYTHONPATH=src uv run pytest tests/simic/test_tamiyo_buffer.py -v
 ```
 
 #### 7b. Smoke Test Training
@@ -488,60 +576,77 @@ PYTHONPATH=src uv run python -m esper.scripts.train ppo \
 
 #### 7c. Verify Observation Ranges
 
-Add temporary logging to verify all features are in expected ranges:
+Add temporary assertion in feature extraction to verify all features are in expected ranges:
 
 ```python
-# In batch_obs_to_features_v3
+# In batch_obs_to_features
 assert (obs >= -2).all() and (obs <= 2).all(), f"Obs out of range: min={obs.min()}, max={obs.max()}"
 ```
 
+Remove assertion after validation passes.
+
 #### 7d. Profile Performance
 
-```bash
-# Compare V2 vs V3 feature extraction speed
-PYTHONPATH=src python -m esper.scripts.profile_features --version v3
+Add timing to feature extraction (no existing profile script for features):
+
+```python
+# Ad-hoc profiling during development
+import time
+start = time.perf_counter()
+for _ in range(100):
+    obs, bp_idx = batch_obs_to_features(signals, reports, slot_config, device)
+elapsed = (time.perf_counter() - start) / 100
+print(f"Feature extraction: {elapsed*1000:.2f}ms/batch")
 ```
 
-#### 7e. Compare Learning Curves
+Target: < 1ms per batch for 4 environments.
 
-Run identical experiments with V2 (old) and V3 (new):
+#### 7e. Learning Curve Comparison
+
+Since there's no version toggle, comparison is via git branches:
 
 ```bash
-# V2 baseline
-PYTHONPATH=src uv run python -m esper.scripts.train ppo --obs-version v2 --policy-version v1 --seed 42
+# Current branch has new implementation
+PYTHONPATH=src uv run python -m esper.scripts.train ppo --episodes 100 --seed 42
 
-# V3 + Policy V2
-PYTHONPATH=src uv run python -m esper.scripts.train ppo --obs-version v3 --policy-version v2 --seed 42
+# Compare metrics in TensorBoard/telemetry against pre-V2 runs
 ```
+
+Note: Checkpoints are incompatible, so comparison is learning curve shape, not resumed training.
 
 ---
 
 ### Phase 8: Cleanup (After Validation)
 
-**Goal:** Remove V1/V2 code paths once V3 is proven.
+**Goal:** Verify no stale code remains. Since we used clean replacement (not dual paths), this phase is mainly verification.
 
-#### 8a. Delete Old Code
+#### 8a. Verify Old Code Deleted
 
-Search for and remove:
+Ensure old feature/network code was deleted during implementation:
+
+```bash
+# Should return no matches if clean replacement was done correctly
+git grep "use_telemetry"  # Old flag
+git grep "FactoredRecurrentActorCritic" | grep -v V2  # Old network class (if renamed)
+```
+
+#### 8b. Verify Tests Updated
+
+Ensure tests use new API signatures:
+
+```bash
+# Check tests aren't importing old functions
+git grep "batch_obs_to_features.*use_telemetry" tests/
+```
+
+#### 8c. Remove Any Deferred Cleanup Markers
+
+If any `TODO(obs-v3)` or `TODO(policy-v2)` markers were added during implementation, resolve them:
 
 ```bash
 git grep "TODO(obs-v3)"
 git grep "TODO(policy-v2)"
-git grep "_OBS_VERSION"
-git grep "_POLICY_VERSION"
 ```
-
-#### 8b. Remove Version Toggles
-
-Make V3/V2 the only path. Delete:
-
-- `batch_obs_to_features_v2()`
-- `FactoredRecurrentActorCriticV1` (if separate class)
-- `_OBS_VERSION` and `_POLICY_VERSION` constants
-
-#### 8c. Update Tests
-
-Remove any V1/V2 specific test cases.
 
 ---
 
@@ -549,11 +654,12 @@ Remove any V1/V2 specific test cases.
 
 | File | Phase | Key Changes |
 |------|-------|-------------|
-| `leyline/__init__.py` | 1 | Dimension constants, version toggle |
-| `tamiyo/policy/features.py` | 2 | V3 extraction, vectorization, log normalization |
-| `tamiyo/networks/factored_lstm.py` | 3, 4 | BlueprintEmbedding, V2 network, op-conditioned critic |
-| `simic/agent/ppo.py` | 5 | Differential entropy, evaluate_actions update |
-| `simic/training/vectorized.py` | 6 | Action feedback tracking, V3 integration |
+| `leyline/__init__.py` | 1 | Dimension constants (256), NUM_STAGES |
+| `tamiyo/policy/features.py` | 2 | Clean replacement, vectorization, log normalization, returns `(obs, bp_idx)` |
+| `tamiyo/networks/factored_lstm.py` | 3, 4 | BlueprintEmbedding, V2 network, op-conditioned Q(s,op) critic |
+| `simic/agent/ppo.py` | 5, 6f | Differential entropy, evaluate_actions with blueprint_indices |
+| `simic/agent/rollout_buffer.py` | 6a | Add `blueprint_indices` tensor, update `add()` and `get_batched_sequences()` |
+| `simic/training/vectorized.py` | 6 | Action feedback tracking, new feature extraction API, blueprint_indices plumbing |
 
 ---
 
