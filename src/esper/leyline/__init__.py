@@ -113,6 +113,11 @@ DEFAULT_HOST_LSTM_LAYERS = 12
 # Used by: config.py, vectorized.py, ppo.py, train.py CLI
 DEFAULT_N_ENVS = 4
 
+# Default number of injection slots (Kasmina capacity points).
+# 3 slots allows sequential scaffolding: Seed A stabilizes, then B, then C.
+# Used by: SlotConfig defaults, feature size calculations, buffer shapes
+DEFAULT_NUM_SLOTS = 3
+
 # =============================================================================
 # PPO Hyperparameters (tuning knobs for policy gradient training)
 # =============================================================================
