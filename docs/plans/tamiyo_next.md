@@ -59,7 +59,7 @@ With 150-epoch sequential scaffolding, the LSTM must maintain "archival memories
 
 **Checkpoint Incompatibility:** V1 checkpoints will NOT load into V2 networks due to:
 
-- Different observation dimensions (218 → 124)
+- Different observation dimensions (218 → 133)
 - Different LSTM hidden size (128 → 512)
 - Different head input dimensions
 - New value head architecture (op-conditioned)
@@ -106,7 +106,9 @@ Per `CLAUDE.md` no-legacy policy, we do **clean replacement**, NOT dual-path ver
 
 ## Implementation Order
 
-### Phase 1: Leyline Constants (Foundation)
+### Phase 1: Leyline Constants (Foundation) ✅ COMPLETE
+
+**Status:** Already merged to `quality-sprint` branch.
 
 **Goal:** Update shared constants that everything depends on.
 
@@ -114,60 +116,34 @@ Per `CLAUDE.md` no-legacy policy, we do **clean replacement**, NOT dual-path ver
 
 - `src/esper/leyline/__init__.py`
 
-**What already exists (don't re-add):**
+**Already implemented (verify with validation command below):**
 
-- `NUM_OPS = 6` ✓ (in `leyline/factored_actions.py`, re-exported)
-- `NUM_STAGES = 10` ✓ (in `leyline/stage_schema.py`, re-exported)
-- `NUM_BLUEPRINTS = 13`, `NUM_STYLES`, `NUM_TEMPO`, etc. ✓
+- `DEFAULT_LSTM_HIDDEN_DIM = 512` (line 103)
+- `DEFAULT_FEATURE_DIM = 512` (line 418)
+- `BLUEPRINT_NULL_INDEX = 13` (line 432)
+- `DEFAULT_BLUEPRINT_EMBED_DIM = 4` (line 438)
+- `NUM_BLUEPRINTS = 13` (line 426)
+- `NUM_OPS = 6`, `NUM_STAGES = 10`, etc.
 
-**Changes:**
-
-```python
-# ⚠️ WARNING: Changing dimension constants IMMEDIATELY breaks checkpoint compatibility.
-# ALL V1 checkpoints (LSTM_HIDDEN=128) will fail to load. Train from scratch.
-
-# Update existing dimension constants (clean replacement)
-DEFAULT_LSTM_HIDDEN_DIM = 512  # Was 128 - supports 150-epoch 3-seed sequential scaffolding
-DEFAULT_FEATURE_DIM = 512      # Was 128 - matches LSTM dim, prevents bottleneck
-
-# New constants for blueprint embedding
-BLUEPRINT_NULL_INDEX: int = 13  # Index for inactive slot embedding (== NUM_BLUEPRINTS)
-DEFAULT_BLUEPRINT_EMBED_DIM: int = 4  # Learned blueprint representation dimension
-```
-
-**Rationale (512 hidden dim):**
-
-1. **Accumulating Context Problem:** At epoch 140 with 3 sequential seeds, the LSTM must hold:
-   - Archival: Seed A's blueprint, fossilization epoch, contribution to host
-   - Archival: Seed B's blueprint, how it interacted with A
-   - Active: Seed C's current gradients, alpha, stage
-
-2. **Catastrophic Overwrite Risk:** With 256 dims processing noisy Seed C gradients, the LSTM might "evict" Seed A's characteristics. 512 provides dedicated "archival slots."
-
-3. **PPO Horizon Cut Bridge:** Rollout boundaries cut gradient flow. The hidden state is the ONLY bridge connecting step 150 to step 1. Larger = more robust value function.
-
-4. **512 is power-of-2:** Optimal for GPU tensor cores (divisible by 8 for AMP).
-
-5. **Feature dim = LSTM dim:** Prevents information bottleneck before LSTM.
-
-6. **BLUEPRINT_NULL_INDEX:** Prevents magic number 13 scattered across features.py and factored_lstm.py.
-
-**Validation:**
+**Validation (run to confirm):**
 
 ```bash
 PYTHONPATH=src python -c "
 from esper.leyline import (
     DEFAULT_LSTM_HIDDEN_DIM, DEFAULT_FEATURE_DIM,
-    DEFAULT_EPISODE_LENGTH, NUM_OPS, NUM_STAGES, NUM_BLUEPRINTS
+    DEFAULT_EPISODE_LENGTH, NUM_OPS, NUM_STAGES, NUM_BLUEPRINTS,
+    BLUEPRINT_NULL_INDEX, DEFAULT_BLUEPRINT_EMBED_DIM
 )
 print(f'LSTM={DEFAULT_LSTM_HIDDEN_DIM}, FEATURE={DEFAULT_FEATURE_DIM}')
 print(f'EPISODE_LENGTH={DEFAULT_EPISODE_LENGTH}')
 print(f'OPS={NUM_OPS}, STAGES={NUM_STAGES}, BLUEPRINTS={NUM_BLUEPRINTS}')
+print(f'NULL_INDEX={BLUEPRINT_NULL_INDEX}, EMBED_DIM={DEFAULT_BLUEPRINT_EMBED_DIM}')
 "
 # Should print:
 # LSTM=512, FEATURE=512
 # EPISODE_LENGTH=150
 # OPS=6, STAGES=10, BLUEPRINTS=13
+# NULL_INDEX=13, EMBED_DIM=4
 ```
 
 ---
@@ -191,12 +167,49 @@ Delete old V2 feature functions as you implement V3. No version toggle.
 from esper.leyline import NUM_OPS, NUM_STAGES
 ```
 
+#### 2a½. Add State Tracking Fields to ParallelEnvState
+
+**File:** `src/esper/simic/training/parallel_env_state.py`
+
+Before implementing feature extraction, add the fields that features will read from. The *update logic* for these fields is in Phase 6b, but the field definitions must exist now.
+
+```python
+from esper.leyline import LifecycleOp
+
+@dataclass
+class ParallelEnvState:
+    # ... existing fields ...
+
+    # === Obs V3 Action Feedback (7 dims: 1 success + 6 op one-hot) ===
+    last_action_success: bool = True
+    last_action_op: int = LifecycleOp.WAIT.value  # 0
+
+    # === Obs V3 Gradient Health Tracking (for gradient_health_prev feature) ===
+    # Maps slot_id -> previous epoch's gradient_health value
+    gradient_health_prev: dict[str, float] = field(default_factory=dict)
+
+    # === Obs V3 Counterfactual Freshness Tracking ===
+    # Maps slot_id -> epochs since last counterfactual measurement
+    epochs_since_counterfactual: dict[str, int] = field(default_factory=dict)
+```
+
+**Initial Values Contract:**
+
+| Field | Initial Value | Rationale |
+|-------|---------------|-----------|
+| `last_action_success` | `True` | First step has no prior action to fail |
+| `last_action_op` | `LifecycleOp.WAIT.value` (0) | Neutral "no action yet" |
+| `gradient_health_prev[slot_id]` | `1.0` | Assume healthy for new slots |
+| `epochs_since_counterfactual[slot_id]` | `0` | Fresh when slot germinates |
+
+**Note:** Phase 6b covers *when and how* to update these fields. For now, just add the field definitions with their default values.
+
 #### 2b. Implement Base Feature Extraction V3
 
 Add `_extract_base_features_v3()` with:
 
 - Log-scale loss normalization: `log(1 + loss) / log(11)`
-- **Raw history (10 dims):** 5 loss + 5 accuracy values, log-normalized and left-padded
+- **Raw history (10 dims):** 5 loss + 5 accuracy values, log-normalized and left-padded (from `TrainingSignals.loss_history` and `TrainingSignals.accuracy_history`)
 - Stage distribution: `num_training_norm`, `num_blending_norm`, `num_holding_norm`
 - Host stabilized flag
 - **Action feedback:** `last_action_success`, `last_action_op` (7 dims)
@@ -235,6 +248,10 @@ Add `_extract_slot_features_v3()` with:
 
 **Per-slot features total: 30 dims** (was 29 in V2)
 
+> **State Tracking:** The `gradient_health_prev` and `epochs_since_counterfactual` values
+> require tracking in `ParallelEnvState`. See **Phase 6b** for the complete state tracking
+> contract including field definitions, update timing, and initial values.
+
 ```python
 from esper.leyline import DEFAULT_GAMMA
 
@@ -243,7 +260,7 @@ from esper.leyline import DEFAULT_GAMMA
 counterfactual_fresh = DEFAULT_GAMMA ** epochs_since_counterfactual
 
 # Gradient trend signal
-gradient_health_prev = previous_epoch_gradient_health  # Track in EnvState
+gradient_health_prev = previous_epoch_gradient_health  # Track in ParallelEnvState
 ```
 
 **Why gamma-matched decay (from DRL review):** The old 0.8^epochs decayed too fast—0.8^10 = 0.1, making counterfactual estimates unreliable after just 10 epochs. Using DEFAULT_GAMMA (0.995) aligns with PPO's credit horizon: 0.995^10 ≈ 0.95, staying useful for ~50 epochs.
@@ -350,20 +367,34 @@ Replace existing function (no `_v3` suffix—this is the new implementation):
 
 ```python
 def get_feature_size(slot_config: SlotConfig) -> int:
-    """Feature size: 31 base (24 + 7 action feedback) + 30*slots = 121 for 3 slots.
+    """Feature size excluding blueprint embeddings (added by network).
 
-    Note: Blueprint embeddings (4*slots=12) added by network, not here.
-    Total input to network: 121 + 12 = 133.
+    Breakdown:
+        Base features:     24 dims (epoch, loss, accuracy, history, stage counts, etc.)
+        Action feedback:    7 dims (last_action_success + last_action_op one-hot)
+        Per-slot features: 30 dims × num_slots (stage, alpha, gradient health, etc.)
+
+    For 3 slots: 24 + 7 + (30 × 3) = 31 + 90 = 121 dims
+
+    Note: Blueprint embeddings (4 × num_slots = 12 for 3 slots) are added
+    inside the network via BlueprintEmbedding, making total network input 133.
     """
-    return 31 + (30 * slot_config.num_slots)
+    BASE_FEATURES = 24
+    ACTION_FEEDBACK = 7
+    SLOT_FEATURES = 30
+    return BASE_FEATURES + ACTION_FEEDBACK + (SLOT_FEATURES * slot_config.num_slots)
 ```
 
-**Dimension breakdown:**
-- Base features: 24 (includes 10-dim raw history)
-- Action feedback: 7 (success + op one-hot)
-- Per-slot: 30 (includes gradient_health_prev)
-- Non-blueprint obs: 31 + 90 = 121
-- With embeddings: 121 + 12 = 133
+**Dimension breakdown (for reference):**
+
+| Component | Dims | Notes |
+|-----------|------|-------|
+| Base features | 24 | epoch, loss, accuracy, 10-dim raw history, stage counts |
+| Action feedback | 7 | last_action_success (1) + last_action_op one-hot (6) |
+| Per-slot | 30 × 3 = 90 | stage, alpha, gradient health, contribution, etc. |
+| **Non-blueprint obs** | **121** | Returned by `get_feature_size()` |
+| Blueprint embeddings | 4 × 3 = 12 | Added inside network |
+| **Total network input** | **133** | —
 
 **Validation:**
 
@@ -385,7 +416,10 @@ print(f'With embeddings: {get_feature_size(config) + 4 * config.num_slots}')  # 
 
 **Files:**
 
-- `src/esper/tamiyo/networks/factored_lstm.py` (or new file)
+- `src/esper/tamiyo/networks/factored_lstm.py`
+
+> **Decision:** Keep `BlueprintEmbedding` in `factored_lstm.py` since it's intimately tied to
+> the network architecture and will be used directly in the network's `__init__` and `forward`.
 
 **Implementation:**
 
