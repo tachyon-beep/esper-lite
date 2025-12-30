@@ -29,14 +29,14 @@ class SlotsPanel(Static):
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
         self.classes = "panel"
-        self.border_title = "SLOTS"
+        self.border_title = "CURRENT SLOTS"
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Update with new snapshot data."""
         self._snapshot = snapshot
         # Update border title with slot/env counts (static for the run)
         n_envs = len(snapshot.envs) if snapshot.envs else 0
-        self.border_title = f"SLOTS ─ {snapshot.total_slots} across {n_envs} envs"
+        self.border_title = f"CURRENT SLOTS ─ {snapshot.total_slots} across {n_envs} envs"
         self.refresh()
 
     def render(self) -> Text:
