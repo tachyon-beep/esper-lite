@@ -7,7 +7,7 @@
 - `2025-12-30-obs-v3-design.md` — Observation space overhaul
 - `2025-12-30-policy-v2-design.md` — Architecture and training enhancements
 
-YOU MUST READ BOTH THIS DOCUMENT AND THE RELEVANT PRERESQUISITE DESIGNS IN FULL BEFORE IMPLEMENTING. DO IT NOW. NO EXCEPTIONS.
+YOU MUST READ BOTH THIS DOCUMENT AND THE RELEVANT PREREQUISITE DESIGNS IN FULL BEFORE IMPLEMENTING. DO IT NOW. NO EXCEPTIONS.
 
 ---
 
@@ -171,8 +171,8 @@ DEFAULT_NUM_SLOTS = 3
 # See ACTION_HEAD_SPECS in factored_actions.py for the authoritative list
 NUM_ACTION_HEADS = 8
 
-# PPO clipping epsilon (Schulman et al., 2017)
-DEFAULT_PPO_CLIP_EPSILON = 0.2
+# Note: DEFAULT_CLIP_RATIO = 0.2 already exists in leyline (line 131)
+# Do NOT add a duplicate DEFAULT_PPO_CLIP_EPSILON - use DEFAULT_CLIP_RATIO instead
 
 # Minimum log probability for numerical stability
 # exp(-100) ≈ 3.7e-44 (tiny but non-zero in float64)
@@ -187,7 +187,7 @@ LOG_PROB_MIN = -100.0
 "OBS_V3_NON_BLUEPRINT_DIM",
 "DEFAULT_NUM_SLOTS",
 "NUM_ACTION_HEADS",
-"DEFAULT_PPO_CLIP_EPSILON",
+# DEFAULT_CLIP_RATIO already exported
 "LOG_PROB_MIN",
 ```
 
@@ -197,14 +197,14 @@ LOG_PROB_MIN = -100.0
 PYTHONPATH=src python -c "
 from esper.leyline import (
     OBS_V3_NON_BLUEPRINT_DIM, DEFAULT_NUM_SLOTS,
-    NUM_ACTION_HEADS, DEFAULT_PPO_CLIP_EPSILON, LOG_PROB_MIN
+    NUM_ACTION_HEADS, DEFAULT_CLIP_RATIO, LOG_PROB_MIN
 )
 print(f'OBS_DIM={OBS_V3_NON_BLUEPRINT_DIM}, SLOTS={DEFAULT_NUM_SLOTS}')
-print(f'HEADS={NUM_ACTION_HEADS}, CLIP={DEFAULT_PPO_CLIP_EPSILON}, LOG_MIN={LOG_PROB_MIN}')
+print(f'HEADS={NUM_ACTION_HEADS}, CLIP={DEFAULT_CLIP_RATIO}, LOG_MIN={LOG_PROB_MIN}')
 "
 # Should print:
 # OBS_DIM=121, SLOTS=3
-# HEADS=9, CLIP=0.2, LOG_MIN=-100.0
+# HEADS=8, CLIP=0.2, LOG_MIN=-100.0
 ```
 
 ---
@@ -372,14 +372,15 @@ Add `_extract_slot_features_v3()` with:
 from esper.leyline import DEFAULT_GAMMA
 
 # Counterfactual freshness (gamma-matched decay)
-# With DEFAULT_GAMMA=0.995, signal stays >0.5 for ~50 epochs
+# With DEFAULT_GAMMA=0.995, signal stays >0.5 for ~138 epochs
+# Math: 0.995^t = 0.5 → t = ln(0.5)/ln(0.995) ≈ 138
 counterfactual_fresh = DEFAULT_GAMMA ** epochs_since_counterfactual
 
 # Gradient trend signal
 gradient_health_prev = previous_epoch_gradient_health  # Track in ParallelEnvState
 ```
 
-**Why gamma-matched decay (from DRL review):** The old 0.8^epochs decayed too fast—0.8^10 = 0.1, making counterfactual estimates unreliable after just 10 epochs. Using DEFAULT_GAMMA (0.995) aligns with PPO's credit horizon: 0.995^10 ≈ 0.95, staying useful for ~50 epochs.
+**Why gamma-matched decay (from DRL review):** The old 0.8^epochs decayed too fast—0.8^10 = 0.1, making counterfactual estimates unreliable after just 10 epochs. Using DEFAULT_GAMMA (0.995) aligns with PPO's credit horizon: 0.995^10 ≈ 0.95, staying useful for ~138 epochs before dropping below 0.5 (ln(0.5)/ln(0.995) ≈ 138).
 
 #### 2d. Implement Vectorized Construction
 
@@ -515,8 +516,8 @@ def batch_obs_to_features(
 >     bp.name: idx for idx, bp in enumerate(BlueprintAction)
 > }
 >
-> # In extraction:
-> bp_idx = _BLUEPRINT_TO_INDEX.get(report.blueprint_id, -1)
+> # In extraction (FAIL-FAST version - don't silently convert unknown to -1):
+> bp_idx = _BLUEPRINT_TO_INDEX[report.blueprint_id]  # Raises KeyError if unknown
 > ```
 >
 > Option A is preferred because it centralizes the mapping and avoids hot-path dict lookups.
@@ -671,8 +672,10 @@ def _validate_blueprint_index(bp_idx: int, slot_id: str) -> int:
 for slot_idx, slot_id in enumerate(slot_config.slot_ids):
     if report := reports.get(slot_id):
         # Derive blueprint_index from blueprint_id (see prerequisite note in Phase 2e)
-        bp_idx = _BLUEPRINT_TO_INDEX.get(report.blueprint_id, -1)
-        bp_idx = _validate_blueprint_index(bp_idx, slot_id)  # Fail-fast
+        # FAIL-FAST: Don't use .get(..., -1) which silently converts unknown IDs to inactive
+        if report.blueprint_id not in _BLUEPRINT_TO_INDEX:
+            raise ValueError(f"Unknown blueprint_id '{report.blueprint_id}' for slot {slot_id}")
+        bp_idx = _BLUEPRINT_TO_INDEX[report.blueprint_id]
         bp_indices[env_idx, slot_idx] = bp_idx
     else:
         bp_indices[env_idx, slot_idx] = -1  # Inactive slot
@@ -749,7 +752,8 @@ from esper.leyline.stage_schema import STAGE_TO_INDEX, NUM_STAGES
 if not is_active_stage(report.stage):
     stage_one_hot = torch.zeros(NUM_STAGES)  # All zeros for inactive
 else:
-    stage_idx = STAGE_TO_INDEX[report.stage.value if hasattr(report.stage, 'value') else report.stage]
+    # report.stage is always SeedStage enum - access .value directly (no hasattr check needed)
+    stage_idx = STAGE_TO_INDEX[report.stage.value]
     stage_one_hot = F.one_hot(torch.tensor(stage_idx), NUM_STAGES)
 
 # WRONG: F.one_hot with raw enum value (fails for HOLDING=6, RESETTING=10)
@@ -770,19 +774,17 @@ Before calling `.to(device)`, validate action mask dtype to catch silent type co
 ```python
 # In compute_action_masks() or where masks are created
 def _validate_action_mask(mask: torch.Tensor, name: str) -> None:
-    """Validate action mask has correct dtype before device transfer."""
-    valid_dtypes = (torch.bool, torch.float32, torch.float64)
-    assert mask.dtype in valid_dtypes, (
+    """Validate action mask has correct dtype before device transfer.
+
+    IMPORTANT: MaskedCategorical expects BOOLEAN masks (True=valid, False=invalid).
+    See action_masks.py line 415: "mask: Boolean mask, True = valid, False = invalid"
+    """
+    # MaskedCategorical requires boolean masks - do NOT accept float
+    assert mask.dtype == torch.bool, (
         f"Action mask '{name}' has invalid dtype {mask.dtype}. "
-        f"Expected one of {valid_dtypes}. "
-        f"This can cause silent masking failures after .to(device)."
+        f"MaskedCategorical requires torch.bool (True=valid, False=invalid). "
+        f"Use .bool() to convert if needed."
     )
-    if mask.dtype in (torch.float32, torch.float64):
-        # Float masks should only contain 0.0 or 1.0
-        unique_vals = mask.unique()
-        assert all(v in (0.0, 1.0) for v in unique_vals.tolist()), (
-            f"Float action mask '{name}' contains values other than 0/1: {unique_vals.tolist()}"
-        )
 
 # Usage:
 # action_mask = compute_action_masks(...)
@@ -826,10 +828,14 @@ from esper.leyline import TrainingSignals, SeedStateReport, SeedStage
 
 # Create minimal test fixtures
 def make_test_signals():
+    # NOTE: TrainingSignals uses nested TrainingMetrics, NOT flat fields
+    from esper.leyline.signals import TrainingMetrics
     return TrainingSignals(
-        epoch=10,
-        val_loss=0.5,
-        val_accuracy=75.0,
+        metrics=TrainingMetrics(
+            epoch=10,
+            val_loss=0.5,
+            val_accuracy=75.0,
+        ),
         loss_history=[0.8, 0.7, 0.6, 0.55, 0.5],
         accuracy_history=[60.0, 65.0, 70.0, 72.0, 75.0],
     )
@@ -1411,7 +1417,8 @@ If different components read `global_step` at different points in the training l
 def _verify_global_step(signals, epoch: int, batch_idx: int, num_batches: int) -> None:
     """Verify global_step calculation matches expectations."""
     expected_at_epoch_end = (epoch + 1) * num_batches
-    actual = signals.metrics.global_step if hasattr(signals, 'metrics') else None
+    # TrainingSignals always has metrics field (default_factory) - access directly
+    actual = signals.metrics.global_step
 
     # Log at end of each of first 3 epochs
     if batch_idx == num_batches - 1 and epoch < 3:
@@ -1878,11 +1885,11 @@ ENTROPY_COEF_PER_HEAD: dict[str, float] = {
     "op": 1.0,           # Always active (100% of steps)
     "slot": 1.0,         # Usually active (~60%)
     "blueprint": 1.3,    # GERMINATE only (~18%) — needs boost
-    "style": 1.2,        # GERMINATE + SET_ALPHA (~22%)
+    "style": 1.2,        # GERMINATE + SET_ALPHA_TARGET (~22%)
     "tempo": 1.3,        # GERMINATE only (~18%) — needs boost
-    "alpha_target": 1.2, # GERMINATE + SET_ALPHA (~22%)
-    "alpha_speed": 1.2,  # SET_ALPHA + PRUNE (~19%)
-    "alpha_curve": 1.2,  # SET_ALPHA + PRUNE (~19%)
+    "alpha_target": 1.2, # GERMINATE + SET_ALPHA_TARGET (~22%)
+    "alpha_speed": 1.2,  # SET_ALPHA_TARGET + PRUNE (~19%)
+    "alpha_curve": 1.2,  # SET_ALPHA_TARGET + PRUNE (~19%)
 }
 # Note: Start conservative (1.2-1.3x), tune empirically if heads collapse
 ```
@@ -2025,14 +2032,15 @@ bootstrap_value = bootstrap_result.value  # Q(s_T, sampled_op_T)
 |-----------|------|-----------|-----------|
 | Intermediate step | `False` | `False` | N/A |
 | Natural termination (goal/failure) | `True` | `False` | `0.0` |
-| Time limit (max_epochs) | `True` | `True` | `Q(s_next, sampled_op)` |
+| Time limit (max_epochs) | `False` | `True` | `Q(s_next, sampled_op)` |
 
 ```python
 # At episode end:
 is_natural_terminal = (some_terminal_condition)  # e.g., catastrophic failure
 is_time_limit = (epoch == max_epochs) and not is_natural_terminal
 
-done = is_natural_terminal or is_time_limit
+# Gymnasium semantics: done=True only for natural terminals, NOT time limits
+done = is_natural_terminal
 truncated = is_time_limit  # ONLY time limit, not natural terminals
 
 # In GAE computation:
@@ -2085,26 +2093,37 @@ class ParallelEnvState:
 
 ```python
 # In vectorized.py, after action execution:
-def _determine_action_success(action: dict, result: ActionResult) -> bool:
-    """Determine if the action succeeded for action feedback feature."""
+# NOTE: ActionResult (from tamiyo.policy.types) does NOT have germination_succeeded etc.
+# Action success must be determined from the environment state changes, not ActionResult.
+# This is pseudocode showing the LOGIC, not the actual type signature.
+
+def _determine_action_success(action: dict, env_state: ParallelEnvState) -> bool:
+    """Determine if the action succeeded for action feedback feature.
+
+    NOTE: Success is determined by comparing environment state before/after action,
+    NOT from ActionResult (which only contains policy outputs: action, log_prob, value).
+    """
     op = LifecycleOp(action["op"])
 
     if op == LifecycleOp.WAIT:
         return True  # WAIT always "succeeds"
     elif op == LifecycleOp.GERMINATE:
-        return result.germination_succeeded  # Did seed actually germinate?
-    elif op == LifecycleOp.SET_ALPHA:
+        # Check if a new seed appeared in the target slot
+        return env_state.seeds_created > previous_seeds_created
+    elif op == LifecycleOp.SET_ALPHA_TARGET:
         return True  # Alpha changes always succeed
     elif op == LifecycleOp.PRUNE:
-        return result.pruned  # Did the prune actually happen?
+        # Check if seed was actually pruned from slot
+        return slot_is_now_empty
     elif op == LifecycleOp.FOSSILIZE:
-        return result.fossilized  # Did fossilization succeed?
+        # Check if fossilization occurred
+        return env_state.seeds_fossilized > previous_fossilized
     else:
         return True  # Unknown ops default to success
 
 # Update state after action
 env_state.last_action_op = action["op"]
-env_state.last_action_success = _determine_action_success(action, result)
+env_state.last_action_success = _determine_action_success(action, env_state)
 ```
 
 **Gradient Health Prev Update:**
@@ -2116,8 +2135,10 @@ for slot_id, report in slot_reports.items():
         env_state.gradient_health_prev[slot_id] = report.telemetry.gradient_health
     # Note: Keep stale values for inactive slots until slot is cleared
 
-# When slot becomes inactive (PRUNED/FOSSILIZED):
-if slot_id in env_state.gradient_health_prev:
+# When slot becomes PRUNED (NOT fossilized - fossilized is still active per is_active_stage):
+# FOSSILIZED seeds remain in the forward pass, so keep tracking them.
+# Only PRUNED/EMBARGOED/RESETTING/DORMANT are truly inactive.
+if not is_active_stage(report.stage) and slot_id in env_state.gradient_health_prev:
     del env_state.gradient_health_prev[slot_id]
 ```
 
@@ -2601,7 +2622,7 @@ def test_advance_requires_pre_holding_stage():
 
 ##### 3. Stabilization Latch Monitoring
 
-`signals.is_stabilized` is a sticky latch that never resets. If it triggers too early due to noise, Tamiyo stops germinating prematurely.
+`signals.metrics.host_stabilized` (an int: 0 or 1) is a sticky latch that never resets. If it triggers too early due to noise, Tamiyo stops germinating prematurely. Note: This is accessed via `SignalTracker.is_stabilized` property or `metrics.host_stabilized` field, NOT a top-level `signals.is_stabilized`.
 
 ```python
 def test_stabilization_latch_noise_resistance():
@@ -3106,7 +3127,7 @@ def test_bootstrap_value_computation_uses_correct_state() -> None:
     # Convert both to features to show they're different
     # (In practice, vectorized.py must use post_action_signals for bootstrap)
     # Using a mock slot config for illustration
-    from esper.tamiyo.policy.features import SlotConfig
+    from esper.leyline.slot_config import SlotConfig  # SlotConfig lives in leyline, NOT features
 
     slot_config = SlotConfig(num_slots=3, slot_ids=["r0c0", "r0c1", "r0c2"])
 
@@ -5171,12 +5192,16 @@ print('Hindsight credit: PASS')
 "
 
 # Verify telemetry counters exist in ParallelEnvState
+# NOTE: ParallelEnvState requires positional args (model, host_optimizer, signal_tracker, governor)
+# This validation uses inspect to check field existence without instantiation
 PYTHONPATH=src uv run python -c "
+import dataclasses
 from esper.simic.training.parallel_env_state import ParallelEnvState
-state = ParallelEnvState()
-assert hasattr(state, 'seeds_created'), 'Missing seeds_created'
-assert hasattr(state, 'seeds_fossilized'), 'Missing seeds_fossilized'
-assert hasattr(state, 'pending_hindsight_credit'), 'Missing pending_hindsight_credit'
+fields = {f.name for f in dataclasses.fields(ParallelEnvState)}
+required = {'seeds_created', 'seeds_fossilized'}  # pending_hindsight_credit may need adding
+missing = required - fields
+assert not missing, f'Missing fields: {missing}'
+print(f'ParallelEnvState fields present: {required & fields}')
 print('ParallelEnvState counters: PASS')
 "
 ```

@@ -170,7 +170,7 @@ Add to base features in Obs V3:
 | 24 | `last_action_success` | `1.0 if executed else 0.0` | {0,1} | Immediate action feedback |
 | 25-30 | `last_action_op` | One-hot of previous op | {0,1}^6 | Context for next decision |
 
-**Note:** Indices 0-23 are the base features from Obs V3 (see `obs-v3-design.md`). Action feedback is appended at indices 24-30.
+**Note:** Indices 0-23 are the base features from Obs V3 (see `2025-12-30-obs-v3-design.md`). Action feedback is appended at indices 24-30.
 
 **Updated Obs V3 totals:**
 ```

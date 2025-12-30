@@ -6,7 +6,7 @@
 
 > **P1 Update (2025-12-30):** Network dimensions increased from 256 to 512.
 > See `tamiyo_next.md` for rationale. This document focuses on observation space;
-> network architecture details in `policy-v2-design.md`.
+> network architecture details in `2025-12-30-policy-v2-design.md`.
 
 ## Summary
 
@@ -16,10 +16,10 @@ Redesign Tamiyo's observation space to eliminate duplication, normalize all feat
 |--------|--------------|---------------|--------|
 | Total dimensions | 218 | 133 (with Policy V2) | -39% |
 | Duplicated features | 27 dims | 0 | Eliminated |
-| Unbounded features | 5+ | 0 | All bounded (see note) |
+| Unbounded features | 5+ | 3 | log-scale loss features need clamp (see note) |
 | Construction | Nested Python loops | Vectorized + cached tables | ~10x faster |
 
-**Note on "All bounded":** Log-scale features (`loss_norm`, `loss_volatility`, `best_loss_norm`) can slightly exceed 1.0 for extreme values (e.g., loss > 10). This is acceptable as values remain bounded (~1.3 max) and maintain meaningful gradients. If strict [0,1] is needed, add final clamp.
+**Note on log-scale features:** Features using `log(1+loss)/log(11)` (`loss_norm`, `loss_history`, `best_loss_norm`) are UNBOUNDED—for loss=100, result is ~1.92; for loss=1000, result is ~2.88. **Recommendation:** Add `.clamp(max=2.0)` to bound these features in practice, or accept that early training with high losses may have features > 1.0.
 
 ## Design Decisions
 
@@ -82,7 +82,7 @@ Redesign Tamiyo's observation space to eliminate duplication, normalize all feat
 | 28 | `downstream_alpha_norm` | `clamp(sum, 0, 3) / 3` | [0,1] | Position context |
 | 29 | `counterfactual_fresh` | `DEFAULT_GAMMA ** epochs_since_cf` | [0,1] | Attribution reliability (gamma-matched) |
 
-**Counterfactual decay rationale:** Using `DEFAULT_GAMMA` (0.995) matches the PPO credit horizon. With 0.995^10 ≈ 0.95, measurements remain useful for ~50 epochs before dropping below 0.5. The previous 0.8^epochs decay was too aggressive (0.8^10 = 0.1).
+**Counterfactual decay rationale:** Using `DEFAULT_GAMMA` (0.995) matches the PPO credit horizon. With 0.995^10 ≈ 0.95, measurements remain useful for ~138 epochs before dropping below 0.5 (ln(0.5)/ln(0.995) ≈ 138). The previous 0.8^epochs decay was too aggressive (0.8^10 = 0.1).
 
 **⚠️ Implementation Notes:**
 
@@ -124,11 +124,11 @@ Blueprint embed:    12  (4 × 3 slots, added inside network)
 Total network:    133
 ```
 
-**Note on Action Feedback:** The 7-dim action feedback (indices 24-30) is defined in `policy-v2-design.md`, not this document. It consists of:
+**Note on Action Feedback:** The 7-dim action feedback (indices 24-30) is defined in `2025-12-30-policy-v2-design.md`, not this document. It consists of:
 - `last_action_success` (1 dim): Whether the previous action executed successfully
 - `last_action_op` (6 dims): One-hot encoding of the previous operation
 
-See `policy-v2-design.md` "Action Feedback Features" section for full specification.
+See `2025-12-30-policy-v2-design.md` "Action Feedback Features" section for full specification.
 
 ## Architecture Changes
 
@@ -206,7 +206,9 @@ obs, blueprint_idx = batch_obs_to_features(signals, reports, slot_config, device
 
 ```python
 # Module-level constants (computed once at import)
-_STAGE_ONE_HOT_TABLE = torch.eye(10, dtype=torch.float32)
+# IMPORTANT: Use leyline constant, NOT hard-coded 10 (prevents cardinality drift)
+from esper.leyline.stage_schema import NUM_STAGES
+_STAGE_ONE_HOT_TABLE = torch.eye(NUM_STAGES, dtype=torch.float32)
 
 # Device-keyed cache to avoid per-step .to(device) allocations
 _DEVICE_CACHE: dict[torch.device, torch.Tensor] = {}
