@@ -100,7 +100,7 @@ class TamiyoBrainV2(Container):
     }
 
     #heads-row {
-        height: 13;  /* Increased from 12 - split flow footer to 2 lines */
+        height: 12;  /* Reduced from 13 - removed padding lines */
         width: 100%;
     }
 

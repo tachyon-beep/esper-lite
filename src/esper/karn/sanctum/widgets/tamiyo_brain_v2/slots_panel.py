@@ -94,10 +94,10 @@ class SlotsPanel(Static):
         result.append("  AvgAge:", style="dim")
         result.append(f"{avg_epochs:.1f}", style="cyan")
         result.append(" epochs", style="dim")
-        result.append("\n")
+        result.append("  ")
 
-        # Line 8: Blueprint breakdown (top 3 by fossilization count)
-        result.append("Top: ", style="dim")
+        # Line 7 continued: Blueprint breakdown (top 3 by fossilization count)
+        result.append("Top 3: ", style="dim")
 
         # Aggregate fossilized seeds by blueprint across all envs
         from collections import Counter

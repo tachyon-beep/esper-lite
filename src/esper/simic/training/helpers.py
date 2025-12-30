@@ -483,11 +483,15 @@ def run_heuristic_episode(
     prev_slot_params = {slot_id: 0 for slot_id in enabled_slots}
 
     # Emit TRAINING_STARTED to activate Karn (P1 fix)
+    # Use max_batches if provided, otherwise use len(trainloader)
+    batches_per_epoch = max_batches if max_batches is not None else len(trainloader)
+
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.TRAINING_STARTED,
         data=TrainingStartedPayload(
             n_envs=1,
             max_epochs=max_epochs,
+            max_batches=batches_per_epoch,
             task=task_spec.name,
             host_params=host_params,
             slot_ids=tuple(enabled_slots),

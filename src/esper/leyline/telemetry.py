@@ -429,6 +429,7 @@ class TrainingStartedPayload:
     # REQUIRED - training fails without these
     n_envs: int
     max_epochs: int
+    max_batches: int  # Batches per episode (len(dataloader))
     task: str
     host_params: int  # Must be post-materialization
     slot_ids: tuple[str, ...]
@@ -470,6 +471,7 @@ class TrainingStartedPayload:
         return cls(
             n_envs=data["n_envs"],
             max_epochs=data["max_epochs"],
+            max_batches=data["max_batches"],
             task=data["task"],
             host_params=data["host_params"],
             slot_ids=_ensure_tuple(data["slot_ids"]),

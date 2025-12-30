@@ -141,9 +141,9 @@ class HeadsPanel(Static):
             # Shift state indicator 2 chars left from right edge for better centering
             state_cell = " " * (width - 3) + state + "  "
             result.append(state_cell, style=style_str)
+        result.append("\n")
 
         # Row 6-7: Gradient Flow Footer (split across 2 lines for readability)
-        result.append("\n")
         result.append("Flow: ", style="dim")
 
         # Line 1: CV and layer health

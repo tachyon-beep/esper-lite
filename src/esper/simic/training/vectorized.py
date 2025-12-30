@@ -913,37 +913,9 @@ def train_ppo_vectorized(
             "steps": entropy_anneal_steps,
         }
 
-    hub.emit(TelemetryEvent(
-        event_type=TelemetryEventType.TRAINING_STARTED,
-        group_id=group_id,
-        message=(
-            f"PPO vectorized training initialized: policy_device={device}, "
-            f"env_device_counts={env_device_counts}"
-        ),
-        data=TrainingStartedPayload(
-            n_envs=n_envs,
-            max_epochs=max_epochs,
-            task=task,
-            host_params=host_params_baseline,
-            slot_ids=tuple(slot_config.slot_ids),
-            seed=seed,
-            n_episodes=n_episodes + start_episode,
-            lr=lr,
-            clip_ratio=clip_ratio,
-            entropy_coef=entropy_coef,
-            param_budget=param_budget,
-            policy_device=device,
-            env_devices=tuple(devices),
-            # Optional fields
-            episode_id=f"ppo_{seed}_{n_episodes}ep",
-            resume_path=str(resume_path) if resume_path else "",
-            reward_mode=reward_mode,
-            start_episode=start_episode,
-            entropy_anneal=entropy_anneal_summary,
-        ),
-    ))
-
     # Create SharedBatchIterator for parallel data loading
+    # NOTE: TRAINING_STARTED telemetry is emitted AFTER dataloaders are created
+    # so we can include max_batches (len(dataloader)) in the payload
     trainset, testset = task_spec.get_datasets()
 
     # Type annotation for shared iterators (union type to handle both branches)
@@ -998,6 +970,38 @@ def train_ppo_vectorized(
 
     num_train_batches = len(shared_train_iter)
     num_test_batches = len(shared_test_iter)
+
+    # Emit TRAINING_STARTED now that we know max_batches
+    hub.emit(TelemetryEvent(
+        event_type=TelemetryEventType.TRAINING_STARTED,
+        group_id=group_id,
+        message=(
+            f"PPO vectorized training initialized: policy_device={device}, "
+            f"env_device_counts={env_device_counts}"
+        ),
+        data=TrainingStartedPayload(
+            n_envs=n_envs,
+            max_epochs=max_epochs,
+            max_batches=num_train_batches,
+            task=task,
+            host_params=host_params_baseline,
+            slot_ids=tuple(slot_config.slot_ids),
+            seed=seed,
+            n_episodes=n_episodes + start_episode,
+            lr=lr,
+            clip_ratio=clip_ratio,
+            entropy_coef=entropy_coef,
+            param_budget=param_budget,
+            policy_device=device,
+            env_devices=tuple(devices),
+            # Optional fields
+            episode_id=f"ppo_{seed}_{n_episodes}ep",
+            resume_path=str(resume_path) if resume_path else "",
+            reward_mode=reward_mode,
+            start_episode=start_episode,
+            entropy_anneal=entropy_anneal_summary,
+        ),
+    ))
 
     # Warm up DataLoaders to ensure workers are spawned.
     #

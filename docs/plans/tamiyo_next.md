@@ -477,6 +477,8 @@ def batch_obs_to_features(
     return obs, blueprint_indices
 ```
 
+> **Note on `reports.get(slot_id)`:** This is **legitimate dictionary access**, not defensive programming. The `reports` parameter is `dict[str, SeedStateReport]` — a dictionary mapping slot IDs to optional seed state reports. Not all slot IDs will have reports (inactive slots return `None`), so `.get()` is the correct idiom for probing optional dictionary entries. This differs from `.get()` on a dataclass or object attribute, which would violate the codebase's prohibition on defensive programming patterns.
+
 **⚠️ dtype Gotcha:** `nn.Embedding` raises `RuntimeError: Expected tensor for argument #1 'indices' to have scalar type Long` if given int32. Always use `np.int64` or `torch.int64`.
 
 #### 2f. Update get_feature_size()
@@ -4327,6 +4329,7 @@ def test_rent_penalty_scales_with_blueprint_size() -> None:
     total_params instead of seed overhead), large seeds incur same cost as
     small seeds. The policy learns to always use maximum-size blueprints.
     """
+    from dataclasses import replace
     from esper.simic.rewards import (
         compute_contribution_reward,
         ContributionRewardConfig,
@@ -4355,13 +4358,7 @@ def test_rent_penalty_scales_with_blueprint_size() -> None:
         action=LifecycleOp.WAIT,
         seed_contribution=0.5,
         val_acc=50.0,
-        seed_info=SeedInfo(
-            *base_seed_info[:-5],  # All fields except last 5
-            seed_params=small_seed_params,
-            previous_stage=base_seed_info.previous_stage,
-            previous_epochs_in_stage=base_seed_info.previous_epochs_in_stage,
-            seed_age_epochs=base_seed_info.seed_age_epochs,
-        ),
+        seed_info=replace(base_seed_info, seed_params=small_seed_params),
         epoch=10,
         max_epochs=25,
         total_params=host_params + small_seed_params,
@@ -4378,13 +4375,7 @@ def test_rent_penalty_scales_with_blueprint_size() -> None:
         action=LifecycleOp.WAIT,
         seed_contribution=0.5,
         val_acc=50.0,
-        seed_info=SeedInfo(
-            *base_seed_info[:-5],
-            seed_params=large_seed_params,
-            previous_stage=base_seed_info.previous_stage,
-            previous_epochs_in_stage=base_seed_info.previous_epochs_in_stage,
-            seed_age_epochs=base_seed_info.seed_age_epochs,
-        ),
+        seed_info=replace(base_seed_info, seed_params=large_seed_params),
         epoch=10,
         max_epochs=25,
         total_params=host_params + large_seed_params,
