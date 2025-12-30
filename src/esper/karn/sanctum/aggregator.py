@@ -173,6 +173,9 @@ class SanctumAggregator:
     # Cumulative counts (never reset, tracks entire training run)
     _cumulative_fossilized: int = 0
     _cumulative_pruned: int = 0
+    # Cumulative action counts across all batches
+    _cumulative_action_counts: dict[str, int] = field(default_factory=dict)
+    _cumulative_total_actions: int = 0
     # Cumulative graveyard (per-blueprint lifecycle stats across entire run)
     _cumulative_blueprint_spawns: dict[str, int] = field(default_factory=dict)
     _cumulative_blueprint_fossilized: dict[str, int] = field(default_factory=dict)
@@ -234,6 +237,8 @@ class SanctumAggregator:
         # Cumulative counters (never reset)
         self._cumulative_fossilized = 0
         self._cumulative_pruned = 0
+        self._cumulative_action_counts = {}
+        self._cumulative_total_actions = 0
         self._cumulative_blueprint_spawns = {}
         self._cumulative_blueprint_fossilized = {}
         self._cumulative_blueprint_prunes = {}
@@ -367,6 +372,9 @@ class SanctumAggregator:
         if total_actions > 0:
             self._tamiyo.action_counts = aggregated_actions
             self._tamiyo.total_actions = total_actions
+        # Always update cumulative counts (even if current batch is zero)
+        self._tamiyo.cumulative_action_counts = dict(self._cumulative_action_counts)
+        self._tamiyo.cumulative_total_actions = self._cumulative_total_actions
 
         # Carousel rotation: expire ONE oldest unpinned decision per cycle if > 30s old
         # This runs every snapshot (250ms), creating natural stagger as each decision
@@ -1063,6 +1071,12 @@ class SanctumAggregator:
         pinned = [r for r in self._best_runs if r.pinned]
         unpinned = [r for r in self._best_runs if not r.pinned][:10]
         self._best_runs = sorted(pinned + unpinned, key=lambda r: r.peak_accuracy, reverse=True)
+
+        # Accumulate batch action counts into cumulative totals BEFORE resetting
+        for env in self._envs.values():
+            for action, count in env.action_counts.items():
+                self._cumulative_action_counts[action] = self._cumulative_action_counts.get(action, 0) + count
+            self._cumulative_total_actions += env.total_actions
 
         # Reset per-env state for next episode
         # ALL episode-scoped fields must reset here

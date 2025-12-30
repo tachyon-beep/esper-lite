@@ -697,9 +697,11 @@ class TamiyoState:
     ppo_batch: int = 0  # Current batch within PPO update (use ppo_batch to avoid conflict with any existing 'batch')
 
     # Action distribution (Actions panel)
-    action_counts: dict[str, int] = field(default_factory=dict)
-    # FIX: Added total_actions for percentage calculation in TamiyoBrain
-    total_actions: int = 0
+    action_counts: dict[str, int] = field(default_factory=dict)  # Current batch only
+    total_actions: int = 0  # Current batch only
+    # Cumulative action counts across all batches (for "total run" display)
+    cumulative_action_counts: dict[str, int] = field(default_factory=dict)
+    cumulative_total_actions: int = 0
 
     # PPO data received flag
     ppo_data_received: bool = False

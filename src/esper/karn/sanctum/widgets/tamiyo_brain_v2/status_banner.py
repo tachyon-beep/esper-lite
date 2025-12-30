@@ -1,10 +1,10 @@
 """StatusBanner - One-line status summary with optional warmup spinner.
 
 Displays:
-    [OK] LEARNING   EV:0.72 Clip:0.18 KL:0.008 Adv:0.12±0.94 GradHP:12/12✓ batch:47/100
+    [OK] LEARNING   KL:0.008 Batch:47/100 [Mem:45%]
 
 Or during warmup:
-    ⠋ WARMING UP [5/50]   EV:0.00 Clip:0.00 KL:0.000 ...
+    ⠋ WARMING UP [5/50]   KL:0.000 Batch:5/50 ...
 """
 
 from __future__ import annotations
@@ -141,30 +141,6 @@ class StatusBanner(Container):
 
     def _append_metrics(self, banner: Text, tamiyo: "TamiyoState") -> None:
         """Append metric values to the banner with trend arrows."""
-        # Explained Variance (higher is better = "accuracy" type)
-        ev_style = self._metric_style(self._get_ev_status(tamiyo.explained_variance))
-        banner.append(f"EV:{tamiyo.explained_variance:.2f}", style=ev_style)
-        ev_arrow, ev_arrow_style = self._trend_arrow(
-            tamiyo.explained_variance_history, "expl_var", "accuracy"
-        )
-        if ev_arrow:
-            banner.append(ev_arrow, style=ev_arrow_style)
-        if tamiyo.explained_variance <= 0:
-            banner.append("!", style="red")
-        banner.append("  ")
-
-        # Clip Fraction (lower is better = "loss" type)
-        clip_style = self._metric_style(self._get_clip_status(tamiyo.clip_fraction))
-        banner.append(f"Clip:{tamiyo.clip_fraction:.2f}", style=clip_style)
-        clip_arrow, clip_arrow_style = self._trend_arrow(
-            tamiyo.clip_fraction_history, "clip_fraction", "loss"
-        )
-        if clip_arrow:
-            banner.append(clip_arrow, style=clip_arrow_style)
-        if tamiyo.clip_fraction > TUIThresholds.CLIP_WARNING:
-            banner.append("!", style=clip_style)
-        banner.append("  ")
-
         # KL Divergence (lower is better = "loss" type)
         kl_style = self._metric_style(self._get_kl_status(tamiyo.kl_divergence))
         banner.append(f"KL:{tamiyo.kl_divergence:.3f}", style=kl_style)
@@ -177,33 +153,11 @@ class StatusBanner(Container):
             banner.append("!", style=kl_style)
         banner.append("  ")
 
-        # Advantage
-        adv_status = self._get_advantage_status(tamiyo.advantage_std)
-        adv_style = self._metric_style(adv_status)
-        banner.append(
-            f"Adv:{tamiyo.advantage_mean:+.2f}±{tamiyo.advantage_std:.2f}",
-            style=adv_style,
-        )
-        if adv_status != "ok":
-            banner.append("!", style=adv_style)
-        banner.append("  ")
-
-        # Gradient Health
-        healthy = DEFAULT_HOST_LSTM_LAYERS - tamiyo.dead_layers - tamiyo.exploding_layers
-        if tamiyo.dead_layers > 0 or tamiyo.exploding_layers > 0:
-            banner.append(
-                f"GradHP:{tamiyo.dead_layers}D/{tamiyo.exploding_layers}E",
-                style="red",
-            )
-        else:
-            banner.append(f"GradHP:{healthy}/{DEFAULT_HOST_LSTM_LAYERS}✓", style="green")
-        banner.append("  ")
-
         # Batch progress (snapshot is non-None when this method is called)
         assert self._snapshot is not None
         batch = self._snapshot.current_batch
         max_batches = self._snapshot.max_batches
-        banner.append(f"batch:{batch}/{max_batches}", style="dim")
+        banner.append(f"Batch:{batch}/{max_batches}", style="dim")
 
         # Memory as percentage (per UX review - more scannable than absolute)
         mem_pct = self._snapshot.tamiyo.infrastructure.memory_usage_percent
@@ -295,35 +249,10 @@ class StatusBanner(Container):
 
         return "ok", "LEARNING", "green"
 
-    def _get_ev_status(self, ev: float) -> str:
-        if ev < TUIThresholds.EXPLAINED_VAR_CRITICAL:
-            return "critical"
-        if ev < TUIThresholds.EXPLAINED_VAR_WARNING:
-            return "warning"
-        return "ok"
-
-    def _get_clip_status(self, clip: float) -> str:
-        if clip > TUIThresholds.CLIP_CRITICAL:
-            return "critical"
-        if clip > TUIThresholds.CLIP_WARNING:
-            return "warning"
-        return "ok"
-
     def _get_kl_status(self, kl: float) -> str:
         if kl > TUIThresholds.KL_CRITICAL:
             return "critical"
         if kl > TUIThresholds.KL_WARNING:
-            return "warning"
-        return "ok"
-
-    def _get_advantage_status(self, adv_std: float) -> str:
-        if adv_std < TUIThresholds.ADVANTAGE_STD_COLLAPSED:
-            return "critical"
-        if adv_std > TUIThresholds.ADVANTAGE_STD_CRITICAL:
-            return "critical"
-        if adv_std > TUIThresholds.ADVANTAGE_STD_WARNING:
-            return "warning"
-        if adv_std < TUIThresholds.ADVANTAGE_STD_LOW_WARNING:
             return "warning"
         return "ok"
 

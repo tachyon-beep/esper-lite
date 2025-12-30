@@ -1,8 +1,8 @@
 """Scoreboard widget - Best Runs and Worst Trajectory panels.
 
 Two-panel layout:
-1. Best Runs (3fr): Stats header + top 7 environments by peak accuracy
-2. Worst Trajectory (1fr): Bottom 3 runs with most regression from peak
+1. Best Runs (5fr): Stats header + top 10 environments by peak accuracy
+2. Worst Trajectory (3fr): Bottom 3 runs with most regression from peak
 
 Columns:
 - # (rank): Medal icons for top 3 (🥇🥈🥉), A/B cohort dot prefix
@@ -27,10 +27,11 @@ if TYPE_CHECKING:
 
 
 # A/B test cohort styling - colored pips for reward modes (matches env_overview.py)
+# Note: cyan reserved for informational data; sparse uses white for distinction
 _AB_STYLES: dict[str, tuple[str, str]] = {
     "shaped": ("●", "bright_blue"),       # Blue pip for shaped
     "simplified": ("●", "bright_yellow"),  # Yellow pip for simplified
-    "sparse": ("●", "bright_cyan"),        # Cyan pip for sparse
+    "sparse": ("●", "bright_white"),       # White pip for sparse (cyan reserved for info)
 }
 
 # Medal icons for top 3
@@ -41,7 +42,7 @@ class Scoreboard(Static):
     """Best Runs scoreboard widget (display only).
 
     Shows:
-    1. Best Runs panel: stats header + top 7 runs by peak accuracy
+    1. Best Runs panel: stats header + top 10 runs by peak accuracy
     2. Worst Trajectory panel: bottom 3 runs with most regression
     """
 
@@ -51,14 +52,14 @@ class Scoreboard(Static):
     }
 
     #best-runs-panel {
-        height: 2fr;
+        height: 5fr;  /* Top 10 runs with stats header */
         border: round $surface-lighten-2;
         border-title-color: cyan;
         padding: 0 1;
     }
 
     #worst-runs-panel {
-        height: 1fr;
+        height: 3fr;  /* Bottom 3 runs with more vertical space */
         border: round $surface-lighten-2;
         border-title-color: red;
         padding: 0 1;
@@ -78,8 +79,8 @@ class Scoreboard(Static):
         """Compose the widget.
 
         Layout (height budget):
-        - Best Runs panel (3fr): stats + 7 rows
-        - Worst Trajectory panel (1fr): 3 rows
+        - Best Runs panel (5fr): stats + 10 rows
+        - Worst Trajectory panel (3fr): 3 rows
         """
         with Vertical(id="best-runs-panel") as panel:
             panel.border_title = "BEST RUNS"
@@ -181,8 +182,8 @@ class Scoreboard(Static):
             self.table.add_row("[dim]No runs yet[/dim]", "", "", "", "", "", "")
             return
 
-        # Sort by peak accuracy, take top 7
-        best_runs = sorted(best_runs, key=lambda r: r.peak_accuracy, reverse=True)[:7]
+        # Sort by peak accuracy, take top 10
+        best_runs = sorted(best_runs, key=lambda r: r.peak_accuracy, reverse=True)[:10]
         self._displayed_records = best_runs
 
         for i, record in enumerate(best_runs, start=1):

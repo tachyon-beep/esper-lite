@@ -25,10 +25,11 @@ if TYPE_CHECKING:
 
 
 # A/B test cohort styling - colored pips for reward modes
+# Note: cyan reserved for informational data; sparse uses white for distinction
 _AB_STYLES: dict[str, tuple[str, str]] = {
     "shaped": ("●", "bright_blue"),      # Blue pip for shaped
     "simplified": ("●", "bright_yellow"), # Yellow pip for simplified
-    "sparse": ("●", "bright_cyan"),       # Cyan pip for sparse
+    "sparse": ("●", "bright_white"),      # White pip for sparse (cyan reserved for info)
 }
 
 
@@ -175,6 +176,11 @@ class EnvOverview(Static):
         )
         filtered_envs = [e for e in sorted_envs if self._matches_filter(e)]
 
+        # Show placeholder if filter matches nothing
+        if self._filter_text and not filtered_envs:
+            self._add_no_matches_row()
+            return
+
         # Compute top 5 accuracy env IDs for visual quieting
         all_envs = list(self._snapshot.envs.values())
         top5_env_ids = self._compute_top5_accuracy_ids(all_envs)
@@ -195,9 +201,13 @@ class EnvOverview(Static):
             target_row = min(saved_cursor_row, self.table.row_count - 1)
             self.table.move_cursor(row=target_row)
 
-        # Restore scroll position (after layout is computed)
+        # Restore scroll position after layout is computed
+        # Direct assignment to scroll_y doesn't work before layout pass completes
         if saved_scroll_y > 0:
-            self.table.scroll_y = saved_scroll_y
+            # Capture value in default arg to avoid closure issues
+            self.table.call_after_refresh(
+                lambda y=saved_scroll_y: setattr(self.table, "scroll_y", y)
+            )
 
     def _compute_top5_accuracy_ids(self, envs: list["EnvState"]) -> set[int]:
         """Compute env IDs of top 5 by current accuracy.
@@ -384,6 +394,14 @@ class EnvOverview(Static):
         num_cols = len(self.table.columns)
         separator = ["─" * 2] * num_cols
         self.table.add_row(*separator)
+
+    def _add_no_matches_row(self) -> None:
+        """Add placeholder row when filter matches no environments."""
+        num_cols = len(self.table.columns)
+        # First cell shows message, rest are empty
+        row = [f"[dim italic]No environments match '{self._filter_text}'[/dim italic]"]
+        row.extend([""] * (num_cols - 1))
+        self.table.add_row(*row)
 
     def _add_aggregate_row(self) -> None:
         """Add aggregate row at bottom."""

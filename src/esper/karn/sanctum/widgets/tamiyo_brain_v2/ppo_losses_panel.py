@@ -6,8 +6,7 @@ and loss sparklines with trends in bottom section.
 Top Section (PPO Gauges):
 - Explained Variance (gauge bar)
 - Entropy (gauge bar)
-- Clip Fraction (gauge bar) + directional breakdown
-- KL Divergence (gauge bar)
+- Clip Fraction (gauge bar) + directional breakdown (↑↓)
 
 Separator line
 
@@ -138,17 +137,6 @@ class PPOLossesPanel(Static):
         clip_neg = tamiyo.gradient_quality.clip_fraction_negative
         if clip_pos > 0 or clip_neg > 0:
             result.append(f" (\u2191{clip_pos:.0%} \u2193{clip_neg:.0%})", style="dim")
-        result.append("\n")
-
-        # Row 4: KL Divergence
-        result.append(self._render_gauge_row(
-            label="KL Div",
-            value=tamiyo.kl_divergence,
-            min_val=0.0,
-            max_val=0.1,
-            status=self._get_kl_status(tamiyo.kl_divergence),
-            is_warmup=is_warmup,
-        ))
 
         return result
 
@@ -301,13 +289,6 @@ class PPOLossesPanel(Static):
         if clip > TUIThresholds.CLIP_CRITICAL:
             return "critical"
         if clip > TUIThresholds.CLIP_WARNING:
-            return "warning"
-        return "ok"
-
-    def _get_kl_status(self, kl: float) -> str:
-        if kl > TUIThresholds.KL_CRITICAL:
-            return "critical"
-        if kl > TUIThresholds.KL_WARNING:
             return "warning"
         return "ok"
 

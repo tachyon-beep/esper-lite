@@ -1,16 +1,18 @@
-"""EventLog widget - Append-only scrolling log.
+"""EventLog widget - Append-only scrolling log with rich metadata.
 
 Architecture:
 - Maintains internal list of line data (append-only, never recalculated)
-- Tracks which seconds have been processed
-- On update: checks for NEW completed seconds, aggregates them, appends line data
-- On render: formats line data using actual widget width for right-justification
+- Tracks which events have been processed by ID
+- Shows rich inline metadata for actionable events (GERMINATED, FOSSILIZED, etc.)
+- Aggregates high-frequency events (EPOCH_COMPLETED, REWARD_COMPUTED)
+- On render: formats timestamps based on visible line order for proper clock flow
 
 This is a LOG, not a reactive view. Line data stays put once added.
 """
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -25,31 +27,63 @@ if TYPE_CHECKING:
 
 # Event type color mapping
 _EVENT_COLORS: dict[str, str] = {
-    # Seed lifecycle
+    # Seed lifecycle - actionable events
     "SEED_GERMINATED": "bright_yellow",
     "SEED_STAGE_CHANGED": "bright_white",
     "SEED_FOSSILIZED": "bright_green",
     "SEED_PRUNED": "bright_red",
-    # Tamiyo actions
-    "REWARD_COMPUTED": "bright_cyan",
-    # Training events
+    # PPO events
+    "PPO_UPDATE_COMPLETED": "bright_magenta",
+    # High-frequency (aggregated)
+    "REWARD_COMPUTED": "dim",
     "TRAINING_STARTED": "bright_green",
     "EPOCH_COMPLETED": "bright_blue",
-    "PPO_UPDATE_COMPLETED": "bright_magenta",
     "BATCH_EPOCH_COMPLETED": "bright_blue",
+}
+
+# Events to show individually with full metadata (not aggregated)
+_INDIVIDUAL_EVENTS = {
+    "SEED_GERMINATED",
+    "SEED_STAGE_CHANGED",
+    "SEED_FOSSILIZED",
+    "SEED_PRUNED",
+    "PPO_UPDATE_COMPLETED",
+    "BATCH_EPOCH_COMPLETED",
+    "TRAINING_STARTED",
+}
+
+# Compact stage name mapping
+_STAGE_SHORT = {
+    "DORMANT": "DORM",
+    "GERMINATED": "GERM",
+    "TRAINING": "TRAIN",
+    "HOLDING": "HOLD",
+    "BLENDING": "BLEND",
+    "FOSSILIZED": "FOSS",
+    "PRUNED": "PRUNE",
+    "EMBARGOED": "EMBG",
+    "RESETTING": "RESET",
 }
 
 # Max envs to show before truncating with "+"
 _MAX_ENVS_SHOWN = 3
 
 
-class EventLog(Static):
-    """Append-only scrolling event log.
+@dataclass
+class _LineData:
+    """Raw line data for render-time formatting."""
+    timestamp: str  # HH:MM:SS
+    content: Text   # Pre-formatted content (without timestamp)
+    env_str: str = ""  # Right-justified env info (single ID or "0 1 2 +")
 
-    - Waits for each second to COMPLETE before showing its events
-    - Each event type within a second gets its own line with count
-    - Shows contributing env IDs right-justified to panel edge
-    - Lines are appended at the bottom; existing lines never change
+
+class EventLog(Static):
+    """Append-only scrolling event log with rich metadata display.
+
+    - Shows individual entries for actionable events (seed lifecycle, PPO)
+    - Aggregates high-frequency events (EPOCH_COMPLETED, REWARD_COMPUTED)
+    - Displays key metadata inline (slot, blueprint, stage transition, etc.)
+    - Timestamp abbreviation computed at render time for proper clock flow
     - Click anywhere to open raw event detail modal
     """
 
@@ -68,13 +102,14 @@ class EventLog(Static):
         """
         super().__init__(**kwargs)
         self._max_lines = max_lines
-        self.border_title = "EVENTS [↵]"
+        self.border_title = "EVENTS [click for detail]"
 
         # === APPEND-ONLY STATE ===
-        # Line data: list of (timestamp, event_label, color, count, env_str) tuples
-        # Timestamp formatting is done at render time, not append time
-        self._line_data: list[tuple[str, str, str, int, str]] = []
-        # Seconds we've already processed (never process twice)
+        # Line data: list of _LineData for render-time formatting
+        self._line_data: list[_LineData] = []
+        # Track processed event IDs to avoid duplicates
+        self._processed_ids: set[str] = set()
+        # Seconds we've processed for aggregated events
         self._processed_seconds: set[str] = set()
         # Keep reference to snapshot for click handler
         self._snapshot: SanctumSnapshot | None = None
@@ -82,9 +117,10 @@ class EventLog(Static):
         self._trimmed_count: int = 0
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
-        """Process snapshot and append any newly completed seconds.
+        """Process snapshot and append new events.
 
-        This is where the work happens - NOT in render().
+        Individual events are shown immediately with full metadata.
+        High-frequency events are aggregated per-second (wait for second to complete).
         """
         self._snapshot = snapshot
 
@@ -95,29 +131,45 @@ class EventLog(Static):
         now = datetime.now(timezone.utc)
         current_second = now.strftime("%H:%M:%S")
 
-        # Group events by timestamp, excluding current second (still accumulating)
-        # Structure: {timestamp: {event_type: set[env_id]}}
-        second_groups: dict[str, dict[str, set[int | None]]] = defaultdict(
+        # Separate individual vs aggregated events
+        individual_events: list["EventLogEntry"] = []
+        aggregate_events: dict[str, dict[str, set[int | None]]] = defaultdict(
             lambda: defaultdict(set)
         )
+
         for entry in snapshot.event_log:
-            ts = entry.timestamp
-            # Skip current second (not complete yet)
-            if ts == current_second:
-                continue
-            # Skip already-processed seconds
-            if ts in self._processed_seconds:
-                continue
-            second_groups[ts][entry.event_type].add(entry.env_id)
+            # Create a unique ID for deduplication
+            event_id = f"{entry.timestamp}:{entry.event_type}:{entry.env_id}:{hash(str(entry.metadata))}"
 
-        if not second_groups:
-            return
+            if entry.event_type in _INDIVIDUAL_EVENTS:
+                if event_id not in self._processed_ids:
+                    individual_events.append(entry)
+                    self._processed_ids.add(event_id)
+            else:
+                # Aggregate by timestamp and event type
+                # Skip current second (still accumulating)
+                if entry.timestamp != current_second:
+                    aggregate_events[entry.timestamp][entry.event_type].add(entry.env_id)
 
-        # Process new completed seconds in chronological order
-        for timestamp in sorted(second_groups.keys()):
-            type_envs = second_groups[timestamp]
-            self._append_second(timestamp, type_envs)
+        # Process individual events (show immediately with metadata)
+        for entry in sorted(individual_events, key=lambda e: e.timestamp):
+            line_data = self._format_individual_event(entry)
+            if line_data:
+                self._line_data.append(line_data)
+
+        # Process aggregated events (show counts per completed second)
+        for timestamp in sorted(aggregate_events.keys()):
+            if timestamp in self._processed_seconds:
+                continue
             self._processed_seconds.add(timestamp)
+            for event_type in sorted(aggregate_events[timestamp].keys()):
+                env_ids = aggregate_events[timestamp][event_type]
+                line_data = self._format_aggregate_event(timestamp, event_type, env_ids)
+                if line_data:
+                    self._line_data.append(line_data)
+
+        # Sort by timestamp to maintain clock flow
+        self._line_data.sort(key=lambda ld: ld.timestamp)
 
         # Trim if we exceed max lines
         if len(self._line_data) > self._max_lines:
@@ -127,61 +179,133 @@ class EventLog(Static):
 
         # Update border title with scroll indicator
         if self._trimmed_count > 0:
-            self.border_title = f"EVENTS [↵] ↑{self._trimmed_count}"
+            self.border_title = f"EVENTS [click] ↑{self._trimmed_count}"
         else:
-            self.border_title = "EVENTS [↵]"
+            self.border_title = "EVENTS [click for detail]"
 
         # Trigger re-render
         self.refresh()
 
-    def _append_second(
-        self, timestamp: str, type_envs: dict[str, set[int | None]]
-    ) -> None:
-        """Append line data for a completed second.
+    def _format_individual_event(self, entry: "EventLogEntry") -> _LineData | None:
+        """Format an individual event with rich inline metadata.
 
-        Each event type gets its own line with count and contributing envs.
-        Stores raw data - formatting happens at render time.
+        Returns _LineData with timestamp and content separated for render-time formatting.
         """
-        for event_type in sorted(type_envs.keys()):
-            env_ids = type_envs[event_type]
-            count = len(env_ids)
+        content = Text()
+        event_type = entry.event_type
+        metadata = entry.metadata
+        color = _EVENT_COLORS.get(event_type, "white")
 
-            # Event type label (shortened for display)
-            color = _EVENT_COLORS.get(event_type, "white")
-            label = (
-                event_type
-                .replace("SEED_", "")
-                .replace("_COMPLETED", "")
-                .replace("_COMPUTED", "")
-            )
+        if event_type == "SEED_GERMINATED":
+            slot = metadata.get("slot_id", "?")
+            blueprint = metadata.get("blueprint", "?")
+            # Truncate blueprint to 10 chars
+            if len(str(blueprint)) > 10:
+                blueprint = str(blueprint)[:9] + "…"
+            content.append(f"{slot} ", style="cyan")
+            content.append("GERM ", style=color)
+            content.append(str(blueprint), style="white")
 
-            # Build env list string
-            env_str = self._format_env_list(env_ids)
+        elif event_type == "SEED_STAGE_CHANGED":
+            slot = metadata.get("slot_id", "?")
+            from_stage = _STAGE_SHORT.get(str(metadata.get("from", "?")), "?")
+            to_stage = _STAGE_SHORT.get(str(metadata.get("to", "?")), "?")
+            content.append(f"{slot} ", style="cyan")
+            content.append(f"{from_stage}→{to_stage}", style=color)
 
-            # Store raw data tuple: (timestamp, label, color, count, env_str)
-            self._line_data.append((timestamp, label, color, count, env_str))
+        elif event_type == "SEED_FOSSILIZED":
+            slot = metadata.get("slot_id", "?")
+            improvement = metadata.get("improvement", 0)
+            content.append(f"{slot} ", style="cyan")
+            content.append("FOSS ", style=color)
+            if isinstance(improvement, (int, float)):
+                content.append(f"+{improvement:.1f}%", style="green")
+            else:
+                content.append(str(improvement), style="green")
 
-    def _format_env_list(self, env_ids: set[int | None]) -> str:
-        """Format env IDs for display, e.g., '0 1 2 3 +'.
+        elif event_type == "SEED_PRUNED":
+            slot = metadata.get("slot_id", "?")
+            reason = metadata.get("reason", "")
+            # Truncate reason to 8 chars
+            if len(str(reason)) > 8:
+                reason = str(reason)[:7] + "…"
+            content.append(f"{slot} ", style="cyan")
+            content.append("PRUNE ", style=color)
+            if reason:
+                content.append(str(reason), style="dim")
 
-        Returns empty string for global events (all None).
-        """
-        # Filter out None (global events)
-        real_ids = sorted(eid for eid in env_ids if eid is not None)
-        if not real_ids:
-            return ""
+        elif event_type == "PPO_UPDATE_COMPLETED":
+            entropy = metadata.get("entropy")
+            clip = metadata.get("clip_fraction")
+            content.append("PPO ", style=color)
+            if entropy is not None:
+                content.append("ent:", style="dim")
+                content.append(f"{float(entropy):.2f}", style="cyan")
+            if clip is not None:
+                content.append(" clip:", style="dim")
+                clip_val = float(clip)
+                content.append(f"{clip_val*100:.0f}%", style="yellow" if clip_val > 0.2 else "green")
 
-        if len(real_ids) <= _MAX_ENVS_SHOWN:
-            return " ".join(str(eid) for eid in real_ids)
+        elif event_type == "BATCH_EPOCH_COMPLETED":
+            batch = metadata.get("batch", "?")
+            episodes = metadata.get("episodes", 0)
+            content.append("BATCH ", style=color)
+            content.append(f"#{batch}", style="cyan")
+            if episodes:
+                content.append(f" +{episodes}eps", style="dim")
+
+        elif event_type == "TRAINING_STARTED":
+            content.append("▶ TRAINING STARTED", style=color)
+
         else:
-            shown = " ".join(str(eid) for eid in real_ids[:_MAX_ENVS_SHOWN])
-            return f"{shown} +"
+            # Fallback for unknown types
+            label = event_type.replace("SEED_", "").replace("_COMPLETED", "")
+            content.append(label, style=color)
+
+        return _LineData(
+            timestamp=entry.timestamp,
+            content=content,
+            env_str=str(entry.env_id) if entry.env_id is not None else "",
+        )
+
+    def _format_aggregate_event(
+        self, timestamp: str, event_type: str, env_ids: set[int | None]
+    ) -> _LineData | None:
+        """Format an aggregated event with count."""
+        content = Text()
+        color = _EVENT_COLORS.get(event_type, "dim")
+        label = (
+            event_type
+            .replace("SEED_", "")
+            .replace("_COMPLETED", "")
+            .replace("_COMPUTED", "")
+        )
+
+        count = len(env_ids)
+        content.append(label, style=color)
+        if count > 1:
+            content.append(f" ×{count}", style="dim")
+
+        # Format env IDs for the line data
+        real_ids = sorted(eid for eid in env_ids if eid is not None)
+        env_str: str | None = None
+        if real_ids:
+            if len(real_ids) <= _MAX_ENVS_SHOWN:
+                env_str = " ".join(str(eid) for eid in real_ids)
+            else:
+                env_str = " ".join(str(eid) for eid in real_ids[:_MAX_ENVS_SHOWN]) + " +"
+
+        return _LineData(
+            timestamp=timestamp,
+            content=content,
+            env_str=env_str if env_str else "",
+        )
 
     def render(self) -> RenderableType:
-        """Render the log with proper right-justification.
+        """Render the log with proper timestamp abbreviation.
 
         Uses actual widget width to align env IDs to right edge.
-        Timestamp rules (all stored as HH:MM:SS):
+        Timestamp rules (computed at render time for proper clock flow):
         - Top line (i==0): shows full HH:MM:SS
         - First event of each new minute: shows full HH:MM:SS
         - All other lines: shows only :SS (with padding for alignment)
@@ -195,8 +319,8 @@ class EventLog(Static):
         lines = []
         last_minute: str | None = None
 
-        for i, (timestamp, label, color, count, env_str) in enumerate(self._line_data):
-            parts = timestamp.split(":")
+        for i, ld in enumerate(self._line_data):
+            parts = ld.timestamp.split(":")
             if len(parts) != 3:
                 continue
 
@@ -211,28 +335,24 @@ class EventLog(Static):
 
             if show_full:
                 # Full format: " HH:MM:SS " = 10 chars (1 space indent + timestamp + space)
-                line.append(f" {timestamp} ", style="bold cyan")
+                line.append(f" {ld.timestamp} ", style="bold cyan")
             else:
-                # Short format: "      :SS " = 9 chars (6 spaces + :SS + space)
+                # Short format: "      :SS " = 10 chars (6 spaces + :SS + space)
                 line.append(f"      :{second} ", style="dim")
 
             # Always update last_minute for tracking
             last_minute = hour_minute
 
-            # Event label
-            line.append(label, style=color)
+            # Append the pre-formatted content
+            line.append_text(ld.content)
 
-            # Count if > 1
-            if count > 1:
-                line.append(f" ×{count}", style="dim")
-
-            # Right-justify env IDs
-            if env_str:
+            # Right-justify env info if present
+            if ld.env_str:
                 left_len = len(line.plain)
-                right_len = len(env_str)
+                right_len = len(ld.env_str)
                 padding = max(1, width - left_len - right_len)
                 line.append(" " * padding)
-                line.append(env_str, style="dim")
+                line.append(ld.env_str, style="dim")
 
             lines.append(line)
 

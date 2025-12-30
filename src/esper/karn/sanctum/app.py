@@ -5,6 +5,23 @@ Layout matches existing Rich TUI (tui.py _render() method).
 
 LAYOUT FIX: TamiyoBrain spans full width as dedicated row (size=11),
 NOT embedded in right column. Event Log included at bottom-left.
+
+UNICODE GLYPH REQUIREMENTS:
+    Sanctum requires a terminal with Unicode support and a font that includes:
+
+    Status icons:     ● ◐ ○ ★ ✓ ✗ ⚠ ▼ ▲
+    Progress bars:    █ ░
+    Sparklines:       ▁ ▂ ▃ ▄ ▅ ▆ ▇ █
+    Arrows:           ↑ ↓ → ↗ ↘ ▶ ▸
+    Alpha curves:     ⌒ ⌢ ⌣ −
+    Medals:           🥇 🥈 🥉 📌
+    Severity:         💀 🔥 ⚠️
+    Separators:       │ ─
+
+    Recommended terminals: iTerm2, Kitty, Windows Terminal, Alacritty
+    Recommended fonts: JetBrains Mono, Fira Code, Cascadia Code, Nerd Fonts
+
+    For terminals without full Unicode/emoji support, use Overwatch (web UI) instead.
 """
 from __future__ import annotations
 
@@ -53,10 +70,17 @@ HELP_TEXT = """\
   [cyan]/[/cyan]         Filter envs (by ID or status)
   [cyan]Esc[/cyan]       Clear filter
   [cyan]i[/cyan]         Show full run info (untruncated)
-  [cyan]p[/cyan]         Toggle pin on Best Runs item
   [cyan]r[/cyan]         Manual refresh
   [cyan]q[/cyan]         Quit Sanctum
-  [cyan]Click[/cyan]     Click Event Log for raw detail view
+
+[bold]Pinning (in Best Runs / Decisions)[/bold]
+  [cyan]p[/cyan]         Toggle pin on selected Best Runs item
+  [cyan]Click[/cyan]     Click decision card to toggle pin (📌)
+  [dim]Pinned items are never removed from the display[/dim]
+
+[bold]Click Actions[/bold]
+  [cyan]Click[/cyan]     Event Log → raw event detail view
+  [cyan]Click[/cyan]     Best Runs row → historical env snapshot
 
 [bold]In Detail Modal[/bold]
   [cyan]Esc[/cyan]       Close modal

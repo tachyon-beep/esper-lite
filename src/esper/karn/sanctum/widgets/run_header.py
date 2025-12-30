@@ -238,7 +238,8 @@ class RunHeader(Static):
         if s.training_thread_alive is True:
             row.append("✓", style="green")
         elif s.training_thread_alive is False:
-            row.append("✗", style="bold red blink")
+            # Bold red is sufficient urgency - blink is distracting and can cause issues
+            row.append("✗", style="bold red")
         else:
             row.append("?", style="dim")
 
