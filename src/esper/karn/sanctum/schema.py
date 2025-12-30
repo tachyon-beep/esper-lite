@@ -1041,7 +1041,7 @@ class SanctumSnapshot:
     # Run metadata
     current_episode: int = 0
     current_batch: int = 0
-    max_batches: int = 0  # Maximum batches per episode
+    max_batches: int = 0  # Total episodes/batches in run (from CLI)
     current_epoch: int = 0
     max_epochs: int = 0
     run_id: str = ""

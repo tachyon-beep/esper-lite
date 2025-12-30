@@ -139,12 +139,18 @@ class AttentionHeatmapPanel(Static):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
+        self._cached_decisions: list["DecisionSnapshot"] = []
         self.classes = "panel"
         self.border_title = "ACTION HEAD OUTPUTS"
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Update with new snapshot data."""
         self._snapshot = snapshot
+
+        # Cache decisions - only update if we have new data
+        if snapshot.tamiyo.recent_decisions:
+            self._cached_decisions = list(snapshot.tamiyo.recent_decisions[:self.MAX_ROWS])
+
         self.refresh()
 
     def _rjust_cell(self, result: Text, content: str, width: int, style: str) -> None:
@@ -154,10 +160,8 @@ class AttentionHeatmapPanel(Static):
 
     def render(self) -> Text:
         """Render the head choices table."""
-        if self._snapshot is None:
-            return self._render_placeholder()
-
-        decisions = self._snapshot.tamiyo.recent_decisions[:self.MAX_ROWS]
+        # Use cached decisions if available, otherwise show placeholder
+        decisions = self._cached_decisions
         if not decisions:
             return self._render_placeholder()
 

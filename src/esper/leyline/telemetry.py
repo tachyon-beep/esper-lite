@@ -429,7 +429,7 @@ class TrainingStartedPayload:
     # REQUIRED - training fails without these
     n_envs: int
     max_epochs: int
-    max_batches: int  # Batches per episode (len(dataloader))
+    max_batches: int  # Total episodes/batches in run (from CLI n_episodes)
     task: str
     host_params: int  # Must be post-materialization
     slot_ids: tuple[str, ...]
