@@ -34,7 +34,7 @@ YOU MUST READ BOTH THIS DOCUMENT AND THE RELEVANT PRERESQUISITE DESIGNS IN FULL 
 
 | Aspect | Before | After |
 |--------|--------|-------|
-| Observation dims | 218 | 124 |
+| Observation dims | 218 | 133 |
 | Model params | ~227K | ~930K |
 | LSTM hidden | 128 | 256 |
 | Feature dim | 128 | 256 |
@@ -171,10 +171,12 @@ from esper.leyline import NUM_OPS, NUM_STAGES
 Add `_extract_base_features_v3()` with:
 
 - Log-scale loss normalization: `log(1 + loss) / log(11)`
-- Compressed history: trend + volatility (4 dims instead of 10)
+- **Raw history (10 dims):** 5 loss + 5 accuracy values, log-normalized and left-padded
 - Stage distribution: `num_training_norm`, `num_blending_norm`, `num_holding_norm`
 - Host stabilized flag
 - **Action feedback:** `last_action_success`, `last_action_op` (7 dims)
+
+**Base features total: 24 dims** (was 18 in V2)
 
 **Key formula changes:**
 
@@ -182,19 +184,44 @@ Add `_extract_base_features_v3()` with:
 # Loss normalization (was: clamp/10)
 loss_norm = math.log(1 + val_loss) / math.log(11)
 
-# History compression (was: 5 raw values each)
-loss_trend = sum(loss_delta_history[-5:]) / max(len(loss_delta_history[-5:]), 1)
-loss_volatility = math.log(1 + statistics.stdev(loss_history[-5:])) / math.log(3) if len(loss_history) > 1 else 0.0
+# Raw history with padding (10 dims total)
+# Left-pad short histories with zeros to ensure consistent length
+def _pad_history(history: list[float], length: int = 5) -> list[float]:
+    """Left-pad history to fixed length."""
+    if len(history) >= length:
+        return history[-length:]
+    return [0.0] * (length - len(history)) + history
+
+loss_history_norm = [math.log(1 + x) / math.log(11) for x in _pad_history(loss_history, 5)]
+acc_history_norm = [x / 100.0 for x in _pad_history(acc_history, 5)]
 ```
+
+**Why raw history (from DRL review):** Trend+volatility compression loses temporal causality. The LSTM needs the raw sequence shape for credit assignment—which epoch's loss delta matters for which decision? 6 dims of "savings" isn't worth degraded policy learning.
 
 #### 2c. Implement Slot Feature Extraction V3
 
 Add `_extract_slot_features_v3()` with:
 
 - Merged telemetry fields (gradient_norm, gradient_health, has_vanishing, has_exploding)
+- **`gradient_health_prev`:** Previous epoch's gradient_health (enables LSTM trend detection)
 - `epochs_in_stage_norm` (was missing normalization)
-- `counterfactual_fresh` decay signal
+- **`counterfactual_fresh`:** `DEFAULT_GAMMA ** epochs_since_cf` (gamma-matched decay)
 - **No blueprint one-hot** (moved to embedding)
+
+**Per-slot features total: 30 dims** (was 29 in V2)
+
+```python
+from esper.leyline import DEFAULT_GAMMA
+
+# Counterfactual freshness (gamma-matched decay)
+# With DEFAULT_GAMMA=0.995, signal stays >0.5 for ~50 epochs
+counterfactual_fresh = DEFAULT_GAMMA ** epochs_since_counterfactual
+
+# Gradient trend signal
+gradient_health_prev = previous_epoch_gradient_health  # Track in EnvState
+```
+
+**Why gamma-matched decay (from DRL review):** The old 0.8^epochs decayed too fast—0.8^10 = 0.1, making counterfactual estimates unreliable after just 10 epochs. Using DEFAULT_GAMMA (0.995) aligns with PPO's credit horizon: 0.995^10 ≈ 0.95, staying useful for ~50 epochs.
 
 #### 2d. Implement Vectorized Construction
 
@@ -206,14 +233,33 @@ def _extract_slot_arrays(batch_reports, slot_config) -> dict[str, np.ndarray]:
     # Single array assignment per slot instead of 25+ individual writes
 ```
 
-Add cached one-hot tables:
+Add cached one-hot tables with **device-keyed cache**:
 
 ```python
-_STAGE_ONE_HOT_TABLE = torch.eye(10, dtype=torch.float32)
+from esper.leyline import NUM_STAGES
 
-def _vectorized_one_hot(indices: torch.Tensor, table: torch.Tensor) -> torch.Tensor:
-    """Lookup-based one-hot encoding."""
+# Module-level constants
+_STAGE_ONE_HOT_TABLE = torch.eye(NUM_STAGES, dtype=torch.float32)
+
+# Device-keyed cache to avoid per-step .to(device) allocations
+_DEVICE_CACHE: dict[torch.device, torch.Tensor] = {}
+
+def _get_cached_table(device: torch.device) -> torch.Tensor:
+    """Get stage one-hot table for device, caching to avoid repeated transfers."""
+    if device not in _DEVICE_CACHE:
+        _DEVICE_CACHE[device] = _STAGE_ONE_HOT_TABLE.to(device)
+    return _DEVICE_CACHE[device]
+
+def _vectorized_one_hot(indices: torch.Tensor, device: torch.device) -> torch.Tensor:
+    """Vectorized one-hot encoding with device-cached lookup table."""
+    table = _get_cached_table(device)
+    valid_mask = indices >= 0  # -1 marks inactive slots
+    safe_indices = indices.clamp(min=0)
+    one_hot = table[safe_indices]
+    return one_hot * valid_mask.unsqueeze(-1).float()  # Zeros out inactive
 ```
+
+**Why device-keyed cache (from PyTorch review):** The naive `.to(indices.device)` allocates a new tensor every step. With ~500 steps/episode across 4 environments, that's 2000 allocations/episode. The cache ensures one-time transfer per device.
 
 #### 2e. Implement batch_obs_to_features_v3()
 
@@ -228,8 +274,8 @@ def batch_obs_to_features_v3(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Returns:
-        obs: [batch, 112] - base + slot features (no blueprint)
-        blueprint_indices: [batch, num_slots] - for embedding lookup
+        obs: [batch, 121] - base (31) + slot features (30*3) (no blueprint)
+        blueprint_indices: [batch, num_slots] - for embedding lookup, dtype=int64
     """
 ```
 
@@ -239,13 +285,20 @@ Replace existing function (no `_v3` suffix—this is the new implementation):
 
 ```python
 def get_feature_size(slot_config: SlotConfig) -> int:
-    """Feature size: 25 base + 29*slots = 112 for 3 slots.
+    """Feature size: 31 base (24 + 7 action feedback) + 30*slots = 121 for 3 slots.
 
     Note: Blueprint embeddings (4*slots=12) added by network, not here.
-    Total input to network: 112 + 12 = 124.
+    Total input to network: 121 + 12 = 133.
     """
-    return 25 + (29 * slot_config.num_slots)
+    return 31 + (30 * slot_config.num_slots)
 ```
+
+**Dimension breakdown:**
+- Base features: 24 (includes 10-dim raw history)
+- Action feedback: 7 (success + op one-hot)
+- Per-slot: 30 (includes gradient_health_prev)
+- Non-blueprint obs: 31 + 90 = 121
+- With embeddings: 121 + 12 = 133
 
 **Validation:**
 
@@ -254,8 +307,8 @@ PYTHONPATH=src python -c "
 from esper.tamiyo.policy.features import get_feature_size
 from esper.leyline.slot_config import SlotConfig
 config = SlotConfig.default()
-print(f'Feature size: {get_feature_size(config)}')  # Should be 112
-print(f'With embeddings: {get_feature_size(config) + 4 * config.num_slots}')  # Should be 124
+print(f'Feature size: {get_feature_size(config)}')  # Should be 121
+print(f'With embeddings: {get_feature_size(config) + 4 * config.num_slots}')  # Should be 133
 "
 ```
 
@@ -301,8 +354,12 @@ class BlueprintEmbedding(nn.Module):
         Returns:
             [batch, num_slots, embed_dim]
         """
-        safe_idx = blueprint_indices.clone()
-        safe_idx[blueprint_indices < 0] = self.null_idx
+        # Use torch.where to avoid .clone() allocation in hot path
+        safe_idx = torch.where(
+            blueprint_indices < 0,
+            torch.tensor(self.null_idx, device=blueprint_indices.device, dtype=blueprint_indices.dtype),
+            blueprint_indices
+        )
         return self.embedding(safe_idx)
 ```
 
@@ -370,7 +427,7 @@ self.value_head = nn.Sequential(
 ```python
 def forward(
     self,
-    state: torch.Tensor,           # [batch, seq, 112] - features without blueprint
+    state: torch.Tensor,           # [batch, seq, 121] - features without blueprint
     blueprint_indices: torch.Tensor,  # [batch, seq, num_slots] - for embedding
     hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
     op_for_value: torch.Tensor | None = None,  # For hard conditioning during update
@@ -405,8 +462,8 @@ This avoids the "soft probs during rollout, hard one-hot during update" pattern 
 PYTHONPATH=src python -c "
 import torch
 from esper.tamiyo.networks.factored_lstm import FactoredRecurrentActorCriticV2
-net = FactoredRecurrentActorCriticV2(state_dim=112, num_slots=3)
-state = torch.randn(2, 5, 112)  # batch=2, seq=5
+net = FactoredRecurrentActorCriticV2(state_dim=121, num_slots=3)
+state = torch.randn(2, 5, 121)  # batch=2, seq=5 (121 non-blueprint dims)
 bp_idx = torch.randint(0, 13, (2, 5, 3))
 out = net(state, bp_idx)
 print(f'Op logits: {out[\"op_logits\"].shape}')  # [2, 5, 6]
@@ -684,12 +741,12 @@ git grep "TODO(policy-v2)"
 
 | File | Phase | Key Changes |
 |------|-------|-------------|
-| `leyline/__init__.py` | 1 | Dimension constants (256), NUM_STAGES |
-| `tamiyo/policy/features.py` | 2 | Clean replacement, vectorization, log normalization, returns `(obs, bp_idx)` |
-| `tamiyo/networks/factored_lstm.py` | 3, 4 | BlueprintEmbedding, V2 network, op-conditioned Q(s,op) critic |
+| `leyline/__init__.py` | 1 | Dimension constants (256), BLUEPRINT_NULL_INDEX, DEFAULT_BLUEPRINT_EMBED_DIM |
+| `tamiyo/policy/features.py` | 2 | Clean replacement, raw history (10 dims), gradient_health_prev, device-keyed cache, gamma-matched counterfactual, returns `(obs[121], bp_idx)` |
+| `tamiyo/networks/factored_lstm.py` | 3, 4 | BlueprintEmbedding (torch.where), V2 network, op-conditioned Q(s,op) critic |
 | `simic/agent/ppo.py` | 5, 6f | Differential entropy, evaluate_actions with blueprint_indices |
 | `simic/agent/rollout_buffer.py` | 6a | Add `blueprint_indices` tensor, update `add()` and `get_batched_sequences()` |
-| `simic/training/vectorized.py` | 6 | Action feedback tracking, new feature extraction API, blueprint_indices plumbing |
+| `simic/training/vectorized.py` | 6 | Action feedback tracking, gradient_health_prev tracking in EnvState, new feature extraction API, blueprint_indices plumbing |
 
 ---
 
@@ -730,7 +787,7 @@ The `use_telemetry` flag no longer exists in V3. Remove from CLI args and config
 
 ### 6. Feature Size Mismatch
 
-V3 feature extraction returns 112 dims. Network expects 124 (112 + 12 from embeddings).
+V3 feature extraction returns 121 dims. Network expects 133 (121 + 12 from embeddings).
 The embedding concatenation happens INSIDE the network, not in feature extraction.
 
 ### 7. Op-Conditioning Consistency (Q(s,op) Pattern)
@@ -785,6 +842,36 @@ bootstrap_value = policy.get_value(final_obs, final_blueprint_indices, hidden, f
 ```
 
 If blueprint_indices are missing at truncation, the bootstrap value will be computed incorrectly.
+
+### 11. Gradient Health Prev Tracking
+
+The `gradient_health_prev` feature requires tracking the previous epoch's gradient health in `EnvState`:
+
+```python
+@dataclass
+class EnvState:
+    # ... existing fields ...
+    gradient_health_prev: dict[str, float] = field(default_factory=dict)  # slot_id → prev value
+```
+
+At each step:
+1. Read `gradient_health_prev[slot_id]` for feature extraction
+2. After step, update `gradient_health_prev[slot_id] = current_gradient_health`
+
+First epoch of each slot should use `gradient_health_prev = 1.0` (assume healthy until proven otherwise).
+
+### 12. History Padding at Episode Start
+
+At episode start, loss/accuracy history may be shorter than 5 epochs. Use left-padding with zeros:
+
+```python
+def _pad_history(history: list[float], length: int = 5) -> list[float]:
+    if len(history) >= length:
+        return history[-length:]
+    return [0.0] * (length - len(history)) + history
+```
+
+This prevents `statistics.stdev()` crashes and gives the LSTM a consistent 5-element window.
 
 ---
 

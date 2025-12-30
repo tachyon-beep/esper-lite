@@ -10,7 +10,7 @@ Redesign Tamiyo's observation space to eliminate duplication, normalize all feat
 
 | Metric | V2 (Current) | V3 (Proposed) | Change |
 |--------|--------------|---------------|--------|
-| Total dimensions | 218 | 117 (→124 with Policy V2) | -46% (→-43%) |
+| Total dimensions | 218 | 133 (with Policy V2) | -39% |
 | Duplicated features | 27 dims | 0 | Eliminated |
 | Unbounded features | 5+ | 0 | All bounded (see note) |
 | Construction | Nested Python loops | Vectorized + cached tables | ~10x faster |
@@ -21,14 +21,15 @@ Redesign Tamiyo's observation space to eliminate duplication, normalize all feat
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| History handling | Compress to trend + volatility | Saves 6 dims, LSTM handles fine-grained patterns |
+| History handling | **Keep raw history (10 dims)** | LSTM needs sequence shape for credit assignment; trend+volatility loses temporal causality |
 | Blueprint encoding | Learned 4-dim embeddings | Model discovers semantic relationships |
 | Telemetry toggle | Remove, merge unique fields | Gradient health signals always valuable |
-| Counterfactual freshness | Include as decay signal | Reliability indicator for contribution feature |
+| Counterfactual freshness | Gamma-matched decay (0.995^epochs) | Matches PPO discount horizon; 0.8^epochs was too aggressive |
+| Gradient trend | Add `gradient_health_prev` | Enables LSTM to distinguish transient vs sustained gradient issues |
 
 ## Feature Specification
 
-### Base Features (18 dims)
+### Base Features (24 dims)
 
 | Idx | Feature | Formula | Range | Purpose |
 |-----|---------|---------|-------|---------|
@@ -39,19 +40,19 @@ Redesign Tamiyo's observation space to eliminate duplication, normalize all feat
 | 4 | `accuracy_delta_norm` | `clamp(acc_delta, -10, 10) / 10` | [-1,1] | Improvement signal |
 | 5 | `plateau_norm` | `clamp(plateau_epochs, 0, 20) / 20` | [0,1] | Stagnation detection |
 | 6 | `host_stabilized` | `1.0 if stabilized else 0.0` | {0,1} | Germination gate |
-| 7 | `loss_trend` | `mean(loss_delta_history[-5:])` norm | [-1,1] | Compressed history |
-| 8 | `loss_volatility` | `log(1 + std(loss_history[-5:])) / log(3)` | [0,~1] | Compressed history (log-scale) |
-| 9 | `accuracy_trend` | `mean(acc_delta_history[-5:])` norm | [-1,1] | Compressed history |
-| 10 | `accuracy_volatility` | `std(acc_history[-5:]) / 30` | [0,1] | Compressed history |
-| 11 | `best_accuracy_norm` | `best_val_accuracy / 100` | [0,1] | Progress tracking |
-| 12 | `best_loss_norm` | `log(1 + best_val_loss) / log(11)` | [0,~1.3] | Progress tracking (log-scale) |
-| 13 | `params_utilization` | `log(1 + params) / log(1 + budget)` | [0,1] | Resource awareness |
-| 14 | `slot_utilization` | `num_active / num_slots` | [0,1] | Germination opportunity |
-| 15 | `num_training_norm` | `count(TRAINING) / num_slots` | [0,1] | Stage distribution |
-| 16 | `num_blending_norm` | `count(BLENDING) / num_slots` | [0,1] | Stage distribution |
-| 17 | `num_holding_norm` | `count(HOLDING) / num_slots` | [0,1] | Stage distribution |
+| 7-11 | `loss_history[0:5]` | `log(1 + loss_i) / log(11)`, padded | [0,~1.3] | Raw loss trajectory (5 dims) |
+| 12-16 | `acc_history[0:5]` | `acc_i / 100`, padded | [0,1] | Raw accuracy trajectory (5 dims) |
+| 17 | `best_accuracy_norm` | `best_val_accuracy / 100` | [0,1] | Progress tracking |
+| 18 | `best_loss_norm` | `log(1 + best_val_loss) / log(11)` | [0,~1.3] | Progress tracking (log-scale) |
+| 19 | `params_utilization` | `log(1 + params) / log(1 + budget)` | [0,1] | Resource awareness |
+| 20 | `slot_utilization` | `num_active / num_slots` | [0,1] | Germination opportunity |
+| 21 | `num_training_norm` | `count(TRAINING) / num_slots` | [0,1] | Stage distribution |
+| 22 | `num_blending_norm` | `count(BLENDING) / num_slots` | [0,1] | Stage distribution |
+| 23 | `num_holding_norm` | `count(HOLDING) / num_slots` | [0,1] | Stage distribution |
 
-### Per-Slot Features (29 dims × num_slots)
+**History padding:** Use `_pad_history(history, 5)` to left-pad short histories with zeros. This prevents `statistics.stdev()` crashes at episode start.
+
+### Per-Slot Features (30 dims × num_slots)
 
 | Idx | Feature | Formula | Range | Purpose |
 |-----|---------|---------|-------|---------|
@@ -62,19 +63,22 @@ Redesign Tamiyo's observation space to eliminate duplication, normalize all feat
 | 13 | `alpha_mode_norm` | `_MODE_INDEX[mode] / (len(_MODE_INDEX) - 1)` | [0,1] | HOLD/RAMP/STEP (see note) |
 | 14 | `alpha_velocity` | `clamp(velocity, -1, 1)` | [-1,1] | Rate of change |
 | 15 | `time_to_target_norm` | `clamp(time, 0, max) / max` | [0,1] | Schedule progress |
-| 16 | `alpha_algorithm_norm` | `(algo - min) / range` | [0,1] | ADD/MULTIPLY/GATE |
+| 16 | `alpha_algorithm_norm` | `_ALGO_INDEX[algo] / (len(_ALGO_INDEX) - 1)` | [0,1] | ADD/MULTIPLY/GATE (explicit index) |
 | 17 | `contribution_norm` | `clamp(contrib, -10, 10) / 10` | [-1,1] | Counterfactual attribution |
 | 18 | `contribution_velocity_norm` | `clamp(vel, -10, 10) / 10` | [-1,1] | Trend for fossilize timing |
 | 19 | `epochs_in_stage_norm` | `clamp(epochs, 0, 50) / 50` | [0,1] | Lifecycle timing |
 | 20 | `gradient_norm_norm` | `clamp(grad, 0, 10) / 10` | [0,1] | Training health |
 | 21 | `gradient_health` | Direct | [0,1] | Composite health score |
-| 22 | `has_vanishing` | Binary | {0,1} | Prune signal |
-| 23 | `has_exploding` | Binary | {0,1} | Prune signal |
-| 24 | `interaction_sum_norm` | `clamp(sum, 0, 10) / 10` | [0,1] | Total synergy |
-| 25 | `boost_received_norm` | `clamp(max, 0, 5) / 5` | [0,1] | Strongest interaction |
-| 26 | `upstream_alpha_norm` | `clamp(sum, 0, 3) / 3` | [0,1] | Position context |
-| 27 | `downstream_alpha_norm` | `clamp(sum, 0, 3) / 3` | [0,1] | Position context |
-| 28 | `counterfactual_fresh` | `0.8 ** epochs_since_cf` | [0,1] | Attribution reliability |
+| 22 | `gradient_health_prev` | Previous epoch's gradient_health | [0,1] | **NEW:** Enables trend detection |
+| 23 | `has_vanishing` | Binary | {0,1} | Prune signal |
+| 24 | `has_exploding` | Binary | {0,1} | Prune signal |
+| 25 | `interaction_sum_norm` | `clamp(sum, 0, 10) / 10` | [0,1] | Total synergy |
+| 26 | `boost_received_norm` | `clamp(max, 0, 5) / 5` | [0,1] | Strongest interaction |
+| 27 | `upstream_alpha_norm` | `clamp(sum, 0, 3) / 3` | [0,1] | Position context |
+| 28 | `downstream_alpha_norm` | `clamp(sum, 0, 3) / 3` | [0,1] | Position context |
+| 29 | `counterfactual_fresh` | `DEFAULT_GAMMA ** epochs_since_cf` | [0,1] | Attribution reliability (gamma-matched) |
+
+**Counterfactual decay rationale:** Using `DEFAULT_GAMMA` (0.995) matches the PPO credit horizon. With 0.995^10 ≈ 0.95, measurements remain useful for ~50 epochs before dropping below 0.5. The previous 0.8^epochs decay was too aggressive (0.8^10 = 0.1).
 
 **⚠️ Implementation Notes:**
 
@@ -103,13 +107,16 @@ Blueprint indices are passed to an `nn.Embedding(14, 4)` layer inside the policy
 ### Total Dimensions
 
 ```
-Base:              18
-Slot 0:            29
-Slot 1:            29
-Slot 2:            29
-Blueprint embed:   12  (4 × 3 slots)
+Base:              24  (was 18; +6 for raw history instead of compressed)
+Action feedback:    7  (last_action_success + op one-hot)
+Slot 0:            30  (was 29; +1 for gradient_health_prev)
+Slot 1:            30
+Slot 2:            30
 ─────────────────────
-Total:            117
+Non-blueprint obs: 121
+Blueprint embed:    12  (4 × 3 slots, added inside network)
+─────────────────────
+Total network:    133
 ```
 
 ## Architecture Changes
@@ -117,30 +124,42 @@ Total:            117
 ### New BlueprintEmbedding Module
 
 ```python
+from esper.leyline import NUM_BLUEPRINTS, BLUEPRINT_NULL_INDEX, DEFAULT_BLUEPRINT_EMBED_DIM
+
 class BlueprintEmbedding(nn.Module):
-    def __init__(self, num_blueprints: int = 13, embed_dim: int = 4):
+    def __init__(
+        self,
+        num_blueprints: int = NUM_BLUEPRINTS,
+        embed_dim: int = DEFAULT_BLUEPRINT_EMBED_DIM,
+    ):
         super().__init__()
         # Index 13 = null embedding for inactive slots
         self.embedding = nn.Embedding(num_blueprints + 1, embed_dim)
-        self.null_idx = num_blueprints
+        self.null_idx = BLUEPRINT_NULL_INDEX
+        nn.init.normal_(self.embedding.weight, std=0.02)
 
     def forward(self, blueprint_indices: torch.Tensor) -> torch.Tensor:
-        # Map -1 (inactive) to null index
-        safe_idx = blueprint_indices.clone()
-        safe_idx[blueprint_indices < 0] = self.null_idx
+        # Map -1 (inactive) to null index WITHOUT .clone() allocation
+        # torch.where is more efficient than clone + masked assignment
+        safe_idx = torch.where(
+            blueprint_indices < 0,
+            torch.tensor(self.null_idx, device=blueprint_indices.device, dtype=blueprint_indices.dtype),
+            blueprint_indices
+        )
         return self.embedding(safe_idx)
 ```
+
+**Note:** Avoid `.clone()` in forward pass—it allocates a new tensor every call. Use `torch.where()` instead.
 
 ### Updated Policy Network
 
 ```python
 class FactoredRecurrentActorCriticV3(nn.Module):
-    def __init__(self, state_dim: int = 112, ...):
-        # state_dim = 25 base (with action feedback) + 29*3 slots = 112
-        # (Without action feedback: 18 + 29*3 = 105)
+    def __init__(self, state_dim: int = 121, ...):
+        # state_dim = 31 base (24 + 7 action feedback) + 30*3 slots = 121
         # blueprint handled separately by embedding
-        self.blueprint_embed = BlueprintEmbedding(13, 4)
-        self.feature_net = nn.Linear(state_dim + 12, feature_dim)  # 112 + 12 = 124
+        self.blueprint_embed = BlueprintEmbedding()
+        self.feature_net = nn.Linear(state_dim + 12, feature_dim)  # 121 + 12 = 133
 
     def forward(self, obs, blueprint_indices, hidden):
         bp_emb = self.blueprint_embed(blueprint_indices).view(obs.shape[0], -1)
@@ -148,12 +167,12 @@ class FactoredRecurrentActorCriticV3(nn.Module):
         # ... rest of forward pass
 ```
 
-**Dimension breakdown (with Policy V2 action feedback):**
-- Base features: 18 original + 7 action feedback = 25
-- Slot features: 29 × 3 = 87
-- Non-blueprint obs: 25 + 87 = 112
+**Dimension breakdown (with raw history + gradient_health_prev):**
+- Base features: 24 (includes raw 10-dim history) + 7 action feedback = 31
+- Slot features: 30 × 3 = 90 (includes gradient_health_prev)
+- Non-blueprint obs: 31 + 90 = 121
 - Blueprint embeddings: 4 × 3 = 12 (added inside network)
-- Total network input: 112 + 12 = 124
+- Total network input: 121 + 12 = 133
 
 ### Feature Extraction API Change
 
@@ -164,8 +183,8 @@ obs = batch_obs_to_features(signals, reports, use_telemetry=True, ...)
 
 # V3 (new, with Policy V2 action feedback)
 obs, blueprint_idx = batch_obs_to_features_v3(signals, reports, ...)
-# Returns: ([batch, 112], [batch, num_slots])
-# Note: 112 = 25 base + 29*3 slots (excludes blueprint, includes action feedback)
+# Returns: ([batch, 121], [batch, num_slots])
+# Note: 121 = 31 base (24 + 7 action feedback) + 30*3 slots (excludes blueprint)
 ```
 
 ## Vectorization Strategy
@@ -176,12 +195,25 @@ obs, blueprint_idx = batch_obs_to_features_v3(signals, reports, ...)
 # Module-level constants (computed once at import)
 _STAGE_ONE_HOT_TABLE = torch.eye(10, dtype=torch.float32)
 
-def _vectorized_one_hot(indices: torch.Tensor, table: torch.Tensor) -> torch.Tensor:
-    valid_mask = indices >= 0
+# Device-keyed cache to avoid per-step .to(device) allocations
+_DEVICE_CACHE: dict[torch.device, torch.Tensor] = {}
+
+def _get_cached_table(device: torch.device) -> torch.Tensor:
+    """Get stage one-hot table for device, caching to avoid repeated transfers."""
+    if device not in _DEVICE_CACHE:
+        _DEVICE_CACHE[device] = _STAGE_ONE_HOT_TABLE.to(device)
+    return _DEVICE_CACHE[device]
+
+def _vectorized_one_hot(indices: torch.Tensor, device: torch.device) -> torch.Tensor:
+    """Vectorized one-hot encoding with device-cached lookup table."""
+    table = _get_cached_table(device)
+    valid_mask = indices >= 0  # -1 marks inactive slots
     safe_indices = indices.clamp(min=0)
-    one_hot = table.to(indices.device)[safe_indices]
-    return one_hot * valid_mask.unsqueeze(-1).float()
+    one_hot = table[safe_indices]
+    return one_hot * valid_mask.unsqueeze(-1).float()  # Zeros out inactive
 ```
+
+**⚠️ Why device-keyed cache:** The original `.to(indices.device)` call allocates a new tensor on every step. With ~500 steps/episode, this adds significant overhead. The cache ensures one-time transfer per device.
 
 ### Pre-extraction Pattern
 
