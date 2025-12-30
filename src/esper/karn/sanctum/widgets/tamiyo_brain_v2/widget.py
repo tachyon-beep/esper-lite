@@ -95,17 +95,17 @@ class TamiyoBrainV2(Container):
 
     /* Row containers - explicit heights based on content + border */
     #ppo-row {
-        height: 13;  /* PPO losses: 11 content + 2 border */
+        height: 12;  /* Reduced from 13 to give space to bottom rows */
         width: 100%;
     }
 
     #heads-row {
-        height: 12;  /* Heads grid: 10 content + 2 border */
+        height: 13;  /* Increased from 12 - split flow footer to 2 lines */
         width: 100%;
     }
 
     #action-row {
-        height: 11;  /* Reduced from 13 to give 2 rows to heads-row */
+        height: 12;  /* Increased from 11 - gained 1 row from ppo-row */
         width: 100%;
     }
 

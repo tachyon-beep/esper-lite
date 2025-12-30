@@ -1,14 +1,15 @@
-"""HeadsPanel - Attention head entropy and gradient heatmaps.
+"""HeadsPanel - Action head entropy and gradient heatmaps.
 
 Uses vertical layout to ensure values align directly under their labels:
 
-    ┌─ ATTENTION HEADS ──────────────────────────────────────────┐
-    │       slot   bpnt~  styl~  temp~  atgt~  aspd~  acrv~  op  │
-    │ Entr  1.00   1.00   0.21   1.00   0.57   1.00   1.00  0.89 │
-    │       ████   ████   ▓░░░   ████   ▓▓░░   ████   ████  ▓▓▓░ │
-    │ Grad  0.13   0.21   0.27   0.19   0.10   0.21   0.12  0.13 │
-    │       ▓░░░   ▓░░░   ▓░░░   ▓░░░   ▓░░░   ▓░░░   ▓░░░  ▓░░░ │
-    └────────────────────────────────────────────────────────────┘
+    ┌─ ACTION HEADS ──────────────────────────────────────────────────────────────────────────────────┐
+    │              Op        Slot    Blueprint        Style      Tempo     αTarget      αSpeed      Curve │
+    │ Entr       0.89        1.00         1.00         0.21       1.00        0.57        1.00       1.00 │
+    │            ▓▓▓░        ████         ████         ▓░░░       ████        ▓▓░░        ████       ████ │
+    │ Grad       0.13        0.13         0.21         0.27       0.19        0.10        0.21       0.12 │
+    │            ▓░░░        ▓░░░         ▓░░░         ▓░░░       ▓░░░        ▓░░░        ▓░░░       ▓░░░ │
+    │ State         ●           ◇            ◇            ○          ◇           ●           ◇          ◇ │
+    └─────────────────────────────────────────────────────────────────────────────────────────────────────┘
 """
 
 from __future__ import annotations
@@ -25,49 +26,49 @@ if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot
 
 
-# Head configuration
-HEAD_CONFIG: list[tuple[str, str, str]] = [
-    ("slot", "head_slot_entropy", "head_slot_grad_norm"),
-    ("bpnt", "head_blueprint_entropy", "head_blueprint_grad_norm"),
-    ("styl", "head_style_entropy", "head_style_grad_norm"),
-    ("temp", "head_tempo_entropy", "head_tempo_grad_norm"),
-    ("atgt", "head_alpha_target_entropy", "head_alpha_target_grad_norm"),
-    ("aspd", "head_alpha_speed_entropy", "head_alpha_speed_grad_norm"),
-    ("acrv", "head_alpha_curve_entropy", "head_alpha_curve_grad_norm"),
-    ("op", "head_op_entropy", "head_op_grad_norm"),
+# Head configuration (label, entropy_field, grad_norm_field, width)
+# Order and widths match HEAD OUTPUTS panel for vertical alignment
+HEAD_CONFIG: list[tuple[str, str, str, int]] = [
+    ("Op", "head_op_entropy", "head_op_grad_norm", 13),
+    ("Slot", "head_slot_entropy", "head_slot_grad_norm", 11),
+    ("Blueprint", "head_blueprint_entropy", "head_blueprint_grad_norm", 14),
+    ("Style", "head_style_entropy", "head_style_grad_norm", 14),
+    ("Tempo", "head_tempo_entropy", "head_tempo_grad_norm", 11),
+    ("αTarget", "head_alpha_target_entropy", "head_alpha_target_grad_norm", 12),
+    ("αSpeed", "head_alpha_speed_entropy", "head_alpha_speed_grad_norm", 12),
+    ("Curve", "head_alpha_curve_entropy", "head_alpha_curve_grad_norm", 11),
 ]
 
-# Heads that are conditional (only relevant for certain ops)
-CONDITIONAL_HEADS = {"styl", "bpnt", "temp", "atgt", "aspd", "acrv"}
+# Heads that are conditional (only relevant for certain ops) - indexed by label
+CONDITIONAL_HEADS = {"Blueprint", "Style", "Tempo", "αTarget", "αSpeed", "Curve"}
 
 # Max entropy per head (ln(N) where N = action space size)
 HEAD_MAX_ENTROPIES: dict[str, float] = {
-    "slot": 1.099,      # ln(3)
-    "bpnt": 2.565,      # ln(13)
-    "styl": 1.386,      # ln(4)
-    "temp": 1.099,      # ln(3)
-    "atgt": 1.099,      # ln(3)
-    "aspd": 1.386,      # ln(4)
-    "acrv": 1.609,      # ln(5) - LINEAR, COSINE, SIGMOID_{GENTLE,STD,SHARP}
-    "op": 1.792,        # ln(6)
+    "Slot": 1.099,      # ln(3)
+    "Blueprint": 2.565,      # ln(13)
+    "Style": 1.386,      # ln(4)
+    "Tempo": 1.099,      # ln(3)
+    "αTarget": 1.099,      # ln(3)
+    "αSpeed": 1.386,      # ln(4)
+    "Curve": 1.609,      # ln(5) - LINEAR, COSINE, SIGMOID_{GENTLE,STD,SHARP}
+    "Op": 1.792,        # ln(6)
 }
 
 
 class HeadsPanel(Static):
-    """Attention head entropy and gradient display panel.
+    """Action head entropy and gradient display panel.
 
     Extends Static directly (like DecisionCard) to eliminate Container
     layout overhead that causes whitespace issues.
     """
 
-    CELL_WIDTH: ClassVar[int] = 7  # Width per head column
     BAR_WIDTH: ClassVar[int] = 5   # Width of mini-bar
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
         self.classes = "panel"
-        self.border_title = "ATTENTION HEADS"
+        self.border_title = "ACTION HEADS"
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Update with new snapshot data."""
@@ -86,67 +87,66 @@ class HeadsPanel(Static):
         tamiyo = self._snapshot.tamiyo
         result = Text()
 
-        # Row 0: Header labels
+        # Row 0: Header labels (plain text, right-aligned like HEAD OUTPUTS)
         result.append("      ", style="dim")  # Indent for row label
-        for abbrev, _, _ in HEAD_CONFIG:
-            # Add ~ suffix for conditional heads
-            label = f"{abbrev}~" if abbrev in CONDITIONAL_HEADS else abbrev
-            result.append(f"{label:^{self.CELL_WIDTH}}", style="dim bold")
+        for label, _, _, width in HEAD_CONFIG:
+            result.append(f"{label:>{width}}", style="dim bold")
         result.append("\n")
 
         # Row 1: Entropy values
         # Note: getattr without default - AttributeError if HEAD_CONFIG has typo
         result.append("Entr  ", style="dim")
-        for abbrev, ent_field, _ in HEAD_CONFIG:
+        for label, ent_field, _, width in HEAD_CONFIG:
             entropy: float = getattr(tamiyo, ent_field)
-            color = self._entropy_color(abbrev, entropy)
-            result.append(f"{entropy:^{self.CELL_WIDTH}.2f}", style=color)
+            color = self._entropy_color(label, entropy)
+            result.append(f"{entropy:>{width}.2f}", style=color)
         result.append("\n")
 
         # Row 2: Entropy bars
         result.append("      ", style="dim")  # Indent
-        for abbrev, ent_field, _ in HEAD_CONFIG:
+        for label, ent_field, _, width in HEAD_CONFIG:
             entropy = getattr(tamiyo, ent_field)
-            bar = self._render_entropy_bar(abbrev, entropy)
-            # Center the bar in the cell
-            padding = (self.CELL_WIDTH - self.BAR_WIDTH) // 2
+            bar = self._render_entropy_bar(label, entropy)
+            # Right-align the bar in the cell (like HEAD OUTPUTS heat bars)
+            padding = width - self.BAR_WIDTH
             result.append(" " * padding)
             result.append(bar)
-            result.append(" " * (self.CELL_WIDTH - self.BAR_WIDTH - padding))
         result.append("\n")
 
         # Row 3: Gradient values
         result.append("Grad  ", style="dim")
-        for abbrev, _, grad_field in HEAD_CONFIG:
+        for label, _, grad_field, width in HEAD_CONFIG:
             grad: float = getattr(tamiyo, grad_field)
             color = self._gradient_color(grad)
-            result.append(f"{grad:^{self.CELL_WIDTH}.2f}", style=color)
+            result.append(f"{grad:>{width}.2f}", style=color)
         result.append("\n")
 
         # Row 4: Gradient bars
         result.append("      ", style="dim")  # Indent
-        for abbrev, _, grad_field in HEAD_CONFIG:
+        for label, _, grad_field, width in HEAD_CONFIG:
             grad = getattr(tamiyo, grad_field)
             bar = self._render_gradient_bar(grad)
-            padding = (self.CELL_WIDTH - self.BAR_WIDTH) // 2
+            # Right-align the bar
+            padding = width - self.BAR_WIDTH
             result.append(" " * padding)
             result.append(bar)
-            result.append(" " * (self.CELL_WIDTH - self.BAR_WIDTH - padding))
         result.append("\n")
 
         # Row 5: Head state indicators (per DRL expert recommendation)
         result.append("State ", style="dim")
-        for abbrev, ent_field, grad_field in HEAD_CONFIG:
+        for label, ent_field, grad_field, width in HEAD_CONFIG:
             entropy = getattr(tamiyo, ent_field)
             grad = getattr(tamiyo, grad_field)
-            state, style = self._head_state(abbrev, entropy, grad)
-            result.append(f"{state:^{self.CELL_WIDTH}}", style=style)
+            state, style_str = self._head_state(label, entropy, grad)
+            # Shift state indicator 2 chars left from right edge for better centering
+            state_cell = " " * (width - 3) + state + "  "
+            result.append(state_cell, style=style_str)
 
-        # Row 6: Gradient Flow Footer (per UX review - keeps bars, adds flow as footer)
+        # Row 6-7: Gradient Flow Footer (split across 2 lines for readability)
         result.append("\n")
-        result.append("─ Flow: ", style="dim")
+        result.append("Flow: ", style="dim")
 
-        # Gradient CV with status
+        # Line 1: CV and layer health
         cv = tamiyo.gradient_quality.gradient_cv
         cv_status = "stable" if cv < 0.5 else ("warn" if cv < 2.0 else "BAD")
         cv_style = "green" if cv < 0.5 else ("yellow" if cv < 2.0 else "red")
@@ -158,9 +158,11 @@ class HeadsPanel(Static):
         exploding = tamiyo.exploding_layers
         total = DEFAULT_HOST_LSTM_LAYERS
         layers_style = "green" if (dead == 0 and exploding == 0) else "red"
-        result.append(f"Dead:{dead}/{total}   Exploding:{exploding}/{total}   ", style=layers_style)
+        result.append(f"Dead:{dead}/{total}   Exploding:{exploding}/{total}", style=layers_style)
 
-        # Directional clip (asymmetry indicator)
+        # Line 2: Directional clip
+        result.append("\n")
+        result.append("      ", style="dim")  # Indent to align with "Flow:"
         clip_pos = tamiyo.gradient_quality.clip_fraction_positive
         clip_neg = tamiyo.gradient_quality.clip_fraction_negative
         result.append(f"Clip:\u2191{clip_pos:.0%}/\u2193{clip_neg:.0%}", style="dim")

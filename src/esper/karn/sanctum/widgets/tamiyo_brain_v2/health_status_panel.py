@@ -130,15 +130,6 @@ class HealthStatusPanel(Static):
 
         # Value range
         result.append(self._render_value_stats())
-        result.append("\n")
-
-        # Learning rate (useful for debugging LR schedules)
-        result.append("Learn Rate   ", style="dim")
-        lr = tamiyo.learning_rate
-        if lr is not None and lr > 0:
-            result.append(f"{lr:.2e}", style="cyan")
-        else:
-            result.append("---", style="dim")
 
         return result
 

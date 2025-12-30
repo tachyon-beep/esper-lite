@@ -14,7 +14,7 @@ All 8 factored action heads are displayed (see leyline/factored_actions.py):
 - Curve: Alpha easing function (LIN, COS, SIG, SIG_G, SIG_H)
 
 Layout:
-    ┌─ HEAD OUTPUTS ─────────────────────────────────────────────────────────────────────────────────┐
+    ┌─ ACTION HEAD OUTPUTS ──────────────────────────────────────────────────────────────────────────┐
     │  Dec          Op        Slot     Blueprint       Style       Tempo   αTarget    αSpeed   Curve │
     │   #1   GERM█████   r0c0█████   conv_lt████   LIN_ADD███   STD███░░   70%████   MED████   COS██ │
     │   #2   WAIT█████           -             -            -          -         -         -       - │
@@ -123,7 +123,7 @@ class AttentionHeatmapPanel(Static):
     color intensity indicating confidence level.
     """
 
-    MAX_ROWS: ClassVar[int] = 5
+    MAX_ROWS: ClassVar[int] = 6
 
     # Column widths (expanded for wider heat indicators)
     COL_DEC: ClassVar[int] = 5
@@ -140,7 +140,7 @@ class AttentionHeatmapPanel(Static):
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
         self.classes = "panel"
-        self.border_title = "HEAD OUTPUTS"
+        self.border_title = "ACTION HEAD OUTPUTS"
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Update with new snapshot data."""

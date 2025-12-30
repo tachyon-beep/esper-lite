@@ -140,7 +140,7 @@ class ActionContext(Static):
 
         # === THIS BATCH (lines 1-2) ===
         bar_width = 30
-        result.append("This batch: [")
+        result.append("This Batch: [")
 
         if batch_total > 0:
             # Calculate widths proportionally, ensuring total = bar_width
@@ -182,13 +182,13 @@ class ActionContext(Static):
             result.append(f"{abbrev}:", style="dim")
             result.append(f"{pct:02d}", style=color)
 
-        result.append("\n")
+        result.append("\n\n")  # Extra newline for spacing between sections
 
         # === TOTAL RUN (lines 3-4) ===
         # Use cumulative counts across all batches
         cumulative_counts = tamiyo.cumulative_action_counts
         cumulative_total = tamiyo.cumulative_total_actions
-        result.append("Total run: [")
+        result.append("Total Run: [")
 
         if cumulative_total > 0:
             # Calculate widths proportionally, ensuring total = bar_width
@@ -228,6 +228,8 @@ class ActionContext(Static):
                 result.append(" ")
             result.append(f"{abbrev}:", style="dim")
             result.append(f"{pct:02d}", style=color)
+
+        result.append("\n")  # Blank line between Total Run and Recent:
 
         return result
 

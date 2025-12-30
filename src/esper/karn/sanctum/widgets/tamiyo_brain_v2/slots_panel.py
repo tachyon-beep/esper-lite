@@ -78,7 +78,7 @@ class SlotsPanel(Static):
                 result.append(bar, style=color)
             result.append("\n")
 
-        # Line 3: Summary stats
+        # Line 7: Summary stats
         foss = snapshot.cumulative_fossilized
         pruned = snapshot.cumulative_pruned
         rate = (foss / max(1, foss + pruned)) * 100 if (foss + pruned) > 0 else 0
@@ -94,5 +94,28 @@ class SlotsPanel(Static):
         result.append("  AvgAge:", style="dim")
         result.append(f"{avg_epochs:.1f}", style="cyan")
         result.append(" epochs", style="dim")
+        result.append("\n")
+
+        # Line 8: Blueprint breakdown (top 3 by fossilization count)
+        result.append("Top: ", style="dim")
+
+        # Aggregate fossilized seeds by blueprint across all envs
+        from collections import Counter
+        blueprint_counts: Counter[str] = Counter()
+
+        for env in snapshot.envs.values():
+            for seed in env.seeds.values():
+                if seed.stage == "FOSSILIZED" and seed.blueprint_id:
+                    blueprint_counts[seed.blueprint_id] += 1
+
+        if blueprint_counts:
+            top_3 = blueprint_counts.most_common(3)
+            for i, (bp, count) in enumerate(top_3):
+                if i > 0:
+                    result.append("  ", style="dim")
+                bp_abbrev = bp[:7]  # Abbreviate long blueprint names
+                result.append(f"{bp_abbrev}({count})", style="blue")
+        else:
+            result.append("none yet", style="dim")
 
         return result

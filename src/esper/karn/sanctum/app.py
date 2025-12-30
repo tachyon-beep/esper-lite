@@ -685,24 +685,39 @@ class SanctumApp(App[None]):
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Handle Enter key on DataTable row to show detail modal.
 
+        Handles clicks on:
+        - EnvOverview table → EnvDetailScreen (live env)
+        - Scoreboard best runs table → HistoricalEnvDetail (frozen snapshot)
+        - Scoreboard bottom 3 table → HistoricalEnvDetail (frozen snapshot)
+
         Args:
             event: The row selection event from DataTable.
         """
         if self._snapshot is None:
             return
 
-        # Get env_id from the row key
+        # Get row key
         row_key = event.row_key
         if row_key is None:
             return
 
-        # Extract env_id from row_key.value (set in EnvOverview._add_env_row)
-        try:
-            env_id = int(row_key.value) if row_key.value is not None else None
-        except (ValueError, TypeError):
+        row_key_str = str(row_key.value) if row_key.value is not None else ""
+
+        # Check if this is a scoreboard click (best runs or bottom 3)
+        if row_key_str.startswith("bottom_"):
+            # Bottom 3 table - extract record_id
+            record_id = row_key_str.replace("bottom_", "")
+            self._show_historical_env_detail(record_id)
+            return
+        elif not row_key_str.isdigit():
+            # Best runs table - record_id is the key directly
+            self._show_historical_env_detail(row_key_str)
             return
 
-        if env_id is None:
+        # Otherwise, it's an env_id from EnvOverview
+        try:
+            env_id = int(row_key_str)
+        except (ValueError, TypeError):
             return
 
         env = self._snapshot.envs.get(env_id)
@@ -718,6 +733,27 @@ class SanctumApp(App[None]):
                 slot_ids=self._snapshot.slot_ids,
             )
         )
+
+    def _show_historical_env_detail(self, record_id: str) -> None:
+        """Show historical env detail for a best run record.
+
+        Args:
+            record_id: The record_id of the BestRunRecord to display.
+        """
+        if self._snapshot is None:
+            return
+
+        # Find the record in best_runs
+        record = None
+        for r in self._snapshot.best_runs:
+            if r.record_id == record_id:
+                record = r
+                break
+
+        if record is None:
+            return
+
+        self.push_screen(HistoricalEnvDetail(record=record))
 
     def on_tamiyo_brain_v2_decision_pin_toggled(
         self, event: TamiyoBrainV2.DecisionPinToggled

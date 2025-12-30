@@ -196,18 +196,6 @@ class PPOLossesPanel(Static):
         tamiyo = self._snapshot.tamiyo
         result = Text()
 
-        # Episode Return sparkline (primary metric)
-        result.append("Ep.Return ", style="bold cyan")
-        if tamiyo.episode_return_history:
-            sparkline = render_sparkline(tamiyo.episode_return_history, width=8)
-            ep_trend = detect_trend(list(tamiyo.episode_return_history))
-            result.append(sparkline)
-            result.append(f" {tamiyo.current_episode_return:>5.1f}", style="white")
-            result.append(ep_trend, style=trend_style(ep_trend, "accuracy"))
-        else:
-            result.append("\u2500" * 8, style="dim")
-        result.append("\n")
-
         # Policy loss with sparkline
         result.append("P.Loss    ", style="dim")
         if tamiyo.policy_loss_history:

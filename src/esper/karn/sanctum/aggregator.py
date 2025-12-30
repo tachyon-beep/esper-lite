@@ -153,6 +153,7 @@ class SanctumAggregator:
     _run_id: str = ""
     _task_name: str = ""
     _max_epochs: int = 75
+    _max_batches: int = 100
     _start_time: float = field(default_factory=time.time)
     _connected: bool = False
     _last_event_ts: float = 0.0
@@ -443,6 +444,7 @@ class SanctumAggregator:
             current_batch=self._current_batch or self._batches_completed,
             current_epoch=self._current_epoch,
             max_epochs=self._max_epochs,
+            max_batches=self._max_batches,
             runtime_seconds=runtime,
             connected=self._connected,
             staleness_seconds=staleness,
@@ -502,6 +504,7 @@ class SanctumAggregator:
         self._run_id = payload.episode_id
         self._task_name = payload.task
         self._max_epochs = payload.max_epochs
+        self._max_batches = payload.max_batches
         self._connected = True
         self._start_time = time.time()
         self._current_episode = payload.start_episode
