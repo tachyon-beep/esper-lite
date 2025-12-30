@@ -258,3 +258,81 @@ def test_analytics_snapshot_payload_accepts_head_telemetry():
     assert payload.head_telemetry is head_telem
     assert payload.head_telemetry.op_confidence == 0.85
     assert payload.head_telemetry.op_entropy == 0.3
+
+
+def test_telemetry_event_serializes_nested_head_telemetry():
+    """TelemetryEvent should serialize head_telemetry dataclass to JSON.
+
+    Verifies the full round-trip: HeadTelemetry -> JSON -> HeadTelemetry
+    """
+    import json
+    from datetime import datetime, timezone
+
+    from esper.karn.serialization import serialize_event
+    from esper.leyline.telemetry import (
+        AnalyticsSnapshotPayload,
+        HeadTelemetry,
+        TelemetryEvent,
+        TelemetryEventType,
+    )
+
+    head_telem = HeadTelemetry(
+        op_confidence=0.85,
+        slot_confidence=0.72,
+        blueprint_confidence=0.91,
+        style_confidence=0.65,
+        tempo_confidence=0.88,
+        alpha_target_confidence=0.77,
+        alpha_speed_confidence=0.69,
+        curve_confidence=0.82,
+        op_entropy=0.3,
+        slot_entropy=0.8,
+        blueprint_entropy=0.5,
+        style_entropy=0.6,
+        tempo_entropy=0.4,
+        alpha_target_entropy=0.55,
+        alpha_speed_entropy=0.45,
+        curve_entropy=0.35,
+    )
+
+    payload = AnalyticsSnapshotPayload(
+        kind="last_action",
+        env_id=0,
+        head_telemetry=head_telem,
+    )
+
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+        timestamp=datetime.now(timezone.utc),
+        data=payload,
+        epoch=10,
+    )
+
+    # Serialize to JSON
+    json_str = serialize_event(event)
+    parsed = json.loads(json_str)
+
+    # Verify nested structure in JSON
+    assert "head_telemetry" in parsed["data"]
+    assert parsed["data"]["head_telemetry"]["op_confidence"] == 0.85
+    assert parsed["data"]["head_telemetry"]["slot_entropy"] == 0.8
+
+    # Round-trip: deserialize back to HeadTelemetry via AnalyticsSnapshotPayload.from_dict
+    restored_payload = AnalyticsSnapshotPayload.from_dict(parsed["data"])
+    assert restored_payload.head_telemetry is not None
+    assert restored_payload.head_telemetry.op_confidence == 0.85
+    assert restored_payload.head_telemetry.slot_confidence == 0.72
+    assert restored_payload.head_telemetry.blueprint_confidence == 0.91
+    assert restored_payload.head_telemetry.style_confidence == 0.65
+    assert restored_payload.head_telemetry.tempo_confidence == 0.88
+    assert restored_payload.head_telemetry.alpha_target_confidence == 0.77
+    assert restored_payload.head_telemetry.alpha_speed_confidence == 0.69
+    assert restored_payload.head_telemetry.curve_confidence == 0.82
+    assert restored_payload.head_telemetry.op_entropy == 0.3
+    assert restored_payload.head_telemetry.slot_entropy == 0.8
+    assert restored_payload.head_telemetry.blueprint_entropy == 0.5
+    assert restored_payload.head_telemetry.style_entropy == 0.6
+    assert restored_payload.head_telemetry.tempo_entropy == 0.4
+    assert restored_payload.head_telemetry.alpha_target_entropy == 0.55
+    assert restored_payload.head_telemetry.alpha_speed_entropy == 0.45
+    assert restored_payload.head_telemetry.curve_entropy == 0.35

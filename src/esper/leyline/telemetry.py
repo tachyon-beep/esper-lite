@@ -1035,7 +1035,7 @@ class CounterfactualMatrixPayload:
         )
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, frozen=True)
 class HeadTelemetry:
     """Per-head confidence and entropy values for factored action heads.
 
@@ -1064,6 +1064,28 @@ class HeadTelemetry:
     alpha_target_entropy: float = 0.0
     alpha_speed_entropy: float = 0.0
     curve_entropy: float = 0.0
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "HeadTelemetry":
+        """Parse from dict. All fields have defaults of 0.0."""
+        return cls(
+            op_confidence=data.get("op_confidence", 0.0),
+            slot_confidence=data.get("slot_confidence", 0.0),
+            blueprint_confidence=data.get("blueprint_confidence", 0.0),
+            style_confidence=data.get("style_confidence", 0.0),
+            tempo_confidence=data.get("tempo_confidence", 0.0),
+            alpha_target_confidence=data.get("alpha_target_confidence", 0.0),
+            alpha_speed_confidence=data.get("alpha_speed_confidence", 0.0),
+            curve_confidence=data.get("curve_confidence", 0.0),
+            op_entropy=data.get("op_entropy", 0.0),
+            slot_entropy=data.get("slot_entropy", 0.0),
+            blueprint_entropy=data.get("blueprint_entropy", 0.0),
+            style_entropy=data.get("style_entropy", 0.0),
+            tempo_entropy=data.get("tempo_entropy", 0.0),
+            alpha_target_entropy=data.get("alpha_target_entropy", 0.0),
+            alpha_speed_entropy=data.get("alpha_speed_entropy", 0.0),
+            curve_entropy=data.get("curve_entropy", 0.0),
+        )
 
 
 @dataclass(slots=True, frozen=True)
@@ -1269,6 +1291,8 @@ class AnalyticsSnapshotPayload:
             num_slots=data.get("num_slots"),
             # Reward components (nested dataclass)
             reward_components=cls._parse_reward_components(data.get("reward_components")),
+            # Head telemetry (nested dataclass)
+            head_telemetry=cls._parse_head_telemetry(data.get("head_telemetry")),
         )
 
     @staticmethod
@@ -1284,6 +1308,13 @@ class AnalyticsSnapshotPayload:
         from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
 
         return RewardComponentsTelemetry.from_dict(data)
+
+    @staticmethod
+    def _parse_head_telemetry(data: dict[str, Any] | None) -> HeadTelemetry | None:
+        """Parse head_telemetry from dict if present."""
+        if data is None:
+            return None
+        return HeadTelemetry.from_dict(data)
 
 
 @dataclass(slots=True, frozen=True)
