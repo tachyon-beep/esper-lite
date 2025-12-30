@@ -144,7 +144,14 @@ class ActionContext(Static):
 
         if batch_total > 0:
             # Calculate widths proportionally, ensuring total = bar_width
-            actions = ["GERMINATE", "SET_ALPHA_TARGET", "FOSSILIZE", "PRUNE", "ADVANCE", "WAIT"]
+            actions = [
+                "GERMINATE",
+                "SET_ALPHA_TARGET",
+                "FOSSILIZE",
+                "PRUNE",
+                "ADVANCE",
+                "WAIT",
+            ]
             widths = []
             for action in actions:
                 count = batch_counts.get(action, 0)
@@ -171,7 +178,9 @@ class ActionContext(Static):
         result.append("]\n")
 
         # This batch percentages
-        for i, action in enumerate(["GERMINATE", "SET_ALPHA_TARGET", "FOSSILIZE", "PRUNE", "ADVANCE", "WAIT"]):
+        for i, action in enumerate(
+            ["GERMINATE", "SET_ALPHA_TARGET", "FOSSILIZE", "PRUNE", "ADVANCE", "WAIT"]
+        ):
             count = batch_counts.get(action, 0)
             pct = int((count / batch_total) * 100) if batch_total > 0 else 0
             abbrev = ACTION_ABBREVS[action]
@@ -188,7 +197,7 @@ class ActionContext(Static):
         # Use cumulative counts across all batches
         cumulative_counts = tamiyo.cumulative_action_counts
         cumulative_total = tamiyo.cumulative_total_actions
-        result.append("Total Run: [")
+        result.append("Total Run:  [")
 
         if cumulative_total > 0:
             # Calculate widths proportionally, ensuring total = bar_width
@@ -218,7 +227,9 @@ class ActionContext(Static):
         result.append("]\n")
 
         # Total run percentages
-        for i, action in enumerate(["GERMINATE", "SET_ALPHA_TARGET", "FOSSILIZE", "PRUNE", "ADVANCE", "WAIT"]):
+        for i, action in enumerate(
+            ["GERMINATE", "SET_ALPHA_TARGET", "FOSSILIZE", "PRUNE", "ADVANCE", "WAIT"]
+        ):
             count = cumulative_counts.get(action, 0)
             pct = int((count / cumulative_total) * 100) if cumulative_total > 0 else 0
             abbrev = ACTION_ABBREVS[action]
@@ -271,7 +282,10 @@ class ActionContext(Static):
         # Recent row (most recent 12) with arrows
         recent_decisions = decisions[:12]
         recent_actions = [
-            (ACTION_ABBREVS.get(d.chosen_action, "?"), ACTION_COLORS.get(d.chosen_action, "white"))
+            (
+                ACTION_ABBREVS.get(d.chosen_action, "?"),
+                ACTION_COLORS.get(d.chosen_action, "white"),
+            )
             for d in recent_decisions
         ]
         recent_actions.reverse()  # Oldest first for left-to-right reading
