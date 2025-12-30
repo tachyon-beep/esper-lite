@@ -16,12 +16,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 import os
+import threading
 from typing import Any, TYPE_CHECKING
 
+import numpy as np
 import torch
+import torch.nn.functional as F
 
 from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
 from esper.leyline.slot_config import SlotConfig
+# Phase 2 imports: Constants needed for Obs V3 feature extraction
+from esper.leyline import NUM_OPS, NUM_STAGES, DEFAULT_GAMMA, NUM_BLUEPRINTS
 # Stage schema for validation and one-hot encoding
 # NOTE: Imported at module level since these are fast O(1) lookups used in hot path
 from esper.leyline.stage_schema import (
