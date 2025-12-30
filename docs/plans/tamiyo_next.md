@@ -349,6 +349,20 @@ Add `_extract_slot_features_v3()` with:
 
 **Per-slot features total: 30 dims** (was 29 in V2)
 
+> ⚠️ **CRITICAL: gradient_health telemetry is currently hardcoded to 1.0**
+>
+> In `vectorized.py` line 2382, the telemetry sync sets `gradient_health=1.0` because
+> `DualGradientStats` doesn't compute health scores. This means `gradient_health_prev`
+> will always be 1.0—a **constant feature with zero information gain**.
+>
+> **Before implementing Phase 2c, you MUST either:**
+> 1. **Fix the source:** Compute real gradient health from the `SeedGradientCollector`
+>    (requires refactoring telemetry sync to use the full collector, not just dual stats)
+> 2. **Remove the feature:** Delete `gradient_health_prev` from the observation spec
+>    and save the dimension for something useful
+>
+> Per CLAUDE.md: "do not defer or put it off" for telemetry components. Option 1 is preferred.
+
 > **State Tracking:** The `gradient_health_prev` and `epochs_since_counterfactual` values
 > require tracking in `ParallelEnvState`. Field definitions and initial values are in
 > **Phase 2a½**. Update timing and logic are in **Phase 6b**.
@@ -476,6 +490,35 @@ def batch_obs_to_features(
     # tensor is already int64 from numpy dtype
     return obs, blueprint_indices
 ```
+
+> ⚠️ **PREREQUISITE: `SeedStateReport.blueprint_index` field**
+>
+> The current `SeedStateReport` has `blueprint_id: str` (e.g., `"CONV_HEAVY"`), NOT `blueprint_index: int`.
+> Before implementing Phase 2e, you must **either:**
+>
+> **Option A (Preferred): Add `blueprint_index` field to `SeedStateReport`**
+> ```python
+> # In src/esper/leyline/reports.py
+> @dataclass
+> class SeedStateReport:
+>     blueprint_id: str = ""
+>     blueprint_index: int = -1  # NEW: Index for nn.Embedding lookup
+> ```
+> Then update `SeedStateFactory` to populate both fields consistently.
+>
+> **Option B: Derive index from ID in feature extraction**
+> ```python
+> from esper.leyline import BlueprintAction
+>
+> _BLUEPRINT_TO_INDEX: dict[str, int] = {
+>     bp.name: idx for idx, bp in enumerate(BlueprintAction)
+> }
+>
+> # In extraction:
+> bp_idx = _BLUEPRINT_TO_INDEX.get(report.blueprint_id, -1)
+> ```
+>
+> Option A is preferred because it centralizes the mapping and avoids hot-path dict lookups.
 
 > **Note on `reports.get(slot_id)`:** This is **legitimate dictionary access**, not defensive programming. The `reports` parameter is `dict[str, SeedStateReport]` — a dictionary mapping slot IDs to optional seed state reports. Not all slot IDs will have reports (inactive slots return `None`), so `.get()` is the correct idiom for probing optional dictionary entries. This differs from `.get()` on a dataclass or object attribute, which would violate the codebase's prohibition on defensive programming patterns.
 
@@ -1692,9 +1735,13 @@ def forward(
     """
     # ... feature processing and LSTM ...
 
-    # Sample op from policy
+    # Sample op from policy (with action masking)
     op_logits = self.op_head(lstm_out)
-    op_dist = Categorical(logits=op_logits)
+    # CRITICAL: Use MaskedCategorical, NOT raw Categorical
+    # - Prevents sampling invalid/masked actions
+    # - Computes entropy only over valid actions
+    # - Uses -1e4 (not -inf) for numerical stability
+    op_dist = MaskedCategorical(logits=op_logits, mask=op_mask)
     sampled_op = op_dist.sample()
 
     # Value conditioned on sampled op (what we store in buffer)
@@ -1727,9 +1774,12 @@ def evaluate_actions(
     """
     # ... feature processing and LSTM (same as forward) ...
 
-    # Compute distributions for all heads
+    # Compute distributions for all heads (with action masking)
     op_logits = self.op_head(lstm_out)
-    op_dist = Categorical(logits=op_logits)
+    # CRITICAL: Use MaskedCategorical, NOT raw Categorical
+    # This ensures entropy is computed only over valid actions and
+    # log_prob returns correct values for the stored action
+    op_dist = MaskedCategorical(logits=op_logits, mask=action_mask["op"])
 
     # Log prob of the STORED action (not a fresh sample)
     stored_op = actions["op"]
@@ -1739,6 +1789,7 @@ def evaluate_actions(
     value = self._compute_value(lstm_out, stored_op)
 
     # Compute log_probs and entropy for all heads
+    # MaskedCategorical.entropy() already excludes masked actions
     log_probs = {"op": op_log_prob, ...}
     entropy = {"op": op_dist.entropy(), ...}
 
@@ -1931,6 +1982,77 @@ self.blueprint_indices[env_id, step_idx] = blueprint_indices
 **Also update:** `TamiyoRolloutStep` NamedTuple to include `blueprint_indices` field.
 
 **Note on op storage:** The existing `op_actions` field already stores the sampled op from each rollout step. This is the op used for value conditioning (see Phase 4e/4f). During PPO update, `batch["op_actions"]` becomes `actions["op"]` which `evaluate_actions()` uses for `Q(s, stored_op)`. No additional storage needed.
+
+#### 6a½. Bootstrap Value Computation (CRITICAL FIX REQUIRED)
+
+> ⚠️ **BUG: Current bootstrap uses `deterministic=True` which is WRONG for Q(s,op) critics**
+>
+> The current code at `vectorized.py:3212-3219` uses:
+> ```python
+> bootstrap_result = agent.policy.get_action(
+>     post_action_features_normalized,
+>     masks=post_masks_batch,
+>     hidden=batched_lstm_hidden,
+>     deterministic=True,  # <-- BUG!
+> )
+> ```
+>
+> With Q(s,op) critics, this creates an **optimistic bias**:
+> - Rollout stores `Q(s, sampled_op)` where op is sampled stochastically
+> - Bootstrap computes `Q(s, argmax_op)` which is always the "best" action
+> - Mixing these creates inconsistent value targets for GAE
+
+**Required fix:**
+
+```python
+# Bootstrap at truncation: sample op stochastically (NOT deterministic)
+# This ensures bootstrap Q(s_T, sampled_op_T) matches rollout Q(s_t, sampled_op_t)
+bootstrap_result = agent.policy.get_action(
+    post_action_features_normalized,
+    masks=post_masks_batch,
+    hidden=batched_lstm_hidden,
+    deterministic=False,  # CRITICAL: Sample op, don't use argmax
+)
+bootstrap_value = bootstrap_result.value  # Q(s_T, sampled_op_T)
+```
+
+#### 6a¾. Done vs Truncated Semantics (CRITICAL FIX REQUIRED)
+
+> ⚠️ **BUG: Current code conflates done and truncated**
+>
+> The current code at `vectorized.py:3003` sets:
+> ```python
+> done = epoch == max_epochs
+> truncated = done  # <-- BUG! "truncated = episode ended" is wrong
+> ```
+>
+> This conflates "episode ended" with "time-limit truncation". With Q(s,op) critics,
+> bootstrapping on genuine terminals biases GAE targets.
+
+**Required fix - Gymnasium-compliant semantics:**
+
+| Condition | done | truncated | bootstrap |
+|-----------|------|-----------|-----------|
+| Intermediate step | `False` | `False` | N/A |
+| Natural termination (goal/failure) | `True` | `False` | `0.0` |
+| Time limit (max_epochs) | `True` | `True` | `Q(s_next, sampled_op)` |
+
+```python
+# At episode end:
+is_natural_terminal = (some_terminal_condition)  # e.g., catastrophic failure
+is_time_limit = (epoch == max_epochs) and not is_natural_terminal
+
+done = is_natural_terminal or is_time_limit
+truncated = is_time_limit  # ONLY time limit, not natural terminals
+
+# In GAE computation:
+if truncated:
+    bootstrap = Q(s_next, sampled_op)  # Time limit: bootstrap from next state
+else:
+    bootstrap = 0.0  # Natural terminal: no future returns
+```
+
+**Test coverage:** See `test_done_vs_truncated_at_max_epochs()` in Phase 7g (line 2815).
 
 #### 6b. Obs V3 State Tracking in ParallelEnvState
 
@@ -2506,20 +2628,22 @@ def test_stabilization_latch_noise_resistance():
 
     The stabilization_threshold controls when training is considered "stable":
     - "Stable" means improvement < threshold for N consecutive epochs
-    - LOWER threshold = smaller improvement required to be "stable" = MORE false positives
-    - HIGHER threshold = larger improvements still count as "stable" = FEWER false positives
+    - LOWER threshold (e.g., 0.02) = only tiny improvements qualify = HARDER to stabilize = FEWER false positives
+    - HIGHER threshold (e.g., 0.05) = larger improvements still qualify = EASIER to stabilize = MORE false positives
 
     Example:
     - threshold=0.03: if epoch improves by 2%, training is "stable" (2% < 3%)
     - threshold=0.05: if epoch improves by 2%, training is "stable" (2% < 5%)
     - threshold=0.05: if epoch improves by 4%, training is STILL "stable" (4% < 5%)
 
+    ↑ Notice: HIGHER threshold (0.05) accepts MORE improvements as "stable" → more false positives
+
     To PREVENT early triggering (more conservative):
-    - INCREASE threshold (e.g., 0.03 → 0.05)
-    - INCREASE stabilization_epochs (e.g., 3 → 5)
+    - DECREASE threshold (e.g., 0.03 → 0.02) — fewer improvements qualify
+    - INCREASE stabilization_epochs (e.g., 3 → 5) — must stay stable longer
 
     To trigger MORE easily (less conservative):
-    - DECREASE threshold (e.g., 0.03 → 0.02)
+    - INCREASE threshold (e.g., 0.03 → 0.05) — more improvements qualify
     """
     from esper.tamiyo.tracker import TamiyoTracker
 
@@ -2564,10 +2688,10 @@ def test_stabilization_latch_noise_resistance():
 
 If stabilization triggers too early in production:
 1. Increase `stabilization_epochs` from 3 to 5
-2. **INCREASE** `stabilization_threshold` from 0.03 to 0.05 (higher threshold = harder to satisfy = fewer false positives)
+2. **DECREASE** `stabilization_threshold` from 0.03 to 0.02 (lower threshold = harder to satisfy = fewer false positives)
 3. Add early-epoch grace period in the tracker: `if epoch < 10: return False` before checking stability conditions
 
-> **Note:** Lower threshold makes it *easier* to stabilize (smaller improvement required), not harder. To prevent early triggering, raise the bar.
+> **Note:** If stability logic is `improvement < threshold`, then HIGHER threshold makes it EASIER to stabilize (more improvements qualify as "small"). To prevent early triggering, LOWER the threshold or INCREASE stabilization_epochs.
 
 ##### 4. Stale Field Detection
 
