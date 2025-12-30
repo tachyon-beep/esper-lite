@@ -31,18 +31,18 @@ Redesign Tamiyo's observation space to eliminate duplication, normalize all feat
 | Idx | Feature | Formula | Range | Purpose |
 |-----|---------|---------|-------|---------|
 | 0 | `epoch_progress` | `epoch / max_epochs` | [0,1] | Temporal position |
-| 1 | `loss_norm` | `clamp(val_loss, 0, 10) / 10` | [0,1] | Task objective |
+| 1 | `loss_norm` | `log(1 + val_loss) / log(11)` | [0,~1.3] | Task objective (log-scale) |
 | 2 | `loss_delta_norm` | `clamp(loss_delta, -2, 2) / 2` | [-1,1] | Improvement signal |
 | 3 | `accuracy_norm` | `val_accuracy / 100` | [0,1] | Task metric |
 | 4 | `accuracy_delta_norm` | `clamp(acc_delta, -10, 10) / 10` | [-1,1] | Improvement signal |
 | 5 | `plateau_norm` | `clamp(plateau_epochs, 0, 20) / 20` | [0,1] | Stagnation detection |
 | 6 | `host_stabilized` | `1.0 if stabilized else 0.0` | {0,1} | Germination gate |
 | 7 | `loss_trend` | `mean(loss_delta_history[-5:])` norm | [-1,1] | Compressed history |
-| 8 | `loss_volatility` | `std(loss_history[-5:])` norm | [0,1] | Compressed history |
+| 8 | `loss_volatility` | `log(1 + std(loss_history[-5:])) / log(3)` | [0,~1] | Compressed history (log-scale) |
 | 9 | `accuracy_trend` | `mean(acc_delta_history[-5:])` norm | [-1,1] | Compressed history |
-| 10 | `accuracy_volatility` | `std(acc_history[-5:])` norm | [0,1] | Compressed history |
+| 10 | `accuracy_volatility` | `std(acc_history[-5:]) / 30` | [0,1] | Compressed history |
 | 11 | `best_accuracy_norm` | `best_val_accuracy / 100` | [0,1] | Progress tracking |
-| 12 | `best_loss_norm` | `clamp(best_val_loss, 0, 10) / 10` | [0,1] | Progress tracking |
+| 12 | `best_loss_norm` | `log(1 + best_val_loss) / log(11)` | [0,~1.3] | Progress tracking (log-scale) |
 | 13 | `params_utilization` | `log(1 + params) / log(1 + budget)` | [0,1] | Resource awareness |
 | 14 | `slot_utilization` | `num_active / num_slots` | [0,1] | Germination opportunity |
 | 15 | `num_training_norm` | `count(TRAINING) / num_slots` | [0,1] | Stage distribution |
@@ -234,3 +234,43 @@ Easy cutout: single constant controls version, grep for `TODO(obs-v3)` to find a
 2. Feature extraction 5x+ faster than V2 (profiled)
 3. All features in documented ranges (unit tested)
 4. Clean V2 deletion possible with single constant change
+
+## Expert Reviews
+
+### External Review (2025-12-30)
+
+Identified three strategic constraints:
+
+1. **LSTM Burden:** History compression forces LSTM to remember rather than see. **Verdict:** Good trade for recurrent policy.
+2. **Linear Clamp Risk:** Original `clamp(loss, 0, 10) / 10` saturates on high-loss tasks. **Resolution:** Switched to log-scale normalization.
+3. **Breaking Change Reality:** V2 checkpoints incompatible. **Verdict:** Acceptable, retrain from scratch.
+
+### DRL Expert Sign-off (2025-12-30)
+
+**Status:** APPROVED
+
+| Concern | Verdict | Notes |
+|---------|---------|-------|
+| LSTM burden | Approved | 128 hidden size sufficient for 5-8 epoch decisions |
+| Linear clamp | Approved with change | Switched to `log(1 + loss) / log(11)` |
+
+Additional recommendations:
+- Blueprint embedding init: `nn.init.normal_(weight, std=0.02)`
+- Monitor feature correlations during training
+- Ablation plan: V3 full vs V3+raw history vs V3+log norm
+
+### PyTorch Expert Sign-off (2025-12-30)
+
+**Status:** APPROVED
+
+| Aspect | Verdict | Notes |
+|--------|---------|-------|
+| NumPy pre-extraction | Approved | Correct approach for minimizing Python overhead |
+| Cached one-hot tables | Approved | Device handling is sound |
+| Blueprint embedding in network | Approved | Clean separation, torch.compile friendly |
+| torch.compile compatibility | Approved | No graph break risks |
+
+Additional recommendations:
+- Pre-allocate NumPy buffers to avoid per-step allocation
+- Use `torch.int64` for blueprint indices (required by `nn.Embedding`)
+- Benchmark with `torch.profiler` before/after
