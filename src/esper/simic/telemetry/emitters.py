@@ -34,6 +34,7 @@ from esper.leyline import (
     TelemetryEventType,
     TrendDetectedPayload,
 )
+from esper.leyline.telemetry import HeadTelemetry
 from esper.nissa import get_hub
 
 from .debug_telemetry import LayerGradientStats, collect_per_layer_gradients
@@ -202,6 +203,7 @@ class VectorizedEmitter:
         alternatives: list[tuple[str, float]] | None = None,
         decision_entropy: float | None = None,
         reward_components: "RewardComponentsTelemetry | None" = None,
+        head_telemetry: HeadTelemetry | None = None,
     ) -> None:
         """Emit last-action detail, offloading formatting to the hub thread.
 
@@ -220,6 +222,7 @@ class VectorizedEmitter:
             alternatives: Top-2 alternative actions with probabilities
             decision_entropy: Entropy of the action distribution
             reward_components: Typed dataclass with full reward breakdown (may be None for LOSS family)
+            head_telemetry: Typed dataclass with per-head confidence and entropy values
         """
         if not self._should_emit("ops_normal"):
             return
@@ -248,8 +251,9 @@ class VectorizedEmitter:
                 action_name=action_name,
                 action_confidence=action_confidence,
                 value_estimate=value_estimate,
-                # Pass typed dataclass directly - replaces individual component fields
+                # Pass typed dataclasses directly - replaces individual component fields
                 reward_components=reward_components,
+                head_telemetry=head_telemetry,
                 # Decision context for TamiyoBrain Decision Cards
                 slot_states=slot_states,
                 alternatives=alternatives,

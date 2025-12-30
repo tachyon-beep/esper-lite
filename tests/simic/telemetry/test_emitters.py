@@ -207,3 +207,49 @@ class TestVectorizedEmitterRewardComponents:
         assert len(events) >= 1
         payload = events[-1].data
         assert payload.reward_components is None
+
+    def test_on_last_action_accepts_head_telemetry(self, mock_hub):
+        """on_last_action should accept and forward HeadTelemetry."""
+        from esper.leyline.telemetry import HeadTelemetry
+
+        emitter = VectorizedEmitter(env_id=0, device="cpu", hub=mock_hub)
+
+        head_telem = HeadTelemetry(
+            op_confidence=0.85,
+            slot_confidence=0.72,
+            blueprint_confidence=0.91,
+            style_confidence=0.65,
+            tempo_confidence=0.88,
+            alpha_target_confidence=0.77,
+            alpha_speed_confidence=0.69,
+            curve_confidence=0.82,
+            op_entropy=0.3,
+            slot_entropy=0.8,
+            blueprint_entropy=0.5,
+            style_entropy=0.6,
+            tempo_entropy=0.4,
+            alpha_target_entropy=0.55,
+            alpha_speed_entropy=0.45,
+            curve_entropy=0.35,
+        )
+
+        emitter.on_last_action(
+            epoch=1,
+            action_indices={"op": 0, "slot": 0, "blueprint": 0, "style": 0, "tempo": 0,
+                           "alpha_target": 0, "alpha_speed": 0, "alpha_curve": 0},
+            slot_id="r0c0",
+            masked={},
+            success=True,
+            active_alpha_algorithm=None,
+            head_telemetry=head_telem,
+        )
+
+        # Check the emitted event contains head_telemetry
+        events = [e for e in mock_hub.events if e.event_type == TelemetryEventType.ANALYTICS_SNAPSHOT]
+        assert len(events) == 1
+        payload = events[0].data
+
+        assert payload.head_telemetry is not None
+        assert payload.head_telemetry.op_confidence == 0.85
+        assert payload.head_telemetry.op_entropy == 0.3
+        assert payload.head_telemetry.curve_confidence == 0.82
