@@ -60,6 +60,9 @@ class PPOUpdateMetrics(TypedDict, total=False):
     ratio_max: float
     ratio_min: float
     early_stop_epoch: int
+    # Log prob extremes (NaN predictor)
+    log_prob_min: float
+    log_prob_max: float
     # Structured metrics
     gradient_stats: GradientStats | None
     head_entropies: dict[str, list[float]]  # Per-head, per-epoch

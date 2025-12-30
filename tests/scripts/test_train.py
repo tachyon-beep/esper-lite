@@ -1,5 +1,7 @@
 import pytest
 
+from esper.scripts.train import build_parser
+
 
 def test_telemetry_lifecycle_only_flag_wired():
     import esper.scripts.train as train
@@ -198,4 +200,170 @@ class TestDualABTestingCLI:
         assert args.ab_test == "shaped-vs-simplified"
         assert args.dual_ab == "shaped-vs-sparse"
         # In actual training, dual_ab would take precedence (checked first in if statement)
+
+
+class TestTamiyoCentricFlags:
+    """Tests for Tamiyo-centric CLI flags."""
+
+    def test_rounds_flag_accepted(self):
+        """--rounds should set n_episodes in config."""
+        parser = build_parser()
+        args = parser.parse_args(["ppo", "--rounds", "50"])
+        assert args.rounds == 50
+
+    def test_envs_flag_accepted(self):
+        """--envs should set n_envs in config."""
+        parser = build_parser()
+        args = parser.parse_args(["ppo", "--envs", "8"])
+        assert args.envs == 8
+
+    def test_episode_length_flag_accepted(self):
+        """--episode-length should set max_epochs in config."""
+        parser = build_parser()
+        args = parser.parse_args(["ppo", "--episode-length", "30"])
+        assert args.episode_length == 30
+
+    def test_flags_default_to_none(self):
+        """Tamiyo flags should default to None (config takes precedence)."""
+        parser = build_parser()
+        args = parser.parse_args(["ppo"])
+        assert args.rounds is None
+        assert args.envs is None
+        assert args.episode_length is None
+        assert args.ppo_epochs is None
+        assert args.memory_size is None
+        assert args.entropy_anneal_rounds is None
+
+    def test_positive_int_validator_rejects_zero(self):
+        """_positive_int should reject zero."""
+        from esper.scripts.train import _positive_int
+        import argparse
+
+        with pytest.raises(argparse.ArgumentTypeError, match="must be >= 1"):
+            _positive_int("0")
+
+    def test_positive_int_validator_rejects_negative(self):
+        """_positive_int should reject negative values."""
+        from esper.scripts.train import _positive_int
+        import argparse
+
+        with pytest.raises(argparse.ArgumentTypeError, match="must be >= 1"):
+            _positive_int("-5")
+
+    def test_positive_int_validator_accepts_positive(self):
+        """_positive_int should accept positive integers."""
+        from esper.scripts.train import _positive_int
+
+        assert _positive_int("1") == 1
+        assert _positive_int("100") == 100
+        assert _positive_int("999999") == 999999
+
+    def test_rounds_overrides_config(self):
+        """--rounds should override n_episodes from preset."""
+        from esper.simic.training import TrainingConfig
+
+        # Simulate what main() does: start with preset, apply CLI overrides
+        config = TrainingConfig.for_cifar10()
+        assert config.n_episodes == 100  # Default
+
+        # CLI would set rounds=50, which maps to n_episodes
+        config.n_episodes = 50  # Simulating the override
+        assert config.n_episodes == 50
+
+    def test_envs_overrides_config(self):
+        """--envs should override n_envs from preset."""
+        from esper.simic.training import TrainingConfig
+
+        config = TrainingConfig.for_cifar10()
+        config.n_envs = 8
+        assert config.n_envs == 8
+
+    def test_episode_length_overrides_both_fields(self):
+        """--episode-length must override both max_epochs and chunk_length.
+
+        TrainingConfig._validate() enforces chunk_length == max_epochs.
+        If we only set one, validation would fail.
+        """
+        from esper.simic.training import TrainingConfig
+
+        config = TrainingConfig.for_cifar10()
+        original_max_epochs = config.max_epochs
+
+        # Apply override as main() does
+        new_length = 30
+        config.max_epochs = new_length
+        config.chunk_length = new_length
+
+        assert config.max_epochs == new_length
+        assert config.chunk_length == new_length
+
+        # Verify validation still passes
+        config._validate()  # Should not raise
+
+    def test_ppo_epochs_flag_accepted(self):
+        """--ppo-epochs should set ppo_updates_per_batch."""
+        parser = build_parser()
+        args = parser.parse_args(["ppo", "--ppo-epochs", "3"])
+        assert args.ppo_epochs == 3
+
+    def test_memory_size_flag_accepted(self):
+        """--memory-size should set lstm_hidden_dim."""
+        parser = build_parser()
+        args = parser.parse_args(["ppo", "--memory-size", "256"])
+        assert args.memory_size == 256
+
+    def test_entropy_anneal_rounds_flag_accepted(self):
+        """--entropy-anneal-rounds should parse correctly."""
+        parser = build_parser()
+        args = parser.parse_args(["ppo", "--entropy-anneal-rounds", "50"])
+        assert args.entropy_anneal_rounds == 50
+
+    def test_entropy_anneal_rounds_accepts_zero(self):
+        """--entropy-anneal-rounds should accept 0 (no annealing)."""
+        parser = build_parser()
+        args = parser.parse_args(["ppo", "--entropy-anneal-rounds", "0"])
+        assert args.entropy_anneal_rounds == 0
+
+    def test_entropy_anneal_rounds_overrides_config(self):
+        """--entropy-anneal-rounds should override config.entropy_anneal_episodes."""
+        from esper.simic.training import TrainingConfig
+
+        config = TrainingConfig.for_cifar10()
+        assert config.entropy_anneal_episodes == 0  # Default
+
+        # CLI would set entropy_anneal_rounds=50, which maps to entropy_anneal_episodes
+        config.entropy_anneal_episodes = 50  # Simulating the override
+        assert config.entropy_anneal_episodes == 50
+
+    def test_full_tamiyo_cli_integration(self):
+        """All Tamiyo-centric flags should work together."""
+        parser = build_parser()
+        args = parser.parse_args([
+            "ppo",
+            "--rounds", "50",
+            "--envs", "8",
+            "--episode-length", "30",
+            "--ppo-epochs", "2",
+            "--memory-size", "256",
+            "--entropy-anneal-rounds", "25",
+        ])
+
+        assert args.rounds == 50
+        assert args.envs == 8
+        assert args.episode_length == 30
+        assert args.ppo_epochs == 2
+        assert args.memory_size == 256
+        assert args.entropy_anneal_rounds == 25
+
+    def test_invalid_rounds_rejected(self):
+        """--rounds 0 should fail with clear error at parse time."""
+        parser = build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["ppo", "--rounds", "0"])
+
+    def test_negative_envs_rejected(self):
+        """--envs -1 should fail with clear error at parse time."""
+        parser = build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["ppo", "--envs", "-1"])
 

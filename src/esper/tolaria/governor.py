@@ -33,7 +33,15 @@ from esper.nissa import get_hub
 
 @dataclass
 class GovernorReport:
-    """Report from a rollback event."""
+    """Report from a rollback event.
+
+    Note: consecutive_panics reflects the post-rollback state (always 0 after
+    successful rollback). The pre-rollback count is captured in the
+    GOVERNOR_ROLLBACK telemetry event's GovernorRollbackPayload.
+
+    Note: loss_at_panic is NaN if rollback was triggered without a preceding
+    panic (e.g., manual rollback). Use math.isnan() to check.
+    """
     reason: str
     loss_at_panic: float
     loss_threshold: float
@@ -203,7 +211,10 @@ class TolariaGovernor:
             self._pending_panic = True
             self._panic_loss = current_loss
             self._panic_reason = "governor_divergence"
-            # Only actually panic after consecutive anomalies
+            # Intentionally NOT adding anomaly loss to history. This keeps
+            # statistical thresholds (mean + k*std) based on "healthy" samples,
+            # ensuring robust anomaly detection. Contaminated statistics would
+            # inflate variance, triggering fewer alarms.
             if self.consecutive_panics >= self.min_panics_before_rollback:
                 return True
             return False
@@ -218,15 +229,18 @@ class TolariaGovernor:
         self,
         *,
         env_id: int = 0,
-        optimizer: torch.optim.Optimizer | None = None,
     ) -> GovernorReport:
         """Emergency stop: restore LKG state and return punishment info.
 
-        Rollback semantics (Option B):
+        Rollback semantics:
         - Restore host + fossilized seeds from snapshot
         - Discard any live/experimental seeds (not fossilized)
         - Reset seed slots to empty/DORMANT state
-        - (Optional) Reset optimizer momentum to prevent immediate re-crash
+
+        IMPORTANT: Caller must clear optimizer state after rollback.
+        PyTorch's load_state_dict() copies weights IN-PLACE (same Parameter
+        objects), so optimizer momentum/variance buffers SURVIVE rollback.
+        Call optimizer.state.clear() to prevent re-divergence.
 
         Philosophy: Fossils are committed stable memory. Live seeds are
         experimental hypotheses - a catastrophic event means they failed
@@ -275,8 +289,10 @@ class TolariaGovernor:
             for k, v in self.last_good_state.items()
         }
 
-        # CRITICAL: Synchronize CUDA stream before load_state_dict
-        # load_state_dict() does NOT synchronize - without this, we load garbage
+        # CRITICAL: Synchronize ALL CUDA streams before load_state_dict
+        # Using device-level sync (not just current_stream) for safety - ensures
+        # no other operations are modifying model parameters during rollback.
+        # Cost is acceptable since rollback is rare. See B1-PT-02 for analysis.
         if device.type == "cuda":
             torch.cuda.synchronize(device)
 
@@ -301,17 +317,30 @@ class TolariaGovernor:
             ),
         ))
 
-        # Reset optimizer momentum (BUG-015 fix)
-        # If we don't clear momentum, the optimizer will push the restored weights
-        # in the same direction that caused the crash.
-        if optimizer is not None:
-            for group in optimizer.param_groups:
-                for p in group["params"]:
-                    state = optimizer.state.get(p)
-                    if state:
-                        for value in state.values():
-                            if isinstance(value, torch.Tensor) and value.is_floating_point():
-                                value.zero_()
+        # IMPORTANT: Optimizer state must be cleared by the CALLER after rollback.
+        #
+        # PyTorch load_state_dict() behavior (verified PyTorch 2.9):
+        # - Default (assign=False): Copies weights IN-PLACE via param.copy_()
+        # - Parameter objects RETAIN their identity (same id())
+        # - Optimizer state is keyed by Parameter objects
+        # - Therefore: momentum/variance buffers SURVIVE rollback unchanged
+        #
+        # If optimizer.state is not cleared, SGD/Adam momentum continues pushing
+        # toward the diverged state that caused the panic, risking re-divergence.
+        #
+        # The caller (vectorized.py) must call optimizer.state.clear() after
+        # execute_rollback() returns. We don't do it here because:
+        # 1. Governor doesn't own the optimizer (separation of concerns)
+        # 2. Multiple optimizers may exist (host + per-seed optimizers)
+        #
+        # TRAP: Using load_state_dict(assign=True) would replace Parameter objects,
+        # but then optimizer.param_groups references orphaned tensors and
+        # optimizer.step() updates garbage. Would require optimizer recreation.
+        #
+        # B1-PT-01 CORRECTION: The original B1-PT-01 ticket incorrectly claimed
+        # load_state_dict() creates new Parameter tensors. This was wrong - it
+        # copies in-place. The "fix" that removed momentum zeroing actually
+        # introduced the bug. Verified via id() checks on Parameters before/after.
 
         # Reset panic counter after successful rollback to allow fresh recovery
         self.consecutive_panics = 0

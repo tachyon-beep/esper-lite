@@ -22,6 +22,7 @@ function createSeedState(overrides: Partial<SeedState> = {}): SeedState {
     epochs_total: 50,
     counterfactual: 0.0,
     blend_tempo_epochs: 0,
+    alpha_curve: 'LINEAR',
     ...overrides
   }
 }

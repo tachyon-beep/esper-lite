@@ -230,6 +230,49 @@ class TestBlueprintPenaltySystem:
         # Should pick conv_heavy (lowest penalty = 3.0)
         assert decision.action.name == "GERMINATE_CONV_HEAVY"
 
+    def test_all_penalized_rotates_through_sorted(self, mock_signals_factory):
+        """B9-DRL-01: When all blueprints penalized, should still rotate for diversity.
+
+        Previously, fallback used deterministic min() which always returned the same
+        blueprint, causing exploration collapse in multi-env training.
+
+        The fix rotates through blueprints in penalty-sorted order (lowest first).
+        """
+        config = HeuristicPolicyConfig(
+            blueprint_rotation=["conv_light", "conv_heavy", "attention"],
+            blueprint_penalty_threshold=1.0,
+        )
+        policy = HeuristicTamiyo(config=config, topology="cnn")
+
+        # Penalize all above threshold
+        # Sorted order should be: conv_heavy (3.0), attention (5.0), conv_light (10.0)
+        # Note: When penalties are equal, tiebreaker is alphabetical by name
+        policy._blueprint_penalties["conv_light"] = 10.0  # Highest
+        policy._blueprint_penalties["conv_heavy"] = 3.0   # Lowest
+        policy._blueprint_penalties["attention"] = 5.0    # Middle
+        policy._last_decay_epoch = 100  # Prevent decay
+
+        signals = mock_signals_factory(epoch=10, plateau_epochs=5, host_stabilized=1)
+
+        # Make 6 consecutive decisions to verify rotation order AND wraparound
+        decisions = [policy.decide(signals, []).action.name for _ in range(6)]
+
+        # Expected order: penalty-sorted (conv_heavy < attention < conv_light)
+        expected_order = [
+            "GERMINATE_CONV_HEAVY",   # Penalty 3.0
+            "GERMINATE_ATTENTION",    # Penalty 5.0
+            "GERMINATE_CONV_LIGHT",   # Penalty 10.0
+        ]
+
+        # Verify first cycle in correct order
+        assert decisions[:3] == expected_order, (
+            f"First cycle wrong order: {decisions[:3]}"
+        )
+        # Verify wraparound maintains same order
+        assert decisions[3:6] == expected_order, (
+            f"Wraparound cycle wrong order: {decisions[3:6]}"
+        )
+
     def test_blueprint_penalties_cleared_on_reset(self):
         """Reset should clear all blueprint penalties."""
         policy = HeuristicTamiyo(topology="cnn")

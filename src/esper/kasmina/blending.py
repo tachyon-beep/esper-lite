@@ -91,12 +91,15 @@ class BlendAlgorithm(nn.Module, ABC):
         self._current_step = step
 
     def reset_cache(self) -> None:
-        """Clear thread-local alpha tensor cache.
+        """Clear this thread's alpha tensor cache.
 
         Call at epoch boundaries to prevent memory accumulation in long-running
         training with DataParallel. Each worker thread creates its own cache
-        entry that persists until thread death. In very long training runs,
-        this can accumulate memory.
+        entry that persists until thread death.
+
+        IMPORTANT: In DataParallel, this only clears the CALLING THREAD's cache.
+        To clear all worker caches, call this method from within each worker's
+        context (e.g., via a custom collate_fn hook at epoch boundaries).
 
         Note: Clearing the cache has minimal performance impact - the tensor
         will be re-created on the next forward pass (single allocation).
@@ -135,6 +138,13 @@ class GatedBlend(BlendAlgorithm):
 
     Supports both CNN (B, C, H, W) and transformer (B, T, C) inputs.
     The gate network operates on pooled (B, C) features.
+
+    Credit Assignment Note:
+        The gate's per-sample decisions are NOT exposed to the RL policy.
+        The policy observes blending *timeline* (step/total_steps) via
+        SeedMetrics.current_alpha, not gate outputs. Causal attribution
+        uses SeedMetrics.counterfactual_contribution instead.
+        See SeedMetrics docstring for design rationale.
     """
 
     algorithm_id = "gated"
@@ -158,9 +168,17 @@ class GatedBlend(BlendAlgorithm):
     def _pool_features(self, x: torch.Tensor) -> torch.Tensor:
         """Pool to (B, C) regardless of topology."""
         if self.topology == "cnn":
+            assert x.ndim == 4, (
+                f"CNN topology expects 4D input [B,C,H,W], got {x.ndim}D. "
+                f"Topology mismatch - check GatedBlend construction."
+            )
             # (B, C, H, W) -> (B, C)
             return x.mean(dim=[2, 3])
         else:
+            assert x.ndim == 3, (
+                f"Transformer topology expects 3D input [B,T,C], got {x.ndim}D. "
+                f"Topology mismatch - check GatedBlend construction."
+            )
             # (B, T, C) -> (B, C)
             return x.mean(dim=1)
 

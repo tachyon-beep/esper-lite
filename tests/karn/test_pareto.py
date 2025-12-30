@@ -8,7 +8,7 @@ from esper.karn.pareto import extract_pareto_frontier, compute_hypervolume_2d
 def make_outcome(acc: float, param: float, stab: float = 1.0) -> EpisodeOutcome:
     """Helper to create test outcomes."""
     return EpisodeOutcome(
-        env_idx=0, episode_idx=0,
+        env_id=0, episode_idx=0,
         final_accuracy=acc, param_ratio=param,
         num_fossilized=1, num_contributing_fossilized=1,
         episode_reward=acc / 10, stability_score=stab,

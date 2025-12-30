@@ -1,6 +1,5 @@
 """Tests that EpisodeOutcome is emitted at episode end."""
 
-import pytest
 import numpy as np
 from esper.karn.store import EpisodeOutcome
 
@@ -8,7 +7,7 @@ from esper.karn.store import EpisodeOutcome
 def test_episode_outcome_created_at_episode_end():
     """vectorized training creates EpisodeOutcome at episode completion."""
     outcome = EpisodeOutcome(
-        env_idx=0,
+        env_id=0,
         episode_idx=1,
         final_accuracy=72.5,
         param_ratio=0.12,
@@ -22,7 +21,7 @@ def test_episode_outcome_created_at_episode_end():
     # Verify all required fields exist
     d = outcome.to_dict()
     required_fields = [
-        "env_idx", "episode_idx", "final_accuracy", "param_ratio",
+        "env_id", "episode_idx", "final_accuracy", "param_ratio",
         "num_fossilized", "num_contributing_fossilized", "episode_reward",
         "stability_score", "reward_mode", "timestamp"
     ]
@@ -53,7 +52,7 @@ def test_episode_outcome_dominates():
     """Verify Pareto dominance check works correctly."""
     # Better on all objectives
     better = EpisodeOutcome(
-        env_idx=0,
+        env_id=0,
         episode_idx=1,
         final_accuracy=80.0,
         param_ratio=0.1,  # lower is better
@@ -64,7 +63,7 @@ def test_episode_outcome_dominates():
         reward_mode="shaped",
     )
     worse = EpisodeOutcome(
-        env_idx=0,
+        env_id=0,
         episode_idx=2,
         final_accuracy=70.0,
         param_ratio=0.2,
@@ -83,7 +82,7 @@ def test_episode_outcome_pareto_incomparable():
     """Verify Pareto-incomparable outcomes don't dominate each other."""
     # Trade-off: high accuracy, high param_ratio vs low accuracy, low param_ratio
     high_acc = EpisodeOutcome(
-        env_idx=0,
+        env_id=0,
         episode_idx=1,
         final_accuracy=85.0,
         param_ratio=0.3,  # worse
@@ -94,7 +93,7 @@ def test_episode_outcome_pareto_incomparable():
         reward_mode="shaped",
     )
     efficient = EpisodeOutcome(
-        env_idx=0,
+        env_id=0,
         episode_idx=2,
         final_accuracy=75.0,  # worse
         param_ratio=0.1,  # better

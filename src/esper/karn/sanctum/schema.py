@@ -16,6 +16,153 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 
+import numpy as np
+
+
+def compute_entropy_velocity(entropy_history: deque[float] | list[float]) -> float:
+    """Compute rate of entropy change (d(entropy)/d(batch)).
+
+    Uses numpy linear regression over last 10 samples for performance and stability.
+
+    Args:
+        entropy_history: Recent entropy values (oldest first).
+
+    Returns:
+        Velocity in entropy units per batch. Negative = declining.
+    """
+    if len(entropy_history) < 5:
+        return 0.0
+
+    values = np.array(list(entropy_history)[-10:])
+    n = len(values)
+    x = np.arange(n)
+
+    # Least squares slope using numpy (10x faster than pure Python)
+    slope, _ = np.polyfit(x, values, 1)
+    return float(slope)
+
+
+def compute_correlation(
+    x_values: deque[float] | list[float],
+    y_values: deque[float] | list[float],
+) -> float:
+    """Compute Pearson correlation between two metric histories.
+
+    Returns:
+        Correlation coefficient (-1 to +1), or 0.0 if insufficient data
+        or zero variance (to avoid NaN).
+    """
+    if len(x_values) < 5 or len(y_values) < 5:
+        return 0.0
+
+    x = list(x_values)[-10:]
+    y = list(y_values)[-10:]
+
+    n = min(len(x), len(y))
+    x, y = x[-n:], y[-n:]
+
+    # Re-check after alignment (n could be < 5 if sequences have different lengths)
+    if n < 5:
+        return 0.0
+
+    x_mean = sum(x) / n
+    y_mean = sum(y) / n
+
+    numerator: float = sum((xi - x_mean) * (yi - y_mean) for xi, yi in zip(x, y))
+    x_var: float = sum((xi - x_mean) ** 2 for xi in x)
+    y_var: float = sum((yi - y_mean) ** 2 for yi in y)
+
+    # Check variance product BEFORE square root for better numerical stability
+    EPSILON = 1e-10
+    variance_product = x_var * y_var
+    if variance_product < EPSILON * EPSILON:
+        return 0.0
+
+    denominator: float = variance_product ** 0.5
+    return numerator / denominator
+
+
+def compute_collapse_risk(
+    entropy_history: deque[float] | list[float],
+    critical_threshold: float = 0.3,
+    warning_threshold: float = 0.5,
+    max_healthy_entropy: float = 1.39,
+    previous_risk: float = 0.0,
+    hysteresis: float = 0.08,
+) -> float:
+    """Compute entropy collapse risk score (0.0 to 1.0).
+
+    Risk is based on:
+    - Current distance from critical threshold (proximity)
+    - Velocity (rate of decline)
+    - Hysteresis to prevent risk score flapping
+
+    Args:
+        entropy_history: Recent entropy values (oldest first).
+        critical_threshold: Entropy below this is collapsed.
+        warning_threshold: Entropy below this is concerning.
+        max_healthy_entropy: Expected healthy entropy level (default ~ln(4)).
+        previous_risk: Previous risk score for hysteresis.
+        hysteresis: Risk change must exceed this to update.
+
+    Returns:
+        0.0 = no risk, 1.0 = imminent/active collapse
+    """
+    if len(entropy_history) < 5:
+        return 0.0
+
+    values = list(entropy_history)
+    current = values[-1]
+    velocity = compute_entropy_velocity(entropy_history)
+
+    # Already collapsed
+    if current <= critical_threshold:
+        return 1.0
+
+    # Calculate proximity-based risk (being near critical is risky even if stable)
+    # max_healthy_entropy is the expected healthy entropy level (default ~ln(4))
+    denominator = max_healthy_entropy - critical_threshold
+    if denominator <= 0:
+        # Invalid threshold configuration - treat as critical proximity
+        proximity = 1.0
+    else:
+        proximity = 1.0 - (current - critical_threshold) / denominator
+        proximity = max(0.0, min(1.0, proximity))
+    proximity_risk = proximity * 0.3  # Cap proximity contribution at 0.3
+
+    # Rising or stable entropy = minimal risk (just proximity)
+    EPSILON = 1e-6
+    if velocity >= -EPSILON:
+        base_risk = proximity_risk
+    else:
+        # Declining entropy - calculate time to collapse
+        distance = current - critical_threshold
+        time_to_collapse = distance / abs(velocity)
+
+        # Time-based risk thresholds
+        if time_to_collapse > 100:
+            time_risk = 0.1
+        elif time_to_collapse > 50:
+            time_risk = 0.25
+        elif time_to_collapse > 20:
+            time_risk = 0.5
+        elif time_to_collapse > 10:
+            time_risk = 0.7
+        else:
+            time_risk = 0.9
+
+        # Combine time and proximity risks
+        if current < warning_threshold:
+            base_risk = 0.5 * time_risk + 0.5 * proximity_risk
+        else:
+            base_risk = 0.7 * time_risk + 0.3 * proximity_risk
+
+    # Apply hysteresis to prevent flapping
+    if abs(base_risk - previous_risk) < hysteresis:
+        return previous_risk
+
+    return min(1.0, max(0.0, base_risk))
+
 
 @dataclass
 class CounterfactualConfig:
@@ -98,10 +245,11 @@ class CounterfactualSnapshot:
         return combined - expected
 
 
-@dataclass
+@dataclass(slots=True)
 class SeedState:
     """State of a single seed slot.
 
+    Uses slots=True for memory efficiency (saves ~100 bytes per instance).
     Reference: tui.py lines 87-100 (SeedState dataclass)
     """
     slot_id: str
@@ -124,6 +272,17 @@ class SeedState:
     counterfactual: float = 0.0  # Causal attribution score
     # Blend tempo - Tamiyo's chosen integration speed (3=FAST, 5=STANDARD, 8=SLOW)
     blend_tempo_epochs: int = 5
+    # Alpha curve shape - always present, but only displayed during BLENDING
+    # (when the curve is causally active). See design rationale in plan.
+    alpha_curve: str = "LINEAR"
+
+    # Inter-slot interaction metrics (from counterfactual engine)
+    # These show how this seed synergizes with others in the ensemble
+    contribution_velocity: float = 0.0  # EMA of contribution changes (trend direction)
+    interaction_sum: float = 0.0  # Σ I_ij for all j ≠ i (total synergy from interactions)
+    boost_received: float = 0.0  # max(I_ij) for j ≠ i (strongest interaction partner)
+    upstream_alpha_sum: float = 0.0  # Σ alpha_j for slots j < i (position-aware blending)
+    downstream_alpha_sum: float = 0.0  # Σ alpha_j for slots j > i (position-aware blending)
 
 
 @dataclass
@@ -229,6 +388,12 @@ class EnvState:
     # Captured from REWARD_COMPUTED event's ab_group field
     # Values: "shaped", "simplified", "sparse", or None if not A/B testing
     reward_mode: str | None = None
+
+    # Governor rollback state (catastrophic failure indicator)
+    # When True, env row shows red alert overlay instead of normal content
+    rolled_back: bool = False
+    rollback_reason: str = ""  # "nan", "lobotomy", "divergence"
+    rollback_timestamp: datetime | None = None
 
     @property
     def current_reward(self) -> float:
@@ -372,6 +537,64 @@ class EnvState:
 
 
 @dataclass
+class GradientQualityMetrics:
+    """Gradient quality diagnostics for DRL training health.
+
+    Grouped separately to prevent TamiyoState bloat (per code review).
+
+    Note: Uses Coefficient of Variation (CV) not SNR per DRL expert review.
+    The original plan had inverted SNR (var/mean² is noise-to-signal).
+    CV = sqrt(var)/|mean| is standard and self-explanatory.
+    """
+    # Gradient Coefficient of Variation (per DRL expert - replaces inverted SNR)
+    # Low CV (<0.5) = high signal quality, High CV (>2.0) = noisy gradients
+    gradient_cv: float = 0.0
+
+    # Directional Clip Fraction (per DRL expert recommendation)
+    # These track WHERE clipping occurs, not WHETHER policy improved:
+    # clip+ = r > 1+ε (probability increases were capped)
+    # clip- = r < 1-ε (probability decreases were capped)
+    # Asymmetry indicates directional policy drift; symmetric high values are normal
+    clip_fraction_positive: float = 0.0
+    clip_fraction_negative: float = 0.0
+
+    # Note: param_update_magnitude REMOVED per PyTorch expert review
+    # - Conflates gradient magnitude with learning rate
+    # - Existing grad_norm, dead_layers, exploding_layers already provide this signal
+
+    # Note: minibatch_gradient_variance REMOVED per PyTorch expert review
+    # - Not applicable to recurrent PPO (single-batch processing due to LSTM coherence)
+
+
+@dataclass
+class InfrastructureMetrics:
+    """PyTorch infrastructure health metrics.
+
+    Grouped separately to prevent TamiyoState bloat (per code review).
+    Collected every N batches to amortize CPU-GPU sync overhead.
+    """
+    # CUDA Memory (PyTorch expert recommendation)
+    cuda_memory_allocated_gb: float = 0.0   # torch.cuda.memory_allocated()
+    cuda_memory_reserved_gb: float = 0.0    # torch.cuda.memory_reserved()
+    cuda_memory_peak_gb: float = 0.0        # torch.cuda.max_memory_allocated()
+    cuda_memory_fragmentation: float = 0.0  # 1 - (allocated/reserved), >0.3 = pressure
+
+    # torch.compile Status (captured at training start - static session metadata)
+    # Note: graph_break_count/compile_healthy removed - not accessible via PyTorch API
+    # Compile issues will surface in throughput metrics (fps, step_time_ms)
+    compile_enabled: bool = False
+    compile_backend: str = ""    # "inductor", "eager", etc.
+    compile_mode: str = ""       # "default", "reduce-overhead", "max-autotune"
+
+    @property
+    def memory_usage_percent(self) -> float:
+        """Memory usage as percentage for compact display."""
+        if self.cuda_memory_reserved_gb <= 0:
+            return 0.0
+        return (self.cuda_memory_allocated_gb / self.cuda_memory_reserved_gb) * 100
+
+
+@dataclass
 class TamiyoState:
     """Tamiyo policy agent state - ALL metrics from existing TUI.
 
@@ -404,16 +627,28 @@ class TamiyoState:
     # Post-normalization stats (should be ~0 mean, ~1 std if normalization working)
     advantage_mean: float = 0.0
     advantage_std: float = 0.0
+    # NaN = no data (std too low or no valid advantages); 0 = symmetric/normal
+    advantage_skewness: float = float("nan")  # >0 right-skewed (few big wins), <0 left-skewed (few big losses)
+    advantage_kurtosis: float = float("nan")  # >0 heavy tails (outliers), <0 light tails; >3 is super-Gaussian
     advantage_min: float = 0.0
     advantage_max: float = 0.0
     # Pre-normalization stats (raw learning signal magnitude)
     advantage_raw_mean: float = 0.0
     advantage_raw_std: float = 0.0
+    # Advantage distribution health (NaN = no data)
+    advantage_positive_ratio: float = float("nan")  # Fraction of positive advantages (healthy: 0.4-0.6)
+
+    # Log probability extremes (NaN predictor)
+    # Values < -50 warning, < -100 critical (numerical underflow imminent)
+    # NaN = no data (no PPO updates yet); 0.0 = deterministic action (valid but rare)
+    log_prob_min: float = float("nan")  # Most negative log prob this update
+    log_prob_max: float = float("nan")  # Highest log prob (should be <= 0)
 
     # Gradient health (shown in Vitals)
     dead_layers: int = 0
     exploding_layers: int = 0
     nan_grad_count: int = 0  # NaN gradient count
+    inf_grad_count: int = 0  # Inf gradient count
     layer_gradient_health: dict[str, float] | None = None  # Per-layer gradient health metrics
     entropy_collapsed: bool = False  # Entropy collapse detected
 
@@ -462,9 +697,11 @@ class TamiyoState:
     ppo_batch: int = 0  # Current batch within PPO update (use ppo_batch to avoid conflict with any existing 'batch')
 
     # Action distribution (Actions panel)
-    action_counts: dict[str, int] = field(default_factory=dict)
-    # FIX: Added total_actions for percentage calculation in TamiyoBrain
-    total_actions: int = 0
+    action_counts: dict[str, int] = field(default_factory=dict)  # Current batch only
+    total_actions: int = 0  # Current batch only
+    # Cumulative action counts across all batches (for "total run" display)
+    cumulative_action_counts: dict[str, int] = field(default_factory=dict)
+    cumulative_total_actions: int = 0
 
     # PPO data received flag
     ppo_data_received: bool = False
@@ -474,6 +711,26 @@ class TamiyoState:
 
     # A/B testing identification (None when not in A/B mode)
     group_id: str | None = None
+
+    # Entropy prediction (computed from entropy_history)
+    entropy_velocity: float = 0.0          # d(entropy)/d(batch), negative = declining
+    collapse_risk_score: float = 0.0       # 0.0-1.0, >0.7 = high risk
+    _previous_risk: float = 0.0            # For hysteresis (not serialized)
+
+    # Entropy-clip correlation (for policy collapse pattern detection)
+    # Negative correlation + low entropy + high clip = COLLAPSE RISK
+    entropy_clip_correlation: float = 0.0
+
+    # Value function statistics (for divergence detection)
+    value_mean: float = 0.0
+    value_std: float = 0.0
+    value_min: float = 0.0
+    value_max: float = 0.0
+    initial_value_spread: float | None = None  # Set after warmup for relative thresholds
+
+    # === Nested Metric Groups (per code review - prevents schema bloat) ===
+    infrastructure: InfrastructureMetrics = field(default_factory=InfrastructureMetrics)
+    gradient_quality: GradientQualityMetrics = field(default_factory=GradientQualityMetrics)
 
 
 @dataclass
@@ -630,6 +887,9 @@ class DecisionSnapshot:
     pinned: bool = False
     # Environment ID that made this decision (for TD advantage tracking)
     env_id: int = 0
+    # Training context when decision was made
+    epoch: int = 0
+    batch: int = 0
 
     # Per-decision metrics (per DRL review)
     # Note: expected_value (above) contains V(s), no need for separate value_estimate
@@ -638,6 +898,37 @@ class DecisionSnapshot:
 
     # Decision-specific entropy (per DRL review - more useful than policy entropy)
     decision_entropy: float = 0.0  # -sum(p*log(p)) for this action distribution
+
+    # Head choice details for factored action heads (per DRL/UX specialist review)
+    # These enable decision cards to show sub-decisions like 'bpnt:conv_l(87%) tmp:STD'
+    # See leyline/factored_actions.py for full head specification
+    chosen_blueprint: str | None = None  # e.g., "conv_light", "attention"
+    chosen_tempo: str | None = None  # "FAST", "STANDARD", "SLOW"
+    chosen_style: str | None = None  # "LINEAR_ADD", "GATED_GATE", etc.
+    chosen_curve: str | None = None  # "LINEAR", "COSINE", "SIGMOID", etc. (alpha curve shape)
+    chosen_alpha_target: str | None = None  # "HALF", "SEVENTY", "FULL" (target alpha amplitude)
+    chosen_alpha_speed: str | None = None  # "INSTANT", "FAST", "MEDIUM", "SLOW" (ramp speed)
+
+    # Per-head confidence values (probability of chosen option within each head)
+    op_confidence: float = 0.0  # Probability of chosen operation
+    slot_confidence: float = 0.0  # Probability of chosen slot
+    blueprint_confidence: float = 0.0  # Probability of chosen blueprint
+    style_confidence: float = 0.0  # Probability of chosen style
+    tempo_confidence: float = 0.0  # Probability of chosen tempo
+    alpha_target_confidence: float = 0.0  # Probability of chosen alpha target
+    alpha_speed_confidence: float = 0.0  # Probability of chosen alpha speed
+    curve_confidence: float = 0.0  # Probability of chosen curve
+
+    # Per-head entropy values (distribution spread - higher means more uncertain)
+    # Useful for diagnosing policy collapse (entropy -> 0) or exploration issues
+    op_entropy: float = 0.0
+    slot_entropy: float = 0.0
+    blueprint_entropy: float = 0.0
+    style_entropy: float = 0.0
+    tempo_entropy: float = 0.0
+    alpha_target_entropy: float = 0.0
+    alpha_speed_entropy: float = 0.0
+    curve_entropy: float = 0.0
 
 
 @dataclass
@@ -750,7 +1041,7 @@ class SanctumSnapshot:
     # Run metadata
     current_episode: int = 0
     current_batch: int = 0
-    max_batches: int = 100  # Maximum batches per episode
+    max_batches: int = 0  # Total episodes/batches in run (from CLI)
     current_epoch: int = 0
     max_epochs: int = 0
     run_id: str = ""
@@ -805,6 +1096,10 @@ class SanctumSnapshot:
 
     # Focused env for detail panel
     focused_env_id: int = 0
+
+    # Last action target (for row highlighting in EnvOverview)
+    last_action_env_id: int | None = None  # None if no actions yet
+    last_action_timestamp: datetime | None = None  # For hysteresis (5s decay)
 
     @property
     def is_stale(self) -> bool:

@@ -46,7 +46,8 @@ def _validate_device(device: str) -> None:
 def create_model(
     task: TaskSpec | str = "cifar10",
     device: str = "cuda",
-    slots: list[str] | None = None,
+    *,
+    slots: list[str],
     permissive_gates: bool = True,
 ) -> torch.nn.Module:
     """Create a MorphogeneticModel for the given task on device.
@@ -67,6 +68,6 @@ def create_model(
     _validate_device(device)
 
     if not slots:
-        raise ValueError("slots parameter is required and cannot be empty")
+        raise ValueError("slots cannot be empty")
 
     return task_spec.create_model(device=device, slots=slots, permissive_gates=permissive_gates)

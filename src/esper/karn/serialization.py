@@ -20,30 +20,47 @@ if TYPE_CHECKING:
     from esper.karn.contracts import TelemetryEventLike
 
 
+def _convert_value(value: Any) -> Any:
+    """Convert a single value to JSON-serializable form.
+
+    Handles:
+    - Dataclasses with to_dict() → call to_dict() (includes @property fields)
+    - Other dataclasses → recursive _convert_value on fields
+    - Enum values → their .name string
+    - Lists/tuples → recursive conversion
+    - None, primitives → pass through
+    """
+    if value is None:
+        return None
+    if isinstance(value, Enum):
+        return value.name
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        # Prefer to_dict() if available (includes @property fields like shaped_reward_ratio)
+        if hasattr(value, "to_dict") and callable(value.to_dict):
+            return value.to_dict()
+        # Fallback: convert fields recursively
+        return {
+            field.name: _convert_value(getattr(value, field.name))
+            for field in dataclasses.fields(value)
+        }
+    if isinstance(value, (list, tuple)):
+        return [_convert_value(item) for item in value]
+    if isinstance(value, dict):
+        return {k: _convert_value(v) for k, v in value.items()}
+    return value
+
+
 def _payload_to_dict(obj: Any) -> Any:
     """Convert a typed payload to a JSON-serializable dict.
 
     Handles:
-    - Dataclass instances → dict via dataclasses.asdict()
+    - Dataclass instances with to_dict() → call to_dict() (includes @property fields)
+    - Other dataclass instances → recursive field conversion
     - Enum values → their .name string
     - None, primitives → pass through
     - Already-dict → pass through
     """
-    if obj is None:
-        return None
-    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
-        # It's a dataclass instance, convert to dict
-        # Use a custom dict_factory to handle nested enums
-        return dataclasses.asdict(
-            obj,
-            dict_factory=lambda items: {
-                k: v.name if isinstance(v, Enum) else v for k, v in items
-            },
-        )
-    if isinstance(obj, dict):
-        return obj
-    # For any other type (shouldn't happen with typed payloads), pass through
-    return obj
+    return _convert_value(obj)
 
 
 def serialize_event(event: "TelemetryEventLike") -> str:

@@ -133,7 +133,7 @@ class TestComputeSimplifiedReward:
             seed_age_epochs=20,
         )
 
-        # With SHAPED, this would trigger severe holding_warning (-9.0 or worse)
+        # With SHAPED, this would trigger holding_warning (-0.25 at epoch 5)
         # With SIMPLIFIED, no warning penalties
         reward = compute_simplified_reward(
             action=LifecycleOp.WAIT,
@@ -145,7 +145,7 @@ class TestComputeSimplifiedReward:
             config=config,
         )
 
-        # Should NOT have the -9.0 holding_warning
+        # Should NOT have the -0.25 holding_warning (SIMPLIFIED skips warnings)
         assert reward > -2.0
 
 

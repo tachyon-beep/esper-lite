@@ -10,11 +10,13 @@ Displays DRL Expert recommended metrics:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from rich.panel import Panel
 from rich.text import Text
 from textual.widgets import Static
+
+if TYPE_CHECKING:
+    from esper.karn.sanctum.schema import SanctumSnapshot
 
 
 @dataclass
@@ -43,69 +45,73 @@ class RewardHealthData:
 
 
 class RewardHealthPanel(Static):
-    """Compact reward health display for Sanctum."""
+    """Compact reward health display for Sanctum.
 
-    DEFAULT_CSS = """
-    RewardHealthPanel {
-        height: 6;
-        border: solid $primary;
-        padding: 0 1;
-    }
+    Uses Textual CSS for border/title instead of Rich Panel to avoid
+    double-nesting appearance.
     """
 
     def __init__(self, data: RewardHealthData | None = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._data = data or RewardHealthData()
+        self.border_title = "REWARD HEALTH"
 
     def update_data(self, data: RewardHealthData) -> None:
         """Update health data and refresh display."""
         self._data = data
         self.refresh()
 
-    def render(self) -> Panel:
-        """Render health indicators."""
-        lines = []
+    def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
+        """Update from snapshot data.
 
-        # PBRS fraction
+        Extracts reward health metrics from the snapshot:
+        - EV explained from Tamiyo explained_variance
+        - Gaming rate from focused env
+        - PBRS fraction from reward components (if available)
+        """
+        # EV explained from policy metrics
+        ev = snapshot.tamiyo.explained_variance
+
+        # Gaming rate from focused env
+        gaming_rate = 0.0
+        focused_env = snapshot.envs.get(snapshot.focused_env_id)
+        if focused_env:
+            gaming_rate = focused_env.gaming_rate
+
+        # PBRS fraction - not directly available, use 0 as placeholder
+        # Would need PBRS signal tracking to properly compute
+        pbrs_fraction = 0.0
+
+        # Hypervolume - not tracked in current schema
+        hypervolume = 0.0
+
+        self._data = RewardHealthData(
+            pbrs_fraction=pbrs_fraction,
+            anti_gaming_trigger_rate=gaming_rate,
+            ev_explained=ev,
+            hypervolume=hypervolume,
+        )
+        self.refresh()
+
+    def render(self) -> Text:
+        """Render health indicators as plain Text (single-line compact format)."""
+        result = Text()
+
+        # All metrics on one line: PBRS:25% Game:2% EV:0.72 HV:1.2
         pbrs_color = "green" if self._data.is_pbrs_healthy else "red"
-        lines.append(
-            Text.assemble(
-                ("PBRS: ", "bold"),
-                (f"{self._data.pbrs_fraction:.0%}", pbrs_color),
-                (" (10-40%)", "dim"),
-            )
-        )
-
-        # Anti-gaming
         gaming_color = "green" if self._data.is_gaming_healthy else "red"
-        lines.append(
-            Text.assemble(
-                ("Gaming: ", "bold"),
-                (f"{self._data.anti_gaming_trigger_rate:.1%}", gaming_color),
-                (" (<5%)", "dim"),
-            )
-        )
-
-        # Explained variance
         ev_color = "green" if self._data.is_ev_healthy else "yellow"
-        lines.append(
-            Text.assemble(
-                ("EV: ", "bold"),
-                (f"{self._data.ev_explained:.2f}", ev_color),
-                (" (>0.5)", "dim"),
-            )
-        )
 
-        # Hypervolume
-        lines.append(
-            Text.assemble(
-                ("HV: ", "bold"),
-                (f"{self._data.hypervolume:.1f}", "cyan"),
-            )
-        )
+        result.append("PBRS:", style="dim")
+        result.append(f"{self._data.pbrs_fraction:.0%}", style=pbrs_color)
+        result.append(" Game:", style="dim")
+        result.append(f"{self._data.anti_gaming_trigger_rate:.0%}", style=gaming_color)
+        result.append(" EV:", style="dim")
+        result.append(f"{self._data.ev_explained:.2f}", style=ev_color)
+        result.append(" HV:", style="dim")
+        result.append(f"{self._data.hypervolume:.1f}", style="cyan")
 
-        content = Text("\n").join(lines)
-        return Panel(content, title="[bold]Reward Health[/]", border_style="blue")
+        return result
 
 
 __all__ = ["RewardHealthPanel", "RewardHealthData"]

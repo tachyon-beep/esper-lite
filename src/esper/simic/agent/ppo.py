@@ -38,7 +38,7 @@ from esper.leyline import (
     DEFAULT_VALUE_CLIP,
     DEFAULT_VALUE_COEF,
     HEAD_NAMES,
-    LifecycleOp,
+    compute_causal_masks,
 )
 from esper.leyline.slot_config import SlotConfig
 import logging
@@ -460,6 +460,36 @@ class PPOAgent:
 
         return self.entropy_coef_min * scale_factor
 
+    def _collect_cuda_memory_metrics(self) -> dict[str, float]:
+        """Collect CUDA memory statistics for infrastructure monitoring.
+
+        Called once per PPO update (not per inner epoch) to amortize sync overhead.
+        Returns empty dict if CUDA is not available.
+        """
+        if not torch.cuda.is_available():
+            return {}
+
+        # Get device index from policy device string
+        device_str = str(self.device)
+        if device_str == "cpu":
+            return {}
+
+        # torch.cuda.memory_allocated() and friends trigger CPU-GPU sync
+        # Calling once per update() is acceptable overhead (~1ms)
+        allocated = torch.cuda.memory_allocated(self.device) / (1024**3)  # GB
+        reserved = torch.cuda.memory_reserved(self.device) / (1024**3)  # GB
+        peak = torch.cuda.max_memory_allocated(self.device) / (1024**3)  # GB
+
+        # Fragmentation: 1 - (allocated/reserved), >0.3 indicates memory pressure
+        fragmentation = 1.0 - (allocated / reserved) if reserved > 0 else 0.0
+
+        return {
+            "cuda_memory_allocated_gb": allocated,
+            "cuda_memory_reserved_gb": reserved,
+            "cuda_memory_peak_gb": peak,
+            "cuda_memory_fragmentation": fragmentation,
+        }
+
     def update(
         self,
         clear_buffer: bool = True,
@@ -520,25 +550,54 @@ class PPOAgent:
         metrics["explained_variance"] = [explained_variance]
         early_stopped = False
 
+        # Collect CUDA memory metrics once per update (amortize sync overhead)
+        cuda_memory_metrics = self._collect_cuda_memory_metrics()
+
         # Compute advantage stats for status banner diagnostics
         # These indicate if advantage normalization is working correctly
         # PERF: Batch mean/std into single GPU→CPU transfer
         valid_advantages_for_stats = data["advantages"][valid_mask]
         if valid_advantages_for_stats.numel() > 0:
-            adv_stats = torch.stack([
-                valid_advantages_for_stats.mean(),
-                valid_advantages_for_stats.std(),
-            ]).cpu().tolist()
+            adv_mean = valid_advantages_for_stats.mean()
+            adv_std = valid_advantages_for_stats.std()
+            # Compute skewness and kurtosis (both use same std threshold)
+            # Use 0.05 threshold to match UI "low warning" - below this, σ^n division unstable
+            if adv_std > 0.05:
+                centered = valid_advantages_for_stats - adv_mean
+                # Skewness: E[(X-μ)³] / σ³ - asymmetry indicator
+                adv_skewness = (centered ** 3).mean() / (adv_std ** 3)
+                # Excess kurtosis: E[(X-μ)⁴] / σ⁴ - 3 (0 = normal, >0 = heavy tails)
+                adv_kurtosis = (centered ** 4).mean() / (adv_std ** 4) - 3.0
+            else:
+                # NaN signals "undefined" - std too low for meaningful higher moments
+                adv_skewness = torch.tensor(float("nan"), device=adv_mean.device, dtype=adv_mean.dtype)
+                adv_kurtosis = torch.tensor(float("nan"), device=adv_mean.device, dtype=adv_mean.dtype)
+            adv_stats = torch.stack([adv_mean, adv_std, adv_skewness, adv_kurtosis]).cpu().tolist()
             metrics["advantage_mean"] = [adv_stats[0]]
             metrics["advantage_std"] = [adv_stats[1]]
+            metrics["advantage_skewness"] = [adv_stats[2]]
+            metrics["advantage_kurtosis"] = [adv_stats[3]]
+            # Fraction of positive advantages (healthy: 40-60%)
+            # Imbalanced ratios suggest reward design issues or easy/hard regions
+            adv_positive_ratio = (valid_advantages_for_stats > 0).float().mean().item()
+            metrics["advantage_positive_ratio"] = [adv_positive_ratio]
         else:
-            metrics["advantage_mean"] = [0.0]
-            metrics["advantage_std"] = [0.0]
+            # No valid advantages - use NaN to signal "no data" (not "balanced" or "zero")
+            metrics["advantage_mean"] = [float("nan")]
+            metrics["advantage_std"] = [float("nan")]
+            metrics["advantage_skewness"] = [float("nan")]
+            metrics["advantage_kurtosis"] = [float("nan")]
+            metrics["advantage_positive_ratio"] = [float("nan")]
 
         # Initialize per-head entropy tracking (P3-1)
         head_entropy_history: dict[str, list[float]] = {head: [] for head in HEAD_NAMES}
         # Initialize per-head gradient norm tracking (P4-6)
         head_grad_norm_history: dict[str, list[float]] = {head: [] for head in HEAD_NAMES + ("value",)}
+        # Initialize log prob extremes tracking (NaN predictor)
+        # Very negative log probs (<-50 warning, <-100 critical) predict numerical underflow
+        # Use inf/-inf for proper min/max tracking (log probs are always <= 0)
+        log_prob_min_across_epochs: float = float("inf")
+        log_prob_max_across_epochs: float = float("-inf")
 
         for epoch_i in range(self.recurrent_n_epochs):
             if early_stopped:
@@ -583,6 +642,16 @@ class PPOAgent:
             for key in entropy:
                 entropy[key] = entropy[key][valid_mask]
 
+            # Track log prob extremes across all heads (NaN predictor)
+            # Use HEAD_NAMES for consistent ordering
+            all_log_probs = torch.cat([log_probs[k] for k in HEAD_NAMES])
+            if all_log_probs.numel() > 0:
+                # Batch min/max into single GPU->CPU transfer
+                epoch_extremes = torch.stack([all_log_probs.min(), all_log_probs.max()]).cpu().tolist()
+                epoch_log_prob_min, epoch_log_prob_max = epoch_extremes
+                log_prob_min_across_epochs = min(log_prob_min_across_epochs, epoch_log_prob_min)
+                log_prob_max_across_epochs = max(log_prob_max_across_epochs, epoch_log_prob_max)
+
             # Track per-head entropy (P3-1)
             # PERF: Batch all 8 head entropies into single GPU→CPU transfer
             head_entropy_tensors = [entropy[key].mean() for key in HEAD_NAMES]
@@ -599,34 +668,9 @@ class PPOAgent:
                 valid_advantages, valid_op_actions
             )
 
-            # Compute causal masks for masked mean computation
-            # (avoid bias from averaging zeros with real values)
-            #
-            # Causal structure (see advantages.py for full documentation):
-            #   WAIT:           only op head
-            #   GERMINATE:      slot, blueprint, style, tempo, alpha_target
-            #   SET_ALPHA:      slot, style, alpha_target, alpha_speed, alpha_curve
-            #   PRUNE:          slot, alpha_speed, alpha_curve
-            #   FOSSILIZE:      slot only (implicit via ~is_wait)
-            #   ADVANCE:        slot only (implicit via ~is_wait)
-            #
-            # Note: ADVANCE and FOSSILIZE are handled implicitly by ~is_wait for slot
-            # and by NOT appearing in any other mask's OR conditions. This is intentional
-            # and more maintainable than explicit enumeration.
-            is_wait = valid_op_actions == LifecycleOp.WAIT
-            is_germinate = valid_op_actions == LifecycleOp.GERMINATE
-            is_set_alpha = valid_op_actions == LifecycleOp.SET_ALPHA_TARGET
-            is_prune = valid_op_actions == LifecycleOp.PRUNE
-            head_masks = {
-                "op": torch.ones_like(is_wait),  # op always relevant
-                "slot": ~is_wait,  # All non-WAIT ops (incl. ADVANCE, FOSSILIZE)
-                "blueprint": is_germinate,  # only for GERMINATE
-                "style": is_germinate | is_set_alpha,  # GERMINATE + SET_ALPHA_TARGET
-                "tempo": is_germinate,  # only for GERMINATE
-                "alpha_target": is_set_alpha | is_germinate,
-                "alpha_speed": is_set_alpha | is_prune,
-                "alpha_curve": is_set_alpha | is_prune,
-            }
+            # B4-DRL-01: Use single source of truth for causal masks (from leyline)
+            # Causal structure documented in esper/leyline/causal_masks.py
+            head_masks = compute_causal_masks(valid_op_actions)
 
             # Compute per-head ratios
             old_log_probs = {
@@ -684,20 +728,31 @@ class PPOAgent:
                 metrics["approx_kl"].append(approx_kl)
 
                 # Clip fraction: how often clipping was active
+                # PERF: Batch all 3 clip metrics into single GPU→CPU transfer
                 joint_ratio = per_head_ratios["op"]
                 clip_fraction_t = ((joint_ratio - 1.0).abs() > self.clip_ratio).float().mean()
-                # Defer .item() - will be synced with approx_kl check anyway
-                metrics["clip_fraction"].append(clip_fraction_t.cpu().item())
+                # Directional clip fractions (per DRL expert recommendation)
+                # Tracks WHERE clipping occurs: asymmetry indicates directional policy drift
+                clip_pos = (joint_ratio > 1.0 + self.clip_ratio).float().mean()
+                clip_neg = (joint_ratio < 1.0 - self.clip_ratio).float().mean()
+                # Single GPU→CPU sync for all 3 clip metrics
+                clip_metrics = torch.stack([clip_fraction_t, clip_pos, clip_neg]).cpu().tolist()
+                metrics["clip_fraction"].append(clip_metrics[0])
+                metrics["clip_fraction_positive"].append(clip_metrics[1])
+                metrics["clip_fraction_negative"].append(clip_metrics[2])
 
                 # Early stopping: if KL exceeds threshold, skip this update entirely
                 # 1.5x multiplier is standard (OpenAI baselines, Stable-Baselines3)
                 if self.target_kl is not None and approx_kl > 1.5 * self.target_kl:
                     early_stopped = True
                     metrics["early_stop_epoch"] = [epoch_i]
-                    # Record ratio metrics even when early stopping
-                    metrics["ratio_mean"].append(joint_ratio.mean().item())
-                    metrics["ratio_max"].append(joint_ratio.max().item())
-                    metrics["ratio_min"].append(joint_ratio.min().item())
+                    # PERF: Batch ratio metrics into single GPU→CPU transfer
+                    ratio_stats = torch.stack([
+                        joint_ratio.mean(), joint_ratio.max(), joint_ratio.min()
+                    ]).cpu().tolist()
+                    metrics["ratio_mean"].append(ratio_stats[0])
+                    metrics["ratio_max"].append(ratio_stats[1])
+                    metrics["ratio_min"].append(ratio_stats[2])
                     break  # Skip loss computation, backward, and optimizer step
 
             # Compute policy loss per head and sum
@@ -794,11 +849,24 @@ class PPOAgent:
                 for head_name, grad_norm in zip(head_names, all_norms):
                     head_grad_norm_history[head_name].append(grad_norm)
 
+                # Gradient CV: coefficient of variation = std/|mean| (per DRL expert)
+                # Low CV (<0.5) = high signal quality, High CV (>2.0) = noisy gradients
+                # PERF: Compute on CPU using already-transferred all_norms (avoids extra sync)
+                n = len(all_norms)
+                if n > 1 and any(v > 0 for v in all_norms):
+                    grad_mean = sum(all_norms) / n
+                    grad_var = sum((x - grad_mean) ** 2 for x in all_norms) / (n - 1)
+                    grad_std = grad_var ** 0.5
+                    grad_cv = grad_std / max(abs(grad_mean), 1e-8)
+                else:
+                    grad_cv = 0.0
+                metrics["gradient_cv"].append(grad_cv)
+
             nn.utils.clip_grad_norm_(self.policy.network.parameters(), self.max_grad_norm)
             self.optimizer.step()
 
             # Track metrics
-            # PERF: Batch all 6 logging metrics into single GPU→CPU transfer
+            # PERF: Batch all 10 logging metrics into single GPU→CPU transfer
             joint_ratio = per_head_ratios["op"]  # Use op ratio as representative
             logging_tensors = torch.stack([
                 policy_loss,
@@ -807,16 +875,31 @@ class PPOAgent:
                 joint_ratio.mean(),
                 joint_ratio.max(),
                 joint_ratio.min(),
+                # Value function stats (single GPU sync with rest)
+                values.mean(),
+                values.std(),
+                values.min(),
+                values.max(),
             ]).cpu().tolist()
+            # NOTE: logging_tensors is now a Python list[float]. Indexed access below
+            # avoids 10 separate GPU→CPU syncs (one per .item() call).
             metrics["policy_loss"].append(logging_tensors[0])
             metrics["value_loss"].append(logging_tensors[1])
             metrics["entropy"].append(logging_tensors[2])
             metrics["ratio_mean"].append(logging_tensors[3])
             metrics["ratio_max"].append(logging_tensors[4])
             metrics["ratio_min"].append(logging_tensors[5])
+            metrics["value_mean"].append(logging_tensors[6])
+            metrics["value_std"].append(logging_tensors[7])
+            metrics["value_min"].append(logging_tensors[8])
+            metrics["value_max"].append(logging_tensors[9])
+            # PERF: Reuse already-transferred ratio stats (indices 4,5) instead of
+            # re-computing on GPU which would trigger 2 redundant syncs
+            ratio_max_val = logging_tensors[4]
+            ratio_min_val = logging_tensors[5]
             if (
-                joint_ratio.max() > self.ratio_explosion_threshold
-                or joint_ratio.min() < self.ratio_collapse_threshold
+                ratio_max_val > self.ratio_explosion_threshold
+                or ratio_min_val < self.ratio_collapse_threshold
             ):
                 diag = RatioExplosionDiagnostic.from_batch(
                     ratio=joint_ratio.flatten(),
@@ -854,6 +937,20 @@ class PPOAgent:
         aggregated_result["head_entropies"] = head_entropy_history
         # Add per-head gradient norm tracking (P4-6)
         aggregated_result["head_grad_norms"] = head_grad_norm_history
+        # Add log prob extremes (NaN predictor)
+        # Guard against no valid data (inf values indicate no updates occurred)
+        # Use NaN (not 0.0) to signal "no data" - 0.0 means "probability=1" which is misleading
+        if log_prob_min_across_epochs == float("inf"):
+            log_prob_min_across_epochs = float("nan")
+        if log_prob_max_across_epochs == float("-inf"):
+            log_prob_max_across_epochs = float("nan")
+        aggregated_result["log_prob_min"] = log_prob_min_across_epochs
+        aggregated_result["log_prob_max"] = log_prob_max_across_epochs
+
+        # Add CUDA memory metrics (collected once per update, not averaged)
+        if cuda_memory_metrics:
+            for k, v in cuda_memory_metrics.items():
+                aggregated_result[k] = v  # type: ignore[literal-required]
 
         return aggregated_result
 

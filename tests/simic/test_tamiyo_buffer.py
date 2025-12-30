@@ -473,3 +473,92 @@ class TestTamiyoRolloutBuffer:
         data = buffer.get_batched_sequences()
         assert data["slot_masks"].shape == (1, 3, 5)
         assert data["slot_actions"].shape == (1, 3)
+
+    def test_mark_terminal_with_penalty(self):
+        """mark_terminal_with_penalty should inject death penalty and mark done.
+
+        B1-DRL-01 fix: When governor rollback occurs, the agent needs a negative
+        reward signal to learn to avoid catastrophic actions.
+        """
+        buffer = TamiyoRolloutBuffer(
+            num_envs=2,
+            max_steps_per_env=5,
+            state_dim=50,
+            lstm_hidden_dim=DEFAULT_LSTM_HIDDEN_DIM,
+        )
+
+        # Add some transitions with positive rewards
+        buffer.start_episode(env_id=0)
+        for i in range(3):
+            buffer.add(
+                env_id=0,
+                state=torch.randn(50),
+                slot_action=0,
+                blueprint_action=0,
+                style_action=0,
+                tempo_action=0,
+                alpha_target_action=0,
+                alpha_speed_action=0,
+                alpha_curve_action=0,
+                op_action=0,
+                slot_log_prob=-1.0,
+                blueprint_log_prob=-1.0,
+                style_log_prob=-1.0,
+                tempo_log_prob=-1.0,
+                alpha_target_log_prob=-1.0,
+                alpha_speed_log_prob=-1.0,
+                alpha_curve_log_prob=-1.0,
+                op_log_prob=-1.0,
+                value=1.0,
+                reward=1.0,  # Positive reward
+                done=False,
+                slot_mask=torch.ones(buffer.num_slots, dtype=torch.bool),
+                blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
+                style_mask=torch.ones(NUM_STYLES, dtype=torch.bool),
+                tempo_mask=torch.ones(NUM_TEMPO, dtype=torch.bool),
+                alpha_target_mask=torch.ones(NUM_ALPHA_TARGETS, dtype=torch.bool),
+                alpha_speed_mask=torch.ones(NUM_ALPHA_SPEEDS, dtype=torch.bool),
+                alpha_curve_mask=torch.ones(NUM_ALPHA_CURVES, dtype=torch.bool),
+                op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
+                hidden_h=torch.zeros(1, 1, 128),
+                hidden_c=torch.zeros(1, 1, 128),
+            )
+
+        # Simulate governor rollback with death penalty
+        death_penalty = -10.0
+        modified = buffer.mark_terminal_with_penalty(env_id=0, penalty=death_penalty)
+
+        assert modified is True
+        # Last transition should now have death penalty
+        assert buffer.rewards[0, 2].item() == death_penalty
+        # Last transition should be marked as terminal
+        assert buffer.dones[0, 2].item() is True
+        # Not truncated - true terminal
+        assert buffer.truncated[0, 2].item() is False
+        # Transitions are preserved (not cleared)
+        assert buffer.step_counts[0] == 3
+
+    def test_mark_terminal_with_penalty_empty_env(self):
+        """mark_terminal_with_penalty on empty env returns False."""
+        buffer = TamiyoRolloutBuffer(
+            num_envs=2,
+            max_steps_per_env=5,
+            state_dim=50,
+            lstm_hidden_dim=DEFAULT_LSTM_HIDDEN_DIM,
+        )
+
+        # No transitions added - should return False
+        modified = buffer.mark_terminal_with_penalty(env_id=0, penalty=-10.0)
+        assert modified is False
+
+    def test_mark_terminal_with_penalty_invalid_env(self):
+        """mark_terminal_with_penalty with invalid env_id raises ValueError."""
+        buffer = TamiyoRolloutBuffer(
+            num_envs=2,
+            max_steps_per_env=5,
+            state_dim=50,
+            lstm_hidden_dim=DEFAULT_LSTM_HIDDEN_DIM,
+        )
+
+        with pytest.raises(ValueError, match="out of range"):
+            buffer.mark_terminal_with_penalty(env_id=5, penalty=-10.0)

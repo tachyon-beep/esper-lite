@@ -9,6 +9,7 @@ from esper.karn.sanctum.widgets.reward_health import RewardHealthData, RewardHea
 from esper.karn.sanctum.widgets.run_header import RunHeader
 from esper.karn.sanctum.widgets.scoreboard import Scoreboard
 from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+from esper.karn.sanctum.widgets.tamiyo_brain_v2 import TamiyoBrainV2
 from esper.karn.sanctum.widgets.thread_death_modal import ThreadDeathModal
 
 __all__ = [
@@ -23,5 +24,6 @@ __all__ = [
     "RunHeader",
     "Scoreboard",
     "TamiyoBrain",
+    "TamiyoBrainV2",
     "ThreadDeathModal",
 ]

@@ -5,6 +5,23 @@ Layout matches existing Rich TUI (tui.py _render() method).
 
 LAYOUT FIX: TamiyoBrain spans full width as dedicated row (size=11),
 NOT embedded in right column. Event Log included at bottom-left.
+
+UNICODE GLYPH REQUIREMENTS:
+    Sanctum requires a terminal with Unicode support and a font that includes:
+
+    Status icons:     ● ◐ ○ ★ ✓ ✗ ⚠ ▼ ▲
+    Progress bars:    █ ░
+    Sparklines:       ▁ ▂ ▃ ▄ ▅ ▆ ▇ █
+    Arrows:           ↑ ↓ → ↗ ↘ ▶ ▸
+    Alpha curves:     ⌒ ⌢ ⌣ −
+    Medals:           🥇 🥈 🥉 📌
+    Severity:         💀 🔥 ⚠️
+    Separators:       │ ─
+
+    Recommended terminals: iTerm2, Kitty, Windows Terminal, Alacritty
+    Recommended fonts: JetBrains Mono, Fira Code, Cascadia Code, Nerd Fonts
+
+    For terminals without full Unicode/emoji support, use Overwatch (web UI) instead.
 """
 from __future__ import annotations
 
@@ -28,7 +45,7 @@ from esper.karn.sanctum.widgets import (
     RewardHealthPanel,
     RunHeader,
     Scoreboard,
-    TamiyoBrain,
+    TamiyoBrainV2,
     ThreadDeathModal,
 )
 
@@ -52,10 +69,18 @@ HELP_TEXT = """\
 [bold]Actions[/bold]
   [cyan]/[/cyan]         Filter envs (by ID or status)
   [cyan]Esc[/cyan]       Clear filter
-  [cyan]p[/cyan]         Toggle pin on Best Runs item
+  [cyan]i[/cyan]         Show full run info (untruncated)
   [cyan]r[/cyan]         Manual refresh
   [cyan]q[/cyan]         Quit Sanctum
-  [cyan]Click[/cyan]     Click Event Log for raw detail view
+
+[bold]Pinning (in Best Runs / Decisions)[/bold]
+  [cyan]p[/cyan]         Toggle pin on selected Best Runs item
+  [cyan]Click[/cyan]     Click decision card to toggle pin (📌)
+  [dim]Pinned items are never removed from the display[/dim]
+
+[bold]Click Actions[/bold]
+  [cyan]Click[/cyan]     Event Log → raw event detail view
+  [cyan]Click[/cyan]     Best Runs row → historical env snapshot
 
 [bold]In Detail Modal[/bold]
   [cyan]Esc[/cyan]       Close modal
@@ -66,7 +91,7 @@ HELP_TEXT = """\
   [green]★[/green] Excellent   [green]✓[/green] Improving
   [yellow]⚠[/yellow] Stalling    [red]✗[/red] Severely stalled
 
-[dim]Press Esc or ? to close this help[/dim]
+[dim]Press Esc, ?, Q, or click to close[/dim]
 """
 
 
@@ -99,6 +124,89 @@ class HelpScreen(ModalScreen[None]):
         """Compose the help screen."""
         with Container(id="help-container"):
             yield Static(HELP_TEXT)
+
+    def on_click(self) -> None:
+        """Dismiss help screen on click."""
+        self.dismiss()
+
+
+class RunInfoScreen(ModalScreen[None]):
+    """Modal showing full run info without truncation."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss", "Close"),
+        Binding("i", "dismiss", "Close"),
+        Binding("q", "dismiss", "Close"),
+    ]
+
+    DEFAULT_CSS = """
+    RunInfoScreen {
+        align: center middle;
+        background: $surface-darken-1 80%;
+    }
+
+    RunInfoScreen > #info-container {
+        width: 80;
+        height: auto;
+        max-height: 80%;
+        background: $surface;
+        border: thick $primary;
+        padding: 1 2;
+    }
+    """
+
+    def __init__(self, snapshot: "SanctumSnapshot") -> None:
+        super().__init__()
+        self._snapshot = snapshot
+
+    def compose(self) -> ComposeResult:
+        """Compose the run info screen."""
+        s = self._snapshot
+        runtime_str = self._format_runtime(s.runtime_seconds)
+
+        info_text = f"""\
+[bold cyan]Run Information[/bold cyan]
+
+[bold]Task Name[/bold]
+  [cyan]{s.task_name or '(not set)'}[/cyan]
+
+[bold]Progress[/bold]
+  Episode:    {s.current_episode}
+  Epoch:      {s.current_epoch} / {s.max_epochs if s.max_epochs > 0 else '∞'}
+  Batch:      {s.current_batch} / {s.max_batches}
+  Runtime:    {runtime_str}
+
+[bold]Throughput[/bold]
+  Epochs/sec:   {s.vitals.epochs_per_second:.2f}
+  Batches/hr:   {s.vitals.batches_per_hour:.1f}
+
+[bold]System[/bold]
+  Connected:    {'Yes' if s.connected else 'No'}
+  Staleness:    {s.staleness_seconds:.1f}s
+  Thread:       {'Alive' if s.training_thread_alive else 'Dead' if s.training_thread_alive is False else 'Unknown'}
+
+[dim]Press Esc, i, or q to close[/dim]
+"""
+        with Container(id="info-container"):
+            yield Static(info_text)
+
+    def _format_runtime(self, seconds: float) -> str:
+        """Format runtime as Xh Ym Zs."""
+        if seconds <= 0:
+            return "--"
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = int(seconds % 60)
+        if hours > 0:
+            return f"{hours}h {minutes}m {secs}s"
+        elif minutes > 0:
+            return f"{minutes}m {secs}s"
+        else:
+            return f"{secs}s"
+
+    def on_click(self) -> None:
+        """Dismiss on click."""
+        self.dismiss()
 
 
 class SanctumApp(App[None]):
@@ -145,6 +253,7 @@ class SanctumApp(App[None]):
         Binding("9", "focus_env(8)", "Env 8", show=False),
         Binding("0", "focus_env(9)", "Env 9", show=False),
         Binding("r", "refresh", "Refresh", show=True),
+        Binding("i", "show_run_info", "Info", show=True),
         Binding("?", "toggle_help", "Help", show=True),
         # Filter
         Binding("/", "start_filter", "Filter", show=True),
@@ -162,6 +271,7 @@ class SanctumApp(App[None]):
         num_envs: int = 16,
         refresh_rate: float = 4.0,
         training_thread: threading.Thread | None = None,
+        shutdown_event: threading.Event | None = None,
     ):
         """Initialize Sanctum app.
 
@@ -170,6 +280,7 @@ class SanctumApp(App[None]):
             num_envs: Number of training environments.
             refresh_rate: Snapshot refresh rate in Hz.
             training_thread: Optional training thread to monitor.
+            shutdown_event: Event to signal training to stop gracefully.
         """
         super().__init__()
         self._backend = backend
@@ -180,8 +291,10 @@ class SanctumApp(App[None]):
         self._lock = threading.Lock()
         self._poll_count = 0  # Debug: track timer fires
         self._training_thread = training_thread  # Monitor thread status
+        self._shutdown_event = shutdown_event  # Signal graceful shutdown
         self._filter_active = False  # Track filter input visibility
         self._thread_death_shown = False  # Track if we've shown death modal
+        self._shutdown_requested = False  # Track if shutdown was requested
 
     def compose(self) -> ComposeResult:
         """Build the Sanctum layout.
@@ -189,8 +302,8 @@ class SanctumApp(App[None]):
         Layout structure:
         - Run Header: Episode, Epoch, Batch, Runtime, Best Accuracy, Connection, A/B comparison
         - Anomaly Strip: Single-line automatic problem surfacing
-        - Top row: EnvOverview (70%) | Scoreboard (30%)
-        - Bottom row: TamiyoBrain (70%) | EventLog (30%)
+        - Top row: EnvOverview (80%) | Scoreboard (20%)
+        - Bottom row: TamiyoBrain (80%) | EventLog (20%)
         - Footer: Keybindings
         """
         yield RunHeader(id="run-header")
@@ -204,12 +317,12 @@ class SanctumApp(App[None]):
         )
 
         with Container(id="sanctum-main"):
-            # Top section: Environment Overview and Metrics Column (Scoreboard + Reward Health)
+            # Top section: Environment Overview and Scoreboard
             with Horizontal(id="top-section"):
                 yield EnvOverview(num_envs=self._num_envs, id="env-overview")
                 with Vertical(id="metrics-column"):
                     yield Scoreboard(id="scoreboard")
-                    yield RewardHealthPanel(id="reward-health")
+                    yield RewardHealthPanel(id="metrics-reward-health")
 
             # Bottom section: TamiyoBrain (left) | Event Log (right)
             with Horizontal(id="bottom-section"):
@@ -225,30 +338,29 @@ class SanctumApp(App[None]):
         """Start refresh timer when app mounts."""
         self.set_interval(self._refresh_interval, self._poll_and_refresh)
 
-    def _get_or_create_tamiyo_widget(self, group_id: str) -> TamiyoBrain:
-        """Get or create TamiyoBrain widget for a policy group.
+    def _get_or_create_tamiyo_widget(self, group_id: str) -> TamiyoBrainV2:
+        """Get or create TamiyoBrainV2 widget for a policy group.
 
         Args:
             group_id: Policy group identifier (e.g., "A", "B", "default")
 
         Returns:
-            TamiyoBrain widget for this group.
+            TamiyoBrainV2 widget for this group.
         """
         widget_id = f"tamiyo-{group_id.lower()}"
         css_class = f"group-{group_id.lower()}"
 
         try:
-            # Try to find existing widget
-            return self.query_one(f"#{widget_id}", TamiyoBrain)
+            return self.query_one(f"#{widget_id}", TamiyoBrainV2)
         except NoMatches:
             # Create new widget and mount it
-            widget = TamiyoBrain(id=widget_id, classes=css_class)
+            widget = TamiyoBrainV2(id=widget_id, classes=css_class)
             try:
                 container = self.query_one("#tamiyo-container")
                 container.mount(widget)
                 return widget
             except NoMatches:
-                self.log.warning(f"Cannot mount TamiyoBrain for {group_id}: container not found")
+                self.log.warning(f"Cannot mount TamiyoBrainV2 for {group_id}: container not found")
                 raise
 
     def _refresh_tamiyo_widgets(self) -> None:
@@ -278,25 +390,6 @@ class SanctumApp(App[None]):
                 pass  # Container hasn't mounted yet
             except Exception as e:
                 self.log.warning(f"Failed to update tamiyo widget for {group_id}: {e}")
-
-        # Update RunHeader with A/B comparison data when 2+ policies
-        if len(snapshots) >= 2:
-            try:
-                run_header = self.query_one("#run-header", RunHeader)
-                group_ids = sorted(snapshots.keys())
-                snapshot_a = snapshots[group_ids[0]]
-                snapshot_b = snapshots[group_ids[1]]
-
-                run_header.update_comparison(
-                    group_a_accuracy=snapshot_a.aggregate_mean_accuracy,
-                    group_b_accuracy=snapshot_b.aggregate_mean_accuracy,
-                    group_a_reward=snapshot_a.aggregate_mean_reward,
-                    group_b_reward=snapshot_b.aggregate_mean_reward,
-                )
-            except NoMatches:
-                pass
-            except Exception as e:
-                self.log.warning(f"Failed to update run header comparison: {e}")
 
     def _poll_and_refresh(self) -> None:
         """Poll backend for new snapshot and refresh all panels.
@@ -378,14 +471,14 @@ class SanctumApp(App[None]):
         except Exception as e:
             self.log.warning(f"Failed to update scoreboard: {e}")
 
-        # Update reward health panel
+        # Update reward health panels (metrics column and TamiyoBrain)
         try:
             health_data = self._backend.compute_reward_health()
-            self.query_one("#reward-health", RewardHealthPanel).update_data(health_data)
+            self.query_one("#metrics-reward-health", RewardHealthPanel).update_data(health_data)
         except NoMatches:
             pass  # Widget hasn't mounted yet
         except Exception as e:
-            self.log.warning(f"Failed to update reward-health: {e}")
+            self.log.warning(f"Failed to update metrics-reward-health: {e}")
 
         # Update TamiyoBrain widgets using multi-group API
         self._refresh_tamiyo_widgets()
@@ -428,6 +521,12 @@ class SanctumApp(App[None]):
     def action_toggle_help(self) -> None:
         """Toggle help display."""
         self.push_screen(HelpScreen())
+
+    def action_show_run_info(self) -> None:
+        """Show full run information modal (untruncated task name, etc.)."""
+        if self._snapshot is None:
+            return
+        self.push_screen(RunInfoScreen(self._snapshot))
 
     def action_cursor_down(self) -> None:
         """Move cursor down in EnvOverview table (vim: j)."""
@@ -553,8 +652,43 @@ class SanctumApp(App[None]):
             )
         )
 
+    async def action_quit(self) -> None:
+        """Handle quit with graceful shutdown.
+
+        Signals the training thread to stop at the end of the current batch,
+        then waits for it to finish before exiting the TUI.
+        """
+        if self._shutdown_requested:
+            # Already shutting down, force quit
+            self.exit()
+            return
+
+        self._shutdown_requested = True
+
+        # Signal training to stop gracefully
+        if self._shutdown_event is not None:
+            self._shutdown_event.set()
+
+        # Update title to show shutdown in progress
+        self.sub_title = "Shutting down... (waiting for batch to complete)"
+
+        # If training thread is alive, let the main script handle the wait
+        # Just exit the TUI - the main script will wait for the thread
+        if self._training_thread is not None and self._training_thread.is_alive():
+            self.notify("Signaling graceful shutdown...", severity="warning")
+            # Small delay so user sees the notification
+            self.set_timer(0.5, lambda: self.exit())
+        else:
+            # Training already done, exit immediately
+            self.exit()
+
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Handle Enter key on DataTable row to show detail modal.
+
+        Handles clicks on:
+        - EnvOverview table → EnvDetailScreen (live env)
+        - Scoreboard best runs table → HistoricalEnvDetail (frozen snapshot)
+        - Scoreboard bottom 3 table → HistoricalEnvDetail (frozen snapshot)
 
         Args:
             event: The row selection event from DataTable.
@@ -562,18 +696,28 @@ class SanctumApp(App[None]):
         if self._snapshot is None:
             return
 
-        # Get env_id from the row key
+        # Get row key
         row_key = event.row_key
         if row_key is None:
             return
 
-        # Extract env_id from row_key.value (set in EnvOverview._add_env_row)
-        try:
-            env_id = int(row_key.value) if row_key.value is not None else None
-        except (ValueError, TypeError):
+        row_key_str = str(row_key.value) if row_key.value is not None else ""
+
+        # Check if this is a scoreboard click (best runs or bottom 3)
+        if row_key_str.startswith("bottom_"):
+            # Bottom 3 table - extract record_id
+            record_id = row_key_str.replace("bottom_", "")
+            self._show_historical_env_detail(record_id)
+            return
+        elif not row_key_str.isdigit():
+            # Best runs table - record_id is the key directly
+            self._show_historical_env_detail(row_key_str)
             return
 
-        if env_id is None:
+        # Otherwise, it's an env_id from EnvOverview
+        try:
+            env_id = int(row_key_str)
+        except (ValueError, TypeError):
             return
 
         env = self._snapshot.envs.get(env_id)
@@ -590,8 +734,29 @@ class SanctumApp(App[None]):
             )
         )
 
-    def on_tamiyo_brain_decision_pin_toggled(
-        self, event: TamiyoBrain.DecisionPinToggled
+    def _show_historical_env_detail(self, record_id: str) -> None:
+        """Show historical env detail for a best run record.
+
+        Args:
+            record_id: The record_id of the BestRunRecord to display.
+        """
+        if self._snapshot is None:
+            return
+
+        # Find the record in best_runs
+        record = None
+        for r in self._snapshot.best_runs:
+            if r.record_id == record_id:
+                record = r
+                break
+
+        if record is None:
+            return
+
+        self.push_screen(HistoricalEnvDetail(record=record))
+
+    def on_tamiyo_brain_v2_decision_pin_toggled(
+        self, event: TamiyoBrainV2.DecisionPinToggled
     ) -> None:
         """Handle click on decision panel to toggle pin status.
 

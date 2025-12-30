@@ -193,6 +193,7 @@ class TestTypedPayloadSerialization:
             param_budget=100000,
             policy_device="cuda:0",
             env_devices=("cuda:0", "cuda:1"),
+            reward_mode="shaped",
         )
         event = MockEventWithTypedPayload(payload)
         result = serialize_event(event)
@@ -262,9 +263,9 @@ class TestPayloadToDict:
         assert _payload_to_dict(None) is None
 
     def test_dict_passes_through(self) -> None:
-        """Dicts should pass through unchanged."""
+        """Dicts should pass through with values converted."""
         original = {"key": "value"}
-        assert _payload_to_dict(original) is original
+        assert _payload_to_dict(original) == original
 
     def test_nested_enum_converted_to_name(self) -> None:
         """Enums nested in dataclasses should be converted to names."""

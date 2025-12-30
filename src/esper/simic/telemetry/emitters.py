@@ -32,12 +32,15 @@ from esper.leyline import (
     STYLE_NAMES,
     TelemetryEvent,
     TelemetryEventType,
+    TrendDetectedPayload,
 )
+from esper.leyline.telemetry import HeadTelemetry
 from esper.nissa import get_hub
 
 from .debug_telemetry import LayerGradientStats, collect_per_layer_gradients
 
 if TYPE_CHECKING:
+    from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
     from esper.simic.training.parallel_env_state import ParallelEnvState
 
     from .telemetry_config import TelemetryConfig
@@ -102,6 +105,13 @@ class VectorizedEmitter:
                     "grad_ratio": report.telemetry.gradient_health,
                     "has_vanishing": report.telemetry.has_vanishing,
                     "has_exploding": report.telemetry.has_exploding,
+                    # Inter-slot interaction metrics (from SeedMetrics - always present via default_factory)
+                    # Note: These are zero for n>3 seeds due to factorial complexity limits
+                    "contribution_velocity": report.metrics.contribution_velocity,
+                    "interaction_sum": report.metrics.interaction_sum,
+                    "boost_received": report.metrics.boost_received,
+                    "upstream_alpha_sum": report.metrics.upstream_alpha_sum,
+                    "downstream_alpha_sum": report.metrics.downstream_alpha_sum,
                 }
 
         self._emit(TelemetryEvent(
@@ -192,75 +202,55 @@ class VectorizedEmitter:
         action_confidence: float | None = None,
         alternatives: list[tuple[str, float]] | None = None,
         decision_entropy: float | None = None,
-        base_acc_delta: float | None = None,
-        bounded_attribution: float | None = None,
-        compute_rent: float | None = None,
-        # Additional reward components for RewardHealthPanel
-        stage_bonus: float | None = None,
-        ratio_penalty: float | None = None,
-        alpha_shock: float | None = None,
+        reward_components: "RewardComponentsTelemetry | None" = None,
+        head_telemetry: HeadTelemetry | None = None,
     ) -> None:
-        """Emit last-action detail, offloading formatting to the hub thread."""
+        """Emit last-action telemetry from the training loop.
+
+        This is the PRODUCTION path called by vectorized.py during training.
+        It accepts action indices as a dict and includes rich context (rewards,
+        confidence, alternatives) for the Sanctum TUI decision cards.
+
+        Note: There is also a standalone `emit_last_action()` function at module
+        level used for UNIT TESTING. That function has explicit *_idx parameters
+        and returns a dict for test assertions. Both must emit the same fields
+        to AnalyticsSnapshotPayload - if you add a field here, add it there too.
+
+        Args:
+            epoch: Current training epoch
+            action_indices: Dict mapping head names to action indices
+            slot_id: Target slot for the action
+            masked: Dict mapping head names to mask flags
+            success: Whether the action executed successfully
+            active_alpha_algorithm: Current alpha algorithm for the slot
+            total_reward: Total reward for this step
+            value_estimate: Value function estimate
+            host_accuracy: Current host model validation accuracy
+            slot_states: Dict mapping slot IDs to state descriptions
+            action_confidence: Confidence (probability) of the chosen action
+            alternatives: Top-2 alternative actions with probabilities
+            decision_entropy: Entropy of the action distribution
+            reward_components: Typed dataclass with full reward breakdown (may be None for LOSS family)
+            head_telemetry: Typed dataclass with per-head confidence and entropy values
+        """
         if not self._should_emit("ops_normal"):
             return
 
         # Pass raw indices + mapping info in the data dict
-        # The background thread could theoretically do the mapping, but 
-        # for now just creating the event object here is much faster than 
+        # The background thread could theoretically do the mapping, but
+        # for now just creating the event object here is much faster than
         # the original unrolled logic in vectorized.py.
-        
-        selected_alpha_algorithm = STYLE_ALPHA_ALGORITHMS[action_indices["style"]].name
-        data: dict[str, Any] = {
-            "kind": "last_action",
-            "env_id": self.env_id,
-            "inner_epoch": epoch,
-            "op": OP_NAMES[action_indices["op"]],
-            # REWARD_COMPUTED-compatible fields (used by Sanctum decision carousel)
-            "action_name": OP_NAMES[action_indices["op"]],
-            "slot_id": slot_id,
-            "action_slot": slot_id if OP_NAMES[action_indices["op"]] != "WAIT" else None,
-            "blueprint_id": BLUEPRINT_IDS[action_indices["blueprint"]],
-            "style": STYLE_NAMES[action_indices["style"]],
-            "blend_id": STYLE_BLEND_IDS[action_indices["style"]],
-            "tempo_idx": action_indices["tempo"],
-            "alpha_target": ALPHA_TARGET_VALUES[action_indices["alpha_target"]],
-            "alpha_speed": ALPHA_SPEED_NAMES[action_indices["alpha_speed"]],
-            "alpha_curve": ALPHA_CURVE_NAMES[action_indices["alpha_curve"]],
-            "alpha_algorithm": active_alpha_algorithm or selected_alpha_algorithm,
-            "alpha_algorithm_selected": selected_alpha_algorithm,
-            "op_masked": bool(masked.get("op", False)),
-            "slot_masked": bool(masked.get("slot", False)),
-            "blueprint_masked": bool(masked.get("blueprint", False)),
-            "style_masked": bool(masked.get("style", False)),
-            "tempo_masked": bool(masked.get("tempo", False)),
-            "alpha_target_masked": bool(masked.get("alpha_target", False)),
-            "alpha_speed_masked": bool(masked.get("alpha_speed", False)),
-            "alpha_curve_masked": bool(masked.get("alpha_curve", False)),
-            "action_success": success,
-        }
 
-        if total_reward is not None:
-            data["total_reward"] = float(total_reward)
-        if value_estimate is not None:
-            data["value_estimate"] = float(value_estimate)
-        if host_accuracy is not None:
-            data["host_accuracy"] = float(host_accuracy)
-            # Reward components use val_acc key, decision uses host_accuracy.
-            data["val_acc"] = float(host_accuracy)
-        if slot_states is not None:
-            data["slot_states"] = dict(slot_states)
-        if action_confidence is not None:
-            data["action_confidence"] = float(action_confidence)
-        if alternatives is not None:
-            data["alternatives"] = list(alternatives)
-        if decision_entropy is not None:
-            data["decision_entropy"] = float(decision_entropy)
-        if base_acc_delta is not None:
-            data["base_acc_delta"] = float(base_acc_delta)
-        if bounded_attribution is not None:
-            data["bounded_attribution"] = float(bounded_attribution)
-        if compute_rent is not None:
-            data["compute_rent"] = float(compute_rent)
+        action_name = OP_NAMES[action_indices["op"]]
+        blueprint_id = BLUEPRINT_IDS[action_indices["blueprint"]]
+        style = STYLE_NAMES[action_indices["style"]]
+        tempo_idx = action_indices["tempo"]
+        alpha_target = ALPHA_TARGET_VALUES[action_indices["alpha_target"]]
+        alpha_speed = ALPHA_SPEED_NAMES[action_indices["alpha_speed"]]
+        alpha_curve = ALPHA_CURVE_NAMES[action_indices["alpha_curve"]]
+        alpha_target_masked = bool(masked.get("alpha_target", False))
+        alpha_speed_masked = bool(masked.get("alpha_speed", False))
+        alpha_curve_masked = bool(masked.get("alpha_curve", False))
 
         self._emit(TelemetryEvent(
             event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
@@ -271,19 +261,27 @@ class VectorizedEmitter:
                 kind="last_action",
                 env_id=self.env_id,
                 total_reward=total_reward,
-                action_name=data["action_name"],
+                action_name=action_name,
                 action_confidence=action_confidence,
                 value_estimate=value_estimate,
-                base_acc_delta=base_acc_delta,
-                bounded_attribution=bounded_attribution,
-                compute_rent=compute_rent,
-                stage_bonus=stage_bonus,
-                ratio_penalty=ratio_penalty,
-                alpha_shock=alpha_shock,
+                # Pass typed dataclasses directly - replaces individual component fields
+                reward_components=reward_components,
+                head_telemetry=head_telemetry,
                 # Decision context for TamiyoBrain Decision Cards
                 slot_states=slot_states,
                 alternatives=alternatives,
                 decision_entropy=decision_entropy,
+                # Head choice fields (for decision card sub-decision display)
+                slot_id=slot_id,
+                blueprint_id=blueprint_id,
+                tempo_idx=tempo_idx,
+                style=style,
+                alpha_target=alpha_target,
+                alpha_speed=alpha_speed,
+                alpha_curve=alpha_curve,
+                alpha_target_masked=alpha_target_masked,
+                alpha_speed_masked=alpha_speed_masked,
+                alpha_curve_masked=alpha_curve_masked,
             ),
         ))
 
@@ -398,13 +396,13 @@ class VectorizedEmitter:
             if event_type:
                 self.hub.emit(TelemetryEvent(
                     event_type=event_type,
-                    data={  # type: ignore[arg-type]
-                        "batch": batch_idx + 1,
-                        "rolling_delta": rolling_delta,
-                        "rolling_avg_accuracy": rolling_avg_acc,
-                        "prev_rolling_avg_accuracy": prev_rolling_avg_acc,
-                        "episodes_completed": episodes_completed,
-                    },
+                    data=TrendDetectedPayload(
+                        batch_idx=batch_idx + 1,
+                        episodes_completed=episodes_completed,
+                        rolling_delta=rolling_delta,
+                        rolling_avg_accuracy=rolling_avg_acc,
+                        prev_rolling_avg_accuracy=prev_rolling_avg_acc,
+                    ),
                 ))
 
         # BATCH_EPOCH_COMPLETED
@@ -554,7 +552,17 @@ def emit_last_action(
     success: bool,
     active_alpha_algorithm: str | None = None,
 ) -> dict[str, Any]:
-    """Emit per-step last-action detail for debugging and UIs.
+    """Standalone last-action emitter for UNIT TESTING.
+
+    This function exists separately from VectorizedEmitter.on_last_action() to
+    allow testing telemetry emission without instantiating the full emitter class.
+    It has explicit *_idx parameters (vs a dict) and returns the payload for
+    test assertions.
+
+    IMPORTANT: Both this function and on_last_action() must emit the same fields
+    to AnalyticsSnapshotPayload. If you add a field to one, add it to the other.
+    The on_last_action() method also includes additional context (rewards,
+    confidence, head_telemetry) that this test helper omits.
 
     Args:
         env_id: Environment index
@@ -563,6 +571,9 @@ def emit_last_action(
         blueprint_idx: Blueprint action index
         style_idx: Germination style action index
         tempo_idx: Tempo action index
+        alpha_target_idx: Alpha target action index
+        alpha_speed_idx: Alpha speed action index
+        alpha_curve_idx: Alpha curve action index
         op_idx: Lifecycle operation index
         slot_id: Target slot ID string
         masked: Dict of head -> was_masked flags
@@ -572,7 +583,7 @@ def emit_last_action(
             sampled style index.
 
     Returns:
-        The emitted data dict (for testing)
+        The emitted data dict (for test assertions)
     """
     hub = get_hub()
     selected_alpha_algorithm = STYLE_ALPHA_ALGORITHMS[style_idx].name
@@ -637,17 +648,22 @@ def emit_last_action(
 
 
 def compute_grad_norm_surrogate(module: nn.Module) -> float | None:
-    """Compute a cheap grad-norm surrogate (single device sync)."""
-    grad_norm_sq = None
-    for param in module.parameters():
-        if param.grad is None:
-            continue
-        g = param.grad.detach()
-        g_sq = (g.float() * g.float()).sum()
-        grad_norm_sq = g_sq if grad_norm_sq is None else grad_norm_sq + g_sq
-    if grad_norm_sq is None:
+    """Compute gradient L2 norm with float64 overflow protection.
+
+    Uses fused _foreach_norm for minimal GPU-CPU sync overhead (single sync).
+    Float64 prevents overflow: float32 overflows at ~1e19 due to squaring,
+    float64 handles up to ~1e154.
+    """
+    grads = [p.grad for p in module.parameters() if p.grad is not None]
+    if not grads:
         return None
-    return float(torch.sqrt(grad_norm_sq).item())
+    # Upcast to float64 for overflow protection on large norms
+    grads_double = [g.double() for g in grads]
+    # Fused kernel: computes all per-tensor norms in one launch
+    per_param_norms = torch._foreach_norm(grads_double, ord=2)
+    # Single reduction via vector_norm (fused) and sync point
+    total_norm = torch.linalg.vector_norm(torch.stack(per_param_norms))
+    return float(total_norm.item())
 
 
 def aggregate_layer_gradient_health(
@@ -755,10 +771,21 @@ def emit_ppo_update_event(
             entropy_loss=0.0,
             advantage_mean=metrics.get("advantage_mean", 0.0),
             advantage_std=metrics.get("advantage_std", 0.0),
+            advantage_skewness=metrics.get("advantage_skewness", 0.0),
+            advantage_kurtosis=metrics.get("advantage_kurtosis", 0.0),
+            advantage_positive_ratio=metrics.get("advantage_positive_ratio", 0.5),
             ratio_mean=metrics.get("ratio_mean", 1.0),
             ratio_min=metrics.get("ratio_min", 1.0),
             ratio_max=metrics.get("ratio_max", 1.0),
             ratio_std=metrics.get("ratio_std", 0.0),
+            # Log prob extremes (NaN predictor)
+            log_prob_min=metrics.get("log_prob_min", 0.0),
+            log_prob_max=metrics.get("log_prob_max", 0.0),
+            # Value function statistics for drift monitoring
+            value_mean=metrics.get("value_mean", 0.0),
+            value_std=metrics.get("value_std", 0.0),
+            value_min=metrics.get("value_min", 0.0),
+            value_max=metrics.get("value_max", 0.0),
             lr=lr,
             entropy_coef=metrics.get("entropy_coef"),
             inf_grad_count=0,
@@ -784,6 +811,15 @@ def emit_ppo_update_event(
             head_alpha_speed_entropy=head_entropies_avg.get("head_alpha_speed_entropy"),
             head_alpha_curve_entropy=head_entropies_avg.get("head_alpha_curve_entropy"),
             head_op_entropy=head_entropies_avg.get("head_op_entropy"),
+            # Gradient quality metrics (per DRL expert)
+            clip_fraction_positive=metrics.get("clip_fraction_positive", 0.0),
+            clip_fraction_negative=metrics.get("clip_fraction_negative", 0.0),
+            gradient_cv=metrics.get("gradient_cv", 0.0),
+            # Infrastructure metrics (per PyTorch expert)
+            cuda_memory_allocated_gb=metrics.get("cuda_memory_allocated_gb", 0.0),
+            cuda_memory_reserved_gb=metrics.get("cuda_memory_reserved_gb", 0.0),
+            cuda_memory_peak_gb=metrics.get("cuda_memory_peak_gb", 0.0),
+            cuda_memory_fragmentation=metrics.get("cuda_memory_fragmentation", 0.0),
             inner_epoch=epoch,
             batch=batch_idx + 1,
         ),
@@ -920,8 +956,6 @@ def emit_mask_hit_rates(
     ))
 
 
-# TODO: [UNWIRED TELEMETRY] - Call check_performance_degradation() at end of each epoch
-# with current accuracy vs rolling average. See telemetry-phase3.md Task 5 for integration notes.
 def check_performance_degradation(
     hub: Any,
     *,

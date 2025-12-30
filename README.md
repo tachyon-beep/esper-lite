@@ -163,21 +163,29 @@ Train a PPO agent to learn optimal seed lifecycle management.
 PYTHONPATH=src python -m esper.scripts.train ppo [OPTIONS]
 ```
 
-#### Config-first workflow
+#### Training Scale (Tamiyo-Centric)
 
-All PPO hyperparameters live in `TrainingConfig` (JSON-loadable). CLI flags are
-limited to picking a preset and runtime wiring:
+These flags control Tamiyo's training directly. All are optional - presets provide sensible defaults.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--rounds N` | 100 | Tamiyo PPO training iterations |
+| `--envs K` | 4 | Parallel CIFAR environments (sample diversity per round) |
+| `--episode-length L` | 25 | Timesteps per environment per round |
+| `--ppo-epochs E` | 1 | Gradient steps per round (passes over rollout data) |
+| `--memory-size H` | 128 | Tamiyo LSTM hidden dimension |
+| `--entropy-anneal-rounds R` | 0 | Rounds over which to anneal entropy (0 = no annealing) |
+
+Each round produces `K × L` transitions for Tamiyo's PPO update.
+Doubling `--rounds` = 2× training time. Doubling `--envs` = richer data per round, same training time.
+
+#### Config & Presets
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--preset` | `cifar10` | Hyperparameter preset: `cifar10`, `cifar10_stable`, `cifar10_deep`, `cifar10_blind`, `tinystories` |
 | `--config-json` | (none) | Path to JSON config (strict: unknown keys fail) |
 | `--task` | `cifar10` | Task preset for dataloaders/topology |
-| `--device` | `cuda:0` | Primary compute device |
-| `--devices` | (none) | Multi-GPU devices (e.g., `cuda:0 cuda:1`) |
-| `--amp` | off | Enable AMP (CUDA only) |
-| `--num-workers` | (task default) | DataLoader workers per environment |
-| `--gpu-preload` | off | Preload dataset to GPU (CIFAR-10 only) |
 | `--seed` | (config default) | Override run seed |
 
 #### Hardware & Performance

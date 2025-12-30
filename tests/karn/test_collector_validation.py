@@ -31,6 +31,7 @@ class TestCollectorIngestValidation:
                 policy_device="cpu",
                 env_devices=("cpu",),
                 episode_id="test",
+                reward_mode="shaped",
             )
         ))
 
@@ -45,7 +46,9 @@ class TestCollectorIngestValidation:
             ),
         ))
 
-        assert collector.store.epoch_snapshots, "epoch snapshot should be committed on EPOCH_COMPLETED"
+        # For single-env (n_envs=1), EPOCH_COMPLETED commits immediately
+        # since all 1 envs have reported for this inner_epoch.
+        assert collector.store.epoch_snapshots, "epoch snapshot should be committed on EPOCH_COMPLETED (single-env)"
         snap = collector.store.epoch_snapshots[-1]
         assert snap.epoch == 1
         assert isinstance(snap.host.val_loss, float)
@@ -73,6 +76,7 @@ class TestCollectorIngestValidation:
                 policy_device="cpu",
                 env_devices=("cpu",),
                 episode_id="test",
+                reward_mode="shaped",
             )
         ))
 
@@ -119,6 +123,7 @@ class TestCollectorIngestValidation:
                 policy_device="cpu",
                 env_devices=("cpu",),
                 episode_id="test",
+                reward_mode="shaped",
             )
         ))
 
@@ -161,6 +166,7 @@ class TestCollectorIngestValidation:
                     policy_device="cpu",
                     env_devices=("cpu",),
                     episode_id="test",
+                    reward_mode="shaped",
                 )
             )
         )

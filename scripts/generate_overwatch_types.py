@@ -187,7 +187,7 @@ def main() -> None:
     """Generate all TypeScript types."""
     print("// Auto-generated from Python schema - DO NOT EDIT")
     print("// Run: python scripts/generate_overwatch_types.py")
-    print(f"// Generated from: esper.karn.sanctum.schema")
+    print("// Generated from: esper.karn.sanctum.schema")
     print()
 
     # Generate enums

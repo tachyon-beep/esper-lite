@@ -19,6 +19,12 @@ from textual.message import Message
 from textual.widgets import Static
 
 from esper.karn.constants import TUIThresholds
+from esper.leyline import (
+    ALPHA_CURVE_GLYPHS,
+    DEFAULT_HOST_LSTM_LAYERS,
+    STAGE_ABBREVIATIONS,
+    STAGE_COLORS,
+)
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import DecisionSnapshot, SanctumSnapshot
@@ -104,9 +110,6 @@ class TamiyoBrain(Static):
     HORIZONTAL_THRESHOLD = 96  # Full side-by-side
     COMPACT_HORIZONTAL_THRESHOLD = 85  # Compressed side-by-side
 
-    # Neural network architecture constant
-    _TOTAL_LAYERS = 12
-
     # Sparkline width for trend visibility (Task 1)
     SPARKLINE_WIDTH = 35
 
@@ -114,11 +117,11 @@ class TamiyoBrain(Static):
     PREDICTION_EXCELLENT_THRESHOLD = 0.1  # Green checkmark: |actual - expected| < 0.1
     PREDICTION_ACCEPTABLE_THRESHOLD = 0.3  # Yellow warning: |actual - expected| < 0.3
 
-    # Enriched decision card width (Task 5)
-    DECISION_CARD_WIDTH = 30
+    # Enriched decision card width (widened from 45 for improved readability)
+    DECISION_CARD_WIDTH = 65
 
     # Decision card height for dynamic count calculation
-    DECISION_CARD_HEIGHT = 7  # 6 lines (title + 5 content) + 1 gap
+    DECISION_CARD_HEIGHT = 8  # 7 lines (title + separator + 5 content + bottom) + 1 gap
 
     # Per-head max entropy values from factored_actions.py (DRL CORRECTED)
     # These are ln(N) where N is the number of actions for each head
@@ -253,6 +256,65 @@ class TamiyoBrain(Static):
         if self._is_compact_mode():
             return self.COMPACT_WIDTH - 2  # 78 chars
         return self.FULL_WIDTH - 2  # 94 chars
+
+    def _entropy_label(self, entropy: float) -> tuple[str, str]:
+        """Return (label, style) for entropy value.
+
+        Semantic labels help operators understand policy health at a glance:
+        - collapsed: Policy stuck, needs intervention
+        - confident: Exploiting known strategy
+        - balanced: Healthy exploration/exploitation
+        - exploring: High exploration mode
+        """
+        if entropy < 0.3:
+            return "[collapsed]", "red"
+        elif entropy < 0.7:
+            return "[confident]", "yellow"
+        elif entropy < 1.2:
+            return "[balanced]", "green"
+        else:
+            return "[exploring]", "cyan"
+
+    def _outcome_badge(self, expect: float, reward: float | None) -> tuple[str, str]:
+        """Return (badge, style) for prediction accuracy.
+
+        Badges provide quick visual feedback on value function quality:
+        - [HIT]: Prediction was accurate (error < 0.1)
+        - [~OK]: Prediction was acceptable (error < 0.3)
+        - [MISS]: Prediction was poor (error >= 0.3)
+        - [...]: Reward not yet received
+        """
+        if reward is None:
+            return "[...]", "dim"
+        diff = abs(reward - expect)
+        if diff < 0.1:
+            return "[HIT]", "bright_green"
+        elif diff < 0.3:
+            return "[~OK]", "yellow"
+        else:
+            return "[MISS]", "red"
+
+    def _action_context_note(self, decision: "DecisionSnapshot") -> str:
+        """Return contextual note for non-GERMINATE actions.
+
+        Replaces the empty head-choices line with meaningful context
+        explaining WHY the action was taken.
+        """
+        action = decision.chosen_action
+        slot = decision.chosen_slot or "?"
+
+        if action == "GERMINATE":
+            return ""  # GERMINATE uses head choices line instead
+        elif action == "WAIT":
+            return "(waiting for training progress)"
+        elif action == "PRUNE":
+            return f"(removing underperformer from {slot})"
+        elif action == "FOSSILIZE":
+            return f"(fusing trained module in {slot})"
+        elif action == "SET_ALPHA_TARGET":
+            return "(adjusting blend parameters)"
+        else:
+            return ""
 
     def _render_separator(self) -> Text:
         """Render horizontal separator at correct width."""
@@ -495,9 +557,10 @@ class TamiyoBrain(Static):
             "WAIT": "dim",
             "FOSSILIZE": "blue",
             "PRUNE": "red",
+            "ADVANCE": "yellow",
         }
 
-        for action in ["GERMINATE", "SET_ALPHA_TARGET", "FOSSILIZE", "PRUNE", "WAIT"]:
+        for action in ["GERMINATE", "SET_ALPHA_TARGET", "FOSSILIZE", "PRUNE", "ADVANCE", "WAIT"]:
             pct = pcts.get(action, 0)
             width = int((pct / 100) * bar_width)
             if width > 0:
@@ -505,7 +568,7 @@ class TamiyoBrain(Static):
 
         bar.append("]")
 
-        # Fixed-width legend: G=09 A=02 F=00 P=06 W=60
+        # Fixed-width legend: G=09 A=02 F=00 P=06 V=02 W=60
         # Always show all actions with 2-digit zero-padded percentages for stability
         abbrevs = {
             "GERMINATE": "G",
@@ -513,10 +576,11 @@ class TamiyoBrain(Static):
             "WAIT": "W",
             "FOSSILIZE": "F",
             "PRUNE": "P",
+            "ADVANCE": "V",  # V for adVance (A is taken)
         }
         # Build legend as separate Text for right-justification
         legend_parts = []
-        for action in ["GERMINATE", "SET_ALPHA_TARGET", "FOSSILIZE", "PRUNE", "WAIT"]:
+        for action in ["GERMINATE", "SET_ALPHA_TARGET", "FOSSILIZE", "PRUNE", "ADVANCE", "WAIT"]:
             pct = pcts.get(action, 0)
             legend_parts.append(
                 (f"{abbrevs[action]}={pct:02.0f}", colors.get(action, "white"))
@@ -603,28 +667,14 @@ class TamiyoBrain(Static):
             "HOLDING",
             "FOSSILIZED",
         ]
-        stage_colors = {
-            "DORMANT": "dim",
-            "GERMINATED": "green",
-            "TRAINING": "cyan",
-            "BLENDING": "yellow",
-            "HOLDING": "bright_cyan",
-            "FOSSILIZED": "blue",
-        }
-        stage_abbrevs = {
-            "DORMANT": "DORM",
-            "GERMINATED": "GERM",
-            "TRAINING": "TRAIN",
-            "BLENDING": "BLEND",
-            "HOLDING": "HOLD",
-            "FOSSILIZED": "FOSS",
-        }
+        # Use leyline constants (uppercase abbrevs for this widget's style)
+        stage_abbrevs = {k: v.upper() for k, v in STAGE_ABBREVIATIONS.items()}
 
         # Build distribution line: "DORM:48 ░░░░ │ GERM:4 ░ │ TRAIN:28 ████ │ ..."
         for i, stage in enumerate(stages):
             count = counts.get(stage, 0)
             abbrev = stage_abbrevs[stage]
-            color = stage_colors[stage]
+            color = STAGE_COLORS.get(stage, "dim")
 
             # Proportional bar (max 4 chars)
             bar_width = min(4, int((count / max(1, total)) * 16)) if total > 0 else 0
@@ -869,42 +919,43 @@ class TamiyoBrain(Static):
         index: int,
         total_cards: int = 3,
     ) -> Text:
-        """Render an enriched 6-line decision card (24 chars wide).
+        """Render an 8-line decision card (65 chars wide) with semantic sections.
+
+        New redesigned format with dashed separator dividing "what happened"
+        from "outcome" section.
 
         Age-based border colors (per UX review):
         - Newest (index 0): cyan border - fresh, actionable
         - Middle: dim grey border - intermediate
         - Oldest (index == total-1): yellow border - aging out soon
 
-        Format per DRL + UX reviews:
-        ┌─ D1 16s ──────────────┐
-        │ WAIT s:1 100%         │  Action, slot, confidence
-        │ H:25% ent:0.85        │  Host accuracy, decision entropy
-        │ V:+0.45 A:-0.12       │  Value estimate, advantage (NEW)
-        │ -0.68→+0.00 ✓ HIT     │  Expected vs actual + text (NEW)
-        │ alt: G:12% P:8%       │  Alternatives
-        └───────────────────────┘
+        Format:
+        ┌─ #1 GERMINATE ──────────────────────────────────────── 16s ───┐
+        │  slot:1  confidence:92%                                       │
+        │  blueprint:conv_light(87%)  STD  sigmoid+add  ╱               │
+        │ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─│
+        │  host:25%  entropy:0.85 [balanced]                      [HIT] │
+        │  expect:+0.45  reward:+0.30  TD:+0.22                         │
+        │  also: WAIT 6%  PRUNE 2%                                      │
+        └───────────────────────────────────────────────────────────────┘
         """
         from datetime import datetime, timezone
 
-        CONTENT_WIDTH = self.DECISION_CARD_WIDTH - 4  # "│ " + content + " │"
+        CARD_WIDTH = self.DECISION_CARD_WIDTH  # 65
+        CONTENT_WIDTH = CARD_WIDTH - 4  # 61 inner chars (│ + space + content + space + │)
 
-        # Age-based border colors (per UX review):
-        # - Newest (index 0): cyan - fresh, actionable
-        # - Middle: dim grey - intermediate
-        # - Oldest (index == total-1): yellow - aging out soon
+        # Age-based border colors
         if total_cards <= 1:
-            border_style = "cyan"  # Single card is always "newest"
+            border_style = "cyan"
         elif index == 0:
-            border_style = "cyan"  # Newest
+            border_style = "cyan"
         elif index == total_cards - 1:
-            border_style = "yellow"  # Oldest
+            border_style = "yellow"
         else:
-            border_style = "dim"  # Middle
+            border_style = "dim"
 
         now = datetime.now(timezone.utc)
         age = (now - decision.timestamp).total_seconds()
-        # Precise formatting: "45s" for <60s, "1:35" for >=60s (no rounding confusion)
         if age < 60:
             age_str = f"{age:.0f}s"
         else:
@@ -924,99 +975,175 @@ class TamiyoBrain(Static):
 
         card = Text()
 
-        # Title: ┌─ D1 16s ──────────────┐
-        title = f"D{index + 1} {age_str}"
-        fill = self.DECISION_CARD_WIDTH - 4 - len(title)
-        card.append(f"┌─ {title}{'─' * fill}┐\n", style=border_style)
+        # === Title line: ┌─ #1 GERMINATE ───────────────────────── 16s ───┐ ===
+        # Format: "┌─ " + title_left + fill + " " + age_str + " ───┐"
+        title_left = f"#{index + 1} {decision.chosen_action}"
+        # We want: ┌─ #1 ACTION ─────...───── XXs ───┐
+        # Total: 65 chars
+        # Left side: "┌─ " = 3 chars
+        # Right side: " ───┐" = 5 chars
+        # Age: " XXs" or " X:XX" (up to 6 chars with space)
+        age_part = f" {age_str} "
+        left_part = f"┌─ {title_left} "
+        right_part = f"{age_part}───┐"
+        fill_len = CARD_WIDTH - len(left_part) - len(right_part)
+        card.append("┌─ ", style=border_style)
+        card.append(f"#{index + 1} ", style="bright_white")
+        card.append(decision.chosen_action, style=action_style)
+        card.append(" ", style=border_style)
+        card.append("─" * max(0, fill_len), style=border_style)
+        card.append(f" {age_str} ", style="dim")
+        card.append("───┐\n", style=border_style)
 
-        # Line 1: ACTION s:N CONF%
-        action_abbrev = decision.chosen_action[:4].upper()
+        # === Line 1: slot:N  confidence:XX% ===
         slot_num = decision.chosen_slot[-1] if decision.chosen_slot else "-"
-        line1 = f"{action_abbrev} s:{slot_num} {decision.confidence:.0%}"
-        card.append("│", style=border_style)
-        card.append(" ")
-        card.append(action_abbrev, style=action_style)
-        card.append(f" s:{slot_num}", style="cyan")
-        card.append(f" {decision.confidence:.0%}", style="dim")
-        card.append(" " * max(0, CONTENT_WIDTH - len(line1)) + " ")
-        card.append("│", style=border_style)
-        card.append("\n")
+        line1_content = f"slot:{slot_num}  confidence:{decision.confidence:.0%}"
+        line1_padding = CONTENT_WIDTH - len(line1_content)
+        card.append("│ ", style=border_style)
+        card.append(f"slot:{slot_num}", style="cyan")
+        card.append("  ", style="dim")
+        card.append(f"confidence:{decision.confidence:.0%}", style="dim")
+        card.append(" " * max(0, line1_padding) + " ", style="dim")
+        card.append("│\n", style=border_style)
 
-        # Line 2: H:XX% ent:X.XX (decision entropy, per DRL review)
-        line2 = f"H:{decision.host_accuracy:.0f}% ent:{decision.decision_entropy:.2f}"
-        card.append("│", style=border_style)
-        card.append(" ")
-        card.append(f"H:{decision.host_accuracy:.0f}%", style="cyan")
-        card.append(f" ent:{decision.decision_entropy:.2f}", style="dim")
-        card.append(" " * max(0, CONTENT_WIDTH - len(line2)) + " ")
-        card.append("│", style=border_style)
-        card.append("\n")
+        # === Line 2: Blueprint info for GERMINATE, OR contextual note for others ===
+        card.append("│ ", style=border_style)
+        if decision.chosen_action == "GERMINATE" and decision.chosen_blueprint:
+            # Format: "blueprint:conv_light(87%)  STD  sigmoid+add  ╱"
+            bp_name = decision.chosen_blueprint[:10]  # Max 10 chars
+            bp_conf = f"({decision.blueprint_confidence:.0%})" if decision.blueprint_confidence else ""
 
-        # Line 3: V:+X.XX δ:+X.XX (per DRL review)
-        # V = expected_value = V(s) value function estimate
-        # δ = value_residual = r - V(s) = prediction error
-        line3 = (
-            f"V:{decision.expected_value:+.2f} \u03b4:{decision.value_residual:+.2f}"
-        )
-        card.append("│", style=border_style)
-        card.append(" ")
-        card.append(f"V:{decision.expected_value:+.2f}", style="cyan")
-        card.append(f" \u03b4:{decision.value_residual:+.2f}", style="magenta")
-        card.append(" " * max(0, CONTENT_WIDTH - len(line3)) + " ")
-        card.append("│", style=border_style)
-        card.append("\n")
+            # Tempo: FAST→▸▸▸, STANDARD→▸▸ (STD), SLOW→▸
+            tempo_map = {"FAST": "▸▸▸", "STANDARD": "▸▸", "SLOW": "▸"}
+            tempo_display = tempo_map.get(decision.chosen_tempo or "", "-")
+            tempo_style = "magenta" if decision.chosen_tempo in tempo_map else "dim"
 
-        # Line 4: r:+X.XX TD:+X.XX ✓ HIT / ✗ MISS (per DRL + UX review)
-        # r = actual_reward = immediate reward received
-        # TD = td_advantage = r + γV(s') - V(s) = true TD(0) advantage
-        # HIT/MISS based on prediction accuracy |r - V(s)|
-        card.append("│", style=border_style)
-        card.append(" ")
-        if decision.actual_reward is not None:
-            diff = abs(decision.actual_reward - decision.expected_value)
-            is_hit = diff < self.PREDICTION_EXCELLENT_THRESHOLD
-            style = "green" if is_hit else "red"
-            icon = "✓" if is_hit else "✗"
-            # Show reward
-            card.append(f"r:{decision.actual_reward:+.2f}", style=style)
-            # Show TD advantage if computed (requires next step's V(s'))
-            if decision.td_advantage is not None:
-                card.append(f" TD:{decision.td_advantage:+.2f}", style="bright_cyan")
-                line4 = f"r:{decision.actual_reward:+.2f} TD:{decision.td_advantage:+.2f} {icon}"
-            else:
-                card.append(" TD:...", style="dim italic")
-                line4 = f"r:{decision.actual_reward:+.2f} TD:... {icon}"
-            card.append(f" {icon}", style=style)
+            # Style: blend style abbreviation
+            style_map = {
+                "LINEAR_ADD": "linear+add",
+                "LINEAR_MULTIPLY": "linear×mul",
+                "SIGMOID_ADD": "sigmoid+add",
+                "GATED_GATE": "gated⊙gate",
+            }
+            style_display = style_map.get(decision.chosen_style or "", "-")
+            style_style = "yellow" if decision.chosen_style in style_map else "dim"
+
+            # Curve glyph
+            curve_glyph = ALPHA_CURVE_GLYPHS.get(decision.chosen_curve or "", "-")
+            curve_style = "green" if decision.chosen_curve in ALPHA_CURVE_GLYPHS else "dim"
+
+            line2_content = f"blueprint:{bp_name}{bp_conf}  {tempo_display}  {style_display}  {curve_glyph}"
+            line2_padding = CONTENT_WIDTH - len(line2_content)
+
+            card.append("blueprint:", style="dim")
+            card.append(bp_name, style="cyan")
+            card.append(bp_conf, style="dim")
+            card.append("  ", style="dim")
+            card.append(tempo_display, style=tempo_style)
+            card.append("  ", style="dim")
+            card.append(style_display, style=style_style)
+            card.append("  ", style="dim")
+            card.append(curve_glyph, style=curve_style)
+            card.append(" " * max(0, line2_padding) + " ")
         else:
-            card.append("r:... TD:...", style="dim italic")
-            line4 = "r:... TD:..."
-        card.append(" " * max(0, CONTENT_WIDTH - len(line4)) + " ")
-        card.append("│", style=border_style)
-        card.append("\n")
+            # Non-GERMINATE: show contextual note
+            context_note = self._action_context_note(decision)
+            line2_content = context_note if context_note else ""
+            line2_padding = CONTENT_WIDTH - len(line2_content)
+            card.append(context_note, style="dim italic")
+            card.append(" " * max(0, line2_padding) + " ")
+        card.append("│\n", style=border_style)
 
-        # Line 5: alt: G:12% P:8%
-        card.append("│", style=border_style)
-        card.append(" ")
+        # === Separator line: │ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─│ ===
+        # Pattern: "│ " (2) + separator_content (61) + " │" (2) = 65 chars
+        # CONTENT_WIDTH = 61, so pattern is 61 chars of "─ " repeating
+        separator_content = "─ " * (CONTENT_WIDTH // 2)
+        if CONTENT_WIDTH % 2 == 1:
+            separator_content += "─"
+        # Trim to exact content width
+        separator_content = separator_content[:CONTENT_WIDTH]
+        card.append("│ ", style=border_style)
+        card.append(separator_content, style="dim")
+        card.append(" │\n", style=border_style)
+
+        # === Line 3: host:XX%  entropy:X.XX [label]                      [BADGE] ===
+        entropy_label, entropy_style = self._entropy_label(decision.decision_entropy)
+        outcome_badge, badge_style = self._outcome_badge(
+            decision.expected_value, decision.actual_reward
+        )
+
+        # Build content: "host:XX%  entropy:X.XX [label]" then right-align "[BADGE]"
+        left_content = f"host:{decision.host_accuracy:.0f}%  entropy:{decision.decision_entropy:.2f} {entropy_label}"
+        right_content = outcome_badge
+        # Calculate padding between left and right
+        middle_padding = CONTENT_WIDTH - len(left_content) - len(right_content)
+
+        card.append("│ ", style=border_style)
+        card.append(f"host:{decision.host_accuracy:.0f}%", style="cyan")
+        card.append("  ", style="dim")
+        card.append(f"entropy:{decision.decision_entropy:.2f}", style="dim")
+        card.append(" ", style="dim")
+        card.append(entropy_label, style=entropy_style)
+        card.append(" " * max(0, middle_padding), style="dim")
+        card.append(outcome_badge, style=badge_style)
+        card.append(" │\n", style=border_style)
+
+        # === Line 4: expect:+X.XX  reward:+X.XX  TD:+X.XX ===
+        card.append("│ ", style=border_style)
+        if decision.actual_reward is not None:
+            if decision.td_advantage is not None:
+                line4_content = f"expect:{decision.expected_value:+.2f}  reward:{decision.actual_reward:+.2f}  TD:{decision.td_advantage:+.2f}"
+                line4_padding = CONTENT_WIDTH - len(line4_content)
+                card.append(f"expect:{decision.expected_value:+.2f}", style="cyan")
+                card.append("  ", style="dim")
+                card.append(f"reward:{decision.actual_reward:+.2f}", style="magenta")
+                card.append("  ", style="dim")
+                card.append(f"TD:{decision.td_advantage:+.2f}", style="bright_cyan")
+            else:
+                line4_content = f"expect:{decision.expected_value:+.2f}  reward:{decision.actual_reward:+.2f}  TD:..."
+                line4_padding = CONTENT_WIDTH - len(line4_content)
+                card.append(f"expect:{decision.expected_value:+.2f}", style="cyan")
+                card.append("  ", style="dim")
+                card.append(f"reward:{decision.actual_reward:+.2f}", style="magenta")
+                card.append("  ", style="dim")
+                card.append("TD:...", style="dim italic")
+        else:
+            line4_content = f"expect:{decision.expected_value:+.2f}  reward:...  TD:..."
+            line4_padding = CONTENT_WIDTH - len(line4_content)
+            card.append(f"expect:{decision.expected_value:+.2f}", style="cyan")
+            card.append("  ", style="dim")
+            card.append("reward:...", style="dim italic")
+            card.append("  ", style="dim")
+            card.append("TD:...", style="dim italic")
+        card.append(" " * max(0, line4_padding) + " ", style="dim")
+        card.append("│\n", style=border_style)
+
+        # === Line 5: also: ACTION X%  ACTION X% ===
+        card.append("│ ", style=border_style)
         if decision.alternatives:
-            alt_strs = [f"{a[0]}:{p:.0%}" for a, p in decision.alternatives[:2]]
-            line5 = "alt: " + " ".join(alt_strs)
-            card.append("alt: ", style="dim")
+            # Format: "also: WAIT 6%  PRUNE 2%"
+            alt_parts = []
+            for alt_action, prob in decision.alternatives[:2]:
+                alt_parts.append(f"{alt_action} {prob:.0%}")
+            line5_content = "also: " + "  ".join(alt_parts)
+            line5_padding = CONTENT_WIDTH - len(line5_content)
+
+            card.append("also: ", style="dim")
             for i, (alt_action, prob) in enumerate(decision.alternatives[:2]):
                 if i > 0:
-                    card.append(" ", style="dim")
+                    card.append("  ", style="dim")
                 alt_style = action_colors.get(alt_action, "dim")
-                card.append(f"{alt_action[0]}:{prob:.0%}", style=alt_style)
+                card.append(alt_action, style=alt_style)
+                card.append(f" {prob:.0%}", style="dim")
         else:
-            line5 = "alt: -"
-            card.append("alt: -", style="dim")
-        card.append(" " * max(0, CONTENT_WIDTH - len(line5)) + " ")
-        card.append("│", style=border_style)
-        card.append("\n")
+            line5_content = "also: -"
+            line5_padding = CONTENT_WIDTH - len(line5_content)
+            card.append("also: -", style="dim")
+        card.append(" " * max(0, line5_padding) + " ", style="dim")
+        card.append("│\n", style=border_style)
 
-        # Bottom border
-        card.append(
-            "└" + "─" * (self.DECISION_CARD_WIDTH - 2) + "┘", style=border_style
-        )
+        # === Bottom border ===
+        card.append("└" + "─" * (CARD_WIDTH - 2) + "┘", style=border_style)
 
         return card
 
@@ -1046,9 +1173,6 @@ class TamiyoBrain(Static):
 
         banner.append(f"{icon} ", style=style)
         banner.append(f"{label}   ", style=style)
-
-        # Track if we're in warmup period (first 50 batches)
-        is_warmup = status == "warmup"
 
         if tamiyo.ppo_data_received:
             # EV with warning indicator
@@ -1086,7 +1210,7 @@ class TamiyoBrain(Static):
             banner.append("  ")
 
             # Gradient health summary (per UX spec)
-            healthy = self._TOTAL_LAYERS - tamiyo.dead_layers - tamiyo.exploding_layers
+            healthy = DEFAULT_HOST_LSTM_LAYERS - tamiyo.dead_layers - tamiyo.exploding_layers
             if tamiyo.dead_layers > 0 or tamiyo.exploding_layers > 0:
                 banner.append(
                     f"GradHP:!! {tamiyo.dead_layers}D/{tamiyo.exploding_layers}E",
@@ -1094,7 +1218,7 @@ class TamiyoBrain(Static):
                 )
             else:
                 banner.append(
-                    f"GradHP:OK {healthy}/{self._TOTAL_LAYERS}", style="green"
+                    f"GradHP:OK {healthy}/{DEFAULT_HOST_LSTM_LAYERS}", style="green"
                 )
             banner.append("  ")
 
@@ -1604,8 +1728,8 @@ class TamiyoBrain(Static):
                 if len(unhealthy_layers) > 4:
                     result.append(f"+{len(unhealthy_layers) - 4} more", style="dim")
         else:
-            healthy = self._TOTAL_LAYERS - tamiyo.dead_layers - tamiyo.exploding_layers
-            result.append(f"OK {healthy}/{self._TOTAL_LAYERS} healthy", style="green")
+            healthy = DEFAULT_HOST_LSTM_LAYERS - tamiyo.dead_layers - tamiyo.exploding_layers
+            result.append(f"OK {healthy}/{DEFAULT_HOST_LSTM_LAYERS} healthy", style="green")
 
         return result
 
@@ -1667,9 +1791,9 @@ class TamiyoBrain(Static):
         matrix.add_row(gauge_grid, separator, metrics_col)
         return matrix
 
-    # Head segment width: 10 chars per head for alignment
-    # Format: "abbr[███] " = 4-char abbrev + "[" + 3-char bar + "] " = 10 chars
-    HEAD_SEGMENT_WIDTH = 10
+    # Head segment width: 12 chars per head for alignment (expanded for 80% layout)
+    # Format: "abbr[█████] " = 4-char abbrev + "[" + 5-char bar + "] " = 12 chars
+    HEAD_SEGMENT_WIDTH = 12
 
     def _compute_head_entropy_context(
         self, head_key: str, observed_entropy: float
@@ -1786,9 +1910,9 @@ class TamiyoBrain(Static):
             # Check for missing data (value=0.0 for untracked heads)
             if value == 0.0 and not is_tracked:
                 # Visual distinction for awaiting telemetry (per risk assessor)
-                # 9-char segment: "abbr[---] "
+                # Use 5 dashes to match 5-char bars
                 result.append(f"{abbrev}[", style="dim")
-                result.append("---", style="dim italic")
+                result.append("-----", style="dim italic")
                 result.append("] ")
                 continue
 
@@ -1797,8 +1921,9 @@ class TamiyoBrain(Static):
             _, _, adjusted_fill = head_contexts[head_key]
             adjusted_fill = max(0, min(1, adjusted_fill))
 
-            # 3-char bar (narrower for 80-char terminal compatibility)
-            bar_width = 3
+            # 5-char bar (expanded for 80% width layout - better granularity)
+            # Per DRL specialist: helps detect entropy collapse earlier
+            bar_width = 5
             filled = int(adjusted_fill * bar_width)
             empty = bar_width - filled
 
@@ -1813,64 +1938,62 @@ class TamiyoBrain(Static):
 
             # Conditional head indicator: append ~ to abbrev
             is_conditional = head_key in self.CONDITIONAL_HEADS
-            label = f"{abbrev}~" if is_conditional else f"{abbrev} " if len(abbrev) < 4 else abbrev
+            label = f"{abbrev}~" if is_conditional else abbrev
 
-            # 9-char segment: "abbr[███] " = 4 + 1 + 3 + 1 + space = 9
-            result.append(f"{label[:4]}[")
+            # 12-char segment: "abbr[█████] " = 4 + 1 + 5 + 1 + space = 12
+            result.append(f"{label}[")
             result.append("█" * filled, style=color)
             result.append("░" * empty, style="dim")
             result.append("] ")
 
-        result.append("\n        ")
+        result.append("\n          ")  # 10 spaces to align under wider bars
 
-        # Second line: values (10-char segments to match bars)
-        # Non-op heads shifted right by 3 chars for alignment under bars
+        # Second line: values with per-head alignment offsets
+        # Bar labels have variable widths (conditional heads add ~), causing cumulative drift.
+        # These offsets correct for the drift to align values under their bars.
+        # Offsets: slot=-2, bpnt=-1, styl=0, temp=+1, atgt=+2, aspd=+3, acrv=+5, op=+6
+        head_offsets = {
+            "slot": -2, "blueprint": -1, "style": 0, "tempo": 1,
+            "alpha_target": 2, "alpha_speed": 3, "alpha_curve": 5, "op": 6,
+        }
+
         for abbrev, field, head_key in heads:
             value = getattr(tamiyo, field, 0.0)
             is_tracked = head_key in self.TRACKED_HEADS
             is_last_head = head_key == "op"
+            offset = head_offsets.get(head_key, 0)
 
             if value == 0.0 and not is_tracked:
-                # 10-char segment: n/a with appropriate alignment
-                if is_last_head:
-                    result.append("   n/a    ", style="dim italic")
-                else:
-                    result.append("     n/a  ", style="dim italic")
+                # n/a segment with per-head offset
+                base_lead = 8 if is_last_head else 6
+                lead = " " * (base_lead + offset)
+                trail = " " * max(0, 4 - offset)
+                result.append(f"{lead}n/a{trail}", style="dim italic")
                 continue
 
             # Use adjusted_fill for threshold decisions
             active_entropy, relevance_ratio, adjusted_fill = head_contexts[head_key]
-
-            # 10-char segment with indicators: critical (!), warning (*), normal
-            # Op head: "  X.XX!   " (2 leading, 3 trailing)
-            # Other heads: "    X.XX! " (4 leading, 1 trailing) - shifted right by 2
-            #
-            # Use adjusted_fill for threshold checks - this accounts for conditional
-            # heads where the observed entropy is diluted by samples where the head
-            # is irrelevant (masked to single option). The adjusted_fill uses the
-            # "active entropy" (entropy when head IS relevant) for threshold decisions.
             is_conditional = head_key in self.CONDITIONAL_HEADS
 
-            if is_last_head:
-                if adjusted_fill < 0.25:
-                    result.append(f"  {value:4.2f}!   ", style="red")
-                elif adjusted_fill < 0.5:
-                    result.append(f"  {value:4.2f}*   ", style="yellow")
-                else:
-                    result.append(f"  {value:4.2f}    ", style="dim")
+            # Determine value string and indicator
+            if adjusted_fill < 0.25:
+                val_str = f"{value:4.2f}!"
+                style = "red"
+            elif adjusted_fill < 0.5:
+                val_str = f"{value:4.2f}*"
+                style = "yellow"
+            elif is_conditional and relevance_ratio < 0.3:
+                val_str = f"{value:4.2f}~"
+                style = "dim"
             else:
-                # For conditional heads, show "~" suffix instead of warning indicators
-                # when the head is rarely used (low relevance) but active entropy is OK
-                if adjusted_fill < 0.25:
-                    result.append(f"    {value:4.2f}! ", style="red")
-                elif adjusted_fill < 0.5:
-                    result.append(f"    {value:4.2f}* ", style="yellow")
-                elif is_conditional and relevance_ratio < 0.3:
-                    # Conditional head with low usage but healthy active entropy
-                    # Show ~ to indicate "conditional, rarely used"
-                    result.append(f"    {value:4.2f}~ ", style="dim")
-                else:
-                    result.append(f"    {value:4.2f}  ", style="dim")
+                val_str = f"{value:4.2f} "
+                style = "dim"
+
+            # Apply per-head offset: adjust leading spaces
+            base_lead = 2 if is_last_head else 5
+            lead = " " * (base_lead + offset)
+            trail = " " * max(0, (3 if is_last_head else 2) - offset)
+            result.append(f"{lead}{val_str}{trail}", style=style)
 
         return result
 
@@ -1889,30 +2012,35 @@ class TamiyoBrain(Static):
 
         tamiyo = self._snapshot.tamiyo
 
-        # Head config: (abbrev, field_name)
+        # Head config: (abbrev, field_name, head_key)
         # Same abbreviations as entropy heatmap for consistency
+        # head_key is used to check if head is conditional (for ~ suffix alignment)
         heads = [
-            ("slot", "head_slot_grad_norm"),
-            ("bpnt", "head_blueprint_grad_norm"),
-            ("styl", "head_style_grad_norm"),
-            ("temp", "head_tempo_grad_norm"),
-            ("atgt", "head_alpha_target_grad_norm"),
-            ("aspd", "head_alpha_speed_grad_norm"),
-            ("acrv", "head_alpha_curve_grad_norm"),
-            ("op", "head_op_grad_norm"),
+            ("slot", "head_slot_grad_norm", "slot"),
+            ("bpnt", "head_blueprint_grad_norm", "blueprint"),
+            ("styl", "head_style_grad_norm", "style"),
+            ("temp", "head_tempo_grad_norm", "tempo"),
+            ("atgt", "head_alpha_target_grad_norm", "alpha_target"),
+            ("aspd", "head_alpha_speed_grad_norm", "alpha_speed"),
+            ("acrv", "head_alpha_curve_grad_norm", "alpha_curve"),
+            ("op", "head_op_grad_norm", "op"),
         ]
 
         result = Text()
         result.append(" Grads: ", style="dim")
 
-        # First line: bars (9-char segments)
-        for abbrev, field in heads:
+        # First line: bars (12-char segments for non-op, 10-char for op)
+        for abbrev, field, head_key in heads:
             value = getattr(tamiyo, field, 0.0)
 
-            # No data case
+            # Conditional head indicator: append ~ to abbrev (matches entropy heatmap)
+            is_conditional = head_key in self.CONDITIONAL_HEADS
+            label = f"{abbrev}~" if is_conditional else abbrev
+
+            # No data case - use 5 dashes to match 5-char bars
             if value == 0.0:
-                result.append(f"{abbrev}[", style="dim")
-                result.append("---", style="dim italic")
+                result.append(f"{label}[", style="dim")
+                result.append("-----", style="dim italic")
                 result.append("] ")
                 continue
 
@@ -1943,33 +2071,38 @@ class TamiyoBrain(Static):
                 fill = 1.0
                 color = "red"
 
-            # 3-char bar
-            bar_width = 3
+            # 5-char bar (expanded for 80% width layout - matches entropy heatmap)
+            bar_width = 5
             filled = int(fill * bar_width)
             empty = bar_width - filled
 
-            # Pad abbrev to 4 chars
-            label = f"{abbrev} " if len(abbrev) < 4 else abbrev
-
-            # 9-char segment: "abbr[███] "
-            result.append(f"{label[:4]}[")
+            # No padding - use label (includes ~ for conditional heads)
+            # (12-char segment for 4-char abbrevs, 10-char for "op")
+            result.append(f"{label}[")
             result.append("█" * filled, style=color)
             result.append("░" * empty, style="dim")
             result.append("] ")
 
-        result.append("\n        ")
+        result.append("\n          ")  # 10 spaces to align under wider bars
 
-        # Second line: values (aligned under bars)
-        for i, (abbrev, field) in enumerate(heads):
+        # Second line: values with per-head alignment offsets (same as entropy heatmap)
+        # Offsets: slot=-2, bpnt=-1, styl=0, temp=+1, atgt=+2, aspd=+3, acrv=+5, op=+6
+        head_offsets = {
+            "slot": -2, "blueprint": -1, "style": 0, "tempo": 1,
+            "alpha_target": 2, "alpha_speed": 3, "alpha_curve": 5, "op": 6,
+        }
+
+        for abbrev, field, head_key in heads:
             value = getattr(tamiyo, field, 0.0)
-            is_last_head = i == len(heads) - 1
+            is_last_head = head_key == "op"
+            offset = head_offsets.get(head_key, 0)
 
             if value == 0.0:
-                # No data
-                if is_last_head:
-                    result.append("   n/a    ", style="dim italic")
-                else:
-                    result.append("     n/a  ", style="dim italic")
+                # n/a segment with per-head offset
+                base_lead = 8 if is_last_head else 6
+                lead = " " * (base_lead + offset)
+                trail = " " * max(0, 4 - offset)
+                result.append(f"{lead}n/a{trail}", style="dim italic")
                 continue
 
             # Determine status indicator
@@ -1996,10 +2129,11 @@ class TamiyoBrain(Static):
             else:
                 val_str = f"{value:4.2f}"
 
-            if is_last_head:
-                result.append(f"  {val_str}{indicator}   ", style=style)
-            else:
-                result.append(f"    {val_str}{indicator} ", style=style)
+            # Apply per-head offset: adjust leading spaces
+            base_lead = 2 if is_last_head else 5
+            lead = " " * (base_lead + offset)
+            trail = " " * max(0, (3 if is_last_head else 2) - offset)
+            result.append(f"{lead}{val_str}{indicator}{trail}", style=style)
 
         return result
 

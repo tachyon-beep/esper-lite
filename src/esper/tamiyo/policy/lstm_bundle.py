@@ -262,15 +262,17 @@ class LSTMPolicyBundle:
     def initial_hidden(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor]:
         """Get initial LSTM hidden state for rollout collection.
 
-        WARNING: Returns inference-mode tensors that are NOT differentiable.
-        These are suitable ONLY for rollout collection (action sampling).
+        Returns inference-mode tensors (is_inference()=True) for performance.
+        These CANNOT be used directly in autograd - would cause RuntimeError.
 
-        For PPO training (evaluate_actions), pass hidden=None instead.
-        The network will create fresh gradient-compatible hidden states
-        internally, ensuring proper backpropagation through the LSTM.
+        The RolloutBuffer pattern makes this safe:
+        1. Buffer pre-allocates regular tensors at initialization
+        2. add() copies VALUES to buffer (inference flag not transferred)
+        3. get_batched_sequences() returns regular tensors
+        4. evaluate_actions() receives gradient-compatible hidden states
 
-        Passing these tensors to evaluate_actions() will NOT cause errors,
-        but gradients will not flow through the initial hidden state.
+        Do NOT bypass the buffer by passing these tensors directly to
+        evaluate_actions() - this would cause RuntimeError.
         """
         return self._network.get_initial_hidden(batch_size, self.device)
 
@@ -298,9 +300,58 @@ class LSTMPolicyBundle:
         """Get device of network parameters."""
         return next(self._network.parameters()).device
 
+    def _check_not_compiled(self, method_name: str) -> None:
+        """Raise if policy is compiled (device/dtype mutations break compiled graphs)."""
+        if self.is_compiled:
+            raise RuntimeError(
+                f"Cannot call .{method_name}() on a compiled policy. "
+                "Create a new policy on the target device and compile after placement."
+            )
+
     def to(self, device: torch.device | str) -> "LSTMPolicyBundle":
-        """Move network to device."""
+        """Move network to device.
+
+        Compiled policies cannot be moved; create a new policy on the target
+        device and compile after placement.
+        """
+        self._check_not_compiled("to")
         self._network = self._network.to(device)
+        return self
+
+    def cuda(self, device: int | torch.device | None = None) -> "LSTMPolicyBundle":
+        """Move network to CUDA device. Raises if compiled."""
+        self._check_not_compiled("cuda")
+        self._network = self._network.cuda(device)
+        return self
+
+    def cpu(self) -> "LSTMPolicyBundle":
+        """Move network to CPU. Raises if compiled."""
+        self._check_not_compiled("cpu")
+        self._network = self._network.cpu()
+        return self
+
+    def half(self) -> "LSTMPolicyBundle":
+        """Convert network to float16. Raises if compiled."""
+        self._check_not_compiled("half")
+        self._network = self._network.half()
+        return self
+
+    def float(self) -> "LSTMPolicyBundle":
+        """Convert network to float32. Raises if compiled."""
+        self._check_not_compiled("float")
+        self._network = self._network.float()
+        return self
+
+    def double(self) -> "LSTMPolicyBundle":
+        """Convert network to float64. Raises if compiled."""
+        self._check_not_compiled("double")
+        self._network = self._network.double()
+        return self
+
+    def bfloat16(self) -> "LSTMPolicyBundle":
+        """Convert network to bfloat16. Raises if compiled."""
+        self._check_not_compiled("bfloat16")
+        self._network = self._network.bfloat16()
         return self
 
     # === Introspection ===

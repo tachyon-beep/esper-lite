@@ -41,6 +41,7 @@ export interface SeedState {
   epochs_total: number;
   counterfactual: number;
   blend_tempo_epochs: number;
+  alpha_curve: string;
 }
 
 export interface RewardComponents {

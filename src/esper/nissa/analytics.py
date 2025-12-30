@@ -19,6 +19,9 @@ from esper.leyline.telemetry import (
     SeedPrunedPayload,
     SeedStageChangedPayload,
     AnalyticsSnapshotPayload,
+    GovernorRollbackPayload,
+    TrendDetectedPayload,
+    TamiyoInitiatedPayload,
 )
 from esper.nissa.output import OutputBackend
 
@@ -275,20 +278,22 @@ class BlueprintAnalytics(OutputBackend):
             return
 
         elif event.event_type == TelemetryEventType.TAMIYO_INITIATED:
-            _logger.warning("TAMIYO_INITIATED event not yet migrated to typed payload")
+            # TAMIYO_INITIATED signals host stabilization - no analytics aggregation needed.
+            # Just validate the payload type and return.
+            if not isinstance(event.data, TamiyoInitiatedPayload):
+                _logger.warning(f"TAMIYO_INITIATED unexpected payload: {type(event.data).__name__}")
             return
 
         # === Trend Detection Events ===
-        elif event.event_type == TelemetryEventType.PLATEAU_DETECTED:
-            _logger.warning("PLATEAU_DETECTED event not yet migrated to typed payload")
-            return
-
-        elif event.event_type == TelemetryEventType.DEGRADATION_DETECTED:
-            _logger.warning("DEGRADATION_DETECTED event not yet migrated to typed payload")
-            return
-
-        elif event.event_type == TelemetryEventType.IMPROVEMENT_DETECTED:
-            _logger.warning("IMPROVEMENT_DETECTED event not yet migrated to typed payload")
+        elif event.event_type in (
+            TelemetryEventType.PLATEAU_DETECTED,
+            TelemetryEventType.DEGRADATION_DETECTED,
+            TelemetryEventType.IMPROVEMENT_DETECTED,
+        ):
+            # Trend events use TrendDetectedPayload for typed access.
+            # No analytics aggregation needed - events are logged/output for monitoring.
+            if not isinstance(event.data, TrendDetectedPayload):
+                _logger.warning(f"{event.event_type.name} missing typed payload")
             return
 
         # === Health/Warning Events ===
@@ -319,7 +324,17 @@ class BlueprintAnalytics(OutputBackend):
 
         # === Governor Events ===
         elif event.event_type == TelemetryEventType.GOVERNOR_ROLLBACK:
-            _logger.warning("GOVERNOR_ROLLBACK event not yet migrated to typed payload")
+            # Governor rollbacks are operational safety events, not blueprint performance metrics.
+            # The event is logged/output by ConsoleOutput; no aggregation needed here.
+            if not isinstance(event.data, GovernorRollbackPayload):
+                _logger.error("GOVERNOR_ROLLBACK event missing typed payload")
+                return
+            _logger.debug(
+                "Governor rollback on env %d: %s (loss=%.4f)",
+                event.data.env_id,
+                event.data.reason,
+                event.data.loss_at_panic if event.data.loss_at_panic is not None else float('nan'),
+            )
             return
 
         # === Counterfactual Events ===

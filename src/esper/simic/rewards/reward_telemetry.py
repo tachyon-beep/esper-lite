@@ -99,7 +99,7 @@ class RewardComponentsTelemetry:
         )
         return abs(shaped) / abs(self.total_reward)
 
-    def to_dict(self) -> dict[str, float | int | str | None]:
+    def to_dict(self) -> dict[str, float | int | str | bool | None]:
         """Convert to dict for TelemetryEvent data field.
 
         Uses explicit dict construction instead of asdict() for 3-5x performance
@@ -136,6 +136,51 @@ class RewardComponentsTelemetry:
             "total_reward": self.total_reward,
             "shaped_reward_ratio": self.shaped_reward_ratio,
         }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, float | int | str | bool | None]) -> "RewardComponentsTelemetry":
+        """Reconstruct from dict (inverse of to_dict).
+
+        Args:
+            data: Dictionary from to_dict() or JSON deserialization.
+
+        Returns:
+            RewardComponentsTelemetry instance.
+
+        Note:
+            shaped_reward_ratio is a computed property and is ignored during
+            reconstruction (it will be recalculated from the component values).
+        """
+        return cls(
+            base_acc_delta=float(data["base_acc_delta"]),  # type: ignore[arg-type]
+            seed_contribution=float(data["seed_contribution"]) if data["seed_contribution"] is not None else None,
+            bounded_attribution=float(data["bounded_attribution"]) if data["bounded_attribution"] is not None else None,
+            progress_since_germination=float(data["progress_since_germination"]) if data["progress_since_germination"] is not None else None,
+            attribution_discount=float(data["attribution_discount"]),  # type: ignore[arg-type]
+            ratio_penalty=float(data["ratio_penalty"]),  # type: ignore[arg-type]
+            compute_rent=float(data["compute_rent"]),  # type: ignore[arg-type]
+            alpha_shock=float(data["alpha_shock"]),  # type: ignore[arg-type]
+            blending_warning=float(data["blending_warning"]),  # type: ignore[arg-type]
+            holding_warning=float(data["holding_warning"]),  # type: ignore[arg-type]
+            stage_bonus=float(data["stage_bonus"]),  # type: ignore[arg-type]
+            pbrs_bonus=float(data["pbrs_bonus"]),  # type: ignore[arg-type]
+            synergy_bonus=float(data["synergy_bonus"]),  # type: ignore[arg-type]
+            action_shaping=float(data["action_shaping"]),  # type: ignore[arg-type]
+            terminal_bonus=float(data["terminal_bonus"]),  # type: ignore[arg-type]
+            fossilize_terminal_bonus=float(data["fossilize_terminal_bonus"]),  # type: ignore[arg-type]
+            hindsight_credit=float(data["hindsight_credit"]),  # type: ignore[arg-type]
+            num_fossilized_seeds=int(data["num_fossilized_seeds"]),  # type: ignore[arg-type]
+            num_contributing_fossilized=int(data["num_contributing_fossilized"]),  # type: ignore[arg-type]
+            action_name=str(data["action_name"]),
+            action_success=bool(data["action_success"]),
+            seed_stage=int(data["seed_stage"]) if data["seed_stage"] is not None else None,
+            epoch=int(data["epoch"]),  # type: ignore[arg-type]
+            val_acc=float(data["val_acc"]),  # type: ignore[arg-type]
+            acc_at_germination=float(data["acc_at_germination"]) if data["acc_at_germination"] is not None else None,
+            host_baseline_acc=float(data["host_baseline_acc"]) if data["host_baseline_acc"] is not None else None,
+            growth_ratio=float(data["growth_ratio"]),  # type: ignore[arg-type]
+            total_reward=float(data["total_reward"]),  # type: ignore[arg-type]
+        )
 
 
 __all__ = ["RewardComponentsTelemetry"]

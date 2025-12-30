@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 import torch
 
+from esper.leyline import get_action_head_sizes
 from esper.leyline.slot_config import SlotConfig
 from esper.simic.agent import PPOAgent, CHECKPOINT_VERSION
 from esper.tamiyo.policy.factory import create_policy
@@ -340,15 +341,10 @@ class TestPPOCheckpointCompileMode:
 
         # Create test input with correct action head sizes
         state = torch.randn(1, state_dim)
+        head_sizes = get_action_head_sizes(slot_config)
         masks = {
-            "slot": torch.ones(1, slot_config.num_slots, dtype=torch.bool),
-            "blueprint": torch.ones(1, 13, dtype=torch.bool),
-            "style": torch.ones(1, 4, dtype=torch.bool),
-            "tempo": torch.ones(1, 3, dtype=torch.bool),
-            "alpha_target": torch.ones(1, 3, dtype=torch.bool),
-            "alpha_speed": torch.ones(1, 4, dtype=torch.bool),
-            "alpha_curve": torch.ones(1, 3, dtype=torch.bool),
-            "op": torch.ones(1, 6, dtype=torch.bool),
+            name: torch.ones(1, size, dtype=torch.bool)
+            for name, size in head_sizes.items()
         }
 
         # Should produce valid output

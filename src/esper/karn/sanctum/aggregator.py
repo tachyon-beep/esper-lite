@@ -14,7 +14,7 @@ import threading
 import time
 import uuid
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
@@ -34,7 +34,11 @@ from esper.karn.sanctum.schema import (
     RunConfig,
     CounterfactualConfig,
     CounterfactualSnapshot,
+    compute_entropy_velocity,
+    compute_collapse_risk,
+    compute_correlation,
 )
+from esper.karn.constants import TUIThresholds
 from esper.karn.sanctum.widgets.reward_health import RewardHealthData
 from esper.karn.pareto import extract_pareto_frontier, compute_hypervolume_2d
 from esper.leyline import (
@@ -49,6 +53,9 @@ from esper.leyline import (
     SeedPrunedPayload,
     CounterfactualMatrixPayload,
     AnalyticsSnapshotPayload,
+    EpisodeOutcomePayload,
+    GovernorRollbackPayload,
+    TEMPO_NAMES,
 )
 
 if TYPE_CHECKING:
@@ -100,6 +107,8 @@ def normalize_action(action: str) -> str:
             return "PRUNE"
         if action.startswith("WAIT"):
             return "WAIT"
+        if action.startswith("ADVANCE"):
+            return "ADVANCE"
     return normalized
 
 
@@ -144,6 +153,7 @@ class SanctumAggregator:
     _run_id: str = ""
     _task_name: str = ""
     _max_epochs: int = 75
+    _max_batches: int = 100
     _start_time: float = field(default_factory=time.time)
     _connected: bool = False
     _last_event_ts: float = 0.0
@@ -164,6 +174,9 @@ class SanctumAggregator:
     # Cumulative counts (never reset, tracks entire training run)
     _cumulative_fossilized: int = 0
     _cumulative_pruned: int = 0
+    # Cumulative action counts across all batches
+    _cumulative_action_counts: dict[str, int] = field(default_factory=dict)
+    _cumulative_total_actions: int = 0
     # Cumulative graveyard (per-blueprint lifecycle stats across entire run)
     _cumulative_blueprint_spawns: dict[str, int] = field(default_factory=dict)
     _cumulative_blueprint_fossilized: dict[str, int] = field(default_factory=dict)
@@ -184,6 +197,10 @@ class SanctumAggregator:
 
     # Focused env for reward panel
     _focused_env_id: int = 0
+
+    # Last action target (for EnvOverview row highlighting)
+    _last_action_env_id: int | None = None
+    _last_action_timestamp: datetime | None = None
 
     # Historical best runs leaderboard (updated at batch end)
     _best_runs: list[BestRunRecord] = field(default_factory=list)
@@ -221,6 +238,8 @@ class SanctumAggregator:
         # Cumulative counters (never reset)
         self._cumulative_fossilized = 0
         self._cumulative_pruned = 0
+        self._cumulative_action_counts = {}
+        self._cumulative_total_actions = 0
         self._cumulative_blueprint_spawns = {}
         self._cumulative_blueprint_fossilized = {}
         self._cumulative_blueprint_prunes = {}
@@ -278,6 +297,8 @@ class SanctumAggregator:
             self._handle_analytics_snapshot(event)
         elif event_type == "EPISODE_OUTCOME":
             self._handle_episode_outcome(event)
+        elif event_type == "GOVERNOR_ROLLBACK":
+            self._handle_governor_rollback(event)
 
     def get_snapshot(self) -> SanctumSnapshot:
         """Get current SanctumSnapshot.
@@ -342,6 +363,7 @@ class SanctumAggregator:
             "SET_ALPHA_TARGET": 0,
             "PRUNE": 0,
             "FOSSILIZE": 0,
+            "ADVANCE": 0,
         }
         total_actions = 0
         for env in self._envs.values():
@@ -351,6 +373,9 @@ class SanctumAggregator:
         if total_actions > 0:
             self._tamiyo.action_counts = aggregated_actions
             self._tamiyo.total_actions = total_actions
+        # Always update cumulative counts (even if current batch is zero)
+        self._tamiyo.cumulative_action_counts = dict(self._cumulative_action_counts)
+        self._tamiyo.cumulative_total_actions = self._cumulative_total_actions
 
         # Carousel rotation: expire ONE oldest unpinned decision per cycle if > 30s old
         # This runs every snapshot (250ms), creating natural stagger as each decision
@@ -419,6 +444,7 @@ class SanctumAggregator:
             current_batch=self._current_batch or self._batches_completed,
             current_epoch=self._current_epoch,
             max_epochs=self._max_epochs,
+            max_batches=self._max_batches,
             runtime_seconds=runtime,
             connected=self._connected,
             staleness_seconds=staleness,
@@ -430,6 +456,9 @@ class SanctumAggregator:
             # Per-env state
             envs=dict(self._envs),
             focused_env_id=self._focused_env_id,
+            # Last action target (for EnvOverview row highlighting)
+            last_action_env_id=self._last_action_env_id,
+            last_action_timestamp=self._last_action_timestamp,
             # Focused env's reward breakdown (for RewardComponents widget)
             rewards=focused_rewards,
             # Tamiyo state
@@ -475,6 +504,7 @@ class SanctumAggregator:
         self._run_id = payload.episode_id
         self._task_name = payload.task
         self._max_epochs = payload.max_epochs
+        self._max_batches = payload.max_batches
         self._connected = True
         self._start_time = time.time()
         self._current_episode = payload.start_episode
@@ -529,6 +559,11 @@ class SanctumAggregator:
         # Reset Tamiyo state
         self._tamiyo = TamiyoState()
 
+        # Compile status (static configuration from training start)
+        self._tamiyo.infrastructure.compile_enabled = payload.compile_enabled
+        self._tamiyo.infrastructure.compile_backend = payload.compile_backend or ""
+        self._tamiyo.infrastructure.compile_mode = payload.compile_mode or ""
+
         # Reset best runs for new training session
         self._best_runs = []
 
@@ -551,6 +586,11 @@ class SanctumAggregator:
         env_id = payload.env_id
         self._ensure_env(env_id)
         env = self._envs[env_id]
+
+        # Clear rollback state - training has resumed for this env
+        if env.rolled_back:
+            env.rolled_back = False
+            env.rollback_reason = ""
 
         # Update accuracy
         val_acc = payload.val_accuracy
@@ -585,6 +625,12 @@ class SanctumAggregator:
             seed.grad_ratio = seed_telemetry.get("grad_ratio", seed.grad_ratio)
             seed.has_vanishing = seed_telemetry.get("has_vanishing", seed.has_vanishing)
             seed.has_exploding = seed_telemetry.get("has_exploding", seed.has_exploding)
+            # Inter-slot interaction metrics (from counterfactual engine)
+            seed.contribution_velocity = seed_telemetry.get("contribution_velocity", seed.contribution_velocity)
+            seed.interaction_sum = seed_telemetry.get("interaction_sum", seed.interaction_sum)
+            seed.boost_received = seed_telemetry.get("boost_received", seed.boost_received)
+            seed.upstream_alpha_sum = seed_telemetry.get("upstream_alpha_sum", seed.upstream_alpha_sum)
+            seed.downstream_alpha_sum = seed_telemetry.get("downstream_alpha_sum", seed.downstream_alpha_sum)
 
             # Track slot_ids dynamically (only if not locked by TRAINING_STARTED)
             if not self._slot_ids_locked and slot_id not in self._slot_ids and slot_id != "unknown":
@@ -663,6 +709,13 @@ class SanctumAggregator:
         # Advantage stats - have defaults
         self._tamiyo.advantage_mean = payload.advantage_mean
         self._tamiyo.advantage_std = payload.advantage_std
+        self._tamiyo.advantage_skewness = payload.advantage_skewness
+        self._tamiyo.advantage_kurtosis = payload.advantage_kurtosis
+        self._tamiyo.advantage_positive_ratio = payload.advantage_positive_ratio
+
+        # Log prob extremes (NaN predictor) - have defaults
+        self._tamiyo.log_prob_min = payload.log_prob_min
+        self._tamiyo.log_prob_max = payload.log_prob_max
 
         # Ratio statistics (PPO importance sampling ratios) - have defaults
         self._tamiyo.ratio_mean = payload.ratio_mean
@@ -681,6 +734,7 @@ class SanctumAggregator:
         self._tamiyo.dead_layers = payload.dead_layers
         self._tamiyo.exploding_layers = payload.exploding_layers
         self._tamiyo.nan_grad_count = payload.nan_grad_count
+        self._tamiyo.inf_grad_count = payload.inf_grad_count
         if payload.layer_gradient_health is not None:
             self._tamiyo.layer_gradient_health = payload.layer_gradient_health
         self._tamiyo.entropy_collapsed = payload.entropy_collapsed
@@ -729,6 +783,49 @@ class SanctumAggregator:
         self._tamiyo.inner_epoch = payload.inner_epoch
         self._tamiyo.ppo_batch = payload.batch
 
+        # Value function statistics (for divergence detection)
+        self._tamiyo.value_mean = payload.value_mean
+        self._tamiyo.value_std = payload.value_std
+        self._tamiyo.value_min = payload.value_min
+        self._tamiyo.value_max = payload.value_max
+
+        # Set initial spread after warmup for relative thresholds
+        WARMUP_BATCHES = 50
+        if self._tamiyo.initial_value_spread is None and self._current_batch >= WARMUP_BATCHES:
+            spread = self._tamiyo.value_max - self._tamiyo.value_min
+            if spread > 0.1:  # Only set if non-trivial
+                self._tamiyo.initial_value_spread = spread
+
+        # Compute entropy velocity and collapse risk (after entropy_history is updated)
+        self._tamiyo.entropy_velocity = compute_entropy_velocity(
+            self._tamiyo.entropy_history
+        )
+        self._tamiyo.collapse_risk_score = compute_collapse_risk(
+            self._tamiyo.entropy_history,
+            critical_threshold=TUIThresholds.ENTROPY_CRITICAL,
+            warning_threshold=TUIThresholds.ENTROPY_WARNING,
+            max_healthy_entropy=TUIThresholds.ENTROPY_MAX,
+            previous_risk=self._tamiyo._previous_risk,
+        )
+        self._tamiyo._previous_risk = self._tamiyo.collapse_risk_score
+
+        # Compute entropy-clip correlation (for policy collapse pattern detection)
+        self._tamiyo.entropy_clip_correlation = compute_correlation(
+            self._tamiyo.entropy_history,
+            self._tamiyo.clip_fraction_history,
+        )
+
+        # Gradient quality metrics (nested dataclass)
+        self._tamiyo.gradient_quality.clip_fraction_positive = payload.clip_fraction_positive
+        self._tamiyo.gradient_quality.clip_fraction_negative = payload.clip_fraction_negative
+        self._tamiyo.gradient_quality.gradient_cv = payload.gradient_cv
+
+        # Infrastructure metrics (nested dataclass)
+        self._tamiyo.infrastructure.cuda_memory_allocated_gb = payload.cuda_memory_allocated_gb
+        self._tamiyo.infrastructure.cuda_memory_reserved_gb = payload.cuda_memory_reserved_gb
+        self._tamiyo.infrastructure.cuda_memory_peak_gb = payload.cuda_memory_peak_gb
+        self._tamiyo.infrastructure.cuda_memory_fragmentation = payload.cuda_memory_fragmentation
+
     def _handle_seed_event(self, event: "TelemetryEvent", event_type: str) -> None:
         """Handle seed lifecycle events with per-env tracking."""
         # Type-safe payload access with type switching based on event_type
@@ -760,6 +857,7 @@ class SanctumAggregator:
             seed.epochs_in_stage = germinated_payload.epochs_in_stage
             seed.blend_tempo_epochs = germinated_payload.blend_tempo_epochs
             seed.alpha = germinated_payload.alpha
+            seed.alpha_curve = germinated_payload.alpha_curve
             env.active_seed_count += 1
 
             # Track blueprint spawn for graveyard
@@ -797,6 +895,7 @@ class SanctumAggregator:
             seed.accuracy_delta = stage_changed_payload.accuracy_delta
             if stage_changed_payload.alpha is not None:
                 seed.alpha = stage_changed_payload.alpha
+            seed.alpha_curve = stage_changed_payload.alpha_curve
 
         elif event_type == "SEED_FOSSILIZED" and isinstance(event.data, SeedFossilizedPayload):
             fossilized_payload = event.data
@@ -939,7 +1038,7 @@ class SanctumAggregator:
                     peak_accuracy=env.best_accuracy,
                     final_accuracy=env.host_accuracy,
                     epoch=env.best_accuracy_epoch,
-                    seeds={k: SeedState(**v.__dict__) for k, v in env.best_seeds.items()},
+                    seeds={k: replace(v) for k, v in env.best_seeds.items()},
                     slot_ids=list(self._slot_ids),  # All slots for showing DORMANT in detail
                     growth_ratio=growth_ratio,
                     # Interactive features
@@ -975,6 +1074,12 @@ class SanctumAggregator:
         pinned = [r for r in self._best_runs if r.pinned]
         unpinned = [r for r in self._best_runs if not r.pinned][:10]
         self._best_runs = sorted(pinned + unpinned, key=lambda r: r.peak_accuracy, reverse=True)
+
+        # Accumulate batch action counts into cumulative totals BEFORE resetting
+        for env in self._envs.values():
+            for action, count in env.action_counts.items():
+                self._cumulative_action_counts[action] = self._cumulative_action_counts.get(action, 0) + count
+            self._cumulative_total_actions += env.total_actions
 
         # Reset per-env state for next episode
         # ALL episode-scoped fields must reset here
@@ -1012,6 +1117,7 @@ class SanctumAggregator:
                 "SET_ALPHA_TARGET": 0,
                 "PRUNE": 0,
                 "FOSSILIZE": 0,
+                "ADVANCE": 0,
             }
             env.total_actions = 0
 
@@ -1103,34 +1209,30 @@ class SanctumAggregator:
             env.action_counts[action_name] = env.action_counts.get(action_name, 0) + 1
             env.total_actions += 1
 
-            # Update reward component breakdown from payload
-            # (migrated from removed REWARD_COMPUTED handler)
-            if payload.base_acc_delta is not None:
-                env.reward_components.base_acc_delta = payload.base_acc_delta
-            if payload.bounded_attribution is not None:
-                env.reward_components.bounded_attribution = payload.bounded_attribution
-            if payload.compute_rent is not None:
-                env.reward_components.compute_rent = payload.compute_rent
-            # Reward health fields (for RewardHealthPanel)
-            if payload.stage_bonus is not None:
-                env.reward_components.stage_bonus = payload.stage_bonus
-            if payload.ratio_penalty is not None:
-                env.reward_components.ratio_penalty = payload.ratio_penalty
-            if payload.alpha_shock is not None:
-                env.reward_components.alpha_shock = payload.alpha_shock
-            # Hindsight credit (Phase 3.2 scaffold credit)
-            if payload.hindsight_credit is not None:
-                env.reward_components.hindsight_credit = payload.hindsight_credit
-            if payload.scaffold_count is not None:
-                env.reward_components.scaffold_count = payload.scaffold_count
-            if payload.avg_scaffold_delay is not None:
-                env.reward_components.avg_scaffold_delay = payload.avg_scaffold_delay
-            # Always update context fields when we have any reward data
-            if payload.base_acc_delta is not None or payload.bounded_attribution is not None:
-                env.reward_components.total = total_reward
+            # Track last action target for EnvOverview row highlighting (with timestamp for hysteresis)
+            self._last_action_env_id = env_id
+            self._last_action_timestamp = datetime.now(timezone.utc)
+
+            # Update reward component breakdown from typed dataclass
+            rc = payload.reward_components
+            if rc is not None:
+                env.reward_components.base_acc_delta = rc.base_acc_delta
+                # bounded_attribution is None for LOSS family (not computed) - leave at default
+                if rc.bounded_attribution is not None:
+                    env.reward_components.bounded_attribution = rc.bounded_attribution
+                env.reward_components.compute_rent = rc.compute_rent
+                env.reward_components.stage_bonus = rc.stage_bonus
+                env.reward_components.ratio_penalty = rc.ratio_penalty
+                env.reward_components.alpha_shock = rc.alpha_shock
+                env.reward_components.hindsight_credit = rc.hindsight_credit
+                env.reward_components.total = rc.total_reward
                 env.reward_components.last_action = action_name
                 env.reward_components.env_id = env_id
                 env.reward_components.val_acc = env.host_accuracy
+                # New fields now available
+                if rc.num_fossilized_seeds is not None:
+                    env.reward_components.scaffold_count = rc.num_fossilized_seeds
+                # avg_scaffold_delay is not in RewardComponentsTelemetry, leave as default
 
             # Track gaming rate (for per-env reward health)
             env.total_reward_steps += 1
@@ -1148,6 +1250,21 @@ class SanctumAggregator:
                 pending.decision.td_advantage = td_adv
                 del self._pending_decisions[env_id]
 
+            # Map tempo index to tempo name (FAST/STANDARD/SLOW)
+            chosen_tempo: str | None = None
+            if payload.tempo_idx is not None and 0 <= payload.tempo_idx < len(TEMPO_NAMES):
+                chosen_tempo = TEMPO_NAMES[payload.tempo_idx]
+
+            # Map alpha_target float to enum name (HALF/SEVENTY/FULL)
+            chosen_alpha_target: str | None = None
+            if payload.alpha_target is not None:
+                # Map float value to enum name
+                alpha_target_map = {0.5: "HALF", 0.7: "SEVENTY", 1.0: "FULL"}
+                chosen_alpha_target = alpha_target_map.get(payload.alpha_target)
+
+            # Extract HeadTelemetry if present
+            ht = payload.head_telemetry
+
             decision = DecisionSnapshot(
                 timestamp=now_dt,
                 slot_states=payload.slot_states or {},
@@ -1161,8 +1278,35 @@ class SanctumAggregator:
                 decision_id=str(uuid.uuid4())[:8],
                 decision_entropy=payload.decision_entropy or 0.0,
                 env_id=env_id,
+                epoch=self._current_epoch,
+                batch=self._current_batch,
                 value_residual=total_reward - value_s,
                 td_advantage=None,
+                # Head choice fields (from AnalyticsSnapshotPayload)
+                chosen_blueprint=payload.blueprint_id,
+                chosen_tempo=chosen_tempo,
+                chosen_style=payload.style,
+                chosen_curve=payload.alpha_curve,
+                chosen_alpha_target=chosen_alpha_target,
+                chosen_alpha_speed=payload.alpha_speed,
+                # Per-head confidence values (from HeadTelemetry)
+                op_confidence=ht.op_confidence if ht else 0.0,
+                slot_confidence=ht.slot_confidence if ht else 0.0,
+                blueprint_confidence=ht.blueprint_confidence if ht else 0.0,
+                style_confidence=ht.style_confidence if ht else 0.0,
+                tempo_confidence=ht.tempo_confidence if ht else 0.0,
+                alpha_target_confidence=ht.alpha_target_confidence if ht else 0.0,
+                alpha_speed_confidence=ht.alpha_speed_confidence if ht else 0.0,
+                curve_confidence=ht.curve_confidence if ht else 0.0,
+                # Per-head entropy values (from HeadTelemetry)
+                op_entropy=ht.op_entropy if ht else 0.0,
+                slot_entropy=ht.slot_entropy if ht else 0.0,
+                blueprint_entropy=ht.blueprint_entropy if ht else 0.0,
+                style_entropy=ht.style_entropy if ht else 0.0,
+                tempo_entropy=ht.tempo_entropy if ht else 0.0,
+                alpha_target_entropy=ht.alpha_target_entropy if ht else 0.0,
+                alpha_speed_entropy=ht.alpha_speed_entropy if ht else 0.0,
+                curve_entropy=ht.curve_entropy if ht else 0.0,
             )
 
             # Store as pending for TD advantage computation on next decision
@@ -1189,11 +1333,23 @@ class SanctumAggregator:
         if data is None:
             return
 
-        # Handle dict-based data (from serialization) - this is the expected path
-        # since EPISODE_OUTCOME events are not currently emitted with typed payloads
-        if isinstance(data, dict):
+        # Handle typed payload (preferred)
+        if isinstance(data, EpisodeOutcomePayload):
             outcome = EpisodeOutcome(
-                env_idx=data["env_idx"],
+                env_id=data.env_id,
+                episode_idx=data.episode_idx,
+                final_accuracy=data.final_accuracy,
+                param_ratio=data.param_ratio,
+                num_fossilized=data.num_fossilized,
+                num_contributing_fossilized=data.num_contributing_fossilized,
+                episode_reward=data.episode_reward,
+                stability_score=data.stability_score,
+                reward_mode=data.reward_mode,
+            )
+        elif isinstance(data, dict):
+            # Legacy dict format (from deserialization)
+            outcome = EpisodeOutcome(
+                env_id=data["env_id"],
                 episode_idx=data["episode_idx"],
                 final_accuracy=data["final_accuracy"],
                 param_ratio=data["param_ratio"],
@@ -1217,6 +1373,36 @@ class SanctumAggregator:
         # Keep only last 100 outcomes to bound memory
         if len(self._episode_outcomes) > 100:
             self._episode_outcomes = self._episode_outcomes[-100:]
+
+    def _handle_governor_rollback(self, event: "TelemetryEvent") -> None:
+        """Handle GOVERNOR_ROLLBACK event - catastrophic failure indicator.
+
+        Sets rollback state on the affected env, which triggers a red alert
+        overlay in the env row widget. The flag is cleared when the next
+        EPOCH_COMPLETED event arrives for that env (training resumed).
+        """
+        if not isinstance(event.data, GovernorRollbackPayload):
+            _logger.warning(
+                "Expected GovernorRollbackPayload for GOVERNOR_ROLLBACK, got %s",
+                type(event.data).__name__,
+            )
+            return
+
+        payload = event.data
+        env_id = payload.env_id
+        self._ensure_env(env_id)
+        env = self._envs[env_id]
+
+        # Set rollback state - will show red alert until training resumes
+        env.rolled_back = True
+        env.rollback_reason = payload.reason
+        env.rollback_timestamp = event.timestamp or datetime.now(timezone.utc)
+
+        _logger.info(
+            "Governor rollback for env %d: %s",
+            env_id,
+            payload.reason,
+        )
 
     def _compute_hypervolume(self) -> float:
         """Compute hypervolume indicator from recent episode outcomes."""

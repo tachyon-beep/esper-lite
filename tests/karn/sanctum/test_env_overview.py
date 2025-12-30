@@ -605,3 +605,93 @@ async def test_slot_cell_blueprint_truncation():
         # Should show "conv_l" (first 6 chars), not full name
         assert "conv_l" in row0
         assert "conv_light_extra_long_name" not in row0
+
+
+def test_growth_ratio_respects_leyline_thresholds():
+    """Growth ratio coloring uses leyline constants, not hardcoded values."""
+    from esper.leyline import DEFAULT_GROWTH_RATIO_GREEN_MAX, DEFAULT_GROWTH_RATIO_YELLOW_MAX
+
+    # Verify constants are what we expect (guards against accidental changes)
+    assert DEFAULT_GROWTH_RATIO_GREEN_MAX == 2.0
+    assert DEFAULT_GROWTH_RATIO_YELLOW_MAX == 5.0
+
+    # Create widget and test formatting
+    widget = EnvOverview(num_envs=1)
+
+    # growth_ratio = (host_params + fossilized_params) / host_params
+    # So for host_params=100:
+    #   fossilized=99 → ratio=1.99
+    #   fossilized=100 → ratio=2.0
+    #   fossilized=399 → ratio=4.99
+    #   fossilized=400 → ratio=5.0
+
+    # Test green threshold (just under 2.0)
+    env_green = EnvState(env_id=0, host_params=100, fossilized_params=99)
+    assert env_green.growth_ratio == 1.99
+    result = widget._format_growth_ratio(env_green)
+    assert "[green]" in result
+
+    # Test yellow threshold (at 2.0, just under 5.0)
+    env_yellow = EnvState(env_id=0, host_params=100, fossilized_params=100)
+    assert env_yellow.growth_ratio == 2.0
+    result = widget._format_growth_ratio(env_yellow)
+    assert "[yellow]" in result
+
+    env_yellow2 = EnvState(env_id=0, host_params=100, fossilized_params=399)
+    assert env_yellow2.growth_ratio == 4.99
+    result = widget._format_growth_ratio(env_yellow2)
+    assert "[yellow]" in result
+
+    # Test red threshold (at 5.0 and above)
+    env_red = EnvState(env_id=0, host_params=100, fossilized_params=400)
+    assert env_red.growth_ratio == 5.0
+    result = widget._format_growth_ratio(env_red)
+    assert "[red]" in result
+
+
+def test_env_overview_highlights_last_action_env():
+    """EnvOverview should show ▶ pip indicator for last-action env."""
+    from datetime import datetime, timezone
+
+    widget = EnvOverview(num_envs=3)
+
+    # Env 2 is the last action target (recent timestamp)
+    env = EnvState(env_id=2, host_accuracy=75.0, status="healthy")
+    now = datetime.now(timezone.utc)
+
+    result = widget._format_env_id(env, last_action_env_id=2, last_action_timestamp=now)
+
+    # Should have action indicator pip (▶ per UX accessibility review)
+    assert "▶" in result, f"Expected action indicator ▶ in: {result}"
+
+
+def test_env_overview_no_highlight_for_other_env():
+    """EnvOverview should NOT show ▶ for envs that aren't the last-action target."""
+    from datetime import datetime, timezone
+
+    widget = EnvOverview(num_envs=3)
+
+    # Env 1 is NOT the last action target (env 2 is)
+    env = EnvState(env_id=1, host_accuracy=72.0, status="healthy")
+    now = datetime.now(timezone.utc)
+
+    result = widget._format_env_id(env, last_action_env_id=2, last_action_timestamp=now)
+
+    # Should NOT have action indicator
+    assert "▶" not in result, f"Expected no ▶ for non-target env: {result}"
+
+
+def test_env_overview_no_highlight_after_hysteresis():
+    """EnvOverview should NOT show ▶ after 5-second hysteresis expires."""
+    from datetime import datetime, timezone, timedelta
+
+    widget = EnvOverview(num_envs=3)
+
+    # Env 2 was the last action target but 10 seconds ago
+    env = EnvState(env_id=2, host_accuracy=75.0, status="healthy")
+    old_timestamp = datetime.now(timezone.utc) - timedelta(seconds=10)
+
+    result = widget._format_env_id(env, last_action_env_id=2, last_action_timestamp=old_timestamp)
+
+    # Should NOT have action indicator (hysteresis expired)
+    assert "▶" not in result, f"Expected no ▶ after hysteresis: {result}"

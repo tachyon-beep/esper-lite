@@ -83,9 +83,9 @@ class EventLogDetail(ModalScreen[None]):
         header.append("\n")
         header.append("Press ", style="dim")
         header.append("ESC", style="cyan")
-        header.append(" or ", style="dim")
+        header.append(", ", style="dim")
         header.append("q", style="cyan")
-        header.append(" to close", style="dim")
+        header.append(", or click to close", style="dim")
         return header
 
     def _render_events(self) -> Table:

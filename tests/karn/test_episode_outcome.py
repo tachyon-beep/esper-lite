@@ -11,7 +11,7 @@ from esper.karn.store import EpisodeOutcome
 def test_episode_outcome_creation():
     """Test basic EpisodeOutcome creation with all fields."""
     outcome = EpisodeOutcome(
-        env_idx=0,
+        env_id=0,
         episode_idx=100,
         final_accuracy=0.85,
         param_ratio=1.2,
@@ -24,7 +24,7 @@ def test_episode_outcome_creation():
     assert outcome.final_accuracy == 0.85
     assert outcome.param_ratio == 1.2
     assert outcome.stability_score == 0.95
-    assert outcome.env_idx == 0
+    assert outcome.env_id == 0
     assert outcome.episode_idx == 100
     assert outcome.reward_mode == "shaped"
     assert outcome.num_fossilized == 1
@@ -36,7 +36,7 @@ def test_episode_outcome_creation():
 def test_episode_outcome_frozen():
     """Test that EpisodeOutcome is immutable (frozen=True)."""
     outcome = EpisodeOutcome(
-        env_idx=0,
+        env_id=0,
         episode_idx=1,
         final_accuracy=0.5,
         param_ratio=1.0,
@@ -54,7 +54,7 @@ def test_episode_outcome_timestamp_default():
     """Test that timestamp defaults to current UTC time."""
     before = datetime.now(timezone.utc)
     outcome = EpisodeOutcome(
-        env_idx=1,
+        env_id=1,
         episode_idx=50,
         final_accuracy=0.7,
         param_ratio=1.1,
@@ -73,7 +73,7 @@ def test_episode_outcome_different_reward_modes():
     modes = ["shaped", "simplified", "sparse", "minimal"]
     for mode in modes:
         outcome = EpisodeOutcome(
-            env_idx=0,
+            env_id=0,
             episode_idx=1,
             final_accuracy=0.5,
             param_ratio=1.0,
@@ -97,7 +97,7 @@ class TestDominates:
     ) -> EpisodeOutcome:
         """Helper to create test outcomes."""
         return EpisodeOutcome(
-            env_idx=0,
+            env_id=0,
             episode_idx=1,
             final_accuracy=final_accuracy,
             param_ratio=param_ratio,
@@ -212,7 +212,7 @@ class TestToDict:
     def test_to_dict_contains_all_fields(self):
         """Test that to_dict includes all fields."""
         outcome = EpisodeOutcome(
-            env_idx=0,
+            env_id=0,
             episode_idx=100,
             final_accuracy=0.85,
             param_ratio=1.2,
@@ -223,7 +223,7 @@ class TestToDict:
             reward_mode="shaped",
         )
         d = outcome.to_dict()
-        assert d["env_idx"] == 0
+        assert d["env_id"] == 0
         assert d["episode_idx"] == 100
         assert d["final_accuracy"] == 0.85
         assert d["param_ratio"] == 1.2
@@ -237,7 +237,7 @@ class TestToDict:
     def test_to_dict_timestamp_is_iso_format(self):
         """Test that timestamp is serialized as ISO format string."""
         outcome = EpisodeOutcome(
-            env_idx=0,
+            env_id=0,
             episode_idx=1,
             final_accuracy=0.5,
             param_ratio=1.0,
@@ -257,7 +257,7 @@ class TestToDict:
         import json
 
         outcome = EpisodeOutcome(
-            env_idx=0,
+            env_id=0,
             episode_idx=1,
             final_accuracy=0.5,
             param_ratio=1.0,

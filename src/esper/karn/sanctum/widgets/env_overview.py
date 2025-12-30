@@ -11,15 +11,25 @@ from typing import TYPE_CHECKING, Any, Iterator
 
 from textual.widgets import DataTable, Static
 
+from esper.leyline import (
+    ALPHA_CURVE_GLYPHS,
+    DEFAULT_GROWTH_RATIO_GREEN_MAX,
+    DEFAULT_GROWTH_RATIO_YELLOW_MAX,
+    STAGE_COLORS,
+)
+
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from esper.karn.sanctum.schema import EnvState, SanctumSnapshot
 
 
 # A/B test cohort styling - colored pips for reward modes
+# Note: cyan reserved for informational data; sparse uses white for distinction
 _AB_STYLES: dict[str, tuple[str, str]] = {
     "shaped": ("●", "bright_blue"),      # Blue pip for shaped
     "simplified": ("●", "bright_yellow"), # Yellow pip for simplified
-    "sparse": ("●", "bright_cyan"),       # Cyan pip for sparse
+    "sparse": ("●", "bright_white"),      # White pip for sparse (cyan reserved for info)
 }
 
 
@@ -166,6 +176,11 @@ class EnvOverview(Static):
         )
         filtered_envs = [e for e in sorted_envs if self._matches_filter(e)]
 
+        # Show placeholder if filter matches nothing
+        if self._filter_text and not filtered_envs:
+            self._add_no_matches_row()
+            return
+
         # Compute top 5 accuracy env IDs for visual quieting
         all_envs = list(self._snapshot.envs.values())
         top5_env_ids = self._compute_top5_accuracy_ids(all_envs)
@@ -186,9 +201,13 @@ class EnvOverview(Static):
             target_row = min(saved_cursor_row, self.table.row_count - 1)
             self.table.move_cursor(row=target_row)
 
-        # Restore scroll position (after layout is computed)
+        # Restore scroll position after layout is computed
+        # Direct assignment to scroll_y doesn't work before layout pass completes
         if saved_scroll_y > 0:
-            self.table.scroll_y = saved_scroll_y
+            # Capture value in default arg to avoid closure issues
+            self.table.call_after_refresh(
+                lambda y=saved_scroll_y: setattr(self.table, "scroll_y", y)
+            )
 
     def _compute_top5_accuracy_ids(self, envs: list["EnvState"]) -> set[int]:
         """Compute env IDs of top 5 by current accuracy.
@@ -256,8 +275,19 @@ class EnvOverview(Static):
             env: Environment state to display.
             dim: If True, apply dim styling for visual quieting.
         """
-        # Env ID with A/B test cohort pip
-        env_id_cell = self._format_env_id(env)
+        # Check for rollback state - show red alert instead of normal row
+        if env.rolled_back:
+            self._add_rollback_alert_row(env)
+            return
+
+        # Env ID with A/B test cohort pip and action target indicator
+        last_action_env_id = self._snapshot.last_action_env_id if self._snapshot else None
+        last_action_timestamp = self._snapshot.last_action_timestamp if self._snapshot else None
+        env_id_cell = self._format_env_id(
+            env,
+            last_action_env_id=last_action_env_id,
+            last_action_timestamp=last_action_timestamp,
+        )
 
         # Accuracy with color coding
         acc_cell = self._format_accuracy(env)
@@ -324,11 +354,54 @@ class EnvOverview(Static):
         # Add row with key=env_id for row selection event handling
         self.table.add_row(*row, key=str(env.env_id))
 
+    def _add_rollback_alert_row(self, env: "EnvState") -> None:
+        """Add a red alert row for an env that has rolled back.
+
+        Shows a prominent CATASTROPHIC FAILURE message instead of normal metrics.
+        This row persists until training resumes for this env.
+
+        Args:
+            env: Environment state with rolled_back=True.
+        """
+        # Format reason for display
+        reason_display = {
+            "governor_nan": "NaN DETECTED",
+            "governor_lobotomy": "LOBOTOMY",
+            "governor_divergence": "DIVERGENCE",
+        }.get(env.rollback_reason, env.rollback_reason.upper() if env.rollback_reason else "UNKNOWN")
+
+        # Build the alert row
+        # First cell: env ID
+        env_id_cell = f"[bold red]{env.env_id}[/bold red]"
+
+        # Calculate how many columns we need to fill
+        num_cols = len(self.table.columns)
+
+        # Alert message spans most columns
+        alert_msg = f"[bold white on red] ⚠ CATASTROPHIC FAILURE - ROLLED BACK ({reason_display}) [/bold white on red]"
+
+        # Build row: env_id, then alert message, then empty cells
+        row = [env_id_cell, alert_msg]
+
+        # Fill remaining columns with empty cells styled red
+        for _ in range(num_cols - 2):
+            row.append("[on red] [/on red]")
+
+        self.table.add_row(*row, key=str(env.env_id))
+
     def _add_separator_row(self) -> None:
         """Add separator row before aggregate."""
         num_cols = len(self.table.columns)
         separator = ["─" * 2] * num_cols
         self.table.add_row(*separator)
+
+    def _add_no_matches_row(self) -> None:
+        """Add placeholder row when filter matches no environments."""
+        num_cols = len(self.table.columns)
+        # First cell shows message, rest are empty
+        row = [f"[dim italic]No environments match '{self._filter_text}'[/dim italic]"]
+        row.extend([""] * (num_cols - 1))
+        self.table.add_row(*row)
 
     def _add_aggregate_row(self) -> None:
         """Add aggregate row at bottom."""
@@ -391,12 +464,40 @@ class EnvOverview(Static):
 
         self.table.add_row(*agg_row)
 
-    def _format_env_id(self, env: "EnvState") -> str:
-        """Format env ID with A/B test cohort pip."""
+    def _format_env_id(
+        self,
+        env: "EnvState",
+        last_action_env_id: int | None = None,
+        last_action_timestamp: "datetime | None" = None,
+    ) -> str:
+        """Format env ID with A/B test cohort pip and action target indicator.
+
+        Args:
+            env: Environment state.
+            last_action_env_id: ID of env that received last action (for highlighting).
+            last_action_timestamp: When the last action occurred (for hysteresis).
+
+        Returns:
+            Formatted env ID string with indicators.
+        """
+        from datetime import datetime, timezone
+
+        # Action target indicator (cyan ▶ prefix) - per UX accessibility review
+        # Only show if action was within last 5 seconds (hysteresis prevents jitter)
+        action_pip = ""
+        if last_action_env_id is not None and env.env_id == last_action_env_id:
+            show_indicator = True
+            if last_action_timestamp is not None:
+                age = (datetime.now(timezone.utc) - last_action_timestamp).total_seconds()
+                show_indicator = age < 5.0  # 5-second hysteresis
+            if show_indicator:
+                action_pip = "[cyan]▶[/cyan]"
+
+        # A/B cohort pip (existing logic)
         if env.reward_mode and env.reward_mode in _AB_STYLES:
             pip, color = _AB_STYLES[env.reward_mode]
-            return f"[{color}]{pip}[/{color}]{env.env_id}"
-        return str(env.env_id)
+            return f"{action_pip}[{color}]{pip}[/{color}]{env.env_id}"
+        return f"{action_pip}{env.env_id}"
 
     def _format_host_loss(self, env: "EnvState") -> str:
         """Format host loss with color coding for overfitting detection.
@@ -424,15 +525,19 @@ class EnvOverview(Static):
 
         Shows how much larger the mutated model is vs baseline.
         - 1.0x = no growth (baseline or no fossilized seeds)
-        - 1.2x = 20% larger due to fossilized seeds
-        - Green if efficient (<1.3x), yellow if moderate (1.3-1.5x), red if heavy (>1.5x)
+        - Green if < DEFAULT_GROWTH_RATIO_GREEN_MAX
+        - Yellow if < DEFAULT_GROWTH_RATIO_YELLOW_MAX
+        - Red otherwise
+
+        Thresholds are configurable via leyline constants. Generous defaults
+        because small host models can easily double with a single attention seed.
         """
         ratio = env.growth_ratio
         if ratio <= 1.0:
             return "[dim]1.0x[/dim]"
-        elif ratio < 1.3:
+        elif ratio < DEFAULT_GROWTH_RATIO_GREEN_MAX:
             return f"[green]{ratio:.2f}x[/green]"
-        elif ratio < 1.5:
+        elif ratio < DEFAULT_GROWTH_RATIO_YELLOW_MAX:
             return f"[yellow]{ratio:.2f}x[/yellow]"
         else:
             return f"[red]{ratio:.2f}x[/red]"
@@ -587,17 +692,8 @@ class EnvOverview(Static):
         if len(blueprint) > 6:
             blueprint = blueprint[:6]
 
-        # Stage-specific styling
-        style_map = {
-            "TRAINING": "cyan",
-            "BLENDING": "yellow",
-            "HOLDING": "magenta",
-            "FOSSILIZED": "green",
-            "PRUNED": "red",
-            "EMBARGOED": "bright_red",
-            "RESETTING": "dim",
-        }
-        style = style_map.get(seed.stage, "white")
+        # Stage-specific styling from leyline
+        style = STAGE_COLORS.get(seed.stage, "white")
 
         # Gradient health indicator
         grad_indicator = ""
@@ -606,18 +702,40 @@ class EnvOverview(Static):
         elif seed.has_vanishing:
             grad_indicator = "[yellow]▼[/yellow]"
 
-        # BLENDING shows tempo arrows and alpha
-        # Tempo: ▸▸▸ = FAST (3), ▸▸ = STANDARD (5), ▸ = SLOW (8)
-        if seed.stage == "BLENDING" and seed.alpha > 0:
-            tempo = seed.blend_tempo_epochs
-            tempo_arrows = "▸▸▸" if tempo <= 3 else ("▸▸" if tempo <= 5 else "▸")
-            base = f"[{style}]{stage_short}:{blueprint} {tempo_arrows} {seed.alpha:.1f}[/{style}]"
-            return f"{base}{grad_indicator}" if grad_indicator else base
+        # Curve glyph: shown for BLENDING/HOLDING/FOSSILIZED, dim "-" for other stages
+        # Position: after stage:blueprint with space (e.g., "Blend:conv_l ⌢")
+        # Always use raw glyph character - dim styling applied in format strings where needed
+        curve_glyph = ALPHA_CURVE_GLYPHS.get(seed.alpha_curve, "−") if seed.stage in ("BLENDING", "HOLDING", "FOSSILIZED") else "−"
 
-        # Active seeds show epochs in stage
+        # Helper: tempo arrows based on blend_tempo_epochs
+        # Tempo: ▸▸▸ = FAST (3), ▸▸ = STANDARD (5), ▸ = SLOW (8)
+        def _tempo_arrows(tempo: int | None) -> str:
+            if tempo is None:
+                return ""
+            return "▸▸▸" if tempo <= 3 else ("▸▸" if tempo <= 5 else "▸")
+
+        # BLENDING shows tempo arrows and alpha
+        if seed.stage == "BLENDING" and seed.alpha > 0:
+            tempo_arrows = _tempo_arrows(seed.blend_tempo_epochs)
+            base = f"[{style}]{stage_short}:{blueprint} {curve_glyph} {tempo_arrows} {seed.alpha:.1f}[/{style}]"
+            return f"{base}{grad_indicator}"
+
+        # HOLDING shows tempo arrows + alpha (blend tempo was used, still relevant)
+        if seed.stage == "HOLDING":
+            tempo_arrows = _tempo_arrows(seed.blend_tempo_epochs)
+            base = f"[{style}]{stage_short}:{blueprint} {curve_glyph} {tempo_arrows} {seed.alpha:.1f}[/{style}]"
+            return f"{base}{grad_indicator}"
+
+        # FOSSILIZED shows historical tempo + curve (how it blended)
+        if seed.stage == "FOSSILIZED":
+            tempo_arrows = _tempo_arrows(seed.blend_tempo_epochs)
+            base = f"[{style}]{stage_short}:{blueprint} [dim]{curve_glyph}[/dim] {tempo_arrows}[/{style}]"
+            return f"{base}{grad_indicator}"
+
+        # Other stages show epochs in stage with dim "-" for curve
         epochs_str = f" e{seed.epochs_in_stage}" if seed.epochs_in_stage > 0 else ""
-        base = f"[{style}]{stage_short}:{blueprint}{epochs_str}[/{style}]"
-        return f"{base}{grad_indicator}" if grad_indicator else base
+        base = f"[{style}]{stage_short}:{blueprint} [dim]{curve_glyph}[/dim]{epochs_str}[/{style}]"
+        return f"{base}{grad_indicator}"
 
     def _format_last_action(self, env: "EnvState") -> str:
         """Format last action taken."""

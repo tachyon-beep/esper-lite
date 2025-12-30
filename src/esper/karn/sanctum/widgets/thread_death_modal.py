@@ -75,6 +75,10 @@ class ThreadDeathModal(ModalScreen[None]):
                 classes="death-message",
             )
             yield Static(
-                Text("Press ESC, Q, or Enter to close", style="dim"),
+                Text("Press ESC, Q, Enter or click to close", style="dim"),
                 classes="death-hint",
             )
+
+    def on_click(self) -> None:
+        """Dismiss modal on click."""
+        self.dismiss()

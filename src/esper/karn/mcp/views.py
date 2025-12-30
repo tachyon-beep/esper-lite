@@ -128,17 +128,39 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract_string(data, '$.ab_group') as ab_group,
             json_extract_string(data, '$.action_name') as action_name,
             json_extract(data, '$.action_success')::BOOLEAN as action_success,
-            json_extract_string(data, '$.seed_stage') as seed_stage,
             json_extract(data, '$.total_reward')::DOUBLE as total_reward,
-            json_extract(data, '$.base_acc_delta')::DOUBLE as base_acc_delta,
-            json_extract(data, '$.bounded_attribution')::DOUBLE as bounded_attribution,
-            json_extract(data, '$.ratio_penalty')::DOUBLE as ratio_penalty,
-            json_extract(data, '$.compute_rent')::DOUBLE as compute_rent,
-            json_extract(data, '$.stage_bonus')::DOUBLE as stage_bonus,
-            json_extract(data, '$.action_shaping')::DOUBLE as action_shaping,
-            json_extract(data, '$.terminal_bonus')::DOUBLE as terminal_bonus,
-            json_extract(data, '$.val_acc')::DOUBLE as val_acc,
-            json_extract(data, '$.num_fossilized_seeds')::INTEGER as num_fossilized_seeds
+            -- All 28 fields from RewardComponentsTelemetry (nested under reward_components)
+            -- Base signal
+            json_extract(data, '$.reward_components.base_acc_delta')::DOUBLE as base_acc_delta,
+            -- Contribution-primary signal
+            json_extract(data, '$.reward_components.seed_contribution')::DOUBLE as seed_contribution,
+            json_extract(data, '$.reward_components.bounded_attribution')::DOUBLE as bounded_attribution,
+            json_extract(data, '$.reward_components.progress_since_germination')::DOUBLE as progress_since_germination,
+            json_extract(data, '$.reward_components.attribution_discount')::DOUBLE as attribution_discount,
+            json_extract(data, '$.reward_components.ratio_penalty')::DOUBLE as ratio_penalty,
+            -- Penalties
+            json_extract(data, '$.reward_components.compute_rent')::DOUBLE as compute_rent,
+            json_extract(data, '$.reward_components.alpha_shock')::DOUBLE as alpha_shock,
+            json_extract(data, '$.reward_components.blending_warning')::DOUBLE as blending_warning,
+            json_extract(data, '$.reward_components.holding_warning')::DOUBLE as holding_warning,
+            -- Bonuses
+            json_extract(data, '$.reward_components.stage_bonus')::DOUBLE as stage_bonus,
+            json_extract(data, '$.reward_components.pbrs_bonus')::DOUBLE as pbrs_bonus,
+            json_extract(data, '$.reward_components.synergy_bonus')::DOUBLE as synergy_bonus,
+            json_extract(data, '$.reward_components.action_shaping')::DOUBLE as action_shaping,
+            json_extract(data, '$.reward_components.terminal_bonus')::DOUBLE as terminal_bonus,
+            json_extract(data, '$.reward_components.fossilize_terminal_bonus')::DOUBLE as fossilize_terminal_bonus,
+            json_extract(data, '$.reward_components.hindsight_credit')::DOUBLE as hindsight_credit,
+            json_extract(data, '$.reward_components.num_fossilized_seeds')::INTEGER as num_fossilized_seeds,
+            json_extract(data, '$.reward_components.num_contributing_fossilized')::INTEGER as num_contributing_fossilized,
+            -- Context fields
+            json_extract(data, '$.reward_components.seed_stage')::INTEGER as seed_stage,
+            json_extract(data, '$.reward_components.val_acc')::DOUBLE as val_acc,
+            json_extract(data, '$.reward_components.acc_at_germination')::DOUBLE as acc_at_germination,
+            json_extract(data, '$.reward_components.host_baseline_acc')::DOUBLE as host_baseline_acc,
+            json_extract(data, '$.reward_components.growth_ratio')::DOUBLE as growth_ratio,
+            -- Computed diagnostic (available via to_dict() serialization)
+            json_extract(data, '$.reward_components.shaped_reward_ratio')::DOUBLE as shaped_reward_ratio
         FROM raw_events
         WHERE
             event_type = 'ANALYTICS_SNAPSHOT'
@@ -168,7 +190,7 @@ VIEW_DEFINITIONS: dict[str, str] = {
         CREATE OR REPLACE VIEW episode_outcomes AS
         SELECT
             timestamp,
-            json_extract(data, '$.env_idx')::INTEGER as env_idx,
+            json_extract(data, '$.env_id')::INTEGER as env_id,
             json_extract(data, '$.episode_idx')::INTEGER as episode_idx,
             json_extract(data, '$.final_accuracy')::DOUBLE as final_accuracy,
             json_extract(data, '$.param_ratio')::DOUBLE as param_ratio,

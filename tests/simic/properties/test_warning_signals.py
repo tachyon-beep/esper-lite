@@ -141,8 +141,8 @@ class TestHoldingWarning:
 
     @given(epochs_in_stage=st.integers(2, 6))
     @settings(max_examples=100)
-    def test_holding_warning_exponential(self, epochs_in_stage):
-        """Holding warning should escalate exponentially."""
+    def test_holding_warning_linear(self, epochs_in_stage):
+        """Holding warning should escalate linearly with a cap."""
         def get_warning(epochs: int) -> float:
             seed_info = SeedInfo(
                 stage=STAGE_HOLDING,
@@ -174,11 +174,15 @@ class TestHoldingWarning:
         warning_n = get_warning(epochs_in_stage)
         warning_n1 = get_warning(epochs_in_stage + 1)
 
-        # Should be more negative (exponential escalation)
+        # Should be more negative (linear escalation up to cap)
         if warning_n < 0 and warning_n1 < 0:
-            ratio = warning_n1 / warning_n
-            # Exponential: should be roughly 3x per epoch (capped at -10)
-            assert ratio >= 1.5 or warning_n1 <= -10.0, (
-                f"Warning escalation ratio {ratio:.2f} too low "
+            # Linear: each step should be at most 0.05 more negative (or at cap -0.3)
+            diff = warning_n - warning_n1  # positive if n1 is more negative
+            assert diff >= 0 or warning_n1 == pytest.approx(-0.3), (
+                f"Warning should escalate linearly or be capped "
                 f"(epoch {epochs_in_stage}: {warning_n}, epoch {epochs_in_stage+1}: {warning_n1})"
+            )
+            # Max penalty should be capped at -0.3
+            assert warning_n1 >= -0.3 - 0.01, (
+                f"Warning should be capped at -0.3, got {warning_n1}"
             )

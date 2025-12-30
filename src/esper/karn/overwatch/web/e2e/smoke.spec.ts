@@ -325,8 +325,9 @@ async function mockWebSocket(page: typeof import('@playwright/test').Page.protot
         // This will be populated by the test
         const mockData = (window as unknown as { __MOCK_SNAPSHOT__?: unknown }).__MOCK_SNAPSHOT__
         if (mockData) {
+          // useOverwatch expects messages in format { type: 'snapshot', data: ... }
           const messageEvent = new MessageEvent('message', {
-            data: JSON.stringify(mockData)
+            data: JSON.stringify({ type: 'snapshot', data: mockData })
           })
           this.dispatchEvent(messageEvent)
           if (this.onmessage) this.onmessage(messageEvent)
@@ -451,8 +452,8 @@ test.describe('Overwatch Dashboard Smoke Tests', () => {
     const helpOverlay = page.locator('[data-testid="keyboard-help-overlay"]')
     await expect(helpOverlay).not.toBeVisible()
 
-    // Press ? to open help
-    await page.keyboard.press('Shift+/')
+    // Press ? to open help (use type instead of press for character input)
+    await page.keyboard.type('?')
 
     // Help overlay should now be visible
     await expect(helpOverlay).toBeVisible({ timeout: 1000 })
@@ -482,7 +483,7 @@ test.describe('Overwatch Dashboard Smoke Tests', () => {
     await page.waitForSelector('[data-testid="main-content"]', { timeout: 5000 })
 
     // Open help overlay
-    await page.keyboard.press('Shift+/')
+    await page.keyboard.type('?')
 
     const helpOverlay = page.locator('[data-testid="keyboard-help-overlay"]')
     await expect(helpOverlay).toBeVisible({ timeout: 1000 })
@@ -508,14 +509,14 @@ test.describe('Overwatch Dashboard Smoke Tests', () => {
     await page.waitForSelector('[data-testid="main-content"]', { timeout: 5000 })
 
     // Open help overlay
-    await page.keyboard.press('Shift+/')
+    await page.keyboard.type('?')
 
     const helpOverlay = page.locator('[data-testid="keyboard-help-overlay"]')
     await expect(helpOverlay).toBeVisible({ timeout: 1000 })
 
-    // Click backdrop
+    // Click backdrop (at top-left corner, outside the modal)
     const backdrop = page.locator('[data-testid="keyboard-help-backdrop"]')
-    await backdrop.click({ force: true })
+    await backdrop.click({ position: { x: 10, y: 10 } })
 
     // Help overlay should be hidden
     await expect(helpOverlay).not.toBeVisible()

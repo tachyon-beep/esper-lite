@@ -40,6 +40,7 @@ from esper.karn.ingest import (
 from esper.leyline.telemetry import (
     TrainingStartedPayload,
     EpochCompletedPayload,
+    BatchEpochCompletedPayload,
     PPOUpdatePayload,
     SeedGerminatedPayload,
     SeedStageChangedPayload,
@@ -139,6 +140,14 @@ class KarnCollector:
         self._anomaly_detector = AnomalyDetector(config=self.config.dense_trigger)
         self._policy_detector = PolicyAnomalyDetector()
 
+        # Multi-env epoch handling: buffer per-env metrics until all envs report
+        # Key: (inner_epoch, env_id), Value: EpochCompletedPayload
+        # This prevents committing N times per inner epoch (once per env).
+        # We commit when len(buffer for epoch X) == n_envs.
+        self._pending_epoch_metrics: dict[tuple[int, int], EpochCompletedPayload] = {}
+        self._n_envs: int = 1  # Set by TRAINING_STARTED, default 1 for single-env
+        self._saw_epoch_completed_since_batch: bool = False
+
     # =========================================================================
     # Backend Management (mirrors NissaHub interface)
     # =========================================================================
@@ -221,6 +230,10 @@ class KarnCollector:
         self._emit_after_close_warned = False
         self._anomaly_detector.reset()
         self._policy_detector.reset()
+        # Multi-env aggregation state
+        self._pending_epoch_metrics.clear()  # Clear stale buffered epochs
+        self._n_envs = 1  # Reset to default single-env
+        self._saw_epoch_completed_since_batch = False
 
     # =========================================================================
     # Event Emission (primary interface)
@@ -282,6 +295,8 @@ class KarnCollector:
         # Route to appropriate handler
         if event_type == "EPOCH_COMPLETED":
             self._handle_epoch_completed(event)
+        elif event_type == "BATCH_EPOCH_COMPLETED":
+            self._handle_batch_epoch_completed(event)
         elif event_type.startswith("SEED_"):
             self._handle_seed_event(event)
         elif event_type == "PPO_UPDATE_COMPLETED":
@@ -298,6 +313,10 @@ class KarnCollector:
         # Typed payload path
         if isinstance(event.data, TrainingStartedPayload):
             episode_id = event.data.episode_id or event.event_id
+            # Capture n_envs for multi-env epoch commit logic
+            self._n_envs = event.data.n_envs or 1
+            self._pending_epoch_metrics.clear()  # Reset buffer for new training run
+            self._saw_epoch_completed_since_batch = False
             self.start_episode(
                 episode_id=episode_id,
                 seed=event.data.seed,
@@ -313,49 +332,88 @@ class KarnCollector:
         _logger.debug(f"Auto-started episode and epoch 1 from TRAINING_STARTED: {episode_id}")
 
     def _handle_epoch_completed(self, event: "TelemetryEvent") -> None:
-        """Handle EPOCH_COMPLETED event."""
-        # Typed payload path
-        if isinstance(event.data, EpochCompletedPayload):
-            raw_epoch = event.epoch if event.epoch is not None else event.data.inner_epoch
-            epoch = coerce_int(raw_epoch, field="epoch", default=0, minimum=0)
+        """Handle per-env EPOCH_COMPLETED event - buffer and commit when all envs report.
 
-            # Auto-start epoch if none exists
-            if not self.store.current_epoch:
-                self.store.start_epoch(epoch)
+        EPOCH_COMPLETED is emitted once per environment per inner epoch. With n_envs
+        environments, we receive n_envs EPOCH_COMPLETED events per inner epoch.
 
-            # Type narrowing: current_epoch is guaranteed non-None after start_epoch
-            current_epoch = self.store.current_epoch
-            if current_epoch is None:
-                return
+        This handler buffers per-env metrics keyed by (inner_epoch, env_id). When all
+        n_envs have reported for a given inner_epoch, we aggregate and commit once.
 
-            # Update host snapshot from typed payload
-            current_epoch.epoch = epoch
-            current_epoch.host.epoch = epoch
-            current_epoch.host.val_loss = event.data.val_loss
-            current_epoch.host.val_accuracy = event.data.val_accuracy
-            # Use payload fields if provided, else default to 0.0
-            current_epoch.host.train_loss = (
-                event.data.train_loss if event.data.train_loss is not None else 0.0
-            )
-            current_epoch.host.train_accuracy = (
-                event.data.train_accuracy if event.data.train_accuracy is not None else 0.0
-            )
-            current_epoch.host.host_grad_norm = (
-                event.data.host_grad_norm if event.data.host_grad_norm is not None else 0.0
-            )
-        else:
+        For single-env runs (n_envs=1), this commits immediately on each event.
+        """
+        if not isinstance(event.data, EpochCompletedPayload):
             _logger.warning(
                 "Expected EpochCompletedPayload for EPOCH_COMPLETED, got %s",
                 type(event.data).__name__,
             )
             return
 
-        # Type narrowing for remaining operations
+        payload = event.data
+        env_id = coerce_int(payload.env_id, field="env_id", default=0, minimum=0)
+        raw_epoch = event.epoch if event.epoch is not None else payload.inner_epoch
+        inner_epoch = coerce_int(raw_epoch, field="epoch", default=0, minimum=0)
+
+        # Buffer per-env metrics keyed by (inner_epoch, env_id)
+        self._pending_epoch_metrics[(inner_epoch, env_id)] = payload
+        self._saw_epoch_completed_since_batch = True
+
+        # Auto-start epoch if none exists (first event)
+        if not self.store.current_epoch:
+            self.store.start_epoch(inner_epoch)
+
+        # Check if all envs have reported for this inner_epoch
+        envs_for_this_epoch = [
+            key for key in self._pending_epoch_metrics.keys()
+            if key[0] == inner_epoch
+        ]
+
+        if len(envs_for_this_epoch) >= self._n_envs:
+            # All envs have reported for this inner_epoch - aggregate and commit
+            self._commit_epoch_from_buffer(inner_epoch)
+
+    def _commit_epoch_from_buffer(self, inner_epoch: int) -> None:
+        """Aggregate buffered per-env metrics and commit the epoch.
+
+        Called when all n_envs have reported for a given inner_epoch.
+        """
         current_epoch = self.store.current_epoch
         if current_epoch is None:
             return
 
-        # P0 Fix: Increment epochs_in_stage for all occupied slots
+        # Collect payloads for this inner_epoch
+        payloads_for_epoch = [
+            payload for (epoch, _), payload in self._pending_epoch_metrics.items()
+            if epoch == inner_epoch
+        ]
+
+        if not payloads_for_epoch:
+            return
+
+        n_envs = len(payloads_for_epoch)
+        total_val_loss = 0.0
+        total_val_accuracy = 0.0
+        total_train_loss = 0.0
+        total_train_accuracy = 0.0
+        total_host_grad_norm = 0.0
+
+        for payload in payloads_for_epoch:
+            total_val_loss += payload.val_loss
+            total_val_accuracy += payload.val_accuracy
+            total_train_loss += payload.train_loss or 0.0
+            total_train_accuracy += payload.train_accuracy or 0.0
+            total_host_grad_norm += payload.host_grad_norm or 0.0
+
+        # Update host snapshot with aggregated (mean) metrics
+        current_epoch.epoch = inner_epoch
+        current_epoch.host.epoch = inner_epoch
+        current_epoch.host.val_loss = total_val_loss / n_envs
+        current_epoch.host.val_accuracy = total_val_accuracy / n_envs
+        current_epoch.host.train_loss = total_train_loss / n_envs
+        current_epoch.host.train_accuracy = total_train_accuracy / n_envs
+        current_epoch.host.host_grad_norm = total_host_grad_norm / n_envs
+
+        # Increment epochs_in_stage for all occupied slots ONCE per epoch
         # (includes EMBARGOED/RESETTING dwell while excluding PRUNED + terminal).
         for slot in current_epoch.slots.values():
             if slot.stage not in (SeedStage.DORMANT, SeedStage.PRUNED, SeedStage.FOSSILIZED):
@@ -369,7 +427,63 @@ class KarnCollector:
         self.store.commit_epoch()
 
         # Start next epoch placeholder
-        self.store.start_epoch(epoch + 1)
+        self.store.start_epoch(inner_epoch + 1)
+
+        # Clear buffer entries for this inner_epoch only
+        keys_to_remove = [key for key in self._pending_epoch_metrics if key[0] == inner_epoch]
+        for key in keys_to_remove:
+            del self._pending_epoch_metrics[key]
+
+    def _handle_batch_epoch_completed(self, event: "TelemetryEvent") -> None:
+        """Handle BATCH_EPOCH_COMPLETED - flush any remaining buffered epochs.
+
+        BATCH_EPOCH_COMPLETED is emitted once per episode (batch of N envs).
+        It serves two purposes:
+        1. Flush partial batches: The last batch may have fewer envs than n_envs,
+           so the barrier in _handle_epoch_completed never triggers. This handler
+           commits any remaining buffered epochs.
+        2. Minimal telemetry fallback: If EPOCH_COMPLETED was gated (ops_normal off),
+           create a single epoch snapshot from BATCH aggregate metrics.
+        """
+        if not isinstance(event.data, BatchEpochCompletedPayload):
+            return
+
+        payload = event.data
+        did_flush = False
+
+        # Case 1: Flush any remaining buffered epochs (partial batch)
+        if self._pending_epoch_metrics:
+            # Get unique inner_epochs that have buffered data
+            buffered_epochs = sorted(set(key[0] for key in self._pending_epoch_metrics))
+            for inner_epoch in buffered_epochs:
+                self._commit_epoch_from_buffer(inner_epoch)
+            did_flush = True
+
+        # Case 2: Minimal telemetry fallback - no EPOCH_COMPLETED events received
+        # Create a single epoch snapshot from BATCH aggregate metrics
+        if not did_flush and not self._saw_epoch_completed_since_batch:
+            if self.store.current_epoch is None:
+                self._saw_epoch_completed_since_batch = False
+                return
+
+            current_epoch = self.store.current_epoch
+            # batch_idx is emitted 1-indexed
+            epoch_num = payload.batch_idx
+            current_epoch.epoch = epoch_num
+            current_epoch.host.epoch = epoch_num
+            current_epoch.host.val_accuracy = payload.avg_accuracy
+            # BATCH doesn't have val_loss - leave at default 0.0
+
+            # Increment epochs_in_stage for active slots
+            for slot in current_epoch.slots.values():
+                if slot.stage not in (SeedStage.DORMANT, SeedStage.PRUNED, SeedStage.FOSSILIZED):
+                    slot.epochs_in_stage += 1
+
+            # Commit and start next
+            self.store.commit_epoch()
+            self.store.start_epoch(epoch_num + 1)
+
+        self._saw_epoch_completed_since_batch = False
 
     def _check_anomalies_and_capture(self, snapshot: EpochSnapshot) -> None:
         """Check for anomalies and manage dense trace capture."""

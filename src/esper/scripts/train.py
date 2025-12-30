@@ -4,6 +4,7 @@
 import argparse
 import logging
 import sys
+from textwrap import dedent
 
 import torch
 
@@ -11,6 +12,14 @@ from esper.nissa import ConsoleOutput, DirectoryOutput, FileOutput, get_hub
 from esper.simic.training import TrainingConfig
 
 _logger = logging.getLogger(__name__)
+
+
+def _positive_int(value: str) -> int:
+    """Argparse type for positive integers (>= 1)."""
+    ivalue = int(value)
+    if ivalue < 1:
+        raise argparse.ArgumentTypeError(f"must be >= 1 (got {ivalue})")
+    return ivalue
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -204,6 +213,76 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="True A/B test: train separate policies on separate GPUs",
     )
+
+    # === Tamiyo Training Scale ===
+    # These control how much and how Tamiyo learns, exposed with Tamiyo-centric names.
+    ppo_parser.add_argument(
+        "--rounds",
+        type=_positive_int,
+        default=None,
+        metavar="N",
+        help="Tamiyo training iterations. Each round = one PPO update using data from all envs. "
+             "(Maps to n_episodes in config. Default: 100)",
+    )
+    ppo_parser.add_argument(
+        "--envs",
+        type=_positive_int,
+        default=None,
+        metavar="K",
+        help="Parallel CIFAR environments per round. More envs = richer/more diverse data per "
+             "Tamiyo update, but same number of updates. (Maps to n_envs. Default: 4)",
+    )
+    ppo_parser.add_argument(
+        "--episode-length",
+        type=_positive_int,
+        default=None,
+        metavar="L",
+        help="Timesteps per environment per round. Each round produces envs × episode_length "
+             "transitions for Tamiyo. (Maps to max_epochs. Default: 25)",
+    )
+    ppo_parser.add_argument(
+        "--ppo-epochs",
+        type=_positive_int,
+        default=None,
+        metavar="E",
+        help="Gradient steps per round (passes over rollout data). Higher = more sample-efficient "
+             "but risks overfitting. (Maps to ppo_updates_per_batch. Default: 1)",
+    )
+    ppo_parser.add_argument(
+        "--memory-size",
+        type=_positive_int,
+        default=None,
+        metavar="H",
+        help="Tamiyo's LSTM hidden dimension (temporal reasoning capacity). "
+             "Smaller = faster but less temporal memory. (Maps to lstm_hidden_dim. Default: 128)",
+    )
+    # Note: Uses type=int (not _positive_int) since 0 is valid (no annealing)
+    ppo_parser.add_argument(
+        "--entropy-anneal-rounds",
+        type=int,
+        default=None,
+        metavar="R",
+        help="Rounds over which to anneal entropy coefficient. 0 = no annealing. "
+             "(Maps to entropy_anneal_episodes. Default: 0)",
+    )
+
+    ppo_parser.epilog = dedent("""
+        Tamiyo Training Parameters:
+          Esper has a two-level RL structure:
+
+          Inner loop: CIFAR environments train small neural networks
+          Outer loop: Tamiyo (policy network) learns to control them via PPO
+
+          Each "round" runs all --envs environments for --episode-length timesteps,
+          then performs one PPO update on Tamiyo using the collected experience.
+
+          Total Tamiyo transitions per round: envs × episode_length
+
+          Example:
+            --rounds 100 --envs 4 --episode-length 25
+            = 100 PPO updates, each using 4 × 25 = 100 transitions
+    """).strip()
+    ppo_parser.formatter_class = argparse.RawDescriptionHelpFormatter
 
     return parser
 
@@ -430,13 +509,15 @@ def main() -> None:
     karn_collector = get_collector()
     hub.add_backend(karn_collector)  # type: ignore[arg-type]
 
-    # Event to signal when DataLoader workers are spawned (for TUI synchronization)
-    # When using Sanctum TUI, main thread waits for this event before starting
-    # Textual, ensuring workers spawn while terminal FDs are valid.
+    # Events for TUI synchronization
+    # - dataloader_ready_event: Signals when DataLoader workers are spawned
+    # - shutdown_event: Signals training to stop gracefully at epoch end
     import threading
     dataloader_ready_event: threading.Event | None = None
+    shutdown_event: threading.Event | None = None
     if use_sanctum:
         dataloader_ready_event = threading.Event()
+        shutdown_event = threading.Event()
 
     # Define training function to enable background execution for Sanctum
     def run_training() -> None:
@@ -496,6 +577,22 @@ def main() -> None:
                     config.gradient_telemetry_stride = args.gradient_telemetry_stride
                 elif args.telemetry_level == "debug":
                     config.gradient_telemetry_stride = 1
+
+                # === Tamiyo-centric CLI overrides ===
+                if args.rounds is not None:
+                    config.n_episodes = args.rounds
+                if args.envs is not None:
+                    config.n_envs = args.envs
+                if args.episode_length is not None:
+                    # chunk_length MUST equal max_epochs per TrainingConfig validation
+                    config.max_epochs = args.episode_length
+                    config.chunk_length = args.episode_length
+                if args.ppo_epochs is not None:
+                    config.ppo_updates_per_batch = args.ppo_epochs
+                if args.memory_size is not None:
+                    config.lstm_hidden_dim = args.memory_size
+                if args.entropy_anneal_rounds is not None:
+                    config.entropy_anneal_episodes = args.entropy_anneal_rounds
 
                 # Handle A/B testing - set on config for validation
                 if args.ab_test:
@@ -582,6 +679,7 @@ def main() -> None:
                         telemetry_lifecycle_only=args.telemetry_lifecycle_only,
                         quiet_analytics=use_sanctum,
                         ready_event=dataloader_ready_event,
+                        shutdown_event=shutdown_event,
                         **config.to_train_kwargs(),
                     )
         except Exception:
@@ -609,7 +707,8 @@ def main() -> None:
                     import sys
                     print(f"\n[TRAINING ERROR]\n{training_error[0]}", file=sys.stderr)
 
-            training_thread = threading.Thread(target=training_wrapper, daemon=True)
+            # daemon=False so we can wait for graceful shutdown
+            training_thread = threading.Thread(target=training_wrapper, daemon=False)
             training_thread.start()
 
             # CRITICAL: Wait for DataLoader workers to spawn BEFORE starting Textual.
@@ -622,13 +721,32 @@ def main() -> None:
                     print("WARNING: DataLoader initialization timed out, starting TUI anyway")
 
             # Run Sanctum TUI in main thread (blocks until user quits)
-            # Pass training_thread so TUI can monitor if it's alive
+            # Pass training_thread and shutdown_event so TUI can signal graceful shutdown
             sanctum_app = SanctumApp(
                 backend=sanctum_backend,  # type: ignore[arg-type]
                 num_envs=num_envs,
                 training_thread=training_thread,
+                shutdown_event=shutdown_event,
             )
             sanctum_app.run()
+
+            # Wait for training thread to finish gracefully (shutdown was signaled by TUI)
+            if training_thread.is_alive():
+                print("Waiting for training to complete current epoch... (Ctrl+C to force quit)")
+
+                # Handle Ctrl+C during wait to allow force quit
+                import signal
+                import os
+
+                def force_quit_handler(signum: int, frame: object) -> None:
+                    print("\nForce quit requested, exiting immediately")
+                    os._exit(1)
+
+                old_handler = signal.signal(signal.SIGINT, force_quit_handler)
+                try:
+                    training_thread.join()  # Wait indefinitely, user can Ctrl+C
+                finally:
+                    signal.signal(signal.SIGINT, old_handler)
 
             # After TUI exits, show any training error
             if training_error[0]:

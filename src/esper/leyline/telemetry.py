@@ -15,7 +15,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, auto
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
 from uuid import uuid4
 
 from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
@@ -222,6 +225,11 @@ class SeedTelemetry:
     blend_tempo_epochs: int = 5
     blending_velocity: float = 0.0  # d(alpha) / d(epoch)
 
+    # Alpha curve shape (from AlphaCurveAction enum name).
+    # Always present because policy always samples a curve; causal relevance
+    # is handled by advantage masking in simic/agent/advantages.py.
+    alpha_curve: str = "LINEAR"
+
     def to_features(self) -> list[float]:
         """Convert to 26-dim feature vector for RL policies.
 
@@ -314,6 +322,7 @@ class SeedTelemetry:
             "captured_at": self.captured_at.isoformat() if self.captured_at else None,
             "blend_tempo_epochs": self.blend_tempo_epochs,
             "blending_velocity": self.blending_velocity,
+            "alpha_curve": self.alpha_curve,
         }
 
     @classmethod
@@ -399,6 +408,7 @@ class SeedTelemetry:
             captured_at=datetime.fromisoformat(data["captured_at"]),
             blend_tempo_epochs=data["blend_tempo_epochs"],
             blending_velocity=data["blending_velocity"],
+            alpha_curve=data["alpha_curve"],
         )
 
 
@@ -419,6 +429,7 @@ class TrainingStartedPayload:
     # REQUIRED - training fails without these
     n_envs: int
     max_epochs: int
+    max_batches: int  # Total episodes/batches in run (from CLI n_episodes)
     task: str
     host_params: int  # Must be post-materialization
     slot_ids: tuple[str, ...]
@@ -431,10 +442,12 @@ class TrainingStartedPayload:
     policy_device: str
     env_devices: tuple[str, ...]
 
+    # REQUIRED - training context
+    reward_mode: str  # e.g. "shaped", "sparse", "minimal", "simplified"
+
     # OPTIONAL - legitimate defaults
     episode_id: str = ""
     resume_path: str = ""
-    reward_mode: str = ""
     start_episode: int = 0
     entropy_anneal: dict[str, float] | None = None
 
@@ -458,6 +471,7 @@ class TrainingStartedPayload:
         return cls(
             n_envs=data["n_envs"],
             max_epochs=data["max_epochs"],
+            max_batches=data["max_batches"],
             task=data["task"],
             host_params=data["host_params"],
             slot_ids=_ensure_tuple(data["slot_ids"]),
@@ -469,10 +483,11 @@ class TrainingStartedPayload:
             param_budget=data["param_budget"],
             policy_device=data["policy_device"],
             env_devices=_ensure_tuple(data["env_devices"]),
+            # Required field
+            reward_mode=data["reward_mode"],
             # Optional fields with defaults
             episode_id=data.get("episode_id", ""),
             resume_path=data.get("resume_path", ""),
-            reward_mode=data.get("reward_mode", ""),
             start_episode=data.get("start_episode", 0),
             entropy_anneal=data.get("entropy_anneal"),
             world_size=data.get("world_size", 1),
@@ -511,10 +526,10 @@ class EpochCompletedPayload:
             env_id=data["env_id"],
             val_accuracy=data["val_accuracy"],
             val_loss=data["val_loss"],
-            inner_epoch=data.get("inner_epoch", data.get("epoch", 0)),
+            inner_epoch=data["inner_epoch"],
             train_loss=data.get("train_loss"),
             train_accuracy=data.get("train_accuracy"),
-            host_grad_norm=data.get("grad_norm"),  # Note: dict uses "grad_norm"
+            host_grad_norm=data.get("host_grad_norm"),
             seeds=data.get("seeds"),
         )
 
@@ -559,6 +574,35 @@ class BatchEpochCompletedPayload:
 
 
 @dataclass(slots=True, frozen=True)
+class TrendDetectedPayload:
+    """Payload for trend detection events (PLATEAU/DEGRADATION/IMPROVEMENT_DETECTED).
+
+    Emitted when rolling accuracy crosses threshold between batches.
+    All three event types use the same payload structure.
+    """
+
+    # REQUIRED - identifies where in training this occurred
+    batch_idx: int
+    episodes_completed: int
+
+    # REQUIRED - the trend detection data
+    rolling_delta: float  # Change from previous rolling avg
+    rolling_avg_accuracy: float  # Current rolling avg
+    prev_rolling_avg_accuracy: float  # Previous rolling avg
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "TrendDetectedPayload":
+        """Parse from dict. Raises KeyError on missing required fields."""
+        return cls(
+            batch_idx=data["batch_idx"],
+            episodes_completed=data["episodes_completed"],
+            rolling_delta=data["rolling_delta"],
+            rolling_avg_accuracy=data["rolling_avg_accuracy"],
+            prev_rolling_avg_accuracy=data["prev_rolling_avg_accuracy"],
+        )
+
+
+@dataclass(slots=True, frozen=True)
 class PPOUpdatePayload:
     """Payload for PPO_UPDATE_COMPLETED event. Emitted after each PPO update."""
 
@@ -578,10 +622,16 @@ class PPOUpdatePayload:
     entropy_loss: float = 0.0
     advantage_mean: float = 0.0
     advantage_std: float = 0.0
+    advantage_skewness: float = 0.0  # Asymmetry: >0 right-skewed, <0 left-skewed
+    advantage_kurtosis: float = 0.0  # Tail heaviness: >0 heavy tails (more outliers), <0 light tails
+    advantage_positive_ratio: float = 0.5  # Fraction positive (healthy: 0.4-0.6)
     ratio_mean: float = 1.0
     ratio_min: float = 1.0
     ratio_max: float = 1.0
     ratio_std: float = 0.0
+    # Log prob extremes (NaN predictor: <-50 warning, <-100 critical)
+    log_prob_min: float = 0.0
+    log_prob_max: float = 0.0
     lr: float | None = None
     entropy_coef: float | None = None
 
@@ -627,6 +677,27 @@ class PPOUpdatePayload:
     # Skipped update flag (for buffer rollback scenarios)
     skipped: bool = False
 
+    # Value function statistics (for divergence detection)
+    value_mean: float = 0.0
+    value_std: float = 0.0
+    value_min: float = 0.0
+    value_max: float = 0.0
+
+    # === Gradient Quality Metrics (per DRL expert review) ===
+    # Directional clip: WHERE clipping occurs (not WHETHER policy improved)
+    clip_fraction_positive: float = 0.0  # r > 1+ε (probability increases capped)
+    clip_fraction_negative: float = 0.0  # r < 1-ε (probability decreases capped)
+    # Gradient CV: coefficient of variation = std/|mean|
+    # Low (<0.5) = high signal quality, High (>2.0) = noisy gradients
+    gradient_cv: float = 0.0
+
+    # === Infrastructure Metrics (per PyTorch expert review) ===
+    # CUDA memory collected every N batches to amortize sync overhead
+    cuda_memory_allocated_gb: float = 0.0  # torch.cuda.memory_allocated()
+    cuda_memory_reserved_gb: float = 0.0   # torch.cuda.memory_reserved()
+    cuda_memory_peak_gb: float = 0.0       # torch.cuda.max_memory_allocated()
+    cuda_memory_fragmentation: float = 0.0 # 1 - (allocated/reserved), >0.3 = pressure
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "PPOUpdatePayload":
         """Parse from dict. Raises KeyError on missing required fields."""
@@ -643,10 +714,15 @@ class PPOUpdatePayload:
             entropy_loss=data.get("entropy_loss", 0.0),
             advantage_mean=data.get("advantage_mean", 0.0),
             advantage_std=data.get("advantage_std", 0.0),
+            advantage_skewness=data.get("advantage_skewness", 0.0),
+            advantage_kurtosis=data.get("advantage_kurtosis", 0.0),
+            advantage_positive_ratio=data.get("advantage_positive_ratio", 0.5),
             ratio_mean=data.get("ratio_mean", 1.0),
             ratio_min=data.get("ratio_min", 1.0),
             ratio_max=data.get("ratio_max", 1.0),
             ratio_std=data.get("ratio_std", 0.0),
+            log_prob_min=data.get("log_prob_min", 0.0),
+            log_prob_max=data.get("log_prob_max", 0.0),
             lr=data.get("lr"),
             entropy_coef=data.get("entropy_coef"),
             inf_grad_count=data.get("inf_grad_count", 0),
@@ -678,6 +754,20 @@ class PPOUpdatePayload:
             inner_epoch=data.get("inner_epoch", 0),
             batch=data.get("batch", 0),
             skipped=data.get("skipped", False),
+            # Value function statistics
+            value_mean=data.get("value_mean", 0.0),
+            value_std=data.get("value_std", 0.0),
+            value_min=data.get("value_min", 0.0),
+            value_max=data.get("value_max", 0.0),
+            # Gradient quality metrics
+            clip_fraction_positive=data.get("clip_fraction_positive", 0.0),
+            clip_fraction_negative=data.get("clip_fraction_negative", 0.0),
+            gradient_cv=data.get("gradient_cv", 0.0),
+            # Infrastructure metrics
+            cuda_memory_allocated_gb=data.get("cuda_memory_allocated_gb", 0.0),
+            cuda_memory_reserved_gb=data.get("cuda_memory_reserved_gb", 0.0),
+            cuda_memory_peak_gb=data.get("cuda_memory_peak_gb", 0.0),
+            cuda_memory_fragmentation=data.get("cuda_memory_fragmentation", 0.0),
         )
 
     @classmethod
@@ -744,6 +834,7 @@ class SeedGerminatedPayload:
     has_exploding: bool = False
     epochs_in_stage: int = 0
     blend_tempo_epochs: int = 5
+    alpha_curve: str = "LINEAR"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SeedGerminatedPayload":
@@ -759,6 +850,7 @@ class SeedGerminatedPayload:
             has_exploding=data.get("has_exploding", False),
             epochs_in_stage=data.get("epochs_in_stage", 0),
             blend_tempo_epochs=data.get("blend_tempo_epochs", 5),
+            alpha_curve=data["alpha_curve"],
         )
 
 
@@ -784,6 +876,9 @@ class SeedStageChangedPayload:
     grad_ratio: float = 0.0
     has_vanishing: bool = False
     has_exploding: bool = False
+    # Alpha curve - always present (policy always samples), but only causally
+    # relevant during BLENDING. See simic/agent/advantages.py for causal masking.
+    alpha_curve: str = "LINEAR"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SeedStageChangedPayload":
@@ -799,6 +894,7 @@ class SeedStageChangedPayload:
             grad_ratio=data.get("grad_ratio", 0.0),
             has_vanishing=data.get("has_vanishing", False),
             has_exploding=data.get("has_exploding", False),
+            alpha_curve=data["alpha_curve"],
         )
 
 
@@ -942,6 +1038,59 @@ class CounterfactualMatrixPayload:
 
 
 @dataclass(slots=True, frozen=True)
+class HeadTelemetry:
+    """Per-head confidence and entropy values for factored action heads.
+
+    Confidence = P(chosen_action | valid_mask) via exp(log_prob).
+    This is the probability among valid actions, properly handling masking.
+
+    Entropy measures how spread out the distribution is (higher = more uncertain).
+    """
+
+    # Per-head confidence (probability of chosen action)
+    op_confidence: float = 0.0
+    slot_confidence: float = 0.0
+    blueprint_confidence: float = 0.0
+    style_confidence: float = 0.0
+    tempo_confidence: float = 0.0
+    alpha_target_confidence: float = 0.0
+    alpha_speed_confidence: float = 0.0
+    curve_confidence: float = 0.0
+
+    # Per-head entropy (distribution spread - higher means more uncertain)
+    op_entropy: float = 0.0
+    slot_entropy: float = 0.0
+    blueprint_entropy: float = 0.0
+    style_entropy: float = 0.0
+    tempo_entropy: float = 0.0
+    alpha_target_entropy: float = 0.0
+    alpha_speed_entropy: float = 0.0
+    curve_entropy: float = 0.0
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "HeadTelemetry":
+        """Parse from dict. All fields have defaults of 0.0."""
+        return cls(
+            op_confidence=data.get("op_confidence", 0.0),
+            slot_confidence=data.get("slot_confidence", 0.0),
+            blueprint_confidence=data.get("blueprint_confidence", 0.0),
+            style_confidence=data.get("style_confidence", 0.0),
+            tempo_confidence=data.get("tempo_confidence", 0.0),
+            alpha_target_confidence=data.get("alpha_target_confidence", 0.0),
+            alpha_speed_confidence=data.get("alpha_speed_confidence", 0.0),
+            curve_confidence=data.get("curve_confidence", 0.0),
+            op_entropy=data.get("op_entropy", 0.0),
+            slot_entropy=data.get("slot_entropy", 0.0),
+            blueprint_entropy=data.get("blueprint_entropy", 0.0),
+            style_entropy=data.get("style_entropy", 0.0),
+            tempo_entropy=data.get("tempo_entropy", 0.0),
+            alpha_target_entropy=data.get("alpha_target_entropy", 0.0),
+            alpha_speed_entropy=data.get("alpha_speed_entropy", 0.0),
+            curve_entropy=data.get("curve_entropy", 0.0),
+        )
+
+
+@dataclass(slots=True, frozen=True)
 class AnalyticsSnapshotPayload:
     """Payload for ANALYTICS_SNAPSHOT event. Used for dashboard sync.
 
@@ -970,6 +1119,8 @@ class AnalyticsSnapshotPayload:
     total_reward: float | None = None
     action_name: str | None = None  # The op name (e.g., "WAIT", "GERMINATE")
     action_confidence: float | None = None
+    # Per-head telemetry (typed dataclass, not raw dict)
+    head_telemetry: HeadTelemetry | None = None
     value_estimate: float | None = None
     slot_id: str | None = None
     blueprint_id: str | None = None
@@ -999,6 +1150,8 @@ class AnalyticsSnapshotPayload:
     stage_bonus: float | None = None  # PBRS shaping bonus for lifecycle stages
     ratio_penalty: float | None = None  # Anti-gaming penalty for extreme ratios
     alpha_shock: float | None = None  # Convex penalty on alpha deltas
+    # Full reward components dataclass (replaces individual fields)
+    reward_components: "RewardComponentsTelemetry | None" = None
     # Decision context for TamiyoBrain Decision Cards
     slot_states: dict[str, str] | None = None  # slot_id -> "Training 12%" or "Empty"
     alternatives: list[tuple[str, float]] | None = None  # Top-2 alternative (action, prob)
@@ -1138,7 +1291,32 @@ class AnalyticsSnapshotPayload:
             # Shapley fields
             shapley_values=data.get("shapley_values"),
             num_slots=data.get("num_slots"),
+            # Reward components (nested dataclass)
+            reward_components=cls._parse_reward_components(data.get("reward_components")),
+            # Head telemetry (nested dataclass)
+            head_telemetry=cls._parse_head_telemetry(data.get("head_telemetry")),
         )
+
+    @staticmethod
+    def _parse_reward_components(
+        data: dict[str, Any] | None,
+    ) -> "RewardComponentsTelemetry | None":
+        """Parse reward_components from dict if present.
+
+        Uses late import to avoid circular dependency at module load time.
+        """
+        if data is None:
+            return None
+        from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
+
+        return RewardComponentsTelemetry.from_dict(data)
+
+    @staticmethod
+    def _parse_head_telemetry(data: dict[str, Any] | None) -> HeadTelemetry | None:
+        """Parse head_telemetry from dict if present."""
+        if data is None:
+            return None
+        return HeadTelemetry.from_dict(data)
 
 
 @dataclass(slots=True, frozen=True)
@@ -1350,6 +1528,7 @@ TelemetryPayload = (
     TrainingStartedPayload
     | EpochCompletedPayload
     | BatchEpochCompletedPayload
+    | TrendDetectedPayload
     | PPOUpdatePayload
     | TamiyoInitiatedPayload
     | SeedGerminatedPayload

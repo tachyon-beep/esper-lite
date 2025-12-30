@@ -241,7 +241,21 @@ class TrainingConfig:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "TrainingConfig":
-        """Create from dictionary, rejecting unknown keys."""
+        """Create from dictionary, rejecting unknown keys.
+
+        Supports aliases:
+        - entropy_anneal_rounds -> entropy_anneal_episodes (Tamiyo-centric naming)
+        """
+        # Handle aliases before validation (detect conflicts)
+        if "entropy_anneal_rounds" in data:
+            if "entropy_anneal_episodes" in data:
+                raise ValueError(
+                    "Cannot specify both 'entropy_anneal_rounds' and 'entropy_anneal_episodes' "
+                    "(they are aliases for the same field)"
+                )
+            data = dict(data)  # Don't mutate input
+            data["entropy_anneal_episodes"] = data.pop("entropy_anneal_rounds")
+
         cls._validate_known_keys(data)
         parsed = dict(data)
         if "reward_family" in parsed:

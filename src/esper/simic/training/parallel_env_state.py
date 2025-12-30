@@ -5,7 +5,6 @@ for a single parallel training environment, including:
 - Model and optimizer references
 - Episode tracking (rewards, action counts)
 - Pre-allocated GPU accumulators (to avoid per-epoch allocation churn)
-- LSTM hidden state for recurrent policies
 """
 
 from __future__ import annotations
@@ -72,11 +71,6 @@ class ParallelEnvState:
     # Pair counterfactual accumulators for 3-4 seeds (key: tuple of slot indices)
     cf_pair_accums: dict[tuple[int, int], torch.Tensor] = field(default_factory=dict)
     cf_pair_totals: dict[tuple[int, int], int] = field(default_factory=dict)
-    # LSTM hidden state for recurrent policy
-    # Shape: (h, c) where each is [num_layers, 1, hidden_dim] for this single env
-    # (Batched to [num_layers, num_envs, hidden_dim] during forward pass)
-    # None = fresh episode (initialized on first action selection)
-    lstm_hidden: tuple[torch.Tensor, torch.Tensor] | None = None
     telemetry_cb: Any = None  # Callback wired when telemetry is enabled
     # Per-slot EMA tracking for seed gradient ratio (for G2 gate)
     # Smooths per-step ratio noise with momentum=0.9

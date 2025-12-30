@@ -3,10 +3,22 @@
 import { computed } from 'vue'
 import type { SeedStage } from '../types/sanctum'
 
+// Curve glyph mapping for visual display (matches leyline ALPHA_CURVE_GLYPHS)
+// Always shown (UX policy: data points don't disappear) - bright when active, dim otherwise.
+// Source of truth: src/esper/leyline/factored_actions.py ALPHA_CURVE_GLYPHS
+const CURVE_GLYPHS: Record<string, string> = {
+  'LINEAR': '\u2571',        // ╱ - diagonal line (constant rate)
+  'COSINE': '\u223F',        // ∿ - wave (ease-in/ease-out)
+  'SIGMOID_GENTLE': '\u2312', // ⌒ - wide top arc (gradual S)
+  'SIGMOID': '\u2322',       // ⌢ - narrow bottom arc (standard S)
+  'SIGMOID_SHARP': '\u2290', // ⊐ - squared bracket (near-step)
+}
+
 const props = defineProps<{
   slotId: string
   stage: SeedStage
   alpha?: number
+  alphaCurve?: string
   hasWarning?: boolean
 }>()
 
@@ -26,6 +38,24 @@ const alphaPercent = computed(() => {
   return `${Math.round(props.alpha * 100)}%`
 })
 
+// Curve glyph display logic
+// UX policy: Data points don't disappear. Always show a curve indicator:
+// - Bright when causally active (BLENDING/HOLDING)
+// - Dim when historical (FOSSILIZED) or not yet relevant (other stages)
+const curveGlyph = computed(() => {
+  const curve = props.alphaCurve ?? 'LINEAR'
+  const glyph = CURVE_GLYPHS[curve] ?? '\u2212' // − (minus sign) as fallback
+  return glyph
+})
+
+const isCurveActive = computed(() => {
+  return props.stage === 'BLENDING' || props.stage === 'HOLDING'
+})
+
+const isCurveHistorical = computed(() => {
+  return props.stage === 'FOSSILIZED'
+})
+
 const tooltip = computed(() => `${props.slotId}: ${props.stage}`)
 </script>
 
@@ -38,6 +68,11 @@ const tooltip = computed(() => `${props.slotId}: ${props.stage}`)
   >
     <span class="slot-id" data-testid="slot-id">{{ abbreviatedSlotId }}</span>
     <span v-if="showAlpha" class="alpha" data-testid="alpha">{{ alphaPercent }}</span>
+    <span
+      class="curve"
+      :class="{ 'curve-active': isCurveActive, 'curve-historical': isCurveHistorical, 'curve-dim': !isCurveActive && !isCurveHistorical }"
+      data-testid="curve-glyph"
+    >{{ curveGlyph }}</span>
     <span v-if="hasWarning" class="warning" data-testid="warning-indicator">!</span>
   </span>
 </template>
@@ -70,6 +105,25 @@ const tooltip = computed(() => `${props.slotId}: ${props.stage}`)
   color: var(--status-warn);
   font-weight: 700;
   animation: pulse 1s infinite;
+}
+
+/* Curve glyph styling */
+/* UX policy: Always visible, brightness indicates causal relevance */
+.curve {
+  font-size: 10px;
+}
+
+.curve-active {
+  opacity: 1;
+  color: var(--text-bright);
+}
+
+.curve-historical {
+  opacity: 0.6;
+}
+
+.curve-dim {
+  opacity: 0.4;
 }
 
 @keyframes pulse {

@@ -5,7 +5,6 @@ This module contains the main training functions extracted from ppo.py.
 
 from __future__ import annotations
 
-import functools
 import logging
 import random
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Protocol, cast
@@ -143,19 +142,30 @@ def _train_step_impl(
     return loss, outputs
 
 
-@functools.cache
+# Module-level cache for successful compilation only.
+# Failures are NOT cached, allowing retry on subsequent calls.
+_compiled_train_step_cache: Callable[
+    [nn.Module, torch.Tensor, torch.Tensor, nn.Module],
+    tuple[torch.Tensor, torch.Tensor]
+] | None = None
+
+
 def _get_compiled_train_step(use_compile: bool = True) -> Callable[
     [nn.Module, torch.Tensor, torch.Tensor, nn.Module],
     tuple[torch.Tensor, torch.Tensor]
 ]:
-    """Get train step function, optionally compiled (thread-safe via functools.cache).
+    """Get train step function, optionally compiled.
 
-    Uses functools.cache for thread-safe lazy initialization. The cache
-    is immutable once populated, avoiding TOCTOU races.
+    Only caches SUCCESSFUL compilations. If compilation fails (e.g., due to
+    transient GPU memory pressure), subsequent calls will retry compilation
+    instead of being stuck with the uncompiled fallback for the process lifetime.
 
     Note: Uses mode="default" instead of "reduce-overhead" because the model
     parameter varies across calls. CUDA graphs (reduce-overhead) capture memory
     addresses, so different model instances would cause repeated graph recapture.
+
+    Thread-safety: Worst-case race is two threads both compiling successfully;
+    one wins, no correctness issue. Failure paths are not cached.
 
     Args:
         use_compile: If True, attempt to compile; if False, use uncompiled version
@@ -163,20 +173,30 @@ def _get_compiled_train_step(use_compile: bool = True) -> Callable[
     Returns:
         The train step function (compiled or uncompiled)
     """
-    if use_compile:
-        try:
-            # M22: dynamic=True handles varying batch sizes without recompilation.
-            # mode="default" is safest (reduce-overhead uses CUDA graphs which
-            # capture memory addresses and break with varying model instances).
-            return torch.compile(_train_step_impl, mode="default", dynamic=True)
-        except Exception as e:
-            # M22: Log compilation failures so they aren't silent
-            logger.warning(
-                "torch.compile failed, falling back to uncompiled train_step: %s",
-                e,
-            )
-            return _train_step_impl
-    return _train_step_impl
+    global _compiled_train_step_cache
+
+    if not use_compile:
+        return _train_step_impl
+
+    # Return cached compiled version if available
+    if _compiled_train_step_cache is not None:
+        return _compiled_train_step_cache
+
+    try:
+        # M22: dynamic=True handles varying batch sizes without recompilation.
+        # mode="default" is safest (reduce-overhead uses CUDA graphs which
+        # capture memory addresses and break with varying model instances).
+        compiled = torch.compile(_train_step_impl, mode="default", dynamic=True)
+        _compiled_train_step_cache = compiled  # Cache only on success
+        return compiled
+    except Exception as e:
+        # Log but DON'T cache - next call will retry compilation
+        logger.warning(
+            "torch.compile failed (will retry on next call), "
+            "falling back to uncompiled train_step: %s",
+            e,
+        )
+        return _train_step_impl
 
 
 def compiled_train_step(
@@ -463,11 +483,15 @@ def run_heuristic_episode(
     prev_slot_params = {slot_id: 0 for slot_id in enabled_slots}
 
     # Emit TRAINING_STARTED to activate Karn (P1 fix)
+    # Use max_batches if provided, otherwise use len(trainloader)
+    batches_per_epoch = max_batches if max_batches is not None else len(trainloader)
+
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.TRAINING_STARTED,
         data=TrainingStartedPayload(
             n_envs=1,
             max_epochs=max_epochs,
+            max_batches=batches_per_epoch,
             task=task_spec.name,
             host_params=host_params,
             slot_ids=tuple(enabled_slots),
@@ -480,6 +504,7 @@ def run_heuristic_episode(
             policy_device="cpu",
             env_devices=("cpu",),
             episode_id=episode_id,
+            reward_mode="shaped",  # Heuristic mode uses shaped rewards
         ),
     ))
 

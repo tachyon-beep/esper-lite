@@ -591,3 +591,37 @@ def test_missing_slot_id_raises_keyerror():
 
     with pytest.raises(KeyError):
         obs_to_multislot_features(obs)
+
+
+def test_blueprint_index_sync_with_leyline():
+    """Verify _BLUEPRINT_TO_INDEX matches BlueprintAction enum (B10-DRL-01).
+
+    This test guards against silent feature corruption if someone adds a new
+    blueprint to BlueprintAction without updating the hot-path lookup table.
+    The dict duplication is intentional for performance, but must stay in sync.
+    """
+    from esper.tamiyo.policy.features import _BLUEPRINT_TO_INDEX, _NUM_BLUEPRINT_TYPES
+    from esper.leyline import BlueprintAction
+
+    # Verify count matches
+    assert len(_BLUEPRINT_TO_INDEX) == len(BlueprintAction), (
+        f"Blueprint count drift: features has {len(_BLUEPRINT_TO_INDEX)}, "
+        f"leyline has {len(BlueprintAction)}. Update _BLUEPRINT_TO_INDEX!"
+    )
+
+    assert _NUM_BLUEPRINT_TYPES == len(BlueprintAction), (
+        f"_NUM_BLUEPRINT_TYPES ({_NUM_BLUEPRINT_TYPES}) != len(BlueprintAction) "
+        f"({len(BlueprintAction)}). Update both constants!"
+    )
+
+    # Verify each mapping matches
+    for bp in BlueprintAction:
+        bp_id = bp.to_blueprint_id()
+        assert bp_id in _BLUEPRINT_TO_INDEX, (
+            f"Missing blueprint '{bp_id}' in _BLUEPRINT_TO_INDEX. "
+            f"Add: '{bp_id}': {bp.value}"
+        )
+        assert _BLUEPRINT_TO_INDEX[bp_id] == bp.value, (
+            f"Index mismatch for '{bp_id}': features has {_BLUEPRINT_TO_INDEX[bp_id]}, "
+            f"leyline has {bp.value}"
+        )

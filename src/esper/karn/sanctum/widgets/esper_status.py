@@ -14,34 +14,10 @@ from rich.table import Table
 from rich.text import Text
 from textual.widgets import Static
 
+from esper.leyline import STAGE_ABBREVIATIONS, STAGE_COLORS
+
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot
-
-
-# Stage short names for compact display (matching Rich TUI)
-_STAGE_SHORT: dict[str, str] = {
-    "DORMANT": "Dorm",
-    "GERMINATED": "Germ",
-    "TRAINING": "Train",
-    "BLENDING": "Blend",
-    "HOLDING": "Hold",
-    "FOSSILIZED": "Foss",
-    "PRUNED": "Prune",
-    "RESETTING": "Reset",
-    "EMBARGOED": "Embar",
-}
-
-# Stage colors matching EnvOverview
-_STAGE_STYLES: dict[str, str] = {
-    "TRAINING": "yellow",
-    "BLENDING": "cyan",
-    "HOLDING": "blue",
-    "FOSSILIZED": "magenta",
-    "PRUNED": "red",
-    "GERMINATED": "green",
-    "EMBARGOED": "red",
-    "RESETTING": "dim",
-}
 
 
 class EsperStatus(Static):
@@ -89,8 +65,8 @@ class EsperStatus(Static):
 
         if stage_counts:
             for stage, count in sorted(stage_counts.items()):
-                short = _STAGE_SHORT.get(stage, stage[:4])
-                style = _STAGE_STYLES.get(stage, "dim")
+                short = STAGE_ABBREVIATIONS.get(stage, stage[:4])
+                style = STAGE_COLORS.get(stage, "dim")
                 table.add_row(f"{short}:", Text(str(count), style=style))
             table.add_row("", "")
 

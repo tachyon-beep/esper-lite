@@ -1340,6 +1340,7 @@ class SeedSlot(nn.Module):
                 params=sum(p.numel() for p in self.seed.parameters() if p.requires_grad),
                 alpha=self.state.alpha if self.state else 0.0,
                 blend_tempo_epochs=blend_tempo_epochs,
+                alpha_curve=self.state.alpha_controller.alpha_curve.name,
                 # Optional gradient health fields - will be zero/false at germination
                 grad_ratio=0.0,
                 has_vanishing=False,
@@ -1431,6 +1432,7 @@ class SeedSlot(nn.Module):
                         alpha=self.state.alpha,
                         accuracy_delta=improvement,
                         epochs_in_stage=epochs_in_stage,
+                        alpha_curve=self.state.alpha_controller.alpha_curve.name,
                         # Optional gradient health fields
                         grad_ratio=(
                             self.state.metrics.seed_gradient_norm_ratio
@@ -1526,6 +1528,7 @@ class SeedSlot(nn.Module):
                 alpha=self.state.alpha,
                 accuracy_delta=improvement,
                 epochs_in_stage=epochs_in_stage,
+                alpha_curve=self.state.alpha_controller.alpha_curve.name,
                 # Optional gradient health fields
                 grad_ratio=(
                     self.state.metrics.seed_gradient_norm_ratio
@@ -1594,6 +1597,7 @@ class SeedSlot(nn.Module):
         *,
         steps: int,
         curve: AlphaCurve | None = None,
+        steepness: float = 12.0,
         reason: str = "",
         initiator: str = "policy",
     ) -> bool:
@@ -1631,6 +1635,7 @@ class SeedSlot(nn.Module):
                     alpha=self.state.alpha,
                     accuracy_delta=improvement,
                     epochs_in_stage=epochs_in_stage,
+                    alpha_curve=self.state.alpha_controller.alpha_curve.name,
                     # Optional gradient health fields
                     grad_ratio=(
                         self.state.metrics.seed_gradient_norm_ratio
@@ -1658,6 +1663,7 @@ class SeedSlot(nn.Module):
             alpha_target=0.0,
             alpha_steps_total=steps,
             alpha_curve=curve,
+            alpha_steepness=steepness,
         )
         self._set_blend_out_freeze(True)
         return True
@@ -1668,6 +1674,7 @@ class SeedSlot(nn.Module):
         alpha_target: float,
         steps: int,
         curve: AlphaCurve | None = None,
+        steepness: float = 12.0,
         alpha_algorithm: AlphaAlgorithm | None = None,
         initiator: str = "policy",
     ) -> bool:
@@ -1714,6 +1721,7 @@ class SeedSlot(nn.Module):
                     alpha=self.state.alpha,
                     accuracy_delta=improvement,
                     epochs_in_stage=epochs_in_stage,
+                    alpha_curve=self.state.alpha_controller.alpha_curve.name,
                     # Optional gradient health fields
                     grad_ratio=(
                         self.state.metrics.seed_gradient_norm_ratio
@@ -1761,6 +1769,7 @@ class SeedSlot(nn.Module):
             alpha_target=alpha_target,
             alpha_steps_total=steps,
             alpha_curve=curve,
+            alpha_steepness=steepness,
         )
 
         # Freeze learnable params when blending down.
@@ -2057,7 +2066,7 @@ class SeedSlot(nn.Module):
         self._blend_out_frozen_params.clear()
         self._blend_out_freeze_active = False
 
-    def start_blending(self, total_steps: int) -> None:
+    def start_blending(self, total_steps: int, steepness: float = 12.0) -> None:
         """Initialize blending with selected algorithm.
 
         Uses blend_algorithm_id set during germinate(). Falls back to sigmoid
@@ -2113,6 +2122,7 @@ class SeedSlot(nn.Module):
                 alpha_target=alpha_target,
                 alpha_steps_total=total_steps,
                 alpha_curve=curve,
+                alpha_steepness=steepness,
             )
 
         topology = self.task_config.topology if self.task_config else "cnn"
@@ -2328,6 +2338,7 @@ class SeedSlot(nn.Module):
                     alpha=self.state.alpha,
                     accuracy_delta=0.0,
                     epochs_in_stage=epochs_in_stage,
+                    alpha_curve=self.state.alpha_controller.alpha_curve.name,
                     # Optional gradient health fields
                     grad_ratio=(
                         self.state.metrics.seed_gradient_norm_ratio
@@ -2376,6 +2387,7 @@ class SeedSlot(nn.Module):
                     alpha=self.state.alpha,
                     accuracy_delta=0.0,
                     epochs_in_stage=epochs_in_stage,
+                    alpha_curve=self.state.alpha_controller.alpha_curve.name,
                     # Optional gradient health fields
                     grad_ratio=(
                         self.state.metrics.seed_gradient_norm_ratio
@@ -2420,6 +2432,7 @@ class SeedSlot(nn.Module):
                     alpha=self.state.alpha,
                     accuracy_delta=0.0,
                     epochs_in_stage=epochs_in_stage,
+                    alpha_curve=self.state.alpha_controller.alpha_curve.name,
                     # Optional gradient health fields
                     grad_ratio=(
                         self.state.metrics.seed_gradient_norm_ratio
@@ -2535,12 +2548,13 @@ class SeedSlot(nn.Module):
     def set_extra_state(self, state: dict[str, Any]) -> None:
         """Restore SeedState from primitive dict."""
         self.isolate_gradients = state.get("isolate_gradients", False)
+        # B3-CR-02: Use direct indexing after membership check (not redundant .get())
         if "blend_algorithm_id" in state:
-            self._blend_algorithm_id = state.get("blend_algorithm_id")
+            self._blend_algorithm_id = state["blend_algorithm_id"]
         if "blend_tempo_epochs" in state:
-            self._blend_tempo_epochs = state.get("blend_tempo_epochs")
+            self._blend_tempo_epochs = state["blend_tempo_epochs"]
         if "blend_alpha_target" in state:
-            self._blend_alpha_target = state.get("blend_alpha_target")
+            self._blend_alpha_target = state["blend_alpha_target"]
 
         if state.get("seed_state"):
             self.state = SeedState.from_dict(state["seed_state"])

@@ -44,6 +44,7 @@ import torch.amp as torch_amp
 
 if TYPE_CHECKING:
     from esper.leyline.reports import SeedStateReport
+    from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
 
 from esper.simic.contracts import SeedSlotProtocol, SlottedHostProtocol
 
@@ -74,6 +75,7 @@ from esper.leyline import (
     DEFAULT_N_ENVS,
     EpisodeOutcomePayload,
     HEAD_NAMES,
+    HeadTelemetry,
     LifecycleOp,
     OP_ADVANCE,
     OP_FOSSILIZE,
@@ -135,9 +137,10 @@ from esper.karn.health import HealthMonitor
 from esper.karn.store import EpisodeOutcome
 from esper.simic.attribution import CounterfactualHelper
 from esper.simic.telemetry.emitters import (
-    emit_with_env_context,
-    compute_grad_norm_surrogate,
     apply_slot_telemetry,
+    check_performance_degradation,
+    compute_grad_norm_surrogate,
+    emit_with_env_context,
     VectorizedEmitter,
 )
 from .parallel_env_state import ParallelEnvState
@@ -280,6 +283,18 @@ def _aggregate_ppo_metrics(update_metrics: list[PPOUpdateMetrics]) -> dict[str, 
             aggregated[key] = max(values)
         elif key == "ratio_min":
             aggregated[key] = min(values)
+        elif key == "value_min":
+            aggregated[key] = min(values)
+        elif key == "value_max":
+            aggregated[key] = max(values)
+        elif key == "value_mean":
+            # Average of means across environments
+            aggregated[key] = sum(values) / len(values)
+        elif key == "value_std":
+            # Cannot simply average std - take max as conservative approximation
+            # (proper solution requires pooled variance with means, but max ensures
+            # we don't underestimate variance which could mask instability)
+            aggregated[key] = max(values)
         elif key == "early_stop_epoch":
             aggregated[key] = min(values)
         elif key == "head_entropies":
@@ -529,6 +544,7 @@ def train_ppo_vectorized(
     quiet_analytics: bool = False,
     telemetry_dir: str | None = None,
     ready_event: "threading.Event | None" = None,
+    shutdown_event: "threading.Event | None" = None,
     group_id: str = "default",  # A/B testing group identifier
 ) -> tuple[PPOAgent, list[dict[str, Any]]]:
     """Train PPO with vectorized environments using INVERTED CONTROL FLOW.
@@ -897,13 +913,7 @@ def train_ppo_vectorized(
             "steps": entropy_anneal_steps,
         }
 
-    dataloader_summary = {
-        "mode": "gpu_preload" if gpu_preload else "shared_batch_iterator",
-        "batch_size_per_env": effective_batch_size_per_env,
-        "num_workers": None if gpu_preload else effective_workers,
-        "pin_memory": not gpu_preload,
-    }
-
+    # Emit TRAINING_STARTED (max_batches = total episodes from CLI)
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.TRAINING_STARTED,
         group_id=group_id,
@@ -914,6 +924,7 @@ def train_ppo_vectorized(
         data=TrainingStartedPayload(
             n_envs=n_envs,
             max_epochs=max_epochs,
+            max_batches=n_episodes + start_episode,
             task=task,
             host_params=host_params_baseline,
             slot_ids=tuple(slot_config.slot_ids),
@@ -1172,11 +1183,13 @@ def train_ppo_vectorized(
         )
 
         # Create CounterfactualHelper for Shapley value analysis at episode end
+        # Use base_seed for reproducible Shapley permutation sampling (B5-CR-01)
         counterfactual_helper = (
             CounterfactualHelper(
                 strategy="auto",  # Full factorial for <=4 slots, Shapley sampling otherwise
                 shapley_samples=20,
                 emit_events=use_telemetry,
+                seed=base_seed,
             )
             if use_telemetry
             else None
@@ -1588,7 +1601,7 @@ def train_ppo_vectorized(
             inputs: Original input tensor [B, ...]
             targets: Original target tensor [B, ...]
             criterion: Loss criterion
-            alpha_overrides: Dict mapping slot_id -> override tensor [K*B, 1, 1, 1]
+            alpha_overrides: Dict mapping slot_id -> override tensor [K*B, 1, 1, 1] (CNN) or [K*B, 1, 1] (transformer)
             num_configs: Number of configurations K
 
         Returns:
@@ -1606,6 +1619,16 @@ def train_ppo_vectorized(
             # Move data and expand for all configurations
             inputs = inputs.to(env_dev, non_blocking=True)
             targets = targets.to(env_dev, non_blocking=True)
+
+            # B8-PT-01 FIX: Protect source tensors from premature deallocation.
+            # The .to() may create new tensors via async copy. Without record_stream(),
+            # the allocator might reclaim this memory before repeat() finishes reading.
+            # When tensors are already on env_dev (SharedGPUBatchIterator path), .to() is
+            # a no-op returning the same tensor; record_stream() is harmless but redundant
+            # since the caller already protected them.
+            if env_state.stream and inputs.is_cuda:
+                inputs.record_stream(env_state.stream)
+                targets.record_stream(env_state.stream)
 
             # Expand inputs/targets: [K*B, ...]
             # Using repeat() is safe here as data is small and we want contiguous chunks
@@ -1766,6 +1789,13 @@ def train_ppo_vectorized(
             train_totals = [0] * envs_this_batch
             for env_state in env_states:
                 env_state.zero_accumulators()
+
+            # Ensure models are in training mode before training phase.
+            # CRITICAL: process_val_batch/process_fused_val_batch call model.eval(), and without
+            # this explicit model.train() call, all epochs after the first validation would run
+            # with eval-mode semantics (frozen BatchNorm stats, disabled Dropout).
+            for env_state in env_states:
+                env_state.model.train()
 
             # ===== TRAINING: Iterate batches first, launch all envs via CUDA streams =====
             # SharedBatchIterator: single DataLoader, batches pre-split and moved to devices
@@ -2006,7 +2036,8 @@ def train_ppo_vectorized(
                     configs = env_configs[i]
                     num_configs = len(configs)
 
-                    # Build alpha_overrides tensors for the fused pass: [K*B, 1, 1, 1]
+                    # Build alpha_overrides tensors for the fused pass
+                    # Shape is topology-aware: [K*B, 1, 1, 1] for CNN, [K*B, 1, 1] for transformer
                     #
                     # IMPORTANT: Only pass alpha_override when at least one config
                     # actually overrides that slot's alpha. Passing a no-op override
@@ -2050,8 +2081,13 @@ def train_ppo_vectorized(
                             ).to(slot_concrete.device)
 
                         current_alpha = slot.alpha
+                        # Topology-aware shape for alpha_overrides
+                        if task_spec.topology == "cnn":
+                            alpha_shape = (num_configs * batch_size, 1, 1, 1)
+                        else:  # transformer
+                            alpha_shape = (num_configs * batch_size, 1, 1)
                         override_vec = torch.full(
-                            (num_configs * batch_size, 1, 1, 1),
+                            alpha_shape,
                             current_alpha,
                             device=env_state.env_device,
                             dtype=inputs.dtype,
@@ -2505,8 +2541,37 @@ def train_ppo_vectorized(
             else:
                 masked_cpu = None
 
+            # PERF: Pre-compute op_probs for telemetry ONCE before env loop.
+            # Previous code called .cpu() per-env inside the loop, causing N GPU syncs
+            # per step instead of 1. This was the root cause of 90% throughput drop.
+            op_probs_cpu: np.ndarray | None = None
+            if ops_telemetry_enabled and action_result.op_logits is not None:
+                # Batch softmax over all envs, single GPU->CPU transfer
+                op_probs_all = torch.softmax(action_result.op_logits, dim=-1)
+                op_probs_cpu = op_probs_all.cpu().numpy()
+
+            # PERF: Pre-compute per-head confidences AND entropy for telemetry.
+            # Uses batched GPU->CPU transfer: stack all heads, single transfer.
+            #
+            # Confidence = exp(log_prob) = P(chosen_action | valid_mask)
+            # This properly handles masking via MaskedCategorical.
+            #
+            # Head names in order matching HeadTelemetry field positions.
+            # We stack log_probs in this order, then index [0..7] to get each head's value.
+            _HEAD_NAMES_FOR_TELEM = ("op", "slot", "blueprint", "style", "tempo", "alpha_target", "alpha_speed", "alpha_curve")
+            head_confidences_cpu: np.ndarray | None = None  # [8, num_envs]
+
+            # NOTE: Entropy is not available during action sampling (only during PPO evaluation).
+            # All entropy fields will be 0.0 until we add entropy computation to get_action().
+            head_entropies_cpu: np.ndarray | None = None
+
+            if ops_telemetry_enabled and head_log_probs:
+                # Stack all head log probs: [8, num_envs]
+                stacked_log_probs = torch.stack([head_log_probs[h] for h in _HEAD_NAMES_FOR_TELEM])
+                # Single exp + detach + transfer
+                head_confidences_cpu = torch.exp(stacked_log_probs).detach().cpu().numpy()
+
             # PHASE 1: Execute actions and collect data for bootstrap computation
-            bootstrap_data: list[dict[str, Any]] = []
             transitions_data = []  # Store transition data for buffer storage
 
             for env_idx, env_state in enumerate(env_states):
@@ -2546,10 +2611,20 @@ def train_ppo_vectorized(
 
                 # Governor rollback
                 if env_idx in governor_panic_envs:
-                    env_state.governor.execute_rollback(
-                        env_id=env_idx, optimizer=env_state.host_optimizer
-                    )
+                    env_state.governor.execute_rollback(env_id=env_idx)
                     env_rollback_occurred[env_idx] = True
+
+                    # CRITICAL: Clear optimizer momentum after rollback.
+                    # PyTorch's load_state_dict() copies weights IN-PLACE, so
+                    # Parameter objects retain their identity (same id()). The
+                    # optimizer's state dict is keyed by Parameter objects, so
+                    # momentum/variance buffers SURVIVE the rollback. Without
+                    # clearing, SGD momentum continues pushing toward the
+                    # diverged state that caused the panic, risking immediate
+                    # re-divergence. See B1-PT-01 correction notes.
+                    env_state.host_optimizer.state.clear()
+                    for seed_opt in env_state.seed_optimizers.values():
+                        seed_opt.state.clear()
 
                 # Compute reward
                 scoreboard = analytics._get_scoreboard(env_idx)
@@ -2591,6 +2666,9 @@ def train_ppo_vectorized(
                     else 0
                 )
                 seed_info = SeedInfo.from_seed_state(seed_state, seed_params_for_slot)
+
+                # Initialize reward_components to None (only populated for CONTRIBUTION family)
+                reward_components: RewardComponentsTelemetry | None = None
 
                 if reward_family_enum == RewardFamily.CONTRIBUTION:
                     reward_args = {
@@ -2649,14 +2727,14 @@ def train_ppo_vectorized(
                     reward += hindsight_credit_applied
                     env_state.pending_hindsight_credit = 0.0
                     # Populate RewardComponentsTelemetry for shaped_reward_ratio calculation
-                    if collect_reward_summary and "reward_components" in locals():
+                    if collect_reward_summary and reward_components is not None:
                         reward_components.hindsight_credit = hindsight_credit_applied
 
                 # Normalize reward for PPO stability (P1-6 fix)
                 normalized_reward = reward_normalizer.update_and_normalize(reward)
                 env_state.episode_rewards.append(reward)
 
-                if collect_reward_summary and "reward_components" in locals():
+                if collect_reward_summary and reward_components is not None:
                     summary = reward_summary_accum[env_idx]
                     summary["total_reward"] += reward
                     if reward_components.bounded_attribution is not None:
@@ -2749,6 +2827,10 @@ def train_ppo_vectorized(
                                     ]
                                     if not env_state.scaffold_boost_ledger[scaffold_slot]:
                                         del env_state.scaffold_boost_ledger[scaffold_slot]
+
+                            # B8-DRL-02 FIX: Clean up seed optimizer after fossilization
+                            # (was missing - memory leak for fossilized seed optimizers)
+                            env_state.seed_optimizers.pop(target_slot, None)
                     elif (
                         op_idx == OP_PRUNE
                         and model.has_active_seed_in_slot(target_slot)
@@ -2759,7 +2841,9 @@ def train_ppo_vectorized(
                         speed_steps = ALPHA_SPEED_TO_STEPS[
                             AlphaSpeedAction(action_dict["alpha_speed"])
                         ]
-                        curve = AlphaCurveAction(action_dict["alpha_curve"]).to_curve()
+                        curve_action = AlphaCurveAction(action_dict["alpha_curve"])
+                        curve = curve_action.to_curve()
+                        steepness = curve_action.to_steepness()
                         target_slot_obj = cast(SeedSlotProtocol, model.seed_slots[target_slot])
                         # Access concrete SeedSlot for schedule_prune/prune
                         from esper.kasmina.slot import SeedSlot
@@ -2770,7 +2854,7 @@ def train_ppo_vectorized(
                             )
                         else:
                             action_success = target_slot_obj.schedule_prune(
-                                steps=speed_steps, curve=curve, initiator="policy"
+                                steps=speed_steps, curve=curve, steepness=steepness, initiator="policy"
                             )
                         if action_success:
                             env_state.seed_optimizers.pop(target_slot, None)
@@ -2782,6 +2866,7 @@ def train_ppo_vectorized(
                         target_slot_obj_alpha = cast(SeedSlotProtocol, model.seed_slots[target_slot])
                         from esper.kasmina.slot import SeedSlot
                         assert isinstance(target_slot_obj_alpha, SeedSlot)
+                        curve_action_alpha = AlphaCurveAction(action_dict["alpha_curve"])
                         action_success = target_slot_obj_alpha.set_alpha_target(
                             alpha_target=ALPHA_TARGET_VALUES[
                                 action_dict["alpha_target"]
@@ -2789,21 +2874,23 @@ def train_ppo_vectorized(
                             steps=ALPHA_SPEED_TO_STEPS[
                                 AlphaSpeedAction(action_dict["alpha_speed"])
                             ],
-                            curve=AlphaCurveAction(
-                                action_dict["alpha_curve"]
-                            ).to_curve(),
+                            curve=curve_action_alpha.to_curve(),
+                            steepness=curve_action_alpha.to_steepness(),
                             alpha_algorithm=alpha_algorithm,
                             initiator="policy",
                         )
-                        if action_success:
-                            env_state.seed_optimizers.pop(target_slot, None)
+                        # B8-DRL-02 FIX: Removed incorrect seed_optimizers.pop() here.
+                        # SET_ALPHA_TARGET doesn't terminate the seed - it's still active.
                     elif op_idx == OP_ADVANCE and model.has_active_seed_in_slot(
                         target_slot
                     ):
                         target_slot_obj_advance = cast(SeedSlotProtocol, model.seed_slots[target_slot])
                         gate_result = target_slot_obj_advance.advance_stage()
                         action_success = gate_result.passed
-                        if action_success:
+                        # B8-DRL-02 FIX: Only pop optimizer if seed terminated.
+                        # ADVANCE can move to non-terminal stages (TRAINING, BLENDING, etc.)
+                        # where the seed is still active and needs its optimizer.
+                        if action_success and not model.has_active_seed_in_slot(target_slot):
                             env_state.seed_optimizers.pop(target_slot, None)
                 elif op_idx == OP_WAIT:
                     action_success = True
@@ -2845,13 +2932,12 @@ def train_ppo_vectorized(
 
                     # Compute action_confidence, alternatives, and decision_entropy from op_logits
                     # PolicyBundle returns op_logits for telemetry when available
+                    # PERF: op_probs_cpu is pre-computed BEFORE the env loop to avoid N GPU syncs
                     action_confidence = None
                     alternatives: list[tuple[str, float]] | None = None
                     decision_entropy = None
-                    if action_result.op_logits is not None and env_idx < action_result.op_logits.shape[0]:
-                        # Compute softmax probabilities from logits
-                        op_probs = torch.softmax(action_result.op_logits[env_idx], dim=-1)
-                        probs_cpu = op_probs.cpu().numpy()
+                    if op_probs_cpu is not None and env_idx < op_probs_cpu.shape[0]:
+                        probs_cpu = op_probs_cpu[env_idx]
                         chosen_op = int(action_dict["op"])
 
                         # action_confidence = P(chosen_op)
@@ -2872,21 +2958,30 @@ def train_ppo_vectorized(
                             if p > 1e-8:  # Avoid log(0)
                                 entropy_sum -= p * math.log(p)
                         decision_entropy = entropy_sum
-                    # Use signals.metrics.accuracy_delta directly - always available
-                    base_acc_delta_for_telemetry = signals.metrics.accuracy_delta
-                    # Extract reward components for telemetry
-                    # (now available since collect_reward_summary matches ops_telemetry_enabled)
-                    bounded_attribution_for_telemetry = None
-                    compute_rent_for_telemetry = None
-                    stage_bonus_for_telemetry = None
-                    ratio_penalty_for_telemetry = None
-                    alpha_shock_for_telemetry = None
-                    if "reward_components" in locals() and reward_components is not None:
-                        bounded_attribution_for_telemetry = reward_components.bounded_attribution
-                        compute_rent_for_telemetry = reward_components.compute_rent
-                        stage_bonus_for_telemetry = reward_components.stage_bonus
-                        ratio_penalty_for_telemetry = reward_components.ratio_penalty
-                        alpha_shock_for_telemetry = reward_components.alpha_shock
+
+                    # Build HeadTelemetry for this env (typed dataclass, not raw dict)
+                    head_telem: HeadTelemetry | None = None
+                    if head_confidences_cpu is not None:
+                        head_telem = HeadTelemetry(
+                            op_confidence=float(head_confidences_cpu[0, env_idx]),
+                            slot_confidence=float(head_confidences_cpu[1, env_idx]),
+                            blueprint_confidence=float(head_confidences_cpu[2, env_idx]),
+                            style_confidence=float(head_confidences_cpu[3, env_idx]),
+                            tempo_confidence=float(head_confidences_cpu[4, env_idx]),
+                            alpha_target_confidence=float(head_confidences_cpu[5, env_idx]),
+                            alpha_speed_confidence=float(head_confidences_cpu[6, env_idx]),
+                            curve_confidence=float(head_confidences_cpu[7, env_idx]),
+                            # Entropy (0.0 if not available)
+                            op_entropy=float(head_entropies_cpu[0, env_idx]) if head_entropies_cpu is not None else 0.0,
+                            slot_entropy=float(head_entropies_cpu[1, env_idx]) if head_entropies_cpu is not None else 0.0,
+                            blueprint_entropy=float(head_entropies_cpu[2, env_idx]) if head_entropies_cpu is not None else 0.0,
+                            style_entropy=float(head_entropies_cpu[3, env_idx]) if head_entropies_cpu is not None else 0.0,
+                            tempo_entropy=float(head_entropies_cpu[4, env_idx]) if head_entropies_cpu is not None else 0.0,
+                            alpha_target_entropy=float(head_entropies_cpu[5, env_idx]) if head_entropies_cpu is not None else 0.0,
+                            alpha_speed_entropy=float(head_entropies_cpu[6, env_idx]) if head_entropies_cpu is not None else 0.0,
+                            curve_entropy=float(head_entropies_cpu[7, env_idx]) if head_entropies_cpu is not None else 0.0,
+                        )
+
                     emitters[env_idx].on_last_action(
                         epoch,
                         action_dict,
@@ -2901,12 +2996,8 @@ def train_ppo_vectorized(
                         action_confidence=action_confidence,
                         alternatives=alternatives,
                         decision_entropy=decision_entropy,
-                        base_acc_delta=base_acc_delta_for_telemetry,
-                        bounded_attribution=bounded_attribution_for_telemetry,
-                        compute_rent=compute_rent_for_telemetry,
-                        stage_bonus=stage_bonus_for_telemetry,
-                        ratio_penalty=ratio_penalty_for_telemetry,
-                        alpha_shock=alpha_shock_for_telemetry,
+                        reward_components=reward_components,  # Pass directly (may be None for LOSS family)
+                        head_telemetry=head_telem,
                     )
 
                 # Store transition
@@ -3006,7 +3097,7 @@ def train_ppo_vectorized(
 
                     # Track episode completion for A/B testing
                     episode_history.append({
-                        "env_idx": env_idx,
+                        "env_id": env_idx,
                         "episode_reward": env_total_rewards[env_idx],
                         "final_accuracy": env_final_accs[env_idx],
                     })
@@ -3021,7 +3112,7 @@ def train_ppo_vectorized(
 
                     # Create EpisodeOutcome for Pareto analysis
                     episode_outcome = EpisodeOutcome(
-                        env_idx=env_idx,
+                        env_id=env_idx,
                         episode_idx=episodes_completed + env_idx,
                         final_accuracy=env_state.val_acc,
                         param_ratio=(model.total_params - host_params_baseline) / max(1, host_params_baseline),
@@ -3174,6 +3265,15 @@ def train_ppo_vectorized(
                     bootstrap_value=bootstrap_val,
                 )
 
+            # Check for graceful shutdown at end of each epoch (not just batch end)
+            # This gives user faster response (~seconds) instead of waiting for full batch
+            if shutdown_event is not None and shutdown_event.is_set():
+                print(
+                    f"\n[Shutdown requested] Stopping at epoch {epoch}/{max_epochs} "
+                    f"(batch {batch_idx + 1}, {episodes_completed}/{total_episodes} episodes)"
+                )
+                break  # Exit epoch loop; batch-level break below will handle cleanup
+
         throughput_step_time_ms_sum += step_timer.stop()
         throughput_dataloader_wait_ms_sum += dataloader_wait_ms_epoch
 
@@ -3185,7 +3285,16 @@ def train_ppo_vectorized(
         ]
         if rollback_env_indices:
             for env_idx in rollback_env_indices:
-                agent.buffer.clear_env(env_idx)
+                # B1-DRL-01 fix: Inject death penalty so PPO learns to avoid
+                # catastrophic actions. Previously get_punishment_reward() was dead code.
+                # P1-NORM fix: Normalize penalty to match other rewards' scale.
+                # Use normalize_only to avoid polluting running stats with rare outliers.
+                penalty = env_states[env_idx].governor.get_punishment_reward()
+                normalized_penalty = reward_normalizer.normalize_only(penalty)
+                agent.buffer.mark_terminal_with_penalty(env_idx, normalized_penalty)
+                # B-METRIC-01 fix: Reflect penalty in episode_rewards so metrics
+                # (EpisodeOutcome, A/B history, stability) match what PPO learned.
+                env_states[env_idx].episode_rewards.append(normalized_penalty)
 
         update_skipped = len(agent.buffer) == 0
         if not update_skipped:
@@ -3201,6 +3310,18 @@ def train_ppo_vectorized(
             ppo_update_time_ms = (time.perf_counter() - update_start) * 1000.0
             ppo_grad_norm = compute_grad_norm_surrogate(agent.policy.network)
 
+            # B7-DRL-01: Wire up gradient EMA tracking for drift detection
+            # Compute gradient health heuristic from norm (vanishing/exploding detection)
+            drift_metrics: dict[str, float] | None = None
+            if grad_ema_tracker is not None and ppo_grad_norm is not None:
+                if ppo_grad_norm < 1e-7:
+                    grad_health = 0.3  # Vanishing gradients
+                elif ppo_grad_norm > 100.0:
+                    grad_health = 0.3  # Exploding gradients
+                else:
+                    grad_health = 1.0  # Healthy range
+                drift_metrics = grad_ema_tracker.update(ppo_grad_norm, grad_health)
+
             metric_values = [v for v in metrics.values() if isinstance(v, (int, float))]
             anomaly_report = anomaly_detector.check_all(
                 ratio_max=metrics.get("ratio_max", 1.0),
@@ -3211,6 +3332,17 @@ def train_ppo_vectorized(
                 current_episode=batch_epoch_id,
                 total_episodes=total_episodes,
             )
+
+            # B7-DRL-01: Check gradient drift and merge into anomaly report
+            if drift_metrics is not None:
+                drift_report = anomaly_detector.check_gradient_drift(
+                    norm_drift=drift_metrics["norm_drift"],
+                    health_drift=drift_metrics["health_drift"],
+                )
+                if drift_report.has_anomaly:
+                    anomaly_report.has_anomaly = True
+                    anomaly_report.anomaly_types.extend(drift_report.anomaly_types)
+                    anomaly_report.details.update(drift_report.details)
             _handle_telemetry_escalation(anomaly_report, telemetry_config)
             _emit_anomaly_diagnostics(
                 hub,
@@ -3294,6 +3426,17 @@ def train_ppo_vectorized(
             )
             prev_rolling_avg_acc = rolling_avg_acc
 
+            # B7-DRL-02: Check for performance degradation (was previously unwired)
+            # Detects catastrophic forgetting, reward hacking, and training decay
+            training_progress = (episodes_completed + envs_this_batch) / total_episodes
+            check_performance_degradation(
+                hub,
+                current_acc=avg_acc,
+                rolling_avg_acc=rolling_avg_acc,
+                env_id=0,  # Aggregate metric across all envs
+                training_progress=training_progress,
+            )
+
         history.append(
             {
                 "batch": batch_idx + 1,
@@ -3313,6 +3456,11 @@ def train_ppo_vectorized(
         episodes_completed += envs_this_batch
         batch_idx += 1
 
+        # Check for graceful shutdown request (e.g., user quit TUI)
+        # Per-epoch check already printed progress; just break here
+        if shutdown_event is not None and shutdown_event.is_set():
+            break
+
     if best_state:
         agent.policy.load_state_dict(best_state)
 
@@ -3329,7 +3477,7 @@ def train_ppo_vectorized(
         from collections import defaultdict
         ab_groups: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
         for ep_data in episode_history:
-            env_idx = int(ep_data["env_idx"])
+            env_idx = int(ep_data["env_id"])
             mode_name = env_reward_configs[env_idx].reward_mode.value
             ab_groups[mode_name].append(ep_data)
 

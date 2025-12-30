@@ -430,41 +430,104 @@ self._append_text(network_badge, style="dim")
 
 **Location:** Status banner, right-aligned after existing metrics.
 
-### Task 4.4: Optional Attention Heatmap Widget
+### Task 4.4: TamiyoBrain Layout Restructure for Attention Heatmap
 
-Create `AttentionHeatmap` widget for Sanctum (optional, behind feature flag):
+Restructure TamiyoBrain's middle section to place the slot attention heatmap alongside the head entropy/gradient heatmaps. Move slot summary from bottom to middle-right.
+
+**Current layout (vertical stack):**
+```
+Row 4: Head entropy heatmap (full width)
+Row 5: Head gradient heatmap (full width)
+...
+Row 10: Slot summary (full width, bottom)
+```
+
+**New layout (60:40 horizontal split in middle rows):**
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Status Banner + Sparklines + Gauges (Rows 1-3)                              │
+├───────────────────────────────────────────┬─────────────────────────────────┤
+│ Head Entropy Heatmap (60%)                │ Slot Attention Heatmap (40%)    │
+│ ┌─────────────────────────────────────┐   │ ┌─────────────────────────────┐ │
+│ │ slot bpnt styl temp atgt aspd acrv op│  │ │     r0c0 r0c1 r1c0         │ │
+│ │  ▓▓   ██   ░░   ▓▓   ░░   ██   ░░  ▓▓│  │ │r0c0  ██   ▓▓   ░░          │ │
+│ └─────────────────────────────────────┘   │ │r0c1  ▓▓   ██   ▓▓          │ │
+│ Head Gradient Heatmap                      │ │r1c0  ░░   ▓▓   ██          │ │
+│ ┌─────────────────────────────────────┐   │ └─────────────────────────────┘ │
+│ │ slot bpnt styl temp atgt aspd acrv op│  │ Slot Summary:                   │
+│ │  ██   ▓▓   ██   ░░   ▓▓   ░░   ██  ░░│  │ 🌱2 📈1 🔀0 🪨0              │
+│ └─────────────────────────────────────┘   │ → GERMINATE available           │
+├───────────────────────────────────────────┴─────────────────────────────────┤
+│ Action Distribution Bar + Action Sequence + Return History (Rows 6-8)       │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Implementation in `_render_horizontal_layout()`:**
 
 ```python
-class AttentionHeatmap(Static):
-    """Visualize slot-slot attention patterns.
+def _render_middle_section(self, snapshot: SanctumSnapshot) -> Table:
+    """Render head heatmaps (left 60%) alongside slot attention (right 40%)."""
+    middle = Table.grid(expand=True)
+    middle.add_column("heads", width=60, ratio=60)  # 60%
+    middle.add_column("slots", width=40, ratio=40)  # 40%
 
-    Shows which slots the agent is attending to when making decisions.
-    Useful for debugging and understanding learned slot interactions.
+    # Left column: head entropy + head gradient (stacked)
+    heads_content = Table.grid()
+    heads_content.add_row(self._render_head_heatmap())
+    heads_content.add_row(self._render_head_gradient_heatmap())
+
+    # Right column: slot attention heatmap + slot summary (stacked)
+    slots_content = Table.grid()
+    if snapshot.tamiyo.network_type == "transformer":
+        slots_content.add_row(self._render_attention_heatmap())
+    slots_content.add_row(self._render_slot_summary())
+
+    middle.add_row(heads_content, slots_content)
+    return middle
+```
+
+**Attention Heatmap Widget (embedded in TamiyoBrain):**
+
+```python
+def _render_attention_heatmap(self) -> Text:
+    """Render slot-slot attention matrix as ASCII heatmap.
+
+    Only rendered when network_type == "transformer".
+    Shows which slots attend to which other slots.
     """
+    weights = self._snapshot.tamiyo.slot_attention_weights
+    if not weights:
+        return Text("(no attention data)", style="dim")
 
-    def __init__(self, max_slots: int = 10):
-        super().__init__()
-        self.max_slots = max_slots
-
-    def update_attention(self, attention_matrix: list[list[float]]) -> None:
-        """Update with new attention weights [num_slots, num_slots]."""
-        ...
-
-    def compose(self) -> ComposeResult:
-        # Render as ASCII heatmap with slot labels
-        ...
+    # Build heatmap using block characters
+    # ██ = high attention, ▓▓ = medium, ░░ = low, ·· = minimal
+    ...
 ```
 
-**Display format:**
-```
-Slot Attention (last step)
-    r0c0 r0c1 r1c0
-r0c0  ██   ▓▓   ░░
-r0c1  ▓▓   ██   ▓▓
-r1c0  ░░   ▓▓   ██
+**CSS updates for 60:40 split:**
+
+```css
+/* In styles.tcss - TamiyoBrain middle section */
+.tamiyo-middle-section {
+    layout: horizontal;
+}
+
+.tamiyo-heads-column {
+    width: 60%;
+}
+
+.tamiyo-slots-column {
+    width: 40%;
+    border-left: solid $primary-lighten-2;
+    padding-left: 1;
+}
 ```
 
-**Integration:** Add to EnvDetailScreen when network_type == "transformer".
+**Benefits of this layout:**
+1. Slot attention visible at same glance as head entropy (correlated metrics)
+2. Removes bottom slot summary row (saves vertical space)
+3. Natural grouping: "what the heads are doing" | "what the slots are doing"
+4. Extra width for attention heatmap accommodates larger slot counts
 
 ### Task 4.5: SanctumSnapshot Schema Extension
 
@@ -604,8 +667,8 @@ Useful for debugging which slots the agent considers together.
 | `src/esper/karn/sanctum/schema.py` | Modify | 4 |
 | `src/esper/karn/sanctum/aggregator.py` | Modify | 4 |
 | `src/esper/karn/sanctum/widgets/tamiyo_brain.py` | Modify | 4 |
-| `src/esper/karn/sanctum/widgets/attention_heatmap.py` | Create | 4 |
-| `tests/karn/sanctum/test_attention_heatmap.py` | Create | 4 |
+| `src/esper/karn/sanctum/styles.tcss` | Modify | 4 |
+| `tests/karn/sanctum/test_tamiyo_brain.py` | Modify | 4 |
 | `scripts/benchmark_architectures.py` | Create | 5 |
 
 ---

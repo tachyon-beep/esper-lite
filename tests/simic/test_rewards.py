@@ -953,16 +953,17 @@ class TestHoldingIndecisionPenalty:
             return_components=True,
         )
 
-        # Epoch 2: -1.0 * (3 ** 0) = -1.0
-        assert components.holding_warning == -1.0, (
-            f"Epoch 2 should have -1.0 penalty: {components.holding_warning}"
+        # Epoch 2: -0.1 (linear rent model)
+        assert components.holding_warning == pytest.approx(-0.1), (
+            f"Epoch 2 should have -0.1 penalty: {components.holding_warning}"
         )
 
     def test_penalty_escalates_over_epochs(self):
-        """WAIT penalty should escalate exponentially each epoch in HOLDING.
+        """WAIT penalty should escalate linearly each epoch in HOLDING.
 
-        DRL Expert review 2025-12-10: exponential to overcome +7.5 attribution.
-        Schedule: epoch 2 -> -1.0, epoch 3 -> -3.0, epoch 4 -> -9.0, capped at -10.0
+        Linear "rent" model prevents massive reward spikes that destabilize
+        the value function. Schedule: epoch 1: 0, epoch 2: -0.1, epoch 3: -0.15,
+        epoch 4: -0.2, epoch 5: -0.25, epoch 6+: -0.3 (capped)
         """
         from enum import IntEnum
         class MockAction(IntEnum):
@@ -988,14 +989,16 @@ class TestHoldingIndecisionPenalty:
             )
             return components.holding_warning
 
-        # Verify exponential escalation: 0, -1.0, -3.0, -9.0, -10.0 (capped)
-        # Formula: -1.0 * (3 ** (epochs_waiting - 1)), capped at -10.0
+        # Verify linear escalation with cap
+        # Schedule: epoch 1: 0, epoch 2: -0.1, epoch 3: -0.15, epoch 4: -0.2,
+        #           epoch 5: -0.25, epoch 6+: -0.3 (capped)
         assert get_penalty(1) == 0.0  # Grace period
-        assert get_penalty(2) == pytest.approx(-1.0)   # 3^0 = 1
-        assert get_penalty(3) == pytest.approx(-3.0)   # 3^1 = 3
-        assert get_penalty(4) == pytest.approx(-9.0)   # 3^2 = 9
-        assert get_penalty(5) == pytest.approx(-10.0)  # 3^3 = 27, capped at -10
-        assert get_penalty(10) == pytest.approx(-10.0) # Still capped
+        assert get_penalty(2) == pytest.approx(-0.1)
+        assert get_penalty(3) == pytest.approx(-0.15)
+        assert get_penalty(4) == pytest.approx(-0.2)
+        assert get_penalty(5) == pytest.approx(-0.25)
+        assert get_penalty(6) == pytest.approx(-0.3)  # Cap kicks in
+        assert get_penalty(10) == pytest.approx(-0.3)  # Still capped
 
     def test_no_penalty_for_fossilize_action(self):
         """FOSSILIZE action should not receive WAIT penalty."""
@@ -1458,9 +1461,9 @@ class TestPenaltyAntiStacking:
         )
 
         # HOLD penalty SHOULD fire (bounded_attribution > 0, epoch 3)
-        # Epoch 3: -1.0 * (3 ** 1) = -3.0
-        assert components.holding_warning == pytest.approx(-3.0), (
-            f"Good seed farming should receive HOLD penalty: {components.holding_warning}"
+        # Epoch 3: -0.15 (linear rent model)
+        assert components.holding_warning == pytest.approx(-0.15), (
+            f"Good seed farming should receive linear HOLD penalty: {components.holding_warning}"
         )
 
 

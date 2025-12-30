@@ -567,3 +567,173 @@ def test_detect_trend_uses_deque():
     values = deque([1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1], maxlen=20)
     trend = detect_trend(values, metric_name="policy_loss", metric_type="loss")
     assert trend == "improving"
+
+
+# =============================================================================
+# DECISION SNAPSHOT HEAD CHOICE FIELDS (per DRL specialist review)
+# =============================================================================
+
+
+def test_decision_snapshot_has_head_choice_fields():
+    """DecisionSnapshot should include blueprint, style, tempo head choices.
+
+    Per DRL specialist: understanding which heads drive decisions helps
+    diagnose credit assignment issues.
+    """
+    from esper.karn.sanctum.schema import DecisionSnapshot
+    from datetime import datetime, timezone
+
+    decision = DecisionSnapshot(
+        timestamp=datetime.now(timezone.utc),
+        slot_states={},
+        host_accuracy=75.0,
+        chosen_action="GERMINATE",
+        chosen_slot="slot_0",
+        confidence=0.92,
+        expected_value=0.5,
+        actual_reward=None,
+        alternatives=[],
+        decision_id="test-1",
+        # New fields (per DRL specialist review)
+        chosen_blueprint="conv_light",
+        chosen_tempo="STANDARD",
+        chosen_style="LINEAR_ADD",
+        blueprint_confidence=0.87,
+        tempo_confidence=0.65,
+        op_confidence=0.92,
+    )
+
+    assert decision.chosen_blueprint == "conv_light"
+    assert decision.chosen_tempo == "STANDARD"
+    assert decision.chosen_style == "LINEAR_ADD"
+    assert decision.blueprint_confidence == 0.87
+    assert decision.tempo_confidence == 0.65
+    assert decision.op_confidence == 0.92
+
+
+# =============================================================================
+# INFRASTRUCTURE METRICS (per PyTorch expert review)
+# =============================================================================
+
+
+def test_infrastructure_metrics_dataclass():
+    """InfrastructureMetrics should contain CUDA memory and compile status."""
+    from esper.karn.sanctum.schema import InfrastructureMetrics
+
+    metrics = InfrastructureMetrics()
+
+    # Memory fields
+    assert metrics.cuda_memory_allocated_gb == 0.0
+    assert metrics.cuda_memory_reserved_gb == 0.0
+    assert metrics.cuda_memory_peak_gb == 0.0
+    assert metrics.cuda_memory_fragmentation == 0.0
+
+    # Compile status (static session metadata - no runtime health detection)
+    assert metrics.compile_enabled is False
+    assert metrics.compile_backend == ""
+    assert metrics.compile_mode == ""
+
+
+def test_infrastructure_metrics_memory_usage_percent():
+    """memory_usage_percent property should compute (allocated/reserved) * 100."""
+    from esper.karn.sanctum.schema import InfrastructureMetrics
+
+    # Standard case: 4.2 / 8.0 = 52.5%
+    metrics = InfrastructureMetrics(
+        cuda_memory_allocated_gb=4.2,
+        cuda_memory_reserved_gb=8.0,
+    )
+    assert abs(metrics.memory_usage_percent - 52.5) < 0.1
+
+    # Edge case: no reserved memory = 0%
+    metrics_empty = InfrastructureMetrics(
+        cuda_memory_allocated_gb=0.0,
+        cuda_memory_reserved_gb=0.0,
+    )
+    assert metrics_empty.memory_usage_percent == 0.0
+
+
+# =============================================================================
+# GRADIENT QUALITY METRICS (per DRL expert review)
+# =============================================================================
+
+
+def test_gradient_quality_metrics_dataclass():
+    """GradientQualityMetrics should contain gradient CV and directional clip."""
+    from esper.karn.sanctum.schema import GradientQualityMetrics
+
+    metrics = GradientQualityMetrics()
+
+    # Gradient coefficient of variation (NOT SNR - per DRL review)
+    # Low CV (<0.5) = high signal quality, High CV (>2.0) = noisy
+    assert metrics.gradient_cv == 0.0
+
+    # Directional clip fraction (per DRL expert)
+    # clip+ = probability increases capped (r > 1+ε)
+    # clip- = probability decreases capped (r < 1-ε)
+    assert metrics.clip_fraction_positive == 0.0
+    assert metrics.clip_fraction_negative == 0.0
+
+
+def test_tamiyo_state_has_nested_metrics():
+    """TamiyoState should have infrastructure and gradient_quality nested fields."""
+    from esper.karn.sanctum.schema import (
+        TamiyoState,
+        InfrastructureMetrics,
+        GradientQualityMetrics,
+    )
+
+    state = TamiyoState()
+
+    # Nested dataclasses should be present with defaults
+    assert isinstance(state.infrastructure, InfrastructureMetrics)
+    assert isinstance(state.gradient_quality, GradientQualityMetrics)
+
+    # Access nested fields
+    assert state.infrastructure.cuda_memory_allocated_gb == 0.0
+    assert state.gradient_quality.gradient_cv == 0.0
+
+
+# =============================================================================
+# DECISION SNAPSHOT PER-HEAD ENTROPY FIELDS (Task 4)
+# =============================================================================
+
+
+def test_decision_snapshot_has_entropy_fields():
+    """DecisionSnapshot should have per-head entropy fields."""
+    from datetime import datetime, timezone
+    from esper.karn.sanctum.schema import DecisionSnapshot
+
+    decision = DecisionSnapshot(
+        timestamp=datetime.now(timezone.utc),
+        slot_states={},
+        host_accuracy=0.9,
+        chosen_action="GERMINATE",
+        chosen_slot="r0c0",
+        confidence=0.85,
+        expected_value=0.5,
+        actual_reward=0.6,
+        alternatives=[],
+        decision_id="abc123",
+        decision_entropy=0.4,
+        env_id=0,
+        value_residual=0.1,
+        # Entropy fields
+        op_entropy=0.3,
+        slot_entropy=0.8,
+        blueprint_entropy=0.5,
+        style_entropy=0.6,
+        tempo_entropy=0.4,
+        alpha_target_entropy=0.55,
+        alpha_speed_entropy=0.45,
+        curve_entropy=0.35,
+    )
+
+    assert decision.op_entropy == 0.3
+    assert decision.slot_entropy == 0.8
+    assert decision.blueprint_entropy == 0.5
+    assert decision.style_entropy == 0.6
+    assert decision.tempo_entropy == 0.4
+    assert decision.alpha_target_entropy == 0.55
+    assert decision.alpha_speed_entropy == 0.45
+    assert decision.curve_entropy == 0.35

@@ -31,6 +31,12 @@ class CNNHost(nn.Module):
     The host itself performs no slot application - it routes activations
     between segment boundaries.
 
+    Architecture Immutability:
+        Following standard nn.Module conventions, the network topology
+        (blocks, layers, channel dimensions) is fixed after __init__.
+        Properties derived from architecture (segment_channels, _segment_to_block)
+        are cached and remain valid for the module's lifetime.
+
     Args:
         num_classes: Number of output classes (default 10 for CIFAR-10)
         n_blocks: Number of conv blocks (default 3, minimum 2)
@@ -101,15 +107,12 @@ class CNNHost(nn.Module):
 
     @functools.cached_property
     def segment_channels(self) -> dict[str, int]:
-        """Map of slot_id -> channel dimension (derived from injection_specs).
-
-        Cached to avoid repeated object creation on each access.
-        """
+        """Slot ID to channel dimension mapping (cached; architecture-derived)."""
         return {spec.slot_id: spec.channels for spec in self.injection_specs()}
 
     @functools.cached_property
     def _segment_to_block(self) -> dict[str, int]:
-        """Map segment ID to block index (cached)."""
+        """Slot ID to block index mapping (cached; architecture-derived)."""
         return {spec.slot_id: spec.layer_range[0] for spec in self.injection_specs()}
 
     @property
@@ -289,6 +292,12 @@ class TransformerHost(nn.Module):
     Provides segment boundaries for MorphogeneticModel to attach SeedSlots.
     The host itself performs no slot application - it routes hidden states
     between segment boundaries.
+
+    Architecture Immutability:
+        Following standard nn.Module conventions, the network topology
+        (layers, embedding dimensions, segment boundaries) is fixed after __init__.
+        Properties derived from architecture (segment_channels) are cached and
+        remain valid for the module's lifetime.
     """
 
     def __init__(
@@ -365,10 +374,7 @@ class TransformerHost(nn.Module):
 
     @functools.cached_property
     def segment_channels(self) -> dict[str, int]:
-        """Map of slot_id -> channel dimension (derived from injection_specs).
-
-        Cached to avoid repeated object creation on each access.
-        """
+        """Slot ID to embedding dimension mapping (cached; architecture-derived)."""
         return {spec.slot_id: spec.channels for spec in self.injection_specs()}
 
     @property
@@ -559,21 +565,53 @@ class MorphogeneticModel(nn.Module):
             slot_obj: SeedSlot = self.seed_slots[slot_id]  # type: ignore[assignment]
             x = slot_obj(x)
             prev_segment = slot_id
-        assert prev_segment is not None
+        assert prev_segment is not None, (
+            "prev_segment unexpectedly None after processing _active_slots. "
+            "This indicates a control flow bug - the early return should handle empty slots."
+        )
         return self.host.forward_from_segment(prev_segment, x)
+
+    def _get_expected_alpha_shape(self, batch_size: int) -> tuple[int, ...]:
+        """Return expected shape for alpha_override tensors based on topology.
+
+        Args:
+            batch_size: Total batch size (K * B for fused forward).
+
+        Returns:
+            Expected shape: (batch_size, 1, 1, 1) for CNN, (batch_size, 1, 1) for transformer.
+        """
+        topology = self.task_config.topology if self.task_config else "cnn"
+        if topology == "cnn":
+            return (batch_size, 1, 1, 1)
+        else:  # transformer
+            return (batch_size, 1, 1)
 
     def fused_forward(self, x: torch.Tensor, alpha_overrides: dict[str, torch.Tensor]) -> torch.Tensor:
         """Fused forward pass for multiple alpha configurations (Zero-Sync Validation).
 
         Args:
-            x: Expanded input tensor of shape [K * B, C, H, W] where K is number of configs.
-            alpha_overrides: Dict mapping slot_id -> tensor of shape [K * B, 1, 1, 1].
+            x: Expanded input tensor of shape [K * B, C, H, W] (CNN) or [K * B, T, C] (transformer).
+            alpha_overrides: Dict mapping slot_id -> tensor of shape [K * B, 1, 1, 1] (CNN)
+                or [K * B, 1, 1] (transformer) for broadcasting.
 
         Returns:
             Output logits for all configurations [K * B, num_classes].
+
+        Raises:
+            AssertionError: If alpha_override shape doesn't match expected topology shape.
         """
         if not self._active_slots:
             return self.host.forward(x)
+
+        # Validate alpha_override shapes early (fail-fast on shape mismatches)
+        expected_shape = self._get_expected_alpha_shape(x.shape[0])
+        topology = self.task_config.topology if self.task_config else "cnn"
+        for slot_id, alpha in alpha_overrides.items():
+            assert alpha.shape == expected_shape, (
+                f"alpha_override for slot '{slot_id}' has shape {tuple(alpha.shape)}, "
+                f"expected {expected_shape} for {topology} topology. "
+                f"Shape mismatch causes silent broadcasting errors or wrong alpha application."
+            )
 
         prev_segment = None
         for slot_id in self._active_slots:
@@ -583,7 +621,10 @@ class MorphogeneticModel(nn.Module):
             slot_obj: SeedSlot = self.seed_slots[slot_id]  # type: ignore[assignment]
             x = slot_obj(x, alpha_override=override)
             prev_segment = slot_id
-        assert prev_segment is not None
+        assert prev_segment is not None, (
+            "prev_segment unexpectedly None after processing _active_slots. "
+            "This indicates a control flow bug - the early return should handle empty slots."
+        )
         return self.host.forward_from_segment(prev_segment, x)
 
     def germinate_seed(

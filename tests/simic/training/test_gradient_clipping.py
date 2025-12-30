@@ -4,10 +4,9 @@ These tests verify that gradient clipping is correctly implemented with proper
 AMP-safe ordering (unscale_ before clip_grad_norm_).
 """
 
-import pytest
 import torch
 import torch.nn as nn
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock
 from typing import Iterator
 
 
