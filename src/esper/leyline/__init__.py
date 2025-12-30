@@ -47,8 +47,10 @@ DEFAULT_MAX_SEEDS = None           # Global limit across all slots
 # Discount factor for PPO and PBRS reward shaping.
 # CRITICAL: PPO gamma MUST equal PBRS gamma for policy invariance (Ng et al., 1999).
 # If they differ, reward shaping can change the optimal policy.
-# Value 0.995 optimized for 25-epoch episodes: gamma^25 ≈ 0.88 preserves meaningful
-# credit for early actions while still providing appropriate temporal discounting.
+# Value 0.995 optimized for 100-epoch episodes: gamma^100 ≈ 0.61 preserves meaningful
+# credit across the full episode while providing appropriate temporal discounting.
+# For multi-generation scaffolding (germinate A → A stabilizes → germinate B),
+# Tamiyo needs to assign credit from epoch ~80 back to decisions at epoch ~5.
 DEFAULT_GAMMA = 0.995
 
 # =============================================================================
@@ -57,15 +59,35 @@ DEFAULT_GAMMA = 0.995
 
 # Episode length for CIFAR environments.
 # This is the "rollout length" for Tamiyo - how many timesteps each env
-# contributes to one Tamiyo training batch. Longer = more temporal context
-# but slower iteration.
+# contributes to one Tamiyo training batch.
+#
+# 100 epochs is the MINIMUM viable horizon for multi-generation scaffolding:
+# - Germinate seed A at epoch 5
+# - A trains/stabilizes by epoch 35
+# - Germinate seed B at epoch 40 (benefiting from A's learned features)
+# - B trains/stabilizes by epoch 70
+# - Both fossilize by epoch 85-90
+#
+# With 25 epochs, Tamiyo could only learn single-seed tactics.
+# With 100 epochs, it can learn the *strategic* value of sequencing.
+#
 # Used by: config.py, vectorized.py, ppo.py (chunk_length, max_steps_per_env)
-DEFAULT_EPISODE_LENGTH = 25
+DEFAULT_EPISODE_LENGTH = 100
+
+# Maximum epochs a seed can spend in a single stage for normalization purposes.
+# Derived from episode length - a seed could theoretically stay in one stage
+# for the entire episode. Used for epochs_in_stage_norm feature.
+# Used by: tamiyo/policy/features.py
+MAX_EPOCHS_IN_STAGE = DEFAULT_EPISODE_LENGTH
 
 # LSTM hidden dimension - architecture constant for temporal memory.
 # Must match across network construction and buffer state tracking.
 # Used by: config.py, vectorized.py, ppo.py, rollout_buffer.py, network.py
 DEFAULT_LSTM_HIDDEN_DIM = 128
+
+# Number of LSTM layers in the host model.
+# Used by: Karn TUI widgets (gradient health display), telemetry dashboards.
+DEFAULT_HOST_LSTM_LAYERS = 12
 
 # Parallel environments for vectorized training.
 # This controls sample DIVERSITY per Tamiyo update, not training quantity.
@@ -541,7 +563,9 @@ __all__ = [
 
     # Episode & Architecture constants
     "DEFAULT_EPISODE_LENGTH",
+    "MAX_EPOCHS_IN_STAGE",
     "DEFAULT_LSTM_HIDDEN_DIM",
+    "DEFAULT_HOST_LSTM_LAYERS",
     "DEFAULT_N_ENVS",
 
     # PPO Hyperparameters

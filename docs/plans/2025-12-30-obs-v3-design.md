@@ -66,7 +66,7 @@ Redesign Tamiyo's observation space to eliminate duplication, normalize all feat
 | 16 | `alpha_algorithm_norm` | `_ALGO_INDEX[algo] / (len(_ALGO_INDEX) - 1)` | [0,1] | ADD/MULTIPLY/GATE (explicit index) |
 | 17 | `contribution_norm` | `clamp(contrib, -10, 10) / 10` | [-1,1] | Counterfactual attribution |
 | 18 | `contribution_velocity_norm` | `clamp(vel, -10, 10) / 10` | [-1,1] | Trend for fossilize timing |
-| 19 | `epochs_in_stage_norm` | `clamp(epochs, 0, 50) / 50` | [0,1] | Lifecycle timing |
+| 19 | `epochs_in_stage_norm` | `clamp(epochs, 0, MAX_EPOCHS_IN_STAGE) / MAX_EPOCHS_IN_STAGE` | [0,1] | Lifecycle timing |
 | 20 | `gradient_norm_norm` | `clamp(grad, 0, 10) / 10` | [0,1] | Training health |
 | 21 | `gradient_health` | Direct | [0,1] | Composite health score |
 | 22 | `gradient_health_prev` | Previous epoch's gradient_health | [0,1] | **NEW:** Enables trend detection |
@@ -135,17 +135,18 @@ class BlueprintEmbedding(nn.Module):
         super().__init__()
         # Index 13 = null embedding for inactive slots
         self.embedding = nn.Embedding(num_blueprints + 1, embed_dim)
-        self.null_idx = BLUEPRINT_NULL_INDEX
         nn.init.normal_(self.embedding.weight, std=0.02)
 
-    def forward(self, blueprint_indices: torch.Tensor) -> torch.Tensor:
-        # Map -1 (inactive) to null index WITHOUT .clone() allocation
-        # torch.where is more efficient than clone + masked assignment
-        safe_idx = torch.where(
-            blueprint_indices < 0,
-            torch.tensor(self.null_idx, device=blueprint_indices.device, dtype=blueprint_indices.dtype),
-            blueprint_indices
+        # Register null index as buffer: moves with module.to(device), no grad, in state_dict
+        self.register_buffer(
+            '_null_idx',
+            torch.tensor(BLUEPRINT_NULL_INDEX, dtype=torch.int64)
         )
+
+    def forward(self, blueprint_indices: torch.Tensor) -> torch.Tensor:
+        # Map -1 (inactive) to null index WITHOUT per-call allocation
+        # _null_idx is already on correct device via module.to(device)
+        safe_idx = torch.where(blueprint_indices < 0, self._null_idx, blueprint_indices)
         return self.embedding(safe_idx)
 ```
 

@@ -277,7 +277,24 @@ def batch_obs_to_features_v3(
         obs: [batch, 121] - base (31) + slot features (30*3) (no blueprint)
         blueprint_indices: [batch, num_slots] - for embedding lookup, dtype=int64
     """
+    # ... feature extraction ...
+
+    # CRITICAL: nn.Embedding requires int64 (LongTensor).
+    # NumPy may default to int32 on some platforms - be explicit!
+    bp_indices = np.zeros((n_envs, num_slots), dtype=np.int64)
+    for env_idx, reports in enumerate(batch_slot_reports):
+        for slot_idx, slot_id in enumerate(slot_config.slot_ids):
+            if report := reports.get(slot_id):
+                bp_indices[env_idx, slot_idx] = report.blueprint_index
+            else:
+                bp_indices[env_idx, slot_idx] = -1  # Inactive slot
+
+    blueprint_indices = torch.from_numpy(bp_indices).to(device)
+    # tensor is already int64 from numpy dtype
+    return obs, blueprint_indices
 ```
+
+**⚠️ dtype Gotcha:** `nn.Embedding` raises `RuntimeError: Expected tensor for argument #1 'indices' to have scalar type Long` if given int32. Always use `np.int64` or `torch.int64`.
 
 #### 2f. Update get_feature_size()
 
@@ -342,24 +359,26 @@ class BlueprintEmbedding(nn.Module):
         super().__init__()
         # Index 13 = null embedding for inactive slots (from leyline)
         self.embedding = nn.Embedding(num_blueprints + 1, embed_dim)
-        self.null_idx = BLUEPRINT_NULL_INDEX
 
         # Small initialization per DRL expert recommendation
         nn.init.normal_(self.embedding.weight, std=0.02)
 
+        # Register null index as buffer: moves with module.to(device), no grad, in state_dict
+        # This avoids per-forward-call tensor allocation that torch.tensor() would cause
+        self.register_buffer(
+            '_null_idx',
+            torch.tensor(BLUEPRINT_NULL_INDEX, dtype=torch.int64)
+        )
+
     def forward(self, blueprint_indices: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            blueprint_indices: [batch, num_slots] with -1 for inactive
+            blueprint_indices: [batch, num_slots] with -1 for inactive, dtype=int64
         Returns:
             [batch, num_slots, embed_dim]
         """
-        # Use torch.where to avoid .clone() allocation in hot path
-        safe_idx = torch.where(
-            blueprint_indices < 0,
-            torch.tensor(self.null_idx, device=blueprint_indices.device, dtype=blueprint_indices.dtype),
-            blueprint_indices
-        )
+        # _null_idx is already on correct device via module.to(device)
+        safe_idx = torch.where(blueprint_indices < 0, self._null_idx, blueprint_indices)
         return self.embedding(safe_idx)
 ```
 
@@ -561,19 +580,102 @@ self.blueprint_indices[env_id, step_idx] = blueprint_indices
 
 **Also update:** `TamiyoRolloutStep` NamedTuple to include `blueprint_indices` field.
 
-#### 6b. Track Action Feedback State
+#### 6b. Obs V3 State Tracking in ParallelEnvState
 
-Add to environment state:
+**IMPORTANT:** This project uses `ParallelEnvState` (in `simic/training/parallel_env_state.py`), NOT a separate `EnvState` class. All Obs V3 state tracking fields go here.
+
+Add to `ParallelEnvState`:
 
 ```python
+from esper.leyline import LifecycleOp
+
 @dataclass
-class EnvState:
-    # ... existing fields ...
+class ParallelEnvState:
+    # ... existing fields (signals, reports, hidden, etc.) ...
+
+    # === Obs V3 Action Feedback (7 dims: 1 success + 6 op one-hot) ===
     last_action_success: bool = True
-    last_action_op: int = 0  # LifecycleOp.WAIT
+    last_action_op: int = LifecycleOp.WAIT.value  # 0
+
+    # === Obs V3 Gradient Health Tracking (for gradient_health_prev feature) ===
+    # Maps slot_id -> previous epoch's gradient_health value
+    # Used in Phase 2c feature extraction
+    gradient_health_prev: dict[str, float] = field(default_factory=dict)
+
+    # === Obs V3 Counterfactual Freshness Tracking ===
+    # Maps slot_id -> epochs since last counterfactual measurement
+    # Incremented each epoch, reset to 0 when counterfactual is computed
+    epochs_since_counterfactual: dict[str, int] = field(default_factory=dict)
 ```
 
-Update after each action execution.
+**State Update Contract:**
+
+| Field | When to Read | When to Update | Initial Value |
+|-------|--------------|----------------|---------------|
+| `last_action_success` | Feature extraction (Phase 2b) | After action execution, before next step | `True` |
+| `last_action_op` | Feature extraction (Phase 2b) | After action execution, before next step | `LifecycleOp.WAIT.value` (0) |
+| `gradient_health_prev[slot_id]` | Feature extraction (Phase 2c) | After epoch completion, from `report.telemetry.gradient_health` | `1.0` (assume healthy for new slots) |
+| `epochs_since_counterfactual[slot_id]` | Feature extraction (Phase 2c) | Increment each epoch; reset to 0 after counterfactual computed | `0` for newly germinated slots |
+
+**Action Success Definition:**
+
+```python
+# In vectorized.py, after action execution:
+def _determine_action_success(action: dict, result: ActionResult) -> bool:
+    """Determine if the action succeeded for action feedback feature."""
+    op = LifecycleOp(action["op"])
+
+    if op == LifecycleOp.WAIT:
+        return True  # WAIT always "succeeds"
+    elif op == LifecycleOp.GERMINATE:
+        return result.germination_succeeded  # Did seed actually germinate?
+    elif op == LifecycleOp.SET_ALPHA:
+        return True  # Alpha changes always succeed
+    elif op == LifecycleOp.PRUNE:
+        return result.pruned  # Did the prune actually happen?
+    elif op == LifecycleOp.FOSSILIZE:
+        return result.fossilized  # Did fossilization succeed?
+    else:
+        return True  # Unknown ops default to success
+
+# Update state after action
+env_state.last_action_op = action["op"]
+env_state.last_action_success = _determine_action_success(action, result)
+```
+
+**Gradient Health Prev Update:**
+
+```python
+# After epoch completion (in vectorized.py step loop):
+for slot_id, report in slot_reports.items():
+    if report.telemetry is not None:
+        env_state.gradient_health_prev[slot_id] = report.telemetry.gradient_health
+    # Note: Keep stale values for inactive slots until slot is cleared
+
+# When slot becomes inactive (PRUNED/FOSSILIZED):
+if slot_id in env_state.gradient_health_prev:
+    del env_state.gradient_health_prev[slot_id]
+```
+
+**Counterfactual Freshness Update:**
+
+```python
+# After each epoch (in vectorized.py step loop):
+for slot_id in active_slot_ids:
+    env_state.epochs_since_counterfactual[slot_id] = (
+        env_state.epochs_since_counterfactual.get(slot_id, 0) + 1
+    )
+
+# When counterfactual is computed (in attribution module):
+env_state.epochs_since_counterfactual[slot_id] = 0
+
+# When slot is germinated:
+env_state.epochs_since_counterfactual[slot_id] = 0
+
+# When slot becomes inactive:
+if slot_id in env_state.epochs_since_counterfactual:
+    del env_state.epochs_since_counterfactual[slot_id]
+```
 
 #### 6c. Update Feature Extraction Call
 
@@ -845,22 +947,22 @@ If blueprint_indices are missing at truncation, the bootstrap value will be comp
 
 ### 11. Gradient Health Prev Tracking
 
-The `gradient_health_prev` feature requires tracking the previous epoch's gradient health in `EnvState`:
+The `gradient_health_prev` feature requires tracking the previous epoch's gradient health in `ParallelEnvState`. See **Phase 6b** for the complete state tracking contract including:
+- Field definition in `ParallelEnvState`
+- When to read (feature extraction)
+- When to update (after epoch completion)
+- Initial value (1.0 for new slots)
+- Cleanup (delete on slot deactivation)
 
-```python
-@dataclass
-class EnvState:
-    # ... existing fields ...
-    gradient_health_prev: dict[str, float] = field(default_factory=dict)  # slot_id → prev value
-```
+### 12. Action Feedback & Counterfactual Tracking
 
-At each step:
-1. Read `gradient_health_prev[slot_id]` for feature extraction
-2. After step, update `gradient_health_prev[slot_id] = current_gradient_health`
+Both `last_action_success`/`last_action_op` (action feedback) and `epochs_since_counterfactual` require tracking in `ParallelEnvState`. See **Phase 6b** for:
+- Field definitions
+- Action success definition per `LifecycleOp`
+- Update timing (after action execution, after epoch completion)
+- Initial values
 
-First epoch of each slot should use `gradient_health_prev = 1.0` (assume healthy until proven otherwise).
-
-### 12. History Padding at Episode Start
+### 13. History Padding at Episode Start
 
 At episode start, loss/accuracy history may be shorter than 5 epochs. Use left-padding with zeros:
 
