@@ -489,15 +489,18 @@ print(f'Output shape: {out.shape}')  # Should be [2, 3, 4]
 
 **Sub-phases:**
 
-#### 4a. Create FactoredRecurrentActorCriticV2 Class
+#### 4a. Replace FactoredRecurrentActorCritic with V2
 
-New class (don't modify V1 yet) with:
+Per clean replacement policy, delete the old class and create the new one:
 
 - `feature_dim = 512`
 - `lstm_hidden_dim = 512`
+- `head_hidden = lstm_hidden_dim // 2 = 256`
 - `BlueprintEmbedding` module
 - 3-layer blueprint head
 - Op-conditioned value head
+
+**Note:** If you need to reference old code during implementation, use `git show HEAD~1:path/to/file`.
 
 #### 4b. Implement 3-Layer Blueprint Head
 
@@ -505,71 +508,192 @@ New class (don't modify V1 yet) with:
 self.blueprint_head = nn.Sequential(
     nn.Linear(lstm_hidden_dim, lstm_hidden_dim),  # 512 → 512
     nn.ReLU(),
-    nn.Linear(lstm_hidden_dim, head_hidden),      # 512 → 128
+    nn.Linear(lstm_hidden_dim, head_hidden),      # 512 → 256
     nn.ReLU(),
-    nn.Linear(head_hidden, num_blueprints),       # 128 → 13
+    nn.Linear(head_hidden, num_blueprints),       # 256 → 13
 )
-```
 
-**Initialization:** Apply `gain=0.01` only to final layer, `sqrt(2)` to intermediate.
+# Initialization: gain=0.01 for final layer, sqrt(2) for intermediate
+def _init_blueprint_head(self):
+    """Apply orthogonal init with appropriate gains to blueprint head."""
+    layers = [m for m in self.blueprint_head if isinstance(m, nn.Linear)]
+    for i, layer in enumerate(layers):
+        if i == len(layers) - 1:  # Final layer
+            nn.init.orthogonal_(layer.weight, gain=0.01)
+        else:  # Intermediate layers
+            nn.init.orthogonal_(layer.weight, gain=math.sqrt(2))
+        nn.init.zeros_(layer.bias)
+```
 
 #### 4c. Implement Op-Conditioned Value Head
 
 ```python
 self.value_head = nn.Sequential(
-    nn.Linear(lstm_hidden_dim + NUM_OPS, head_hidden),  # 512+6 → 128
+    nn.Linear(lstm_hidden_dim + NUM_OPS, head_hidden),  # 512+6 → 256
     nn.ReLU(),
-    nn.Linear(head_hidden, 1),
+    nn.Linear(head_hidden, 1),                          # 256 → 1
 )
+
+def _compute_value(self, lstm_out: torch.Tensor, op: torch.Tensor) -> torch.Tensor:
+    """Shared helper: compute Q(s, op) value conditioned on operation.
+
+    Used by both forward() (with sampled op) and evaluate_actions() (with stored op).
+    """
+    op_one_hot = F.one_hot(op, num_classes=NUM_OPS).float()
+    value_input = torch.cat([lstm_out, op_one_hot], dim=-1)
+    return self.value_head(value_input).squeeze(-1)
 ```
 
-#### 4d. Update forward() Signature
+#### 4d. Define Output Types
+
+Use `NamedTuple` for strict typing and torch.jit compatibility:
+
+```python
+from typing import NamedTuple
+
+class ForwardOutput(NamedTuple):
+    """Output from forward() during rollout."""
+    op_logits: torch.Tensor           # [batch, seq, NUM_OPS]
+    slot_logits: torch.Tensor         # [batch, seq, num_slots]
+    blueprint_logits: torch.Tensor    # [batch, seq, NUM_BLUEPRINTS]
+    style_logits: torch.Tensor        # [batch, seq, num_styles]
+    tempo_logits: torch.Tensor        # [batch, seq, num_tempos]
+    alpha_target_logits: torch.Tensor # [batch, seq, num_targets]
+    alpha_speed_logits: torch.Tensor  # [batch, seq, num_speeds]
+    alpha_curve_logits: torch.Tensor  # [batch, seq, num_curves]
+    value: torch.Tensor               # [batch, seq] - Q(s, sampled_op)
+    sampled_op: torch.Tensor          # [batch, seq] - the op used for value conditioning
+    hidden: tuple[torch.Tensor, torch.Tensor]  # LSTM state
+
+class EvaluateOutput(NamedTuple):
+    """Output from evaluate_actions() during PPO update."""
+    log_probs: dict[str, torch.Tensor]  # Per-head log probs of stored actions
+    entropy: dict[str, torch.Tensor]     # Per-head entropy
+    value: torch.Tensor                  # [batch, seq] - Q(s, stored_op)
+```
+
+#### 4e. Implement forward() for Rollout
 
 ```python
 def forward(
     self,
-    state: torch.Tensor,           # [batch, seq, 121] - features without blueprint
-    blueprint_indices: torch.Tensor,  # [batch, seq, num_slots] - for embedding
+    state: torch.Tensor,              # [batch, seq, 121]
+    blueprint_indices: torch.Tensor,  # [batch, seq, num_slots]
     hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
-    op_for_value: torch.Tensor | None = None,  # For hard conditioning during update
-    # ... masks ...
+    action_mask: torch.Tensor | None = None,
 ) -> ForwardOutput:
+    """Rollout path: sample actions, compute Q(s, sampled_op).
+
+    This is used during data collection. The value returned is conditioned
+    on the sampled op and should be stored in the rollout buffer.
+    """
+    # ... feature processing and LSTM ...
+
+    # Sample op from policy
+    op_logits = self.op_head(lstm_out)
+    op_dist = Categorical(logits=op_logits)
+    sampled_op = op_dist.sample()
+
+    # Value conditioned on sampled op (what we store in buffer)
+    value = self._compute_value(lstm_out, sampled_op)
+
+    return ForwardOutput(
+        op_logits=op_logits,
+        # ... other logits ...
+        value=value,
+        sampled_op=sampled_op,
+        hidden=new_hidden,
+    )
 ```
 
-#### 4e. Implement Op-Conditioning Logic (Q(s,op) Pattern)
+#### 4f. Implement evaluate_actions() for PPO Update
 
 ```python
-# Compute op logits and sample action
-op_logits = self.op_head(lstm_out)
-op_dist = Categorical(logits=op_logits)
-sampled_op = op_dist.sample()
+def evaluate_actions(
+    self,
+    state: torch.Tensor,              # [batch, seq, 121]
+    blueprint_indices: torch.Tensor,  # [batch, seq, num_slots]
+    actions: dict[str, torch.Tensor], # Stored actions from buffer
+    hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
+    action_mask: torch.Tensor | None = None,
+) -> EvaluateOutput:
+    """PPO update path: compute log_probs, entropy, Q(s, stored_op).
 
-# Op-conditioned critic: always use hard one-hot of sampled op
-# This treats the critic as Q(s, op) — consistent in both rollout and update
-op_one_hot = F.one_hot(sampled_op, num_classes=NUM_OPS).float()
-value_input = torch.cat([lstm_out, op_one_hot], dim=-1)
-value = self.value_head(value_input)
+    The value is conditioned on the STORED op (actions["op"]), ensuring
+    consistency with what was stored during rollout.
+    """
+    # ... feature processing and LSTM (same as forward) ...
+
+    # Compute distributions for all heads
+    op_logits = self.op_head(lstm_out)
+    op_dist = Categorical(logits=op_logits)
+
+    # Log prob of the STORED action (not a fresh sample)
+    stored_op = actions["op"]
+    op_log_prob = op_dist.log_prob(stored_op)
+
+    # Value conditioned on STORED op (must match what was stored)
+    value = self._compute_value(lstm_out, stored_op)
+
+    # Compute log_probs and entropy for all heads
+    log_probs = {"op": op_log_prob, ...}
+    entropy = {"op": op_dist.entropy(), ...}
+
+    return EvaluateOutput(log_probs=log_probs, entropy=entropy, value=value)
+```
+
+#### 4g. Implement get_value() for Bootstrap
+
+```python
+def get_value(
+    self,
+    state: torch.Tensor,              # [batch, 1, 121] - single step
+    blueprint_indices: torch.Tensor,  # [batch, 1, num_slots]
+    hidden: tuple[torch.Tensor, torch.Tensor],
+    sampled_op: torch.Tensor,         # [batch] - op from final step
+) -> torch.Tensor:
+    """Compute bootstrap value at episode truncation.
+
+    Used when episode is truncated (not terminal). Must condition on
+    the same op that would have been taken, for GAE consistency.
+    """
+    # ... feature processing and LSTM ...
+    return self._compute_value(lstm_out, sampled_op)
 ```
 
 **Design rationale:** We use hard one-hot conditioning in **both** rollout and PPO update:
-- Rollout: `Q(s, sampled_op)` — value stored matches the op actually taken
-- PPO update: same `Q(s, sampled_op)` — no GAE mismatch
+- `forward()`: `Q(s, sampled_op)` — value stored matches the op sampled
+- `evaluate_actions()`: `Q(s, stored_op)` — stored_op == sampled_op from rollout
+- `get_value()`: `Q(s, sampled_op)` — for bootstrap at truncation
 
-This avoids the "soft probs during rollout, hard one-hot during update" pattern which creates advantage estimation inconsistencies.
+This ensures the value function trained matches what was stored, avoiding GAE mismatch.
 
 **Validation:**
 
 ```bash
 PYTHONPATH=src python -c "
 import torch
-from esper.tamiyo.networks.factored_lstm import FactoredRecurrentActorCriticV2
-net = FactoredRecurrentActorCriticV2(state_dim=121, num_slots=3)
-state = torch.randn(2, 5, 121)  # batch=2, seq=5 (121 non-blueprint dims)
+from esper.tamiyo.networks.factored_lstm import (
+    FactoredRecurrentActorCritic, ForwardOutput, EvaluateOutput
+)
+net = FactoredRecurrentActorCritic(state_dim=121, num_slots=3)
+state = torch.randn(2, 5, 121)  # batch=2, seq=5
 bp_idx = torch.randint(0, 13, (2, 5, 3))
+
+# Test forward
 out = net(state, bp_idx)
-print(f'Op logits: {out[\"op_logits\"].shape}')  # [2, 5, 6]
-print(f'Value: {out[\"value\"].shape}')  # [2, 5]
-print(f'Params: {sum(p.numel() for p in net.parameters())}')  # ~2.1M (512 hidden)
+assert isinstance(out, ForwardOutput)
+print(f'Op logits: {out.op_logits.shape}')  # [2, 5, 6]
+print(f'Value: {out.value.shape}')          # [2, 5]
+print(f'Sampled op: {out.sampled_op.shape}')  # [2, 5]
+
+# Test evaluate_actions
+actions = {'op': torch.randint(0, 6, (2, 5)), 'slot': torch.randint(0, 3, (2, 5)), ...}
+eval_out = net.evaluate_actions(state, bp_idx, actions)
+assert isinstance(eval_out, EvaluateOutput)
+print(f'Value (eval): {eval_out.value.shape}')  # [2, 5]
+
+print(f'Params: {sum(p.numel() for p in net.parameters())}')  # ~2.1M
 "
 ```
 
@@ -926,11 +1050,12 @@ git grep "TODO(policy-v2)"
 | File | Phase | Key Changes |
 |------|-------|-------------|
 | `leyline/__init__.py` | 1 | Dimension constants (512), BLUEPRINT_NULL_INDEX, DEFAULT_BLUEPRINT_EMBED_DIM, NUM_BLUEPRINTS |
+| `simic/training/parallel_env_state.py` | 2a½ | Add Obs V3 state tracking fields (action feedback, gradient_health_prev, epochs_since_counterfactual) |
 | `tamiyo/policy/features.py` | 2 | Clean replacement, raw history (10 dims), gradient_health_prev, device-keyed cache, gamma-matched counterfactual, returns `(obs[121], bp_idx)` |
-| `tamiyo/networks/factored_lstm.py` | 3, 4 | BlueprintEmbedding (torch.where), V2 network, op-conditioned Q(s,op) critic |
+| `tamiyo/networks/factored_lstm.py` | 3, 4 | BlueprintEmbedding, ForwardOutput/EvaluateOutput types, 3-layer blueprint head, op-conditioned Q(s,op) critic, `_compute_value()` helper |
 | `simic/agent/ppo.py` | 5, 6f | Differential entropy, evaluate_actions with blueprint_indices |
-| `simic/agent/rollout_buffer.py` | 6a | Add `blueprint_indices` tensor, update `add()` and `get_batched_sequences()` |
-| `simic/training/vectorized.py` | 6 | Action feedback tracking, gradient_health_prev tracking in EnvState, new feature extraction API, blueprint_indices plumbing |
+| `simic/agent/rollout_buffer.py` | 6a | Add `blueprint_indices` tensor, add `sampled_op` storage, update `add()` and `get_batched_sequences()` |
+| `simic/training/vectorized.py` | 6 | Action feedback tracking, gradient_health_prev tracking, new feature extraction API, blueprint_indices plumbing |
 
 ---
 
