@@ -13,7 +13,7 @@ Enhance Tamiyo's policy architecture and training configuration to better suppor
 |--------|--------------|---------------|--------|
 | LSTM hidden dim | 128 | 256 | +100% capacity |
 | Feature dim | 128 | 256 | Matched to LSTM |
-| Total params | ~227K | ~830K | +266% |
+| Total params | ~227K | ~930K | +310% |
 | Observation dims | 117 | 124 | +7 (action feedback) |
 | Blueprint head layers | 2 | 3 | +1 layer |
 | Critic conditioning | None | Op-conditioned | +6 input dims |
@@ -115,23 +115,32 @@ self.value_head = nn.Sequential(
 
 **Forward pass change:**
 ```python
-def forward(self, state, hidden, masks, op_for_value=None):
+def forward(self, state, hidden, masks, sampled_op: torch.Tensor):
     # ... LSTM processing ...
 
-    if op_for_value is not None:
-        # During PPO update: condition on sampled op (hard one-hot)
-        op_one_hot = F.one_hot(op_for_value, num_classes=NUM_OPS).float()
-        value_input = torch.cat([lstm_out, op_one_hot], dim=-1)
-    else:
-        # During rollout: use expected value over ops (soft probs)
-        # CRITICAL: .detach() prevents value loss from backprop into actor head
-        op_probs = F.softmax(op_logits, dim=-1).detach()
-        value_input = torch.cat([lstm_out, op_probs], dim=-1)
-
+    # Op-conditioned critic: always condition on sampled op (hard one-hot)
+    # This treats the critic as Q(s, op) — a lightweight action-value baseline
+    op_one_hot = F.one_hot(sampled_op, num_classes=NUM_OPS).float()
+    value_input = torch.cat([lstm_out, op_one_hot], dim=-1)
     value = self.value_head(value_input)
 ```
 
-**⚠️ Gradient Isolation Warning:** Without `.detach()`, value loss would backpropagate through `op_logits`, training the actor to help the critic rather than to select good actions. This coupling destabilizes PPO.
+**Design choice: Q(s, op) pattern**
+
+We use hard one-hot conditioning in **both** rollout and PPO update for consistency:
+- Rollout: `value = Q(s, sampled_op)` — value stored in buffer matches op taken
+- PPO update: same `Q(s, sampled_op)` — no mismatch in advantage estimation
+
+This avoids the alternative (soft probs during rollout, hard one-hot during update) which creates GAE mismatch because the value function trained differs from the one used during rollout.
+
+For logging/monitoring, expected value can be computed separately:
+```python
+# Optional: compute V(s) = E[Q(s,op)] for monitoring only
+with torch.no_grad():
+    op_probs = F.softmax(op_logits, dim=-1)
+    q_all = torch.stack([value_head(cat(lstm_out, one_hot(i))) for i in range(NUM_OPS)])
+    expected_value = (op_probs * q_all).sum(dim=-1)
+```
 
 **Parameter impact:** +~1K params
 
@@ -256,21 +265,24 @@ Post-LSTM LayerNorm(256)
 
 ## Parameter Count
 
-| Component | V1 Params | V2 Params | Delta |
-|-----------|-----------|-----------|-------|
-| feature_net | ~18K | ~33K | +15K |
-| LSTM | ~132K | ~528K | +396K |
-| lstm_ln | ~0.3K | ~0.5K | +0.2K |
-| blueprint_head | ~9K | ~100K | +91K |
-| other 7 heads | ~60K | ~137K | +77K |
-| value_head | ~8K | ~34K | +26K |
-| **Total** | **~227K** | **~830K** | **+603K** |
+| Component | V1 Params | V2 Params | Formula |
+|-----------|-----------|-----------|---------|
+| feature_net | ~18K | ~32.5K | Linear(124,256) + LN(256) |
+| LSTM | ~132K | ~526K | 4×256×256 + 4×256² + 8×256 |
+| lstm_ln | ~0.3K | ~0.5K | LN(256) |
+| blueprint_head | ~9K | ~100K | 256→256→128→13 (3-layer) |
+| 7 standard heads | ~60K | ~231K | 7 × (256→128→k), ~33K each |
+| value_head | ~8K | ~34K | 262→128→1 |
+| blueprint_embed | - | ~0.1K | Embedding(14, 4) |
+| **Total** | **~227K** | **~930K** | **+310%** |
+
+**Verification:** Run `sum(p.numel() for p in model.parameters())` on the instantiated network. The above is hand-calculated; implementation may vary slightly.
 
 **Memory estimate:**
-- Parameters: 830K × 4 bytes = 3.3 MB
-- Gradients: 830K × 4 bytes = 3.3 MB
-- Optimizer state (Adam m+v): 830K × 8 bytes = 6.6 MB
-- **Total model memory:** ~13 MB (trivial)
+- Parameters: 930K × 4 bytes = 3.7 MB
+- Gradients: 930K × 4 bytes = 3.7 MB
+- Optimizer state (Adam m+v): 930K × 8 bytes = 7.4 MB
+- **Total model memory:** ~15 MB (trivial)
 
 ## Migration Plan
 
@@ -412,9 +424,10 @@ DEFAULT_FEATURE_DIM = 256 if _POLICY_VERSION == "v2" else 128
 | Mixed precision | Approved | BF16 recommended on Ampere+ GPUs |
 
 **Implementation notes:**
-1. Op-conditioning approach:
-   - Rollout (get_action): `value_input = cat(lstm_out, softmax(op_logits).detach())` — soft, **detached**
-   - PPO update: `value_input = cat(lstm_out, one_hot(op_action))` — hard
-2. **CRITICAL:** The `.detach()` on softmax during rollout prevents value loss from backpropagating into actor head, which would destabilize training
-3. Current orthogonal init is appropriate — no changes needed for larger dims
-4. Use `torch.amp.autocast(dtype=torch.bfloat16)` for training on Ampere+ GPUs
+1. Op-conditioning approach (Q(s,op) pattern):
+   - Rollout: `value_input = cat(lstm_out, one_hot(sampled_op))` — hard
+   - PPO update: `value_input = cat(lstm_out, one_hot(sampled_op))` — same hard one-hot
+   - **Consistency:** Both use the same conditioning to avoid GAE mismatch
+2. Current orthogonal init is appropriate — no changes needed for larger dims
+3. Use `torch.amp.autocast(dtype=torch.bfloat16)` for training on Ampere+ GPUs
+4. **Param count verification:** Run `sum(p.numel() for p in model.parameters())` after instantiation

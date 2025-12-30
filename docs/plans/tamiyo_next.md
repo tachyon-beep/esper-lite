@@ -14,7 +14,7 @@ YOU MUST READ BOTH THIS DOCUMENT AND THE RELEVANT PRERESQUISITE DESIGNS IN FULL 
 | Aspect | Before | After |
 |--------|--------|-------|
 | Observation dims | 218 | 124 |
-| Model params | ~227K | ~830K |
+| Model params | ~227K | ~930K |
 | LSTM hidden | 128 | 256 |
 | Feature dim | 128 | 256 |
 | Decision horizon | ~25 epochs | 50+ epochs |
@@ -326,26 +326,26 @@ def forward(
 ) -> ForwardOutput:
 ```
 
-#### 4e. Implement Op-Conditioning Logic
+#### 4e. Implement Op-Conditioning Logic (Q(s,op) Pattern)
 
 ```python
-# Compute op logits first
+# Compute op logits and sample action
 op_logits = self.op_head(lstm_out)
+op_dist = Categorical(logits=op_logits)
+sampled_op = op_dist.sample()
 
-# Value conditioning
-if op_for_value is not None:
-    # Hard one-hot during PPO update
-    op_encoding = F.one_hot(op_for_value, num_classes=NUM_OPS).float()
-else:
-    # Soft probabilities during rollout
-    # CRITICAL: .detach() prevents value loss from backpropagating into actor head
-    op_encoding = F.softmax(op_logits, dim=-1).detach()
-
-value_input = torch.cat([lstm_out, op_encoding], dim=-1)
+# Op-conditioned critic: always use hard one-hot of sampled op
+# This treats the critic as Q(s, op) — consistent in both rollout and update
+op_one_hot = F.one_hot(sampled_op, num_classes=NUM_OPS).float()
+value_input = torch.cat([lstm_out, op_one_hot], dim=-1)
 value = self.value_head(value_input)
 ```
 
-**⚠️ CRITICAL:** The `.detach()` is mandatory. Without it, value loss backpropagates through `op_logits`, training the actor to help the critic rather than to choose good actions. This destabilizes PPO training.
+**Design rationale:** We use hard one-hot conditioning in **both** rollout and PPO update:
+- Rollout: `Q(s, sampled_op)` — value stored matches the op actually taken
+- PPO update: same `Q(s, sampled_op)` — no GAE mismatch
+
+This avoids the "soft probs during rollout, hard one-hot during update" pattern which creates advantage estimation inconsistencies.
 
 **Validation:**
 
@@ -359,7 +359,7 @@ bp_idx = torch.randint(0, 13, (2, 5, 3))
 out = net(state, bp_idx)
 print(f'Op logits: {out[\"op_logits\"].shape}')  # [2, 5, 6]
 print(f'Value: {out[\"value\"].shape}')  # [2, 5]
-print(f'Params: {sum(p.numel() for p in net.parameters())}')  # ~830K
+print(f'Params: {sum(p.numel() for p in net.parameters())}')  # ~930K
 "
 ```
 
@@ -400,7 +400,7 @@ for head, entropy in per_head_entropy.items():
 
 #### 5c. Update evaluate_actions() Call
 
-Pass `op_for_value` during PPO update:
+Pass the sampled op for value conditioning (same as rollout for consistency):
 
 ```python
 result = self.policy.evaluate_actions(
@@ -409,9 +409,11 @@ result = self.policy.evaluate_actions(
     actions,
     masks,
     hidden,
-    op_for_value=actions["op"],  # Hard conditioning
+    sampled_op=actions["op"],  # Same hard conditioning as rollout
 )
 ```
+
+**Note:** The `sampled_op` is the same action that was taken during rollout. This ensures the Q(s,op) value trained matches exactly what was stored in the buffer.
 
 ---
 
@@ -585,19 +587,21 @@ The `use_telemetry` flag no longer exists in V3. Remove from CLI args and config
 V3 feature extraction returns 112 dims. Network expects 124 (112 + 12 from embeddings).
 The embedding concatenation happens INSIDE the network, not in feature extraction.
 
-### 7. Op-Conditioning Gradient Leakage (CRITICAL)
+### 7. Op-Conditioning Consistency (Q(s,op) Pattern)
 
-During rollout, the op-conditioned critic uses `F.softmax(op_logits)`. **You MUST `.detach()` this:**
+Use hard one-hot conditioning in **both** rollout and PPO update:
 
 ```python
-# WRONG - value loss backprops into actor head
-op_encoding = F.softmax(op_logits, dim=-1)
+# WRONG - different conditioning creates GAE mismatch
+# rollout:  softmax(op_logits).detach()  # soft
+# update:   one_hot(sampled_op)          # hard
 
-# CORRECT - gradient isolation
-op_encoding = F.softmax(op_logits, dim=-1).detach()
+# CORRECT - same conditioning in both
+op_one_hot = F.one_hot(sampled_op, num_classes=NUM_OPS).float()
+value = value_head(cat(lstm_out, op_one_hot))
 ```
 
-Without `.detach()`, value loss trains the actor to help the critic rather than choose good actions.
+This treats the critic as `Q(s, op)` rather than `V(s)`. The value stored during rollout matches exactly what's trained during update — no advantage estimation mismatch.
 
 ### 8. Enum Normalization Robustness
 
