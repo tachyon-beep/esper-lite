@@ -188,7 +188,7 @@ class ActionContext(Static):
         # Use cumulative counts across all batches
         cumulative_counts = tamiyo.cumulative_action_counts
         cumulative_total = tamiyo.cumulative_total_actions
-        result.append(" Total run: [")
+        result.append("Total run: [")
 
         if cumulative_total > 0:
             # Calculate widths proportionally, ensuring total = bar_width
