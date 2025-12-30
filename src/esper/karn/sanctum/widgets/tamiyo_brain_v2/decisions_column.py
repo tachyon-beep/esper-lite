@@ -11,11 +11,8 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from rich.text import Text
-from textual import events
 from textual.app import ComposeResult
-from textual.binding import Binding
 from textual.containers import Container, Vertical
-from textual.message import Message
 from textual.widgets import Static
 
 from esper.leyline import ALPHA_CURVE_GLYPHS
@@ -38,17 +35,7 @@ ACTION_COLORS: dict[str, str] = {
 class DecisionCard(Static):
     """Individual decision card widget with CSS-driven styling."""
 
-    CARD_WIDTH: ClassVar[int] = 42
-
-    # Enable keyboard focus for card navigation
-    can_focus = True
-
-    class Pinned(Message):
-        """Posted when user clicks to toggle pin status."""
-
-        def __init__(self, decision_id: str) -> None:
-            super().__init__()
-            self.decision_id = decision_id
+    CARD_WIDTH: ClassVar[int] = 46
 
     def __init__(
         self,
@@ -74,15 +61,6 @@ class DecisionCard(Static):
         elif self.index == self.total_cards - 1:
             self.add_class("oldest")
 
-    def on_click(self) -> None:
-        """Handle click to toggle pin."""
-        self.post_message(self.Pinned(self.decision.decision_id))
-
-    def on_key(self, event: events.Key) -> None:
-        """Handle keyboard input on focused card."""
-        if event.key == "p":
-            self.post_message(self.Pinned(self.decision.decision_id))
-            event.stop()
 
     def render(self) -> Text:
         """Render the decision card content."""
@@ -104,7 +82,15 @@ class DecisionCard(Static):
         result.append(age_str, style="dim")
         result.append("\n")
 
-        # Line 2: Slot + Confidence
+        # Line 2: Training context (epoch, env, batch)
+        result.append(f"epoch:{decision.epoch}", style="dim")
+        result.append("  ", style="dim")
+        result.append(f"env:{decision.env_id}", style="cyan")
+        result.append("  ", style="dim")
+        result.append(f"batch:{decision.batch}", style="dim")
+        result.append("\n")
+
+        # Line 3: Slot + Confidence
         slot_num = decision.chosen_slot[-1] if decision.chosen_slot else "-"
         result.append(f"slot:{slot_num}", style="cyan")
         result.append("  ", style="dim")
@@ -309,11 +295,6 @@ class DecisionsColumn(Container):
     CARD_SWAP_INTERVAL: ClassVar[float] = 30.0
     MAX_CARDS: ClassVar[int] = 3
 
-    BINDINGS = [
-        Binding("j", "focus_next", "Next card", show=False),
-        Binding("k", "focus_prev", "Previous card", show=False),
-    ]
-
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
@@ -321,10 +302,10 @@ class DecisionsColumn(Container):
         self._last_card_swap_time: float = 0.0
         self._rendering: bool = False  # Guard against concurrent renders
         self._render_generation: int = 0  # Unique ID suffix for each render
+        self.border_title = "DECISIONS"
 
     def compose(self) -> ComposeResult:
         """Compose the decisions column."""
-        yield Static("DECISIONS [j/k:nav p:pin]", id="decisions-header", classes="decisions-header")
         yield Vertical(id="cards-container")
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
@@ -422,45 +403,3 @@ class DecisionsColumn(Container):
         container = self.query_one("#cards-container", Vertical)
         for card in container.query(DecisionCard):
             card.refresh()
-
-    def on_decision_card_pinned(self, event: DecisionCard.Pinned) -> None:
-        """Handle pin toggle from decision card."""
-        # Toggle pin state in data
-        for decision in self._displayed_decisions:
-            if decision.decision_id == event.decision_id:
-                decision.pinned = not decision.pinned
-                break
-
-        # Update card styling in-place (avoid remove/mount cycle)
-        container = self.query_one("#cards-container", Vertical)
-        for card in container.query(DecisionCard):
-            if card.decision.decision_id == event.decision_id:
-                card._update_classes()
-                card.refresh()
-                break
-
-    def action_focus_next(self) -> None:
-        """Move focus to next decision card."""
-        cards = list(self.query(DecisionCard))
-        if not cards:
-            return
-        focused = self.app.focused
-        if isinstance(focused, DecisionCard) and focused in cards:
-            idx = cards.index(focused)
-            next_idx = (idx + 1) % len(cards)
-            cards[next_idx].focus()
-        else:
-            cards[0].focus()
-
-    def action_focus_prev(self) -> None:
-        """Move focus to previous decision card."""
-        cards = list(self.query(DecisionCard))
-        if not cards:
-            return
-        focused = self.app.focused
-        if isinstance(focused, DecisionCard) and focused in cards:
-            idx = cards.index(focused)
-            prev_idx = (idx - 1) % len(cards)
-            cards[prev_idx].focus()
-        else:
-            cards[-1].focus()

@@ -192,9 +192,6 @@ class AttentionHeatmapPanel(Static):
             result.append("\n")
             result.append("-" * total_width, style="dim")
 
-        # Extra lines for visual breathing room
-        result.append("\n\n")
-
         return result
 
     def _render_placeholder(self) -> Text:

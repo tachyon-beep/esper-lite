@@ -328,8 +328,11 @@ class StatusBanner(Container):
         return "ok"
 
     def _metric_style(self, status: str) -> str:
-        """Convert status to Rich style."""
-        return {"ok": "green", "warning": "yellow", "critical": "red bold"}[status]
+        """Convert status to Rich style.
+
+        Uses dim for ok metrics to reduce visual noise - only highlight problems.
+        """
+        return {"ok": "dim", "warning": "yellow", "critical": "red bold"}[status]
 
     def _trend_arrow(
         self,

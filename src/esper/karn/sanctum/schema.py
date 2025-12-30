@@ -885,6 +885,9 @@ class DecisionSnapshot:
     pinned: bool = False
     # Environment ID that made this decision (for TD advantage tracking)
     env_id: int = 0
+    # Training context when decision was made
+    epoch: int = 0
+    batch: int = 0
 
     # Per-decision metrics (per DRL review)
     # Note: expected_value (above) contains V(s), no need for separate value_estimate

@@ -3,15 +3,25 @@
 Redesigned policy agent dashboard with CSS-driven layout and
 composable sub-widgets for better maintainability.
 
+=== COLOR HIERARCHY (3 concerns only) ===
+1. IDENTITY - Container border shows A/B/C group (green/cyan/magenta)
+   - Applied via .group-a, .group-b, .group-c CSS classes
+2. HEALTH - Status overrides identity when unhealthy (yellow=warning, red=critical)
+   - Applied via .status-ok, .status-warning, .status-critical CSS classes
+   - CSS cascade: status classes come AFTER group classes to override
+3. EMPHASIS - Individual metric values highlight only when problematic
+   - ok metrics: dim/muted (reduce visual noise)
+   - warning metrics: yellow
+   - critical metrics: red bold
+
 Layout:
     ┌─────────────────────────────────────────────────────────────────┐
     │ StatusBanner (1 line)                                           │
     ├───────────────────────────────────────────────────┬─────────────┤
     │ VitalsColumn (75%)                                │ Decisions   │
     │ ├── PPOLosses (50%)  | Health (50%)               │ (25%)       │
-    │ ├── HeadsPanel (50%) | Slots (50%)                │ ├── Card    │
-    │ └── ActionContext    | HeadChoices (50/50)        │ └── Card    │
-    │     RewardHealth     │                            │             │
+    │ ├── HeadsPanel (68%) | Slots (32%)                │ ├── Card    │
+    │ └── AttentionHeatmap (68%) | ActionContext (32%)  │ └── Card    │
     └───────────────────────────────────────────────────┴─────────────┘
 """
 
@@ -20,9 +30,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from textual.app import ComposeResult
-from textual.containers import Container, Horizontal, Vertical, VerticalScroll
-from textual.css.query import NoMatches
-from textual.message import Message
+from textual.containers import Container, Horizontal, VerticalScroll
 
 from .status_banner import StatusBanner
 from .ppo_losses_panel import PPOLossesPanel
@@ -30,9 +38,8 @@ from .health_status_panel import HealthStatusPanel
 from .heads_grid import HeadsPanel
 from .action_context import ActionContext
 from .slots_panel import SlotsPanel
-from .decisions_column import DecisionCard, DecisionsColumn
+from .decisions_column import DecisionsColumn
 from .attention_heatmap import AttentionHeatmapPanel
-from ..reward_health import RewardHealthPanel
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot
@@ -44,16 +51,6 @@ class TamiyoBrainV2(Container):
     Drop-in replacement for TamiyoBrain with improved visual design
     and composable architecture.
     """
-
-    class DecisionPinToggled(Message):
-        """Posted when user clicks a decision to toggle pin status.
-
-        Bubbles up to the app for backend persistence.
-        """
-
-        def __init__(self, decision_id: str) -> None:
-            super().__init__()
-            self.decision_id = decision_id
 
     DEFAULT_CSS = """
     TamiyoBrainV2 {
@@ -90,54 +87,63 @@ class TamiyoBrainV2(Container):
         width: 1fr;
         min-width: 45;
         height: 100%;
-        border-left: solid $surface-lighten-1;
+        border: round $surface-lighten-2;
+        border-title-color: $text-muted;
         padding: 0 1;
+        align: left top;
     }
 
-    /* Row containers - auto height, full width */
-    #ppo-row, #heads-row, #action-row {
-        height: auto;
+    /* Row containers - explicit heights based on content + border */
+    #ppo-row {
+        height: 13;  /* PPO losses: 11 content + 2 border */
         width: 100%;
     }
 
-    #action-stack {
-        width: 3fr;
-        height: auto;
+    #heads-row {
+        height: 12;  /* Heads grid: 10 content + 2 border */
+        width: 100%;
     }
 
-    /* All panels - consistent styling, height from content */
+    #action-row {
+        height: 11;  /* Reduced from 13 to give 2 rows to heads-row */
+        width: 100%;
+    }
+
+    /* All panels - fill their row heights */
     #ppo-losses-panel, #health-panel {
         width: 1fr;
-        height: auto;
+        height: 1fr;  /* Fill ppo-row height */
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
         padding: 0 1;
     }
 
-    #heads-panel, #slots-panel {
-        width: 1fr;
-        height: auto;
+    #heads-panel {
+        width: 68%;
+        height: 1fr;  /* Fill heads-row height */
+        border: round $surface-lighten-2;
+        border-title-color: $text-muted;
+        padding: 0 1;
+    }
+
+    #slots-panel {
+        width: 32%;
+        height: 1fr;  /* Fill heads-row height */
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
         padding: 0 1;
     }
 
     #action-context {
-        height: auto;
-        border: round $surface-lighten-2;
-        border-title-color: $text-muted;
-        padding: 0 1;
-    }
-
-    #reward-health {
-        height: 1fr;  /* Fill remaining space in action-stack */
+        width: 32%;
+        height: 1fr;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
         padding: 0 1;
     }
 
     #attention-heatmap {
-        width: 7fr;
+        width: 68%;
         height: 1fr;  /* Fill available height in action-row */
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
@@ -154,12 +160,6 @@ class TamiyoBrainV2(Container):
         margin-bottom: 0;
     }
 
-    .decisions-header {
-        height: 1;
-        text-style: bold;
-        color: $text-muted;
-        margin-bottom: 0;
-    }
 
     DecisionCard {
         height: auto;
@@ -180,20 +180,12 @@ class TamiyoBrainV2(Container):
         border: double $success;
     }
 
-    DecisionCard:focus {
-        border: thick $accent;
-        background: $panel-darken-1;
-    }
-
-    DecisionCard.pinned:focus {
-        border: thick $success;
-        background: $panel-darken-1;
-    }
-
     /* Remove padding from decision column internals */
-    #decisions-header, #cards-container {
+    #cards-container {
         padding: 0;
         margin: 0;
+        height: auto;
+        border: none;
     }
     """
 
@@ -221,12 +213,10 @@ class TamiyoBrainV2(Container):
                 with Horizontal(id="heads-row"):
                     yield HeadsPanel(id="heads-panel")
                     yield SlotsPanel(id="slots-panel")
-                # Action row - AttentionHeatmap | Stacked (ActionContext + RewardHealth)
+                # Action row - AttentionHeatmap | ActionContext
                 with Horizontal(id="action-row"):
                     yield AttentionHeatmapPanel(id="attention-heatmap")
-                    with Vertical(id="action-stack"):
-                        yield ActionContext(id="action-context")
-                        yield RewardHealthPanel(id="reward-health")
+                    yield ActionContext(id="action-context")
 
             yield DecisionsColumn(id="decisions-column")
 
@@ -244,57 +234,18 @@ class TamiyoBrainV2(Container):
             self.border_title = "TAMIYO"
 
         # Propagate snapshot to all child widgets
-        # Use try-except to handle case where widgets haven't mounted yet
-        try:
-            self.query_one("#status-banner", StatusBanner).update_snapshot(snapshot)
-        except NoMatches:
-            pass
-
-        try:
-            self.query_one("#ppo-losses-panel", PPOLossesPanel).update_snapshot(snapshot)
-        except NoMatches:
-            pass
-
-        try:
-            self.query_one("#health-panel", HealthStatusPanel).update_snapshot(snapshot)
-        except NoMatches:
-            pass
-
-        try:
-            self.query_one("#heads-panel", HeadsPanel).update_snapshot(snapshot)
-        except NoMatches:
-            pass
-
-        try:
-            self.query_one("#action-context", ActionContext).update_snapshot(snapshot)
-        except NoMatches:
-            pass
-
-        try:
-            self.query_one("#slots-panel", SlotsPanel).update_snapshot(snapshot)
-        except NoMatches:
-            pass
-
-        try:
-            self.query_one("#attention-heatmap", AttentionHeatmapPanel).update_snapshot(snapshot)
-        except NoMatches:
-            pass
-
-        try:
-            self.query_one("#reward-health", RewardHealthPanel).update_snapshot(snapshot)
-        except NoMatches:
-            pass
-
-        try:
-            self.query_one("#decisions-column", DecisionsColumn).update_snapshot(snapshot)
-        except NoMatches:
-            pass
+        # Note: If called before widgets are mounted, this will raise NoMatches.
+        # That's a bug in calling code - fix the caller, not the symptom.
+        self.query_one("#status-banner", StatusBanner).update_snapshot(snapshot)
+        self.query_one("#ppo-losses-panel", PPOLossesPanel).update_snapshot(snapshot)
+        self.query_one("#health-panel", HealthStatusPanel).update_snapshot(snapshot)
+        self.query_one("#heads-panel", HeadsPanel).update_snapshot(snapshot)
+        self.query_one("#action-context", ActionContext).update_snapshot(snapshot)
+        self.query_one("#slots-panel", SlotsPanel).update_snapshot(snapshot)
+        self.query_one("#attention-heatmap", AttentionHeatmapPanel).update_snapshot(snapshot)
+        self.query_one("#decisions-column", DecisionsColumn).update_snapshot(snapshot)
 
     @property
     def snapshot(self) -> "SanctumSnapshot | None":
         """Access current snapshot for testing."""
         return self._snapshot
-
-    def on_decision_card_pinned(self, event: DecisionCard.Pinned) -> None:
-        """Handle pin toggle from decision card and bubble up to app."""
-        self.post_message(self.DecisionPinToggled(event.decision_id))

@@ -1,5 +1,13 @@
 /* Sanctum Diagnostic TUI Styles
  * New layout: Top (EnvOverview + Scoreboard) | Bottom (EventLog + TamiyoBrain)
+ *
+ * === BORDER HIERARCHY ===
+ * 1. solid [semantic color] - Primary containers (env-overview, event-log, tamiyo)
+ *    - $primary (blue): env-overview, filter-input
+ *    - yellow: event-log (high-velocity events)
+ *    - group/status colors: tamiyo (A/B testing + health)
+ * 2. round $surface-lighten-2 - Nested/secondary panels (scoreboard, tamiyo sub-panels)
+ * 3. double $accent - Focus state (keyboard navigation indicator)
  */
 
 /* Run Header - single-line status bar */
@@ -26,9 +34,9 @@
     padding: 0 1;
 }
 
-/* Top section: Env Overview + Scoreboard (~37% of main area) */
+/* Top section: Env Overview + Scoreboard (~43% of main area) */
 #top-section {
-    height: 37%;
+    height: 43%;
     min-height: 10;
 }
 
@@ -51,28 +59,29 @@
     height: 1fr;
 }
 
-/* Scoreboard - Best Runs (full height of metrics column) */
+/* Scoreboard - contains Best Runs and Worst Trajectory panels */
 #scoreboard {
-    height: 1fr;
-    border: solid cyan;
-    border-title-color: cyan;
+    height: 3fr;
     overflow-y: auto;
-    padding: 0 1;
-}
-
-#scoreboard:focus-within {
-    border: double $accent;
+    padding: 0;
 }
 
 /* Scoreboard stats header */
 #scoreboard-stats {
     height: auto;
-    margin-bottom: 1;
 }
 
-/* Bottom section: Event Log + TamiyoBrain (~63% of main area) */
+/* Reward Health panel in metrics column */
+#metrics-reward-health {
+    height: 1fr;
+    border: round $surface-lighten-2;
+    border-title-color: $text-muted;
+    padding: 0 1;
+}
+
+/* Bottom section: Event Log + TamiyoBrain (~57% of main area) */
 #bottom-section {
-    height: 63%;
+    height: 57%;
     min-height: 14;
     width: 100%;
 }
@@ -185,27 +194,4 @@
 /* Hidden class for toggling visibility */
 .hidden {
     display: none;
-}
-
-/* ============================================================================
-   TamiyoBrainV2 Layout
-   ============================================================================ */
-
-/* Heads row: HeadsPanel (65%) | SlotsPanel (35%) */
-#heads-panel {
-    width: 68%;
-}
-
-#slots-panel {
-    width: 32%;
-}
-
-/* Action row: AttentionHeatmap (65%) | ActionStack (35%)
-   Matches heads row widths for visual alignment */
-#attention-heatmap {
-    width: 68%;
-}
-
-#action-stack {
-    width: 32%;
 }

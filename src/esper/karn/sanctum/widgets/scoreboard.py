@@ -1,14 +1,8 @@
-"""Scoreboard widget - Best Runs leaderboard.
+"""Scoreboard widget - Best Runs and Worst Trajectory panels.
 
-Port of tui.py _render_scoreboard() (lines 1083-1190).
-Shows stats header and top 10 environments by best accuracy.
-
-Reference: src/esper/karn/tui.py lines 1083-1190 (_render_scoreboard method)
-
-Interactive features:
-- j/k or ↑/↓: Navigate rows
-- Enter: Open HistoricalEnvDetail modal with snapshot at peak
-- p: Toggle pin status (pinned rows never get removed)
+Two-panel layout:
+1. Best Runs (3fr): Stats header + top 7 environments by peak accuracy
+2. Worst Trajectory (1fr): Bottom 3 runs with most regression from peak
 
 Columns:
 - # (rank): Medal icons for top 3 (🥇🥈🥉), A/B cohort dot prefix
@@ -23,8 +17,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Iterator
 
-from textual.binding import Binding
-from textual.message import Message
+from textual.containers import Vertical
 from textual.widgets import DataTable, Static
 
 from esper.leyline import STAGE_COLORS
@@ -45,35 +38,32 @@ _MEDALS: tuple[str, str, str] = ("🥇", "🥈", "🥉")
 
 
 class Scoreboard(Static):
-    """Best Runs scoreboard widget with keyboard navigation.
+    """Best Runs scoreboard widget (display only).
 
     Shows:
-    1. Stats header: global best, mean best, fossilized/pruned counts
-    2. Leaderboard: top 10 completed env runs with peak accuracy + seed composition
-
-    Keyboard:
-    - j/k or ↑/↓: Navigate rows
-    - Enter: Open historical detail view
-    - p: Toggle pin on selected row
+    1. Best Runs panel: stats header + top 7 runs by peak accuracy
+    2. Worst Trajectory panel: bottom 3 runs with most regression
     """
 
-    BINDINGS = [
-        Binding("p", "toggle_pin", "Toggle Pin", show=False),
-    ]
+    DEFAULT_CSS = """
+    Scoreboard {
+        layout: vertical;
+    }
 
-    class BestRunSelected(Message):
-        """Posted when user selects a best run to view details."""
+    #best-runs-panel {
+        height: 2fr;
+        border: round $surface-lighten-2;
+        border-title-color: cyan;
+        padding: 0 1;
+    }
 
-        def __init__(self, record: "BestRunRecord") -> None:
-            super().__init__()
-            self.record = record
-
-    class BestRunPinToggled(Message):
-        """Posted when user toggles pin on a best run."""
-
-        def __init__(self, record_id: str) -> None:
-            super().__init__()
-            self.record_id = record_id
+    #worst-runs-panel {
+        height: 1fr;
+        border: round $surface-lighten-2;
+        border-title-color: red;
+        padding: 0 1;
+    }
+    """
 
     def __init__(self, **kwargs: Any) -> None:
         """Initialize Scoreboard widget."""
@@ -81,24 +71,24 @@ class Scoreboard(Static):
         self._snapshot: SanctumSnapshot | None = None
         self._displayed_records: list["BestRunRecord"] = []
         self._bottom_records: list["BestRunRecord"] = []
-        self.border_title = "BEST RUNS"
         self.table: DataTable[Any] = DataTable[Any](zebra_stripes=True, cursor_type="row")
         self.bottom_table: DataTable[Any] = DataTable[Any](zebra_stripes=True, cursor_type="row")
 
-    def compose(self) -> Iterator[Static | DataTable[Any]]:
+    def compose(self) -> Iterator[Vertical | Static | DataTable[Any]]:
         """Compose the widget.
 
         Layout (height budget):
-        - Stats header: 1 line
-        - Top 10 table: 1 header + 10 rows = 11 lines
-        - Separator: 2 lines (whitespace + "WORST TRAJECTORY" label)
-        - Bottom 3 table: 1 header + 3 rows = 4 lines
-        - Total: ~18 lines
+        - Best Runs panel (3fr): stats + 7 rows
+        - Worst Trajectory panel (1fr): 3 rows
         """
-        yield Static(id="scoreboard-stats")
-        yield self.table
-        yield Static("\n[bold red]▼ WORST TRAJECTORY[/bold red]", id="bottom-separator")
-        yield self.bottom_table
+        with Vertical(id="best-runs-panel") as panel:
+            panel.border_title = "BEST RUNS"
+            yield Static(id="scoreboard-stats")
+            yield self.table
+
+        with Vertical(id="worst-runs-panel") as panel:
+            panel.border_title = "WORST TRAJECTORY"
+            yield self.bottom_table
 
     def on_mount(self) -> None:
         """Setup table columns on mount."""
@@ -114,11 +104,11 @@ class Scoreboard(Static):
         """
         self.table.clear(columns=True)
         self.table.add_column("#", key="rank", width=4)      # Cohort dot + medal/number
-        self.table.add_column("Ep", key="episode", width=4)  # Episode number
-        self.table.add_column("@", key="epoch", width=3)     # Epoch of peak
+        self.table.add_column("Ep", key="episode", width=3)  # Episode number
+        self.table.add_column("@", key="epoch", width=2)     # Epoch of peak
         self.table.add_column("Peak", key="peak", width=6)   # Peak accuracy
-        self.table.add_column("Traj", key="traj", width=8)   # Trajectory arrow + final
-        self.table.add_column("Grw", key="growth", width=6)  # Growth ratio (shortened)
+        self.table.add_column("Traj", key="traj", width=7)   # Trajectory arrow + final
+        self.table.add_column("Grw", key="growth", width=5)  # Growth ratio (shortened)
         self.table.add_column("Seeds", key="seeds", width=14)  # Seed composition
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
@@ -160,12 +150,16 @@ class Scoreboard(Static):
         )
         stats_widget.update(stats_text)
 
-        # Update title
-        pinned_count = sum(1 for r in best_runs if r.pinned)
-        if pinned_count > 0:
-            self.border_title = f"BEST RUNS ({pinned_count} 📌) [dim]Enter=view p=pin[/dim]"
-        else:
-            self.border_title = "BEST RUNS [dim]Enter=view p=pin[/dim]"
+        # Update panel title
+        try:
+            panel = self.query_one("#best-runs-panel", Vertical)
+            pinned_count = sum(1 for r in best_runs if r.pinned)
+            if pinned_count > 0:
+                panel.border_title = f"BEST RUNS ({pinned_count} 📌)"
+            else:
+                panel.border_title = "BEST RUNS"
+        except Exception:
+            pass
 
     def _refresh_table(self) -> None:
         """Refresh the leaderboard table.
@@ -187,8 +181,8 @@ class Scoreboard(Static):
             self.table.add_row("[dim]No runs yet[/dim]", "", "", "", "", "", "")
             return
 
-        # Sort by peak accuracy, take top 10
-        best_runs = sorted(best_runs, key=lambda r: r.peak_accuracy, reverse=True)[:10]
+        # Sort by peak accuracy, take top 7
+        best_runs = sorted(best_runs, key=lambda r: r.peak_accuracy, reverse=True)[:7]
         self._displayed_records = best_runs
 
         for i, record in enumerate(best_runs, start=1):
@@ -221,11 +215,11 @@ class Scoreboard(Static):
         """
         self.bottom_table.clear(columns=True)
         self.bottom_table.add_column("#", key="rank", width=4)
-        self.bottom_table.add_column("Ep", key="episode", width=4)
-        self.bottom_table.add_column("@", key="epoch", width=3)
+        self.bottom_table.add_column("Ep", key="episode", width=3)
+        self.bottom_table.add_column("@", key="epoch", width=2)
         self.bottom_table.add_column("Peak", key="peak", width=6)
-        self.bottom_table.add_column("Traj", key="traj", width=8)
-        self.bottom_table.add_column("Grw", key="growth", width=6)
+        self.bottom_table.add_column("Traj", key="traj", width=7)
+        self.bottom_table.add_column("Grw", key="growth", width=5)
         self.bottom_table.add_column("Seeds", key="seeds", width=14)
 
     def _refresh_bottom_table(self) -> None:
@@ -283,49 +277,6 @@ class Scoreboard(Static):
                 self._format_seeds(record.seeds),
                 key=row_key,
             )
-
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        """Handle Enter key on table row (works for both top and bottom tables)."""
-        row_key = event.row_key
-        if row_key is None:
-            return
-
-        key_value = row_key.value
-
-        # Check if this is a bottom table selection
-        if key_value.startswith("bottom_"):
-            # Search bottom records
-            for i, record in enumerate(self._bottom_records, start=1):
-                if record.record_id and key_value == f"bottom_{record.record_id}":
-                    self.post_message(self.BestRunSelected(record))
-                    return
-                elif key_value == f"bottom_row_{i}":
-                    self.post_message(self.BestRunSelected(record))
-                    return
-        else:
-            # Search top records
-            if not self._displayed_records:
-                return
-            for i, record in enumerate(self._displayed_records, start=1):
-                if record.record_id and record.record_id == key_value:
-                    self.post_message(self.BestRunSelected(record))
-                    return
-                elif key_value == f"row_{i}":
-                    self.post_message(self.BestRunSelected(record))
-                    return
-
-    def action_toggle_pin(self) -> None:
-        """Toggle pin on currently selected row."""
-        if not self._displayed_records or self.table.row_count == 0:
-            return
-
-        cursor_row = self.table.cursor_row
-        if cursor_row is None or cursor_row >= len(self._displayed_records):
-            return
-
-        record = self._displayed_records[cursor_row]
-        if record.record_id:
-            self.post_message(self.BestRunPinToggled(record.record_id))
 
     def _format_rank(self, rank: int, record: "BestRunRecord") -> str:
         """Format rank with medal icons and A/B cohort dot.

@@ -60,7 +60,7 @@ class EventLog(Static):
             super().__init__()
             self.events = events
 
-    def __init__(self, max_lines: int = 30, **kwargs: Any) -> None:
+    def __init__(self, max_lines: int = 36, **kwargs: Any) -> None:
         """Initialize EventLog widget.
 
         Args:
@@ -68,19 +68,18 @@ class EventLog(Static):
         """
         super().__init__(**kwargs)
         self._max_lines = max_lines
-        self.border_title = "EVENTS"
+        self.border_title = "EVENTS [↵]"
 
         # === APPEND-ONLY STATE ===
-        # Line data: list of (left_text, right_str) tuples
-        # - left_text: Rich Text with timestamp + event + count
-        # - right_str: Plain string with env IDs (or empty)
-        self._line_data: list[tuple[Text, str]] = []
+        # Line data: list of (timestamp, event_label, color, count, env_str) tuples
+        # Timestamp formatting is done at render time, not append time
+        self._line_data: list[tuple[str, str, str, int, str]] = []
         # Seconds we've already processed (never process twice)
         self._processed_seconds: set[str] = set()
-        # Track last minute shown (for abbreviated timestamps)
-        self._last_minute: str | None = None
         # Keep reference to snapshot for click handler
         self._snapshot: SanctumSnapshot | None = None
+        # Track trimmed lines for scroll indicator
+        self._trimmed_count: int = 0
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Process snapshot and append any newly completed seconds.
@@ -122,7 +121,15 @@ class EventLog(Static):
 
         # Trim if we exceed max lines
         if len(self._line_data) > self._max_lines:
+            excess = len(self._line_data) - self._max_lines
+            self._trimmed_count += excess
             self._line_data = self._line_data[-self._max_lines:]
+
+        # Update border title with scroll indicator
+        if self._trimmed_count > 0:
+            self.border_title = f"EVENTS [↵] ↑{self._trimmed_count}"
+        else:
+            self.border_title = "EVENTS [↵]"
 
         # Trigger re-render
         self.refresh()
@@ -133,28 +140,13 @@ class EventLog(Static):
         """Append line data for a completed second.
 
         Each event type gets its own line with count and contributing envs.
+        Stores raw data - formatting happens at render time.
         """
-        parts = timestamp.split(":")
-        if len(parts) != 3:
-            return
-
-        current_minute = parts[1]
-
         for event_type in sorted(type_envs.keys()):
             env_ids = type_envs[event_type]
             count = len(env_ids)
 
-            # Build left part (timestamp + event + count)
-            left = Text()
-
-            # Timestamp: "MM:SS " or "  :SS " (abbreviated if same minute)
-            if current_minute != self._last_minute:
-                left.append(f"{parts[1]}:{parts[2]} ", style="dim")
-                self._last_minute = current_minute
-            else:
-                left.append(f"  :{parts[2]} ", style="dim")
-
-            # Event type (shortened for display)
+            # Event type label (shortened for display)
             color = _EVENT_COLORS.get(event_type, "white")
             label = (
                 event_type
@@ -162,16 +154,12 @@ class EventLog(Static):
                 .replace("_COMPLETED", "")
                 .replace("_COMPUTED", "")
             )
-            left.append(label, style=color)
 
-            # Count if > 1
-            if count > 1:
-                left.append(f" ×{count}", style="dim")
+            # Build env list string
+            env_str = self._format_env_list(env_ids)
 
-            # Build right part (env list)
-            right = self._format_env_list(env_ids)
-
-            self._line_data.append((left, right))
+            # Store raw data tuple: (timestamp, label, color, count, env_str)
+            self._line_data.append((timestamp, label, color, count, env_str))
 
     def _format_env_list(self, env_ids: set[int | None]) -> str:
         """Format env IDs for display, e.g., '0 1 2 3 +'.
@@ -193,6 +181,10 @@ class EventLog(Static):
         """Render the log with proper right-justification.
 
         Uses actual widget width to align env IDs to right edge.
+        Timestamp rules (all stored as HH:MM:SS):
+        - Top line (i==0): shows full HH:MM:SS
+        - First event of each new minute: shows full HH:MM:SS
+        - All other lines: shows only :SS (with padding for alignment)
         """
         if not self._line_data:
             return Text("Waiting for events...", style="dim")
@@ -201,17 +193,46 @@ class EventLog(Static):
         width = self.size.width - 2 if self.size.width > 4 else 30
 
         lines = []
-        for left_text, right_str in self._line_data:
-            line = Text()
-            line.append_text(left_text)
+        last_minute: str | None = None
 
-            if right_str:
-                # Calculate padding to push right_str to right edge
-                left_len = len(left_text.plain)
-                right_len = len(right_str)
+        for i, (timestamp, label, color, count, env_str) in enumerate(self._line_data):
+            parts = timestamp.split(":")
+            if len(parts) != 3:
+                continue
+
+            hour_minute = f"{parts[0]}:{parts[1]}"
+            second = parts[2]
+
+            line = Text()
+
+            # Determine if this line shows full timestamp or abbreviated
+            # Full: top line (i==0) OR first event of a new minute
+            show_full = (i == 0) or (hour_minute != last_minute)
+
+            if show_full:
+                # Full format: " HH:MM:SS " = 10 chars (1 space indent + timestamp + space)
+                line.append(f" {timestamp} ", style="bold cyan")
+            else:
+                # Short format: "      :SS " = 9 chars (6 spaces + :SS + space)
+                line.append(f"      :{second} ", style="dim")
+
+            # Always update last_minute for tracking
+            last_minute = hour_minute
+
+            # Event label
+            line.append(label, style=color)
+
+            # Count if > 1
+            if count > 1:
+                line.append(f" ×{count}", style="dim")
+
+            # Right-justify env IDs
+            if env_str:
+                left_len = len(line.plain)
+                right_len = len(env_str)
                 padding = max(1, width - left_len - right_len)
                 line.append(" " * padding)
-                line.append(right_str, style="dim")
+                line.append(env_str, style="dim")
 
             lines.append(line)
 

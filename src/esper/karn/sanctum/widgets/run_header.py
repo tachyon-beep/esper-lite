@@ -156,6 +156,25 @@ class RunHeader(Static):
         bar = "█" * filled + "░" * (width - filled)
         return f"{bar} {current}/{max_epochs}"
 
+    def _render_batch_progress(self, current: int, max_batches: int, width: int = 8) -> str:
+        """Render batch progress meter (Tamiyo's training epochs).
+
+        Args:
+            current: Current batch number.
+            max_batches: Maximum batches per episode.
+            width: Bar width in characters.
+
+        Returns:
+            Compact progress string like "B:██░░ 25/100".
+        """
+        if max_batches <= 0:
+            return f"B:{current}"
+
+        progress = min(current / max_batches, 1.0)
+        filled = int(progress * width)
+        bar = "█" * filled + "░" * (width - filled)
+        return f"B:{bar} {current}/{max_batches}"
+
     def _format_run_name(self, name: str | None, max_width: int = 14) -> str:
         """Format run name with truncation to fixed width.
 
@@ -236,9 +255,15 @@ class RunHeader(Static):
         row.append(f"{s.current_episode:>3}", style="bold cyan")
         row.append(" ", style="dim")
 
-        # === Segment 5: Progress bar + fraction ===
+        # === Segment 5: Epoch progress bar + fraction ===
         progress = self._render_progress_bar(s.current_epoch, s.max_epochs)
         row.append(progress, style="cyan")
+
+        row.append(" ", style="dim")
+
+        # === Segment 5b: Batch progress (Tamiyo's epochs = system batches) ===
+        batch_progress = self._render_batch_progress(s.current_batch, s.max_batches)
+        row.append(batch_progress, style="magenta")
 
         row.append(" │ ", style="dim")
 

@@ -61,7 +61,7 @@ class HeadsPanel(Static):
     """
 
     CELL_WIDTH: ClassVar[int] = 7  # Width per head column
-    BAR_WIDTH: ClassVar[int] = 4   # Width of mini-bar
+    BAR_WIDTH: ClassVar[int] = 5   # Width of mini-bar
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -164,9 +164,6 @@ class HeadsPanel(Static):
         clip_pos = tamiyo.gradient_quality.clip_fraction_positive
         clip_neg = tamiyo.gradient_quality.clip_fraction_negative
         result.append(f"Clip:\u2191{clip_pos:.0%}/\u2193{clip_neg:.0%}", style="dim")
-
-        # Extra line for visual breathing room
-        result.append("\n")
 
         return result
 

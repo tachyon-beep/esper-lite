@@ -312,4 +312,5 @@ class PPOLossesPanel(Static):
         return "ok"
 
     def _status_style(self, status: str) -> str:
-        return {"ok": "bright_cyan", "warning": "yellow", "critical": "red bold"}[status]
+        # Use cyan for ok (visible but not loud), yellow/red for problems
+        return {"ok": "cyan", "warning": "yellow", "critical": "red bold"}[status]

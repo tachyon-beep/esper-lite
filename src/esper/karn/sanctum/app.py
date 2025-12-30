@@ -52,6 +52,7 @@ HELP_TEXT = """\
 [bold]Actions[/bold]
   [cyan]/[/cyan]         Filter envs (by ID or status)
   [cyan]Esc[/cyan]       Clear filter
+  [cyan]i[/cyan]         Show full run info (untruncated)
   [cyan]p[/cyan]         Toggle pin on Best Runs item
   [cyan]r[/cyan]         Manual refresh
   [cyan]q[/cyan]         Quit Sanctum
@@ -105,6 +106,85 @@ class HelpScreen(ModalScreen[None]):
         self.dismiss()
 
 
+class RunInfoScreen(ModalScreen[None]):
+    """Modal showing full run info without truncation."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss", "Close"),
+        Binding("i", "dismiss", "Close"),
+        Binding("q", "dismiss", "Close"),
+    ]
+
+    DEFAULT_CSS = """
+    RunInfoScreen {
+        align: center middle;
+        background: $surface-darken-1 80%;
+    }
+
+    RunInfoScreen > #info-container {
+        width: 80;
+        height: auto;
+        max-height: 80%;
+        background: $surface;
+        border: thick $primary;
+        padding: 1 2;
+    }
+    """
+
+    def __init__(self, snapshot: "SanctumSnapshot") -> None:
+        super().__init__()
+        self._snapshot = snapshot
+
+    def compose(self) -> ComposeResult:
+        """Compose the run info screen."""
+        s = self._snapshot
+        runtime_str = self._format_runtime(s.runtime_seconds)
+
+        info_text = f"""\
+[bold cyan]Run Information[/bold cyan]
+
+[bold]Task Name[/bold]
+  [cyan]{s.task_name or '(not set)'}[/cyan]
+
+[bold]Progress[/bold]
+  Episode:    {s.current_episode}
+  Epoch:      {s.current_epoch} / {s.max_epochs if s.max_epochs > 0 else '∞'}
+  Batch:      {s.current_batch} / {s.max_batches}
+  Runtime:    {runtime_str}
+
+[bold]Throughput[/bold]
+  Epochs/sec:   {s.vitals.epochs_per_second:.2f}
+  Batches/hr:   {s.vitals.batches_per_hour:.1f}
+
+[bold]System[/bold]
+  Connected:    {'Yes' if s.connected else 'No'}
+  Staleness:    {s.staleness_seconds:.1f}s
+  Thread:       {'Alive' if s.training_thread_alive else 'Dead' if s.training_thread_alive is False else 'Unknown'}
+
+[dim]Press Esc, i, or q to close[/dim]
+"""
+        with Container(id="info-container"):
+            yield Static(info_text)
+
+    def _format_runtime(self, seconds: float) -> str:
+        """Format runtime as Xh Ym Zs."""
+        if seconds <= 0:
+            return "--"
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = int(seconds % 60)
+        if hours > 0:
+            return f"{hours}h {minutes}m {secs}s"
+        elif minutes > 0:
+            return f"{minutes}m {secs}s"
+        else:
+            return f"{secs}s"
+
+    def on_click(self) -> None:
+        """Dismiss on click."""
+        self.dismiss()
+
+
 class SanctumApp(App[None]):
     """Sanctum diagnostic TUI for Esper training.
 
@@ -149,6 +229,7 @@ class SanctumApp(App[None]):
         Binding("9", "focus_env(8)", "Env 8", show=False),
         Binding("0", "focus_env(9)", "Env 9", show=False),
         Binding("r", "refresh", "Refresh", show=True),
+        Binding("i", "show_run_info", "Info", show=True),
         Binding("?", "toggle_help", "Help", show=True),
         # Filter
         Binding("/", "start_filter", "Filter", show=True),
@@ -217,6 +298,7 @@ class SanctumApp(App[None]):
                 yield EnvOverview(num_envs=self._num_envs, id="env-overview")
                 with Vertical(id="metrics-column"):
                     yield Scoreboard(id="scoreboard")
+                    yield RewardHealthPanel(id="metrics-reward-health")
 
             # Bottom section: TamiyoBrain (left) | Event Log (right)
             with Horizontal(id="bottom-section"):
@@ -365,14 +447,14 @@ class SanctumApp(App[None]):
         except Exception as e:
             self.log.warning(f"Failed to update scoreboard: {e}")
 
-        # Update reward health panel
+        # Update reward health panels (metrics column and TamiyoBrain)
         try:
             health_data = self._backend.compute_reward_health()
-            self.query_one("#reward-health", RewardHealthPanel).update_data(health_data)
+            self.query_one("#metrics-reward-health", RewardHealthPanel).update_data(health_data)
         except NoMatches:
             pass  # Widget hasn't mounted yet
         except Exception as e:
-            self.log.warning(f"Failed to update reward-health: {e}")
+            self.log.warning(f"Failed to update metrics-reward-health: {e}")
 
         # Update TamiyoBrain widgets using multi-group API
         self._refresh_tamiyo_widgets()
@@ -415,6 +497,12 @@ class SanctumApp(App[None]):
     def action_toggle_help(self) -> None:
         """Toggle help display."""
         self.push_screen(HelpScreen())
+
+    def action_show_run_info(self) -> None:
+        """Show full run information modal (untruncated task name, etc.)."""
+        if self._snapshot is None:
+            return
+        self.push_screen(RunInfoScreen(self._snapshot))
 
     def action_cursor_down(self) -> None:
         """Move cursor down in EnvOverview table (vim: j)."""

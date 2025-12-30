@@ -17,14 +17,14 @@ if TYPE_CHECKING:
     from esper.karn.sanctum.schema import DecisionSnapshot, SanctumSnapshot
 
 
-# Action colors
+# Action colors (must match decisions_column.py and attention_heatmap.py)
 ACTION_COLORS: dict[str, str] = {
     "GERMINATE": "green",
     "SET_ALPHA_TARGET": "cyan",
     "FOSSILIZE": "blue",
     "PRUNE": "red",
     "WAIT": "dim",
-    "ADVANCE": "yellow",
+    "ADVANCE": "cyan",
 }
 
 ACTION_ABBREVS: dict[str, str] = {
