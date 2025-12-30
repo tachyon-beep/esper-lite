@@ -10,10 +10,12 @@ Redesign Tamiyo's observation space to eliminate duplication, normalize all feat
 
 | Metric | V2 (Current) | V3 (Proposed) | Change |
 |--------|--------------|---------------|--------|
-| Total dimensions | 218 | 117 | -46% |
+| Total dimensions | 218 | 117 (→124 with Policy V2) | -46% (→-43%) |
 | Duplicated features | 27 dims | 0 | Eliminated |
-| Unbounded features | 5+ | 0 | All normalized |
+| Unbounded features | 5+ | 0 | All bounded (see note) |
 | Construction | Nested Python loops | Vectorized + cached tables | ~10x faster |
+
+**Note on "All bounded":** Log-scale features (`loss_norm`, `loss_volatility`, `best_loss_norm`) can slightly exceed 1.0 for extreme values (e.g., loss > 10). This is acceptable as values remain bounded (~1.3 max) and maintain meaningful gradients. If strict [0,1] is needed, add final clamp.
 
 ## Design Decisions
 
@@ -57,7 +59,7 @@ Redesign Tamiyo's observation space to eliminate duplication, normalize all feat
 | 1-10 | `stage_one_hot` | One-hot of SeedStage | {0,1}^10 | State machine position |
 | 11 | `alpha` | Direct | [0,1] | Current blend weight |
 | 12 | `alpha_target` | Direct | [0,1] | Controller target |
-| 13 | `alpha_mode_norm` | `mode.value / max_mode` | [0,1] | HOLD/RAMP/STEP |
+| 13 | `alpha_mode_norm` | `_MODE_INDEX[mode] / (len(_MODE_INDEX) - 1)` | [0,1] | HOLD/RAMP/STEP (see note) |
 | 14 | `alpha_velocity` | `clamp(velocity, -1, 1)` | [-1,1] | Rate of change |
 | 15 | `time_to_target_norm` | `clamp(time, 0, max) / max` | [0,1] | Schedule progress |
 | 16 | `alpha_algorithm_norm` | `(algo - min) / range` | [0,1] | ADD/MULTIPLY/GATE |
@@ -73,6 +75,23 @@ Redesign Tamiyo's observation space to eliminate duplication, normalize all feat
 | 26 | `upstream_alpha_norm` | `clamp(sum, 0, 3) / 3` | [0,1] | Position context |
 | 27 | `downstream_alpha_norm` | `clamp(sum, 0, 3) / 3` | [0,1] | Position context |
 | 28 | `counterfactual_fresh` | `0.8 ** epochs_since_cf` | [0,1] | Attribution reliability |
+
+**⚠️ Implementation Notes:**
+
+1. **Enum normalization robustness (alpha_mode_norm, alpha_algorithm_norm):** Use explicit index mappings rather than `.value / max_value`. This prevents silent bugs if enum values change or are reordered:
+   ```python
+   _MODE_INDEX = {AlphaMode.HOLD: 0, AlphaMode.RAMP: 1, AlphaMode.STEP: 2}
+   alpha_mode_norm = _MODE_INDEX[mode] / (len(_MODE_INDEX) - 1)
+   ```
+
+2. **Inactive slot stage encoding:** Inactive slots (`is_active=0`) must have **all-zeros** for stage one-hot, distinct from any valid stage. The vectorized one-hot helper must respect this:
+   ```python
+   def _vectorized_one_hot(indices: torch.Tensor, table: torch.Tensor) -> torch.Tensor:
+       valid_mask = indices >= 0  # -1 for inactive
+       safe_indices = indices.clamp(min=0)
+       one_hot = table.to(indices.device)[safe_indices]
+       return one_hot * valid_mask.unsqueeze(-1).float()  # Zeros out inactive
+   ```
 
 ### Blueprint Embeddings (4 dims × num_slots, separate)
 
@@ -116,16 +135,25 @@ class BlueprintEmbedding(nn.Module):
 
 ```python
 class FactoredRecurrentActorCriticV3(nn.Module):
-    def __init__(self, state_dim: int = 105, ...):
-        # state_dim excludes blueprint (handled by embedding)
+    def __init__(self, state_dim: int = 112, ...):
+        # state_dim = 25 base (with action feedback) + 29*3 slots = 112
+        # (Without action feedback: 18 + 29*3 = 105)
+        # blueprint handled separately by embedding
         self.blueprint_embed = BlueprintEmbedding(13, 4)
-        self.feature_net = nn.Linear(state_dim + 12, feature_dim)  # 105 + 12 = 117
+        self.feature_net = nn.Linear(state_dim + 12, feature_dim)  # 112 + 12 = 124
 
     def forward(self, obs, blueprint_indices, hidden):
         bp_emb = self.blueprint_embed(blueprint_indices).view(obs.shape[0], -1)
         full_obs = torch.cat([obs, bp_emb], dim=-1)
         # ... rest of forward pass
 ```
+
+**Dimension breakdown (with Policy V2 action feedback):**
+- Base features: 18 original + 7 action feedback = 25
+- Slot features: 29 × 3 = 87
+- Non-blueprint obs: 25 + 87 = 112
+- Blueprint embeddings: 4 × 3 = 12 (added inside network)
+- Total network input: 112 + 12 = 124
 
 ### Feature Extraction API Change
 
@@ -134,9 +162,10 @@ class FactoredRecurrentActorCriticV3(nn.Module):
 obs = batch_obs_to_features(signals, reports, use_telemetry=True, ...)
 # Returns: [batch, 218]
 
-# V3 (new)
+# V3 (new, with Policy V2 action feedback)
 obs, blueprint_idx = batch_obs_to_features_v3(signals, reports, ...)
-# Returns: ([batch, 105], [batch, num_slots])
+# Returns: ([batch, 112], [batch, num_slots])
+# Note: 112 = 25 base + 29*3 slots (excludes blueprint, includes action feedback)
 ```
 
 ## Vectorization Strategy

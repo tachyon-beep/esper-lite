@@ -338,11 +338,14 @@ if op_for_value is not None:
     op_encoding = F.one_hot(op_for_value, num_classes=NUM_OPS).float()
 else:
     # Soft probabilities during rollout
-    op_encoding = F.softmax(op_logits, dim=-1)
+    # CRITICAL: .detach() prevents value loss from backpropagating into actor head
+    op_encoding = F.softmax(op_logits, dim=-1).detach()
 
 value_input = torch.cat([lstm_out, op_encoding], dim=-1)
 value = self.value_head(value_input)
 ```
+
+**⚠️ CRITICAL:** The `.detach()` is mandatory. Without it, value loss backpropagates through `op_logits`, training the actor to help the critic rather than to choose good actions. This destabilizes PPO training.
 
 **Validation:**
 
@@ -581,6 +584,45 @@ The `use_telemetry` flag no longer exists in V3. Remove from CLI args and config
 
 V3 feature extraction returns 112 dims. Network expects 124 (112 + 12 from embeddings).
 The embedding concatenation happens INSIDE the network, not in feature extraction.
+
+### 7. Op-Conditioning Gradient Leakage (CRITICAL)
+
+During rollout, the op-conditioned critic uses `F.softmax(op_logits)`. **You MUST `.detach()` this:**
+
+```python
+# WRONG - value loss backprops into actor head
+op_encoding = F.softmax(op_logits, dim=-1)
+
+# CORRECT - gradient isolation
+op_encoding = F.softmax(op_logits, dim=-1).detach()
+```
+
+Without `.detach()`, value loss trains the actor to help the critic rather than choose good actions.
+
+### 8. Enum Normalization Robustness
+
+Use explicit index mappings for enum features, not `.value / max_value`:
+
+```python
+# FRAGILE - breaks if enum values change
+alpha_mode_norm = mode.value / max_mode
+
+# ROBUST - explicit mapping
+_MODE_INDEX = {AlphaMode.HOLD: 0, AlphaMode.RAMP: 1, AlphaMode.STEP: 2}
+alpha_mode_norm = _MODE_INDEX[mode] / (len(_MODE_INDEX) - 1)
+```
+
+### 9. Inactive Slot Stage Encoding
+
+Inactive slots (`is_active=0`) must have **all-zeros** for stage one-hot, NOT stage 0. The vectorized one-hot helper must mask by validity:
+
+```python
+def _vectorized_one_hot(indices, table):
+    valid_mask = indices >= 0  # -1 for inactive
+    safe_indices = indices.clamp(min=0)
+    one_hot = table[safe_indices]
+    return one_hot * valid_mask.unsqueeze(-1).float()  # Zeros out inactive
+```
 
 ---
 

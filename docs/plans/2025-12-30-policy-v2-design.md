@@ -13,7 +13,7 @@ Enhance Tamiyo's policy architecture and training configuration to better suppor
 |--------|--------------|---------------|--------|
 | LSTM hidden dim | 128 | 256 | +100% capacity |
 | Feature dim | 128 | 256 | Matched to LSTM |
-| Total params | ~227K | ~600K | +165% |
+| Total params | ~227K | ~830K | +266% |
 | Observation dims | 117 | 124 | +7 (action feedback) |
 | Blueprint head layers | 2 | 3 | +1 layer |
 | Critic conditioning | None | Op-conditioned | +6 input dims |
@@ -119,16 +119,19 @@ def forward(self, state, hidden, masks, op_for_value=None):
     # ... LSTM processing ...
 
     if op_for_value is not None:
-        # During evaluation: condition on sampled op
+        # During PPO update: condition on sampled op (hard one-hot)
         op_one_hot = F.one_hot(op_for_value, num_classes=NUM_OPS).float()
         value_input = torch.cat([lstm_out, op_one_hot], dim=-1)
     else:
-        # During rollout: use expected value over ops
-        op_probs = F.softmax(op_logits, dim=-1)
+        # During rollout: use expected value over ops (soft probs)
+        # CRITICAL: .detach() prevents value loss from backprop into actor head
+        op_probs = F.softmax(op_logits, dim=-1).detach()
         value_input = torch.cat([lstm_out, op_probs], dim=-1)
 
     value = self.value_head(value_input)
 ```
+
+**⚠️ Gradient Isolation Warning:** Without `.detach()`, value loss would backpropagate through `op_logits`, training the actor to help the critic rather than to select good actions. This coupling destabilizes PPO.
 
 **Parameter impact:** +~1K params
 
@@ -220,13 +223,15 @@ def __init__(self, num_blueprints: int = 13, embed_dim: int = 4):
 ## Network Architecture Summary
 
 ```
-Input: [batch, seq, 124]
+Inputs:
+  obs: [batch, seq, 112]              ← Non-blueprint features (25 base + 29×3 slots)
+  blueprint_indices: [batch, seq, 3]  ← Integer indices for embedding lookup
     │
     ▼
-BlueprintEmbedding(indices) → [batch, seq, 12]
+BlueprintEmbedding(indices) → [batch, seq, 3, 4] → flatten → [batch, seq, 12]
     │
     ▼
-Concat → [batch, seq, 112 + 12] = [batch, seq, 124]
+Concat(obs, bp_emb) → [batch, seq, 112 + 12] = [batch, seq, 124]
     │
     ▼
 Feature Net: Linear(124, 256) → LayerNorm → ReLU
@@ -408,7 +413,8 @@ DEFAULT_FEATURE_DIM = 256 if _POLICY_VERSION == "v2" else 128
 
 **Implementation notes:**
 1. Op-conditioning approach:
-   - Rollout (get_action): `value_input = cat(lstm_out, softmax(op_logits))` — soft
+   - Rollout (get_action): `value_input = cat(lstm_out, softmax(op_logits).detach())` — soft, **detached**
    - PPO update: `value_input = cat(lstm_out, one_hot(op_action))` — hard
-2. Current orthogonal init is appropriate — no changes needed for larger dims
-3. Use `torch.amp.autocast(dtype=torch.bfloat16)` for training on Ampere+ GPUs
+2. **CRITICAL:** The `.detach()` on softmax during rollout prevents value loss from backpropagating into actor head, which would destabilize training
+3. Current orthogonal init is appropriate — no changes needed for larger dims
+4. Use `torch.amp.autocast(dtype=torch.bfloat16)` for training on Ampere+ GPUs
