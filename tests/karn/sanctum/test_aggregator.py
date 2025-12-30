@@ -451,6 +451,107 @@ def test_aggregator_populates_nested_metrics():
     assert snapshot.tamiyo.infrastructure.cuda_memory_fragmentation == 0.475
 
 
+def test_decision_snapshot_populates_from_head_telemetry():
+    """DecisionSnapshot should include confidence and entropy from HeadTelemetry."""
+    from datetime import datetime, timezone
+    from esper.karn.sanctum.aggregator import SanctumAggregator
+    from esper.leyline.telemetry import (
+        AnalyticsSnapshotPayload,
+        HeadTelemetry,
+        TelemetryEvent,
+        TelemetryEventType,
+        TrainingStartedPayload,
+    )
+
+    agg = SanctumAggregator()
+
+    # Initialize with training started (all required fields)
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.TRAINING_STARTED,
+        epoch=0,
+        data=TrainingStartedPayload(
+            n_envs=1,
+            max_epochs=25,
+            task="mnist",
+            host_params=1000000,
+            slot_ids=("r0c0", "r0c1"),
+            seed=42,
+            n_episodes=100,
+            lr=3e-4,
+            clip_ratio=0.2,
+            entropy_coef=0.01,
+            param_budget=500000,
+            policy_device="cuda:0",
+            env_devices=("cuda:0",),
+            reward_mode="shaped",
+        ),
+    ))
+
+    # Send last_action with HeadTelemetry
+    head_telem = HeadTelemetry(
+        op_confidence=0.85,
+        slot_confidence=0.72,
+        blueprint_confidence=0.91,
+        style_confidence=0.65,
+        tempo_confidence=0.88,
+        alpha_target_confidence=0.77,
+        alpha_speed_confidence=0.69,
+        curve_confidence=0.82,
+        op_entropy=0.3,
+        slot_entropy=0.8,
+        blueprint_entropy=0.5,
+        style_entropy=0.6,
+        tempo_entropy=0.4,
+        alpha_target_entropy=0.55,
+        alpha_speed_entropy=0.45,
+        curve_entropy=0.35,
+    )
+
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+        epoch=1,
+        timestamp=datetime.now(timezone.utc),
+        data=AnalyticsSnapshotPayload(
+            kind="last_action",
+            env_id=0,
+            action_name="GERMINATE",
+            slot_id="r0c0",
+            blueprint_id="conv_light",
+            style="LINEAR_ADD",
+            tempo_idx=1,
+            alpha_target=0.7,
+            alpha_speed="MEDIUM",
+            alpha_curve="COSINE",
+            action_confidence=0.85,
+            head_telemetry=head_telem,
+        ),
+    ))
+
+    snapshot = agg.get_snapshot()
+    decisions = snapshot.tamiyo.recent_decisions
+    assert len(decisions) == 1
+
+    decision = decisions[0]
+    # Confidence
+    assert decision.op_confidence == 0.85
+    assert decision.slot_confidence == 0.72
+    assert decision.blueprint_confidence == 0.91
+    assert decision.style_confidence == 0.65
+    assert decision.tempo_confidence == 0.88
+    assert decision.alpha_target_confidence == 0.77
+    assert decision.alpha_speed_confidence == 0.69
+    assert decision.curve_confidence == 0.82
+    # Entropy
+    assert decision.op_entropy == 0.3
+    assert decision.slot_entropy == 0.8
+    assert decision.blueprint_entropy == 0.5
+    assert decision.style_entropy == 0.6
+    assert decision.tempo_entropy == 0.4
+    assert decision.alpha_target_entropy == 0.55
+    assert decision.alpha_speed_entropy == 0.45
+    assert decision.curve_entropy == 0.35
+
+
 def test_aggregator_populates_compile_status():
     """Aggregator should populate compile status from TrainingStartedPayload."""
     from esper.karn.sanctum.aggregator import SanctumAggregator

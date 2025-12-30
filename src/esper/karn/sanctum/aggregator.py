@@ -1234,6 +1234,16 @@ class SanctumAggregator:
             if payload.tempo_idx is not None and 0 <= payload.tempo_idx < len(TEMPO_NAMES):
                 chosen_tempo = TEMPO_NAMES[payload.tempo_idx]
 
+            # Map alpha_target float to enum name (HALF/SEVENTY/FULL)
+            chosen_alpha_target: str | None = None
+            if payload.alpha_target is not None:
+                # Map float value to enum name
+                alpha_target_map = {0.5: "HALF", 0.7: "SEVENTY", 1.0: "FULL"}
+                chosen_alpha_target = alpha_target_map.get(payload.alpha_target)
+
+            # Extract HeadTelemetry if present
+            ht = payload.head_telemetry
+
             decision = DecisionSnapshot(
                 timestamp=now_dt,
                 slot_states=payload.slot_states or {},
@@ -1254,6 +1264,26 @@ class SanctumAggregator:
                 chosen_tempo=chosen_tempo,
                 chosen_style=payload.style,
                 chosen_curve=payload.alpha_curve,
+                chosen_alpha_target=chosen_alpha_target,
+                chosen_alpha_speed=payload.alpha_speed,
+                # Per-head confidence values (from HeadTelemetry)
+                op_confidence=ht.op_confidence if ht else 0.0,
+                slot_confidence=ht.slot_confidence if ht else 0.0,
+                blueprint_confidence=ht.blueprint_confidence if ht else 0.0,
+                style_confidence=ht.style_confidence if ht else 0.0,
+                tempo_confidence=ht.tempo_confidence if ht else 0.0,
+                alpha_target_confidence=ht.alpha_target_confidence if ht else 0.0,
+                alpha_speed_confidence=ht.alpha_speed_confidence if ht else 0.0,
+                curve_confidence=ht.curve_confidence if ht else 0.0,
+                # Per-head entropy values (from HeadTelemetry)
+                op_entropy=ht.op_entropy if ht else 0.0,
+                slot_entropy=ht.slot_entropy if ht else 0.0,
+                blueprint_entropy=ht.blueprint_entropy if ht else 0.0,
+                style_entropy=ht.style_entropy if ht else 0.0,
+                tempo_entropy=ht.tempo_entropy if ht else 0.0,
+                alpha_target_entropy=ht.alpha_target_entropy if ht else 0.0,
+                alpha_speed_entropy=ht.alpha_speed_entropy if ht else 0.0,
+                curve_entropy=ht.curve_entropy if ht else 0.0,
             )
 
             # Store as pending for TD advantage computation on next decision
