@@ -47,10 +47,15 @@ DEFAULT_MAX_SEEDS = None           # Global limit across all slots
 # Discount factor for PPO and PBRS reward shaping.
 # CRITICAL: PPO gamma MUST equal PBRS gamma for policy invariance (Ng et al., 1999).
 # If they differ, reward shaping can change the optimal policy.
-# Value 0.995 optimized for 100-epoch episodes: gamma^100 ≈ 0.61 preserves meaningful
-# credit across the full episode while providing appropriate temporal discounting.
-# For multi-generation scaffolding (germinate A → A stabilizes → germinate B),
-# Tamiyo needs to assign credit from epoch ~80 back to decisions at epoch ~5.
+#
+# Value 0.995 optimized for 150-epoch sequential scaffolding:
+# - gamma^150 ≈ 0.47 preserves ~47% credit at episode end
+# - gamma^100 ≈ 0.61 preserves ~61% credit at 2/3 point
+# - gamma^50 ≈ 0.78 preserves ~78% credit at 1/3 point
+#
+# For 3-seed sequential scaffolding, Tamiyo needs to assign credit from
+# epoch ~140 (Seed C fossilizes) back to epoch ~5 (Seed A germination decision).
+# 0.995^135 ≈ 0.51 means early decisions still receive meaningful signal.
 DEFAULT_GAMMA = 0.995
 
 # =============================================================================
@@ -61,18 +66,20 @@ DEFAULT_GAMMA = 0.995
 # This is the "rollout length" for Tamiyo - how many timesteps each env
 # contributes to one Tamiyo training batch.
 #
-# 100 epochs is the MINIMUM viable horizon for multi-generation scaffolding:
+# 150 epochs is the MINIMUM viable horizon for SEQUENTIAL 3-seed scaffolding:
 # - Germinate seed A at epoch 5
-# - A trains/stabilizes by epoch 35
-# - Germinate seed B at epoch 40 (benefiting from A's learned features)
-# - B trains/stabilizes by epoch 70
-# - Both fossilize by epoch 85-90
+# - A trains/stabilizes by epoch 40, fossilizes by epoch 50
+# - Germinate seed B at epoch 55 (benefiting from A's learned features)
+# - B trains/stabilizes by epoch 95, fossilizes by epoch 105
+# - Germinate seed C at epoch 110 (building on A+B)
+# - C trains/stabilizes by epoch 145
 #
-# With 25 epochs, Tamiyo could only learn single-seed tactics.
-# With 100 epochs, it can learn the *strategic* value of sequencing.
+# The 150-200 epoch range allows Tamiyo to learn the *strategic* value of
+# sequential planting - that germinating Seed C after Seed B stabilizes
+# produces better synergies than parallel germination.
 #
 # Used by: config.py, vectorized.py, ppo.py (chunk_length, max_steps_per_env)
-DEFAULT_EPISODE_LENGTH = 100
+DEFAULT_EPISODE_LENGTH = 150
 
 # Maximum epochs a seed can spend in a single stage for normalization purposes.
 # Derived from episode length - a seed could theoretically stay in one stage
@@ -82,8 +89,18 @@ MAX_EPOCHS_IN_STAGE = DEFAULT_EPISODE_LENGTH
 
 # LSTM hidden dimension - architecture constant for temporal memory.
 # Must match across network construction and buffer state tracking.
+#
+# 512 is required for 150-epoch sequential 3-seed scaffolding due to:
+# - "Accumulating Context": LSTM must remember Seed A's archival info while
+#   processing Seed B and C's active gradients over 100+ timesteps
+# - "PPO Horizon Cut Risk": Hidden state is the only bridge connecting
+#   step 150 to step 1 across rollout boundaries
+#
+# 256 dims risk "Catastrophic Overwrite" - Seed C's gradient flood may
+# evict earlier seeds' learned representations.
+#
 # Used by: config.py, vectorized.py, ppo.py, rollout_buffer.py, network.py
-DEFAULT_LSTM_HIDDEN_DIM = 128
+DEFAULT_LSTM_HIDDEN_DIM = 512
 
 # Number of LSTM layers in the host model.
 # Used by: Karn TUI widgets (gradient health display), telemetry dashboards.
@@ -394,8 +411,31 @@ DEFAULT_DROPOUT = 0.1
 DEFAULT_VALUE_CLIP = 10.0
 
 # Feature extraction dimension before LSTM in Tamiyo network.
-# Larger = more capacity but slower training.
-DEFAULT_FEATURE_DIM = 128
+# Matches LSTM hidden dim to prevent information bottleneck.
+# With 512 LSTM hidden, 128 feature dim would compress information
+# unnecessarily before the LSTM can process it.
+# Used by: tamiyo/policy/network.py
+DEFAULT_FEATURE_DIM = 512
+
+# =============================================================================
+# Blueprint Embedding (Obs V3 Neural Encoding)
+# =============================================================================
+
+# Number of valid blueprints (0-12 inclusive). Used for embedding table size.
+# The embedding table has NUM_BLUEPRINTS + 1 entries to accommodate the null index.
+NUM_BLUEPRINTS = 13
+
+# Index used for "no blueprint" / null embedding in BlueprintEmbedding.
+# Must be >= NUM_BLUEPRINTS to avoid collision with valid blueprint indices.
+# Used in: torch.where(blueprint_indices < 0, _null_idx, blueprint_indices)
+# Stored as register_buffer to avoid torch.tensor() allocation per forward call.
+BLUEPRINT_NULL_INDEX = 13
+
+# Embedding dimension for blueprint vectors.
+# Small (4) because blueprints are low-cardinality (13 types).
+# Larger dims would overfit; 4 is sufficient for type discrimination.
+# Total embedding params: (NUM_BLUEPRINTS + 1) * EMBED_DIM = 14 * 4 = 56
+DEFAULT_BLUEPRINT_EMBED_DIM = 4
 
 # =============================================================================
 # Blueprint Penalty System (Anti-Thrashing)
@@ -678,6 +718,11 @@ __all__ = [
     # PPO Network Architecture
     "DEFAULT_VALUE_CLIP",
     "DEFAULT_FEATURE_DIM",
+
+    # Blueprint Embedding (Obs V3)
+    "NUM_BLUEPRINTS",
+    "BLUEPRINT_NULL_INDEX",
+    "DEFAULT_BLUEPRINT_EMBED_DIM",
 
     # Blueprint Penalty System
     "DEFAULT_BLUEPRINT_PENALTY_ON_PRUNE",

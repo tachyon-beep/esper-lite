@@ -35,11 +35,23 @@ YOU MUST READ BOTH THIS DOCUMENT AND THE RELEVANT PRERESQUISITE DESIGNS IN FULL 
 | Aspect | Before | After |
 |--------|--------|-------|
 | Observation dims | 218 | 133 |
-| Model params | ~227K | ~930K |
-| LSTM hidden | 128 | 256 |
-| Feature dim | 128 | 256 |
-| Decision horizon | ~25 epochs | 50+ epochs |
+| Model params | ~227K | ~2.1M |
+| LSTM hidden | 128 | 512 |
+| Feature dim | 128 | 512 |
+| Episode length | 25 epochs | 150 epochs |
+| Decision horizon | ~25 epochs | 150+ epochs (3-seed sequential) |
 | Value aliasing | Present | Solved |
+
+**Why 512 hidden dim (not 256):**
+
+With 150-epoch sequential scaffolding, the LSTM must maintain "archival memories" of earlier seeds while processing current ones. At epoch 140:
+- Seed A: "I planted a CONV_HEAVY at epoch 5. It's fossilized and providing base structure."
+- Seed B: "I planted ATTENTION at epoch 55. It fossilized at epoch 105, interacting with Seed A."
+- Seed C: "I'm currently tuning DEPTHWISE to synergize with A+B."
+
+**256 risks "Catastrophic Overwrite"** — as the LSTM processes Seed C's noisy gradients, it might evict the memory of what Seed A actually is. 512 provides the scratchpad space to keep archival memories safe.
+
+**PPO "Horizon Cut" Bridge:** The LSTM hidden state is the only thing connecting step 150 to step 1 across rollout boundaries. Larger hidden state = more robust long-term state representation for the value function.
 
 ## Before You Start
 
@@ -48,7 +60,7 @@ YOU MUST READ BOTH THIS DOCUMENT AND THE RELEVANT PRERESQUISITE DESIGNS IN FULL 
 **Checkpoint Incompatibility:** V1 checkpoints will NOT load into V2 networks due to:
 
 - Different observation dimensions (218 → 124)
-- Different LSTM hidden size (128 → 256)
+- Different LSTM hidden size (128 → 512)
 - Different head input dimensions
 - New value head architecture (op-conditioned)
 
@@ -115,19 +127,30 @@ Per `CLAUDE.md` no-legacy policy, we do **clean replacement**, NOT dual-path ver
 # ALL V1 checkpoints (LSTM_HIDDEN=128) will fail to load. Train from scratch.
 
 # Update existing dimension constants (clean replacement)
-DEFAULT_LSTM_HIDDEN_DIM = 256  # Was 128 - supports 50+ epoch decision horizon
-DEFAULT_FEATURE_DIM = 256      # Was 128 - matches LSTM dim, prevents bottleneck
+DEFAULT_LSTM_HIDDEN_DIM = 512  # Was 128 - supports 150-epoch 3-seed sequential scaffolding
+DEFAULT_FEATURE_DIM = 512      # Was 128 - matches LSTM dim, prevents bottleneck
 
 # New constants for blueprint embedding
 BLUEPRINT_NULL_INDEX: int = 13  # Index for inactive slot embedding (== NUM_BLUEPRINTS)
 DEFAULT_BLUEPRINT_EMBED_DIM: int = 4  # Learned blueprint representation dimension
 ```
 
-**Rationale (from specialist reviews):**
-- **256 hidden dim:** For LSTM credit assignment, hidden dim scales with `O(horizon × info_per_step)`. With 3 slots needing ~10-20 bits each, 256 provides ~85 dims/slot.
-- **256 is power-of-2:** Optimal for GPU tensor cores (divisible by 8 for AMP).
-- **Feature dim = LSTM dim:** Prevents information bottleneck before LSTM.
-- **BLUEPRINT_NULL_INDEX:** Prevents magic number 13 scattered across features.py and factored_lstm.py.
+**Rationale (512 hidden dim):**
+
+1. **Accumulating Context Problem:** At epoch 140 with 3 sequential seeds, the LSTM must hold:
+   - Archival: Seed A's blueprint, fossilization epoch, contribution to host
+   - Archival: Seed B's blueprint, how it interacted with A
+   - Active: Seed C's current gradients, alpha, stage
+
+2. **Catastrophic Overwrite Risk:** With 256 dims processing noisy Seed C gradients, the LSTM might "evict" Seed A's characteristics. 512 provides dedicated "archival slots."
+
+3. **PPO Horizon Cut Bridge:** Rollout boundaries cut gradient flow. The hidden state is the ONLY bridge connecting step 150 to step 1. Larger = more robust value function.
+
+4. **512 is power-of-2:** Optimal for GPU tensor cores (divisible by 8 for AMP).
+
+5. **Feature dim = LSTM dim:** Prevents information bottleneck before LSTM.
+
+6. **BLUEPRINT_NULL_INDEX:** Prevents magic number 13 scattered across features.py and factored_lstm.py.
 
 **Validation:**
 
@@ -135,13 +158,15 @@ DEFAULT_BLUEPRINT_EMBED_DIM: int = 4  # Learned blueprint representation dimensi
 PYTHONPATH=src python -c "
 from esper.leyline import (
     DEFAULT_LSTM_HIDDEN_DIM, DEFAULT_FEATURE_DIM,
-    NUM_OPS, NUM_STAGES, NUM_BLUEPRINTS
+    DEFAULT_EPISODE_LENGTH, NUM_OPS, NUM_STAGES, NUM_BLUEPRINTS
 )
 print(f'LSTM={DEFAULT_LSTM_HIDDEN_DIM}, FEATURE={DEFAULT_FEATURE_DIM}')
+print(f'EPISODE_LENGTH={DEFAULT_EPISODE_LENGTH}')
 print(f'OPS={NUM_OPS}, STAGES={NUM_STAGES}, BLUEPRINTS={NUM_BLUEPRINTS}')
 "
 # Should print:
-# LSTM=256, FEATURE=256
+# LSTM=512, FEATURE=512
+# EPISODE_LENGTH=150
 # OPS=6, STAGES=10, BLUEPRINTS=13
 ```
 
@@ -244,14 +269,35 @@ _STAGE_ONE_HOT_TABLE = torch.eye(NUM_STAGES, dtype=torch.float32)
 # Device-keyed cache to avoid per-step .to(device) allocations
 _DEVICE_CACHE: dict[torch.device, torch.Tensor] = {}
 
+def _normalize_device(device: torch.device) -> torch.device:
+    """Normalize device to canonical form (cuda -> cuda:0).
+
+    This prevents duplicate cache entries for the same physical device.
+    torch.device("cuda") != torch.device("cuda:0") but they're the same GPU.
+    """
+    if device.type == "cuda" and device.index is None:
+        return torch.device("cuda", torch.cuda.current_device())
+    return device
+
 def _get_cached_table(device: torch.device) -> torch.Tensor:
     """Get stage one-hot table for device, caching to avoid repeated transfers."""
+    device = _normalize_device(device)
     if device not in _DEVICE_CACHE:
         _DEVICE_CACHE[device] = _STAGE_ONE_HOT_TABLE.to(device)
     return _DEVICE_CACHE[device]
 
 def _vectorized_one_hot(indices: torch.Tensor, device: torch.device) -> torch.Tensor:
-    """Vectorized one-hot encoding with device-cached lookup table."""
+    """Vectorized one-hot encoding with device-cached lookup table.
+
+    Args:
+        indices: Stage indices of shape [..., num_slots] where -1 marks inactive.
+                 Supports arbitrary leading batch dimensions.
+        device: Target device for output tensor.
+
+    Returns:
+        One-hot encoded tensor of shape [..., num_slots, NUM_STAGES].
+        Inactive slots (index -1) are all zeros.
+    """
     table = _get_cached_table(device)
     valid_mask = indices >= 0  # -1 marks inactive slots
     safe_indices = indices.clamp(min=0)
@@ -260,6 +306,8 @@ def _vectorized_one_hot(indices: torch.Tensor, device: torch.device) -> torch.Te
 ```
 
 **Why device-keyed cache (from PyTorch review):** The naive `.to(indices.device)` allocates a new tensor every step. With ~500 steps/episode across 4 environments, that's 2000 allocations/episode. The cache ensures one-time transfer per device.
+
+**Why device normalization:** `torch.device("cuda")` and `torch.device("cuda:0")` hash differently but represent the same GPU on single-GPU systems. Without normalization, the cache could create duplicate tensors for the same physical device, wasting VRAM.
 
 #### 2e. Implement batch_obs_to_features_v3()
 
@@ -411,8 +459,8 @@ print(f'Output shape: {out.shape}')  # Should be [2, 3, 4]
 
 New class (don't modify V1 yet) with:
 
-- `feature_dim = 256`
-- `lstm_hidden_dim = 256`
+- `feature_dim = 512`
+- `lstm_hidden_dim = 512`
 - `BlueprintEmbedding` module
 - 3-layer blueprint head
 - Op-conditioned value head
@@ -421,9 +469,9 @@ New class (don't modify V1 yet) with:
 
 ```python
 self.blueprint_head = nn.Sequential(
-    nn.Linear(lstm_hidden_dim, lstm_hidden_dim),  # 256 → 256
+    nn.Linear(lstm_hidden_dim, lstm_hidden_dim),  # 512 → 512
     nn.ReLU(),
-    nn.Linear(lstm_hidden_dim, head_hidden),      # 256 → 128
+    nn.Linear(lstm_hidden_dim, head_hidden),      # 512 → 128
     nn.ReLU(),
     nn.Linear(head_hidden, num_blueprints),       # 128 → 13
 )
@@ -435,7 +483,7 @@ self.blueprint_head = nn.Sequential(
 
 ```python
 self.value_head = nn.Sequential(
-    nn.Linear(lstm_hidden_dim + NUM_OPS, head_hidden),  # 256+6 → 128
+    nn.Linear(lstm_hidden_dim + NUM_OPS, head_hidden),  # 512+6 → 128
     nn.ReLU(),
     nn.Linear(head_hidden, 1),
 )
@@ -487,7 +535,7 @@ bp_idx = torch.randint(0, 13, (2, 5, 3))
 out = net(state, bp_idx)
 print(f'Op logits: {out[\"op_logits\"].shape}')  # [2, 5, 6]
 print(f'Value: {out[\"value\"].shape}')  # [2, 5]
-print(f'Params: {sum(p.numel() for p in net.parameters())}')  # ~930K
+print(f'Params: {sum(p.numel() for p in net.parameters())}')  # ~2.1M (512 hidden)
 "
 ```
 
@@ -843,7 +891,7 @@ git grep "TODO(policy-v2)"
 
 | File | Phase | Key Changes |
 |------|-------|-------------|
-| `leyline/__init__.py` | 1 | Dimension constants (256), BLUEPRINT_NULL_INDEX, DEFAULT_BLUEPRINT_EMBED_DIM |
+| `leyline/__init__.py` | 1 | Dimension constants (512), BLUEPRINT_NULL_INDEX, DEFAULT_BLUEPRINT_EMBED_DIM, NUM_BLUEPRINTS |
 | `tamiyo/policy/features.py` | 2 | Clean replacement, raw history (10 dims), gradient_health_prev, device-keyed cache, gamma-matched counterfactual, returns `(obs[121], bp_idx)` |
 | `tamiyo/networks/factored_lstm.py` | 3, 4 | BlueprintEmbedding (torch.where), V2 network, op-conditioned Q(s,op) critic |
 | `simic/agent/ppo.py` | 5, 6f | Differential entropy, evaluate_actions with blueprint_indices |
@@ -908,18 +956,28 @@ value = value_head(cat(lstm_out, op_one_hot))
 
 This treats the critic as `Q(s, op)` rather than `V(s)`. The value stored during rollout matches exactly what's trained during update — no advantage estimation mismatch.
 
-### 8. Enum Normalization Robustness
+### 8. Enum Normalization Strategy
 
-Use explicit index mappings for enum features, not `.value / max_value`:
+**Decision:** Keep `.value / max_value` pattern for enum normalization (simpler, auto-adapts to new enum values).
 
 ```python
-# FRAGILE - breaks if enum values change
-alpha_mode_norm = mode.value / max_mode
+# Current approach (keeping this)
+alpha_mode_norm = mode.value / (len(AlphaMode) - 1)
+alpha_algorithm_norm = algo.value / (len(AlphaAlgorithm) - 1)
+```
 
-# ROBUST - explicit mapping
+**⚠️ ASSUMPTION:** This requires enum values to be sequential starting from 0:
+- `AlphaMode.HOLD = 0, RAMP = 1, STEP = 2` ✓
+- `AlphaAlgorithm.ADD = 0, MULTIPLY = 1, GATE = 2` ✓
+- `SeedStage.DORMANT = 0, ... , FOSSILIZED = 9` ✓
+
+**If this assumption breaks** (non-sequential values, gaps, or values > len-1), switch to explicit mapping:
+```python
 _MODE_INDEX = {AlphaMode.HOLD: 0, AlphaMode.RAMP: 1, AlphaMode.STEP: 2}
 alpha_mode_norm = _MODE_INDEX[mode] / (len(_MODE_INDEX) - 1)
 ```
+
+**Maintenance note:** When adding new enum values, ensure they follow the sequential pattern OR update all normalization code.
 
 ### 9. Inactive Slot Stage Encoding
 

@@ -82,11 +82,12 @@ Redesign Tamiyo's observation space to eliminate duplication, normalize all feat
 
 **⚠️ Implementation Notes:**
 
-1. **Enum normalization robustness (alpha_mode_norm, alpha_algorithm_norm):** Use explicit index mappings rather than `.value / max_value`. This prevents silent bugs if enum values change or are reordered:
+1. **Enum normalization (alpha_mode_norm, alpha_algorithm_norm):** Use `.value / (len(Enum) - 1)` for simplicity, but this REQUIRES enum values to be sequential starting from 0:
    ```python
-   _MODE_INDEX = {AlphaMode.HOLD: 0, AlphaMode.RAMP: 1, AlphaMode.STEP: 2}
-   alpha_mode_norm = _MODE_INDEX[mode] / (len(_MODE_INDEX) - 1)
+   # Works because AlphaMode.HOLD=0, RAMP=1, STEP=2 (sequential)
+   alpha_mode_norm = mode.value / (len(AlphaMode) - 1)
    ```
+   If enum values become non-sequential, switch to explicit `_MODE_INDEX` mapping.
 
 2. **Inactive slot stage encoding:** Inactive slots (`is_active=0`) must have **all-zeros** for stage one-hot, distinct from any valid stage. The vectorized one-hot helper must respect this:
    ```python
@@ -199,8 +200,19 @@ _STAGE_ONE_HOT_TABLE = torch.eye(10, dtype=torch.float32)
 # Device-keyed cache to avoid per-step .to(device) allocations
 _DEVICE_CACHE: dict[torch.device, torch.Tensor] = {}
 
+def _normalize_device(device: torch.device) -> torch.device:
+    """Normalize device to canonical form (cuda -> cuda:0).
+
+    Prevents duplicate cache entries: torch.device('cuda') and
+    torch.device('cuda:0') hash differently but refer to the same GPU.
+    """
+    if device.type == "cuda" and device.index is None:
+        return torch.device("cuda", torch.cuda.current_device())
+    return device
+
 def _get_cached_table(device: torch.device) -> torch.Tensor:
     """Get stage one-hot table for device, caching to avoid repeated transfers."""
+    device = _normalize_device(device)  # Prevent cuda vs cuda:0 duplication
     if device not in _DEVICE_CACHE:
         _DEVICE_CACHE[device] = _STAGE_ONE_HOT_TABLE.to(device)
     return _DEVICE_CACHE[device]
