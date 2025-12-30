@@ -12,5 +12,6 @@ Usage:
 """
 
 from .widget import TamiyoBrainV2
+from .ppo_losses_panel import PPOLossesPanel
 
-__all__ = ["TamiyoBrainV2"]
+__all__ = ["TamiyoBrainV2", "PPOLossesPanel"]
