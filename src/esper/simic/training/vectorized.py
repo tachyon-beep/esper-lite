@@ -104,7 +104,9 @@ from esper.simic.telemetry import (
     check_numerical_stability,
     collect_host_gradients_async,
     collect_seed_gradients_only_async,
+    collect_seed_gradients_async,
     materialize_dual_grad_stats,
+    materialize_grad_stats,
     TelemetryConfig,
     GradientEMATracker,  # P4-9
 )
@@ -1257,13 +1259,20 @@ def train_ppo_vectorized(
 
         grad_stats_by_slot = {}
         for slot_id in slots_needing_grad_telemetry:
+            # Dual stats for G2 gate (host/seed ratio)
             seed_stats = collect_seed_gradients_only_async(
                 model.get_seed_parameters(slot_id),
                 device=env_dev,
             )
+            # Health stats for gradient telemetry (vanishing/exploding detection)
+            # Note: get_seed_parameters returns a generator, call it again
+            health_stats = collect_seed_gradients_async(
+                model.get_seed_parameters(slot_id),
+            )
             grad_stats_by_slot[slot_id] = {
                 **host_stats,
                 **seed_stats,
+                '_health_stats': health_stats,  # Nested to avoid key conflicts
             }
 
         return grad_stats_by_slot
@@ -2375,15 +2384,18 @@ def train_ppo_vectorized(
                         # Sync ratio to SeedMetrics for G2 gate evaluation
                         seed_state.metrics.seed_gradient_norm_ratio = ema
 
-                        # Sync telemetry using seed gradient stats from dual collection
+                        # Materialize health stats for gradient health telemetry
+                        health_stats = materialize_grad_stats(async_stats['_health_stats'])
+
+                        # Sync telemetry using real gradient health from collect_seed_gradients_async
                         # Access concrete SeedState for sync_telemetry with args
                         from esper.kasmina.slot import SeedState
                         if isinstance(seed_state, SeedState):
                             seed_state.sync_telemetry(
-                                gradient_norm=dual_stats.seed_grad_norm,
-                                gradient_health=1.0,  # Simplified: dual stats don't compute health
-                                has_vanishing=dual_stats.seed_grad_norm < 1e-7,
-                                has_exploding=dual_stats.seed_grad_norm > 100.0,
+                                gradient_norm=health_stats['gradient_norm'],
+                                gradient_health=health_stats['gradient_health'],
+                                has_vanishing=health_stats['has_vanishing'],
+                                has_exploding=health_stats['has_exploding'],
                                 epoch=epoch,
                                 max_epochs=max_epochs,
                             )
