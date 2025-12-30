@@ -113,7 +113,7 @@ Blueprint indices are passed to an `nn.Embedding(14, 4)` layer inside the policy
 
 ```
 Base:              24  (was 18; +6 for raw history instead of compressed)
-Action feedback:    7  (last_action_success + op one-hot)
+Action feedback:    7  (last_action_success + op one-hot) — see note below
 Slot 0:            30  (was 29; +1 for gradient_health_prev)
 Slot 1:            30
 Slot 2:            30
@@ -123,6 +123,12 @@ Blueprint embed:    12  (4 × 3 slots, added inside network)
 ─────────────────────
 Total network:    133
 ```
+
+**Note on Action Feedback:** The 7-dim action feedback (indices 24-30) is defined in `policy-v2-design.md`, not this document. It consists of:
+- `last_action_success` (1 dim): Whether the previous action executed successfully
+- `last_action_op` (6 dims): One-hot encoding of the previous operation
+
+See `policy-v2-design.md` "Action Feedback Features" section for full specification.
 
 ## Architecture Changes
 
@@ -188,8 +194,8 @@ class FactoredRecurrentActorCriticV2(nn.Module):
 obs = batch_obs_to_features(signals, reports, use_telemetry=True, ...)
 # Returns: [batch, 218]
 
-# V3 (new, with Policy V2 action feedback)
-obs, blueprint_idx = batch_obs_to_features_v3(signals, reports, ...)
+# V3 (new, clean replacement - no _v3 suffix)
+obs, blueprint_idx = batch_obs_to_features(signals, reports, slot_config, device)
 # Returns: ([batch, 121], [batch, num_slots])
 # Note: 121 = 31 base (24 + 7 action feedback) + 30*3 slots (excludes blueprint)
 ```
@@ -205,12 +211,19 @@ _STAGE_ONE_HOT_TABLE = torch.eye(10, dtype=torch.float32)
 # Device-keyed cache to avoid per-step .to(device) allocations
 _DEVICE_CACHE: dict[torch.device, torch.Tensor] = {}
 
-def _normalize_device(device: torch.device) -> torch.device:
-    """Normalize device to canonical form (cuda -> cuda:0).
+def _normalize_device(device: torch.device | str) -> torch.device:
+    """Normalize device to canonical form.
+
+    Handles:
+    - "cuda" or torch.device("cuda") → torch.device("cuda", current_device)
+    - "cpu" or torch.device("cpu") → torch.device("cpu")
+    - "cuda:0" → torch.device("cuda", 0)
 
     Prevents duplicate cache entries: torch.device('cuda') and
     torch.device('cuda:0') hash differently but refer to the same GPU.
     """
+    if isinstance(device, str):
+        device = torch.device(device)
     if device.type == "cuda" and device.index is None:
         return torch.device("cuda", torch.cuda.current_device())
     return device
@@ -251,7 +264,7 @@ def _extract_slot_arrays(batch_reports, slot_config) -> dict[str, np.ndarray]:
 - Add `_extract_base_features_v3()`
 - Add `_extract_slot_arrays()` with scalar packing
 - Add `_vectorized_one_hot()` with cached tables
-- Add `batch_obs_to_features_v3()` returning `(obs, blueprint_idx)`
+- Replace `batch_obs_to_features()` to return `(obs, blueprint_idx)` tuple
 - Unit tests for dimensions and value ranges
 
 ### Phase 2: Network Architecture
