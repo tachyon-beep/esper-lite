@@ -75,6 +75,7 @@ from esper.leyline import (
     DEFAULT_N_ENVS,
     EpisodeOutcomePayload,
     HEAD_NAMES,
+    HeadTelemetry,
     LifecycleOp,
     OP_ADVANCE,
     OP_FOSSILIZE,
@@ -2547,6 +2548,31 @@ def train_ppo_vectorized(
                 op_probs_all = torch.softmax(action_result.op_logits, dim=-1)
                 op_probs_cpu = op_probs_all.cpu().numpy()
 
+            # PERF: Pre-compute per-head confidences AND entropy for telemetry.
+            # Uses batched GPU->CPU transfer: stack all heads, single transfer.
+            #
+            # Confidence = exp(log_prob) = P(chosen_action | valid_mask)
+            # This properly handles masking via MaskedCategorical.
+            #
+            # Entropy measures distribution spread (higher = more uncertain).
+            # Already computed by policy network.
+            #
+            # Head ordering matches HeadTelemetry field order for direct indexing.
+            _HEAD_NAMES_FOR_TELEM = ("op", "slot", "blueprint", "style", "tempo", "alpha_target", "alpha_speed", "alpha_curve")
+            head_confidences_cpu: np.ndarray | None = None  # [8, num_envs]
+            head_entropies_cpu: np.ndarray | None = None    # [8, num_envs]
+
+            if ops_telemetry_enabled and head_log_probs:
+                # Stack all head log probs: [8, num_envs]
+                stacked_log_probs = torch.stack([head_log_probs[h] for h in _HEAD_NAMES_FOR_TELEM])
+                # Single exp + detach + transfer
+                head_confidences_cpu = torch.exp(stacked_log_probs).detach().cpu().numpy()
+
+                # Get entropy if available from action_result
+                if hasattr(action_result, 'entropy') and action_result.entropy:
+                    stacked_entropy = torch.stack([action_result.entropy[h] for h in _HEAD_NAMES_FOR_TELEM])
+                    head_entropies_cpu = stacked_entropy.detach().cpu().numpy()
+
             # PHASE 1: Execute actions and collect data for bootstrap computation
             transitions_data = []  # Store transition data for buffer storage
 
@@ -2934,6 +2960,30 @@ def train_ppo_vectorized(
                             if p > 1e-8:  # Avoid log(0)
                                 entropy_sum -= p * math.log(p)
                         decision_entropy = entropy_sum
+
+                    # Build HeadTelemetry for this env (typed dataclass, not raw dict)
+                    head_telem: HeadTelemetry | None = None
+                    if head_confidences_cpu is not None:
+                        head_telem = HeadTelemetry(
+                            op_confidence=float(head_confidences_cpu[0, env_idx]),
+                            slot_confidence=float(head_confidences_cpu[1, env_idx]),
+                            blueprint_confidence=float(head_confidences_cpu[2, env_idx]),
+                            style_confidence=float(head_confidences_cpu[3, env_idx]),
+                            tempo_confidence=float(head_confidences_cpu[4, env_idx]),
+                            alpha_target_confidence=float(head_confidences_cpu[5, env_idx]),
+                            alpha_speed_confidence=float(head_confidences_cpu[6, env_idx]),
+                            curve_confidence=float(head_confidences_cpu[7, env_idx]),
+                            # Entropy (0.0 if not available)
+                            op_entropy=float(head_entropies_cpu[0, env_idx]) if head_entropies_cpu is not None else 0.0,
+                            slot_entropy=float(head_entropies_cpu[1, env_idx]) if head_entropies_cpu is not None else 0.0,
+                            blueprint_entropy=float(head_entropies_cpu[2, env_idx]) if head_entropies_cpu is not None else 0.0,
+                            style_entropy=float(head_entropies_cpu[3, env_idx]) if head_entropies_cpu is not None else 0.0,
+                            tempo_entropy=float(head_entropies_cpu[4, env_idx]) if head_entropies_cpu is not None else 0.0,
+                            alpha_target_entropy=float(head_entropies_cpu[5, env_idx]) if head_entropies_cpu is not None else 0.0,
+                            alpha_speed_entropy=float(head_entropies_cpu[6, env_idx]) if head_entropies_cpu is not None else 0.0,
+                            curve_entropy=float(head_entropies_cpu[7, env_idx]) if head_entropies_cpu is not None else 0.0,
+                        )
+
                     emitters[env_idx].on_last_action(
                         epoch,
                         action_dict,
@@ -2949,6 +2999,7 @@ def train_ppo_vectorized(
                         alternatives=alternatives,
                         decision_entropy=decision_entropy,
                         reward_components=reward_components,  # Pass directly (may be None for LOSS family)
+                        head_telemetry=head_telem,
                     )
 
                 # Store transition
