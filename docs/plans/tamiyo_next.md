@@ -104,25 +104,45 @@ Per `CLAUDE.md` no-legacy policy, we do **clean replacement**, NOT dual-path ver
 
 **What already exists (don't re-add):**
 
-- `NUM_OPS = 6` ✓ (in `leyline/factored_actions.py`, re-exported from `__init__.py`)
-- `NUM_BLUEPRINTS`, `NUM_STYLES`, `NUM_TEMPO`, etc. ✓
+- `NUM_OPS = 6` ✓ (in `leyline/factored_actions.py`, re-exported)
+- `NUM_STAGES = 10` ✓ (in `leyline/stage_schema.py`, re-exported)
+- `NUM_BLUEPRINTS = 13`, `NUM_STYLES`, `NUM_TEMPO`, etc. ✓
 
 **Changes:**
 
 ```python
-# Update dimension constants (clean replacement, no conditionals)
-DEFAULT_LSTM_HIDDEN_DIM = 256  # Was 128
-DEFAULT_FEATURE_DIM = 256      # Was 128 (add if missing)
+# ⚠️ WARNING: Changing dimension constants IMMEDIATELY breaks checkpoint compatibility.
+# ALL V1 checkpoints (LSTM_HIDDEN=128) will fail to load. Train from scratch.
 
-# Add stage count for vectorized one-hot (if not present)
-NUM_STAGES = 10  # len(SeedStage)
+# Update existing dimension constants (clean replacement)
+DEFAULT_LSTM_HIDDEN_DIM = 256  # Was 128 - supports 50+ epoch decision horizon
+DEFAULT_FEATURE_DIM = 256      # Was 128 - matches LSTM dim, prevents bottleneck
+
+# New constants for blueprint embedding
+BLUEPRINT_NULL_INDEX: int = 13  # Index for inactive slot embedding (== NUM_BLUEPRINTS)
+DEFAULT_BLUEPRINT_EMBED_DIM: int = 4  # Learned blueprint representation dimension
 ```
+
+**Rationale (from specialist reviews):**
+- **256 hidden dim:** For LSTM credit assignment, hidden dim scales with `O(horizon × info_per_step)`. With 3 slots needing ~10-20 bits each, 256 provides ~85 dims/slot.
+- **256 is power-of-2:** Optimal for GPU tensor cores (divisible by 8 for AMP).
+- **Feature dim = LSTM dim:** Prevents information bottleneck before LSTM.
+- **BLUEPRINT_NULL_INDEX:** Prevents magic number 13 scattered across features.py and factored_lstm.py.
 
 **Validation:**
 
 ```bash
-PYTHONPATH=src python -c "from esper.leyline import DEFAULT_LSTM_HIDDEN_DIM, NUM_OPS; print(f'LSTM={DEFAULT_LSTM_HIDDEN_DIM}, OPS={NUM_OPS}')"
-# Should print: LSTM=256, OPS=6
+PYTHONPATH=src python -c "
+from esper.leyline import (
+    DEFAULT_LSTM_HIDDEN_DIM, DEFAULT_FEATURE_DIM,
+    NUM_OPS, NUM_STAGES, NUM_BLUEPRINTS
+)
+print(f'LSTM={DEFAULT_LSTM_HIDDEN_DIM}, FEATURE={DEFAULT_FEATURE_DIM}')
+print(f'OPS={NUM_OPS}, STAGES={NUM_STAGES}, BLUEPRINTS={NUM_BLUEPRINTS}')
+"
+# Should print:
+# LSTM=256, FEATURE=256
+# OPS=6, STAGES=10, BLUEPRINTS=13
 ```
 
 ---
@@ -252,14 +272,24 @@ print(f'With embeddings: {get_feature_size(config) + 4 * config.num_slots}')  # 
 **Implementation:**
 
 ```python
+from esper.leyline import (
+    NUM_BLUEPRINTS,
+    BLUEPRINT_NULL_INDEX,
+    DEFAULT_BLUEPRINT_EMBED_DIM,
+)
+
 class BlueprintEmbedding(nn.Module):
     """Learned blueprint embeddings for Obs V3."""
 
-    def __init__(self, num_blueprints: int = 13, embed_dim: int = 4):
+    def __init__(
+        self,
+        num_blueprints: int = NUM_BLUEPRINTS,
+        embed_dim: int = DEFAULT_BLUEPRINT_EMBED_DIM,
+    ):
         super().__init__()
-        # Index 13 = null embedding for inactive slots
+        # Index 13 = null embedding for inactive slots (from leyline)
         self.embedding = nn.Embedding(num_blueprints + 1, embed_dim)
-        self.null_idx = num_blueprints
+        self.null_idx = BLUEPRINT_NULL_INDEX
 
         # Small initialization per DRL expert recommendation
         nn.init.normal_(self.embedding.weight, std=0.02)
@@ -669,9 +699,19 @@ git grep "TODO(policy-v2)"
 
 Must be `torch.int64` for `nn.Embedding`. NumPy extraction should use `np.int64`.
 
-### 2. Op-Conditioning During Bootstrap
+### 2. Op-Conditioning During Bootstrap (P1 from DRL Review)
 
-At episode end, use sampled op from final step for value bootstrap, NOT expected value.
+The **same sampled_op** must be used for ALL three value computations:
+1. Value stored during rollout collection
+2. Value computed during PPO update (for GAE)
+3. Value bootstrap at episode truncation
+
+```python
+# At truncation, compute bootstrap value with SAME conditioning as rollout
+bootstrap_value = value_head(cat(lstm_out, F.one_hot(final_sampled_op, NUM_OPS).float()))
+```
+
+**If any path uses different conditioning (e.g., expected value E[Q(s,op)]), advantage estimates will be biased.**
 
 ### 3. Blueprint Head Initialization
 
@@ -733,6 +773,18 @@ def _vectorized_one_hot(indices, table):
     one_hot = table[safe_indices]
     return one_hot * valid_mask.unsqueeze(-1).float()  # Zeros out inactive
 ```
+
+### 10. Bootstrap Blueprint Indices (P1 from DRL Review)
+
+At episode truncation, the bootstrap value computation needs **both** the final observation AND the final blueprint_indices. Ensure the rollout buffer stores blueprint_indices for the final observation:
+
+```python
+# In truncation handling (vectorized.py)
+final_obs, final_blueprint_indices = batch_obs_to_features(final_signals, final_reports, ...)
+bootstrap_value = policy.get_value(final_obs, final_blueprint_indices, hidden, final_sampled_op)
+```
+
+If blueprint_indices are missing at truncation, the bootstrap value will be computed incorrectly.
 
 ---
 
