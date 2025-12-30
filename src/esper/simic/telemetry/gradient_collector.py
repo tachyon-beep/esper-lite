@@ -8,7 +8,7 @@ during comparison and training loops.
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
-from typing import Iterator
+from typing import Iterator, TypedDict
 
 import torch
 import torch.nn as nn
@@ -27,6 +27,15 @@ from esper.leyline import DEFAULT_MAX_GRAD_NORM
 # - True explosions (100x+) indicate numerical instability
 DEFAULT_VANISHING_THRESHOLD = 1e-7  # Very small but non-zero
 DEFAULT_EXPLODING_THRESHOLD = 10.0 * DEFAULT_MAX_GRAD_NORM  # = 5.0 with default clip
+
+
+class GradientHealthStats(TypedDict):
+    """Materialized gradient health statistics for telemetry sync."""
+
+    gradient_norm: float
+    gradient_health: float
+    has_vanishing: bool
+    has_exploding: bool
 
 
 @dataclass(slots=True)
@@ -107,7 +116,7 @@ class SeedGradientCollector:
         self.vanishing_threshold = vanishing_threshold
         self.exploding_threshold = exploding_threshold
 
-    def collect(self, parameters: Iterator[nn.Parameter]) -> dict[str, float | bool]:
+    def collect(self, parameters: Iterator[nn.Parameter]) -> GradientHealthStats:
         """Collect gradient statistics from parameters (sync version).
 
         Call this after loss.backward() to gather gradient stats.
@@ -118,7 +127,7 @@ class SeedGradientCollector:
             parameters: Iterator of parameters (e.g., model.parameters())
 
         Returns:
-            Dict with keys: gradient_norm, gradient_health, has_vanishing, has_exploding
+            GradientHealthStats with gradient_norm, gradient_health, has_vanishing, has_exploding
         """
         async_stats = self.collect_async(parameters)
         return materialize_grad_stats(async_stats)
@@ -174,7 +183,7 @@ class SeedGradientCollector:
         }
 
 
-def materialize_grad_stats(async_stats: dict[str, bool | int | float | torch.Tensor]) -> dict[str, float | bool]:
+def materialize_grad_stats(async_stats: dict[str, bool | int | float | torch.Tensor]) -> GradientHealthStats:
     """Convert async gradient stats tensors to Python values.
 
     Call this AFTER stream.synchronize() to safely extract .item() values.
@@ -183,7 +192,7 @@ def materialize_grad_stats(async_stats: dict[str, bool | int | float | torch.Ten
         async_stats: Dict from collect_async() with tensor values
 
     Returns:
-        Dict with Python float/bool values ready for telemetry
+        GradientHealthStats with Python float/bool values ready for telemetry
     """
     if async_stats.get('_empty', False):
         # Already materialized (empty case returns Python values directly)
@@ -582,7 +591,8 @@ __all__ = [
     # H14: PPO-tuned threshold constants
     "DEFAULT_VANISHING_THRESHOLD",
     "DEFAULT_EXPLODING_THRESHOLD",
-    # Classes and functions
+    # Classes, TypedDicts, and functions
+    "GradientHealthStats",
     "GradientHealthMetrics",
     "SeedGradientCollector",
     "materialize_grad_stats",

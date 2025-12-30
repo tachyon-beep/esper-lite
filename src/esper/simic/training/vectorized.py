@@ -2388,23 +2388,19 @@ def train_ppo_vectorized(
                         health_stats = materialize_grad_stats(async_stats['_health_stats'])
 
                         # Sync telemetry using real gradient health from collect_seed_gradients_async
-                        # Access concrete SeedState for sync_telemetry with args
-                        from esper.kasmina.slot import SeedState
-                        if isinstance(seed_state, SeedState):
-                            seed_state.sync_telemetry(
-                                gradient_norm=health_stats['gradient_norm'],
-                                gradient_health=health_stats['gradient_health'],
-                                has_vanishing=health_stats['has_vanishing'],
-                                has_exploding=health_stats['has_exploding'],
-                                epoch=epoch,
-                                max_epochs=max_epochs,
-                            )
-                            synced_slot_ids.add(slot_id)
+                        seed_state.sync_telemetry(
+                            gradient_norm=health_stats['gradient_norm'],
+                            gradient_health=health_stats['gradient_health'],
+                            has_vanishing=health_stats['has_vanishing'],
+                            has_exploding=health_stats['has_exploding'],
+                            epoch=epoch,
+                            max_epochs=max_epochs,
+                        )
+                        synced_slot_ids.add(slot_id)
 
                 # Fallback: sync telemetry for active seeds that didn't get gradient stats
                 # This ensures accuracy_delta is always populated from metrics.improvement_since_stage_start
                 # Gradient parameters are omitted - sync_telemetry leaves gradient fields at defaults
-                from esper.kasmina.slot import SeedState as ConcreteSeedState
                 for slot_id in slots:
                     if slot_id in synced_slot_ids:
                         continue
@@ -2414,9 +2410,8 @@ def train_ppo_vectorized(
                     seed_state_fallback = slot_obj_fallback.state
                     if seed_state_fallback is None:
                         continue
-                    if isinstance(seed_state_fallback, ConcreteSeedState):
-                        # Only sync accuracy/stage telemetry - no gradient data available
-                        seed_state_fallback.sync_telemetry(epoch=epoch, max_epochs=max_epochs)
+                    # Only sync accuracy/stage telemetry - no gradient data available
+                    seed_state_fallback.sync_telemetry(epoch=epoch, max_epochs=max_epochs)
 
                 slot_reports = model.get_slot_reports()
 
