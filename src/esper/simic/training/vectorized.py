@@ -2554,24 +2554,20 @@ def train_ppo_vectorized(
             # Confidence = exp(log_prob) = P(chosen_action | valid_mask)
             # This properly handles masking via MaskedCategorical.
             #
-            # Entropy measures distribution spread (higher = more uncertain).
-            # Already computed by policy network.
-            #
-            # Head ordering matches HeadTelemetry field order for direct indexing.
+            # Head names in order matching HeadTelemetry field positions.
+            # We stack log_probs in this order, then index [0..7] to get each head's value.
             _HEAD_NAMES_FOR_TELEM = ("op", "slot", "blueprint", "style", "tempo", "alpha_target", "alpha_speed", "alpha_curve")
             head_confidences_cpu: np.ndarray | None = None  # [8, num_envs]
-            head_entropies_cpu: np.ndarray | None = None    # [8, num_envs]
+
+            # NOTE: Entropy is not available during action sampling (only during PPO evaluation).
+            # All entropy fields will be 0.0 until we add entropy computation to get_action().
+            head_entropies_cpu: np.ndarray | None = None
 
             if ops_telemetry_enabled and head_log_probs:
                 # Stack all head log probs: [8, num_envs]
                 stacked_log_probs = torch.stack([head_log_probs[h] for h in _HEAD_NAMES_FOR_TELEM])
                 # Single exp + detach + transfer
                 head_confidences_cpu = torch.exp(stacked_log_probs).detach().cpu().numpy()
-
-                # Get entropy if available from action_result
-                if hasattr(action_result, 'entropy') and action_result.entropy:
-                    stacked_entropy = torch.stack([action_result.entropy[h] for h in _HEAD_NAMES_FOR_TELEM])
-                    head_entropies_cpu = stacked_entropy.detach().cpu().numpy()
 
             # PHASE 1: Execute actions and collect data for bootstrap computation
             transitions_data = []  # Store transition data for buffer storage
