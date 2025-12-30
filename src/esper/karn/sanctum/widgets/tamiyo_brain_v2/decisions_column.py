@@ -141,7 +141,7 @@ class DecisionCard(Static):
         result.append("\n")
 
         # Line 5: Host + Entropy + Badge
-        entropy_label, entropy_style = self._entropy_label(decision.decision_entropy)
+        entropy_label, entropy_style = self._entropy_label(decision)
         outcome_badge, badge_style = self._outcome_badge(
             decision.expected_value, decision.actual_reward
         )
@@ -267,10 +267,39 @@ class DecisionCard(Static):
 
         return "policy decision"
 
-    def _entropy_label(self, entropy: float) -> tuple[str, str]:
-        """Return (label, style) for entropy value."""
+    def _entropy_label(self, decision: "DecisionSnapshot") -> tuple[str, str]:
+        """Return (label, style) for entropy value.
+
+        Context-aware: distinguishes between legitimate low-entropy decisions
+        (deterministic valid actions) and concerning policy collapse.
+        """
+        entropy = decision.decision_entropy
+        action = decision.chosen_action
+        confidence = decision.confidence
+        slot_states = decision.slot_states
+
+        # Count slot states for context
+        dormant_count = sum(1 for s in slot_states.values() if "Dormant" in s or "Empty" in s)
+        training_count = sum(1 for s in slot_states.values() if "Training" in s)
+
+        # Determine if low entropy is legitimate
+        legitimate_low_entropy = False
         if entropy < 0.3:
-            return "[collapsed]", "red"
+            # WAIT is legitimate when no valid actions exist
+            if action == "WAIT" and (dormant_count == 0 or training_count > 0):
+                legitimate_low_entropy = True
+            # High-confidence GERMINATE with available slot is legitimate
+            elif action == "GERMINATE" and confidence > 0.8 and dormant_count > 0:
+                legitimate_low_entropy = True
+            # High-confidence FOSSILIZE/PRUNE are legitimate
+            elif action in ("FOSSILIZE", "PRUNE") and confidence > 0.8:
+                legitimate_low_entropy = True
+
+        # Apply labels
+        if entropy < 0.3:
+            if legitimate_low_entropy:
+                return "✓", "green"  # Deterministic valid decision
+            return "[collapsing]", "red"  # Actual policy collapse
         elif entropy < 0.7:
             return "[confident]", "yellow"
         elif entropy < 1.2:
