@@ -88,6 +88,8 @@ from esper.leyline import (
     DEFAULT_MIN_TRAINING_IMPROVEMENT,
     DEFAULT_MIN_BLENDING_EPOCHS,
     DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE,
+    # Blueprint lookup
+    BLUEPRINT_ID_TO_INDEX,
 )
 
 if TYPE_CHECKING:
@@ -536,6 +538,7 @@ class SeedState:
             seed_id=self.seed_id,
             slot_id=self.slot_id,
             blueprint_id=self.blueprint_id,
+            blueprint_index=BLUEPRINT_ID_TO_INDEX.get(self.blueprint_id, -1),
             stage=self.stage,
             previous_stage=self.previous_stage,
             previous_epochs_in_stage=self.previous_epochs_in_stage,

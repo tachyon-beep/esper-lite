@@ -214,6 +214,14 @@ OP_NAMES: tuple[str, ...] = tuple(op.name for op in LifecycleOp)
 # Blueprint ID lookup (matches BlueprintAction.to_blueprint_id())
 BLUEPRINT_IDS: tuple[str | None, ...] = tuple(bp.to_blueprint_id() for bp in BlueprintAction)
 
+# Reverse mapping: blueprint_id string -> embedding index
+# Used by SeedStateReport.blueprint_index for efficient embedding lookup.
+# Maps lowercase strings (e.g., "conv_heavy") to BlueprintAction enum values (0-12).
+# Returns -1 for unknown/empty blueprint_id.
+BLUEPRINT_ID_TO_INDEX: dict[str, int] = {
+    bid: idx for idx, bid in enumerate(BLUEPRINT_IDS) if bid is not None
+}
+
 STYLE_NAMES: tuple[str, ...] = tuple(style.name for style in GerminationStyle)
 STYLE_BLEND_IDS: tuple[str, ...] = tuple(STYLE_TO_KASMINA[style][0] for style in GerminationStyle)
 STYLE_ALPHA_ALGORITHMS: tuple[AlphaAlgorithm, ...] = tuple(
@@ -246,6 +254,9 @@ assert OP_NAMES == tuple(op.name for op in LifecycleOp), (
 )
 assert len(BLUEPRINT_IDS) == len(BlueprintAction), (
     "BLUEPRINT_IDS length mismatch with BlueprintAction enum"
+)
+assert len(BLUEPRINT_ID_TO_INDEX) == len(BlueprintAction), (
+    "BLUEPRINT_ID_TO_INDEX length mismatch with BlueprintAction enum"
 )
 assert len(STYLE_NAMES) == len(GerminationStyle), (
     "STYLE_NAMES length mismatch with GerminationStyle enum"
@@ -474,6 +485,7 @@ __all__ = [
     # Lookup tables for hot path optimization
     "OP_NAMES",
     "BLUEPRINT_IDS",
+    "BLUEPRINT_ID_TO_INDEX",
     "STYLE_NAMES",
     "STYLE_BLEND_IDS",
     "STYLE_ALPHA_ALGORITHMS",
