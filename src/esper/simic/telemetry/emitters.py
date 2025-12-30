@@ -205,7 +205,16 @@ class VectorizedEmitter:
         reward_components: "RewardComponentsTelemetry | None" = None,
         head_telemetry: HeadTelemetry | None = None,
     ) -> None:
-        """Emit last-action detail, offloading formatting to the hub thread.
+        """Emit last-action telemetry from the training loop.
+
+        This is the PRODUCTION path called by vectorized.py during training.
+        It accepts action indices as a dict and includes rich context (rewards,
+        confidence, alternatives) for the Sanctum TUI decision cards.
+
+        Note: There is also a standalone `emit_last_action()` function at module
+        level used for UNIT TESTING. That function has explicit *_idx parameters
+        and returns a dict for test assertions. Both must emit the same fields
+        to AnalyticsSnapshotPayload - if you add a field here, add it there too.
 
         Args:
             epoch: Current training epoch
@@ -236,7 +245,11 @@ class VectorizedEmitter:
         blueprint_id = BLUEPRINT_IDS[action_indices["blueprint"]]
         style = STYLE_NAMES[action_indices["style"]]
         tempo_idx = action_indices["tempo"]
+        alpha_target = ALPHA_TARGET_VALUES[action_indices["alpha_target"]]
+        alpha_speed = ALPHA_SPEED_NAMES[action_indices["alpha_speed"]]
         alpha_curve = ALPHA_CURVE_NAMES[action_indices["alpha_curve"]]
+        alpha_target_masked = bool(masked.get("alpha_target", False))
+        alpha_speed_masked = bool(masked.get("alpha_speed", False))
         alpha_curve_masked = bool(masked.get("alpha_curve", False))
 
         self._emit(TelemetryEvent(
@@ -263,7 +276,11 @@ class VectorizedEmitter:
                 blueprint_id=blueprint_id,
                 tempo_idx=tempo_idx,
                 style=style,
+                alpha_target=alpha_target,
+                alpha_speed=alpha_speed,
                 alpha_curve=alpha_curve,
+                alpha_target_masked=alpha_target_masked,
+                alpha_speed_masked=alpha_speed_masked,
                 alpha_curve_masked=alpha_curve_masked,
             ),
         ))
@@ -535,7 +552,17 @@ def emit_last_action(
     success: bool,
     active_alpha_algorithm: str | None = None,
 ) -> dict[str, Any]:
-    """Emit per-step last-action detail for debugging and UIs.
+    """Standalone last-action emitter for UNIT TESTING.
+
+    This function exists separately from VectorizedEmitter.on_last_action() to
+    allow testing telemetry emission without instantiating the full emitter class.
+    It has explicit *_idx parameters (vs a dict) and returns the payload for
+    test assertions.
+
+    IMPORTANT: Both this function and on_last_action() must emit the same fields
+    to AnalyticsSnapshotPayload. If you add a field to one, add it to the other.
+    The on_last_action() method also includes additional context (rewards,
+    confidence, head_telemetry) that this test helper omits.
 
     Args:
         env_id: Environment index
@@ -544,6 +571,9 @@ def emit_last_action(
         blueprint_idx: Blueprint action index
         style_idx: Germination style action index
         tempo_idx: Tempo action index
+        alpha_target_idx: Alpha target action index
+        alpha_speed_idx: Alpha speed action index
+        alpha_curve_idx: Alpha curve action index
         op_idx: Lifecycle operation index
         slot_id: Target slot ID string
         masked: Dict of head -> was_masked flags
@@ -553,7 +583,7 @@ def emit_last_action(
             sampled style index.
 
     Returns:
-        The emitted data dict (for testing)
+        The emitted data dict (for test assertions)
     """
     hub = get_hub()
     selected_alpha_algorithm = STYLE_ALPHA_ALGORITHMS[style_idx].name

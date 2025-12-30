@@ -728,27 +728,31 @@ class PPOAgent:
                 metrics["approx_kl"].append(approx_kl)
 
                 # Clip fraction: how often clipping was active
+                # PERF: Batch all 3 clip metrics into single GPU→CPU transfer
                 joint_ratio = per_head_ratios["op"]
                 clip_fraction_t = ((joint_ratio - 1.0).abs() > self.clip_ratio).float().mean()
-                # Defer .item() - will be synced with approx_kl check anyway
-                metrics["clip_fraction"].append(clip_fraction_t.cpu().item())
-
                 # Directional clip fractions (per DRL expert recommendation)
                 # Tracks WHERE clipping occurs: asymmetry indicates directional policy drift
                 clip_pos = (joint_ratio > 1.0 + self.clip_ratio).float().mean()
                 clip_neg = (joint_ratio < 1.0 - self.clip_ratio).float().mean()
-                metrics["clip_fraction_positive"].append(clip_pos.cpu().item())
-                metrics["clip_fraction_negative"].append(clip_neg.cpu().item())
+                # Single GPU→CPU sync for all 3 clip metrics
+                clip_metrics = torch.stack([clip_fraction_t, clip_pos, clip_neg]).cpu().tolist()
+                metrics["clip_fraction"].append(clip_metrics[0])
+                metrics["clip_fraction_positive"].append(clip_metrics[1])
+                metrics["clip_fraction_negative"].append(clip_metrics[2])
 
                 # Early stopping: if KL exceeds threshold, skip this update entirely
                 # 1.5x multiplier is standard (OpenAI baselines, Stable-Baselines3)
                 if self.target_kl is not None and approx_kl > 1.5 * self.target_kl:
                     early_stopped = True
                     metrics["early_stop_epoch"] = [epoch_i]
-                    # Record ratio metrics even when early stopping
-                    metrics["ratio_mean"].append(joint_ratio.mean().item())
-                    metrics["ratio_max"].append(joint_ratio.max().item())
-                    metrics["ratio_min"].append(joint_ratio.min().item())
+                    # PERF: Batch ratio metrics into single GPU→CPU transfer
+                    ratio_stats = torch.stack([
+                        joint_ratio.mean(), joint_ratio.max(), joint_ratio.min()
+                    ]).cpu().tolist()
+                    metrics["ratio_mean"].append(ratio_stats[0])
+                    metrics["ratio_max"].append(ratio_stats[1])
+                    metrics["ratio_min"].append(ratio_stats[2])
                     break  # Skip loss computation, backward, and optimizer step
 
             # Compute policy loss per head and sum
@@ -847,11 +851,15 @@ class PPOAgent:
 
                 # Gradient CV: coefficient of variation = std/|mean| (per DRL expert)
                 # Low CV (<0.5) = high signal quality, High CV (>2.0) = noisy gradients
-                grad_norm_tensor = torch.stack(head_norm_tensors)
-                grad_mean = grad_norm_tensor.mean()
-                grad_std = grad_norm_tensor.std()
-                # Avoid division by zero (if mean is 0, CV is 0 - no gradient signal)
-                grad_cv = (grad_std / grad_mean.abs().clamp(min=1e-8)).item()
+                # PERF: Compute on CPU using already-transferred all_norms (avoids extra sync)
+                n = len(all_norms)
+                if n > 1 and any(v > 0 for v in all_norms):
+                    grad_mean = sum(all_norms) / n
+                    grad_var = sum((x - grad_mean) ** 2 for x in all_norms) / (n - 1)
+                    grad_std = grad_var ** 0.5
+                    grad_cv = grad_std / max(abs(grad_mean), 1e-8)
+                else:
+                    grad_cv = 0.0
                 metrics["gradient_cv"].append(grad_cv)
 
             nn.utils.clip_grad_norm_(self.policy.network.parameters(), self.max_grad_norm)
@@ -885,9 +893,13 @@ class PPOAgent:
             metrics["value_std"].append(logging_tensors[7])
             metrics["value_min"].append(logging_tensors[8])
             metrics["value_max"].append(logging_tensors[9])
+            # PERF: Reuse already-transferred ratio stats (indices 4,5) instead of
+            # re-computing on GPU which would trigger 2 redundant syncs
+            ratio_max_val = logging_tensors[4]
+            ratio_min_val = logging_tensors[5]
             if (
-                joint_ratio.max() > self.ratio_explosion_threshold
-                or joint_ratio.min() < self.ratio_collapse_threshold
+                ratio_max_val > self.ratio_explosion_threshold
+                or ratio_min_val < self.ratio_collapse_threshold
             ):
                 diag = RatioExplosionDiagnostic.from_batch(
                     ratio=joint_ratio.flatten(),
