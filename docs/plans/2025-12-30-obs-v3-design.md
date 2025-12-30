@@ -1,8 +1,12 @@
 # Obs 3.0 Design: Tamiyo Observation Space Overhaul
 
-**Status:** Approved
+**Status:** Approved (Updated with P1 Decisions)
 **Date:** 2025-12-30
 **Authors:** Claude (with DRL Expert, PyTorch Expert, Exploration Agent)
+
+> **P1 Update (2025-12-30):** Network dimensions increased from 256 to 512.
+> See `tamiyo_next.md` for rationale. This document focuses on observation space;
+> network architecture details in `policy-v2-design.md`.
 
 ## Summary
 
@@ -156,16 +160,17 @@ class BlueprintEmbedding(nn.Module):
 ### Updated Policy Network
 
 ```python
-class FactoredRecurrentActorCriticV3(nn.Module):
-    def __init__(self, state_dim: int = 121, ...):
+class FactoredRecurrentActorCriticV2(nn.Module):
+    def __init__(self, state_dim: int = 121, feature_dim: int = 512, ...):
         # state_dim = 31 base (24 + 7 action feedback) + 30*3 slots = 121
         # blueprint handled separately by embedding
         self.blueprint_embed = BlueprintEmbedding()
-        self.feature_net = nn.Linear(state_dim + 12, feature_dim)  # 121 + 12 = 133
+        self.feature_net = nn.Linear(state_dim + 12, feature_dim)  # 121 + 12 = 133 → 512
 
     def forward(self, obs, blueprint_indices, hidden):
         bp_emb = self.blueprint_embed(blueprint_indices).view(obs.shape[0], -1)
-        full_obs = torch.cat([obs, bp_emb], dim=-1)
+        full_obs = torch.cat([obs, bp_emb], dim=-1)  # [batch, seq, 133]
+        features = self.feature_net(full_obs)  # [batch, seq, 512]
         # ... rest of forward pass
 ```
 
@@ -174,7 +179,7 @@ class FactoredRecurrentActorCriticV3(nn.Module):
 - Slot features: 30 × 3 = 90 (includes gradient_health_prev)
 - Non-blueprint obs: 31 + 90 = 121
 - Blueprint embeddings: 4 × 3 = 12 (added inside network)
-- Total network input: 121 + 12 = 133
+- Total network input: 121 + 12 = 133 → 512 via feature_net
 
 ### Feature Extraction API Change
 
@@ -312,11 +317,11 @@ Identified three strategic constraints:
 
 ### DRL Expert Sign-off (2025-12-30)
 
-**Status:** APPROVED
+**Status:** APPROVED (updated for 512 hidden)
 
 | Concern | Verdict | Notes |
 |---------|---------|-------|
-| LSTM burden | Approved | 128 hidden size sufficient for 5-8 epoch decisions |
+| LSTM burden | Approved | 512 hidden size for 150-epoch 3-seed sequential scaffolding |
 | Linear clamp | Approved with change | Switched to `log(1 + loss) / log(11)` |
 
 Additional recommendations:

@@ -645,21 +645,25 @@ def evaluate_actions(
 #### 4g. Implement get_value() for Bootstrap
 
 ```python
+@torch.no_grad()
 def get_value(
     self,
     state: torch.Tensor,              # [batch, 1, 121] - single step
     blueprint_indices: torch.Tensor,  # [batch, 1, num_slots]
     hidden: tuple[torch.Tensor, torch.Tensor],
-    sampled_op: torch.Tensor,         # [batch] - op from final step
+    sampled_op: torch.Tensor,         # [batch] - op to condition on
 ) -> torch.Tensor:
-    """Compute bootstrap value at episode truncation.
+    """Compute value for a given state-op pair without gradient tracking.
 
-    Used when episode is truncated (not terminal). Must condition on
-    the same op that would have been taken, for GAE consistency.
+    Note: For bootstrap at truncation, prefer using forward() instead
+    (see Gotcha #2). This method is for cases where you already have
+    a specific op and only need the value.
     """
     # ... feature processing and LSTM ...
     return self._compute_value(lstm_out, sampled_op)
 ```
+
+**@torch.no_grad() rationale:** Bootstrap value computation during rollout should not accumulate gradients. The decorator prevents memory leaks during long rollouts.
 
 **Design rationale:** We use hard one-hot conditioning in **both** rollout and PPO update:
 - `forward()`: `Q(s, sampled_op)` — value stored matches the op sampled
@@ -717,13 +721,14 @@ Add to `PPOConfig` dataclass (or as module-level constants in ppo.py):
 ENTROPY_COEF_PER_HEAD: dict[str, float] = {
     "op": 1.0,           # Always active (100% of steps)
     "slot": 1.0,         # Usually active (~60%)
-    "blueprint": 1.5,    # GERMINATE only (~18%) — needs boost
+    "blueprint": 1.3,    # GERMINATE only (~18%) — needs boost
     "style": 1.2,        # GERMINATE + SET_ALPHA (~22%)
-    "tempo": 1.5,        # GERMINATE only (~18%) — needs boost
+    "tempo": 1.3,        # GERMINATE only (~18%) — needs boost
     "alpha_target": 1.2, # GERMINATE + SET_ALPHA (~22%)
-    "alpha_speed": 1.3,  # SET_ALPHA + PRUNE (~19%)
-    "alpha_curve": 1.3,  # SET_ALPHA + PRUNE (~19%)
+    "alpha_speed": 1.2,  # SET_ALPHA + PRUNE (~19%)
+    "alpha_curve": 1.2,  # SET_ALPHA + PRUNE (~19%)
 }
+# Note: Start conservative (1.2-1.3x), tune empirically if heads collapse
 ```
 
 #### 5b. Update Entropy Loss Computation
@@ -809,6 +814,8 @@ self.blueprint_indices[env_id, step_idx] = blueprint_indices
 ```
 
 **Also update:** `TamiyoRolloutStep` NamedTuple to include `blueprint_indices` field.
+
+**Note on op storage:** The existing `op_actions` field already stores the sampled op from each rollout step. This is the op used for value conditioning (see Phase 4e/4f). During PPO update, `batch["op_actions"]` becomes `actions["op"]` which `evaluate_actions()` uses for `Q(s, stored_op)`. No additional storage needed.
 
 #### 6b. Obs V3 State Tracking in ParallelEnvState
 
@@ -951,15 +958,21 @@ In `ppo.py`, the `_ppo_update()` method must pass blueprint_indices from buffer 
 
 ```python
 batch = buffer.get_batched_sequences(device)
-# ...
+actions = {
+    "op": batch["op_actions"],
+    "slot": batch["slot_actions"],
+    # ... other action heads ...
+}
+# evaluate_actions() extracts stored_op from actions["op"] internally
+# (see Phase 4f) - no separate sampled_op parameter needed
 result = policy.evaluate_actions(
     batch["states"],
     batch["blueprint_indices"],  # NEW
     actions,
     masks,
     initial_hidden,
-    sampled_op=batch["op_actions"],
 )
+```
 
 ---
 
@@ -1091,15 +1104,28 @@ Must be `torch.int64` for `nn.Embedding`. NumPy extraction should use `np.int64`
 
 ### 2. Op-Conditioning During Bootstrap (P1 from DRL Review)
 
-The **same sampled_op** must be used for ALL three value computations:
-1. Value stored during rollout collection
-2. Value computed during PPO update (for GAE)
-3. Value bootstrap at episode truncation
+The **same conditioning pattern** must be used for ALL three value computations:
+1. Value stored during rollout collection → `Q(s, sampled_op)`
+2. Value computed during PPO update → `Q(s, stored_op)` where `stored_op == sampled_op` from rollout
+3. Value bootstrap at episode truncation → `Q(s_T, sampled_op_T)`
+
+**At truncation, where does `sampled_op_T` come from?**
+
+The agent hasn't taken an action in the terminal state `s_T` yet. To get the op for conditioning:
 
 ```python
-# At truncation, compute bootstrap value with SAME conditioning as rollout
-bootstrap_value = value_head(cat(lstm_out, F.one_hot(final_sampled_op, NUM_OPS).float()))
+# In truncation handling (vectorized.py):
+# 1. Extract features for final state
+final_obs, final_blueprint_indices = batch_obs_to_features(final_signals, final_reports, ...)
+
+# 2. Run forward() to sample what op WOULD have been taken
+#    (this also gives us the correctly conditioned value)
+with torch.no_grad():
+    forward_out = policy(final_obs, final_blueprint_indices, hidden)
+    bootstrap_value = forward_out.value  # Already Q(s_T, sampled_op_T)
 ```
+
+**Why not use the last stored op?** Using `op_{T-1}` (from the previous transition) would condition on a potentially different operation, creating a mismatch. The policy might choose differently in state `s_T`.
 
 **If any path uses different conditioning (e.g., expected value E[Q(s,op)]), advantage estimates will be biased.**
 
@@ -1176,12 +1202,16 @@ def _vectorized_one_hot(indices, table):
 
 ### 10. Bootstrap Blueprint Indices (P1 from DRL Review)
 
-At episode truncation, the bootstrap value computation needs **both** the final observation AND the final blueprint_indices. Ensure the rollout buffer stores blueprint_indices for the final observation:
+At episode truncation, the bootstrap value computation needs **both** the final observation AND the final blueprint_indices:
 
 ```python
 # In truncation handling (vectorized.py)
 final_obs, final_blueprint_indices = batch_obs_to_features(final_signals, final_reports, ...)
-bootstrap_value = policy.get_value(final_obs, final_blueprint_indices, hidden, final_sampled_op)
+
+# Use forward() to get correctly conditioned value (see Gotcha #2)
+with torch.no_grad():
+    forward_out = policy(final_obs, final_blueprint_indices, hidden)
+    bootstrap_value = forward_out.value
 ```
 
 If blueprint_indices are missing at truncation, the bootstrap value will be computed incorrectly.
