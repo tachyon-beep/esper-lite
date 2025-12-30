@@ -167,8 +167,9 @@ DEFAULT_NUM_SLOTS = 3
 # =============================================================================
 
 # Number of action heads in the factored policy
-# (slot, blueprint, blend_algorithm, tempo, alpha_target, alpha_speed, alpha_curve, alpha_algorithm, op)
-NUM_ACTION_HEADS = 9
+# (slot, blueprint, style, tempo, alpha_target, alpha_speed, alpha_curve, op)
+# See ACTION_HEAD_SPECS in factored_actions.py for the authoritative list
+NUM_ACTION_HEADS = 8
 
 # PPO clipping epsilon (Schulman et al., 2017)
 DEFAULT_PPO_CLIP_EPSILON = 0.2
@@ -638,75 +639,51 @@ The static guards above catch enum/constant drift at import time. Add this runti
 
 ```python
 # In batch_obs_to_features(), validate runtime blueprint indices:
-import logging
-from typing import Optional
-
-_bp_validation_logger = logging.getLogger("esper.tamiyo.features.validation")
+# ALWAYS fail-fast - per CLAUDE.md "No Bug-Hiding Patterns" policy
 
 
-def _validate_blueprint_index(
-    bp_idx: int,
-    slot_id: str,
-    *,
-    strict: bool = False,
-) -> int:
-    """Validate and optionally sanitize blueprint index.
+def _validate_blueprint_index(bp_idx: int, slot_id: str) -> int:
+    """Validate blueprint index - raises on invalid data.
 
-    Runtime guard against invalid blueprint indices in observations.
-    This catches data corruption (e.g., malformed SeedStateReport,
-    stale slot reports, or serialization issues), not just static drift.
+    Per CLAUDE.md: "If code would fail without a defensive pattern, that failure
+    is a bug to fix, not a symptom to suppress."
 
-    Addresses code review finding: Single corrupt observation shouldn't crash
-    a 12-hour training run. Production needs resilience; tests need strictness.
+    If this raises, the bug is in SeedStateReport CREATION, not here.
+    Fix the upstream producer, don't sanitize here.
 
     Args:
         bp_idx: Blueprint index from observation (-1 for inactive, 0-12 for active)
         slot_id: Slot identifier for error context
-        strict: If True, raise ValueError on invalid index.
-                If False (default), log error and return -1 (treat as inactive).
-
-    Returns:
-        Validated blueprint index, or -1 if invalid and not strict.
 
     Raises:
-        ValueError: If strict=True and index is invalid.
-
-    Example:
-        # In tests (crash on bad data for immediate feedback):
-        bp_idx = _validate_blueprint_index(raw_idx, slot_id, strict=True)
-
-        # In production training (graceful degradation):
-        bp_idx = _validate_blueprint_index(raw_idx, slot_id, strict=False)
+        ValueError: If index is invalid.
     """
     if bp_idx != -1 and (bp_idx < 0 or bp_idx >= NUM_BLUEPRINTS):
-        msg = (
+        raise ValueError(
             f"Slot {slot_id} has invalid blueprint_index {bp_idx}. "
-            f"Valid range: 0-{NUM_BLUEPRINTS-1} or -1 (inactive)."
+            f"Valid range: 0-{NUM_BLUEPRINTS-1} or -1 (inactive). "
+            f"This indicates a bug in SeedStateReport creation - fix upstream."
         )
-        if strict:
-            raise ValueError(msg)
-        else:
-            _bp_validation_logger.error(
-                f"{msg} Treating as inactive slot (-1). "
-                f"This may indicate data corruption in SeedStateReport."
-            )
-            return -1
     return bp_idx
 
 
 # Usage in feature extraction loop:
 for slot_idx, slot_id in enumerate(slot_config.slot_ids):
     if report := reports.get(slot_id):
-        # Use strict=False in training, strict=True in tests
-        bp_idx = _validate_blueprint_index(
-            report.blueprint_index, slot_id, strict=False
-        )
+        # Derive blueprint_index from blueprint_id (see prerequisite note in Phase 2e)
+        bp_idx = _BLUEPRINT_TO_INDEX.get(report.blueprint_id, -1)
+        bp_idx = _validate_blueprint_index(bp_idx, slot_id)  # Fail-fast
         bp_indices[env_idx, slot_idx] = bp_idx
     else:
         bp_indices[env_idx, slot_idx] = -1  # Inactive slot
 ```
 
-**Note:** This catches runtime data corruption, not just static drift. The static guards ensure the code is correct; the runtime guard ensures the data is correct. The `strict` parameter allows tests to fail immediately on invalid data while production training gracefully degrades.
+> ⚠️ **CLAUDE.md Compliance:** The previous `strict=False` pattern was removed because it violates
+> the "No Bug-Hiding Patterns" prohibition. Invalid blueprint indices indicate bugs in upstream
+> code (SeedStateReport creation). The fix is to validate at the source, not sanitize at consumption.
+>
+> If a 12-hour training run crashes due to invalid data, **that's a bug worth finding immediately**,
+> not a symptom to suppress. The crash message now clearly identifies where the fix belongs.
 
 **Validation command:**
 
@@ -752,21 +729,31 @@ def _encode_stage(stage_value: int) -> torch.Tensor:
 
 **Design Decision: All-Zeros for Inactive Slots**
 
-When a slot is inactive (`is_active=False`), its stage encoding should be all-zeros, NOT a one-hot for stage 0 (DORMANT). This is intentional:
+When a slot is inactive (stage is PRUNED, EMBARGOED, etc.), its stage encoding should be all-zeros, NOT a one-hot for stage 0. This is intentional:
 
 - All-zeros is indistinguishable from "no slot" in the embedding space
 - This prevents the network from learning spurious patterns from inactive slot stages
-- The `is_active` flag (separate feature) disambiguates "inactive slot with stage 0" from "active slot with DORMANT stage"
+- A derived `is_active` feature (from stage) disambiguates "inactive slot" from "active slot with DORMANT stage"
+
+> ⚠️ **CRITICAL: `SeedStateReport` does NOT have an `is_active` field.**
+> Use `is_active_stage(report.stage)` from `esper.leyline.stages` instead.
+>
+> Also: `F.one_hot(report.stage, NUM_STAGES)` will FAIL because SeedStage values
+> are non-contiguous (gap at 5, max is 10). Use `STAGE_TO_INDEX` mapping.
 
 ```python
-# CORRECT: inactive slot gets all-zeros stage encoding
-if not report.is_active:
-    stage_one_hot = torch.zeros(NUM_STAGES)  # All zeros
-else:
-    stage_one_hot = F.one_hot(torch.tensor(report.stage), NUM_STAGES)
+from esper.leyline.stages import is_active_stage
+from esper.leyline.stage_schema import STAGE_TO_INDEX, NUM_STAGES
 
-# WRONG: inactive slot gets DORMANT encoding (creates spurious signal)
-# stage_one_hot = F.one_hot(torch.tensor(0), NUM_STAGES)  # DON'T DO THIS
+# CORRECT: check activity via stage, use index mapping for one-hot
+if not is_active_stage(report.stage):
+    stage_one_hot = torch.zeros(NUM_STAGES)  # All zeros for inactive
+else:
+    stage_idx = STAGE_TO_INDEX[report.stage.value if hasattr(report.stage, 'value') else report.stage]
+    stage_one_hot = F.one_hot(torch.tensor(stage_idx), NUM_STAGES)
+
+# WRONG: F.one_hot with raw enum value (fails for HOLDING=6, RESETTING=10)
+# stage_one_hot = F.one_hot(torch.tensor(report.stage), NUM_STAGES)  # DON'T DO THIS
 ```
 
 **Enable during testing:**
@@ -847,18 +834,20 @@ def make_test_signals():
         accuracy_history=[60.0, 65.0, 70.0, 72.0, 75.0],
     )
 
-def make_test_report(slot_id: str, stage: int = 2, is_active: bool = True):
+def make_test_report(slot_id: str, stage: int = 2):
     \"\"\"Create a test slot report.
 
-    Note: is_active=False with a slot report is different from no slot report.
-    Seeds in PRUNED or EMBARGOED stages have slot reports but is_active=False.
+    Note: SeedStateReport does NOT have is_active or blueprint_index fields.
+    Activity is derived from stage via is_active_stage().
+    Blueprint index must be derived from blueprint_id via mapping.
     \"\"\"
+    from esper.leyline.stages import is_active_stage
+    is_active = is_active_stage(SeedStage(stage))
     return SeedStateReport(
         slot_id=slot_id,
-        is_active=is_active,
-        stage=stage,
-        blueprint_index=5 if is_active else -1,
-        alpha=0.3 if is_active else 0.0,
+        stage=SeedStage(stage),
+        blueprint_id='CONV_HEAVY' if is_active else '',  # String, not index
+        alpha_target=0.3 if is_active else 0.0,
     )
 
 config = SlotConfig.default()
@@ -875,22 +864,21 @@ test_cases = [
 
     # DRL Review Addition: Seeds in inactive stages WITH slot reports
     # This is different from 'no slot report' - the seed exists but is inactive
+    # Note: is_active is DERIVED from stage, not a separate field
     ({config.slot_ids[0]: make_test_report(
         config.slot_ids[0],
-        stage=SeedStage.PRUNED.value,
-        is_active=False
-    )}, 'Seed in PRUNED stage (has report, is_active=False)'),
+        stage=SeedStage.PRUNED.value,  # Inactive stage
+    )}, 'Seed in PRUNED stage (has report, inactive by stage)'),
     ({config.slot_ids[0]: make_test_report(
         config.slot_ids[0],
-        stage=SeedStage.EMBARGOED.value,
-        is_active=False
-    )}, 'Seed in EMBARGOED stage (has report, is_active=False)'),
+        stage=SeedStage.EMBARGOED.value,  # Inactive stage
+    )}, 'Seed in EMBARGOED stage (has report, inactive by stage)'),
 
     # Mixed: some active, some inactive with reports
     ({
-        config.slot_ids[0]: make_test_report(config.slot_ids[0], stage=2, is_active=True),
-        config.slot_ids[1]: make_test_report(config.slot_ids[1], stage=SeedStage.PRUNED.value, is_active=False),
-    }, 'Mixed: one active, one PRUNED'),
+        config.slot_ids[0]: make_test_report(config.slot_ids[0], stage=SeedStage.TRAINING.value),  # Active
+        config.slot_ids[1]: make_test_report(config.slot_ids[1], stage=SeedStage.PRUNED.value),  # Inactive
+    }, 'Mixed: one TRAINING (active), one PRUNED (inactive)'),
 ]
 
 for reports, desc in test_cases:
@@ -902,10 +890,11 @@ for reports, desc in test_cases:
         assert obs.shape == (1, expected_size), f'Shape mismatch: {obs.shape} vs (1, {expected_size})'
         assert bp_idx.shape == (1, config.num_slots), f'BP idx shape: {bp_idx.shape}'
 
-        # Verify inactive slots (either no report OR is_active=False) have -1 blueprint index
+        # Verify inactive slots (either no report OR inactive stage) have -1 blueprint index
+        from esper.leyline.stages import is_active_stage
         for i, slot_id in enumerate(config.slot_ids):
             report = reports.get(slot_id)
-            if report is None or not report.is_active:
+            if report is None or not is_active_stage(report.stage):
                 assert bp_idx[0, i] == -1, f'Inactive slot {slot_id} should have bp_idx=-1, got {bp_idx[0, i]}'
 
         print(f'✓ {desc}: obs={obs.shape}, bp_idx={bp_idx.shape}')
@@ -919,7 +908,8 @@ print('✓ All slot configuration edge cases passed')
 
 **Note:** The test cases distinguish between:
 1. **No slot report** - Slot is empty (never germinated or fully cleared)
-2. **Slot report with `is_active=False`** - Seed exists but is in an inactive stage (PRUNED, EMBARGOED)
+2. **Slot report with inactive stage** - Seed exists but is in an inactive stage (PRUNED, EMBARGOED)
+   - Activity is determined by `is_active_stage(report.stage)`, NOT a separate field
 
 Both cases should produce `bp_idx=-1` and all-zeros feature encoding, but they arise from different situations in the training loop.
 
@@ -6635,34 +6625,51 @@ This treats the critic as `Q(s, op)` rather than `V(s)`. The value stored during
 
 ### 8. Enum Normalization Strategy
 
-**Decision:** Keep `.value / max_value` pattern for enum normalization (simpler, auto-adapts to new enum values).
+> ⚠️ **CRITICAL: Most enums do NOT start at 0 and SeedStage has gaps**
+>
+> The codebase enums have non-sequential values:
+> - `AlphaMode`: HOLD=0, UP=1, DOWN=2 — **starts at 0, OK**
+> - `AlphaAlgorithm`: ADD=1, MULTIPLY=2, GATE=3 — **starts at 1, NOT 0**
+> - `AlphaCurve`: LINEAR=1, COSINE=2, SIGMOID=3 — **starts at 1, NOT 0**
+> - `SeedStage`: UNKNOWN=0, DORMANT=1, ..., HOLDING=6, FOSSILIZED=7, ..., RESETTING=10 — **gap at 5, max is 10**
+>
+> **Source files:**
+> - `src/esper/leyline/alpha.py` — AlphaMode, AlphaAlgorithm, AlphaCurve
+> - `src/esper/leyline/stages.py` — SeedStage
+
+**Decision:** Use explicit index mappings (NOT `.value / max_value`).
+
+The `.value / (len(Enum) - 1)` pattern only works for enums that start at 0 with contiguous values. Most of ours don't.
 
 ```python
-# Current approach (keeping this)
-alpha_mode_norm = mode.value / (len(AlphaMode) - 1)
-alpha_algorithm_norm = algo.value / (len(AlphaAlgorithm) - 1)
+# WRONG - would produce incorrect normalization for ADD=1, MULTIPLY=2, GATE=3:
+# algo.value / (len(AlphaAlgorithm) - 1) = 1/2 for ADD, 2/2 for MULTIPLY, 3/2(!) for GATE
+alpha_algorithm_norm = algo.value / (len(AlphaAlgorithm) - 1)  # DON'T DO THIS
+
+# CORRECT - explicit index mapping:
+_ALGO_TO_INDEX = {AlphaAlgorithm.ADD: 0, AlphaAlgorithm.MULTIPLY: 1, AlphaAlgorithm.GATE: 2}
+alpha_algorithm_norm = _ALGO_TO_INDEX[algo] / (len(_ALGO_TO_INDEX) - 1)
+
+# AlphaMode is the ONLY one where .value / max works (HOLD=0, UP=1, DOWN=2):
+alpha_mode_norm = mode.value / (len(AlphaMode) - 1)  # OK for AlphaMode only
+
+# AlphaCurve needs explicit mapping (LINEAR=1, COSINE=2, SIGMOID=3):
+_CURVE_TO_INDEX = {AlphaCurve.LINEAR: 0, AlphaCurve.COSINE: 1, AlphaCurve.SIGMOID: 2}
+alpha_curve_norm = _CURVE_TO_INDEX[curve] / (len(_CURVE_TO_INDEX) - 1)
+
+# SeedStage: Use STAGE_TO_INDEX from stage_schema.py (handles gap at value 5):
+from esper.leyline.stage_schema import STAGE_TO_INDEX, NUM_STAGES
+stage_idx = STAGE_TO_INDEX[stage.value]
+stage_norm = stage_idx / (NUM_STAGES - 1)
 ```
 
-**⚠️ ASSUMPTION:** This requires enum values to be sequential starting from 0:
-- `AlphaMode.HOLD = 0, RAMP = 1, STEP = 2` ✓
-- `AlphaAlgorithm.ADD = 0, MULTIPLY = 1, GATE = 2` ✓
-- `SeedStage.DORMANT = 0, ... , FOSSILIZED = 9` ✓
-
-**Verify enum values in:**
-- `src/esper/leyline/enums.py` — AlphaMode, AlphaAlgorithm definitions
-- `src/esper/leyline/__init__.py` — SeedStage, LifecycleOp definitions
-
-**If this assumption breaks** (non-sequential values, gaps, or values > len-1), switch to explicit mapping:
-```python
-_MODE_INDEX = {AlphaMode.HOLD: 0, AlphaMode.RAMP: 1, AlphaMode.STEP: 2}
-alpha_mode_norm = _MODE_INDEX[mode] / (len(_MODE_INDEX) - 1)
-```
-
-**Maintenance note:** When adding new enum values, ensure they follow the sequential pattern OR update all normalization code.
+**Key insight:** The codebase already has `STAGE_TO_INDEX` in `stage_schema.py` for exactly this reason — SeedStage has a gap at value 5 (retired SHADOWING stage).
 
 ### 9. Inactive Slot Stage Encoding
 
-Inactive slots (`is_active=0`) must have **all-zeros** for stage one-hot, NOT stage 0. The vectorized one-hot helper must mask by validity:
+Inactive slots (where `is_active_stage(report.stage)` returns False) must have **all-zeros** for stage one-hot, NOT stage 0. The vectorized one-hot helper must mask by validity:
+
+> **Note:** `SeedStateReport` does NOT have an `is_active` field. Use `is_active_stage(report.stage)` from `esper.leyline.stages` instead.
 
 ```python
 def _vectorized_one_hot(indices, table):
