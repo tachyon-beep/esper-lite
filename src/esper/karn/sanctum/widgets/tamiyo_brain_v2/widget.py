@@ -8,7 +8,7 @@ Layout:
     │ StatusBanner (1 line)                                           │
     ├─────────────────────────────────────────┬───────────────────────┤
     │ VitalsColumn (2/3 width)                │ DecisionsColumn (1/3) │
-    │ ├── PPOHealth | Losses | Health         │ ├── DecisionCard      │
+    │ ├── PPOLosses | Health (50/50)          │ ├── DecisionCard      │
     │ ├── HeadsPanel (entropy + gradients)    │ ├── DecisionCard      │
     │ └── ActionContext | Slots | RewardHealth│ └── DecisionCard      │
     └─────────────────────────────────────────┴───────────────────────┘
@@ -24,8 +24,7 @@ from textual.css.query import NoMatches
 from textual.message import Message
 
 from .status_banner import StatusBanner
-from .ppo_health import PPOHealthPanel
-from .losses_panel import LossesPanel
+from .ppo_losses_panel import PPOLossesPanel
 from .health_status_panel import HealthStatusPanel
 from .heads_grid import HeadsPanel
 from .action_context import ActionContext
@@ -101,31 +100,27 @@ class TamiyoBrainV2(Container):
     }
 
     /* Sub-panels - now Static-based, height sizes to content */
-    #ppo-health, #losses-panel, #health-panel, #heads-panel, #action-context, #slots-panel {
+    #ppo-losses-panel, #health-panel, #heads-panel, #action-context, #slots-panel {
         height: auto;
         padding: 0;
         margin: 0;
     }
 
-    /* PPO row - three panels */
+    /* PPO row - two panels, 50/50 split */
     #ppo-row {
         height: auto;
         width: 100%;
     }
 
-    #ppo-row #ppo-health {
-        width: 0.9fr;
-    }
-
-    #ppo-row #losses-panel {
-        width: 0.9fr;
+    #ppo-row #ppo-losses-panel {
+        width: 1fr;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
         padding: 0 1;
     }
 
     #ppo-row #health-panel {
-        width: 1.2fr;
+        width: 1fr;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
         padding: 0 1;
@@ -232,10 +227,9 @@ class TamiyoBrainV2(Container):
         # Main content: vitals left, decisions right
         with Horizontal(id="main-content"):
             with VerticalScroll(id="vitals-column"):
-                # PPO row - three panels
+                # PPO row - two panels (50/50 split)
                 with Horizontal(id="ppo-row"):
-                    yield PPOHealthPanel(id="ppo-health")
-                    yield LossesPanel(id="losses-panel")
+                    yield PPOLossesPanel(id="ppo-losses-panel")
                     yield HealthStatusPanel(id="health-panel")
                 yield HeadsPanel(id="heads-panel")
                 # ActionContext, Slots, and RewardHealth side by side
@@ -267,12 +261,7 @@ class TamiyoBrainV2(Container):
             pass
 
         try:
-            self.query_one("#ppo-health", PPOHealthPanel).update_snapshot(snapshot)
-        except NoMatches:
-            pass
-
-        try:
-            self.query_one("#losses-panel", LossesPanel).update_snapshot(snapshot)
+            self.query_one("#ppo-losses-panel", PPOLossesPanel).update_snapshot(snapshot)
         except NoMatches:
             pass
 
