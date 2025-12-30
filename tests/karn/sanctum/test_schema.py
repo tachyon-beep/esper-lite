@@ -692,3 +692,48 @@ def test_tamiyo_state_has_nested_metrics():
     # Access nested fields
     assert state.infrastructure.cuda_memory_allocated_gb == 0.0
     assert state.gradient_quality.gradient_cv == 0.0
+
+
+# =============================================================================
+# DECISION SNAPSHOT PER-HEAD ENTROPY FIELDS (Task 4)
+# =============================================================================
+
+
+def test_decision_snapshot_has_entropy_fields():
+    """DecisionSnapshot should have per-head entropy fields."""
+    from datetime import datetime, timezone
+    from esper.karn.sanctum.schema import DecisionSnapshot
+
+    decision = DecisionSnapshot(
+        timestamp=datetime.now(timezone.utc),
+        slot_states={},
+        host_accuracy=0.9,
+        chosen_action="GERMINATE",
+        chosen_slot="r0c0",
+        confidence=0.85,
+        expected_value=0.5,
+        actual_reward=0.6,
+        alternatives=[],
+        decision_id="abc123",
+        decision_entropy=0.4,
+        env_id=0,
+        value_residual=0.1,
+        # Entropy fields
+        op_entropy=0.3,
+        slot_entropy=0.8,
+        blueprint_entropy=0.5,
+        style_entropy=0.6,
+        tempo_entropy=0.4,
+        alpha_target_entropy=0.55,
+        alpha_speed_entropy=0.45,
+        curve_entropy=0.35,
+    )
+
+    assert decision.op_entropy == 0.3
+    assert decision.slot_entropy == 0.8
+    assert decision.blueprint_entropy == 0.5
+    assert decision.style_entropy == 0.6
+    assert decision.tempo_entropy == 0.4
+    assert decision.alpha_target_entropy == 0.55
+    assert decision.alpha_speed_entropy == 0.45
+    assert decision.curve_entropy == 0.35

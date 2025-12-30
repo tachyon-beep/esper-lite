@@ -894,15 +894,36 @@ class DecisionSnapshot:
     # Decision-specific entropy (per DRL review - more useful than policy entropy)
     decision_entropy: float = 0.0  # -sum(p*log(p)) for this action distribution
 
-    # Head choice details for GERMINATE actions (per DRL/UX specialist review)
+    # Head choice details for factored action heads (per DRL/UX specialist review)
     # These enable decision cards to show sub-decisions like 'bpnt:conv_l(87%) tmp:STD'
+    # See leyline/factored_actions.py for full head specification
     chosen_blueprint: str | None = None  # e.g., "conv_light", "attention"
     chosen_tempo: str | None = None  # "FAST", "STANDARD", "SLOW"
     chosen_style: str | None = None  # "LINEAR_ADD", "GATED_GATE", etc.
     chosen_curve: str | None = None  # "LINEAR", "COSINE", "SIGMOID", etc. (alpha curve shape)
+    chosen_alpha_target: str | None = None  # "HALF", "SEVENTY", "FULL" (target alpha amplitude)
+    chosen_alpha_speed: str | None = None  # "INSTANT", "FAST", "MEDIUM", "SLOW" (ramp speed)
+
+    # Per-head confidence values (probability of chosen option within each head)
+    op_confidence: float = 0.0  # Probability of chosen operation
+    slot_confidence: float = 0.0  # Probability of chosen slot
     blueprint_confidence: float = 0.0  # Probability of chosen blueprint
+    style_confidence: float = 0.0  # Probability of chosen style
     tempo_confidence: float = 0.0  # Probability of chosen tempo
-    op_confidence: float = 0.0  # Probability of chosen operation (per DRL review)
+    alpha_target_confidence: float = 0.0  # Probability of chosen alpha target
+    alpha_speed_confidence: float = 0.0  # Probability of chosen alpha speed
+    curve_confidence: float = 0.0  # Probability of chosen curve
+
+    # Per-head entropy values (distribution spread - higher means more uncertain)
+    # Useful for diagnosing policy collapse (entropy -> 0) or exploration issues
+    op_entropy: float = 0.0
+    slot_entropy: float = 0.0
+    blueprint_entropy: float = 0.0
+    style_entropy: float = 0.0
+    tempo_entropy: float = 0.0
+    alpha_target_entropy: float = 0.0
+    alpha_speed_entropy: float = 0.0
+    curve_entropy: float = 0.0
 
 
 @dataclass
