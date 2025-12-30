@@ -107,6 +107,8 @@ def normalize_action(action: str) -> str:
             return "PRUNE"
         if action.startswith("WAIT"):
             return "WAIT"
+        if action.startswith("ADVANCE"):
+            return "ADVANCE"
     return normalized
 
 
@@ -355,6 +357,7 @@ class SanctumAggregator:
             "SET_ALPHA_TARGET": 0,
             "PRUNE": 0,
             "FOSSILIZE": 0,
+            "ADVANCE": 0,
         }
         total_actions = 0
         for env in self._envs.values():
@@ -1097,6 +1100,7 @@ class SanctumAggregator:
                 "SET_ALPHA_TARGET": 0,
                 "PRUNE": 0,
                 "FOSSILIZE": 0,
+                "ADVANCE": 0,
             }
             env.total_actions = 0
 

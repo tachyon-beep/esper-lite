@@ -6,12 +6,13 @@ composable sub-widgets for better maintainability.
 Layout:
     ┌─────────────────────────────────────────────────────────────────┐
     │ StatusBanner (1 line)                                           │
-    ├─────────────────────────────────────────┬───────────────────────┤
-    │ VitalsColumn (2/3 width)                │ DecisionsColumn (1/3) │
-    │ ├── PPOLosses | Health (50/50)          │ ├── DecisionCard      │
-    │ ├── HeadsPanel (entropy + gradients)    │ ├── DecisionCard      │
-    │ └── ActionContext | Slots | RewardHealth│ └── DecisionCard      │
-    └─────────────────────────────────────────┴───────────────────────┘
+    ├───────────────────────────────────────────────────┬─────────────┤
+    │ VitalsColumn (75%)                                │ Decisions   │
+    │ ├── PPOLosses (50%)  | Health (50%)               │ (25%)       │
+    │ ├── HeadsPanel (50%) | Slots (50%)                │ ├── Card    │
+    │ └── ActionContext    | HeadChoices (50/50)        │ └── Card    │
+    │     RewardHealth     │                            │             │
+    └───────────────────────────────────────────────────┴─────────────┘
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from textual.app import ComposeResult
-from textual.containers import Container, Horizontal, VerticalScroll
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
 from textual.message import Message
 
@@ -30,6 +31,7 @@ from .heads_grid import HeadsPanel
 from .action_context import ActionContext
 from .slots_panel import SlotsPanel
 from .decisions_column import DecisionCard, DecisionsColumn
+from .attention_heatmap import AttentionHeatmapPanel
 from ..reward_health import RewardHealthPanel
 
 if TYPE_CHECKING:
@@ -79,80 +81,64 @@ class TamiyoBrainV2(Container):
     }
 
     #vitals-column {
-        width: 2fr;
+        width: 3fr;
         height: 100%;
         padding: 0 1;
     }
 
     #decisions-column {
         width: 1fr;
-        min-width: 50;
+        min-width: 45;
         height: 100%;
         border-left: solid $surface-lighten-1;
         padding: 0 1;
     }
 
-    .panel {
-        border: round $surface-lighten-2;
-        margin: 0;
-        padding: 0 1;
-        height: auto;
-    }
-
-    /* Sub-panels - now Static-based, height sizes to content */
-    #ppo-losses-panel, #health-panel, #heads-panel, #action-context, #slots-panel {
-        height: auto;
-        padding: 0;
-        margin: 0;
-    }
-
-    /* PPO row - two panels, 50/50 split */
-    #ppo-row {
+    /* Row containers - auto height, full width */
+    #ppo-row, #heads-row, #action-row {
         height: auto;
         width: 100%;
     }
 
-    #ppo-row #ppo-losses-panel {
+    #action-stack {
+        width: 3fr;
+        height: auto;
+    }
+
+    /* All panels - consistent styling, height from content */
+    #ppo-losses-panel, #health-panel {
         width: 1fr;
+        height: auto;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
         padding: 0 1;
     }
 
-    #ppo-row #health-panel {
+    #heads-panel, #slots-panel {
         width: 1fr;
+        height: auto;
+        border: round $surface-lighten-2;
+        border-title-color: $text-muted;
+        padding: 0 1;
+    }
+
+    #action-context {
+        height: auto;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
         padding: 0 1;
     }
 
     #reward-health {
-        height: auto;
-        padding: 0;
-        margin: 0;
-    }
-
-    #action-row {
-        height: auto;
-        width: 100%;
-    }
-
-    /* Action row: ActionContext and Slots wider, RewardHealth half-width */
-    #action-row #action-context {
-        width: 1.25fr;
-    }
-
-    #action-row #slots-panel {
-        width: 1.25fr;
-        height: auto;
+        height: 1fr;  /* Fill remaining space in action-stack */
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
         padding: 0 1;
     }
 
-    #action-row #reward-health {
-        width: 0.5fr;
-        height: auto;
+    #attention-heatmap {
+        width: 7fr;
+        height: 1fr;  /* Fill available height in action-row */
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
         padding: 0 1;
@@ -231,12 +217,16 @@ class TamiyoBrainV2(Container):
                 with Horizontal(id="ppo-row"):
                     yield PPOLossesPanel(id="ppo-losses-panel")
                     yield HealthStatusPanel(id="health-panel")
-                yield HeadsPanel(id="heads-panel")
-                # ActionContext, Slots, and RewardHealth side by side
-                with Horizontal(id="action-row"):
-                    yield ActionContext(id="action-context")
+                # Heads row - HeadsPanel (60%) | SlotsPanel (40%)
+                with Horizontal(id="heads-row"):
+                    yield HeadsPanel(id="heads-panel")
                     yield SlotsPanel(id="slots-panel")
-                    yield RewardHealthPanel(id="reward-health")
+                # Action row - AttentionHeatmap | Stacked (ActionContext + RewardHealth)
+                with Horizontal(id="action-row"):
+                    yield AttentionHeatmapPanel(id="attention-heatmap")
+                    with Vertical(id="action-stack"):
+                        yield ActionContext(id="action-context")
+                        yield RewardHealthPanel(id="reward-health")
 
             yield DecisionsColumn(id="decisions-column")
 
@@ -282,6 +272,16 @@ class TamiyoBrainV2(Container):
 
         try:
             self.query_one("#slots-panel", SlotsPanel).update_snapshot(snapshot)
+        except NoMatches:
+            pass
+
+        try:
+            self.query_one("#attention-heatmap", AttentionHeatmapPanel).update_snapshot(snapshot)
+        except NoMatches:
+            pass
+
+        try:
+            self.query_one("#reward-health", RewardHealthPanel).update_snapshot(snapshot)
         except NoMatches:
             pass
 

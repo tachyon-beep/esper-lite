@@ -58,6 +58,8 @@ class PPOLossesPanel(Static):
             velocity = snapshot.tamiyo.entropy_velocity
             if velocity < 0:
                 distance = snapshot.tamiyo.entropy - TUIThresholds.ENTROPY_CRITICAL
+                # Clamp negative distance (already below critical) to 0
+                distance = max(0.0, distance)
                 batches = int(distance / abs(velocity)) if velocity != 0 else 999
                 self.border_title = f"PPO LOSSES !! COLLAPSE ~{batches}b"
             else:

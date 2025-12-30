@@ -1,23 +1,28 @@
 """Run Header Widget for Sanctum.
 
-Displays run identity, connection status, and training progress
-in a two-line header at the top of the Sanctum TUI.
+Single-line status bar showing essential training state at a glance.
+Designed with fixed-width segments to prevent text jumping.
 
-Row 1: Episode | Epoch/Max | Batch | Runtime | Best Accuracy
-Row 2: Connection Status | Env Health Summary | Seed Totals
+Layout:
+│ ● LIVE ✓ │ run_name │ Ep 47 ████████░░░░ 150/500 │ 1h 23m │ 0.8e/s 2.1b/m │
 
-Reference: Overwatch's run_header.py adapted for Sanctum schema.
+Segments (all fixed-width):
+- Connection: ● LIVE / ◐ SLOW / ○ STALE (6 chars)
+- Thread: ✓ / ✗ (1 char, bold red if dead)
+- Run name: Task/experiment name (14 chars max, truncated)
+- Episode: Current episode number
+- Progress: Visual bar + epoch fraction
+- Runtime: Elapsed time
+- Throughput: epochs/sec and batches/min
+
+System alarms shown in subtitle (right-aligned).
 """
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from rich.panel import Panel
-from rich.table import Table
 from rich.text import Text
 from textual.widgets import Static
-
-from esper.leyline import STAGE_COLORS
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot
@@ -39,72 +44,22 @@ def _format_runtime(seconds: float) -> str:
 
 
 class RunHeader(Static):
-    """Run header widget showing training progress and connection status.
+    """Single-line status bar for training state.
 
-    Two-row format:
-        Ep 5 | 150/500 epochs | Batch 3 | 1h 23m | Best: 82.3% (ep 4)
-        ● Live | 4 healthy, 0 stalled | Train:8 Blend:2 Foss:12
+    Fixed-width layout (no text jumping):
+        ● LIVE ✓ │ my_experiment │ Ep 47 ████████░░░░ 150/500 │ 1h 23m │ 0.8e/s 2.1b/m
 
-    In A/B mode, adds comparison info:
-        ... | A/B: +7.0% acc | Leading: A
-
-    Provides at-a-glance training context that was in the old Rich TUI header.
+    Design principles:
+    - Fixed-width segments prevent jumping as values change
+    - Only essential metrics (duplicates removed, other panels show details)
+    - Visual progress bar for epoch completion
+    - System alarms in subtitle, not main content
     """
 
     def __init__(self, **kwargs: Any) -> None:
         """Initialize RunHeader widget."""
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
-        # A/B comparison state
-        self._group_a_accuracy = 0.0
-        self._group_b_accuracy = 0.0
-        self._group_a_reward = 0.0
-        self._group_b_reward = 0.0
-        self._leader: str | None = None
-        self._ab_mode: bool = False
-
-    @property
-    def leader(self) -> str | None:
-        """Return group ID of current leader (A, B, or None if tied)."""
-        return self._leader
-
-    def update_comparison(
-        self,
-        group_a_accuracy: float,
-        group_b_accuracy: float,
-        group_a_reward: float,
-        group_b_reward: float,
-    ) -> None:
-        """Update A/B comparison metrics.
-
-        Args:
-            group_a_accuracy: Mean accuracy for policy A.
-            group_b_accuracy: Mean accuracy for policy B.
-            group_a_reward: Mean reward for policy A.
-            group_b_reward: Mean reward for policy B.
-        """
-        self._ab_mode = True
-        self._group_a_accuracy = group_a_accuracy
-        self._group_b_accuracy = group_b_accuracy
-        self._group_a_reward = group_a_reward
-        self._group_b_reward = group_b_reward
-
-        # Determine leader: reward-first (primary RL objective), accuracy as tiebreaker
-        reward_delta = group_a_reward - group_b_reward
-        mean_reward = (abs(group_a_reward) + abs(group_b_reward)) / 2
-
-        # Significant reward difference (>5% of mean) is decisive
-        if mean_reward > 0 and abs(reward_delta) > 0.05 * mean_reward:
-            self._leader = "A" if reward_delta > 0 else "B"
-        # Fallback to accuracy for close reward races
-        elif group_a_accuracy > group_b_accuracy:
-            self._leader = "A"
-        elif group_b_accuracy > group_a_accuracy:
-            self._leader = "B"
-        else:
-            self._leader = None
-
-        self.refresh()
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Update widget with new snapshot data."""
@@ -132,65 +87,6 @@ class RunHeader(Static):
             return (f"◐ SLOW ({staleness:.0f}s)", "yellow")
         else:
             return (f"○ STALE ({staleness:.0f}s)", "red")
-
-    def _get_env_health_summary(self) -> str:
-        """Get environment health summary."""
-        if self._snapshot is None or not self._snapshot.envs:
-            return "No envs"
-
-        healthy = 0
-        stalled = 0
-        degraded = 0
-
-        for env in self._snapshot.envs.values():
-            status = env.status.lower()
-            if status in ("healthy", "excellent"):
-                healthy += 1
-            elif status == "stalled":
-                stalled += 1
-            elif status == "degraded":
-                degraded += 1
-            else:
-                healthy += 1  # initializing counts as healthy
-
-        parts = []
-        if healthy > 0:
-            parts.append(f"[green]{healthy} OK[/]")
-        if stalled > 0:
-            parts.append(f"[yellow]{stalled} stall[/]")
-        if degraded > 0:
-            parts.append(f"[red]{degraded} deg[/]")
-
-        return " ".join(parts) if parts else "No envs"
-
-    def _get_seed_stage_counts(self) -> str:
-        """Get seed stage counts across all envs."""
-        if self._snapshot is None or not self._snapshot.envs:
-            return ""
-
-        training = 0
-        blending = 0
-        fossilized = 0
-
-        for env in self._snapshot.envs.values():
-            for seed in env.seeds.values():
-                stage = seed.stage.upper()
-                if stage == "TRAINING":
-                    training += 1
-                elif stage in ("BLENDING", "HOLDING"):
-                    blending += 1
-                elif stage == "FOSSILIZED":
-                    fossilized += 1
-
-        parts = []
-        if training > 0:
-            parts.append(f"[{STAGE_COLORS['TRAINING']}]T:{training}[/]")
-        if blending > 0:
-            parts.append(f"[{STAGE_COLORS['BLENDING']}]B:{blending}[/]")
-        if fossilized > 0:
-            parts.append(f"[{STAGE_COLORS['FOSSILIZED']}]F:{fossilized}[/]")
-
-        return " ".join(parts) if parts else "[dim]No seeds[/]"
 
     def _get_system_alarm_indicator(self) -> str:
         """Get system alarm indicator for header.
@@ -241,163 +137,129 @@ class RunHeader(Static):
             return True
         return False
 
-    def render(self) -> Panel:
-        """Render the run header panel."""
+    def _render_progress_bar(self, current: int, max_epochs: int, width: int = 16) -> str:
+        """Render epoch progress bar with fixed width.
+
+        Args:
+            current: Current epoch number.
+            max_epochs: Maximum epochs (0 = unbounded).
+            width: Bar width in characters.
+
+        Returns:
+            Progress string like "████████░░░░░░░░ 150/500" or "Epoch 150 (unbounded)".
+        """
+        if max_epochs <= 0:
+            return f"Epoch {current} (unbounded)"
+
+        progress = min(current / max_epochs, 1.0)
+        filled = int(progress * width)
+        bar = "█" * filled + "░" * (width - filled)
+        return f"{bar} {current}/{max_epochs}"
+
+    def _format_run_name(self, name: str | None, max_width: int = 14) -> str:
+        """Format run name with truncation to fixed width.
+
+        Args:
+            name: Run/task name (may be None or empty).
+            max_width: Maximum width including truncation ellipsis.
+
+        Returns:
+            Left-aligned name padded to max_width, or spaces if empty.
+        """
+        if not name:
+            return " " * max_width
+        if len(name) > max_width:
+            return name[: max_width - 1] + "…"
+        return f"{name:<{max_width}}"
+
+    def _format_throughput(self, eps: float, bpm: float) -> str:
+        """Format throughput metrics to fixed width.
+
+        Args:
+            eps: Epochs per second.
+            bpm: Batches per minute.
+
+        Returns:
+            Fixed-width string like "0.8e/s 2.1b/m" (13 chars).
+        """
+        return f"{eps:>3.1f}e/s {bpm:>4.1f}b/m"
+
+    def render(self) -> Text:
+        """Render the run header as a single-line status bar (no border).
+
+        Layout (1 line, fixed-width segments):
+        ● LIVE ✓ │ run_name │ Ep 47 ████████░░░░ 150/500 │ 1h 23m │ 0.8e/s 2.1b/m │ ✓ System
+        """
         if self._snapshot is None:
-            return Panel(
-                Text("Waiting for training data...", style="dim"),
-                title="[bold]RUN STATUS[/bold]",
-                border_style="blue",
-            )
+            return Text("○ WAIT   │ Waiting for training data...", style="dim")
 
         s = self._snapshot
+        row = Text()
 
-        # Build two-row table
-        table = Table(show_header=False, box=None, padding=(0, 1), expand=True)
-        table.add_column("Content", no_wrap=True)
-
-        # === Row 1: Training Progress ===
-        row1 = Text()
-        row1.append("Ep ", style="dim")
-        row1.append(f"{s.current_episode}", style="bold cyan")
-        row1.append("  |  ", style="dim")
-
-        # Epoch progress
-        if s.max_epochs > 0:
-            row1.append(f"{s.current_epoch}/{s.max_epochs}", style="cyan")
-            row1.append(" epochs", style="dim")
+        # === Segment 1: Connection status (6 chars) ===
+        conn_text, conn_style = self._get_connection_status()
+        # Extract icon and status word
+        parts = conn_text.split()
+        icon = parts[0] if parts else "○"
+        # Normalize status to 4 chars: LIVE, SLOW, STAL, DISC
+        if "LIVE" in conn_text:
+            status_word = "LIVE"
+        elif "SLOW" in conn_text:
+            status_word = "SLOW"
+        elif "STALE" in conn_text:
+            status_word = "STAL"
+        elif "Disconnected" in conn_text:
+            status_word = "DISC"
         else:
-            row1.append(f"{s.current_epoch} epochs", style="cyan")
-        row1.append("  |  ", style="dim")
+            status_word = "WAIT"
+        row.append(f"{icon} {status_word}", style=conn_style)
+        row.append(" ", style="dim")
 
-        # Batch
-        row1.append("Batch ", style="dim")
-        row1.append(f"{s.current_batch}", style="cyan")
-        row1.append("  |  ", style="dim")
+        # === Segment 2: Thread status (1 char) ===
+        if s.training_thread_alive is True:
+            row.append("✓", style="green")
+        elif s.training_thread_alive is False:
+            row.append("✗", style="bold red blink")
+        else:
+            row.append("?", style="dim")
 
-        # Runtime
+        row.append(" │ ", style="dim")
+
+        # === Segment 3: Run name (14 chars fixed) ===
+        run_name = self._format_run_name(s.task_name)
+        row.append(run_name, style="italic cyan")
+
+        row.append(" │ ", style="dim")
+
+        # === Segment 4: Episode (right-aligned in 6 chars) ===
+        row.append("Ep ", style="dim")
+        row.append(f"{s.current_episode:>3}", style="bold cyan")
+        row.append(" ", style="dim")
+
+        # === Segment 5: Progress bar + fraction ===
+        progress = self._render_progress_bar(s.current_epoch, s.max_epochs)
+        row.append(progress, style="cyan")
+
+        row.append(" │ ", style="dim")
+
+        # === Segment 6: Runtime (right-aligned) ===
         runtime = _format_runtime(s.runtime_seconds)
-        row1.append(runtime, style="cyan")
-        row1.append("  |  ", style="dim")
+        row.append(f"{runtime:>7}", style="cyan")
 
-        # Throughput: epochs/sec and batches/min (always visible)
+        row.append(" │ ", style="dim")
+
+        # === Segment 7: Throughput (fixed 15 chars) ===
         eps = s.vitals.epochs_per_second
         bpm = s.vitals.batches_per_hour / 60  # Convert to per minute
-        row1.append(f"{eps:.1f}", style="cyan")
-        row1.append(" ep/s  ", style="dim")
-        row1.append(f"{bpm:.1f}", style="cyan")
-        row1.append(" batch/min", style="dim")
-        row1.append("  |  ", style="dim")
+        throughput = self._format_throughput(eps, bpm)
+        row.append(throughput, style="dim")
 
-        # Best accuracy (global)
-        best_accs = [e.best_accuracy for e in s.envs.values() if e.best_accuracy > 0]
-        if best_accs:
-            global_best = max(best_accs)
-            # Find which episode achieved the best
-            best_ep = 0
-            for e in s.envs.values():
-                if e.best_accuracy == global_best:
-                    best_ep = e.best_accuracy_episode
-                    break
-            row1.append("Best: ", style="dim")
-            row1.append(f"{global_best:.1f}%", style="bold green")
-            if best_ep > 0:
-                row1.append(f" (ep {best_ep})", style="dim")
+        # === Segment 8: System alarm indicator (at end) ===
+        row.append(" │ ", style="dim")
+        if self.has_system_alarm:
+            alarm_indicator = self._get_system_alarm_indicator()
+            row.append(f"⚠ {alarm_indicator}", style="bold red")
         else:
-            row1.append("Best: ", style="dim")
-            row1.append("--", style="dim")
+            row.append("✓ System", style="green dim")
 
-        # Rolling average with sparkline (always visible)
-        row1.append("  |  ", style="dim")
-        row1.append("Avg: ", style="dim")
-        if s.mean_accuracy_history:
-            from esper.karn.sanctum.schema import make_sparkline
-            current_mean = s.mean_accuracy_history[-1]
-            sparkline = make_sparkline(s.mean_accuracy_history, width=10)
-            row1.append(f"{current_mean:.1f}%", style="cyan")
-            row1.append(f" {sparkline}", style="cyan")
-        else:
-            row1.append("--", style="dim")
-
-        # A/B Comparison (only when in A/B testing mode)
-        if self._ab_mode:
-            row1.append("  |  ", style="dim")
-            delta_acc = self._group_a_accuracy - self._group_b_accuracy
-            sign = "+" if delta_acc >= 0 else ""
-            # Bold colors for significant differences (>5%)
-            if abs(delta_acc) > 5:
-                acc_style = "green bold" if delta_acc > 0 else "red bold"
-            else:
-                acc_style = "dim"
-            row1.append("A/B: ", style="dim")
-            row1.append(f"{sign}{delta_acc:.1f}%", style=acc_style)
-            row1.append(" acc", style="dim")
-            row1.append("  ", style="dim")
-            # Leader indicator
-            if self._leader:
-                color = "green" if self._leader == "A" else "cyan"
-                row1.append(f"Leading: {self._leader}", style=f"{color} bold")
-            else:
-                row1.append("Tied", style="dim italic")
-
-        table.add_row(row1)
-
-        # === Row 2: Connection + Diagnostics + Health ===
-        row2 = Text()
-
-        # Connection status
-        conn_text, conn_style = self._get_connection_status()
-        row2.append(conn_text, style=conn_style)
-        row2.append("  |  ", style="dim")
-
-        # Thread status indicator (critical for debugging crashes)
-        if s.training_thread_alive is True:
-            row2.append("Thread ", style="dim")
-            row2.append("✓", style="green")
-        elif s.training_thread_alive is False:
-            row2.append("Thread ", style="dim")
-            row2.append("✗ DEAD", style="bold red")
-        else:
-            row2.append("Thread ", style="dim")
-            row2.append("?", style="dim")
-        row2.append("  |  ", style="dim")
-
-        # Event stats - show rate if meaningful
-        if s.total_events_received > 0 and s.runtime_seconds > 0:
-            events_per_sec = s.total_events_received / s.runtime_seconds
-            row2.append(f"{s.total_events_received:,}", style="cyan")
-            row2.append(" events ", style="dim")
-            row2.append(f"({events_per_sec:.1f}/s)", style="dim")
-        else:
-            row2.append(f"{s.total_events_received}", style="cyan")
-            row2.append(" events", style="dim")
-        row2.append("  |  ", style="dim")
-
-        # Env health summary (uses Rich markup, need to parse it)
-        row2.append_text(Text.from_markup(self._get_env_health_summary()))
-        row2.append("  |  ", style="dim")
-
-        # Seed stage counts (uses Rich markup, need to parse it)
-        row2.append_text(Text.from_markup(self._get_seed_stage_counts()))
-
-        # Task name if available
-        if s.task_name:
-            row2.append("  |  ", style="dim")
-            row2.append(s.task_name, style="italic cyan")
-
-        table.add_row(row2)
-
-        # System alarm indicator
-        alarm_indicator = self._get_system_alarm_indicator()
-        alarm_style = "green" if alarm_indicator == "OK" else "bold red"
-
-        # Dynamic border: red when any system alarm active (memory or CPU)
-        border_style = "bold red" if self.has_system_alarm else "blue"
-
-        return Panel(
-            table,
-            title="[bold]RUN STATUS[/bold]",
-            subtitle=f"[{alarm_style}]{alarm_indicator}[/]",
-            subtitle_align="right",
-            border_style=border_style,
-        )
+        return row

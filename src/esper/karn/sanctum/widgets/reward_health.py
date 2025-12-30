@@ -10,10 +10,13 @@ Displays DRL Expert recommended metrics:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from rich.text import Text
 from textual.widgets import Static
+
+if TYPE_CHECKING:
+    from esper.karn.sanctum.schema import SanctumSnapshot
 
 
 @dataclass
@@ -58,35 +61,55 @@ class RewardHealthPanel(Static):
         self._data = data
         self.refresh()
 
+    def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
+        """Update from snapshot data.
+
+        Extracts reward health metrics from the snapshot:
+        - EV explained from Tamiyo explained_variance
+        - Gaming rate from focused env
+        - PBRS fraction from reward components (if available)
+        """
+        # EV explained from policy metrics
+        ev = snapshot.tamiyo.explained_variance
+
+        # Gaming rate from focused env
+        gaming_rate = 0.0
+        focused_env = snapshot.envs.get(snapshot.focused_env_id)
+        if focused_env:
+            gaming_rate = focused_env.gaming_rate
+
+        # PBRS fraction - not directly available, use 0 as placeholder
+        # Would need PBRS signal tracking to properly compute
+        pbrs_fraction = 0.0
+
+        # Hypervolume - not tracked in current schema
+        hypervolume = 0.0
+
+        self._data = RewardHealthData(
+            pbrs_fraction=pbrs_fraction,
+            anti_gaming_trigger_rate=gaming_rate,
+            ev_explained=ev,
+            hypervolume=hypervolume,
+        )
+        self.refresh()
+
     def render(self) -> Text:
-        """Render health indicators as plain Text."""
+        """Render health indicators as plain Text (single-line compact format)."""
         result = Text()
 
-        # PBRS fraction
+        # All metrics on one line: PBRS:25% Game:2% EV:0.72 HV:1.2
         pbrs_color = "green" if self._data.is_pbrs_healthy else "red"
-        result.append("PBRS: ", style="bold")
-        result.append(f"{self._data.pbrs_fraction:.0%}", style=pbrs_color)
-        result.append(" (10-40%)", style="dim")
-        result.append("\n")
-
-        # Anti-gaming
         gaming_color = "green" if self._data.is_gaming_healthy else "red"
-        result.append("Gaming: ", style="bold")
-        result.append(f"{self._data.anti_gaming_trigger_rate:.1%}", style=gaming_color)
-        result.append(" (<5%)", style="dim")
-        result.append("\n")
-
-        # Explained variance
         ev_color = "green" if self._data.is_ev_healthy else "yellow"
-        result.append("EV: ", style="bold")
-        result.append(f"{self._data.ev_explained:.2f}", style=ev_color)
-        result.append(" (>0.5)", style="dim")
-        result.append("\n")
 
-        # Hypervolume
-        result.append("HV: ", style="bold")
+        result.append("PBRS:", style="dim")
+        result.append(f"{self._data.pbrs_fraction:.0%}", style=pbrs_color)
+        result.append(" Game:", style="dim")
+        result.append(f"{self._data.anti_gaming_trigger_rate:.0%}", style=gaming_color)
+        result.append(" EV:", style="dim")
+        result.append(f"{self._data.ev_explained:.2f}", style=ev_color)
+        result.append(" HV:", style="dim")
         result.append(f"{self._data.hypervolume:.1f}", style="cyan")
-        result.append("\n")  # Extra line for visual balance
 
         return result
 

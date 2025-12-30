@@ -13,5 +13,6 @@ Usage:
 
 from .widget import TamiyoBrainV2
 from .ppo_losses_panel import PPOLossesPanel
+from .attention_heatmap import AttentionHeatmapPanel
 
-__all__ = ["TamiyoBrainV2", "PPOLossesPanel"]
+__all__ = ["TamiyoBrainV2", "PPOLossesPanel", "AttentionHeatmapPanel"]

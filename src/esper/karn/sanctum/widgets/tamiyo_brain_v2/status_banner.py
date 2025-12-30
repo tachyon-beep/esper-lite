@@ -18,6 +18,7 @@ from textual.widgets import Static
 
 from esper.karn.constants import TUIThresholds
 from esper.karn.sanctum.schema import detect_trend
+from esper.leyline import DEFAULT_HOST_LSTM_LAYERS
 
 if TYPE_CHECKING:
     from collections import deque
@@ -29,7 +30,6 @@ class StatusBanner(Container):
     """One-line status banner with key metrics."""
 
     WARMUP_BATCHES: ClassVar[int] = 50
-    TOTAL_LAYERS: ClassVar[int] = 12
 
     # Braille spinner characters for warmup animation
     SPINNER_CHARS: ClassVar[str] = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -189,14 +189,14 @@ class StatusBanner(Container):
         banner.append("  ")
 
         # Gradient Health
-        healthy = self.TOTAL_LAYERS - tamiyo.dead_layers - tamiyo.exploding_layers
+        healthy = DEFAULT_HOST_LSTM_LAYERS - tamiyo.dead_layers - tamiyo.exploding_layers
         if tamiyo.dead_layers > 0 or tamiyo.exploding_layers > 0:
             banner.append(
                 f"GradHP:{tamiyo.dead_layers}D/{tamiyo.exploding_layers}E",
                 style="red",
             )
         else:
-            banner.append(f"GradHP:{healthy}/{self.TOTAL_LAYERS}✓", style="green")
+            banner.append(f"GradHP:{healthy}/{DEFAULT_HOST_LSTM_LAYERS}✓", style="green")
         banner.append("  ")
 
         # Batch progress (snapshot is non-None when this method is called)

@@ -24,6 +24,7 @@ ACTION_COLORS: dict[str, str] = {
     "FOSSILIZE": "blue",
     "PRUNE": "red",
     "WAIT": "dim",
+    "ADVANCE": "yellow",
 }
 
 ACTION_ABBREVS: dict[str, str] = {
@@ -32,6 +33,7 @@ ACTION_ABBREVS: dict[str, str] = {
     "FOSSILIZE": "F",
     "PRUNE": "P",
     "WAIT": "W",
+    "ADVANCE": "V",  # V for adVance (A is taken by SET_ALPHA_TARGET)
 }
 
 
@@ -105,7 +107,7 @@ class ActionContext(Static):
         result.append(self._render_action_sequence())
         result.append("\n")
         result.append(self._render_return_history())
-        result.append("\n")  # Extra line for visual balance
+        result.append("\n")  # Extra line for visual breathing room
         return result
 
     def _render_action_bar(self) -> Text:
@@ -126,7 +128,7 @@ class ActionContext(Static):
         result = Text()
         result.append("[")
 
-        for action in ["GERMINATE", "SET_ALPHA_TARGET", "FOSSILIZE", "PRUNE", "WAIT"]:
+        for action in ["GERMINATE", "SET_ALPHA_TARGET", "FOSSILIZE", "PRUNE", "ADVANCE", "WAIT"]:
             pct = pcts.get(action, 0)
             width = int((pct / 100) * self.BAR_WIDTH)
             if width > 0:
@@ -134,9 +136,9 @@ class ActionContext(Static):
 
         result.append("]")
 
-        # Compact legend: 18G 4A 0F 17P 40W
-        result.append(" ")
-        for action in ["GERMINATE", "SET_ALPHA_TARGET", "FOSSILIZE", "PRUNE", "WAIT"]:
+        # Compact legend on new line: 18G 4A 0F 17P 2V 40W
+        result.append("\n")
+        for action in ["GERMINATE", "SET_ALPHA_TARGET", "FOSSILIZE", "PRUNE", "ADVANCE", "WAIT"]:
             pct = pcts.get(action, 0)
             abbrev = ACTION_ABBREVS[action]
             color = ACTION_COLORS[action]

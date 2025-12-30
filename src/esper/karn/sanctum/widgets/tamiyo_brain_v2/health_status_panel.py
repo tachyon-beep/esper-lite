@@ -19,6 +19,7 @@ from rich.text import Text
 from textual.widgets import Static
 
 from esper.karn.constants import TUIThresholds
+from esper.leyline import DEFAULT_HOST_LSTM_LAYERS
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
@@ -29,8 +30,6 @@ class HealthStatusPanel(Static):
 
     Extends Static directly for minimal layout overhead.
     """
-
-    TOTAL_LAYERS: ClassVar[int] = 12
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -114,11 +113,11 @@ class HealthStatusPanel(Static):
 
         # Layer health
         result.append("Layers       ", style="dim")
-        healthy = self.TOTAL_LAYERS - tamiyo.dead_layers - tamiyo.exploding_layers
+        healthy = DEFAULT_HOST_LSTM_LAYERS - tamiyo.dead_layers - tamiyo.exploding_layers
         if tamiyo.dead_layers > 0 or tamiyo.exploding_layers > 0:
             result.append(f"{tamiyo.dead_layers}D/{tamiyo.exploding_layers}E", style="red")
         else:
-            result.append(f"{healthy}/{self.TOTAL_LAYERS} ✓", style="green")
+            result.append(f"{healthy}/{DEFAULT_HOST_LSTM_LAYERS} ✓", style="green")
         result.append("\n")
 
         # Entropy trend
@@ -131,6 +130,15 @@ class HealthStatusPanel(Static):
 
         # Value range
         result.append(self._render_value_stats())
+        result.append("\n")
+
+        # Learning rate (useful for debugging LR schedules)
+        result.append("Learn Rate   ", style="dim")
+        lr = tamiyo.learning_rate
+        if lr is not None and lr > 0:
+            result.append(f"{lr:.2e}", style="cyan")
+        else:
+            result.append("---", style="dim")
 
         return result
 

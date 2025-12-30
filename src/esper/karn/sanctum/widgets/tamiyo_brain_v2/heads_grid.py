@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from rich.text import Text
 from textual.widgets import Static
 
+from esper.leyline import DEFAULT_HOST_LSTM_LAYERS
+
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot
 
@@ -154,7 +156,7 @@ class HeadsPanel(Static):
         # Dead/Exploding layers (use existing TamiyoState fields)
         dead = tamiyo.dead_layers
         exploding = tamiyo.exploding_layers
-        total = 12  # TOTAL_LAYERS constant
+        total = DEFAULT_HOST_LSTM_LAYERS
         layers_style = "green" if (dead == 0 and exploding == 0) else "red"
         result.append(f"Dead:{dead}/{total}   Exploding:{exploding}/{total}   ", style=layers_style)
 
@@ -162,6 +164,9 @@ class HeadsPanel(Static):
         clip_pos = tamiyo.gradient_quality.clip_fraction_positive
         clip_neg = tamiyo.gradient_quality.clip_fraction_negative
         result.append(f"Clip:\u2191{clip_pos:.0%}/\u2193{clip_neg:.0%}", style="dim")
+
+        # Extra line for visual breathing room
+        result.append("\n")
 
         return result
 

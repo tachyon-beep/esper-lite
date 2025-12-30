@@ -27,7 +27,8 @@ def test_heads_panel_shows_gradient_flow_footer():
     content = panel.render()
 
     content_str = str(content)
-    # Should show gradient CV
-    assert "CV" in content_str or "0.42" in content_str
-    # Should show directional clip
-    assert "↑" in content_str or "↓" in content_str or "10%" in content_str
+    # Should show gradient CV with value and status
+    assert "CV:0.42" in content_str
+    assert "stable" in content_str
+    # Should show directional clip fractions
+    assert "Clip:" in content_str

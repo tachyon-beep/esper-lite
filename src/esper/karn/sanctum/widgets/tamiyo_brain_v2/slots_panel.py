@@ -57,20 +57,23 @@ class SlotsPanel(Static):
         stages = ["DORMANT", "GERMINATED", "TRAINING", "BLENDING", "HOLDING", "FOSSILIZED"]
         stage_abbrevs = {k: v.upper() for k, v in STAGE_ABBREVIATIONS.items()}
 
+        # Bar width expanded to fill available space (was 8, now 24)
+        MAX_BAR_WIDTH = 24
+
         for stage in stages:
             count = counts.get(stage, 0)
             abbrev = stage_abbrevs.get(stage, stage[:4])
             color = STAGE_COLORS.get(stage, "dim")
 
-            # Proportional bar (max 8 chars for better visibility)
-            bar_width = min(8, int((count / max(1, total)) * 16)) if total > 0 else 0
-            bar_char = "█" if stage != "DORMANT" else "░"
+            # Proportional bar (expanded to fill panel width)
+            bar_width = int((count / max(1, total)) * MAX_BAR_WIDTH) if total > 0 else 0
+            bar_char = "●" if stage != "DORMANT" else "○"
             bar = bar_char * bar_width
 
             # Left-align abbreviation, right-align count
             result.append(f"{abbrev:<5}", style="dim")
-            result.append(f"{count:>2}", style=color)
-            result.append("  ", style="dim")
+            result.append(f"{count:>3}", style=color)
+            result.append(" ", style="dim")
             if bar:
                 result.append(bar, style=color)
             result.append("\n")

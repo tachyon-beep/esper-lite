@@ -285,25 +285,6 @@ class SanctumApp(App[None]):
             except Exception as e:
                 self.log.warning(f"Failed to update tamiyo widget for {group_id}: {e}")
 
-        # Update RunHeader with A/B comparison data when 2+ policies
-        if len(snapshots) >= 2:
-            try:
-                run_header = self.query_one("#run-header", RunHeader)
-                group_ids = sorted(snapshots.keys())
-                snapshot_a = snapshots[group_ids[0]]
-                snapshot_b = snapshots[group_ids[1]]
-
-                run_header.update_comparison(
-                    group_a_accuracy=snapshot_a.aggregate_mean_accuracy,
-                    group_b_accuracy=snapshot_b.aggregate_mean_accuracy,
-                    group_a_reward=snapshot_a.aggregate_mean_reward,
-                    group_b_reward=snapshot_b.aggregate_mean_reward,
-                )
-            except NoMatches:
-                pass
-            except Exception as e:
-                self.log.warning(f"Failed to update run header comparison: {e}")
-
     def _poll_and_refresh(self) -> None:
         """Poll backend for new snapshot and refresh all panels.
 

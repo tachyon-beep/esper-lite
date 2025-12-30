@@ -9,6 +9,15 @@ Interactive features:
 - j/k or ↑/↓: Navigate rows
 - Enter: Open HistoricalEnvDetail modal with snapshot at peak
 - p: Toggle pin status (pinned rows never get removed)
+
+Columns:
+- # (rank): Medal icons for top 3 (🥇🥈🥉), A/B cohort dot prefix
+- Ep: Episode number
+- @: Epoch when peak was achieved (early peak = more potential)
+- Peak: Best accuracy achieved
+- Traj: Trajectory arrow showing peak→final (↗ climbing, ─→ held, ↘ regressed)
+- Growth: Parameter growth ratio
+- Seeds: Contributing seed blueprints with improvement deltas
 """
 from __future__ import annotations
 
@@ -22,6 +31,17 @@ from esper.leyline import STAGE_COLORS
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import BestRunRecord, SanctumSnapshot, SeedState
+
+
+# A/B test cohort styling - colored pips for reward modes (matches env_overview.py)
+_AB_STYLES: dict[str, tuple[str, str]] = {
+    "shaped": ("●", "bright_blue"),       # Blue pip for shaped
+    "simplified": ("●", "bright_yellow"),  # Yellow pip for simplified
+    "sparse": ("●", "bright_cyan"),        # Cyan pip for sparse
+}
+
+# Medal icons for top 3
+_MEDALS: tuple[str, str, str] = ("🥇", "🥈", "🥉")
 
 
 class Scoreboard(Static):
@@ -60,32 +80,53 @@ class Scoreboard(Static):
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
         self._displayed_records: list["BestRunRecord"] = []
+        self._bottom_records: list["BestRunRecord"] = []
         self.border_title = "BEST RUNS"
         self.table: DataTable[Any] = DataTable[Any](zebra_stripes=True, cursor_type="row")
+        self.bottom_table: DataTable[Any] = DataTable[Any](zebra_stripes=True, cursor_type="row")
 
     def compose(self) -> Iterator[Static | DataTable[Any]]:
-        """Compose the widget."""
+        """Compose the widget.
+
+        Layout (height budget):
+        - Stats header: 1 line
+        - Top 10 table: 1 header + 10 rows = 11 lines
+        - Separator: 2 lines (whitespace + "WORST TRAJECTORY" label)
+        - Bottom 3 table: 1 header + 3 rows = 4 lines
+        - Total: ~18 lines
+        """
         yield Static(id="scoreboard-stats")
         yield self.table
+        yield Static("\n[bold red]▼ WORST TRAJECTORY[/bold red]", id="bottom-separator")
+        yield self.bottom_table
 
     def on_mount(self) -> None:
         """Setup table columns on mount."""
         self._setup_columns()
+        self._setup_bottom_columns()
 
     def _setup_columns(self) -> None:
-        """Setup leaderboard table columns."""
+        """Setup leaderboard table columns.
+
+        Layout:
+        │ #  │ Ep │ @ │ Peak │  Traj  │Growth│ Seeds        │
+        │●🥇 │ 47 │12 │85.5% │ ─→85.2 │1.03x │ conv+2.1     │
+        """
         self.table.clear(columns=True)
-        self.table.add_column("#", key="rank", width=3)
-        self.table.add_column("Ep", key="episode", width=4)
-        self.table.add_column("Acc", key="accuracy", width=6)
-        self.table.add_column("Growth", key="growth", width=7)
-        self.table.add_column("Seeds", key="seeds", width=18)
+        self.table.add_column("#", key="rank", width=4)      # Cohort dot + medal/number
+        self.table.add_column("Ep", key="episode", width=4)  # Episode number
+        self.table.add_column("@", key="epoch", width=3)     # Epoch of peak
+        self.table.add_column("Peak", key="peak", width=6)   # Peak accuracy
+        self.table.add_column("Traj", key="traj", width=8)   # Trajectory arrow + final
+        self.table.add_column("Grw", key="growth", width=6)  # Growth ratio (shortened)
+        self.table.add_column("Seeds", key="seeds", width=14)  # Seed composition
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Update widget with new snapshot data."""
         self._snapshot = snapshot
         self._refresh_stats()
         self._refresh_table()
+        self._refresh_bottom_table()
 
     def _refresh_stats(self) -> None:
         """Refresh the stats header."""
@@ -143,7 +184,7 @@ class Scoreboard(Static):
         best_runs = list(self._snapshot.best_runs)
         if not best_runs:
             self._displayed_records = []
-            self.table.add_row("[dim]No runs yet[/dim]", "", "", "", "")
+            self.table.add_row("[dim]No runs yet[/dim]", "", "", "", "", "", "")
             return
 
         # Sort by peak accuracy, take top 10
@@ -151,13 +192,14 @@ class Scoreboard(Static):
         self._displayed_records = best_runs
 
         for i, record in enumerate(best_runs, start=1):
-            rank_display = f"📌{i}" if record.pinned else str(i)
             # Use record_id if available, otherwise fallback to index-based key
             row_key = record.record_id if record.record_id else f"row_{i}"
             self.table.add_row(
-                rank_display,
+                self._format_rank(i, record),
                 str(record.episode + 1),
+                self._format_epoch(record),
                 f"[bold green]{record.peak_accuracy:.1f}[/bold green]",
+                self._format_trajectory(record),
                 self._format_growth_ratio(record.growth_ratio),
                 self._format_seeds(record.seeds),
                 key=row_key,
@@ -172,25 +214,105 @@ class Scoreboard(Static):
         if saved_scroll_y > 0:
             self.table.scroll_y = saved_scroll_y
 
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        """Handle Enter key on table row."""
-        if not self._displayed_records:
+    def _setup_bottom_columns(self) -> None:
+        """Setup bottom 3 table columns (compact version of top 10).
+
+        Same structure as top 10 but for runs with worst trajectory.
+        """
+        self.bottom_table.clear(columns=True)
+        self.bottom_table.add_column("#", key="rank", width=4)
+        self.bottom_table.add_column("Ep", key="episode", width=4)
+        self.bottom_table.add_column("@", key="epoch", width=3)
+        self.bottom_table.add_column("Peak", key="peak", width=6)
+        self.bottom_table.add_column("Traj", key="traj", width=8)
+        self.bottom_table.add_column("Grw", key="growth", width=6)
+        self.bottom_table.add_column("Seeds", key="seeds", width=14)
+
+    def _refresh_bottom_table(self) -> None:
+        """Refresh the bottom 3 table showing worst trajectory runs.
+
+        Sorts by trajectory (final - peak) ascending to find runs
+        that regressed the most from their peak.
+        """
+        if self._snapshot is None:
             return
 
+        self.bottom_table.clear()
+
+        best_runs = list(self._snapshot.best_runs)
+        if not best_runs:
+            self._bottom_records = []
+            self.bottom_table.add_row("[dim]No data[/dim]", "", "", "", "", "", "")
+            return
+
+        # Sort by trajectory delta (final - peak), ascending = worst regression first
+        # Exclude runs with positive trajectory (still climbing)
+        runs_with_regression = [
+            r for r in best_runs
+            if (r.final_accuracy - r.peak_accuracy) < -0.5  # At least 0.5% regression
+        ]
+
+        if not runs_with_regression:
+            self._bottom_records = []
+            self.bottom_table.add_row("[dim]No regressions[/dim]", "", "", "", "", "", "")
+            return
+
+        # Sort by worst trajectory (most negative delta first)
+        runs_with_regression.sort(key=lambda r: r.final_accuracy - r.peak_accuracy)
+        bottom_3 = runs_with_regression[:3]
+        self._bottom_records = bottom_3
+
+        for i, record in enumerate(bottom_3, start=1):
+            row_key = f"bottom_{record.record_id}" if record.record_id else f"bottom_row_{i}"
+            # Calculate regression severity for rank display
+            delta = record.final_accuracy - record.peak_accuracy
+            if delta < -10:
+                severity = "💀"  # Catastrophic (>10% drop)
+            elif delta < -5:
+                severity = "🔥"  # Severe (5-10% drop)
+            else:
+                severity = "⚠️"   # Warning (0.5-5% drop)
+
+            self.bottom_table.add_row(
+                f"{severity}{i}",
+                str(record.episode + 1),
+                self._format_epoch(record),
+                f"[yellow]{record.peak_accuracy:.1f}[/yellow]",
+                self._format_trajectory(record),
+                self._format_growth_ratio(record.growth_ratio),
+                self._format_seeds(record.seeds),
+                key=row_key,
+            )
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Handle Enter key on table row (works for both top and bottom tables)."""
         row_key = event.row_key
         if row_key is None:
             return
 
         key_value = row_key.value
 
-        # Find record by key - check both record_id and fallback row_N format
-        for i, record in enumerate(self._displayed_records, start=1):
-            if record.record_id and record.record_id == key_value:
-                self.post_message(self.BestRunSelected(record))
-                break
-            elif key_value == f"row_{i}":
-                self.post_message(self.BestRunSelected(record))
-                break
+        # Check if this is a bottom table selection
+        if key_value.startswith("bottom_"):
+            # Search bottom records
+            for i, record in enumerate(self._bottom_records, start=1):
+                if record.record_id and key_value == f"bottom_{record.record_id}":
+                    self.post_message(self.BestRunSelected(record))
+                    return
+                elif key_value == f"bottom_row_{i}":
+                    self.post_message(self.BestRunSelected(record))
+                    return
+        else:
+            # Search top records
+            if not self._displayed_records:
+                return
+            for i, record in enumerate(self._displayed_records, start=1):
+                if record.record_id and record.record_id == key_value:
+                    self.post_message(self.BestRunSelected(record))
+                    return
+                elif key_value == f"row_{i}":
+                    self.post_message(self.BestRunSelected(record))
+                    return
 
     def action_toggle_pin(self) -> None:
         """Toggle pin on currently selected row."""
@@ -204,6 +326,85 @@ class Scoreboard(Static):
         record = self._displayed_records[cursor_row]
         if record.record_id:
             self.post_message(self.BestRunPinToggled(record.record_id))
+
+    def _format_rank(self, rank: int, record: "BestRunRecord") -> str:
+        """Format rank with medal icons and A/B cohort dot.
+
+        Layout: [cohort_dot][medal_or_pin_or_number]
+        Examples:
+        - ●🥇 (cohort dot + gold medal)
+        - ●📌2 (cohort dot + pinned rank 2)
+        - 🥈 (no cohort + silver medal)
+        - 4 (plain rank 4)
+        """
+        parts = []
+
+        # A/B cohort dot prefix
+        if record.reward_mode and record.reward_mode in _AB_STYLES:
+            pip, color = _AB_STYLES[record.reward_mode]
+            parts.append(f"[{color}]{pip}[/{color}]")
+
+        # Medal for top 3, pin indicator, or plain number
+        if record.pinned:
+            parts.append(f"📌{rank}")
+        elif rank <= 3:
+            parts.append(_MEDALS[rank - 1])
+        else:
+            parts.append(str(rank))
+
+        return "".join(parts)
+
+    def _format_epoch(self, record: "BestRunRecord") -> str:
+        """Format epoch when peak was achieved.
+
+        Color coding:
+        - Green: Early peak (epoch < 25) - lots of room to grow
+        - White: Mid peak (25-50)
+        - Yellow: Late peak (50-65)
+        - Red: Very late peak (65+) - near max epochs
+        """
+        epoch = record.epoch
+        if epoch < 25:
+            return f"[green]{epoch}[/green]"
+        elif epoch < 50:
+            return str(epoch)
+        elif epoch < 65:
+            return f"[yellow]{epoch}[/yellow]"
+        else:
+            return f"[red]{epoch}[/red]"
+
+    def _format_trajectory(self, record: "BestRunRecord") -> str:
+        """Format trajectory showing peak→final relationship.
+
+        Arrows:
+        - ↗ (green): Still climbing - final > peak (rare but possible with smoothing)
+        - ─→ (dim): Held steady - within 1% of peak
+        - ↘ (yellow/red): Regressed - final < peak
+
+        Color intensity based on regression severity:
+        - <2% drop: dim arrow
+        - 2-5% drop: yellow
+        - >5% drop: red
+        """
+        peak = record.peak_accuracy
+        final = record.final_accuracy
+        delta = final - peak
+
+        if delta > 0.5:
+            # Still climbing (final > peak)
+            return f"[green]↗{final:.1f}[/green]"
+        elif delta >= -1.0:
+            # Held steady (within 1%)
+            return f"[dim]─→{final:.1f}[/dim]"
+        elif delta >= -2.0:
+            # Small regression
+            return f"[dim]↘{final:.1f}[/dim]"
+        elif delta >= -5.0:
+            # Moderate regression
+            return f"[yellow]↘{final:.1f}[/yellow]"
+        else:
+            # Severe regression (>5% drop)
+            return f"[red]↘{final:.1f}[/red]"
 
     def _format_seeds(self, seeds: dict[str, "SeedState"]) -> str:
         """Format seed composition at peak accuracy with improvement annotations.

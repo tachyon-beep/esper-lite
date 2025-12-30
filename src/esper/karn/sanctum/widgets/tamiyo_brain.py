@@ -19,7 +19,12 @@ from textual.message import Message
 from textual.widgets import Static
 
 from esper.karn.constants import TUIThresholds
-from esper.leyline import ALPHA_CURVE_GLYPHS, STAGE_COLORS, STAGE_ABBREVIATIONS
+from esper.leyline import (
+    ALPHA_CURVE_GLYPHS,
+    DEFAULT_HOST_LSTM_LAYERS,
+    STAGE_ABBREVIATIONS,
+    STAGE_COLORS,
+)
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import DecisionSnapshot, SanctumSnapshot
@@ -104,9 +109,6 @@ class TamiyoBrain(Static):
     # Layout mode thresholds
     HORIZONTAL_THRESHOLD = 96  # Full side-by-side
     COMPACT_HORIZONTAL_THRESHOLD = 85  # Compressed side-by-side
-
-    # Neural network architecture constant
-    _TOTAL_LAYERS = 12
 
     # Sparkline width for trend visibility (Task 1)
     SPARKLINE_WIDTH = 35
@@ -555,9 +557,10 @@ class TamiyoBrain(Static):
             "WAIT": "dim",
             "FOSSILIZE": "blue",
             "PRUNE": "red",
+            "ADVANCE": "yellow",
         }
 
-        for action in ["GERMINATE", "SET_ALPHA_TARGET", "FOSSILIZE", "PRUNE", "WAIT"]:
+        for action in ["GERMINATE", "SET_ALPHA_TARGET", "FOSSILIZE", "PRUNE", "ADVANCE", "WAIT"]:
             pct = pcts.get(action, 0)
             width = int((pct / 100) * bar_width)
             if width > 0:
@@ -565,7 +568,7 @@ class TamiyoBrain(Static):
 
         bar.append("]")
 
-        # Fixed-width legend: G=09 A=02 F=00 P=06 W=60
+        # Fixed-width legend: G=09 A=02 F=00 P=06 V=02 W=60
         # Always show all actions with 2-digit zero-padded percentages for stability
         abbrevs = {
             "GERMINATE": "G",
@@ -573,10 +576,11 @@ class TamiyoBrain(Static):
             "WAIT": "W",
             "FOSSILIZE": "F",
             "PRUNE": "P",
+            "ADVANCE": "V",  # V for adVance (A is taken)
         }
         # Build legend as separate Text for right-justification
         legend_parts = []
-        for action in ["GERMINATE", "SET_ALPHA_TARGET", "FOSSILIZE", "PRUNE", "WAIT"]:
+        for action in ["GERMINATE", "SET_ALPHA_TARGET", "FOSSILIZE", "PRUNE", "ADVANCE", "WAIT"]:
             pct = pcts.get(action, 0)
             legend_parts.append(
                 (f"{abbrevs[action]}={pct:02.0f}", colors.get(action, "white"))
@@ -1206,7 +1210,7 @@ class TamiyoBrain(Static):
             banner.append("  ")
 
             # Gradient health summary (per UX spec)
-            healthy = self._TOTAL_LAYERS - tamiyo.dead_layers - tamiyo.exploding_layers
+            healthy = DEFAULT_HOST_LSTM_LAYERS - tamiyo.dead_layers - tamiyo.exploding_layers
             if tamiyo.dead_layers > 0 or tamiyo.exploding_layers > 0:
                 banner.append(
                     f"GradHP:!! {tamiyo.dead_layers}D/{tamiyo.exploding_layers}E",
@@ -1214,7 +1218,7 @@ class TamiyoBrain(Static):
                 )
             else:
                 banner.append(
-                    f"GradHP:OK {healthy}/{self._TOTAL_LAYERS}", style="green"
+                    f"GradHP:OK {healthy}/{DEFAULT_HOST_LSTM_LAYERS}", style="green"
                 )
             banner.append("  ")
 
@@ -1724,8 +1728,8 @@ class TamiyoBrain(Static):
                 if len(unhealthy_layers) > 4:
                     result.append(f"+{len(unhealthy_layers) - 4} more", style="dim")
         else:
-            healthy = self._TOTAL_LAYERS - tamiyo.dead_layers - tamiyo.exploding_layers
-            result.append(f"OK {healthy}/{self._TOTAL_LAYERS} healthy", style="green")
+            healthy = DEFAULT_HOST_LSTM_LAYERS - tamiyo.dead_layers - tamiyo.exploding_layers
+            result.append(f"OK {healthy}/{DEFAULT_HOST_LSTM_LAYERS} healthy", style="green")
 
         return result
 

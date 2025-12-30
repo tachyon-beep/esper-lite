@@ -2,11 +2,10 @@
  * New layout: Top (EnvOverview + Scoreboard) | Bottom (EventLog + TamiyoBrain)
  */
 
-/* Run Header - fixed height for 2-row display with visual separation */
+/* Run Header - single-line status bar */
 #run-header {
-    height: 6;
-    min-height: 6;
-    margin-bottom: 1;
+    height: 1;
+    min-height: 1;
     background: $surface-lighten-1;  /* Slight background for separation */
 }
 
@@ -15,7 +14,6 @@
     height: 1;
     min-height: 1;
     padding: 0 1;
-    margin-bottom: 1;
 }
 
 /* When anomalies exist, make it stand out */
@@ -28,9 +26,9 @@
     padding: 0 1;
 }
 
-/* Top section: Env Overview + Scoreboard (~40% of main area) */
+/* Top section: Env Overview + Scoreboard (~37% of main area) */
 #top-section {
-    height: 40%;
+    height: 37%;
     min-height: 10;
 }
 
@@ -72,9 +70,9 @@
     margin-bottom: 1;
 }
 
-/* Bottom section: Event Log + TamiyoBrain (~60% of main area) */
+/* Bottom section: Event Log + TamiyoBrain (~63% of main area) */
 #bottom-section {
-    height: 60%;
+    height: 63%;
     min-height: 14;
     width: 100%;
 }
@@ -187,4 +185,27 @@
 /* Hidden class for toggling visibility */
 .hidden {
     display: none;
+}
+
+/* ============================================================================
+   TamiyoBrainV2 Layout
+   ============================================================================ */
+
+/* Heads row: HeadsPanel (65%) | SlotsPanel (35%) */
+#heads-panel {
+    width: 68%;
+}
+
+#slots-panel {
+    width: 32%;
+}
+
+/* Action row: AttentionHeatmap (65%) | ActionStack (35%)
+   Matches heads row widths for visual alignment */
+#attention-heatmap {
+    width: 68%;
+}
+
+#action-stack {
+    width: 32%;
 }
