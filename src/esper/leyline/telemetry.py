@@ -1035,6 +1035,37 @@ class CounterfactualMatrixPayload:
         )
 
 
+@dataclass(slots=True)
+class HeadTelemetry:
+    """Per-head confidence and entropy values for factored action heads.
+
+    Confidence = P(chosen_action | valid_mask) via exp(log_prob).
+    This is the probability among valid actions, properly handling masking.
+
+    Entropy measures how spread out the distribution is (higher = more uncertain).
+    """
+
+    # Per-head confidence (probability of chosen action)
+    op_confidence: float = 0.0
+    slot_confidence: float = 0.0
+    blueprint_confidence: float = 0.0
+    style_confidence: float = 0.0
+    tempo_confidence: float = 0.0
+    alpha_target_confidence: float = 0.0
+    alpha_speed_confidence: float = 0.0
+    curve_confidence: float = 0.0
+
+    # Per-head entropy (distribution spread - higher means more uncertain)
+    op_entropy: float = 0.0
+    slot_entropy: float = 0.0
+    blueprint_entropy: float = 0.0
+    style_entropy: float = 0.0
+    tempo_entropy: float = 0.0
+    alpha_target_entropy: float = 0.0
+    alpha_speed_entropy: float = 0.0
+    curve_entropy: float = 0.0
+
+
 @dataclass(slots=True, frozen=True)
 class AnalyticsSnapshotPayload:
     """Payload for ANALYTICS_SNAPSHOT event. Used for dashboard sync.
@@ -1064,6 +1095,8 @@ class AnalyticsSnapshotPayload:
     total_reward: float | None = None
     action_name: str | None = None  # The op name (e.g., "WAIT", "GERMINATE")
     action_confidence: float | None = None
+    # Per-head telemetry (typed dataclass, not raw dict)
+    head_telemetry: HeadTelemetry | None = None
     value_estimate: float | None = None
     slot_id: str | None = None
     blueprint_id: str | None = None

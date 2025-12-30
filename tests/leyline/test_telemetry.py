@@ -176,3 +176,85 @@ def test_ppo_update_payload_from_dict_parses_new_fields():
     assert payload.cuda_memory_reserved_gb == 10.0
     assert payload.cuda_memory_peak_gb == 7.5
     assert payload.cuda_memory_fragmentation == 0.30
+
+
+# =============================================================================
+# HeadTelemetry Dataclass Tests
+# =============================================================================
+
+
+def test_head_telemetry_dataclass():
+    """HeadTelemetry should hold confidence and entropy for all 8 heads."""
+    from esper.leyline.telemetry import HeadTelemetry
+
+    head_telem = HeadTelemetry(
+        op_confidence=0.85,
+        slot_confidence=0.72,
+        blueprint_confidence=0.91,
+        style_confidence=0.65,
+        tempo_confidence=0.88,
+        alpha_target_confidence=0.77,
+        alpha_speed_confidence=0.69,
+        curve_confidence=0.82,
+        op_entropy=0.3,
+        slot_entropy=0.8,
+        blueprint_entropy=0.5,
+        style_entropy=0.6,
+        tempo_entropy=0.4,
+        alpha_target_entropy=0.55,
+        alpha_speed_entropy=0.45,
+        curve_entropy=0.35,
+    )
+
+    # Verify all confidence fields
+    assert head_telem.op_confidence == 0.85
+    assert head_telem.slot_confidence == 0.72
+    assert head_telem.blueprint_confidence == 0.91
+    assert head_telem.style_confidence == 0.65
+    assert head_telem.tempo_confidence == 0.88
+    assert head_telem.alpha_target_confidence == 0.77
+    assert head_telem.alpha_speed_confidence == 0.69
+    assert head_telem.curve_confidence == 0.82
+
+    # Verify all entropy fields
+    assert head_telem.op_entropy == 0.3
+    assert head_telem.slot_entropy == 0.8
+    assert head_telem.blueprint_entropy == 0.5
+    assert head_telem.style_entropy == 0.6
+    assert head_telem.tempo_entropy == 0.4
+    assert head_telem.alpha_target_entropy == 0.55
+    assert head_telem.alpha_speed_entropy == 0.45
+    assert head_telem.curve_entropy == 0.35
+
+
+def test_analytics_snapshot_payload_accepts_head_telemetry():
+    """AnalyticsSnapshotPayload should accept HeadTelemetry."""
+    from esper.leyline.telemetry import AnalyticsSnapshotPayload, HeadTelemetry
+
+    head_telem = HeadTelemetry(
+        op_confidence=0.85,
+        slot_confidence=0.72,
+        blueprint_confidence=0.91,
+        style_confidence=0.65,
+        tempo_confidence=0.88,
+        alpha_target_confidence=0.77,
+        alpha_speed_confidence=0.69,
+        curve_confidence=0.82,
+        op_entropy=0.3,
+        slot_entropy=0.8,
+        blueprint_entropy=0.5,
+        style_entropy=0.6,
+        tempo_entropy=0.4,
+        alpha_target_entropy=0.55,
+        alpha_speed_entropy=0.45,
+        curve_entropy=0.35,
+    )
+
+    payload = AnalyticsSnapshotPayload(
+        kind="last_action",
+        head_telemetry=head_telem,
+    )
+
+    assert payload.head_telemetry is head_telem
+    assert payload.head_telemetry.op_confidence == 0.85
+    assert payload.head_telemetry.op_entropy == 0.3
