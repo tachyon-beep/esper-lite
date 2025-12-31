@@ -593,3 +593,47 @@ def test_aggregator_populates_compile_status():
     assert snapshot.tamiyo.infrastructure.compile_enabled is True
     assert snapshot.tamiyo.infrastructure.compile_backend == "inductor"
     assert snapshot.tamiyo.infrastructure.compile_mode == "reduce-overhead"
+
+
+def test_aggregator_wires_q_values():
+    """Aggregator wires Q-values from PPO_UPDATE_COMPLETED to TamiyoState."""
+    from esper.karn.sanctum.aggregator import SanctumAggregator
+    from esper.leyline.telemetry import TelemetryEvent, TelemetryEventType, PPOUpdatePayload
+
+    aggregator = SanctumAggregator(num_envs=4)
+
+    # Emit PPO_UPDATE_COMPLETED with Q-values
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        epoch=1,
+        data=PPOUpdatePayload(
+            policy_loss=0.5,
+            value_loss=0.3,
+            entropy=1.2,
+            grad_norm=2.0,
+            kl_divergence=0.01,
+            clip_fraction=0.15,
+            nan_grad_count=0,
+            q_germinate=5.2,
+            q_advance=3.1,
+            q_fossilize=2.8,
+            q_prune=-1.5,
+            q_wait=0.5,
+            q_set_alpha=4.0,
+            q_variance=2.3,
+            q_spread=6.7,
+        ),
+    )
+
+    aggregator.process_event(event)
+    snapshot = aggregator.get_snapshot()
+
+    # Verify Q-values are wired to TamiyoState
+    assert snapshot.tamiyo.q_germinate == 5.2
+    assert snapshot.tamiyo.q_advance == 3.1
+    assert snapshot.tamiyo.q_fossilize == 2.8
+    assert snapshot.tamiyo.q_prune == -1.5
+    assert snapshot.tamiyo.q_wait == 0.5
+    assert snapshot.tamiyo.q_set_alpha == 4.0
+    assert snapshot.tamiyo.q_variance == 2.3
+    assert snapshot.tamiyo.q_spread == 6.7

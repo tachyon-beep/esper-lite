@@ -789,6 +789,16 @@ class SanctumAggregator:
         self._tamiyo.value_min = payload.value_min
         self._tamiyo.value_max = payload.value_max
 
+        # Op-conditioned Q-values (Policy V2)
+        self._tamiyo.q_germinate = payload.q_germinate
+        self._tamiyo.q_advance = payload.q_advance
+        self._tamiyo.q_fossilize = payload.q_fossilize
+        self._tamiyo.q_prune = payload.q_prune
+        self._tamiyo.q_wait = payload.q_wait
+        self._tamiyo.q_set_alpha = payload.q_set_alpha
+        self._tamiyo.q_variance = payload.q_variance
+        self._tamiyo.q_spread = payload.q_spread
+
         # Set initial spread after warmup for relative thresholds
         WARMUP_BATCHES = 50
         if self._tamiyo.initial_value_spread is None and self._current_batch >= WARMUP_BATCHES:
