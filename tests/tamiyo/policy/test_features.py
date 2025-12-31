@@ -14,6 +14,8 @@ _STATE_AFTER_STAGE_DIMS = 15  # alpha, improvement, velocity, tempo, 7 alpha con
 _BLUEPRINT_ONE_HOT_DIMS = 13
 _SLOT_FEATURE_SIZE = 39  # 1 + 10 + 15 + 13
 
+MAX_EPOCHS = 100
+
 
 
 # =============================================================================
@@ -167,7 +169,12 @@ def test_batch_obs_to_features_basic():
     ]
 
     obs, blueprint_indices = batch_obs_to_features(
-        batch_signals, batch_slot_reports, batch_env_states, slot_config, device
+        batch_signals,
+        batch_slot_reports,
+        batch_env_states,
+        slot_config,
+        device,
+        max_epochs=MAX_EPOCHS,
     )
 
     # Obs V3: 23 base + 30 per slot × 3 slots = 113 dims
@@ -212,14 +219,19 @@ def test_batch_obs_to_features_base_features():
     batch_env_states = [_make_mock_parallel_env_state(last_action_success=True, last_action_op=2)]
 
     obs, _ = batch_obs_to_features(
-        batch_signals, batch_slot_reports, batch_env_states, slot_config, device
+        batch_signals,
+        batch_slot_reports,
+        batch_env_states,
+        slot_config,
+        device,
+        max_epochs=MAX_EPOCHS,
     )
 
     # Extract base features (first 23 dims)
     base = obs[0, :23]
 
-    # Check epoch normalization (50 / 150 = 0.333...)
-    assert abs(base[0].item() - (50.0 / 150.0)) < 1e-6
+    # Check epoch normalization (50 / max_epochs)
+    assert abs(base[0].item() - (50.0 / MAX_EPOCHS)) < 1e-6
 
     # Check loss normalization: log(1 + 1.5) / log(16) ≈ 0.3296
     expected_loss_norm = math.log(1 + 1.5) / math.log(16)
@@ -274,7 +286,12 @@ def test_batch_obs_to_features_slot_features():
     ]
 
     obs, _ = batch_obs_to_features(
-        batch_signals, batch_slot_reports, batch_env_states, slot_config, device
+        batch_signals,
+        batch_slot_reports,
+        batch_env_states,
+        slot_config,
+        device,
+        max_epochs=MAX_EPOCHS,
     )
 
     # Extract first slot features (indices 23-52)
@@ -334,7 +351,12 @@ def test_batch_obs_to_features_normalization_ranges():
     ]
 
     obs, _ = batch_obs_to_features(
-        batch_signals, batch_slot_reports, batch_env_states, slot_config, device
+        batch_signals,
+        batch_slot_reports,
+        batch_env_states,
+        slot_config,
+        device,
+        max_epochs=MAX_EPOCHS,
     )
 
     # Check all values are finite
@@ -371,7 +393,12 @@ def test_batch_obs_to_features_action_feedback():
     ]
 
     obs, _ = batch_obs_to_features(
-        batch_signals, batch_slot_reports, batch_env_states, slot_config, device
+        batch_signals,
+        batch_slot_reports,
+        batch_env_states,
+        slot_config,
+        device,
+        max_epochs=MAX_EPOCHS,
     )
 
     # First env: action feedback (indices 16-22)
@@ -409,7 +436,12 @@ def test_batch_obs_to_features_gradient_health_tracking():
     ]
 
     obs, _ = batch_obs_to_features(
-        batch_signals, batch_slot_reports, batch_env_states, slot_config, device
+        batch_signals,
+        batch_slot_reports,
+        batch_env_states,
+        slot_config,
+        device,
+        max_epochs=MAX_EPOCHS,
     )
 
     # gradient_health_prev is at slot feature index 27 within slot
@@ -421,7 +453,12 @@ def test_batch_obs_to_features_gradient_health_tracking():
     batch_env_states = [_make_mock_parallel_env_state()]
 
     obs, _ = batch_obs_to_features(
-        batch_signals, batch_slot_reports, batch_env_states, slot_config, device
+        batch_signals,
+        batch_slot_reports,
+        batch_env_states,
+        slot_config,
+        device,
+        max_epochs=MAX_EPOCHS,
     )
 
     assert abs(obs[0, gradient_health_prev_idx].item() - 1.0) < 1e-6
@@ -451,7 +488,12 @@ def test_batch_obs_to_features_counterfactual_freshness():
         ]
 
         obs, _ = batch_obs_to_features(
-            batch_signals, batch_slot_reports, batch_env_states, slot_config, device
+            batch_signals,
+            batch_slot_reports,
+            batch_env_states,
+            slot_config,
+            device,
+            max_epochs=MAX_EPOCHS,
         )
 
         # counterfactual_fresh is at slot feature index 29
@@ -482,7 +524,12 @@ def test_batch_obs_to_features_dynamic_slots():
     batch_env_states = [_make_mock_parallel_env_state()]
 
     obs, blueprint_indices = batch_obs_to_features(
-        batch_signals, batch_slot_reports, batch_env_states, slot_config, device
+        batch_signals,
+        batch_slot_reports,
+        batch_env_states,
+        slot_config,
+        device,
+        max_epochs=MAX_EPOCHS,
     )
 
     # Obs V3 with 5 slots: 23 base + 30 × 5 = 173 dims
@@ -520,7 +567,12 @@ def test_batch_obs_to_features_stage_distribution():
     batch_env_states = [_make_mock_parallel_env_state()]
 
     obs, _ = batch_obs_to_features(
-        batch_signals, batch_slot_reports, batch_env_states, slot_config, device
+        batch_signals,
+        batch_slot_reports,
+        batch_env_states,
+        slot_config,
+        device,
+        max_epochs=MAX_EPOCHS,
     )
 
     # Stage distribution at indices 13-15 (base features)
@@ -564,7 +616,12 @@ def test_batch_obs_to_features_batch_processing():
     batch_env_states = [_make_mock_parallel_env_state() for _ in range(4)]
 
     obs, blueprint_indices = batch_obs_to_features(
-        batch_signals, batch_slot_reports, batch_env_states, slot_config, device
+        batch_signals,
+        batch_slot_reports,
+        batch_env_states,
+        slot_config,
+        device,
+        max_epochs=MAX_EPOCHS,
     )
 
     # Check shapes
@@ -599,7 +656,12 @@ def test_batch_obs_to_features_inactive_slots_are_zeros():
     batch_env_states = [_make_mock_parallel_env_state()]
 
     obs, _ = batch_obs_to_features(
-        batch_signals, batch_slot_reports, batch_env_states, slot_config, device
+        batch_signals,
+        batch_slot_reports,
+        batch_env_states,
+        slot_config,
+        device,
+        max_epochs=MAX_EPOCHS,
     )
 
     # Check r0c1 slot (indices 53-82) is all zeros
@@ -644,7 +706,12 @@ def test_feature_extraction_performance_cuda_synchronized():
     # Warmup - ensure CUDA context is initialized and kernels are compiled
     for _ in range(10):
         batch_obs_to_features(
-            batch_signals, batch_slot_reports, batch_env_states, slot_config, device
+            batch_signals,
+            batch_slot_reports,
+            batch_env_states,
+            slot_config,
+            device,
+            max_epochs=MAX_EPOCHS,
         )
 
     # Timed measurement with proper CUDA synchronization
@@ -654,7 +721,12 @@ def test_feature_extraction_performance_cuda_synchronized():
     num_iterations = 100
     for _ in range(num_iterations):
         batch_obs_to_features(
-            batch_signals, batch_slot_reports, batch_env_states, slot_config, device
+            batch_signals,
+            batch_slot_reports,
+            batch_env_states,
+            slot_config,
+            device,
+            max_epochs=MAX_EPOCHS,
         )
         torch.cuda.synchronize()  # Force kernel completion before timing
 

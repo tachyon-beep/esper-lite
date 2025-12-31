@@ -5,7 +5,7 @@ Two-panel layout (equal size):
 2. Worst Trajectory (1fr): Bottom 5 runs with most regression from peak
 
 Columns:
-- # (rank): Medal icons for top 3 (🥇🥈🥉), A/B cohort dot prefix
+- # (rank): Plain numeric rank (1-5)
 - Ep: Episode number
 - @: Epoch when peak was achieved (early peak = more potential)
 - Peak: Best accuracy achieved
@@ -25,18 +25,6 @@ from esper.leyline import STAGE_COLORS
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import BestRunRecord, SanctumSnapshot, SeedState
-
-
-# A/B test cohort styling - colored pips for reward modes (matches env_overview.py)
-# Note: cyan reserved for informational data; sparse uses white for distinction
-_AB_STYLES: dict[str, tuple[str, str]] = {
-    "shaped": ("●", "bright_blue"),       # Blue pip for shaped
-    "simplified": ("●", "bright_yellow"),  # Yellow pip for simplified
-    "sparse": ("●", "bright_white"),       # White pip for sparse (cyan reserved for info)
-}
-
-# Medal icons for top 3
-_MEDALS: tuple[str, str, str] = ("🥇", "🥈", "🥉")
 
 
 class Scoreboard(Static):
@@ -116,10 +104,10 @@ class Scoreboard(Static):
 
         Layout:
         │ #  │ Ep │ @ │ Peak │  Traj  │Growth│ Seeds  │
-        │●🥇 │ 47 │12 │85.5% │ ─→85.2 │1.03x │ 1/0/2  │
+        │ 1  │ 47 │12 │85.5% │ ─→85.2 │1.03x │ 1/0/2  │
         """
         self.table.clear(columns=True)
-        self.table.add_column("#", key="rank", width=4)      # Cohort dot + medal/number
+        self.table.add_column("#", key="rank", width=4)      # Rank number (1-5)
         self.table.add_column("Ep", key="episode", width=3)  # Episode number
         self.table.add_column("@", key="epoch", width=2)     # Epoch of peak
         self.table.add_column("Peak", key="peak", width=6)   # Peak accuracy
@@ -205,7 +193,7 @@ class Scoreboard(Static):
             # Use record_id if available, otherwise fallback to index-based key
             row_key = record.record_id if record.record_id else f"row_{i}"
             self.table.add_row(
-                self._format_rank(i, record),
+                str(i),
                 str(record.episode + 1),
                 self._format_epoch(record),
                 f"[bold green]{record.peak_accuracy:.1f}[/bold green]",
@@ -274,17 +262,8 @@ class Scoreboard(Static):
 
         for i, record in enumerate(bottom_5, start=1):
             row_key = f"bottom_{record.record_id}" if record.record_id else f"bottom_row_{i}"
-            # Calculate regression severity for rank display
-            delta = record.final_accuracy - record.peak_accuracy
-            if delta < -10:
-                severity = "💀"  # Catastrophic (>10% drop)
-            elif delta < -5:
-                severity = "🔥"  # Severe (5-10% drop)
-            else:
-                severity = "⚠️"   # Warning (0.5-5% drop)
-
             self.bottom_table.add_row(
-                f"{severity}{i}",
+                str(i),
                 str(record.episode + 1),
                 self._format_epoch(record),
                 f"[yellow]{record.peak_accuracy:.1f}[/yellow]",
@@ -293,33 +272,6 @@ class Scoreboard(Static):
                 self._format_seeds(record.seeds),
                 key=row_key,
             )
-
-    def _format_rank(self, rank: int, record: "BestRunRecord") -> str:
-        """Format rank with medal icons and A/B cohort dot.
-
-        Layout: [cohort_dot][medal_or_pin_or_number]
-        Examples:
-        - ●🥇 (cohort dot + gold medal)
-        - ●📌2 (cohort dot + pinned rank 2)
-        - 🥈 (no cohort + silver medal)
-        - 4 (plain rank 4)
-        """
-        parts = []
-
-        # A/B cohort dot prefix
-        if record.reward_mode and record.reward_mode in _AB_STYLES:
-            pip, color = _AB_STYLES[record.reward_mode]
-            parts.append(f"[{color}]{pip}[/{color}]")
-
-        # Medal for top 3, pin indicator, or plain number
-        if record.pinned:
-            parts.append(f"📌{rank}")
-        elif rank <= 3:
-            parts.append(_MEDALS[rank - 1])
-        else:
-            parts.append(str(rank))
-
-        return "".join(parts)
 
     def _format_epoch(self, record: "BestRunRecord") -> str:
         """Format epoch when peak was achieved.

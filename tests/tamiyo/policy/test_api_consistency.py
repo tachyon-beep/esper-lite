@@ -127,7 +127,14 @@ def test_feature_extraction_returns_tuple():
     batch_env_states = [_make_test_env_state() for _ in range(4)]
     device = torch.device("cpu")
 
-    result = batch_obs_to_features(batch_signals, batch_slot_reports, batch_env_states, config, device)
+    result = batch_obs_to_features(
+        batch_signals,
+        batch_slot_reports,
+        batch_env_states,
+        config,
+        device,
+        max_epochs=100,
+    )
 
     # Must be a tuple
     assert isinstance(result, tuple), f"Expected tuple, got {type(result)}"

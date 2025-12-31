@@ -82,6 +82,7 @@ def test_event_log_with_events():
     )
 
     widget.update_snapshot(snapshot)
+    widget._drip_tick()
 
     # Should have line data for the 3 seconds (each event type per second = 1 line each)
     assert len(widget._line_data) == 3
@@ -171,6 +172,7 @@ def test_event_log_groups_by_second():
     )
 
     widget.update_snapshot(snapshot)
+    widget._drip_tick()
 
     # Should have 2 lines: one for REWARD_COMPUTED ×3, one for SEED_GERMINATED
     assert len(widget._line_data) == 2
@@ -220,6 +222,7 @@ def test_event_log_uses_colors_in_rendering():
     )
 
     widget.update_snapshot(snapshot)
+    widget._drip_tick()
 
     # Line data should contain styled text
     assert len(widget._line_data) == 1

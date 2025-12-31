@@ -96,26 +96,33 @@ class SlotsPanel(Static):
         result.append(" epochs", style="dim")
         result.append("\n")
 
-        # Line 8: Blueprint breakdown (top 3 by fossilization count)
-        result.append("Top 3: ", style="dim")
-
-        # Aggregate fossilized seeds by blueprint across all envs
+        # Line 8-9: Blueprint breakdown (top 3 fossilized blueprints)
         from collections import Counter
-        blueprint_counts: Counter[str] = Counter()
 
+        def render_top_three(label: str, counts: Counter[str]) -> None:
+            result.append(label, style="dim")
+            if counts:
+                top_three = counts.most_common(3)
+                for i, (blueprint_id, count) in enumerate(top_three):
+                    if i > 0:
+                        result.append("  ", style="dim")
+                    bp_abbrev = blueprint_id[:7]  # Abbreviate long blueprint names
+                    result.append(f"{bp_abbrev}({count})", style="blue")
+            else:
+                result.append("none yet", style="dim")
+
+        # "This Batch": current fossilized slot contents across all envs
+        batch_counts: Counter[str] = Counter()
         for env in snapshot.envs.values():
             for seed in env.seeds.values():
                 if seed.stage == "FOSSILIZED" and seed.blueprint_id:
-                    blueprint_counts[seed.blueprint_id] += 1
+                    batch_counts[seed.blueprint_id] += 1
 
-        if blueprint_counts:
-            top_3 = blueprint_counts.most_common(3)
-            for i, (bp, count) in enumerate(top_3):
-                if i > 0:
-                    result.append("  ", style="dim")
-                bp_abbrev = bp[:7]  # Abbreviate long blueprint names
-                result.append(f"{bp_abbrev}({count})", style="blue")
-        else:
-            result.append("none yet", style="dim")
+        render_top_three("Top Three This Batch: ", batch_counts)
+        result.append("\n")
+
+        # "This Run": cumulative fossilizations across the entire run (all slots)
+        run_counts: Counter[str] = Counter(snapshot.cumulative_blueprint_fossilized)
+        render_top_three("Top Three This Run: ", run_counts)
 
         return result

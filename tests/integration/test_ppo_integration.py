@@ -20,6 +20,8 @@ from esper.leyline.slot_config import SlotConfig
 from esper.leyline.signals import TrainingSignals, TrainingMetrics
 from esper.simic.training.parallel_env_state import ParallelEnvState
 
+MAX_EPOCHS = 100
+
 
 def _make_mock_training_signals():
     """Create mock TrainingSignals for testing."""
@@ -85,7 +87,12 @@ class TestPPOFeatureCompatibility:
 
         # Extract features (Obs V3)
         obs, blueprint_indices = batch_obs_to_features(
-            batch_signals, batch_slot_reports, batch_env_states, slot_config, device
+            batch_signals,
+            batch_slot_reports,
+            batch_env_states,
+            slot_config,
+            device,
+            max_epochs=MAX_EPOCHS,
         )
 
         # Obs V3: 23 base + 30 per slot × 3 slots = 113 dims
@@ -153,7 +160,12 @@ class TestPPOEndToEnd:
         batch_env_states = [_make_mock_parallel_env_state()]
 
         obs, blueprint_indices = batch_obs_to_features(
-            batch_signals, batch_slot_reports, batch_env_states, slot_config, device
+            batch_signals,
+            batch_slot_reports,
+            batch_env_states,
+            slot_config,
+            device,
+            max_epochs=MAX_EPOCHS,
         )
 
         state_tensor = obs.unsqueeze(1)
@@ -199,7 +211,12 @@ class TestPPOEndToEnd:
         batch_env_states = [_make_mock_parallel_env_state()]
 
         obs, blueprint_indices = batch_obs_to_features(
-            batch_signals, batch_slot_reports, batch_env_states, slot_config, device
+            batch_signals,
+            batch_slot_reports,
+            batch_env_states,
+            slot_config,
+            device,
+            max_epochs=MAX_EPOCHS,
         )
 
         # Sample action

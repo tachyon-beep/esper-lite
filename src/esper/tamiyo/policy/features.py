@@ -26,7 +26,7 @@ import torch.nn.functional as F
 from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
 from esper.leyline.slot_config import SlotConfig
 # Phase 2 imports: Constants needed for Obs V3 feature extraction
-from esper.leyline import NUM_OPS, NUM_STAGES, DEFAULT_GAMMA, MAX_EPOCHS_IN_STAGE
+from esper.leyline import NUM_OPS, NUM_STAGES, DEFAULT_GAMMA
 # Stage schema for validation and one-hot encoding
 # NOTE: Imported at module level since these are fast O(1) lookups used in hot path
 from esper.leyline.stage_schema import (
@@ -104,11 +104,12 @@ def _extract_base_features_v3(
     num_blending: int,
     num_holding: int,
     slot_config: SlotConfig,
+    max_epochs: int,
 ) -> torch.Tensor:
     """Extract base features (23 dims) for Obs V3.
 
     Base features:
-    - Current epoch (1 dim): normalized to [0, 1] (max 150 epochs)
+    - Current epoch (1 dim): normalized to [0, 1] using runtime max_epochs
     - Current val_loss (1 dim): log-normalized
     - Current val_accuracy (1 dim): normalized to [0, 1]
     - Raw loss history (5 dims): log-normalized, left-padded
@@ -127,14 +128,15 @@ def _extract_base_features_v3(
         num_blending: Number of seeds in BLENDING stage
         num_holding: Number of seeds in HOLDING stage
         slot_config: SlotConfig for normalization
+        max_epochs: Runtime episode length for normalization
 
     Returns:
         torch.Tensor with shape (23,)
     """
     # Current metrics (3 dims)
-    # Normalize epoch to [0, 1] range using 150 as max (typical training length)
-    MAX_EPOCHS_NORM = float(MAX_EPOCHS_IN_STAGE)
-    epoch_norm = float(signal.metrics.epoch) / MAX_EPOCHS_NORM
+    # Normalize epoch to [0, 1] range using runtime max_epochs
+    max_epochs_den = float(max_epochs)
+    epoch_norm = float(signal.metrics.epoch) / max_epochs_den
     # Loss normalization: log(1 + loss) / log(16)
     # Range: [0.0, 1.0] supporting loss values up to 15 before saturation
     # CIFAR-10 baseline 2.3 → 0.4311, TinyStories baseline 10.8 → 0.8954
@@ -188,6 +190,7 @@ def _extract_slot_features_v3(
     slot_report: Any,  # SeedStateReport
     env_state: Any,  # ParallelEnvState
     slot_id: str,
+    max_epochs: int,
 ) -> torch.Tensor:
     """Extract per-slot features (30 dims) for Obs V3.
 
@@ -212,6 +215,7 @@ def _extract_slot_features_v3(
         slot_report: SeedStateReport with current slot state
         env_state: ParallelEnvState with gradient health tracking
         slot_id: Slot identifier for looking up tracked state
+        max_epochs: Runtime episode length for normalization
 
     Returns:
         torch.Tensor with shape (30,)
@@ -250,14 +254,14 @@ def _extract_slot_features_v3(
     alpha_target = slot_report.alpha_target
     alpha_mode_norm = float(slot_report.alpha_mode) / max(_ALPHA_MODE_MAX, 1)
 
-    # Normalize alpha schedule steps by episode length (150 epochs)
-    # CRITICAL: Must use MAX_EPOCHS_IN_STAGE (150) not 25 to preserve temporal resolution
-    # for multi-seed chaining visibility. The LSTM needs to distinguish:
+    # Normalize alpha schedule steps by runtime episode length for multi-seed chaining visibility.
+    # The LSTM needs to distinguish:
     # - Seed A at epoch 50 (fossilization decision)
     # - Seed B at epoch 75 (mid-training)
     # - Seed C at epoch 145 (end-of-episode)
-    # Using 25 would saturate all these to 1.0, breaking sequential scaffolding credit assignment.
-    max_epochs_den = float(MAX_EPOCHS_IN_STAGE)  # 150.0
+    # Using shorter-than-runtime denominators would saturate these to 1.0,
+    # breaking sequential scaffolding credit assignment.
+    max_epochs_den = float(max_epochs)
     alpha_steps_total_norm = min(float(slot_report.alpha_steps_total), max_epochs_den) / max_epochs_den
     alpha_steps_done_norm = min(float(slot_report.alpha_steps_done), max_epochs_den) / max_epochs_den
     time_to_target_norm = min(float(slot_report.time_to_target), max_epochs_den) / max_epochs_den
@@ -284,8 +288,8 @@ def _extract_slot_features_v3(
     # Default to 1.0 (healthy) if not yet tracked for this slot
     gradient_health_prev = env_state.gradient_health_prev.get(slot_id, 1.0)
 
-    # epochs_in_stage_norm (1 dim) - normalize to [0, 1] using MAX_EPOCHS_IN_STAGE (150)
-    # CRITICAL: Must use full episode length to preserve temporal resolution for multi-seed chaining.
+    # epochs_in_stage_norm (1 dim) - normalize to [0, 1] using runtime max_epochs.
+    # Must use full episode length to preserve temporal resolution for multi-seed chaining.
     # The LSTM needs to distinguish stages at different episode points (early/mid/late fossilization).
     epochs_in_stage = slot_report.metrics.epochs_in_current_stage
     epochs_in_stage_norm = min(float(epochs_in_stage), max_epochs_den) / max_epochs_den
@@ -430,7 +434,6 @@ MULTISLOT_FEATURE_SIZE = 113  # Obs V3: 23 + (30 × 3)
 
 # Observation normalization bounds (kept local to avoid heavier imports on the HOT PATH)
 _IMPROVEMENT_CLAMP_PCT_PTS: float = 10.0  # Clamp improvement to ±10 percentage points → [-1, 1]
-_DEFAULT_MAX_EPOCHS_DEN: float = 25.0  # Fallback when obs['max_epochs'] not provided
 _ALPHA_MODE_MAX: int = max(mode.value for mode in AlphaMode)
 _ALPHA_ALGO_MIN: int = min(algo.value for algo in AlphaAlgorithm)
 _ALPHA_ALGO_MAX: int = max(algo.value for algo in AlphaAlgorithm)
@@ -470,6 +473,8 @@ def batch_obs_to_features(
     batch_env_states: list[Any],  # list[ParallelEnvState]
     slot_config: SlotConfig,
     device: torch.device,
+    *,
+    max_epochs: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Extract features for batch of environments (Obs V3).
 
@@ -492,6 +497,7 @@ def batch_obs_to_features(
         batch_env_states: List of ParallelEnvState with action feedback and tracking
         slot_config: Slot configuration defining num_slots and slot_ids
         device: Target device for output tensors
+        max_epochs: Runtime episode length for normalization
 
     Returns:
         obs: [batch, obs_dim] - observation features (base + slots, no blueprint)
@@ -532,6 +538,7 @@ def batch_obs_to_features(
             num_blending=num_blending,
             num_holding=num_holding,
             slot_config=slot_config,
+            max_epochs=max_epochs,
         )
 
         # Extract slot features (30 dims per slot)
@@ -544,6 +551,7 @@ def batch_obs_to_features(
                     slot_report=report,
                     env_state=env_state,
                     slot_id=slot_id,
+                    max_epochs=max_epochs,
                 )
             else:
                 # Inactive slot - all zeros (30 dims)

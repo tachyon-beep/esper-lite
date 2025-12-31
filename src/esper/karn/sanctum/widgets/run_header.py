@@ -19,6 +19,8 @@ System alarms shown in subtitle (right-aligned).
 """
 from __future__ import annotations
 
+import time
+from collections import deque
 from typing import TYPE_CHECKING, Any
 
 from rich.text import Text
@@ -60,10 +62,17 @@ class RunHeader(Static):
         """Initialize RunHeader widget."""
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
+        self._ui_tick_times: deque[float] = deque(maxlen=32)
+        self._ui_hz: float = 0.0
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Update widget with new snapshot data."""
         self._snapshot = snapshot
+        now = time.monotonic()
+        self._ui_tick_times.append(now)
+        if len(self._ui_tick_times) >= 2:
+            dt = self._ui_tick_times[-1] - self._ui_tick_times[0]
+            self._ui_hz = (len(self._ui_tick_times) - 1) / dt if dt > 0 else 0.0
         self.refresh()
 
     def _get_connection_status(self) -> tuple[str, str]:
@@ -287,5 +296,9 @@ class RunHeader(Static):
             row.append(f"⚠ {alarm_indicator}", style="bold red")
         else:
             row.append("✓ System", style="green dim")
+
+        # === Segment 9: UI tick rate (diagnostic) ===
+        row.append(" ", style="dim")
+        row.append(f"@{self._ui_hz:>4.1f}Hz", style="dim")
 
         return row

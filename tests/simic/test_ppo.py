@@ -453,6 +453,7 @@ def test_signals_to_features_with_multislot_params():
         batch_env_states=batch_env_states,
         slot_config=slot_config,
         device=torch.device("cpu"),
+        max_epochs=100,
     )
 
     # Obs V3: 23 base + 30*3 slots = 113 dims (excluding blueprint embeddings)
@@ -541,6 +542,7 @@ def test_signals_to_features_telemetry_slot_alignment() -> None:
         batch_env_states=batch_env_states,
         slot_config=slot_config,
         device=torch.device("cpu"),
+        max_epochs=100,
     )
 
     # V3: Telemetry is embedded in slot features (4 dims: gradient_norm, gradient_health, has_vanishing, has_exploding)

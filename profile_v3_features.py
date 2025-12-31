@@ -16,6 +16,8 @@ from esper.leyline import SlotConfig
 from esper.leyline.signals import TrainingSignals, TrainingMetrics
 from esper.simic.training.parallel_env_state import ParallelEnvState
 
+MAX_EPOCHS = 100
+
 
 def _make_mock_training_signals():
     """Create mock TrainingSignals for profiling."""
@@ -83,7 +85,12 @@ def phase1_baseline_timing(num_warmup=10, num_iterations=100):
     # Warmup
     for _ in range(num_warmup):
         _ = batch_obs_to_features(
-            batch_signals, batch_slot_reports, batch_env_states, slot_config, device
+            batch_signals,
+            batch_slot_reports,
+            batch_env_states,
+            slot_config,
+            device,
+            max_epochs=MAX_EPOCHS,
         )
 
     # Timed runs
@@ -91,7 +98,12 @@ def phase1_baseline_timing(num_warmup=10, num_iterations=100):
     for _ in range(num_iterations):
         start = time.perf_counter()
         obs, bp_indices = batch_obs_to_features(
-            batch_signals, batch_slot_reports, batch_env_states, slot_config, device
+            batch_signals,
+            batch_slot_reports,
+            batch_env_states,
+            slot_config,
+            device,
+            max_epochs=MAX_EPOCHS,
         )
         elapsed = time.perf_counter() - start
         times.append(elapsed * 1000)  # Convert to ms
@@ -134,7 +146,12 @@ def phase2_bottleneck_type(batch_signals, batch_slot_reports, batch_env_states, 
     ) as prof:
         for _ in range(10):
             _ = batch_obs_to_features(
-                batch_signals, batch_slot_reports, batch_env_states, slot_config, device
+                batch_signals,
+                batch_slot_reports,
+                batch_env_states,
+                slot_config,
+                device,
+                max_epochs=MAX_EPOCHS,
             )
 
     print("\n=== CPU Time (Top 10) ===")
@@ -164,7 +181,12 @@ def phase3_batch_scaling(slot_config, device):
         # Warmup
         for _ in range(5):
             _ = batch_obs_to_features(
-                batch_signals, batch_slot_reports, batch_env_states, slot_config, device
+                batch_signals,
+                batch_slot_reports,
+                batch_env_states,
+                slot_config,
+                device,
+                max_epochs=MAX_EPOCHS,
             )
 
         # Timed runs
@@ -172,7 +194,12 @@ def phase3_batch_scaling(slot_config, device):
         for _ in range(50):
             start = time.perf_counter()
             _ = batch_obs_to_features(
-                batch_signals, batch_slot_reports, batch_env_states, slot_config, device
+                batch_signals,
+                batch_slot_reports,
+                batch_env_states,
+                slot_config,
+                device,
+                max_epochs=MAX_EPOCHS,
             )
             elapsed = time.perf_counter() - start
             times.append(elapsed * 1000)

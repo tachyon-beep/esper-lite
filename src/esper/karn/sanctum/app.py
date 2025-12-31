@@ -26,6 +26,7 @@ UNICODE GLYPH REQUIREMENTS:
 from __future__ import annotations
 
 import threading
+import time
 import traceback
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -373,6 +374,7 @@ class SanctumApp(App[None]):
         self._refresh_timer: "Timer | None" = None
         self._pending_view: SanctumView | None = None
         self._apply_view_scheduled = False
+        self._last_heavy_widget_update_ts: float = 0.0
 
     def compose(self) -> ComposeResult:
         """Build the Sanctum layout.
@@ -576,6 +578,9 @@ class SanctumApp(App[None]):
             view: The full view model for this tick.
         """
         snapshot = view.primary
+        now = time.monotonic()
+        heavy_due = (now - self._last_heavy_widget_update_ts) >= 0.5
+
         # Update run header first (most important context)
         try:
             self.query_one("#run-header", RunHeader).update_snapshot(snapshot)
@@ -589,21 +594,24 @@ class SanctumApp(App[None]):
             pass  # Widget hasn't mounted yet
 
         # Update each widget - query by ID and call update_snapshot
-        try:
-            self.query_one("#env-overview", EnvOverview).update_snapshot(snapshot)
-        except NoMatches:
-            pass  # Widget hasn't mounted yet
+        if heavy_due:
+            try:
+                self.query_one("#env-overview", EnvOverview).update_snapshot(snapshot)
+            except NoMatches:
+                pass  # Widget hasn't mounted yet
 
-        try:
-            self.query_one("#scoreboard", Scoreboard).update_snapshot(snapshot)
-        except NoMatches:
-            pass  # Widget hasn't mounted yet
+            try:
+                self.query_one("#scoreboard", Scoreboard).update_snapshot(snapshot)
+            except NoMatches:
+                pass  # Widget hasn't mounted yet
 
-        # Update reward health panels (metrics column and TamiyoBrain)
-        try:
-            self.query_one("#metrics-reward-health", RewardHealthPanel).update_data(view.reward_health)
-        except NoMatches:
-            pass  # Widget hasn't mounted yet
+            # Update reward health panel (metrics column)
+            try:
+                self.query_one("#metrics-reward-health", RewardHealthPanel).update_data(view.reward_health)
+            except NoMatches:
+                pass  # Widget hasn't mounted yet
+
+            self._last_heavy_widget_update_ts = now
 
         # Update TamiyoBrain widgets using multi-group snapshots
         self._refresh_tamiyo_widgets(view.snapshots_by_group)

@@ -1699,6 +1699,7 @@ def train_ppo_vectorized(
             batch_env_states=env_states,
             slot_config=slot_config,
             device=device,
+            max_epochs=max_epochs,
         )
 
     history = []
@@ -2464,6 +2465,7 @@ def train_ppo_vectorized(
                 batch_env_states=env_states,
                 slot_config=slot_config,
                 device=torch.device(device),
+                max_epochs=max_epochs,
             )
             # NOTE: blueprint_indices_batch is passed to get_action() for op-conditioned value (Phase 4)
 

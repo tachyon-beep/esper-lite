@@ -23,6 +23,8 @@ Layout:
 
 from __future__ import annotations
 
+import time
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from rich.text import Text
@@ -123,7 +125,13 @@ class AttentionHeatmapPanel(Static):
     color intensity indicating confidence level.
     """
 
-    MAX_ROWS: ClassVar[int] = 6
+    # 8-row carousel with 5s staggering:
+    # Newest row rotates every 5s, so rows represent ~5/10/…/40s age buckets.
+    MAX_ROWS: ClassVar[int] = 8
+    SWAP_INTERVAL_S: ClassVar[float] = 5.0
+    MAX_DISPLAY_AGE_S: ClassVar[float] = 40.0
+    AGE_PIP_CHAR: ClassVar[str] = "●"
+    AGE_PIP_EMPTY: ClassVar[str] = "○"
 
     # Column widths (expanded for wider heat indicators)
     COL_DEC: ClassVar[int] = 5
@@ -139,7 +147,8 @@ class AttentionHeatmapPanel(Static):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
-        self._cached_decisions: list["DecisionSnapshot"] = []
+        self._displayed_decisions: list["DecisionSnapshot"] = []
+        self._last_swap_ts: float = 0.0
         self.classes = "panel"
         self.border_title = "ACTION HEAD OUTPUTS"
 
@@ -147,24 +156,93 @@ class AttentionHeatmapPanel(Static):
         """Update with new snapshot data."""
         self._snapshot = snapshot
 
-        # Cache decisions - only update if we have new data
-        if snapshot.tamiyo.recent_decisions:
-            self._cached_decisions = list(snapshot.tamiyo.recent_decisions[:self.MAX_ROWS])
+        incoming = list(snapshot.tamiyo.recent_decisions)
+        if incoming:
+            self._refresh_carousel(incoming)
 
         self.refresh()
+
+    def _refresh_carousel(self, incoming: list["DecisionSnapshot"]) -> None:
+        """Update the displayed rows with a 5s-staggered carousel.
+
+        Behavior mirrors DecisionsColumn's stability approach:
+        - Fill quickly until we have MAX_ROWS.
+        - Once full, swap in at most one new decision every SWAP_INTERVAL_S.
+        """
+        displayed_ids = {d.decision_id for d in self._displayed_decisions if d.decision_id}
+        candidates = [d for d in incoming if d.decision_id and d.decision_id not in displayed_ids]
+        if not candidates:
+            return
+
+        candidates.sort(key=lambda d: d.timestamp, reverse=True)
+        now = time.monotonic()
+
+        # Growing phase: add immediately until full (preserve newest-first ordering).
+        if len(self._displayed_decisions) < self.MAX_ROWS:
+            needed = self.MAX_ROWS - len(self._displayed_decisions)
+            to_add = candidates[:needed]
+            for decision in reversed(to_add):
+                self._displayed_decisions.insert(0, decision)
+            if len(self._displayed_decisions) == self.MAX_ROWS and self._last_swap_ts == 0.0:
+                self._last_swap_ts = now
+            return
+
+        # Steady state: swap at most once per interval.
+        if now - self._last_swap_ts < self.SWAP_INTERVAL_S:
+            return
+
+        self._displayed_decisions.insert(0, candidates[0])
+        if len(self._displayed_decisions) > self.MAX_ROWS:
+            self._displayed_decisions.pop()
+        self._last_swap_ts = now
 
     def _rjust_cell(self, result: Text, content: str, width: int, style: str) -> None:
         """Append right-justified content to result."""
         padding = max(0, width - len(content))
         result.append(" " * padding + content, style=style)
 
+    def _age_pip_style(self, age_s: float) -> str:
+        """Return Rich style for age pip (green → yellow → brown → red)."""
+        if self.MAX_DISPLAY_AGE_S <= 0:
+            return "dim"
+        ratio = age_s / self.MAX_DISPLAY_AGE_S
+        if ratio < 0.40:
+            return "green"
+        if ratio < 0.70:
+            return "yellow"
+        if ratio < 0.90:
+            return "#8B4513"  # brown (saddle brown)
+        return "red"
+
+    def _render_dec_cell(
+        self,
+        result: Text,
+        *,
+        row_index: int,
+        decision: "DecisionSnapshot | None",
+        now_dt: datetime,
+    ) -> None:
+        label = f"#{row_index + 1}"
+        if decision is None:
+            content = f"{self.AGE_PIP_EMPTY}{label}"
+            self._rjust_cell(result, content, self.COL_DEC, "dim")
+            return
+
+        age_s = max(0.0, (now_dt - decision.timestamp).total_seconds())
+        padding = max(0, self.COL_DEC - (len(self.AGE_PIP_CHAR) + len(label)))
+        result.append(" " * padding, style="dim")
+        result.append(self.AGE_PIP_CHAR, style=self._age_pip_style(age_s))
+        # Keep the identifier scannable even when pip is red.
+        label_style = "bright_white" if row_index == 0 else "dim"
+        result.append(label, style=label_style)
+
     def render(self) -> Text:
         """Render the head choices table."""
-        # Use cached decisions if available, otherwise show placeholder
-        decisions = self._cached_decisions
+        decisions = self._displayed_decisions
         if not decisions:
             return self._render_placeholder()
 
+        now_dt = datetime.now(timezone.utc)
         result = Text()
 
         # Header row (right-aligned)
@@ -179,22 +257,15 @@ class AttentionHeatmapPanel(Static):
         self._rjust_cell(result, "Curve", self.COL_CURVE, "dim bold")
         result.append("\n")
 
-        # Decision rows
-        for i, decision in enumerate(decisions):
-            self._render_decision_row(result, i, decision)
-            if i < len(decisions) - 1:
+        # Decision rows (pad to fixed height for stability)
+        for i in range(self.MAX_ROWS):
+            decision = decisions[i] if i < len(decisions) else None
+            if decision is not None:
+                self._render_decision_row(result, i, decision, now_dt=now_dt)
+            else:
+                self._render_empty_row(result, i, now_dt=now_dt)
+            if i < self.MAX_ROWS - 1:
                 result.append("\n")
-
-        # Pad to minimum rows for consistent height
-        rows_shown = len(decisions)
-        total_width = (
-            self.COL_DEC + self.COL_OP + self.COL_SLOT + self.COL_BLUEPRINT +
-            self.COL_STYLE + self.COL_TEMPO + self.COL_ALPHA_TGT +
-            self.COL_ALPHA_SPD + self.COL_CURVE
-        )
-        for _ in range(rows_shown, self.MAX_ROWS):
-            result.append("\n")
-            result.append("-" * total_width, style="dim")
 
         return result
 
@@ -216,7 +287,7 @@ class AttentionHeatmapPanel(Static):
 
         # Show placeholder rows
         for i in range(self.MAX_ROWS):
-            self._rjust_cell(result, f"#{i + 1}", self.COL_DEC, "dim")
+            self._render_dec_cell(result, row_index=i, decision=None, now_dt=datetime.now(timezone.utc))
             self._rjust_cell(result, "---", self.COL_OP, "dim")
             self._rjust_cell(result, "---", self.COL_SLOT, "dim")
             self._rjust_cell(result, "---", self.COL_BLUEPRINT, "dim")
@@ -229,13 +300,23 @@ class AttentionHeatmapPanel(Static):
                 result.append("\n")
         return result
 
+    def _render_empty_row(self, result: Text, index: int, *, now_dt: datetime) -> None:
+        self._render_dec_cell(result, row_index=index, decision=None, now_dt=now_dt)
+        self._rjust_cell(result, "---", self.COL_OP, "dim")
+        self._rjust_cell(result, "---", self.COL_SLOT, "dim")
+        self._rjust_cell(result, "---", self.COL_BLUEPRINT, "dim")
+        self._rjust_cell(result, "---", self.COL_STYLE, "dim")
+        self._rjust_cell(result, "---", self.COL_TEMPO, "dim")
+        self._rjust_cell(result, "---", self.COL_ALPHA_TGT, "dim")
+        self._rjust_cell(result, "---", self.COL_ALPHA_SPD, "dim")
+        self._rjust_cell(result, "---", self.COL_CURVE, "dim")
+
     def _render_decision_row(
-        self, result: Text, index: int, decision: "DecisionSnapshot"
+        self, result: Text, index: int, decision: "DecisionSnapshot", *, now_dt: datetime
     ) -> None:
         """Render a single decision row with head choices."""
-        # Row label (right-aligned)
-        label_style = "bright_white" if index == 0 else "dim"
-        self._rjust_cell(result, f"#{index + 1}", self.COL_DEC, label_style)
+        # Row label with age pip (right-aligned)
+        self._render_dec_cell(result, row_index=index, decision=decision, now_dt=now_dt)
 
         # Op (action) with confidence heat (right-aligned)
         action = decision.chosen_action
