@@ -683,6 +683,20 @@ class PPOUpdatePayload:
     value_min: float = 0.0
     value_max: float = 0.0
 
+    # === Op-Conditioned Q-Values (Policy V2) ===
+    # Q(s, op) for each operation - value estimates conditioned on the operation
+    # These show how the critic values different operations in the current state
+    q_germinate: float = 0.0  # Q(s, GERMINATE)
+    q_advance: float = 0.0    # Q(s, ADVANCE)
+    q_fossilize: float = 0.0  # Q(s, FOSSILIZE)
+    q_prune: float = 0.0      # Q(s, PRUNE)
+    q_wait: float = 0.0       # Q(s, WAIT)
+    q_set_alpha: float = 0.0  # Q(s, SET_ALPHA_TARGET)
+
+    # Q-value analysis metrics
+    q_variance: float = 0.0  # Variance across ops (low = critic ignoring op conditioning)
+    q_spread: float = 0.0    # max(Q) - min(Q) across ops
+
     # === Gradient Quality Metrics (per DRL expert review) ===
     # Directional clip: WHERE clipping occurs (not WHETHER policy improved)
     clip_fraction_positive: float = 0.0  # r > 1+ε (probability increases capped)
@@ -759,6 +773,15 @@ class PPOUpdatePayload:
             value_std=data.get("value_std", 0.0),
             value_min=data.get("value_min", 0.0),
             value_max=data.get("value_max", 0.0),
+            # Q-values
+            q_germinate=data.get("q_germinate", 0.0),
+            q_advance=data.get("q_advance", 0.0),
+            q_fossilize=data.get("q_fossilize", 0.0),
+            q_prune=data.get("q_prune", 0.0),
+            q_wait=data.get("q_wait", 0.0),
+            q_set_alpha=data.get("q_set_alpha", 0.0),
+            q_variance=data.get("q_variance", 0.0),
+            q_spread=data.get("q_spread", 0.0),
             # Gradient quality metrics
             clip_fraction_positive=data.get("clip_fraction_positive", 0.0),
             clip_fraction_negative=data.get("clip_fraction_negative", 0.0),
