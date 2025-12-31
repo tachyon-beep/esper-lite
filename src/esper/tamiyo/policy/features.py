@@ -104,10 +104,9 @@ def _extract_base_features_v3(
     num_training: int,
     num_blending: int,
     num_holding: int,
-    host_stabilized: bool,
     slot_config: SlotConfig,
 ) -> torch.Tensor:
-    """Extract base features (24 dims) for Obs V3.
+    """Extract base features (23 dims) for Obs V3.
 
     Base features:
     - Current epoch (1 dim): normalized to [0, 1] (max 150 epochs)
@@ -116,10 +115,11 @@ def _extract_base_features_v3(
     - Raw loss history (5 dims): log-normalized, left-padded
     - Raw accuracy history (5 dims): normalized to [0, 1], left-padded
     - Stage distribution (3 dims): num_training_norm, num_blending_norm, num_holding_norm
-    - Host stabilized flag (1 dim): 0.0 or 1.0
     - Action feedback (7 dims): last_action_success (1) + last_action_op one-hot (6)
 
-    Total: 24 base features
+    Total: 23 base features
+
+    Note: Removed host_stabilized - Tamiyo learns stability from raw telemetry.
 
     Args:
         signal: TrainingSignals with metrics and history
@@ -127,11 +127,10 @@ def _extract_base_features_v3(
         num_training: Number of seeds in TRAINING stage
         num_blending: Number of seeds in BLENDING stage
         num_holding: Number of seeds in HOLDING stage
-        host_stabilized: Whether host has stabilized (boolean)
         slot_config: SlotConfig for normalization
 
     Returns:
-        torch.Tensor with shape (24,)
+        torch.Tensor with shape (23,)
     """
     # Current metrics (3 dims)
     # Normalize epoch to [0, 1] range using 150 as max (typical training length)
@@ -159,9 +158,6 @@ def _extract_base_features_v3(
     num_blending_norm = num_blending / max_slots
     num_holding_norm = num_holding / max_slots
 
-    # Host stabilized flag (1 dim)
-    host_stabilized_float = 1.0 if host_stabilized else 0.0
-
     # Action feedback (7 dims): last_action_success + last_action_op one-hot (6 dims)
     last_action_success = 1.0 if env_state.last_action_success else 0.0
 
@@ -174,7 +170,7 @@ def _extract_base_features_v3(
         num_classes=NUM_OPS
     ).float()
 
-    # Combine all base features (24 dims total)
+    # Combine all base features (23 dims total)
     base_features = (
         [epoch_norm] +  # 1 dim - normalized to [0, 1]
         [val_loss_norm] +  # 1 dim
@@ -182,7 +178,6 @@ def _extract_base_features_v3(
         loss_history_norm +  # 5 dims
         acc_history_norm +   # 5 dims
         [num_training_norm, num_blending_norm, num_holding_norm] +  # 3 dims
-        [host_stabilized_float] +  # 1 dim
         [last_action_success] +  # 1 dim
         last_op_one_hot.tolist()  # 6 dims
     )
@@ -408,10 +403,11 @@ def _vectorized_one_hot(indices: torch.Tensor, device: torch.device) -> torch.Te
 # =============================================================================
 
 # Obs V3 Constants
-# Base features: 24 dims (epoch, val_loss, val_accuracy, history_5 × 2, stage distribution,
-#                         host_stabilized, action feedback: last_action_success + last_action_op one-hot)
+# Base features: 23 dims (epoch, val_loss, val_accuracy, history_5 × 2, stage distribution,
+#                         action feedback: last_action_success + last_action_op one-hot)
 # NOTE: Includes 7 action feedback dims (last_action_success + 6-dim one-hot for last_action_op)
-BASE_FEATURE_SIZE = 24
+# NOTE: Removed host_stabilized - Tamiyo learns stability from raw telemetry
+BASE_FEATURE_SIZE = 23
 
 # Per-slot features (Obs V3 - NO blueprint one-hot, moved to embedding):
 # 1 is_active
@@ -446,17 +442,17 @@ def get_feature_size(slot_config: SlotConfig) -> int:
     """Feature size excluding blueprint embeddings (added by network).
 
     Obs V3 Breakdown:
-        Base features:     24 dims (epoch, val_loss, val_accuracy,
+        Base features:     23 dims (epoch, val_loss, val_accuracy,
                                     loss_history_5, accuracy_history_5,
-                                    stage distribution, host_stabilized,
+                                    stage distribution,
                                     action feedback: last_action_success + last_action_op one-hot)
         Per-slot features: 30 dims × num_slots (stage one-hot, alpha, gradient health,
                                                  contribution, telemetry, etc.)
 
-    For 3 slots: 24 + (30 × 3) = 114 dims
+    For 3 slots: 23 + (30 × 3) = 113 dims
 
     Note: Blueprint embeddings (4 dims × num_slots) are added inside the network
-    via BlueprintEmbedding module, making total network input 114 + 12 = 126 for 3 slots.
+    via BlueprintEmbedding module, making total network input 113 + 12 = 125 for 3 slots.
 
     Args:
         slot_config: Slot configuration defining number of slots
@@ -464,7 +460,7 @@ def get_feature_size(slot_config: SlotConfig) -> int:
     Returns:
         Total observation feature size (excluding blueprint embeddings)
     """
-    BASE_FEATURES = 24  # Includes 7 action feedback dims
+    BASE_FEATURES = 23  # Includes 7 action feedback dims
     SLOT_FEATURES = 30  # Per-slot, excluding blueprint (moved to embedding)
     return BASE_FEATURES + (SLOT_FEATURES * slot_config.num_slots)
 
@@ -483,15 +479,13 @@ def batch_obs_to_features(
     - blueprint_indices: [batch, num_slots] - int64 indices for nn.Embedding lookup
 
     Feature breakdown:
-    - Base features: 24 dims (epoch, loss, accuracy, raw history, stage counts, host stabilized)
+    - Base features: 23 dims (epoch, loss, accuracy, raw history, stage counts)
     - Action feedback: 7 dims (last_action_success + last_action_op one-hot) - INCLUDED in base
     - Per-slot features: 30 dims × num_slots (stage, alpha, gradient health, contribution, etc.)
 
-    For 3 slots: 24 + (30 × 3) = 114 dims
+    For 3 slots: 23 + (30 × 3) = 113 dims
 
-    Note: The spec mentions 121 dims (24 + 7 + 90) suggesting action feedback is separate.
-    However, _extract_base_features_v3() returns 24 dims which INCLUDES the 7 action feedback
-    dims (see lines 120-121). Therefore, the actual dimension is 24 + 90 = 114 for 3 slots.
+    Note: Removed host_stabilized - Tamiyo learns stability from raw telemetry.
 
     Args:
         batch_signals: List of TrainingSignals with metrics and history
@@ -531,18 +525,13 @@ def batch_obs_to_features(
         reports = batch_slot_reports[env_idx]
         num_training, num_blending, num_holding = stage_distributions[env_idx]
 
-        # TODO: [FUTURE FUNCTIONALITY] - Define host_stabilized heuristic from
-        # plateau_epochs / loss trend once those signals are finalized.
-        host_stabilized = False
-
-        # Extract base features (24 dims)
+        # Extract base features (23 dims)
         base_features = _extract_base_features_v3(
             signal=signal,
             env_state=env_state,
             num_training=num_training,
             num_blending=num_blending,
             num_holding=num_holding,
-            host_stabilized=host_stabilized,
             slot_config=slot_config,
         )
 

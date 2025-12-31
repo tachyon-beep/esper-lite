@@ -9,7 +9,7 @@ def test_heads_panel_shows_gradient_flow_footer():
         SanctumSnapshot,
         TamiyoState,
     )
-    from esper.karn.sanctum.widgets.tamiyo_brain_v2.heads_grid import HeadsPanel
+    from esper.karn.sanctum.widgets.tamiyo_brain.heads_grid import HeadsPanel
 
     snapshot = SanctumSnapshot()
     snapshot.tamiyo = TamiyoState()

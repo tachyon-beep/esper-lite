@@ -1,6 +1,6 @@
-"""TamiyoBrainV2 - Main container widget.
+"""TamiyoBrain - Main container widget.
 
-Redesigned policy agent dashboard with CSS-driven layout and
+Policy agent dashboard with CSS-driven layout and
 composable sub-widgets for better maintainability.
 
 === COLOR HIERARCHY (3 concerns only) ===
@@ -45,15 +45,14 @@ if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot
 
 
-class TamiyoBrainV2(Container):
-    """Redesigned Tamiyo policy agent dashboard.
+class TamiyoBrain(Container):
+    """Tamiyo policy agent dashboard.
 
-    Drop-in replacement for TamiyoBrain with improved visual design
-    and composable architecture.
+    Policy agent diagnostics with composable architecture.
     """
 
     DEFAULT_CSS = """
-    TamiyoBrainV2 {
+    TamiyoBrain {
         layout: vertical;
         height: 100%;
         border: round $surface-lighten-2;
@@ -95,17 +94,17 @@ class TamiyoBrainV2(Container):
 
     /* Row containers - explicit heights based on content + border */
     #ppo-row {
-        height: 12;  /* Reduced from 13 to give space to bottom rows */
+        height: 14;  /* Increased from 12 - gained 2 lines from heads-row and action-row */
         width: 100%;
     }
 
     #heads-row {
-        height: 12;  /* Reduced from 13 - removed padding lines */
+        height: 15;  /* Reduced from 17 - removed 2 more lines of whitespace */
         width: 100%;
     }
 
     #action-row {
-        height: 12;  /* Increased from 11 - gained 1 row from ppo-row */
+        height: 13;  /* Reduced from 14 - gave 1 line to ppo-row */
         width: 100%;
     }
 

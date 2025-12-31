@@ -9,7 +9,7 @@ These tests verify the value function divergence detection logic, including:
 
 
 from esper.karn.sanctum.schema import TamiyoState, SanctumSnapshot
-from esper.karn.sanctum.widgets.tamiyo_brain_v2.health_status_panel import HealthStatusPanel
+from esper.karn.sanctum.widgets.tamiyo_brain.health_status_panel import HealthStatusPanel
 
 
 class TestValueFunctionDisplay:

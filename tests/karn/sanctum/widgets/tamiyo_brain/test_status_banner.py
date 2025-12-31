@@ -3,7 +3,7 @@
 import pytest
 
 from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
-from esper.karn.sanctum.widgets.tamiyo_brain_v2.status_banner import StatusBanner
+from esper.karn.sanctum.widgets.tamiyo_brain.status_banner import StatusBanner
 
 
 # =============================================================================

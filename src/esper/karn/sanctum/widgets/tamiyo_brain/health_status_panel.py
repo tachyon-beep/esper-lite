@@ -92,7 +92,7 @@ class HealthStatusPanel(Static):
             result.append(" !", style=self._status_style(joint_status))
         result.append("\n")
 
-        # Per-head ratio max (condensed - only show if any head is concerning)
+        # Per-head ratio max (always visible - dim when healthy, colored when elevated)
         head_ratios = [
             ("Op", tamiyo.head_op_ratio_max),
             ("Sl", tamiyo.head_slot_ratio_max),
@@ -103,15 +103,13 @@ class HealthStatusPanel(Static):
             ("αS", tamiyo.head_alpha_speed_ratio_max),
             ("Cv", tamiyo.head_alpha_curve_ratio_max),
         ]
-        worst_head_ratio = max(r for _, r in head_ratios)
-        if worst_head_ratio > 1.5:  # Show per-head breakdown if any head is elevated
-            result.append("  Per-head:  ", style="dim")
-            for i, (label, ratio) in enumerate(head_ratios):
-                if i > 0:
-                    result.append(" ")
-                color = "red" if ratio > 2.0 else ("yellow" if ratio > 1.5 else "dim")
-                result.append(f"{label}:{ratio:.1f}", style=color)
-            result.append("\n")
+        result.append("  Per-head:  ", style="dim")
+        for i, (label, ratio) in enumerate(head_ratios):
+            if i > 0:
+                result.append(" ")
+            color = "red" if ratio > 2.0 else ("yellow" if ratio > 1.5 else "dim")
+            result.append(f"{label}:{ratio:.1f}", style=color)
+        result.append("\n")
 
         # Grad norm
         gn_status = self._get_grad_norm_status(tamiyo.grad_norm)

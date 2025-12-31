@@ -170,8 +170,8 @@ def test_batch_obs_to_features_basic():
         batch_signals, batch_slot_reports, batch_env_states, slot_config, device
     )
 
-    # Obs V3: 24 base + 30 per slot × 3 slots = 114 dims
-    assert obs.shape == (2, 114), f"Expected (2, 114), got {obs.shape}"
+    # Obs V3: 23 base + 30 per slot × 3 slots = 113 dims
+    assert obs.shape == (2, 113), f"Expected (2, 113), got {obs.shape}"
     assert blueprint_indices.shape == (2, 3), f"Expected (2, 3), got {blueprint_indices.shape}"
 
     # Check blueprint indices
@@ -185,7 +185,7 @@ def test_batch_obs_to_features_basic():
 
 
 def test_batch_obs_to_features_base_features():
-    """Base features should be 24 dims with proper normalization."""
+    """Base features should be 23 dims with proper normalization."""
     from esper.tamiyo.policy.features import batch_obs_to_features
     from esper.leyline.slot_config import SlotConfig
     import torch
@@ -215,8 +215,8 @@ def test_batch_obs_to_features_base_features():
         batch_signals, batch_slot_reports, batch_env_states, slot_config, device
     )
 
-    # Extract base features (first 24 dims)
-    base = obs[0, :24]
+    # Extract base features (first 23 dims)
+    base = obs[0, :23]
 
     # Check epoch normalization (50 / 150 = 0.333...)
     assert abs(base[0].item() - (50.0 / 150.0)) < 1e-6
@@ -243,15 +243,12 @@ def test_batch_obs_to_features_base_features():
     assert base[14].item() == 0.0  # num_blending_norm
     assert base[15].item() == 0.0  # num_holding_norm
 
-    # Check host_stabilized (index 16) - False = 0.0
-    assert base[16].item() == 0.0
-
-    # Check action feedback (indices 17-23)
-    assert base[17].item() == 1.0  # last_action_success = True
-    # last_action_op one-hot for op=2 (indices 18-23)
+    # Check action feedback (indices 16-22)
+    assert base[16].item() == 1.0  # last_action_success = True
+    # last_action_op one-hot for op=2 (indices 17-22)
     expected_one_hot = [0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
     for i, expected in enumerate(expected_one_hot):
-        assert abs(base[18 + i].item() - expected) < 1e-6
+        assert abs(base[17 + i].item() - expected) < 1e-6
 
 
 def test_batch_obs_to_features_slot_features():
@@ -280,8 +277,8 @@ def test_batch_obs_to_features_slot_features():
         batch_signals, batch_slot_reports, batch_env_states, slot_config, device
     )
 
-    # Extract first slot features (indices 24-53)
-    slot = obs[0, 24:54]
+    # Extract first slot features (indices 23-52)
+    slot = obs[0, 23:53]
 
     # is_active (index 0 of slot)
     assert slot[0].item() == 1.0
@@ -378,19 +375,19 @@ def test_batch_obs_to_features_action_feedback():
         batch_signals, batch_slot_reports, batch_env_states, slot_config, device
     )
 
-    # First env: action feedback (indices 17-23)
-    assert obs[0, 17].item() == 0.0  # last_action_success = False
+    # First env: action feedback (indices 16-22)
+    assert obs[0, 16].item() == 0.0  # last_action_success = False
     # last_action_op one-hot for op=4
     expected_one_hot = [0.0, 0.0, 0.0, 0.0, 1.0, 0.0]
     for i, expected in enumerate(expected_one_hot):
-        assert abs(obs[0, 18 + i].item() - expected) < 1e-6
+        assert abs(obs[0, 17 + i].item() - expected) < 1e-6
 
     # Second env: action feedback
-    assert obs[1, 17].item() == 1.0  # last_action_success = True
+    assert obs[1, 16].item() == 1.0  # last_action_success = True
     # last_action_op one-hot for op=1
     expected_one_hot = [0.0, 1.0, 0.0, 0.0, 0.0, 0.0]
     for i, expected in enumerate(expected_one_hot):
-        assert abs(obs[1, 18 + i].item() - expected) < 1e-6
+        assert abs(obs[1, 17 + i].item() - expected) < 1e-6
 
 
 def test_batch_obs_to_features_gradient_health_tracking():
@@ -417,8 +414,8 @@ def test_batch_obs_to_features_gradient_health_tracking():
     )
 
     # gradient_health_prev is at slot feature index 27 within slot
-    # Slot starts at 24, gradient_health_prev is at offset 27 within slot
-    gradient_health_prev_idx = 24 + 27  # = 51
+    # Slot starts at 23, gradient_health_prev is at offset 27 within slot
+    gradient_health_prev_idx = 23 + 27  # = 50
     assert abs(obs[0, gradient_health_prev_idx].item() - 0.75) < 1e-6
 
     # Test with no tracked health (should default to 1.0)
@@ -459,7 +456,7 @@ def test_batch_obs_to_features_counterfactual_freshness():
         )
 
         # counterfactual_fresh is at slot feature index 29
-        cf_fresh_idx = 24 + 29  # = 53
+        cf_fresh_idx = 23 + 29  # = 52
         expected = DEFAULT_GAMMA ** epochs
         assert abs(obs[0, cf_fresh_idx].item() - expected) < 1e-4, \
             f"epochs={epochs}: expected {expected}, got {obs[0, cf_fresh_idx].item()}"
@@ -489,8 +486,8 @@ def test_batch_obs_to_features_dynamic_slots():
         batch_signals, batch_slot_reports, batch_env_states, slot_config, device
     )
 
-    # Obs V3 with 5 slots: 24 base + 30 × 5 = 174 dims
-    assert obs.shape == (1, 174), f"Expected (1, 174) for 5 slots, got {obs.shape}"
+    # Obs V3 with 5 slots: 23 base + 30 × 5 = 173 dims
+    assert obs.shape == (1, 173), f"Expected (1, 173) for 5 slots, got {obs.shape}"
     assert blueprint_indices.shape == (1, 5)
 
     # Check blueprint indices
@@ -572,7 +569,7 @@ def test_batch_obs_to_features_batch_processing():
     )
 
     # Check shapes
-    assert obs.shape == (4, 114)
+    assert obs.shape == (4, 113)
     assert blueprint_indices.shape == (4, 3)
 
     # Check each environment has different epoch values
@@ -606,12 +603,12 @@ def test_batch_obs_to_features_inactive_slots_are_zeros():
         batch_signals, batch_slot_reports, batch_env_states, slot_config, device
     )
 
-    # Check r0c1 slot (indices 54-83) is all zeros
-    r0c1_features = obs[0, 54:84]
+    # Check r0c1 slot (indices 53-82) is all zeros
+    r0c1_features = obs[0, 53:83]
     assert torch.all(r0c1_features == 0.0), "Inactive slot should be all zeros"
 
-    # Check r0c2 slot (indices 84-113) is all zeros
-    r0c2_features = obs[0, 84:114]
+    # Check r0c2 slot (indices 83-112) is all zeros
+    r0c2_features = obs[0, 83:113]
     assert torch.all(r0c2_features == 0.0), "Inactive slot should be all zeros"
 
 

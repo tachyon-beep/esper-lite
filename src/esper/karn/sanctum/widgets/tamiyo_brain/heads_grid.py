@@ -30,14 +30,14 @@ if TYPE_CHECKING:
 # Order and widths match HEAD OUTPUTS panel for vertical alignment
 # entropy_coef: Differential entropy coefficient from Policy V2 (1.3x for sparse heads)
 HEAD_CONFIG: list[tuple[str, str, str, int, float]] = [
-    ("Op", "head_op_entropy", "head_op_grad_norm", 13, 1.0),
-    ("Slot", "head_slot_entropy", "head_slot_grad_norm", 11, 1.0),
-    ("Blueprint", "head_blueprint_entropy", "head_blueprint_grad_norm", 14, 1.3),
-    ("Style", "head_style_entropy", "head_style_grad_norm", 14, 1.2),
-    ("Tempo", "head_tempo_entropy", "head_tempo_grad_norm", 11, 1.3),
-    ("αTarget", "head_alpha_target_entropy", "head_alpha_target_grad_norm", 12, 1.2),
-    ("αSpeed", "head_alpha_speed_entropy", "head_alpha_speed_grad_norm", 12, 1.2),
-    ("Curve", "head_alpha_curve_entropy", "head_alpha_curve_grad_norm", 11, 1.2),
+    ("Op", "head_op_entropy", "head_op_grad_norm", 7, 1.0),
+    ("Slot", "head_slot_entropy", "head_slot_grad_norm", 7, 1.0),
+    ("Blueprint", "head_blueprint_entropy", "head_blueprint_grad_norm", 10, 1.3),
+    ("Style", "head_style_entropy", "head_style_grad_norm", 7, 1.2),
+    ("Tempo", "head_tempo_entropy", "head_tempo_grad_norm", 7, 1.3),
+    ("αTarget", "head_alpha_target_entropy", "head_alpha_target_grad_norm", 8, 1.2),
+    ("αSpeed", "head_alpha_speed_entropy", "head_alpha_speed_grad_norm", 7, 1.2),
+    ("Curve", "head_alpha_curve_entropy", "head_alpha_curve_grad_norm", 7, 1.2),
 ]
 
 # Heads that are conditional (only relevant for certain ops) - indexed by label
@@ -92,6 +92,7 @@ class HeadsPanel(Static):
         result.append("      ", style="dim")  # Indent for row label
         for label, _, _, width, _ in HEAD_CONFIG:
             result.append(f"{label:>{width}}", style="dim bold")
+            result.append("  ")  # 2-space padding between columns
         result.append("\n")
 
         # Row 1: Entropy values with coefficient markers (Policy V2)
@@ -110,6 +111,7 @@ class HeadsPanel(Static):
                 result.append(f"×{coef:.1f}", style="cyan dim")
             else:
                 result.append(f"{entropy:>{width}.2f}", style=color)
+            result.append("  ")  # 2-space padding between columns
         result.append("\n")
 
         # Row 2: Entropy bars
@@ -121,6 +123,7 @@ class HeadsPanel(Static):
             padding = width - self.BAR_WIDTH
             result.append(" " * padding)
             result.append(bar)
+            result.append("  ")  # 2-space padding between columns
         result.append("\n")
 
         # Row 3: Gradient values with trend arrows (Policy V2)
@@ -135,6 +138,7 @@ class HeadsPanel(Static):
             val_width = width - 1
             result.append(f"{grad:>{val_width}.2f}", style=color)
             result.append(trend, style=self._gradient_trend_style(grad, grad_prev))
+            result.append("  ")  # 2-space padding between columns
         result.append("\n")
 
         # Row 4: Gradient bars
@@ -146,6 +150,7 @@ class HeadsPanel(Static):
             padding = width - self.BAR_WIDTH
             result.append(" " * padding)
             result.append(bar)
+            result.append("  ")  # 2-space padding between columns
         result.append("\n")
 
         # Row 5: Head state indicators (per DRL expert recommendation)
@@ -154,9 +159,10 @@ class HeadsPanel(Static):
             entropy = getattr(tamiyo, ent_field)
             grad = getattr(tamiyo, grad_field)
             state, style_str = self._head_state(label, entropy, grad)
-            # Shift state indicator 2 chars left from right edge for better centering
-            state_cell = " " * (width - 3) + state + "  "
+            # Center state indicator within the cell
+            state_cell = " " * (width - 1) + state
             result.append(state_cell, style=style_str)
+            result.append("  ")  # 2-space padding between columns
         result.append("\n")
 
         # Row 6-7: Gradient Flow Footer (split across 2 lines for readability)

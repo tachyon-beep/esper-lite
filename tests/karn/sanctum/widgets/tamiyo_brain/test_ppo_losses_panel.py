@@ -7,7 +7,7 @@ from esper.karn.sanctum.schema import (
     SanctumSnapshot,
     TamiyoState,
 )
-from esper.karn.sanctum.widgets.tamiyo_brain_v2.ppo_losses_panel import PPOLossesPanel
+from esper.karn.sanctum.widgets.tamiyo_brain.ppo_losses_panel import PPOLossesPanel
 
 
 def test_ppo_losses_shows_gauges():

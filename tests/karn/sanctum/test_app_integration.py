@@ -127,10 +127,10 @@ async def test_new_layout_structure():
 
 @pytest.mark.asyncio
 async def test_sanctum_app_shows_multiple_tamiyo_widgets():
-    """A/B mode should show two TamiyoBrainV2 widgets side-by-side."""
+    """A/B mode should show two TamiyoBrain widgets side-by-side."""
     from esper.karn.sanctum.app import SanctumApp
     from esper.karn.sanctum.backend import SanctumBackend
-    from esper.karn.sanctum.widgets.tamiyo_brain_v2 import TamiyoBrainV2
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
     from esper.leyline import TelemetryEvent, TelemetryEventType
 
     backend = SanctumBackend(num_envs=4)
@@ -158,8 +158,8 @@ async def test_sanctum_app_shows_multiple_tamiyo_widgets():
         app._poll_and_refresh()
         await pilot.pause()
 
-        # Should have two TamiyoBrainV2 widgets
-        widgets = app.query(TamiyoBrainV2)
+        # Should have two TamiyoBrain widgets
+        widgets = app.query(TamiyoBrain)
         assert len(widgets) == 2
 
         # Each should have correct group class
@@ -174,7 +174,7 @@ async def test_keyboard_switches_between_policies():
     """Tab key should cycle focus between policy widgets."""
     from esper.karn.sanctum.app import SanctumApp
     from esper.karn.sanctum.backend import SanctumBackend
-    from esper.karn.sanctum.widgets.tamiyo_brain_v2 import TamiyoBrainV2
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
     from esper.leyline import TelemetryEvent, TelemetryEventType
 
     backend = SanctumBackend(num_envs=4)
@@ -203,18 +203,18 @@ async def test_keyboard_switches_between_policies():
         app._poll_and_refresh()
         await pilot.pause()
 
-        # Verify we have two TamiyoBrainV2 widgets
-        widgets = list(app.query(TamiyoBrainV2))
+        # Verify we have two TamiyoBrain widgets
+        widgets = list(app.query(TamiyoBrain))
         assert len(widgets) == 2, f"Expected 2 widgets, got {len(widgets)}"
 
-        # TamiyoBrainV2 widgets support keyboard focus (can_focus=True)
+        # TamiyoBrain widgets support keyboard focus (can_focus=True)
         # Just verify they exist and have correct classes - focus cycling is flaky with refresh timers
         # This is sufficient to verify the widget tree is correctly composed
         widget_classes = [set(w.classes) for w in widgets]
         assert any("group-a" in c for c in [" ".join(w.classes) for w in widgets]), "Should have group-a widget"
         assert any("group-b" in c for c in [" ".join(w.classes) for w in widgets]), "Should have group-b widget"
 
-        # Verify both widgets have can_focus=True (they inherited this from TamiyoBrainV2)
+        # Verify both widgets have can_focus=True (they inherited this from TamiyoBrain)
         for w in widgets:
             assert w.can_focus, f"Widget {w.id} should have can_focus=True"
 
@@ -298,10 +298,10 @@ async def test_run_header_no_ab_comparison_in_single_mode():
 
 @pytest.mark.asyncio
 async def test_backend_emits_create_multiple_tamiyo_widgets():
-    """Backend emitting A/B events should create two TamiyoBrainV2 widgets via production path."""
+    """Backend emitting A/B events should create two TamiyoBrain widgets via production path."""
     from esper.karn.sanctum.app import SanctumApp
     from esper.karn.sanctum.backend import SanctumBackend
-    from esper.karn.sanctum.widgets.tamiyo_brain_v2 import TamiyoBrainV2
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
     from esper.leyline import TelemetryEvent, TelemetryEventType
 
     backend = SanctumBackend(num_envs=4)
@@ -330,9 +330,9 @@ async def test_backend_emits_create_multiple_tamiyo_widgets():
         app._poll_and_refresh()
         await pilot.pause()
 
-        # Should have two TamiyoBrainV2 widgets
-        widgets = list(app.query(TamiyoBrainV2))
-        assert len(widgets) == 2, f"Expected 2 TamiyoBrainV2 widgets, got {len(widgets)}"
+        # Should have two TamiyoBrain widgets
+        widgets = list(app.query(TamiyoBrain))
+        assert len(widgets) == 2, f"Expected 2 TamiyoBrain widgets, got {len(widgets)}"
 
         # Each should have correct group class
         classes = [" ".join(w.classes) for w in widgets]

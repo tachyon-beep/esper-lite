@@ -45,7 +45,7 @@ from esper.karn.sanctum.widgets import (
     RewardHealthPanel,
     RunHeader,
     Scoreboard,
-    TamiyoBrainV2,
+    TamiyoBrain,
     ThreadDeathModal,
 )
 
@@ -338,29 +338,29 @@ class SanctumApp(App[None]):
         """Start refresh timer when app mounts."""
         self.set_interval(self._refresh_interval, self._poll_and_refresh)
 
-    def _get_or_create_tamiyo_widget(self, group_id: str) -> TamiyoBrainV2:
-        """Get or create TamiyoBrainV2 widget for a policy group.
+    def _get_or_create_tamiyo_widget(self, group_id: str) -> TamiyoBrain:
+        """Get or create TamiyoBrain widget for a policy group.
 
         Args:
             group_id: Policy group identifier (e.g., "A", "B", "default")
 
         Returns:
-            TamiyoBrainV2 widget for this group.
+            TamiyoBrain widget for this group.
         """
         widget_id = f"tamiyo-{group_id.lower()}"
         css_class = f"group-{group_id.lower()}"
 
         try:
-            return self.query_one(f"#{widget_id}", TamiyoBrainV2)
+            return self.query_one(f"#{widget_id}", TamiyoBrain)
         except NoMatches:
             # Create new widget and mount it
-            widget = TamiyoBrainV2(id=widget_id, classes=css_class)
+            widget = TamiyoBrain(id=widget_id, classes=css_class)
             try:
                 container = self.query_one("#tamiyo-container")
                 container.mount(widget)
                 return widget
             except NoMatches:
-                self.log.warning(f"Cannot mount TamiyoBrainV2 for {group_id}: container not found")
+                self.log.warning(f"Cannot mount TamiyoBrain for {group_id}: container not found")
                 raise
 
     def _refresh_tamiyo_widgets(self) -> None:
@@ -755,8 +755,8 @@ class SanctumApp(App[None]):
 
         self.push_screen(HistoricalEnvDetail(record=record))
 
-    def on_tamiyo_brain_v2_decision_pin_toggled(
-        self, event: TamiyoBrainV2.DecisionPinToggled
+    def on_tamiyo_brain_decision_pin_toggled(
+        self, event: TamiyoBrain.DecisionPinToggled
     ) -> None:
         """Handle click on decision panel to toggle pin status.
 
