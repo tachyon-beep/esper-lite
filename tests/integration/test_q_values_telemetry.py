@@ -169,10 +169,10 @@ def test_q_values_end_to_end_flow():
     assert snapshot.tamiyo.q_spread >= 0.0, "q_spread should be non-negative"
 
     # Print Q-values for verification
-    print(f"\n=== Q-Value Telemetry Flow Test ===")
+    print("\n=== Q-Value Telemetry Flow Test ===")
     print(f"Q-variance: {snapshot.tamiyo.q_variance:.4f}")
     print(f"Q-spread: {snapshot.tamiyo.q_spread:.4f}")
-    print(f"Q-values:")
+    print("Q-values:")
     print(f"  GERMINATE:  {snapshot.tamiyo.q_germinate:.2f}")
     print(f"  ADVANCE:    {snapshot.tamiyo.q_advance:.2f}")
     print(f"  FOSSILIZE:  {snapshot.tamiyo.q_fossilize:.2f}")

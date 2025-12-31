@@ -1,5 +1,4 @@
 """Tests for PPO module."""
-import pytest
 import torch
 
 from esper.leyline import (
@@ -18,7 +17,6 @@ from esper.leyline.slot_config import SlotConfig
 from esper.simic.agent import PPOAgent
 from esper.tamiyo.policy import create_policy
 from esper.tamiyo.policy.features import get_feature_size, batch_obs_to_features
-from esper.simic.training.parallel_env_state import ParallelEnvState
 
 
 def test_ppo_agent_architecture():

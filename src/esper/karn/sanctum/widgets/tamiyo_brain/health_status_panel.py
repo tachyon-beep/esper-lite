@@ -13,7 +13,7 @@ Displays:
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any
 
 from rich.text import Text
 from textual.widgets import Static

@@ -2,7 +2,6 @@
 
 import subprocess
 import inspect
-import pytest
 from pathlib import Path
 
 

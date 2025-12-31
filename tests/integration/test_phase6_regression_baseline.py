@@ -105,7 +105,7 @@ def test_phase6_regression_baseline():
 
     # === Success: All metrics within expected ranges ===
 
-    print(f"\n✓ Phase 6 Regression Baseline:")
+    print("\n✓ Phase 6 Regression Baseline:")
     print(f"  First Accuracy:  {first_accuracy:.2f}%")
     print(f"  Final Accuracy:  {final_accuracy:.2f}%")
     print(f"  Improvement:     {final_accuracy - first_accuracy:+.2f}%")
@@ -121,7 +121,7 @@ def test_phase6_op_conditioning_sanity():
     implementation is working correctly in the training loop.
     """
     from esper.tamiyo.policy.factory import create_policy
-    from esper.leyline import SlotConfig, NUM_OPS
+    from esper.leyline import SlotConfig
     from esper.tamiyo.policy.features import get_feature_size
 
     slot_config = SlotConfig.default()
@@ -152,5 +152,5 @@ def test_phase6_op_conditioning_sanity():
         "This suggests op-conditioning is not working - all ops produce same value."
     )
 
-    print(f"\n✓ Op-conditioning sanity check:")
+    print("\n✓ Op-conditioning sanity check:")
     print(f"  Value std across ops: {value_std:.4f} (> 0.01 threshold)")

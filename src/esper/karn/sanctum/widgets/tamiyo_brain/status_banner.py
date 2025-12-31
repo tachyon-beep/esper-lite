@@ -18,7 +18,6 @@ from textual.widgets import Static
 
 from esper.karn.constants import TUIThresholds
 from esper.karn.sanctum.schema import detect_trend
-from esper.leyline import DEFAULT_HOST_LSTM_LAYERS
 
 if TYPE_CHECKING:
     from collections import deque

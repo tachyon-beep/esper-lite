@@ -350,7 +350,6 @@ def test_batch_obs_to_features_action_feedback():
     """Action feedback should be correctly encoded in base features."""
     from esper.tamiyo.policy.features import batch_obs_to_features
     from esper.leyline.slot_config import SlotConfig
-    from esper.leyline import LifecycleOp
     import torch
 
     slot_config = SlotConfig.default()

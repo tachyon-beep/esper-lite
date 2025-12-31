@@ -26,14 +26,13 @@ import torch.nn.functional as F
 from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
 from esper.leyline.slot_config import SlotConfig
 # Phase 2 imports: Constants needed for Obs V3 feature extraction
-from esper.leyline import NUM_OPS, NUM_STAGES, DEFAULT_GAMMA, NUM_BLUEPRINTS, MAX_EPOCHS_IN_STAGE
+from esper.leyline import NUM_OPS, NUM_STAGES, DEFAULT_GAMMA, MAX_EPOCHS_IN_STAGE
 # Stage schema for validation and one-hot encoding
 # NOTE: Imported at module level since these are fast O(1) lookups used in hot path
 from esper.leyline.stage_schema import (
     VALID_STAGE_VALUES as _VALID_STAGE_VALUES,
     NUM_STAGES as _NUM_STAGE_DIMS,
     stage_to_one_hot as _stage_to_one_hot,
-    STAGE_TO_INDEX as _STAGE_TO_INDEX,
 )
 
 # HOT PATH: ONLY leyline imports allowed!
@@ -43,7 +42,7 @@ _DEBUG_STAGE_VALIDATION = os.environ.get("ESPER_DEBUG_STAGE", "").lower() in ("1
 
 if TYPE_CHECKING:
     # Type hints only - not imported at runtime
-    from esper.leyline import SeedStateReport
+    pass
 
 
 __all__ = [

@@ -1,6 +1,5 @@
 """API consistency tests for (obs, blueprint_indices) tuple flow."""
 
-import pytest
 import torch
 from esper.tamiyo.policy.features import batch_obs_to_features, get_feature_size
 from esper.tamiyo.networks.factored_lstm import FactoredRecurrentActorCritic

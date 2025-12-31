@@ -7,7 +7,6 @@ validation behavior as MaskedCategorical (catching empty masks and inf/nan logit
 import pytest
 import torch
 
-from esper.leyline import HEAD_NAMES
 from esper.tamiyo.networks import FactoredRecurrentActorCritic
 from esper.tamiyo.policy.action_masks import InvalidStateMachineError, MaskedCategorical
 
