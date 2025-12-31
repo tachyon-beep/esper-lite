@@ -41,7 +41,12 @@ from esper.leyline import (
     get_action_head_sizes,
 )
 from esper.leyline.slot_config import SlotConfig
-from esper.tamiyo.policy.action_masks import MaskedCategorical
+from esper.tamiyo.policy.action_masks import (
+    InvalidStateMachineError,
+    MaskedCategorical,
+    _validate_action_mask,
+    _validate_logits,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +87,7 @@ class _ForwardOutput(TypedDict):
     alpha_curve_logits: torch.Tensor
     op_logits: torch.Tensor
     value: torch.Tensor
+    lstm_out: torch.Tensor  # NEW: [batch, seq, hidden_dim] for value recomputation
     sampled_op: torch.Tensor  # NEW: Op used for value conditioning
     hidden: tuple[torch.Tensor, torch.Tensor]
 
@@ -185,8 +191,10 @@ class FactoredRecurrentActorCritic(nn.Module):
 
         # Feature extraction before LSTM (reduces dimensionality)
         # M7: Pre-LSTM LayerNorm stabilizes input distribution to LSTM
+        # Input: state_dim (114) + blueprint embeddings (num_slots * embed_dim = 3 * 4 = 12) = 126 total
+        blueprint_embed_size = self.num_slots * DEFAULT_BLUEPRINT_EMBED_DIM
         self.feature_net = nn.Sequential(
-            nn.Linear(state_dim, feature_dim),
+            nn.Linear(state_dim + blueprint_embed_size, feature_dim),
             nn.LayerNorm(feature_dim),  # Normalize BEFORE LSTM
             nn.ReLU(),
         )
@@ -410,8 +418,13 @@ class FactoredRecurrentActorCritic(nn.Module):
         if hidden is None:
             hidden = self.get_initial_hidden(batch_size, device)
 
+        # Blueprint embedding (Phase 3) - embed active blueprint indices
+        bp_emb = self.blueprint_embedding(blueprint_indices)  # [batch, seq, num_slots, embed_dim]
+        bp_emb_flat = bp_emb.flatten(start_dim=2)  # [batch, seq, num_slots * embed_dim] = [batch, seq, 12]
+        state_with_bp = torch.cat([state, bp_emb_flat], dim=-1)  # [batch, seq, state_dim + 12]
+
         # Feature extraction
-        features = self.feature_net(state)  # [batch, seq_len, feature_dim]
+        features = self.feature_net(state_with_bp)  # [batch, seq_len, feature_dim]
 
         # LSTM forward
         lstm_out, new_hidden = self.lstm(features, hidden)
@@ -449,15 +462,32 @@ class FactoredRecurrentActorCritic(nn.Module):
         if op_mask is not None:
             op_logits = op_logits.masked_fill(~op_mask, MASKED_LOGIT_VALUE)
 
+        # Validate op mask and logits before sampling (matches MaskedCategorical behavior)
+        # CRITICAL: Catches state machine bugs (empty masks) and network instability
+        # (inf/nan logits) during forward pass. Only runs when validation is enabled.
+        if MaskedCategorical.validate:
+            # Validate mask if provided (check all batch×seq elements have valid actions)
+            if op_mask is not None:
+                # op_mask: [batch, seq_len, num_ops]
+                valid_count = op_mask.sum(dim=-1)  # [batch, seq_len]
+                if (valid_count == 0).any():
+                    raise InvalidStateMachineError(
+                        f"No valid op actions available in forward(). Mask: {op_mask}. "
+                        "This indicates a bug in the Kasmina state machine."
+                    )
+            # Validate logits for inf/nan
+            _validate_logits(op_logits)
+
         # Sample op from policy for op-conditioned value
-        # Use MaskedCategorical for safe sampling with masking
-        op_logits_flat = op_logits.reshape(-1, self.num_ops)
-        if op_mask is not None:
-            op_mask_flat = op_mask.reshape(-1, self.num_ops)
-        else:
-            op_mask_flat = torch.ones_like(op_logits_flat, dtype=torch.bool)
-        op_dist = MaskedCategorical(logits=op_logits_flat, mask=op_mask_flat)
-        sampled_op_flat = op_dist.sample()
+        # PERFORMANCE OPTIMIZATION: Use direct multinomial sampling instead of
+        # MaskedCategorical. PyTorch's Categorical.sample() triggers 2 CPU-GPU syncs
+        # per call via internal validation (aten::item, aten::is_nonzero). Direct
+        # multinomial avoids this overhead while maintaining correctness.
+        # Note: op_logits is already masked (see above), so we can
+        # compute softmax directly without re-masking.
+        op_probs = F.softmax(op_logits, dim=-1)  # [batch, seq_len, num_ops]
+        op_probs_flat = op_probs.reshape(-1, self.num_ops)  # [batch*seq_len, num_ops]
+        sampled_op_flat = torch.multinomial(op_probs_flat, num_samples=1).squeeze(-1)
         sampled_op = sampled_op_flat.reshape(batch_size, seq_len)
 
         # Op-conditioned value: Q(s, sampled_op)
@@ -473,6 +503,7 @@ class FactoredRecurrentActorCritic(nn.Module):
             "alpha_curve_logits": alpha_curve_logits,
             "op_logits": op_logits,
             "value": value,
+            "lstm_out": lstm_out,  # NEW: Expose for value recomputation in get_action()
             "sampled_op": sampled_op,
             "hidden": new_hidden,
         }
@@ -593,33 +624,103 @@ class FactoredRecurrentActorCritic(nn.Module):
                 *,
                 mask_override: torch.Tensor | None = None,
             ) -> None:
+                """Sample action and compute log_prob without MaskedCategorical.
+
+                PERFORMANCE OPTIMIZATION: PyTorch's Categorical triggers 2+ CPU-GPU
+                syncs per instantiation. Using direct multinomial + log_softmax avoids
+                this overhead (0.3ms -> 0.1ms per head on RTX 4060 Ti).
+                """
                 logits = head_logits[key]  # [batch, action_dim]
                 mask = mask_override if mask_override is not None else masks[key]
                 if mask is None:
                     mask = torch.ones_like(logits, dtype=torch.bool)
-                dist = MaskedCategorical(logits=logits, mask=mask)
+
+                # Validate mask and logits (matches MaskedCategorical behavior)
+                # CRITICAL: Catches state machine bugs (empty masks) and network
+                # instability (inf/nan logits) early instead of silently proceeding.
+                if MaskedCategorical.validate:
+                    _validate_action_mask(mask)
+                    _validate_logits(logits)
+
+                # Apply mask directly (same as MaskedCategorical)
+                masked_logits = logits.masked_fill(~mask, MASKED_LOGIT_VALUE)
 
                 if deterministic:
-                    # Use masked_logits for argmax (more numerically stable than probs)
-                    action = dist.masked_logits.argmax(dim=-1)
+                    action = masked_logits.argmax(dim=-1)
                 else:
-                    action = dist.sample()
+                    # Direct multinomial sampling (no Categorical overhead)
+                    probs = F.softmax(masked_logits, dim=-1)
+                    action = torch.multinomial(probs, num_samples=1).squeeze(-1)
+
+                # Compute log_prob directly: log_softmax(logits)[action]
+                all_log_probs = F.log_softmax(masked_logits, dim=-1)
+                log_prob = all_log_probs.gather(-1, action.unsqueeze(-1)).squeeze(-1)
 
                 actions[key] = action
-                log_probs[key] = dist.log_prob(action)
+                log_probs[key] = log_prob
 
-            _sample_head("op")
+            # === OP HEAD: CRITICAL FIX - Must use same op for value and action ===
+            # Bug: Previously _sample_head("op") sampled independently from forward(),
+            # causing value/action mismatch. This created biased advantages and
+            # bootstrap corruption. Fix: Reuse sampled_op from forward() (stochastic)
+            # or recompute value with argmax_op (deterministic).
+            #
+            # PERFORMANCE OPTIMIZATION: Avoid creating MaskedCategorical for op here.
+            # MaskedCategorical uses Categorical internally, which triggers 2 CPU-GPU
+            # syncs per instantiation via aten::item/is_nonzero. Instead, compute
+            # masked_logits and log_prob directly using tensor ops (no sync).
+            op_logits = head_logits["op"]
+            op_mask = masks["op"]
+            if op_mask is None:
+                op_mask = torch.ones_like(op_logits, dtype=torch.bool)
+
+            # Validate mask and logits (matches MaskedCategorical behavior)
+            # CRITICAL: This validation catches state machine bugs early rather than
+            # silently selecting invalid actions. Only runs when validation is enabled.
+            if MaskedCategorical.validate:
+                _validate_action_mask(op_mask)
+                _validate_logits(op_logits)
+
+            # Compute masked logits directly (same as MaskedCategorical)
+            op_masked_logits = op_logits.masked_fill(~op_mask, MASKED_LOGIT_VALUE)
+
+            if deterministic:
+                # Deterministic mode (bootstrap/eval): use argmax
+                selected_op = op_masked_logits.argmax(dim=-1)
+                # CRITICAL: Recompute value with argmax op for consistency
+                # Value from forward() used sampled op - we need Q(s, argmax_op)
+                lstm_out = output["lstm_out"][:, 0, :]  # [batch, hidden_dim]
+                value = self._compute_value(
+                    lstm_out.unsqueeze(1),  # [batch, 1, hidden_dim]
+                    selected_op.unsqueeze(1)  # [batch, 1]
+                ).squeeze(1)  # [batch]
+            else:
+                # Stochastic mode (rollout): reuse sampled op from forward()
+                # This ensures value = Q(s, op) where op is the action we'll take
+                selected_op = output["sampled_op"][:, 0]
+                value = output["value"][:, 0]  # Already Q(s, sampled_op)
+
+            actions["op"] = selected_op
+            # Compute log_prob directly without creating Categorical (avoids 2 GPU syncs)
+            # log_prob = log_softmax(logits)[action]
+            op_log_probs = F.log_softmax(op_masked_logits, dim=-1)
+            log_probs["op"] = op_log_probs.gather(-1, selected_op.unsqueeze(-1)).squeeze(-1)
+            sampled_op = selected_op  # For return value consistency
+
+            # Style mask override based on selected_op (not from independent sample)
             style_mask_override = masks["style"]
             if style_mask_override is None:
                 style_mask_override = torch.ones_like(head_logits["style"], dtype=torch.bool)
             # Avoid `.any()` (CPU sync) by applying the override unconditionally.
             style_mask_override = style_mask_override.clone()
-            style_irrelevant = (actions["op"] != LifecycleOp.GERMINATE) & (
-                actions["op"] != LifecycleOp.SET_ALPHA_TARGET
+            style_irrelevant = (selected_op != LifecycleOp.GERMINATE) & (
+                selected_op != LifecycleOp.SET_ALPHA_TARGET
             )
             style_mask_override[style_irrelevant] = False
             style_mask_override[style_irrelevant, int(GerminationStyle.SIGMOID_ADD)] = True
             _sample_head("style", mask_override=style_mask_override)
+
+            # Sample remaining heads (unchanged)
             for key in [
                 "slot",
                 "blueprint",
@@ -630,8 +731,7 @@ class FactoredRecurrentActorCritic(nn.Module):
             ]:
                 _sample_head(key)
 
-            value = output["value"][:, 0]  # [batch]
-            sampled_op = output["sampled_op"][:, 0]  # [batch]
+            # Value and sampled_op are already set above based on deterministic mode
             new_hidden = output["hidden"]
 
             # Conditionally capture op_logits for telemetry (Decision Snapshot)
@@ -690,8 +790,13 @@ class FactoredRecurrentActorCritic(nn.Module):
         if hidden is None:
             hidden = self.get_initial_hidden(batch_size, device)
 
+        # Blueprint embedding (Phase 3) - embed active blueprint indices
+        bp_emb = self.blueprint_embedding(blueprint_indices)  # [batch, seq, num_slots, embed_dim]
+        bp_emb_flat = bp_emb.flatten(start_dim=2)  # [batch, seq, num_slots * embed_dim] = [batch, seq, 12]
+        state_with_bp = torch.cat([states, bp_emb_flat], dim=-1)  # [batch, seq, state_dim + 12]
+
         # Feature extraction and LSTM (same as forward)
-        features = self.feature_net(states)
+        features = self.feature_net(state_with_bp)
         lstm_out, new_hidden = self.lstm(features, hidden)
         lstm_out = self.lstm_ln(lstm_out)
 

@@ -1,10 +1,11 @@
 """EventLog widget - Append-only scrolling log with rich metadata.
 
 Architecture:
-- Maintains internal list of line data (append-only, never recalculated)
+- Maintains internal list of line data (append-only for individual events)
 - Tracks which events have been processed by ID
 - Shows rich inline metadata for actionable events (GERMINATED, FOSSILIZED, etc.)
 - Aggregates high-frequency events (EPOCH_COMPLETED, REWARD_COMPUTED)
+- Updates aggregated lines live as new events arrive
 - On render: formats timestamps based on visible line order for proper clock flow
 
 This is a LOG, not a reactive view. Line data stays put once added.
@@ -13,7 +14,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from rich.console import Group, RenderableType
@@ -75,6 +75,8 @@ class _LineData:
     timestamp: str  # HH:MM:SS
     content: Text   # Pre-formatted content (without timestamp)
     env_str: str = ""  # Right-justified env info (single ID or "0 1 2 +")
+    event_type: str = ""  # Used for updating aggregated lines
+    is_aggregate: bool = False
 
 
 class EventLog(Static):
@@ -109,8 +111,8 @@ class EventLog(Static):
         self._line_data: list[_LineData] = []
         # Track processed event IDs to avoid duplicates
         self._processed_ids: set[str] = set()
-        # Seconds we've processed for aggregated events
-        self._processed_seconds: set[str] = set()
+        # Mapping for in-place updates of aggregated lines
+        self._aggregate_line_index: dict[tuple[str, str], int] = {}
         # Keep reference to snapshot for click handler
         self._snapshot: SanctumSnapshot | None = None
         # Track trimmed lines for scroll indicator
@@ -120,22 +122,16 @@ class EventLog(Static):
         """Process snapshot and append new events.
 
         Individual events are shown immediately with full metadata.
-        High-frequency events are aggregated per-second (wait for second to complete).
+        High-frequency events are aggregated per-second and updated live.
         """
         self._snapshot = snapshot
 
         if not snapshot.event_log:
             return
 
-        # What second is it NOW? (UTC)
-        now = datetime.now(timezone.utc)
-        current_second = now.strftime("%H:%M:%S")
-
         # Separate individual vs aggregated events
         individual_events: list["EventLogEntry"] = []
-        aggregate_events: dict[str, dict[str, set[int | None]]] = defaultdict(
-            lambda: defaultdict(set)
-        )
+        aggregate_events: dict[tuple[str, str], set[int | None]] = defaultdict(set)
 
         for entry in snapshot.event_log:
             # Create a unique ID for deduplication
@@ -146,10 +142,8 @@ class EventLog(Static):
                     individual_events.append(entry)
                     self._processed_ids.add(event_id)
             else:
-                # Aggregate by timestamp and event type
-                # Skip current second (still accumulating)
-                if entry.timestamp != current_second:
-                    aggregate_events[entry.timestamp][entry.event_type].add(entry.env_id)
+                # Aggregate by timestamp and event type (updated live)
+                aggregate_events[(entry.timestamp, entry.event_type)].add(entry.env_id)
 
         # Process individual events (show immediately with metadata)
         for entry in sorted(individual_events, key=lambda e: e.timestamp):
@@ -157,25 +151,39 @@ class EventLog(Static):
             if line_data:
                 self._line_data.append(line_data)
 
-        # Process aggregated events (show counts per completed second)
-        for timestamp in sorted(aggregate_events.keys()):
-            if timestamp in self._processed_seconds:
+        # Process aggregated events (show counts per second, updated live)
+        for (timestamp, event_type) in sorted(aggregate_events.keys()):
+            env_ids = aggregate_events[(timestamp, event_type)]
+            line_data = self._format_aggregate_event(timestamp, event_type, env_ids)
+            if not line_data:
                 continue
-            self._processed_seconds.add(timestamp)
-            for event_type in sorted(aggregate_events[timestamp].keys()):
-                env_ids = aggregate_events[timestamp][event_type]
-                line_data = self._format_aggregate_event(timestamp, event_type, env_ids)
-                if line_data:
-                    self._line_data.append(line_data)
+
+            key = (timestamp, event_type)
+            existing_idx = self._aggregate_line_index.get(key)
+            if existing_idx is None:
+                self._line_data.append(line_data)
+            else:
+                self._line_data[existing_idx] = line_data
 
         # Sort by timestamp to maintain clock flow
         self._line_data.sort(key=lambda ld: ld.timestamp)
+
+        # Rebuild aggregate line index after sort
+        self._aggregate_line_index.clear()
+        for idx, ld in enumerate(self._line_data):
+            if ld.is_aggregate:
+                self._aggregate_line_index[(ld.timestamp, ld.event_type)] = idx
 
         # Trim if we exceed max lines
         if len(self._line_data) > self._max_lines:
             excess = len(self._line_data) - self._max_lines
             self._trimmed_count += excess
             self._line_data = self._line_data[-self._max_lines:]
+            # Rebuild again after trimming (indices changed)
+            self._aggregate_line_index.clear()
+            for idx, ld in enumerate(self._line_data):
+                if ld.is_aggregate:
+                    self._aggregate_line_index[(ld.timestamp, ld.event_type)] = idx
 
         # Update border title with scroll indicator
         if self._trimmed_count > 0:
@@ -266,6 +274,8 @@ class EventLog(Static):
             timestamp=entry.timestamp,
             content=content,
             env_str=str(entry.env_id) if entry.env_id is not None else "",
+            event_type=entry.event_type,
+            is_aggregate=False,
         )
 
     def _format_aggregate_event(
@@ -299,6 +309,8 @@ class EventLog(Static):
             timestamp=timestamp,
             content=content,
             env_str=env_str if env_str else "",
+            event_type=event_type,
+            is_aggregate=True,
         )
 
     def render(self) -> RenderableType:

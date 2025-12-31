@@ -443,6 +443,20 @@ BLUEPRINT_NULL_INDEX = 13
 # Total embedding params: (NUM_BLUEPRINTS + 1) * EMBED_DIM = 14 * 4 = 56
 DEFAULT_BLUEPRINT_EMBED_DIM = 4
 
+# Obs V3 base observation dimension (before blueprint embeddings are concatenated).
+# This is 24 base features + (30 per-slot features × 3 slots) = 114 dimensions.
+# The full Obs V3 input to the network is: 114 + (3 slots × 4 embed_dim) = 126 dims.
+OBS_V3_NON_BLUEPRINT_DIM = 114
+
+# Number of independent action heads in Tamiyo's factored action space.
+# Heads: op, slot, blueprint, style, tempo, alpha_target, alpha_speed, alpha_curve.
+NUM_ACTION_HEADS = 8
+
+# Minimum log probability clamp for numerical stability.
+# Prevents log(0) = -inf and ensures gradients remain finite.
+# Used in: MaskedCategorical distribution log_prob calculations.
+LOG_PROB_MIN = -100.0
+
 # =============================================================================
 # Blueprint Penalty System (Anti-Thrashing)
 # =============================================================================
@@ -730,6 +744,9 @@ __all__ = [
     "NUM_BLUEPRINTS",
     "BLUEPRINT_NULL_INDEX",
     "DEFAULT_BLUEPRINT_EMBED_DIM",
+    "OBS_V3_NON_BLUEPRINT_DIM",
+    "NUM_ACTION_HEADS",
+    "LOG_PROB_MIN",
 
     # Blueprint Penalty System
     "DEFAULT_BLUEPRINT_PENALTY_ON_PRUNE",

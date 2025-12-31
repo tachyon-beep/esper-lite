@@ -50,19 +50,13 @@ def test_event_log_no_events():
 def test_event_log_with_events():
     """Test render with events shows formatted log.
 
-    NOTE: The refactored EventLog is append-only and groups events by second.
-    It waits for a second to COMPLETE before showing events, so we can't test
-    live rendering without mocking datetime. We test the line data population instead.
+    NOTE: EventLog groups high-frequency events by second.
+    We test line data population (not full Textual rendering).
     """
     from esper.karn.sanctum.widgets.event_log import EventLog
     from esper.karn.sanctum.schema import EventLogEntry
-    from unittest.mock import patch
-    from datetime import datetime, timezone
 
     widget = EventLog(max_lines=10)
-
-    # Mock datetime to make all test timestamps "complete" (in the past)
-    mock_now = datetime(2024, 1, 1, 10, 15, 40, tzinfo=timezone.utc)
 
     snapshot = SanctumSnapshot(
         event_log=[
@@ -87,10 +81,7 @@ def test_event_log_with_events():
         ]
     )
 
-    with patch("esper.karn.sanctum.widgets.event_log.datetime") as mock_datetime:
-        mock_datetime.now.return_value = mock_now
-        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
-        widget.update_snapshot(snapshot)
+    widget.update_snapshot(snapshot)
 
     # Should have line data for the 3 seconds (each event type per second = 1 line each)
     assert len(widget._line_data) == 3
@@ -106,8 +97,6 @@ def test_event_log_max_lines_limit():
     """Test that only max_lines are kept in line data."""
     from esper.karn.sanctum.widgets.event_log import EventLog
     from esper.karn.sanctum.schema import EventLogEntry
-    from unittest.mock import patch
-    from datetime import datetime, timezone
 
     # Create 30 events at different seconds
     events = [
@@ -122,13 +111,7 @@ def test_event_log_max_lines_limit():
 
     widget = EventLog(max_lines=10)  # Only keep 10 lines
 
-    # Mock datetime to make all timestamps "complete"
-    mock_now = datetime(2024, 1, 1, 10, 1, 0, tzinfo=timezone.utc)
-
-    with patch("esper.karn.sanctum.widgets.event_log.datetime") as mock_datetime:
-        mock_datetime.now.return_value = mock_now
-        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
-        widget.update_snapshot(SanctumSnapshot(event_log=events))
+    widget.update_snapshot(SanctumSnapshot(event_log=events))
 
     # Should have trimmed to max_lines
     assert len(widget._line_data) == 10
@@ -154,8 +137,6 @@ def test_event_log_groups_by_second():
     """EventLog groups events by timestamp second, showing counts for duplicates."""
     from esper.karn.sanctum.widgets.event_log import EventLog
     from esper.karn.sanctum.schema import EventLogEntry
-    from unittest.mock import patch
-    from datetime import datetime, timezone
 
     widget = EventLog()
 
@@ -189,13 +170,7 @@ def test_event_log_groups_by_second():
         ]
     )
 
-    # Mock datetime to make all timestamps "complete"
-    mock_now = datetime(2024, 1, 1, 12, 33, 20, tzinfo=timezone.utc)
-
-    with patch("esper.karn.sanctum.widgets.event_log.datetime") as mock_datetime:
-        mock_datetime.now.return_value = mock_now
-        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
-        widget.update_snapshot(snapshot)
+    widget.update_snapshot(snapshot)
 
     # Should have 2 lines: one for REWARD_COMPUTED ×3, one for SEED_GERMINATED
     assert len(widget._line_data) == 2
@@ -230,8 +205,6 @@ def test_event_log_uses_colors_in_rendering():
     """EventLog applies colors from _EVENT_COLORS when rendering lines."""
     from esper.karn.sanctum.widgets.event_log import EventLog
     from esper.karn.sanctum.schema import EventLogEntry
-    from unittest.mock import patch
-    from datetime import datetime, timezone
 
     widget = EventLog()
 
@@ -246,12 +219,7 @@ def test_event_log_uses_colors_in_rendering():
         ]
     )
 
-    mock_now = datetime(2024, 1, 1, 12, 0, 5, tzinfo=timezone.utc)
-
-    with patch("esper.karn.sanctum.widgets.event_log.datetime") as mock_datetime:
-        mock_datetime.now.return_value = mock_now
-        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
-        widget.update_snapshot(snapshot)
+    widget.update_snapshot(snapshot)
 
     # Line data should contain styled text
     assert len(widget._line_data) == 1
