@@ -101,18 +101,19 @@ class LSTMPolicyBundle:
         """
         # Convert dict masks to individual parameters
         # Request op_logits for telemetry (decision snapshots need action probabilities)
+        # NOTE: Direct dict access (not .get()) to fail fast if caller provides incomplete masks
         result = self._network.get_action(
             features,
             blueprint_indices,
             hidden,
-            slot_mask=masks.get("slot"),
-            blueprint_mask=masks.get("blueprint"),
-            style_mask=masks.get("style"),
-            tempo_mask=masks.get("tempo"),
-            op_mask=masks.get("op"),
-            alpha_target_mask=masks.get("alpha_target"),
-            alpha_speed_mask=masks.get("alpha_speed"),
-            alpha_curve_mask=masks.get("alpha_curve"),
+            slot_mask=masks["slot"],
+            blueprint_mask=masks["blueprint"],
+            style_mask=masks["style"],
+            tempo_mask=masks["tempo"],
+            op_mask=masks["op"],
+            alpha_target_mask=masks["alpha_target"],
+            alpha_speed_mask=masks["alpha_speed"],
+            alpha_curve_mask=masks["alpha_curve"],
             deterministic=deterministic,
             return_op_logits=True,
         )

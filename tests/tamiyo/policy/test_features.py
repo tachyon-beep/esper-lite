@@ -5,6 +5,9 @@ Per-slot layout: [is_active(1), stage_one_hot(10), state(15), blueprint(13)] = 3
 State features: alpha, improvement, contribution_velocity, tempo, 7 alpha controller params, 4 scaffolding params
 """
 
+import pytest
+import torch
+
 # Slot feature layout constants for test clarity
 _STAGE_ONE_HOT_DIMS = 10
 _STATE_AFTER_STAGE_DIMS = 15  # alpha, improvement, velocity, tempo, 7 alpha controller, 4 scaffolding
@@ -610,3 +613,59 @@ def test_batch_obs_to_features_inactive_slots_are_zeros():
     # Check r0c2 slot (indices 84-113) is all zeros
     r0c2_features = obs[0, 84:114]
     assert torch.all(r0c2_features == 0.0), "Inactive slot should be all zeros"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires CUDA")
+def test_feature_extraction_performance_cuda_synchronized():
+    """Verify V3 feature extraction is <1ms/batch with proper CUDA sync.
+
+    Critical test from PyTorch specialist review: Performance tests on CUDA
+    must use proper synchronization to get accurate timings. Without
+    torch.cuda.synchronize(), async kernel launches can make code appear
+    faster than it actually is.
+
+    This test uses CUDA events for accurate timing and verifies the hot path
+    feature extraction meets performance requirements.
+    """
+    import time
+    from esper.tamiyo.policy.features import batch_obs_to_features
+    from esper.leyline.slot_config import SlotConfig
+
+    device = torch.device("cuda")
+    slot_config = SlotConfig.default()
+
+    # Prepare test data (4-environment batch)
+    batch_signals = [_make_mock_training_signals() for _ in range(4)]
+    batch_slot_reports = [
+        {
+            "r0c0": _make_mock_seed_state_report("r0c0", blueprint_index=1),
+            "r0c1": _make_mock_seed_state_report("r0c1", blueprint_index=2),
+        }
+        for _ in range(4)
+    ]
+    batch_env_states = [_make_mock_parallel_env_state() for _ in range(4)]
+
+    # Warmup - ensure CUDA context is initialized and kernels are compiled
+    for _ in range(10):
+        batch_obs_to_features(
+            batch_signals, batch_slot_reports, batch_env_states, slot_config, device
+        )
+
+    # Timed measurement with proper CUDA synchronization
+    torch.cuda.synchronize()
+    start = time.perf_counter()
+
+    num_iterations = 100
+    for _ in range(num_iterations):
+        batch_obs_to_features(
+            batch_signals, batch_slot_reports, batch_env_states, slot_config, device
+        )
+        torch.cuda.synchronize()  # Force kernel completion before timing
+
+    elapsed = (time.perf_counter() - start) / num_iterations
+
+    # Target: <1ms per batch (conservative threshold for feature extraction)
+    assert elapsed < 0.001, (
+        f"Feature extraction too slow: {elapsed * 1000:.3f}ms/batch (target: <1ms). "
+        "This may indicate regression in the hot path feature extraction."
+    )

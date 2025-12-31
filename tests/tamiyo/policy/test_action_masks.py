@@ -1259,3 +1259,146 @@ class TestMaskedCategoricalValidation:
         mask = torch.zeros(1, 5, dtype=torch.bool)  # All invalid!
         with pytest.raises(InvalidStateMachineError):
             MaskedCategorical(logits, mask)
+
+
+# === Lifecycle Gating Validation Tests (Phase 7) ===
+
+
+def test_embargo_blocks_germination():
+    """Verify EMBARGOED slots block GERMINATE operation.
+
+    Critical test from Phase 7: After a slot is pruned, it enters EMBARGOED stage
+    for DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE epochs to prevent thrashing (immediate
+    regermination). This test verifies that:
+    1. EMBARGOED slots cannot be germinated
+    2. GERMINATE is only enabled if at least one slot is DORMANT (not EMBARGOED)
+    """
+    from esper.leyline import DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE
+
+    # Scenario: All 3 slots are embargoed (recently pruned)
+    slot_states = {
+        "r0c0": MaskSeedInfo(
+            stage=SeedStage.EMBARGOED.value,
+            seed_age_epochs=2,  # 2 epochs into embargo period
+        ),
+        "r0c1": MaskSeedInfo(
+            stage=SeedStage.EMBARGOED.value,
+            seed_age_epochs=1,
+        ),
+        "r0c2": MaskSeedInfo(
+            stage=SeedStage.EMBARGOED.value,
+            seed_age_epochs=0,  # Just pruned
+        ),
+    }
+
+    masks = compute_action_masks(slot_states, enabled_slots=["r0c0", "r0c1", "r0c2"])
+
+    # GERMINATE should be blocked (no dormant slots available)
+    assert not masks["op"][LifecycleOp.GERMINATE], (
+        "GERMINATE should be blocked when all slots are embargoed. "
+        f"Embargo period is {DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE} epochs."
+    )
+
+    # WAIT should still be available
+    assert masks["op"][LifecycleOp.WAIT], "WAIT should always be available"
+
+
+def test_embargoed_vs_dormant_germination():
+    """Verify GERMINATE is enabled only for DORMANT slots, not EMBARGOED.
+
+    This test distinguishes between:
+    - DORMANT: Empty, available for germination
+    - EMBARGOED: Empty but in cooldown period, NOT available
+
+    Both are "empty" (no seed), but only DORMANT allows germination.
+    """
+    # Scenario: Mix of DORMANT and EMBARGOED slots
+    slot_states = {
+        "r0c0": None,  # Truly empty (DORMANT)
+        "r0c1": MaskSeedInfo(
+            stage=SeedStage.EMBARGOED.value,
+            seed_age_epochs=1,
+        ),
+        "r0c2": MaskSeedInfo(
+            stage=SeedStage.EMBARGOED.value,
+            seed_age_epochs=3,
+        ),
+    }
+
+    masks = compute_action_masks(slot_states, enabled_slots=["r0c0", "r0c1", "r0c2"])
+
+    # GERMINATE should be enabled (r0c0 is dormant/None)
+    assert masks["op"][LifecycleOp.GERMINATE], (
+        "GERMINATE should be enabled when at least one slot is DORMANT (None). "
+        "r0c0 is None (dormant), so germination is possible."
+    )
+
+    # Slot mask should allow all slots (policy decides which to target)
+    assert masks["slot"][0], "r0c0 (DORMANT) should be selectable"
+    assert masks["slot"][1], "r0c1 should be selectable"
+    assert masks["slot"][2], "r0c2 should be selectable"
+
+
+def test_pruned_stage_blocks_operations():
+    """Verify PRUNED stage blocks most operations.
+
+    PRUNED is a transient state between execution and EMBARGOED. Seeds in PRUNED
+    stage should not be prunable/fossilizable/alpha-settable.
+    """
+    slot_states = {
+        "r0c0": MaskSeedInfo(
+            stage=SeedStage.PRUNED.value,
+            seed_age_epochs=5,
+        ),
+    }
+
+    masks = compute_action_masks(slot_states, enabled_slots=["r0c0"])
+
+    # PRUNE should be blocked (seed is already pruned)
+    assert not masks["op"][LifecycleOp.PRUNE], (
+        "PRUNE should be blocked for PRUNED stage"
+    )
+
+    # FOSSILIZE should be blocked (can only fossilize from HOLDING)
+    assert not masks["op"][LifecycleOp.FOSSILIZE], (
+        "FOSSILIZE should be blocked for PRUNED stage"
+    )
+
+    # SET_ALPHA_TARGET should be blocked (no seed to set alpha for)
+    assert not masks["op"][LifecycleOp.SET_ALPHA_TARGET], (
+        "SET_ALPHA_TARGET should be blocked for PRUNED stage"
+    )
+
+    # WAIT should still be available
+    assert masks["op"][LifecycleOp.WAIT], "WAIT should always be available"
+
+
+def test_embargo_duration_correctness():
+    """Verify embargo period matches DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE.
+
+    This test documents the embargo period and ensures it's applied correctly.
+    The embargo mechanism is enforced by Kasmina (slot management), not by
+    action masks - masks just reflect the current state.
+    """
+    from esper.leyline import DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE
+
+    # Document expected embargo duration
+    assert DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE == 5, (
+        "Embargo period should be 5 epochs. If this changed, "
+        "update related tests and documentation."
+    )
+
+    # Verify slot in embargo blocks germination
+    slot_states = {
+        "r0c0": MaskSeedInfo(
+            stage=SeedStage.EMBARGOED.value,
+            seed_age_epochs=2,  # 2/5 epochs through embargo
+        ),
+    }
+
+    masks = compute_action_masks(slot_states, enabled_slots=["r0c0"])
+
+    # GERMINATE blocked (only slot is embargoed)
+    assert not masks["op"][LifecycleOp.GERMINATE], (
+        "GERMINATE should be blocked during embargo period"
+    )

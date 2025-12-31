@@ -510,6 +510,7 @@ class TamiyoBrain(Static):
             tamiyo.entropy,
             0,
             2.0,
+            self._get_entropy_status(tamiyo.entropy),
             self._get_entropy_label(tamiyo.entropy, batch),
         )
         value_gauge = self._render_gauge(
@@ -517,6 +518,7 @@ class TamiyoBrain(Static):
             tamiyo.value_loss,
             0,
             1.0,
+            self._get_value_loss_status(tamiyo.value_loss),
             self._get_value_loss_label(tamiyo.value_loss, batch),
         )
         kl_gauge = self._render_gauge(
@@ -524,6 +526,7 @@ class TamiyoBrain(Static):
             tamiyo.kl_divergence,
             0.0,
             0.1,
+            self._get_kl_status(tamiyo.kl_divergence),
             self._get_kl_label(tamiyo.kl_divergence, batch),
         )
 
@@ -803,39 +806,6 @@ class TamiyoBrain(Static):
                 )  # No pattern highlighting on prior
 
         return result
-
-    def _render_gauge(
-        self, label: str, value: float, min_val: float, max_val: float, description: str
-    ) -> Text:
-        """Render a single gauge with label and description on separate lines."""
-        # Normalize to 0-1
-        normalized = (
-            (value - min_val) / (max_val - min_val) if max_val != min_val else 0.5
-        )
-        normalized = max(0, min(1, normalized))
-
-        # Build gauge bar (width 12)
-        gauge_width = 12
-        filled = int(normalized * gauge_width)
-        empty = gauge_width - filled
-
-        gauge = Text()
-        # Line 1: Label
-        gauge.append(f"{label}:\n", style="dim")
-        # Line 2: Bar and value
-        gauge.append("[")
-        gauge.append("█" * filled, style="cyan")
-        gauge.append("░" * empty, style="dim")
-        gauge.append("]")
-        # Use more precision for small values (like KL divergence in 0.001-0.015 range)
-        if max_val < 1.0 and value < 0.1:
-            gauge.append(f" {value:.4f}\n", style="cyan")
-        else:
-            gauge.append(f" {value:.2f}\n", style="cyan")
-        # Line 3: Description
-        gauge.append(f'"{description}"', style="italic dim")
-
-        return gauge
 
     def _get_entropy_label(self, entropy: float, batch: int = 0) -> str:
         """Batch-aware entropy label."""
@@ -1359,6 +1329,14 @@ class TamiyoBrain(Static):
             return "warning"
         return "ok"
 
+    def _get_value_loss_status(self, value_loss: float) -> str:
+        """Get health status for value loss."""
+        if value_loss > 5.0:
+            return "critical"
+        elif value_loss > 1.0:
+            return "warning"
+        return "ok"
+
     def _get_ev_status(self, ev: float) -> str:
         """Get health status for explained variance."""
         if ev < TUIThresholds.EXPLAINED_VAR_CRITICAL:
@@ -1456,7 +1434,7 @@ class TamiyoBrain(Static):
         kl_indicator, kl_indicator_style = trend_to_indicator(kl_trend)
 
         # Row 1: Explained Variance | Entropy
-        ev_gauge = self._render_gauge_v2(
+        ev_gauge = self._render_gauge(
             "Expl.Var",
             tamiyo.explained_variance,
             min_val=-1.0,
@@ -1466,7 +1444,7 @@ class TamiyoBrain(Static):
             trend_indicator=ev_indicator,
             trend_style=ev_indicator_style,
         )
-        entropy_gauge = self._render_gauge_v2(
+        entropy_gauge = self._render_gauge(
             "Entropy",
             tamiyo.entropy,
             min_val=0.0,
@@ -1479,7 +1457,7 @@ class TamiyoBrain(Static):
         grid.add_row(ev_gauge, entropy_gauge)
 
         # Row 2: Clip Fraction | KL Divergence
-        clip_gauge = self._render_gauge_v2(
+        clip_gauge = self._render_gauge(
             "Clip Frac",
             tamiyo.clip_fraction,
             min_val=0.0,
@@ -1489,7 +1467,7 @@ class TamiyoBrain(Static):
             trend_indicator=clip_indicator,
             trend_style=clip_indicator_style,
         )
-        kl_gauge = self._render_gauge_v2(
+        kl_gauge = self._render_gauge(
             "KL Div",
             tamiyo.kl_divergence,
             min_val=0.0,
@@ -1503,7 +1481,7 @@ class TamiyoBrain(Static):
 
         return grid
 
-    def _render_gauge_v2(
+    def _render_gauge(
         self,
         label: str,
         value: float,

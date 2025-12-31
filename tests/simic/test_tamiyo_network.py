@@ -435,3 +435,218 @@ def test_entropy_respects_valid_actions_only():
     assert torch.isfinite(slot_entropy).all()
     assert (slot_entropy >= 0).all()
     assert (slot_entropy <= 1.01).all()
+
+
+def test_device_migration_complete():
+    """Verify model.to(device) migrates all components including blueprint embedding.
+
+    Critical test from PyTorch specialist review: LSTM models with custom buffers
+    can have device fragmentation where some components fail to migrate during
+    model.to(device). This test ensures:
+    1. BlueprintEmbedding's _null_idx buffer migrates with model
+    2. All named parameters are on the same device
+    """
+    from esper.tamiyo.networks.factored_lstm import FactoredRecurrentActorCritic
+
+    model = FactoredRecurrentActorCritic(state_dim=114, num_slots=3)
+    target_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(target_device)
+
+    # Get device from first parameter
+    device = next(model.parameters()).device
+
+    # Verify blueprint embedding's _null_idx buffer migrated
+    assert model.blueprint_embedding._null_idx.device == device, (
+        f"Blueprint embedding _null_idx buffer on {model.blueprint_embedding._null_idx.device}, "
+        f"expected {device}. Buffer did not migrate with model.to()."
+    )
+
+    # Verify all parameters on same device
+    for name, param in model.named_parameters():
+        assert param.device == device, f"Parameter '{name}' on {param.device}, expected {device}"
+
+    # Verify all buffers on same device
+    for name, buf in model.named_buffers():
+        assert buf.device == device, f"Buffer '{name}' on {buf.device}, expected {device}"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires CUDA")
+def test_no_gradient_memory_leak_over_episodes():
+    """Verify LSTM hidden states are properly detached between episodes.
+
+    Critical test from PyTorch specialist review: LSTM hidden states carry gradient
+    graphs. If not detached at episode boundaries, gradient graphs accumulate
+    indefinitely, causing:
+    1. Unbounded BPTT across episode boundaries
+    2. Memory growth proportional to total training steps
+    3. OOM after ~100-1000 episodes
+
+    This test simulates multiple episodes and verifies memory stays bounded.
+    """
+    from esper.tamiyo.networks.factored_lstm import FactoredRecurrentActorCritic
+
+    model = FactoredRecurrentActorCritic(state_dim=114, num_slots=3).cuda()
+    model.train()
+
+    torch.cuda.empty_cache()
+    torch.cuda.reset_peak_memory_stats()
+
+    def run_episode() -> None:
+        """Run a single episode with proper hidden state handling."""
+        hidden = model.get_initial_hidden(batch_size=4, device="cuda")
+
+        # Simulate 10-step episode
+        state = torch.randn(4, 10, 114, device="cuda")
+        bp_idx = torch.randint(0, 13, (4, 10, 3), device="cuda")
+
+        output = model.forward(state, bp_idx, hidden)
+
+        # Compute loss and backprop
+        loss = output["value"].sum()
+        loss.backward()
+
+        # Clear gradients
+        model.zero_grad(set_to_none=True)
+
+        # Free intermediate tensors explicitly
+        del output, state, bp_idx, loss, hidden
+
+    # Warmup: run a few episodes to stabilize memory allocator
+    for _ in range(3):
+        run_episode()
+
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
+
+    # Measure baseline memory after warmup (steady state)
+    baseline_mem = torch.cuda.memory_allocated()
+
+    # Run additional episodes
+    for _ in range(10):
+        run_episode()
+
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
+
+    final_mem = torch.cuda.memory_allocated()
+
+    # Memory should stay stable (allow 20% margin for allocator fragmentation)
+    # If hidden states leaked, we'd see linear growth with episode count
+    growth_ratio = final_mem / baseline_mem if baseline_mem > 0 else 1.0
+    assert growth_ratio < 1.2, (
+        f"Potential memory leak detected: {baseline_mem / 1024**2:.2f}MB -> {final_mem / 1024**2:.2f}MB "
+        f"({growth_ratio:.2f}x growth). "
+        "This suggests gradient graphs are accumulating across episodes."
+    )
+
+
+# === Op-Conditioning Consistency Tests (Phase 4 Addendum) ===
+
+
+def test_op_conditioned_value_forward():
+    """Verify forward() computes Q(s, sampled_op).
+
+    Critical test from Phase 4 addendum: The value head is now op-conditioned,
+    meaning it computes Q(s, op) instead of V(s). This test verifies:
+    1. Forward pass samples an op
+    2. Value is conditioned on that sampled op
+    3. Output contains the sampled_op for storage in rollout buffer
+    """
+    net = FactoredRecurrentActorCritic(state_dim=114, num_slots=3)
+    state = torch.randn(2, 5, 114)  # [batch, seq, state_dim]
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (2, 5, 3))
+
+    out = net(state, bp_idx)
+
+    # Should have sampled op (used for value conditioning)
+    assert "sampled_op" in out, "Forward output missing sampled_op field"
+    assert out["sampled_op"].shape == (2, 5), f"sampled_op wrong shape: {out['sampled_op'].shape}"
+
+    # Value should be conditioned on that op
+    assert out["value"].shape == (2, 5), f"Value wrong shape: {out['value'].shape}"
+
+    # sampled_op should be valid (in range [0, NUM_OPS))
+    assert (out["sampled_op"] >= 0).all(), "sampled_op has negative values"
+    assert (out["sampled_op"] < NUM_OPS).all(), f"sampled_op exceeds NUM_OPS={NUM_OPS}"
+
+
+def test_stored_op_value_consistency():
+    """Verify evaluate_actions uses stored_op from rollout buffer.
+
+    Critical test from Phase 4 addendum: During PPO updates, evaluate_actions
+    must use the STORED op from the rollout buffer (not resample). This ensures:
+    1. Forward: samples op_t, computes Q(s_t, op_t), stores op_t
+    2. Evaluate: retrieves stored op_t, computes Q(s_t, op_t) [same value]
+
+    If evaluate_actions resampled the op, values would differ and gradients
+    would be biased.
+    """
+    net = FactoredRecurrentActorCritic(state_dim=114, num_slots=3)
+    state = torch.randn(2, 5, 114)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (2, 5, 3))
+
+    # Get actions from forward (simulates rollout collection)
+    fwd_out = net(state, bp_idx)
+    stored_op = fwd_out["sampled_op"]
+
+    # Build actions dict with stored op (what rollout buffer stores)
+    actions = {
+        "op": stored_op,
+        "slot": torch.randint(0, 3, (2, 5)),
+        "blueprint": torch.randint(0, NUM_BLUEPRINTS, (2, 5)),
+        "style": torch.randint(0, NUM_STYLES, (2, 5)),
+        "tempo": torch.randint(0, NUM_TEMPO, (2, 5)),
+        "alpha_target": torch.randint(0, NUM_ALPHA_TARGETS, (2, 5)),
+        "alpha_speed": torch.randint(0, NUM_ALPHA_SPEEDS, (2, 5)),
+        "alpha_curve": torch.randint(0, NUM_ALPHA_CURVES, (2, 5)),
+    }
+
+    # Evaluate with stored actions (simulates PPO update)
+    eval_log_probs, eval_value, eval_entropy, _ = net.evaluate_actions(
+        state, bp_idx, actions
+    )
+
+    # Values should match when same op is used
+    # (allow small FP error due to different computation paths)
+    assert torch.allclose(fwd_out["value"], eval_value, atol=1e-5), (
+        f"Value mismatch: forward={fwd_out['value'].mean():.6f}, "
+        f"evaluate={eval_value.mean():.6f}. "
+        "evaluate_actions may be resampling op instead of using stored op."
+    )
+
+
+def test_blueprint_embedding_shapes():
+    """Verify blueprint embeddings integrate correctly into network.
+
+    Critical test from Phase 4 addendum: Blueprint indices must be embedded
+    and concatenated to state features before LSTM. This test verifies:
+    1. Active slots (valid indices) produce different embeddings
+    2. Inactive slots (index -1) map to learned null embedding
+    3. Different blueprint patterns produce different network outputs
+    """
+    net = FactoredRecurrentActorCritic(state_dim=114, num_slots=3)
+
+    # Test with various blueprint index patterns
+    # Shape must be [batch, seq, num_slots]
+    bp_idx_active = torch.tensor([[[0, 2, 5]], [[1, 3, 7]]])  # All active
+    bp_idx_inactive = torch.tensor([[[-1, -1, -1]], [[0, -1, 2]]])  # Some inactive
+
+    state = torch.randn(2, 1, 114)
+
+    out1 = net(state, bp_idx_active)
+    out2 = net(state, bp_idx_inactive)
+
+    # Both should produce valid outputs
+    assert out1["value"].shape == (2, 1), f"out1 value wrong shape: {out1['value'].shape}"
+    assert out2["value"].shape == (2, 1), f"out2 value wrong shape: {out2['value'].shape}"
+
+    # Different indices should produce different values
+    # (same state, different blueprint patterns → different Q-values)
+    assert not torch.allclose(out1["value"], out2["value"]), (
+        "Different blueprint patterns produced identical values. "
+        "Blueprint embeddings may not be influencing the network."
+    )
+
+    # Verify no NaN/Inf (inactive slots shouldn't break the network)
+    assert torch.isfinite(out1["value"]).all(), "Active slots produced non-finite values"
+    assert torch.isfinite(out2["value"]).all(), "Inactive slots produced non-finite values"
