@@ -122,8 +122,10 @@ class BlueprintEmbedding(nn.Module):
 
         # Register null index as buffer: moves with module.to(device), no grad, in state_dict
         # This avoids per-forward-call tensor allocation that torch.tensor() would cause
-        self._null_idx = torch.tensor(BLUEPRINT_NULL_INDEX, dtype=torch.int64)
-        self.register_buffer("_null_idx", self._null_idx)
+        self.register_buffer(
+            "_null_idx",
+            torch.tensor(BLUEPRINT_NULL_INDEX, dtype=torch.int64),
+        )
 
     def forward(self, blueprint_indices: torch.Tensor) -> torch.Tensor:
         """Convert blueprint indices to embeddings.

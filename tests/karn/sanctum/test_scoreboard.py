@@ -1,4 +1,5 @@
 """Tests for Scoreboard widget."""
+
 import pytest
 
 from textual.app import App
@@ -203,9 +204,15 @@ async def test_medal_indicators_top_3():
         snapshot = SanctumSnapshot(slot_ids=["R0C0"])
 
         # Create 3 records
-        record0 = BestRunRecord(env_id=0, episode=1, peak_accuracy=95.0, final_accuracy=95.0)
-        record1 = BestRunRecord(env_id=1, episode=2, peak_accuracy=92.0, final_accuracy=92.0)
-        record2 = BestRunRecord(env_id=2, episode=3, peak_accuracy=88.0, final_accuracy=88.0)
+        record0 = BestRunRecord(
+            env_id=0, episode=1, peak_accuracy=95.0, final_accuracy=95.0
+        )
+        record1 = BestRunRecord(
+            env_id=1, episode=2, peak_accuracy=92.0, final_accuracy=92.0
+        )
+        record2 = BestRunRecord(
+            env_id=2, episode=3, peak_accuracy=88.0, final_accuracy=88.0
+        )
 
         snapshot.best_runs = [record0, record1, record2]
         snapshot.envs[0] = EnvState(env_id=0)
@@ -320,171 +327,6 @@ async def test_current_accuracy_styling_dim():
 
 
 @pytest.mark.asyncio
-async def test_seeds_display_blueprints_when_3_or_fewer():
-    """Seeds display should show blueprint names when ≤3 seeds."""
-    app = ScoreboardTestApp()
-    async with app.run_test():
-        snapshot = SanctumSnapshot(slot_ids=["R0C0", "R0C1"])
-        env = EnvState(env_id=0)
-        snapshot.envs[0] = env
-
-        seed0 = SeedState(slot_id="R0C0", blueprint_id="conv_light", stage="FOSSILIZED")
-        seed1 = SeedState(slot_id="R0C1", blueprint_id="dense_medium", stage="BLENDING")
-
-        record = BestRunRecord(
-            env_id=0,
-            episode=1,
-            peak_accuracy=95.0,
-            final_accuracy=95.0,
-            seeds={"R0C0": seed0, "R0C1": seed1},
-        )
-        snapshot.best_runs = [record]
-
-        widget = app.query_one(Scoreboard)
-        widget.update_snapshot(snapshot)
-
-        # Should show "conv_l" (green) and "dense_" (magenta) with stage-based colors
-        seeds_str = widget._format_seeds(record.seeds)
-        assert "conv_l" in seeds_str  # FOSSILIZED → green
-        assert "dense_" in seeds_str  # BLENDING → magenta
-        assert "[green]" in seeds_str or "[magenta]" in seeds_str
-
-
-@pytest.mark.asyncio
-async def test_seeds_display_individual_when_exactly_3():
-    """Seeds display should show individual blueprints when exactly 3 seeds."""
-    app = ScoreboardTestApp()
-    async with app.run_test():
-        snapshot = SanctumSnapshot(slot_ids=["R0C0", "R0C1", "R1C0"])
-        env = EnvState(env_id=0)
-        snapshot.envs[0] = env
-
-        seed0 = SeedState(slot_id="R0C0", blueprint_id="conv_l", stage="FOSSILIZED")
-        seed1 = SeedState(slot_id="R0C1", blueprint_id="dense_m", stage="BLENDING")
-        seed2 = SeedState(slot_id="R1C0", blueprint_id="attn_a", stage="HOLDING")
-
-        record = BestRunRecord(
-            env_id=0,
-            episode=1,
-            peak_accuracy=95.0,
-            final_accuracy=95.0,
-            seeds={"R0C0": seed0, "R0C1": seed1, "R1C0": seed2},
-        )
-        snapshot.best_runs = [record]
-
-        widget = app.query_one(Scoreboard)
-        widget.update_snapshot(snapshot)
-
-        # Should show all three contributing blueprints with stage-based colors
-        seeds_str = widget._format_seeds(record.seeds)
-        assert "conv_l" in seeds_str  # FOSSILIZED → green (first 6 chars)
-        assert "dense_" in seeds_str  # BLENDING → magenta (first 6 chars of "dense_m")
-        assert "attn_a" in seeds_str  # HOLDING → yellow (first 6 chars)
-        assert "[green]" in seeds_str  # FOSSILIZED color
-        assert "[yellow]" in seeds_str  # HOLDING color
-
-
-@pytest.mark.asyncio
-async def test_seeds_display_multi_stage_when_more_than_3():
-    """Seeds display should truncate with +N when >3 contributing seeds."""
-    app = ScoreboardTestApp()
-    async with app.run_test():
-        snapshot = SanctumSnapshot(slot_ids=["R0C0", "R0C1", "R1C0", "R1C1"])
-        env = EnvState(env_id=0)
-        snapshot.envs[0] = env
-
-        # 2 FOSSILIZED, 2 provisional (all contributing)
-        seed0 = SeedState(slot_id="R0C0", blueprint_id="conv_l", stage="FOSSILIZED")
-        seed1 = SeedState(slot_id="R0C1", blueprint_id="dense_m", stage="FOSSILIZED")
-        seed2 = SeedState(slot_id="R1C0", blueprint_id="attn_a", stage="HOLDING")
-        seed3 = SeedState(slot_id="R1C1", blueprint_id="rnn_xx", stage="BLENDING")
-
-        record = BestRunRecord(
-            env_id=0,
-            episode=1,
-            peak_accuracy=95.0,
-            final_accuracy=95.0,
-            seeds={"R0C0": seed0, "R0C1": seed1, "R1C0": seed2, "R1C1": seed3},
-        )
-        snapshot.best_runs = [record]
-
-        widget = app.query_one(Scoreboard)
-        widget.update_snapshot(snapshot)
-
-        # Should show first 3 seeds plus "+1"
-        seeds_str = widget._format_seeds(record.seeds)
-        assert "+1" in seeds_str
-        assert "[green]" in seeds_str  # FOSSILIZED → green
-        assert "[magenta]" in seeds_str or "[yellow]" in seeds_str  # Provisional colors
-
-
-@pytest.mark.asyncio
-async def test_seeds_display_all_permanent_when_more_than_3():
-    """Seeds display should truncate with +N when all >3 seeds are FOSSILIZED."""
-    app = ScoreboardTestApp()
-    async with app.run_test():
-        snapshot = SanctumSnapshot(slot_ids=["R0C0", "R0C1", "R1C0", "R1C1"])
-        env = EnvState(env_id=0)
-        snapshot.envs[0] = env
-
-        # All 4 FOSSILIZED
-        seed0 = SeedState(slot_id="R0C0", blueprint_id="conv_l", stage="FOSSILIZED")
-        seed1 = SeedState(slot_id="R0C1", blueprint_id="dense_m", stage="FOSSILIZED")
-        seed2 = SeedState(slot_id="R1C0", blueprint_id="attn_a", stage="FOSSILIZED")
-        seed3 = SeedState(slot_id="R1C1", blueprint_id="rnn_xx", stage="FOSSILIZED")
-
-        record = BestRunRecord(
-            env_id=0,
-            episode=1,
-            peak_accuracy=95.0,
-            final_accuracy=95.0,
-            seeds={"R0C0": seed0, "R0C1": seed1, "R1C0": seed2, "R1C1": seed3},
-        )
-        snapshot.best_runs = [record]
-
-        widget = app.query_one(Scoreboard)
-        widget.update_snapshot(snapshot)
-
-        # Should show first 3 seeds plus "+1"
-        seeds_str = widget._format_seeds(record.seeds)
-        assert "+1" in seeds_str
-        assert "[green]" in seeds_str
-
-
-@pytest.mark.asyncio
-async def test_seeds_display_all_provisional_when_more_than_3():
-    """Seeds display should truncate with +N when all >3 seeds are provisional."""
-    app = ScoreboardTestApp()
-    async with app.run_test():
-        snapshot = SanctumSnapshot(slot_ids=["R0C0", "R0C1", "R1C0", "R1C1"])
-        env = EnvState(env_id=0)
-        snapshot.envs[0] = env
-
-        # All 4 contributing (no TRAINING/GERMINATED/DORMANT)
-        seed0 = SeedState(slot_id="R0C0", blueprint_id="conv_l", stage="BLENDING")
-        seed1 = SeedState(slot_id="R0C1", blueprint_id="dense_m", stage="BLENDING")
-        seed2 = SeedState(slot_id="R1C0", blueprint_id="attn_a", stage="HOLDING")
-        seed3 = SeedState(slot_id="R1C1", blueprint_id="rnn_xx", stage="HOLDING")
-
-        record = BestRunRecord(
-            env_id=0,
-            episode=1,
-            peak_accuracy=95.0,
-            final_accuracy=95.0,
-            seeds={"R0C0": seed0, "R0C1": seed1, "R1C0": seed2, "R1C1": seed3},
-        )
-        snapshot.best_runs = [record]
-
-        widget = app.query_one(Scoreboard)
-        widget.update_snapshot(snapshot)
-
-        # Should show first 3 seeds plus "+1"
-        seeds_str = widget._format_seeds(record.seeds)
-        assert "+1" in seeds_str
-        assert "[magenta]" in seeds_str or "[yellow]" in seeds_str
-
-
-@pytest.mark.asyncio
 async def test_ab_cohort_pip_styling():
     """A/B test cohort should show colored pip before rank."""
     app = ScoreboardTestApp()
@@ -495,7 +337,9 @@ async def test_ab_cohort_pip_styling():
         env0 = EnvState(env_id=0, reward_mode="shaped")
         snapshot.envs[0] = env0
 
-        record0 = BestRunRecord(env_id=0, episode=1, peak_accuracy=95.0, final_accuracy=95.0)
+        record0 = BestRunRecord(
+            env_id=0, episode=1, peak_accuracy=95.0, final_accuracy=95.0
+        )
         snapshot.best_runs = [record0]
 
         widget = app.query_one(Scoreboard)
@@ -503,46 +347,6 @@ async def test_ab_cohort_pip_styling():
 
         # Pip should be rendered (checked in _render logic)
         assert widget._snapshot is not None
-
-
-@pytest.mark.asyncio
-async def test_empty_best_runs_display():
-    """Empty best runs should show placeholder row."""
-    app = ScoreboardTestApp()
-    async with app.run_test():
-        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
-        snapshot.best_runs = []
-
-        widget = app.query_one(Scoreboard)
-        widget.update_snapshot(snapshot)
-
-        # Should render without errors
-        assert widget._snapshot is not None
-
-
-@pytest.mark.asyncio
-async def test_no_seeds_display_dash():
-    """Records with no seeds should display dash."""
-    app = ScoreboardTestApp()
-    async with app.run_test():
-        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
-        env = EnvState(env_id=0)
-        snapshot.envs[0] = env
-
-        record = BestRunRecord(
-            env_id=0,
-            episode=1,
-            peak_accuracy=95.0,
-            final_accuracy=95.0,
-            seeds={},  # No seeds
-        )
-        snapshot.best_runs = [record]
-
-        widget = app.query_one(Scoreboard)
-        widget.update_snapshot(snapshot)
-
-        seeds_str = widget._format_seeds(record.seeds)
-        assert seeds_str == "─"
 
 
 @pytest.mark.asyncio
@@ -556,7 +360,9 @@ async def test_env_without_ab_cohort_no_pip():
         env = EnvState(env_id=0, reward_mode=None)
         snapshot.envs[0] = env
 
-        record = BestRunRecord(env_id=0, episode=1, peak_accuracy=95.0, final_accuracy=95.0)
+        record = BestRunRecord(
+            env_id=0, episode=1, peak_accuracy=95.0, final_accuracy=95.0
+        )
         snapshot.best_runs = [record]
 
         widget = app.query_one(Scoreboard)

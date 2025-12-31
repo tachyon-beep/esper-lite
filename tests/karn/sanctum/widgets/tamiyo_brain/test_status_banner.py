@@ -42,7 +42,7 @@ class TestNaNInfDisplay:
         """When nan_grad_count=0 and inf_grad_count=0, no NaN/Inf indicator should appear."""
         # Directly set snapshot and call render without update()
         banner._snapshot = healthy_snapshot
-        content = banner._render_content()
+        content = banner._render_banner_text()
 
         # Convert to plain text for assertion
         plain = content.plain
@@ -54,7 +54,7 @@ class TestNaNInfDisplay:
         """When nan_grad_count>0, show 'NaN:N' in content."""
         healthy_snapshot.tamiyo.nan_grad_count = 3
         banner._snapshot = healthy_snapshot
-        content = banner._render_content()
+        content = banner._render_banner_text()
 
         plain = content.plain
 
@@ -65,7 +65,7 @@ class TestNaNInfDisplay:
         healthy_snapshot.tamiyo.nan_grad_count = 2
         healthy_snapshot.tamiyo.inf_grad_count = 5
         banner._snapshot = healthy_snapshot
-        content = banner._render_content()
+        content = banner._render_banner_text()
 
         plain = content.plain
 
@@ -119,7 +119,7 @@ class TestNaNInfDisplay:
         """NaN count >5 should trigger reverse video style for maximum visibility."""
         healthy_snapshot.tamiyo.nan_grad_count = 10
         banner._snapshot = healthy_snapshot
-        content = banner._render_content()
+        content = banner._render_banner_text()
 
         # Check that the NaN span has reverse style
         # We need to inspect the spans, not just plain text
@@ -136,7 +136,7 @@ class TestNaNInfDisplay:
         """Inf count >5 should trigger reverse video style for maximum visibility."""
         healthy_snapshot.tamiyo.inf_grad_count = 8
         banner._snapshot = healthy_snapshot
-        content = banner._render_content()
+        content = banner._render_banner_text()
 
         # Check that the Inf span has reverse style
         found_reverse = False
@@ -152,7 +152,7 @@ class TestNaNInfDisplay:
         """NaN/Inf indicator should appear FIRST (leftmost) for F-pattern visibility."""
         healthy_snapshot.tamiyo.nan_grad_count = 3
         banner._snapshot = healthy_snapshot
-        content = banner._render_content()
+        content = banner._render_banner_text()
 
         plain = content.plain
 

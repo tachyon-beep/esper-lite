@@ -69,10 +69,16 @@ class TestMemoryUsage:
             "alpha_curve": torch.ones(4, NUM_ALPHA_CURVES, dtype=torch.bool),
             "op": torch.ones(4, NUM_OPS, dtype=torch.bool),
         }
+        blueprint_indices = torch.full(
+            (4, config.num_slots),
+            -1,
+            dtype=torch.int64,
+        )
 
         with torch.no_grad():
             _ = agent.policy.network.get_action(
                 states,
+                blueprint_indices,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
                 style_mask=masks["style"],
@@ -228,6 +234,11 @@ class TestEpisodeCycling:
         initial_memory = tracemalloc.get_traced_memory()[0]
 
         # Cycle through episodes
+        blueprint_indices = torch.full(
+            (config.num_slots,),
+            -1,
+            dtype=torch.int64,
+        )
         for episode in range(n_episodes):
             # Start episodes
             for env_idx in range(n_envs):
@@ -244,6 +255,7 @@ class TestEpisodeCycling:
                     agent.buffer.add(
                         env_id=env_idx,
                         state=state,
+                        blueprint_indices=blueprint_indices,
                         slot_action=step % config.num_slots,
                         blueprint_action=0,
                         style_action=0,
@@ -314,6 +326,11 @@ class TestEpisodeCycling:
 
         # Many action selections
         n_iterations = 500
+        blueprint_indices = torch.full(
+            (1, config.num_slots),
+            -1,
+            dtype=torch.int64,
+        )
         for _ in range(n_iterations):
             states = torch.randn(1, state_dim)
             masks = {
@@ -330,6 +347,7 @@ class TestEpisodeCycling:
             with torch.no_grad():
                 result = agent.policy.network.get_action(
                     states,
+                    blueprint_indices,
                     slot_mask=masks["slot"],
                     blueprint_mask=masks["blueprint"],
                     style_mask=masks["style"],
@@ -392,11 +410,17 @@ class TestScalingBehavior:
                 "alpha_curve": torch.ones(1, NUM_ALPHA_CURVES, dtype=torch.bool),
                 "op": torch.ones(1, NUM_OPS, dtype=torch.bool),
             }
+            blueprint_indices = torch.full(
+                (1, config.num_slots),
+                -1,
+                dtype=torch.int64,
+            )
 
             with torch.no_grad():
                 for _ in range(5):
                     _ = agent.policy.network.get_action(
                         states,
+                        blueprint_indices,
                         slot_mask=masks["slot"],
                         blueprint_mask=masks["blueprint"],
                         style_mask=masks["style"],
@@ -415,6 +439,7 @@ class TestScalingBehavior:
                 for _ in range(n_iterations):
                     _ = agent.policy.network.get_action(
                         states,
+                        blueprint_indices,
                         slot_mask=masks["slot"],
                         blueprint_mask=masks["blueprint"],
                         style_mask=masks["style"],
