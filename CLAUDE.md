@@ -70,25 +70,24 @@ Legacy code and backwards compatibility create:
 - Claude Code MUST delete old code completely when making changes
 - Any legacy code patterns MUST be flagged and removed immediately
 
-## Archive Policy
+## Plans Organization
 
-**The `docs/plans/archive/` directory contains completed or superseded implementation plans.**
+Plans are grouped into:
 
-### What It Contains
+- `docs/plans/concepts/` — draft specs, strategies, and early ideas (not implementation-ready)
+- `docs/plans/ready/` — approved or actively staged implementation plans
+- `docs/plans/completed/` — executed plans and historical decision records
+- `docs/plans/abandoned/` — superseded, deferred, or cancelled plans
 
-- Implementation plans that have been executed
-- Plans superseded by architectural changes
-- Historical decision records
-
-### How to Treat It
+### How to Treat Completed/Abandoned
 
 - **Reference for understanding past decisions** and why certain approaches were taken
-- **DO NOT** implement tasks from archived plans without checking if they're still relevant
-- **DO NOT** assume archived plans reflect current architecture
+- **DO NOT** implement tasks from completed/abandoned plans without checking if they're still relevant
+- **DO NOT** assume completed/abandoned plans reflect current architecture
 
 ### The Rule
 
-When a plan is completed or superseded, move it to the archive. Keep `docs/plans/` lean with only active/future work.
+When a plan is completed, move it to `docs/plans/completed/`. When a plan is superseded, deferred, or cancelled, move it to `docs/plans/abandoned/`. Keep `docs/plans/ready/` lean with only active/future work.
 
 ## Deferred Functionality
 
