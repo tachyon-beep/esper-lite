@@ -1674,25 +1674,20 @@ def train_ppo_vectorized(
     def batch_signals_to_features(
         batch_signals: list[Any],
         batch_slot_reports: list[dict[str, "SeedStateReport"]],
-        use_telemetry: bool,
-        max_epochs: int,
-        effective_max_seeds: int,
         slot_config: SlotConfig,
         env_states: list[ParallelEnvState],
         device: torch.device,
-    ) -> torch.Tensor:
-        """Consolidated signals-to-features conversion for all environments."""
-        all_total_params = [es.model.total_params for es in env_states]
-        all_total_seeds = [es.model.total_seeds() for es in env_states]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Consolidated signals-to-features conversion for all environments.
 
+        Returns:
+            obs: [batch, obs_dim] - observation features (Obs V3: 114 dims for 3 slots)
+            blueprint_indices: [batch, num_slots] - blueprint indices for embedding lookup (int64)
+        """
         return batch_obs_to_features(
             batch_signals=batch_signals,
             batch_slot_reports=batch_slot_reports,
-            use_telemetry=use_telemetry,
-            max_epochs=max_epochs,
-            total_params=all_total_params,
-            total_seeds=all_total_seeds,
-            max_seeds=effective_max_seeds,
+            batch_env_states=env_states,
             slot_config=slot_config,
             device=device,
         )
@@ -2315,8 +2310,6 @@ def train_ppo_vectorized(
             # Collect signals, slot reports and action masks from all environments
             all_signals = []
             all_slot_reports = []
-            all_total_params = []
-            all_total_seeds = []
             all_masks = []
 
             # Post-action metadata for batched bootstrap computation
@@ -2437,10 +2430,8 @@ def train_ppo_vectorized(
 
                 all_signals.append(signals)
                 all_slot_reports.append(slot_reports)
-                all_total_params.append(model.total_params if model else 0)
-                # Cache total_seeds for this env (used in feature extraction AND action masking)
+                # Cache total_seeds for this env (used in action masking)
                 env_total_seeds = model.total_seeds() if model else 0
-                all_total_seeds.append(env_total_seeds)
 
                 # Compute action mask based on current state (physical constraints only)
                 # Build slot states for ALL enabled slots (multi-slot masking)
@@ -2456,18 +2447,17 @@ def train_ppo_vectorized(
                 )
                 all_masks.append(mask)
 
-            # OPTIMIZATION: Batched tensor-driven feature extraction
-            states_batch = batch_obs_to_features(
+            # OPTIMIZATION: Batched tensor-driven feature extraction (Obs V3)
+            # Returns tuple: (obs [batch, obs_dim], blueprint_indices [batch, num_slots])
+            states_batch, blueprint_indices_batch = batch_obs_to_features(
                 batch_signals=all_signals,
                 batch_slot_reports=all_slot_reports,
-                use_telemetry=use_telemetry,
-                max_epochs=max_epochs,
-                total_params=all_total_params,
-                total_seeds=all_total_seeds,
-                max_seeds=effective_max_seeds,
+                batch_env_states=env_states,
                 slot_config=slot_config,
                 device=torch.device(device),
             )
+            # TODO: [Phase 3] Pass blueprint_indices_batch to policy network for embedding lookup
+            # For now, store for future use - network currently ignores this parameter
 
             # Stack dict masks into batched dict: {key: [n_envs, head_dim]}
             # Use static HEAD_NAMES for torch.compile compatibility
@@ -3199,12 +3189,11 @@ def train_ppo_vectorized(
             # PHASE 2: Compute all bootstrap values in single batched forward pass
             bootstrap_values = []
             if all_post_action_signals:
-                post_action_features_batch = batch_signals_to_features(
+                # Unpack Obs V3 tuple (obs, blueprint_indices)
+                # TODO: [Phase 3] Pass post_action_bp_indices to policy for embedding lookup
+                post_action_features_batch, _post_action_bp_indices = batch_signals_to_features(
                     batch_signals=all_post_action_signals,
                     batch_slot_reports=all_post_action_slot_reports,
-                    use_telemetry=use_telemetry,
-                    max_epochs=max_epochs,
-                    effective_max_seeds=effective_max_seeds,
                     slot_config=slot_config,
                     env_states=env_states,
                     device=torch.device(device),
