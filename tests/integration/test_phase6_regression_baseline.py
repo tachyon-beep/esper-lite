@@ -40,9 +40,9 @@ def test_phase6_regression_baseline():
         n_envs=2,            # Minimal parallelism
         task="cifar10",
         use_telemetry=False, # Disable telemetry for speed
-        reward_mode=RewardMode.SIMPLIFIED,  # Faster reward
+        reward_mode=RewardMode.SIMPLIFIED,  # Faster reward computation
         save_path=None,      # Don't save checkpoints
-        enable_counterfactual=False,  # Disable for speed
+        slots=['r0c0', 'r0c1', 'r0c2'],  # Required parameter
     )
 
     # === Validation: Training Stability ===

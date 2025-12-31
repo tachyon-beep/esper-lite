@@ -26,7 +26,7 @@ import torch.nn.functional as F
 from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
 from esper.leyline.slot_config import SlotConfig
 # Phase 2 imports: Constants needed for Obs V3 feature extraction
-from esper.leyline import NUM_OPS, NUM_STAGES, DEFAULT_GAMMA, NUM_BLUEPRINTS
+from esper.leyline import NUM_OPS, NUM_STAGES, DEFAULT_GAMMA, NUM_BLUEPRINTS, MAX_EPOCHS_IN_STAGE
 # Stage schema for validation and one-hot encoding
 # NOTE: Imported at module level since these are fast O(1) lookups used in hot path
 from esper.leyline.stage_schema import (
@@ -105,6 +105,7 @@ def _extract_base_features_v3(
     num_blending: int,
     num_holding: int,
     host_stabilized: bool,
+    slot_config: SlotConfig,
 ) -> torch.Tensor:
     """Extract base features (24 dims) for Obs V3.
 
@@ -150,10 +151,12 @@ def _extract_base_features_v3(
     acc_history_padded = _pad_history(signal.accuracy_history, 5)
     acc_history_norm = [x / 100.0 for x in acc_history_padded]
 
-    # Stage distribution (3 dims) - normalize by max slots (3)
-    num_training_norm = num_training / 3.0
-    num_blending_norm = num_blending / 3.0
-    num_holding_norm = num_holding / 3.0
+    # Stage distribution (3 dims) - normalize by actual slot count
+    # CRITICAL: Must use slot_config.num_slots for correctness with arbitrary grid sizes
+    max_slots = float(slot_config.num_slots)
+    num_training_norm = num_training / max_slots
+    num_blending_norm = num_blending / max_slots
+    num_holding_norm = num_holding / max_slots
 
     # Host stabilized flag (1 dim) - already boolean (0.0 or 1.0)
     host_stabilized_float = 1.0 if host_stabilized else 0.0
@@ -252,8 +255,14 @@ def _extract_slot_features_v3(
     alpha_target = slot_report.alpha_target
     alpha_mode_norm = float(slot_report.alpha_mode) / max(_ALPHA_MODE_MAX, 1)
 
-    # Normalize alpha schedule steps (use 25 epochs as default max)
-    max_epochs_den = 25.0
+    # Normalize alpha schedule steps by episode length (150 epochs)
+    # CRITICAL: Must use MAX_EPOCHS_IN_STAGE (150) not 25 to preserve temporal resolution
+    # for multi-seed chaining visibility. The LSTM needs to distinguish:
+    # - Seed A at epoch 50 (fossilization decision)
+    # - Seed B at epoch 75 (mid-training)
+    # - Seed C at epoch 145 (end-of-episode)
+    # Using 25 would saturate all these to 1.0, breaking sequential scaffolding credit assignment.
+    max_epochs_den = float(MAX_EPOCHS_IN_STAGE)  # 150.0
     alpha_steps_total_norm = min(float(slot_report.alpha_steps_total), max_epochs_den) / max_epochs_den
     alpha_steps_done_norm = min(float(slot_report.alpha_steps_done), max_epochs_den) / max_epochs_den
     time_to_target_norm = min(float(slot_report.time_to_target), max_epochs_den) / max_epochs_den
@@ -280,7 +289,9 @@ def _extract_slot_features_v3(
     # Default to 1.0 (healthy) if not yet tracked for this slot
     gradient_health_prev = env_state.gradient_health_prev.get(slot_id, 1.0)
 
-    # epochs_in_stage_norm (1 dim) - normalize to [0, 1] using max 25 epochs
+    # epochs_in_stage_norm (1 dim) - normalize to [0, 1] using MAX_EPOCHS_IN_STAGE (150)
+    # CRITICAL: Must use full episode length to preserve temporal resolution for multi-seed chaining.
+    # The LSTM needs to distinguish stages at different episode points (early/mid/late fossilization).
     epochs_in_stage = slot_report.metrics.epochs_in_current_stage
     epochs_in_stage_norm = min(float(epochs_in_stage), max_epochs_den) / max_epochs_den
 
@@ -531,6 +542,7 @@ def batch_obs_to_features(
             num_blending=num_blending,
             num_holding=num_holding,
             host_stabilized=host_stabilized,
+            slot_config=slot_config,
         )
 
         # Extract slot features (30 dims per slot)

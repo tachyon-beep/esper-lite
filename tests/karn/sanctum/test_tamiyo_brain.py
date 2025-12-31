@@ -664,13 +664,13 @@ async def test_tamiyo_brain_learning_vitals_gauges():
         widget.update_snapshot(snapshot)
 
         # Verify gauges render
-        entropy_gauge = widget._render_gauge("Entropy", 0.42, 0, 2.0, "Getting decisive")
+        entropy_gauge = widget._render_gauge("Entropy", 0.42, 0, 2.0, "ok", "Getting decisive")
         assert entropy_gauge is not None
 
-        value_gauge = widget._render_gauge("Value Loss", 0.08, 0, 1.0, "Learning well")
+        value_gauge = widget._render_gauge("Value Loss", 0.08, 0, 1.0, "ok", "Learning well")
         assert value_gauge is not None
 
-        advantage_gauge = widget._render_gauge("Advantage", 0.31, -1.0, 1.0, "Choices working")
+        advantage_gauge = widget._render_gauge("Advantage", 0.31, -1.0, 1.0, "ok", "Choices working")
         assert advantage_gauge is not None
 
 

@@ -1,12 +1,13 @@
 """ActionContext - Action distribution and sequence display.
 
-Layout (6 lines):
+Layout (7 lines, Policy V2):
 1. This batch: [▓▓▓▓░░░░░░░░░░░░░░░░] bar for current training batch
 2. G:09 A:03 F:00 P:15 V:02 W:71 (this batch percentages)
 3. Total run: [▓▓▓▓▓▓▓▓░░░░░░░░░░░░] cumulative bar across all batches
 4. G:22 A:05 F:00 P:21 V:02 W:50 (total run percentages)
-5. ⚠ STUCK G→G→A→W→W→W→W→W→P→G→A→F (recent sequence + patterns)
-6. Returns: +1.2 -0.3 +2.1 -0.8 +0.5 +1.7  avg:+0.7↗
+5. ⚠ STUCK G✓→G✓→A✗→W✓→W✓ (recent sequence + patterns + success markers)
+6. Last: GERMINATE ✓ (action feedback for Policy V2)
+7. Returns: +1.2 -0.3 +2.1 -0.8 +0.5 +1.7  avg:+0.7↗
 """
 
 from __future__ import annotations
@@ -83,16 +84,17 @@ def detect_action_patterns(
 
 
 class ActionContext(Static):
-    """Action context panel with distribution, sequence, and returns.
+    """Action context panel with distribution, sequence, and returns (Policy V2).
 
     Extends Static directly (like DecisionCard) to eliminate Container
     layout overhead that causes whitespace issues.
 
-    Layout (6 lines):
+    Layout (7 lines):
     1-2. This batch: bar + percentages
     3-4. Total run: bar + percentages
-    5. Recent sequence with pattern warnings
-    6. Returns with trend
+    5. Recent sequence with pattern warnings + success markers
+    6. Last action feedback (execution status)
+    7. Returns with trend
     """
 
     def __init__(self, **kwargs: Any) -> None:
@@ -107,13 +109,13 @@ class ActionContext(Static):
         self.refresh()  # Trigger render()
 
     def render(self) -> Text:
-        """Render all action context sections (6 lines)."""
+        """Render all action context sections (7 lines, Policy V2)."""
         result = Text()
         result.append(self._render_action_bars())  # Lines 1-4: both bars
         result.append("\n")
-        result.append(self._render_action_sequence())  # Line 5
+        result.append(self._render_action_sequence())  # Lines 5-6: sequence + last action
         result.append("\n")
-        result.append(self._render_return_history())  # Line 6
+        result.append(self._render_return_history())  # Line 7
         return result
 
     def _render_action_bars(self) -> Text:
@@ -247,14 +249,18 @@ class ActionContext(Static):
     def _render_action_sequence(self) -> Text:
         """Render recent action sequence with pattern warnings FIRST.
 
-        Format: ⚠ STUCK  G→G→A→W→W→W→W→W→P→G→A→F
+        Format (Policy V2):
+        ⚠ STUCK  G✓→G✓→A✗→W✓→W✓→W✓→W✓→W✓→P✓→G✓→A✓→F✓
+        Last: GERMINATE ✓ (slot_0)
+
         Pattern warnings are placed first for visibility.
-        Arrows between actions improve readability.
+        Success markers show execution feedback.
         """
         if self._snapshot is None:
             return Text("[no data]", style="dim")
 
-        decisions = self._snapshot.tamiyo.recent_decisions[:24]
+        tamiyo = self._snapshot.tamiyo
+        decisions = tamiyo.recent_decisions[:24]
         if not decisions:
             return Text("[no actions yet]", style="dim")
 
@@ -279,18 +285,19 @@ class ActionContext(Static):
         if not patterns:
             result.append("Recent: ", style="dim")
 
-        # Recent row (most recent 12) with arrows
+        # Recent row (most recent 12) with arrows and success markers
         recent_decisions = decisions[:12]
         recent_actions = [
             (
                 ACTION_ABBREVS.get(d.chosen_action, "?"),
                 ACTION_COLORS.get(d.chosen_action, "white"),
+                getattr(d, "success", True),  # Success flag (default True for old data)
             )
             for d in recent_decisions
         ]
         recent_actions.reverse()  # Oldest first for left-to-right reading
 
-        for i, (char, color) in enumerate(recent_actions):
+        for i, (char, color, success) in enumerate(recent_actions):
             # Override color if pattern detected
             if is_stuck:
                 style = "yellow"
@@ -300,9 +307,22 @@ class ActionContext(Static):
                 style = color
 
             result.append(char, style=style)
+            # Success marker
+            marker = "✓" if success else "✗"
+            marker_style = "green" if success else "red"
+            result.append(marker, style=marker_style)
+
             # Arrow separator (except for last)
             if i < len(recent_actions) - 1:
                 result.append("→", style="dim")
+
+        # Add last action context (Policy V2)
+        result.append("\n")
+        result.append("Last: ", style="dim")
+        result.append(f"{tamiyo.last_action_op} ", style=ACTION_COLORS.get(tamiyo.last_action_op, "white"))
+        marker = "✓" if tamiyo.last_action_success else "✗"
+        marker_style = "green" if tamiyo.last_action_success else "red bold"
+        result.append(marker, style=marker_style)
 
         return result
 

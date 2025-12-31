@@ -26,17 +26,18 @@ if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot
 
 
-# Head configuration (label, entropy_field, grad_norm_field, width)
+# Head configuration (label, entropy_field, grad_norm_field, width, entropy_coef)
 # Order and widths match HEAD OUTPUTS panel for vertical alignment
-HEAD_CONFIG: list[tuple[str, str, str, int]] = [
-    ("Op", "head_op_entropy", "head_op_grad_norm", 13),
-    ("Slot", "head_slot_entropy", "head_slot_grad_norm", 11),
-    ("Blueprint", "head_blueprint_entropy", "head_blueprint_grad_norm", 14),
-    ("Style", "head_style_entropy", "head_style_grad_norm", 14),
-    ("Tempo", "head_tempo_entropy", "head_tempo_grad_norm", 11),
-    ("αTarget", "head_alpha_target_entropy", "head_alpha_target_grad_norm", 12),
-    ("αSpeed", "head_alpha_speed_entropy", "head_alpha_speed_grad_norm", 12),
-    ("Curve", "head_alpha_curve_entropy", "head_alpha_curve_grad_norm", 11),
+# entropy_coef: Differential entropy coefficient from Policy V2 (1.3x for sparse heads)
+HEAD_CONFIG: list[tuple[str, str, str, int, float]] = [
+    ("Op", "head_op_entropy", "head_op_grad_norm", 13, 1.0),
+    ("Slot", "head_slot_entropy", "head_slot_grad_norm", 11, 1.0),
+    ("Blueprint", "head_blueprint_entropy", "head_blueprint_grad_norm", 14, 1.3),
+    ("Style", "head_style_entropy", "head_style_grad_norm", 14, 1.2),
+    ("Tempo", "head_tempo_entropy", "head_tempo_grad_norm", 11, 1.3),
+    ("αTarget", "head_alpha_target_entropy", "head_alpha_target_grad_norm", 12, 1.2),
+    ("αSpeed", "head_alpha_speed_entropy", "head_alpha_speed_grad_norm", 12, 1.2),
+    ("Curve", "head_alpha_curve_entropy", "head_alpha_curve_grad_norm", 11, 1.2),
 ]
 
 # Heads that are conditional (only relevant for certain ops) - indexed by label
@@ -89,22 +90,31 @@ class HeadsPanel(Static):
 
         # Row 0: Header labels (plain text, right-aligned like HEAD OUTPUTS)
         result.append("      ", style="dim")  # Indent for row label
-        for label, _, _, width in HEAD_CONFIG:
+        for label, _, _, width, _ in HEAD_CONFIG:
             result.append(f"{label:>{width}}", style="dim bold")
         result.append("\n")
 
-        # Row 1: Entropy values
+        # Row 1: Entropy values with coefficient markers (Policy V2)
         # Note: getattr without default - AttributeError if HEAD_CONFIG has typo
         result.append("Entr  ", style="dim")
-        for label, ent_field, _, width in HEAD_CONFIG:
+        for label, ent_field, _, width, coef in HEAD_CONFIG:
             entropy: float = getattr(tamiyo, ent_field)
             color = self._entropy_color(label, entropy)
-            result.append(f"{entropy:>{width}.2f}", style=color)
+
+            # Show coefficient for sparse heads (>1.0)
+            if coef > 1.0:
+                # Add coefficient marker (e.g., "0.89×1.3")
+                # Reduce value width to fit coefficient
+                val_width = width - 4  # Leave space for "×1.X"
+                result.append(f"{entropy:>{val_width}.2f}", style=color)
+                result.append(f"×{coef:.1f}", style="cyan dim")
+            else:
+                result.append(f"{entropy:>{width}.2f}", style=color)
         result.append("\n")
 
         # Row 2: Entropy bars
         result.append("      ", style="dim")  # Indent
-        for label, ent_field, _, width in HEAD_CONFIG:
+        for label, ent_field, _, width, _ in HEAD_CONFIG:
             entropy = getattr(tamiyo, ent_field)
             bar = self._render_entropy_bar(label, entropy)
             # Right-align the bar in the cell (like HEAD OUTPUTS heat bars)
@@ -113,17 +123,23 @@ class HeadsPanel(Static):
             result.append(bar)
         result.append("\n")
 
-        # Row 3: Gradient values
+        # Row 3: Gradient values with trend arrows (Policy V2)
         result.append("Grad  ", style="dim")
-        for label, _, grad_field, width in HEAD_CONFIG:
+        for label, _, grad_field, width, _ in HEAD_CONFIG:
             grad: float = getattr(tamiyo, grad_field)
+            grad_prev: float = getattr(tamiyo, f"{grad_field}_prev")
+            trend = self._gradient_trend(grad, grad_prev)
             color = self._gradient_color(grad)
-            result.append(f"{grad:>{width}.2f}", style=color)
+
+            # Value + trend arrow (1 char)
+            val_width = width - 1
+            result.append(f"{grad:>{val_width}.2f}", style=color)
+            result.append(trend, style=self._gradient_trend_style(grad, grad_prev))
         result.append("\n")
 
         # Row 4: Gradient bars
         result.append("      ", style="dim")  # Indent
-        for label, _, grad_field, width in HEAD_CONFIG:
+        for label, _, grad_field, width, _ in HEAD_CONFIG:
             grad = getattr(tamiyo, grad_field)
             bar = self._render_gradient_bar(grad)
             # Right-align the bar
@@ -134,7 +150,7 @@ class HeadsPanel(Static):
 
         # Row 5: Head state indicators (per DRL expert recommendation)
         result.append("State ", style="dim")
-        for label, ent_field, grad_field, width in HEAD_CONFIG:
+        for label, ent_field, grad_field, width, _ in HEAD_CONFIG:
             entropy = getattr(tamiyo, ent_field)
             grad = getattr(tamiyo, grad_field)
             state, style_str = self._head_state(label, entropy, grad)
@@ -213,6 +229,39 @@ class HeadsPanel(Static):
             return "yellow"  # Strong
         else:
             return "red"  # Exploding
+
+    def _gradient_trend(self, grad: float, grad_prev: float) -> str:
+        """Get trend arrow for gradient health (Policy V2).
+
+        Enables distinguishing transient spikes (noisy batch) from sustained issues.
+        """
+        EPSILON = 0.01
+        delta = grad - grad_prev
+
+        if abs(delta) < EPSILON:
+            return "→"  # Stable
+        elif delta > 0:
+            return "↗"  # Rising
+        else:
+            return "↘"  # Falling
+
+    def _gradient_trend_style(self, grad: float, grad_prev: float) -> str:
+        """Style for gradient trend arrow based on health context."""
+        # Rising gradients are good if in vanishing range, bad if in exploding range
+        # Falling gradients are good if in exploding range, bad if in vanishing range
+        delta = grad - grad_prev
+        EPSILON = 0.01
+
+        if abs(delta) < EPSILON:
+            return "dim"  # Stable
+
+        # Context-aware coloring
+        if grad < 0.1:  # Vanishing range
+            return "green" if delta > 0 else "red"  # Rising = good, falling = bad
+        elif grad > 2.0:  # Exploding range
+            return "red" if delta > 0 else "green"  # Rising = bad, falling = good
+        else:  # Healthy range
+            return "dim"  # Changes are neutral in healthy range
 
     def _head_state(self, head: str, entropy: float, grad_norm: float) -> tuple[str, str]:
         """Classify head state based on entropy and gradient.

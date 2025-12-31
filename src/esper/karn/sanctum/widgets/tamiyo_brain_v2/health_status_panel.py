@@ -84,11 +84,34 @@ class HealthStatusPanel(Static):
             result.append(" !", style=self._status_style(worst_status))
         result.append("\n")
 
-        # Ratio bounds
-        ratio_status = self._get_ratio_status(tamiyo.ratio_min, tamiyo.ratio_max)
-        result.append("Ratio        ", style="dim")
-        result.append(f"[{tamiyo.ratio_min:.2f},{tamiyo.ratio_max:.2f}]", style=self._status_style(ratio_status))
+        # Ratio bounds (joint ratio for multi-head)
+        joint_status = self._get_joint_ratio_status(tamiyo.joint_ratio_max)
+        result.append("Ratio Joint  ", style="dim")
+        result.append(f"{tamiyo.joint_ratio_max:.2f}", style=self._status_style(joint_status))
+        if joint_status != "ok":
+            result.append(" !", style=self._status_style(joint_status))
         result.append("\n")
+
+        # Per-head ratio max (condensed - only show if any head is concerning)
+        head_ratios = [
+            ("Op", tamiyo.head_op_ratio_max),
+            ("Sl", tamiyo.head_slot_ratio_max),
+            ("BP", tamiyo.head_blueprint_ratio_max),
+            ("St", tamiyo.head_style_ratio_max),
+            ("Te", tamiyo.head_tempo_ratio_max),
+            ("αT", tamiyo.head_alpha_target_ratio_max),
+            ("αS", tamiyo.head_alpha_speed_ratio_max),
+            ("Cv", tamiyo.head_alpha_curve_ratio_max),
+        ]
+        worst_head_ratio = max(r for _, r in head_ratios)
+        if worst_head_ratio > 1.5:  # Show per-head breakdown if any head is elevated
+            result.append("  Per-head:  ", style="dim")
+            for i, (label, ratio) in enumerate(head_ratios):
+                if i > 0:
+                    result.append(" ")
+                color = "red" if ratio > 2.0 else ("yellow" if ratio > 1.5 else "dim")
+                result.append(f"{label}:{ratio:.1f}", style=color)
+            result.append("\n")
 
         # Grad norm
         gn_status = self._get_grad_norm_status(tamiyo.grad_norm)
@@ -213,24 +236,51 @@ class HealthStatusPanel(Static):
         return result
 
     def _render_value_stats(self) -> Text:
-        """Render value function statistics with relative thresholds."""
+        """Render op-conditioned Q-values (Policy V2).
+
+        Shows Q(s,op) for each operation and Q-variance metric.
+        Low variance indicates critic is ignoring op conditioning.
+        """
         if self._snapshot is None:
             return Text()
 
         tamiyo = self._snapshot.tamiyo
         result = Text()
 
-        value_status = self._get_value_status(tamiyo)
-        value_style = self._status_style(value_status)
+        # Q-values per operation (abbreviated for space)
+        result.append("Q-Values     ", style="dim")
 
-        result.append("Value Range  ", style="dim")
-        result.append(f"[{tamiyo.value_min:.1f}, {tamiyo.value_max:.1f}]", style=value_style)
+        # Define ops with colors
+        ops = [
+            ("G", tamiyo.q_germinate, "green"),
+            ("A", tamiyo.q_advance, "cyan"),
+            ("F", tamiyo.q_fossilize, "blue"),
+            ("P", tamiyo.q_prune, "red"),
+            ("V", tamiyo.q_set_alpha, "cyan"),  # V for set alpha (A is advance)
+            ("W", tamiyo.q_wait, "dim"),
+        ]
 
-        if tamiyo.value_std > 0:
-            result.append(f" s={tamiyo.value_std:.2f}", style="dim")
+        for i, (label, q_val, color) in enumerate(ops):
+            if i > 0:
+                result.append(" ", style="dim")
+            result.append(f"{label}:", style="dim")
+            result.append(f"{q_val:+.1f}", style=color)
 
-        if value_status != "ok":
-            result.append(" !", style=value_style)
+        result.append("\n")
+
+        # Q-variance (op-sensitivity check)
+        result.append("Q Variance   ", style="dim")
+
+        var_status = self._get_q_variance_status(tamiyo.q_variance)
+        result.append(f"{tamiyo.q_variance:.2f}", style=self._status_style(var_status))
+
+        if var_status == "critical":
+            result.append(" NO OP COND!", style="red bold")
+        elif var_status == "warning":
+            result.append(" weak", style="yellow")
+
+        # Q-spread for context
+        result.append(f"  spread:{tamiyo.q_spread:.1f}", style="dim")
 
         return result
 
@@ -350,6 +400,30 @@ class HealthStatusPanel(Static):
             return "critical"
         if grad_norm > TUIThresholds.GRAD_NORM_WARNING:
             return "warning"
+        return "ok"
+
+    def _get_q_variance_status(self, q_variance: float) -> str:
+        """Check if Q-variance indicates op conditioning is working.
+
+        Low variance means Q(s, op) ≈ Q(s, op') for all ops → critic ignoring op input.
+        High variance means different ops get different value estimates → healthy.
+        """
+        if q_variance < 0.01:
+            return "critical"  # Essentially collapsed to V(s)
+        if q_variance < 0.1:
+            return "warning"  # Weak differentiation between ops
+        return "ok"
+
+    def _get_joint_ratio_status(self, joint_ratio: float) -> str:
+        """Check joint ratio (product of per-head ratios).
+
+        With 8 heads, individual ratios at 1.15 produce joint ratio ~3.06.
+        Standard PPO clip range is [0.8, 1.2] → joint should be close to 1.0.
+        """
+        if joint_ratio > 3.0 or joint_ratio < 0.33:
+            return "critical"  # Severe explosion/collapse
+        if joint_ratio > 2.0 or joint_ratio < 0.5:
+            return "warning"  # Elevated but not critical
         return "ok"
 
     def _status_style(self, status: str) -> str:
