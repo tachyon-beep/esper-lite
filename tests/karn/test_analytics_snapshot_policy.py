@@ -22,6 +22,7 @@ def make_training_started_payload(**kwargs) -> TrainingStartedPayload:
         "task": "classification",
         "reward_mode": "shaped",
         "max_epochs": 10,
+        "max_batches": 100,
         "n_envs": 1,
         "host_params": 1000,
         "slot_ids": ("slot0",),

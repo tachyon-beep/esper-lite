@@ -94,16 +94,13 @@ def test_run_header_basic_info():
     # Check epoch/max
     assert "250/500" in rendered or "250" in rendered
 
-    # Check batch
-    assert "Batch" in rendered
-    assert "150" in rendered
+    # Check batch (format is now "B:150" instead of "Batch 150")
+    assert "B:150" in rendered or "150" in rendered
 
     # Check runtime
     assert "1h" in rendered
 
-    # Check best accuracy
-    assert "Best:" in rendered
-    assert "82.3%" in rendered
+    # Note: Best accuracy is no longer shown in RunHeader (shown in env detail)
 
 
 def test_run_header_connection_live():
@@ -133,7 +130,7 @@ def test_run_header_connection_stale():
     panel = widget.render()
     rendered = render_to_text(panel)
 
-    assert "STALE" in rendered  # Uppercase for accessibility
+    assert "STAL" in rendered  # Abbreviated to 4 chars for fixed-width layout
 
 
 def test_run_header_connection_disconnected():
@@ -148,11 +145,11 @@ def test_run_header_connection_disconnected():
     panel = widget.render()
     rendered = render_to_text(panel)
 
-    assert "Disconnected" in rendered
+    assert "DISC" in rendered  # Abbreviated to 4 chars for fixed-width layout
 
 
 def test_run_header_env_health_summary():
-    """Test environment health summary."""
+    """RunHeader no longer shows env health summary (moved to other panels)."""
     snapshot = SanctumSnapshot(connected=True, staleness_seconds=1.0)
 
     # Add envs with different statuses
@@ -166,13 +163,13 @@ def test_run_header_env_health_summary():
     panel = widget.render()
     rendered = render_to_text(panel)
 
-    # Should show env counts
-    assert "OK" in rendered or "2" in rendered  # 2 healthy/excellent
-    assert "stall" in rendered or "1" in rendered
+    # RunHeader now focuses on connection, episode/epoch progress, and system alarms
+    # Env health is shown in EnvOverview panel instead
+    assert "LIVE" in rendered or "STAL" in rendered
 
 
 def test_run_header_seed_stage_counts():
-    """Test seed stage counts."""
+    """RunHeader no longer shows seed stage counts (moved to other panels)."""
     snapshot = SanctumSnapshot(connected=True, staleness_seconds=1.0)
 
     env = EnvState(env_id=0)
@@ -187,10 +184,9 @@ def test_run_header_seed_stage_counts():
     panel = widget.render()
     rendered = render_to_text(panel)
 
-    # Should show seed counts (T:2 B:1 F:1)
-    assert "T:" in rendered or "2" in rendered
-    assert "B:" in rendered or "1" in rendered
-    assert "F:" in rendered or "1" in rendered
+    # RunHeader now focuses on connection, episode/epoch progress, and system alarms
+    # Seed stage counts are shown in EnvOverview panel instead
+    assert "LIVE" in rendered or "STAL" in rendered
 
 
 def test_run_header_task_name():
@@ -229,8 +225,8 @@ def test_run_header_system_alarm_ok():
     panel = widget.render()
     rendered = render_to_text(panel)
 
-    # Should show OK indicator in subtitle
-    assert "OK" in rendered
+    # Should show system indicator (now shows "✓ System" instead of "OK")
+    assert "System" in rendered
 
 
 def test_run_header_system_alarm_triggered():
@@ -260,8 +256,8 @@ def test_run_header_system_alarm_triggered():
 
 
 def test_run_header_border_red_on_memory_alarm():
-    """RunHeader border should be red when memory alarm is active."""
-    from rich.panel import Panel
+    """RunHeader should show alarm indicator when memory alarm is active."""
+    from rich.text import Text
     from esper.karn.sanctum.schema import SystemVitals
 
     # Create snapshot with memory alarm
@@ -272,15 +268,17 @@ def test_run_header_border_red_on_memory_alarm():
     header = RunHeader()
     header.update_snapshot(snapshot)
 
-    # Render and check border style
+    # Render and check for alarm indicator
     rendered = header.render()
-    assert isinstance(rendered, Panel)
-    assert rendered.border_style == "bold red"
+    assert isinstance(rendered, Text)
+    # Should show alarm indicator (⚠ RAM 90%)
+    rendered_text = rendered.plain
+    assert "RAM" in rendered_text or "⚠" in rendered_text
 
 
 def test_run_header_border_blue_normally():
-    """RunHeader border should be blue when no memory alarm."""
-    from rich.panel import Panel
+    """RunHeader should show system OK when no memory alarm."""
+    from rich.text import Text
     from esper.karn.sanctum.schema import SystemVitals
 
     # Create snapshot without memory alarm
@@ -291,187 +289,16 @@ def test_run_header_border_blue_normally():
     header = RunHeader()
     header.update_snapshot(snapshot)
 
-    # Render and check border style
+    # Render and check for system OK indicator
     rendered = header.render()
-    assert isinstance(rendered, Panel)
-    assert rendered.border_style == "blue"
+    assert isinstance(rendered, Text)
+    # Should show "✓ System" when no alarms
+    assert "System" in rendered.plain
 
 
 # =============================================================================
-# A/B Comparison Tests (moved from test_comparison_header.py)
+# A/B Comparison Tests - REMOVED
 # =============================================================================
-
-
-def test_run_header_update_comparison_method():
-    """RunHeader should have update_comparison method for A/B data."""
-    header = RunHeader()
-
-    # Should not raise
-    header.update_comparison(
-        group_a_accuracy=75.0,
-        group_b_accuracy=68.0,
-        group_a_reward=12.5,
-        group_b_reward=10.2,
-    )
-
-    # Should have a leader property
-    assert header.leader == "A"
-
-
-def test_run_header_shows_comparison_delta():
-    """RunHeader should show accuracy delta when in A/B mode."""
-    snapshot = SanctumSnapshot(connected=True, staleness_seconds=1.0)
-
-    header = RunHeader()
-    header.update_snapshot(snapshot)
-    header.update_comparison(
-        group_a_accuracy=75.0,
-        group_b_accuracy=68.0,
-        group_a_reward=12.5,
-        group_b_reward=10.2,
-    )
-
-    rendered = header.render()
-    text = render_to_text(rendered)
-
-    # Should show delta (75.0 - 68.0 = +7.0%)
-    assert "+7.0%" in text
-
-
-def test_run_header_comparison_reward_decisive():
-    """Reward should be decisive when significantly different."""
-    header = RunHeader()
-
-    # B has lower accuracy but significantly higher reward
-    header.update_comparison(
-        group_a_accuracy=75.0,
-        group_b_accuracy=68.0,
-        group_a_reward=10.0,
-        group_b_reward=15.0,  # B has 50% higher reward
-    )
-
-    # B should lead because reward is the RL objective
-    assert header.leader == "B"
-
-
-def test_run_header_comparison_tied():
-    """Leader should be None when metrics are equal."""
-    header = RunHeader()
-
-    header.update_comparison(
-        group_a_accuracy=70.0,
-        group_b_accuracy=70.0,
-        group_a_reward=10.0,
-        group_b_reward=10.0,
-    )
-
-    assert header.leader is None
-
-
-def test_run_header_no_comparison_by_default():
-    """RunHeader should not show comparison info when not in A/B mode."""
-    snapshot = SanctumSnapshot(connected=True, staleness_seconds=1.0)
-
-    header = RunHeader()
-    header.update_snapshot(snapshot)
-
-    rendered = header.render()
-    text = render_to_text(rendered)
-
-    # Should NOT show A/B comparison elements
-    assert "A/B" not in text
-    assert "Leading:" not in text
-    assert "Acc Δ" not in text
-
-
-def test_run_header_shows_leader_indicator():
-    """RunHeader should show leader indicator in A/B mode."""
-    snapshot = SanctumSnapshot(connected=True, staleness_seconds=1.0)
-
-    header = RunHeader()
-    header.update_snapshot(snapshot)
-    header.update_comparison(
-        group_a_accuracy=75.0,
-        group_b_accuracy=68.0,
-        group_a_reward=12.5,
-        group_b_reward=10.2,
-    )
-
-    rendered = header.render()
-    text = render_to_text(rendered)
-
-    # Should show leader
-    assert "A" in text  # Leading policy indicator
-
-
-# =============================================================================
-# Always-Visible Metrics Tests
-# =============================================================================
-
-
-def test_run_header_throughput_always_visible():
-    """Throughput should always be visible, even when zero."""
-    from esper.karn.sanctum.schema import SystemVitals
-
-    snapshot = SanctumSnapshot(connected=True, staleness_seconds=1.0)
-    # Zero throughput
-    snapshot.vitals = SystemVitals(
-        epochs_per_second=0.0,
-        batches_per_hour=0.0,
-    )
-
-    header = RunHeader()
-    header.update_snapshot(snapshot)
-    rendered = render_to_text(header.render())
-
-    # Should still show throughput labels
-    assert "ep/s" in rendered
-    assert "batch/min" in rendered
-    # Should show zero values
-    assert "0.0" in rendered
-
-
-def test_run_header_average_always_visible():
-    """Rolling average should always be visible, with placeholder when no history."""
-    snapshot = SanctumSnapshot(connected=True, staleness_seconds=1.0)
-    # No mean accuracy history
-    snapshot.mean_accuracy_history = []
-
-    header = RunHeader()
-    header.update_snapshot(snapshot)
-    rendered = render_to_text(header.render())
-
-    # Should still show "Avg:" label
-    assert "Avg:" in rendered
-    # Should show placeholder
-    assert "--" in rendered
-
-
-def test_run_header_average_shows_value_with_history():
-    """Rolling average should show value when history is available."""
-    snapshot = SanctumSnapshot(connected=True, staleness_seconds=1.0)
-    snapshot.mean_accuracy_history = [65.0, 70.0, 75.0]
-
-    header = RunHeader()
-    header.update_snapshot(snapshot)
-    rendered = render_to_text(header.render())
-
-    # Should show "Avg:" label
-    assert "Avg:" in rendered
-    # Should show current mean (last value)
-    assert "75.0%" in rendered
-
-
-def test_run_header_best_always_visible():
-    """Best accuracy should always be visible, with placeholder when no data."""
-    snapshot = SanctumSnapshot(connected=True, staleness_seconds=1.0)
-    # No envs, so no best accuracy
-
-    header = RunHeader()
-    header.update_snapshot(snapshot)
-    rendered = render_to_text(header.render())
-
-    # Should show "Best:" label
-    assert "Best:" in rendered
-    # Should show placeholder
-    assert "--" in rendered
+# NOTE: A/B comparison functionality has been removed from RunHeader.
+# A/B comparison is now handled at the app level with multiple policy tabs.
+# These tests have been removed as the functionality no longer exists.

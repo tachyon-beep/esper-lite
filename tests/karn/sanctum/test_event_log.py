@@ -28,8 +28,9 @@ def test_event_log_creation():
 
     widget = EventLog()
     assert widget is not None
-    assert widget._max_lines == 30  # Default max lines
-    assert widget.border_title == "EVENTS"
+    assert widget._max_lines == 36  # Default max lines
+    # Border title is set but may be truncated by Textual based on widget width
+    assert widget.border_title.startswith("EVENTS")
 
 
 def test_event_log_no_events():
@@ -95,10 +96,10 @@ def test_event_log_with_events():
     assert len(widget._line_data) == 3
 
     # Verify the event types are in the line data
-    all_text = " ".join(left.plain for left, _ in widget._line_data)
+    all_text = " ".join(ld.content.plain for ld in widget._line_data)
     assert "TRAINING_STARTED" in all_text or "TRAINING" in all_text
     assert "REWARD" in all_text
-    assert "GERMINATED" in all_text
+    assert "GERM" in all_text  # SEED_GERMINATED is shortened to GERM
 
 
 def test_event_log_max_lines_limit():
@@ -200,11 +201,11 @@ def test_event_log_groups_by_second():
     assert len(widget._line_data) == 2
 
     # Check first line has count indicator
-    first_line_text = widget._line_data[0][0].plain
+    first_line_text = widget._line_data[0].content.plain
     assert "×3" in first_line_text  # 3 REWARD_COMPUTED events
 
     # Check env IDs are captured
-    first_line_envs = widget._line_data[0][1]
+    first_line_envs = widget._line_data[0].env_str
     assert "0" in first_line_envs
     assert "1" in first_line_envs
     assert "2" in first_line_envs
@@ -218,7 +219,7 @@ def test_event_log_color_coding():
     assert _EVENT_COLORS["SEED_GERMINATED"] == "bright_yellow"
     assert _EVENT_COLORS["SEED_FOSSILIZED"] == "bright_green"
     assert _EVENT_COLORS["SEED_PRUNED"] == "bright_red"
-    assert _EVENT_COLORS["REWARD_COMPUTED"] == "bright_cyan"
+    assert _EVENT_COLORS["REWARD_COMPUTED"] == "dim"
     assert _EVENT_COLORS["BATCH_EPOCH_COMPLETED"] == "bright_blue"
 
     # Unknown events default to "white" via .get() in implementation
@@ -254,7 +255,7 @@ def test_event_log_uses_colors_in_rendering():
 
     # Line data should contain styled text
     assert len(widget._line_data) == 1
-    left_text, _ = widget._line_data[0]
+    line_data = widget._line_data[0]
 
-    # The text should contain GERMINATED (after SEED_ is stripped)
-    assert "GERMINATED" in left_text.plain
+    # The text should contain GERMINATED
+    assert "GERM" in line_data.content.plain

@@ -11,7 +11,7 @@ from esper.karn.sanctum.widgets.tamiyo_brain_v2.ppo_losses_panel import PPOLosse
 
 
 def test_ppo_losses_shows_gauges():
-    """PPOLossesPanel should show all 4 PPO gauge metrics."""
+    """PPOLossesPanel should show the 3 main PPO gauge metrics."""
     snapshot = SanctumSnapshot()
     snapshot.tamiyo = TamiyoState(
         explained_variance=0.85,
@@ -26,17 +26,16 @@ def test_ppo_losses_shows_gauges():
     content = panel.render()
 
     content_str = str(content)
-    # Should show all 4 gauge labels
+    # Should show 3 main gauge labels (Expl.Var, Entropy, Clip Frac)
     assert "Expl.Var" in content_str
     assert "Entropy" in content_str
     assert "Clip Frac" in content_str
-    assert "KL Div" in content_str
     # Should have gauge bars
     assert "[" in content_str and "]" in content_str
 
 
 def test_ppo_losses_shows_sparklines():
-    """PPOLossesPanel should show all 3 loss sparklines."""
+    """PPOLossesPanel should show loss sparklines and value/policy ratio."""
     snapshot = SanctumSnapshot()
     snapshot.tamiyo = TamiyoState(
         policy_loss=0.05,
@@ -53,10 +52,11 @@ def test_ppo_losses_shows_sparklines():
     content = panel.render()
 
     content_str = str(content)
-    # Should show sparkline labels
-    assert "Ep.Return" in content_str
+    # Should show sparkline labels (P.Loss and V.Loss, not Ep.Return anymore)
     assert "P.Loss" in content_str
     assert "V.Loss" in content_str
+    # Should show value/policy loss ratio
+    assert "L_v/L_p" in content_str
 
 
 def test_ppo_losses_shows_directional_clip():

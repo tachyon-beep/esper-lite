@@ -34,6 +34,7 @@ class TestMultiEnvSlotTracking:
             data=TrainingStartedPayload(
                 n_envs=2,
                 max_epochs=10,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0", "r0c1"),
@@ -98,6 +99,7 @@ class TestMultiEnvSlotTracking:
             data=TrainingStartedPayload(
                 n_envs=1,
                 max_epochs=5,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0",),
@@ -143,6 +145,7 @@ class TestMultiEnvSlotTracking:
                 data=TrainingStartedPayload(
                     n_envs=2,
                     max_epochs=5,
+                max_batches=100,
                     task="test_task",
                     host_params=1000,
                     slot_ids=("r0c0", "r0c1"),
@@ -186,6 +189,7 @@ class TestMultiEnvSlotTracking:
                 data=TrainingStartedPayload(
                     n_envs=2,
                     max_epochs=5,
+                max_batches=100,
                     task="test_task",
                     host_params=1000,
                     slot_ids=("r0c0", "r0c1"),
@@ -242,6 +246,7 @@ class TestKarnCollectorEmitAfterClose:
             data=TrainingStartedPayload(
                 n_envs=1,
                 max_epochs=5,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0", "r0c1"),
@@ -434,6 +439,7 @@ class TestCounterfactualNoneDataHandling:
             data=TrainingStartedPayload(
                 n_envs=1,
                 max_epochs=5,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0",),
@@ -496,6 +502,7 @@ class TestMultiEnvEpochCommitBug:
             data=TrainingStartedPayload(
                 n_envs=n_envs,
                 max_epochs=10,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0",),
@@ -596,6 +603,7 @@ class TestMultiEnvEpochCommitBug:
             data=TrainingStartedPayload(
                 n_envs=n_envs,
                 max_epochs=10,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0",),
@@ -652,6 +660,7 @@ class TestMultiEnvEpochCommitBug:
             data=TrainingStartedPayload(
                 n_envs=n_envs,
                 max_epochs=10,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0",),
@@ -748,6 +757,7 @@ class TestPartialBatchFlush:
             data=TrainingStartedPayload(
                 n_envs=n_envs,
                 max_epochs=10,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0",),
@@ -822,6 +832,7 @@ class TestPartialBatchFlush:
             data=TrainingStartedPayload(
                 n_envs=n_envs,
                 max_epochs=10,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0",),
@@ -903,6 +914,7 @@ class TestMinimalTelemetryFallback:
             data=TrainingStartedPayload(
                 n_envs=4,
                 max_epochs=10,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0",),
@@ -962,6 +974,7 @@ class TestMinimalTelemetryFallback:
             data=TrainingStartedPayload(
                 n_envs=4,
                 max_epochs=10,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0",),
@@ -1032,6 +1045,7 @@ class TestResetClearsMultiEnvState:
             data=TrainingStartedPayload(
                 n_envs=4,
                 max_epochs=10,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0",),
@@ -1082,6 +1096,7 @@ class TestResetClearsMultiEnvState:
             data=TrainingStartedPayload(
                 n_envs=4,
                 max_epochs=10,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0",),
@@ -1118,6 +1133,7 @@ class TestResetClearsMultiEnvState:
             data=TrainingStartedPayload(
                 n_envs=4,
                 max_epochs=10,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0",),

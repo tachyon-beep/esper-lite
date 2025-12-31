@@ -32,8 +32,8 @@ def test_buffer_add_accepts_tensor_log_probs():
     alpha_speed_mask = torch.ones(NUM_ALPHA_SPEEDS, dtype=torch.bool)
     alpha_curve_mask = torch.ones(NUM_ALPHA_CURVES, dtype=torch.bool)
     op_mask = torch.ones(NUM_OPS, dtype=torch.bool)
-    hidden_h = torch.randn(1, 1, 128)
-    hidden_c = torch.randn(1, 1, 128)
+    hidden_h = torch.randn(1, 1, 512)
+    hidden_c = torch.randn(1, 1, 512)
 
     # Should accept tensors (0-dim) for log_probs
     buffer.add(
@@ -93,8 +93,8 @@ def test_buffer_add_still_accepts_float_log_probs():
     alpha_speed_mask = torch.ones(NUM_ALPHA_SPEEDS, dtype=torch.bool)
     alpha_curve_mask = torch.ones(NUM_ALPHA_CURVES, dtype=torch.bool)
     op_mask = torch.ones(NUM_OPS, dtype=torch.bool)
-    hidden_h = torch.randn(1, 1, 128)
-    hidden_c = torch.randn(1, 1, 128)
+    hidden_h = torch.randn(1, 1, 512)
+    hidden_c = torch.randn(1, 1, 512)
 
     # Should still accept floats
     buffer.add(
@@ -152,8 +152,8 @@ def test_buffer_add_accepts_mixed_float_and_tensor():
     alpha_speed_mask = torch.ones(NUM_ALPHA_SPEEDS, dtype=torch.bool)
     alpha_curve_mask = torch.ones(NUM_ALPHA_CURVES, dtype=torch.bool)
     op_mask = torch.ones(NUM_OPS, dtype=torch.bool)
-    hidden_h = torch.randn(1, 1, 128)
-    hidden_c = torch.randn(1, 1, 128)
+    hidden_h = torch.randn(1, 1, 512)
+    hidden_c = torch.randn(1, 1, 512)
 
     # Mix of tensor and float inputs
     buffer.add(

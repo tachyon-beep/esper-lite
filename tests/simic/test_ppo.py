@@ -15,9 +15,10 @@ from esper.leyline import (
     NUM_TEMPO,
 )
 from esper.leyline.slot_config import SlotConfig
-from esper.simic.agent import signals_to_features, PPOAgent
+from esper.simic.agent import PPOAgent
 from esper.tamiyo.policy import create_policy
-from esper.tamiyo.policy.features import MULTISLOT_FEATURE_SIZE, get_feature_size
+from esper.tamiyo.policy.features import get_feature_size, batch_obs_to_features
+from esper.simic.training.parallel_env_state import ParallelEnvState
 
 
 def test_ppo_agent_architecture():
@@ -408,7 +409,9 @@ def test_head_grad_norms_includes_tempo_head() -> None:
 
 
 def test_signals_to_features_with_multislot_params():
-    """Test signals_to_features accepts total_seeds and max_seeds params."""
+    """Test batch_obs_to_features V3 API with 3-slot config."""
+    from esper.leyline import LifecycleOp
+
     # Create minimal signals mock
     class MockMetrics:
         epoch = 10
@@ -428,29 +431,35 @@ def test_signals_to_features_with_multislot_params():
         metrics = MockMetrics()
         loss_history = [0.8, 0.7, 0.6, 0.5, 0.5]
         accuracy_history = [70.0, 75.0, 80.0, 82.0, 85.0]
-        active_seeds = []
-        available_slots = 3
-        seed_stage = 0
-        seed_epochs_in_stage = 0
-        seed_alpha = 0.0
-        seed_improvement = 0.0
-        seed_counterfactual = 0.0
 
-    features = signals_to_features(
-        signals=MockSignals(),
-        slot_reports={},
-        use_telemetry=False,
-        slots=["r0c1"],
-        total_seeds=1,  # NEW param
-        max_seeds=3,    # NEW param
+    class MockEnvState:
+        last_action_success = True
+        last_action_op = LifecycleOp.WAIT.value
+        gradient_health_prev = {}
+        epochs_since_counterfactual = {}
+
+    slot_config = SlotConfig.default()  # 3 slots
+    batch_signals = [MockSignals()]
+    batch_slot_reports = [{}]  # Empty slot reports (all inactive)
+    batch_env_states = [MockEnvState()]
+
+    obs, blueprint_indices = batch_obs_to_features(
+        batch_signals=batch_signals,
+        batch_slot_reports=batch_slot_reports,
+        batch_env_states=batch_env_states,
+        slot_config=slot_config,
+        device=torch.device("cpu"),
     )
 
-    assert len(features) == MULTISLOT_FEATURE_SIZE
+    # Obs V3: 24 base + 30*3 slots = 114 dims (excluding blueprint embeddings)
+    expected_dim = get_feature_size(slot_config)
+    assert obs.shape == (1, expected_dim)
+    assert obs.shape[1] == 114
 
 
 def test_signals_to_features_telemetry_slot_alignment() -> None:
-    """Telemetry slices must align to [early][mid][late], not "first enabled slot"."""
-    from esper.leyline import SeedMetrics, SeedStage, SeedStateReport, SeedTelemetry
+    """Telemetry features embedded in slot features align to slot config order."""
+    from esper.leyline import SeedMetrics, SeedStage, SeedStateReport, SeedTelemetry, LifecycleOp
 
     class MockMetrics:
         epoch = 7
@@ -470,13 +479,12 @@ def test_signals_to_features_telemetry_slot_alignment() -> None:
         metrics = MockMetrics()
         loss_history = []
         accuracy_history = []
-        active_seeds = []
-        available_slots = 3
-        seed_stage = 0
-        seed_epochs_in_stage = 0
-        seed_alpha = 0.0
-        seed_improvement = 0.0
-        seed_counterfactual = 0.0
+
+    class MockEnvState:
+        last_action_success = True
+        last_action_op = LifecycleOp.WAIT.value
+        gradient_health_prev = {"r0c1": 0.8}  # Previous gradient health
+        epochs_since_counterfactual = {"r0c1": 2}  # 2 epochs since last CF
 
     mid_telemetry = SeedTelemetry(seed_id="s1", blueprint_id="norm")
     mid_telemetry.gradient_norm = 2.0
@@ -496,25 +504,78 @@ def test_signals_to_features_telemetry_slot_alignment() -> None:
             seed_id="s1",
             slot_id="r0c1",
             blueprint_id="norm",
+            blueprint_index=3,  # norm blueprint index
             stage=SeedStage.TRAINING,
-            metrics=SeedMetrics(epochs_total=7),
+            metrics=SeedMetrics(
+                epochs_total=7,
+                current_alpha=0.3,
+                counterfactual_contribution=1.5,
+                contribution_velocity=0.2,
+                epochs_in_current_stage=4,
+                interaction_sum=0.0,
+            ),
             telemetry=mid_telemetry,
+            blend_tempo_epochs=5,
+            alpha_target=0.5,
+            alpha_mode=0,
+            alpha_steps_total=10,
+            alpha_steps_done=3,
+            time_to_target=7,
+            alpha_velocity=0.05,
+            alpha_algorithm=0,
         )
     }
 
-    features = signals_to_features(
-        signals=MockSignals(),
-        slot_reports=slot_reports,
-        use_telemetry=True,
-        slots=["r0c1"],
+    slot_config = SlotConfig.default()  # 3 slots: r0c0, r0c1, r0c2
+    batch_signals = [MockSignals()]
+    batch_slot_reports = [slot_reports]
+    batch_env_states = [MockEnvState()]
+
+    obs, blueprint_indices = batch_obs_to_features(
+        batch_signals=batch_signals,
+        batch_slot_reports=batch_slot_reports,
+        batch_env_states=batch_env_states,
+        slot_config=slot_config,
+        device=torch.device("cpu"),
     )
 
-    base = MULTISLOT_FEATURE_SIZE
-    dim = SeedTelemetry.feature_dim()
+    # V3: Telemetry is embedded in slot features (4 dims: gradient_norm, gradient_health, has_vanishing, has_exploding)
+    # Base features: 24 dims
+    # Slot 0 (r0c0): 30 dims - all zeros (inactive)
+    # Slot 1 (r0c1): 30 dims - active with telemetry
+    # Slot 2 (r0c2): 30 dims - all zeros (inactive)
 
-    assert features[base:base + dim] == [0.0] * dim  # r0c0 (disabled)
-    assert features[base + dim:base + 2 * dim] == pytest.approx(mid_telemetry.to_features())  # r0c1
-    assert features[base + 2 * dim:base + 3 * dim] == [0.0] * dim  # r0c2 (disabled)
+    # Extract slot 1 features (r0c1) - starts at index 24 + 30 = 54
+    slot1_start = 24 + 30  # Skip base + slot0
+    slot1_features = obs[0, slot1_start:slot1_start + 30].tolist()
+
+    # Slot features layout (30 dims):
+    # [0] is_active = 1.0
+    # [1-10] stage one-hot
+    # [11] current_alpha
+    # [12] contribution
+    # [13] contribution_velocity
+    # [14] blend_tempo_epochs
+    # [15-22] alpha scaffolding (8 dims)
+    # [23-26] telemetry merged (4 dims): gradient_norm, gradient_health, has_vanishing, has_exploding
+    # [27] gradient_health_prev
+    # [28] epochs_in_stage_norm
+    # [29] counterfactual_fresh
+
+    # Check telemetry fields are present (indices 23-26 in slot features)
+    assert slot1_features[23] > 0.0  # gradient_norm (normalized, should be > 0)
+    assert 0.0 <= slot1_features[24] <= 1.0  # gradient_health
+    assert slot1_features[25] == 1.0  # has_vanishing = True
+    assert slot1_features[26] == 0.0  # has_exploding = False
+
+    # Check slot 0 and slot 2 are all zeros (inactive)
+    slot0_start = 24
+    slot0_features = obs[0, slot0_start:slot0_start + 30].tolist()
+    assert slot0_features == [0.0] * 30  # r0c0 (disabled)
+
+    slot2_start = 24 + 60  # Skip base + slot0 + slot1
+    slot2_features = obs[0, slot2_start:slot2_start + 30].tolist()
+    assert slot2_features == [0.0] * 30  # r0c2 (disabled)
 
 
 def test_ppo_agent_accepts_slot_config():

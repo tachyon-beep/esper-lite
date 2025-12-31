@@ -472,6 +472,7 @@ def test_decision_snapshot_populates_from_head_telemetry():
         data=TrainingStartedPayload(
             n_envs=1,
             max_epochs=25,
+            max_batches=100,
             task="mnist",
             host_params=1000000,
             slot_ids=("r0c0", "r0c1"),
@@ -566,6 +567,7 @@ def test_aggregator_populates_compile_status():
             # Required fields (from leyline/telemetry.py TrainingStartedPayload)
             n_envs=4,
             max_epochs=25,
+            max_batches=100,
             task="mnist",
             host_params=1000000,
             slot_ids=("slot_0", "slot_1", "slot_2"),
