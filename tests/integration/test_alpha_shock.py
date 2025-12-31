@@ -18,17 +18,47 @@ from esper.tolaria.environment import create_model
 # Helper Functions
 # =============================================================================
 
-def train_seed_one_step(model: nn.Module, inputs: torch.Tensor, targets: torch.Tensor, criterion: nn.Module):
+def train_seed_one_step(model: nn.Module, inputs: torch.Tensor, targets: torch.Tensor, criterion: nn.Module, slot_id: str):
     """Train the seed for one step in ISOLATION mode."""
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+    slot = cast(SeedSlot, model.seed_slots[slot_id])
+    
+    # CRITICAL FIX: Optimize SEED only. 
+    # Host must remain chemically invariant during incubation.
+    optimizer = torch.optim.SGD(slot.seed.parameters(), lr=0.1)
     optimizer.zero_grad()
     
-    # Forward with alpha=0 (Incubator mode)
-    # This uses ste_forward, so seed receives gradients but output is host-only
+    # Force Host to be immutable for this operation
+    # (Just in case gradients leak via the connection point)
+    # Note: We need gradients to flow *through* the host to the seed input,
+    # but we don't want to update host weights.
+    # We can't set requires_grad=False on host, because that might stop gradient flow if host is used.
+    # But ste_forward uses host_features (detached or not).
+    # If we use isolate_gradients=True, seed input is detached.
+    # So gradient flow stops at seed input. Host weights don't get grad from seed path.
+    # But host weights might get grad from host path?
+    # ste_forward: host + (seed - detached).
+    # Backward: dL/dHost = 1. dL/dSeed = 1.
+    # If we run backward(), host weights WILL get gradients from the host path!
+    # We must ensuring optimizer only updates seed.
+    # And ideally we don't even compute host grads to save time, but standard backward() computes all.
+    # Since we construct optimizer with ONLY seed params, host weights won't update.
+    
+    # Forward pass
     output = model(inputs)
     loss = criterion(output, targets)
     loss.backward()
+    
+    # DEBUG: Check gradients
+    total_grad = 0.0
+    for p in slot.seed.parameters():
+        if p.grad is not None:
+            total_grad += p.grad.abs().sum().item()
+    print(f"Step grad norm: {total_grad}")
+    
     optimizer.step()
+    # Zero all grads to be clean for next step
+    model.zero_grad()
+        
     return loss.item()
 
 def measure_shock(model: nn.Module, inputs: torch.Tensor, targets: torch.Tensor, criterion: nn.Module, slot_id: str, alpha_step: float = 0.01) -> float:
@@ -38,12 +68,16 @@ def measure_shock(model: nn.Module, inputs: torch.Tensor, targets: torch.Tensor,
     # Baseline (Alpha=0)
     slot.state.alpha = 0.0
     slot.state.alpha_controller.alpha = 0.0
+    slot._cached_alpha_tensor = None  # <--- CRITICAL FIX: Invalidate cache
+    
     with torch.no_grad():
         loss_0 = criterion(model(inputs), targets).item()
         
     # Shock (Alpha=step)
     slot.state.alpha = alpha_step
     slot.state.alpha_controller.alpha = alpha_step
+    slot._cached_alpha_tensor = None  # <--- CRITICAL FIX: Invalidate cache
+    
     # IMPORTANT: When alpha > 0, we are in BLENDING.
     # We must ensure the forward pass logic respects this.
     # SeedSlot.forward uses alpha from state/controller.
@@ -128,8 +162,8 @@ class TestAlphaShock:
         # Train for a few steps to align seed with residual
         print("\nIncubating seed...")
         initial_loss = 0
-        for i in range(10):
-            loss = train_seed_one_step(model_exp, inputs, targets, criterion)
+        for i in range(50):
+            loss = train_seed_one_step(model_exp, inputs, targets, criterion, "r0c1")
             if i == 0: initial_loss = loss
             
         # Switch to blending
