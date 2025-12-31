@@ -466,6 +466,69 @@ class PPOAgent:
             metrics["advantage_kurtosis"] = [float("nan")]
             metrics["advantage_positive_ratio"] = [float("nan")]
 
+        # === Collect Op-Conditioned Q-Values (Policy V2) ===
+        # Compute Q(s, op) for all ops using a representative state
+        # Use first valid state from batch to avoid bias from terminal states
+        if valid_mask.any():
+            # Get first valid state
+            first_valid_idx = valid_mask.nonzero(as_tuple=True)
+            if len(first_valid_idx[0]) > 0:
+                sample_state_idx = (first_valid_idx[0][0].item(), first_valid_idx[1][0].item())
+                sample_obs = data["states"][sample_state_idx[0], sample_state_idx[1]].unsqueeze(0).unsqueeze(0)  # [1, 1, state_dim]
+                sample_blueprints = data["blueprint_indices"][sample_state_idx[0], sample_state_idx[1]].unsqueeze(0).unsqueeze(0)  # [1, 1, num_slots]
+
+                # Forward pass to get LSTM output
+                with torch.no_grad():
+                    forward_result = self.policy.network.forward(
+                        state=sample_obs,
+                        blueprint_indices=sample_blueprints,
+                        hidden=None,  # Use initial hidden state for consistency
+                    )
+                    lstm_out = forward_result["lstm_out"]  # [1, 1, hidden_dim]
+
+                # Compute Q(s, op) for each op
+                from esper.leyline import NUM_OPS
+                q_values = []
+                for op_idx in range(NUM_OPS):
+                    op_tensor = torch.tensor([[op_idx]], dtype=torch.long, device=self.device)
+                    q_val = self.policy.network._compute_value(lstm_out, op_tensor)
+                    q_values.append(q_val.item())
+
+                # Unpack to named ops (order matches LifecycleOp enum)
+                # LifecycleOp: GERMINATE=0, ADVANCE=1, FOSSILIZE=2, PRUNE=3, WAIT=4, SET_ALPHA_TARGET=5
+                metrics["q_germinate"] = [q_values[0]]
+                metrics["q_advance"] = [q_values[1]]
+                metrics["q_fossilize"] = [q_values[2]]
+                metrics["q_prune"] = [q_values[3]]
+                metrics["q_wait"] = [q_values[4]]
+                metrics["q_set_alpha"] = [q_values[5]]
+
+                # Compute Q-variance and Q-spread
+                q_variance = float(torch.tensor(q_values).var().item())
+                q_spread = max(q_values) - min(q_values)
+                metrics["q_variance"] = [q_variance]
+                metrics["q_spread"] = [q_spread]
+            else:
+                # No valid states - use NaN
+                metrics["q_germinate"] = [float("nan")]
+                metrics["q_advance"] = [float("nan")]
+                metrics["q_fossilize"] = [float("nan")]
+                metrics["q_prune"] = [float("nan")]
+                metrics["q_wait"] = [float("nan")]
+                metrics["q_set_alpha"] = [float("nan")]
+                metrics["q_variance"] = [float("nan")]
+                metrics["q_spread"] = [float("nan")]
+        else:
+            # No valid data - use NaN
+            metrics["q_germinate"] = [float("nan")]
+            metrics["q_advance"] = [float("nan")]
+            metrics["q_fossilize"] = [float("nan")]
+            metrics["q_prune"] = [float("nan")]
+            metrics["q_wait"] = [float("nan")]
+            metrics["q_set_alpha"] = [float("nan")]
+            metrics["q_variance"] = [float("nan")]
+            metrics["q_spread"] = [float("nan")]
+
         # Initialize per-head entropy tracking (P3-1)
         head_entropy_history: dict[str, list[float]] = {head: [] for head in HEAD_NAMES}
         # Initialize per-head gradient norm tracking (P4-6)

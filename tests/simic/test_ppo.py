@@ -760,3 +760,85 @@ def test_ppo_agent_full_update_with_5_slots():
     assert "policy_loss" in metrics
     assert "value_loss" in metrics
     assert "entropy" in metrics
+
+
+def test_ppo_update_collects_q_values():
+    """PPO update collects Q(s,op) for all ops and computes variance."""
+    slot_config = SlotConfig.default()
+    policy = create_policy(
+        policy_type="lstm",
+        slot_config=slot_config,
+        device="cpu",
+        compile_mode="off",
+    )
+    agent = PPOAgent(
+        policy=policy,
+        slot_config=slot_config,
+        num_envs=1,
+        max_steps_per_env=5,
+        target_kl=None,  # Disable KL early stopping
+        device="cpu",
+    )
+
+    # Add some transitions to buffer
+    agent.buffer.start_episode(env_id=0)
+    for i in range(5):
+        agent.buffer.add(
+            env_id=0,
+            state=torch.randn(agent.policy.network.state_dim),
+            slot_action=0,
+            blueprint_action=0,
+            style_action=0,
+            tempo_action=0,
+            alpha_target_action=0,
+            alpha_speed_action=0,
+            alpha_curve_action=0,
+            op_action=0,
+            slot_log_prob=-1.0,
+            blueprint_log_prob=-1.0,
+            style_log_prob=-1.0,
+            tempo_log_prob=-1.0,
+            alpha_target_log_prob=-1.0,
+            alpha_speed_log_prob=-1.0,
+            alpha_curve_log_prob=-1.0,
+            op_log_prob=-1.0,
+            value=1.0,
+            reward=1.0,
+            done=(i == 4),
+            truncated=False,
+            slot_mask=torch.ones(3, dtype=torch.bool),
+            blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
+            style_mask=torch.ones(NUM_STYLES, dtype=torch.bool),
+            tempo_mask=torch.ones(NUM_TEMPO, dtype=torch.bool),
+            alpha_target_mask=torch.ones(NUM_ALPHA_TARGETS, dtype=torch.bool),
+            alpha_speed_mask=torch.ones(NUM_ALPHA_SPEEDS, dtype=torch.bool),
+            alpha_curve_mask=torch.ones(NUM_ALPHA_CURVES, dtype=torch.bool),
+            op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
+            hidden_h=torch.zeros(1, 1, agent.policy.hidden_dim),
+            hidden_c=torch.zeros(1, 1, agent.policy.hidden_dim),
+            bootstrap_value=0.0,
+            blueprint_indices=torch.zeros(3, dtype=torch.long),
+        )
+    agent.buffer.end_episode(env_id=0)
+
+    # Trigger update
+    metrics = agent.update()
+
+    # Verify Q-values were collected
+    assert "q_germinate" in metrics
+    assert "q_advance" in metrics
+    assert "q_fossilize" in metrics
+    assert "q_prune" in metrics
+    assert "q_wait" in metrics
+    assert "q_set_alpha" in metrics
+    assert "q_variance" in metrics
+    assert "q_spread" in metrics
+
+    # Q-values should be floats
+    assert isinstance(metrics["q_germinate"], float)
+
+    # Q-variance should be >= 0
+    assert metrics["q_variance"] >= 0.0
+
+    # Q-spread should be >= 0
+    assert metrics["q_spread"] >= 0.0
