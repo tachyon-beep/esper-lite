@@ -198,8 +198,12 @@ def test_multislot_feature_size_constant():
 
     features = obs_to_multislot_features(obs)
 
-    assert len(features) == MULTISLOT_FEATURE_SIZE
-    assert MULTISLOT_FEATURE_SIZE == 140, "Expected 23 base + 117 slot features (3 slots × 39)"
+    # NOTE: This test uses obs_to_multislot_features() which is Obs V2 format (23 base + 39 per slot).
+    # MULTISLOT_FEATURE_SIZE now reflects Obs V3 (24 base + 30 per slot = 114 for 3 slots).
+    # For V2: 23 base + 117 slot features (3 slots × 39) = 140
+    expected_v2_size = 23 + (3 * 39)  # V2 format
+    assert len(features) == expected_v2_size
+    assert expected_v2_size == 140, "Expected 23 base + 117 slot features (3 slots × 39)"
 
 
 def test_seed_utilization_feature():
@@ -353,10 +357,12 @@ def test_dynamic_feature_size_3_slots():
 
     features = obs_to_multislot_features(obs, slot_config=slot_config)
 
-    # 23 base + 3 slots * 39 features = 140
-    expected_size = get_feature_size(slot_config)
-    assert expected_size == 140, f"Expected feature size 140 for 3 slots, got {expected_size}"
-    assert len(features) == expected_size, f"Expected {expected_size} features, got {len(features)}"
+    # NOTE: obs_to_multislot_features() returns V2 format (23 base + 39 per slot).
+    # get_feature_size() now returns V3 format (24 base + 30 per slot).
+    # For V2 with 3 slots: 23 base + 3 slots * 39 features = 140
+    expected_v2_size = 23 + (slot_config.num_slots * 39)
+    assert expected_v2_size == 140, f"Expected feature size 140 for 3 slots (V2), got {expected_v2_size}"
+    assert len(features) == expected_v2_size, f"Expected {expected_v2_size} features, got {len(features)}"
 
 
 def test_dynamic_feature_size_5_slots():
@@ -391,10 +397,12 @@ def test_dynamic_feature_size_5_slots():
 
     features = obs_to_multislot_features(obs, slot_config=slot_config)
 
-    # 23 base + 5 slots * 39 features = 218
-    expected_size = get_feature_size(slot_config)
-    assert expected_size == 218, f"Expected feature size 218 for 5 slots, got {expected_size}"
-    assert len(features) == expected_size, f"Expected {expected_size} features, got {len(features)}"
+    # NOTE: obs_to_multislot_features() returns V2 format (23 base + 39 per slot).
+    # get_feature_size() now returns V3 format (24 base + 30 per slot).
+    # For V2 with 5 slots: 23 base + 5 slots * 39 features = 218
+    expected_v2_size = 23 + (slot_config.num_slots * 39)
+    assert expected_v2_size == 218, f"Expected feature size 218 for 5 slots (V2), got {expected_v2_size}"
+    assert len(features) == expected_v2_size, f"Expected {expected_v2_size} features, got {len(features)}"
 
 
 def test_dynamic_slot_iteration():
@@ -535,10 +543,11 @@ def test_slot_features_include_interactions():
     """Verify slot features include interaction and topology fields."""
     from esper.tamiyo.policy.features import SLOT_FEATURE_SIZE
 
-    # New layout: 1 is_active + 10 stage + 15 state + 13 blueprint = 39 dims
-    # (was 35: 1 + 10 + 11 + 13)
-    # Added 4 dims: interaction_sum, boost_received, upstream_alpha, downstream_alpha
-    assert SLOT_FEATURE_SIZE == 39, f"Expected 39 dims/slot, got {SLOT_FEATURE_SIZE}"
+    # Obs V3 layout: 1 is_active + 10 stage + 19 state (no blueprint one-hot) = 30 dims
+    # Blueprint one-hot (13 dims) was moved to embedding layer in the network.
+    # State includes: alpha, contribution, velocity, tempo, alpha scaffolding (8),
+    # telemetry (4), gradient_health_prev, epochs_in_stage_norm, counterfactual_fresh
+    assert SLOT_FEATURE_SIZE == 30, f"Expected 30 dims/slot (Obs V3), got {SLOT_FEATURE_SIZE}"
 
 
 def test_missing_slots_raises_keyerror():

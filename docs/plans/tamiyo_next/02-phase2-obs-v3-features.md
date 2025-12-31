@@ -262,7 +262,7 @@ def batch_obs_to_features(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Returns:
-        obs: [batch, 121] - base (31) + slot features (30*3) (no blueprint)
+        obs: [batch, 114] - base (24) + slot features (30*3) (no blueprint)
         blueprint_indices: [batch, num_slots] - for embedding lookup, dtype=int64
     """
     # ... feature extraction ...
@@ -324,31 +324,31 @@ def get_feature_size(slot_config: SlotConfig) -> int:
     """Feature size excluding blueprint embeddings (added by network).
 
     Breakdown:
-        Base features:     24 dims (epoch, loss, accuracy, history, stage counts, etc.)
-        Action feedback:    7 dims (last_action_success + last_action_op one-hot)
+        Base features:     24 dims (epoch, loss, accuracy, history, stage counts,
+                                    action feedback: last_action_success + last_action_op one-hot)
         Per-slot features: 30 dims × num_slots (stage, alpha, gradient health, etc.)
 
-    For 3 slots: 24 + 7 + (30 × 3) = 31 + 90 = 121 dims
+    For 3 slots: 24 + (30 × 3) = 114 dims
 
     Note: Blueprint embeddings (4 × num_slots = 12 for 3 slots) are added
-    inside the network via BlueprintEmbedding, making total network input 133.
+    inside the network via BlueprintEmbedding, making total network input 126.
     """
-    BASE_FEATURES = 24
-    ACTION_FEEDBACK = 7
+    BASE_FEATURES = 24  # INCLUDES 7 action feedback dims
     SLOT_FEATURES = 30
-    return BASE_FEATURES + ACTION_FEEDBACK + (SLOT_FEATURES * slot_config.num_slots)
+    return BASE_FEATURES + (SLOT_FEATURES * slot_config.num_slots)
 ```
 
 **Dimension breakdown (for reference):**
 
 | Component | Dims | Notes |
 |-----------|------|-------|
-| Base features | 24 | epoch, loss, accuracy, 10-dim raw history, stage counts |
-| Action feedback | 7 | last_action_success (1) + last_action_op one-hot (6) |
+| Base features | 24 | epoch, loss, accuracy, 10-dim raw history, stage counts, action feedback |
 | Per-slot | 30 × 3 = 90 | stage, alpha, gradient health, contribution, etc. |
-| **Non-blueprint obs** | **121** | Returned by `get_feature_size()` |
+| **Non-blueprint obs** | **114** | Returned by `get_feature_size()` |
 | Blueprint embeddings | 4 × 3 = 12 | Added inside network |
-| **Total network input** | **133** | —
+| **Total network input** | **126** | obs (114) + embeddings (12) |
+
+**Note:** Base features (24 dims) INCLUDE action feedback (7 dims: last_action_success + 6-dim one-hot for last_action_op). They are not separate.
 
 **Validation:**
 
@@ -357,8 +357,8 @@ PYTHONPATH=src python -c "
 from esper.tamiyo.policy.features import get_feature_size
 from esper.leyline.slot_config import SlotConfig
 config = SlotConfig.default()
-print(f'Feature size: {get_feature_size(config)}')  # Should be 121
-print(f'With embeddings: {get_feature_size(config) + 4 * config.num_slots}')  # Should be 133
+print(f'Feature size: {get_feature_size(config)}')  # Should be 114
+print(f'With embeddings: {get_feature_size(config) + 4 * config.num_slots}')  # Should be 126
 "
 ```
 
@@ -372,9 +372,10 @@ Verify the dimension breakdown matches `state_dim` passed to the network:
 
 | Component | Dims | Cumulative |
 |-----------|------|------------|
-| Base features | 24 | 24 |
-| Action feedback | 7 | 31 |
-| Per-slot (3 slots) | 90 | 121 |
+| Base features (includes action feedback) | 24 | 24 |
+| Per-slot (3 slots) | 90 | 114 |
+
+**Note:** Action feedback (7 dims: last_action_success + 6-dim one-hot for last_action_op) is INCLUDED in the base 24 dims, not separate.
 
 ```bash
 PYTHONPATH=src python -c "
@@ -385,15 +386,14 @@ config = SlotConfig.default()
 feature_size = get_feature_size(config)
 
 # Expected breakdown
-BASE = 24
-ACTION_FEEDBACK = 7
+BASE = 24  # INCLUDES 7 action feedback dims
 SLOT_FEATURES = 30
-expected = BASE + ACTION_FEEDBACK + (SLOT_FEATURES * config.num_slots)
+expected = BASE + (SLOT_FEATURES * config.num_slots)
 
 assert feature_size == expected, f'Mismatch: {feature_size} != {expected}'
-assert feature_size == 121, f'Expected 121 dims, got {feature_size}'
+assert feature_size == 114, f'Expected 114 dims, got {feature_size}'
 print(f'✓ Feature size verified: {feature_size} dims')
-print(f'  Base: {BASE}, Action feedback: {ACTION_FEEDBACK}, Slots: {SLOT_FEATURES}×{config.num_slots}={SLOT_FEATURES * config.num_slots}')
+print(f'  Base: {BASE} (includes 7 action feedback dims), Slots: {SLOT_FEATURES}×{config.num_slots}={SLOT_FEATURES * config.num_slots}')
 "
 ```
 
@@ -715,7 +715,7 @@ These checks address DRL-specific concerns that go beyond basic feature correctn
 
 **Gradient Flow Check**
 
-Verify all 121 features receive gradients during backpropagation. Dead features (never receiving gradients) indicate either:
+Verify all 114 features receive gradients during backpropagation. Dead features (never receiving gradients) indicate either:
 - Masking bugs that zero out features inappropriately
 - Network architecture issues (dead ReLU paths)
 - Feature extraction bugs that produce constant values
@@ -723,15 +723,15 @@ Verify all 121 features receive gradients during backpropagation. Dead features 
 ```python
 # Add to test suite or run manually after Phase 4:
 def test_gradient_flow_all_features():
-    """Verify all 121 features receive gradients during a forward-backward pass."""
+    """Verify all 114 features receive gradients during a forward-backward pass."""
     import torch
     from esper.tamiyo.networks.factored_lstm import FactoredRecurrentActorCritic
 
-    net = FactoredRecurrentActorCritic(state_dim=121, num_slots=3)
+    net = FactoredRecurrentActorCritic(state_dim=114, num_slots=3)
     net.train()
 
     # Create input that requires grad
-    state = torch.randn(2, 5, 121, requires_grad=True)  # batch=2, seq=5, features=121
+    state = torch.randn(2, 5, 114, requires_grad=True)  # batch=2, seq=5, features=114
     bp_idx = torch.randint(0, 13, (2, 5, 3))
 
     # Forward pass
@@ -742,15 +742,15 @@ def test_gradient_flow_all_features():
     loss.backward()
 
     # Check gradient magnitude per feature
-    grad = state.grad  # [2, 5, 121]
-    grad_per_feature = grad.abs().mean(dim=(0, 1))  # [121]
+    grad = state.grad  # [2, 5, 114]
+    grad_per_feature = grad.abs().mean(dim=(0, 1))  # [114]
 
     dead_features = (grad_per_feature == 0).nonzero(as_tuple=True)[0]
     assert len(dead_features) == 0, (
         f"Features {dead_features.tolist()} receive zero gradient. "
         f"Check masking logic and feature extraction for these indices."
     )
-    print(f"✓ All 121 features receive gradients (min={grad_per_feature.min():.2e}, max={grad_per_feature.max():.2e})")
+    print(f"✓ All 114 features receive gradients (min={grad_per_feature.min():.2e}, max={grad_per_feature.max():.2e})")
 ```
 
 **Observation Normalization Check**
@@ -807,8 +807,8 @@ def check_obs_range(obs, name):
         print(f'✓ {name}: range [{obs_min:.2f}, {obs_max:.2f}] within bounds')
 
 # Test cases
-check_obs_range(torch.randn(4, 121) * 2, 'normal_obs')  # Should pass
-check_obs_range(torch.randn(4, 121) * 20, 'scaled_obs')  # Should warn
+check_obs_range(torch.randn(4, 114) * 2, 'normal_obs')  # Should pass
+check_obs_range(torch.randn(4, 114) * 20, 'scaled_obs')  # Should warn
 print('✓ Observation normalization check working')
 "
 ```
@@ -960,8 +960,8 @@ import torch
 # Simulate normalizer behavior check (matches actual RunningMeanStd)
 class MockNormalizer:
     def __init__(self, epsilon=1e-4):
-        self.running_mean = torch.zeros(121)
-        self.running_var = torch.ones(121)  # var, not std
+        self.running_mean = torch.zeros(114)
+        self.running_var = torch.ones(114)  # var, not std
         self.count = epsilon  # Initialized to epsilon, not 0
         self.epsilon = epsilon
 
@@ -986,7 +986,7 @@ print(f'Initial: count={normalizer.count:.4f} (should be ~epsilon), mean={normal
 
 # Simulate some updates
 for _ in range(100):
-    fake_obs = torch.randn(121) * 0.5 + 0.1  # Non-zero mean data
+    fake_obs = torch.randn(114) * 0.5 + 0.1  # Non-zero mean data
     normalizer.update(fake_obs)
 
 print(f'After 100 updates: count={normalizer.count:.1f}, mean={normalizer.running_mean.mean():.4f}')

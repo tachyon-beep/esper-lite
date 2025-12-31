@@ -760,7 +760,7 @@ def train_ppo_vectorized(
     effective_workers = num_workers if num_workers is not None else 4
 
     # State dimension: base features (dynamic based on slot count) + telemetry features when enabled.
-    # For 3 slots: 23 base + 3*25 slot features = 98, plus 3*17 telemetry = 149.
+    # Obs V3: For 3 slots: 24 base + 3*30 slot features = 114, plus blueprint embeddings (added in network).
     base_feature_size = get_feature_size(slot_config)
     telemetry_size = (
         slot_config.num_slots * SeedTelemetry.feature_dim() if use_telemetry else 0
