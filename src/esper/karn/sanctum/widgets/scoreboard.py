@@ -182,8 +182,8 @@ class Scoreboard(Static):
             self.table.add_row("[dim]No runs yet[/dim]", "", "", "", "", "", "")
             return
 
-        # Sort by peak accuracy, display best runs (panel height determines visible count)
-        best_runs = sorted(best_runs, key=lambda r: r.peak_accuracy, reverse=True)[:10]
+        # Sort by peak accuracy, display top 5 best runs
+        best_runs = sorted(best_runs, key=lambda r: r.peak_accuracy, reverse=True)[:5]
         self._displayed_records = best_runs
 
         for i, record in enumerate(best_runs, start=1):
