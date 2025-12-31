@@ -427,15 +427,14 @@ DEFAULT_FEATURE_DIM = 512
 # Blueprint Embedding (Obs V3 Neural Encoding)
 # =============================================================================
 
-# Number of valid blueprints (0-12 inclusive). Used for embedding table size.
+# Number of valid blueprints (indices 0-(NUM_BLUEPRINTS - 1)). Used for embedding table size.
 # The embedding table has NUM_BLUEPRINTS + 1 entries to accommodate the null index.
-NUM_BLUEPRINTS = 13
 
 # Index used for "no blueprint" / null embedding in BlueprintEmbedding.
 # Must be >= NUM_BLUEPRINTS to avoid collision with valid blueprint indices.
 # Used in: torch.where(blueprint_indices < 0, _null_idx, blueprint_indices)
 # Stored as register_buffer to avoid torch.tensor() allocation per forward call.
-BLUEPRINT_NULL_INDEX = 13
+BLUEPRINT_NULL_INDEX = NUM_BLUEPRINTS
 
 # Embedding dimension for blueprint vectors.
 # Small (4) because blueprints are low-cardinality (13 types).
