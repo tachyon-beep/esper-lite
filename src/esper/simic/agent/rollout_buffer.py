@@ -126,6 +126,7 @@ class TamiyoRolloutBuffer:
 
     # Pre-allocated tensors (set in __post_init__)
     states: torch.Tensor = field(init=False)
+    blueprint_indices: torch.Tensor = field(init=False)  # [num_envs, max_steps, num_slots]
     slot_actions: torch.Tensor = field(init=False)
     blueprint_actions: torch.Tensor = field(init=False)
     style_actions: torch.Tensor = field(init=False)
@@ -180,6 +181,10 @@ class TamiyoRolloutBuffer:
 
         # Core state
         self.states = torch.zeros(n, m, self.state_dim, device=device)
+
+        # Blueprint indices for op-conditioned value (Phase 4)
+        # Values 0-12 for active blueprints, 0 for inactive (default padding)
+        self.blueprint_indices = torch.zeros(n, m, self.num_slots, dtype=torch.long, device=device)
 
         # Factored actions
         self.slot_actions = torch.zeros(n, m, dtype=torch.long, device=device)
@@ -256,6 +261,7 @@ class TamiyoRolloutBuffer:
         self,
         env_id: int,
         state: torch.Tensor,
+        blueprint_indices: torch.Tensor,
         slot_action: int,
         blueprint_action: int,
         style_action: int,
@@ -291,6 +297,12 @@ class TamiyoRolloutBuffer:
         """Add a transition for a specific environment.
 
         Direct tensor assignment - no list append overhead.
+
+        Args:
+            env_id: Environment index
+            state: State features [state_dim]
+            blueprint_indices: Blueprint indices per slot [num_slots]
+            ...: Other transition data
         """
         step_idx = self.step_counts[env_id]
 
@@ -306,6 +318,7 @@ class TamiyoRolloutBuffer:
 
         # Direct tensor assignment
         self.states[env_id, step_idx] = state.detach()
+        self.blueprint_indices[env_id, step_idx] = blueprint_indices.detach()
         self.slot_actions[env_id, step_idx] = slot_action
         self.blueprint_actions[env_id, step_idx] = blueprint_action
         self.style_actions[env_id, step_idx] = style_action
@@ -465,6 +478,7 @@ class TamiyoRolloutBuffer:
 
         return {
             "states": self.states.to(device, non_blocking=nb),
+            "blueprint_indices": self.blueprint_indices.to(device, non_blocking=nb),
             "slot_actions": self.slot_actions.to(device, non_blocking=nb),
             "blueprint_actions": self.blueprint_actions.to(device, non_blocking=nb),
             "style_actions": self.style_actions.to(device, non_blocking=nb),

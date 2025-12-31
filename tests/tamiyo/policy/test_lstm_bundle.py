@@ -62,6 +62,7 @@ def test_lstm_bundle_initial_hidden(lstm_bundle):
 def test_lstm_bundle_get_action(lstm_bundle, slot_config):
     """get_action should return ActionResult."""
     features = torch.randn(1, lstm_bundle.feature_dim)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (1, slot_config.num_slots))
     masks = {
         "slot": torch.ones(1, slot_config.num_slots, dtype=torch.bool),
         "blueprint": torch.ones(1, NUM_BLUEPRINTS, dtype=torch.bool),
@@ -74,7 +75,7 @@ def test_lstm_bundle_get_action(lstm_bundle, slot_config):
     }
     hidden = lstm_bundle.initial_hidden(batch_size=1)
 
-    result = lstm_bundle.get_action(features, masks, hidden)
+    result = lstm_bundle.get_action(features, bp_idx, masks, hidden)
 
     assert isinstance(result, ActionResult)
     assert "op" in result.action
@@ -85,6 +86,7 @@ def test_lstm_bundle_get_action(lstm_bundle, slot_config):
 def test_lstm_bundle_evaluate_actions(lstm_bundle, slot_config):
     """evaluate_actions should return EvalResult with gradients."""
     features = torch.randn(1, 10, lstm_bundle.feature_dim)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (1, 10, slot_config.num_slots))
     masks = {
         "slot": torch.ones(1, 10, slot_config.num_slots, dtype=torch.bool),
         "blueprint": torch.ones(1, 10, NUM_BLUEPRINTS, dtype=torch.bool),
@@ -109,7 +111,7 @@ def test_lstm_bundle_evaluate_actions(lstm_bundle, slot_config):
     # evaluate_actions needs to support gradients, so pass None (network will create proper hidden state)
     hidden = None
 
-    result = lstm_bundle.evaluate_actions(features, actions, masks, hidden)
+    result = lstm_bundle.evaluate_actions(features, bp_idx, actions, masks, hidden)
 
     assert isinstance(result, EvalResult)
     assert result.log_prob["op"].requires_grad
@@ -159,6 +161,7 @@ def test_get_policy_lstm(slot_config):
 def test_lstm_bundle_forward(lstm_bundle, slot_config):
     """forward() should return ForwardResult with logits."""
     features = torch.randn(1, 1, lstm_bundle.feature_dim)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (1, 1, slot_config.num_slots))
     masks = {
         "slot": torch.ones(1, slot_config.num_slots, dtype=torch.bool),
         "blueprint": torch.ones(1, NUM_BLUEPRINTS, dtype=torch.bool),
@@ -173,7 +176,7 @@ def test_lstm_bundle_forward(lstm_bundle, slot_config):
     # (initial_hidden() creates inference-mode tensors that can't be used with autograd)
     hidden = None
 
-    result = lstm_bundle.forward(features, masks, hidden)
+    result = lstm_bundle.forward(features, bp_idx, masks, hidden)
 
     assert isinstance(result, ForwardResult)
     assert "op" in result.logits
@@ -182,25 +185,27 @@ def test_lstm_bundle_forward(lstm_bundle, slot_config):
     assert result.hidden is not None
 
 
-def test_lstm_bundle_get_value(lstm_bundle):
+def test_lstm_bundle_get_value(lstm_bundle, slot_config):
     """get_value() should return state value estimate."""
     features = torch.randn(1, lstm_bundle.feature_dim)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (1, slot_config.num_slots))
     # Pass None for hidden - network creates its own initial state
     hidden = None
 
-    value = lstm_bundle.get_value(features, hidden)
+    value = lstm_bundle.get_value(features, bp_idx, hidden)
 
     assert isinstance(value, torch.Tensor)
     # Value should be scalar or batch dimension
     assert value.numel() == 1 or (value.dim() == 1 and value.shape[0] == 1)
 
 
-def test_get_value_does_not_create_grad_graph(lstm_bundle):
+def test_get_value_does_not_create_grad_graph(lstm_bundle, slot_config):
     """get_value() should not create gradient computation graph."""
     # Ensure we're in a context where gradients would normally be tracked
     features = torch.randn(1, lstm_bundle.feature_dim).requires_grad_(True)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (1, slot_config.num_slots))
 
-    value = lstm_bundle.get_value(features)
+    value = lstm_bundle.get_value(features, bp_idx)
 
     # Value should not require grad (computed in inference_mode)
     assert not value.requires_grad, (

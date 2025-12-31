@@ -25,14 +25,19 @@ from typing import TypedDict
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from esper.leyline import (
+    BLUEPRINT_NULL_INDEX,
+    DEFAULT_BLUEPRINT_EMBED_DIM,
     DEFAULT_LSTM_HIDDEN_DIM,
     DEFAULT_FEATURE_DIM,
     GerminationStyle,
     HEAD_NAMES,
     LifecycleOp,
     MASKED_LOGIT_VALUE,
+    NUM_BLUEPRINTS,
+    NUM_OPS,
     get_action_head_sizes,
 )
 from esper.leyline.slot_config import SlotConfig
@@ -46,8 +51,9 @@ class GetActionResult:
     Attributes:
         actions: Dict of action indices per head [batch]
         log_probs: Dict of log probs per head [batch] (NON-DIFFERENTIABLE)
-        values: Value estimates [batch]
+        values: Value estimates [batch] - Q(s, sampled_op)
         hidden: Updated hidden state (h, c)
+        sampled_op: The op action sampled/selected [batch] - used for value conditioning
         op_logits: Raw masked logits for op head [batch, num_ops].
             Only populated if return_op_logits=True, otherwise None.
             Use F.softmax(op_logits, dim=-1) to get action probabilities.
@@ -57,11 +63,15 @@ class GetActionResult:
     log_probs: dict[str, torch.Tensor]
     values: torch.Tensor
     hidden: tuple[torch.Tensor, torch.Tensor]
+    sampled_op: torch.Tensor
     op_logits: torch.Tensor | None = None
 
 
 class _ForwardOutput(TypedDict):
-    """Typed dict for forward() return value - enables mypy to track per-key types."""
+    """Typed dict for forward() return value - enables mypy to track per-key types.
+
+    Note: value is Q(s, sampled_op) - conditioned on the sampled op action.
+    """
 
     slot_logits: torch.Tensor
     blueprint_logits: torch.Tensor
@@ -72,7 +82,57 @@ class _ForwardOutput(TypedDict):
     alpha_curve_logits: torch.Tensor
     op_logits: torch.Tensor
     value: torch.Tensor
+    sampled_op: torch.Tensor  # NEW: Op used for value conditioning
     hidden: tuple[torch.Tensor, torch.Tensor]
+
+
+class BlueprintEmbedding(nn.Module):
+    """Learned blueprint embeddings for Obs V3.
+
+    Converts blueprint indices (0-12) to learned vector representations.
+    Inactive slots (blueprint_index = -1) map to a trainable null embedding.
+
+    Architecture:
+        - Embedding table: (NUM_BLUEPRINTS + 1) x embed_dim
+        - Initialization: N(0, 0.02) for stable early training
+        - Null handling: register_buffer for device-safe -1 → 13 mapping
+
+    Args:
+        num_blueprints: Number of valid blueprints (default: 13)
+        embed_dim: Dimension of embedding vectors (default: 4)
+    """
+
+    def __init__(
+        self,
+        num_blueprints: int = NUM_BLUEPRINTS,
+        embed_dim: int = DEFAULT_BLUEPRINT_EMBED_DIM,
+    ):
+        super().__init__()
+        # Index 13 = null embedding for inactive slots (from leyline)
+        self.embedding = nn.Embedding(num_blueprints + 1, embed_dim)
+
+        # Small initialization per DRL expert recommendation
+        nn.init.normal_(self.embedding.weight, std=0.02)
+
+        # Register null index as buffer: moves with module.to(device), no grad, in state_dict
+        # This avoids per-forward-call tensor allocation that torch.tensor() would cause
+        self.register_buffer(
+            "_null_idx",
+            torch.tensor(BLUEPRINT_NULL_INDEX, dtype=torch.int64),
+        )
+
+    def forward(self, blueprint_indices: torch.Tensor) -> torch.Tensor:
+        """Convert blueprint indices to embeddings.
+
+        Args:
+            blueprint_indices: Int64 tensor [batch, num_slots], -1 for inactive
+
+        Returns:
+            Float tensor [batch, num_slots, embed_dim]
+        """
+        # _null_idx is already on correct device via module.to(device)
+        safe_idx = torch.where(blueprint_indices < 0, self._null_idx, blueprint_indices)
+        return self.embedding(safe_idx)
 
 
 class FactoredRecurrentActorCritic(nn.Module):
@@ -160,11 +220,7 @@ class FactoredRecurrentActorCritic(nn.Module):
             nn.ReLU(),
             nn.Linear(head_hidden, self.num_slots),
         )
-        self.blueprint_head = nn.Sequential(
-            nn.Linear(lstm_hidden_dim, head_hidden),
-            nn.ReLU(),
-            nn.Linear(head_hidden, self.num_blueprints),
-        )
+        # NOTE: blueprint_head defined below with 3-layer architecture (Phase 4)
         self.style_head = nn.Sequential(
             nn.Linear(lstm_hidden_dim, head_hidden),
             nn.ReLU(),
@@ -196,9 +252,27 @@ class FactoredRecurrentActorCritic(nn.Module):
             nn.Linear(head_hidden, self.num_ops),
         )
 
-        # Value head
+        # Blueprint embedding for Obs V3 (Phase 3)
+        self.blueprint_embedding = BlueprintEmbedding(
+            num_blueprints=NUM_BLUEPRINTS,
+            embed_dim=DEFAULT_BLUEPRINT_EMBED_DIM,
+        )
+        # Total embedding contribution: num_slots * embed_dim
+        self._blueprint_embed_total_dim = self.num_slots * DEFAULT_BLUEPRINT_EMBED_DIM
+
+        # 3-layer blueprint head (Phase 4 - deeper for blueprint selection complexity)
+        self.blueprint_head = nn.Sequential(
+            nn.Linear(lstm_hidden_dim, lstm_hidden_dim),  # 512 -> 512
+            nn.ReLU(),
+            nn.Linear(lstm_hidden_dim, head_hidden),  # 512 -> 256
+            nn.ReLU(),
+            nn.Linear(head_hidden, self.num_blueprints),  # 256 -> 13
+        )
+
+        # Op-conditioned value head (Phase 4): Q(s, op) instead of V(s)
+        # Input: lstm_out (lstm_hidden_dim) + op_one_hot (NUM_OPS)
         self.value_head = nn.Sequential(
-            nn.Linear(lstm_hidden_dim, head_hidden),
+            nn.Linear(lstm_hidden_dim + NUM_OPS, head_hidden),
             nn.ReLU(),
             nn.Linear(head_hidden, 1),
         )
@@ -286,9 +360,27 @@ class FactoredRecurrentActorCritic(nn.Module):
         c = torch.zeros(self.lstm_layers, batch_size, self.lstm_hidden_dim, device=device)
         return h, c
 
+    def _compute_value(self, lstm_out: torch.Tensor, op: torch.Tensor) -> torch.Tensor:
+        """Compute Q(s, op) value conditioned on operation.
+
+        Shared helper used by both forward() (with sampled op) and
+        evaluate_actions() (with stored op from buffer).
+
+        Args:
+            lstm_out: LSTM output [batch, seq_len, lstm_hidden_dim]
+            op: Operation indices [batch, seq_len]
+
+        Returns:
+            Value estimates [batch, seq_len]
+        """
+        op_one_hot = F.one_hot(op, num_classes=NUM_OPS).float()
+        value_input = torch.cat([lstm_out, op_one_hot], dim=-1)
+        return self.value_head(value_input).squeeze(-1)
+
     def forward(
         self,
         state: torch.Tensor,  # [batch, seq_len, state_dim]
+        blueprint_indices: torch.Tensor,  # [batch, seq_len, num_slots]
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
         slot_mask: torch.Tensor | None = None,
         blueprint_mask: torch.Tensor | None = None,
@@ -303,14 +395,16 @@ class FactoredRecurrentActorCritic(nn.Module):
 
         Args:
             state: Input state [batch, seq_len, state_dim]
+            blueprint_indices: Blueprint indices per slot [batch, seq_len, num_slots]
+                Values 0-12 for active blueprints, -1 for inactive slots.
             hidden: (h, c) tuple, each [num_layers, batch, hidden_dim]
             *_mask: Boolean masks [batch, seq_len, action_dim], True = valid
 
         Returns:
-            _ForwardOutput with slot_logits, blueprint_logits, style_logits,
-            tempo_logits, op_logits, value, and hidden tuple
+            _ForwardOutput with logits, Q(s, sampled_op) value, sampled_op, and hidden
         """
         batch_size = state.size(0)
+        seq_len = state.size(1)
         device = state.device
 
         if hidden is None:
@@ -355,8 +449,19 @@ class FactoredRecurrentActorCritic(nn.Module):
         if op_mask is not None:
             op_logits = op_logits.masked_fill(~op_mask, MASKED_LOGIT_VALUE)
 
-        # Value prediction
-        value = self.value_head(lstm_out).squeeze(-1)  # [batch, seq_len]
+        # Sample op from policy for op-conditioned value
+        # Use MaskedCategorical for safe sampling with masking
+        op_logits_flat = op_logits.reshape(-1, self.num_ops)
+        if op_mask is not None:
+            op_mask_flat = op_mask.reshape(-1, self.num_ops)
+        else:
+            op_mask_flat = torch.ones_like(op_logits_flat, dtype=torch.bool)
+        op_dist = MaskedCategorical(logits=op_logits_flat, mask=op_mask_flat)
+        sampled_op_flat = op_dist.sample()
+        sampled_op = sampled_op_flat.reshape(batch_size, seq_len)
+
+        # Op-conditioned value: Q(s, sampled_op)
+        value = self._compute_value(lstm_out, sampled_op)
 
         return {
             "slot_logits": slot_logits,
@@ -368,12 +473,14 @@ class FactoredRecurrentActorCritic(nn.Module):
             "alpha_curve_logits": alpha_curve_logits,
             "op_logits": op_logits,
             "value": value,
+            "sampled_op": sampled_op,
             "hidden": new_hidden,
         }
 
     def get_action(
         self,
         state: torch.Tensor,  # [batch, state_dim] or [batch, 1, state_dim]
+        blueprint_indices: torch.Tensor,  # [batch, num_slots] or [batch, 1, num_slots]
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
         slot_mask: torch.Tensor | None = None,
         blueprint_mask: torch.Tensor | None = None,
@@ -397,6 +504,8 @@ class FactoredRecurrentActorCritic(nn.Module):
 
         Args:
             state: Input state tensor [batch, state_dim] or [batch, 1, state_dim]
+            blueprint_indices: Blueprint indices per slot [batch, num_slots] or
+                [batch, 1, num_slots]. Values 0-12 for active blueprints, -1 for inactive.
             hidden: LSTM hidden state (h, c) or None for initial state
             slot_mask: Boolean mask for slot actions [batch, num_slots]
             blueprint_mask: Boolean mask for blueprint actions [batch, num_blueprints]
@@ -408,12 +517,16 @@ class FactoredRecurrentActorCritic(nn.Module):
                 for telemetry/decision snapshot. Default False for performance.
 
         Returns:
-            GetActionResult with actions, log_probs, values, hidden, and
-            optionally op_logits if return_op_logits=True.
+            GetActionResult with actions, log_probs, values, hidden, sampled_op,
+            and optionally op_logits if return_op_logits=True.
         """
         # Ensure 3D input
         if state.dim() == 2:
             state = state.unsqueeze(1)  # [batch, 1, state_dim]
+
+        # Ensure blueprint_indices is 3D [batch, seq, num_slots]
+        if blueprint_indices.dim() == 2:
+            blueprint_indices = blueprint_indices.unsqueeze(1)
 
         # Reshape masks to [batch, 1, dim] if provided as [batch, dim]
         if slot_mask is not None and slot_mask.dim() == 2:
@@ -436,6 +549,7 @@ class FactoredRecurrentActorCritic(nn.Module):
         with torch.inference_mode():
             output = self.forward(
                 state,
+                blueprint_indices,
                 hidden,
                 slot_mask,
                 blueprint_mask,
@@ -517,6 +631,7 @@ class FactoredRecurrentActorCritic(nn.Module):
                 _sample_head(key)
 
             value = output["value"][:, 0]  # [batch]
+            sampled_op = output["sampled_op"][:, 0]  # [batch]
             new_hidden = output["hidden"]
 
             # Conditionally capture op_logits for telemetry (Decision Snapshot)
@@ -527,12 +642,14 @@ class FactoredRecurrentActorCritic(nn.Module):
                 log_probs=log_probs,
                 values=value,
                 hidden=new_hidden,
+                sampled_op=sampled_op,
                 op_logits=op_logits_out,
             )
 
     def evaluate_actions(
         self,
         states: torch.Tensor,  # [batch, seq_len, state_dim]
+        blueprint_indices: torch.Tensor,  # [batch, seq_len, num_slots]
         actions: dict[str, torch.Tensor],  # Each [batch, seq_len]
         slot_mask: torch.Tensor | None = None,
         blueprint_mask: torch.Tensor | None = None,
@@ -551,24 +668,64 @@ class FactoredRecurrentActorCritic(nn.Module):
     ]:
         """Evaluate actions for PPO update.
 
+        Uses stored op from actions dict for value conditioning (Q(s, stored_op)),
+        ensuring consistency with what was stored during rollout collection.
+
+        Args:
+            states: Input states [batch, seq_len, state_dim]
+            blueprint_indices: Blueprint indices [batch, seq_len, num_slots]
+            actions: Stored actions from buffer, including 'op' key
+            *_mask: Boolean masks [batch, seq_len, action_dim]
+            hidden: Initial LSTM hidden state
+
         Returns:
             log_probs: Dict of per-head log probs [batch, seq_len]
-            values: Value estimates [batch, seq_len]
+            values: Value estimates Q(s, stored_op) [batch, seq_len]
             entropy: Dict of per-head entropies [batch, seq_len]
             hidden: Final hidden state
         """
-        output = self.forward(
-            states,
-            hidden,
-            slot_mask,
-            blueprint_mask,
-            style_mask,
-            tempo_mask,
-            alpha_target_mask,
-            alpha_speed_mask,
-            alpha_curve_mask,
-            op_mask,
-        )
+        batch_size = states.size(0)
+        device = states.device
+
+        if hidden is None:
+            hidden = self.get_initial_hidden(batch_size, device)
+
+        # Feature extraction and LSTM (same as forward)
+        features = self.feature_net(states)
+        lstm_out, new_hidden = self.lstm(features, hidden)
+        lstm_out = self.lstm_ln(lstm_out)
+
+        # Compute logits for each head
+        slot_logits = self.slot_head(lstm_out)
+        blueprint_logits = self.blueprint_head(lstm_out)
+        style_logits = self.style_head(lstm_out)
+        tempo_logits = self.tempo_head(lstm_out)
+        alpha_target_logits = self.alpha_target_head(lstm_out)
+        alpha_speed_logits = self.alpha_speed_head(lstm_out)
+        alpha_curve_logits = self.alpha_curve_head(lstm_out)
+        op_logits = self.op_head(lstm_out)
+
+        # Apply masks
+        if slot_mask is not None:
+            slot_logits = slot_logits.masked_fill(~slot_mask, MASKED_LOGIT_VALUE)
+        if blueprint_mask is not None:
+            blueprint_logits = blueprint_logits.masked_fill(~blueprint_mask, MASKED_LOGIT_VALUE)
+        if style_mask is not None:
+            style_logits = style_logits.masked_fill(~style_mask, MASKED_LOGIT_VALUE)
+        if tempo_mask is not None:
+            tempo_logits = tempo_logits.masked_fill(~tempo_mask, MASKED_LOGIT_VALUE)
+        if alpha_target_mask is not None:
+            alpha_target_logits = alpha_target_logits.masked_fill(~alpha_target_mask, MASKED_LOGIT_VALUE)
+        if alpha_speed_mask is not None:
+            alpha_speed_logits = alpha_speed_logits.masked_fill(~alpha_speed_mask, MASKED_LOGIT_VALUE)
+        if alpha_curve_mask is not None:
+            alpha_curve_logits = alpha_curve_logits.masked_fill(~alpha_curve_mask, MASKED_LOGIT_VALUE)
+        if op_mask is not None:
+            op_logits = op_logits.masked_fill(~op_mask, MASKED_LOGIT_VALUE)
+
+        # Use STORED op for value conditioning (not freshly sampled)
+        stored_op = actions["op"]
+        value = self._compute_value(lstm_out, stored_op)
 
         log_probs: dict[str, torch.Tensor] = {}
         entropy: dict[str, torch.Tensor] = {}
@@ -586,16 +743,15 @@ class FactoredRecurrentActorCritic(nn.Module):
             "op": op_mask,
         }
 
-        # Map head names to logits (TypedDict keys must be literals)
         head_logits: dict[str, torch.Tensor] = {
-            "slot": output["slot_logits"],
-            "blueprint": output["blueprint_logits"],
-            "style": output["style_logits"],
-            "tempo": output["tempo_logits"],
-            "alpha_target": output["alpha_target_logits"],
-            "alpha_speed": output["alpha_speed_logits"],
-            "alpha_curve": output["alpha_curve_logits"],
-            "op": output["op_logits"],
+            "slot": slot_logits,
+            "blueprint": blueprint_logits,
+            "style": style_logits,
+            "tempo": tempo_logits,
+            "alpha_target": alpha_target_logits,
+            "alpha_speed": alpha_speed_logits,
+            "alpha_curve": alpha_curve_logits,
+            "op": op_logits,
         }
 
         for key in HEAD_NAMES:
@@ -629,7 +785,7 @@ class FactoredRecurrentActorCritic(nn.Module):
             log_probs[key] = dist.log_prob(action_flat).reshape(batch, seq)
             entropy[key] = dist.entropy().reshape(batch, seq)
 
-        return log_probs, output["value"], entropy, output["hidden"]
+        return log_probs, value, entropy, new_hidden
 
 
-__all__ = ["FactoredRecurrentActorCritic", "GetActionResult"]
+__all__ = ["BlueprintEmbedding", "FactoredRecurrentActorCritic", "GetActionResult"]

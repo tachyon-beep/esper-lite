@@ -83,8 +83,9 @@ def test_kl_early_stopping_triggers():
                 "op": torch.ones(1, NUM_OPS, dtype=torch.bool, device=agent.device),
             }
             pre_hidden = hidden
+            bp_indices = torch.zeros(1, slot_config.num_slots, dtype=torch.long, device=agent.device)
             result = agent.policy.network.get_action(
-                state, hidden,
+                state, bp_indices, hidden,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
                 style_mask=masks["style"],
@@ -130,6 +131,7 @@ def test_kl_early_stopping_triggers():
                 hidden_h=pre_hidden[0],
                 hidden_c=pre_hidden[1],
                 bootstrap_value=0.0,
+                blueprint_indices=bp_indices.squeeze(0),
             )
         agent.buffer.end_episode(env_id)
 
@@ -209,6 +211,7 @@ def test_kl_early_stopping_with_single_epoch():
                 hidden_h=torch.zeros(1, 1, agent.policy.hidden_dim),
                 hidden_c=torch.zeros(1, 1, agent.policy.hidden_dim),
                 bootstrap_value=0.0,
+                blueprint_indices=torch.zeros(slot_config.num_slots, dtype=torch.long),
             )
         agent.buffer.end_episode(env_id)
 
@@ -349,8 +352,10 @@ def test_head_grad_norms_includes_tempo_head() -> None:
         masks["op"][:, LifecycleOp.GERMINATE] = True
 
         pre_hidden = hidden
+        bp_indices = torch.zeros(1, slot_config.num_slots, dtype=torch.long, device=device)
         result = agent.policy.network.get_action(
             state,
+            bp_indices,
             hidden,
             slot_mask=masks["slot"],
             blueprint_mask=masks["blueprint"],
@@ -398,6 +403,7 @@ def test_head_grad_norms_includes_tempo_head() -> None:
             hidden_h=pre_hidden[0],
             hidden_c=pre_hidden[1],
             bootstrap_value=0.0,
+            blueprint_indices=bp_indices.squeeze(0),
         )
     agent.buffer.end_episode(env_id=0)
 
@@ -743,6 +749,7 @@ def test_ppo_agent_full_update_with_5_slots():
             op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
             hidden_h=torch.zeros(1, 1, agent.policy.hidden_dim),
             hidden_c=torch.zeros(1, 1, agent.policy.hidden_dim),
+            blueprint_indices=torch.zeros(5, dtype=torch.long),  # 5 slots
         )
     agent.buffer.end_episode(env_id=0)
 

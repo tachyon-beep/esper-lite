@@ -26,7 +26,6 @@ from esper.tamiyo.policy.registry import (
 )
 from esper.tamiyo.policy.factory import create_policy
 from esper.tamiyo.policy.features import (
-    obs_to_multislot_features,
     get_feature_size,
     BASE_FEATURE_SIZE,
     SLOT_FEATURE_SIZE,
@@ -84,7 +83,6 @@ __all__ = [
     "HeuristicPolicyBundle",
     "create_heuristic_policy",
     # Features
-    "obs_to_multislot_features",
     "get_feature_size",
     "BASE_FEATURE_SIZE",
     "SLOT_FEATURE_SIZE",

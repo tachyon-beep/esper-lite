@@ -52,138 +52,23 @@ logger = logging.getLogger(__name__)
 # Increment when checkpoint structure changes in backwards-incompatible ways
 CHECKPOINT_VERSION = 1
 
+# Sparse heads need higher entropy coefficients to maintain exploration
+# when they receive fewer training signals due to causal masking
+ENTROPY_COEF_PER_HEAD: dict[str, float] = {
+    "op": 1.0,  # Always active (100% of steps)
+    "slot": 1.0,  # Usually active (~60%)
+    "blueprint": 1.3,  # GERMINATE only (~18%) — needs boost
+    "style": 1.2,  # GERMINATE + SET_ALPHA_TARGET (~22%)
+    "tempo": 1.3,  # GERMINATE only (~18%) — needs boost
+    "alpha_target": 1.2,  # GERMINATE + SET_ALPHA_TARGET (~22%)
+    "alpha_speed": 1.2,  # SET_ALPHA_TARGET + PRUNE (~19%)
+    "alpha_curve": 1.2,  # SET_ALPHA_TARGET + PRUNE (~19%)
+}
+# Note: Start conservative (1.2-1.3x), tune empirically if heads collapse
+
 
 # =============================================================================
 # Feature Extraction (PPO-specific wrapper)
-# =============================================================================
-
-def signals_to_features(
-    signals: Any,
-    *,
-    slot_reports: dict[str, "SeedStateReport"],
-    use_telemetry: bool = True,
-    max_epochs: int = DEFAULT_EPISODE_LENGTH,
-    slots: list[str] | None = None,
-    total_params: int = 0,
-    total_seeds: int = 0,
-    max_seeds: int = 0,
-    slot_config: "SlotConfig | None" = None,
-) -> list[float]:
-    """Convert training signals to a flat feature vector for PPO.
-
-    This is a thin wrapper around `tamiyo.policy.features.obs_to_multislot_features`
-    plus optional per-slot `SeedTelemetry` features appended in deterministic
-    `slot_config` order.
-    """
-    from esper.leyline.slot_id import validate_slot_ids
-    from esper.tamiyo.policy.features import obs_to_multislot_features
-
-    if slot_config is None:
-        slot_config = SlotConfig.default()
-
-    if not slots:
-        raise ValueError("signals_to_features: slots parameter is required and cannot be empty")
-
-    enabled_slots = validate_slot_ids(list(slots))
-    enabled_set = set(enabled_slots)
-
-    # loss_history and accuracy_history are required fields on TrainingSignals
-    # (leyline/signals.py lines 79-80) with default empty lists
-    loss_hist = list(signals.loss_history[-5:]) if signals.loss_history else []
-    while len(loss_hist) < 5:
-        loss_hist.insert(0, 0.0)
-
-    acc_hist = list(signals.accuracy_history[-5:]) if signals.accuracy_history else []
-    while len(acc_hist) < 5:
-        acc_hist.insert(0, 0.0)
-
-    obs: dict[str, Any] = {
-        "epoch": signals.metrics.epoch,
-        "global_step": signals.metrics.global_step,
-        "train_loss": signals.metrics.train_loss,
-        "val_loss": signals.metrics.val_loss,
-        "loss_delta": signals.metrics.loss_delta,
-        "train_accuracy": signals.metrics.train_accuracy,
-        "val_accuracy": signals.metrics.val_accuracy,
-        "accuracy_delta": signals.metrics.accuracy_delta,
-        "plateau_epochs": signals.metrics.plateau_epochs,
-        "best_val_accuracy": signals.metrics.best_val_accuracy,
-        "best_val_loss": signals.metrics.best_val_loss,
-        "loss_history_5": loss_hist,
-        "accuracy_history_5": acc_hist,
-        "total_params": total_params,
-        "max_epochs": max_epochs,
-        "slots": {},
-    }
-
-    # Build per-slot state dict from reports.
-    # ALL slots in slot_config must be present (Task 4: fail loudly on missing required fields).
-    slot_states: dict[str, dict[str, Any]] = {}
-    for slot_id in slot_config.slot_ids:
-        report = slot_reports.get(slot_id)
-        if report is None:
-            # Missing report -> inactive slot with default values
-            slot_states[slot_id] = {
-                "is_active": 0.0,
-                "stage": 0,
-                "alpha": 0.0,
-                "improvement": 0.0,
-            }
-            continue
-
-        contribution = report.metrics.counterfactual_contribution
-        if contribution is None:
-            contribution = report.metrics.improvement_since_stage_start
-
-        slot_states[slot_id] = {
-            "is_active": 1.0,
-            "stage": report.stage.value,
-            "alpha": report.metrics.current_alpha,
-            "improvement": contribution,
-            "blend_tempo_epochs": report.blend_tempo_epochs,
-            "alpha_target": report.alpha_target,
-            "alpha_mode": report.alpha_mode,
-            "alpha_steps_total": report.alpha_steps_total,
-            "alpha_steps_done": report.alpha_steps_done,
-            "time_to_target": report.time_to_target,
-            "alpha_velocity": report.alpha_velocity,
-            "alpha_algorithm": report.alpha_algorithm,
-            "blueprint_id": report.blueprint_id,
-        }
-
-    obs["slots"] = slot_states
-
-    features = obs_to_multislot_features(
-        obs,
-        total_seeds=total_seeds,
-        max_seeds=max_seeds,
-        slot_config=slot_config,
-    )
-
-    if use_telemetry:
-        from esper.leyline import SeedTelemetry
-
-        telemetry_features: list[float] = []
-        dim = SeedTelemetry.feature_dim()
-        for slot_id in slot_config.slot_ids:
-            if slot_id not in enabled_set:
-                telemetry_features.extend([0.0] * dim)
-                continue
-
-            report = slot_reports.get(slot_id)
-            if report is None or report.telemetry is None:
-                telemetry_features.extend([0.0] * dim)
-                continue
-
-            telemetry_features.extend(report.telemetry.to_features())
-
-        features.extend(telemetry_features)
-
-    return features
-
-
-# =============================================================================
-# PPO Agent
 # =============================================================================
 
 class PPOAgent:
@@ -271,17 +156,8 @@ class PPOAgent:
         self.entropy_coef_min = entropy_coef_min
         self.adaptive_entropy_floor = adaptive_entropy_floor
         self.entropy_anneal_steps = entropy_anneal_steps
-        # Per-head entropy multipliers (default to uniform)
-        self.entropy_coef_per_head = entropy_coef_per_head or {
-            "slot": 1.0,
-            "blueprint": 1.0,
-            "style": 1.0,
-            "tempo": 1.0,
-            "alpha_target": 1.0,
-            "alpha_speed": 1.0,
-            "alpha_curve": 1.0,
-            "op": 1.0,
-        }
+        # Per-head entropy multipliers (differential coefficients for sparse heads)
+        self.entropy_coef_per_head = entropy_coef_per_head or ENTROPY_COEF_PER_HEAD
         self.value_coef = value_coef
         self.clip_value = clip_value
         self.value_clip = value_clip
@@ -383,7 +259,8 @@ class PPOAgent:
             shared_params = (
                 list(base_net.feature_net.parameters()) +
                 list(base_net.lstm.parameters()) +
-                list(base_net.lstm_ln.parameters())
+                list(base_net.lstm_ln.parameters()) +
+                list(base_net.blueprint_embedding.parameters())  # Phase 4: blueprint embeddings
             )
 
             self.optimizer: torch.optim.Optimizer = torch.optim.AdamW([
@@ -627,6 +504,7 @@ class PPOAgent:
             }
             result = self.policy.evaluate_actions(
                 data["states"],
+                data["blueprint_indices"],
                 actions,
                 masks,
                 hidden=(data["initial_hidden_h"], data["initial_hidden_c"]),
@@ -1124,5 +1002,4 @@ class PPOAgent:
 
 __all__ = [
     "PPOAgent",
-    "signals_to_features",
 ]

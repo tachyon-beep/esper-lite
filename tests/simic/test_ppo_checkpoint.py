@@ -341,6 +341,7 @@ class TestPPOCheckpointCompileMode:
 
         # Create test input with correct action head sizes
         state = torch.randn(1, state_dim)
+        bp_indices = torch.zeros(1, slot_config.num_slots, dtype=torch.long)
         head_sizes = get_action_head_sizes(slot_config)
         masks = {
             name: torch.ones(1, size, dtype=torch.bool)
@@ -351,6 +352,7 @@ class TestPPOCheckpointCompileMode:
         with torch.no_grad():
             result = loaded.policy.network.get_action(
                 state,
+                bp_indices,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
                 style_mask=masks["style"],

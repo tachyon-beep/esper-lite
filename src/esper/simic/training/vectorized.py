@@ -85,7 +85,6 @@ from esper.leyline import (
     OP_SET_ALPHA_TARGET,
     OP_WAIT,
     SeedStage,
-    SeedTelemetry,
     SlotConfig,
     STYLE_ALPHA_ALGORITHMS,
     STYLE_BLEND_IDS,
@@ -759,13 +758,12 @@ def train_ppo_vectorized(
         )
     effective_workers = num_workers if num_workers is not None else 4
 
-    # State dimension: base features (dynamic based on slot count) + telemetry features when enabled.
-    # Obs V3: For 3 slots: 24 base + 3*30 slot features = 114, plus blueprint embeddings (added in network).
-    base_feature_size = get_feature_size(slot_config)
-    telemetry_size = (
-        slot_config.num_slots * SeedTelemetry.feature_dim() if use_telemetry else 0
-    )
-    state_dim = base_feature_size + telemetry_size
+    # State dimension: Obs V3 features from batch_obs_to_features().
+    # For 3 slots: 24 base + 3*30 slot features = 114 dims.
+    # NOTE: Telemetry features are now MERGED into slot features (30 per slot),
+    # so we no longer add separate SeedTelemetry.feature_dim() per slot.
+    # Blueprint embeddings (4 × num_slots) are added inside the network.
+    state_dim = get_feature_size(slot_config)
 
     # Use EMA momentum for stable normalization during long training runs
     # (prevents distribution shift that can break PPO ratio calculations)
@@ -2189,6 +2187,8 @@ def train_ppo_vectorized(
                                     )
                                 seed_state.metrics._prev_contribution = new_contribution
                                 seed_state.metrics.counterfactual_contribution = new_contribution
+                                # Obs V3: Reset counterfactual staleness tracker on fresh measurement
+                                env_state.epochs_since_counterfactual[slot_id] = 0
                     elif kind == "all_off":
                         all_disabled_accs[i] = acc
                     elif kind == "pair":
@@ -2456,8 +2456,7 @@ def train_ppo_vectorized(
                 slot_config=slot_config,
                 device=torch.device(device),
             )
-            # TODO: [Phase 3] Pass blueprint_indices_batch to policy network for embedding lookup
-            # For now, store for future use - network currently ignores this parameter
+            # NOTE: blueprint_indices_batch is passed to get_action() for op-conditioned value (Phase 4)
 
             # Stack dict masks into batched dict: {key: [n_envs, head_dim]}
             # Use static HEAD_NAMES for torch.compile compatibility
@@ -2495,6 +2494,7 @@ def train_ppo_vectorized(
             # get_action returns ActionResult dataclass
             action_result = agent.policy.get_action(
                 states_batch_normalized,
+                blueprint_indices=blueprint_indices_batch,
                 masks=masks_batch,
                 hidden=batched_lstm_hidden,
                 deterministic=False,
@@ -2900,6 +2900,27 @@ def train_ppo_vectorized(
                         + 1
                     )
 
+                # Obs V3: Update action feedback state for next timestep's feature extraction
+                env_state.last_action_success = action_success
+                env_state.last_action_op = int(action_dict["op"])
+
+                # Obs V3: Update gradient health history for LSTM trend detection
+                # Use slot reports from current timestep (before action) as "prev" for next timestep
+                slot_reports_for_env = all_slot_reports[env_idx]
+                for slot_id in ordered_slots:
+                    if slot_id in slot_reports_for_env:
+                        report = slot_reports_for_env[slot_id]
+                        if report.telemetry is not None:
+                            env_state.gradient_health_prev[slot_id] = report.telemetry.gradient_health
+
+                        # Obs V3: Increment epochs since last counterfactual measurement
+                        # This is reset to 0 when counterfactual_contribution is updated (see line ~2191)
+                        if slot_id in env_state.epochs_since_counterfactual:
+                            env_state.epochs_since_counterfactual[slot_id] += 1
+                        else:
+                            # Initialize tracking for new slots
+                            env_state.epochs_since_counterfactual[slot_id] = 0
+
                 # Consolidate telemetry via emitter
                 if ops_telemetry_enabled and masked_cpu is not None:
                     masked_flags = {k: bool(masked_cpu[k][env_idx]) for k in HEAD_NAMES}
@@ -3008,6 +3029,7 @@ def train_ppo_vectorized(
                     {
                         "env_id": env_idx,
                         "state": states_batch[env_idx].detach(),
+                        "blueprint_indices": blueprint_indices_batch[env_idx].detach(),
                         "action_dict": action_dict,
                         "log_probs": {
                             k: v[env_idx].detach() for k, v in head_log_probs.items()
@@ -3190,8 +3212,7 @@ def train_ppo_vectorized(
             bootstrap_values = []
             if all_post_action_signals:
                 # Unpack Obs V3 tuple (obs, blueprint_indices)
-                # TODO: [Phase 3] Pass post_action_bp_indices to policy for embedding lookup
-                post_action_features_batch, _post_action_bp_indices = batch_signals_to_features(
+                post_action_features_batch, post_action_bp_indices = batch_signals_to_features(
                     batch_signals=all_post_action_signals,
                     batch_slot_reports=all_post_action_slot_reports,
                     slot_config=slot_config,
@@ -3209,6 +3230,7 @@ def train_ppo_vectorized(
                 with torch.inference_mode():
                     bootstrap_result = agent.policy.get_action(
                         post_action_features_normalized,
+                        blueprint_indices=post_action_bp_indices,
                         masks=post_masks_batch,
                         hidden=batched_lstm_hidden,
                         deterministic=True,
@@ -3228,6 +3250,7 @@ def train_ppo_vectorized(
                 agent.buffer.add(
                     env_id=transition["env_id"],
                     state=transition["state"],
+                    blueprint_indices=transition["blueprint_indices"],
                     slot_action=transition["action_dict"]["slot"],
                     blueprint_action=transition["action_dict"]["blueprint"],
                     style_action=transition["action_dict"]["style"],

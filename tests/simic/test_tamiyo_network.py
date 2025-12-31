@@ -25,8 +25,9 @@ class TestFactoredRecurrentActorCritic:
         """Forward pass must return logits for all factored heads."""
         net = FactoredRecurrentActorCritic(state_dim=50)
         state = torch.randn(2, 1, 50)  # [batch, seq, state_dim]
+        bp_idx = torch.randint(0, NUM_BLUEPRINTS, (2, 1, 3))  # [batch, seq, num_slots]
 
-        output = net(state)
+        output = net(state, bp_idx)
 
         assert "slot_logits" in output
         assert "blueprint_logits" in output
@@ -56,14 +57,15 @@ class TestFactoredRecurrentActorCritic:
 
         batch_size = 2
         hidden = net.get_initial_hidden(batch_size, torch.device("cpu"))
+        bp_idx = torch.randint(0, NUM_BLUEPRINTS, (batch_size, 1, 3))
 
         # First step
         state1 = torch.randn(batch_size, 1, 50)
-        output1 = net(state1, hidden=hidden)
+        output1 = net(state1, bp_idx, hidden=hidden)
 
         # Second step with updated hidden
         state2 = torch.randn(batch_size, 1, 50)
-        output2 = net(state2, hidden=output1["hidden"])
+        output2 = net(state2, bp_idx, hidden=output1["hidden"])
 
         # Hidden states should be different after processing different inputs
         h1, c1 = output1["hidden"]
@@ -74,6 +76,7 @@ class TestFactoredRecurrentActorCritic:
         """Invalid actions must have large negative logits after masking."""
         net = FactoredRecurrentActorCritic(state_dim=50)
         state = torch.randn(1, 1, 50)
+        bp_idx = torch.randint(0, NUM_BLUEPRINTS, (1, 1, 3))
 
         # Mask out slot 0 and 2, only slot 1 valid
         slot_mask = torch.tensor([[[False, True, False]]])
@@ -81,6 +84,7 @@ class TestFactoredRecurrentActorCritic:
 
         output = net(
             state,
+            bp_idx,
             slot_mask=slot_mask,
             blueprint_mask=None,
             style_mask=None,
@@ -97,6 +101,7 @@ class TestFactoredRecurrentActorCritic:
         """evaluate_actions must return per-head log probs."""
         net = FactoredRecurrentActorCritic(state_dim=50)
         state = torch.randn(2, 5, 50)  # [batch, seq, state_dim]
+        bp_idx = torch.randint(0, NUM_BLUEPRINTS, (2, 5, 3))
         actions = {
             "slot": torch.zeros(2, 5, dtype=torch.long),
             "blueprint": torch.zeros(2, 5, dtype=torch.long),
@@ -108,7 +113,7 @@ class TestFactoredRecurrentActorCritic:
             "op": torch.zeros(2, 5, dtype=torch.long),
         }
 
-        log_probs, values, entropy, hidden = net.evaluate_actions(state, actions)
+        log_probs, values, entropy, hidden = net.evaluate_actions(state, bp_idx, actions)
 
         # Per-head log probs
         assert "slot" in log_probs
@@ -128,8 +133,9 @@ class TestFactoredRecurrentActorCritic:
         """get_action must return per-head log probs for buffer storage."""
         net = FactoredRecurrentActorCritic(state_dim=50)
         state = torch.randn(2, 50)  # [batch, state_dim]
+        bp_idx = torch.randint(0, NUM_BLUEPRINTS, (2, 3))
 
-        result = net.get_action(state)
+        result = net.get_action(state, bp_idx)
 
         # Should have per-head actions and log_probs
         assert "slot" in result.actions
@@ -158,6 +164,7 @@ class TestFactoredRecurrentActorCritic:
         """Entropy should be normalized by max entropy for each head."""
         net = FactoredRecurrentActorCritic(state_dim=50)
         state = torch.randn(2, 5, 50)
+        bp_idx = torch.randint(0, NUM_BLUEPRINTS, (2, 5, 3))
         actions = {
             "slot": torch.zeros(2, 5, dtype=torch.long),
             "blueprint": torch.zeros(2, 5, dtype=torch.long),
@@ -169,7 +176,7 @@ class TestFactoredRecurrentActorCritic:
             "op": torch.zeros(2, 5, dtype=torch.long),
         }
 
-        _, _, entropy, _ = net.evaluate_actions(state, actions)
+        _, _, entropy, _ = net.evaluate_actions(state, bp_idx, actions)
 
         # Normalized entropy should be between 0 and 1
         for key in [
@@ -189,10 +196,11 @@ class TestFactoredRecurrentActorCritic:
         """Deterministic mode should always return argmax."""
         net = FactoredRecurrentActorCritic(state_dim=50)
         state = torch.randn(1, 50)
+        bp_idx = torch.randint(0, NUM_BLUEPRINTS, (1, 3))
 
         # Run multiple times - deterministic should be consistent
-        result1 = net.get_action(state, deterministic=True)
-        result2 = net.get_action(state, deterministic=True)
+        result1 = net.get_action(state, bp_idx, deterministic=True)
+        result2 = net.get_action(state, bp_idx, deterministic=True)
 
         for key in [
             "slot",
@@ -211,6 +219,7 @@ def test_style_mask_forces_default_when_not_germinate():
     """Non-GERMINATE ops should force style to a single default choice."""
     net = FactoredRecurrentActorCritic(state_dim=20)
     state = torch.randn(3, 20)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (3, 3))
 
     op_mask = torch.zeros(3, NUM_OPS, dtype=torch.bool)
     op_mask[:, LifecycleOp.WAIT] = True
@@ -218,6 +227,7 @@ def test_style_mask_forces_default_when_not_germinate():
 
     result = net.get_action(
         state,
+        bp_idx,
         op_mask=op_mask,
         style_mask=style_mask,
     )
@@ -230,6 +240,7 @@ def test_style_not_forced_for_set_alpha_target():
     """SET_ALPHA_TARGET should not force style to the default choice."""
     net = FactoredRecurrentActorCritic(state_dim=20)
     state = torch.randn(2, 20)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (2, 3))
 
     # Force op = SET_ALPHA_TARGET
     op_mask = torch.zeros(2, NUM_OPS, dtype=torch.bool)
@@ -248,6 +259,7 @@ def test_style_not_forced_for_set_alpha_target():
 
     result = net.get_action(
         state,
+        bp_idx,
         deterministic=True,
         op_mask=op_mask,
         style_mask=style_mask,
@@ -265,12 +277,13 @@ def test_masking_produces_valid_softmax():
     """
     net = FactoredRecurrentActorCritic(state_dim=35)
     state = torch.randn(2, 3, 35)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (2, 3, 3))
 
     # Mask that disables some actions
     slot_mask = torch.ones(2, 3, 3, dtype=torch.bool)
     slot_mask[:, :, 1] = False  # Mask out middle action
 
-    output = net.forward(state, slot_mask=slot_mask)
+    output = net.forward(state, bp_idx, slot_mask=slot_mask)
 
     # Test that _MASK_VALUE produces valid softmax across dtypes
     for dtype in [torch.float32, torch.float16, torch.bfloat16]:
@@ -297,12 +310,13 @@ def test_logits_no_inf_after_masking():
     """
     net = FactoredRecurrentActorCritic(state_dim=35)
     state = torch.randn(2, 3, 35)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (2, 3, 3))
 
     # Mask that disables some actions
     slot_mask = torch.ones(2, 3, 3, dtype=torch.bool)
     slot_mask[:, :, 1] = False  # Mask out middle action
 
-    output = net.forward(state, slot_mask=slot_mask)
+    output = net.forward(state, bp_idx, slot_mask=slot_mask)
 
     # Should not contain inf - masked values should use -1e4, not -inf
     for key in [
@@ -337,6 +351,7 @@ def test_entropy_normalization_with_single_action():
     )
 
     state = torch.randn(2, 3, 35)
+    bp_idx = torch.randint(0, 5, (2, 3, 1))  # num_slots=1
     actions = {
         "slot": torch.zeros(2, 3, dtype=torch.long),  # Only one option
         "blueprint": torch.randint(0, 5, (2, 3)),
@@ -348,7 +363,7 @@ def test_entropy_normalization_with_single_action():
         "op": torch.randint(0, NUM_OPS, (2, 3)),
     }
 
-    log_probs, values, entropy, hidden = net.evaluate_actions(state, actions)
+    log_probs, values, entropy, hidden = net.evaluate_actions(state, bp_idx, actions)
 
     # Entropy for single-action head should be 0 (no uncertainty), not inf/nan
     assert not torch.isnan(entropy["slot"]).any(), "Entropy should not be NaN"
@@ -362,6 +377,7 @@ def test_entropy_normalization_in_loss():
     net = FactoredRecurrentActorCritic(state_dim=35, num_slots=1)
 
     state = torch.randn(2, 3, 35)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (2, 3, 1))  # num_slots=1
     actions = {
         "slot": torch.zeros(2, 3, dtype=torch.long),
         "blueprint": torch.randint(0, 5, (2, 3)),
@@ -373,7 +389,7 @@ def test_entropy_normalization_in_loss():
         "op": torch.randint(0, NUM_OPS, (2, 3)),
     }
 
-    log_probs, values, entropy, _ = net.evaluate_actions(state, actions)
+    log_probs, values, entropy, _ = net.evaluate_actions(state, bp_idx, actions)
 
     # Entropy loss should be bounded
     entropy_loss = sum(-ent.mean() for ent in entropy.values())
@@ -384,16 +400,18 @@ def test_get_action_raises_on_all_false_mask():
     """MaskedCategorical should raise when mask has no valid actions."""
     net = FactoredRecurrentActorCritic(state_dim=20)
     state = torch.randn(1, 20)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (1, 3))
     invalid_mask = torch.zeros(1, 3, dtype=torch.bool)
 
     with pytest.raises(InvalidStateMachineError):
-        net.get_action(state, slot_mask=invalid_mask)
+        net.get_action(state, bp_idx, slot_mask=invalid_mask)
 
 
 def test_entropy_respects_valid_actions_only():
     """Entropy should be computed over valid actions and remain normalized."""
     net = FactoredRecurrentActorCritic(state_dim=20)
     state = torch.randn(1, 2, 20)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (1, 2, 3))
     slot_mask = torch.tensor([[[True, True, False]]])
     actions = {
         "slot": torch.zeros(1, 2, dtype=torch.long),
@@ -408,6 +426,7 @@ def test_entropy_respects_valid_actions_only():
 
     _, _, entropy, _ = net.evaluate_actions(
         states=state,
+        blueprint_indices=bp_idx,
         actions=actions,
         slot_mask=slot_mask,
     )
