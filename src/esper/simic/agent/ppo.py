@@ -957,9 +957,14 @@ class PPOAgent:
                 f"Saved slot_ids: {architecture['slot_ids']}"
             )
 
-        # === Infer state_dim ===
-        # feature_net.0.weight has shape [hidden_dim, state_dim]
-        state_dim = state_dict['feature_net.0.weight'].shape[1]
+        # === Extract state_dim ===
+        # Required since checkpoint v1; base_net.state_dim excludes blueprint embeddings.
+        if 'state_dim' not in architecture:
+            raise RuntimeError(
+                "Incompatible checkpoint: architecture.state_dim is required. "
+                "Please retrain the model to create a compatible checkpoint."
+            )
+        state_dim = int(architecture['state_dim'])
 
         # === Extract compile_mode (default "off" for old checkpoints) ===
         compile_mode = config.get('compile_mode', 'off')
@@ -968,9 +973,9 @@ class PPOAgent:
         from esper.tamiyo.policy.factory import create_policy
         policy = create_policy(
             policy_type="lstm",
-            feature_dim=state_dim,
             slot_config=slot_config,
-            hidden_dim=config['lstm_hidden_dim'],
+            state_dim=state_dim,
+            lstm_hidden_dim=config['lstm_hidden_dim'],
             device=device,
             compile_mode="off",  # Defer compilation until weights loaded
         )

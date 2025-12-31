@@ -128,13 +128,14 @@ def _extract_base_features_v3(
         num_blending: Number of seeds in BLENDING stage
         num_holding: Number of seeds in HOLDING stage
         host_stabilized: Whether host has stabilized (boolean)
+        slot_config: SlotConfig for normalization
 
     Returns:
         torch.Tensor with shape (24,)
     """
     # Current metrics (3 dims)
     # Normalize epoch to [0, 1] range using 150 as max (typical training length)
-    MAX_EPOCHS_NORM = 150.0
+    MAX_EPOCHS_NORM = float(MAX_EPOCHS_IN_STAGE)
     epoch_norm = float(signal.metrics.epoch) / MAX_EPOCHS_NORM
     # Loss normalization: log(1 + loss) / log(16)
     # Range: [0.0, 1.0] supporting loss values up to 15 before saturation
@@ -158,7 +159,7 @@ def _extract_base_features_v3(
     num_blending_norm = num_blending / max_slots
     num_holding_norm = num_holding / max_slots
 
-    # Host stabilized flag (1 dim) - already boolean (0.0 or 1.0)
+    # Host stabilized flag (1 dim)
     host_stabilized_float = 1.0 if host_stabilized else 0.0
 
     # Action feedback (7 dims): last_action_success + last_action_op one-hot (6 dims)
@@ -427,10 +428,10 @@ BASE_FEATURE_SIZE = 24
 # Total: 1 + 10 + 1 + 1 + 1 + 1 + 8 + 4 + 1 + 1 + 1 = 30 dims per slot (blueprint moved to embedding)
 SLOT_FEATURE_SIZE = 30
 
-# Obs V3 total for 3 slots: 24 base + 3 slots × 30 features = 114 dims (excludes blueprint embeddings)
-# Blueprint embeddings (4 dims × 3 slots = 12) are added inside the network, making total network input 126
+# Obs V3 total for 3 slots: 23 base + 3 slots × 30 features = 113 dims (excludes blueprint embeddings)
+# Blueprint embeddings (4 dims × 3 slots = 12) are added inside the network, making total network input 125
 # NOTE: Default for 3-slot configuration. Use get_feature_size(slot_config) for dynamic slot counts.
-MULTISLOT_FEATURE_SIZE = 114  # Obs V3: 24 + (30 × 3)
+MULTISLOT_FEATURE_SIZE = 113  # Obs V3: 23 + (30 × 3)
 
 # Observation normalization bounds (kept local to avoid heavier imports on the HOT PATH)
 _IMPROVEMENT_CLAMP_PCT_PTS: float = 10.0  # Clamp improvement to ±10 percentage points → [-1, 1]
@@ -530,8 +531,8 @@ def batch_obs_to_features(
         reports = batch_slot_reports[env_idx]
         num_training, num_blending, num_holding = stage_distributions[env_idx]
 
-        # TODO: Determine host_stabilized flag (placeholder for now)
-        # This should be set based on some criteria like plateau_epochs threshold
+        # TODO: [FUTURE FUNCTIONALITY] - Define host_stabilized heuristic from
+        # plateau_epochs / loss trend once those signals are finalized.
         host_stabilized = False
 
         # Extract base features (24 dims)
