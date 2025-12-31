@@ -26,15 +26,19 @@ UNICODE GLYPH REQUIREMENTS:
 from __future__ import annotations
 
 import threading
+import traceback
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
+from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Input, Static
 
+from esper.karn.sanctum.errors import SanctumTelemetryFatalError
 from esper.karn.sanctum.widgets import (
     AnomalyStrip,
     EnvDetailScreen,
@@ -52,6 +56,8 @@ from esper.karn.sanctum.widgets import (
 if TYPE_CHECKING:
     from esper.karn.sanctum.backend import SanctumBackend
     from esper.karn.sanctum.schema import SanctumSnapshot
+    from textual.timer import Timer
+    from esper.karn.sanctum.widgets.reward_health import RewardHealthData
 
 
 HELP_TEXT = """\
@@ -93,6 +99,15 @@ HELP_TEXT = """\
 
 [dim]Press Esc, ?, Q, or click to close[/dim]
 """
+
+
+@dataclass(frozen=True)
+class SanctumView:
+    """All data needed to render one UI refresh tick."""
+
+    primary: "SanctumSnapshot"
+    snapshots_by_group: dict[str, "SanctumSnapshot"]
+    reward_health: "RewardHealthData"
 
 
 class HelpScreen(ModalScreen[None]):
@@ -209,6 +224,64 @@ class RunInfoScreen(ModalScreen[None]):
         self.dismiss()
 
 
+class TelemetryFatalScreen(ModalScreen[None]):
+    """Fatal telemetry error screen.
+
+    Sanctum is a developer diagnostics surface. If telemetry contracts break,
+    we stop refreshing and surface the full traceback loudly.
+    """
+
+    BINDINGS = [
+        Binding("escape", "dismiss", "Close"),
+        Binding("q", "dismiss", "Close"),
+    ]
+
+    DEFAULT_CSS = """
+    TelemetryFatalScreen {
+        align: center middle;
+        background: $error-darken-3 90%;
+    }
+
+    TelemetryFatalScreen > #fatal-container {
+        width: 95%;
+        height: 95%;
+        background: $surface;
+        border: thick $error;
+        padding: 1 2;
+    }
+
+    TelemetryFatalScreen .fatal-title {
+        height: 1;
+        text-align: center;
+        color: $error;
+        text-style: bold;
+        margin-bottom: 1;
+    }
+
+    TelemetryFatalScreen .fatal-message {
+        height: auto;
+        margin-bottom: 1;
+    }
+
+    TelemetryFatalScreen #trace-scroll {
+        height: 1fr;
+        border: solid $error-darken-1;
+        padding: 0 1;
+    }
+    """
+
+    def __init__(self, error: SanctumTelemetryFatalError) -> None:
+        super().__init__()
+        self._error = error
+
+    def compose(self) -> ComposeResult:
+        with Container(id="fatal-container"):
+            yield Static("TELEMETRY FAILURE", classes="fatal-title")
+            yield Static(str(self._error), classes="fatal-message")
+            with VerticalScroll(id="trace-scroll"):
+                yield Static(self._error.traceback)
+
+
 class SanctumApp(App[None]):
     """Sanctum diagnostic TUI for Esper training.
 
@@ -230,6 +303,8 @@ class SanctumApp(App[None]):
     SUB_TITLE = "Esper Training Debugger"
 
     CSS_PATH = "styles.tcss"
+
+    view: SanctumView | None = reactive(None)
 
     BINDINGS = [
         Binding("q", "quit", "Quit", show=True),
@@ -288,13 +363,16 @@ class SanctumApp(App[None]):
         self._refresh_interval = 1.0 / refresh_rate
         self._focused_env_id: int = 0
         self._snapshot: "SanctumSnapshot" | None = None
-        self._lock = threading.Lock()
         self._poll_count = 0  # Debug: track timer fires
         self._training_thread = training_thread  # Monitor thread status
         self._shutdown_event = shutdown_event  # Signal graceful shutdown
         self._filter_active = False  # Track filter input visibility
         self._thread_death_shown = False  # Track if we've shown death modal
         self._shutdown_requested = False  # Track if shutdown was requested
+        self._telemetry_fatal_shown = False
+        self._refresh_timer: "Timer | None" = None
+        self._pending_view: SanctumView | None = None
+        self._apply_view_scheduled = False
 
     def compose(self) -> ComposeResult:
         """Build the Sanctum layout.
@@ -336,7 +414,7 @@ class SanctumApp(App[None]):
 
     def on_mount(self) -> None:
         """Start refresh timer when app mounts."""
-        self.set_interval(self._refresh_interval, self._poll_and_refresh)
+        self._refresh_timer = self.set_interval(self._refresh_interval, self._poll_and_refresh)
 
     def _get_or_create_tamiyo_widget(self, group_id: str) -> TamiyoBrain:
         """Get or create TamiyoBrain widget for a policy group.
@@ -363,13 +441,8 @@ class SanctumApp(App[None]):
                 self.log.warning(f"Cannot mount TamiyoBrain for {group_id}: container not found")
                 raise
 
-    def _refresh_tamiyo_widgets(self) -> None:
-        """Refresh TamiyoBrain widgets from backend's multi-group snapshots.
-
-        Creates widgets dynamically for each policy group. Handles both
-        single-policy mode (one widget) and A/B testing (two+ widgets).
-        """
-        snapshots = self._backend.get_all_snapshots()
+    def _refresh_tamiyo_widgets(self, snapshots: dict[str, "SanctumSnapshot"]) -> None:
+        """Refresh TamiyoBrain widgets from multi-group snapshots."""
 
         # Handle empty case (no events yet) - create default widget
         if not snapshots:
@@ -388,8 +461,17 @@ class SanctumApp(App[None]):
                 widget.update_snapshot(group_snapshot)
             except NoMatches:
                 pass  # Container hasn't mounted yet
-            except Exception as e:
-                self.log.warning(f"Failed to update tamiyo widget for {group_id}: {e}")
+
+    def _show_telemetry_fatal(self, error: SanctumTelemetryFatalError) -> None:
+        """Stop refreshing and surface telemetry failures loudly."""
+        if self._telemetry_fatal_shown:
+            return
+        self._telemetry_fatal_shown = True
+
+        if self._refresh_timer is not None:
+            self._refresh_timer.pause()
+
+        self.push_screen(TelemetryFatalScreen(error))
 
     def _poll_and_refresh(self) -> None:
         """Poll backend for new snapshot and refresh all panels.
@@ -403,15 +485,41 @@ class SanctumApp(App[None]):
             self.log.warning("Backend is None, skipping refresh")
             return
 
-        # Get snapshot from backend (thread-safe)
-        snapshot = self._backend.get_snapshot()
+        try:
+            snapshots_by_group = self._backend.get_all_snapshots()
+            reward_health = self._backend.compute_reward_health()
+        except SanctumTelemetryFatalError as e:
+            self._show_telemetry_fatal(e)
+            return
+        except Exception as e:
+            self._show_telemetry_fatal(
+                SanctumTelemetryFatalError(
+                    f"Sanctum refresh failed: {e}",
+                    traceback.format_exc(),
+                )
+            )
+            return
 
-        # Debug: Add poll count to snapshot for display
-        snapshot.poll_count = self._poll_count
+        # Choose primary snapshot (used by non-policy-group widgets).
+        if "default" in snapshots_by_group:
+            primary = snapshots_by_group["default"]
+        elif snapshots_by_group:
+            primary = snapshots_by_group[sorted(snapshots_by_group.keys())[0]]
+        else:
+            from esper.karn.sanctum.schema import SanctumSnapshot
+
+            primary = SanctumSnapshot()
+
+        # Debug: Add poll count to snapshots for display
+        primary.poll_count = self._poll_count
+        for snapshot in snapshots_by_group.values():
+            snapshot.poll_count = self._poll_count
 
         # Debug: Check if training thread is still alive
         thread_alive = self._training_thread.is_alive() if self._training_thread else None
-        snapshot.training_thread_alive = thread_alive
+        primary.training_thread_alive = thread_alive
+        for snapshot in snapshots_by_group.values():
+            snapshot.training_thread_alive = thread_alive
 
         # Check if training thread died (and we haven't shown modal yet)
         if thread_alive is False and not self._thread_death_shown:
@@ -421,74 +529,89 @@ class SanctumApp(App[None]):
 
         # Debug: Log snapshot state (visible in Textual console with Ctrl+Shift+D)
         self.log.info(
-            f"Poll #{self._poll_count}: connected={snapshot.connected}, "
-            f"ep={snapshot.current_episode}, "
-            f"events={len(snapshot.event_log)}, "
-            f"total_events={snapshot.total_events_received}, "
+            f"Poll #{self._poll_count}: connected={primary.connected}, "
+            f"ep={primary.current_episode}, "
+            f"events={len(primary.event_log)}, "
+            f"total_events={primary.total_events_received}, "
             f"thread_alive={thread_alive}"
         )
 
-        with self._lock:
-            self._snapshot = snapshot
+        try:
+            self.view = SanctumView(
+                primary=primary,
+                snapshots_by_group=snapshots_by_group,
+                reward_health=reward_health,
+            )
+        except SanctumTelemetryFatalError as e:
+            self._show_telemetry_fatal(e)
+        except Exception as e:
+            self._show_telemetry_fatal(
+                SanctumTelemetryFatalError(
+                    f"Sanctum render update failed: {e}",
+                    traceback.format_exc(),
+                )
+            )
 
-        # Update all widgets
-        self._refresh_all_panels(snapshot)
+    def watch_view(self, view: SanctumView | None) -> None:
+        """Apply latest view model to widgets."""
+        self._pending_view = view
+        if self._apply_view_scheduled:
+            return
+        self._apply_view_scheduled = True
+        self.call_after_refresh(self._apply_pending_view)
 
-    def _refresh_all_panels(self, snapshot: "SanctumSnapshot") -> None:
-        """Refresh all panels with new snapshot data.
+    def _apply_pending_view(self) -> None:
+        """Apply the most recent view after the next refresh/layout pass."""
+        self._apply_view_scheduled = False
+        view = self._pending_view
+        if view is None:
+            return
+        self._snapshot = view.primary
+        self._apply_view(view)
+
+    def _apply_view(self, view: SanctumView) -> None:
+        """Refresh all panels from a single, consistent view model.
 
         Args:
-            snapshot: The current telemetry snapshot (for non-TamiyoBrain widgets).
+            view: The full view model for this tick.
         """
+        snapshot = view.primary
         # Update run header first (most important context)
         try:
             self.query_one("#run-header", RunHeader).update_snapshot(snapshot)
         except NoMatches:
             pass  # Widget hasn't mounted yet
-        except Exception as e:
-            self.log.warning(f"Failed to update run-header: {e}")
 
         # Update anomaly strip (after run header)
         try:
             self.query_one("#anomaly-strip", AnomalyStrip).update_snapshot(snapshot)
         except NoMatches:
             pass  # Widget hasn't mounted yet
-        except Exception as e:
-            self.log.warning(f"Failed to update anomaly-strip: {e}")
 
         # Update each widget - query by ID and call update_snapshot
         try:
             self.query_one("#env-overview", EnvOverview).update_snapshot(snapshot)
         except NoMatches:
             pass  # Widget hasn't mounted yet
-        except Exception as e:
-            self.log.warning(f"Failed to update env-overview: {e}")
 
         try:
             self.query_one("#scoreboard", Scoreboard).update_snapshot(snapshot)
         except NoMatches:
             pass  # Widget hasn't mounted yet
-        except Exception as e:
-            self.log.warning(f"Failed to update scoreboard: {e}")
 
         # Update reward health panels (metrics column and TamiyoBrain)
         try:
-            health_data = self._backend.compute_reward_health()
-            self.query_one("#metrics-reward-health", RewardHealthPanel).update_data(health_data)
+            self.query_one("#metrics-reward-health", RewardHealthPanel).update_data(view.reward_health)
         except NoMatches:
             pass  # Widget hasn't mounted yet
-        except Exception as e:
-            self.log.warning(f"Failed to update metrics-reward-health: {e}")
 
-        # Update TamiyoBrain widgets using multi-group API
-        self._refresh_tamiyo_widgets()
+        # Update TamiyoBrain widgets using multi-group snapshots
+        self._refresh_tamiyo_widgets(view.snapshots_by_group)
 
         try:
             self.query_one("#event-log", EventLog).update_snapshot(snapshot)
         except NoMatches:
             pass  # Widget hasn't mounted yet
-        except Exception as e:
-            self.log.warning(f"Failed to update event-log: {e}")
 
         # Update EnvDetailScreen modal if displayed
         # Check if we have a modal screen on the stack
@@ -498,10 +621,7 @@ class SanctumApp(App[None]):
                 # Get updated env state from snapshot
                 env = snapshot.envs.get(current_screen.env_id)
                 if env is not None:
-                    try:
-                        current_screen.update_env_state(env)
-                    except Exception as e:
-                        self.log.warning(f"Failed to update env-detail-screen: {e}")
+                    current_screen.update_env_state(env)
 
     def action_focus_env(self, env_id: int) -> None:
         """Focus on specific environment for detail panels.
@@ -767,7 +887,11 @@ class SanctumApp(App[None]):
             return
 
         # Toggle pin in aggregator
-        new_status = self._backend.toggle_decision_pin(event.decision_id)
+        try:
+            new_status = self._backend.toggle_decision_pin(event.group_id, event.decision_id)
+        except SanctumTelemetryFatalError as e:
+            self._show_telemetry_fatal(e)
+            return
         self.log.info(f"Decision {event.decision_id} pin toggled: {new_status}")
 
         # Refresh to show updated pin status
@@ -804,7 +928,11 @@ class SanctumApp(App[None]):
             return
 
         # Toggle pin in aggregator
-        new_status = self._backend.toggle_best_run_pin(event.record_id)
+        try:
+            new_status = self._backend.toggle_best_run_pin(event.record_id)
+        except SanctumTelemetryFatalError as e:
+            self._show_telemetry_fatal(e)
+            return
         self.log.info(f"Best run {event.record_id} pin toggled: {new_status}")
 
         # Refresh to show updated pin status

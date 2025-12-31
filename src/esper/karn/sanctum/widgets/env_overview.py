@@ -125,10 +125,8 @@ class EnvOverview(Static):
 
     def _setup_columns(self) -> None:
         """Setup table columns based on snapshot."""
-        if self._snapshot is None:
-            return
-
         self.table.clear(columns=True)
+        slot_ids = self._snapshot.slot_ids if self._snapshot is not None else self._current_slot_ids
 
         # Fixed columns - ordered: Identity → Performance → Trends → Reward breakdown
         self.table.add_column("Env", key="env")
@@ -144,7 +142,7 @@ class EnvOverview(Static):
         self.table.add_column("Rent", key="rent")
 
         # Dynamic slot columns
-        for slot_id in self._snapshot.slot_ids:
+        for slot_id in slot_ids:
             self.table.add_column(slot_id, key=f"slot_{slot_id}")
 
         # Last action, stale epochs, and status

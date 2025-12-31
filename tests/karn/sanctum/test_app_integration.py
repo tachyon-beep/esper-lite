@@ -17,7 +17,7 @@ class TestSanctumAppIntegration:
         from esper.karn.sanctum.app import SanctumApp
 
         mock_backend = MagicMock()
-        mock_backend.get_snapshot.return_value = SanctumSnapshot()
+        mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
         mock_backend.compute_reward_health.return_value = RewardHealthData()
 
         app = SanctumApp(backend=mock_backend, num_envs=4)
@@ -39,7 +39,7 @@ class TestSanctumAppIntegration:
             tamiyo=TamiyoState(entropy=1.2, clip_fraction=0.15),
             envs={0: EnvState(env_id=0, host_accuracy=75.5)},
         )
-        mock_backend.get_snapshot.return_value = snapshot
+        mock_backend.get_all_snapshots.return_value = {"default": snapshot}
         mock_backend.compute_reward_health.return_value = RewardHealthData()
 
         # Use a fast refresh rate so timer fires quickly
@@ -52,7 +52,7 @@ class TestSanctumAppIntegration:
             await pilot.pause()
 
             # Backend should have been called by set_interval -> _poll_and_refresh
-            mock_backend.get_snapshot.assert_called()
+            mock_backend.get_all_snapshots.assert_called()
 
     @pytest.mark.asyncio
     async def test_focus_env_updates_reward_panel(self):
@@ -60,7 +60,7 @@ class TestSanctumAppIntegration:
         from esper.karn.sanctum.app import SanctumApp
 
         mock_backend = MagicMock()
-        mock_backend.get_snapshot.return_value = SanctumSnapshot()
+        mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
         mock_backend.compute_reward_health.return_value = RewardHealthData()
 
         app = SanctumApp(backend=mock_backend, num_envs=16)
@@ -86,7 +86,7 @@ class TestSanctumAppIntegration:
         from esper.karn.sanctum.app import SanctumApp
 
         mock_backend = MagicMock()
-        mock_backend.get_snapshot.return_value = SanctumSnapshot()
+        mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
         mock_backend.compute_reward_health.return_value = RewardHealthData()
 
         app = SanctumApp(backend=mock_backend, num_envs=4)
@@ -210,7 +210,6 @@ async def test_keyboard_switches_between_policies():
         # TamiyoBrain widgets support keyboard focus (can_focus=True)
         # Just verify they exist and have correct classes - focus cycling is flaky with refresh timers
         # This is sufficient to verify the widget tree is correctly composed
-        widget_classes = [set(w.classes) for w in widgets]
         assert any("group-a" in c for c in [" ".join(w.classes) for w in widgets]), "Should have group-a widget"
         assert any("group-b" in c for c in [" ".join(w.classes) for w in widgets]), "Should have group-b widget"
 

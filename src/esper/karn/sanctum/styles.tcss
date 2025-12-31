@@ -95,7 +95,8 @@
 
 #tamiyo-container TamiyoBrain {
     width: 1fr;
-    margin: 0 1;
+    margin-left: 0;
+    margin-right: 1;
     height: 1fr;
     min-height: 28;
     min-width: 96;

@@ -73,15 +73,6 @@ class TestBatchEventTypes:
         assert event_type.name == "TRAINING_STARTED"
 
 
-class TestCounterfactualEventType:
-    """Verify counterfactual event type is defined."""
-
-    def test_counterfactual_computed_exists(self) -> None:
-        """COUNTERFACTUAL_COMPUTED should be a valid event type."""
-        event_type = TelemetryEventType.COUNTERFACTUAL_COMPUTED
-        assert event_type.name == "COUNTERFACTUAL_COMPUTED"
-
-
 class TestSeedGateEventType:
     """Verify seed gate event types are defined."""
 
@@ -134,22 +125,6 @@ class TestConsoleOutputFormatters:
         assert "BATCH 3" in captured.out
         assert "24/100" in captured.out
         assert "67.2%" in captured.out
-
-    def test_formats_counterfactual_computed(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """Verify ConsoleOutput formats COUNTERFACTUAL_COMPUTED correctly."""
-        console = ConsoleOutput()
-        # Note: COUNTERFACTUAL_COMPUTED does not yet have a typed payload
-        event = TelemetryEvent(
-            event_type=TelemetryEventType.COUNTERFACTUAL_COMPUTED,
-            data={
-                "slot": 0,
-                "contribution": 2.3,
-                "marginal_lift": 0.8,
-            },
-        )
-        console.emit(event)
-        captured = capsys.readouterr()
-        assert "Counterfactual" in captured.out
 
     def test_formats_checkpoint_saved(self, capsys: pytest.CaptureFixture[str]) -> None:
         """Verify ConsoleOutput formats CHECKPOINT_SAVED correctly."""

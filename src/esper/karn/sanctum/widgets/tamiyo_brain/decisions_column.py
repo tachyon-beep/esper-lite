@@ -11,8 +11,10 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from rich.text import Text
+from textual import events
 from textual.app import ComposeResult
 from textual.containers import Container, Vertical
+from textual.message import Message
 from textual.widgets import Static
 
 from esper.leyline import ALPHA_CURVE_GLYPHS
@@ -32,6 +34,28 @@ ACTION_COLORS: dict[str, str] = {
 }
 
 
+class DecisionPinRequested(Message):
+    """Request to toggle pin status for a decision."""
+
+    bubble = True
+
+    def __init__(self, *, group_id: str, decision_id: str) -> None:
+        super().__init__()
+        self.group_id = group_id
+        self.decision_id = decision_id
+
+
+class DecisionDetailRequested(Message):
+    """Request to open a drill-down view for a decision."""
+
+    bubble = True
+
+    def __init__(self, *, group_id: str, decision: "DecisionSnapshot") -> None:
+        super().__init__()
+        self.group_id = group_id
+        self.decision = decision
+
+
 class DecisionCard(Static):
     """Individual decision card widget with CSS-driven styling."""
 
@@ -42,12 +66,14 @@ class DecisionCard(Static):
         decision: "DecisionSnapshot",
         index: int,
         total_cards: int,
+        group_id: str,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self.decision = decision
         self.index = index
         self.total_cards = total_cards
+        self._group_id = group_id
         self._update_classes()
 
     def _update_classes(self) -> None:
@@ -61,6 +87,17 @@ class DecisionCard(Static):
         elif self.index == self.total_cards - 1:
             self.add_class("oldest")
 
+    def on_click(self, event: events.Click) -> None:
+        """Left click opens detail, right click toggles pin."""
+        if event.button == 3:
+            if not self.decision.decision_id:
+                raise ValueError("DecisionSnapshot.decision_id is required to toggle pin")
+            self.post_message(
+                DecisionPinRequested(group_id=self._group_id, decision_id=self.decision.decision_id)
+            )
+            return
+
+        self.post_message(DecisionDetailRequested(group_id=self._group_id, decision=self.decision))
 
     def render(self) -> Text:
         """Render the decision card content."""
@@ -331,6 +368,7 @@ class DecisionsColumn(Container):
         self._last_card_swap_time: float = 0.0
         self._rendering: bool = False  # Guard against concurrent renders
         self._render_generation: int = 0  # Unique ID suffix for each render
+        self._group_id: str = "default"
         self.border_title = "DECISIONS"
 
     def compose(self) -> ComposeResult:
@@ -340,6 +378,7 @@ class DecisionsColumn(Container):
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Update with new snapshot data using throttled card replacement."""
         self._snapshot = snapshot
+        self._group_id = snapshot.tamiyo.group_id or "default"
         now = time.time()
 
         incoming = snapshot.tamiyo.recent_decisions
@@ -421,6 +460,7 @@ class DecisionsColumn(Container):
                     decision=decision,
                     index=i,
                     total_cards=total,
+                    group_id=self._group_id,
                     id=f"card-{decision.decision_id}-{gen}",
                 )
                 container.mount(card)

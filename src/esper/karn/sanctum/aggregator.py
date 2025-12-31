@@ -38,6 +38,7 @@ from esper.karn.sanctum.schema import (
     compute_collapse_risk,
     compute_correlation,
 )
+from esper.karn.sanctum.snapshot_copy import copy_snapshot
 from esper.karn.constants import TUIThresholds
 from esper.karn.sanctum.widgets.reward_health import RewardHealthData
 from esper.karn.pareto import extract_pareto_frontier, compute_hypervolume_2d
@@ -49,6 +50,7 @@ from esper.leyline import (
     PPOUpdatePayload,
     SeedGerminatedPayload,
     SeedStageChangedPayload,
+    SeedGateEvaluatedPayload,
     SeedFossilizedPayload,
     SeedPrunedPayload,
     CounterfactualMatrixPayload,
@@ -435,7 +437,7 @@ class SanctumAggregator:
         active_slots = total_slots - slot_stage_counts["DORMANT"]
         avg_epochs = total_epochs_in_stage / non_dormant_count if non_dormant_count > 0 else 0.0
 
-        return SanctumSnapshot(
+        snapshot = SanctumSnapshot(
             # Run context
             run_id=self._run_id,
             task_name=self._task_name,
@@ -486,6 +488,7 @@ class SanctumAggregator:
             active_slots=active_slots,
             avg_epochs_in_stage=avg_epochs,
         )
+        return copy_snapshot(snapshot)
 
     # =========================================================================
     # Event Handlers (matching TUIOutput behavior 1:1)
@@ -494,11 +497,10 @@ class SanctumAggregator:
     def _handle_training_started(self, event: "TelemetryEvent") -> None:
         """Handle TRAINING_STARTED event."""
         if not isinstance(event.data, TrainingStartedPayload):
-            _logger.warning(
-                "Expected TrainingStartedPayload for TRAINING_STARTED, got %s",
-                type(event.data).__name__,
+            raise TypeError(
+                "TRAINING_STARTED requires TrainingStartedPayload, got "
+                f"{type(event.data).__name__}"
             )
-            return
 
         payload = event.data
         self._run_id = payload.episode_id
@@ -530,11 +532,8 @@ class SanctumAggregator:
         self._reward_mode = payload.reward_mode
 
         # Capture hyperparameters for run header display
-        if payload.entropy_anneal is None:
-            _logger.warning("TRAINING_STARTED missing entropy_anneal config")
-            entropy_anneal_config = {}
-        else:
-            entropy_anneal_config = payload.entropy_anneal
+        # entropy_anneal is optional telemetry (None = not configured)
+        entropy_anneal_config = payload.entropy_anneal or {}
 
         self._run_config = RunConfig(
             seed=payload.seed,
@@ -575,11 +574,10 @@ class SanctumAggregator:
         any event missing env_id as a defensive measure.
         """
         if not isinstance(event.data, EpochCompletedPayload):
-            _logger.warning(
-                "Expected EpochCompletedPayload for EPOCH_COMPLETED, got %s",
-                type(event.data).__name__,
+            raise TypeError(
+                "EPOCH_COMPLETED requires EpochCompletedPayload, got "
+                f"{type(event.data).__name__}"
             )
-            return
 
         payload = event.data
 
@@ -604,12 +602,8 @@ class SanctumAggregator:
         self._current_epoch = inner_epoch
 
         # Update per-seed telemetry from EPOCH_COMPLETED event
-        # Note: seeds is dict[str, dict[str, Any]] - inner dicts remain untyped
-        if payload.seeds is None:
-            _logger.warning("EPOCH_COMPLETED missing seeds telemetry")
-            seeds_data = {}
-        else:
-            seeds_data = payload.seeds
+        # Note: seeds telemetry is optional; inner dicts remain untyped.
+        seeds_data = payload.seeds or {}
         for slot_id, seed_telemetry in seeds_data.items():
             # Ensure seed exists
             if slot_id not in env.seeds:
@@ -652,11 +646,10 @@ class SanctumAggregator:
     def _handle_ppo_update(self, event: "TelemetryEvent") -> None:
         """Handle PPO_UPDATE_COMPLETED event."""
         if not isinstance(event.data, PPOUpdatePayload):
-            _logger.warning(
-                "Expected PPOUpdatePayload for PPO_UPDATE_COMPLETED, got %s",
-                type(event.data).__name__,
+            raise TypeError(
+                "PPO_UPDATE_COMPLETED requires PPOUpdatePayload, got "
+                f"{type(event.data).__name__}"
             )
-            return
 
         payload = event.data
 
@@ -993,15 +986,49 @@ class SanctumAggregator:
             env.pruned_count += 1
             self._cumulative_pruned += 1
             env.active_seed_count = max(0, env.active_seed_count - 1)
+        elif event_type == "SEED_GATE_EVALUATED" and isinstance(event.data, SeedGateEvaluatedPayload):
+            gate_payload = event.data
+            slot_id = event.slot_id or gate_payload.slot_id
+            env_id = gate_payload.env_id
+
+            self._ensure_env(env_id)
+            env = self._envs[env_id]
+
+            # Dynamically track slot_ids (covers tests / partial telemetry streams).
+            if (
+                not self._slot_ids_locked
+                and slot_id
+                and slot_id not in self._slot_ids
+                and slot_id != "unknown"
+            ):
+                self._slot_ids.append(slot_id)
+                self._slot_ids.sort()
+
+            # Ensure the slot exists so gate activity can be inspected later.
+            if slot_id not in env.seeds:
+                env.seeds[slot_id] = SeedState(slot_id=slot_id)
+        else:
+            expected: dict[str, type] = {
+                "SEED_GERMINATED": SeedGerminatedPayload,
+                "SEED_STAGE_CHANGED": SeedStageChangedPayload,
+                "SEED_GATE_EVALUATED": SeedGateEvaluatedPayload,
+                "SEED_FOSSILIZED": SeedFossilizedPayload,
+                "SEED_PRUNED": SeedPrunedPayload,
+            }
+            if event_type in expected:
+                raise TypeError(
+                    f"{event_type} requires {expected[event_type].__name__}, got "
+                    f"{type(event.data).__name__}"
+                )
+            raise NotImplementedError(f"Unhandled seed event type: {event_type}")
 
     def _handle_batch_epoch_completed(self, event: "TelemetryEvent") -> None:
         """Handle BATCH_EPOCH_COMPLETED event (episode completion)."""
         if not isinstance(event.data, BatchEpochCompletedPayload):
-            _logger.warning(
-                "Expected BatchEpochCompletedPayload for BATCH_EPOCH_COMPLETED, got %s",
-                type(event.data).__name__,
+            raise TypeError(
+                "BATCH_EPOCH_COMPLETED requires BatchEpochCompletedPayload, got "
+                f"{type(event.data).__name__}"
             )
-            return
 
         payload = event.data
 
@@ -1149,18 +1176,16 @@ class SanctumAggregator:
     def _handle_counterfactual_matrix(self, event: "TelemetryEvent") -> None:
         """Handle COUNTERFACTUAL_MATRIX_COMPUTED event."""
         if not isinstance(event.data, CounterfactualMatrixPayload):
-            _logger.warning(
-                "Expected CounterfactualMatrixPayload for COUNTERFACTUAL_MATRIX_COMPUTED, got %s",
-                type(event.data).__name__,
+            raise TypeError(
+                "COUNTERFACTUAL_MATRIX_COMPUTED requires CounterfactualMatrixPayload, got "
+                f"{type(event.data).__name__}"
             )
-            return
 
         payload = event.data
         env_id = payload.env_id
 
-        env = self._envs.get(env_id)
-        if env is None:
-            return
+        self._ensure_env(env_id)
+        env = self._envs[env_id]
 
         # Parse configs
         configs = [
@@ -1181,11 +1206,10 @@ class SanctumAggregator:
     def _handle_analytics_snapshot(self, event: "TelemetryEvent") -> None:
         """Handle ANALYTICS_SNAPSHOT events used by Sanctum/Tamiyo UI."""
         if not isinstance(event.data, AnalyticsSnapshotPayload):
-            _logger.warning(
-                "Expected AnalyticsSnapshotPayload for ANALYTICS_SNAPSHOT, got %s",
-                type(event.data).__name__,
+            raise TypeError(
+                "ANALYTICS_SNAPSHOT requires AnalyticsSnapshotPayload, got "
+                f"{type(event.data).__name__}"
             )
-            return
 
         payload = event.data
         kind = payload.kind
@@ -1202,7 +1226,7 @@ class SanctumAggregator:
         if kind == "last_action" and payload.action_confidence is not None:
             env_id = payload.env_id
             if env_id is None:
-                return
+                raise ValueError("ANALYTICS_SNAPSHOT(kind=last_action) missing env_id")
 
             self._ensure_env(env_id)
             env = self._envs[env_id]
@@ -1341,42 +1365,25 @@ class SanctumAggregator:
 
         data = event.data
         if data is None:
-            return
+            raise TypeError("EPISODE_OUTCOME event missing data payload")
 
-        # Handle typed payload (preferred)
-        if isinstance(data, EpisodeOutcomePayload):
-            outcome = EpisodeOutcome(
-                env_id=data.env_id,
-                episode_idx=data.episode_idx,
-                final_accuracy=data.final_accuracy,
-                param_ratio=data.param_ratio,
-                num_fossilized=data.num_fossilized,
-                num_contributing_fossilized=data.num_contributing_fossilized,
-                episode_reward=data.episode_reward,
-                stability_score=data.stability_score,
-                reward_mode=data.reward_mode,
+        if not isinstance(data, EpisodeOutcomePayload):
+            raise TypeError(
+                "EPISODE_OUTCOME requires EpisodeOutcomePayload, got "
+                f"{type(data).__name__}"
             )
-        elif isinstance(data, dict):
-            # Legacy dict format (from deserialization)
-            outcome = EpisodeOutcome(
-                env_id=data["env_id"],
-                episode_idx=data["episode_idx"],
-                final_accuracy=data["final_accuracy"],
-                param_ratio=data["param_ratio"],
-                num_fossilized=data["num_fossilized"],
-                num_contributing_fossilized=data["num_contributing_fossilized"],
-                episode_reward=data["episode_reward"],
-                stability_score=data["stability_score"],
-                reward_mode=data["reward_mode"],
-            )
-        elif isinstance(data, EpisodeOutcome):
-            outcome = data
-        else:
-            _logger.warning(
-                "Unexpected data type for EPISODE_OUTCOME: %s",
-                type(data).__name__,
-            )
-            return
+
+        outcome = EpisodeOutcome(
+            env_id=data.env_id,
+            episode_idx=data.episode_idx,
+            final_accuracy=data.final_accuracy,
+            param_ratio=data.param_ratio,
+            num_fossilized=data.num_fossilized,
+            num_contributing_fossilized=data.num_contributing_fossilized,
+            episode_reward=data.episode_reward,
+            stability_score=data.stability_score,
+            reward_mode=data.reward_mode,
+        )
 
         self._episode_outcomes.append(outcome)
 
@@ -1392,11 +1399,10 @@ class SanctumAggregator:
         EPOCH_COMPLETED event arrives for that env (training resumed).
         """
         if not isinstance(event.data, GovernorRollbackPayload):
-            _logger.warning(
-                "Expected GovernorRollbackPayload for GOVERNOR_ROLLBACK, got %s",
-                type(event.data).__name__,
+            raise TypeError(
+                "GOVERNOR_ROLLBACK requires GovernorRollbackPayload, got "
+                f"{type(event.data).__name__}"
             )
-            return
 
         payload = event.data
         env_id = payload.env_id
@@ -1505,6 +1511,18 @@ class SanctumAggregator:
                 slot_id = event.slot_id if event.slot_id else event.data.slot_id
                 metadata["slot_id"] = slot_id
                 metadata["blueprint"] = event.data.blueprint_id
+                env_id = event.data.env_id
+            elif event_type == "SEED_GATE_EVALUATED" and isinstance(event.data, SeedGateEvaluatedPayload):
+                message = "Gate evaluated"
+                slot_id = event.slot_id if event.slot_id else event.data.slot_id
+                metadata["slot_id"] = slot_id
+                metadata["gate"] = event.data.gate
+                metadata["target_stage"] = event.data.target_stage
+                metadata["result"] = "PASS" if event.data.passed else "FAIL"
+                if event.data.checks_failed:
+                    metadata["failed_checks"] = len(event.data.checks_failed)
+                if event.data.message:
+                    metadata["detail"] = event.data.message
                 env_id = event.data.env_id
             elif event_type == "SEED_STAGE_CHANGED" and isinstance(event.data, SeedStageChangedPayload):
                 message = "Stage changed"

@@ -151,6 +151,10 @@ class HealthStatusPanel(Static):
 
         # Value range
         result.append(self._render_value_stats())
+        result.append("\n")
+
+        # Op-conditioned Q-values (Policy V2)
+        result.append(self._render_q_value_stats())
 
         return result
 
@@ -234,6 +238,34 @@ class HealthStatusPanel(Static):
         return result
 
     def _render_value_stats(self) -> Text:
+        """Render value function range and stability indicators.
+
+        Designed to catch value collapse (constant), value explosion, and
+        unstable coefficient-of-variation regimes.
+        """
+        if self._snapshot is None:
+            return Text()
+
+        tamiyo = self._snapshot.tamiyo
+        result = Text()
+
+        v_min = tamiyo.value_min
+        v_max = tamiyo.value_max
+        v_std = tamiyo.value_std
+
+        status = self._get_value_status(tamiyo)
+
+        result.append("Value Range  ", style="dim")
+        result.append(f"[{v_min:.1f},{v_max:.1f}]", style=self._status_style(status))
+        result.append(" ", style="dim")
+        result.append(f"s={v_std:.2f}", style="dim")
+
+        if status != "ok":
+            result.append(" !", style=self._status_style(status))
+
+        return result
+
+    def _render_q_value_stats(self) -> Text:
         """Render op-conditioned Q-values (Policy V2).
 
         Shows Q(s,op) for each operation and Q-variance metric.

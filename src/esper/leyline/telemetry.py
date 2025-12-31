@@ -111,7 +111,6 @@ class TelemetryEventType(Enum):
     CHECKPOINT_LOADED = auto()        # Model checkpoint restored
 
     # === Counterfactual Attribution Events ===
-    COUNTERFACTUAL_COMPUTED = auto()  # Per-slot counterfactual contribution measured
     COUNTERFACTUAL_MATRIX_COMPUTED = auto()  # Full factorial matrix for env
 
     # === Analytics Events ===
@@ -1395,29 +1394,6 @@ class AnomalyDetectedPayload:
 
 
 @dataclass(slots=True, frozen=True)
-class CounterfactualUnavailablePayload:
-    """Payload for COUNTERFACTUAL_COMPUTED when baseline is unavailable.
-
-    Emitted when counterfactual computation cannot be performed for a slot,
-    e.g., due to missing baseline or invalid slot state.
-    """
-
-    # REQUIRED
-    env_id: int
-    slot_id: str
-    reason: str  # Why counterfactual is unavailable (e.g., "no_baseline", "dormant_slot")
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "CounterfactualUnavailablePayload":
-        """Parse from dict. Raises KeyError on missing required fields."""
-        return cls(
-            env_id=data["env_id"],
-            slot_id=data["slot_id"],
-            reason=data["reason"],
-        )
-
-
-@dataclass(slots=True, frozen=True)
 class PerformanceDegradationPayload:
     """Payload for PERFORMANCE_DEGRADATION event.
 
@@ -1560,7 +1536,6 @@ TelemetryPayload = (
     | SeedFossilizedPayload
     | SeedPrunedPayload
     | CounterfactualMatrixPayload
-    | CounterfactualUnavailablePayload
     | AnalyticsSnapshotPayload
     | AnomalyDetectedPayload
     | PerformanceDegradationPayload

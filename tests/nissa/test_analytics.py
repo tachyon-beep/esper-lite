@@ -1,5 +1,7 @@
 """Tests for Nissa Blueprint Analytics."""
 
+import logging
+
 from esper.nissa.analytics import BlueprintStats, SeedScoreboard
 from esper.leyline import TelemetryEvent, TelemetryEventType
 from esper.leyline.telemetry import (
@@ -7,6 +9,7 @@ from esper.leyline.telemetry import (
     SeedFossilizedPayload,
     SeedPrunedPayload,
     EpochCompletedPayload,
+    PerformanceDegradationPayload,
 )
 from esper.nissa.analytics import BlueprintAnalytics
 
@@ -166,6 +169,29 @@ class TestBlueprintAnalytics:
 
         assert len(analytics.stats) == 0
         assert len(analytics.scoreboards) == 0
+
+    def test_accepts_typed_performance_degradation(self, caplog):
+        """PERFORMANCE_DEGRADATION uses typed payload and is handled without warnings."""
+        analytics = BlueprintAnalytics(quiet=True)
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.PERFORMANCE_DEGRADATION,
+            severity="warning",
+            data=PerformanceDegradationPayload(
+                env_id=0,
+                current_acc=0.6,
+                rolling_avg_acc=0.8,
+                drop_percent=25.0,
+                threshold_percent=10.0,
+                training_progress=0.5,
+            ),
+        )
+
+        with caplog.at_level(logging.WARNING, logger="esper.nissa.analytics"):
+            analytics.emit(event)
+
+        assert len(analytics.stats) == 0
+        assert len(analytics.scoreboards) == 0
+        assert not any("not yet migrated" in r.getMessage() for r in caplog.records)
 
     def test_summary_table_format(self):
         """Summary table is formatted correctly."""

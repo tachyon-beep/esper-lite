@@ -1187,7 +1187,7 @@ class TestSanctumBackend:
         assert hasattr(backend, "get_snapshot")
 
     def test_emit_ignored_before_start(self):
-        """Events should be ignored before start()."""
+        """emit() before start() should fail loud (misconfigured telemetry)."""
         backend = SanctumBackend(num_envs=4)
 
         event = MagicMock()
@@ -1196,12 +1196,8 @@ class TestSanctumBackend:
         event.timestamp = datetime.now(timezone.utc)
         event.data = {"episode_id": "test"}
 
-        # Emit before start
-        backend.emit(event)
-        snapshot = backend.get_snapshot()
-
-        # Should not have processed
-        assert snapshot.run_id == ""
+        with pytest.raises(RuntimeError):
+            backend.emit(event)
 
     def test_emit_processed_after_start(self):
         """Events should be processed after start()."""
@@ -1236,8 +1232,28 @@ class TestSanctumBackend:
 
         assert snapshot.run_id == "test-run"
 
+    def test_fatal_telemetry_error_is_sticky(self):
+        """A telemetry contract violation should permanently trip the backend."""
+        from esper.karn.sanctum.errors import SanctumTelemetryFatalError
+
+        backend = SanctumBackend(num_envs=4)
+        backend.start()
+
+        event = MagicMock()
+        event.event_type = MagicMock()
+        event.event_type.name = "TRAINING_STARTED"
+        event.timestamp = datetime.now(timezone.utc)
+        # Wrong payload type: must be TrainingStartedPayload
+        event.data = {"episode_id": "test"}
+
+        with pytest.raises(SanctumTelemetryFatalError):
+            backend.emit(event)
+
+        with pytest.raises(SanctumTelemetryFatalError):
+            backend.get_snapshot()
+
     def test_close_stops_processing(self):
-        """Events should be ignored after close()."""
+        """emit() after close() should fail loud (stopped telemetry backend)."""
         backend = SanctumBackend(num_envs=4)
         backend.start()
         backend.close()
@@ -1265,10 +1281,8 @@ class TestSanctumBackend:
             reward_mode="shaped",
         )
 
-        backend.emit(event)
-        snapshot = backend.get_snapshot()
-
-        assert snapshot.run_id == ""
+        with pytest.raises(RuntimeError):
+            backend.emit(event)
 
 
 class TestBackendMultiGroupAPI:

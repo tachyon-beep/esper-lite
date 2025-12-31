@@ -39,7 +39,7 @@ from .health_status_panel import HealthStatusPanel
 from .heads_grid import HeadsPanel
 from .action_context import ActionContext
 from .slots_panel import SlotsPanel
-from .decisions_column import DecisionsColumn
+from .decisions_column import DecisionDetailRequested, DecisionPinRequested, DecisionsColumn
 from .attention_heatmap import AttentionHeatmapPanel
 
 if TYPE_CHECKING:
@@ -55,8 +55,9 @@ class TamiyoBrain(Container):
     class DecisionPinToggled(Message):
         """Posted when a decision card's pin status is toggled."""
 
-        def __init__(self, decision_id: str) -> None:
+        def __init__(self, *, group_id: str, decision_id: str) -> None:
             super().__init__()
+            self.group_id = group_id
             self.decision_id = decision_id
 
     DEFAULT_CSS = """
@@ -251,6 +252,16 @@ class TamiyoBrain(Container):
         self.query_one("#slots-panel", SlotsPanel).update_snapshot(snapshot)
         self.query_one("#attention-heatmap", AttentionHeatmapPanel).update_snapshot(snapshot)
         self.query_one("#decisions-column", DecisionsColumn).update_snapshot(snapshot)
+
+    def on_decision_pin_requested(self, event: DecisionPinRequested) -> None:
+        """Toggle pin status for a decision (bubbles to SanctumApp)."""
+        self.post_message(self.DecisionPinToggled(group_id=event.group_id, decision_id=event.decision_id))
+
+    def on_decision_detail_requested(self, event: DecisionDetailRequested) -> None:
+        """Open drill-down screen for a decision."""
+        from .decision_detail_screen import DecisionDetailScreen
+
+        self.app.push_screen(DecisionDetailScreen(decision=event.decision, group_id=event.group_id))
 
     @property
     def snapshot(self) -> "SanctumSnapshot | None":

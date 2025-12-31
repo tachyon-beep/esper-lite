@@ -49,7 +49,6 @@ from esper.leyline.telemetry import (
     SeedPrunedPayload,
     AnomalyDetectedPayload,
     AnalyticsSnapshotPayload,
-    CounterfactualUnavailablePayload,
 )
 from esper.leyline import SeedStage
 
@@ -301,8 +300,6 @@ class KarnCollector:
             self._handle_seed_event(event)
         elif event_type == "PPO_UPDATE_COMPLETED":
             self._handle_ppo_update(event)
-        elif event_type == "COUNTERFACTUAL_COMPUTED":
-            self._handle_counterfactual_computed(event)
         elif event_type in _ANOMALY_EVENT_TYPES:
             self._handle_anomaly_event(event, event_type)
         elif event_type == "ANALYTICS_SNAPSHOT":
@@ -620,69 +617,6 @@ class KarnCollector:
             policy.action_op = payload.action_name
         if payload.value_estimate is not None:
             policy.value_estimate = payload.value_estimate
-
-    def _handle_counterfactual_computed(self, event: "TelemetryEvent") -> None:
-        """Handle COUNTERFACTUAL_COMPUTED event.
-
-        Note: This event currently uses dict payloads (not typed). A typed payload
-        should be added in the future for type safety.
-        """
-        if not self.store.current_epoch:
-            return
-
-        if event.data is None:
-            _logger.warning("Event %s has no data payload", event.event_type)
-            return
-
-        # Handle typed CounterfactualUnavailablePayload (baseline unavailable)
-        if isinstance(event.data, CounterfactualUnavailablePayload):
-            payload = event.data
-            slot_key = f"env{payload.env_id}:{payload.slot_id}"
-            if slot_key not in self.store.current_epoch.slots:
-                self.store.current_epoch.slots[slot_key] = SlotSnapshot(slot_id=slot_key)
-            slot = self.store.current_epoch.slots[slot_key]
-            # Clear counterfactual contribution when unavailable
-            slot.counterfactual_contribution = None
-            return
-
-        # Handle dict payloads (successful counterfactual with contribution data)
-        if not isinstance(event.data, dict):
-            _logger.warning(
-                "Expected dict or CounterfactualUnavailablePayload for COUNTERFACTUAL_COMPUTED, got %s",
-                type(event.data).__name__,
-            )
-            return
-
-        data = event.data
-        if "env_id" not in data:
-            return
-        env_id = coerce_int(data.get("env_id"), field="env_id", default=-1, minimum=0)
-        if env_id < 0:
-            return
-        raw_slot_id = event.slot_id if event.slot_id is not None else data.get("slot_id")
-        slot_id = coerce_str(raw_slot_id, field="slot_id", default="").strip()
-        if not slot_id:
-            return
-
-        slot_key = f"env{env_id}:{slot_id}"
-        if slot_key not in self.store.current_epoch.slots:
-            self.store.current_epoch.slots[slot_key] = SlotSnapshot(slot_id=slot_key)
-        slot = self.store.current_epoch.slots[slot_key]
-
-        available = True
-        if "available" in data:
-            available_coerced = coerce_bool_or_none(data.get("available"), field="available")
-            available = True if available_coerced is None else available_coerced
-
-        if available is False:
-            slot.counterfactual_contribution = None
-            return
-
-        slot.counterfactual_contribution = coerce_float_or_none(data.get("contribution"), field="contribution")
-        slot.total_improvement = coerce_float_or_none(data.get("total_improvement"), field="total_improvement")
-        slot.improvement_this_epoch = coerce_float(
-            data.get("improvement_this_epoch"), field="improvement_this_epoch", default=0.0
-        )
 
     def _handle_anomaly_event(self, event: "TelemetryEvent", event_type: str) -> None:
         """Handle Simic anomaly events for dense trace capture.

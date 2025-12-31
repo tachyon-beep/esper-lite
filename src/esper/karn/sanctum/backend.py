@@ -7,8 +7,11 @@ events and update the AggregatorRegistry for TUI consumption.
 from __future__ import annotations
 
 import logging
+import threading
+import traceback
 from typing import TYPE_CHECKING
 
+from esper.karn.sanctum.errors import SanctumTelemetryFatalError
 from esper.karn.sanctum.registry import AggregatorRegistry
 
 if TYPE_CHECKING:
@@ -42,10 +45,14 @@ class SanctumBackend:
         )
         self._started = False
         self._event_count = 0
+        self._fatal_error: SanctumTelemetryFatalError | None = None
+        self._fatal_lock = threading.Lock()
 
     def start(self) -> None:
         """Start the backend (required by OutputBackend protocol)."""
         self._started = True
+        with self._fatal_lock:
+            self._fatal_error = None
         _logger.info("SanctumBackend started")
 
     def emit(self, event: "TelemetryEvent") -> None:
@@ -57,14 +64,36 @@ class SanctumBackend:
             event: The telemetry event to process.
         """
         if not self._started:
-            _logger.warning("SanctumBackend.emit() called before start()")
+            raise RuntimeError("SanctumBackend.emit() called before start()")
+
+        with self._fatal_lock:
+            fatal = self._fatal_error
+        if fatal is not None:
             return
-        self._event_count += 1
-        self._registry.process_event(event)
+
+        try:
+            self._event_count += 1
+            self._registry.process_event(event)
+        except Exception as e:
+            tb = traceback.format_exc()
+            fatal = SanctumTelemetryFatalError(
+                f"Sanctum telemetry processing failed: {e}",
+                tb,
+            )
+            with self._fatal_lock:
+                self._fatal_error = fatal
+            _logger.exception("SanctumBackend encountered fatal telemetry error")
+            raise fatal
 
     def close(self) -> None:
         """Close the backend (required by OutputBackend protocol)."""
         self._started = False
+
+    def _raise_if_fatal(self) -> None:
+        with self._fatal_lock:
+            fatal = self._fatal_error
+        if fatal is not None:
+            raise fatal
 
     def get_snapshot(self) -> "SanctumSnapshot":
         """Get merged SanctumSnapshot for backward compatibility.
@@ -75,6 +104,7 @@ class SanctumBackend:
         Returns:
             Snapshot of current aggregator state.
         """
+        self._raise_if_fatal()
         snapshots = self._registry.get_all_snapshots()
         if not snapshots:
             # No events yet - return empty snapshot
@@ -97,26 +127,26 @@ class SanctumBackend:
         Returns:
             Dict mapping group_id to SanctumSnapshot.
         """
+        self._raise_if_fatal()
         snapshots = self._registry.get_all_snapshots()
         # Add event count to each snapshot
         for snapshot in snapshots.values():
             snapshot.total_events_received = self._event_count
         return snapshots
 
-    def toggle_decision_pin(self, decision_id: str) -> bool:
+    def toggle_decision_pin(self, group_id: str, decision_id: str) -> bool:
         """Toggle pin status for a decision.
 
         Args:
+            group_id: Policy group identifier (e.g., "A", "B", "default").
             decision_id: ID of the decision to toggle.
 
         Returns:
             New pin status (True if pinned, False if unpinned).
         """
-        # Pin applies to first group (or specific group if ID contains group prefix)
-        snapshots = self._registry.get_all_snapshots()
-        if not snapshots:
-            return False
-        group_id = sorted(snapshots.keys())[0]
+        self._raise_if_fatal()
+        if group_id not in self._registry.group_ids:
+            raise KeyError(f"Unknown policy group_id for decision pin: {group_id}")
         aggregator = self._registry.get_or_create(group_id)
         return aggregator.toggle_decision_pin(decision_id)
 
@@ -129,11 +159,12 @@ class SanctumBackend:
         Returns:
             New pin status (True if pinned, False if unpinned).
         """
+        self._raise_if_fatal()
         # Pin applies to first group
-        snapshots = self._registry.get_all_snapshots()
-        if not snapshots:
+        group_ids = self._registry.group_ids
+        if not group_ids:
             return False
-        group_id = sorted(snapshots.keys())[0]
+        group_id = sorted(group_ids)[0]
         aggregator = self._registry.get_or_create(group_id)
         return aggregator.toggle_best_run_pin(record_id)
 
@@ -145,9 +176,10 @@ class SanctumBackend:
         """
         from esper.karn.sanctum.widgets.reward_health import RewardHealthData
 
-        snapshots = self._registry.get_all_snapshots()
-        if not snapshots:
+        self._raise_if_fatal()
+        group_ids = self._registry.group_ids
+        if not group_ids:
             return RewardHealthData()
-        group_id = sorted(snapshots.keys())[0]
+        group_id = sorted(group_ids)[0]
         aggregator = self._registry.get_or_create(group_id)
         return aggregator.compute_reward_health()

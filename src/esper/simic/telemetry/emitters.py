@@ -855,28 +855,6 @@ def emit_action_distribution(
     ))
 
 
-def emit_cf_unavailable(
-    hub: Any,
-    *,
-    env_id: int,
-    slot_id: str,
-    reason: str,
-) -> None:
-    """Emit marker event when counterfactual baseline is unavailable."""
-    from esper.leyline import CounterfactualUnavailablePayload
-
-    hub.emit(TelemetryEvent(
-        event_type=TelemetryEventType.COUNTERFACTUAL_COMPUTED,
-        slot_id=slot_id,
-        severity="warning",
-        data=CounterfactualUnavailablePayload(
-            env_id=env_id,
-            slot_id=slot_id,
-            reason=reason,
-        ),
-    ))
-
-
 def emit_throughput(
     *,
     hub: Any,
@@ -1055,7 +1033,6 @@ __all__ = [
     "compute_grad_norm_surrogate",
     "emit_action_distribution",
     "emit_batch_completed",
-    "emit_cf_unavailable",
     "emit_last_action",
     "emit_mask_hit_rates",
     "emit_ppo_update_event",

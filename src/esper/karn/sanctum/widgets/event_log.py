@@ -30,6 +30,7 @@ _EVENT_COLORS: dict[str, str] = {
     # Seed lifecycle - actionable events
     "SEED_GERMINATED": "bright_yellow",
     "SEED_STAGE_CHANGED": "bright_white",
+    "SEED_GATE_EVALUATED": "bright_white",
     "SEED_FOSSILIZED": "bright_green",
     "SEED_PRUNED": "bright_red",
     # PPO events
@@ -45,6 +46,7 @@ _EVENT_COLORS: dict[str, str] = {
 _INDIVIDUAL_EVENTS = {
     "SEED_GERMINATED",
     "SEED_STAGE_CHANGED",
+    "SEED_GATE_EVALUATED",
     "SEED_FOSSILIZED",
     "SEED_PRUNED",
     "PPO_UPDATE_COMPLETED",
@@ -220,6 +222,26 @@ class EventLog(Static):
             to_stage = _STAGE_SHORT.get(str(metadata.get("to", "?")), "?")
             content.append(f"{slot} ", style="cyan")
             content.append(f"{from_stage}→{to_stage}", style=color)
+
+        elif event_type == "SEED_GATE_EVALUATED":
+            slot = metadata.get("slot_id", "?")
+            gate = metadata.get("gate", "?")
+            target = str(metadata.get("target_stage", "?"))
+            target_short = _STAGE_SHORT.get(target, target)
+            result = str(metadata.get("result", "?"))
+            failed_checks = metadata.get("failed_checks")
+
+            content.append(f"{slot} ", style="cyan")
+            content.append(f"{gate} ", style="dim")
+            if result == "PASS":
+                content.append("✓", style="green")
+            elif result == "FAIL":
+                content.append("✗", style="red")
+            else:
+                content.append(result, style="yellow")
+            content.append(f" →{target_short}", style=color)
+            if isinstance(failed_checks, int) and failed_checks > 0:
+                content.append(f" ({failed_checks} failed)", style="dim")
 
         elif event_type == "SEED_FOSSILIZED":
             slot = metadata.get("slot_id", "?")

@@ -346,23 +346,6 @@ class ConsoleOutput(OutputBackend):
                 if env_acc_str:
                     print(f"[{timestamp}]   Env accs: [{env_acc_str}]")
                 print(f"[{timestamp}]   Avg: {avg_acc:.1f}% (rolling: {rolling_acc:.1f}%), reward: {avg_reward:.1f}")
-        elif event_type == "COUNTERFACTUAL_COMPUTED":
-            if event.data is None:
-                _logger.warning("COUNTERFACTUAL_COMPUTED event has no data payload")
-                return
-            # COUNTERFACTUAL_COMPUTED not yet migrated to typed payload
-            if isinstance(event.data, dict):
-                env_id = event.data.get("env_id", "?")
-                slot_id = event.data.get("slot_id", "?")
-                available = event.data.get("available", True)
-                if available is False:
-                    reason = event.data.get("reason", "unknown")
-                    print(f"[{timestamp}] env{env_id} | Counterfactual {slot_id}: unavailable ({reason})")
-                else:
-                    real_acc = event.data.get("real_accuracy", 0.0)
-                    baseline_acc = event.data.get("baseline_accuracy", 0.0)
-                    contribution = event.data.get("contribution", 0.0)
-                    print(f"[{timestamp}] env{env_id} | Counterfactual {slot_id}: {real_acc:.1f}% real, {baseline_acc:.1f}% baseline, Δ={contribution:+.1f}%")
         elif event_type == "CHECKPOINT_SAVED":
             # TODO: [DEAD CODE] - This formatting code for CHECKPOINT_SAVED is unreachable
             # because these events are never emitted. See: leyline/telemetry.py dead event TODOs.

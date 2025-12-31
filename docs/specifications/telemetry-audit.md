@@ -19,7 +19,7 @@ Reference of what telemetry we capture, how it is produced, and where it flows. 
 
 ## PPO Vectorized Telemetry (Simic)
 - **Setup:** `vectorized.py` adds `BlueprintAnalytics` backend and emits `TRAINING_STARTED` (devices, task, reward mode, dataloader config, budgets).
-- **Lifecycle/Counterfactual:** Slot events from Kasmina (with injected `env_id`), `COUNTERFACTUAL_COMPUTED` per slot when baselines available (real_acc, baseline_acc, Δ).
+- **Lifecycle/Counterfactual:** Slot events from Kasmina (with injected `env_id`); `SEED_FOSSILIZED`/`SEED_PRUNED` include optional `counterfactual`; matrix snapshots use `COUNTERFACTUAL_MATRIX_COMPUTED`.
 - **Batch cadence:**
   - `BATCH_EPOCH_COMPLETED` (batch_idx, episodes_completed/total, env_accuracies, avg/rolling acc, avg reward, train/val loss/acc, n_envs, skipped_update, plateau_detected, inner_epoch).
   - `EPOCH_COMPLETED` (per-env) with val loss/acc and seed telemetry (env_id scoped).
@@ -61,5 +61,5 @@ Reference of what telemetry we capture, how it is produced, and where it flows. 
 ## Notable Behaviors / Correctness Notes
 - Slot telemetry is skipped when `fast_mode=True` or `use_telemetry=False`; Obs V3 keeps telemetry fields with default values (dims unchanged).
 - Reward breakdowns only surface at DEBUG level; ops-normal runs see only aggregate reward.
-- Counterfactual events originate from (a) per-slot baseline in vectorized loop (final epoch) and (b) optional Karn helper (multi-slot matrix). Missing baselines yield `seed_contribution=None` and proxy signals in reward computation.
+- Counterfactual matrices originate from the Simic vectorized loop via `COUNTERFACTUAL_MATRIX_COMPUTED`; missing baselines yield `seed_contribution=None` and proxy signals in reward computation.
 - BlueprintAnalytics expects `env_id` in lifecycle events; vectorized path injects it via callback, heuristic fixes it to 0—other emitters must include it for correct aggregation.

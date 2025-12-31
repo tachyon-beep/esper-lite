@@ -2,7 +2,7 @@
 
 from esper.karn.sanctum.aggregator import SanctumAggregator
 from esper.leyline import TelemetryEvent, TelemetryEventType
-from esper.leyline.telemetry import PPOUpdatePayload
+from esper.leyline.telemetry import PPOUpdatePayload, SeedGateEvaluatedPayload
 
 
 def test_ppo_update_populates_history():
@@ -74,6 +74,21 @@ def test_ppo_update_populates_history():
     assert abs(clip_fractions[0] - 0.1) < 1e-9
     assert abs(clip_fractions[1] - 0.12) < 1e-9
     assert abs(clip_fractions[2] - 0.14) < 1e-9
+
+
+def test_get_snapshot_returns_isolated_copy() -> None:
+    """get_snapshot() must never expose live, mutable aggregator state."""
+    agg = SanctumAggregator(num_envs=2)
+
+    snapshot1 = agg.get_snapshot()
+    snapshot1.envs[0].host_accuracy = 123.0
+    snapshot1.envs[0].action_counts["WAIT"] = 999
+    snapshot1.tamiyo.policy_loss_history.append(9.99)
+
+    snapshot2 = agg.get_snapshot()
+    assert snapshot2.envs[0].host_accuracy == 0.0
+    assert snapshot2.envs[0].action_counts["WAIT"] == 0
+    assert list(snapshot2.tamiyo.policy_loss_history) == []
 
 
 def test_ppo_update_populates_head_entropies():
@@ -162,6 +177,36 @@ def test_ppo_update_filters_default_group_id():
     snapshot = agg.get_snapshot()
     # Should NOT be set to "default" - that would show [default] label
     assert snapshot.tamiyo.group_id is None
+
+
+def test_seed_gate_evaluated_event_is_handled() -> None:
+    """SEED_GATE_EVALUATED must not crash Sanctum aggregation."""
+    agg = SanctumAggregator(num_envs=1)
+
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.SEED_GATE_EVALUATED,
+        data=SeedGateEvaluatedPayload(
+            slot_id="r0c0",
+            env_id=0,
+            gate="G2",
+            passed=False,
+            target_stage="BLENDING",
+            checks_passed=(),
+            checks_failed=("insufficient_contribution",),
+            message="not ready",
+        ),
+    )
+    agg.process_event(event)
+
+    snapshot = agg.get_snapshot()
+    assert snapshot.envs[0].seeds["r0c0"].slot_id == "r0c0"
+
+    assert snapshot.event_log, "Expected gate event to be present in event_log"
+    entry = snapshot.event_log[-1]
+    assert entry.event_type == "SEED_GATE_EVALUATED"
+    assert entry.env_id == 0
+    assert entry.metadata["gate"] == "G2"
+    assert entry.metadata["result"] == "FAIL"
 
 
 def test_ppo_update_with_none_group_id():

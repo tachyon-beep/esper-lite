@@ -147,6 +147,17 @@ from esper.simic.telemetry.emitters import (
 from .parallel_env_state import ParallelEnvState
 from .helpers import compute_rent_and_shock_inputs
 
+# PERF: Static head indices (optimized for high env counts).
+_HEAD_NAME_TO_IDX: dict[str, int] = {name: idx for idx, name in enumerate(HEAD_NAMES)}
+_HEAD_SLOT_IDX = _HEAD_NAME_TO_IDX["slot"]
+_HEAD_BLUEPRINT_IDX = _HEAD_NAME_TO_IDX["blueprint"]
+_HEAD_STYLE_IDX = _HEAD_NAME_TO_IDX["style"]
+_HEAD_TEMPO_IDX = _HEAD_NAME_TO_IDX["tempo"]
+_HEAD_ALPHA_TARGET_IDX = _HEAD_NAME_TO_IDX["alpha_target"]
+_HEAD_ALPHA_SPEED_IDX = _HEAD_NAME_TO_IDX["alpha_speed"]
+_HEAD_ALPHA_CURVE_IDX = _HEAD_NAME_TO_IDX["alpha_curve"]
+_HEAD_OP_IDX = _HEAD_NAME_TO_IDX["op"]
+
 _logger = logging.getLogger(__name__)
 
 
@@ -1756,8 +1767,6 @@ def train_ppo_vectorized(
             }
             for _ in range(envs_this_batch)
         ]
-        mask_hits = {head: 0 for head in HEAD_NAMES}
-        mask_total = {head: 0 for head in HEAD_NAMES}
 
         # Accumulate raw (unnormalized) states for deferred normalizer update.
         # We freeze normalizer stats during rollout to ensure consistent normalization
@@ -2507,36 +2516,24 @@ def train_ppo_vectorized(
             batched_lstm_hidden = action_result.hidden
 
             # Convert to list of dicts for per-env processing
-            # PERF NOTE: This does 9 separate GPU→CPU transfers (8 action heads + 1 value).
-            # Consolidating via torch.stack() before .cpu() would reduce to 1 transfer but:
-            #   1. Stack creates new allocation on GPU
-            #   2. Split/indexing on CPU adds overhead
-            # For small batch sizes (typical RL: 8-64 envs), separate transfers may be faster.
-            # TODO: [FUTURE OPTIMIZATION] - Benchmark stacked vs separate transfers for
-            # various batch sizes. If stacked is faster, use:
-            #   stacked = torch.stack([actions_dict[k] for k in HEAD_NAMES] + [values_tensor])
-            #   all_cpu = stacked.cpu().numpy()
-            #   actions_cpu = {k: all_cpu[i] for i, k in enumerate(HEAD_NAMES)}
-            #   values = all_cpu[-1].tolist()
-            actions_cpu = {key: actions_dict[key].cpu().numpy() for key in HEAD_NAMES}
-            values_cpu = values_tensor.cpu()
-            actions = [
-                {key: int(actions_cpu[key][i]) for key in HEAD_NAMES}
-                for i in range(len(env_states))
-            ]
-            values = values_cpu.tolist()  # .tolist() on CPU tensor is free
+            # PERF NOTE: Consolidate action head transfers into a single D2H copy.
+            # This matters for larger env counts (16+), where per-head transfers and
+            # per-env Python dict construction become a scaling bottleneck.
+            actions_stacked = torch.stack([actions_dict[name] for name in HEAD_NAMES])
+            actions_np = actions_stacked.cpu().numpy()  # [num_heads, num_envs]
+            values = values_tensor.cpu().tolist()  # .tolist() on CPU tensor is free
 
             # Batch compute mask stats for telemetry
+            masked_np: np.ndarray | None = None  # [num_heads, num_envs]
             if ops_telemetry_enabled:
                 masked_batch = {
                     key: ~masks_batch[key].all(dim=-1)  # [num_envs] bool tensor
                     for key in HEAD_NAMES
                 }
-                masked_cpu = {
-                    key: masked_batch[key].cpu().numpy() for key in HEAD_NAMES
-                }
+                masked_stacked = torch.stack([masked_batch[name] for name in HEAD_NAMES])
+                masked_np = masked_stacked.cpu().numpy()
             else:
-                masked_cpu = None
+                masked_np = None
 
             # PERF: Pre-compute op_probs for telemetry ONCE before env loop.
             # Previous code called .cpu() per-env inside the loop, causing N GPU syncs
@@ -2568,8 +2565,27 @@ def train_ppo_vectorized(
                 # Single exp + detach + transfer
                 head_confidences_cpu = torch.exp(stacked_log_probs).detach().cpu().numpy()
 
-            # PHASE 1: Execute actions and collect data for bootstrap computation
-            transitions_data = []  # Store transition data for buffer storage
+            # PHASE 1: Execute actions and store transitions (bootstrap patched after)
+            truncated_bootstrap_targets: list[tuple[int, int]] = []
+
+            # Cache per-head tensors for buffer writes (avoid dict lookups in hot loop)
+            slot_log_probs_batch = head_log_probs["slot"]
+            blueprint_log_probs_batch = head_log_probs["blueprint"]
+            style_log_probs_batch = head_log_probs["style"]
+            tempo_log_probs_batch = head_log_probs["tempo"]
+            alpha_target_log_probs_batch = head_log_probs["alpha_target"]
+            alpha_speed_log_probs_batch = head_log_probs["alpha_speed"]
+            alpha_curve_log_probs_batch = head_log_probs["alpha_curve"]
+            op_log_probs_batch = head_log_probs["op"]
+
+            slot_masks_batch = masks_batch["slot"]
+            blueprint_masks_batch = masks_batch["blueprint"]
+            style_masks_batch = masks_batch["style"]
+            tempo_masks_batch = masks_batch["tempo"]
+            alpha_target_masks_batch = masks_batch["alpha_target"]
+            alpha_speed_masks_batch = masks_batch["alpha_speed"]
+            alpha_curve_masks_batch = masks_batch["alpha_curve"]
+            op_masks_batch = masks_batch["op"]
 
             for env_idx, env_state in enumerate(env_states):
                 model = env_state.model
@@ -2577,7 +2593,27 @@ def train_ppo_vectorized(
                 value = values[env_idx]
 
                 # Parse sampled action indices and derive values (Deduplication)
-                action_dict = actions[env_idx]
+                slot_action = int(actions_np[_HEAD_SLOT_IDX, env_idx])
+                blueprint_action = int(actions_np[_HEAD_BLUEPRINT_IDX, env_idx])
+                style_action = int(actions_np[_HEAD_STYLE_IDX, env_idx])
+                tempo_action = int(actions_np[_HEAD_TEMPO_IDX, env_idx])
+                alpha_target_action = int(actions_np[_HEAD_ALPHA_TARGET_IDX, env_idx])
+                alpha_speed_action = int(actions_np[_HEAD_ALPHA_SPEED_IDX, env_idx])
+                alpha_curve_action = int(actions_np[_HEAD_ALPHA_CURVE_IDX, env_idx])
+                op_action = int(actions_np[_HEAD_OP_IDX, env_idx])
+
+                action_dict: dict[str, int] | None = None
+                if ops_telemetry_enabled:
+                    action_dict = {
+                        "slot": slot_action,
+                        "blueprint": blueprint_action,
+                        "style": style_action,
+                        "tempo": tempo_action,
+                        "alpha_target": alpha_target_action,
+                        "alpha_speed": alpha_speed_action,
+                        "alpha_curve": alpha_curve_action,
+                        "op": op_action,
+                    }
                 (
                     target_slot,
                     slot_is_enabled,
@@ -2590,10 +2626,10 @@ def train_ppo_vectorized(
                     alpha_target,
                 ) = _parse_sampled_action(
                     env_idx,
-                    action_dict["op"],
-                    action_dict["slot"],
-                    action_dict["style"],
-                    action_dict["alpha_target"],
+                    op_action,
+                    slot_action,
+                    style_action,
+                    alpha_target_action,
                     slots,
                     slot_config,
                     model,
@@ -2608,7 +2644,15 @@ def train_ppo_vectorized(
 
                 # Governor rollback
                 if env_idx in governor_panic_envs:
-                    env_state.governor.execute_rollback(env_id=env_idx)
+                    # Stream safety: rollback mutates model tensors; ensure it runs on the
+                    # per-env CUDA stream to avoid default-stream leakage and races.
+                    rollback_ctx = (
+                        torch.cuda.stream(env_state.stream)
+                        if env_state.stream
+                        else nullcontext()
+                    )
+                    with rollback_ctx:
+                        env_state.governor.execute_rollback(env_id=env_idx)
                     env_rollback_occurred[env_idx] = True
 
                     # CRITICAL: Clear optimizer momentum after rollback.
@@ -2744,154 +2788,159 @@ def train_ppo_vectorized(
                     summary["count"] += 1
 
                 # Execute action
-                op_idx = action_dict["op"]
-                if slot_is_enabled:
-                    if (
-                        op_idx == OP_GERMINATE
-                        and model.seed_slots[target_slot].state is None
-                    ):
-                        env_state.acc_at_germination[target_slot] = env_state.val_acc
-                        blueprint_id = BLUEPRINT_IDS[action_dict["blueprint"]]
-                        assert blueprint_id is not None, "NULL blueprint should not reach germination"
-                        model.germinate_seed(
-                            blueprint_id,
-                            f"env{env_idx}_seed_{env_state.seeds_created}",
-                            slot=target_slot,
-                            blend_algorithm_id=blend_algorithm_id,
-                            blend_tempo_epochs=TEMPO_TO_EPOCHS[
-                                TempoAction(action_dict["tempo"])
-                            ],
-                            alpha_algorithm=alpha_algorithm,
-                            alpha_target=alpha_target,
-                        )
-                        env_state.init_obs_v3_slot_tracking(target_slot)
-                        env_state.seeds_created += 1
-                        env_state.seed_optimizers.pop(target_slot, None)
+                # Stream safety: lifecycle ops can create/move CUDA tensors (germination
+                # validation probes, module moves, etc). Run them on env_state.stream.
+                lifecycle_ctx = (
+                    torch.cuda.stream(env_state.stream)
+                    if env_state.stream
+                    else nullcontext()
+                )
+                with lifecycle_ctx:
+                    if slot_is_enabled:
+                        if (
+                            op_action == OP_GERMINATE
+                            and model.seed_slots[target_slot].state is None
+                        ):
+                            env_state.acc_at_germination[target_slot] = env_state.val_acc
+                            blueprint_id = BLUEPRINT_IDS[blueprint_action]
+                            assert blueprint_id is not None, "NULL blueprint should not reach germination"
+                            model.germinate_seed(
+                                blueprint_id,
+                                f"env{env_idx}_seed_{env_state.seeds_created}",
+                                slot=target_slot,
+                                blend_algorithm_id=blend_algorithm_id,
+                                blend_tempo_epochs=TEMPO_TO_EPOCHS[
+                                    TempoAction(tempo_action)
+                                ],
+                                alpha_algorithm=alpha_algorithm,
+                                alpha_target=alpha_target,
+                            )
+                            env_state.init_obs_v3_slot_tracking(target_slot)
+                            env_state.seeds_created += 1
+                            env_state.seed_optimizers.pop(target_slot, None)
+                            action_success = True
+                        elif op_action == OP_FOSSILIZE:
+                            action_success = _advance_active_seed(model, target_slot)
+                            if action_success:
+                                env_state.seeds_fossilized += 1
+                                if seed_info is not None and (
+                                    seed_info.total_improvement
+                                    >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
+                                ):
+                                    env_state.contributing_fossilized += 1
+                                env_state.acc_at_germination.pop(target_slot, None)
+
+                                # Compute temporally-discounted hindsight credit for scaffolds
+                                beneficiary_improvement = seed_info.total_improvement if seed_info else 0.0
+                                if beneficiary_improvement > 0:
+                                    # Use outer loop epoch variable (not per-env counter)
+                                    current_epoch = epoch
+                                    total_credit = 0.0
+                                    scaffold_count = 0
+                                    total_delay = 0
+
+                                    # Find all scaffolds that boosted this beneficiary
+                                    for scaffold_slot, boosts in env_state.scaffold_boost_ledger.items():
+                                        for boost_given, beneficiary_slot, epoch_of_boost in boosts:
+                                            if beneficiary_slot == target_slot and boost_given > 0:
+                                                # Temporal discount: credit decays with distance
+                                                delay = current_epoch - epoch_of_boost
+                                                discount = DEFAULT_GAMMA ** delay
+
+                                                # Compute discounted hindsight credit
+                                                raw_credit = compute_scaffold_hindsight_credit(
+                                                    boost_given=boost_given,
+                                                    beneficiary_improvement=beneficiary_improvement,
+                                                    credit_weight=HINDSIGHT_CREDIT_WEIGHT,
+                                                )
+                                                total_credit += raw_credit * discount
+                                                scaffold_count += 1
+                                                total_delay += delay
+
+                                    # Cap total credit to prevent runaway values
+                                    total_credit = min(total_credit, MAX_HINDSIGHT_CREDIT)
+
+                                    env_state.pending_hindsight_credit += total_credit
+
+                                    # Track scaffold metrics for telemetry (per-environment)
+                                    if collect_reward_summary:
+                                        summary = reward_summary_accum[env_idx]
+                                        summary["scaffold_count"] += scaffold_count
+                                        summary["scaffold_delay_total"] += total_delay
+
+                                    # Clear this beneficiary from all ledgers (it's now fossilized)
+                                    for scaffold_slot in list(env_state.scaffold_boost_ledger.keys()):
+                                        env_state.scaffold_boost_ledger[scaffold_slot] = [
+                                            (b, ben, e) for (b, ben, e) in env_state.scaffold_boost_ledger[scaffold_slot]
+                                            if ben != target_slot
+                                        ]
+                                        if not env_state.scaffold_boost_ledger[scaffold_slot]:
+                                            del env_state.scaffold_boost_ledger[scaffold_slot]
+
+                                # B8-DRL-02 FIX: Clean up seed optimizer after fossilization
+                                # (was missing - memory leak for fossilized seed optimizers)
+                                env_state.seed_optimizers.pop(target_slot, None)
+                        elif (
+                            op_action == OP_PRUNE
+                            and model.has_active_seed_in_slot(target_slot)
+                            # BUG-020 fix: enforce MIN_PRUNE_AGE at execution gate
+                            and seed_info is not None
+                            and seed_info.seed_age_epochs >= MIN_PRUNE_AGE
+                        ):
+                            speed_steps = ALPHA_SPEED_TO_STEPS[
+                                AlphaSpeedAction(alpha_speed_action)
+                            ]
+                            curve_action_obj = AlphaCurveAction(alpha_curve_action)
+                            curve = curve_action_obj.to_curve()
+                            steepness = curve_action_obj.to_steepness()
+                            target_slot_obj = cast(SeedSlotProtocol, model.seed_slots[target_slot])
+                            # Access concrete SeedSlot for schedule_prune/prune
+                            from esper.kasmina.slot import SeedSlot
+                            assert isinstance(target_slot_obj, SeedSlot)
+                            if speed_steps <= 0:
+                                action_success = target_slot_obj.prune(
+                                    reason="policy_prune", initiator="policy"
+                                )
+                            else:
+                                action_success = target_slot_obj.schedule_prune(
+                                    steps=speed_steps, curve=curve, steepness=steepness, initiator="policy"
+                                )
+                            if action_success:
+                                env_state.seed_optimizers.pop(target_slot, None)
+                                env_state.acc_at_germination.pop(target_slot, None)
+                        elif (
+                            op_action == OP_SET_ALPHA_TARGET
+                            and model.has_active_seed_in_slot(target_slot)
+                        ):
+                            target_slot_obj_alpha = cast(SeedSlotProtocol, model.seed_slots[target_slot])
+                            from esper.kasmina.slot import SeedSlot
+                            assert isinstance(target_slot_obj_alpha, SeedSlot)
+                            curve_action_alpha = AlphaCurveAction(alpha_curve_action)
+                            action_success = target_slot_obj_alpha.set_alpha_target(
+                                alpha_target=alpha_target,
+                                steps=ALPHA_SPEED_TO_STEPS[
+                                    AlphaSpeedAction(alpha_speed_action)
+                                ],
+                                curve=curve_action_alpha.to_curve(),
+                                steepness=curve_action_alpha.to_steepness(),
+                                alpha_algorithm=alpha_algorithm,
+                                initiator="policy",
+                            )
+                            # B8-DRL-02 FIX: Removed incorrect seed_optimizers.pop() here.
+                            # SET_ALPHA_TARGET doesn't terminate the seed - it's still active.
+                        elif op_action == OP_ADVANCE and model.has_active_seed_in_slot(
+                            target_slot
+                        ):
+                            target_slot_obj_advance = cast(SeedSlotProtocol, model.seed_slots[target_slot])
+                            gate_result = target_slot_obj_advance.advance_stage()
+                            action_success = gate_result.passed
+                            # B8-DRL-02 FIX: Only pop optimizer if seed terminated.
+                            # ADVANCE can move to non-terminal stages (TRAINING, BLENDING, etc.)
+                            # where the seed is still active and needs its optimizer.
+                            if action_success and not model.has_active_seed_in_slot(target_slot):
+                                env_state.seed_optimizers.pop(target_slot, None)
+                    elif op_action == OP_WAIT:
                         action_success = True
-                    elif op_idx == OP_FOSSILIZE:
-                        action_success = _advance_active_seed(model, target_slot)
-                        if action_success:
-                            env_state.seeds_fossilized += 1
-                            if seed_info is not None and (
-                                seed_info.total_improvement
-                                >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
-                            ):
-                                env_state.contributing_fossilized += 1
-                            env_state.acc_at_germination.pop(target_slot, None)
-
-                            # Compute temporally-discounted hindsight credit for scaffolds
-                            beneficiary_improvement = seed_info.total_improvement if seed_info else 0.0
-                            if beneficiary_improvement > 0:
-                                # Use outer loop epoch variable (not per-env counter)
-                                current_epoch = epoch
-                                total_credit = 0.0
-                                scaffold_count = 0
-                                total_delay = 0
-
-                                # Find all scaffolds that boosted this beneficiary
-                                for scaffold_slot, boosts in env_state.scaffold_boost_ledger.items():
-                                    for boost_given, beneficiary_slot, epoch_of_boost in boosts:
-                                        if beneficiary_slot == target_slot and boost_given > 0:
-                                            # Temporal discount: credit decays with distance
-                                            delay = current_epoch - epoch_of_boost
-                                            discount = DEFAULT_GAMMA ** delay
-
-                                            # Compute discounted hindsight credit
-                                            raw_credit = compute_scaffold_hindsight_credit(
-                                                boost_given=boost_given,
-                                                beneficiary_improvement=beneficiary_improvement,
-                                                credit_weight=HINDSIGHT_CREDIT_WEIGHT,
-                                            )
-                                            total_credit += raw_credit * discount
-                                            scaffold_count += 1
-                                            total_delay += delay
-
-                                # Cap total credit to prevent runaway values
-                                total_credit = min(total_credit, MAX_HINDSIGHT_CREDIT)
-
-                                env_state.pending_hindsight_credit += total_credit
-
-                                # Track scaffold metrics for telemetry (per-environment)
-                                if collect_reward_summary:
-                                    summary = reward_summary_accum[env_idx]
-                                    summary["scaffold_count"] += scaffold_count
-                                    summary["scaffold_delay_total"] += total_delay
-
-                                # Clear this beneficiary from all ledgers (it's now fossilized)
-                                for scaffold_slot in list(env_state.scaffold_boost_ledger.keys()):
-                                    env_state.scaffold_boost_ledger[scaffold_slot] = [
-                                        (b, ben, e) for (b, ben, e) in env_state.scaffold_boost_ledger[scaffold_slot]
-                                        if ben != target_slot
-                                    ]
-                                    if not env_state.scaffold_boost_ledger[scaffold_slot]:
-                                        del env_state.scaffold_boost_ledger[scaffold_slot]
-
-                            # B8-DRL-02 FIX: Clean up seed optimizer after fossilization
-                            # (was missing - memory leak for fossilized seed optimizers)
-                            env_state.seed_optimizers.pop(target_slot, None)
-                    elif (
-                        op_idx == OP_PRUNE
-                        and model.has_active_seed_in_slot(target_slot)
-                        # BUG-020 fix: enforce MIN_PRUNE_AGE at execution gate
-                        and seed_info is not None
-                        and seed_info.seed_age_epochs >= MIN_PRUNE_AGE
-                    ):
-                        speed_steps = ALPHA_SPEED_TO_STEPS[
-                            AlphaSpeedAction(action_dict["alpha_speed"])
-                        ]
-                        curve_action = AlphaCurveAction(action_dict["alpha_curve"])
-                        curve = curve_action.to_curve()
-                        steepness = curve_action.to_steepness()
-                        target_slot_obj = cast(SeedSlotProtocol, model.seed_slots[target_slot])
-                        # Access concrete SeedSlot for schedule_prune/prune
-                        from esper.kasmina.slot import SeedSlot
-                        assert isinstance(target_slot_obj, SeedSlot)
-                        if speed_steps <= 0:
-                            action_success = target_slot_obj.prune(
-                                reason="policy_prune", initiator="policy"
-                            )
-                        else:
-                            action_success = target_slot_obj.schedule_prune(
-                                steps=speed_steps, curve=curve, steepness=steepness, initiator="policy"
-                            )
-                        if action_success:
-                            env_state.seed_optimizers.pop(target_slot, None)
-                            env_state.acc_at_germination.pop(target_slot, None)
-                    elif (
-                        op_idx == OP_SET_ALPHA_TARGET
-                        and model.has_active_seed_in_slot(target_slot)
-                    ):
-                        target_slot_obj_alpha = cast(SeedSlotProtocol, model.seed_slots[target_slot])
-                        from esper.kasmina.slot import SeedSlot
-                        assert isinstance(target_slot_obj_alpha, SeedSlot)
-                        curve_action_alpha = AlphaCurveAction(action_dict["alpha_curve"])
-                        action_success = target_slot_obj_alpha.set_alpha_target(
-                            alpha_target=ALPHA_TARGET_VALUES[
-                                action_dict["alpha_target"]
-                            ],
-                            steps=ALPHA_SPEED_TO_STEPS[
-                                AlphaSpeedAction(action_dict["alpha_speed"])
-                            ],
-                            curve=curve_action_alpha.to_curve(),
-                            steepness=curve_action_alpha.to_steepness(),
-                            alpha_algorithm=alpha_algorithm,
-                            initiator="policy",
-                        )
-                        # B8-DRL-02 FIX: Removed incorrect seed_optimizers.pop() here.
-                        # SET_ALPHA_TARGET doesn't terminate the seed - it's still active.
-                    elif op_idx == OP_ADVANCE and model.has_active_seed_in_slot(
-                        target_slot
-                    ):
-                        target_slot_obj_advance = cast(SeedSlotProtocol, model.seed_slots[target_slot])
-                        gate_result = target_slot_obj_advance.advance_stage()
-                        action_success = gate_result.passed
-                        # B8-DRL-02 FIX: Only pop optimizer if seed terminated.
-                        # ADVANCE can move to non-terminal stages (TRAINING, BLENDING, etc.)
-                        # where the seed is still active and needs its optimizer.
-                        if action_success and not model.has_active_seed_in_slot(target_slot):
-                            env_state.seed_optimizers.pop(target_slot, None)
-                elif op_idx == OP_WAIT:
-                    action_success = True
 
                 if action_success:
                     env_state.successful_action_counts[action_for_reward.name] = (
@@ -2903,7 +2952,7 @@ def train_ppo_vectorized(
 
                 # Obs V3: Update action feedback state for next timestep's feature extraction
                 env_state.last_action_success = action_success
-                env_state.last_action_op = int(action_dict["op"])
+                env_state.last_action_op = op_action
 
                 # Obs V3: Update gradient health history for LSTM trend detection
                 # Use slot reports from current timestep (before action) as "prev" for next timestep
@@ -2923,12 +2972,12 @@ def train_ppo_vectorized(
                             env_state.epochs_since_counterfactual[slot_id] = 0
 
                 # Consolidate telemetry via emitter
-                if ops_telemetry_enabled and masked_cpu is not None:
-                    masked_flags = {k: bool(masked_cpu[k][env_idx]) for k in HEAD_NAMES}
-                    for k, m in masked_flags.items():
-                        mask_total[k] += 1
-                        if m:
-                            mask_hits[k] += 1
+                if ops_telemetry_enabled and masked_np is not None:
+                    assert action_dict is not None
+                    masked_flags = {
+                        head: bool(masked_np[head_idx, env_idx])
+                        for head_idx, head in enumerate(HEAD_NAMES)
+                    }
 
                     post_slot_obj = cast(SeedSlotProtocol, model.seed_slots[target_slot])
                     post_slot_state = post_slot_obj.state
@@ -2957,7 +3006,7 @@ def train_ppo_vectorized(
                     decision_entropy = None
                     if op_probs_cpu is not None and env_idx < op_probs_cpu.shape[0]:
                         probs_cpu = op_probs_cpu[env_idx]
-                        chosen_op = int(action_dict["op"])
+                        chosen_op = op_action
 
                         # action_confidence = P(chosen_op)
                         if 0 <= chosen_op < len(probs_cpu):
@@ -3019,33 +3068,49 @@ def train_ppo_vectorized(
                         head_telemetry=head_telem,
                     )
 
-                # Store transition
+                # Store transition directly into rollout buffer.
                 done = epoch == max_epochs
                 truncated = done
 
-                if truncated:
-                    pass
-
-                transitions_data.append(
-                    {
-                        "env_id": env_idx,
-                        "state": states_batch[env_idx].detach(),
-                        "blueprint_indices": blueprint_indices_batch[env_idx].detach(),
-                        "action_dict": action_dict,
-                        "log_probs": {
-                            k: v[env_idx].detach() for k, v in head_log_probs.items()
-                        },
-                        "env_masks": {
-                            k: v[env_idx].detach() for k, v in masks_batch.items()
-                        },
-                        "value": value,
-                        "reward": normalized_reward,
-                        "done": done,
-                        "truncated": truncated,
-                        "hidden_h": pre_step_hiddens[env_idx][0].detach(),
-                        "hidden_c": pre_step_hiddens[env_idx][1].detach(),
-                    }
+                step_idx = agent.buffer.step_counts[env_idx]
+                agent.buffer.add(
+                    env_id=env_idx,
+                    state=states_batch[env_idx].detach(),
+                    blueprint_indices=blueprint_indices_batch[env_idx].detach(),
+                    slot_action=slot_action,
+                    blueprint_action=blueprint_action,
+                    style_action=style_action,
+                    tempo_action=tempo_action,
+                    alpha_target_action=alpha_target_action,
+                    alpha_speed_action=alpha_speed_action,
+                    alpha_curve_action=alpha_curve_action,
+                    op_action=op_action,
+                    slot_log_prob=slot_log_probs_batch[env_idx],
+                    blueprint_log_prob=blueprint_log_probs_batch[env_idx],
+                    style_log_prob=style_log_probs_batch[env_idx],
+                    tempo_log_prob=tempo_log_probs_batch[env_idx],
+                    alpha_target_log_prob=alpha_target_log_probs_batch[env_idx],
+                    alpha_speed_log_prob=alpha_speed_log_probs_batch[env_idx],
+                    alpha_curve_log_prob=alpha_curve_log_probs_batch[env_idx],
+                    op_log_prob=op_log_probs_batch[env_idx],
+                    value=value,
+                    reward=normalized_reward,
+                    done=done,
+                    slot_mask=slot_masks_batch[env_idx],
+                    blueprint_mask=blueprint_masks_batch[env_idx],
+                    style_mask=style_masks_batch[env_idx],
+                    tempo_mask=tempo_masks_batch[env_idx],
+                    alpha_target_mask=alpha_target_masks_batch[env_idx],
+                    alpha_speed_mask=alpha_speed_masks_batch[env_idx],
+                    alpha_curve_mask=alpha_curve_masks_batch[env_idx],
+                    op_mask=op_masks_batch[env_idx],
+                    hidden_h=pre_step_hiddens[env_idx][0].detach(),
+                    hidden_c=pre_step_hiddens[env_idx][1].detach(),
+                    truncated=truncated,
+                    bootstrap_value=0.0,
                 )
+                if truncated:
+                    truncated_bootstrap_targets.append((env_idx, step_idx))
 
                 if done:
                     agent.buffer.end_episode(env_id=env_idx)
@@ -3212,7 +3277,7 @@ def train_ppo_vectorized(
                                 )
 
             # PHASE 2: Compute all bootstrap values in single batched forward pass
-            bootstrap_values = []
+            bootstrap_values: list[float] = []
             if all_post_action_signals:
                 # Unpack Obs V3 tuple (obs, blueprint_indices)
                 post_action_features_batch, post_action_bp_indices = batch_signals_to_features(
@@ -3241,51 +3306,15 @@ def train_ppo_vectorized(
                 # PERF: Move to CPU before .tolist() to avoid per-value GPU sync
                 bootstrap_values = bootstrap_result.value.cpu().tolist()
 
-            # PHASE 3: Store transitions
-            bootstrap_idx = 0
-            for transition in transitions_data:
-                bootstrap_val = (
-                    bootstrap_values[bootstrap_idx] if transition["truncated"] else 0.0
-                )
-                if transition["truncated"]:
-                    bootstrap_idx += 1
-
-                agent.buffer.add(
-                    env_id=transition["env_id"],
-                    state=transition["state"],
-                    blueprint_indices=transition["blueprint_indices"],
-                    slot_action=transition["action_dict"]["slot"],
-                    blueprint_action=transition["action_dict"]["blueprint"],
-                    style_action=transition["action_dict"]["style"],
-                    tempo_action=transition["action_dict"]["tempo"],
-                    alpha_target_action=transition["action_dict"]["alpha_target"],
-                    alpha_speed_action=transition["action_dict"]["alpha_speed"],
-                    alpha_curve_action=transition["action_dict"]["alpha_curve"],
-                    op_action=transition["action_dict"]["op"],
-                    slot_log_prob=transition["log_probs"]["slot"],
-                    blueprint_log_prob=transition["log_probs"]["blueprint"],
-                    style_log_prob=transition["log_probs"]["style"],
-                    tempo_log_prob=transition["log_probs"]["tempo"],
-                    alpha_target_log_prob=transition["log_probs"]["alpha_target"],
-                    alpha_speed_log_prob=transition["log_probs"]["alpha_speed"],
-                    alpha_curve_log_prob=transition["log_probs"]["alpha_curve"],
-                    op_log_prob=transition["log_probs"]["op"],
-                    value=transition["value"],
-                    reward=transition["reward"],
-                    done=transition["done"],
-                    slot_mask=transition["env_masks"]["slot"],
-                    blueprint_mask=transition["env_masks"]["blueprint"],
-                    style_mask=transition["env_masks"]["style"],
-                    tempo_mask=transition["env_masks"]["tempo"],
-                    alpha_target_mask=transition["env_masks"]["alpha_target"],
-                    alpha_speed_mask=transition["env_masks"]["alpha_speed"],
-                    alpha_curve_mask=transition["env_masks"]["alpha_curve"],
-                    op_mask=transition["env_masks"]["op"],
-                    hidden_h=transition["hidden_h"],
-                    hidden_c=transition["hidden_c"],
-                    truncated=transition["truncated"],
-                    bootstrap_value=bootstrap_val,
-                )
+            if truncated_bootstrap_targets:
+                if not bootstrap_values:
+                    raise RuntimeError(
+                        "Missing bootstrap values for truncated transitions."
+                    )
+                for (env_id, step_idx), bootstrap_val in zip(
+                    truncated_bootstrap_targets, bootstrap_values, strict=True
+                ):
+                    agent.buffer.bootstrap_values[env_id, step_idx] = bootstrap_val
 
             # Check for graceful shutdown at end of each epoch (not just batch end)
             # This gives user faster response (~seconds) instead of waiting for full batch
