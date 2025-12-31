@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import TypedDict
+from typing import TypedDict, cast
 
 import torch
 import torch.nn as nn
@@ -122,10 +122,8 @@ class BlueprintEmbedding(nn.Module):
 
         # Register null index as buffer: moves with module.to(device), no grad, in state_dict
         # This avoids per-forward-call tensor allocation that torch.tensor() would cause
-        self.register_buffer(
-            "_null_idx",
-            torch.tensor(BLUEPRINT_NULL_INDEX, dtype=torch.int64),
-        )
+        self._null_idx = torch.tensor(BLUEPRINT_NULL_INDEX, dtype=torch.int64)
+        self.register_buffer("_null_idx", self._null_idx)
 
     def forward(self, blueprint_indices: torch.Tensor) -> torch.Tensor:
         """Convert blueprint indices to embeddings.
@@ -138,7 +136,7 @@ class BlueprintEmbedding(nn.Module):
         """
         # _null_idx is already on correct device via module.to(device)
         safe_idx = torch.where(blueprint_indices < 0, self._null_idx, blueprint_indices)
-        return self.embedding(safe_idx)
+        return cast(torch.Tensor, self.embedding(safe_idx))
 
 
 class FactoredRecurrentActorCritic(nn.Module):
@@ -383,7 +381,8 @@ class FactoredRecurrentActorCritic(nn.Module):
         """
         op_one_hot = F.one_hot(op, num_classes=NUM_OPS).float()
         value_input = torch.cat([lstm_out, op_one_hot], dim=-1)
-        return self.value_head(value_input).squeeze(-1)
+        value = cast(torch.Tensor, self.value_head(value_input))
+        return value.squeeze(-1)
 
     def forward(
         self,

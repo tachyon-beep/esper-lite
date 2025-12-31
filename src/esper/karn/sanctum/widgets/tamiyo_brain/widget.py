@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any
 
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, VerticalScroll
+from textual.message import Message
 
 from .status_banner import StatusBanner
 from .ppo_losses_panel import PPOLossesPanel
@@ -50,6 +51,13 @@ class TamiyoBrain(Container):
 
     Policy agent diagnostics with composable architecture.
     """
+
+    class DecisionPinToggled(Message):
+        """Posted when a decision card's pin status is toggled."""
+
+        def __init__(self, decision_id: str) -> None:
+            super().__init__()
+            self.decision_id = decision_id
 
     DEFAULT_CSS = """
     TamiyoBrain {

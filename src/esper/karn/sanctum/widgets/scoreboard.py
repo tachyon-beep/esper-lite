@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Iterator
 
 from textual.containers import Vertical
+from textual.message import Message
 from textual.widgets import DataTable, Static
 
 from esper.leyline import STAGE_COLORS
@@ -45,6 +46,20 @@ class Scoreboard(Static):
     1. Best Runs panel: stats header + top 5 runs by peak accuracy
     2. Worst Trajectory panel: bottom 5 runs with most regression
     """
+
+    class BestRunSelected(Message):
+        """Posted when a best run row is selected for detail view."""
+
+        def __init__(self, record: "BestRunRecord") -> None:
+            super().__init__()
+            self.record = record
+
+    class BestRunPinToggled(Message):
+        """Posted when a best run's pin status is toggled."""
+
+        def __init__(self, record_id: str) -> None:
+            super().__init__()
+            self.record_id = record_id
 
     DEFAULT_CSS = """
     Scoreboard {

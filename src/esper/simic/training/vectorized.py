@@ -2940,13 +2940,13 @@ def train_ppo_vectorized(
                     slot_reports_for_decision = all_slot_reports[env_idx]
                     decision_slot_states: dict[str, str] = {}
                     for slot_id in ordered_slots:
-                        report = slot_reports_for_decision.get(slot_id)
-                        if report is None:
+                        if slot_id not in slot_reports_for_decision:
                             decision_slot_states[slot_id] = "Empty"
                             continue
-                        stage_label = report.stage.name.title()
+                        slot_report = slot_reports_for_decision[slot_id]
+                        stage_label = slot_report.stage.name.title()
                         decision_slot_states[slot_id] = (
-                            f"{stage_label} {report.metrics.total_improvement:.0f}%"
+                            f"{stage_label} {slot_report.metrics.total_improvement:.0f}%"
                         )
 
                     # Compute action_confidence, alternatives, and decision_entropy from op_logits
