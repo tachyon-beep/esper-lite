@@ -1,5 +1,7 @@
 # Tamiyo Next: Obs V3 + Policy V2 Implementation Guide
 
+> NOTE: Historical plan. Shipped Obs V3 uses 23 base + 30 per-slot = 113 non-blueprint dims (3 slots) and 4-dim blueprint embeddings (12 total, 125 input). The 133-dim totals in this doc are superseded by `src/esper/tamiyo/policy/features.py`.
+
 **Status:** Ready for Implementation
 **Date:** 2025-12-30
 **Prerequisites:** This document consolidates the approved designs from:

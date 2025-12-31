@@ -6,7 +6,7 @@
 
 ## Overview
 
-The TamiyoBrain widget displays a horizontal stacked bar chart showing the distribution of Tamiyo's lifecycle actions (WAIT, GERMINATE, SET_ALPHA_TARGET, FOSSILIZE, PRUNE). The subpanel visualizes what percentage of time Tamiyo spends on each action type.
+The TamiyoBrain widget displays a horizontal stacked bar chart showing the distribution of Tamiyo's lifecycle actions (WAIT, GERMINATE, SET_ALPHA_TARGET, FOSSILIZE, PRUNE, ADVANCE). The subpanel visualizes what percentage of time Tamiyo spends on each action type.
 
 ## Telemetry Fields
 
@@ -42,6 +42,7 @@ Actions are normalized at aggregation (lines 71-103):
 - `SET_ALPHA_TARGET_*` → `SET_ALPHA_TARGET`
 - `PRUNE_*` → `PRUNE`
 - `WAIT` → `WAIT`
+- `ADVANCE_*` → `ADVANCE`
 
 ## Issues Found
 

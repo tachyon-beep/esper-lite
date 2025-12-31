@@ -19,7 +19,7 @@ compliance_tags:
   - "Non-Fatal"
   - "I/O"
 schema_version: "1.0"
-last_updated: "2025-12-14"
+last_updated: "2026-01-01"
 last_reviewed_commit: "40226ca"
 ---
 
@@ -381,7 +381,7 @@ Training CLI wires Nissa backends into the global hub:
 |-----------|----------|----------------|
 | `tests/nissa/test_output.py` | DirectoryOutput + hub routing | Timestamped dir creation, JSONL write, hub→dir integration |
 | `tests/integration/test_telemetry_event_formatters.py` | Console formatting + hub fanout | New event type formatting, backend routing semantics |
-| `tests/test_nissa_analytics.py` | BlueprintAnalytics correctness | Germinate/fossilize/cull tracking, snapshot serializability |
+| `tests/test_nissa_analytics.py` | BlueprintAnalytics correctness | Germinate/fossilize/prune tracking, snapshot serializability |
 | `tests/integration/test_blueprint_analytics.py` | End-to-end lifecycle integration | Real model lifecycle emits events and updates analytics |
 
 ---

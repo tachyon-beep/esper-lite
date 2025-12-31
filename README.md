@@ -46,7 +46,7 @@ The system is organised into seven decoupled domains:
 | **Nissa** | Sensory Organs | Observability hub — perceives training dynamics and routes telemetry. |
 | **Karn** | Memory | Research telemetry system with analytics, health monitoring, TUI, and web dashboard. |
 
-> **📝 Metaphor Note:** Esper uses *body/organism* terminology for system architecture (domains as organs) and *botanical* terminology for seed lifecycle (germinate, graft, cull). Think of it as: "The organism's stem cells undergo a botanical development process."
+> **📝 Metaphor Note:** Esper uses *body/organism* terminology for system architecture (domains as organs) and *botanical* terminology for seed lifecycle (germinate, graft, prune). Think of it as: "The organism's stem cells undergo a botanical development process."
 
 ---
 

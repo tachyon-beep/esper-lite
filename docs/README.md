@@ -13,6 +13,7 @@ Core sections
 - `docs/decisions/`: ADRs and major decision records.
 - `docs/telemetry/`: telemetry panel and UI docs (start at `00-index.md`).
 - `docs/manuals/`: setup guides and operational how-tos.
+- `docs/optimization/`: performance analyses and optimization plans.
 
 Research and review
 - `docs/research/`: long-form research, with `archive/` for older items.

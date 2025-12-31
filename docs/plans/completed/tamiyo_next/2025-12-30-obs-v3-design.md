@@ -4,6 +4,8 @@
 **Date:** 2025-12-30
 **Authors:** Claude (with DRL Expert, PyTorch Expert, Exploration Agent)
 
+> NOTE: Historical plan. Shipped Obs V3 uses 23 base + 30 per-slot = 113 non-blueprint dims (3 slots) and 4-dim blueprint embeddings (12 total, 125 input). The 121/133 dims in this doc are superseded by `src/esper/tamiyo/policy/features.py`.
+
 > **P1 Update (2025-12-30):** Network dimensions increased from 256 to 512.
 > See `tamiyo_next.md` for rationale. This document focuses on observation space;
 > network architecture details in `2025-12-30-policy-v2-design.md`.

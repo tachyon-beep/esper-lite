@@ -12,7 +12,7 @@
 |--------|-----------------|-------|-------------|--------|
 | [Kasmina](kasmina.md) | Stem Cell | Core Logic | Tier-0 | 📝 Pending |
 | [Leyline](leyline.md) | DNA/Proteins | Infrastructure | Tier-0 | 📝 Pending |
-| [Tamiyo](tamiyo.md) | Gardener | Control | Tier-1 | ✅ Complete |
+| [Tamiyo](tamiyo.md) | Brain/Cortex | Control | Tier-1 | ✅ Complete |
 | [Tolaria](tolaria.md) | Metabolism | Core Logic | Tier-0 | 📝 Pending |
 | [Simic](simic.md) | Evolution | Core Logic | Tier-0 | ✅ Complete |
 | [Nissa](nissa.md) | Sensory Organs | Observation | Tier-2 | 📝 Pending |
@@ -91,11 +91,11 @@ Infrastructure layer providing shared types, enums, tensor schemas, and data con
 ### Tamiyo - The Brain (Nervous System)
 **Location:** `src/esper/tamiyo/`
 
-Strategic decision-making logic. Can be heuristic (rule-based) or neural (learned policy). Decides WHEN to germinate, advance, or cull seeds.
+Strategic decision-making logic. Can be heuristic (rule-based) or neural (learned policy). Decides WHEN to germinate, advance, set alpha targets, fossilize, or prune seeds.
 
-**Key Concepts:** `HeuristicController`, decision thresholds, lifecycle triggers
+**Key Concepts:** `PolicyBundle`, `FactoredAction`, decision thresholds, lifecycle triggers
 
-**Interacts With:** Simic (receives policy), Leyline (uses types), Tolaria (sends decisions)
+**Interacts With:** Simic (policy training + rollout), Leyline (uses types), Tolaria (sends decisions)
 
 ---
 

@@ -2,7 +2,7 @@
 
 **Audit Date:** 2025-12-26
 **Widget:** `src/esper/karn/sanctum/widgets/tamiyo_brain.py`
-**Status:** ✅ 95% Wired (per-head grad norms missing)
+**Status:** ✅ 100% Wired
 
 ## Overview
 
@@ -40,7 +40,7 @@ The TamiyoBrain widget displays PPO training health through multiple metrics:
 | `policy_loss_history` | PPO_UPDATE_COMPLETED | `_handle_ppo_update()` l.631 | ✅ Wired |
 | `value_loss_history` | PPO_UPDATE_COMPLETED | `_handle_ppo_update()` l.635 | ✅ Wired |
 | `grad_norm_history` | PPO_UPDATE_COMPLETED | `_handle_ppo_update()` l.650 | ✅ Wired |
-| `head_*_grad_norm` | PPO_UPDATE_COMPLETED | NOT EXTRACTED | ⚠️ Dead |
+| `head_*_grad_norm` | PPO_UPDATE_COMPLETED | `_handle_ppo_update()` l.742-759 | ✅ Wired |
 
 ## Data Flow
 
@@ -60,14 +60,9 @@ TamiyoBrain render methods
 
 ## Issues Found
 
-### 1. Per-Head Gradient Norms Defined But Not Displayed
-- **Fields:** `head_slot_grad_norm` through `head_op_grad_norm` in schema
-- **Issue:** Emitted in pipeline but aggregator never extracts them
-- **Severity:** Medium - dead code
-- **Recommendation:** Either populate and display, or remove from schema
+None. Per-head gradient norms are extracted and available in TamiyoState.
 
 ## Recommendations
 
-1. Decide on per-head gradient norms: display alongside entropy bars or remove
-2. Add integration test for PPO→Aggregator→Widget pipeline
-3. Document field-to-widget correlation in handler docstring
+1. Add integration test for PPO→Aggregator→Widget pipeline
+2. Document field-to-widget correlation in handler docstring
