@@ -38,6 +38,8 @@ from esper.leyline import (
     DEFAULT_VALUE_CLIP,
     DEFAULT_VALUE_COEF,
     HEAD_NAMES,
+    LifecycleOp,
+    NUM_OPS,
     compute_causal_masks,
 )
 from esper.leyline.slot_config import SlotConfig
@@ -65,6 +67,25 @@ ENTROPY_COEF_PER_HEAD: dict[str, float] = {
     "alpha_curve": 1.2,  # SET_ALPHA_TARGET + PRUNE (~19%)
 }
 # Note: Start conservative (1.2-1.3x), tune empirically if heads collapse
+
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
+def _init_q_metrics_nan() -> dict[str, list[float]]:
+    """Initialize Q-value metrics with NaN when no valid states available."""
+    nan = float("nan")
+    return {
+        "q_germinate": [nan],
+        "q_advance": [nan],
+        "q_fossilize": [nan],
+        "q_prune": [nan],
+        "q_wait": [nan],
+        "q_set_alpha": [nan],
+        "q_variance": [nan],
+        "q_spread": [nan],
+    }
 
 
 # =============================================================================
@@ -487,47 +508,34 @@ class PPOAgent:
                     lstm_out = forward_result["lstm_out"]  # [1, 1, hidden_dim]
 
                 # Compute Q(s, op) for each op
-                from esper.leyline import NUM_OPS
-                q_values = []
+                # Build mapping from LifecycleOp to Q-values
+                q_value_map: dict[LifecycleOp, float] = {}
                 for op_idx in range(NUM_OPS):
                     op_tensor = torch.tensor([[op_idx]], dtype=torch.long, device=self.device)
                     q_val = self.policy.network._compute_value(lstm_out, op_tensor)
-                    q_values.append(q_val.item())
+                    q_value_map[LifecycleOp(op_idx)] = q_val.item()
 
-                # Unpack to named ops (order matches LifecycleOp enum)
-                # LifecycleOp: GERMINATE=0, ADVANCE=1, FOSSILIZE=2, PRUNE=3, WAIT=4, SET_ALPHA_TARGET=5
-                metrics["q_germinate"] = [q_values[0]]
-                metrics["q_advance"] = [q_values[1]]
-                metrics["q_fossilize"] = [q_values[2]]
-                metrics["q_prune"] = [q_values[3]]
-                metrics["q_wait"] = [q_values[4]]
-                metrics["q_set_alpha"] = [q_values[5]]
+                # Assign to metrics with correct names using actual LifecycleOp enum
+                # LifecycleOp: WAIT=0, GERMINATE=1, SET_ALPHA_TARGET=2, PRUNE=3, FOSSILIZE=4, ADVANCE=5
+                metrics["q_germinate"] = [q_value_map[LifecycleOp.GERMINATE]]
+                metrics["q_advance"] = [q_value_map[LifecycleOp.ADVANCE]]
+                metrics["q_fossilize"] = [q_value_map[LifecycleOp.FOSSILIZE]]
+                metrics["q_prune"] = [q_value_map[LifecycleOp.PRUNE]]
+                metrics["q_wait"] = [q_value_map[LifecycleOp.WAIT]]
+                metrics["q_set_alpha"] = [q_value_map[LifecycleOp.SET_ALPHA_TARGET]]
 
                 # Compute Q-variance and Q-spread
+                q_values = list(q_value_map.values())
                 q_variance = float(torch.tensor(q_values).var().item())
                 q_spread = max(q_values) - min(q_values)
                 metrics["q_variance"] = [q_variance]
                 metrics["q_spread"] = [q_spread]
             else:
                 # No valid states - use NaN
-                metrics["q_germinate"] = [float("nan")]
-                metrics["q_advance"] = [float("nan")]
-                metrics["q_fossilize"] = [float("nan")]
-                metrics["q_prune"] = [float("nan")]
-                metrics["q_wait"] = [float("nan")]
-                metrics["q_set_alpha"] = [float("nan")]
-                metrics["q_variance"] = [float("nan")]
-                metrics["q_spread"] = [float("nan")]
+                metrics.update(_init_q_metrics_nan())
         else:
             # No valid data - use NaN
-            metrics["q_germinate"] = [float("nan")]
-            metrics["q_advance"] = [float("nan")]
-            metrics["q_fossilize"] = [float("nan")]
-            metrics["q_prune"] = [float("nan")]
-            metrics["q_wait"] = [float("nan")]
-            metrics["q_set_alpha"] = [float("nan")]
-            metrics["q_variance"] = [float("nan")]
-            metrics["q_spread"] = [float("nan")]
+            metrics.update(_init_q_metrics_nan())
 
         # Initialize per-head entropy tracking (P3-1)
         head_entropy_history: dict[str, list[float]] = {head: [] for head in HEAD_NAMES}
