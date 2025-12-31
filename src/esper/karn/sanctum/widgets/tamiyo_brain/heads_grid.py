@@ -33,11 +33,11 @@ HEAD_CONFIG: list[tuple[str, str, str, int, float]] = [
     ("Op", "head_op_entropy", "head_op_grad_norm", 7, 1.0),
     ("Slot", "head_slot_entropy", "head_slot_grad_norm", 7, 1.0),
     ("Blueprint", "head_blueprint_entropy", "head_blueprint_grad_norm", 10, 1.3),
-    ("Style", "head_style_entropy", "head_style_grad_norm", 7, 1.2),
-    ("Tempo", "head_tempo_entropy", "head_tempo_grad_norm", 7, 1.3),
-    ("αTarget", "head_alpha_target_entropy", "head_alpha_target_grad_norm", 8, 1.2),
-    ("αSpeed", "head_alpha_speed_entropy", "head_alpha_speed_grad_norm", 7, 1.2),
-    ("Curve", "head_alpha_curve_entropy", "head_alpha_curve_grad_norm", 7, 1.2),
+    ("Style", "head_style_entropy", "head_style_grad_norm", 9, 1.2),
+    ("Tempo", "head_tempo_entropy", "head_tempo_grad_norm", 9, 1.3),
+    ("αTarget", "head_alpha_target_entropy", "head_alpha_target_grad_norm", 9, 1.2),
+    ("αSpeed", "head_alpha_speed_entropy", "head_alpha_speed_grad_norm", 9, 1.2),
+    ("Curve", "head_alpha_curve_entropy", "head_alpha_curve_grad_norm", 9, 1.2),
 ]
 
 # Heads that are conditional (only relevant for certain ops) - indexed by label
@@ -103,12 +103,16 @@ class HeadsPanel(Static):
             color = self._entropy_color(label, entropy)
 
             # Show coefficient for sparse heads (>1.0)
+            # Each column is exactly `width` chars, with 2-space gutter between columns
             if coef > 1.0:
-                # Add coefficient marker (e.g., "0.89×1.3")
-                # Reduce value width to fit coefficient
-                val_width = width - 4  # Leave space for "×1.X"
-                result.append(f"{entropy:>{val_width}.2f}", style=color)
-                result.append(f"×{coef:.1f}", style="cyan dim")
+                # Format: "1.3×0.22" (coefficient first, then value)
+                coef_prefix = f"{coef:.1f}×"  # "1.3×" (4 chars)
+                value = f"{entropy:.2f}"  # "0.22" (4 chars)
+                combined = coef_prefix + value  # e.g., "1.3×0.22" (8 chars)
+                padding = width - len(combined)
+                result.append(" " * padding, style="dim")
+                result.append(coef_prefix, style="cyan dim")
+                result.append(value, style=color)
             else:
                 result.append(f"{entropy:>{width}.2f}", style=color)
             result.append("  ")  # 2-space padding between columns
@@ -134,9 +138,13 @@ class HeadsPanel(Static):
             trend = self._gradient_trend(grad, grad_prev)
             color = self._gradient_color(grad)
 
-            # Value + trend arrow (1 char)
-            val_width = width - 1
-            result.append(f"{grad:>{val_width}.2f}", style=color)
+            # Value + trend arrow (1 char) = exactly `width` chars total
+            # e.g., " 0.35↗" (6 chars for width=7: 5 for value + 1 for arrow)
+            value = f"{grad:.2f}"  # "0.35" (4 chars)
+            combined = value + trend  # e.g., "0.35↗" (5 chars)
+            padding = width - len(combined)
+            result.append(" " * padding, style="dim")
+            result.append(value, style=color)
             result.append(trend, style=self._gradient_trend_style(grad, grad_prev))
             result.append("  ")  # 2-space padding between columns
         result.append("\n")
@@ -159,9 +167,16 @@ class HeadsPanel(Static):
             entropy = getattr(tamiyo, ent_field)
             grad = getattr(tamiyo, grad_field)
             state, style_str = self._head_state(label, entropy, grad)
-            # Center state indicator within the cell
-            state_cell = " " * (width - 1) + state
-            result.append(state_cell, style=style_str)
+            # Center state indicator under the 5-char bar (bars are right-aligned)
+            # Bar center is at width - 3, so state should be at that position
+            # For width=7: 4 spaces + indicator + 2 spaces = 7 chars total
+            # For width=9: 6 spaces + indicator + 2 spaces = 9 chars total
+            # For width=10: 7 spaces + indicator + 2 spaces = 10 chars total
+            left_pad = width - 3
+            right_pad = 2
+            result.append(" " * left_pad, style="dim")
+            result.append(state, style=style_str)
+            result.append(" " * right_pad, style="dim")
             result.append("  ")  # 2-space padding between columns
         result.append("\n")
 
