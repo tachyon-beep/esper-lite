@@ -8,12 +8,13 @@ Esper is a framework for **Morphogenetic AI**—neural networks that dynamically
 
 As of **Tamiyo Next**, the RL-controlled policy stack has been upgraded to support long-horizon, multi-seed scaffolding:
 
-- **Obs V3:** reduced observation redundancy and moved blueprint identity to **learned embeddings**  
-  - Non-blueprint obs: **121 dims**
+- **Obs V3:** reduced observation redundancy and moved blueprint identity to **learned embeddings**
+  - Non-blueprint obs: **113 dims** (23 base + 30 per-slot × 3 slots)
   - Blueprint embedding: **4 × slots** (e.g., 12 dims for 3 slots)
-  - Total policy input: **133 dims**
+  - Total policy input: **125 dims**
 - **Policy V2:** **512-dim feature net + 512 hidden LSTM**, designed for ~150-epoch decision horizons
 - **Critic:** action-conditioned **Q(s, op)** baseline (removes value aliasing)
+- **Q-values telemetry:** Op-conditioned Q(s,op) values now visible in Sanctum UI with variance diagnostic
 - **Episode length:** default **150** epochs/steps per rollout horizon
 
 ---
@@ -25,7 +26,7 @@ As of **Tamiyo Next**, the RL-controlled policy stack has been upgraded to suppo
   - **Tamiyo (Heuristic):** A rule-based baseline controller for stable, predictable growth.
   - **Simic (RL):** A PPO reinforcement learning agent that learns optimal growth strategies by observing training dynamics.
 - **⚡ Vectorised Training:** High-performance, multi-GPU RL environment using CUDA streams and inverted control flow for massive parallel throughput.
-- **🔍 Rich Telemetry:** The **Nissa** subsystem provides profile-based diagnostics (gradient health, loss landscape sharpness) for deep debugging.
+- **🔍 Rich Telemetry:** The **Nissa** subsystem provides profile-based diagnostics (gradient health, loss landscape sharpness) for deep debugging. **Karn** telemetry now includes op-conditioned Q-values visible in Sanctum UI.
 - **🧬 Obs V3 + Blueprint Embeddings:** Compact observation space with learned blueprint embeddings (no one-hot blueprint explosion).
 - **🎯 Q(s,op) Critic:** Op-conditioned value head aligns rollout values, bootstrap values, and PPO update values.
 

@@ -263,12 +263,17 @@ python -m esper.scripts.train ppo --reward-mode minimal
 
 **Delivered Capabilities:**
 
-* Obs V3: compact obs + blueprint embeddings
+* Obs V3: compact obs + blueprint embeddings (113 dims + 12 blueprint embed = 125 total network input)
 * Policy V2: 512/512 feature+LSTM, 150-step horizon
 * Q(s,op) critic: action-conditioned value baseline
 * Differential entropy coefficients by head (protect sparse heads from collapse)
 
-**Status:** IMPLEMENTED
+**Q-values telemetry (2025-12-31):** ✅ COMPLETE
+- Op-conditioned Q(s,op) values wired end-to-end from PPO → telemetry → UI
+- Sanctum HealthStatusPanel displays Q-values with variance diagnostic
+- Detects if critic ignores op conditioning (Q-variance < 0.01 = critical)
+
+**Status:** IMPLEMENTED (Q-values telemetry ✅ 2025-12-31)
 **Operational status:** Waiting on Phase 2.5 gates below before proceeding to Phase 3.
 
 ---
