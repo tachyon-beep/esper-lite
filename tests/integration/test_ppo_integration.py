@@ -7,9 +7,9 @@ Tests that PPO components work together correctly:
 """
 
 import torch
-from conftest import create_all_valid_masks
 
 from esper.simic.agent import PPOAgent
+from .conftest import create_all_valid_masks
 from esper.tamiyo.policy.features import batch_obs_to_features
 from esper.tamiyo.policy.factory import create_policy
 from esper.leyline import (

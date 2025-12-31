@@ -740,22 +740,30 @@ class SanctumAggregator:
         if payload.head_slot_entropy is not None:
             self._tamiyo.head_slot_entropy = payload.head_slot_entropy
         if payload.head_slot_grad_norm is not None:
+            self._tamiyo.head_slot_grad_norm_prev = self._tamiyo.head_slot_grad_norm
             self._tamiyo.head_slot_grad_norm = payload.head_slot_grad_norm
         if payload.head_blueprint_entropy is not None:
             self._tamiyo.head_blueprint_entropy = payload.head_blueprint_entropy
         if payload.head_blueprint_grad_norm is not None:
+            self._tamiyo.head_blueprint_grad_norm_prev = self._tamiyo.head_blueprint_grad_norm
             self._tamiyo.head_blueprint_grad_norm = payload.head_blueprint_grad_norm
         if payload.head_style_grad_norm is not None:
+            self._tamiyo.head_style_grad_norm_prev = self._tamiyo.head_style_grad_norm
             self._tamiyo.head_style_grad_norm = payload.head_style_grad_norm
         if payload.head_tempo_grad_norm is not None:
+            self._tamiyo.head_tempo_grad_norm_prev = self._tamiyo.head_tempo_grad_norm
             self._tamiyo.head_tempo_grad_norm = payload.head_tempo_grad_norm
         if payload.head_alpha_target_grad_norm is not None:
+            self._tamiyo.head_alpha_target_grad_norm_prev = self._tamiyo.head_alpha_target_grad_norm
             self._tamiyo.head_alpha_target_grad_norm = payload.head_alpha_target_grad_norm
         if payload.head_alpha_speed_grad_norm is not None:
+            self._tamiyo.head_alpha_speed_grad_norm_prev = self._tamiyo.head_alpha_speed_grad_norm
             self._tamiyo.head_alpha_speed_grad_norm = payload.head_alpha_speed_grad_norm
         if payload.head_alpha_curve_grad_norm is not None:
+            self._tamiyo.head_alpha_curve_grad_norm_prev = self._tamiyo.head_alpha_curve_grad_norm
             self._tamiyo.head_alpha_curve_grad_norm = payload.head_alpha_curve_grad_norm
         if payload.head_op_grad_norm is not None:
+            self._tamiyo.head_op_grad_norm_prev = self._tamiyo.head_op_grad_norm
             self._tamiyo.head_op_grad_norm = payload.head_op_grad_norm
 
         # Per-head entropies (for heatmap visualization) - optional with None

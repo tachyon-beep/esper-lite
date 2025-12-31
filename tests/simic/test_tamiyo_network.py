@@ -13,6 +13,7 @@ from esper.leyline import (
     NUM_OPS,
     NUM_STYLES,
     NUM_TEMPO,
+    OBS_V3_NON_BLUEPRINT_DIM,
 )
 from esper.tamiyo.policy.action_masks import InvalidStateMachineError
 from esper.tamiyo.networks import FactoredRecurrentActorCritic
@@ -448,7 +449,7 @@ def test_device_migration_complete():
     """
     from esper.tamiyo.networks.factored_lstm import FactoredRecurrentActorCritic
 
-    model = FactoredRecurrentActorCritic(state_dim=114, num_slots=3)
+    model = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM, num_slots=3)
     target_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(target_device)
 
@@ -485,7 +486,7 @@ def test_no_gradient_memory_leak_over_episodes():
     """
     from esper.tamiyo.networks.factored_lstm import FactoredRecurrentActorCritic
 
-    model = FactoredRecurrentActorCritic(state_dim=114, num_slots=3).cuda()
+    model = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM, num_slots=3).cuda()
     model.train()
 
     torch.cuda.empty_cache()
@@ -496,7 +497,7 @@ def test_no_gradient_memory_leak_over_episodes():
         hidden = model.get_initial_hidden(batch_size=4, device="cuda")
 
         # Simulate 10-step episode
-        state = torch.randn(4, 10, 114, device="cuda")
+        state = torch.randn(4, 10, OBS_V3_NON_BLUEPRINT_DIM, device="cuda")
         bp_idx = torch.randint(0, 13, (4, 10, 3), device="cuda")
 
         output = model.forward(state, bp_idx, hidden)
@@ -552,8 +553,8 @@ def test_op_conditioned_value_forward():
     2. Value is conditioned on that sampled op
     3. Output contains the sampled_op for storage in rollout buffer
     """
-    net = FactoredRecurrentActorCritic(state_dim=114, num_slots=3)
-    state = torch.randn(2, 5, 114)  # [batch, seq, state_dim]
+    net = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM, num_slots=3)
+    state = torch.randn(2, 5, OBS_V3_NON_BLUEPRINT_DIM)  # [batch, seq, state_dim]
     bp_idx = torch.randint(0, NUM_BLUEPRINTS, (2, 5, 3))
 
     out = net(state, bp_idx)
@@ -581,8 +582,8 @@ def test_stored_op_value_consistency():
     If evaluate_actions resampled the op, values would differ and gradients
     would be biased.
     """
-    net = FactoredRecurrentActorCritic(state_dim=114, num_slots=3)
-    state = torch.randn(2, 5, 114)
+    net = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM, num_slots=3)
+    state = torch.randn(2, 5, OBS_V3_NON_BLUEPRINT_DIM)
     bp_idx = torch.randint(0, NUM_BLUEPRINTS, (2, 5, 3))
 
     # Get actions from forward (simulates rollout collection)
@@ -624,14 +625,14 @@ def test_blueprint_embedding_shapes():
     2. Inactive slots (index -1) map to learned null embedding
     3. Different blueprint patterns produce different network outputs
     """
-    net = FactoredRecurrentActorCritic(state_dim=114, num_slots=3)
+    net = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM, num_slots=3)
 
     # Test with various blueprint index patterns
     # Shape must be [batch, seq, num_slots]
     bp_idx_active = torch.tensor([[[0, 2, 5]], [[1, 3, 7]]])  # All active
     bp_idx_inactive = torch.tensor([[[-1, -1, -1]], [[0, -1, 2]]])  # Some inactive
 
-    state = torch.randn(2, 1, 114)
+    state = torch.randn(2, 1, OBS_V3_NON_BLUEPRINT_DIM)
 
     out1 = net(state, bp_idx_active)
     out2 = net(state, bp_idx_inactive)

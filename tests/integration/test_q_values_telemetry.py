@@ -2,7 +2,8 @@
 
 import math
 import torch
-from conftest import create_all_valid_masks
+
+from .conftest import create_all_valid_masks
 from esper.karn.sanctum.aggregator import SanctumAggregator
 from esper.leyline.slot_config import SlotConfig
 from esper.leyline.telemetry import TelemetryEvent, TelemetryEventType, PPOUpdatePayload

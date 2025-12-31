@@ -26,7 +26,14 @@ import torch.nn.functional as F
 from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
 from esper.leyline.slot_config import SlotConfig
 # Phase 2 imports: Constants needed for Obs V3 feature extraction
-from esper.leyline import NUM_OPS, NUM_STAGES, DEFAULT_GAMMA
+from esper.leyline import (
+    DEFAULT_GAMMA,
+    NUM_OPS,
+    NUM_STAGES,
+    OBS_V3_BASE_FEATURE_SIZE,
+    OBS_V3_NON_BLUEPRINT_DIM,
+    OBS_V3_SLOT_FEATURE_SIZE,
+)
 # Stage schema for validation and one-hot encoding
 # NOTE: Imported at module level since these are fast O(1) lookups used in hot path
 from esper.leyline.stage_schema import (
@@ -410,7 +417,7 @@ def _vectorized_one_hot(indices: torch.Tensor, device: torch.device) -> torch.Te
 #                         action feedback: last_action_success + last_action_op one-hot)
 # NOTE: Includes 7 action feedback dims (last_action_success + 6-dim one-hot for last_action_op)
 # NOTE: Removed host_stabilized - Tamiyo learns stability from raw telemetry
-BASE_FEATURE_SIZE = 23
+BASE_FEATURE_SIZE = OBS_V3_BASE_FEATURE_SIZE
 
 # Per-slot features (Obs V3 - NO blueprint one-hot, moved to embedding):
 # 1 is_active
@@ -425,12 +432,12 @@ BASE_FEATURE_SIZE = 23
 # + 1 epochs_in_stage_norm
 # + 1 counterfactual_fresh
 # Total: 1 + 10 + 1 + 1 + 1 + 1 + 8 + 4 + 1 + 1 + 1 = 30 dims per slot (blueprint moved to embedding)
-SLOT_FEATURE_SIZE = 30
+SLOT_FEATURE_SIZE = OBS_V3_SLOT_FEATURE_SIZE
 
 # Obs V3 total for 3 slots: 23 base + 3 slots × 30 features = 113 dims (excludes blueprint embeddings)
 # Blueprint embeddings (4 dims × 3 slots = 12) are added inside the network, making total network input 125
 # NOTE: Default for 3-slot configuration. Use get_feature_size(slot_config) for dynamic slot counts.
-MULTISLOT_FEATURE_SIZE = 113  # Obs V3: 23 + (30 × 3)
+MULTISLOT_FEATURE_SIZE = OBS_V3_NON_BLUEPRINT_DIM
 
 # Observation normalization bounds (kept local to avoid heavier imports on the HOT PATH)
 _IMPROVEMENT_CLAMP_PCT_PTS: float = 10.0  # Clamp improvement to ±10 percentage points → [-1, 1]
@@ -462,9 +469,7 @@ def get_feature_size(slot_config: SlotConfig) -> int:
     Returns:
         Total observation feature size (excluding blueprint embeddings)
     """
-    BASE_FEATURES = 23  # Includes 7 action feedback dims
-    SLOT_FEATURES = 30  # Per-slot, excluding blueprint (moved to embedding)
-    return BASE_FEATURES + (SLOT_FEATURES * slot_config.num_slots)
+    return OBS_V3_BASE_FEATURE_SIZE + (OBS_V3_SLOT_FEATURE_SIZE * slot_config.num_slots)
 
 
 def batch_obs_to_features(

@@ -682,3 +682,79 @@ def test_aggregator_wires_q_values():
     assert snapshot.tamiyo.q_set_alpha == 4.0
     assert snapshot.tamiyo.q_variance == 2.3
     assert snapshot.tamiyo.q_spread == 6.7
+
+def test_aggregator_tracks_previous_gradient_norms():
+    """Aggregator should track previous gradient norms for trend detection."""
+    agg = SanctumAggregator(num_envs=4)
+
+    # First PPO update - establish baseline
+    event1 = TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        data=PPOUpdatePayload(
+            policy_loss=0.1,
+            value_loss=0.2,
+            entropy=1.0,
+            grad_norm=0.5,
+            kl_divergence=0.01,
+            clip_fraction=0.15,
+            nan_grad_count=0,
+            head_op_grad_norm=0.12,
+            head_slot_grad_norm=0.15,
+            head_blueprint_grad_norm=0.20,
+            head_style_grad_norm=0.18,
+            head_tempo_grad_norm=0.14,
+            head_alpha_target_grad_norm=0.16,
+            head_alpha_speed_grad_norm=0.13,
+            head_alpha_curve_grad_norm=0.11,
+        ),
+    )
+    agg.process_event(event1)
+
+    snapshot1 = agg.get_snapshot()
+    # First update: current values set, prev values still at default (0.0)
+    assert snapshot1.tamiyo.head_op_grad_norm == 0.12
+    assert snapshot1.tamiyo.head_op_grad_norm_prev == 0.0
+    assert snapshot1.tamiyo.head_slot_grad_norm == 0.15
+    assert snapshot1.tamiyo.head_slot_grad_norm_prev == 0.0
+
+    # Second PPO update - should move current to prev
+    event2 = TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        data=PPOUpdatePayload(
+            policy_loss=0.1,
+            value_loss=0.2,
+            entropy=1.0,
+            grad_norm=0.5,
+            kl_divergence=0.01,
+            clip_fraction=0.15,
+            nan_grad_count=0,
+            head_op_grad_norm=0.25,
+            head_slot_grad_norm=0.30,
+            head_blueprint_grad_norm=0.35,
+            head_style_grad_norm=0.28,
+            head_tempo_grad_norm=0.22,
+            head_alpha_target_grad_norm=0.26,
+            head_alpha_speed_grad_norm=0.24,
+            head_alpha_curve_grad_norm=0.21,
+        ),
+    )
+    agg.process_event(event2)
+
+    snapshot2 = agg.get_snapshot()
+    # Second update: prev should have first update's values
+    assert snapshot2.tamiyo.head_op_grad_norm == 0.25
+    assert snapshot2.tamiyo.head_op_grad_norm_prev == 0.12  # Previous value saved
+    assert snapshot2.tamiyo.head_slot_grad_norm == 0.30
+    assert snapshot2.tamiyo.head_slot_grad_norm_prev == 0.15
+    assert snapshot2.tamiyo.head_blueprint_grad_norm == 0.35
+    assert snapshot2.tamiyo.head_blueprint_grad_norm_prev == 0.20
+    assert snapshot2.tamiyo.head_style_grad_norm == 0.28
+    assert snapshot2.tamiyo.head_style_grad_norm_prev == 0.18
+    assert snapshot2.tamiyo.head_tempo_grad_norm == 0.22
+    assert snapshot2.tamiyo.head_tempo_grad_norm_prev == 0.14
+    assert snapshot2.tamiyo.head_alpha_target_grad_norm == 0.26
+    assert snapshot2.tamiyo.head_alpha_target_grad_norm_prev == 0.16
+    assert snapshot2.tamiyo.head_alpha_speed_grad_norm == 0.24
+    assert snapshot2.tamiyo.head_alpha_speed_grad_norm_prev == 0.13
+    assert snapshot2.tamiyo.head_alpha_curve_grad_norm == 0.21
+    assert snapshot2.tamiyo.head_alpha_curve_grad_norm_prev == 0.11

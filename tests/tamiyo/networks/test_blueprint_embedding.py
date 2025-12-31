@@ -9,7 +9,7 @@ Critical validation tests identified by PyTorch specialist review:
 import pytest
 import torch
 
-from esper.leyline import NUM_BLUEPRINTS
+from esper.leyline import NUM_BLUEPRINTS, OBS_V3_NON_BLUEPRINT_DIM
 from esper.tamiyo.networks.factored_lstm import BlueprintEmbedding
 
 
@@ -147,10 +147,10 @@ def test_blueprint_embedding_in_model_context():
     """Verify BlueprintEmbedding works correctly within full model."""
     from esper.tamiyo.networks.factored_lstm import FactoredRecurrentActorCritic
 
-    model = FactoredRecurrentActorCritic(state_dim=114, num_slots=3)
+    model = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM, num_slots=3)
 
     # Test with valid indices including inactive slots
-    state = torch.randn(2, 1, 114)
+    state = torch.randn(2, 1, OBS_V3_NON_BLUEPRINT_DIM)
     bp_idx = torch.tensor([[[0, 5, -1]], [[NUM_BLUEPRINTS - 1, -1, -1]]])
 
     output = model(state, bp_idx)

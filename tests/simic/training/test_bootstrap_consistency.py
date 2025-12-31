@@ -9,7 +9,7 @@ Related bug report: docs/bugs/CRITICAL-op-value-mismatch.md
 
 import torch
 from esper.tamiyo.policy import create_policy
-from esper.leyline import HEAD_NAMES
+from esper.leyline import HEAD_NAMES, OBS_V3_NON_BLUEPRINT_DIM
 
 
 class TestBootstrapConsistency:
@@ -19,13 +19,13 @@ class TestBootstrapConsistency:
         """Bootstrap (deterministic=True) should use argmax op for value."""
         policy = create_policy(
             policy_type="lstm",
-            state_dim=114,  # Obs V3 dimension (before blueprint embeddings)
-            num_slots=3,  # 114 dims = 24 base + 30×3 slots
+            state_dim=OBS_V3_NON_BLUEPRINT_DIM,
+            num_slots=3,
             device="cpu",
             compile_mode="off",
         )
 
-        state = torch.randn(2, 114)  # 114-dim observation
+        state = torch.randn(2, OBS_V3_NON_BLUEPRINT_DIM)
         bp_idx = torch.randint(0, 13, (2, 3))
 
         # Bootstrap call (as done in vectorized.py line 3236)
@@ -59,13 +59,13 @@ class TestBootstrapConsistency:
         """Verify bootstrap doesn't reuse value from forward()'s random sample."""
         policy = create_policy(
             policy_type="lstm",
-            state_dim=114,  # Obs V3 dimension (before blueprint embeddings)
-            num_slots=3,  # 114 dims = 24 base + 30×3 slots
+            state_dim=OBS_V3_NON_BLUEPRINT_DIM,
+            num_slots=3,
             device="cpu",
             compile_mode="off",
         )
 
-        state = torch.randn(4, 114)
+        state = torch.randn(4, OBS_V3_NON_BLUEPRINT_DIM)
         bp_idx = torch.randint(0, 13, (4, 3))
 
         # Get forward() output (uses sample)
@@ -98,13 +98,13 @@ class TestBootstrapConsistency:
         """Verify bootstrap is deterministic across multiple calls."""
         policy = create_policy(
             policy_type="lstm",
-            state_dim=114,  # Obs V3 dimension (before blueprint embeddings)
-            num_slots=3,  # 114 dims = 24 base + 30×3 slots
+            state_dim=OBS_V3_NON_BLUEPRINT_DIM,
+            num_slots=3,
             device="cpu",
             compile_mode="off",
         )
 
-        state = torch.randn(3, 114)  # 114-dim observation
+        state = torch.randn(3, OBS_V3_NON_BLUEPRINT_DIM)
         bp_idx = torch.randint(0, 13, (3, 3))
         masks = {k: None for k in HEAD_NAMES}
 

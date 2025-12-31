@@ -770,7 +770,7 @@ def train_ppo_vectorized(
     effective_workers = num_workers if num_workers is not None else 4
 
     # State dimension: Obs V3 features from batch_obs_to_features().
-    # For 3 slots: 24 base + 3*30 slot features = 114 dims.
+    # For 3 slots: 23 base + 3*30 slot features = 113 dims.
     # NOTE: Telemetry features are now MERGED into slot features (30 per slot),
     # so we no longer add separate SeedTelemetry.feature_dim() per slot.
     # Blueprint embeddings (4 × num_slots) are added inside the network.
@@ -1690,7 +1690,7 @@ def train_ppo_vectorized(
         """Consolidated signals-to-features conversion for all environments.
 
         Returns:
-            obs: [batch, obs_dim] - observation features (Obs V3: 114 dims for 3 slots)
+            obs: [batch, obs_dim] - observation features (Obs V3: 113 dims for 3 slots)
             blueprint_indices: [batch, num_slots] - blueprint indices for embedding lookup (int64)
         """
         return batch_obs_to_features(
