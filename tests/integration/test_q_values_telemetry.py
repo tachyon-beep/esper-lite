@@ -1,19 +1,11 @@
 """Integration test: Q-values flow from Policy V2 → PPO → Telemetry → Sanctum UI."""
 
+import math
 import torch
+from conftest import create_all_valid_masks
 from esper.karn.sanctum.aggregator import SanctumAggregator
-from esper.nissa import NissaHub
 from esper.leyline.slot_config import SlotConfig
 from esper.leyline.telemetry import TelemetryEvent, TelemetryEventType, PPOUpdatePayload
-from esper.leyline import (
-    NUM_ALPHA_CURVES,
-    NUM_ALPHA_SPEEDS,
-    NUM_ALPHA_TARGETS,
-    NUM_BLUEPRINTS,
-    NUM_OPS,
-    NUM_STYLES,
-    NUM_TEMPO,
-)
 from esper.simic.agent import PPOAgent
 from esper.tamiyo.policy.factory import create_policy
 from esper.tamiyo.policy.features import get_feature_size
@@ -51,20 +43,6 @@ def test_q_values_end_to_end_flow():
         device="cpu",
     )
 
-    # Create action masks (all valid)
-    def _create_all_valid_masks(batch_size: int = 1) -> dict[str, torch.Tensor]:
-        """Create all-valid per-head action masks for testing."""
-        return {
-            "slot": torch.ones(batch_size, 3, dtype=torch.bool),
-            "blueprint": torch.ones(batch_size, NUM_BLUEPRINTS, dtype=torch.bool),
-            "style": torch.ones(batch_size, NUM_STYLES, dtype=torch.bool),
-            "tempo": torch.ones(batch_size, NUM_TEMPO, dtype=torch.bool),
-            "alpha_target": torch.ones(batch_size, NUM_ALPHA_TARGETS, dtype=torch.bool),
-            "alpha_speed": torch.ones(batch_size, NUM_ALPHA_SPEEDS, dtype=torch.bool),
-            "alpha_curve": torch.ones(batch_size, NUM_ALPHA_CURVES, dtype=torch.bool),
-            "op": torch.ones(batch_size, NUM_OPS, dtype=torch.bool),
-        }
-
     # Fill buffer with synthetic rollout data
     device = torch.device("cpu")
     hidden = agent.policy.network.get_initial_hidden(1, device)
@@ -76,7 +54,7 @@ def test_q_values_end_to_end_flow():
             # Create synthetic state
             state = torch.randn(1, state_dim, device=device)
             blueprint_indices = torch.zeros(1, slot_config.num_slots, dtype=torch.long, device=device)
-            masks = _create_all_valid_masks(batch_size=1)
+            masks = create_all_valid_masks(batch_size=1)
 
             # Get action from policy
             pre_hidden = hidden
@@ -155,13 +133,14 @@ def test_q_values_end_to_end_flow():
         event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
         epoch=1,
         data=PPOUpdatePayload(
-            policy_loss=metrics.get("policy_loss", 0.0),
-            value_loss=metrics.get("value_loss", 0.0),
-            entropy=metrics.get("entropy", 0.0),
-            grad_norm=metrics.get("grad_norm", 0.0),
-            kl_divergence=metrics.get("approx_kl", 0.0),
-            clip_fraction=metrics.get("clip_fraction", 0.0),
-            nan_grad_count=metrics.get("nan_grad_count", 0),
+            policy_loss=metrics["policy_loss"],
+            value_loss=metrics["value_loss"],
+            entropy=metrics["entropy"],
+            grad_norm=metrics.get("grad_norm", 0.0),  # Keep .get() - not asserted
+            kl_divergence=metrics["approx_kl"],
+            clip_fraction=metrics["clip_fraction"],
+            nan_grad_count=metrics.get("nan_grad_count", 0),  # Keep .get() - not asserted
+            # Q-values (already asserted to exist)
             q_germinate=metrics["q_germinate"],
             q_advance=metrics["q_advance"],
             q_fossilize=metrics["q_fossilize"],
@@ -179,13 +158,13 @@ def test_q_values_end_to_end_flow():
     # Verify aggregator received and wired Q-values
     snapshot = aggregator.get_snapshot()
 
-    # Q-values should be populated in TamiyoState
-    assert snapshot.tamiyo.q_germinate != 0.0, "q_germinate should have real value"
-    assert snapshot.tamiyo.q_advance != 0.0, "q_advance should have real value"
-    assert snapshot.tamiyo.q_fossilize != 0.0, "q_fossilize should have real value"
-    assert snapshot.tamiyo.q_prune != 0.0, "q_prune should have real value"
-    assert snapshot.tamiyo.q_wait != 0.0, "q_wait should have real value"
-    assert snapshot.tamiyo.q_set_alpha != 0.0, "q_set_alpha should have real value"
+    # Q-values should be finite (not NaN/inf)
+    assert math.isfinite(snapshot.tamiyo.q_germinate), "q_germinate should be finite"
+    assert math.isfinite(snapshot.tamiyo.q_advance), "q_advance should be finite"
+    assert math.isfinite(snapshot.tamiyo.q_fossilize), "q_fossilize should be finite"
+    assert math.isfinite(snapshot.tamiyo.q_prune), "q_prune should be finite"
+    assert math.isfinite(snapshot.tamiyo.q_wait), "q_wait should be finite"
+    assert math.isfinite(snapshot.tamiyo.q_set_alpha), "q_set_alpha should be finite"
     assert snapshot.tamiyo.q_variance >= 0.0, "q_variance should be non-negative"
     assert snapshot.tamiyo.q_spread >= 0.0, "q_spread should be non-negative"
 

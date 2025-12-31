@@ -68,6 +68,15 @@ class PPOUpdateMetrics(TypedDict, total=False):
     head_entropies: dict[str, list[float]]  # Per-head, per-epoch
     head_grad_norms: dict[str, list[float]]  # Per-head, per-epoch
     ratio_diagnostic: dict[str, Any]
+    # Q-values (Policy V2 op-conditioned critic)
+    q_germinate: float
+    q_advance: float
+    q_fossilize: float
+    q_prune: float
+    q_wait: float
+    q_set_alpha: float
+    q_variance: float
+    q_spread: float
 
 
 class HeadLogProbs(TypedDict):

@@ -7,36 +7,18 @@ Tests that PPO components work together correctly:
 """
 
 import torch
+from conftest import create_all_valid_masks
 
 from esper.simic.agent import PPOAgent
 from esper.tamiyo.policy.features import batch_obs_to_features
 from esper.tamiyo.policy.factory import create_policy
 from esper.leyline import (
-    NUM_ALPHA_CURVES,
-    NUM_ALPHA_SPEEDS,
-    NUM_ALPHA_TARGETS,
     NUM_BLUEPRINTS,
     NUM_OPS,
-    NUM_STYLES,
-    NUM_TEMPO,
 )
 from esper.leyline.slot_config import SlotConfig
 from esper.leyline.signals import TrainingSignals, TrainingMetrics
 from esper.simic.training.parallel_env_state import ParallelEnvState
-
-
-def _create_all_valid_masks(batch_size: int = 1) -> dict[str, torch.Tensor]:
-    """Create all-valid per-head action masks for testing."""
-    return {
-        "slot": torch.ones(batch_size, 3, dtype=torch.bool),              # 3 slots
-        "blueprint": torch.ones(batch_size, NUM_BLUEPRINTS, dtype=torch.bool),
-        "style": torch.ones(batch_size, NUM_STYLES, dtype=torch.bool),
-        "tempo": torch.ones(batch_size, NUM_TEMPO, dtype=torch.bool),
-        "alpha_target": torch.ones(batch_size, NUM_ALPHA_TARGETS, dtype=torch.bool),
-        "alpha_speed": torch.ones(batch_size, NUM_ALPHA_SPEEDS, dtype=torch.bool),
-        "alpha_curve": torch.ones(batch_size, NUM_ALPHA_CURVES, dtype=torch.bool),
-        "op": torch.ones(batch_size, NUM_OPS, dtype=torch.bool),
-    }
 
 
 def _make_mock_training_signals():
@@ -106,14 +88,14 @@ class TestPPOFeatureCompatibility:
             batch_signals, batch_slot_reports, batch_env_states, slot_config, device
         )
 
-        # Obs V3: 24 base + 30 per slot × 3 slots = 114 dims
-        assert obs.shape == (1, 114), f"Expected (1, 114), got {obs.shape}"
+        # Obs V3: 23 base + 30 per slot × 3 slots = 113 dims
+        assert obs.shape == (1, 113), f"Expected (1, 113), got {obs.shape}"
         assert blueprint_indices.shape == (1, 3), f"Expected (1, 3), got {blueprint_indices.shape}"
 
         # Create PPO agent with matching dimensions
         policy = create_policy(
             policy_type="lstm",
-            state_dim=114,
+            state_dim=113,
             slot_config=slot_config,
             device="cpu",
             compile_mode="off",
@@ -121,9 +103,9 @@ class TestPPOFeatureCompatibility:
         agent = PPOAgent(policy=policy, device="cpu")
 
         # Convert to 2D tensor (add sequence dim)
-        state_tensor = obs.unsqueeze(1)  # [1, 1, 114]
+        state_tensor = obs.unsqueeze(1)  # [1, 1, 113]
         bp_indices = blueprint_indices.unsqueeze(1)  # [1, 1, 3]
-        masks = _create_all_valid_masks()
+        masks = create_all_valid_masks()
 
         # Should work without errors
         with torch.no_grad():
@@ -158,7 +140,7 @@ class TestPPOEndToEnd:
         # Create PPO agent
         policy = create_policy(
             policy_type="lstm",
-            state_dim=114,
+            state_dim=113,
             slot_config=slot_config,
             device="cpu",
             compile_mode="off",
@@ -176,7 +158,7 @@ class TestPPOEndToEnd:
 
         state_tensor = obs.unsqueeze(1)
         bp_indices = blueprint_indices.unsqueeze(1)
-        masks = _create_all_valid_masks()
+        masks = create_all_valid_masks()
 
         # Sample action
         with torch.no_grad():
@@ -204,7 +186,7 @@ class TestPPOEndToEnd:
 
         policy = create_policy(
             policy_type="lstm",
-            state_dim=114,
+            state_dim=113,
             slot_config=slot_config,
             device="cpu",
             compile_mode="off",
@@ -221,7 +203,7 @@ class TestPPOEndToEnd:
         )
 
         # Sample action
-        masks = _create_all_valid_masks()
+        masks = create_all_valid_masks()
         with torch.no_grad():
             result = agent.policy.get_action(
                 obs,
