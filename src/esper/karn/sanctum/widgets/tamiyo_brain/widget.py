@@ -99,7 +99,7 @@ class TamiyoBrain(Container):
     }
 
     #heads-row {
-        height: 15;  /* Reduced from 17 - removed 2 more lines of whitespace */
+        height: 13;  /* Reduced from 15 - removed 2 more lines of whitespace */
         width: 100%;
     }
 
