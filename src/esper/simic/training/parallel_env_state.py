@@ -218,5 +218,17 @@ class ParallelEnvState:
         else:
             self.zero_accumulators()
 
+    def init_obs_v3_slot_tracking(self, slot_id: str) -> None:
+        """Initialize Obs V3 per-slot tracking for a newly germinated seed."""
+        self.gradient_health_prev[slot_id] = 1.0
+        self.epochs_since_counterfactual[slot_id] = 0
+
+    def clear_obs_v3_slot_tracking(self, slot_id: str) -> None:
+        """Clear Obs V3 per-slot tracking when a slot becomes empty."""
+        if slot_id in self.gradient_health_prev:
+            del self.gradient_health_prev[slot_id]
+        if slot_id in self.epochs_since_counterfactual:
+            del self.epochs_since_counterfactual[slot_id]
+
 
 __all__ = ["ParallelEnvState"]

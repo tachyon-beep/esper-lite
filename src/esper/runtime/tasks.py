@@ -249,9 +249,11 @@ def _cifar10_blind_spec() -> TaskSpec:
     ) -> MorphogeneticModel:
         if not slots:
             raise ValueError("slots parameter is required and cannot be empty")
-        # Medium-Weak blind host: 32 channels (for bandwidth), 2 blocks, no pooling.
-        # This provides a wide feature space for seeds but zero spatial context.
-        host = CNNHost(num_classes=10, base_channels=32, n_blocks=2, pool_layers=0, kernel_size=1)
+        # Medium-Weak blind host: 3 blocks, no pooling, 1x1 convs only.
+        # Exposes 3 injection points (r0c0, r0c1, r0c2) while remaining spatially blind.
+        # Keep final width aligned with the 2-block variant (64 channels) to avoid
+        # inflating baseline accuracy via pure channel bandwidth.
+        host = CNNHost(num_classes=10, base_channels=16, n_blocks=3, pool_layers=0, kernel_size=1)
         return MorphogeneticModel(
             host, device=device, slots=slots, task_config=cifar_config,
             permissive_gates=permissive_gates,

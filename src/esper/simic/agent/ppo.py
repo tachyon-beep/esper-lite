@@ -46,7 +46,7 @@ from esper.leyline.slot_config import SlotConfig
 import logging
 
 if TYPE_CHECKING:
-    from esper.leyline import SeedStateReport
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -494,7 +494,7 @@ class PPOAgent:
             # Get first valid state
             first_valid_idx = valid_mask.nonzero(as_tuple=True)
             if len(first_valid_idx[0]) > 0:
-                sample_state_idx = (first_valid_idx[0][0].item(), first_valid_idx[1][0].item())
+                sample_state_idx = (int(first_valid_idx[0][0].item()), int(first_valid_idx[1][0].item()))
                 sample_obs = data["states"][sample_state_idx[0], sample_state_idx[1]].unsqueeze(0).unsqueeze(0)  # [1, 1, state_dim]
                 sample_blueprints = data["blueprint_indices"][sample_state_idx[0], sample_state_idx[1]].unsqueeze(0).unsqueeze(0)  # [1, 1, num_slots]
 
@@ -512,7 +512,7 @@ class PPOAgent:
                 q_value_map: dict[LifecycleOp, float] = {}
                 for op_idx in range(NUM_OPS):
                     op_tensor = torch.tensor([[op_idx]], dtype=torch.long, device=self.device)
-                    q_val = self.policy.network._compute_value(lstm_out, op_tensor)
+                    q_val = self.policy.network._compute_value(lstm_out, op_tensor)  # type: ignore[operator]
                     q_value_map[LifecycleOp(op_idx)] = q_val.item()
 
                 # Assign to metrics with correct names using actual LifecycleOp enum

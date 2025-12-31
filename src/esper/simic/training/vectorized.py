@@ -2764,6 +2764,7 @@ def train_ppo_vectorized(
                             alpha_algorithm=alpha_algorithm,
                             alpha_target=alpha_target,
                         )
+                        env_state.init_obs_v3_slot_tracking(target_slot)
                         env_state.seeds_created += 1
                         env_state.seed_optimizers.pop(target_slot, None)
                         action_success = True
@@ -3074,6 +3075,8 @@ def train_ppo_vectorized(
                         env_state.seed_optimizers.pop(slot_id, None)
                         env_state.acc_at_germination.pop(slot_id, None)
                         env_state.gradient_ratio_ema.pop(slot_id, None)
+                    if slot_for_step.state is None:
+                        env_state.clear_obs_v3_slot_tracking(slot_id)
 
                 # Fix BUG-022: Collect bootstrap state AFTER mechanical advance
                 if truncated:

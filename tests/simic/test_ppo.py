@@ -457,10 +457,10 @@ def test_signals_to_features_with_multislot_params():
         device=torch.device("cpu"),
     )
 
-    # Obs V3: 24 base + 30*3 slots = 114 dims (excluding blueprint embeddings)
+    # Obs V3: 23 base + 30*3 slots = 113 dims (excluding blueprint embeddings)
     expected_dim = get_feature_size(slot_config)
     assert obs.shape == (1, expected_dim)
-    assert obs.shape[1] == 114
+    assert obs.shape[1] == 113
 
 
 def test_signals_to_features_telemetry_slot_alignment() -> None:
@@ -546,13 +546,13 @@ def test_signals_to_features_telemetry_slot_alignment() -> None:
     )
 
     # V3: Telemetry is embedded in slot features (4 dims: gradient_norm, gradient_health, has_vanishing, has_exploding)
-    # Base features: 24 dims
+    # Base features: 23 dims
     # Slot 0 (r0c0): 30 dims - all zeros (inactive)
     # Slot 1 (r0c1): 30 dims - active with telemetry
     # Slot 2 (r0c2): 30 dims - all zeros (inactive)
 
-    # Extract slot 1 features (r0c1) - starts at index 24 + 30 = 54
-    slot1_start = 24 + 30  # Skip base + slot0
+    # Extract slot 1 features (r0c1) - starts at index 23 + 30 = 53
+    slot1_start = 23 + 30  # Skip base + slot0
     slot1_features = obs[0, slot1_start:slot1_start + 30].tolist()
 
     # Slot features layout (30 dims):
@@ -575,11 +575,11 @@ def test_signals_to_features_telemetry_slot_alignment() -> None:
     assert slot1_features[26] == 0.0  # has_exploding = False
 
     # Check slot 0 and slot 2 are all zeros (inactive)
-    slot0_start = 24
+    slot0_start = 23
     slot0_features = obs[0, slot0_start:slot0_start + 30].tolist()
     assert slot0_features == [0.0] * 30  # r0c0 (disabled)
 
-    slot2_start = 24 + 60  # Skip base + slot0 + slot1
+    slot2_start = 23 + 60  # Skip base + slot0 + slot1
     slot2_features = obs[0, slot2_start:slot2_start + 30].tolist()
     assert slot2_features == [0.0] * 30  # r0c2 (disabled)
 

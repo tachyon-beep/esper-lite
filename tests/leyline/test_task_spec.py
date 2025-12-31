@@ -38,3 +38,11 @@ def test_tinystories_spec_builds_model_and_loaders():
     assert batch_x.shape[1] == spec.block_size
     assert batch_y.shape == batch_x.shape
     assert len(valloader) > 0
+
+
+def test_cifar10_blind_spec_supports_three_slots():
+    spec = get_task_spec("cifar10_blind")
+
+    model = spec.create_model(device="cpu", slots=["r0c0", "r0c1", "r0c2"])
+    assert isinstance(model.host, CNNHost)
+    assert set(model.seed_slots.keys()) == {"r0c0", "r0c1", "r0c2"}
