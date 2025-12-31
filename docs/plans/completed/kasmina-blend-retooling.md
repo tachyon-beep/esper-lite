@@ -612,8 +612,8 @@ This plan assumes single-process for the initial implementation. If/when we add 
 - Median |total_reward| ~ 0.0783; p90(alpha_delta^2) ~ 0.04.
 - Suggested BaseSlotRent ~ 0.0039; shock_coef ~ 0.1958 (target shock ~ 0.00783 at p90).
 - Full JSON summaries:
-  - `docs/phase5_reward_calibration.json` (telemetry + cifar10 mock)
-  - `docs/phase5_reward_calibration_tinystories.json` (tinystories mock)
+  - `docs/misc/archive/phase5_reward_calibration.json` (telemetry + cifar10 mock)
+  - `docs/misc/archive/phase5_reward_calibration_tinystories.json` (tinystories mock)
 - Mock calibration (cifar10, 5 episodes, 5 epochs, 10 batches, random_germinate_bias=1.0):
   - Heuristic median |total_reward| ~ 0.0 (p90 ~ 0.3906); random median |total_reward| ~ 0.0811 (p90 ~ 0.4688).
 - Mock calibration (tinystories, 3 episodes, 3 epochs, 4 batches, random_germinate_bias=1.0, random only):

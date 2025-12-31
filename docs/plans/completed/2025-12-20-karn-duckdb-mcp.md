@@ -851,11 +851,11 @@ git commit -m "feat(karn): export MCP server public API"
 ## Task 8: Add MCP Client Configuration Documentation
 
 **Files:**
-- Create: `docs/mcp-setup.md`
+- Create: `docs/manuals/mcp-setup.md`
 
 **Step 1: Write setup documentation**
 
-Create `docs/mcp-setup.md`:
+Create `docs/manuals/mcp-setup.md`:
 
 ```markdown
 # Karn MCP Server Setup
@@ -915,7 +915,7 @@ List available views and example queries.
 **Step 2: Commit**
 
 ```bash
-git add docs/mcp-setup.md
+git add docs/manuals/mcp-setup.md
 git commit -m "docs: add MCP server setup guide"
 ```
 
