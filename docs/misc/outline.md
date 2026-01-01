@@ -33,7 +33,7 @@ A standard ResNet or Transformer is a **fossil**: its skeletal structure is fixe
 
 We argue that the topology of a neural network should be a function of its training history, not solely its creator’s intuition. Biology does not build a brain and then switch it on; the brain grows in response to stimuli while paying ongoing metabolic costs.
 
-Esper aims to build an environment where networks can grow safely, and where growth is not free. Seeds are introduced, evaluated under selective pressure, and either integrated (**Fossilised**) or removed (**Pruned**). The focus is not "the perfect architecture", but the **physics of a system** in which useful architectures can emerge under cost and stability constraints.
+Esper aims to build an environment where networks can grow safely, and where growth is not free. Seeds are introduced, evaluated under selective pressure, and either integrated (**Committed**) or removed (**Pruned**). The focus is not "the perfect architecture", but the **physics of a system** in which useful architectures can emerge under cost and stability constraints.
 
 ### 1.1 Two-timescale learning: training models vs training Tamiyo
 
@@ -60,7 +60,7 @@ At a high level, Esper runs a closed feedback loop across substrate and organism
 
 **Organism (decides and acts):**
 3. **Kasmina** performs forward and backward passes while supporting dormant and active SeedSlots.
-4. **Tamiyo** observes training dynamics and slot states, then chooses **growth** actions (germinate, blend, fossilise).
+4. **Tamiyo** observes training dynamics and slot states, then chooses **growth** actions (germinate, blend, commit).
 5. **Emrakul** observes phage states and chooses **decay** actions (lysis, extraction). *(Planned; currently unified with Tamiyo.)*
 
 A rough schematic:
@@ -104,14 +104,14 @@ Phase 1 deliberately pays a large one-time (C_{\text{meta}}) to reduce (C_{\text
 **Organism terms:**
 * **SeedSlot:** A pre-allocated insertion point. When dormant, it behaves as an identity (or no-op) under a defined contract. The "heavy" wrapper for growth.
 * **Kasmina seed:** A growable module instantiated in a SeedSlot during exploration and development. Creative tissue—can become anything, learns and morphs, Tamiyo-managed.
-* **Phage (wrapper):** A standard "infrastructure wrapper" that exposes telemetry and a lysis interface. Fossilised seeds are rewrapped as phage-managed infrastructure.
+* **Phage (wrapper):** A standard "infrastructure wrapper" that exposes telemetry and a lysis interface. Committed seeds are rewrapped as phage-managed infrastructure.
 * **Blueprint:** The family/type of module a seed can become (the "genome library").
 * **Alpha (α):** A continuous gate controlling a seed's contribution to the host forward path (SeedSlot only; phages run at effective α=1).
 
 **Lifecycle terms:**
 * **Committed (Tamiyo-locked):** A seed state where Tamiyo will not modify the slot further; custodianship transfers to Emrakul.
 * **Compacted:** A physical rewrite step (optional) that removes edit machinery and fuses the committed structure at a safe boundary (end of training or checkpoint compaction).
-* **Lysis:** Controlled dissolution: reduce α toward 0 via `schedule_prune()`, then reclaim resources via `prune()` at a safe boundary.
+* **Lysis:** Controlled dissolution via a **sedation mask** (distinct from α). Phages expose `apply_sedation_mask()` for soft gating and `physical_lysis()` for reclamation at safe boundaries.
 * **Emrakul:** The immune system: a peer policy to Tamiyo that controls phages and decides when to trigger lysis. *(Planned; currently Tamiyo handles both growth and decay.)*
 
 **Value terms:**
@@ -145,8 +145,8 @@ DORMANT → GERMINATED → TRAINING → BLENDING → HOLDING → COMMITTED (Tami
 
 | Actor | Can modify α? | Can change lifecycle? | Scope |
 |-------|---------------|----------------------|-------|
-| **Tamiyo** | Yes, pre-fossilisation | Yes, up to Fossilise | Seeds in DORMANT…HOLDING |
-| **Emrakul** | Yes | Yes (lysis only) | Fossilised seeds + phage-wrapped infrastructure |
+| **Tamiyo** | Yes, pre-commit | Yes, up to Commit | Seeds in DORMANT…HOLDING |
+| **Emrakul** | No (uses sedation mask) | Yes (lysis only) | Committed seeds + phage-wrapped infrastructure |
 | **Tolaria** | Yes (emergency) | Yes (rollback/emergency lysis) | Anything, but only on catastrophic triggers |
 
 ---
@@ -241,13 +241,15 @@ where:
 
 The rent penalty is capped (`max_rent`) to avoid overwhelming the task signal.
 
+*Current rent uses a parameter-based proxy; future versions will incorporate measured step-time and memory pressure for hardware-aligned pricing.*
+
 **Churn** penalises structural volatility (edits per window, oscillations, frequent state flips). Its purpose is to discourage tax-loophole behaviours such as rapid add/remove cycles or α oscillation around thresholds.
 
 ### 5.2 Value functions and horizons
 
 Esper uses two value definitions on different timescales:
 
-1. **Online return** is the discounted reward used by PPO (γ = 0.995, GAE λ = 0.98) for short-horizon control and stability. Episode boundaries are 150 epochs.
+1. **Online return** is the discounted reward used by PPO (γ = 0.995, GAE λ = 0.98, current implementation values) for short-horizon control and stability. Episode boundaries are 150 epochs.
 
 2. **Audit value v(S)** is used for Phase 1 Shapley labels: a fixed training budget under a specified protocol with a final evaluation metric (e.g. validation loss or accuracy).
 
@@ -385,10 +387,10 @@ The two policies have distinct domains and a clear handoff:
 
 | Policy | Controls | Actions | Focus |
 |--------|----------|---------|-------|
-| **Tamiyo** | Seeds | germinate, blend, fossilise, advance | Growth: when to add capacity |
+| **Tamiyo** | Seeds | germinate, blend, commit, advance | Growth: when to add capacity |
 | **Emrakul** | Phages | lysis, extraction, redundancy prune | Decay: when to remove capacity |
 
-**Custodianship handoff:** When Tamiyo fossilises a seed, its parameters are **baked into the host** at the next epoch—this is irreversible. However, the structure remains phage-wrapped, and custodianship transfers to Emrakul. If the architecture later becomes redundant or stops paying rent, Emrakul can lysis the *structure* (removing the layers), even though the weight contributions are permanent. This mirrors biological fossilisation: the organism is done growing that structure, but the immune system can still remove tissue.
+**Custodianship handoff:** When Tamiyo commits a seed, the decision is **irreversible at the policy level**—Tamiyo will not edit that slot again. However, the structure remains phage-wrapped, and custodianship transfers to Emrakul. If the architecture later becomes redundant or stops paying rent, Emrakul can lysis the structure (gating, masking, or removing the layers). Physical compaction (fusing weights into adjacent layers, removing wrapper overhead) happens only at safe boundaries and is optional. This mirrors biological fossilisation: the organism is done growing that structure, but the immune system can still remove tissue.
 
 This separation allows each policy to specialise: Tamiyo optimises for growth timing and blueprint selection; Emrakul optimises for infrastructure health and efficiency.
 
@@ -424,9 +426,9 @@ A **Phage** provides:
 
 ### 9.3 Functional lysis (online) and physical lysis (safe boundary)
 
-* **Functional lysis:** Emrakul monitors a phage's ROI. If contribution drops below rent (or confidence falls), Emrakul triggers lysis, reducing α while training continues. This encourages the network to re-route around the fading structure.
+* **Functional lysis:** Emrakul monitors a phage's ROI. If contribution drops below rent (or confidence falls), Emrakul triggers lysis via a **sedation mask** (not α—phages have no α). This encourages the network to re-route around the fading structure while training continues.
 
-* **Physical lysis:** Once α → 0, the structure can be reclaimed at a safe boundary. The slot transitions through PRUNED → EMBARGOED → RESETTING → DORMANT (ready for reuse).
+* **Physical lysis:** Once the sedation mask → 0 (fully gated), the structure can be reclaimed at a safe boundary. The slot transitions through PRUNED → EMBARGOED → RESETTING → DORMANT (ready for reuse).
 
 ### 9.4 Redundant takeover and "lazy paths"
 
@@ -457,7 +459,7 @@ For large models, a single Tamiyo–Emrakul pair becomes a bottleneck. The natur
 * **Global reward, local critics:** Simic remains a single accounting system, but each pair learns a critic on its own slice of telemetry.
 * **Boundary contracts:** Track mismatch at zone interfaces (distribution drift, gradient flow health) to detect cross-zone externalities.
 
-### 9.7 Future extensions
+### 9.7 Speculative extensions (not required for core Esper)
 
 **Narset (speculative meta-layer):** A slow-timescale coordinator that allocates per-zone budgets using **telemetry only** (performance trends, cost, churn, health). Narset does not observe the architecture or seed inventory, and cannot directly select modules. This information bottleneck forces policies to be robust and limits topology-specific overfitting.
 
@@ -502,6 +504,8 @@ Scale changes the nature of the tragedy. In a 70B model, losing a layer is a hai
 | **Channel** | <0.001% (invisible) | ~0.05% (subtle) | ✅ Micro-surgery |
 
 **Asymmetric granularity principle:** Emrakul's atomic unit of destruction must be *smaller* than Tamiyo's atomic unit of creation. Tamiyo builds organs (modules); Emrakul cuts tissues (heads/channels).
+
+**Sedation mass governance:** Fine-grained lysis creates a new attack surface—Emrakul could gradually lobotomise the model without ever triggering a single-action alarm. Mitigation: a **global sedation budget** caps the total parameter mass under simultaneous sedation (e.g. ≤5% of host). Narset (or a simpler governor) controls this budget, not Emrakul.
 
 **Two-stage lysis protocol (Sedate, don't Delete):**
 
