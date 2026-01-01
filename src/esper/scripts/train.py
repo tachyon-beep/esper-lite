@@ -128,13 +128,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable Rich terminal UI (uses console output instead)",
     )
     telemetry_parent.add_argument(
-        "--tui-layout",
-        type=str,
-        choices=["compact", "standard", "wide", "auto"],
-        default="auto",
-        help="DEPRECATED: Use --sanctum instead. This flag is ignored.",
-    )
-    telemetry_parent.add_argument(
         "--export-karn",
         type=str,
         default=None,
@@ -477,13 +470,6 @@ def main() -> None:
 
     if not is_tty and not args.no_tui:
         print("Non-TTY detected, using console output instead of TUI")
-
-    # Warn about deprecated --tui-layout flag
-    if args.tui_layout != "auto":
-        print(
-            "WARNING: --tui-layout is deprecated and ignored. "
-            "Use --sanctum for the developer TUI."
-        )
 
     # Add console output if not using a TUI backend
     if not use_sanctum:

@@ -397,18 +397,16 @@ class WandbBackend(OutputBackend):
         wandb.log(metrics, step=self._episode_step)
 
         # Send alert for real-time notification
-        # hasattr AUTHORIZED by Code Review 2026-01-01
-        # Justification: wandb.alert may not exist in older versions or disabled mode
-        if hasattr(wandb, "alert") and hasattr(wandb, "AlertLevel"):
-            try:
-                wandb.alert(
-                    title=f"Training Anomaly: {anomaly_type}",
-                    text=f"Episode {event.data.episode}: {event.data.detail}",
-                    level=wandb.AlertLevel.WARN,
-                )
-            except Exception as e:
-                # Don't crash training if alert fails
-                _logger.warning(f"Failed to send wandb alert: {e}")
+        # wandb>=0.16.0 is required (pyproject.toml), so alert() always exists
+        try:
+            wandb.alert(
+                title=f"Training Anomaly: {anomaly_type}",
+                text=f"Episode {event.data.episode}: {event.data.detail}",
+                level=wandb.AlertLevel.WARN,
+            )
+        except Exception as e:
+            # Network errors or offline mode - don't crash training
+            _logger.warning(f"Failed to send wandb alert: {e}")
 
     def close(self) -> None:
         """Finish wandb run and release resources.

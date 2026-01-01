@@ -33,8 +33,12 @@ class BlueprintAction(IntEnum):
     MLP = 11
     FLEX_ATTENTION = 12
 
-    def to_blueprint_id(self) -> str | None:
-        """Map to registered blueprint name."""
+    def to_blueprint_id(self) -> str:
+        """Map to registered blueprint name.
+
+        Raises:
+            KeyError: If BlueprintAction value is not in mapping (indicates enum/mapping mismatch bug).
+        """
         mapping = {
             0: "noop",
             1: "conv_light",
@@ -50,7 +54,7 @@ class BlueprintAction(IntEnum):
             11: "mlp",
             12: "flex_attention",
         }
-        return mapping.get(self.value)
+        return mapping[self.value]
 
 
 class GerminationStyle(IntEnum):

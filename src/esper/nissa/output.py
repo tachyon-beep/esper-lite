@@ -63,13 +63,10 @@ def _payload_to_dict(payload: Any) -> Any:
 
 def _telemetry_event_to_dict(event: TelemetryEvent) -> dict[str, Any]:
     """Convert TelemetryEvent to a dict for JSON serialization (fast path)."""
-    # hasattr AUTHORIZED by operator on 2026-01-01 00:00:00 UTC
-    # Justification: Serialization - handle both enum and string event_type values
-    event_type = event.event_type.name if hasattr(event.event_type, "name") else str(event.event_type)
-
-    # hasattr AUTHORIZED by operator on 2026-01-01 00:00:00 UTC
-    # Justification: Serialization - safely handle datetime objects from various sources
-    timestamp = event.timestamp.isoformat() if hasattr(event.timestamp, "isoformat") else str(event.timestamp)
+    # TelemetryEvent.event_type is TelemetryEventType (Enum) - always has .name
+    # TelemetryEvent.timestamp is datetime - always has .isoformat()
+    event_type = event.event_type.name
+    timestamp = event.timestamp.isoformat()
 
     return {
         "event_id": event.event_id,
@@ -179,14 +176,14 @@ class BackendWorker:
         # until we've sent the shutdown sentinel
         try:
             self._queue.join()
-        except Exception:
-            pass  # Queue join can fail if worker died
+        except Exception as e:
+            _logger.warning(f"Queue join failed during {self._name} shutdown (worker may have died): {e}")
 
         # Send shutdown signal
         try:
             self._queue.put(None, timeout=1.0)
         except queue.Full:
-            pass
+            _logger.warning(f"Queue full during {self._name} shutdown, forcing stop")
 
         # NOW it's safe to reject new events - sentinel is in queue
         self._stopped = True
@@ -415,25 +412,15 @@ class ConsoleOutput(OutputBackend):
             if event.data is None:
                 _logger.warning("TAMIYO_INITIATED event has no data payload")
                 return
-            # Handle typed payload
-            if isinstance(event.data, TamiyoInitiatedPayload):
-                payload = event.data
-                env_str = f"env{payload.env_id}"
-                if payload.stabilization_epochs == 0:
-                    print(f"[{timestamp}] {env_str} | Host stabilized at epoch {payload.epoch} - germination now allowed")
-                else:
-                    print(f"[{timestamp}] {env_str} | Host stabilized at epoch {payload.epoch} ({payload.stable_count}/{payload.stabilization_epochs} stable) - germination now allowed")
-            elif isinstance(event.data, dict):
-                # Legacy dict format (from deserialization)
-                env_id = event.data.get("env_id")
-                epoch = event.data.get("epoch", "?")
-                stable_count = event.data.get("stable_count", 0)
-                stabilization_epochs = event.data.get("stabilization_epochs", 0)
-                env_str = f"env{env_id}" if env_id is not None else "Tamiyo"
-                if stabilization_epochs == 0:
-                    print(f"[{timestamp}] {env_str} | Host stabilized at epoch {epoch} - germination now allowed")
-                else:
-                    print(f"[{timestamp}] {env_str} | Host stabilized at epoch {epoch} ({stable_count}/{stabilization_epochs} stable) - germination now allowed")
+            # TAMIYO_INITIATED always uses typed payload
+            if not isinstance(event.data, TamiyoInitiatedPayload):
+                raise TypeError(f"TAMIYO_INITIATED event has invalid payload type: {type(event.data)}")
+            payload = event.data
+            env_str = f"env{payload.env_id}"
+            if payload.stabilization_epochs == 0:
+                print(f"[{timestamp}] {env_str} | Host stabilized at epoch {payload.epoch} - germination now allowed")
+            else:
+                print(f"[{timestamp}] {env_str} | Host stabilized at epoch {payload.epoch} ({payload.stable_count}/{payload.stabilization_epochs} stable) - germination now allowed")
         elif event_type == "PPO_UPDATE_COMPLETED":
             if event.data is None:
                 _logger.warning("PPO_UPDATE_COMPLETED event has no data payload")
@@ -764,8 +751,8 @@ class NissaHub:
         for worker in self._backend_workers:
             try:
                 worker._queue.join()
-            except Exception:
-                pass  # Queue join can fail if worker died
+            except Exception as e:
+                _logger.warning(f"Queue join failed for {worker._name} during flush (worker may have died): {e}")
 
     def get_backend_stats(self) -> dict[str, dict[str, int | float]]:
         """Get performance statistics for all backend workers.
@@ -827,15 +814,15 @@ class NissaHub:
                 # Use a timeout to avoid blocking forever if worker is stuck.
                 try:
                     self._queue.join()
-                except Exception:
-                    pass  # Queue join can fail if worker died
+                except Exception as e:
+                    _logger.warning(f"Queue join failed during hub close (worker may have died): {e}")
 
                 # Add None to queue as sentinel for worker shutdown.
                 # Use blocking put with timeout to ensure signal is received.
                 self._queue.put(None, timeout=2.0)
                 self._worker_thread.join(timeout=5.0)
-            except (queue.Full, RuntimeError):
-                pass  # Worker might already be dead or queue unreachable
+            except (queue.Full, RuntimeError) as e:
+                _logger.warning(f"Hub shutdown interrupted (worker may be dead or queue unreachable): {e}")
 
         # Stop all backend workers (this drains their queues)
         for worker in self._backend_workers:
