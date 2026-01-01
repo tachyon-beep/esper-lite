@@ -3,57 +3,29 @@
 **Status:** Ready for Implementation
 **Created:** 2026-01-02
 **Author:** Claude Code
-**Priority:** High (blocks telemetry interpretability)
+**Priority:** Medium (improves telemetry interpretability)
 
 ## Executive Summary
 
-This plan addresses two categories of issues discovered in the telemetry system:
-
-1. **Data Bugs**: `inner_epoch` always reports 150 (max), `grad_norm` always reports 1.0 (post-clip)
-2. **Architectural Confusion**: Event types don't indicate which domain (Tamiyo/Tolaria/Kasmina/Simic) they belong to, making telemetry data hard to interpret
+This plan addresses **architectural confusion** in the telemetry system where event types don't indicate which domain (Tamiyo/Tolaria/Kasmina/Simic) they belong to.
 
 The solution is to:
 - Rename event types to include domain prefixes
-- Fix the payload bugs
 - Update all consumers (MCP views, Sanctum widgets, Overwatch)
-- Maintain backward compatibility during migration
+- Atomic cutover (no backward compatibility period)
+
+## Completed Bug Fixes (2026-01-02)
+
+The following data bugs have been **fixed in the bug-fixes branch** and are no longer part of this plan:
+
+1. ✅ **`pre_clip_grad_norm` now captured**: `ppo.py` captures the return value of `clip_grad_norm_()` before clipping
+2. ✅ **`ppo_updates_count` now tracked**: `vectorized.py` reports actual PPO update count per batch
+
+These fixes add two new fields to `PPOUpdatePayload`:
+- `pre_clip_grad_norm: float` - Gradient norm BEFORE clipping (detects explosion)
+- `ppo_updates_count: int` - Actual number of PPO gradient updates in the batch
 
 ## Problem Statement
-
-### Bug 1: `inner_epoch` Always 150
-
-**Location:** `src/esper/simic/training/vectorized.py:3541`
-
-**Root Cause:** PPO updates happen AFTER the epoch loop completes. The `epoch` variable passed to telemetry is the loop variable's final value (`max_epochs`), not the PPO update iteration.
-
-```python
-# Current (broken):
-for epoch in range(1, max_epochs + 1):
-    # ... epoch loop runs 1-150 ...
-    pass
-# epoch == 150 here
-
-# PPO update happens here, OUTSIDE the loop
-batch_emitter.on_ppo_update(epoch=epoch, ...)  # Always 150!
-```
-
-**Impact:** Cannot track which PPO update within a batch produced the metrics.
-
-### Bug 2: `grad_norm` Always 1.0
-
-**Location:** `src/esper/simic/agent/ppo.py:792` and `vectorized.py:3475`
-
-**Root Cause:** Gradient norm is measured AFTER `clip_grad_norm_()` clips gradients to `max_grad_norm=1.0`.
-
-```python
-# In ppo.py:792 - clips gradients, DISCARDS the pre-clip norm
-nn.utils.clip_grad_norm_(self.policy.network.parameters(), self.max_grad_norm)
-
-# In vectorized.py:3475 - measures AFTER clipping
-ppo_grad_norm = compute_grad_norm_surrogate(agent.policy.network)  # Always ~1.0!
-```
-
-**Impact:** Cannot detect gradient explosion (pre-clip norm >> 1.0) vs healthy gradients.
 
 ### Architectural Issue: Domain Confusion
 
@@ -72,8 +44,8 @@ When analyzing telemetry, users must know implementation details to understand w
 
 1. **Self-Documenting Events**: Event type names should indicate their domain
 2. **Accurate Metrics**: Fix `inner_epoch` and `grad_norm` bugs
-3. **Backward Compatibility**: Support both old and new event types during migration
-4. **Minimal UX Disruption**: Existing dashboards continue working
+3. **Atomic Cutover**: Rename events in single commit, update all consumers together (no dual-emit)
+4. **Safety-First**: Comprehensive test validation before and after migration
 
 ## Detailed Changes
 
@@ -101,38 +73,19 @@ class TelemetryEventType(Enum):
     # PLATEAU_DETECTED, DEGRADATION_DETECTED, etc. - keep as-is
     # These are fitness signals, correctly in Simic domain
 
-    # === Deprecated (emit both old and new during migration) ===
-    PPO_UPDATE_COMPLETED = auto()      # -> TAMIYO_POLICY_UPDATE
-    EPOCH_COMPLETED = auto()           # -> TOLARIA_EPOCH_COMPLETED
-    BATCH_EPOCH_COMPLETED = auto()     # -> TOLARIA_BATCH_COMPLETED
-    GOVERNOR_ROLLBACK = auto()         # -> TOLARIA_ROLLBACK
-
-    # === Dead Code (delete) ===
-    # ISOLATION_VIOLATION - never emitted, remove
+    # === DELETE (replaced by domain-prefixed versions above) ===
+    # PPO_UPDATE_COMPLETED      -> TAMIYO_POLICY_UPDATE
+    # EPOCH_COMPLETED           -> TOLARIA_EPOCH_COMPLETED
+    # BATCH_EPOCH_COMPLETED     -> TOLARIA_BATCH_COMPLETED
+    # GOVERNOR_ROLLBACK         -> TOLARIA_ROLLBACK
+    # ISOLATION_VIOLATION       -> never emitted, delete
 ```
 
 #### 1.2 Payload Changes
 
 **Rename:** `PPOUpdatePayload` → `TamiyoPolicyUpdatePayload`
 
-**New fields:**
-```python
-@dataclass(slots=True, frozen=True)
-class TamiyoPolicyUpdatePayload:
-    # ... existing fields ...
-
-    # NEW: PPO update iteration within the batch (replaces misleading inner_epoch)
-    ppo_update_idx: int = 1  # 1, 2, 3... for ppo_updates_per_batch
-
-    # NEW: Pre-clip gradient norm (actual gradient magnitude)
-    pre_clip_grad_norm: float = 0.0
-
-    # EXISTING: Post-clip gradient norm (kept for reference)
-    grad_norm: float = 0.0
-
-    # DEPRECATED: inner_epoch (remove after migration)
-    # Was always max_epochs, semantically meaningless for PPO updates
-```
+Note: `pre_clip_grad_norm` and `ppo_updates_count` fields have already been added (see "Completed Bug Fixes" section).
 
 **Rename:** `EpochCompletedPayload` → `TolariaEpochPayload`
 **Rename:** `BatchEpochCompletedPayload` → `TolariaBatchPayload`
@@ -140,99 +93,62 @@ class TamiyoPolicyUpdatePayload:
 
 ### Phase 2: Emission Changes
 
-#### 2.1 Fix grad_norm Bug
-
-**File:** `src/esper/simic/agent/ppo.py`
-
-```python
-# Line 792 - capture pre-clip norm
-pre_clip_norm = nn.utils.clip_grad_norm_(
-    self.policy.network.parameters(),
-    self.max_grad_norm
-)
-metrics["pre_clip_grad_norm"].append(float(pre_clip_norm))
-```
-
-#### 2.2 Fix inner_epoch Bug
-
-**File:** `src/esper/simic/training/vectorized.py`
-
-```python
-# In _run_ppo_updates, track update index
-for update_idx in range(updates_to_run):
-    # ... existing code ...
-    metrics["ppo_update_idx"] = update_idx + 1  # 1-indexed
-
-# Pass to telemetry
-batch_emitter.on_ppo_update(
-    ppo_update_idx=metrics.get("ppo_update_idx", 1),  # NEW
-    # Remove: epoch=epoch (was always max_epochs)
-    ...
-)
-```
-
-#### 2.3 Emit New Event Types
+#### 2.1 Emit New Event Types
 
 **File:** `src/esper/simic/telemetry/emitters.py`
 
-During migration, emit BOTH old and new event types:
+Replace old event types with new domain-prefixed versions (atomic cutover):
 
 ```python
 def emit_ppo_update_event(...):
-    # Emit new event type
+    # Use new domain-prefixed event type
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.TAMIYO_POLICY_UPDATE,
         data=TamiyoPolicyUpdatePayload(...),
     ))
-
-    # Also emit old event type (backward compat)
-    hub.emit(TelemetryEvent(
-        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
-        data=PPOUpdatePayload(...),  # Old payload format
-    ))
 ```
 
-### Phase 3: Consumption Changes
+### Phase 3: Consumption Changes (Atomic Cutover)
+
+All consumers must be updated in the same commit as the emission changes.
 
 #### 3.1 MCP View Updates
 
 **File:** `src/esper/karn/mcp/views.py`
 
-Create new views alongside old ones:
+Rename views to use new event types:
 
 ```sql
--- New view (primary)
-CREATE OR REPLACE VIEW tamiyo_updates AS
+CREATE OR REPLACE VIEW tamiyo_policy_updates AS
 SELECT ...
 FROM raw_events
-WHERE event_type IN ('TAMIYO_POLICY_UPDATE', 'PPO_UPDATE_COMPLETED')
-
--- Old view (deprecated, points to new)
-CREATE OR REPLACE VIEW ppo_updates AS
-SELECT * FROM tamiyo_updates
+WHERE event_type = 'TAMIYO_POLICY_UPDATE'
 ```
 
 | Old View | New View | Notes |
 |----------|----------|-------|
-| `epochs` | `tolaria_epochs` | Accept both event types |
-| `ppo_updates` | `tamiyo_updates` | Accept both event types |
-| `batch_epochs` | `tolaria_batches` | Accept both event types |
+| `epochs` | `tolaria_epochs` | New event type only |
+| `ppo_updates` | `tamiyo_policy_updates` | New event type only |
+| `batch_epochs` | `tolaria_batches` | New event type only |
 
 #### 3.2 Sanctum Aggregator Updates
 
 **File:** `src/esper/karn/sanctum/aggregator.py`
 
-Update event routing to handle both:
+Update event routing to use new event types:
 
 ```python
 def _handle_event(self, event: TelemetryEvent) -> None:
     event_type = event.event_type.name
 
-    # Handle both old and new event types
-    if event_type in ("TAMIYO_POLICY_UPDATE", "PPO_UPDATE_COMPLETED"):
+    if event_type == "TAMIYO_POLICY_UPDATE":
         self._handle_tamiyo_policy_update(event)
-    elif event_type in ("TOLARIA_EPOCH_COMPLETED", "EPOCH_COMPLETED"):
+    elif event_type == "TOLARIA_EPOCH_COMPLETED":
         self._handle_tolaria_epoch(event)
+    elif event_type == "TOLARIA_BATCH_COMPLETED":
+        self._handle_tolaria_batch(event)
+    elif event_type == "TOLARIA_ROLLBACK":
+        self._handle_tolaria_rollback(event)
     # ... etc
 ```
 
@@ -240,46 +156,33 @@ def _handle_event(self, event: TelemetryEvent) -> None:
 
 **File:** `src/esper/karn/sanctum/widgets/event_log.py`
 
-Update color mappings:
+Update color mappings to new names only:
 
 ```python
 EVENT_COLORS = {
-    # New names (primary)
     "TAMIYO_POLICY_UPDATE": "bright_magenta",
     "TOLARIA_EPOCH_COMPLETED": "bright_blue",
     "TOLARIA_BATCH_COMPLETED": "bright_blue",
     "TOLARIA_ROLLBACK": "bright_red",
-
-    # Old names (deprecated, same colors)
-    "PPO_UPDATE_COMPLETED": "bright_magenta",
-    "EPOCH_COMPLETED": "bright_blue",
-    "BATCH_EPOCH_COMPLETED": "bright_blue",
-    "GOVERNOR_ROLLBACK": "bright_red",
 }
 ```
 
-#### 3.4 Dashboard HTML Updates
+#### 3.4 Nissa Output Backends
 
-**File:** `src/esper/karn/dashboard.html`
+**Files:**
+- `src/esper/nissa/output.py` - Console output
+- `src/esper/nissa/wandb_backend.py` - WandB logging
 
-Update JavaScript event handlers:
+Update event type checks to new names.
 
-```javascript
-case 'TAMIYO_POLICY_UPDATE':
-case 'PPO_UPDATE_COMPLETED':  // Backward compat
-    handleTamiyoUpdate(event);
-    break;
-```
+### Phase 4: Safety Check (Pre-Implementation)
 
-### Phase 4: Cleanup (Post-Migration)
+Before implementing changes, validate test coverage:
 
-After all consumers are updated and tested:
-
-1. Stop emitting deprecated event types
-2. Remove deprecated event types from enum
-3. Remove backward-compat view aliases
-4. Remove old payload classes
-5. Update documentation
+1. **Run baseline tests** - Capture current test pass rate
+2. **Map tests to consumers** - Ensure each consumer has test coverage
+3. **Add missing consumer tests** - Fill gaps before migration
+4. **Verify 1:1 event mapping** - Each old event has exactly one new equivalent
 
 ## File Impact Summary
 
@@ -293,62 +196,55 @@ After all consumers are updated and tested:
 | `src/esper/simic/telemetry/emitters.py` | Emit new event types, update payloads |
 | `src/esper/tolaria/governor.py` | Emit TOLARIA_ROLLBACK |
 
-### Must Change (Consumption)
+### Must Change (Consumption) - 4 Consumers
 
-| File | Changes |
-|------|---------|
-| `src/esper/karn/mcp/views.py` | New view names, accept both event types |
-| `src/esper/karn/mcp/server.py` | Update view descriptions |
-| `src/esper/karn/mcp/reports.py` | Update queries to use new views |
-| `src/esper/karn/collector.py` | Handle both event types |
-| `src/esper/karn/store.py` | Handle both event types |
-| `src/esper/karn/sanctum/aggregator.py` | Handle both event types |
-| `src/esper/karn/sanctum/widgets/event_log.py` | Color mappings for new types |
-| `src/esper/karn/dashboard.html` | JS event handlers |
+| Consumer | Files | Changes |
+|----------|-------|---------|
+| **Karn MCP** | `mcp/views.py` | Rename views, update event type filters |
+| **Sanctum TUI** | `sanctum/aggregator.py`, `sanctum/widgets/event_log.py`, `collector.py`, `store.py` | Update event routing |
+| **Console Output** | `nissa/output.py` | Update event type checks |
+| **WandB Backend** | `nissa/wandb_backend.py` | Update event type checks |
+
+**Note:** Overwatch consumes via Sanctum (not a separate consumer).
 
 ### Must Change (Tests)
 
 | Pattern | Estimated Count |
 |---------|-----------------|
-| `tests/**/test_*.py` referencing old event types | ~20 files |
+| `tests/**/test_*.py` referencing old event types | ~15-20 files |
 | Mock data generators | ~5 files |
 
-## Migration Timeline
+## Migration Timeline (Atomic Cutover)
 
-### Week 1: Contract & Emission
+### Day 1: Safety Check
+- [ ] Run full test suite, capture baseline
+- [ ] Map each consumer to its tests
+- [ ] Identify any untested consumers
+
+### Day 2: Implementation (Single Commit)
 - [ ] Add new event types to Leyline
-- [ ] Add new payload classes
-- [ ] Fix grad_norm bug in ppo.py
-- [ ] Fix inner_epoch bug in vectorized.py
-- [ ] Update emitters to emit both old and new
-
-### Week 2: Consumption
-- [ ] Update MCP views (accept both)
-- [ ] Update Sanctum aggregator (accept both)
-- [ ] Update Sanctum widgets
-- [ ] Update dashboard.html
-
-### Week 3: Testing & Validation
+- [ ] Delete old event types from enum
+- [ ] Rename payload classes
+- [ ] Fix `pre_clip_grad_norm` bug in ppo.py
+- [ ] Fix `ppo_update_idx` bug in vectorized.py
+- [ ] Update all 4 consumers (MCP, Sanctum, Console, WandB)
 - [ ] Update all tests
+
+### Day 3: Validation
 - [ ] Run full test suite
 - [ ] Manual testing with Sanctum TUI
 - [ ] Manual testing with Overwatch web
-
-### Week 4: Cleanup
-- [ ] Remove deprecated event types
-- [ ] Remove backward-compat code
-- [ ] Update documentation
-- [ ] Final validation
+- [ ] Run short training to verify telemetry flow
 
 ## Rollback Plan
 
-If issues arise:
+If issues arise after the atomic cutover:
 
-1. **Emission rollback**: Revert emitter changes to only emit old event types
-2. **Consumption rollback**: Views/aggregators already handle both, no change needed
-3. **Full rollback**: Revert all Leyline changes, return to previous state
+```bash
+git revert <commit-hash>  # Single commit to revert
+```
 
-The dual-emit strategy means consumers can be rolled back independently of emitters.
+Atomic cutover means all changes are in one commit - rollback is trivial.
 
 ## Success Criteria
 
@@ -371,8 +267,7 @@ The dual-emit strategy means consumers can be rolled back independently of emitt
 ## Open Questions
 
 1. **View naming:** Should we use `tamiyo_updates` or `tamiyo_policy_updates`?
-2. **Backward compat duration:** How long to emit both old and new? (Proposed: 2 weeks)
-3. **ANALYTICS_SNAPSHOT:** This multi-kind event spans domains - should it be split?
+2. **ANALYTICS_SNAPSHOT:** This multi-kind event spans domains - should it be split?
 
 ## Appendix A: Complete Event Domain Mapping
 
@@ -450,12 +345,12 @@ raw_events (base)
 
 The following fields are recommended by the DRL specialist for comprehensive policy telemetry.
 
-### C.1 Critical Bug Fixes (TIER 1)
+### C.1 Critical Bug Fixes (TIER 1) - ✅ COMPLETED
 
-| Field | Type | Why It Matters | Audience |
-|-------|------|----------------|----------|
-| `pre_clip_grad_norm` | `float` | **Bug Fix**: Detect gradient explosion before clipping | All |
-| `ppo_update_idx` | `int` | **Bug Fix**: Track which PPO update (1,2,3...) vs always 150 | All |
+| Field | Type | Why It Matters | Status |
+|-------|------|----------------|--------|
+| `pre_clip_grad_norm` | `float` | Detect gradient explosion before clipping | ✅ Implemented |
+| `ppo_updates_count` | `int` | Track PPO update count per batch | ✅ Implemented |
 
 ### C.2 Trust Region Diagnostics (HIGH PRIORITY)
 
@@ -611,7 +506,7 @@ class InfrastructureSnapshotPayload:
 
 | Phase | Category | Fields | Effort |
 |-------|----------|--------|--------|
-| **1** | Bug Fixes | `pre_clip_grad_norm`, `ppo_update_idx` | 1 day |
+| ~~**1**~~ | ~~Bug Fixes~~ | ~~`pre_clip_grad_norm`, `ppo_updates_count`~~ | ✅ DONE |
 | **2** | Trust Region | `approx_kl_max`, `trust_region_violations` | 2 days |
 | **3** | Value Function | `value_prediction_error_*`, `return_*` | 2 days |
 | **4** | Infrastructure | `forward/backward_time_ms`, memory deltas | 2 days |
@@ -727,21 +622,23 @@ The Sanctum TUI consumes telemetry across **9 distinct information categories**.
 
 | Gap | Current State | Recommendation |
 |-----|---------------|----------------|
-| `pre_clip_grad_norm` | Not captured (always 1.0) | **BUG FIX** - Phase 1 |
-| `ppo_update_idx` | Incorrect (always 150) | **BUG FIX** - Phase 1 |
+| ~~`pre_clip_grad_norm`~~ | ~~Not captured~~ | ✅ Fixed |
+| ~~`ppo_updates_count`~~ | ~~Incorrect~~ | ✅ Fixed |
 | `training_thread_alive` | Hardcoded true | Add heartbeat event |
 | `total_events_received` | Computed locally | Add to snapshot schema |
 | Per-layer gradient health | Optional dict | Ensure consistent emission |
 | Seed diversity metrics | Not captured | Future enhancement |
 
-### G.5 Backward Compatibility for Sanctum
+### G.5 Atomic Cutover for Sanctum
 
-The Sanctum aggregator (`aggregator.py`) must handle both old and new event types during migration:
+With atomic cutover, the aggregator uses new event types only:
 
 ```python
-# Example: Handle both PPO_UPDATE_COMPLETED and TAMIYO_POLICY_UPDATE
-if event_type.name in ("TAMIYO_POLICY_UPDATE", "PPO_UPDATE_COMPLETED"):
+# After migration: new event types only
+if event_type.name == "TAMIYO_POLICY_UPDATE":
     self._handle_tamiyo_policy_update(event)
+elif event_type.name == "TOLARIA_EPOCH_COMPLETED":
+    self._handle_tolaria_epoch(event)
 ```
 
-**Key requirement:** All 9 information categories must continue flowing to widgets regardless of event name changes. The aggregator acts as the translation layer.
+**Key requirement:** All 9 information categories continue flowing to widgets. The aggregator translates domain-prefixed events to the same internal state.

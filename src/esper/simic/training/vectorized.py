@@ -47,7 +47,7 @@ if TYPE_CHECKING:
     from esper.leyline.reports import SeedStateReport
     from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
 
-from esper.simic.contracts import SeedSlotProtocol, SlottedHostProtocol
+from esper.simic.contracts import SeedSlotProtocol, SeedStateProtocol, SlottedHostProtocol
 
 # NOTE: get_task_spec imported lazily inside train_ppo_vectorized to avoid circular import:
 #   runtime -> simic.rewards -> simic -> simic.training -> vectorized -> runtime
@@ -370,6 +370,11 @@ def _run_ppo_updates(
 
     aggregated_metrics = _aggregate_ppo_metrics(update_metrics)
 
+    # BUG FIX: Track actual PPO update count (was reporting inner_epoch=150 always)
+    # This tells consumers how many PPO gradient updates occurred in this batch.
+    # Early stopping on KL divergence may reduce this below ppo_updates_per_batch.
+    aggregated_metrics["ppo_updates_count"] = len(update_metrics)
+
     return aggregated_metrics
 
 
@@ -618,7 +623,7 @@ def train_ppo_vectorized(
     try:
         from threading import RLock
 
-        from tqdm import tqdm  # type: ignore[import-untyped]
+        from tqdm import tqdm
 
         tqdm.set_lock(RLock())
     except (ImportError, AttributeError) as e:
@@ -2773,8 +2778,9 @@ def train_ppo_vectorized(
                             "config": env_reward_configs[env_idx],
                         }
                         if emit_reward_components_event or collect_reward_summary:
+                            # mypy can't verify **dict unpacking into typed function parameters
                             result = compute_reward(
-                                **reward_args, return_components=True
+                                **reward_args, return_components=True  # type: ignore[arg-type]
                             )
                             # compute_reward returns tuple[float, RewardComponents] when return_components=True
                             reward, reward_components = result  # type: ignore[misc]
@@ -2783,7 +2789,7 @@ def train_ppo_vectorized(
                                     env_idx
                                 ][target_slot]
                         else:
-                            reward = compute_reward(**reward_args)
+                            reward = compute_reward(**reward_args)  # type: ignore[arg-type]
                     else:
                         reward = compute_loss_reward(
                             action=action_for_reward,
@@ -3199,11 +3205,14 @@ def train_ppo_vectorized(
                                 train_accuracy=env_state.train_acc,
                                 val_loss=env_state.val_loss,
                                 val_accuracy=env_state.val_acc,
-                                active_seeds=[
-                                    s.state
-                                    for s in model.seed_slots.values()
-                                    if s.is_active and s.state
-                                ],
+                                active_seeds=cast(
+                                    list[SeedStateProtocol],
+                                    [
+                                        s.state
+                                        for s in model.seed_slots.values()
+                                        if s.is_active and s.state
+                                    ],
+                                ),
                                 available_slots=sum(
                                     1 for s in model.seed_slots.values() if s.state is None
                                 ),

@@ -617,10 +617,15 @@ class PPOUpdatePayload:
     policy_loss: float
     value_loss: float
     entropy: float
-    grad_norm: float  # Use float('inf') for AMP overflow
+    grad_norm: float  # Post-clip gradient norm (typically ~1.0 when clipping active)
     kl_divergence: float
     clip_fraction: float
     nan_grad_count: int  # DRL expert: fail-fast on NaN
+
+    # BUG FIX: Pre-clip gradient norm captures actual gradient magnitude BEFORE clipping.
+    # Critical for detecting gradient explosion (pre_clip >> 1.0) vs healthy gradients.
+    # Previously this was lost because clip_grad_norm_() return value was discarded.
+    pre_clip_grad_norm: float = 0.0
 
     # OPTIONAL - explained_variance can be NaN early training
     explained_variance: float | None = None
@@ -690,8 +695,13 @@ class PPOUpdatePayload:
     joint_ratio_max: float = 1.0  # Product of per-head ratios (computed in log-space)
 
     # PPO inner loop context
-    inner_epoch: int = 0
+    inner_epoch: int = 0  # Host training epoch (1-150), NOT PPO update iteration
     batch: int = 0
+
+    # BUG FIX: Track actual number of PPO gradient updates that occurred in this batch.
+    # Previously inner_epoch was misused for this (always showed max_epochs=150).
+    # This may be less than ppo_updates_per_batch if early-stopped on KL divergence.
+    ppo_updates_count: int = 1
 
     # Skipped update flag (for buffer rollback scenarios)
     skipped: bool = False
@@ -742,6 +752,7 @@ class PPOUpdatePayload:
             kl_divergence=data["kl_divergence"],
             clip_fraction=data["clip_fraction"],
             nan_grad_count=data.get("nan_grad_count", 0),
+            pre_clip_grad_norm=data["pre_clip_grad_norm"],
             # Optional fields
             explained_variance=data.get("explained_variance"),
             entropy_loss=data.get("entropy_loss", 0.0),
@@ -796,6 +807,7 @@ class PPOUpdatePayload:
             joint_ratio_max=data.get("joint_ratio_max", 1.0),
             inner_epoch=data.get("inner_epoch", 0),
             batch=data.get("batch", 0),
+            ppo_updates_count=data["ppo_updates_count"],
             skipped=data.get("skipped", False),
             # Value function statistics
             value_mean=data.get("value_mean", 0.0),

@@ -21,11 +21,10 @@ import logging
 import queue
 import threading
 import time
-from abc import ABC, abstractmethod
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from esper.leyline import TelemetryEvent
 from esper.leyline.telemetry import (
@@ -63,12 +62,12 @@ def _join_with_timeout(q: queue.Queue[Any], timeout: float | None) -> bool:
         return True
 
     deadline = time.monotonic() + timeout
-    with q.all_tasks_done:  # type: ignore[attr-defined]
-        while q.unfinished_tasks:  # type: ignore[attr-defined]
+    with q.all_tasks_done:
+        while q.unfinished_tasks:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return False
-            q.all_tasks_done.wait(timeout=remaining)  # type: ignore[attr-defined]
+            q.all_tasks_done.wait(timeout=remaining)
     return True
 
 
@@ -267,25 +266,41 @@ class BackendWorker:
                 _logger.error(f"Unexpected error in backend worker {self._name}: {e}")
 
 
-class OutputBackend(ABC):
-    """Base class for telemetry output backends."""
+@runtime_checkable
+class OutputBackend(Protocol):
+    """Protocol for telemetry output backends.
 
-    def start(self) -> None:
-        """Start the backend (e.g., open files, start threads)."""
-        pass
+    This is a structural typing protocol - any class with matching methods
+    satisfies this type, no explicit inheritance required. Classes MAY
+    inherit from this Protocol to get default implementations of start()
+    and close().
 
-    @abstractmethod
+    Methods:
+        start: Initialize the backend (default: no-op)
+        emit: Process a telemetry event (required)
+        close: Release resources (default: no-op)
+    """
+
+    def start(self) -> bool | None:
+        """Start the backend (e.g., open files, start threads).
+
+        Returns:
+            True if started successfully, False if failed (optional dependencies
+            missing), or None for backends that don't report status.
+        """
+        ...
+
     def emit(self, event: TelemetryEvent) -> None:
         """Emit a telemetry event to this backend.
 
         Args:
             event: The telemetry event to emit.
         """
-        pass
+        ...
 
     def close(self) -> None:
         """Close the backend and release resources."""
-        pass
+        ...
 
 
 class ConsoleOutput(OutputBackend):
@@ -304,6 +319,14 @@ class ConsoleOutput(OutputBackend):
         self.verbose = verbose
         self.use_color = use_color
         self.min_severity = min_severity
+
+    def start(self) -> None:
+        """No-op for console output."""
+        pass
+
+    def close(self) -> None:
+        """No-op for console output."""
+        pass
 
     def emit(self, event: TelemetryEvent) -> None:
         """Emit event to console if it meets minimum severity threshold."""
@@ -487,6 +510,10 @@ class FileOutput(OutputBackend):
         # Open file in append mode
         self._file = open(self.path, 'a', encoding='utf-8')
 
+    def start(self) -> None:
+        """No-op for file output (file opened in __init__)."""
+        pass
+
     def emit(self, event: TelemetryEvent) -> None:
         """Emit event to file."""
         event_dict = self._event_to_dict(event)
@@ -551,6 +578,10 @@ class DirectoryOutput(OutputBackend):
     def output_dir(self) -> Path:
         """Return the full path to the timestamped output directory."""
         return self._output_dir
+
+    def start(self) -> None:
+        """No-op for directory output (directory created in __init__)."""
+        pass
 
     def emit(self, event: TelemetryEvent) -> None:
         """Emit event to the directory's events.jsonl file."""

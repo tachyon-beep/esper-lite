@@ -75,7 +75,7 @@ def create_heuristic_policy(
     return HeuristicPolicyBundle(config=config, topology=topology)
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> type:
     """Lazy import for HeuristicPolicyBundle (not needed for registration)."""
     if name == "HeuristicPolicyBundle":
         from esper.tamiyo.policy.heuristic_bundle import HeuristicPolicyBundle

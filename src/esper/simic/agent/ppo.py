@@ -789,7 +789,13 @@ class PPOAgent:
                     grad_cv = 0.0
                 metrics["gradient_cv"].append(grad_cv)
 
-            nn.utils.clip_grad_norm_(self.policy.network.parameters(), self.max_grad_norm)
+            # Capture pre-clip gradient norm (BUG FIX: was discarding this value)
+            # The return value of clip_grad_norm_ is the total norm BEFORE clipping.
+            # This is critical for detecting gradient explosion vs healthy gradients.
+            pre_clip_norm = nn.utils.clip_grad_norm_(
+                self.policy.network.parameters(), self.max_grad_norm
+            )
+            metrics["pre_clip_grad_norm"].append(float(pre_clip_norm))
             self.optimizer.step()
 
             # Track metrics

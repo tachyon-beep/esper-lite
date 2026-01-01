@@ -1267,7 +1267,7 @@ class SanctumAggregator:
                     values[slot_id] = ShapleyEstimate(
                         mean=metrics.get("mean", 0.0),
                         std=metrics.get("std", 0.0),
-                        n_samples=metrics.get("n_samples", 0),
+                        n_samples=int(metrics.get("n_samples", 0)),
                     )
 
                 env.shapley_snapshot = ShapleySnapshot(

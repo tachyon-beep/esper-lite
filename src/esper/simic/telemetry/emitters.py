@@ -781,6 +781,8 @@ def emit_ppo_update_event(
             kl_divergence=metrics.get("approx_kl", 0.0),
             clip_fraction=metrics.get("clip_fraction", 0.0),
             nan_grad_count=metrics.get("nan_grad_count", 0),
+            # BUG FIX: Pre-clip gradient norm for detecting explosion vs healthy gradients
+            pre_clip_grad_norm=metrics["pre_clip_grad_norm"],
             # Optional fields
             explained_variance=metrics.get("explained_variance"),
             entropy_loss=0.0,
@@ -856,6 +858,8 @@ def emit_ppo_update_event(
             cuda_memory_fragmentation=metrics.get("cuda_memory_fragmentation", 0.0),
             inner_epoch=epoch,
             batch=batch_idx + 1,
+            # BUG FIX: Track actual PPO update count (inner_epoch was misleading)
+            ppo_updates_count=metrics["ppo_updates_count"],
         ),
         group_id=group_id,
     ))

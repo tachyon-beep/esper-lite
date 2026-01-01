@@ -153,17 +153,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Keep lightweight seed lifecycle telemetry even when ops telemetry is disabled",
     )
     telemetry_parent.add_argument(
-        "--dashboard",
-        action="store_true",
-        help="Enable real-time WebSocket dashboard (requires: pip install esper-lite[dashboard])",
-    )
-    telemetry_parent.add_argument(
-        "--dashboard-port",
-        type=int,
-        default=8000,
-        help="Dashboard server port (default: 8000)",
-    )
-    telemetry_parent.add_argument(
         "--no-tui",
         action="store_true",
         help="Disable Rich terminal UI (uses console output instead)",
@@ -553,64 +542,6 @@ def main() -> None:
         karn_collector = KarnCollector()
         hub.add_backend(karn_collector)
 
-    # Add WebSocket dashboard if requested
-    dashboard_backend = None
-    if args.dashboard:
-        try:
-            from esper.karn import DashboardServer
-
-            # DashboardServer provides integrated HTTP + WebSocket:
-            # - Serves dashboard HTML at http://localhost:PORT/
-            # - WebSocket telemetry at ws://localhost:PORT/ws
-            # - Queues events from sync training loop
-            dashboard_backend = DashboardServer(port=args.dashboard_port)
-            dashboard_backend.start()
-            hub.add_backend(dashboard_backend)
-
-            # Get all network interfaces for dashboard URLs
-            def get_network_interfaces() -> list[str]:
-                """Get all network interface IPs."""
-                interfaces = ["localhost", "127.0.0.1"]
-                try:
-                    import socket
-                    hostname = socket.gethostname()
-                    # Get all IPs for this host
-                    for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
-                        ip = str(info[4][0])
-                        if ip not in interfaces and not ip.startswith("127."):
-                            interfaces.append(ip)
-                    # Also try to get the primary LAN IP
-                    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                    try:
-                        s.connect(("8.8.8.8", 80))
-                        lan_ip = s.getsockname()[0]
-                        if lan_ip not in interfaces:
-                            interfaces.insert(2, lan_ip)  # Put after localhost
-                    except OSError as e:
-                        _logger.debug("Network interface discovery failed: %s", e)
-                    finally:
-                        s.close()
-                except OSError as e:
-                    _logger.debug("Network interface discovery failed: %s", e)
-                return interfaces
-
-            # Print clickable dashboard links (OSC 8 hyperlinks for modern terminals)
-            interfaces = get_network_interfaces()
-            print()
-            print("  \033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m")
-            print("  \033[1m🔬 Live Dashboard\033[0m (listening on all interfaces)")
-            for iface in interfaces:
-                url = f"http://{iface}:{args.dashboard_port}"
-                # OSC 8 format: \033]8;;URL\033\\TEXT\033]8;;\033\\
-                hyperlink = f"\033]8;;{url}\033\\{url}\033]8;;\033\\"
-                label = " (local)" if iface in ("localhost", "127.0.0.1") else " (LAN)" if not iface.startswith("127.") else ""
-                print(f"     → {hyperlink}\033[90m{label}\033[0m")
-            print("  \033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m")
-            print()
-        except ImportError:
-            print("Warning: Dashboard dependencies not installed.")
-            print("  Install with: pip install esper-lite[dashboard]")
-
     # Add Wandb backend if requested
     wandb_backend = None
     if args.wandb:
@@ -787,7 +718,7 @@ def main() -> None:
                 if args.task is not None:
                     config.task = args.task
                 if args.slots is not None:
-                    config.slots = tuple(args.slots)
+                    config.slots = list(args.slots)
                 if args.max_seeds is not None:
                     config.max_seeds = args.max_seeds
 

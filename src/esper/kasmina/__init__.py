@@ -130,35 +130,35 @@ def __getattr__(name: str) -> Any:
     # Slot (HEAVY - loads torch)
     if name in _SLOT_EXPORTS:
         from esper.kasmina.slot import SeedMetrics, SeedState, QualityGates, SeedSlot
-        mapping: dict[str, Any] = {
+        slot_exports: dict[str, Any] = {
             "SeedMetrics": SeedMetrics,
             "SeedState": SeedState,
             "QualityGates": QualityGates,
             "SeedSlot": SeedSlot,
         }
-        globals().update(mapping)
-        return mapping[name]
+        globals().update(slot_exports)
+        return slot_exports[name]
 
     # Blueprints (HEAVY - loads torch)
     if name in _BLUEPRINT_EXPORTS:
         from esper.kasmina.blueprints import BlueprintRegistry, BlueprintSpec, ConvBlock
-        mapping: dict[str, Any] = {
+        blueprint_exports: dict[str, Any] = {
             "BlueprintRegistry": BlueprintRegistry,
             "BlueprintSpec": BlueprintSpec,
             "ConvBlock": ConvBlock,
         }
-        globals().update(mapping)
-        return mapping[name]
+        globals().update(blueprint_exports)
+        return blueprint_exports[name]
 
     # Isolation (HEAVY - loads torch)
     if name in _ISOLATION_EXPORTS:
         from esper.kasmina.isolation import blend_with_isolation, GradientHealthMonitor
-        mapping: dict[str, Any] = {
+        isolation_exports: dict[str, Any] = {
             "blend_with_isolation": blend_with_isolation,
             "GradientHealthMonitor": GradientHealthMonitor,
         }
-        globals().update(mapping)
-        return mapping[name]
+        globals().update(isolation_exports)
+        return isolation_exports[name]
 
     # Protocol (lightweight)
     if name in _PROTOCOL_EXPORTS:
@@ -169,14 +169,14 @@ def __getattr__(name: str) -> Any:
     # Host (HEAVY - loads torch)
     if name in _HOST_EXPORTS:
         from esper.kasmina.host import CNNHost, TransformerHost, TransformerBlock, MorphogeneticModel
-        mapping: dict[str, Any] = {
+        host_exports: dict[str, Any] = {
             "CNNHost": CNNHost,
             "TransformerHost": TransformerHost,
             "TransformerBlock": TransformerBlock,
             "MorphogeneticModel": MorphogeneticModel,
         }
-        globals().update(mapping)
-        return mapping[name]
+        globals().update(host_exports)
+        return host_exports[name]
 
     # Alpha (lightweight)
     if name in _ALPHA_EXPORTS:

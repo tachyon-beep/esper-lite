@@ -21,7 +21,13 @@ def test_emit_ppo_update_event_propagates_group_id():
 
     emit_ppo_update_event(
         hub=hub,
-        metrics={"policy_loss": 0.1, "value_loss": 0.2, "entropy": 1.5},
+        metrics={
+            "policy_loss": 0.1,
+            "value_loss": 0.2,
+            "entropy": 1.5,
+            "pre_clip_grad_norm": 2.5,
+            "ppo_updates_count": 1,
+        },
         episodes_completed=10,
         batch_idx=5,
         epoch=100,
@@ -49,6 +55,8 @@ def test_emit_ppo_update_event_includes_value_stats():
             "policy_loss": 0.1,
             "value_loss": 0.2,
             "entropy": 1.5,
+            "pre_clip_grad_norm": 3.2,
+            "ppo_updates_count": 2,
             # Value function statistics
             "value_mean": 5.5,
             "value_std": 1.2,

@@ -1,7 +1,7 @@
 """Karn Serialization - Shared event serialization for output backends.
 
 Provides a single source of truth for converting TelemetryEvent-like
-objects to JSON strings. Used by WebSocketOutput and DashboardServer.
+objects to JSON strings. Used by WebSocketOutput and OverwatchBackend.
 
 Usage:
     from esper.karn.serialization import serialize_event

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from esper.karn.store import (
@@ -33,6 +33,7 @@ from esper.karn.ingest import (
     coerce_int,
     coerce_seed_stage,
 )
+from esper.nissa.output import OutputBackend
 from esper.leyline.telemetry import (
     TrainingStartedPayload,
     EpochCompletedPayload,
@@ -62,33 +63,6 @@ _ANOMALY_EVENT_TYPES = frozenset({
     "GRADIENT_ANOMALY",
     "GRADIENT_PATHOLOGY_DETECTED",
 })
-
-
-class OutputBackend(Protocol):
-    """Protocol for Karn output backends.
-
-    Note:
-        All methods are called by KarnCollector:
-        - start() is called by add_backend() before the backend is registered
-        - emit() is called for each telemetry event
-        - close() is called during collector shutdown
-
-        Backends can implement start() as a no-op if no initialization is needed.
-        For convenience, subclass esper.nissa.output.OutputBackend which provides
-        default no-op implementations for start() and close().
-    """
-
-    def start(self) -> None:
-        """Start backend (called by add_backend(), can be no-op)."""
-        ...
-
-    def emit(self, event: "TelemetryEvent") -> None:
-        """Emit event to this backend."""
-        ...
-
-    def close(self) -> None:
-        """Close backend and release resources."""
-        ...
 
 
 @dataclass

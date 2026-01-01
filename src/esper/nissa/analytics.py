@@ -159,6 +159,14 @@ class BlueprintAnalytics(OutputBackend):
         self.scoreboards: dict[int, SeedScoreboard] = {}
         self.quiet = quiet
 
+    def start(self) -> None:
+        """No-op for analytics backend."""
+        pass
+
+    def close(self) -> None:
+        """No-op for analytics backend."""
+        pass
+
     def set_host_params(self, env_id: int, host_params: int) -> None:
         """Initialize or update host parameter count for an environment."""
         sb = self._get_scoreboard(env_id)
