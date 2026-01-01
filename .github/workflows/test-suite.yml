@@ -14,25 +14,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: |
-          pip install ruff mypy
-          pip install -e .
-
+      # Use pre-built ruff action - no installation needed
       - name: Lint with ruff
-        run: ruff check src/ tests/
+        uses: astral-sh/ruff-action@v3
+        with:
+          args: "check src/ tests/"
 
-      - name: Type check with mypy
-        run: MYPYPATH=src mypy -p esper
-
-  property-tests:
+  typecheck:
     runs-on: ubuntu-latest
-    needs: lint
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -42,29 +31,53 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Cache dependencies
-        uses: actions/cache@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
+          enable-cache: true
+
+      # Install only what mypy needs (stubs + minimal deps)
+      - name: Install dependencies for type checking
+        run: |
+          uv pip install --system mypy types-PyYAML
+          uv pip install --system -e . --no-deps
+          uv pip install --system torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Type check with mypy
+        run: MYPYPATH=src mypy -p esper
+
+  property-tests:
+    runs-on: ubuntu-latest
+    needs: [lint, typecheck]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
 
       - name: Install dependencies
-        run: |
-          pip install -e .[dev]
-          pip install hypothesis pytest
+        run: uv sync --extra dev
 
       - name: Run property tests
         env:
           HYPOTHESIS_PROFILE: ci
         run: |
-          pytest tests/properties/ \
+          uv run pytest tests/properties/ \
             -v \
             --hypothesis-show-statistics \
             --tb=short
 
   unit-and-integration-tests:
     runs-on: ubuntu-latest
-    needs: lint
+    needs: [lint, typecheck]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -74,20 +87,17 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Cache dependencies
-        uses: actions/cache@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
+          enable-cache: true
 
       - name: Install dependencies
-        run: |
-          pip install -e .[dev]
-          pip install pytest pytest-cov
+        run: uv sync --extra dev
 
       - name: Run unit tests
         run: |
-          pytest tests/unit/ -v --cov=src --cov-report=json
+          uv run pytest tests/unit/ -v --cov=src --cov-report=json
 
       - name: Check coverage threshold
         run: |
@@ -100,7 +110,7 @@ jobs:
 
       - name: Run integration tests
         run: |
-          pytest tests/integration/ -v
+          uv run pytest tests/integration/ -v
 
   e2e-smoke-tests:
     runs-on: ubuntu-latest
@@ -114,14 +124,17 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
       - name: Install dependencies
-        run: |
-          pip install -e .[dev]
-          pip install pytest
+        run: uv sync --extra dev
 
       - name: Run E2E smoke tests
         run: |
-          pytest tests/e2e/ -v -m "not slow"
+          uv run pytest tests/e2e/ -v -m "not slow"
 
   nightly-full-suite:
     if: github.event_name == 'schedule'
@@ -135,21 +148,24 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
       - name: Install dependencies
-        run: |
-          pip install -e .[dev]
-          pip install hypothesis pytest
+        run: uv sync --extra dev
 
       - name: Run full property tests (thorough)
         env:
           HYPOTHESIS_PROFILE: thorough
         run: |
-          pytest tests/properties/ -v --hypothesis-show-statistics
+          uv run pytest tests/properties/ -v --hypothesis-show-statistics
 
       - name: Run all E2E tests
         run: |
-          pytest tests/e2e/ -v  # All tests, including slow ones
+          uv run pytest tests/e2e/ -v  # All tests, including slow ones
 
       - name: Run performance benchmarks
         run: |
-          pytest tests/benchmarks/ -v
+          uv run pytest tests/benchmarks/ -v
