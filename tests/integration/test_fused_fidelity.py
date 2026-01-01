@@ -118,7 +118,7 @@ def run_fused_validation(
     
     # 1. Tile Inputs
     # Shape: [K * B, ...]
-    inputs_fused = inputs.repeat(num_configs, 1)
+    inputs_fused = inputs.repeat(num_configs, *([1] * (inputs.dim() - 1)))
     
     # 2. Build Alpha Overrides
     # This logic replicates `vectorized.py` lines ~2050-2100
@@ -128,10 +128,10 @@ def run_fused_validation(
         slot = cast(SeedSlot, model.seed_slots[slot_id])
         current_alpha = slot.alpha
         
-        # Determine shape (assuming flat/Linear inputs for SimpleHost)
-        # For CNN it would be (K*B, 1, 1, 1)
-        # For this test we use (K*B, 1) for broadcasting against (K*B, hidden)
-        alpha_shape = (num_configs * batch_size, 1)
+        # Alpha overrides must match MorphogeneticModel.fused_forward() expectations:
+        # - CNN: (K*B, 1, 1, 1)
+        # - Transformer: (K*B, 1, 1)
+        alpha_shape = (num_configs * batch_size, *([1] * (inputs.dim() - 1)))
         
         override_vec = torch.full(
             alpha_shape,
@@ -151,8 +151,8 @@ def run_fused_validation(
         
     # 3. Run Fused Forward Pass
     with torch.no_grad():
-        # SlottedHost.forward supports alpha_overrides
-        output_fused = model(inputs_fused, alpha_overrides=alpha_overrides)
+        # MorphogeneticModel exposes fused_forward() for alpha override batches.
+        output_fused = model.fused_forward(inputs_fused, alpha_overrides=alpha_overrides)  # type: ignore[attr-defined]
         
     # 4. Split Results
     results = list(torch.split(output_fused, batch_size, dim=0))
@@ -167,7 +167,7 @@ class TestFusedValidationFidelity:
     
     def test_fused_vs_sequential_accuracy(self):
         """Verify bitwise fidelity between fused and sequential validation."""
-        device = torch.device("cpu")
+        device = "cpu"
         
         # 1. Setup Model (Standard CIFAR-10 like setup but smaller)
         # using create_model to get the full SlottedHost wrapper
@@ -181,13 +181,13 @@ class TestFusedValidationFidelity:
         # r0c1: BLENDING (alpha 0.5)
         # r0c2: FOSSILIZED (alpha 1.0)
         slot1 = cast(SeedSlot, model.seed_slots["r0c1"])
-        slot1.germinate("conv3x3", alpha_target=1.0)
+        slot1.germinate("conv_small", alpha_target=1.0)
         slot1.state.stage = SeedStage.BLENDING
         slot1.state.alpha = 0.5
         slot1.state.alpha_controller.alpha = 0.5
         
         slot2 = cast(SeedSlot, model.seed_slots["r0c2"])
-        slot2.germinate("conv3x3", alpha_target=1.0)
+        slot2.germinate("conv_small", alpha_target=1.0)
         slot2.state.stage = SeedStage.FOSSILIZED
         slot2.state.alpha = 1.0
         slot2.state.alpha_controller.alpha = 1.0
@@ -254,11 +254,11 @@ class TestFusedValidationFidelity:
                 
     def test_batch_norm_stats_frozen(self):
         """Verify that Fused Validation does not update BN running stats."""
-        device = torch.device("cpu")
+        device = "cpu"
         model = create_model(task="cifar10", device=device, slots=["r0c1"])
         
         # Access a BN layer
-        bn_layer = model.host.layer1[0].bn1
+        bn_layer = model.host.blocks[0].bn
         initial_mean = bn_layer.running_mean.clone()
         
         # Run fused pass

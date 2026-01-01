@@ -182,3 +182,25 @@ class TestRewardNormalizer:
         # One sample
         normalizer.update_and_normalize(1.0)
         assert normalizer.normalize_only(3.0) == 3.0  # Still not enough for variance
+
+    def test_sparse_zeros_then_spike_stays_finite(self):
+        """Sparse episodes (many zeros then spike) should not produce NaN/Inf."""
+        import math
+        from esper.simic.control import RewardNormalizer
+
+        normalizer = RewardNormalizer()
+        rewards = [0.0] * 24 + [0.78]
+        normalized = [normalizer.update_and_normalize(r) for r in rewards]
+
+        assert all(math.isfinite(n) for n in normalized)
+
+    def test_sparse_multiple_episodes_stays_finite(self):
+        """RewardNormalizer should remain stable across multiple sparse episodes."""
+        import math
+        from esper.simic.control import RewardNormalizer
+
+        normalizer = RewardNormalizer()
+        for ep in range(10):
+            rewards = [0.0] * 24 + [0.7 + 0.02 * ep]
+            normalized = [normalizer.update_and_normalize(r) for r in rewards]
+            assert all(math.isfinite(n) for n in normalized)

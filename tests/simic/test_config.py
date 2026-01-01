@@ -60,7 +60,6 @@ class TestTrainingConfigPresets:
         assert config.entropy_coef_start == 0.06
         assert config.entropy_coef_end == 0.03
         assert config.entropy_anneal_episodes == 200
-        assert config.adaptive_entropy_floor is True
 
 
 class TestTrainingConfigConversion:

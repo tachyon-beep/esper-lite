@@ -1,4 +1,4 @@
-"""Integration tests for factored action mode in vectorized PPO training.
+"""Contract tests for the factored action architecture.
 
 The unified architecture always uses factored actions with per-head masks.
 These tests verify the action mask computation and batched action selection.
@@ -121,6 +121,7 @@ class TestPPOAgentFactoredInVectorized:
 
         # Batched states
         states = torch.randn(n_envs, state_dim)
+        blueprint_indices = torch.full((n_envs, slot_config.num_slots), -1, dtype=torch.long)
 
         # Batched masks (dict of [n_envs, head_dim] tensors)
         masks = {
@@ -138,6 +139,7 @@ class TestPPOAgentFactoredInVectorized:
         with torch.no_grad():
             result = agent.policy.network.get_action(
                 states,
+                blueprint_indices,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
                 style_mask=masks["style"],
@@ -188,6 +190,7 @@ class TestPPOAgentFactoredInVectorized:
             num_envs=n_envs,
             max_steps_per_env=10,
         )
+        blueprint_indices = torch.full((slot_config.num_slots,), -1, dtype=torch.long)
 
         # Start episodes for all envs
         for env_idx in range(n_envs):
@@ -202,6 +205,7 @@ class TestPPOAgentFactoredInVectorized:
             agent.buffer.add(
                 env_id=env_idx,
                 state=state,
+                blueprint_indices=blueprint_indices,
                 slot_action=env_idx % slot_config.num_slots,
                 blueprint_action=env_idx % NUM_BLUEPRINTS,
                 style_action=env_idx % NUM_STYLES,

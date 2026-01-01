@@ -1,6 +1,6 @@
-"""End-to-end tests for dynamic slot configurations.
+"""Contract tests for dynamic slot configurations.
 
-Tests verify that training works correctly with various slot configurations:
+These tests verify that core RL-policy plumbing supports variable slot counts:
 - Different slot counts (1, 5, 9, 25)
 - Multiple environments with independent mask computation
 - Slot saturation and recovery after culling
@@ -54,6 +54,7 @@ class TestTrainingWithDifferentSlotCounts:
 
         # Verify forward pass works
         states = torch.randn(1, state_dim)
+        blueprint_indices = torch.full((1, config.num_slots), -1, dtype=torch.long)
         masks = {
             "slot": torch.ones(1, 1, dtype=torch.bool),
             "blueprint": torch.ones(1, NUM_BLUEPRINTS, dtype=torch.bool),
@@ -68,6 +69,7 @@ class TestTrainingWithDifferentSlotCounts:
         with torch.no_grad():
             result = agent.policy.network.get_action(
                 states,
+                blueprint_indices,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
                 style_mask=masks["style"],
@@ -107,6 +109,7 @@ class TestTrainingWithDifferentSlotCounts:
         # Verify batched forward pass works
         n_envs = 2
         states = torch.randn(n_envs, state_dim)
+        blueprint_indices = torch.full((n_envs, config.num_slots), -1, dtype=torch.long)
         masks = {
             "slot": torch.ones(n_envs, 5, dtype=torch.bool),
             "blueprint": torch.ones(n_envs, NUM_BLUEPRINTS, dtype=torch.bool),
@@ -121,6 +124,7 @@ class TestTrainingWithDifferentSlotCounts:
         with torch.no_grad():
             result = agent.policy.network.get_action(
                 states,
+                blueprint_indices,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
                 style_mask=masks["style"],
@@ -166,6 +170,7 @@ class TestTrainingWithDifferentSlotCounts:
         # Verify forward pass with all 9 slots
         n_envs = 2
         states = torch.randn(n_envs, state_dim)
+        blueprint_indices = torch.full((n_envs, config.num_slots), -1, dtype=torch.long)
         masks = {
             "slot": torch.ones(n_envs, 9, dtype=torch.bool),
             "blueprint": torch.ones(n_envs, NUM_BLUEPRINTS, dtype=torch.bool),
@@ -180,6 +185,7 @@ class TestTrainingWithDifferentSlotCounts:
         with torch.no_grad():
             result = agent.policy.network.get_action(
                 states,
+                blueprint_indices,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
                 style_mask=masks["style"],
@@ -397,6 +403,7 @@ class TestLargeSlotConfigurations:
 
         # Verify forward pass with 25 slots
         states = torch.randn(1, state_dim)
+        blueprint_indices = torch.full((1, config.num_slots), -1, dtype=torch.long)
         masks = {
             "slot": torch.ones(1, 25, dtype=torch.bool),
             "blueprint": torch.ones(1, NUM_BLUEPRINTS, dtype=torch.bool),
@@ -411,6 +418,7 @@ class TestLargeSlotConfigurations:
         with torch.no_grad():
             result = agent.policy.network.get_action(
                 states,
+                blueprint_indices,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
                 style_mask=masks["style"],
@@ -467,6 +475,7 @@ class TestBufferWithDynamicSlots:
             num_envs=2,
             max_steps_per_env=10,
         )
+        blueprint_indices = torch.full((config.num_slots,), -1, dtype=torch.long)
 
         # Start episodes
         for env_idx in range(2):
@@ -481,6 +490,7 @@ class TestBufferWithDynamicSlots:
             agent.buffer.add(
                 env_id=env_idx,
                 state=state,
+                blueprint_indices=blueprint_indices,
                 slot_action=env_idx % 5,
                 blueprint_action=0,
                 style_action=0,
@@ -533,6 +543,7 @@ class TestBufferWithDynamicSlots:
             num_envs=1,
             max_steps_per_env=10,
         )
+        blueprint_indices = torch.full((config.num_slots,), -1, dtype=torch.long)
 
         agent.buffer.start_episode(env_id=0)
 
@@ -544,6 +555,7 @@ class TestBufferWithDynamicSlots:
         agent.buffer.add(
             env_id=0,
             state=state,
+            blueprint_indices=blueprint_indices,
             slot_action=0,
             blueprint_action=0,
             style_action=0,

@@ -173,14 +173,15 @@ class LSTMPolicyBundle:
             features,
             blueprint_indices,
             hidden,
-            slot_mask=expand_mask(masks.get("slot")),
-            blueprint_mask=expand_mask(masks.get("blueprint")),
-            style_mask=expand_mask(masks.get("style")),
-            tempo_mask=expand_mask(masks.get("tempo")),
-            op_mask=expand_mask(masks.get("op")),
-            alpha_target_mask=expand_mask(masks.get("alpha_target")),
-            alpha_speed_mask=expand_mask(masks.get("alpha_speed")),
-            alpha_curve_mask=expand_mask(masks.get("alpha_curve")),
+            # NOTE: Direct dict access (not .get()) to fail fast if caller provides incomplete masks
+            slot_mask=expand_mask(masks["slot"]),
+            blueprint_mask=expand_mask(masks["blueprint"]),
+            style_mask=expand_mask(masks["style"]),
+            tempo_mask=expand_mask(masks["tempo"]),
+            op_mask=expand_mask(masks["op"]),
+            alpha_target_mask=expand_mask(masks["alpha_target"]),
+            alpha_speed_mask=expand_mask(masks["alpha_speed"]),
+            alpha_curve_mask=expand_mask(masks["alpha_curve"]),
         )
 
         # Build logits dict with explicit key access to satisfy mypy TypedDict constraints
@@ -229,14 +230,15 @@ class LSTMPolicyBundle:
             features,
             blueprint_indices,
             actions,
-            slot_mask=masks.get("slot"),
-            blueprint_mask=masks.get("blueprint"),
-            style_mask=masks.get("style"),
-            tempo_mask=masks.get("tempo"),
-            op_mask=masks.get("op"),
-            alpha_target_mask=masks.get("alpha_target"),
-            alpha_speed_mask=masks.get("alpha_speed"),
-            alpha_curve_mask=masks.get("alpha_curve"),
+            # NOTE: Direct dict access (not .get()) to fail fast if caller provides incomplete masks
+            slot_mask=masks["slot"],
+            blueprint_mask=masks["blueprint"],
+            style_mask=masks["style"],
+            tempo_mask=masks["tempo"],
+            op_mask=masks["op"],
+            alpha_target_mask=masks["alpha_target"],
+            alpha_speed_mask=masks["alpha_speed"],
+            alpha_curve_mask=masks["alpha_curve"],
             hidden=hidden,
         )
 

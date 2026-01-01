@@ -10,7 +10,6 @@ import pytest
 import torch
 import torch.nn as nn
 from typing import cast
-import copy
 
 from esper.kasmina.slot import SeedSlot
 from esper.leyline import SeedStage

@@ -1,4 +1,4 @@
-"""Integration tests for PPO algorithm with factored action space.
+"""Cross-stack tests for PPO with factored action space.
 
 Tests that PPO components work together correctly:
 - Feature extraction produces compatible tensors
@@ -9,7 +9,7 @@ Tests that PPO components work together correctly:
 import torch
 
 from esper.simic.agent import PPOAgent
-from .conftest import create_all_valid_masks
+from tests.helpers import create_all_valid_masks
 from esper.tamiyo.policy.features import batch_obs_to_features
 from esper.tamiyo.policy.factory import create_policy
 from esper.leyline import (

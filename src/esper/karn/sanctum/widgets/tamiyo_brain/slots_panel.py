@@ -118,11 +118,11 @@ class SlotsPanel(Static):
                 if seed.stage == "FOSSILIZED" and seed.blueprint_id:
                     batch_counts[seed.blueprint_id] += 1
 
-        render_top_three("Top Three This Batch: ", batch_counts)
+        render_top_three("Top 3 (B): ", batch_counts)
         result.append("\n")
 
         # "This Run": cumulative fossilizations across the entire run (all slots)
         run_counts: Counter[str] = Counter(snapshot.cumulative_blueprint_fossilized)
-        render_top_three("Top Three This Run: ", run_counts)
+        render_top_three("Top 3 (R): ", run_counts)
 
         return result

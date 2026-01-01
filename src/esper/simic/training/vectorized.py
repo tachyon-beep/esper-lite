@@ -27,6 +27,7 @@ Usage:
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import math
 import os
@@ -518,7 +519,6 @@ def train_ppo_vectorized(
     entropy_coef_start: float | None = None,
     entropy_coef_end: float | None = None,
     entropy_coef_min: float = DEFAULT_ENTROPY_COEF_MIN,  # From leyline
-    adaptive_entropy_floor: bool = False,
     entropy_anneal_episodes: int = 0,
     gamma: float = DEFAULT_GAMMA,
     gae_lambda: float = DEFAULT_GAE_LAMBDA,  # From leyline
@@ -905,7 +905,6 @@ def train_ppo_vectorized(
             entropy_coef_start=entropy_coef_start,
             entropy_coef_end=entropy_coef_end,
             entropy_coef_min=entropy_coef_min,
-            adaptive_entropy_floor=adaptive_entropy_floor,
             entropy_anneal_steps=entropy_anneal_steps,
             device=device,
             chunk_length=chunk_length,
@@ -2775,6 +2774,9 @@ def train_ppo_vectorized(
 
                 # Normalize reward for PPO stability (P1-6 fix)
                 normalized_reward = reward_normalizer.update_and_normalize(reward)
+                # B11-CR-03 fix: Store RAW rewards for telemetry interpretability
+                # PPO buffer uses normalized_reward (for training stability)
+                # Telemetry uses raw reward (for cross-run comparability)
                 env_state.episode_rewards.append(reward)
 
                 if collect_reward_summary and reward_components is not None:
@@ -3116,20 +3118,11 @@ def train_ppo_vectorized(
 
                 if done:
                     agent.buffer.end_episode(env_id=env_idx)
-                    if batched_lstm_hidden is not None:
-                        # P4-FIX: Inplace update to inference tensor not allowed.
-                        # Reset this environment's hidden state in the batch for the next episode.
-                        init_hidden = agent.policy.initial_hidden(1)
-                        assert init_hidden is not None, "initial_hidden should not return None"
-                        init_h, init_c = init_hidden
-
-                        # Create new tensors to avoid inplace modification of inference tensors
-                        assert isinstance(batched_lstm_hidden, tuple) and len(batched_lstm_hidden) == 2
-                        new_h = batched_lstm_hidden[0].clone()
-                        new_c = batched_lstm_hidden[1].clone()
-                        new_h[:, env_idx : env_idx + 1, :] = init_h
-                        new_c[:, env_idx : env_idx + 1, :] = init_c
-                        batched_lstm_hidden = (new_h, new_c)
+                    # NOTE: Do NOT reset batched_lstm_hidden here. The bootstrap value computation
+                    # (after the epoch loop) requires the carried episode hidden state to correctly
+                    # estimate V(s_{t+1}) for truncated episodes. Resetting to initial_hidden() would
+                    # bias the GAE computation by computing V(s_{t+1}) with a "memory-wiped" agent.
+                    # The next rollout will initialize fresh hidden states anyway (line 1747).
 
                 # Mechanical lifecycle advance
                 for slot_id in slots:
@@ -3214,7 +3207,8 @@ def train_ppo_vectorized(
                     episode_outcomes.append(episode_outcome)
 
                     # Emit EPISODE_OUTCOME telemetry for Pareto analysis
-                    if env_state.telemetry_cb:
+                    # B11-CR-04 fix: Skip emission for rollback episodes (will emit corrected outcome later)
+                    if env_state.telemetry_cb and not env_rollback_occurred[env_idx]:
                         env_state.telemetry_cb(TelemetryEvent(
                             event_type=TelemetryEventType.EPISODE_OUTCOME,
                             epoch=episodes_completed + env_idx,
@@ -3345,9 +3339,72 @@ def train_ppo_vectorized(
                 penalty = env_states[env_idx].governor.get_punishment_reward()
                 normalized_penalty = reward_normalizer.normalize_only(penalty)
                 agent.buffer.mark_terminal_with_penalty(env_idx, normalized_penalty)
-                # B-METRIC-01 fix: Reflect penalty in episode_rewards so metrics
-                # (EpisodeOutcome, A/B history, stability) match what PPO learned.
-                env_states[env_idx].episode_rewards.append(normalized_penalty)
+                # B11-CR-03 fix: OVERWRITE last reward with RAW penalty (for telemetry interpretability).
+                # Buffer gets normalized_penalty (for PPO training stability).
+                # Telemetry gets raw penalty (for cross-run comparability).
+                if env_states[env_idx].episode_rewards:
+                    env_states[env_idx].episode_rewards[-1] = penalty
+
+            # B11-CR-02 fix: Recompute metrics after penalty injection
+            # Metrics were computed in the epoch loop (lines 3173-3214) BEFORE penalty was applied.
+            # This caused EpisodeOutcome, episode_history, and stability to reflect PRE-PENALTY
+            # rewards, making rollback episodes appear ~2x more rewarding and ~1.6x more stable.
+            if rollback_env_indices:
+                for env_idx in rollback_env_indices:
+                    env_state = env_states[env_idx]
+
+                    # 1. Recompute total reward from post-penalty episode_rewards
+                    env_total_rewards[env_idx] = sum(env_state.episode_rewards)
+
+                    # 2. Update episode_history entry for this env
+                    for entry in reversed(episode_history):
+                        if entry["env_id"] == env_idx:
+                            entry["episode_reward"] = env_total_rewards[env_idx]
+                            break
+
+                    # 3. Recompute stability from post-penalty variance
+                    recent_ep_rewards = (
+                        env_state.episode_rewards[-20:]
+                        if len(env_state.episode_rewards) >= 20
+                        else env_state.episode_rewards
+                    )
+                    if len(recent_ep_rewards) > 1:
+                        reward_var = float(np.var(recent_ep_rewards))
+                        stability = 1.0 / (1.0 + reward_var)
+                    else:
+                        stability = 1.0
+
+                    # 4. Find and replace EpisodeOutcome for this env
+                    # EpisodeOutcome is frozen dataclass, use dataclasses.replace()
+                    for i, outcome in enumerate(episode_outcomes):
+                        if outcome.env_id == env_idx:
+                            corrected_outcome = dataclasses.replace(
+                                outcome,
+                                episode_reward=env_total_rewards[env_idx],
+                                stability_score=stability,
+                            )
+                            episode_outcomes[i] = corrected_outcome
+
+                            # 5. Emit corrected EPISODE_OUTCOME telemetry
+                            # B11-CR-04 fix: First emission was suppressed for rollback episodes
+                            # (see line 3213), so we emit the corrected outcome here (one event total).
+                            if env_state.telemetry_cb:
+                                env_state.telemetry_cb(TelemetryEvent(
+                                    event_type=TelemetryEventType.EPISODE_OUTCOME,
+                                    epoch=corrected_outcome.episode_idx,
+                                    data=EpisodeOutcomePayload(
+                                        env_id=env_idx,
+                                        episode_idx=corrected_outcome.episode_idx,
+                                        final_accuracy=corrected_outcome.final_accuracy,
+                                        param_ratio=corrected_outcome.param_ratio,
+                                        num_fossilized=corrected_outcome.num_fossilized,
+                                        num_contributing_fossilized=corrected_outcome.num_contributing_fossilized,
+                                        episode_reward=corrected_outcome.episode_reward,
+                                        stability_score=corrected_outcome.stability_score,
+                                        reward_mode=corrected_outcome.reward_mode,
+                                    ),
+                                ))
+                            break
 
         update_skipped = len(agent.buffer) == 0
         if not update_skipped:

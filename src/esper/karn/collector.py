@@ -30,12 +30,8 @@ from esper.karn.store import (
 )
 from esper.karn.triggers import AnomalyDetector, PolicyAnomalyDetector
 from esper.karn.ingest import (
-    coerce_bool_or_none,
-    coerce_float,
-    coerce_float_or_none,
     coerce_int,
     coerce_seed_stage,
-    coerce_str,
 )
 from esper.leyline.telemetry import (
     TrainingStartedPayload,

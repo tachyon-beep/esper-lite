@@ -397,15 +397,18 @@ class AttentionHeatmapPanel(Static):
 
     def _confidence_heat(self, confidence: float) -> str:
         """Convert confidence to heat indicator (5 chars)."""
-        if confidence >= 0.9:
-            return "█████"
-        elif confidence >= 0.8:
-            return "████░"
-        elif confidence >= 0.7:
-            return "███░░"
-        elif confidence >= 0.5:
-            return "██░░░"
-        elif confidence >= 0.3:
-            return "█░░░░"
-        else:
+        if confidence <= 0.0:
             return "░░░░░"
+        # Reserve full bar for true certainty (p == 1.0), which usually means the
+        # head was forced by masking (only one valid choice).
+        if confidence >= 1.0:
+            return "█████"
+        if confidence >= 0.75:
+            return "████░"
+        if confidence >= 0.5:
+            return "███░░"
+        if confidence >= 0.25:
+            return "██░░░"
+        # Non-zero confidence should always render at least one filled block
+        # so low-probability heads are distinguishable from missing telemetry.
+        return "█░░░░"

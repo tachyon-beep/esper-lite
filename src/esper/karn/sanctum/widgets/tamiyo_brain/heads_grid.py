@@ -26,6 +26,8 @@ if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot
 
 
+# TODO: This shouldn't be hard coded into the UI!
+
 # Head configuration (label, entropy_field, grad_norm_field, width, entropy_coef)
 # Order and widths match HEAD OUTPUTS panel for vertical alignment
 # entropy_coef: Differential entropy coefficient from Policy V2 (1.3x for sparse heads)
@@ -45,14 +47,14 @@ CONDITIONAL_HEADS = {"Blueprint", "Style", "Tempo", "αTarget", "αSpeed", "Curv
 
 # Max entropy per head (ln(N) where N = action space size)
 HEAD_MAX_ENTROPIES: dict[str, float] = {
-    "Slot": 1.099,      # ln(3)
-    "Blueprint": 2.565,      # ln(13)
-    "Style": 1.386,      # ln(4)
-    "Tempo": 1.099,      # ln(3)
-    "αTarget": 1.099,      # ln(3)
-    "αSpeed": 1.386,      # ln(4)
-    "Curve": 1.609,      # ln(5) - LINEAR, COSINE, SIGMOID_{GENTLE,STD,SHARP}
-    "Op": 1.792,        # ln(6)
+    "Slot": 1.099,  # ln(3)
+    "Blueprint": 2.565,  # ln(13)
+    "Style": 1.386,  # ln(4)
+    "Tempo": 1.099,  # ln(3)
+    "αTarget": 1.099,  # ln(3)
+    "αSpeed": 1.386,  # ln(4)
+    "Curve": 1.609,  # ln(5) - LINEAR, COSINE, SIGMOID_{GENTLE,STD,SHARP}
+    "Op": 1.792,  # ln(6)
 }
 
 
@@ -63,7 +65,23 @@ class HeadsPanel(Static):
     layout overhead that causes whitespace issues.
     """
 
-    BAR_WIDTH: ClassVar[int] = 5   # Width of mini-bar
+    BAR_WIDTH: ClassVar[int] = 5  # Width of mini-bar
+    # Alignment shim: match column boundaries with AttentionHeatmapPanel
+    # ("ACTION HEAD OUTPUTS") so scanning between the two panels is effortless.
+    #
+    # Reference widths in AttentionHeatmapPanel:
+    # Dec=5, Op=13, Slot=11, Blueprint=14, Style=14, Tempo=11, αTarget=12, αSpeed=12, Curve=11
+    _PRE_OP_GUTTER: ClassVar[int] = 5
+    _GUTTER_BY_LABEL: ClassVar[dict[str, int]] = {
+        "Op": 4,
+        "Slot": 4,
+        "Blueprint": 5,
+        "Style": 2,
+        "Tempo": 3,
+        "αTarget": 3,
+        "αSpeed": 2,
+        "Curve": 2,
+    }
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -87,18 +105,22 @@ class HeadsPanel(Static):
 
         tamiyo = self._snapshot.tamiyo
         result = Text()
+        last_col = len(HEAD_CONFIG) - 1
 
         # Row 0: Header labels (plain text, right-aligned like HEAD OUTPUTS)
         result.append("      ", style="dim")  # Indent for row label
-        for label, _, _, width, _ in HEAD_CONFIG:
+        result.append(" " * self._PRE_OP_GUTTER, style="dim")
+        for col_idx, (label, _, _, width, _) in enumerate(HEAD_CONFIG):
             result.append(f"{label:>{width}}", style="dim bold")
-            result.append("  ")  # 2-space padding between columns
+            if col_idx != last_col:
+                result.append(" " * self._column_gutter(label))
         result.append("\n")
 
         # Row 1: Entropy values with coefficient markers (Policy V2)
         # Note: getattr without default - AttributeError if HEAD_CONFIG has typo
         result.append("Entr  ", style="dim")
-        for label, ent_field, _, width, coef in HEAD_CONFIG:
+        result.append(" " * self._PRE_OP_GUTTER, style="dim")
+        for col_idx, (label, ent_field, _, width, coef) in enumerate(HEAD_CONFIG):
             entropy: float = getattr(tamiyo, ent_field)
             color = self._entropy_color(label, entropy)
 
@@ -115,24 +137,28 @@ class HeadsPanel(Static):
                 result.append(value, style=color)
             else:
                 result.append(f"{entropy:>{width}.2f}", style=color)
-            result.append("  ")  # 2-space padding between columns
+            if col_idx != last_col:
+                result.append(" " * self._column_gutter(label))
         result.append("\n")
 
         # Row 2: Entropy bars
         result.append("      ", style="dim")  # Indent
-        for label, ent_field, _, width, _ in HEAD_CONFIG:
+        result.append(" " * self._PRE_OP_GUTTER, style="dim")
+        for col_idx, (label, ent_field, _, width, _) in enumerate(HEAD_CONFIG):
             entropy = getattr(tamiyo, ent_field)
             bar = self._render_entropy_bar(label, entropy)
             # Right-align the bar in the cell (like HEAD OUTPUTS heat bars)
             padding = width - self.BAR_WIDTH
             result.append(" " * padding)
             result.append(bar)
-            result.append("  ")  # 2-space padding between columns
+            if col_idx != last_col:
+                result.append(" " * self._column_gutter(label))
         result.append("\n")
 
         # Row 3: Gradient values with trend arrows (Policy V2)
         result.append("Grad  ", style="dim")
-        for label, _, grad_field, width, _ in HEAD_CONFIG:
+        result.append(" " * self._PRE_OP_GUTTER, style="dim")
+        for col_idx, (label, _, grad_field, width, _) in enumerate(HEAD_CONFIG):
             grad: float = getattr(tamiyo, grad_field)
             grad_prev: float = getattr(tamiyo, f"{grad_field}_prev")
             trend = self._gradient_trend(grad, grad_prev)
@@ -146,24 +172,28 @@ class HeadsPanel(Static):
             result.append(" " * padding, style="dim")
             result.append(value, style=color)
             result.append(trend, style=self._gradient_trend_style(grad, grad_prev))
-            result.append("  ")  # 2-space padding between columns
+            if col_idx != last_col:
+                result.append(" " * self._column_gutter(label))
         result.append("\n")
 
         # Row 4: Gradient bars
         result.append("      ", style="dim")  # Indent
-        for label, _, grad_field, width, _ in HEAD_CONFIG:
+        result.append(" " * self._PRE_OP_GUTTER, style="dim")
+        for col_idx, (label, _, grad_field, width, _) in enumerate(HEAD_CONFIG):
             grad = getattr(tamiyo, grad_field)
             bar = self._render_gradient_bar(grad)
             # Right-align the bar
             padding = width - self.BAR_WIDTH
             result.append(" " * padding)
             result.append(bar)
-            result.append("  ")  # 2-space padding between columns
+            if col_idx != last_col:
+                result.append(" " * self._column_gutter(label))
         result.append("\n")
 
         # Row 5: Head state indicators (per DRL expert recommendation)
         result.append("State ", style="dim")
-        for label, ent_field, grad_field, width, _ in HEAD_CONFIG:
+        result.append(" " * self._PRE_OP_GUTTER, style="dim")
+        for col_idx, (label, ent_field, grad_field, width, _) in enumerate(HEAD_CONFIG):
             entropy = getattr(tamiyo, ent_field)
             grad = getattr(tamiyo, grad_field)
             state, style_str = self._head_state(label, entropy, grad)
@@ -177,7 +207,8 @@ class HeadsPanel(Static):
             result.append(" " * left_pad, style="dim")
             result.append(state, style=style_str)
             result.append(" " * right_pad, style="dim")
-            result.append("  ")  # 2-space padding between columns
+            if col_idx != last_col:
+                result.append(" " * self._column_gutter(label))
         result.append("\n")
 
         # Row 6-7: Gradient Flow Footer (split across 2 lines for readability)
@@ -195,7 +226,9 @@ class HeadsPanel(Static):
         exploding = tamiyo.exploding_layers
         total = DEFAULT_HOST_LSTM_LAYERS
         layers_style = "green" if (dead == 0 and exploding == 0) else "red"
-        result.append(f"Dead:{dead}/{total}   Exploding:{exploding}/{total}", style=layers_style)
+        result.append(
+            f"Dead:{dead}/{total}   Exploding:{exploding}/{total}", style=layers_style
+        )
 
         # Line 2: Directional clip
         result.append("\n")
@@ -205,6 +238,13 @@ class HeadsPanel(Static):
         result.append(f"Clip:\u2191{clip_pos:.0%}/\u2193{clip_neg:.0%}", style="dim")
 
         return result
+
+    def _column_gutter(self, label: str) -> int:
+        """Return number of spaces after a column label.
+
+        Used to align selected columns with the ACTION HEAD OUTPUTS panel.
+        """
+        return self._GUTTER_BY_LABEL[label]
 
     def _entropy_color(self, head: str, entropy: float) -> str:
         """Get color for entropy value based on normalized level."""
@@ -284,7 +324,9 @@ class HeadsPanel(Static):
         else:  # Healthy range
             return "dim"  # Changes are neutral in healthy range
 
-    def _head_state(self, head: str, entropy: float, grad_norm: float) -> tuple[str, str]:
+    def _head_state(
+        self, head: str, entropy: float, grad_norm: float
+    ) -> tuple[str, str]:
         """Classify head state based on entropy and gradient.
 
         States (per DRL expert):

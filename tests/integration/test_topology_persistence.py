@@ -6,7 +6,6 @@ restoring the exact topology and state (Stage, Alpha, Weights).
 
 import pytest
 import torch
-import os
 from typing import cast
 
 from esper.kasmina.slot import SeedSlot

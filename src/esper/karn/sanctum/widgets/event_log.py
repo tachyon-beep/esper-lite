@@ -71,6 +71,7 @@ _STAGE_SHORT = {
 
 # Max envs to show before truncating with "+"
 _MAX_ENVS_SHOWN = 3
+_DRIP_TICK_SECONDS = 0.1
 
 
 @dataclass
@@ -82,6 +83,15 @@ class _LineData:
     env_str: str = ""  # Right-justified env info (single ID or "0 1 2 +")
     event_type: str = ""  # Used for updating aggregated lines
     is_aggregate: bool = False
+
+
+@dataclass(frozen=True)
+class _QueuedEvent:
+    """EventLogEntry with a scheduled release time for smooth scrolling."""
+
+    queued_ts: float
+    ready_ts: float
+    entry: "EventLogEntry"
 
 
 class EventLog(Static):
@@ -101,14 +111,26 @@ class EventLog(Static):
             super().__init__()
             self.events = events
 
-    def __init__(self, max_lines: int = 36, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        max_lines: int = 36,
+        buffer_seconds: float = 1.0,
+        max_delay_seconds: float = 2.0,
+        **kwargs: Any,
+    ) -> None:
         """Initialize EventLog widget.
 
         Args:
             max_lines: Maximum lines to display (oldest trimmed).
+            buffer_seconds: Delay before displaying individual events for smooth scrolling.
+            max_delay_seconds: Maximum wall-clock delay for individual events.
         """
         super().__init__(**kwargs)
+        if buffer_seconds > max_delay_seconds:
+            raise ValueError("buffer_seconds must be <= max_delay_seconds")
         self._max_lines = max_lines
+        self._buffer_seconds = buffer_seconds
+        self._max_delay_seconds = max_delay_seconds
         self.border_title = "EVENTS [click for detail]"
 
         # === APPEND-ONLY STATE ===
@@ -124,7 +146,7 @@ class EventLog(Static):
         self._trimmed_count: int = 0
 
         # === DRIP-FEED STATE ===
-        self._pending_individual: deque["EventLogEntry"] = deque()
+        self._pending_individual: deque[_QueuedEvent] = deque()
         self._drip_budget: float = 0.0
         self._last_drip_ts: float = 0.0
 
@@ -137,7 +159,7 @@ class EventLog(Static):
 
     def on_mount(self) -> None:
         self._last_drip_ts = time.monotonic()
-        self.set_interval(0.1, self._drip_tick)
+        self.set_interval(_DRIP_TICK_SECONDS, self._drip_tick)
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Process snapshot and append new events.
@@ -171,8 +193,15 @@ class EventLog(Static):
                 aggregate_events[(entry.timestamp, entry.event_type)].add(entry.env_id)
 
         # Queue individual events for drip-feed insertion.
+        now = time.monotonic()
         for entry in sorted(individual_events, key=lambda e: e.timestamp):
-            self._pending_individual.append(entry)
+            self._pending_individual.append(
+                _QueuedEvent(
+                    queued_ts=now,
+                    ready_ts=now + self._buffer_seconds,
+                    entry=entry,
+                )
+            )
 
         # Process aggregated events (show counts per second, updated live)
         for (timestamp, event_type) in sorted(aggregate_events.keys()):
@@ -256,26 +285,68 @@ class EventLog(Static):
                 self._aggregate_line_index[(ld.timestamp, ld.event_type)] = idx
 
     def _drip_tick(self) -> None:
-        if not self._pending_individual:
-            return
-
         now = time.monotonic()
         dt = now - self._last_drip_ts
         self._last_drip_ts = now
+        if dt <= 0:
+            return
+
+        if not self._pending_individual:
+            self._drip_budget = 0.0
+            return
+
+        # Jitter buffer: hold events briefly so bursts can be drip-fed smoothly.
+        if self._pending_individual[0].ready_ts > now:
+            self._drip_budget = 0.0
+            return
+
+        oldest_age = now - self._pending_individual[0].queued_ts
+        catch_up_threshold = max(self._max_delay_seconds - _DRIP_TICK_SECONDS, 0.0)
+        if oldest_age >= catch_up_threshold:
+            emitted = 0
+            MAX_EMIT_PER_TICK = 500
+            while self._pending_individual and emitted < MAX_EMIT_PER_TICK:
+                queued = self._pending_individual[0]
+                if queued.ready_ts > now:
+                    break
+                oldest_age = now - queued.queued_ts
+                if oldest_age < self._buffer_seconds:
+                    break
+                queued = self._pending_individual.popleft()
+                line_data = self._format_individual_event(queued.entry, seq=self._allocate_seq())
+                if line_data is not None:
+                    self._line_data.append(line_data)
+                emitted += 1
+
+            if emitted > 0:
+                self._drip_budget = 0.0
+                self._sort_and_trim_lines()
+                self._update_border_title()
+                self.refresh()
+            return
 
         rate = self._events_per_second
         if rate <= 0:
             rate = 1.0
 
         self._drip_budget += rate * dt
-        to_emit = int(self._drip_budget)
+        # Prevent runaway bursts if the UI thread stalls or the observed rate spikes.
+        MAX_EMIT_PER_TICK = 3
+        MAX_BUDGET = float(MAX_EMIT_PER_TICK) * 5.0
+        if self._drip_budget > MAX_BUDGET:
+            self._drip_budget = MAX_BUDGET
+
+        to_emit = min(int(self._drip_budget), MAX_EMIT_PER_TICK)
         if to_emit <= 0:
             return
 
         emitted = 0
         while emitted < to_emit and self._pending_individual:
-            entry = self._pending_individual.popleft()
-            line_data = self._format_individual_event(entry, seq=self._allocate_seq())
+            queued = self._pending_individual[0]
+            if queued.ready_ts > now:
+                break
+            queued = self._pending_individual.popleft()
+            line_data = self._format_individual_event(queued.entry, seq=self._allocate_seq())
             if line_data is not None:
                 self._line_data.append(line_data)
             emitted += 1

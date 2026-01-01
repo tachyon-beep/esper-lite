@@ -10,11 +10,9 @@ import torch
 import numpy as np
 import random
 import hashlib
-from typing import Any
 
 from esper.simic.training.vectorized import train_ppo_vectorized
 from esper.simic.training.config import TrainingConfig
-from esper.simic.agent import PPOAgent
 
 # =============================================================================
 # Helper: Trace Recorder

@@ -305,7 +305,7 @@ class SanctumApp(App[None]):
 
     CSS_PATH = "styles.tcss"
 
-    view: SanctumView | None = reactive(None)
+    view: reactive[SanctumView | None] = reactive(None)
 
     BINDINGS = [
         Binding("q", "quit", "Quit", show=True),

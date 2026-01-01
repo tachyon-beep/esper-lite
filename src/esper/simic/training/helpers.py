@@ -25,7 +25,6 @@ from esper.leyline import (
 if TYPE_CHECKING:
     from torch.utils.data import DataLoader
     from esper.runtime import TaskSpec
-    from esper.simic.contracts import SlottedHostProtocol
     from esper.tamiyo.heuristic import HeuristicTamiyo
 # NOTE: get_task_spec imported lazily inside functions to avoid circular import:
 #   runtime -> simic.rewards -> simic -> simic.training -> helpers -> runtime
@@ -36,6 +35,7 @@ from esper.simic.telemetry import (
     TelemetryConfig,
 )
 from esper.simic.telemetry.gradient_collector import GradientHealthStats
+from esper.simic.contracts import SlottedHostProtocol
 from esper.leyline.slot_config import SlotConfig
 from esper.leyline.slot_id import validate_slot_ids
 from esper.nissa import get_hub

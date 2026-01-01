@@ -211,3 +211,51 @@ def test_get_value_does_not_create_grad_graph(lstm_bundle, slot_config):
     assert not value.requires_grad, (
         "get_value() created gradient graph. Add @torch.inference_mode() decorator."
     )
+
+
+def test_lstm_bundle_forward_missing_mask_key_raises(lstm_bundle, slot_config):
+    """forward() should fail fast if any required mask key is missing."""
+    features = torch.randn(1, 1, lstm_bundle.feature_dim)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (1, 1, slot_config.num_slots))
+    masks = {
+        "slot": torch.ones(1, slot_config.num_slots, dtype=torch.bool),
+        "blueprint": torch.ones(1, NUM_BLUEPRINTS, dtype=torch.bool),
+        "style": torch.ones(1, NUM_STYLES, dtype=torch.bool),
+        "tempo": torch.ones(1, NUM_TEMPO, dtype=torch.bool),
+        "alpha_target": torch.ones(1, NUM_ALPHA_TARGETS, dtype=torch.bool),
+        "alpha_speed": torch.ones(1, NUM_ALPHA_SPEEDS, dtype=torch.bool),
+        "alpha_curve": torch.ones(1, NUM_ALPHA_CURVES, dtype=torch.bool),
+        # "op" missing on purpose
+    }
+
+    with pytest.raises(KeyError, match="op"):
+        lstm_bundle.forward(features, bp_idx, masks)
+
+
+def test_lstm_bundle_evaluate_actions_missing_mask_key_raises(lstm_bundle, slot_config):
+    """evaluate_actions() should fail fast if any required mask key is missing."""
+    features = torch.randn(1, 10, lstm_bundle.feature_dim)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (1, 10, slot_config.num_slots))
+    masks = {
+        "slot": torch.ones(1, 10, slot_config.num_slots, dtype=torch.bool),
+        "blueprint": torch.ones(1, 10, NUM_BLUEPRINTS, dtype=torch.bool),
+        "style": torch.ones(1, 10, NUM_STYLES, dtype=torch.bool),
+        "tempo": torch.ones(1, 10, NUM_TEMPO, dtype=torch.bool),
+        "alpha_target": torch.ones(1, 10, NUM_ALPHA_TARGETS, dtype=torch.bool),
+        "alpha_speed": torch.ones(1, 10, NUM_ALPHA_SPEEDS, dtype=torch.bool),
+        "alpha_curve": torch.ones(1, 10, NUM_ALPHA_CURVES, dtype=torch.bool),
+        # "op" missing on purpose
+    }
+    actions = {
+        "slot": torch.zeros(1, 10, dtype=torch.long),
+        "blueprint": torch.zeros(1, 10, dtype=torch.long),
+        "style": torch.zeros(1, 10, dtype=torch.long),
+        "tempo": torch.zeros(1, 10, dtype=torch.long),
+        "alpha_target": torch.zeros(1, 10, dtype=torch.long),
+        "alpha_speed": torch.zeros(1, 10, dtype=torch.long),
+        "alpha_curve": torch.zeros(1, 10, dtype=torch.long),
+        "op": torch.zeros(1, 10, dtype=torch.long),
+    }
+
+    with pytest.raises(KeyError, match="op"):
+        lstm_bundle.evaluate_actions(features, bp_idx, actions, masks, hidden=None)

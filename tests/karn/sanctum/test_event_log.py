@@ -56,7 +56,7 @@ def test_event_log_with_events():
     from esper.karn.sanctum.widgets.event_log import EventLog
     from esper.karn.sanctum.schema import EventLogEntry
 
-    widget = EventLog(max_lines=10)
+    widget = EventLog(max_lines=10, buffer_seconds=0.0)
 
     snapshot = SanctumSnapshot(
         event_log=[
@@ -139,7 +139,7 @@ def test_event_log_groups_by_second():
     from esper.karn.sanctum.widgets.event_log import EventLog
     from esper.karn.sanctum.schema import EventLogEntry
 
-    widget = EventLog()
+    widget = EventLog(buffer_seconds=0.0)
 
     # Multiple events in the same second should be counted
     snapshot = SanctumSnapshot(
@@ -208,7 +208,7 @@ def test_event_log_uses_colors_in_rendering():
     from esper.karn.sanctum.widgets.event_log import EventLog
     from esper.karn.sanctum.schema import EventLogEntry
 
-    widget = EventLog()
+    widget = EventLog(buffer_seconds=0.0)
 
     snapshot = SanctumSnapshot(
         event_log=[

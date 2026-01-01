@@ -1,6 +1,6 @@
-"""Cross-component consistency tests for SlotConfig propagation.
+"""Cross-component contract tests for SlotConfig propagation.
 
-Tests verify that SlotConfig is correctly propagated through the entire stack:
+These tests verify that SlotConfig is correctly propagated through the stack:
 - PPOAgent → Network (num_slots matches)
 - Features → Network (state_dim matches)
 - Masks → Network (head sizes match)
@@ -101,9 +101,10 @@ class TestFeatureDimensionConsistency:
         batch_size = 8
         seq_len = 1  # Single timestep
         states = torch.randn(batch_size, seq_len, state_dim)
+        bp_idx = torch.full((batch_size, seq_len, config.num_slots), -1, dtype=torch.long)
 
         # Should not raise
-        output = network(states)
+        output = network(states, bp_idx)
 
         # Verify output dimensions (network returns a dict)
         # Network preserves sequence dimension: (batch, seq, dim)
@@ -314,10 +315,11 @@ class TestDimensionMismatchDetection:
         batch_size = 8
         seq_len = 1
         wrong_input = torch.randn(batch_size, seq_len, wrong_state_dim)
+        bp_idx = torch.full((batch_size, seq_len, config.num_slots), -1, dtype=torch.long)
 
         # Should raise a runtime error due to dimension mismatch
         with pytest.raises(RuntimeError):
-            network(wrong_input)
+            network(wrong_input, bp_idx)
 
     def test_ppo_agent_network_num_slots_from_config(self):
         """PPOAgent's network should derive num_slots from slot_config."""

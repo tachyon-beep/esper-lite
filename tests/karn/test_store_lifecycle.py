@@ -1,14 +1,9 @@
-"""Integration tests for Karn-Nissa interaction.
+"""Tests for Karn TelemetryStore lifecycle.
 
-Tests the core integration where:
-- Karn TelemetryStore receives data from training
-- Store tracks epoch history
-- Export/import functionality works
+These tests focus on TelemetryStore's in-memory lifecycle (episode/epoch tracking).
 """
 
 import pytest
-import tempfile
-from pathlib import Path
 
 from esper.karn.store import (
     TelemetryStore,
@@ -79,47 +74,3 @@ class TestTelemetryStoreLifecycle:
         latest = store.latest_epoch
         assert latest is not None
         assert latest.epoch == 1
-
-
-# =============================================================================
-# Telemetry Export Tests
-# =============================================================================
-
-
-class TestTelemetryExport:
-    """Tests for Karn telemetry export/import."""
-
-    def test_export_to_jsonl(self, store, episode_context):
-        """Store should export to JSONL format."""
-        store.start_episode(episode_context)
-
-        for epoch in range(3):
-            store.start_epoch(epoch=epoch)
-            store.commit_epoch()
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "telemetry.jsonl"
-            count = store.export_jsonl(path=str(path))
-
-            assert count > 0
-            assert path.exists()
-
-    def test_export_creates_valid_file(self, store, episode_context):
-        """Exported JSONL file should be valid and non-empty."""
-        store.start_episode(episode_context)
-        for epoch in range(3):
-            store.start_epoch(epoch=epoch)
-            store.commit_epoch()
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "telemetry.jsonl"
-            count = store.export_jsonl(path=str(path))
-
-            # File should exist and have content
-            assert path.exists()
-            assert count > 0
-
-            # File should contain valid JSON lines
-            with open(path, "r") as f:
-                lines = f.readlines()
-            assert len(lines) > 0

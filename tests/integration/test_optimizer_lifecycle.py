@@ -7,8 +7,6 @@ after pruning, preventing long-term memory leaks.
 import pytest
 import torch
 import gc
-import weakref
-from unittest.mock import MagicMock
 
 from esper.simic.training.vectorized import train_ppo_vectorized
 from esper.simic.training.config import TrainingConfig
@@ -22,61 +20,80 @@ class SurgeonAgent:
     A scripted agent that forces a specific lifecycle:
     Germinate -> Train -> Prune.
     """
-    def __init__(self, n_envs: int, *args, **kwargs):
-        self.n_envs = n_envs
+    def __init__(self, num_envs: int, *args, **kwargs):
+        self.n_envs = num_envs
         self.step_count = 0
         # Minimal PPO Interface needed by vectorized.py
-        self.buffer = type("MockBuffer", (), {"add": lambda *args, **kwargs: None, "reset": lambda: None, "compute_advantages": lambda: None, "mark_terminal_with_penalty": lambda *args: None, "step_counts": [0]*n_envs, "bootstrap_values": {}})()
-        self.lstm_hidden_dim = 512
-        self.policy = type("MockPolicy", (), {"reset_noise": lambda: None})()
-        # Mock parameters for the trainer to update/clip
-        self.policy.network = torch.nn.Linear(10, 2)
+        self.buffer = type("MockBuffer", (), {
+            "add": lambda *args, **kwargs: None, 
+            "reset": lambda: None, 
+            "compute_advantages": lambda: None, 
+            "mark_terminal_with_penalty": lambda *args: None, 
+            "start_episode": lambda *args, **kwargs: None,
+            "end_episode": lambda *args, **kwargs: None,
+            "__len__": lambda self: 0,
+            "step_counts": [0]*num_envs, 
+            "bootstrap_values": {}
+        })()
+        
+        # Define Policy class with get_action
+        class MockPolicy:
+            def __init__(self, agent):
+                self.agent = agent
+                self.network = torch.nn.Linear(10, 2)
+                
+            def reset_noise(self): pass
+            
+            def initial_hidden(self, batch_size):
+                return (torch.zeros(1, batch_size, 512), torch.zeros(1, batch_size, 512))
+                
+            def get_action(self, obs, hidden=None, **kwargs):
+                self.agent.step_count += 1
+                
+                # Action Structure: 0=WAIT, 1=GERMINATE, 2=PRUNE
+                from esper.leyline import OP_WAIT, OP_GERMINATE, OP_PRUNE, OP_ADVANCE, BLUEPRINT_ID_TO_INDEX
+                
+                ops = torch.zeros(self.agent.n_envs, dtype=torch.long)
+                slots = torch.zeros(self.agent.n_envs, dtype=torch.long) # r0c1
+                blueprints = torch.zeros(self.agent.n_envs, dtype=torch.long)
+                
+                # Pick a valid blueprint with params (e.g. conv_small)
+                bp_idx = BLUEPRINT_ID_TO_INDEX.get("conv_small", 1) # Default to 1 if not found
+                
+                if self.agent.step_count == 1:
+                    ops.fill_(OP_GERMINATE) 
+                    blueprints.fill_(bp_idx)
+                elif self.agent.step_count == 5:
+                    ops.fill_(OP_ADVANCE)
+                elif self.agent.step_count == 10:
+                    ops.fill_(OP_PRUNE)
+                else:
+                    ops.fill_(OP_WAIT)
+                    
+                from esper.leyline import ACTION_HEAD_NAMES
+                actions = {name: torch.zeros(self.agent.n_envs, dtype=torch.long) for name in ACTION_HEAD_NAMES}
+                actions["op"] = ops
+                actions["slot"] = slots
+                actions["blueprint"] = blueprints
+
+                class Result:
+                    pass
+
+                res = Result()
+                res.action = actions
+                res.value = torch.zeros(self.agent.n_envs)
+                res.log_prob = {k: torch.zeros(self.agent.n_envs) for k in actions}
+                res.hidden = (torch.zeros(1, self.agent.n_envs, 512), torch.zeros(1, self.agent.n_envs, 512))
+                res.op_logits = None
+                return res
+
+            def state_dict(self):
+                return {}
+
+        self.policy = MockPolicy(self)
         self.target_kl = None
 
-    def get_action(self, obs, hidden=None, **kwargs):
-        self.step_count += 1
-        
-        # Action Structure: 0=WAIT, 1=GERMINATE, 2=PRUNE
-        # Maps to esper.leyline.OP_NAMES: 0=WAIT, 1=GERMINATE, 2=ADVANCE, 3=PRUNE, ...
-        # Wait, I need to check actual OP indices.
-        from esper.leyline import OP_WAIT, OP_GERMINATE, OP_PRUNE, OP_ADVANCE
-        
-        ops = torch.zeros(self.n_envs, dtype=torch.long)
-        slots = torch.zeros(self.n_envs, dtype=torch.long) # Always target r0c1 (index 0 for canonical?)
-        # Need to ensure r0c1 is index 0. Default SlotConfig sorts slots.
-        
-        if self.step_count == 1:
-            # Step 1: Germinate
-            ops.fill_(OP_GERMINATE) 
-        elif self.step_count == 5:
-            # Step 5: Advance (TRAINING->BLENDING) if G2 passes
-            # But we just want to ensure it stays alive long enough
-            # Let's just wait until prune
-            ops.fill_(OP_ADVANCE)
-        elif self.step_count == 10:
-            # Step 10: Prune
-            ops.fill_(OP_PRUNE)
-        else:
-            # Wait/Train
-            ops.fill_(OP_WAIT)
-            
-        # We need all head keys
-        from esper.leyline import ACTION_HEAD_NAMES
-        actions = {name: torch.zeros(self.n_envs, dtype=torch.long) for name in ACTION_HEAD_NAMES}
-        actions["op"] = ops
-        actions["slot"] = slots
-        
-        # Mock returns
-        class Result: pass
-        res = Result()
-        res.actions = actions
-        res.values = torch.zeros(self.n_envs)
-        res.log_probs = {k: torch.zeros(self.n_envs) for k in actions}
-        res.hidden_h = torch.zeros(1, self.n_envs, 512)
-        res.hidden_c = torch.zeros(1, self.n_envs, 512)
-        
-        return res
-
+    # SurgeonAgent.get_action is removed as it's not called
     def update(self, **kwargs):
         return {} # No-op
 

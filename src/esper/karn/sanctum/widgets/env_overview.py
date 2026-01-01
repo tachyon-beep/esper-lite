@@ -145,10 +145,11 @@ class EnvOverview(Static):
         for slot_id in slot_ids:
             self.table.add_column(slot_id, key=f"slot_{slot_id}")
 
-        # Last action, stale epochs, and status
+        # Last action, momentum, status, and telemetry staleness
         self.table.add_column("Last", key="last")
-        self.table.add_column("Stale", key="stale")
+        self.table.add_column("Momentum", key="momentum")
         self.table.add_column("Status", key="status")
+        self.table.add_column("Stale", key="stale")
 
     def _refresh_table(self) -> None:
         """Refresh table rows with current snapshot data.
@@ -320,11 +321,14 @@ class EnvOverview(Static):
         # Last action
         last_action = self._format_last_action(env)
 
-        # Stale epochs (time since improvement)
-        stale_cell = self._format_stale_epochs(env)
+        # Momentum (epochs since improvement)
+        momentum_cell = self._format_momentum_epochs(env)
 
         # Status
         status_cell = self._format_status(env)
+
+        # Telemetry staleness (time since last env update)
+        staleness_cell = self._format_row_staleness(env)
 
         # Build row - order matches column definition
         row = [
@@ -341,8 +345,9 @@ class EnvOverview(Static):
             rent_cell,
         ] + slot_cells + [
             last_action,
-            stale_cell,
+            momentum_cell,
             status_cell,
+            staleness_cell,
         ]
 
         # Apply visual quieting (dim) if needed
@@ -451,7 +456,7 @@ class EnvOverview(Static):
         # Last action column (empty)
         agg_row.append("")
 
-        # Stale column - show mean epochs since improvement
+        # Momentum column - show mean epochs since improvement
         stales = [e.epochs_since_improvement for e in self._snapshot.envs.values()]
         mean_stale = sum(stales) / len(stales) if stales else 0
         agg_row.append(f"[dim]μ{mean_stale:.0f}[/dim]")
@@ -459,6 +464,18 @@ class EnvOverview(Static):
         # Status column shows best accuracy from any env
         best_acc = max((e.best_accuracy for e in self._snapshot.envs.values()), default=0.0)
         agg_row.append(f"[dim]{best_acc:.1f}%[/dim]")
+
+        # Stale column - show mean telemetry age
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+        ages = [
+            (now - e.last_update).total_seconds()
+            for e in self._snapshot.envs.values()
+            if e.last_update is not None
+        ]
+        mean_age = sum(ages) / len(ages) if ages else 0.0
+        agg_row.append(f"[dim]μ{mean_age:.0f}s[/dim]" if ages else "[dim]─[/dim]")
 
         self.table.add_row(*agg_row)
 
@@ -753,10 +770,10 @@ class EnvOverview(Static):
 
         return action_short
 
-    def _format_stale_epochs(self, env: "EnvState") -> str:
+    def _format_momentum_epochs(self, env: "EnvState") -> str:
         """Format epochs since improvement with context-aware color coding.
 
-        Staleness is only concerning when stuck in a BAD state. Being stable
+        Momentum is only concerning when stuck in a BAD state. Being stable
         at "excellent" or "healthy" for many epochs is good, not bad.
 
         Returns the number of epochs since the last improvement, colored:
@@ -789,6 +806,20 @@ class EnvOverview(Static):
             return f"[yellow]!{epochs}[/yellow]"
         else:
             return f"[red]x{epochs}[/red]"
+
+    def _format_row_staleness(self, env: "EnvState") -> str:
+        """Format staleness as time since last env update."""
+        from datetime import datetime, timezone
+
+        if env.last_update is None:
+            return "[red]●BAD[/red]"
+
+        age_s = (datetime.now(timezone.utc) - env.last_update).total_seconds()
+        if age_s < 2.0:
+            return "[green]●OK[/green]"
+        if age_s <= 5.0:
+            return "[yellow]●WARN[/yellow]"
+        return "[red]●BAD[/red]"
 
     def _format_status(self, env: "EnvState") -> str:
         """Format status with color coding."""

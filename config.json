@@ -11,11 +11,10 @@
   "entropy_coef_min": 0.01,
   "entropy_coef_start": 0.10,
   "entropy_coef_end": 0.03,
-  "adaptive_entropy_floor": true,
   "entropy_anneal_episodes": 800,
   "use_telemetry": true,
   "amp": true,
-  "lstm_hidden_dim": 128,
+  "lstm_hidden_dim": 512,
   "chunk_length": 150,
   "slots": [
     "r0c0",

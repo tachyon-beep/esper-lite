@@ -161,10 +161,8 @@ class TestAlphaShock:
         
         # Train for a few steps to align seed with residual
         print("\nIncubating seed...")
-        initial_loss = 0
         for i in range(50):
-            loss = train_seed_one_step(model_exp, inputs, targets, criterion, "r0c1")
-            if i == 0: initial_loss = loss
+            _ = train_seed_one_step(model_exp, inputs, targets, criterion, "r0c1")
             
         # Switch to blending
         slot_e.state.stage = SeedStage.BLENDING

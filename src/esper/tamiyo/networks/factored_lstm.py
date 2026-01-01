@@ -137,7 +137,8 @@ class BlueprintEmbedding(nn.Module):
             Float tensor [batch, num_slots, embed_dim]
         """
         # _null_idx is already on correct device via module.to(device)
-        safe_idx = torch.where(blueprint_indices < 0, self._null_idx, blueprint_indices)
+        null_idx = cast(torch.Tensor, self._null_idx)
+        safe_idx = torch.where(blueprint_indices < 0, null_idx, blueprint_indices)
         return cast(torch.Tensor, self.embedding(safe_idx))
 
 

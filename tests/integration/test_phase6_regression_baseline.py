@@ -127,17 +127,19 @@ def test_phase6_op_conditioning_sanity():
     slot_config = SlotConfig.default()
     policy = create_policy(
         policy_type="lstm",
-        feature_dim=get_feature_size(slot_config),
+        slot_config=slot_config,
     )
 
     # Create identical state
     state = torch.randn(4, get_feature_size(slot_config))
     bp_indices = torch.randint(0, 13, (4, slot_config.num_slots))
+    from tests.helpers import create_all_valid_masks
+    masks = create_all_valid_masks(batch_size=state.shape[0])
 
     # Sample actions multiple times
     values = []
     for _ in range(10):
-        result = policy.get_action(state, bp_indices, masks={})
+        result = policy.get_action(state, bp_indices, masks=masks)
         values.append(result.value.clone())
 
     # Convert to tensor
