@@ -62,10 +62,12 @@ class PolicyBundle(Protocol):
     # Note: Feature extraction (signals → features) is handled by Simic's
     # signals_to_features() which requires training context (slot_reports,
     # telemetry settings, max_epochs, etc.) that the PolicyBundle doesn't have.
-    # PolicyBundle receives pre-computed features, not raw TrainingSignals.
+    # PolicyBundle receives pre-computed tensor features + blueprint indices,
+    # not raw TrainingSignals.
     def get_action(
         self,
         features: torch.Tensor,
+        blueprint_indices: torch.Tensor,
         masks: dict[str, torch.Tensor],
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
         deterministic: bool = False,
@@ -80,6 +82,7 @@ class PolicyBundle(Protocol):
     def forward(
         self,
         features: torch.Tensor,
+        blueprint_indices: torch.Tensor,
         masks: dict[str, torch.Tensor],
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> "ForwardResult":
@@ -99,6 +102,7 @@ class PolicyBundle(Protocol):
     def evaluate_actions(
         self,
         features: torch.Tensor,
+        blueprint_indices: torch.Tensor,
         actions: dict[str, torch.Tensor],
         masks: dict[str, torch.Tensor],
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
@@ -107,6 +111,7 @@ class PolicyBundle(Protocol):
 
         Args:
             features: State features [batch, seq_len, feature_dim]
+            blueprint_indices: Blueprint indices per slot [batch, seq_len, num_slots]
             actions: Dict mapping head names to action tensors [batch, seq_len]
             masks: Dict mapping head names to boolean masks
             hidden: Optional recurrent hidden state
@@ -141,6 +146,7 @@ class PolicyBundle(Protocol):
     def get_value(
         self,
         features: torch.Tensor,
+        blueprint_indices: torch.Tensor,
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> torch.Tensor:
         """State value estimate for baseline."""

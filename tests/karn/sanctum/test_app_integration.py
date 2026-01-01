@@ -17,7 +17,7 @@ class TestSanctumAppIntegration:
         from esper.karn.sanctum.app import SanctumApp
 
         mock_backend = MagicMock()
-        mock_backend.get_snapshot.return_value = SanctumSnapshot()
+        mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
         mock_backend.compute_reward_health.return_value = RewardHealthData()
 
         app = SanctumApp(backend=mock_backend, num_envs=4)
@@ -39,7 +39,7 @@ class TestSanctumAppIntegration:
             tamiyo=TamiyoState(entropy=1.2, clip_fraction=0.15),
             envs={0: EnvState(env_id=0, host_accuracy=75.5)},
         )
-        mock_backend.get_snapshot.return_value = snapshot
+        mock_backend.get_all_snapshots.return_value = {"default": snapshot}
         mock_backend.compute_reward_health.return_value = RewardHealthData()
 
         # Use a fast refresh rate so timer fires quickly
@@ -52,7 +52,7 @@ class TestSanctumAppIntegration:
             await pilot.pause()
 
             # Backend should have been called by set_interval -> _poll_and_refresh
-            mock_backend.get_snapshot.assert_called()
+            mock_backend.get_all_snapshots.assert_called()
 
     @pytest.mark.asyncio
     async def test_focus_env_updates_reward_panel(self):
@@ -60,7 +60,7 @@ class TestSanctumAppIntegration:
         from esper.karn.sanctum.app import SanctumApp
 
         mock_backend = MagicMock()
-        mock_backend.get_snapshot.return_value = SanctumSnapshot()
+        mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
         mock_backend.compute_reward_health.return_value = RewardHealthData()
 
         app = SanctumApp(backend=mock_backend, num_envs=16)
@@ -86,7 +86,7 @@ class TestSanctumAppIntegration:
         from esper.karn.sanctum.app import SanctumApp
 
         mock_backend = MagicMock()
-        mock_backend.get_snapshot.return_value = SanctumSnapshot()
+        mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
         mock_backend.compute_reward_health.return_value = RewardHealthData()
 
         app = SanctumApp(backend=mock_backend, num_envs=4)
@@ -127,10 +127,10 @@ async def test_new_layout_structure():
 
 @pytest.mark.asyncio
 async def test_sanctum_app_shows_multiple_tamiyo_widgets():
-    """A/B mode should show two TamiyoBrainV2 widgets side-by-side."""
+    """A/B mode should show two TamiyoBrain widgets side-by-side."""
     from esper.karn.sanctum.app import SanctumApp
     from esper.karn.sanctum.backend import SanctumBackend
-    from esper.karn.sanctum.widgets.tamiyo_brain_v2 import TamiyoBrainV2
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
     from esper.leyline import TelemetryEvent, TelemetryEventType
 
     backend = SanctumBackend(num_envs=4)
@@ -158,8 +158,8 @@ async def test_sanctum_app_shows_multiple_tamiyo_widgets():
         app._poll_and_refresh()
         await pilot.pause()
 
-        # Should have two TamiyoBrainV2 widgets
-        widgets = app.query(TamiyoBrainV2)
+        # Should have two TamiyoBrain widgets
+        widgets = app.query(TamiyoBrain)
         assert len(widgets) == 2
 
         # Each should have correct group class
@@ -174,7 +174,7 @@ async def test_keyboard_switches_between_policies():
     """Tab key should cycle focus between policy widgets."""
     from esper.karn.sanctum.app import SanctumApp
     from esper.karn.sanctum.backend import SanctumBackend
-    from esper.karn.sanctum.widgets.tamiyo_brain_v2 import TamiyoBrainV2
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
     from esper.leyline import TelemetryEvent, TelemetryEventType
 
     backend = SanctumBackend(num_envs=4)
@@ -203,18 +203,17 @@ async def test_keyboard_switches_between_policies():
         app._poll_and_refresh()
         await pilot.pause()
 
-        # Verify we have two TamiyoBrainV2 widgets
-        widgets = list(app.query(TamiyoBrainV2))
+        # Verify we have two TamiyoBrain widgets
+        widgets = list(app.query(TamiyoBrain))
         assert len(widgets) == 2, f"Expected 2 widgets, got {len(widgets)}"
 
-        # TamiyoBrainV2 widgets support keyboard focus (can_focus=True)
+        # TamiyoBrain widgets support keyboard focus (can_focus=True)
         # Just verify they exist and have correct classes - focus cycling is flaky with refresh timers
         # This is sufficient to verify the widget tree is correctly composed
-        widget_classes = [set(w.classes) for w in widgets]
         assert any("group-a" in c for c in [" ".join(w.classes) for w in widgets]), "Should have group-a widget"
         assert any("group-b" in c for c in [" ".join(w.classes) for w in widgets]), "Should have group-b widget"
 
-        # Verify both widgets have can_focus=True (they inherited this from TamiyoBrainV2)
+        # Verify both widgets have can_focus=True (they inherited this from TamiyoBrain)
         for w in widgets:
             assert w.can_focus, f"Widget {w.id} should have can_focus=True"
 
@@ -252,12 +251,10 @@ async def test_run_header_shows_ab_comparison():
         app._poll_and_refresh()
         await pilot.pause()
 
-        # RunHeader should have A/B mode active with a leader
+        # RunHeader no longer has A/B mode - A/B comparison is handled at app level
         header = app.query_one("#run-header", RunHeader)
-        # Leader is determined in update_comparison() when called by app
-        # Both policies start with same metrics so leader depends on tiebreaker
-        # Just verify A/B mode is active (leader can be A, B, or None)
-        assert header._ab_mode is True
+        # Just verify header exists and renders without error
+        assert header is not None
 
 
 @pytest.mark.asyncio
@@ -292,17 +289,18 @@ async def test_run_header_no_ab_comparison_in_single_mode():
         app._poll_and_refresh()
         await pilot.pause()
 
-        # RunHeader should NOT be in A/B mode
+        # RunHeader no longer has A/B mode - A/B comparison is handled at app level
         header = app.query_one("#run-header", RunHeader)
-        assert header._ab_mode is False
+        # Just verify header exists and renders without error
+        assert header is not None
 
 
 @pytest.mark.asyncio
 async def test_backend_emits_create_multiple_tamiyo_widgets():
-    """Backend emitting A/B events should create two TamiyoBrainV2 widgets via production path."""
+    """Backend emitting A/B events should create two TamiyoBrain widgets via production path."""
     from esper.karn.sanctum.app import SanctumApp
     from esper.karn.sanctum.backend import SanctumBackend
-    from esper.karn.sanctum.widgets.tamiyo_brain_v2 import TamiyoBrainV2
+    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
     from esper.leyline import TelemetryEvent, TelemetryEventType
 
     backend = SanctumBackend(num_envs=4)
@@ -331,9 +329,9 @@ async def test_backend_emits_create_multiple_tamiyo_widgets():
         app._poll_and_refresh()
         await pilot.pause()
 
-        # Should have two TamiyoBrainV2 widgets
-        widgets = list(app.query(TamiyoBrainV2))
-        assert len(widgets) == 2, f"Expected 2 TamiyoBrainV2 widgets, got {len(widgets)}"
+        # Should have two TamiyoBrain widgets
+        widgets = list(app.query(TamiyoBrain))
+        assert len(widgets) == 2, f"Expected 2 TamiyoBrain widgets, got {len(widgets)}"
 
         # Each should have correct group class
         classes = [" ".join(w.classes) for w in widgets]

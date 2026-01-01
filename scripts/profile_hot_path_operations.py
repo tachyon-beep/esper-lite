@@ -49,7 +49,7 @@ def benchmark_grad_clipping(
     iterations: int = 100,
 ) -> dict:
     """Benchmark gradient clipping overhead."""
-    device = next(model.parameters()).device
+    _device = next(model.parameters()).device  # verify model is on expected device
     params = list(model.parameters())
 
     # Create fake gradients

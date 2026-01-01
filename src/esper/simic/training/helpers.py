@@ -16,16 +16,17 @@ from esper.leyline import (
     AnalyticsSnapshotPayload,
     EpochCompletedPayload,
     FactoredAction,
+    GERMINATE_PREFIX,
     LifecycleOp,
     TelemetryEvent,
     TelemetryEventType,
     TrainingStartedPayload,
+    is_germinate_action_name,
 )
 
 if TYPE_CHECKING:
     from torch.utils.data import DataLoader
     from esper.runtime import TaskSpec
-    from esper.simic.contracts import SlottedHostProtocol
     from esper.tamiyo.heuristic import HeuristicTamiyo
 # NOTE: get_task_spec imported lazily inside functions to avoid circular import:
 #   runtime -> simic.rewards -> simic -> simic.training -> helpers -> runtime
@@ -35,6 +36,8 @@ from esper.simic.telemetry import (
     materialize_grad_stats,
     TelemetryConfig,
 )
+from esper.simic.telemetry.gradient_collector import GradientHealthStats
+from esper.simic.contracts import SlottedHostProtocol
 from esper.leyline.slot_config import SlotConfig
 from esper.leyline.slot_id import validate_slot_ids
 from esper.nissa import get_hub
@@ -239,7 +242,7 @@ def _train_one_epoch(
     device: str,
     task_type: str,
     collect_gradients: bool = False,
-) -> tuple[float, float, int, dict[str, Any] | None]:
+) -> tuple[float, float, int, GradientHealthStats | None]:
     """Unified training loop for all seed stages.
 
     This function extracts the repeated inline loop pattern. Callers use
@@ -262,7 +265,7 @@ def _train_one_epoch(
         - running_loss: Sum of loss values across batches (float)
         - correct_count: Sum of correct predictions (float/int)
         - total_count: Total samples processed (int)
-        - grad_stats: Gradient statistics dict if collect_gradients=True, else None
+        - grad_stats: GradientHealthStats if collect_gradients=True, else None
 
     Note:
         Uses tensor accumulation internally with a single .item() sync at epoch end
@@ -317,7 +320,7 @@ def _train_one_epoch(
     epoch_correct = running_correct.item()
 
     # Now safe to materialize gradient tensors (after implicit sync above)
-    materialized_grad_stats: dict[str, Any] | None = None
+    materialized_grad_stats: GradientHealthStats | None = None
     if grad_stats is not None and not grad_stats.get('_empty', False):
         materialized_grad_stats = materialize_grad_stats(grad_stats)
 
@@ -337,9 +340,9 @@ def _convert_flat_to_factored(action: Any, topology: str = "cnn") -> FactoredAct
 
     action_name = action.name
 
-    if action_name.startswith("GERMINATE_"):
+    if is_germinate_action_name(action_name):
         # Extract blueprint from action name like "GERMINATE_CONV_LIGHT"
-        blueprint_name_upper = action_name.replace("GERMINATE_", "")
+        blueprint_name_upper = action_name[len(GERMINATE_PREFIX):]
         # Look up BlueprintAction by name, default to NOOP for unknown blueprints
         try:
             blueprint = BlueprintAction[blueprint_name_upper]

@@ -427,13 +427,13 @@ class EnvDetailScreen(ModalScreen[None]):
         header.append(f"Current: {env.host_accuracy:.1f}%", style="white")
         header.append("  │  ")
 
-        # Epochs since improvement
-        epochs_stale = env.epochs_since_improvement or 0
-        if epochs_stale > 0:
-            stale_style = "red" if epochs_stale > 10 else "yellow"
+        # Epochs since improvement (momentum)
+        momentum_epochs = env.epochs_since_improvement or 0
+        if momentum_epochs > 0:
+            momentum_style = "red" if momentum_epochs > 10 else "yellow"
             header.append(
-                f"Stale: {epochs_stale} epochs",
-                style=stale_style,
+                f"Momentum: {momentum_epochs} epochs",
+                style=momentum_style,
             )
         else:
             header.append("Improving", style="green")

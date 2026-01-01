@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import IntEnum
+from typing import Literal
 
 from esper.leyline.slot_config import SlotConfig
 from esper.leyline.alpha import AlphaAlgorithm, AlphaCurve
@@ -32,8 +33,12 @@ class BlueprintAction(IntEnum):
     MLP = 11
     FLEX_ATTENTION = 12
 
-    def to_blueprint_id(self) -> str | None:
-        """Map to registered blueprint name."""
+    def to_blueprint_id(self) -> str:
+        """Map to registered blueprint name.
+
+        Raises:
+            KeyError: If BlueprintAction value is not in mapping (indicates enum/mapping mismatch bug).
+        """
         mapping = {
             0: "noop",
             1: "conv_light",
@@ -49,7 +54,7 @@ class BlueprintAction(IntEnum):
             11: "mlp",
             12: "flex_attention",
         }
-        return mapping.get(self.value)
+        return mapping[self.value]
 
 
 class GerminationStyle(IntEnum):
@@ -214,6 +219,14 @@ OP_NAMES: tuple[str, ...] = tuple(op.name for op in LifecycleOp)
 # Blueprint ID lookup (matches BlueprintAction.to_blueprint_id())
 BLUEPRINT_IDS: tuple[str | None, ...] = tuple(bp.to_blueprint_id() for bp in BlueprintAction)
 
+# Reverse mapping: blueprint_id string -> embedding index
+# Used by SeedStateReport.blueprint_index for efficient embedding lookup.
+# Maps lowercase strings (e.g., "conv_heavy") to BlueprintAction enum values (0-12).
+# Returns -1 for unknown/empty blueprint_id.
+BLUEPRINT_ID_TO_INDEX: dict[str, int] = {
+    bid: idx for idx, bid in enumerate(BLUEPRINT_IDS) if bid is not None
+}
+
 STYLE_NAMES: tuple[str, ...] = tuple(style.name for style in GerminationStyle)
 STYLE_BLEND_IDS: tuple[str, ...] = tuple(STYLE_TO_KASMINA[style][0] for style in GerminationStyle)
 STYLE_ALPHA_ALGORITHMS: tuple[AlphaAlgorithm, ...] = tuple(
@@ -246,6 +259,9 @@ assert OP_NAMES == tuple(op.name for op in LifecycleOp), (
 )
 assert len(BLUEPRINT_IDS) == len(BlueprintAction), (
     "BLUEPRINT_IDS length mismatch with BlueprintAction enum"
+)
+assert len(BLUEPRINT_ID_TO_INDEX) == len(BlueprintAction), (
+    "BLUEPRINT_ID_TO_INDEX length mismatch with BlueprintAction enum"
 )
 assert len(STYLE_NAMES) == len(GerminationStyle), (
     "STYLE_NAMES length mismatch with GerminationStyle enum"
@@ -424,6 +440,18 @@ def get_action_head_sizes(slot_config: SlotConfig) -> dict[str, int]:
     return {spec.name: spec.size(slot_config) for spec in ACTION_HEAD_SPECS}
 
 
+# =============================================================================
+# Topology Configuration
+# =============================================================================
+
+# Type alias for topology - use this at API boundaries for static type checking
+Topology = Literal["cnn", "transformer"]
+"""Type alias for valid topology values. Use at API boundaries for type safety."""
+
+# Runtime validation set - use for dynamic values from config/CLI
+VALID_TOPOLOGIES: frozenset[str] = frozenset({"cnn", "transformer"})
+"""Valid topology values for runtime validation."""
+
 # Valid blueprints per topology (for action masking)
 CNN_BLUEPRINTS = frozenset({
     BlueprintAction.NOOP,
@@ -471,9 +499,12 @@ __all__ = [
     "get_action_head_sizes",
     "CNN_BLUEPRINTS",
     "TRANSFORMER_BLUEPRINTS",
+    "Topology",
+    "VALID_TOPOLOGIES",
     # Lookup tables for hot path optimization
     "OP_NAMES",
     "BLUEPRINT_IDS",
+    "BLUEPRINT_ID_TO_INDEX",
     "STYLE_NAMES",
     "STYLE_BLEND_IDS",
     "STYLE_ALPHA_ALGORITHMS",

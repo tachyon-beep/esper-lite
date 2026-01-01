@@ -65,8 +65,9 @@ class TestTamiyoRolloutBuffer:
                 alpha_speed_mask=torch.ones(NUM_ALPHA_SPEEDS, dtype=torch.bool),
                 alpha_curve_mask=torch.ones(NUM_ALPHA_CURVES, dtype=torch.bool),
                 op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
-                hidden_h=torch.zeros(1, 1, 128),
-                hidden_c=torch.zeros(1, 1, 128),
+                hidden_h=torch.zeros(1, 1, 512),
+                hidden_c=torch.zeros(1, 1, 512),
+                blueprint_indices=torch.zeros(3, dtype=torch.long),
             )
         buffer.end_episode(env_id=0)
 
@@ -103,8 +104,9 @@ class TestTamiyoRolloutBuffer:
                 alpha_speed_mask=torch.ones(NUM_ALPHA_SPEEDS, dtype=torch.bool),
                 alpha_curve_mask=torch.ones(NUM_ALPHA_CURVES, dtype=torch.bool),
                 op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
-                hidden_h=torch.zeros(1, 1, 128),
-                hidden_c=torch.zeros(1, 1, 128),
+                hidden_h=torch.zeros(1, 1, 512),
+                hidden_c=torch.zeros(1, 1, 512),
+                blueprint_indices=torch.zeros(3, dtype=torch.long),
             )
         buffer.end_episode(env_id=1)
 
@@ -163,8 +165,9 @@ class TestTamiyoRolloutBuffer:
             alpha_speed_mask=torch.ones(NUM_ALPHA_SPEEDS, dtype=torch.bool),
             alpha_curve_mask=torch.ones(NUM_ALPHA_CURVES, dtype=torch.bool),
             op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
-            hidden_h=torch.zeros(1, 1, 128),
-            hidden_c=torch.zeros(1, 1, 128),
+            hidden_h=torch.zeros(1, 1, DEFAULT_LSTM_HIDDEN_DIM),
+            hidden_c=torch.zeros(1, 1, DEFAULT_LSTM_HIDDEN_DIM),
+            blueprint_indices=torch.zeros(3, dtype=torch.long),
         )
         buffer.end_episode(env_id=0)
 
@@ -184,8 +187,8 @@ class TestTamiyoRolloutBuffer:
             lstm_hidden_dim=DEFAULT_LSTM_HIDDEN_DIM,
         )
 
-        hidden_h = torch.randn(1, 1, 128)
-        hidden_c = torch.randn(1, 1, 128)
+        hidden_h = torch.randn(1, 1, 512)
+        hidden_c = torch.randn(1, 1, 512)
 
         buffer.start_episode(env_id=0)
         buffer.add(
@@ -220,12 +223,13 @@ class TestTamiyoRolloutBuffer:
             op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
             hidden_h=hidden_h,
             hidden_c=hidden_c,
+            blueprint_indices=torch.zeros(3, dtype=torch.long),
         )
         buffer.end_episode(env_id=0)
 
-        # Hidden states should be stored (squeezed from [1, 1, 128] to [128])
+        # Hidden states should be stored (squeezed from [1, 1, 512] to [512])
         stored_h = buffer.hidden_h[0, 0]
-        assert stored_h.shape == (1, 128)
+        assert stored_h.shape == (1, 512)
         assert torch.allclose(stored_h.squeeze(0), hidden_h.squeeze())
 
     def test_empty_buffer_update(self):
@@ -288,6 +292,7 @@ class TestTamiyoRolloutBuffer:
             op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
             hidden_h=torch.zeros(1, 1, DEFAULT_LSTM_HIDDEN_DIM),
             hidden_c=torch.zeros(1, 1, DEFAULT_LSTM_HIDDEN_DIM),
+            blueprint_indices=torch.zeros(3, dtype=torch.long),
         )
         buffer.end_episode(env_id=0)
 
@@ -338,8 +343,9 @@ class TestTamiyoRolloutBuffer:
                 alpha_speed_mask=torch.ones(NUM_ALPHA_SPEEDS, dtype=torch.bool),
                 alpha_curve_mask=torch.ones(NUM_ALPHA_CURVES, dtype=torch.bool),
                 op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
-                hidden_h=torch.zeros(1, 1, 128),
-                hidden_c=torch.zeros(1, 1, 128),
+                hidden_h=torch.zeros(1, 1, 512),
+                hidden_c=torch.zeros(1, 1, 512),
+                blueprint_indices=torch.zeros(3, dtype=torch.long),
             )
 
         # Third add should raise
@@ -374,8 +380,9 @@ class TestTamiyoRolloutBuffer:
                 alpha_speed_mask=torch.ones(NUM_ALPHA_SPEEDS, dtype=torch.bool),
                 alpha_curve_mask=torch.ones(NUM_ALPHA_CURVES, dtype=torch.bool),
                 op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
-                hidden_h=torch.zeros(1, 1, 128),
-                hidden_c=torch.zeros(1, 1, 128),
+                hidden_h=torch.zeros(1, 1, 512),
+                hidden_c=torch.zeros(1, 1, 512),
+                blueprint_indices=torch.zeros(3, dtype=torch.long),
             )
 
     def test_dynamic_slot_config_3_slots(self):
@@ -461,8 +468,9 @@ class TestTamiyoRolloutBuffer:
                 alpha_speed_mask=torch.ones(NUM_ALPHA_SPEEDS, dtype=torch.bool),
                 alpha_curve_mask=torch.ones(NUM_ALPHA_CURVES, dtype=torch.bool),
                 op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
-                hidden_h=torch.zeros(1, 1, 128),
-                hidden_c=torch.zeros(1, 1, 128),
+                hidden_h=torch.zeros(1, 1, 512),
+                hidden_c=torch.zeros(1, 1, 512),
+                blueprint_indices=torch.zeros(5, dtype=torch.long),  # 5 slots
             )
         buffer.end_episode(env_id=0)
 
@@ -520,8 +528,9 @@ class TestTamiyoRolloutBuffer:
                 alpha_speed_mask=torch.ones(NUM_ALPHA_SPEEDS, dtype=torch.bool),
                 alpha_curve_mask=torch.ones(NUM_ALPHA_CURVES, dtype=torch.bool),
                 op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
-                hidden_h=torch.zeros(1, 1, 128),
-                hidden_c=torch.zeros(1, 1, 128),
+                hidden_h=torch.zeros(1, 1, 512),
+                hidden_c=torch.zeros(1, 1, 512),
+                blueprint_indices=torch.zeros(buffer.num_slots, dtype=torch.long),
             )
 
         # Simulate governor rollback with death penalty

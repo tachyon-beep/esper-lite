@@ -2,7 +2,7 @@
 
 from esper.karn.sanctum.registry import AggregatorRegistry
 from esper.karn.sanctum.aggregator import SanctumAggregator
-from esper.leyline.telemetry import TelemetryEvent, TelemetryEventType
+from esper.leyline.telemetry import EpochCompletedPayload, TelemetryEvent, TelemetryEventType
 
 
 def test_registry_creates_aggregator_on_demand():
@@ -54,12 +54,14 @@ def test_registry_routes_events_by_group_id():
     event_a = TelemetryEvent(
         event_type=TelemetryEventType.EPOCH_COMPLETED,
         group_id="A",
-        message="Group A event"
+        message="Group A event",
+        data=EpochCompletedPayload(env_id=0, val_accuracy=0.0, val_loss=0.0, inner_epoch=0),
     )
     event_b = TelemetryEvent(
         event_type=TelemetryEventType.EPOCH_COMPLETED,
         group_id="B",
-        message="Group B event"
+        message="Group B event",
+        data=EpochCompletedPayload(env_id=0, val_accuracy=0.0, val_loss=0.0, inner_epoch=0),
     )
 
     # Process events
@@ -80,7 +82,8 @@ def test_registry_default_group_for_missing_group_id():
     event = TelemetryEvent(
         event_type=TelemetryEventType.EPOCH_COMPLETED,
         group_id="default",
-        message="Default group event"
+        message="Default group event",
+        data=EpochCompletedPayload(env_id=0, val_accuracy=0.0, val_loss=0.0, inner_epoch=0),
     )
 
     # Process event

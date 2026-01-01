@@ -28,6 +28,9 @@ from esper.leyline import (
     DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE,
     DEFAULT_BLUEPRINT_PENALTY_ON_PRUNE,
     DEFAULT_BLUEPRINT_PENALTY_DECAY,
+    GERMINATE_PREFIX,
+    get_blueprint_from_action_name,
+    is_germinate_action_name,
     DEFAULT_BLUEPRINT_PENALTY_THRESHOLD,
     DEFAULT_MIN_IMPROVEMENT_TO_FOSSILIZE,
 )
@@ -108,16 +111,16 @@ class HeuristicTamiyo:
         # P1-B fix: Validate blueprint_rotation against available actions at init
         # Prevents AttributeError crash during training when getattr fails
         available_blueprints = {
-            name[len("GERMINATE_"):].lower()
+            get_blueprint_from_action_name(name)
             for name in dir(self._action_enum)
-            if name.startswith("GERMINATE_")
+            if is_germinate_action_name(name)
         }
         invalid_blueprints = set(self.config.blueprint_rotation) - available_blueprints
         if invalid_blueprints:
             raise ValueError(
                 f"blueprint_rotation contains blueprints not available for "
-                f"topology '{topology}': {sorted(invalid_blueprints)}. "
-                f"Available: {sorted(available_blueprints)}"
+                f"topology '{topology}': {sorted(str(b) for b in invalid_blueprints)}. "
+                f"Available: {sorted(str(b) for b in available_blueprints)}"
             )
 
         self._blueprint_index = 0
@@ -186,7 +189,7 @@ class HeuristicTamiyo:
             # Justification: Dynamic enum lookup - Action enum is built dynamically via
             # build_action_enum() with GERMINATE_<BLUEPRINT> members. Standard pattern
             # for accessing dynamically-named enum members.
-            germinate_action = getattr(Action, f"GERMINATE_{blueprint_id.upper()}")
+            germinate_action = getattr(Action, f"{GERMINATE_PREFIX}{blueprint_id.upper()}")
             self._germination_count += 1
             return TamiyoDecision(
                 action=germinate_action,

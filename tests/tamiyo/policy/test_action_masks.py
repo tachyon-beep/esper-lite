@@ -830,8 +830,12 @@ class TestBuildSlotStates:
 class TestActionMaskEdgeCases:
     """Edge case tests for action masking boundary conditions."""
 
-    def test_all_slots_disabled_only_wait_valid(self):
-        """When no slots are enabled, only WAIT should be valid."""
+    def test_all_slots_disabled_raises_error(self):
+        """Empty enabled_slots is a configuration error and should raise ValueError.
+
+        B9-CR-01: Fail fast on misconfiguration. If no slots are enabled,
+        the task cannot be performed - this is always a config error.
+        """
         from esper.leyline.slot_config import SlotConfig
 
         slot_states = {
@@ -840,20 +844,12 @@ class TestActionMaskEdgeCases:
             "r0c2": None,
         }
 
-        masks = compute_action_masks(
-            slot_states,
-            enabled_slots=[],  # No slots enabled
-            slot_config=SlotConfig.default(),
-        )
-
-        # No slots selectable
-        assert not masks["slot"].any(), "No slots should be selectable when none enabled"
-
-        # Only WAIT should be valid
-        assert masks["op"][LifecycleOp.WAIT], "WAIT must always be valid"
-        assert not masks["op"][LifecycleOp.GERMINATE], "GERMINATE requires enabled empty slot"
-        assert not masks["op"][LifecycleOp.PRUNE], "PRUNE requires enabled slot with seed"
-        assert not masks["op"][LifecycleOp.FOSSILIZE], "FOSSILIZE requires enabled HOLDING"
+        with pytest.raises(ValueError, match="cannot be empty"):
+            compute_action_masks(
+                slot_states,
+                enabled_slots=[],  # No slots enabled = config error
+                slot_config=SlotConfig.default(),
+            )
 
     def test_large_config_9_slots(self):
         """9-slot (3x3) grid should mask correctly."""
@@ -1259,3 +1255,288 @@ class TestMaskedCategoricalValidation:
         mask = torch.zeros(1, 5, dtype=torch.bool)  # All invalid!
         with pytest.raises(InvalidStateMachineError):
             MaskedCategorical(logits, mask)
+
+
+# === Lifecycle Gating Validation Tests (Phase 7) ===
+
+
+def test_embargo_blocks_germination():
+    """Verify EMBARGOED slots block GERMINATE operation.
+
+    Critical test from Phase 7: After a slot is pruned, it enters EMBARGOED stage
+    for DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE epochs to prevent thrashing (immediate
+    regermination). This test verifies that:
+    1. EMBARGOED slots cannot be germinated
+    2. GERMINATE is only enabled if at least one slot is DORMANT (not EMBARGOED)
+    """
+    from esper.leyline import DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE
+
+    # Scenario: All 3 slots are embargoed (recently pruned)
+    slot_states = {
+        "r0c0": MaskSeedInfo(
+            stage=SeedStage.EMBARGOED.value,
+            seed_age_epochs=2,  # 2 epochs into embargo period
+        ),
+        "r0c1": MaskSeedInfo(
+            stage=SeedStage.EMBARGOED.value,
+            seed_age_epochs=1,
+        ),
+        "r0c2": MaskSeedInfo(
+            stage=SeedStage.EMBARGOED.value,
+            seed_age_epochs=0,  # Just pruned
+        ),
+    }
+
+    masks = compute_action_masks(slot_states, enabled_slots=["r0c0", "r0c1", "r0c2"])
+
+    # GERMINATE should be blocked (no dormant slots available)
+    assert not masks["op"][LifecycleOp.GERMINATE], (
+        "GERMINATE should be blocked when all slots are embargoed. "
+        f"Embargo period is {DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE} epochs."
+    )
+
+    # WAIT should still be available
+    assert masks["op"][LifecycleOp.WAIT], "WAIT should always be available"
+
+
+def test_embargoed_vs_dormant_germination():
+    """Verify GERMINATE is enabled only for DORMANT slots, not EMBARGOED.
+
+    This test distinguishes between:
+    - DORMANT: Empty, available for germination
+    - EMBARGOED: Empty but in cooldown period, NOT available
+
+    Both are "empty" (no seed), but only DORMANT allows germination.
+    """
+    # Scenario: Mix of DORMANT and EMBARGOED slots
+    slot_states = {
+        "r0c0": None,  # Truly empty (DORMANT)
+        "r0c1": MaskSeedInfo(
+            stage=SeedStage.EMBARGOED.value,
+            seed_age_epochs=1,
+        ),
+        "r0c2": MaskSeedInfo(
+            stage=SeedStage.EMBARGOED.value,
+            seed_age_epochs=3,
+        ),
+    }
+
+    masks = compute_action_masks(slot_states, enabled_slots=["r0c0", "r0c1", "r0c2"])
+
+    # GERMINATE should be enabled (r0c0 is dormant/None)
+    assert masks["op"][LifecycleOp.GERMINATE], (
+        "GERMINATE should be enabled when at least one slot is DORMANT (None). "
+        "r0c0 is None (dormant), so germination is possible."
+    )
+
+    # Slot mask should allow all slots (policy decides which to target)
+    assert masks["slot"][0], "r0c0 (DORMANT) should be selectable"
+    assert masks["slot"][1], "r0c1 should be selectable"
+    assert masks["slot"][2], "r0c2 should be selectable"
+
+
+def test_pruned_stage_blocks_operations():
+    """Verify PRUNED stage blocks most operations.
+
+    PRUNED is a transient state between execution and EMBARGOED. Seeds in PRUNED
+    stage should not be prunable/fossilizable/alpha-settable.
+    """
+    slot_states = {
+        "r0c0": MaskSeedInfo(
+            stage=SeedStage.PRUNED.value,
+            seed_age_epochs=5,
+        ),
+    }
+
+    masks = compute_action_masks(slot_states, enabled_slots=["r0c0"])
+
+    # PRUNE should be blocked (seed is already pruned)
+    assert not masks["op"][LifecycleOp.PRUNE], (
+        "PRUNE should be blocked for PRUNED stage"
+    )
+
+    # FOSSILIZE should be blocked (can only fossilize from HOLDING)
+    assert not masks["op"][LifecycleOp.FOSSILIZE], (
+        "FOSSILIZE should be blocked for PRUNED stage"
+    )
+
+    # SET_ALPHA_TARGET should be blocked (no seed to set alpha for)
+    assert not masks["op"][LifecycleOp.SET_ALPHA_TARGET], (
+        "SET_ALPHA_TARGET should be blocked for PRUNED stage"
+    )
+
+    # WAIT should still be available
+    assert masks["op"][LifecycleOp.WAIT], "WAIT should always be available"
+
+
+def test_embargo_duration_correctness():
+    """Verify embargo period matches DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE.
+
+    This test documents the embargo period and ensures it's applied correctly.
+    The embargo mechanism is enforced by Kasmina (slot management), not by
+    action masks - masks just reflect the current state.
+    """
+    from esper.leyline import DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE
+
+    # Document expected embargo duration
+    assert DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE == 5, (
+        "Embargo period should be 5 epochs. If this changed, "
+        "update related tests and documentation."
+    )
+
+    # Verify slot in embargo blocks germination
+    slot_states = {
+        "r0c0": MaskSeedInfo(
+            stage=SeedStage.EMBARGOED.value,
+            seed_age_epochs=2,  # 2/5 epochs through embargo
+        ),
+    }
+
+    masks = compute_action_masks(slot_states, enabled_slots=["r0c0"])
+
+    # GERMINATE blocked (only slot is embargoed)
+    assert not masks["op"][LifecycleOp.GERMINATE], (
+        "GERMINATE should be blocked during embargo period"
+    )
+
+
+# =============================================================================
+# Input Validation Tests (B9-CR-01: fail fast on misconfiguration)
+# =============================================================================
+
+
+class TestComputeActionMasksValidation:
+    """Test input validation in compute_action_masks().
+
+    B9-CR-01: These tests ensure invalid inputs raise ValueError immediately
+    rather than producing incorrect masks or failing cryptically later.
+    """
+
+    def test_invalid_topology_raises_error(self):
+        """Invalid topology string should raise ValueError, not silently fallback."""
+        slot_states = {"r0c0": None}
+
+        with pytest.raises(ValueError, match="Unknown topology"):
+            compute_action_masks(
+                slot_states,
+                enabled_slots=["r0c0"],
+                topology="Transformer",  # type: ignore[arg-type] # Intentional - testing runtime validation
+            )
+
+    def test_topology_case_sensitive(self):
+        """Topology is case-sensitive - 'CNN' is not 'cnn'."""
+        slot_states = {"r0c0": None}
+
+        with pytest.raises(ValueError, match="Unknown topology"):
+            compute_action_masks(
+                slot_states,
+                enabled_slots=["r0c0"],
+                topology="CNN",  # type: ignore[arg-type]
+            )
+
+    def test_topology_whitespace_not_stripped(self):
+        """Topology with whitespace should fail, not be silently trimmed."""
+        slot_states = {"r0c0": None}
+
+        with pytest.raises(ValueError, match="Unknown topology"):
+            compute_action_masks(
+                slot_states,
+                enabled_slots=["r0c0"],
+                topology="cnn ",  # type: ignore[arg-type] # Trailing space
+            )
+
+    def test_unknown_enabled_slot_raises_error(self):
+        """Unknown slot IDs in enabled_slots should raise ValueError."""
+        slot_states = {"r0c0": None}
+
+        with pytest.raises(ValueError, match="unknown slot IDs"):
+            compute_action_masks(
+                slot_states,
+                enabled_slots=["r0c0", "early"],  # "early" is legacy/invalid
+            )
+
+    def test_empty_enabled_slots_raises_error(self):
+        """Empty enabled_slots should raise ValueError."""
+        slot_states = {"r0c0": None}
+
+        with pytest.raises(ValueError, match="cannot be empty"):
+            compute_action_masks(
+                slot_states,
+                enabled_slots=[],
+            )
+
+    def test_valid_topologies_accepted(self):
+        """Valid topology values should work without error."""
+        slot_states = {"r0c0": None}
+
+        # Both valid topologies should work
+        masks_cnn = compute_action_masks(
+            slot_states, enabled_slots=["r0c0"], topology="cnn"
+        )
+        assert "op" in masks_cnn
+
+        masks_transformer = compute_action_masks(
+            slot_states, enabled_slots=["r0c0"], topology="transformer"
+        )
+        assert "op" in masks_transformer
+
+
+class TestComputeBatchMasksValidation:
+    """Test input validation in compute_batch_masks().
+
+    B9-CR-01: Guards for empty batch and mismatched list lengths.
+    """
+
+    def test_empty_batch_raises_error(self):
+        """Empty batch_slot_states should raise ValueError with clear message."""
+        with pytest.raises(ValueError, match="at least one observation"):
+            compute_batch_masks(
+                batch_slot_states=[],
+                enabled_slots=["r0c0"],
+            )
+
+    def test_mismatched_total_seeds_length_raises_error(self):
+        """total_seeds_list must match batch_slot_states length."""
+        batch_slot_states = [{"r0c0": None}, {"r0c0": None}]  # 2 envs
+
+        with pytest.raises(ValueError, match="length"):
+            compute_batch_masks(
+                batch_slot_states,
+                enabled_slots=["r0c0"],
+                total_seeds_list=[0],  # Only 1 element for 2 envs
+            )
+
+    def test_none_total_seeds_list_accepted(self):
+        """total_seeds_list=None should be accepted (defaults to 0 for all)."""
+        batch_slot_states = [{"r0c0": None}, {"r0c0": None}]
+
+        # Should not raise
+        masks = compute_batch_masks(
+            batch_slot_states,
+            enabled_slots=["r0c0"],
+            total_seeds_list=None,
+        )
+        assert masks["op"].shape[0] == 2  # Batch dimension
+
+    def test_matching_total_seeds_list_accepted(self):
+        """total_seeds_list with matching length should work."""
+        batch_slot_states = [{"r0c0": None}, {"r0c0": None}]
+
+        # Should not raise
+        masks = compute_batch_masks(
+            batch_slot_states,
+            enabled_slots=["r0c0"],
+            total_seeds_list=[0, 1],  # Correct length
+        )
+        assert masks["op"].shape[0] == 2
+
+    def test_invalid_topology_propagates_from_compute_action_masks(self):
+        """Invalid topology should raise even when called via compute_batch_masks."""
+        batch_slot_states = [{"r0c0": None}]
+
+        with pytest.raises(ValueError, match="Unknown topology"):
+            compute_batch_masks(
+                batch_slot_states,
+                enabled_slots=["r0c0"],
+                topology="invalid",  # type: ignore[arg-type]
+            )

@@ -28,7 +28,8 @@ from esper.leyline import (
     SeedStage,
 )
 from esper.leyline.telemetry import GovernorPanicReason
-from esper.nissa import get_hub
+
+# NOTE: get_hub imported at function scope to defer telemetry hub initialization
 
 
 @dataclass
@@ -102,6 +103,15 @@ class TolariaGovernor:
         Tensors are moved to CPU; non-tensor values are deep copied.
         This trades slightly slower rollback for significant GPU memory savings,
         especially for large models where snapshots could double GPU memory usage.
+
+        STREAM CONTRACT: This method must be called OUTSIDE any non-default CUDA
+        stream context, after all async training operations have been synchronized.
+        The model.state_dict() operation runs on the default stream, and tensor.cpu()
+        synchronizes with the source device. Caller is responsible for ensuring no
+        concurrent writes to model parameters during snapshot.
+
+        Current call site (vectorized.py) satisfies this by calling snapshot() after
+        stream.synchronize() and outside the per-env stream context.
         """
         # C7 FIX: Explicitly free old snapshot to allow garbage collection
         # NOTE: We intentionally do NOT call torch.cuda.empty_cache() here.
@@ -139,9 +149,13 @@ class TolariaGovernor:
 
         # Store on CPU to save GPU memory (rollback is rare, memory savings are constant)
         # Use no_grad() to prevent any autograd overhead during state extraction
+        # PERF: For CUDA tensors, .cpu() already allocates a fresh CPU tensor, so
+        # .clone() is redundant. Only clone() for CPU tensors to ensure independence.
         with torch.no_grad():
             self.last_good_state = {
-                k: v.detach().cpu().clone() if isinstance(v, torch.Tensor) else copy.deepcopy(v)
+                k: (v.detach().clone() if v.device.type == "cpu" else v.detach().cpu())
+                   if isinstance(v, torch.Tensor)
+                   else copy.deepcopy(v)
                 for k, v in filtered_state.items()
             }
 
@@ -222,6 +236,7 @@ class TolariaGovernor:
             self.loss_history.append(current_loss)
             self.consecutive_panics = 0
             self._pending_panic = False
+            self._panic_loss = None  # Clear stale panic loss on recovery
             self._panic_reason = None
             return False
 
@@ -260,6 +275,8 @@ class TolariaGovernor:
         threshold = avg + (self.sensitivity * std)
 
         # Prepare telemetry data (emitted after rollback completes)
+        # Import hub at function scope to defer initialization
+        from esper.nissa import get_hub
         hub = get_hub()
         # Cast is safe: _panic_reason is only set to valid GovernorPanicReason values
         panic_reason = cast(GovernorPanicReason, self._panic_reason or "governor_rollback")
@@ -342,13 +359,17 @@ class TolariaGovernor:
         # copies in-place. The "fix" that removed momentum zeroing actually
         # introduced the bug. Verified via id() checks on Parameters before/after.
 
-        # Reset panic counter after successful rollback to allow fresh recovery
+        # Reset ALL panic state after successful rollback to prevent stale context
+        # from leaking into future reports. Store loss locally first for the report.
+        loss_at_panic = self._panic_loss
         self.consecutive_panics = 0
+        self._pending_panic = False
+        self._panic_loss = None
         self._panic_reason = None
 
         return GovernorReport(
             reason="Structural Collapse",
-            loss_at_panic=self._panic_loss if self._panic_loss is not None else float('nan'),
+            loss_at_panic=loss_at_panic if loss_at_panic is not None else float('nan'),
             loss_threshold=threshold,
             consecutive_panics=self.consecutive_panics,
             rollback_occurred=True,

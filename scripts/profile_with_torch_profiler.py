@@ -29,8 +29,8 @@ print(f"Total GPU memory: {total_mem:.1f} GB")
 # Clear any existing memory
 torch.cuda.empty_cache()
 
-from esper.nissa import reset_hub
-from esper.simic.training.vectorized import train_ppo_vectorized
+from esper.nissa import reset_hub  # noqa: E402 - import after CUDA check
+from esper.simic.training.vectorized import train_ppo_vectorized  # noqa: E402
 
 
 def profile_training():

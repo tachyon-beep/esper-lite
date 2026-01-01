@@ -9,6 +9,7 @@ This tests the entire refactored pipeline to ensure all fields flow through corr
 import duckdb
 
 from datetime import datetime, timezone
+from typing import cast
 
 from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
 from esper.leyline.telemetry import (
@@ -16,6 +17,7 @@ from esper.leyline.telemetry import (
     AnalyticsSnapshotPayload,
     TelemetryEventType,
 )
+from esper.karn.contracts import TelemetryEventLike
 from esper.karn.mcp.views import create_views
 from esper.karn.serialization import serialize_event
 
@@ -55,7 +57,7 @@ def test_reward_components_flow_end_to_end(tmp_path):
     run_dir = tmp_path / "test_run"
     run_dir.mkdir()
     events_file = run_dir / "events.jsonl"
-    events_file.write_text(serialize_event(event) + "\n")
+    events_file.write_text(serialize_event(cast(TelemetryEventLike, event)) + "\n")
 
     # 4. Query via MCP view
     conn = duckdb.connect(":memory:")
@@ -126,7 +128,7 @@ def test_reward_components_all_fields_serialized(tmp_path):
     run_dir = tmp_path / "test_run"
     run_dir.mkdir()
     events_file = run_dir / "events.jsonl"
-    events_file.write_text(serialize_event(event) + "\n")
+    events_file.write_text(serialize_event(cast(TelemetryEventLike, event)) + "\n")
 
     conn = duckdb.connect(":memory:")
     create_views(conn, str(tmp_path))
@@ -225,7 +227,7 @@ def test_reward_components_shaped_reward_ratio_computed(tmp_path):
     run_dir = tmp_path / "test_run"
     run_dir.mkdir()
     events_file = run_dir / "events.jsonl"
-    serialized = serialize_event(event)
+    serialized = serialize_event(cast(TelemetryEventLike, event))
     events_file.write_text(serialized + "\n")
 
     # Verify shaped_reward_ratio is in serialized JSON
@@ -261,7 +263,7 @@ def test_reward_components_null_optional_fields(tmp_path):
     run_dir = tmp_path / "test_run"
     run_dir.mkdir()
     events_file = run_dir / "events.jsonl"
-    events_file.write_text(serialize_event(event) + "\n")
+    events_file.write_text(serialize_event(cast(TelemetryEventLike, event)) + "\n")
 
     conn = duckdb.connect(":memory:")
     create_views(conn, str(tmp_path))

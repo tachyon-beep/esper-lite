@@ -19,6 +19,7 @@ class TestCollectorIngestValidation:
             data=TrainingStartedPayload(
                 n_envs=1,
                 max_epochs=5,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0",),
@@ -64,6 +65,7 @@ class TestCollectorIngestValidation:
             data=TrainingStartedPayload(
                 n_envs=1,
                 max_epochs=5,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0",),
@@ -111,6 +113,7 @@ class TestCollectorIngestValidation:
             data=TrainingStartedPayload(
                 n_envs=1,
                 max_epochs=5,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0",),
@@ -154,6 +157,7 @@ class TestCollectorIngestValidation:
                 data=TrainingStartedPayload(
                     n_envs=1,
                     max_epochs=5,
+                max_batches=100,
                     task="test_task",
                     host_params=1000,
                     slot_ids=("r0c0",),

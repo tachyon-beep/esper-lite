@@ -60,7 +60,6 @@ class TestGradientClippingAMPOrdering:
 
         # Now simulate the clipping logic from process_train_batch
         max_grad_norm = 1.0
-        slots_to_step: list[str] = []
 
         if max_grad_norm is not None and max_grad_norm > 0:
             if mock_scaler is not None:
@@ -88,7 +87,7 @@ class TestGradientClippingAMPOrdering:
 
         # Check gradient norm before clipping
         all_params = list(model.get_host_parameters())
-        grad_norm_before = torch.nn.utils.clip_grad_norm_(all_params, float('inf'))
+        torch.nn.utils.clip_grad_norm_(all_params, float('inf'))
 
         # Reset and create same large gradients
         host_opt.zero_grad()
@@ -97,7 +96,7 @@ class TestGradientClippingAMPOrdering:
 
         # Now clip with a small max_grad_norm
         max_grad_norm = 0.1
-        grad_norm_after = torch.nn.utils.clip_grad_norm_(all_params, max_grad_norm)
+        torch.nn.utils.clip_grad_norm_(all_params, max_grad_norm)
 
         # The returned value is the original norm (before clipping)
         # After clipping, the actual norm should be <= max_grad_norm

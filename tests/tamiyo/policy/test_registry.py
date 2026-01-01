@@ -13,16 +13,26 @@ from esper.tamiyo.policy.types import ActionResult, EvalResult, ForwardResult
 
 
 class MockPolicyBundle:
-    """Minimal PolicyBundle implementation for testing."""
+    """Minimal PolicyBundle implementation for testing.
 
-    def __init__(self, hidden_dim: int = 64):
-        self.hidden_dim = hidden_dim
+    Implements the full PolicyBundle protocol including:
+    - torch.compile integration (compile, is_compiled)
+    - Configuration access (slot_config, feature_dim, hidden_dim, network)
+    - Correct method signatures with blueprint_indices parameter
+    """
+
+    def __init__(self, hidden_dim: int = 64, feature_dim: int = 128, slot_config=None):
+        self._hidden_dim = hidden_dim
+        self._feature_dim = feature_dim
         self._device = torch.device("cpu")
+        self._is_compiled = False
+        # Lazy import to avoid circular dependency
+        from esper.leyline.slot_config import SlotConfig
+        self._slot_config = slot_config or SlotConfig.for_grid(rows=1, cols=4)
+        # Minimal network for testing
+        self._network = torch.nn.Linear(feature_dim, hidden_dim)
 
-    def process_signals(self, signals):
-        return torch.zeros(1, 10)
-
-    def get_action(self, features, masks, hidden=None, deterministic=False):
+    def get_action(self, features, blueprint_indices, masks, hidden=None, deterministic=False):
         return ActionResult(
             action={'op': 0},
             log_prob={'op': torch.tensor(0.0)},
@@ -30,14 +40,14 @@ class MockPolicyBundle:
             hidden=None,
         )
 
-    def forward(self, features, masks, hidden=None):
+    def forward(self, features, blueprint_indices, masks, hidden=None):
         return ForwardResult(
             logits={'op': torch.zeros(4)},
             value=torch.tensor(0.0),
             hidden=None,
         )
 
-    def evaluate_actions(self, features, actions, masks, hidden=None):
+    def evaluate_actions(self, features, blueprint_indices, actions, masks, hidden=None):
         return EvalResult(
             log_prob={'op': torch.tensor(0.0)},
             value=torch.tensor(0.0),
@@ -51,17 +61,17 @@ class MockPolicyBundle:
     def sync_from(self, source, tau=0.005):
         raise NotImplementedError("Mock does not support off-policy")
 
-    def get_value(self, features, hidden=None):
+    def get_value(self, features, blueprint_indices, hidden=None):
         return torch.tensor(0.0)
 
     def initial_hidden(self, batch_size):
         return None
 
     def state_dict(self):
-        return {"hidden_dim": self.hidden_dim}
+        return {"hidden_dim": self._hidden_dim}
 
     def load_state_dict(self, state_dict, strict=True):
-        self.hidden_dim = state_dict["hidden_dim"]
+        self._hidden_dim = state_dict["hidden_dim"]
 
     @property
     def device(self):
@@ -69,6 +79,7 @@ class MockPolicyBundle:
 
     def to(self, device):
         self._device = torch.device(device)
+        self._network = self._network.to(device)
         return self
 
     @property
@@ -85,6 +96,33 @@ class MockPolicyBundle:
 
     def enable_gradient_checkpointing(self, enabled=True):
         pass
+
+    # === torch.compile integration ===
+    def compile(self, mode: str = "default", dynamic: bool = True):
+        """Compile the underlying network (no-op for mock)."""
+        if mode != "off":
+            self._is_compiled = True
+
+    @property
+    def is_compiled(self):
+        return self._is_compiled
+
+    # === Configuration access ===
+    @property
+    def slot_config(self):
+        return self._slot_config
+
+    @property
+    def feature_dim(self):
+        return self._feature_dim
+
+    @property
+    def hidden_dim(self):
+        return self._hidden_dim
+
+    @property
+    def network(self):
+        return self._network
 
 
 @pytest.fixture()

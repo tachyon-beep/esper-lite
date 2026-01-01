@@ -98,7 +98,7 @@ Two sentences maximum. This is the module's reason for existence.
 
 **Examples:**
 
-- **Kasmina:** "Manages seed slot lifecycle, blueprint instantiation, and grafting mechanics." / "Does NOT make strategic decisions about WHEN to germinate or cull - that's Tamiyo's job."
+- **Kasmina:** "Manages seed slot lifecycle, blueprint instantiation, and grafting mechanics." / "Does NOT make strategic decisions about WHEN to germinate or prune - that's Tamiyo's job."
 
 - **Simic:** "Provides PPO training infrastructure including policy networks, rollout collection, and advantage estimation." / "Does NOT interact with the host model directly - all host operations go through Tolaria."
 

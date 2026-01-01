@@ -154,12 +154,11 @@ class ThresholdConfig:
 | `SEED_*` | `KarnCollector._handle_seed_event()` | Updates namespaced `SlotSnapshot` (`src/esper/karn/collector.py:249`) |
 | `PPO_UPDATE_COMPLETED` | `KarnCollector._handle_ppo_update()` | Stores PPO diagnostics (`src/esper/karn/collector.py:297`) |
 | `REWARD_COMPUTED` | `KarnCollector._handle_reward_computed()` | Stores reward/action summary (`src/esper/karn/collector.py:313`) |
-| `COUNTERFACTUAL_COMPUTED` | `KarnCollector._handle_counterfactual_computed()` | Stores per-slot contribution if slot key matches (`src/esper/karn/collector.py:327`) |
 | anomaly strings (e.g. `RATIO_EXPLOSION_DETECTED`) | `KarnCollector._handle_anomaly_event()` | Starts dense trace capture window (`src/esper/karn/collector.py:341`) |
 
 ### Emits
 
-Karn itself does not originate events; it is a sink/router. The one exception is `CounterfactualHelper`, which emits `COUNTERFACTUAL_COMPUTED` back into Nissa for downstream consumers (`src/esper/karn/counterfactual_helper.py:127`).
+Karn itself does not originate events; it is a sink/router.
 
 ---
 
@@ -359,4 +358,3 @@ Implementation: `AnomalyDetector.start_trace()` / `finalize_trace()` (`src/esper
 | Date | Change | Commit | Impact |
 |------|--------|--------|--------|
 | 2025-12-14 | Initial Karn bible (no specialist subagent review in this Codex run) | `40226ca` | Establishes contracts, boundaries, and known gaps |
-

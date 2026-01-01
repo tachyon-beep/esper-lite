@@ -16,7 +16,7 @@ compliance_tags:
   - "Gradient-Aware"
   - "Checkpoint-Critical"
 schema_version: "1.0"
-last_updated: "2025-12-14"
+last_updated: "2026-01-01"
 last_reviewed_commit: "db3b9c1"
 ---
 
@@ -26,7 +26,7 @@ last_reviewed_commit: "db3b9c1"
 
 **Role:** Manages seed module lifecycle from germination through fossilization, providing gradient-safe integration of dynamically-grown neural network components into host networks.
 
-**Anti-Scope:** Does NOT make strategic decisions about WHEN to germinate, advance, or cull seeds—that's Tamiyo's job. Does NOT run training loops—that's Tolaria's job. Does NOT compute rewards—that's Simic's job.
+**Anti-Scope:** Does NOT make strategic decisions about WHEN to germinate, advance, or prune seeds—that's Tamiyo's job. Does NOT run training loops—that's Tolaria's job. Does NOT compute rewards—that's Simic's job.
 
 ---
 
@@ -50,7 +50,7 @@ last_reviewed_commit: "db3b9c1"
 |--------|-----------|-------------|
 | `germinate()` | `(blueprint_id, seed_id, host_module, blend_algorithm_id) -> SeedState` | Create and validate new seed |
 | `advance_stage()` | `(target_stage) -> GateResult` | Progress through lifecycle |
-| `cull()` | `(reason) -> bool` | Remove non-fossilized seed |
+| `prune()` | `(reason) -> bool` | Remove non-fossilized seed |
 | `forward()` | `(host_features) -> Tensor` | Apply seed transformation |
 | `capture_gradient_telemetry()` | `() -> None` | Update G2 gate metrics |
 | `step_epoch()` | `() -> None` | Mechanical lifecycle advancement |
@@ -86,7 +86,7 @@ last_reviewed_commit: "db3b9c1"
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `germinate_seed()` | `(blueprint_id, seed_id, slot, blend_algorithm_id)` | Germinate in specific slot |
-| `cull_seed()` | `(slot)` | Cull seed in slot (transitions to PRUNED) |
+| `prune_seed()` | `(slot)` | Prune seed in slot (transitions to PRUNED) |
 | `get_seed_parameters()` | `(slot) -> Iterator[Parameter]` | Get seed params |
 | `get_host_parameters()` | `() -> Iterator[Parameter]` | Get host-only params |
 
@@ -251,7 +251,7 @@ BLENDING+ stages: Standard lerp gradient attribution
 
 ### Ephemeral (Cached/Temporary)
 - `_shape_probe_cache`: Cleared on device transfer
-- Isolation monitor parameter lists: Cleared on reset/cull
+- Isolation monitor parameter lists: Cleared on reset/prune
 
 ### Read-Only (Consumed)
 - `task_config`: From Simic via training script
@@ -271,7 +271,7 @@ BLENDING+ stages: Standard lerp gradient attribution
 - **Seed Allocation:** On `germinate()`, blueprint instantiated and moved to device
 - **Shape Probe:** Lazy allocation, cached per topology, cleared on device change
 - **Parameter Lists:** Held by `GradientIsolationMonitor`, cleared on `reset()`
-- **Cull Cleanup:** Seed set to None, state cleared, monitor reset
+- **Prune Cleanup:** Seed set to None, state cleared, monitor reset
 
 ---
 
@@ -283,7 +283,7 @@ BLENDING+ stages: Standard lerp gradient attribution
 |--------|-------------|----------------|
 | `tolaria.Trainer` | Calls `step_epoch()`, `capture_gradient_telemetry()` | Seeds stuck in wrong stage |
 | `simic.VectorizedEnv` | Creates `MorphogeneticModel`, calls `germinate_seed()` | Cannot create environments |
-| `tamiyo.HeuristicController` | Calls `advance_stage()`, `cull()` | No lifecycle progression |
+| `tamiyo.HeuristicTamiyo` | Calls `advance_stage()`, `prune()` | No lifecycle progression |
 
 ## 5.2 Downstream (Modules Kasmina depends on)
 
@@ -352,7 +352,7 @@ Kasmina is the biological machinery for growing new neural tissue. Just as stem 
 | [leyline](leyline.md) | **Implements** | Uses `SeedStage`, `GateLevel`, telemetry types |
 | [simic](simic.md) | **Consumed by** | Simic creates MorphogeneticModel for envs |
 | [tolaria](tolaria.md) | **Called by** | Tolaria calls `step_epoch()` in training loop |
-| [tamiyo](tamiyo.md) | **Controlled by** | Tamiyo makes germinate/advance/cull decisions |
+| [tamiyo](tamiyo.md) | **Controlled by** | Tamiyo makes germinate/advance/prune decisions |
 | [karn](karn.md) | **Feeds** | Emits lifecycle telemetry events |
 
 ## 7.2 Key Source Files

@@ -20,6 +20,7 @@ import json
 import logging
 import queue
 import threading
+import time
 from abc import ABC, abstractmethod
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
@@ -41,6 +42,192 @@ from esper.leyline.telemetry import (
 )
 
 _logger = logging.getLogger(__name__)
+
+
+def _payload_to_dict(payload: Any) -> Any:
+    """Convert a TelemetryEvent.data payload into a JSON-friendly structure.
+
+    PERF: Prefer payload.to_dict() when present to avoid dataclasses.asdict() deep-copy overhead
+    on already-JSONable containers (slot_states, per-seed dicts, etc.).
+    """
+    if payload is None:
+        return None
+    if is_dataclass(payload) and not isinstance(payload, type):
+        # hasattr AUTHORIZED by operator on 2026-01-01 00:00:00 UTC
+        # Justification: Serialization - prefer to_dict() for typed payloads that provide it
+        if hasattr(payload, "to_dict") and callable(payload.to_dict):
+            return payload.to_dict()
+        return asdict(payload)
+    return payload
+
+
+def _telemetry_event_to_dict(event: TelemetryEvent) -> dict[str, Any]:
+    """Convert TelemetryEvent to a dict for JSON serialization (fast path)."""
+    # TelemetryEvent.event_type is TelemetryEventType (Enum) - always has .name
+    # TelemetryEvent.timestamp is datetime - always has .isoformat()
+    event_type = event.event_type.name
+    timestamp = event.timestamp.isoformat()
+
+    return {
+        "event_id": event.event_id,
+        "event_type": event_type,
+        "timestamp": timestamp,
+        "seed_id": event.seed_id,
+        "slot_id": event.slot_id,
+        "epoch": event.epoch,
+        "group_id": event.group_id,
+        "message": event.message,
+        "data": _payload_to_dict(event.data),
+        "severity": event.severity,
+    }
+
+
+class BackendWorker:
+    """Worker thread that processes events for a single backend.
+
+    Isolates slow backends from fast ones by giving each backend its own
+    queue and processing thread. Prevents head-of-line blocking where one
+    slow backend (e.g. disk I/O) stalls all others (e.g. in-memory aggregation).
+
+    Thread-safe: enqueue() can be called from main worker thread while
+    _worker_loop() runs in background thread.
+    """
+
+    def __init__(
+        self,
+        backend: "OutputBackend",
+        max_queue_size: int = 100,
+        name: str | None = None,
+    ):
+        """Initialize backend worker.
+
+        Args:
+            backend: The output backend to wrap.
+            max_queue_size: Maximum events to buffer before dropping.
+            name: Thread name (defaults to backend class name).
+        """
+        self._backend = backend
+        self._queue: queue.Queue[TelemetryEvent | None] = queue.Queue(maxsize=max_queue_size)
+        self._name = name or backend.__class__.__name__
+        self._thread = threading.Thread(
+            target=self._worker_loop,
+            name=f"BackendWorker-{self._name}",
+            daemon=True,
+        )
+        self._stopped = False
+        self._dropped_events = 0
+        self._processed_events = 0
+        self._total_processing_time = 0.0
+        self._thread.start()
+
+    def enqueue(self, event: TelemetryEvent) -> None:
+        """Enqueue event for processing (non-blocking).
+
+        Args:
+            event: The telemetry event to process.
+        """
+        if self._stopped:
+            return
+
+        try:
+            # Non-blocking put - if backend is slow and queue is full, drop event
+            self._queue.put_nowait(event)
+        except queue.Full:
+            self._dropped_events += 1
+            if self._dropped_events % 100 == 1:  # Log every 100th drop
+                _logger.warning(
+                    f"Backend {self._name} queue full, dropped {self._dropped_events} events"
+                )
+
+    def get_stats(self) -> dict[str, int | float]:
+        """Get performance statistics for this backend worker.
+
+        Returns:
+            Dictionary with processed count, dropped count, avg processing time.
+        """
+        avg_time = (
+            self._total_processing_time / self._processed_events
+            if self._processed_events > 0
+            else 0.0
+        )
+        return {
+            "processed_events": self._processed_events,
+            "dropped_events": self._dropped_events,
+            "avg_processing_time_ms": avg_time * 1000,
+            "total_processing_time_s": self._total_processing_time,
+        }
+
+    def stop(self, timeout: float = 5.0) -> None:
+        """Stop the worker thread gracefully.
+
+        Waits for all pending events to be processed before stopping.
+
+        CRITICAL: Does NOT set _stopped=True until after sending sentinel,
+        to avoid dropping events that are still being enqueued by main worker.
+
+        Args:
+            timeout: Maximum time to wait for worker to finish.
+        """
+        if self._stopped:
+            return
+
+        # Wait for queue to drain (all pending events processed)
+        # Do NOT set _stopped=True yet - enqueue() must still accept events
+        # until we've sent the shutdown sentinel
+        try:
+            self._queue.join()
+        except Exception as e:
+            _logger.warning(f"Queue join failed during {self._name} shutdown (worker may have died): {e}")
+
+        # Send shutdown signal
+        try:
+            self._queue.put(None, timeout=1.0)
+        except queue.Full:
+            _logger.warning(f"Queue full during {self._name} shutdown, forcing stop")
+
+        # NOW it's safe to reject new events - sentinel is in queue
+        self._stopped = True
+
+        # Wait for worker to finish
+        if self._thread.is_alive():
+            self._thread.join(timeout=timeout)
+            if self._thread.is_alive():
+                _logger.warning(f"Backend worker {self._name} did not stop within {timeout}s")
+
+        # Log performance stats on shutdown
+        stats = self.get_stats()
+        if stats["processed_events"] > 0:
+            _logger.debug(
+                f"Backend {self._name}: processed={stats['processed_events']}, "
+                f"dropped={stats['dropped_events']}, "
+                f"avg_time={stats['avg_processing_time_ms']:.2f}ms"
+            )
+
+    def _worker_loop(self) -> None:
+        """Background worker loop that processes events from the queue."""
+        while True:
+            try:
+                event = self._queue.get(timeout=1.0)
+                if event is None:  # Shutdown signal
+                    self._queue.task_done()
+                    break
+
+                # Track processing time
+                start_time = time.time()
+                try:
+                    self._backend.emit(event)
+                    self._processed_events += 1
+                except Exception as e:
+                    _logger.error(f"Error in backend {self._name}: {e}")
+                finally:
+                    elapsed = time.time() - start_time
+                    self._total_processing_time += elapsed
+
+                self._queue.task_done()
+            except queue.Empty:
+                continue
+            except Exception as e:
+                _logger.error(f"Unexpected error in backend worker {self._name}: {e}")
 
 
 class OutputBackend(ABC):
@@ -197,23 +384,6 @@ class ConsoleOutput(OutputBackend):
                 if env_acc_str:
                     print(f"[{timestamp}]   Env accs: [{env_acc_str}]")
                 print(f"[{timestamp}]   Avg: {avg_acc:.1f}% (rolling: {rolling_acc:.1f}%), reward: {avg_reward:.1f}")
-        elif event_type == "COUNTERFACTUAL_COMPUTED":
-            if event.data is None:
-                _logger.warning("COUNTERFACTUAL_COMPUTED event has no data payload")
-                return
-            # COUNTERFACTUAL_COMPUTED not yet migrated to typed payload
-            if isinstance(event.data, dict):
-                env_id = event.data.get("env_id", "?")
-                slot_id = event.data.get("slot_id", "?")
-                available = event.data.get("available", True)
-                if available is False:
-                    reason = event.data.get("reason", "unknown")
-                    print(f"[{timestamp}] env{env_id} | Counterfactual {slot_id}: unavailable ({reason})")
-                else:
-                    real_acc = event.data.get("real_accuracy", 0.0)
-                    baseline_acc = event.data.get("baseline_accuracy", 0.0)
-                    contribution = event.data.get("contribution", 0.0)
-                    print(f"[{timestamp}] env{env_id} | Counterfactual {slot_id}: {real_acc:.1f}% real, {baseline_acc:.1f}% baseline, Δ={contribution:+.1f}%")
         elif event_type == "CHECKPOINT_SAVED":
             # TODO: [DEAD CODE] - This formatting code for CHECKPOINT_SAVED is unreachable
             # because these events are never emitted. See: leyline/telemetry.py dead event TODOs.
@@ -242,25 +412,15 @@ class ConsoleOutput(OutputBackend):
             if event.data is None:
                 _logger.warning("TAMIYO_INITIATED event has no data payload")
                 return
-            # Handle typed payload
-            if isinstance(event.data, TamiyoInitiatedPayload):
-                payload = event.data
-                env_str = f"env{payload.env_id}"
-                if payload.stabilization_epochs == 0:
-                    print(f"[{timestamp}] {env_str} | Host stabilized at epoch {payload.epoch} - germination now allowed")
-                else:
-                    print(f"[{timestamp}] {env_str} | Host stabilized at epoch {payload.epoch} ({payload.stable_count}/{payload.stabilization_epochs} stable) - germination now allowed")
-            elif isinstance(event.data, dict):
-                # Legacy dict format (from deserialization)
-                env_id = event.data.get("env_id")
-                epoch = event.data.get("epoch", "?")
-                stable_count = event.data.get("stable_count", 0)
-                stabilization_epochs = event.data.get("stabilization_epochs", 0)
-                env_str = f"env{env_id}" if env_id is not None else "Tamiyo"
-                if stabilization_epochs == 0:
-                    print(f"[{timestamp}] {env_str} | Host stabilized at epoch {epoch} - germination now allowed")
-                else:
-                    print(f"[{timestamp}] {env_str} | Host stabilized at epoch {epoch} ({stable_count}/{stabilization_epochs} stable) - germination now allowed")
+            # TAMIYO_INITIATED always uses typed payload
+            if not isinstance(event.data, TamiyoInitiatedPayload):
+                raise TypeError(f"TAMIYO_INITIATED event has invalid payload type: {type(event.data)}")
+            payload = event.data
+            env_str = f"env{payload.env_id}"
+            if payload.stabilization_epochs == 0:
+                print(f"[{timestamp}] {env_str} | Host stabilized at epoch {payload.epoch} - germination now allowed")
+            else:
+                print(f"[{timestamp}] {env_str} | Host stabilized at epoch {payload.epoch} ({payload.stable_count}/{payload.stabilization_epochs} stable) - germination now allowed")
         elif event_type == "PPO_UPDATE_COMPLETED":
             if event.data is None:
                 _logger.warning("PPO_UPDATE_COMPLETED event has no data payload")
@@ -292,24 +452,7 @@ class ConsoleOutput(OutputBackend):
 
     def _event_to_dict(self, event: TelemetryEvent) -> dict[str, Any]:
         """Convert event to dictionary for serialization."""
-        if is_dataclass(event):
-            data = asdict(event)
-        else:
-            data = event.__dict__
-
-        # Convert datetime objects to ISO format strings
-        # hasattr AUTHORIZED by operator on 2025-11-29 15:05:24 UTC
-        # Justification: Serialization - safely handle datetime objects from various sources
-        if 'timestamp' in data and hasattr(data['timestamp'], 'isoformat'):
-            data['timestamp'] = data['timestamp'].isoformat()
-
-        # Convert enum to string
-        # hasattr AUTHORIZED by operator on 2025-11-29 15:05:24 UTC
-        # Justification: Serialization - safely handle enum objects with .name attribute
-        if 'event_type' in data and hasattr(data['event_type'], 'name'):
-            data['event_type'] = data['event_type'].name
-
-        return data
+        return _telemetry_event_to_dict(event)
 
 
 class FileOutput(OutputBackend):
@@ -358,24 +501,7 @@ class FileOutput(OutputBackend):
 
     def _event_to_dict(self, event: TelemetryEvent) -> dict[str, Any]:
         """Convert event to dictionary for serialization."""
-        if is_dataclass(event):
-            data = asdict(event)
-        else:
-            data = event.__dict__
-
-        # Convert datetime objects to ISO format strings
-        # hasattr AUTHORIZED by operator on 2025-11-29 15:05:24 UTC
-        # Justification: Serialization - safely handle datetime objects from various sources
-        if 'timestamp' in data and hasattr(data['timestamp'], 'isoformat'):
-            data['timestamp'] = data['timestamp'].isoformat()
-
-        # Convert enum to string
-        # hasattr AUTHORIZED by operator on 2025-11-29 15:05:24 UTC
-        # Justification: Serialization - safely handle enum objects with .name attribute
-        if 'event_type' in data and hasattr(data['event_type'], 'name'):
-            data['event_type'] = data['event_type'].name
-
-        return data
+        return _telemetry_event_to_dict(event)
 
     def __del__(self) -> None:
         """Ensure file is closed on deletion."""
@@ -433,9 +559,17 @@ class NissaHub:
     distributes them to all registered output backends.
 
     Performance:
-        Emission is asynchronous. Events are placed in a queue and processed
-        by a background worker thread. This prevents slow I/O backends
-        (e.g. console, network) from blocking the training loop.
+        Emission is asynchronous with parallel backend processing. Events
+        are placed in a main queue, then fanned out to per-backend worker
+        threads. This ensures slow backends (e.g. disk I/O) don't block
+        fast ones (e.g. in-memory aggregation), preventing head-of-line
+        blocking under burst loads.
+
+        Architecture:
+            1. Main worker: Dequeues events from central queue
+            2. Fan-out: Distributes events to all backend workers
+            3. Backend workers: Process events independently in parallel
+            4. Back-pressure: Each backend has bounded queue (drops on overflow)
 
     Lifecycle Contract:
         - add_backend(): Starts backend immediately; raises RuntimeError if hub is closed
@@ -454,13 +588,16 @@ class NissaHub:
         hub.emit(event)
     """
 
-    def __init__(self, max_queue_size: int = 1000):
+    def __init__(self, max_queue_size: int = 1000, backend_queue_size: int = 100):
         self._backends: list[OutputBackend] = []
+        self._backend_workers: list[BackendWorker] = []
+        self._backend_queue_size = backend_queue_size
         self._closed = False  # Idempotency flag for close()
         self._emit_after_close_warned = False
         self._queue: queue.Queue[TelemetryEvent | None] = queue.Queue(maxsize=max_queue_size)
         self._worker_thread: threading.Thread | None = None
         self._lock = threading.Lock()
+        self._dropped_events = 0
 
     def _start_worker(self) -> None:
         """Start the background worker thread if not already running."""
@@ -472,7 +609,12 @@ class NissaHub:
                 self._worker_thread.start()
 
     def _worker_loop(self) -> None:
-        """Background worker loop that processes events from the queue."""
+        """Background worker loop that fans out events to all backend workers.
+
+        This is the main multiplexer: it dequeues events from the central queue
+        and distributes them to all per-backend worker queues in parallel.
+        Backends process independently, so slow backends don't block fast ones.
+        """
         while True:
             try:
                 event = self._queue.get(timeout=1.0)
@@ -480,13 +622,10 @@ class NissaHub:
                     self._queue.task_done()
                     break
 
-                for backend in self._backends:
-                    try:
-                        backend.emit(event)
-                    except Exception as e:
-                        # Log error but don't let one backend failure break others
-                        _logger.error(f"Error in backend {backend.__class__.__name__}: {e}")
-                
+                # Fan out to all backend workers
+                for worker in self._backend_workers:
+                    worker.enqueue(event)
+
                 self._queue.task_done()
             except queue.Empty:
                 continue
@@ -496,9 +635,9 @@ class NissaHub:
     def add_backend(self, backend: OutputBackend) -> None:
         """Add an output backend to the hub.
 
-        The backend is started immediately on add. If start() fails,
-        the backend is NOT added and the exception is re-raised
-        (fail-fast to prevent half-initialized state and silent misconfiguration).
+        The backend is started immediately and wrapped in a BackendWorker
+        with its own processing thread. This ensures slow backends don't
+        block fast ones.
 
         Args:
             backend: The output backend to add.
@@ -516,6 +655,14 @@ class NissaHub:
         try:
             backend.start()
             self._backends.append(backend)
+
+            # Create worker thread for this backend
+            worker = BackendWorker(
+                backend=backend,
+                max_queue_size=self._backend_queue_size,
+            )
+            self._backend_workers.append(worker)
+
             self._start_worker()
         except Exception:
             _logger.exception(f"Failed to start backend {backend.__class__.__name__}, not adding")
@@ -524,14 +671,26 @@ class NissaHub:
     def remove_backend(self, backend: OutputBackend) -> None:
         """Remove an output backend from the hub.
 
+        Stops the backend's worker thread and closes the backend.
+
         Args:
             backend: The output backend to remove.
         """
         if backend in self._backends:
+            idx = self._backends.index(backend)
+
+            # Stop the backend worker
+            if idx < len(self._backend_workers):
+                worker = self._backend_workers[idx]
+                worker.stop()
+                self._backend_workers.pop(idx)
+
+            # Close the backend
             try:
                 backend.close()
             except Exception as e:
                 _logger.error(f"Error closing backend {backend.__class__.__name__}: {e}")
+
             self._backends.remove(backend)
 
     def emit(self, event: TelemetryEvent) -> None:
@@ -555,10 +714,20 @@ class NissaHub:
             # If queue is full, we drop the event and warn.
             self._queue.put_nowait(event)
         except queue.Full:
-            _logger.warning("NissaHub queue full, dropping telemetry event")
+            self._dropped_events += 1
+            # Log first drop immediately, then throttle to avoid hitching under overload.
+            if self._dropped_events == 1 or self._dropped_events % 1000 == 0:
+                _logger.warning(
+                    "NissaHub queue full, dropped %d telemetry events",
+                    self._dropped_events,
+                )
 
     def flush(self, timeout: float | None = None) -> None:
         """Block until all queued events have been processed.
+
+        Waits for both the main queue AND all backend worker queues to drain.
+        This ensures the documented contract: "all events have been delivered
+        to backends before proceeding".
 
         Useful for tests or shutdown sequences where you need to ensure
         all events have been delivered to backends before proceeding.
@@ -571,9 +740,30 @@ class NissaHub:
         # Only wait if there's actually a worker running to process events
         if self._worker_thread is None or not self._worker_thread.is_alive():
             return
+
+        # Stage 1: Wait for main queue to drain (fan-out complete)
         # join() blocks until all items in the queue have been processed
         # (i.e., task_done() has been called for each get())
         self._queue.join()
+
+        # Stage 2: Wait for all backend worker queues to drain (processing complete)
+        # Without this, flush() would return while backend workers are still emitting
+        for worker in self._backend_workers:
+            try:
+                worker._queue.join()
+            except Exception as e:
+                _logger.warning(f"Queue join failed for {worker._name} during flush (worker may have died): {e}")
+
+    def get_backend_stats(self) -> dict[str, dict[str, int | float]]:
+        """Get performance statistics for all backend workers.
+
+        Returns:
+            Dictionary mapping backend name to its stats.
+        """
+        stats = {}
+        for worker in self._backend_workers:
+            stats[worker._name] = worker.get_stats()
+        return stats
 
     def reset(self) -> None:
         """Reset the hub: close all backends and clear the list.
@@ -588,17 +778,25 @@ class NissaHub:
         """
         self.close()
         self._backends.clear()
+        self._backend_workers.clear()
         self._closed = False  # Allow hub to be reused after reset
         self._emit_after_close_warned = False
         # Create fresh queue to ensure no stale events from previous runs
         self._queue = queue.Queue(maxsize=self._queue.maxsize)
         self._worker_thread = None  # Will be recreated on next add_backend()
+        self._dropped_events = 0
 
     def close(self) -> None:
         """Close all backends (idempotent).
 
         Safe to call multiple times - only closes backends once.
-        Flushes pending events before shutting down the worker.
+        Flushes pending events before shutting down workers.
+
+        Shutdown order:
+            1. Stop accepting new events (set _closed flag)
+            2. Drain main queue and stop main worker
+            3. Stop all backend workers (drains their queues)
+            4. Close all backends
         """
         if self._closed:
             return
@@ -608,7 +806,7 @@ class NissaHub:
         # after the sentinel, causing those events to be silently dropped.
         self._closed = True
 
-        # Signal worker to stop and wait for it to finish
+        # Signal main worker to stop and wait for it to finish
         if self._worker_thread is not None and self._worker_thread.is_alive():
             try:
                 # Drain any events already in the queue before sending sentinel.
@@ -616,16 +814,24 @@ class NissaHub:
                 # Use a timeout to avoid blocking forever if worker is stuck.
                 try:
                     self._queue.join()
-                except Exception:
-                    pass  # Queue join can fail if worker died
+                except Exception as e:
+                    _logger.warning(f"Queue join failed during hub close (worker may have died): {e}")
 
                 # Add None to queue as sentinel for worker shutdown.
                 # Use blocking put with timeout to ensure signal is received.
                 self._queue.put(None, timeout=2.0)
                 self._worker_thread.join(timeout=5.0)
-            except (queue.Full, RuntimeError):
-                pass  # Worker might already be dead or queue unreachable
+            except (queue.Full, RuntimeError) as e:
+                _logger.warning(f"Hub shutdown interrupted (worker may be dead or queue unreachable): {e}")
 
+        # Stop all backend workers (this drains their queues)
+        for worker in self._backend_workers:
+            try:
+                worker.stop(timeout=5.0)
+            except Exception as e:
+                _logger.error(f"Error stopping backend worker: {e}")
+
+        # Close all backends
         for backend in self._backends:
             try:
                 backend.close()

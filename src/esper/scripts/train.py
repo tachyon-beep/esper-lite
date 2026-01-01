@@ -46,6 +46,61 @@ def build_parser() -> argparse.ArgumentParser:
         help="Telemetry verbosity level (default: normal)",
     )
     telemetry_parent.add_argument(
+        "--torch-profiler",
+        action="store_true",
+        help="Enable torch.profiler trace capture (TensorBoard-compatible)",
+    )
+    telemetry_parent.add_argument(
+        "--torch-profiler-dir",
+        type=str,
+        default="./profiler_traces",
+        help="Output directory for torch.profiler traces (default: ./profiler_traces)",
+    )
+    telemetry_parent.add_argument(
+        "--torch-profiler-wait",
+        type=int,
+        default=1,
+        help="torch.profiler schedule: wait steps before warmup (default: 1)",
+    )
+    telemetry_parent.add_argument(
+        "--torch-profiler-warmup",
+        type=int,
+        default=1,
+        help="torch.profiler schedule: warmup steps (default: 1)",
+    )
+    telemetry_parent.add_argument(
+        "--torch-profiler-active",
+        type=int,
+        default=3,
+        help="torch.profiler schedule: active (recording) steps (default: 3)",
+    )
+    telemetry_parent.add_argument(
+        "--torch-profiler-repeat",
+        type=int,
+        default=1,
+        help="torch.profiler schedule: number of cycles to repeat (default: 1)",
+    )
+    telemetry_parent.add_argument(
+        "--torch-profiler-record-shapes",
+        action="store_true",
+        help="torch.profiler: record tensor shapes (larger traces)",
+    )
+    telemetry_parent.add_argument(
+        "--torch-profiler-profile-memory",
+        action="store_true",
+        help="torch.profiler: profile memory allocations (larger traces)",
+    )
+    telemetry_parent.add_argument(
+        "--torch-profiler-with-stack",
+        action="store_true",
+        help="torch.profiler: record Python stacks (very large traces)",
+    )
+    telemetry_parent.add_argument(
+        "--torch-profiler-summary",
+        action="store_true",
+        help="Print a compact torch.profiler op summary at the end of training",
+    )
+    telemetry_parent.add_argument(
         "--gradient-telemetry-stride",
         type=int,
         default=None,
@@ -73,18 +128,64 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable Rich terminal UI (uses console output instead)",
     )
     telemetry_parent.add_argument(
-        "--tui-layout",
-        type=str,
-        choices=["compact", "standard", "wide", "auto"],
-        default="auto",
-        help="DEPRECATED: Use --sanctum instead. This flag is ignored.",
-    )
-    telemetry_parent.add_argument(
         "--export-karn",
         type=str,
         default=None,
         metavar="PATH",
         help="Export Karn telemetry store to JSONL file after training",
+    )
+    telemetry_parent.add_argument(
+        "--wandb",
+        action="store_true",
+        help="Enable Weights & Biases logging (requires: pip install wandb)",
+    )
+    telemetry_parent.add_argument(
+        "--wandb-project",
+        type=str,
+        default="esper",
+        help="Wandb project name (default: esper)",
+    )
+    telemetry_parent.add_argument(
+        "--wandb-entity",
+        type=str,
+        default=None,
+        help="Wandb team/user name (optional)",
+    )
+    telemetry_parent.add_argument(
+        "--wandb-tags",
+        type=str,
+        nargs="*",
+        default=None,
+        help="Wandb tags for this run (space-separated)",
+    )
+    telemetry_parent.add_argument(
+        "--wandb-group",
+        type=str,
+        default=None,
+        help="Wandb group name for related runs",
+    )
+    telemetry_parent.add_argument(
+        "--wandb-name",
+        type=str,
+        default=None,
+        help="Custom wandb run name (auto-generated if not specified)",
+    )
+    telemetry_parent.add_argument(
+        "--wandb-mode",
+        type=str,
+        choices=["online", "offline", "disabled"],
+        default="online",
+        help="Wandb mode: online (sync), offline (sync later), disabled (no-op)",
+    )
+    telemetry_parent.add_argument(
+        "--wandb-no-code",
+        action="store_true",
+        help="Disable wandb code logging (git commit, diff)",
+    )
+    telemetry_parent.add_argument(
+        "--wandb-no-system",
+        action="store_true",
+        help="Disable wandb system metrics (GPU, CPU, memory)",
     )
     telemetry_parent.add_argument(
         "--sanctum",
@@ -171,6 +272,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--gpu-preload",
         action="store_true",
         help="Preload dataset to GPU for 8x faster data loading (CIFAR-10 only, uses ~0.75GB VRAM)",
+    )
+    ppo_parser.add_argument(
+        "--experimental-gpu-preload-gather",
+        action="store_true",
+        help="EXPERIMENTAL: Use a DataLoader-free gather iterator for --gpu-preload (CIFAR-10 only).",
     )
     ppo_parser.add_argument(
         "--amp",
@@ -323,6 +429,8 @@ def main() -> None:
     # Mutual exclusion check for UI modes
     if args.sanctum and args.overwatch:
         parser.error("--sanctum and --overwatch are mutually exclusive")
+    if args.algorithm == "ppo" and args.experimental_gpu_preload_gather and not args.gpu_preload:
+        parser.error("--experimental-gpu-preload-gather requires --gpu-preload")
 
     # Create TelemetryConfig from CLI argument
     from esper.simic.telemetry import TelemetryConfig, TelemetryLevel
@@ -363,13 +471,6 @@ def main() -> None:
     if not is_tty and not args.no_tui:
         print("Non-TTY detected, using console output instead of TUI")
 
-    # Warn about deprecated --tui-layout flag
-    if args.tui_layout != "auto":
-        print(
-            "WARNING: --tui-layout is deprecated and ignored. "
-            "Use --sanctum for the developer TUI."
-        )
-
     # Add console output if not using a TUI backend
     if not use_sanctum:
         hub.add_backend(ConsoleOutput(min_severity=console_min_severity))
@@ -393,7 +494,7 @@ def main() -> None:
     if args.export_karn:
         from esper.karn import KarnCollector
         karn_collector = KarnCollector()
-        hub.add_backend(karn_collector)  # type: ignore[arg-type]
+        hub.add_backend(karn_collector)
 
     # Add WebSocket dashboard if requested
     dashboard_backend = None
@@ -407,7 +508,7 @@ def main() -> None:
             # - Queues events from sync training loop
             dashboard_backend = DashboardServer(port=args.dashboard_port)
             dashboard_backend.start()
-            hub.add_backend(dashboard_backend)  # type: ignore[arg-type]
+            hub.add_backend(dashboard_backend)
 
             # Get all network interfaces for dashboard URLs
             def get_network_interfaces() -> list[str]:
@@ -453,6 +554,49 @@ def main() -> None:
             print("Warning: Dashboard dependencies not installed.")
             print("  Install with: pip install esper-lite[dashboard]")
 
+    # Add Wandb backend if requested
+    wandb_backend = None
+    if args.wandb:
+        try:
+            from esper.nissa.wandb_backend import WandbBackend
+
+            # Build config dict from training args for wandb logging
+            wandb_config = {
+                "algorithm": args.algorithm,
+            }
+
+            # Add algorithm-specific config
+            if args.algorithm == "ppo":
+                # Add PPO-specific hyperparameters
+                # These will be available after config is created below,
+                # but we can add them to wandb config via wandb.config.update()
+                # during TRAINING_STARTED event handling
+                pass
+
+            wandb_backend = WandbBackend(
+                project=args.wandb_project,
+                entity=args.wandb_entity,
+                config=wandb_config,
+                tags=args.wandb_tags or [],
+                group=args.wandb_group,
+                name=args.wandb_name,
+                mode=args.wandb_mode,
+                log_code=not args.wandb_no_code,
+                log_system=not args.wandb_no_system,
+            )
+            hub.add_backend(wandb_backend)
+
+            print(f"Wandb logging enabled (project: {args.wandb_project}, mode: {args.wandb_mode})")
+            if args.wandb_tags:
+                print(f"  Tags: {', '.join(args.wandb_tags)}")
+            if args.wandb_group:
+                print(f"  Group: {args.wandb_group}")
+
+        except ImportError as e:
+            print(f"Warning: Wandb integration unavailable: {e}")
+            print("  Install with: pip install wandb")
+            sys.exit(1)
+
     # Setup Sanctum backend if requested
     sanctum_backend = None
     if use_sanctum:
@@ -484,7 +628,7 @@ def main() -> None:
             num_envs = DEFAULT_N_ENVS
 
         sanctum_backend = SanctumBackend(num_envs=num_envs)
-        hub.add_backend(sanctum_backend)  # type: ignore[arg-type]
+        hub.add_backend(sanctum_backend)
 
     # Setup Overwatch backend if requested
     overwatch_backend = None
@@ -493,7 +637,7 @@ def main() -> None:
 
         overwatch_backend = OverwatchBackend(port=args.overwatch_port)
         if overwatch_backend.start():
-            hub.add_backend(overwatch_backend)  # type: ignore[arg-type]
+            hub.add_backend(overwatch_backend)
             print(f"Overwatch dashboard: http://localhost:{args.overwatch_port}")
         else:
             print(
@@ -507,7 +651,7 @@ def main() -> None:
     # KarnCollector captures events into typed store for research analytics
     from esper.karn import get_collector
     karn_collector = get_collector()
-    hub.add_backend(karn_collector)  # type: ignore[arg-type]
+    hub.add_backend(karn_collector)
 
     # Events for TUI synchronization
     # - dataloader_ready_event: Signals when DataLoader workers are spawned
@@ -641,7 +785,7 @@ def main() -> None:
                     # Use task from config if specified, otherwise CLI arg
                     effective_task = config.task if config.task else args.task
 
-                    from esper.simic.training import train_dual_policy_ab
+                    from esper.simic.training.dual_ab import train_dual_policy_ab
                     train_dual_policy_ab(
                         n_envs_per_group=config.n_envs,
                         group_configs=group_configs,
@@ -662,11 +806,15 @@ def main() -> None:
                     )
                 else:
                     print(config.summary())
+                    if args.experimental_gpu_preload_gather:
+                        print(
+                            "EXPERIMENTAL: Using GPU-preload gather iterator (DataLoader-free)."
+                        )
 
                     # Use task from config if specified, otherwise CLI arg
                     effective_task = config.task if config.task else args.task
 
-                    from esper.simic.training import train_ppo_vectorized
+                    from esper.simic.training.vectorized import train_ppo_vectorized
                     train_ppo_vectorized(
                         device=args.device,
                         devices=args.devices,
@@ -675,11 +823,22 @@ def main() -> None:
                         resume_path=args.resume,
                         num_workers=args.num_workers,
                         gpu_preload=args.gpu_preload,
+                        experimental_gpu_preload_gather=args.experimental_gpu_preload_gather,
                         telemetry_config=telemetry_config,
                         telemetry_lifecycle_only=args.telemetry_lifecycle_only,
                         quiet_analytics=use_sanctum,
                         ready_event=dataloader_ready_event,
                         shutdown_event=shutdown_event,
+                        torch_profiler=args.torch_profiler,
+                        torch_profiler_dir=args.torch_profiler_dir,
+                        torch_profiler_wait=args.torch_profiler_wait,
+                        torch_profiler_warmup=args.torch_profiler_warmup,
+                        torch_profiler_active=args.torch_profiler_active,
+                        torch_profiler_repeat=args.torch_profiler_repeat,
+                        torch_profiler_record_shapes=args.torch_profiler_record_shapes,
+                        torch_profiler_profile_memory=args.torch_profiler_profile_memory,
+                        torch_profiler_with_stack=args.torch_profiler_with_stack,
+                        torch_profiler_summary=args.torch_profiler_summary,
                         **config.to_train_kwargs(),
                     )
         except Exception:

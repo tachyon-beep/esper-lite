@@ -182,6 +182,7 @@ class TestTypedPayloadSerialization:
         payload = TrainingStartedPayload(
             n_envs=4,
             max_epochs=100,
+            max_batches=100,
             task="test_task",
             host_params=1000000,
             slot_ids=("r0c0", "r0c1"),

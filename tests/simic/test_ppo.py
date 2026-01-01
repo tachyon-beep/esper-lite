@@ -1,5 +1,4 @@
 """Tests for PPO module."""
-import pytest
 import torch
 
 from esper.leyline import (
@@ -15,9 +14,9 @@ from esper.leyline import (
     NUM_TEMPO,
 )
 from esper.leyline.slot_config import SlotConfig
-from esper.simic.agent import signals_to_features, PPOAgent
+from esper.simic.agent import PPOAgent
 from esper.tamiyo.policy import create_policy
-from esper.tamiyo.policy.features import MULTISLOT_FEATURE_SIZE, get_feature_size
+from esper.tamiyo.policy.features import get_feature_size, batch_obs_to_features
 
 
 def test_ppo_agent_architecture():
@@ -82,8 +81,9 @@ def test_kl_early_stopping_triggers():
                 "op": torch.ones(1, NUM_OPS, dtype=torch.bool, device=agent.device),
             }
             pre_hidden = hidden
+            bp_indices = torch.zeros(1, slot_config.num_slots, dtype=torch.long, device=agent.device)
             result = agent.policy.network.get_action(
-                state, hidden,
+                state, bp_indices, hidden,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
                 style_mask=masks["style"],
@@ -129,6 +129,7 @@ def test_kl_early_stopping_triggers():
                 hidden_h=pre_hidden[0],
                 hidden_c=pre_hidden[1],
                 bootstrap_value=0.0,
+                blueprint_indices=bp_indices.squeeze(0),
             )
         agent.buffer.end_episode(env_id)
 
@@ -208,6 +209,7 @@ def test_kl_early_stopping_with_single_epoch():
                 hidden_h=torch.zeros(1, 1, agent.policy.hidden_dim),
                 hidden_c=torch.zeros(1, 1, agent.policy.hidden_dim),
                 bootstrap_value=0.0,
+                blueprint_indices=torch.zeros(slot_config.num_slots, dtype=torch.long),
             )
         agent.buffer.end_episode(env_id)
 
@@ -348,8 +350,10 @@ def test_head_grad_norms_includes_tempo_head() -> None:
         masks["op"][:, LifecycleOp.GERMINATE] = True
 
         pre_hidden = hidden
+        bp_indices = torch.zeros(1, slot_config.num_slots, dtype=torch.long, device=device)
         result = agent.policy.network.get_action(
             state,
+            bp_indices,
             hidden,
             slot_mask=masks["slot"],
             blueprint_mask=masks["blueprint"],
@@ -397,6 +401,7 @@ def test_head_grad_norms_includes_tempo_head() -> None:
             hidden_h=pre_hidden[0],
             hidden_c=pre_hidden[1],
             bootstrap_value=0.0,
+            blueprint_indices=bp_indices.squeeze(0),
         )
     agent.buffer.end_episode(env_id=0)
 
@@ -408,7 +413,9 @@ def test_head_grad_norms_includes_tempo_head() -> None:
 
 
 def test_signals_to_features_with_multislot_params():
-    """Test signals_to_features accepts total_seeds and max_seeds params."""
+    """Test batch_obs_to_features V3 API with 3-slot config."""
+    from esper.leyline import LifecycleOp
+
     # Create minimal signals mock
     class MockMetrics:
         epoch = 10
@@ -428,29 +435,36 @@ def test_signals_to_features_with_multislot_params():
         metrics = MockMetrics()
         loss_history = [0.8, 0.7, 0.6, 0.5, 0.5]
         accuracy_history = [70.0, 75.0, 80.0, 82.0, 85.0]
-        active_seeds = []
-        available_slots = 3
-        seed_stage = 0
-        seed_epochs_in_stage = 0
-        seed_alpha = 0.0
-        seed_improvement = 0.0
-        seed_counterfactual = 0.0
 
-    features = signals_to_features(
-        signals=MockSignals(),
-        slot_reports={},
-        use_telemetry=False,
-        slots=["r0c1"],
-        total_seeds=1,  # NEW param
-        max_seeds=3,    # NEW param
+    class MockEnvState:
+        last_action_success = True
+        last_action_op = LifecycleOp.WAIT.value
+        gradient_health_prev = {}
+        epochs_since_counterfactual = {}
+
+    slot_config = SlotConfig.default()  # 3 slots
+    batch_signals = [MockSignals()]
+    batch_slot_reports = [{}]  # Empty slot reports (all inactive)
+    batch_env_states = [MockEnvState()]
+
+    obs, blueprint_indices = batch_obs_to_features(
+        batch_signals=batch_signals,
+        batch_slot_reports=batch_slot_reports,
+        batch_env_states=batch_env_states,
+        slot_config=slot_config,
+        device=torch.device("cpu"),
+        max_epochs=100,
     )
 
-    assert len(features) == MULTISLOT_FEATURE_SIZE
+    # Obs V3: 23 base + 30*3 slots = 113 dims (excluding blueprint embeddings)
+    expected_dim = get_feature_size(slot_config)
+    assert obs.shape == (1, expected_dim)
+    assert obs.shape[1] == 113
 
 
 def test_signals_to_features_telemetry_slot_alignment() -> None:
-    """Telemetry slices must align to [early][mid][late], not "first enabled slot"."""
-    from esper.leyline import SeedMetrics, SeedStage, SeedStateReport, SeedTelemetry
+    """Telemetry features embedded in slot features align to slot config order."""
+    from esper.leyline import SeedMetrics, SeedStage, SeedStateReport, SeedTelemetry, LifecycleOp
 
     class MockMetrics:
         epoch = 7
@@ -470,13 +484,12 @@ def test_signals_to_features_telemetry_slot_alignment() -> None:
         metrics = MockMetrics()
         loss_history = []
         accuracy_history = []
-        active_seeds = []
-        available_slots = 3
-        seed_stage = 0
-        seed_epochs_in_stage = 0
-        seed_alpha = 0.0
-        seed_improvement = 0.0
-        seed_counterfactual = 0.0
+
+    class MockEnvState:
+        last_action_success = True
+        last_action_op = LifecycleOp.WAIT.value
+        gradient_health_prev = {"r0c1": 0.8}  # Previous gradient health
+        epochs_since_counterfactual = {"r0c1": 2}  # 2 epochs since last CF
 
     mid_telemetry = SeedTelemetry(seed_id="s1", blueprint_id="norm")
     mid_telemetry.gradient_norm = 2.0
@@ -496,25 +509,79 @@ def test_signals_to_features_telemetry_slot_alignment() -> None:
             seed_id="s1",
             slot_id="r0c1",
             blueprint_id="norm",
+            blueprint_index=3,  # norm blueprint index
             stage=SeedStage.TRAINING,
-            metrics=SeedMetrics(epochs_total=7),
+            metrics=SeedMetrics(
+                epochs_total=7,
+                current_alpha=0.3,
+                counterfactual_contribution=1.5,
+                contribution_velocity=0.2,
+                epochs_in_current_stage=4,
+                interaction_sum=0.0,
+            ),
             telemetry=mid_telemetry,
+            blend_tempo_epochs=5,
+            alpha_target=0.5,
+            alpha_mode=0,
+            alpha_steps_total=10,
+            alpha_steps_done=3,
+            time_to_target=7,
+            alpha_velocity=0.05,
+            alpha_algorithm=0,
         )
     }
 
-    features = signals_to_features(
-        signals=MockSignals(),
-        slot_reports=slot_reports,
-        use_telemetry=True,
-        slots=["r0c1"],
+    slot_config = SlotConfig.default()  # 3 slots: r0c0, r0c1, r0c2
+    batch_signals = [MockSignals()]
+    batch_slot_reports = [slot_reports]
+    batch_env_states = [MockEnvState()]
+
+    obs, blueprint_indices = batch_obs_to_features(
+        batch_signals=batch_signals,
+        batch_slot_reports=batch_slot_reports,
+        batch_env_states=batch_env_states,
+        slot_config=slot_config,
+        device=torch.device("cpu"),
+        max_epochs=100,
     )
 
-    base = MULTISLOT_FEATURE_SIZE
-    dim = SeedTelemetry.feature_dim()
+    # V3: Telemetry is embedded in slot features (4 dims: gradient_norm, gradient_health, has_vanishing, has_exploding)
+    # Base features: 23 dims
+    # Slot 0 (r0c0): 30 dims - all zeros (inactive)
+    # Slot 1 (r0c1): 30 dims - active with telemetry
+    # Slot 2 (r0c2): 30 dims - all zeros (inactive)
 
-    assert features[base:base + dim] == [0.0] * dim  # r0c0 (disabled)
-    assert features[base + dim:base + 2 * dim] == pytest.approx(mid_telemetry.to_features())  # r0c1
-    assert features[base + 2 * dim:base + 3 * dim] == [0.0] * dim  # r0c2 (disabled)
+    # Extract slot 1 features (r0c1) - starts at index 23 + 30 = 53
+    slot1_start = 23 + 30  # Skip base + slot0
+    slot1_features = obs[0, slot1_start:slot1_start + 30].tolist()
+
+    # Slot features layout (30 dims):
+    # [0] is_active = 1.0
+    # [1-10] stage one-hot
+    # [11] current_alpha
+    # [12] contribution
+    # [13] contribution_velocity
+    # [14] blend_tempo_epochs
+    # [15-22] alpha scaffolding (8 dims)
+    # [23-26] telemetry merged (4 dims): gradient_norm, gradient_health, has_vanishing, has_exploding
+    # [27] gradient_health_prev
+    # [28] epochs_in_stage_norm
+    # [29] counterfactual_fresh
+
+    # Check telemetry fields are present (indices 23-26 in slot features)
+    assert slot1_features[23] > 0.0  # gradient_norm (normalized, should be > 0)
+    assert 0.0 <= slot1_features[24] <= 1.0  # gradient_health
+    assert slot1_features[25] == 1.0  # has_vanishing = True
+    assert slot1_features[26] == 0.0  # has_exploding = False
+
+    # Check slot 0 and slot 2 are all zeros (inactive)
+    slot0_start = 23
+    slot0_features = obs[0, slot0_start:slot0_start + 30].tolist()
+    assert slot0_features == [0.0] * 30  # r0c0 (disabled)
+
+    slot2_start = 23 + 60  # Skip base + slot0 + slot1
+    slot2_features = obs[0, slot2_start:slot2_start + 30].tolist()
+    assert slot2_features == [0.0] * 30  # r0c2 (disabled)
 
 
 def test_ppo_agent_accepts_slot_config():
@@ -682,6 +749,7 @@ def test_ppo_agent_full_update_with_5_slots():
             op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
             hidden_h=torch.zeros(1, 1, agent.policy.hidden_dim),
             hidden_c=torch.zeros(1, 1, agent.policy.hidden_dim),
+            blueprint_indices=torch.zeros(5, dtype=torch.long),  # 5 slots
         )
     agent.buffer.end_episode(env_id=0)
 
@@ -692,3 +760,85 @@ def test_ppo_agent_full_update_with_5_slots():
     assert "policy_loss" in metrics
     assert "value_loss" in metrics
     assert "entropy" in metrics
+
+
+def test_ppo_update_collects_q_values():
+    """PPO update collects Q(s,op) for all ops and computes variance."""
+    slot_config = SlotConfig.default()
+    policy = create_policy(
+        policy_type="lstm",
+        slot_config=slot_config,
+        device="cpu",
+        compile_mode="off",
+    )
+    agent = PPOAgent(
+        policy=policy,
+        slot_config=slot_config,
+        num_envs=1,
+        max_steps_per_env=5,
+        target_kl=None,  # Disable KL early stopping
+        device="cpu",
+    )
+
+    # Add some transitions to buffer
+    agent.buffer.start_episode(env_id=0)
+    for i in range(5):
+        agent.buffer.add(
+            env_id=0,
+            state=torch.randn(agent.policy.network.state_dim),
+            slot_action=0,
+            blueprint_action=0,
+            style_action=0,
+            tempo_action=0,
+            alpha_target_action=0,
+            alpha_speed_action=0,
+            alpha_curve_action=0,
+            op_action=0,
+            slot_log_prob=-1.0,
+            blueprint_log_prob=-1.0,
+            style_log_prob=-1.0,
+            tempo_log_prob=-1.0,
+            alpha_target_log_prob=-1.0,
+            alpha_speed_log_prob=-1.0,
+            alpha_curve_log_prob=-1.0,
+            op_log_prob=-1.0,
+            value=1.0,
+            reward=1.0,
+            done=(i == 4),
+            truncated=False,
+            slot_mask=torch.ones(3, dtype=torch.bool),
+            blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
+            style_mask=torch.ones(NUM_STYLES, dtype=torch.bool),
+            tempo_mask=torch.ones(NUM_TEMPO, dtype=torch.bool),
+            alpha_target_mask=torch.ones(NUM_ALPHA_TARGETS, dtype=torch.bool),
+            alpha_speed_mask=torch.ones(NUM_ALPHA_SPEEDS, dtype=torch.bool),
+            alpha_curve_mask=torch.ones(NUM_ALPHA_CURVES, dtype=torch.bool),
+            op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
+            hidden_h=torch.zeros(1, 1, agent.policy.hidden_dim),
+            hidden_c=torch.zeros(1, 1, agent.policy.hidden_dim),
+            bootstrap_value=0.0,
+            blueprint_indices=torch.zeros(3, dtype=torch.long),
+        )
+    agent.buffer.end_episode(env_id=0)
+
+    # Trigger update
+    metrics = agent.update()
+
+    # Verify Q-values were collected
+    assert "q_germinate" in metrics
+    assert "q_advance" in metrics
+    assert "q_fossilize" in metrics
+    assert "q_prune" in metrics
+    assert "q_wait" in metrics
+    assert "q_set_alpha" in metrics
+    assert "q_variance" in metrics
+    assert "q_spread" in metrics
+
+    # Q-values should be floats
+    assert isinstance(metrics["q_germinate"], float)
+
+    # Q-variance should be >= 0
+    assert metrics["q_variance"] >= 0.0
+
+    # Q-spread should be >= 0
+    assert metrics["q_spread"] >= 0.0

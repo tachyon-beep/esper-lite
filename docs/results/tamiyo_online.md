@@ -1,3 +1,5 @@
+NOTE: Historical run log (pre-Obs V3/Policy V2). Action labels (CULL) and episode length (25) are legacy.
+
 john@nyx:~/esper-lite$ uv run src/esper/scripts/train.py ppo --vectorized --n-envs 4 --devices cuda:0 cuda:1
 ============================================================
 

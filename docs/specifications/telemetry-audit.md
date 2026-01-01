@@ -6,7 +6,7 @@ Reference of what telemetry we capture, how it is produced, and where it flows. 
 - **Hub/backends:** `nissa.output.NissaHub` fan-outs to Console/File/Directory/TUI/Dashboard/Karn backends wired in `scripts/train.py`. Severity filter follows CLI telemetry level (debug shows all, normal hides debug).
 - **Profiles (Nissa):** `nissa/config.py` + `profiles.yaml` control heavy diagnostics (gradient stats, per-class, loss landscape, weight norms). Default `standard` enables gradient stats for select layers.
 - **Levels (Simic):** `simic/telemetry_config.py` levels OFF/MINIMAL/NORMAL/DEBUG with auto-escalation on anomalies. Slot telemetry uses `use_telemetry` flag and level; `fast_mode` disables slot events entirely.
-- **Contracts:** Event types in `leyline/telemetry.py`; RL observation schema in `leyline/signals.py` (35-dim base + SeedTelemetry when enabled).
+- **Contracts:** Event types in `leyline/telemetry.py`; TrainingSignals in `leyline/signals.py`; Obs V3 feature construction in `tamiyo/policy/features.py` (113 non-blueprint dims + blueprint embeddings).
 
 ## Seed Lifecycle Telemetry (Kasmina)
 - **Emitter:** `kasmina/slot.py` via `on_telemetry` callback (skipped when `fast_mode=True`).
@@ -19,7 +19,7 @@ Reference of what telemetry we capture, how it is produced, and where it flows. 
 
 ## PPO Vectorized Telemetry (Simic)
 - **Setup:** `vectorized.py` adds `BlueprintAnalytics` backend and emits `TRAINING_STARTED` (devices, task, reward mode, dataloader config, budgets).
-- **Lifecycle/Counterfactual:** Slot events from Kasmina (with injected `env_id`), `COUNTERFACTUAL_COMPUTED` per slot when baselines available (real_acc, baseline_acc, Δ).
+- **Lifecycle/Counterfactual:** Slot events from Kasmina (with injected `env_id`); `SEED_FOSSILIZED`/`SEED_PRUNED` include optional `counterfactual`; matrix snapshots use `COUNTERFACTUAL_MATRIX_COMPUTED`.
 - **Batch cadence:**
   - `BATCH_EPOCH_COMPLETED` (batch_idx, episodes_completed/total, env_accuracies, avg/rolling acc, avg reward, train/val loss/acc, n_envs, skipped_update, plateau_detected, inner_epoch).
   - `EPOCH_COMPLETED` (per-env) with val loss/acc and seed telemetry (env_id scoped).
@@ -30,7 +30,7 @@ Reference of what telemetry we capture, how it is produced, and where it flows. 
 - **Governor:** `GOVERNOR_ROLLBACK` (env_id, reason, loss_at_panic, threshold, consecutive_panics) and injects negative reward; snapshots every 5 epochs (no event) and panic detection uses loss stats.
 - **Analytics sync:** `ANALYTICS_SNAPSHOT` every batch (rolling accuracy, entropy/KL/EV, seeds created/fossilized, skipped flag) plus summary/scoreboard strings every 5 batches when `quiet_analytics` is False.
 - **Checkpointing:** `CHECKPOINT_LOADED` (resume/best state) and `CHECKPOINT_SAVED` (path, avg_accuracy).
-- **Telemetry gating:** Slot telemetry and reward components are disabled when `use_telemetry` is False or level below ops-normal/debug respectively; SeedTelemetry features are omitted from state vector when `use_telemetry` is False.
+- **Telemetry gating:** Slot telemetry and reward components are disabled when `use_telemetry` is False or level below ops-normal/debug respectively; Obs V3 keeps telemetry slots but fills defaults when telemetry is missing.
 
 ## Heuristic Telemetry (Simic training.py)
 - `TRAINING_STARTED` at run start.
@@ -59,7 +59,7 @@ Reference of what telemetry we capture, how it is produced, and where it flows. 
 - Defined but not emitted: `MEMORY_WARNING`, `REWARD_HACKING_SUSPECTED`, command events (`COMMAND_*`), `ISOLATION_VIOLATION`, `PERFORMANCE_DEGRADATION`. Hook points exist in telemetry contracts but no producers currently wire them.
 
 ## Notable Behaviors / Correctness Notes
-- Slot telemetry is skipped when `fast_mode=True` or `use_telemetry=False`; PPO state vector drops SeedTelemetry in that case.
+- Slot telemetry is skipped when `fast_mode=True` or `use_telemetry=False`; Obs V3 keeps telemetry fields with default values (dims unchanged).
 - Reward breakdowns only surface at DEBUG level; ops-normal runs see only aggregate reward.
-- Counterfactual events originate from (a) per-slot baseline in vectorized loop (final epoch) and (b) optional Karn helper (multi-slot matrix). Missing baselines yield `seed_contribution=None` and proxy signals in reward computation.
+- Counterfactual matrices originate from the Simic vectorized loop via `COUNTERFACTUAL_MATRIX_COMPUTED`; missing baselines yield `seed_contribution=None` and proxy signals in reward computation.
 - BlueprintAnalytics expects `env_id` in lifecycle events; vectorized path injects it via callback, heuristic fixes it to 0—other emitters must include it for correct aggregation.

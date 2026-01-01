@@ -114,6 +114,7 @@ class TestEpochTelemetryContract:
         training_payload = TrainingStartedPayload(
             n_envs=1,
             max_epochs=10,
+            max_batches=100,  # Total episodes in run
             task="cifar10",
             host_params=1000000,
             slot_ids=("r0c0",),

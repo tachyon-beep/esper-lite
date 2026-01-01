@@ -287,7 +287,6 @@ class TestTamiyoCentricFlags:
         from esper.simic.training import TrainingConfig
 
         config = TrainingConfig.for_cifar10()
-        original_max_epochs = config.max_epochs
 
         # Apply override as main() does
         new_length = 30
@@ -366,4 +365,3 @@ class TestTamiyoCentricFlags:
         parser = build_parser()
         with pytest.raises(SystemExit):
             parser.parse_args(["ppo", "--envs", "-1"])
-

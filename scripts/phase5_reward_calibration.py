@@ -62,7 +62,11 @@ class RandomTamiyo:
 
     def __post_init__(self) -> None:
         from esper.kasmina.blueprints import BlueprintRegistry
-        from esper.leyline.actions import build_action_enum
+        from esper.leyline.actions import (
+            build_action_enum,
+            get_blueprint_from_action_name,
+            is_germinate_action_name,
+        )
 
         if self.germinate_bias < 0:
             raise ValueError("germinate_bias must be >= 0")
@@ -70,9 +74,9 @@ class RandomTamiyo:
         self._action_enum = build_action_enum(self.topology)
         self._germinate_actions = []
         for action in self._action_enum:
-            if not action.name.startswith("GERMINATE_"):
+            if not is_germinate_action_name(action.name):
                 continue
-            blueprint_id = action.name[len("GERMINATE_"):].lower()
+            blueprint_id = get_blueprint_from_action_name(action.name)
             try:
                 spec = BlueprintRegistry.get(self.topology, blueprint_id)
             except ValueError:

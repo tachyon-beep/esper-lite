@@ -13,13 +13,10 @@ Subpackages:
 
 __version__ = "1.0.0"
 
-# Re-export key types for convenience
+# Public convenience exports (keep this module lightweight; no torch imports)
 from esper.leyline import SeedStage, TrainingSignals
-from esper.kasmina import MorphogeneticModel, SeedSlot
 
 __all__ = [
     "SeedStage",
     "TrainingSignals",
-    "MorphogeneticModel",
-    "SeedSlot",
 ]

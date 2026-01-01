@@ -540,20 +540,22 @@ class TestSlotMaskRespectEnabledSlots:
             f"All slots should be selectable when all enabled: {masks['slot']}"
         )
 
-    def test_no_enabled_slots_means_none_selectable(self):
-        """Property: enabling no slots makes none selectable (edge case)."""
+    def test_no_enabled_slots_raises_error(self):
+        """Property: empty enabled_slots is a configuration error.
+
+        B9-CR-01: Fail fast on misconfiguration. If no slots are enabled,
+        the task cannot be performed - this is always a config error.
+        """
+        import pytest
         config = SlotConfig.default()
         slot_states = {slot_id: None for slot_id in config.slot_ids}
 
-        masks = compute_action_masks(
-            slot_states=slot_states,
-            enabled_slots=[],  # No slots enabled
-            slot_config=config,
-        )
-
-        assert not masks["slot"].any(), (
-            f"No slots should be selectable when none enabled: {masks['slot']}"
-        )
+        with pytest.raises(ValueError, match="cannot be empty"):
+            compute_action_masks(
+                slot_states=slot_states,
+                enabled_slots=[],  # No slots enabled = config error
+                slot_config=config,
+            )
 
 
 class TestBlueprintMask:

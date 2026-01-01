@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 from pathlib import Path
-import math
 from typing import TYPE_CHECKING, Any
 
 import torch
@@ -38,13 +37,15 @@ from esper.leyline import (
     DEFAULT_VALUE_CLIP,
     DEFAULT_VALUE_COEF,
     HEAD_NAMES,
-    compute_causal_masks,
+    LifecycleOp,
+    NUM_OPS,
 )
+from esper.leyline.causal_masks import compute_causal_masks
 from esper.leyline.slot_config import SlotConfig
 import logging
 
 if TYPE_CHECKING:
-    from esper.leyline import SeedStateReport
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -52,138 +53,42 @@ logger = logging.getLogger(__name__)
 # Increment when checkpoint structure changes in backwards-incompatible ways
 CHECKPOINT_VERSION = 1
 
+# Sparse heads need higher entropy coefficients to maintain exploration
+# when they receive fewer training signals due to causal masking
+ENTROPY_COEF_PER_HEAD: dict[str, float] = {
+    "op": 1.0,  # Always active (100% of steps)
+    "slot": 1.0,  # Usually active (~60%)
+    "blueprint": 1.3,  # GERMINATE only (~18%) — needs boost
+    "style": 1.2,  # GERMINATE + SET_ALPHA_TARGET (~22%)
+    "tempo": 1.3,  # GERMINATE only (~18%) — needs boost
+    "alpha_target": 1.2,  # GERMINATE + SET_ALPHA_TARGET (~22%)
+    "alpha_speed": 1.2,  # SET_ALPHA_TARGET + PRUNE (~19%)
+    "alpha_curve": 1.2,  # SET_ALPHA_TARGET + PRUNE (~19%)
+}
+# Note: Start conservative (1.2-1.3x), tune empirically if heads collapse
+
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
+def _init_q_metrics_nan() -> dict[str, list[float]]:
+    """Initialize Q-value metrics with NaN when no valid states available."""
+    nan = float("nan")
+    return {
+        "q_germinate": [nan],
+        "q_advance": [nan],
+        "q_fossilize": [nan],
+        "q_prune": [nan],
+        "q_wait": [nan],
+        "q_set_alpha": [nan],
+        "q_variance": [nan],
+        "q_spread": [nan],
+    }
+
 
 # =============================================================================
 # Feature Extraction (PPO-specific wrapper)
-# =============================================================================
-
-def signals_to_features(
-    signals: Any,
-    *,
-    slot_reports: dict[str, "SeedStateReport"],
-    use_telemetry: bool = True,
-    max_epochs: int = DEFAULT_EPISODE_LENGTH,
-    slots: list[str] | None = None,
-    total_params: int = 0,
-    total_seeds: int = 0,
-    max_seeds: int = 0,
-    slot_config: "SlotConfig | None" = None,
-) -> list[float]:
-    """Convert training signals to a flat feature vector for PPO.
-
-    This is a thin wrapper around `tamiyo.policy.features.obs_to_multislot_features`
-    plus optional per-slot `SeedTelemetry` features appended in deterministic
-    `slot_config` order.
-    """
-    from esper.leyline.slot_id import validate_slot_ids
-    from esper.tamiyo.policy.features import obs_to_multislot_features
-
-    if slot_config is None:
-        slot_config = SlotConfig.default()
-
-    if not slots:
-        raise ValueError("signals_to_features: slots parameter is required and cannot be empty")
-
-    enabled_slots = validate_slot_ids(list(slots))
-    enabled_set = set(enabled_slots)
-
-    # loss_history and accuracy_history are required fields on TrainingSignals
-    # (leyline/signals.py lines 79-80) with default empty lists
-    loss_hist = list(signals.loss_history[-5:]) if signals.loss_history else []
-    while len(loss_hist) < 5:
-        loss_hist.insert(0, 0.0)
-
-    acc_hist = list(signals.accuracy_history[-5:]) if signals.accuracy_history else []
-    while len(acc_hist) < 5:
-        acc_hist.insert(0, 0.0)
-
-    obs: dict[str, Any] = {
-        "epoch": signals.metrics.epoch,
-        "global_step": signals.metrics.global_step,
-        "train_loss": signals.metrics.train_loss,
-        "val_loss": signals.metrics.val_loss,
-        "loss_delta": signals.metrics.loss_delta,
-        "train_accuracy": signals.metrics.train_accuracy,
-        "val_accuracy": signals.metrics.val_accuracy,
-        "accuracy_delta": signals.metrics.accuracy_delta,
-        "plateau_epochs": signals.metrics.plateau_epochs,
-        "best_val_accuracy": signals.metrics.best_val_accuracy,
-        "best_val_loss": signals.metrics.best_val_loss,
-        "loss_history_5": loss_hist,
-        "accuracy_history_5": acc_hist,
-        "total_params": total_params,
-        "max_epochs": max_epochs,
-        "slots": {},
-    }
-
-    # Build per-slot state dict from reports.
-    # ALL slots in slot_config must be present (Task 4: fail loudly on missing required fields).
-    slot_states: dict[str, dict[str, Any]] = {}
-    for slot_id in slot_config.slot_ids:
-        report = slot_reports.get(slot_id)
-        if report is None:
-            # Missing report -> inactive slot with default values
-            slot_states[slot_id] = {
-                "is_active": 0.0,
-                "stage": 0,
-                "alpha": 0.0,
-                "improvement": 0.0,
-            }
-            continue
-
-        contribution = report.metrics.counterfactual_contribution
-        if contribution is None:
-            contribution = report.metrics.improvement_since_stage_start
-
-        slot_states[slot_id] = {
-            "is_active": 1.0,
-            "stage": report.stage.value,
-            "alpha": report.metrics.current_alpha,
-            "improvement": contribution,
-            "blend_tempo_epochs": report.blend_tempo_epochs,
-            "alpha_target": report.alpha_target,
-            "alpha_mode": report.alpha_mode,
-            "alpha_steps_total": report.alpha_steps_total,
-            "alpha_steps_done": report.alpha_steps_done,
-            "time_to_target": report.time_to_target,
-            "alpha_velocity": report.alpha_velocity,
-            "alpha_algorithm": report.alpha_algorithm,
-            "blueprint_id": report.blueprint_id,
-        }
-
-    obs["slots"] = slot_states
-
-    features = obs_to_multislot_features(
-        obs,
-        total_seeds=total_seeds,
-        max_seeds=max_seeds,
-        slot_config=slot_config,
-    )
-
-    if use_telemetry:
-        from esper.leyline import SeedTelemetry
-
-        telemetry_features: list[float] = []
-        dim = SeedTelemetry.feature_dim()
-        for slot_id in slot_config.slot_ids:
-            if slot_id not in enabled_set:
-                telemetry_features.extend([0.0] * dim)
-                continue
-
-            report = slot_reports.get(slot_id)
-            if report is None or report.telemetry is None:
-                telemetry_features.extend([0.0] * dim)
-                continue
-
-            telemetry_features.extend(report.telemetry.to_features())
-
-        features.extend(telemetry_features)
-
-    return features
-
-
-# =============================================================================
-# PPO Agent
 # =============================================================================
 
 class PPOAgent:
@@ -204,7 +109,6 @@ class PPOAgent:
         entropy_coef_start: float | None = None,
         entropy_coef_end: float | None = None,
         entropy_coef_min: float = DEFAULT_ENTROPY_COEF_MIN,  # Exploration floor (from leyline)
-        adaptive_entropy_floor: bool = False,  # Scale floor with valid action count
         entropy_anneal_steps: int = 0,
         # Per-head entropy coefficients for relative weighting.
         # Blueprint/style heads may warrant different entropy weighting since they
@@ -269,19 +173,9 @@ class PPOAgent:
         self.entropy_coef_start = entropy_coef_start if entropy_coef_start is not None else entropy_coef
         self.entropy_coef_end = entropy_coef_end if entropy_coef_end is not None else entropy_coef
         self.entropy_coef_min = entropy_coef_min
-        self.adaptive_entropy_floor = adaptive_entropy_floor
         self.entropy_anneal_steps = entropy_anneal_steps
-        # Per-head entropy multipliers (default to uniform)
-        self.entropy_coef_per_head = entropy_coef_per_head or {
-            "slot": 1.0,
-            "blueprint": 1.0,
-            "style": 1.0,
-            "tempo": 1.0,
-            "alpha_target": 1.0,
-            "alpha_speed": 1.0,
-            "alpha_curve": 1.0,
-            "op": 1.0,
-        }
+        # Per-head entropy multipliers (differential coefficients for sparse heads)
+        self.entropy_coef_per_head = entropy_coef_per_head or ENTROPY_COEF_PER_HEAD
         self.value_coef = value_coef
         self.clip_value = clip_value
         self.value_clip = value_clip
@@ -383,7 +277,8 @@ class PPOAgent:
             shared_params = (
                 list(base_net.feature_net.parameters()) +
                 list(base_net.lstm.parameters()) +
-                list(base_net.lstm_ln.parameters())
+                list(base_net.lstm_ln.parameters()) +
+                list(base_net.blueprint_embedding.parameters())  # Phase 4: blueprint embeddings
             )
 
             self.optimizer: torch.optim.Optimizer = torch.optim.AdamW([
@@ -397,68 +292,26 @@ class PPOAgent:
             )
         self.train_steps = 0
 
-    def get_entropy_coef(self, action_mask: torch.Tensor | None = None) -> float:
-        """Get current entropy coefficient with optional adaptive floor.
-
-        Args:
-            action_mask: Optional action mask for adaptive floor computation
+    def get_entropy_coef(self) -> float:
+        """Get current entropy coefficient with annealing and floor.
 
         Returns:
-            Entropy coefficient (decayed if enabled, floored if adaptive)
+            Entropy coefficient (annealed if enabled, floored at entropy_coef_min)
+
+        Note:
+            The adaptive_entropy_floor feature was removed (B11-DRL-02). It scaled
+            the floor by mask density, but MaskedCategorical already normalizes
+            entropy by log(num_valid), making the adaptive scaling redundant and
+            potentially harmful (over-exploration in masked states).
         """
         if self.entropy_anneal_steps == 0:
-            # No annealing - use fixed coefficient with adaptive floor
-            floor = self.get_entropy_floor(action_mask)
-            return max(self.entropy_coef, floor)
+            # No annealing - use fixed coefficient with base floor
+            return max(self.entropy_coef, self.entropy_coef_min)
 
-        # With annealing - interpolate and apply adaptive floor
+        # With annealing - interpolate and apply base floor
         progress = min(1.0, self.train_steps / self.entropy_anneal_steps)
         annealed = self.entropy_coef_start + progress * (self.entropy_coef_end - self.entropy_coef_start)
-
-        # Get floor (adaptive if enabled, otherwise base floor)
-        floor = self.get_entropy_floor(action_mask)
-
-        return max(annealed, floor)
-
-    # TODO: potential dead code - action_mask is not currently threaded through callers.
-    def get_entropy_floor(self, action_mask: torch.Tensor | None = None) -> float:
-        """Get entropy floor, optionally scaled by valid action count.
-
-        When adaptive_entropy_floor=True, uses information-theoretic scaling:
-        scale_factor = log(num_total) / log(num_valid)
-
-        This maintains the same "relative exploration" level - if we want
-        10% of max entropy with 5 actions, we want 10% of max entropy with
-        2 actions, but max_entropy(2) = log(2) < max_entropy(5) = log(5).
-
-        Args:
-            action_mask: Binary mask of valid actions [action_dim] or None
-
-        Returns:
-            Entropy coefficient floor (minimum value)
-        """
-        if not self.adaptive_entropy_floor or action_mask is None:
-            return self.entropy_coef_min
-
-        # Count valid actions
-        num_valid = int(action_mask.sum().item())
-        num_total = action_mask.shape[-1]
-
-        if num_valid >= num_total or num_valid <= 1:
-            return self.entropy_coef_min
-
-        # Information-theoretic scaling: ratio of maximum entropies
-        # max_entropy_full = log(num_total), max_entropy_valid = log(num_valid)
-        max_entropy_full = math.log(num_total)
-        max_entropy_valid = math.log(num_valid)
-
-        # Scale to maintain same fraction of max entropy
-        scale_factor = max_entropy_full / max_entropy_valid
-
-        # Cap at 3x to avoid extreme values
-        scale_factor = min(scale_factor, 3.0)
-
-        return self.entropy_coef_min * scale_factor
+        return max(annealed, self.entropy_coef_min)
 
     def _collect_cuda_memory_metrics(self) -> dict[str, float]:
         """Collect CUDA memory statistics for infrastructure monitoring.
@@ -589,6 +442,56 @@ class PPOAgent:
             metrics["advantage_kurtosis"] = [float("nan")]
             metrics["advantage_positive_ratio"] = [float("nan")]
 
+        # === Collect Op-Conditioned Q-Values (Policy V2) ===
+        # Compute Q(s, op) for all ops using a representative state
+        # Use first valid state from batch to avoid bias from terminal states
+        if valid_mask.any():
+            # Get first valid state
+            first_valid_idx = valid_mask.nonzero(as_tuple=True)
+            if len(first_valid_idx[0]) > 0:
+                sample_state_idx = (int(first_valid_idx[0][0].item()), int(first_valid_idx[1][0].item()))
+                sample_obs = data["states"][sample_state_idx[0], sample_state_idx[1]].unsqueeze(0).unsqueeze(0)  # [1, 1, state_dim]
+                sample_blueprints = data["blueprint_indices"][sample_state_idx[0], sample_state_idx[1]].unsqueeze(0).unsqueeze(0)  # [1, 1, num_slots]
+
+                # Forward pass to get LSTM output
+                with torch.no_grad():
+                    forward_result = self.policy.network.forward(
+                        state=sample_obs,
+                        blueprint_indices=sample_blueprints,
+                        hidden=None,  # Use initial hidden state for consistency
+                    )
+                    lstm_out = forward_result["lstm_out"]  # [1, 1, hidden_dim]
+
+                # Compute Q(s, op) for each op
+                # Build mapping from LifecycleOp to Q-values
+                q_value_map: dict[LifecycleOp, float] = {}
+                for op_idx in range(NUM_OPS):
+                    op_tensor = torch.tensor([[op_idx]], dtype=torch.long, device=self.device)
+                    q_val = self.policy.network._compute_value(lstm_out, op_tensor)  # type: ignore[operator]
+                    q_value_map[LifecycleOp(op_idx)] = q_val.item()
+
+                # Assign to metrics with correct names using actual LifecycleOp enum
+                # LifecycleOp: WAIT=0, GERMINATE=1, SET_ALPHA_TARGET=2, PRUNE=3, FOSSILIZE=4, ADVANCE=5
+                metrics["q_germinate"] = [q_value_map[LifecycleOp.GERMINATE]]
+                metrics["q_advance"] = [q_value_map[LifecycleOp.ADVANCE]]
+                metrics["q_fossilize"] = [q_value_map[LifecycleOp.FOSSILIZE]]
+                metrics["q_prune"] = [q_value_map[LifecycleOp.PRUNE]]
+                metrics["q_wait"] = [q_value_map[LifecycleOp.WAIT]]
+                metrics["q_set_alpha"] = [q_value_map[LifecycleOp.SET_ALPHA_TARGET]]
+
+                # Compute Q-variance and Q-spread
+                q_values = list(q_value_map.values())
+                q_variance = float(torch.tensor(q_values).var().item())
+                q_spread = max(q_values) - min(q_values)
+                metrics["q_variance"] = [q_variance]
+                metrics["q_spread"] = [q_spread]
+            else:
+                # No valid states - use NaN
+                metrics.update(_init_q_metrics_nan())
+        else:
+            # No valid data - use NaN
+            metrics.update(_init_q_metrics_nan())
+
         # Initialize per-head entropy tracking (P3-1)
         head_entropy_history: dict[str, list[float]] = {head: [] for head in HEAD_NAMES}
         # Initialize per-head gradient norm tracking (P4-6)
@@ -598,6 +501,11 @@ class PPOAgent:
         # Use inf/-inf for proper min/max tracking (log probs are always <= 0)
         log_prob_min_across_epochs: float = float("inf")
         log_prob_max_across_epochs: float = float("-inf")
+
+        # Initialize per-head ratio max tracking (Policy V2 - multi-head ratio explosion detection)
+        # Track max ratio per head across all epochs for telemetry
+        head_ratio_max_across_epochs: dict[str, float] = {head: float("-inf") for head in HEAD_NAMES}
+        joint_ratio_max_across_epochs: float = float("-inf")
 
         for epoch_i in range(self.recurrent_n_epochs):
             if early_stopped:
@@ -627,6 +535,7 @@ class PPOAgent:
             }
             result = self.policy.evaluate_actions(
                 data["states"],
+                data["blueprint_indices"],
                 actions,
                 masks,
                 hidden=(data["initial_hidden_h"], data["initial_hidden_c"]),
@@ -685,13 +594,32 @@ class PPOAgent:
             }
 
             per_head_ratios = {}
+            log_ratios_for_joint: dict[str, torch.Tensor] = {}  # Store for joint ratio computation
             for key in HEAD_NAMES:
                 # Clamp log-ratio to prevent inf/NaN from exp() when probabilities diverge
                 # significantly. log(exp(20)) ≈ 4.85e8 is already extreme; log(exp(88)) overflows.
                 # This provides early protection before ratio explosion detection (lines 809-821).
                 log_ratio = log_probs[key] - old_log_probs[key]
                 log_ratio_clamped = torch.clamp(log_ratio, min=-20.0, max=20.0)
+                log_ratios_for_joint[key] = log_ratio_clamped
                 per_head_ratios[key] = torch.exp(log_ratio_clamped)
+
+            # Track per-head ratio max across epochs (Policy V2 telemetry)
+            # PERF: Batch all 8 head ratio max values into single GPU→CPU transfer
+            with torch.inference_mode():
+                per_head_ratio_max_tensors = [per_head_ratios[k].max() for k in HEAD_NAMES]
+                per_head_ratio_max_values = torch.stack(per_head_ratio_max_tensors).cpu().tolist()
+                for key, max_val in zip(HEAD_NAMES, per_head_ratio_max_values):
+                    head_ratio_max_across_epochs[key] = max(head_ratio_max_across_epochs[key], max_val)
+
+                # Compute joint ratio using log-space summation (numerically stable)
+                # joint_ratio = exp(sum(log_ratio_i)) = product(ratio_i)
+                stacked_log_ratios = torch.stack([log_ratios_for_joint[k] for k in HEAD_NAMES])
+                joint_log_ratio = stacked_log_ratios.sum(dim=0)  # Sum across heads per timestep
+                joint_log_ratio_clamped = torch.clamp(joint_log_ratio, min=-30.0, max=30.0)
+                joint_ratio = torch.exp(joint_log_ratio_clamped)
+                epoch_joint_ratio_max = joint_ratio.max().item()
+                joint_ratio_max_across_epochs = max(joint_ratio_max_across_epochs, epoch_joint_ratio_max)
 
             # Compute KL divergence EARLY (before optimizer step) for effective early stopping
             # BUG-003 FIX: With recurrent_n_epochs=1, the old check at loop end was useless
@@ -947,6 +875,17 @@ class PPOAgent:
         aggregated_result["log_prob_min"] = log_prob_min_across_epochs
         aggregated_result["log_prob_max"] = log_prob_max_across_epochs
 
+        # Add per-head ratio max tracking (Policy V2 - multi-head ratio explosion detection)
+        # Guard against no valid data (-inf values indicate no updates occurred)
+        # Use 1.0 (neutral ratio) as default for missing data
+        for key in HEAD_NAMES:
+            ratio_key = f"head_{key}_ratio_max"
+            max_val = head_ratio_max_across_epochs[key]
+            aggregated_result[ratio_key] = max_val if max_val != float("-inf") else 1.0  # type: ignore[literal-required]
+        aggregated_result["joint_ratio_max"] = (
+            joint_ratio_max_across_epochs if joint_ratio_max_across_epochs != float("-inf") else 1.0
+        )
+
         # Add CUDA memory metrics (collected once per update, not averaged)
         if cuda_memory_metrics:
             for k, v in cuda_memory_metrics.items():
@@ -982,7 +921,6 @@ class PPOAgent:
                 'entropy_coef_start': self.entropy_coef_start,
                 'entropy_coef_end': self.entropy_coef_end,
                 'entropy_coef_min': self.entropy_coef_min,
-                'adaptive_entropy_floor': self.adaptive_entropy_floor,
                 'entropy_anneal_steps': self.entropy_anneal_steps,
                 'entropy_coef_per_head': self.entropy_coef_per_head,
                 'value_coef': self.value_coef,
@@ -1079,9 +1017,14 @@ class PPOAgent:
                 f"Saved slot_ids: {architecture['slot_ids']}"
             )
 
-        # === Infer state_dim ===
-        # feature_net.0.weight has shape [hidden_dim, state_dim]
-        state_dim = state_dict['feature_net.0.weight'].shape[1]
+        # === Extract state_dim ===
+        # Required since checkpoint v1; base_net.state_dim excludes blueprint embeddings.
+        if 'state_dim' not in architecture:
+            raise RuntimeError(
+                "Incompatible checkpoint: architecture.state_dim is required. "
+                "Please retrain the model to create a compatible checkpoint."
+            )
+        state_dim = int(architecture['state_dim'])
 
         # === Extract compile_mode (default "off" for old checkpoints) ===
         compile_mode = config.get('compile_mode', 'off')
@@ -1090,9 +1033,9 @@ class PPOAgent:
         from esper.tamiyo.policy.factory import create_policy
         policy = create_policy(
             policy_type="lstm",
-            feature_dim=state_dim,
             slot_config=slot_config,
-            hidden_dim=config['lstm_hidden_dim'],
+            state_dim=state_dim,
+            lstm_hidden_dim=config['lstm_hidden_dim'],
             device=device,
             compile_mode="off",  # Defer compilation until weights loaded
         )
@@ -1124,5 +1067,4 @@ class PPOAgent:
 
 __all__ = [
     "PPOAgent",
-    "signals_to_features",
 ]

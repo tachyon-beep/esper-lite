@@ -8,20 +8,11 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from esper.kasmina.blueprints import BlueprintRegistry
-from esper.leyline.actions import build_action_enum
-
-
-def _is_germinate_action(action) -> bool:
-    """Check if action is any germinate variant."""
-    return action.name.startswith("GERMINATE_")
-
-
-def _get_blueprint_from_action(action) -> str | None:
-    """Get blueprint name from a germinate action."""
-    name = action.name
-    if name.startswith("GERMINATE_"):
-        return name[len("GERMINATE_"):].lower()
-    return None
+from esper.leyline.actions import (
+    build_action_enum,
+    get_blueprint_from_action_name,
+    is_germinate_action_name,
+)
 
 
 class TestActionBijection:
@@ -32,7 +23,7 @@ class TestActionBijection:
         """Property: blueprint → action → blueprint is identity."""
         ActionEnum = build_action_enum("cnn")
         action = getattr(ActionEnum, f"GERMINATE_{blueprint_id.upper()}")
-        recovered = _get_blueprint_from_action(action)
+        recovered = get_blueprint_from_action_name(action.name)
         assert recovered == blueprint_id
 
 
@@ -45,7 +36,7 @@ class TestActionSpaceCompleteness:
         ActionEnum = build_action_enum("cnn")
         for spec in specs:
             action = getattr(ActionEnum, f"GERMINATE_{spec.name.upper()}")
-            assert _get_blueprint_from_action(action) == spec.name
+            assert get_blueprint_from_action_name(action.name) == spec.name
 
     def test_no_duplicate_mappings(self):
         """Each blueprint maps to a unique action."""
@@ -57,9 +48,9 @@ class TestActionSpaceCompleteness:
     def test_germinate_actions_have_blueprints(self):
         """All germinate actions map to a blueprint."""
         ActionEnum = build_action_enum("cnn")
-        germinate_actions = [a for a in ActionEnum if _is_germinate_action(a)]
+        germinate_actions = [a for a in ActionEnum if is_germinate_action_name(a.name)]
         for action in germinate_actions:
-            blueprint_id = _get_blueprint_from_action(action)
+            blueprint_id = get_blueprint_from_action_name(action.name)
             assert isinstance(blueprint_id, str)
 
     def test_non_germinate_actions_have_no_blueprints(self):
@@ -72,11 +63,11 @@ class TestActionSpaceCompleteness:
             ActionEnum.ADVANCE,
         ]
         for action in non_germinate:
-            assert _get_blueprint_from_action(action) is None
+            assert get_blueprint_from_action_name(action.name) is None
 
     def test_action_enum_completeness(self):
         """Every action is germinate or one of WAIT/FOSSILIZE/PRUNE/ADVANCE."""
         ActionEnum = build_action_enum("cnn")
-        germinate = {a for a in ActionEnum if _is_germinate_action(a)}
+        germinate = {a for a in ActionEnum if is_germinate_action_name(a.name)}
         non_germinate = {ActionEnum.WAIT, ActionEnum.FOSSILIZE, ActionEnum.PRUNE, ActionEnum.ADVANCE}
         assert set(ActionEnum) == germinate | non_germinate

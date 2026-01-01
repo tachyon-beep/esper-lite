@@ -73,7 +73,6 @@ class TrainingConfig:
     entropy_coef_start: float | None = None
     entropy_coef_end: float | None = None
     entropy_coef_min: float = DEFAULT_ENTROPY_COEF_MIN
-    adaptive_entropy_floor: bool = False
     entropy_anneal_episodes: int = 0
 
     # === Telemetry and runtime flags ===
@@ -173,7 +172,6 @@ class TrainingConfig:
             entropy_coef_start=0.06,
             entropy_coef_end=0.03,
             entropy_anneal_episodes=200,
-            adaptive_entropy_floor=True,
             plateau_threshold=0.4,
         )
 
@@ -306,7 +304,6 @@ class TrainingConfig:
             "entropy_coef_start": self.entropy_coef_start,
             "entropy_coef_end": self.entropy_coef_end,
             "entropy_coef_min": self.entropy_coef_min,
-            "adaptive_entropy_floor": self.adaptive_entropy_floor,
             "entropy_anneal_steps": entropy_steps,
             "lstm_hidden_dim": self.lstm_hidden_dim,
             "chunk_length": self.chunk_length,
@@ -328,7 +325,6 @@ class TrainingConfig:
             "entropy_coef_start": self.entropy_coef_start,
             "entropy_coef_end": self.entropy_coef_end,
             "entropy_coef_min": self.entropy_coef_min,
-            "adaptive_entropy_floor": self.adaptive_entropy_floor,
             "entropy_anneal_episodes": self.entropy_anneal_episodes,
             "gamma": self.gamma,
             "gae_lambda": self.gae_lambda,

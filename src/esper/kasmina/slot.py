@@ -88,6 +88,8 @@ from esper.leyline import (
     DEFAULT_MIN_TRAINING_IMPROVEMENT,
     DEFAULT_MIN_BLENDING_EPOCHS,
     DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE,
+    # Blueprint lookup
+    BLUEPRINT_ID_TO_INDEX,
 )
 
 if TYPE_CHECKING:
@@ -536,6 +538,7 @@ class SeedState:
             seed_id=self.seed_id,
             slot_id=self.slot_id,
             blueprint_id=self.blueprint_id,
+            blueprint_index=BLUEPRINT_ID_TO_INDEX.get(self.blueprint_id, -1),
             stage=self.stage,
             previous_stage=self.previous_stage,
             previous_epochs_in_stage=self.previous_epochs_in_stage,
@@ -2265,16 +2268,20 @@ class SeedSlot(nn.Module):
 
         return synced_result
 
-    def step_epoch(self) -> bool:
+    def step_epoch(self) -> None:
         """Advance lifecycle mechanics once per epoch (Kasmina timekeeper).
 
-        Returns:
-            True if step_epoch triggers a system-initiated prune, False otherwise.
-            Stage advancement is explicit via advance_stage(); step_epoch only
-            ticks alpha schedules and cooldown transitions.
+        Auto-prune events are signaled via `state.metrics.auto_pruned`.
+        Callers should typically check (and clear) this flag immediately
+        AFTER calling `step_epoch()` to catch both:
+        - governor/rollback prunes (flag set outside `step_epoch()`)
+        - scheduled prune completion (flag set inside `step_epoch()`)
+
+        Stage advancement is explicit via advance_stage(); step_epoch only
+        ticks alpha schedules and cooldown transitions.
         """
         if not self.state:
-            return False
+            return
 
         stage = self.state.stage
 
@@ -2303,15 +2310,15 @@ class SeedSlot(nn.Module):
                     reason = self._pending_prune_reason or "scheduled_prune"
                     initiator = self._pending_prune_initiator or "policy"
                     self.prune(reason=reason, initiator=initiator)
-                    return False
-            return False
+                    return
+            return
 
         # HOLDING: Decision point for Tamiyo
         # Fossilization requires explicit FOSSILIZE action - NO auto-advance
         # (DRL Expert review 2025-12-10: auto-fossilize violated credit assignment)
         # Phase 4: No auto-prunes here; policy/governor must decide explicitly.
         if stage == SeedStage.HOLDING:
-            return False
+            return
 
         # Phase 4: cooldown pipeline after pruning (seed removed, state retained).
         #
@@ -2357,7 +2364,7 @@ class SeedSlot(nn.Module):
                     ),
                 ),
             )
-            return False
+            return
 
         if stage == SeedStage.EMBARGOED:
             # Advance dwell tick (not tied to validation accuracy).
@@ -2366,7 +2373,7 @@ class SeedSlot(nn.Module):
 
             embargo_epochs = DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE
             if self.state.metrics.epochs_in_current_stage < embargo_epochs:
-                return False
+                return
 
             old_stage = self.state.stage
             metrics = self.state.metrics
@@ -2406,7 +2413,7 @@ class SeedSlot(nn.Module):
                     ),
                 ),
             )
-            return False
+            return
 
         if stage == SeedStage.RESETTING:
             self.state.metrics.epochs_total += 1
@@ -2414,7 +2421,7 @@ class SeedSlot(nn.Module):
 
             # Resetting is a short cleanup dwell; keep it 1 tick for now.
             if self.state.metrics.epochs_in_current_stage < 1:
-                return False
+                return
 
             old_stage = self.state.stage
             metrics = self.state.metrics
@@ -2452,9 +2459,6 @@ class SeedSlot(nn.Module):
                 ),
             )
             self.state = None
-            return False
-
-        return False  # No auto-prune
 
     def get_state_report(self) -> SeedStateReport | None:
         """Get current state as Leyline report."""
@@ -2490,8 +2494,6 @@ class SeedSlot(nn.Module):
                 payload_dict.setdefault("alpha", self.state.alpha)
             if self.telemetry_inner_epoch is not None:
                 payload_dict.setdefault("inner_epoch", self.telemetry_inner_epoch)
-            if self.telemetry_global_epoch is not None:
-                payload_dict.setdefault("global_epoch", self.telemetry_global_epoch)
             if (
                 self.state is not None
                 and self.state.telemetry is not None
@@ -2510,6 +2512,7 @@ class SeedSlot(nn.Module):
             event_type=event_type,
             seed_id=self.state.seed_id if self.state else None,
             slot_id=self.slot_id,
+            epoch=self.telemetry_global_epoch,
             data=payload_data,
         )
         self.on_telemetry(event)

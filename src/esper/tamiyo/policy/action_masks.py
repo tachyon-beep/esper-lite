@@ -43,7 +43,9 @@ from esper.leyline import (
     NUM_STYLES,
     NUM_TEMPO,
     SeedStage,
+    Topology,
     TRANSFORMER_BLUEPRINTS,
+    VALID_TOPOLOGIES,
 )
 from esper.leyline.stages import VALID_TRANSITIONS
 from esper.leyline.slot_config import SlotConfig
@@ -118,7 +120,7 @@ def compute_action_masks(
     max_seeds: int = 0,
     slot_config: SlotConfig | None = None,
     device: torch.device | None = None,
-    topology: str = "cnn",
+    topology: Topology = "cnn",
     allow_governor_override: bool = False,
 ) -> dict[str, torch.Tensor]:
     """Compute action masks based on slot states.
@@ -145,14 +147,37 @@ def compute_action_masks(
         - "alpha_speed": [NUM_ALPHA_SPEEDS] - which alpha speeds can be used
         - "alpha_curve": [NUM_ALPHA_CURVES] - which alpha curves can be used
         - "op": [NUM_OPS] - which operations are valid (ANY enabled slot)
+
+    Raises:
+        ValueError: If topology is not "cnn" or "transformer"
+        ValueError: If enabled_slots is empty
+        ValueError: If enabled_slots contains unknown slot IDs
     """
+    # === Input Validation (fail fast on misconfiguration) ===
+    if topology not in VALID_TOPOLOGIES:
+        raise ValueError(
+            f"Unknown topology: {topology!r}. Valid topologies: {sorted(VALID_TOPOLOGIES)}"
+        )
+
+    if not enabled_slots:
+        raise ValueError("enabled_slots cannot be empty")
+
     if slot_config is None:
         slot_config = SlotConfig.default()
+
+    # Validate enabled_slots against slot_config
+    enabled_set = set(enabled_slots)
+    valid_slots = set(slot_config.slot_ids)
+    unknown_slots = enabled_set - valid_slots
+    if unknown_slots:
+        raise ValueError(
+            f"enabled_slots contains unknown slot IDs: {sorted(unknown_slots)}. "
+            f"Valid slot IDs: {slot_config.slot_ids}"
+        )
 
     device = device or torch.device("cpu")
 
     # Order enabled slots according to slot_config order
-    enabled_set = set(enabled_slots)
     ordered = tuple(slot_id for slot_id in slot_config.slot_ids if slot_id in enabled_set)
 
     # Slot mask: only enabled slots are selectable in canonical order
@@ -255,7 +280,7 @@ def compute_batch_masks(
     max_seeds: int = 0,
     slot_config: SlotConfig | None = None,
     device: torch.device | None = None,
-    topology: str = "cnn",
+    topology: Topology = "cnn",
     allow_governor_override: bool = False,
 ) -> dict[str, torch.Tensor]:
     """Compute action masks for a batch of observations.
@@ -275,10 +300,27 @@ def compute_batch_masks(
 
     Returns:
         Dict of boolean tensors (batch_size, num_actions) for each head
+
+    Raises:
+        ValueError: If batch_slot_states is empty
+        ValueError: If total_seeds_list length doesn't match batch_slot_states length
     """
+    # === Input Validation (fail fast on misconfiguration) ===
+    if not batch_slot_states:
+        raise ValueError(
+            "compute_batch_masks requires at least one observation (batch_slot_states is empty)"
+        )
+
+    if total_seeds_list is not None and len(total_seeds_list) != len(batch_slot_states):
+        raise ValueError(
+            f"total_seeds_list length ({len(total_seeds_list)}) must match "
+            f"batch_slot_states length ({len(batch_slot_states)})"
+        )
+
     device = device or torch.device("cpu")
 
     # Delegate to compute_action_masks for each env
+    # (topology/enabled_slots validation happens in compute_action_masks)
     masks_list = [
         compute_action_masks(
             slot_states=slot_states,

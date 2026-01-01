@@ -2,7 +2,7 @@
 module: simic
 version: 2.0
 status: active
-last_updated: 2025-12-14
+last_updated: 2026-01-01
 maintainers: [John]
 specialist_reviews:
   - agent: drl-expert
@@ -21,13 +21,14 @@ specialist_reviews:
 
 Simic is the **reinforcement learning training infrastructure** for Tamiyo, Esper's seed lifecycle controller. It implements PPO (Proximal Policy Optimization) with:
 
-- **Factored action heads**: 4 independent policy heads (slot, blueprint, blend, op) with causal masking
-- **LSTM temporal memory**: Tracks seed lifecycle state across 25-epoch episodes
+- **Factored action heads**: 8 independent policy heads (slot, blueprint, style, tempo, alpha_target, alpha_speed, alpha_curve, op) with causal masking
+- **LSTM temporal memory**: Tracks seed lifecycle state across 150-epoch episodes
+- **Op-conditioned critic**: Q(s, op) baseline reduces value aliasing
 - **Counterfactual reward attribution**: Measures seed value via ablation (alpha=0 validation)
 - **PBRS reward shaping**: Potential-based shaping that preserves optimal policy
 - **Vectorized parallel training**: N environments with CUDA stream optimization
 
-The module trains an LSTM policy that observes training signals and makes lifecycle decisions (GERMINATE, WAIT, FOSSILIZE, CULL) to maximize host model accuracy while minimizing parameter bloat.
+The module trains an LSTM policy that observes training signals and makes lifecycle decisions (WAIT, GERMINATE, ADVANCE, SET_ALPHA_TARGET, FOSSILIZE, PRUNE) to maximize host model accuracy while minimizing parameter bloat.
 
 ### Anti-Scope
 
@@ -58,7 +59,7 @@ history = train_ppo_vectorized(
     task="cifar10",
     n_episodes=100,
     n_envs=4,
-    max_epochs=25,
+    max_epochs=150,
     device="cuda:0",
     slots=["r0c0", "r0c1", "r0c2"],
 )
@@ -92,7 +93,7 @@ reward = compute_contribution_reward(
     val_acc=65.0,
     seed_info=SeedInfo(...),
     epoch=10,
-    max_epochs=25,
+    max_epochs=150,
 )
 ```
 
@@ -115,11 +116,19 @@ class TamiyoRolloutStep(NamedTuple):
     state: torch.Tensor           # [state_dim]
     slot_action: int
     blueprint_action: int
-    blend_action: int
+    style_action: int
+    tempo_action: int
+    alpha_target_action: int
+    alpha_speed_action: int
+    alpha_curve_action: int
     op_action: int
     slot_log_prob: float
     blueprint_log_prob: float
-    blend_log_prob: float
+    style_log_prob: float
+    tempo_log_prob: float
+    alpha_target_log_prob: float
+    alpha_speed_log_prob: float
+    alpha_curve_log_prob: float
     op_log_prob: float
     value: float
     reward: float
@@ -128,7 +137,11 @@ class TamiyoRolloutStep(NamedTuple):
     bootstrap_value: float
     slot_mask: torch.Tensor
     blueprint_mask: torch.Tensor
-    blend_mask: torch.Tensor
+    style_mask: torch.Tensor
+    tempo_mask: torch.Tensor
+    alpha_target_mask: torch.Tensor
+    alpha_speed_mask: torch.Tensor
+    alpha_curve_mask: torch.Tensor
     op_mask: torch.Tensor
     hidden_h: torch.Tensor        # [num_layers, hidden_dim]
     hidden_c: torch.Tensor
@@ -155,7 +168,7 @@ config = ContributionRewardConfig(reward_mode=RewardMode.SHAPED)
 # Sparse terminal-only - Tests credit assignment capability
 config = ContributionRewardConfig(reward_mode=RewardMode.SPARSE)
 
-# Minimal - Sparse + early-cull penalty only
+# Minimal - Sparse + early-prune penalty only
 config = ContributionRewardConfig(reward_mode=RewardMode.MINIMAL)
 ```
 
@@ -168,24 +181,34 @@ config = ContributionRewardConfig(reward_mode=RewardMode.MINIMAL)
 ```python
 # FactoredRecurrentActorCritic
 # Input
-state: [batch, seq_len, 80]       # 50 base + 30 telemetry features (10 per slot × 3)
+features: [batch, seq_len, 113]   # Obs V3 non-blueprint (23 base + 30 per slot * 3)
+blueprint_indices: [batch, seq_len, 3]  # Per-slot blueprint indices
+# Network concatenates blueprint embeddings (num_slots * 4) before feature_net
 
 # Hidden state (LSTM)
-hidden_h: [1, batch, 128]         # [num_layers, batch, hidden_dim]
-hidden_c: [1, batch, 128]
+hidden_h: [1, batch, 512]         # [num_layers, batch, hidden_dim]
+hidden_c: [1, batch, 512]
 
 # Action masks (True = valid action)
-slot_mask: [batch, seq_len, 3]     # NUM_SLOTS
-blueprint_mask: [batch, seq_len, 5] # NUM_BLUEPRINTS
-blend_mask: [batch, seq_len, 3]    # NUM_BLENDS
-op_mask: [batch, seq_len, 4]       # NUM_OPS
+slot_mask: [batch, seq_len, num_slots]
+blueprint_mask: [batch, seq_len, NUM_BLUEPRINTS]
+style_mask: [batch, seq_len, NUM_STYLES]
+tempo_mask: [batch, seq_len, NUM_TEMPO]
+alpha_target_mask: [batch, seq_len, NUM_ALPHA_TARGETS]
+alpha_speed_mask: [batch, seq_len, NUM_ALPHA_SPEEDS]
+alpha_curve_mask: [batch, seq_len, NUM_ALPHA_CURVES]
+op_mask: [batch, seq_len, NUM_OPS]
 
 # Outputs
-slot_logits: [batch, seq_len, 3]
-blueprint_logits: [batch, seq_len, 5]
-blend_logits: [batch, seq_len, 3]
-op_logits: [batch, seq_len, 4]
-value: [batch, seq_len]
+slot_logits: [batch, seq_len, num_slots]
+blueprint_logits: [batch, seq_len, NUM_BLUEPRINTS]
+style_logits: [batch, seq_len, NUM_STYLES]
+tempo_logits: [batch, seq_len, NUM_TEMPO]
+alpha_target_logits: [batch, seq_len, NUM_ALPHA_TARGETS]
+alpha_speed_logits: [batch, seq_len, NUM_ALPHA_SPEEDS]
+alpha_curve_logits: [batch, seq_len, NUM_ALPHA_CURVES]
+op_logits: [batch, seq_len, NUM_OPS]
+value: [batch, seq_len]           # Q(s, op) baseline
 ```
 
 ### Buffer Shapes
@@ -193,42 +216,40 @@ value: [batch, seq_len]
 ```python
 # TamiyoRolloutBuffer pre-allocated tensors
 # Shape: [num_envs, max_steps_per_env, ...]
-states: [4, 25, 80]
-slot_actions: [4, 25]              # dtype=torch.long
-values: [4, 25]
-rewards: [4, 25]
-advantages: [4, 25]                # Computed after rollout
-returns: [4, 25]                   # advantages + values
-hidden_h: [4, 25, 1, 128]          # [envs, steps, layers, hidden]
+states: [4, 150, 113]
+slot_actions: [4, 150]             # dtype=torch.long
+values: [4, 150]
+rewards: [4, 150]
+advantages: [4, 150]               # Computed after rollout
+returns: [4, 150]                  # advantages + values
+hidden_h: [4, 150, 1, 512]         # [envs, steps, layers, hidden]
 ```
 
 ### Feature Vector Composition
 
 ```python
-# Total: 80 dimensions (50 base + 30 telemetry [10 per slot × 3 slots])
-# Ordering contract: telemetry slices are `[early][mid][late]`; empty/disabled slots are zero-padded.
+# Total non-blueprint dims: 23 base + 30 per-slot * num_slots (113 for 3 slots)
+# Blueprint identity moved to embeddings inside the network (4 dims per slot).
 
-# Global features (23 dims): vectorized.py:360-380
-- epoch/max_epochs, learning_phase (3)
-- train_loss, val_loss, loss_delta (3)
-- train_acc, val_acc, acc_delta, best_val_acc (4)
+# Base features (23 dims): tamiyo/policy/features.py
+- epoch_norm, val_loss_norm, val_accuracy_norm (3)
 - loss_history_5 (5)
 - accuracy_history_5 (5)
-- trend features (3)
+- stage distribution (num_training/blending/holding) (3)
+- action feedback: last_action_success + last_action_op one-hot (7)
 
-# Per-slot features (27 dims = 3 slots x 9): vectorized.py:380-400
-# For each of early/mid/late:
+# Per-slot features (30 dims each)
 - is_active (1)
-- stage (1)
-- alpha (1)
-- improvement (1)
-- blueprint_one_hot (5)
-
-# Telemetry features (10 dims): leyline/SeedTelemetry.to_features()
-- grad_norm, grad_variance, param_norm
-- loss_per_param, update_magnitude
-- activation_mean, activation_std
-- dead_neurons_pct, spike_ratio, weight_std
+- stage one-hot (10)
+- current_alpha (1)
+- contribution_norm (1)
+- contribution_velocity (1)
+- blend_tempo_norm (1)
+- alpha scaffolding (8): target, mode, steps_total, steps_done, time_to_target, velocity, algorithm, interaction_sum
+- telemetry merged (4): gradient_norm, gradient_health, has_vanishing, has_exploding
+- gradient_health_prev (1)
+- epochs_in_stage_norm (1)
+- counterfactual_fresh (1)
 ```
 
 ---
@@ -315,7 +336,7 @@ simic
 │   ├── SeedStage         # Stage enumeration
 │   ├── FactoredAction    # Action space definition
 │   ├── TelemetryEvent    # Event types
-│   └── MIN_CULL_AGE, MIN_HOLDING_EPOCHS  # Constants
+│   └── MIN_PRUNE_AGE, MIN_HOLDING_EPOCHS  # Constants
 ├── kasmina (model)
 │   ├── MorphogeneticModel  # Model with seed slots
 │   ├── SeedSlot           # Per-slot management
@@ -363,17 +384,23 @@ train_ppo_vectorized
 
 # 1. Action Selection (with frozen normalizer)
 with torch.inference_mode():
-    actions, log_probs, value, new_hidden = agent.network.get_action(
-        obs, hidden, slot_mask, blueprint_mask, blend_mask, op_mask
+    action_result = agent.policy.get_action(
+        features,
+        blueprint_indices=blueprint_indices,
+        masks=masks,
+        hidden=hidden,
+        deterministic=False,
     )
 
 # 2. Action Execution (via MorphogeneticModel)
 if factored_action.is_germinate:
     model.germinate_seed(blueprint_id, seed_id, slot=target_slot)
+elif factored_action.op == LifecycleOp.SET_ALPHA_TARGET:
+    slot.set_alpha_target(alpha_target, steps, curve, steepness, alpha_algorithm)
 elif factored_action.is_fossilize:
     slot.advance_stage(SeedStage.FOSSILIZED)
-elif factored_action.is_cull:
-    model.cull_seed(slot=target_slot)
+elif factored_action.is_prune:
+    model.prune_seed(slot=target_slot)
 
 # 3. Telemetry Emission
 hub.emit(TelemetryEvent(
@@ -517,9 +544,9 @@ if components.ratio_penalty != 0:
 
 | Insight | Why It Matters | Location |
 |---------|----------------|----------|
-| Truncation bootstrapping is NOT terminal | Time-limit truncation (25 epochs) is artificial. Without bootstrap, value function underestimates returns near episode end | `rollout_buffer.py:283-289` |
+| Truncation bootstrapping is NOT terminal | Time-limit truncation (default 150 epochs) is artificial. Without bootstrap, value function underestimates returns near episode end | `rollout_buffer.py:283-289` |
 | Counterfactual fused with validation | Eliminates second DataLoader pass. Sets alpha=0 temporarily during validation batch | `vectorized.py:893-903` |
-| Causal advantage masking | Blueprint/blend choices only matter for GERMINATE. Zero advantages for causally-irrelevant heads reduces gradient noise | `advantages.py:33-70` |
+| Causal advantage masking | Per-head masks follow op selection; non-causal heads get zeroed advantages | `advantages.py:33-70` |
 | Ransomware = high removal cost, negative improvement | Counterfactual measures "removal cost" not "value added". Seed can create dependencies without improving accuracy | `rewards.py:426-451` |
 | Governor clears buffer on rollback | Prevents training on transitions that led to catastrophic failure | `vectorized.py:1442-1450` |
 
@@ -527,7 +554,7 @@ if components.ratio_penalty != 0:
 
 | Change | Consequence |
 |--------|-------------|
-| Remove LayerNorm on LSTM output | Hidden state magnitudes drift over 25 steps, causing gradient explosion |
+| Remove LayerNorm on LSTM output | Hidden state magnitudes drift over long horizons, causing gradient explosion |
 | Use joint log prob instead of per-head | Causal masking breaks - irrelevant heads contribute noise to policy gradient |
 | Remove attribution_discount | Ransomware seeds accumulate positive rewards despite net harm |
 | Use gamma=0.99 in PPO with gamma=0.995 PBRS | PBRS no longer preserves optimal policy - shaping can change learned behavior |
@@ -554,10 +581,10 @@ if components.ratio_penalty != 0:
 - `fix(vectorized)`: Use compute_reward dispatcher
 
 ### Architecture Decisions
-- **PBRS over pure sparse**: Sparse reward tested but LSTM credit assignment insufficient for 25-step horizon without shaping
+- **PBRS over pure sparse**: Sparse reward tested but LSTM credit assignment insufficient for 150-step horizons without shaping
 - **Factored action space**: Enables causal masking, reduces gradient noise vs joint action
 - **Single PPO epoch for recurrent**: Multiple epochs cause hidden state staleness
-- **Pre-allocated buffer**: Fixed 25-epoch episodes enable compile-friendly direct indexing
+- **Pre-allocated buffer**: Fixed 150-epoch episodes enable compile-friendly direct indexing
 
 ---
 

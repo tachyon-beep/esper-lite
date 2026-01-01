@@ -193,7 +193,7 @@ class TestFusedForwardAlphaShapeValidation:
         x = torch.randn(4, 3, 32, 32)
         alpha_wrong = torch.full((4, 1, 1), 0.5)
 
-        with pytest.raises(AssertionError, match="expected.*cnn topology"):
+        with pytest.raises(ValueError, match="expected.*cnn topology"):
             model.fused_forward(x, {"r0c1": alpha_wrong})
 
     def test_transformer_correct_shape_accepted(self):
@@ -240,7 +240,7 @@ class TestFusedForwardAlphaShapeValidation:
         x = torch.randint(0, 100, (4, 16))
         alpha_wrong = torch.full((4, 1, 1, 1), 0.5)
 
-        with pytest.raises(AssertionError, match="expected.*transformer topology"):
+        with pytest.raises(ValueError, match="expected.*transformer topology"):
             model.fused_forward(x, {"r0c1": alpha_wrong})
 
     def test_batch_size_mismatch_rejected(self):
@@ -253,7 +253,7 @@ class TestFusedForwardAlphaShapeValidation:
         x = torch.randn(4, 3, 32, 32)
         alpha_wrong_batch = torch.full((2, 1, 1, 1), 0.5)
 
-        with pytest.raises(AssertionError, match="expected"):
+        with pytest.raises(ValueError, match="expected"):
             model.fused_forward(x, {"r0c1": alpha_wrong_batch})
 
     def test_empty_alpha_overrides_allowed(self):
@@ -267,3 +267,45 @@ class TestFusedForwardAlphaShapeValidation:
         # Empty dict - slots use their default alpha
         out = model.fused_forward(x, {})
         assert out.shape == (4, 10)
+
+    def test_unknown_alpha_override_key_rejected(self):
+        """Unknown keys in alpha_overrides should raise ValueError (typo protection)."""
+        host = CNNHost(num_classes=10)
+        model = MorphogeneticModel(host, device="cpu", slots=["r0c1"])
+        model.germinate_seed("noop", "seed_1", slot="r0c1")
+
+        x = torch.randn(4, 3, 32, 32)
+        alpha = torch.full((4, 1, 1, 1), 0.5)
+
+        # Typo: "r0cl" (letter L) instead of "r0c1" (number 1)
+        with pytest.raises(ValueError, match="Unknown alpha_overrides keys"):
+            model.fused_forward(x, {"r0cl": alpha})
+
+    def test_transformer_without_task_config_uses_host_topology(self):
+        """TransformerHost should use transformer topology even without task_config."""
+        host = TransformerHost(vocab_size=100, n_embd=64, n_head=2, n_layer=6, block_size=32)
+        # No task_config provided - topology comes from host
+        model = MorphogeneticModel(host, device="cpu", slots=["r0c1"])
+        model.germinate_seed("noop", "seed_1", slot="r0c1")
+
+        # Transformer shape: [B, 1, 1]
+        x = torch.randint(0, 100, (4, 16))
+        alpha = torch.full((4, 1, 1), 0.5)
+
+        # Should work - host provides topology, not task_config
+        out = model.fused_forward(x, {"r0c1": alpha})
+        assert out.shape == (4, 16, 100)
+
+
+class TestHostTopologyProperty:
+    """Test that hosts expose topology property correctly."""
+
+    def test_cnn_host_topology(self):
+        """CNNHost should return 'cnn' topology."""
+        host = CNNHost(num_classes=10)
+        assert host.topology == "cnn"
+
+    def test_transformer_host_topology(self):
+        """TransformerHost should return 'transformer' topology."""
+        host = TransformerHost(vocab_size=100, n_embd=64, n_head=2, n_layer=6, block_size=32)
+        assert host.topology == "transformer"

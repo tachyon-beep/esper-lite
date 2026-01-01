@@ -18,9 +18,11 @@ class TestBlueprintAnalyticsIntegration:
         # Create model with telemetry callback
         model = create_model(device="cpu", slots=["r0c1"])
 
-        def callback(event: TelemetryEvent):
-            event.data["env_id"] = 0
-            hub.emit(event)
+        from esper.simic.telemetry.emitters import emit_with_env_context
+
+        def callback(event: TelemetryEvent) -> None:
+            # Slot events use env_id=-1 sentinel; inject env context without mutating frozen payloads.
+            emit_with_env_context(hub, env_idx=0, device="cpu", event=event)
 
         model.seed_slots["r0c1"].on_telemetry = callback
         model.seed_slots["r0c1"].fast_mode = False
@@ -30,27 +32,32 @@ class TestBlueprintAnalyticsIntegration:
             p.numel() for p in model.host.parameters() if p.requires_grad
         )
 
-        # Germinate
-        model.germinate_seed("depthwise", "test_seed", slot="r0c1")
+        try:
+            # Germinate
+            model.germinate_seed("depthwise", "test_seed", slot="r0c1")
+            hub.flush()
 
-        assert analytics.stats["depthwise"].germinated == 1
-        assert analytics.scoreboards[0].live_blueprint == "depthwise"
+            assert analytics.stats["depthwise"].germinated == 1
+            assert analytics.scoreboards[0].live_blueprint == "depthwise"
 
-        # Simulate improvement and fossilize
-        model.seed_slots["r0c1"].state.metrics.initial_val_accuracy = 70.0
-        model.seed_slots["r0c1"].state.metrics.current_val_accuracy = 75.0
-        model.seed_slots["r0c1"].state.metrics.counterfactual_contribution = 5.0  # Required for G5
+            # Simulate improvement and fossilize
+            model.seed_slots["r0c1"].state.metrics.initial_val_accuracy = 70.0
+            model.seed_slots["r0c1"].state.metrics.current_val_accuracy = 75.0
+            model.seed_slots["r0c1"].state.metrics.counterfactual_contribution = 5.0  # Required for G5
 
-        # Force to HOLDING stage for fossilization (per instructions)
-        from esper.leyline import SeedStage
-        model.seed_slots["r0c1"].state.stage = SeedStage.HOLDING
-        model.seed_slots["r0c1"].state.is_healthy = True  # G5 also requires health
-        model.seed_slots["r0c1"].advance_stage(SeedStage.FOSSILIZED)
+            # Force to HOLDING stage for fossilization (per instructions)
+            from esper.leyline import SeedStage
+            model.seed_slots["r0c1"].state.stage = SeedStage.HOLDING
+            model.seed_slots["r0c1"].state.is_healthy = True  # G5 also requires health
+            model.seed_slots["r0c1"].advance_stage(SeedStage.FOSSILIZED)
+            hub.flush()
 
-        assert analytics.stats["depthwise"].fossilized == 1
-        assert analytics.stats["depthwise"].acc_deltas == [5.0]
-        assert analytics.scoreboards[0].total_fossilized == 1
-        assert analytics.scoreboards[0].params_added > 0
+            assert analytics.stats["depthwise"].fossilized == 1
+            assert analytics.stats["depthwise"].acc_deltas == [5.0]
+            assert analytics.scoreboards[0].total_fossilized == 1
+            assert analytics.scoreboards[0].params_added > 0
+        finally:
+            hub.close()
 
     def test_summary_tables_format(self):
         """Summary tables are readable and complete."""

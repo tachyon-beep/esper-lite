@@ -9,9 +9,9 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Iterator, Protocol, runtime_checkable
 
-import torch.nn as nn
-
 if TYPE_CHECKING:
+    import torch.nn as nn
+
     from esper.leyline import GateResult, SeedStage
 
 
@@ -36,8 +36,31 @@ class SeedStateProtocol(Protocol):
         """Check if transition to new stage is valid."""
         ...
 
-    def sync_telemetry(self) -> None:
-        """Synchronize internal state to telemetry fields."""
+    def sync_telemetry(
+        self,
+        gradient_norm: float | None = None,
+        gradient_health: float | None = None,
+        has_vanishing: bool | None = None,
+        has_exploding: bool | None = None,
+        epoch: int = 0,
+        max_epochs: int = 25,
+    ) -> None:
+        """Synchronize internal state to telemetry fields.
+
+        Call this once per epoch after validation to update telemetry.
+        SeedMetrics remains the source of truth for accuracy/epoch data.
+
+        Args:
+            gradient_norm: Optional gradient norm from gradient stats collection.
+            gradient_health: Optional gradient health metric (0-1, higher = healthier).
+            has_vanishing: Optional flag indicating vanishing gradients detected.
+            has_exploding: Optional flag indicating exploding gradients detected.
+            epoch: Current epoch number.
+            max_epochs: Maximum epochs for the training run.
+
+        When gradient parameters are None, gradient-related telemetry fields
+        are left at their default values (no gradient data available).
+        """
         ...
 
 
@@ -92,11 +115,13 @@ class SeedSlotProtocol(Protocol):
         """
         ...
 
-    def step_epoch(self) -> bool:
+    def step_epoch(self) -> None:
         """Advance lifecycle mechanically once per epoch.
 
-        Returns:
-            True if an auto-prune occurred, False otherwise.
+        Auto-prune events are signaled via `state.metrics.auto_pruned`.
+        Callers should check (and clear) this flag immediately AFTER
+        calling `step_epoch()` to catch both governor prunes and scheduled
+        prune completion.
         """
         ...
 

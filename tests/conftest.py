@@ -190,20 +190,27 @@ def temp_workspace(tmp_path):
 # =============================================================================
 
 @pytest.fixture(autouse=True)
-def reset_random_seeds():
+def reset_random_seeds(request):
     """Reset random seeds before each test for reproducibility.
 
     This fixture runs automatically for all tests.
+
+    Tests can skip torch seeding by using @pytest.mark.no_torch_seeding.
+    This is needed for import isolation tests that delete sys.modules.
     """
     import random
     import numpy as np
-    import torch
 
     random.seed(42)
     np.random.seed(42)
-    torch.manual_seed(42)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(42)
+
+    # Skip torch import if test is marked with no_torch_seeding
+    # (prevents issues with import isolation tests that delete sys.modules)
+    if "no_torch_seeding" not in request.keywords:
+        import torch
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
 
     yield  # Test runs here
 

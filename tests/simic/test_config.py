@@ -15,7 +15,7 @@ class TestTrainingConfigDefaults:
     def test_default_config_creates_successfully(self):
         """Default TrainingConfig should initialize without errors."""
         config = TrainingConfig()
-        assert config.lstm_hidden_dim == 128
+        assert config.lstm_hidden_dim == 512  # V3: DEFAULT_LSTM_HIDDEN_DIM updated to 512
         assert config.chunk_length == config.max_epochs  # Auto-matched
         assert config.reward_family.value == "contribution"
         assert config.reward_mode.value == "shaped"
@@ -60,7 +60,6 @@ class TestTrainingConfigPresets:
         assert config.entropy_coef_start == 0.06
         assert config.entropy_coef_end == 0.03
         assert config.entropy_anneal_episodes == 200
-        assert config.adaptive_entropy_floor is True
 
 
 class TestTrainingConfigConversion:
@@ -70,6 +69,7 @@ class TestTrainingConfigConversion:
         """LSTM params should flow to PPOAgent kwargs."""
         config = TrainingConfig(
             lstm_hidden_dim=256,
+            max_epochs=25,  # chunk_length must match max_epochs
             chunk_length=25,
             entropy_anneal_episodes=8,
             n_envs=4,
@@ -116,7 +116,7 @@ class TestTrainingConfigSummary:
 
     def test_summary_includes_lstm_info(self):
         """Summary should show LSTM info."""
-        config = TrainingConfig(lstm_hidden_dim=256, chunk_length=25)
+        config = TrainingConfig(lstm_hidden_dim=256, max_epochs=25, chunk_length=25)
         summary = config.summary()
         assert "LSTM" in summary
         assert "hidden=256" in summary

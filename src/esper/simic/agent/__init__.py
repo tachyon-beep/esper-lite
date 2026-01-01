@@ -1,7 +1,7 @@
 """PPO algorithm core for Tamiyo seed lifecycle control.
 
 This subpackage contains the learnable agent components:
-- ppo.py: PPOAgent class and signals_to_features helper
+- ppo.py: PPOAgent class
 - rollout_buffer.py: TamiyoRolloutBuffer for trajectory storage
 - advantages.py: GAE advantage computation
 """
@@ -15,7 +15,6 @@ from .rollout_buffer import (
 
 from .ppo import (
     CHECKPOINT_VERSION,
-    signals_to_features,
     PPOAgent,
 )
 
@@ -35,7 +34,6 @@ __all__ = [
     "TamiyoRolloutBuffer",
     # PPO Agent
     "CHECKPOINT_VERSION",
-    "signals_to_features",
     "PPOAgent",
     # Types
     "GradientStats",

@@ -60,6 +60,66 @@ class TestSeedGradientCollector:
         assert stats['has_exploding'] is False
 
 
+class TestSeedGradientCollectorEdgeCases:
+    """Edge-case tests for gradient health and norms."""
+
+    def test_gradient_norm_matches_analytic_single_weight(self):
+        """Gradient norm matches analytic value for a 1×1 linear weight."""
+        model = nn.Linear(1, 1, bias=False)
+        model.weight.data.fill_(2.0)
+
+        x = torch.tensor([[3.0]])
+        y_pred = model(x)
+        loss = y_pred.sum()
+        loss.backward()
+
+        collector = SeedGradientCollector()
+        stats = collector.collect(model.parameters())
+
+        assert abs(stats["gradient_norm"] - 3.0) < 1e-5
+
+    def test_detects_vanishing_gradients(self):
+        """Collector flags vanishing gradients below threshold."""
+        param = torch.nn.Parameter(torch.ones(10, 10))
+        param.grad = torch.full((10, 10), 1e-8)
+
+        collector = SeedGradientCollector()
+        stats = collector.collect([param])
+
+        assert stats["has_vanishing"] is True
+        assert stats["gradient_health"] < 1.0
+
+    def test_detects_exploding_gradients(self):
+        """Collector flags exploding gradients above threshold."""
+        param = torch.nn.Parameter(torch.ones(10, 10))
+        param.grad = torch.full((10, 10), 200.0)
+
+        collector = SeedGradientCollector()
+        stats = collector.collect([param])
+
+        assert stats["has_exploding"] is True
+        assert stats["gradient_health"] < 1.0
+
+    def test_gradient_health_scoring_orders(self):
+        """Healthy gradients score higher than mixed vanishing+exploding."""
+        collector = SeedGradientCollector()
+
+        param_healthy = torch.nn.Parameter(torch.ones(10, 10))
+        param_healthy.grad = torch.full((10, 10), 0.01)
+        healthy_stats = collector.collect([param_healthy])
+
+        param_unhealthy = torch.nn.Parameter(torch.ones(10, 10))
+        param_unhealthy.grad = torch.cat(
+            [
+                torch.full((5, 10), 1e-8),
+                torch.full((5, 10), 200.0),
+            ]
+        )
+        unhealthy_stats = collector.collect([param_unhealthy])
+
+        assert healthy_stats["gradient_health"] > unhealthy_stats["gradient_health"]
+
+
 # =============================================================================
 # Enhanced Gradient Metrics Tests
 # =============================================================================

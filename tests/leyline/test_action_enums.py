@@ -2,13 +2,7 @@
 
 from enum import IntEnum
 
-
-def _get_blueprint_from_action(action) -> str | None:
-    """Get blueprint name from a germinate action (local helper)."""
-    name = action.name
-    if name.startswith("GERMINATE_"):
-        return name[len("GERMINATE_"):].lower()
-    return None
+from esper.leyline.actions import get_blueprint_from_action_name
 
 
 def test_build_action_enum_cnn():
@@ -64,9 +58,9 @@ def test_get_blueprint_from_action():
 
     Action = build_action_enum("cnn")
 
-    blueprint = _get_blueprint_from_action(Action.GERMINATE_NORM)
+    blueprint = get_blueprint_from_action_name(Action.GERMINATE_NORM.name)
     assert blueprint == "norm"
 
-    assert _get_blueprint_from_action(Action.WAIT) is None
-    assert _get_blueprint_from_action(Action.FOSSILIZE) is None
-    assert _get_blueprint_from_action(Action.PRUNE) is None
+    assert get_blueprint_from_action_name(Action.WAIT.name) is None
+    assert get_blueprint_from_action_name(Action.FOSSILIZE.name) is None
+    assert get_blueprint_from_action_name(Action.PRUNE.name) is None

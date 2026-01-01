@@ -19,6 +19,7 @@ class HostProtocol(Protocol):
     """Contract for graftable host networks.
 
     Hosts are pure backbone networks that provide:
+    - topology: Network type ('cnn' or 'transformer') for shape inference
     - injection_specs: Ordered injection boundary metadata
     - injection_points: Available segment boundaries for seed attachment
     - segment_channels: Channel dimensions at each boundary
@@ -47,6 +48,11 @@ class HostProtocol(Protocol):
     @property
     def segment_channels(self) -> dict[str, int]:
         """Map of canonical slot_id -> channel dimension."""
+        ...
+
+    @property
+    def topology(self) -> str:
+        """Network topology type: 'cnn' or 'transformer'."""
         ...
 
     def forward(self, x: Tensor) -> Tensor:

@@ -332,7 +332,7 @@ class TestTolariaGovernor:
         model = DummyModel()
         gov = TolariaGovernor(model)
 
-        with patch("esper.tolaria.governor.get_hub") as get_hub:
+        with patch("esper.nissa.get_hub") as get_hub:
             hub = Mock()
             get_hub.return_value = hub
 
@@ -839,3 +839,68 @@ class TestTolariaGovernor:
 
         # Verify rollback report
         assert report.rollback_occurred is True
+
+    def test_panic_state_cleared_after_rollback(self):
+        """Verify stale _panic_loss doesn't leak into subsequent rollbacks.
+
+        Regression test for issue where _panic_loss was not cleared after
+        rollback, causing stale values to appear in GovernorReport for
+        subsequent unrelated rollbacks.
+        """
+        from esper.tolaria import TolariaGovernor
+
+        model = DummyModel()
+        gov = TolariaGovernor(model)
+
+        # Build minimal history
+        for i in range(15):
+            gov.loss_history.append(1.0)
+
+        # Simulate a panic that sets _panic_loss
+        gov._panic_loss = 50.0
+        gov._panic_reason = "governor_divergence"
+        gov._pending_panic = True
+        gov.consecutive_panics = 3
+
+        # First rollback - should report the panic loss
+        report1 = gov.execute_rollback()
+        assert report1.loss_at_panic == 50.0
+
+        # After rollback, panic state should be cleared
+        assert gov._panic_loss is None
+        assert gov._panic_reason is None
+        assert gov._pending_panic is False
+
+        # Second rollback without new panic - should report NaN
+        # (Rebuild history since rollback doesn't clear it)
+        for i in range(5):
+            gov.loss_history.append(1.0)
+        report2 = gov.execute_rollback()
+        assert math.isnan(report2.loss_at_panic), (
+            f"Expected NaN for rollback without preceding panic, got {report2.loss_at_panic}"
+        )
+
+    def test_panic_state_cleared_on_recovery(self):
+        """Verify _panic_loss is cleared when check_vital_signs returns to normal."""
+        from esper.tolaria import TolariaGovernor
+
+        model = DummyModel()
+        gov = TolariaGovernor(model)
+
+        # Build history
+        for i in range(15):
+            gov.loss_history.append(1.0)
+
+        # Simulate a panic that sets _panic_loss (but below rollback threshold)
+        gov._panic_loss = 25.0
+        gov._panic_reason = "governor_divergence"
+        gov._pending_panic = True
+        gov.consecutive_panics = 1
+
+        # Normal sample should clear panic state
+        result = gov.check_vital_signs(1.0)
+        assert result is False
+        assert gov._panic_loss is None
+        assert gov._panic_reason is None
+        assert gov._pending_panic is False
+        assert gov.consecutive_panics == 0

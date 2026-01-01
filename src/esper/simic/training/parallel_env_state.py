@@ -11,17 +11,20 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, DefaultDict
+from typing import TYPE_CHECKING, DefaultDict
 
 import torch
 
 from esper.leyline import LifecycleOp
 
 if TYPE_CHECKING:
+    from torch.amp.grad_scaler import GradScaler
     from esper.tolaria import TolariaGovernor
     from esper.karn.health import HealthMonitor
     from esper.simic.attribution import CounterfactualHelper
     from esper.kasmina.host import MorphogeneticModel
+    from esper.tamiyo.tracker import SignalTracker
+    from esper.leyline import TelemetryCallback
 
 
 @dataclass(slots=True)
@@ -33,14 +36,14 @@ class ParallelEnvState:
     """
     model: "MorphogeneticModel"
     host_optimizer: torch.optim.Optimizer
-    signal_tracker: Any  # SignalTracker from tamiyo
+    signal_tracker: "SignalTracker"  # Tracks training signals (accuracy, loss trends)
     governor: "TolariaGovernor"  # Fail-safe watchdog for catastrophic failure detection
     health_monitor: "HealthMonitor | None" = None  # System health monitoring (GPU memory warnings)
     counterfactual_helper: "CounterfactualHelper | None" = None  # Shapley value analysis at episode end
     seed_optimizers: dict[str, torch.optim.Optimizer] = field(default_factory=dict)
-    env_device: str = "cuda:0"  # Device this env runs on
+    env_device: str = "cpu"  # Device this env runs on
     stream: torch.cuda.Stream | None = None  # CUDA stream for async execution
-    scaler: Any = None  # Per-env AMP scaler (torch.amp.GradScaler, but stubs inconsistent)
+    scaler: "GradScaler | None" = None  # Per-env AMP scaler for FP16 mixed precision
     seeds_created: int = 0
     seeds_fossilized: int = 0  # Total seeds fossilized this episode
     contributing_fossilized: int = 0  # Seeds with total_improvement >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
@@ -71,7 +74,7 @@ class ParallelEnvState:
     # Pair counterfactual accumulators for 3-4 seeds (key: tuple of slot indices)
     cf_pair_accums: dict[tuple[int, int], torch.Tensor] = field(default_factory=dict)
     cf_pair_totals: dict[tuple[int, int], int] = field(default_factory=dict)
-    telemetry_cb: Any = None  # Callback wired when telemetry is enabled
+    telemetry_cb: "TelemetryCallback | None" = None  # Callback wired when telemetry is enabled
     # Per-slot EMA tracking for seed gradient ratio (for G2 gate)
     # Smooths per-step ratio noise with momentum=0.9
     gradient_ratio_ema: dict[str, float] = field(default_factory=dict)
@@ -93,6 +96,22 @@ class ParallelEnvState:
     # Pre-computed autocast decision for hot path performance
     # Avoids repeated device type checks and amp flag evaluation per batch
     autocast_enabled: bool = False
+
+    # === Obs V3 Action Feedback (Phase 2a½) ===
+    # last_action_success: True = no prior action to fail (first step has none)
+    # last_action_op: LifecycleOp.WAIT.value (0) = neutral "no action yet"
+    last_action_success: bool = True
+    last_action_op: int = 0  # LifecycleOp.WAIT.value, avoid lambda for slots=True
+
+    # === Obs V3 Gradient Health Tracking (Phase 2a½) ===
+    # Maps slot_id -> previous epoch's gradient_health value
+    # Initial value for new slots: 1.0 (assume healthy)
+    gradient_health_prev: dict[str, float] = field(default_factory=dict)
+
+    # === Obs V3 Counterfactual Freshness Tracking (Phase 2a½) ===
+    # Maps slot_id -> epochs since last counterfactual measurement
+    # Initial value for new slots: 0 (fresh when slot germinates)
+    epochs_since_counterfactual: dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         # Initialize counters with LifecycleOp names (WAIT, GERMINATE, SET_ALPHA_TARGET, PRUNE, FOSSILIZE, ADVANCE)
@@ -178,17 +197,41 @@ class ParallelEnvState:
         self.gradient_ratio_ema = {slot_id: 0.0 for slot_id in slots}
         self.scaffold_boost_ledger.clear()
         self.pending_hindsight_credit = 0.0
+
+        # Reset Obs V3 action feedback (Phase 2a½)
+        self.last_action_success = True  # No prior action to fail
+        self.last_action_op = LifecycleOp.WAIT.value  # Neutral op
+
+        # Clear Obs V3 per-slot tracking (Phase 2a½)
+        # These are populated per-slot when seeds germinate:
+        # - gradient_health_prev[slot_id] = 1.0 (assume healthy)
+        # - epochs_since_counterfactual[slot_id] = 0 (fresh)
+        self.gradient_health_prev.clear()
+        self.epochs_since_counterfactual.clear()
+
         self.signal_tracker.reset()
         self.governor.reset()
         if self.health_monitor is not None:
             self.health_monitor.reset()
         if self.counterfactual_helper is not None:
-            self.counterfactual_helper._last_matrix = None
+            self.counterfactual_helper.reset()
 
         if self.train_loss_accum is None:
             self.init_accumulators(slots)
         else:
             self.zero_accumulators()
+
+    def init_obs_v3_slot_tracking(self, slot_id: str) -> None:
+        """Initialize Obs V3 per-slot tracking for a newly germinated seed."""
+        self.gradient_health_prev[slot_id] = 1.0
+        self.epochs_since_counterfactual[slot_id] = 0
+
+    def clear_obs_v3_slot_tracking(self, slot_id: str) -> None:
+        """Clear Obs V3 per-slot tracking when a slot becomes empty."""
+        if slot_id in self.gradient_health_prev:
+            del self.gradient_health_prev[slot_id]
+        if slot_id in self.epochs_since_counterfactual:
+            del self.epochs_since_counterfactual[slot_id]
 
 
 __all__ = ["ParallelEnvState"]

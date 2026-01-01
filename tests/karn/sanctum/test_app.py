@@ -9,8 +9,11 @@ from esper.karn.sanctum.schema import SanctumSnapshot
 @pytest.mark.asyncio
 async def test_app_launches():
     """App should launch without errors."""
+    from esper.karn.sanctum.widgets.reward_health import RewardHealthData
+
     mock_backend = MagicMock()
-    mock_backend.get_snapshot.return_value = SanctumSnapshot()
+    mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
+    mock_backend.compute_reward_health.return_value = RewardHealthData()
 
     app = SanctumApp(backend=mock_backend)
     async with app.run_test():
@@ -20,8 +23,11 @@ async def test_app_launches():
 @pytest.mark.asyncio
 async def test_app_has_main_panels():
     """App should have all required panels."""
+    from esper.karn.sanctum.widgets.reward_health import RewardHealthData
+
     mock_backend = MagicMock()
-    mock_backend.get_snapshot.return_value = SanctumSnapshot()
+    mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
+    mock_backend.compute_reward_health.return_value = RewardHealthData()
 
     app = SanctumApp(backend=mock_backend)
     async with app.run_test():
@@ -35,8 +41,11 @@ async def test_app_has_main_panels():
 @pytest.mark.asyncio
 async def test_app_quit_binding():
     """Pressing q should trigger quit action."""
+    from esper.karn.sanctum.widgets.reward_health import RewardHealthData
+
     mock_backend = MagicMock()
-    mock_backend.get_snapshot.return_value = SanctumSnapshot()
+    mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
+    mock_backend.compute_reward_health.return_value = RewardHealthData()
 
     app = SanctumApp(backend=mock_backend)
     quit_called = False
@@ -62,8 +71,11 @@ async def test_app_quit_binding():
 @pytest.mark.asyncio
 async def test_app_focus_navigation():
     """Tab should cycle through focusable panels."""
+    from esper.karn.sanctum.widgets.reward_health import RewardHealthData
+
     mock_backend = MagicMock()
-    mock_backend.get_snapshot.return_value = SanctumSnapshot()
+    mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
+    mock_backend.compute_reward_health.return_value = RewardHealthData()
 
     app = SanctumApp(backend=mock_backend)
     async with app.run_test() as pilot:
@@ -76,9 +88,11 @@ async def test_app_focus_navigation():
 async def test_app_has_anomaly_strip():
     """App should have AnomalyStrip widget between RunHeader and main content."""
     from esper.karn.sanctum.widgets import AnomalyStrip
+    from esper.karn.sanctum.widgets.reward_health import RewardHealthData
 
     mock_backend = MagicMock()
-    mock_backend.get_snapshot.return_value = SanctumSnapshot()
+    mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
+    mock_backend.compute_reward_health.return_value = RewardHealthData()
 
     app = SanctumApp(backend=mock_backend, num_envs=4)
     async with app.run_test():
@@ -94,8 +108,7 @@ async def test_app_shows_thread_death_modal():
     from esper.karn.sanctum.widgets.reward_health import RewardHealthData
 
     mock_backend = MagicMock()
-    mock_backend.get_snapshot.return_value = SanctumSnapshot()
-    # Ensure compute_reward_health returns proper data, not MagicMock
+    mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
     mock_backend.compute_reward_health.return_value = RewardHealthData()
 
     # Create a thread that immediately stops
@@ -112,5 +125,4 @@ async def test_app_shows_thread_death_modal():
 
         # Check that modal was shown
         assert app._thread_death_shown is True
-
 

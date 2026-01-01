@@ -22,6 +22,7 @@ from esper.leyline.telemetry import (
     GovernorRollbackPayload,
     TrendDetectedPayload,
     TamiyoInitiatedPayload,
+    PerformanceDegradationPayload,
 )
 from esper.nissa.output import OutputBackend
 
@@ -302,7 +303,18 @@ class BlueprintAnalytics(OutputBackend):
             return
 
         elif event.event_type == TelemetryEventType.PERFORMANCE_DEGRADATION:
-            _logger.warning("PERFORMANCE_DEGRADATION event not yet migrated to typed payload")
+            if not isinstance(event.data, PerformanceDegradationPayload):
+                _logger.error("PERFORMANCE_DEGRADATION event missing typed payload")
+                return
+
+            if not self.quiet:
+                p = event.data
+                print(
+                    f"    [env{p.env_id}] Performance degradation: "
+                    f"{p.drop_percent:.1f}% drop (threshold {p.threshold_percent:.1f}%), "
+                    f"acc {p.current_acc:.4f} vs μ{p.rolling_avg_acc:.4f}, "
+                    f"progress {p.training_progress * 100:.0f}%"
+                )
             return
 
         elif event.event_type == TelemetryEventType.REWARD_HACKING_SUSPECTED:
@@ -335,11 +347,6 @@ class BlueprintAnalytics(OutputBackend):
                 event.data.reason,
                 event.data.loss_at_panic if event.data.loss_at_panic is not None else float('nan'),
             )
-            return
-
-        # === Counterfactual Events ===
-        elif event.event_type == TelemetryEventType.COUNTERFACTUAL_COMPUTED:
-            _logger.warning("COUNTERFACTUAL_COMPUTED event not yet migrated to typed payload")
             return
 
     def _get_scoreboard(self, env_id: int) -> SeedScoreboard:

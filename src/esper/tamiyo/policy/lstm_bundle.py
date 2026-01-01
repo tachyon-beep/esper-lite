@@ -50,17 +50,17 @@ class LSTMPolicyBundle:
             slot_config: Slot configuration (defaults to SlotConfig.default())
             dropout: Dropout rate for LSTM (currently unused by network)
         """
-        self.hidden_dim = hidden_dim
+        self._hidden_dim = hidden_dim
         self.num_lstm_layers = num_lstm_layers
-        self.slot_config = slot_config or SlotConfig.default()
+        self._slot_config = slot_config or SlotConfig.default()
 
         # Auto-compute feature_dim from slot_config if not provided
         # This prevents drift between feature extraction and network input dimensions
         if feature_dim is None:
             from esper.tamiyo.policy.features import get_feature_size
-            feature_dim = get_feature_size(self.slot_config)
+            feature_dim = get_feature_size(self._slot_config)
 
-        self.feature_dim = feature_dim
+        self._feature_dim = feature_dim
 
         # Lazy import to avoid circular dependency
         from esper.tamiyo.networks import FactoredRecurrentActorCritic
@@ -79,6 +79,7 @@ class LSTMPolicyBundle:
     def get_action(
         self,
         features: torch.Tensor,
+        blueprint_indices: torch.Tensor,
         masks: dict[str, torch.Tensor],
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
         deterministic: bool = False,
@@ -87,20 +88,32 @@ class LSTMPolicyBundle:
 
         This method wraps the network's get_action method, converting from
         the dict-based mask format to individual mask parameters.
+
+        Args:
+            features: Input features [batch, feature_dim]
+            blueprint_indices: Blueprint indices per slot [batch, num_slots]
+            masks: Dict of boolean masks for each action head
+            hidden: Optional LSTM hidden state
+            deterministic: If True, use argmax instead of sampling
+
+        Returns:
+            ActionResult with actions, log_probs, value, hidden, and op_logits
         """
         # Convert dict masks to individual parameters
         # Request op_logits for telemetry (decision snapshots need action probabilities)
+        # NOTE: Direct dict access (not .get()) to fail fast if caller provides incomplete masks
         result = self._network.get_action(
             features,
+            blueprint_indices,
             hidden,
-            slot_mask=masks.get("slot"),
-            blueprint_mask=masks.get("blueprint"),
-            style_mask=masks.get("style"),
-            tempo_mask=masks.get("tempo"),
-            op_mask=masks.get("op"),
-            alpha_target_mask=masks.get("alpha_target"),
-            alpha_speed_mask=masks.get("alpha_speed"),
-            alpha_curve_mask=masks.get("alpha_curve"),
+            slot_mask=masks["slot"],
+            blueprint_mask=masks["blueprint"],
+            style_mask=masks["style"],
+            tempo_mask=masks["tempo"],
+            op_mask=masks["op"],
+            alpha_target_mask=masks["alpha_target"],
+            alpha_speed_mask=masks["alpha_speed"],
+            alpha_curve_mask=masks["alpha_curve"],
             deterministic=deterministic,
             return_op_logits=True,
         )
@@ -117,6 +130,7 @@ class LSTMPolicyBundle:
     def forward(
         self,
         features: torch.Tensor,
+        blueprint_indices: torch.Tensor,
         masks: dict[str, torch.Tensor],
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> ForwardResult:
@@ -127,6 +141,8 @@ class LSTMPolicyBundle:
         Args:
             features: Input features [batch, seq_len, feature_dim] or [batch, feature_dim].
                 2D inputs are automatically expanded to 3D with seq_len=1.
+            blueprint_indices: Blueprint indices [batch, seq_len, num_slots] or [batch, num_slots].
+                2D inputs are automatically expanded to 3D.
             masks: Dict of boolean masks for each action head. Masks should be
                 [batch, action_dim] or [batch, seq_len, action_dim]. 2D masks are
                 automatically expanded to match features.
@@ -141,6 +157,10 @@ class LSTMPolicyBundle:
         if need_expand:
             features = features.unsqueeze(1)
 
+        # Expand blueprint_indices to 3D if needed
+        if blueprint_indices.dim() == 2:
+            blueprint_indices = blueprint_indices.unsqueeze(1)
+
         # Normalize masks to match feature shape (network expects 3D masks)
         def expand_mask(mask: torch.Tensor | None) -> torch.Tensor | None:
             if mask is None:
@@ -151,15 +171,17 @@ class LSTMPolicyBundle:
 
         output = self._network.forward(
             features,
+            blueprint_indices,
             hidden,
-            slot_mask=expand_mask(masks.get("slot")),
-            blueprint_mask=expand_mask(masks.get("blueprint")),
-            style_mask=expand_mask(masks.get("style")),
-            tempo_mask=expand_mask(masks.get("tempo")),
-            op_mask=expand_mask(masks.get("op")),
-            alpha_target_mask=expand_mask(masks.get("alpha_target")),
-            alpha_speed_mask=expand_mask(masks.get("alpha_speed")),
-            alpha_curve_mask=expand_mask(masks.get("alpha_curve")),
+            # NOTE: Direct dict access (not .get()) to fail fast if caller provides incomplete masks
+            slot_mask=expand_mask(masks["slot"]),
+            blueprint_mask=expand_mask(masks["blueprint"]),
+            style_mask=expand_mask(masks["style"]),
+            tempo_mask=expand_mask(masks["tempo"]),
+            op_mask=expand_mask(masks["op"]),
+            alpha_target_mask=expand_mask(masks["alpha_target"]),
+            alpha_speed_mask=expand_mask(masks["alpha_speed"]),
+            alpha_curve_mask=expand_mask(masks["alpha_curve"]),
         )
 
         # Build logits dict with explicit key access to satisfy mypy TypedDict constraints
@@ -185,6 +207,7 @@ class LSTMPolicyBundle:
     def evaluate_actions(
         self,
         features: torch.Tensor,
+        blueprint_indices: torch.Tensor,
         actions: dict[str, torch.Tensor],
         masks: dict[str, torch.Tensor],
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
@@ -192,18 +215,30 @@ class LSTMPolicyBundle:
         """Evaluate actions for PPO training.
 
         This method wraps the network's evaluate_actions method.
+
+        Args:
+            features: Input features [batch, seq_len, feature_dim]
+            blueprint_indices: Blueprint indices [batch, seq_len, num_slots]
+            actions: Stored actions from buffer
+            masks: Dict of boolean masks for each action head
+            hidden: Optional initial LSTM hidden state
+
+        Returns:
+            EvalResult with log_probs, value, entropy, and new hidden state
         """
         log_probs, values, entropies, new_hidden = self._network.evaluate_actions(
             features,
+            blueprint_indices,
             actions,
-            slot_mask=masks.get("slot"),
-            blueprint_mask=masks.get("blueprint"),
-            style_mask=masks.get("style"),
-            tempo_mask=masks.get("tempo"),
-            op_mask=masks.get("op"),
-            alpha_target_mask=masks.get("alpha_target"),
-            alpha_speed_mask=masks.get("alpha_speed"),
-            alpha_curve_mask=masks.get("alpha_curve"),
+            # NOTE: Direct dict access (not .get()) to fail fast if caller provides incomplete masks
+            slot_mask=masks["slot"],
+            blueprint_mask=masks["blueprint"],
+            style_mask=masks["style"],
+            tempo_mask=masks["tempo"],
+            op_mask=masks["op"],
+            alpha_target_mask=masks["alpha_target"],
+            alpha_speed_mask=masks["alpha_speed"],
+            alpha_curve_mask=masks["alpha_curve"],
             hidden=hidden,
         )
 
@@ -240,6 +275,7 @@ class LSTMPolicyBundle:
     def get_value(
         self,
         features: torch.Tensor,
+        blueprint_indices: torch.Tensor,
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> torch.Tensor:
         """Get state value estimate.
@@ -247,12 +283,24 @@ class LSTMPolicyBundle:
         Note: Uses inference_mode() since this is only called for bootstrap
         value computation during rollout collection, not during PPO training.
         The network's forward pass for training uses evaluate_actions() instead.
+
+        Args:
+            features: Input features [batch, feature_dim]
+            blueprint_indices: Blueprint indices [batch, num_slots]
+            hidden: Optional LSTM hidden state
+
+        Returns:
+            Value estimates [batch]
         """
         # Need to add seq_len dimension if not present
         if features.dim() == 2:
             features = features.unsqueeze(1)
 
-        output = self._network.forward(features, hidden)
+        # Expand blueprint_indices to 3D
+        if blueprint_indices.dim() == 2:
+            blueprint_indices = blueprint_indices.unsqueeze(1)
+
+        output = self._network.forward(features, blueprint_indices, hidden)
         # value is [batch, seq_len], return [batch]
         return output["value"][:, 0] if output["value"].dim() > 1 else output["value"]
 
@@ -370,6 +418,23 @@ class LSTMPolicyBundle:
     def dtype(self) -> torch.dtype:
         """Get dtype of network parameters."""
         return next(self._network.parameters()).dtype
+
+    # === Configuration Access ===
+
+    @property
+    def slot_config(self) -> SlotConfig:
+        """Slot configuration for action masking."""
+        return self._slot_config
+
+    @property
+    def feature_dim(self) -> int:
+        """Input feature dimension."""
+        return self._feature_dim
+
+    @property
+    def hidden_dim(self) -> int:
+        """LSTM hidden state dimension."""
+        return self._hidden_dim
 
     # === Optional: Gradient Checkpointing ===
 

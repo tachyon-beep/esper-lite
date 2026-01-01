@@ -70,25 +70,24 @@ Legacy code and backwards compatibility create:
 - Claude Code MUST delete old code completely when making changes
 - Any legacy code patterns MUST be flagged and removed immediately
 
-## Archive Policy
+## Plans Organization
 
-**The `docs/plans/archive/` directory contains completed or superseded implementation plans.**
+Plans are grouped into:
 
-### What It Contains
+- `docs/plans/concepts/` — draft specs, strategies, and early ideas (not implementation-ready)
+- `docs/plans/ready/` — approved or actively staged implementation plans
+- `docs/plans/completed/` — executed plans and historical decision records
+- `docs/plans/abandoned/` — superseded, deferred, or cancelled plans
 
-- Implementation plans that have been executed
-- Plans superseded by architectural changes
-- Historical decision records
-
-### How to Treat It
+### How to Treat Completed/Abandoned
 
 - **Reference for understanding past decisions** and why certain approaches were taken
-- **DO NOT** implement tasks from archived plans without checking if they're still relevant
-- **DO NOT** assume archived plans reflect current architecture
+- **DO NOT** implement tasks from completed/abandoned plans without checking if they're still relevant
+- **DO NOT** assume completed/abandoned plans reflect current architecture
 
 ### The Rule
 
-When a plan is completed or superseded, move it to the archive. Keep `docs/plans/` lean with only active/future work.
+When a plan is completed, move it to `docs/plans/completed/`. When a plan is superseded, deferred, or cancelled, move it to `docs/plans/abandoned/`. Keep `docs/plans/ready/` lean with only active/future work.
 
 ## Deferred Functionality
 
@@ -139,7 +138,9 @@ This project is a deep reinforcement learning system built on PyTorch. Given the
 
 ### Karn MCP Server
 
-The `esper-karn` MCP server provides SQL access to training telemetry. Use `mcp__esper-karn__list_views` to see available views (`runs`, `epochs`, `ppo_updates`, `seed_lifecycle`, `rewards`, `anomalies`), then query with `mcp__esper-karn__query_sql`. Useful for analyzing training runs, debugging PPO health, and tracking seed fossilization rates.
+The `esper-karn` MCP server provides SQL access (DuckDB) to training telemetry. Start with `mcp__esper-karn__list_runs` or `mcp__esper-karn__run_overview`, then use `mcp__esper-karn__query_sql` for custom queries (structured JSON). Use `mcp__esper-karn__describe_view` to inspect schemas, and `mcp__esper-karn__query_sql_markdown` for copy/paste tables.
+
+Core views include `runs`, `epochs`, `ppo_updates`, `batch_epochs`, `batch_stats`, `seed_lifecycle`, `decisions`, `rewards`, `trends`, `anomalies`, `episode_outcomes`, and `raw_events`. Prefer filtering by `run_dir` to avoid mixing multiple runs in a single telemetry directory.
 
 ### Package Manager: UV
 

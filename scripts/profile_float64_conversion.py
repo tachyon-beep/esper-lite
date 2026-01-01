@@ -44,7 +44,7 @@ def benchmark_gradient_collection(
     with_float64: bool = True,
 ) -> dict:
     """Benchmark gradient collection with/without float64 conversion."""
-    device = next(model.parameters()).device
+    _device = next(model.parameters()).device  # verify model is on expected device
 
     # Create fake gradients
     for p in model.parameters():
@@ -67,10 +67,10 @@ def benchmark_gradient_collection(
             # Original pattern: use float32 directly
             grads_for_norm = grads
 
-        # Compute norms
+        # Compute norms (forces GPU computation; value unused)
         per_param_norms = torch._foreach_norm(grads_for_norm, ord=2)
         all_norms = torch.stack(per_param_norms)
-        total_squared = (all_norms ** 2).sum()
+        _total_squared = (all_norms ** 2).sum()
 
         torch.cuda.synchronize()
         times.append(time.perf_counter() - start)
@@ -87,7 +87,7 @@ def benchmark_double_conversion_only(
     iterations: int = 100,
 ) -> dict:
     """Benchmark just the .double() conversion."""
-    device = next(model.parameters()).device
+    _device = next(model.parameters()).device  # verify model is on expected device
 
     # Create fake gradients
     for p in model.parameters():
@@ -102,8 +102,8 @@ def benchmark_double_conversion_only(
         torch.cuda.synchronize()
         start = time.perf_counter()
 
-        # Just the conversion
-        grads_double = [g.double() for g in grads]
+        # Just the conversion (forces GPU computation; value unused)
+        _grads_double = [g.double() for g in grads]
 
         torch.cuda.synchronize()
         times.append(time.perf_counter() - start)
@@ -119,7 +119,7 @@ def benchmark_foreach_norm_overhead(
     iterations: int = 100,
 ) -> dict:
     """Benchmark _foreach_norm with different dtypes."""
-    device = next(model.parameters()).device
+    _device = next(model.parameters()).device  # verify model is on expected device
 
     # Create fake gradients
     for p in model.parameters():

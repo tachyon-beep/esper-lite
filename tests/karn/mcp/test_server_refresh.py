@@ -11,7 +11,8 @@ def test_server_refreshes_stubbed_views_when_files_appear() -> None:
         server = KarnMCPServer(telemetry_dir=tmpdir)
 
         before = server.query_sql_sync("SELECT COUNT(*) AS n FROM raw_events")
-        assert "| 0 |" in before
+        assert before["ok"] is True
+        assert before["rows"][0]["n"] == 0
 
         run_dir = Path(tmpdir) / "telemetry_2025-01-01_000000"
         run_dir.mkdir()
@@ -31,5 +32,5 @@ def test_server_refreshes_stubbed_views_when_files_appear() -> None:
         events_file.write_text(json.dumps(event) + "\n")
 
         after = server.query_sql_sync("SELECT COUNT(*) AS n FROM raw_events")
-        assert "| 1 |" in after
-
+        assert after["ok"] is True
+        assert after["rows"][0]["n"] == 1

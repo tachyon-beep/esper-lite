@@ -2,7 +2,8 @@
 
 import torch
 
-from esper.leyline import HEAD_NAMES, LifecycleOp, compute_causal_masks
+from esper.leyline import HEAD_NAMES, LifecycleOp
+from esper.leyline.causal_masks import compute_causal_masks
 from esper.simic.agent import compute_per_head_advantages
 
 

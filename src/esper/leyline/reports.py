@@ -91,6 +91,9 @@ class SeedStateReport:
     seed_id: str = ""
     slot_id: str = ""
     blueprint_id: str = ""
+    # Embedding index for the blueprint (BlueprintAction enum value).
+    # -1 indicates "no blueprint" / unset (0 is a valid index for NOOP).
+    blueprint_index: int = -1
 
     # Lifecycle
     stage: SeedStage = SeedStage.UNKNOWN

@@ -34,6 +34,7 @@ class TestMultiEnvSlotTracking:
             data=TrainingStartedPayload(
                 n_envs=2,
                 max_epochs=10,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0", "r0c1"),
@@ -98,6 +99,7 @@ class TestMultiEnvSlotTracking:
             data=TrainingStartedPayload(
                 n_envs=1,
                 max_epochs=5,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0",),
@@ -130,49 +132,6 @@ class TestMultiEnvSlotTracking:
         slots = store.current_epoch.slots
         assert "env3:r0c0" in slots or "r0c0" in slots
 
-    def test_counterfactual_env_idx_is_ignored_to_avoid_misbucketing(self):
-        """env_idx is not a supported telemetry field (no legacy shims)."""
-        from esper.karn.collector import KarnCollector
-
-        collector = KarnCollector()
-        store = collector.store
-
-        collector.emit(
-            TelemetryEvent(
-                event_type=TelemetryEventType.TRAINING_STARTED,
-                data=TrainingStartedPayload(
-                    n_envs=2,
-                    max_epochs=5,
-                    task="test_task",
-                    host_params=1000,
-                    slot_ids=("r0c0", "r0c1"),
-                    seed=42,
-                    n_episodes=100,
-                    lr=0.001,
-                    clip_ratio=0.2,
-                    entropy_coef=0.01,
-                    param_budget=10000,
-                    reward_mode="shaped",
-                    policy_device="cpu",
-                    env_devices=("cpu", "cpu"),
-                    episode_id="test_cf_env_idx",
-                )
-            )
-        )
-
-        collector.emit(
-            TelemetryEvent(
-                event_type=TelemetryEventType.COUNTERFACTUAL_COMPUTED,
-                slot_id="r0c1",
-                data={"env_idx": 1, "contribution": 0.9},
-            )
-        )
-
-        slots = store.current_epoch.slots
-        assert "env0:r0c1" not in slots
-        assert "env1:r0c1" not in slots
-        assert "r0c1" not in slots
-
     def test_gate_event_updates_slot_gate_fields(self):
         """Gate evaluation events populate per-slot gate fields."""
         from esper.karn.collector import KarnCollector
@@ -186,6 +145,7 @@ class TestMultiEnvSlotTracking:
                 data=TrainingStartedPayload(
                     n_envs=2,
                     max_epochs=5,
+                max_batches=100,
                     task="test_task",
                     host_params=1000,
                     slot_ids=("r0c0", "r0c1"),
@@ -242,6 +202,7 @@ class TestKarnCollectorEmitAfterClose:
             data=TrainingStartedPayload(
                 n_envs=1,
                 max_epochs=5,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0", "r0c1"),
@@ -419,56 +380,6 @@ class TestKarnCollectorAddBackendFailure:
         assert len(collector._backends) == 1
 
 
-class TestCounterfactualNoneDataHandling:
-    """Tests for counterfactual event with None data payload."""
-
-    def test_counterfactual_with_none_data_logs_warning(self, caplog: pytest.LogCaptureFixture):
-        """COUNTERFACTUAL_COMPUTED with None data should log warning and return early."""
-        from esper.karn.collector import KarnCollector
-
-        collector = KarnCollector()
-
-        # Start episode to enable event processing
-        collector.emit(TelemetryEvent(
-            event_type=TelemetryEventType.TRAINING_STARTED,
-            data=TrainingStartedPayload(
-                n_envs=1,
-                max_epochs=5,
-                task="test_task",
-                host_params=1000,
-                slot_ids=("r0c0",),
-                seed=42,
-                n_episodes=100,
-                lr=0.001,
-                clip_ratio=0.2,
-                entropy_coef=0.01,
-                param_budget=10000,
-                reward_mode="shaped",
-                policy_device="cpu",
-                env_devices=("cpu",),
-                episode_id="test_cf_none",
-            )
-        ))
-
-        with caplog.at_level(logging.WARNING, logger="esper.karn.collector"):
-            # Emit counterfactual event with None data
-            collector.emit(TelemetryEvent(
-                event_type=TelemetryEventType.COUNTERFACTUAL_COMPUTED,
-                slot_id="r0c0",
-                data=None,  # This should trigger the warning
-            ))
-
-        # Verify warning was logged
-        assert any(
-            "has no data payload" in record.message
-            for record in caplog.records
-        ), "Expected warning about missing data payload"
-
-        # Verify no slot was created (event was dropped after warning)
-        slots = collector.store.current_epoch.slots if collector.store.current_epoch else {}
-        assert len(slots) == 0, "No slots should be created when data is None"
-
-
 class TestMultiEnvEpochCommitBug:
     """Tests for the multi-env epoch commit race condition.
 
@@ -496,6 +407,7 @@ class TestMultiEnvEpochCommitBug:
             data=TrainingStartedPayload(
                 n_envs=n_envs,
                 max_epochs=10,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0",),
@@ -596,6 +508,7 @@ class TestMultiEnvEpochCommitBug:
             data=TrainingStartedPayload(
                 n_envs=n_envs,
                 max_epochs=10,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0",),
@@ -652,6 +565,7 @@ class TestMultiEnvEpochCommitBug:
             data=TrainingStartedPayload(
                 n_envs=n_envs,
                 max_epochs=10,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0",),
@@ -748,6 +662,7 @@ class TestPartialBatchFlush:
             data=TrainingStartedPayload(
                 n_envs=n_envs,
                 max_epochs=10,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0",),
@@ -822,6 +737,7 @@ class TestPartialBatchFlush:
             data=TrainingStartedPayload(
                 n_envs=n_envs,
                 max_epochs=10,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0",),
@@ -903,6 +819,7 @@ class TestMinimalTelemetryFallback:
             data=TrainingStartedPayload(
                 n_envs=4,
                 max_epochs=10,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0",),
@@ -962,6 +879,7 @@ class TestMinimalTelemetryFallback:
             data=TrainingStartedPayload(
                 n_envs=4,
                 max_epochs=10,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0",),
@@ -1032,6 +950,7 @@ class TestResetClearsMultiEnvState:
             data=TrainingStartedPayload(
                 n_envs=4,
                 max_epochs=10,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0",),
@@ -1082,6 +1001,7 @@ class TestResetClearsMultiEnvState:
             data=TrainingStartedPayload(
                 n_envs=4,
                 max_epochs=10,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0",),
@@ -1118,6 +1038,7 @@ class TestResetClearsMultiEnvState:
             data=TrainingStartedPayload(
                 n_envs=4,
                 max_epochs=10,
+                max_batches=100,
                 task="test_task",
                 host_params=1000,
                 slot_ids=("r0c0",),

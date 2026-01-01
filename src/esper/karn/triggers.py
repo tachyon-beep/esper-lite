@@ -68,7 +68,9 @@ class RollingStats:
             self.accuracy_initialized = True
             return 0.0
 
-        drop = (self.prev_accuracy - accuracy) * 100  # Percentage points
+        # Accuracy is already emitted in percentage points (0-100), so the drop is
+        # computed directly in percentage points (not scaled by 100).
+        drop = self.prev_accuracy - accuracy
         self.prev_accuracy = accuracy
         return drop
 

@@ -34,6 +34,9 @@ dashboard = [
 tui = [
     "textual>=0.47.0",
 ]
+wandb = [
+    "wandb>=0.16.0",
+]
 
 [build-system]
 requires = ["setuptools>=61.0"]
@@ -92,9 +95,22 @@ module = "esper.leyline.telemetry"
 strict = true  # Typed payloads must be fully strict
 
 [[tool.mypy.overrides]]
-module = "esper.karn.sanctum.*"
-strict = true  # Sanctum aggregator must be strict
+module = [
+    "esper.karn.sanctum.aggregator",
+    "esper.karn.sanctum.schema",
+    "esper.karn.sanctum.snapshot_copy",
+]
+strict = true  # Data layer must be strict
 
+# Textual-based UI modules: disable 'misc' errors for "Class cannot subclass Any"
+# Textual doesn't ship complete type stubs, so Static/Container/Message/Screen
+# appear as Any to mypy. These are false positives from the framework limitation.
+[[tool.mypy.overrides]]
+module = [
+    "esper.karn.sanctum.widgets.*",
+    "esper.karn.sanctum.app",
+]
+disable_error_code = ["misc"]
 
 # Third-party libraries without stubs
 [[tool.mypy.overrides]]
@@ -111,5 +127,7 @@ module = [
     "fastapi.*",
     "uvicorn",
     "uvicorn.*",
+    "wandb",
+    "wandb.*",
 ]
 ignore_missing_imports = true

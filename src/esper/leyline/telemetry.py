@@ -12,10 +12,11 @@ Each domain emits events using these contracts:
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 if TYPE_CHECKING:
     from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
@@ -111,7 +112,6 @@ class TelemetryEventType(Enum):
     CHECKPOINT_LOADED = auto()        # Model checkpoint restored
 
     # === Counterfactual Attribution Events ===
-    COUNTERFACTUAL_COMPUTED = auto()  # Per-slot counterfactual contribution measured
     COUNTERFACTUAL_MATRIX_COMPUTED = auto()  # Full factorial matrix for env
 
     # === Analytics Events ===
@@ -533,6 +533,22 @@ class EpochCompletedPayload:
             seeds=data.get("seeds"),
         )
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dict for telemetry serialization.
+
+        PERF: Avoids dataclasses.asdict() deep-copying nested dict payloads (e.g., per-seed telemetry).
+        """
+        return {
+            "env_id": self.env_id,
+            "val_accuracy": self.val_accuracy,
+            "val_loss": self.val_loss,
+            "inner_epoch": self.inner_epoch,
+            "train_loss": self.train_loss,
+            "train_accuracy": self.train_accuracy,
+            "host_grad_norm": self.host_grad_norm,
+            "seeds": self.seeds,
+        }
+
 
 @dataclass(slots=True, frozen=True)
 class BatchEpochCompletedPayload:
@@ -670,6 +686,18 @@ class PPOUpdatePayload:
     head_alpha_curve_entropy: float | None = None
     head_op_entropy: float | None = None
 
+    # Per-head PPO ratio max (Policy V2 - multi-head ratio explosion detection)
+    # Individual head ratios can look healthy while joint ratio exceeds clip range
+    head_slot_ratio_max: float = 1.0
+    head_blueprint_ratio_max: float = 1.0
+    head_style_ratio_max: float = 1.0
+    head_tempo_ratio_max: float = 1.0
+    head_alpha_target_ratio_max: float = 1.0
+    head_alpha_speed_ratio_max: float = 1.0
+    head_alpha_curve_ratio_max: float = 1.0
+    head_op_ratio_max: float = 1.0
+    joint_ratio_max: float = 1.0  # Product of per-head ratios (computed in log-space)
+
     # PPO inner loop context
     inner_epoch: int = 0
     batch: int = 0
@@ -682,6 +710,20 @@ class PPOUpdatePayload:
     value_std: float = 0.0
     value_min: float = 0.0
     value_max: float = 0.0
+
+    # === Op-Conditioned Q-Values (Policy V2) ===
+    # Q(s, op) for each operation - value estimates conditioned on the operation
+    # These show how the critic values different operations in the current state
+    q_germinate: float = 0.0  # Q(s, GERMINATE)
+    q_advance: float = 0.0    # Q(s, ADVANCE)
+    q_fossilize: float = 0.0  # Q(s, FOSSILIZE)
+    q_prune: float = 0.0      # Q(s, PRUNE)
+    q_wait: float = 0.0       # Q(s, WAIT)
+    q_set_alpha: float = 0.0  # Q(s, SET_ALPHA_TARGET)
+
+    # Q-value analysis metrics
+    q_variance: float = 0.0  # Variance across ops (low = critic ignoring op conditioning)
+    q_spread: float = 0.0    # max(Q) - min(Q) across ops
 
     # === Gradient Quality Metrics (per DRL expert review) ===
     # Directional clip: WHERE clipping occurs (not WHETHER policy improved)
@@ -751,6 +793,16 @@ class PPOUpdatePayload:
             head_alpha_speed_entropy=data.get("head_alpha_speed_entropy"),
             head_alpha_curve_entropy=data.get("head_alpha_curve_entropy"),
             head_op_entropy=data.get("head_op_entropy"),
+            # Per-head ratio max
+            head_slot_ratio_max=data.get("head_slot_ratio_max", 1.0),
+            head_blueprint_ratio_max=data.get("head_blueprint_ratio_max", 1.0),
+            head_style_ratio_max=data.get("head_style_ratio_max", 1.0),
+            head_tempo_ratio_max=data.get("head_tempo_ratio_max", 1.0),
+            head_alpha_target_ratio_max=data.get("head_alpha_target_ratio_max", 1.0),
+            head_alpha_speed_ratio_max=data.get("head_alpha_speed_ratio_max", 1.0),
+            head_alpha_curve_ratio_max=data.get("head_alpha_curve_ratio_max", 1.0),
+            head_op_ratio_max=data.get("head_op_ratio_max", 1.0),
+            joint_ratio_max=data.get("joint_ratio_max", 1.0),
             inner_epoch=data.get("inner_epoch", 0),
             batch=data.get("batch", 0),
             skipped=data.get("skipped", False),
@@ -759,6 +811,15 @@ class PPOUpdatePayload:
             value_std=data.get("value_std", 0.0),
             value_min=data.get("value_min", 0.0),
             value_max=data.get("value_max", 0.0),
+            # Q-values
+            q_germinate=data.get("q_germinate", 0.0),
+            q_advance=data.get("q_advance", 0.0),
+            q_fossilize=data.get("q_fossilize", 0.0),
+            q_prune=data.get("q_prune", 0.0),
+            q_wait=data.get("q_wait", 0.0),
+            q_set_alpha=data.get("q_set_alpha", 0.0),
+            q_variance=data.get("q_variance", 0.0),
+            q_spread=data.get("q_spread", 0.0),
             # Gradient quality metrics
             clip_fraction_positive=data.get("clip_fraction_positive", 0.0),
             clip_fraction_negative=data.get("clip_fraction_negative", 0.0),
@@ -886,8 +947,8 @@ class SeedStageChangedPayload:
         return cls(
             slot_id=data["slot_id"],
             env_id=data["env_id"],
-            from_stage=data["from"],
-            to_stage=data["to"],
+            from_stage=data["from_stage"],
+            to_stage=data["to_stage"],
             alpha=data.get("alpha"),
             accuracy_delta=data.get("accuracy_delta", 0.0),
             epochs_in_stage=data.get("epochs_in_stage", 0),
@@ -896,6 +957,26 @@ class SeedStageChangedPayload:
             has_exploding=data.get("has_exploding", False),
             alpha_curve=data["alpha_curve"],
         )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dict for telemetry serialization.
+
+        PERF: Avoids dataclasses.asdict() deep-copy overhead and enforces a
+        stable JSON schema that matches the dataclass field names.
+        """
+        return {
+            "slot_id": self.slot_id,
+            "env_id": self.env_id,
+            "from_stage": self.from_stage,
+            "to_stage": self.to_stage,
+            "alpha": self.alpha,
+            "accuracy_delta": self.accuracy_delta,
+            "epochs_in_stage": self.epochs_in_stage,
+            "grad_ratio": self.grad_ratio,
+            "has_vanishing": self.has_vanishing,
+            "has_exploding": self.has_exploding,
+            "alpha_curve": self.alpha_curve,
+        }
 
 
 @dataclass(slots=True, frozen=True)
@@ -1088,6 +1169,27 @@ class HeadTelemetry:
             alpha_speed_entropy=data.get("alpha_speed_entropy", 0.0),
             curve_entropy=data.get("curve_entropy", 0.0),
         )
+
+    def to_dict(self) -> dict[str, float]:
+        """Convert to dict for telemetry serialization (avoids dataclasses.asdict deep copy)."""
+        return {
+            "op_confidence": self.op_confidence,
+            "slot_confidence": self.slot_confidence,
+            "blueprint_confidence": self.blueprint_confidence,
+            "style_confidence": self.style_confidence,
+            "tempo_confidence": self.tempo_confidence,
+            "alpha_target_confidence": self.alpha_target_confidence,
+            "alpha_speed_confidence": self.alpha_speed_confidence,
+            "curve_confidence": self.curve_confidence,
+            "op_entropy": self.op_entropy,
+            "slot_entropy": self.slot_entropy,
+            "blueprint_entropy": self.blueprint_entropy,
+            "style_entropy": self.style_entropy,
+            "tempo_entropy": self.tempo_entropy,
+            "alpha_target_entropy": self.alpha_target_entropy,
+            "alpha_speed_entropy": self.alpha_speed_entropy,
+            "curve_entropy": self.curve_entropy,
+        }
 
 
 @dataclass(slots=True, frozen=True)
@@ -1297,6 +1399,23 @@ class AnalyticsSnapshotPayload:
             head_telemetry=cls._parse_head_telemetry(data.get("head_telemetry")),
         )
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dict for telemetry serialization.
+
+        PERF: Avoids dataclasses.asdict() deep-copying large, already-JSONable containers
+        like slot_states, alternatives, scoreboard_tables, and shapley_values.
+        """
+        payload: dict[str, Any] = {}
+        for dc_field in dataclasses.fields(self):
+            value = getattr(self, dc_field.name)
+            if dc_field.name == "head_telemetry":
+                payload[dc_field.name] = value.to_dict() if value is not None else None
+            elif dc_field.name == "reward_components":
+                payload[dc_field.name] = value.to_dict() if value is not None else None
+            else:
+                payload[dc_field.name] = value
+        return payload
+
     @staticmethod
     def _parse_reward_components(
         data: dict[str, Any] | None,
@@ -1368,29 +1487,6 @@ class AnomalyDetectedPayload:
             gradient_stats=gradient_stats,
             stability=data.get("stability"),
             ratio_diagnostic=data.get("ratio_diagnostic"),
-        )
-
-
-@dataclass(slots=True, frozen=True)
-class CounterfactualUnavailablePayload:
-    """Payload for COUNTERFACTUAL_COMPUTED when baseline is unavailable.
-
-    Emitted when counterfactual computation cannot be performed for a slot,
-    e.g., due to missing baseline or invalid slot state.
-    """
-
-    # REQUIRED
-    env_id: int
-    slot_id: str
-    reason: str  # Why counterfactual is unavailable (e.g., "no_baseline", "dormant_slot")
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "CounterfactualUnavailablePayload":
-        """Parse from dict. Raises KeyError on missing required fields."""
-        return cls(
-            env_id=data["env_id"],
-            slot_id=data["slot_id"],
-            reason=data["reason"],
         )
 
 
@@ -1537,10 +1633,21 @@ TelemetryPayload = (
     | SeedFossilizedPayload
     | SeedPrunedPayload
     | CounterfactualMatrixPayload
-    | CounterfactualUnavailablePayload
     | AnalyticsSnapshotPayload
     | AnomalyDetectedPayload
     | PerformanceDegradationPayload
     | EpisodeOutcomePayload
     | GovernorRollbackPayload
 )
+
+
+# =============================================================================
+# Telemetry Callback Type Alias
+# =============================================================================
+
+TelemetryCallback = Callable[[TelemetryEvent], None]
+"""Type alias for telemetry event callbacks.
+
+Used by components that accept a telemetry emission callback, e.g.:
+    telemetry_cb: TelemetryCallback | None = None
+"""

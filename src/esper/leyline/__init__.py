@@ -196,6 +196,7 @@ from esper.leyline.factored_actions import (
     ALPHA_TARGET_NAMES,
     ALPHA_TARGET_VALUES,
     BLUEPRINT_IDS,
+    BLUEPRINT_ID_TO_INDEX,
     BlueprintAction,
     CNN_BLUEPRINTS,
     FactoredAction,
@@ -221,7 +222,9 @@ from esper.leyline.factored_actions import (
     STYLE_TO_KASMINA,
     TEMPO_NAMES,
     TEMPO_TO_EPOCHS,
+    Topology,
     TRANSFORMER_BLUEPRINTS,
+    VALID_TOPOLOGIES,
     TempoAction,
     get_action_head_sizes,
 )
@@ -426,21 +429,37 @@ DEFAULT_FEATURE_DIM = 512
 # Blueprint Embedding (Obs V3 Neural Encoding)
 # =============================================================================
 
-# Number of valid blueprints (0-12 inclusive). Used for embedding table size.
+# Number of valid blueprints (indices 0-(NUM_BLUEPRINTS - 1)). Used for embedding table size.
 # The embedding table has NUM_BLUEPRINTS + 1 entries to accommodate the null index.
-NUM_BLUEPRINTS = 13
 
 # Index used for "no blueprint" / null embedding in BlueprintEmbedding.
 # Must be >= NUM_BLUEPRINTS to avoid collision with valid blueprint indices.
 # Used in: torch.where(blueprint_indices < 0, _null_idx, blueprint_indices)
 # Stored as register_buffer to avoid torch.tensor() allocation per forward call.
-BLUEPRINT_NULL_INDEX = 13
+BLUEPRINT_NULL_INDEX = NUM_BLUEPRINTS
 
 # Embedding dimension for blueprint vectors.
 # Small (4) because blueprints are low-cardinality (13 types).
 # Larger dims would overfit; 4 is sufficient for type discrimination.
 # Total embedding params: (NUM_BLUEPRINTS + 1) * EMBED_DIM = 14 * 4 = 56
 DEFAULT_BLUEPRINT_EMBED_DIM = 4
+
+# Obs V3 base observation dimension (before blueprint embeddings are concatenated).
+# For DEFAULT_NUM_SLOTS=3: 23 + (30 × 3) = 113 dims.
+# The full Obs V3 input to the network is:
+#   OBS_V3_NON_BLUEPRINT_DIM + (DEFAULT_NUM_SLOTS × DEFAULT_BLUEPRINT_EMBED_DIM) = 125 dims.
+OBS_V3_BASE_FEATURE_SIZE = 23
+OBS_V3_SLOT_FEATURE_SIZE = 30
+OBS_V3_NON_BLUEPRINT_DIM = OBS_V3_BASE_FEATURE_SIZE + (OBS_V3_SLOT_FEATURE_SIZE * DEFAULT_NUM_SLOTS)
+
+# Number of independent action heads in Tamiyo's factored action space.
+# Heads: op, slot, blueprint, style, tempo, alpha_target, alpha_speed, alpha_curve.
+NUM_ACTION_HEADS = 8
+
+# Minimum log probability clamp for numerical stability.
+# Prevents log(0) = -inf and ensures gradients remain finite.
+# Used in: MaskedCategorical distribution log_prob calculations.
+LOG_PROB_MIN = -100.0
 
 # =============================================================================
 # Blueprint Penalty System (Anti-Thrashing)
@@ -501,7 +520,12 @@ from esper.leyline.injection_spec import InjectionSpec
 from esper.leyline.slot_config import SlotConfig
 
 # Actions (build_action_enum used by HeuristicTamiyo for flat action mapping)
-from esper.leyline.actions import build_action_enum
+from esper.leyline.actions import (
+    GERMINATE_PREFIX,
+    build_action_enum,
+    get_blueprint_from_action_name,
+    is_germinate_action_name,
+)
 
 # Stages and transitions
 from esper.leyline.stages import (
@@ -552,6 +576,7 @@ from esper.leyline.reports import (
 from esper.leyline.telemetry import (
     TelemetryEventType,
     TelemetryEvent,
+    TelemetryCallback,
     PerformanceBudgets,
     DEFAULT_BUDGETS,
     SeedTelemetry,
@@ -569,7 +594,6 @@ from esper.leyline.telemetry import (
     SeedFossilizedPayload,
     SeedPrunedPayload,
     CounterfactualMatrixPayload,
-    CounterfactualUnavailablePayload,
     AnalyticsSnapshotPayload,
     HeadTelemetry,
     AnomalyDetectedPayload,
@@ -585,9 +609,6 @@ from esper.leyline.alpha import (
     AlphaCurve,
     AlphaAlgorithm,
 )
-
-# Causal masks (single source of truth for factored action masking)
-from esper.leyline.causal_masks import compute_causal_masks
 
 # Type contracts for observations
 from esper.leyline.types import (
@@ -642,6 +663,7 @@ __all__ = [
     "ALPHA_TARGET_NAMES",
     "ALPHA_TARGET_VALUES",
     "BLUEPRINT_IDS",
+    "BLUEPRINT_ID_TO_INDEX",
     "BlueprintAction",
     "CNN_BLUEPRINTS",
     "FactoredAction",
@@ -671,7 +693,9 @@ __all__ = [
     "TEMPO_NAMES",
     "TEMPO_TO_EPOCHS",
     "TempoAction",
+    "Topology",
     "TRANSFORMER_BLUEPRINTS",
+    "VALID_TOPOLOGIES",
 
     # Reward Shaping Constants
     "DEFAULT_CONTRIBUTION_WEIGHT",
@@ -728,6 +752,11 @@ __all__ = [
     "NUM_BLUEPRINTS",
     "BLUEPRINT_NULL_INDEX",
     "DEFAULT_BLUEPRINT_EMBED_DIM",
+    "OBS_V3_BASE_FEATURE_SIZE",
+    "OBS_V3_SLOT_FEATURE_SIZE",
+    "OBS_V3_NON_BLUEPRINT_DIM",
+    "NUM_ACTION_HEADS",
+    "LOG_PROB_MIN",
 
     # Blueprint Penalty System
     "DEFAULT_BLUEPRINT_PENALTY_ON_PRUNE",
@@ -756,7 +785,10 @@ __all__ = [
     "SlotConfig",
 
     # Actions (build_action_enum used by HeuristicTamiyo)
+    "GERMINATE_PREFIX",
     "build_action_enum",
+    "get_blueprint_from_action_name",
+    "is_germinate_action_name",
 
     # Stages
     "SeedStage",
@@ -796,6 +828,7 @@ __all__ = [
     # Telemetry
     "TelemetryEventType",
     "TelemetryEvent",
+    "TelemetryCallback",
     "PerformanceBudgets",
     "DEFAULT_BUDGETS",
     "SeedTelemetry",
@@ -813,7 +846,6 @@ __all__ = [
     "SeedFossilizedPayload",
     "SeedPrunedPayload",
     "CounterfactualMatrixPayload",
-    "CounterfactualUnavailablePayload",
     "AnalyticsSnapshotPayload",
     "HeadTelemetry",
     "AnomalyDetectedPayload",
@@ -826,9 +858,6 @@ __all__ = [
     "AlphaMode",
     "AlphaCurve",
     "AlphaAlgorithm",
-
-    # Causal masks
-    "compute_causal_masks",
 
     # Type contracts
     "SeedObservationFields",

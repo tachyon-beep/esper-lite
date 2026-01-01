@@ -336,3 +336,69 @@ def test_telemetry_event_serializes_nested_head_telemetry():
     assert restored_payload.head_telemetry.alpha_target_entropy == 0.55
     assert restored_payload.head_telemetry.alpha_speed_entropy == 0.45
     assert restored_payload.head_telemetry.curve_entropy == 0.35
+
+
+# =============================================================================
+# Q-Value Telemetry Tests (Policy V2)
+# =============================================================================
+
+
+def test_ppo_update_payload_with_q_values():
+    """PPOUpdatePayload accepts and serializes Q-values per op."""
+    from esper.leyline.telemetry import PPOUpdatePayload
+
+    payload = PPOUpdatePayload(
+        policy_loss=0.5,
+        value_loss=0.3,
+        entropy=1.2,
+        grad_norm=2.0,
+        kl_divergence=0.01,
+        clip_fraction=0.15,
+        nan_grad_count=0,
+        # Q-values per operation
+        q_germinate=5.2,
+        q_advance=3.1,
+        q_fossilize=2.8,
+        q_prune=-1.5,
+        q_wait=0.5,
+        q_set_alpha=4.0,
+        q_variance=2.3,
+        q_spread=6.7,
+    )
+
+    assert payload.q_germinate == 5.2
+    assert payload.q_advance == 3.1
+    assert payload.q_fossilize == 2.8
+    assert payload.q_prune == -1.5
+    assert payload.q_wait == 0.5
+    assert payload.q_set_alpha == 4.0
+    assert payload.q_variance == 2.3
+    assert payload.q_spread == 6.7
+
+
+def test_ppo_update_payload_from_dict_with_q_values():
+    """PPOUpdatePayload.from_dict parses Q-values."""
+    from esper.leyline.telemetry import PPOUpdatePayload
+
+    data = {
+        "policy_loss": 0.5,
+        "value_loss": 0.3,
+        "entropy": 1.2,
+        "grad_norm": 2.0,
+        "kl_divergence": 0.01,
+        "clip_fraction": 0.15,
+        "nan_grad_count": 0,
+        "q_germinate": 5.2,
+        "q_advance": 3.1,
+        "q_fossilize": 2.8,
+        "q_prune": -1.5,
+        "q_wait": 0.5,
+        "q_set_alpha": 4.0,
+        "q_variance": 2.3,
+        "q_spread": 6.7,
+    }
+
+    payload = PPOUpdatePayload.from_dict(data)
+
+    assert payload.q_germinate == 5.2
+    assert payload.q_variance == 2.3

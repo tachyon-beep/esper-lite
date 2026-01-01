@@ -2,7 +2,7 @@
 
 from esper.karn.sanctum.aggregator import SanctumAggregator
 from esper.leyline import TelemetryEvent, TelemetryEventType
-from esper.leyline.telemetry import PPOUpdatePayload
+from esper.leyline.telemetry import PPOUpdatePayload, SeedGateEvaluatedPayload
 
 
 def test_ppo_update_populates_history():
@@ -74,6 +74,21 @@ def test_ppo_update_populates_history():
     assert abs(clip_fractions[0] - 0.1) < 1e-9
     assert abs(clip_fractions[1] - 0.12) < 1e-9
     assert abs(clip_fractions[2] - 0.14) < 1e-9
+
+
+def test_get_snapshot_returns_isolated_copy() -> None:
+    """get_snapshot() must never expose live, mutable aggregator state."""
+    agg = SanctumAggregator(num_envs=2)
+
+    snapshot1 = agg.get_snapshot()
+    snapshot1.envs[0].host_accuracy = 123.0
+    snapshot1.envs[0].action_counts["WAIT"] = 999
+    snapshot1.tamiyo.policy_loss_history.append(9.99)
+
+    snapshot2 = agg.get_snapshot()
+    assert snapshot2.envs[0].host_accuracy == 0.0
+    assert snapshot2.envs[0].action_counts["WAIT"] == 0
+    assert list(snapshot2.tamiyo.policy_loss_history) == []
 
 
 def test_ppo_update_populates_head_entropies():
@@ -162,6 +177,36 @@ def test_ppo_update_filters_default_group_id():
     snapshot = agg.get_snapshot()
     # Should NOT be set to "default" - that would show [default] label
     assert snapshot.tamiyo.group_id is None
+
+
+def test_seed_gate_evaluated_event_is_handled() -> None:
+    """SEED_GATE_EVALUATED must not crash Sanctum aggregation."""
+    agg = SanctumAggregator(num_envs=1)
+
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.SEED_GATE_EVALUATED,
+        data=SeedGateEvaluatedPayload(
+            slot_id="r0c0",
+            env_id=0,
+            gate="G2",
+            passed=False,
+            target_stage="BLENDING",
+            checks_passed=(),
+            checks_failed=("insufficient_contribution",),
+            message="not ready",
+        ),
+    )
+    agg.process_event(event)
+
+    snapshot = agg.get_snapshot()
+    assert snapshot.envs[0].seeds["r0c0"].slot_id == "r0c0"
+
+    assert snapshot.event_log, "Expected gate event to be present in event_log"
+    entry = snapshot.event_log[-1]
+    assert entry.event_type == "SEED_GATE_EVALUATED"
+    assert entry.env_id == 0
+    assert entry.metadata["gate"] == "G2"
+    assert entry.metadata["result"] == "FAIL"
 
 
 def test_ppo_update_with_none_group_id():
@@ -472,6 +517,7 @@ def test_decision_snapshot_populates_from_head_telemetry():
         data=TrainingStartedPayload(
             n_envs=1,
             max_epochs=25,
+            max_batches=100,
             task="mnist",
             host_params=1000000,
             slot_ids=("r0c0", "r0c1"),
@@ -566,6 +612,7 @@ def test_aggregator_populates_compile_status():
             # Required fields (from leyline/telemetry.py TrainingStartedPayload)
             n_envs=4,
             max_epochs=25,
+            max_batches=100,
             task="mnist",
             host_params=1000000,
             slot_ids=("slot_0", "slot_1", "slot_2"),
@@ -591,3 +638,123 @@ def test_aggregator_populates_compile_status():
     assert snapshot.tamiyo.infrastructure.compile_enabled is True
     assert snapshot.tamiyo.infrastructure.compile_backend == "inductor"
     assert snapshot.tamiyo.infrastructure.compile_mode == "reduce-overhead"
+
+
+def test_aggregator_wires_q_values():
+    """Aggregator wires Q-values from PPO_UPDATE_COMPLETED to TamiyoState."""
+    from esper.karn.sanctum.aggregator import SanctumAggregator
+    from esper.leyline.telemetry import TelemetryEvent, TelemetryEventType, PPOUpdatePayload
+
+    aggregator = SanctumAggregator(num_envs=4)
+
+    # Emit PPO_UPDATE_COMPLETED with Q-values
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        epoch=1,
+        data=PPOUpdatePayload(
+            policy_loss=0.5,
+            value_loss=0.3,
+            entropy=1.2,
+            grad_norm=2.0,
+            kl_divergence=0.01,
+            clip_fraction=0.15,
+            nan_grad_count=0,
+            q_germinate=5.2,
+            q_advance=3.1,
+            q_fossilize=2.8,
+            q_prune=-1.5,
+            q_wait=0.5,
+            q_set_alpha=4.0,
+            q_variance=2.3,
+            q_spread=6.7,
+        ),
+    )
+
+    aggregator.process_event(event)
+    snapshot = aggregator.get_snapshot()
+
+    # Verify Q-values are wired to TamiyoState
+    assert snapshot.tamiyo.q_germinate == 5.2
+    assert snapshot.tamiyo.q_advance == 3.1
+    assert snapshot.tamiyo.q_fossilize == 2.8
+    assert snapshot.tamiyo.q_prune == -1.5
+    assert snapshot.tamiyo.q_wait == 0.5
+    assert snapshot.tamiyo.q_set_alpha == 4.0
+    assert snapshot.tamiyo.q_variance == 2.3
+    assert snapshot.tamiyo.q_spread == 6.7
+
+def test_aggregator_tracks_previous_gradient_norms():
+    """Aggregator should track previous gradient norms for trend detection."""
+    agg = SanctumAggregator(num_envs=4)
+
+    # First PPO update - establish baseline
+    event1 = TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        data=PPOUpdatePayload(
+            policy_loss=0.1,
+            value_loss=0.2,
+            entropy=1.0,
+            grad_norm=0.5,
+            kl_divergence=0.01,
+            clip_fraction=0.15,
+            nan_grad_count=0,
+            head_op_grad_norm=0.12,
+            head_slot_grad_norm=0.15,
+            head_blueprint_grad_norm=0.20,
+            head_style_grad_norm=0.18,
+            head_tempo_grad_norm=0.14,
+            head_alpha_target_grad_norm=0.16,
+            head_alpha_speed_grad_norm=0.13,
+            head_alpha_curve_grad_norm=0.11,
+        ),
+    )
+    agg.process_event(event1)
+
+    snapshot1 = agg.get_snapshot()
+    # First update: current values set, prev values still at default (0.0)
+    assert snapshot1.tamiyo.head_op_grad_norm == 0.12
+    assert snapshot1.tamiyo.head_op_grad_norm_prev == 0.0
+    assert snapshot1.tamiyo.head_slot_grad_norm == 0.15
+    assert snapshot1.tamiyo.head_slot_grad_norm_prev == 0.0
+
+    # Second PPO update - should move current to prev
+    event2 = TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        data=PPOUpdatePayload(
+            policy_loss=0.1,
+            value_loss=0.2,
+            entropy=1.0,
+            grad_norm=0.5,
+            kl_divergence=0.01,
+            clip_fraction=0.15,
+            nan_grad_count=0,
+            head_op_grad_norm=0.25,
+            head_slot_grad_norm=0.30,
+            head_blueprint_grad_norm=0.35,
+            head_style_grad_norm=0.28,
+            head_tempo_grad_norm=0.22,
+            head_alpha_target_grad_norm=0.26,
+            head_alpha_speed_grad_norm=0.24,
+            head_alpha_curve_grad_norm=0.21,
+        ),
+    )
+    agg.process_event(event2)
+
+    snapshot2 = agg.get_snapshot()
+    # Second update: prev should have first update's values
+    assert snapshot2.tamiyo.head_op_grad_norm == 0.25
+    assert snapshot2.tamiyo.head_op_grad_norm_prev == 0.12  # Previous value saved
+    assert snapshot2.tamiyo.head_slot_grad_norm == 0.30
+    assert snapshot2.tamiyo.head_slot_grad_norm_prev == 0.15
+    assert snapshot2.tamiyo.head_blueprint_grad_norm == 0.35
+    assert snapshot2.tamiyo.head_blueprint_grad_norm_prev == 0.20
+    assert snapshot2.tamiyo.head_style_grad_norm == 0.28
+    assert snapshot2.tamiyo.head_style_grad_norm_prev == 0.18
+    assert snapshot2.tamiyo.head_tempo_grad_norm == 0.22
+    assert snapshot2.tamiyo.head_tempo_grad_norm_prev == 0.14
+    assert snapshot2.tamiyo.head_alpha_target_grad_norm == 0.26
+    assert snapshot2.tamiyo.head_alpha_target_grad_norm_prev == 0.16
+    assert snapshot2.tamiyo.head_alpha_speed_grad_norm == 0.24
+    assert snapshot2.tamiyo.head_alpha_speed_grad_norm_prev == 0.13
+    assert snapshot2.tamiyo.head_alpha_curve_grad_norm == 0.21
+    assert snapshot2.tamiyo.head_alpha_curve_grad_norm_prev == 0.11

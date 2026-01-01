@@ -120,6 +120,11 @@ class CNNHost(nn.Module):
         """Map of slot_id -> channel dimension. Alias for segment_channels."""
         return self.segment_channels
 
+    @property
+    def topology(self) -> str:
+        """Return 'cnn' for this CNN backbone."""
+        return "cnn"
+
     # NOTE: forward_to_segment() is intentionally duplicated between CNNHost
     # and TransformerHost. While the structure is similar, the details differ:
     # - CNN: handles pool_layers, uses spatial features (B, C, H, W)
@@ -382,6 +387,11 @@ class TransformerHost(nn.Module):
         """Map of slot_id -> embedding dimension. Alias for segment_channels."""
         return self.segment_channels
 
+    @property
+    def topology(self) -> str:
+        """Return 'transformer' for this transformer backbone."""
+        return "transformer"
+
     # NOTE: forward_to_segment() is intentionally duplicated between CNNHost
     # and TransformerHost. While the structure is similar, the details differ:
     # - CNN: handles pool_layers, uses spatial features (B, C, H, W)
@@ -572,7 +582,7 @@ class MorphogeneticModel(nn.Module):
         return self.host.forward_from_segment(prev_segment, x)
 
     def _get_expected_alpha_shape(self, batch_size: int) -> tuple[int, ...]:
-        """Return expected shape for alpha_override tensors based on topology.
+        """Return expected shape for alpha_override tensors based on host topology.
 
         Args:
             batch_size: Total batch size (K * B for fused forward).
@@ -580,8 +590,7 @@ class MorphogeneticModel(nn.Module):
         Returns:
             Expected shape: (batch_size, 1, 1, 1) for CNN, (batch_size, 1, 1) for transformer.
         """
-        topology = self.task_config.topology if self.task_config else "cnn"
-        if topology == "cnn":
+        if self.host.topology == "cnn":
             return (batch_size, 1, 1, 1)
         else:  # transformer
             return (batch_size, 1, 1)
@@ -598,20 +607,30 @@ class MorphogeneticModel(nn.Module):
             Output logits for all configurations [K * B, num_classes].
 
         Raises:
-            AssertionError: If alpha_override shape doesn't match expected topology shape.
+            ValueError: If alpha_overrides contains keys not in seed_slots.
+            ValueError: If alpha_override shape doesn't match expected topology shape.
         """
         if not self._active_slots:
             return self.host.forward(x)
 
+        # Validate all alpha_overrides keys exist in seed_slots (fail-fast on typos)
+        unknown_keys = set(alpha_overrides) - set(self.seed_slots)
+        if unknown_keys:
+            raise ValueError(
+                f"Unknown alpha_overrides keys: {sorted(unknown_keys)}. "
+                f"Available slots: {sorted(self.seed_slots.keys())}"
+            )
+
         # Validate alpha_override shapes early (fail-fast on shape mismatches)
         expected_shape = self._get_expected_alpha_shape(x.shape[0])
-        topology = self.task_config.topology if self.task_config else "cnn"
+        topology = self.host.topology
         for slot_id, alpha in alpha_overrides.items():
-            assert alpha.shape == expected_shape, (
-                f"alpha_override for slot '{slot_id}' has shape {tuple(alpha.shape)}, "
-                f"expected {expected_shape} for {topology} topology. "
-                f"Shape mismatch causes silent broadcasting errors or wrong alpha application."
-            )
+            if alpha.shape != expected_shape:
+                raise ValueError(
+                    f"alpha_override for slot '{slot_id}' has shape {tuple(alpha.shape)}, "
+                    f"expected {expected_shape} for {topology} topology. "
+                    f"Shape mismatch causes silent broadcasting errors or wrong alpha application."
+                )
 
         prev_segment = None
         for slot_id in self._active_slots:

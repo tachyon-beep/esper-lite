@@ -13,6 +13,7 @@ from esper.leyline import (
     NUM_OPS,
     NUM_STYLES,
     NUM_TEMPO,
+    OBS_V3_NON_BLUEPRINT_DIM,
 )
 from esper.tamiyo.policy.action_masks import InvalidStateMachineError
 from esper.tamiyo.networks import FactoredRecurrentActorCritic
@@ -25,8 +26,9 @@ class TestFactoredRecurrentActorCritic:
         """Forward pass must return logits for all factored heads."""
         net = FactoredRecurrentActorCritic(state_dim=50)
         state = torch.randn(2, 1, 50)  # [batch, seq, state_dim]
+        bp_idx = torch.randint(0, NUM_BLUEPRINTS, (2, 1, 3))  # [batch, seq, num_slots]
 
-        output = net(state)
+        output = net(state, bp_idx)
 
         assert "slot_logits" in output
         assert "blueprint_logits" in output
@@ -56,14 +58,15 @@ class TestFactoredRecurrentActorCritic:
 
         batch_size = 2
         hidden = net.get_initial_hidden(batch_size, torch.device("cpu"))
+        bp_idx = torch.randint(0, NUM_BLUEPRINTS, (batch_size, 1, 3))
 
         # First step
         state1 = torch.randn(batch_size, 1, 50)
-        output1 = net(state1, hidden=hidden)
+        output1 = net(state1, bp_idx, hidden=hidden)
 
         # Second step with updated hidden
         state2 = torch.randn(batch_size, 1, 50)
-        output2 = net(state2, hidden=output1["hidden"])
+        output2 = net(state2, bp_idx, hidden=output1["hidden"])
 
         # Hidden states should be different after processing different inputs
         h1, c1 = output1["hidden"]
@@ -74,6 +77,7 @@ class TestFactoredRecurrentActorCritic:
         """Invalid actions must have large negative logits after masking."""
         net = FactoredRecurrentActorCritic(state_dim=50)
         state = torch.randn(1, 1, 50)
+        bp_idx = torch.randint(0, NUM_BLUEPRINTS, (1, 1, 3))
 
         # Mask out slot 0 and 2, only slot 1 valid
         slot_mask = torch.tensor([[[False, True, False]]])
@@ -81,6 +85,7 @@ class TestFactoredRecurrentActorCritic:
 
         output = net(
             state,
+            bp_idx,
             slot_mask=slot_mask,
             blueprint_mask=None,
             style_mask=None,
@@ -97,6 +102,7 @@ class TestFactoredRecurrentActorCritic:
         """evaluate_actions must return per-head log probs."""
         net = FactoredRecurrentActorCritic(state_dim=50)
         state = torch.randn(2, 5, 50)  # [batch, seq, state_dim]
+        bp_idx = torch.randint(0, NUM_BLUEPRINTS, (2, 5, 3))
         actions = {
             "slot": torch.zeros(2, 5, dtype=torch.long),
             "blueprint": torch.zeros(2, 5, dtype=torch.long),
@@ -108,7 +114,7 @@ class TestFactoredRecurrentActorCritic:
             "op": torch.zeros(2, 5, dtype=torch.long),
         }
 
-        log_probs, values, entropy, hidden = net.evaluate_actions(state, actions)
+        log_probs, values, entropy, hidden = net.evaluate_actions(state, bp_idx, actions)
 
         # Per-head log probs
         assert "slot" in log_probs
@@ -128,8 +134,9 @@ class TestFactoredRecurrentActorCritic:
         """get_action must return per-head log probs for buffer storage."""
         net = FactoredRecurrentActorCritic(state_dim=50)
         state = torch.randn(2, 50)  # [batch, state_dim]
+        bp_idx = torch.randint(0, NUM_BLUEPRINTS, (2, 3))
 
-        result = net.get_action(state)
+        result = net.get_action(state, bp_idx)
 
         # Should have per-head actions and log_probs
         assert "slot" in result.actions
@@ -158,6 +165,7 @@ class TestFactoredRecurrentActorCritic:
         """Entropy should be normalized by max entropy for each head."""
         net = FactoredRecurrentActorCritic(state_dim=50)
         state = torch.randn(2, 5, 50)
+        bp_idx = torch.randint(0, NUM_BLUEPRINTS, (2, 5, 3))
         actions = {
             "slot": torch.zeros(2, 5, dtype=torch.long),
             "blueprint": torch.zeros(2, 5, dtype=torch.long),
@@ -169,7 +177,7 @@ class TestFactoredRecurrentActorCritic:
             "op": torch.zeros(2, 5, dtype=torch.long),
         }
 
-        _, _, entropy, _ = net.evaluate_actions(state, actions)
+        _, _, entropy, _ = net.evaluate_actions(state, bp_idx, actions)
 
         # Normalized entropy should be between 0 and 1
         for key in [
@@ -189,10 +197,11 @@ class TestFactoredRecurrentActorCritic:
         """Deterministic mode should always return argmax."""
         net = FactoredRecurrentActorCritic(state_dim=50)
         state = torch.randn(1, 50)
+        bp_idx = torch.randint(0, NUM_BLUEPRINTS, (1, 3))
 
         # Run multiple times - deterministic should be consistent
-        result1 = net.get_action(state, deterministic=True)
-        result2 = net.get_action(state, deterministic=True)
+        result1 = net.get_action(state, bp_idx, deterministic=True)
+        result2 = net.get_action(state, bp_idx, deterministic=True)
 
         for key in [
             "slot",
@@ -211,6 +220,7 @@ def test_style_mask_forces_default_when_not_germinate():
     """Non-GERMINATE ops should force style to a single default choice."""
     net = FactoredRecurrentActorCritic(state_dim=20)
     state = torch.randn(3, 20)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (3, 3))
 
     op_mask = torch.zeros(3, NUM_OPS, dtype=torch.bool)
     op_mask[:, LifecycleOp.WAIT] = True
@@ -218,6 +228,7 @@ def test_style_mask_forces_default_when_not_germinate():
 
     result = net.get_action(
         state,
+        bp_idx,
         op_mask=op_mask,
         style_mask=style_mask,
     )
@@ -230,6 +241,7 @@ def test_style_not_forced_for_set_alpha_target():
     """SET_ALPHA_TARGET should not force style to the default choice."""
     net = FactoredRecurrentActorCritic(state_dim=20)
     state = torch.randn(2, 20)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (2, 3))
 
     # Force op = SET_ALPHA_TARGET
     op_mask = torch.zeros(2, NUM_OPS, dtype=torch.bool)
@@ -248,6 +260,7 @@ def test_style_not_forced_for_set_alpha_target():
 
     result = net.get_action(
         state,
+        bp_idx,
         deterministic=True,
         op_mask=op_mask,
         style_mask=style_mask,
@@ -265,12 +278,13 @@ def test_masking_produces_valid_softmax():
     """
     net = FactoredRecurrentActorCritic(state_dim=35)
     state = torch.randn(2, 3, 35)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (2, 3, 3))
 
     # Mask that disables some actions
     slot_mask = torch.ones(2, 3, 3, dtype=torch.bool)
     slot_mask[:, :, 1] = False  # Mask out middle action
 
-    output = net.forward(state, slot_mask=slot_mask)
+    output = net.forward(state, bp_idx, slot_mask=slot_mask)
 
     # Test that _MASK_VALUE produces valid softmax across dtypes
     for dtype in [torch.float32, torch.float16, torch.bfloat16]:
@@ -297,12 +311,13 @@ def test_logits_no_inf_after_masking():
     """
     net = FactoredRecurrentActorCritic(state_dim=35)
     state = torch.randn(2, 3, 35)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (2, 3, 3))
 
     # Mask that disables some actions
     slot_mask = torch.ones(2, 3, 3, dtype=torch.bool)
     slot_mask[:, :, 1] = False  # Mask out middle action
 
-    output = net.forward(state, slot_mask=slot_mask)
+    output = net.forward(state, bp_idx, slot_mask=slot_mask)
 
     # Should not contain inf - masked values should use -1e4, not -inf
     for key in [
@@ -337,6 +352,7 @@ def test_entropy_normalization_with_single_action():
     )
 
     state = torch.randn(2, 3, 35)
+    bp_idx = torch.randint(0, 5, (2, 3, 1))  # num_slots=1
     actions = {
         "slot": torch.zeros(2, 3, dtype=torch.long),  # Only one option
         "blueprint": torch.randint(0, 5, (2, 3)),
@@ -348,7 +364,7 @@ def test_entropy_normalization_with_single_action():
         "op": torch.randint(0, NUM_OPS, (2, 3)),
     }
 
-    log_probs, values, entropy, hidden = net.evaluate_actions(state, actions)
+    log_probs, values, entropy, hidden = net.evaluate_actions(state, bp_idx, actions)
 
     # Entropy for single-action head should be 0 (no uncertainty), not inf/nan
     assert not torch.isnan(entropy["slot"]).any(), "Entropy should not be NaN"
@@ -362,6 +378,7 @@ def test_entropy_normalization_in_loss():
     net = FactoredRecurrentActorCritic(state_dim=35, num_slots=1)
 
     state = torch.randn(2, 3, 35)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (2, 3, 1))  # num_slots=1
     actions = {
         "slot": torch.zeros(2, 3, dtype=torch.long),
         "blueprint": torch.randint(0, 5, (2, 3)),
@@ -373,7 +390,7 @@ def test_entropy_normalization_in_loss():
         "op": torch.randint(0, NUM_OPS, (2, 3)),
     }
 
-    log_probs, values, entropy, _ = net.evaluate_actions(state, actions)
+    log_probs, values, entropy, _ = net.evaluate_actions(state, bp_idx, actions)
 
     # Entropy loss should be bounded
     entropy_loss = sum(-ent.mean() for ent in entropy.values())
@@ -384,16 +401,18 @@ def test_get_action_raises_on_all_false_mask():
     """MaskedCategorical should raise when mask has no valid actions."""
     net = FactoredRecurrentActorCritic(state_dim=20)
     state = torch.randn(1, 20)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (1, 3))
     invalid_mask = torch.zeros(1, 3, dtype=torch.bool)
 
     with pytest.raises(InvalidStateMachineError):
-        net.get_action(state, slot_mask=invalid_mask)
+        net.get_action(state, bp_idx, slot_mask=invalid_mask)
 
 
 def test_entropy_respects_valid_actions_only():
     """Entropy should be computed over valid actions and remain normalized."""
     net = FactoredRecurrentActorCritic(state_dim=20)
     state = torch.randn(1, 2, 20)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (1, 2, 3))
     slot_mask = torch.tensor([[[True, True, False]]])
     actions = {
         "slot": torch.zeros(1, 2, dtype=torch.long),
@@ -408,6 +427,7 @@ def test_entropy_respects_valid_actions_only():
 
     _, _, entropy, _ = net.evaluate_actions(
         states=state,
+        blueprint_indices=bp_idx,
         actions=actions,
         slot_mask=slot_mask,
     )
@@ -416,3 +436,218 @@ def test_entropy_respects_valid_actions_only():
     assert torch.isfinite(slot_entropy).all()
     assert (slot_entropy >= 0).all()
     assert (slot_entropy <= 1.01).all()
+
+
+def test_device_migration_complete():
+    """Verify model.to(device) migrates all components including blueprint embedding.
+
+    Critical test from PyTorch specialist review: LSTM models with custom buffers
+    can have device fragmentation where some components fail to migrate during
+    model.to(device). This test ensures:
+    1. BlueprintEmbedding's _null_idx buffer migrates with model
+    2. All named parameters are on the same device
+    """
+    from esper.tamiyo.networks.factored_lstm import FactoredRecurrentActorCritic
+
+    model = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM, num_slots=3)
+    target_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(target_device)
+
+    # Get device from first parameter
+    device = next(model.parameters()).device
+
+    # Verify blueprint embedding's _null_idx buffer migrated
+    assert model.blueprint_embedding._null_idx.device == device, (
+        f"Blueprint embedding _null_idx buffer on {model.blueprint_embedding._null_idx.device}, "
+        f"expected {device}. Buffer did not migrate with model.to()."
+    )
+
+    # Verify all parameters on same device
+    for name, param in model.named_parameters():
+        assert param.device == device, f"Parameter '{name}' on {param.device}, expected {device}"
+
+    # Verify all buffers on same device
+    for name, buf in model.named_buffers():
+        assert buf.device == device, f"Buffer '{name}' on {buf.device}, expected {device}"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires CUDA")
+def test_no_gradient_memory_leak_over_episodes():
+    """Verify LSTM hidden states are properly detached between episodes.
+
+    Critical test from PyTorch specialist review: LSTM hidden states carry gradient
+    graphs. If not detached at episode boundaries, gradient graphs accumulate
+    indefinitely, causing:
+    1. Unbounded BPTT across episode boundaries
+    2. Memory growth proportional to total training steps
+    3. OOM after ~100-1000 episodes
+
+    This test simulates multiple episodes and verifies memory stays bounded.
+    """
+    from esper.tamiyo.networks.factored_lstm import FactoredRecurrentActorCritic
+
+    model = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM, num_slots=3).cuda()
+    model.train()
+
+    torch.cuda.empty_cache()
+    torch.cuda.reset_peak_memory_stats()
+
+    def run_episode() -> None:
+        """Run a single episode with proper hidden state handling."""
+        hidden = model.get_initial_hidden(batch_size=4, device="cuda")
+
+        # Simulate 10-step episode
+        state = torch.randn(4, 10, OBS_V3_NON_BLUEPRINT_DIM, device="cuda")
+        bp_idx = torch.randint(0, 13, (4, 10, 3), device="cuda")
+
+        output = model.forward(state, bp_idx, hidden)
+
+        # Compute loss and backprop
+        loss = output["value"].sum()
+        loss.backward()
+
+        # Clear gradients
+        model.zero_grad(set_to_none=True)
+
+        # Free intermediate tensors explicitly
+        del output, state, bp_idx, loss, hidden
+
+    # Warmup: run a few episodes to stabilize memory allocator
+    for _ in range(3):
+        run_episode()
+
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
+
+    # Measure baseline memory after warmup (steady state)
+    baseline_mem = torch.cuda.memory_allocated()
+
+    # Run additional episodes
+    for _ in range(10):
+        run_episode()
+
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
+
+    final_mem = torch.cuda.memory_allocated()
+
+    # Memory should stay stable (allow 20% margin for allocator fragmentation)
+    # If hidden states leaked, we'd see linear growth with episode count
+    growth_ratio = final_mem / baseline_mem if baseline_mem > 0 else 1.0
+    assert growth_ratio < 1.2, (
+        f"Potential memory leak detected: {baseline_mem / 1024**2:.2f}MB -> {final_mem / 1024**2:.2f}MB "
+        f"({growth_ratio:.2f}x growth). "
+        "This suggests gradient graphs are accumulating across episodes."
+    )
+
+
+# === Op-Conditioning Consistency Tests (Phase 4 Addendum) ===
+
+
+def test_op_conditioned_value_forward():
+    """Verify forward() computes Q(s, sampled_op).
+
+    Critical test from Phase 4 addendum: The value head is now op-conditioned,
+    meaning it computes Q(s, op) instead of V(s). This test verifies:
+    1. Forward pass samples an op
+    2. Value is conditioned on that sampled op
+    3. Output contains the sampled_op for storage in rollout buffer
+    """
+    net = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM, num_slots=3)
+    state = torch.randn(2, 5, OBS_V3_NON_BLUEPRINT_DIM)  # [batch, seq, state_dim]
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (2, 5, 3))
+
+    out = net(state, bp_idx)
+
+    # Should have sampled op (used for value conditioning)
+    assert "sampled_op" in out, "Forward output missing sampled_op field"
+    assert out["sampled_op"].shape == (2, 5), f"sampled_op wrong shape: {out['sampled_op'].shape}"
+
+    # Value should be conditioned on that op
+    assert out["value"].shape == (2, 5), f"Value wrong shape: {out['value'].shape}"
+
+    # sampled_op should be valid (in range [0, NUM_OPS))
+    assert (out["sampled_op"] >= 0).all(), "sampled_op has negative values"
+    assert (out["sampled_op"] < NUM_OPS).all(), f"sampled_op exceeds NUM_OPS={NUM_OPS}"
+
+
+def test_stored_op_value_consistency():
+    """Verify evaluate_actions uses stored_op from rollout buffer.
+
+    Critical test from Phase 4 addendum: During PPO updates, evaluate_actions
+    must use the STORED op from the rollout buffer (not resample). This ensures:
+    1. Forward: samples op_t, computes Q(s_t, op_t), stores op_t
+    2. Evaluate: retrieves stored op_t, computes Q(s_t, op_t) [same value]
+
+    If evaluate_actions resampled the op, values would differ and gradients
+    would be biased.
+    """
+    net = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM, num_slots=3)
+    state = torch.randn(2, 5, OBS_V3_NON_BLUEPRINT_DIM)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (2, 5, 3))
+
+    # Get actions from forward (simulates rollout collection)
+    fwd_out = net(state, bp_idx)
+    stored_op = fwd_out["sampled_op"]
+
+    # Build actions dict with stored op (what rollout buffer stores)
+    actions = {
+        "op": stored_op,
+        "slot": torch.randint(0, 3, (2, 5)),
+        "blueprint": torch.randint(0, NUM_BLUEPRINTS, (2, 5)),
+        "style": torch.randint(0, NUM_STYLES, (2, 5)),
+        "tempo": torch.randint(0, NUM_TEMPO, (2, 5)),
+        "alpha_target": torch.randint(0, NUM_ALPHA_TARGETS, (2, 5)),
+        "alpha_speed": torch.randint(0, NUM_ALPHA_SPEEDS, (2, 5)),
+        "alpha_curve": torch.randint(0, NUM_ALPHA_CURVES, (2, 5)),
+    }
+
+    # Evaluate with stored actions (simulates PPO update)
+    eval_log_probs, eval_value, eval_entropy, _ = net.evaluate_actions(
+        state, bp_idx, actions
+    )
+
+    # Values should match when same op is used
+    # (allow small FP error due to different computation paths)
+    assert torch.allclose(fwd_out["value"], eval_value, atol=1e-5), (
+        f"Value mismatch: forward={fwd_out['value'].mean():.6f}, "
+        f"evaluate={eval_value.mean():.6f}. "
+        "evaluate_actions may be resampling op instead of using stored op."
+    )
+
+
+def test_blueprint_embedding_shapes():
+    """Verify blueprint embeddings integrate correctly into network.
+
+    Critical test from Phase 4 addendum: Blueprint indices must be embedded
+    and concatenated to state features before LSTM. This test verifies:
+    1. Active slots (valid indices) produce different embeddings
+    2. Inactive slots (index -1) map to learned null embedding
+    3. Different blueprint patterns produce different network outputs
+    """
+    net = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM, num_slots=3)
+
+    # Test with various blueprint index patterns
+    # Shape must be [batch, seq, num_slots]
+    bp_idx_active = torch.tensor([[[0, 2, 5]], [[1, 3, 7]]])  # All active
+    bp_idx_inactive = torch.tensor([[[-1, -1, -1]], [[0, -1, 2]]])  # Some inactive
+
+    state = torch.randn(2, 1, OBS_V3_NON_BLUEPRINT_DIM)
+
+    out1 = net(state, bp_idx_active)
+    out2 = net(state, bp_idx_inactive)
+
+    # Both should produce valid outputs
+    assert out1["value"].shape == (2, 1), f"out1 value wrong shape: {out1['value'].shape}"
+    assert out2["value"].shape == (2, 1), f"out2 value wrong shape: {out2['value'].shape}"
+
+    # Different indices should produce different values
+    # (same state, different blueprint patterns → different Q-values)
+    assert not torch.allclose(out1["value"], out2["value"]), (
+        "Different blueprint patterns produced identical values. "
+        "Blueprint embeddings may not be influencing the network."
+    )
+
+    # Verify no NaN/Inf (inactive slots shouldn't break the network)
+    assert torch.isfinite(out1["value"]).all(), "Active slots produced non-finite values"
+    assert torch.isfinite(out2["value"]).all(), "Inactive slots produced non-finite values"

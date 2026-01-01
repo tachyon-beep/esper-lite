@@ -28,7 +28,6 @@ from esper.simic.telemetry.emitters import (
     check_performance_degradation,
     emit_action_distribution,
     emit_batch_completed,
-    emit_cf_unavailable,
     emit_last_action,
     emit_mask_hit_rates,
     emit_ppo_update_event,
@@ -159,23 +158,6 @@ def test_action_distribution_snapshot():
     payload = hub.emit.call_args[0][0].data
     # Typed payload access (AnalyticsSnapshotPayload)
     assert payload.action_counts["WAIT"] == 3
-
-
-def test_counterfactual_unavailable_event():
-    hub = Mock()
-    emit_cf_unavailable(
-        hub,
-        env_id=0,
-        slot_id="r0c1",
-        reason="missing_baseline",
-    )
-    data = hub.emit.call_args[0][0].data
-    # CounterfactualUnavailablePayload is a typed dataclass (not dict)
-    # Its type indicates unavailability - no need for explicit "available" field
-    from esper.leyline import CounterfactualUnavailablePayload
-    assert isinstance(data, CounterfactualUnavailablePayload)
-    assert data.reason == "missing_baseline"
-    assert data.slot_id == "r0c1"
 
 
 def test_throughput_metrics_emitted():

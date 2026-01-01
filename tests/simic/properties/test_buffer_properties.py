@@ -169,6 +169,7 @@ class TestBufferDataIntegrity:
             op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
             hidden_h=torch.zeros(1, 1, DEFAULT_LSTM_HIDDEN_DIM),
             hidden_c=torch.zeros(1, 1, DEFAULT_LSTM_HIDDEN_DIM),
+            blueprint_indices=torch.zeros(3, dtype=torch.long),
         )
 
         assert buffer.slot_actions[0, 0].item() == slot_action
@@ -240,6 +241,7 @@ class TestBufferLogProbInvariants:
             op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
             hidden_h=torch.zeros(1, 1, DEFAULT_LSTM_HIDDEN_DIM),
             hidden_c=torch.zeros(1, 1, DEFAULT_LSTM_HIDDEN_DIM),
+            blueprint_indices=torch.zeros(3, dtype=torch.long),
         )
 
         assert abs(buffer.slot_log_probs[0, 0].item() - slot_lp) < 1e-6
@@ -414,4 +416,5 @@ def _add_dummy_transition(
         op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
         hidden_h=torch.zeros(1, 1, DEFAULT_LSTM_HIDDEN_DIM),
         hidden_c=torch.zeros(1, 1, DEFAULT_LSTM_HIDDEN_DIM),
+        blueprint_indices=torch.zeros(num_slots, dtype=torch.long),
     )

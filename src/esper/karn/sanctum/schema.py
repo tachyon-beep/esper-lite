@@ -385,8 +385,8 @@ class EnvState:
     degraded_counter: int = 0
 
     # A/B test cohort (for color coding)
-    # Captured from REWARD_COMPUTED event's ab_group field
-    # Values: "shaped", "simplified", "sparse", or None if not A/B testing
+    # Captured from TRAINING_STARTED payload.reward_mode
+    # Values: "shaped", "simplified", "sparse", etc.
     reward_mode: str | None = None
 
     # Governor rollback state (catastrophic failure indicator)
@@ -676,6 +676,29 @@ class TamiyoState:
     head_alpha_curve_grad_norm: float = 0.0
     head_op_grad_norm: float = 0.0
 
+    # Previous gradient norms (Policy V2 - for trend detection)
+    # Enables distinguishing transient spikes from sustained gradient issues
+    head_slot_grad_norm_prev: float = 0.0
+    head_blueprint_grad_norm_prev: float = 0.0
+    head_style_grad_norm_prev: float = 0.0
+    head_tempo_grad_norm_prev: float = 0.0
+    head_alpha_target_grad_norm_prev: float = 0.0
+    head_alpha_speed_grad_norm_prev: float = 0.0
+    head_alpha_curve_grad_norm_prev: float = 0.0
+    head_op_grad_norm_prev: float = 0.0
+
+    # Per-head PPO ratios (Policy V2 - multi-head ratio explosion detection)
+    # Individual head ratios can look healthy while joint ratio exceeds clip range
+    head_slot_ratio_max: float = 1.0
+    head_blueprint_ratio_max: float = 1.0
+    head_style_ratio_max: float = 1.0
+    head_tempo_ratio_max: float = 1.0
+    head_alpha_target_ratio_max: float = 1.0
+    head_alpha_speed_ratio_max: float = 1.0
+    head_alpha_curve_ratio_max: float = 1.0
+    head_op_ratio_max: float = 1.0
+    joint_ratio_max: float = 1.0  # Product of per-head ratios
+
     # Episode return tracking (PRIMARY RL METRIC - per DRL review)
     episode_return_history: deque[float] = field(
         default_factory=lambda: deque(maxlen=20)
@@ -727,6 +750,22 @@ class TamiyoState:
     value_min: float = 0.0
     value_max: float = 0.0
     initial_value_spread: float | None = None  # Set after warmup for relative thresholds
+
+    # Op-conditioned Q-values (Policy V2 - Q(s,op) architecture)
+    # Each op gets a different value estimate for the same state
+    q_germinate: float = 0.0
+    q_advance: float = 0.0
+    q_fossilize: float = 0.0
+    q_prune: float = 0.0
+    q_wait: float = 0.0
+    q_set_alpha: float = 0.0
+    # Q-value analysis metrics
+    q_variance: float = 0.0  # Variance across ops (low = critic ignoring op conditioning)
+    q_spread: float = 0.0  # max(Q) - min(Q) across ops
+
+    # Action feedback (Policy V2 - added to observations for credit assignment)
+    last_action_success: bool = True  # Whether previous action executed successfully
+    last_action_op: str = "WAIT"  # Previous operation for context
 
     # === Nested Metric Groups (per code review - prevents schema bloat) ===
     infrastructure: InfrastructureMetrics = field(default_factory=InfrastructureMetrics)

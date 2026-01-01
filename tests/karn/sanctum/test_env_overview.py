@@ -176,11 +176,13 @@ async def test_correct_columns(empty_snapshot):
         widget = app.query_one(EnvOverview)
         widget.update_snapshot(empty_snapshot)
 
-        # Expected columns: Env, Acc, Loss, CF, Growth, Reward, Acc▁▃▅, Rwd▁▃▅, ΔAcc, Seed Δ, Rent, [slots...], Last, Stale, Status
-        # Fixed: 11 + 3 slots + 3 (Last, Stale, Status) = 17 total
-        # Env, Acc, Loss, CF, Growth, Reward, Acc▁▃▅, Rwd▁▃▅, ΔAcc, Seed Δ, Rent (11) + R0C0, R0C1, R1C0 (3) + Last, Stale, Status (3) = 17
+        # Expected columns: Env, Acc, Loss, CF, Growth, Reward, Acc▁▃▅, Rwd▁▃▅, ΔAcc, Seed Δ, Rent,
+        # [slots...], Last, Momentum, Status, Stale
+        # Fixed: 11 + 3 slots + 4 (Last, Momentum, Status, Stale) = 18 total
+        # Env, Acc, Loss, CF, Growth, Reward, Acc▁▃▅, Rwd▁▃▅, ΔAcc, Seed Δ, Rent (11) + R0C0, R0C1, R1C0 (3)
+        # + Last, Momentum, Status, Stale (4) = 18
         assert widget.table is not None
-        assert len(widget.table.columns) == 17
+        assert len(widget.table.columns) == 18
 
 
 @pytest.mark.asyncio
