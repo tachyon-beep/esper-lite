@@ -37,7 +37,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --extra dev --extra tui
 
       - name: Type check with mypy
         run: MYPYPATH=src uv run mypy -p esper
