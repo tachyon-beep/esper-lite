@@ -395,6 +395,17 @@ def _cifar10_broken_spec() -> TaskSpec:
     )
 
 
+# Registry of valid task names (single source of truth)
+VALID_TASKS: frozenset[str] = frozenset({
+    "cifar10",
+    "cifar10_deep",
+    "cifar10_blind",
+    "cifar10_crushed",
+    "cifar10_broken",
+    "tinystories",
+})
+
+
 def get_task_spec(name: str) -> TaskSpec:
     """Return TaskSpec preset by name."""
     key = name.lower()
@@ -411,9 +422,8 @@ def get_task_spec(name: str) -> TaskSpec:
     if key == "tinystories":
         return _tinystories_spec()
     raise ValueError(
-        f"Unknown task '{name}'. Available: cifar10, cifar10_deep, cifar10_blind, "
-        "cifar10_crushed, cifar10_broken, tinystories"
+        f"Unknown task '{name}'. Available: {', '.join(sorted(VALID_TASKS))}"
     )
 
 
-__all__ = ["TaskSpec", "get_task_spec"]
+__all__ = ["TaskSpec", "get_task_spec", "VALID_TASKS"]

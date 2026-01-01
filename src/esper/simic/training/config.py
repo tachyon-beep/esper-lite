@@ -417,12 +417,14 @@ class TrainingConfig:
         except SlotIdError as e:
             raise ValueError(f"Invalid slot configuration: {e}") from e
 
-        # Validate task if specified
-        valid_tasks = {"cifar10", "cifar10_deep", "cifar10_blind", "tinystories"}
-        if self.task is not None and self.task not in valid_tasks:
-            raise ValueError(
-                f"Invalid task '{self.task}'. Valid options: {sorted(valid_tasks)}"
-            )
+        # Validate task if specified (dynamically lookup valid tasks)
+        if self.task is not None:
+            # Import here to avoid circular dependency at module load time
+            from esper.runtime.tasks import VALID_TASKS
+            if self.task not in VALID_TASKS:
+                raise ValueError(
+                    f"Invalid task '{self.task}'. Valid options: {sorted(VALID_TASKS)}"
+                )
 
         if self.param_budget <= 0:
             raise ValueError("param_budget must be positive")
