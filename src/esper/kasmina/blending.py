@@ -18,6 +18,12 @@ import torch
 import torch.nn as nn
 
 
+class _AlphaCacheLocal(threading.local):
+    def __init__(self) -> None:
+        super().__init__()
+        self.cache: tuple[torch.device, torch.dtype, float, torch.Tensor] | None = None
+
+
 class AlphaScheduleProtocol(Protocol):
     """Protocol defining required attributes for alpha schedule objects.
 
@@ -60,7 +66,7 @@ class BlendAlgorithm(nn.Module, ABC):
         super().__init__()
         # Thread-local cache for alpha tensor to avoid per-forward allocation
         # Uses thread-local storage for multi-GPU DataParallel safety
-        self._alpha_cache_local = threading.local()
+        self._alpha_cache_local = _AlphaCacheLocal()
 
     def _get_cached_alpha_tensor(self, value: float, x: torch.Tensor) -> torch.Tensor:
         """Get alpha tensor, using cache if possible.
@@ -73,7 +79,7 @@ class BlendAlgorithm(nn.Module, ABC):
         - Dtype: Mixed precision training may change dtypes dynamically
         - Value: Schedule-based blends change alpha each step
         """
-        cache = getattr(self._alpha_cache_local, 'cache', None)
+        cache = self._alpha_cache_local.cache
         if cache is not None:
             cached_device, cached_dtype, cached_value, cached_tensor = cache
             if cached_device == x.device and cached_dtype == x.dtype and cached_value == value:
