@@ -51,14 +51,14 @@ def _resolve_run_dir(
             [group_id],
         ).fetchone()
     if row is not None:
-        return row[0]
+        return str(row[0])
 
     row = conn.execute(
         "SELECT run_dir FROM raw_events WHERE run_dir IS NOT NULL ORDER BY timestamp DESC LIMIT 1"
     ).fetchone()
     if row is None:
         return None
-    return row[0]
+    return str(row[0])
 
 
 def build_run_overview(

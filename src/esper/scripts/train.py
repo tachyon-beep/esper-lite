@@ -508,7 +508,7 @@ def main() -> None:
     if args.export_karn:
         from esper.karn import KarnCollector
         karn_collector = KarnCollector()
-        hub.add_backend(karn_collector)  # type: ignore[arg-type]
+        hub.add_backend(karn_collector)
 
     # Add WebSocket dashboard if requested
     dashboard_backend = None
@@ -522,7 +522,7 @@ def main() -> None:
             # - Queues events from sync training loop
             dashboard_backend = DashboardServer(port=args.dashboard_port)
             dashboard_backend.start()
-            hub.add_backend(dashboard_backend)  # type: ignore[arg-type]
+            hub.add_backend(dashboard_backend)
 
             # Get all network interfaces for dashboard URLs
             def get_network_interfaces() -> list[str]:
@@ -642,7 +642,7 @@ def main() -> None:
             num_envs = DEFAULT_N_ENVS
 
         sanctum_backend = SanctumBackend(num_envs=num_envs)
-        hub.add_backend(sanctum_backend)  # type: ignore[arg-type]
+        hub.add_backend(sanctum_backend)
 
     # Setup Overwatch backend if requested
     overwatch_backend = None
@@ -651,7 +651,7 @@ def main() -> None:
 
         overwatch_backend = OverwatchBackend(port=args.overwatch_port)
         if overwatch_backend.start():
-            hub.add_backend(overwatch_backend)  # type: ignore[arg-type]
+            hub.add_backend(overwatch_backend)
             print(f"Overwatch dashboard: http://localhost:{args.overwatch_port}")
         else:
             print(
@@ -665,7 +665,7 @@ def main() -> None:
     # KarnCollector captures events into typed store for research analytics
     from esper.karn import get_collector
     karn_collector = get_collector()
-    hub.add_backend(karn_collector)  # type: ignore[arg-type]
+    hub.add_backend(karn_collector)
 
     # Events for TUI synchronization
     # - dataloader_ready_event: Signals when DataLoader workers are spawned

@@ -718,6 +718,17 @@ class SanctumAggregator:
         self._tamiyo.ratio_max = payload.ratio_max
         self._tamiyo.ratio_std = payload.ratio_std
 
+        # Per-head ratio max (Policy V2 - multi-head ratio explosion detection)
+        self._tamiyo.head_slot_ratio_max = payload.head_slot_ratio_max
+        self._tamiyo.head_blueprint_ratio_max = payload.head_blueprint_ratio_max
+        self._tamiyo.head_style_ratio_max = payload.head_style_ratio_max
+        self._tamiyo.head_tempo_ratio_max = payload.head_tempo_ratio_max
+        self._tamiyo.head_alpha_target_ratio_max = payload.head_alpha_target_ratio_max
+        self._tamiyo.head_alpha_speed_ratio_max = payload.head_alpha_speed_ratio_max
+        self._tamiyo.head_alpha_curve_ratio_max = payload.head_alpha_curve_ratio_max
+        self._tamiyo.head_op_ratio_max = payload.head_op_ratio_max
+        self._tamiyo.joint_ratio_max = payload.joint_ratio_max
+
         # Learning rate and entropy coefficient - optional with None
         if payload.lr is not None:
             self._tamiyo.learning_rate = payload.lr

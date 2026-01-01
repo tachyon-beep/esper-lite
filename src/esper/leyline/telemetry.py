@@ -686,6 +686,18 @@ class PPOUpdatePayload:
     head_alpha_curve_entropy: float | None = None
     head_op_entropy: float | None = None
 
+    # Per-head PPO ratio max (Policy V2 - multi-head ratio explosion detection)
+    # Individual head ratios can look healthy while joint ratio exceeds clip range
+    head_slot_ratio_max: float = 1.0
+    head_blueprint_ratio_max: float = 1.0
+    head_style_ratio_max: float = 1.0
+    head_tempo_ratio_max: float = 1.0
+    head_alpha_target_ratio_max: float = 1.0
+    head_alpha_speed_ratio_max: float = 1.0
+    head_alpha_curve_ratio_max: float = 1.0
+    head_op_ratio_max: float = 1.0
+    joint_ratio_max: float = 1.0  # Product of per-head ratios (computed in log-space)
+
     # PPO inner loop context
     inner_epoch: int = 0
     batch: int = 0
@@ -781,6 +793,16 @@ class PPOUpdatePayload:
             head_alpha_speed_entropy=data.get("head_alpha_speed_entropy"),
             head_alpha_curve_entropy=data.get("head_alpha_curve_entropy"),
             head_op_entropy=data.get("head_op_entropy"),
+            # Per-head ratio max
+            head_slot_ratio_max=data.get("head_slot_ratio_max", 1.0),
+            head_blueprint_ratio_max=data.get("head_blueprint_ratio_max", 1.0),
+            head_style_ratio_max=data.get("head_style_ratio_max", 1.0),
+            head_tempo_ratio_max=data.get("head_tempo_ratio_max", 1.0),
+            head_alpha_target_ratio_max=data.get("head_alpha_target_ratio_max", 1.0),
+            head_alpha_speed_ratio_max=data.get("head_alpha_speed_ratio_max", 1.0),
+            head_alpha_curve_ratio_max=data.get("head_alpha_curve_ratio_max", 1.0),
+            head_op_ratio_max=data.get("head_op_ratio_max", 1.0),
+            joint_ratio_max=data.get("joint_ratio_max", 1.0),
             inner_epoch=data.get("inner_epoch", 0),
             batch=data.get("batch", 0),
             skipped=data.get("skipped", False),

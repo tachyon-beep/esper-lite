@@ -113,10 +113,10 @@ def phase1_baseline_timing(num_warmup=10, num_iterations=100):
     max_time = max(times)
     std_time = (sum((t - mean_time)**2 for t in times) / len(times)) ** 0.5
 
-    print(f"Batch size: 1 environment")
+    print("Batch size: 1 environment")
     print(f"Feature dim: {obs.shape[-1]}")
     print(f"Blueprint indices shape: {bp_indices.shape}")
-    print(f"\nTiming (ms):")
+    print("\nTiming (ms):")
     print(f"  Mean:  {mean_time:.4f}ms")
     print(f"  Min:   {min_time:.4f}ms")
     print(f"  Max:   {max_time:.4f}ms")
@@ -212,7 +212,7 @@ def phase3_batch_scaling(slot_config, device):
 
     # Calculate efficiency
     baseline_per_sample = results[0][2]  # batch_size=1
-    print(f"\nScaling efficiency (vs batch_size=1):")
+    print("\nScaling efficiency (vs batch_size=1):")
     for batch_size, mean_time, per_sample in results:
         efficiency = (baseline_per_sample / per_sample) * 100
         print(f"  Batch {batch_size:2d}: {efficiency:5.1f}% efficient")
@@ -232,17 +232,17 @@ def main():
     batch_signals = [_make_mock_training_signals()]
     batch_slot_reports = [{}]
     batch_env_states = [_make_mock_parallel_env_state()]
-    prof = phase2_bottleneck_type(batch_signals, batch_slot_reports, batch_env_states, slot_config, device)
+    _prof = phase2_bottleneck_type(batch_signals, batch_slot_reports, batch_env_states, slot_config, device)
 
     # Phase 3: Batch scaling
-    results = phase3_batch_scaling(slot_config, device)
+    _results = phase3_batch_scaling(slot_config, device)
 
     # Summary
     print("\n" + "=" * 60)
     print("PROFILING SUMMARY")
     print("=" * 60)
     print(f"Single batch mean time: {mean_time:.4f}ms")
-    print(f"Target: <1.0ms")
+    print("Target: <1.0ms")
     print(f"Status: {'✓ PASS' if mean_time < 1.0 else '✗ FAIL'}")
 
     if mean_time >= 1.0:

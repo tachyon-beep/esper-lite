@@ -1531,7 +1531,7 @@ def train_ppo_vectorized(
             #   dynamic range matches FP32. No scaling needed; direct backward().
             # Note: backward() is untyped in PyTorch stubs
             if env_state.scaler is not None:
-                env_state.scaler.scale(loss).backward()
+                env_state.scaler.scale(loss).backward()  # type: ignore[no-untyped-call]
             else:
                 loss.backward()  # type: ignore[no-untyped-call]
             # Collect gradient telemetry (isolated from torch.compile)

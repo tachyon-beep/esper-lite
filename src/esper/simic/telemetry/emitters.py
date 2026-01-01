@@ -835,6 +835,16 @@ def emit_ppo_update_event(
             head_alpha_speed_entropy=head_entropies_avg.get("head_alpha_speed_entropy"),
             head_alpha_curve_entropy=head_entropies_avg.get("head_alpha_curve_entropy"),
             head_op_entropy=head_entropies_avg.get("head_op_entropy"),
+            # Per-head ratio max (Policy V2 - multi-head ratio explosion detection)
+            head_slot_ratio_max=metrics.get("head_slot_ratio_max", 1.0),
+            head_blueprint_ratio_max=metrics.get("head_blueprint_ratio_max", 1.0),
+            head_style_ratio_max=metrics.get("head_style_ratio_max", 1.0),
+            head_tempo_ratio_max=metrics.get("head_tempo_ratio_max", 1.0),
+            head_alpha_target_ratio_max=metrics.get("head_alpha_target_ratio_max", 1.0),
+            head_alpha_speed_ratio_max=metrics.get("head_alpha_speed_ratio_max", 1.0),
+            head_alpha_curve_ratio_max=metrics.get("head_alpha_curve_ratio_max", 1.0),
+            head_op_ratio_max=metrics.get("head_op_ratio_max", 1.0),
+            joint_ratio_max=metrics.get("joint_ratio_max", 1.0),
             # Gradient quality metrics (per DRL expert)
             clip_fraction_positive=metrics.get("clip_fraction_positive", 0.0),
             clip_fraction_negative=metrics.get("clip_fraction_negative", 0.0),

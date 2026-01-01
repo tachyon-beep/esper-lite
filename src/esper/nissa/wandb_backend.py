@@ -28,7 +28,7 @@ try:
     WANDB_AVAILABLE = True
 except ImportError:
     WANDB_AVAILABLE = False
-    wandb = None  # type: ignore
+    wandb = None
 
 from esper.nissa.output import OutputBackend
 from esper.leyline import TelemetryEvent, TelemetryEventType
@@ -238,13 +238,11 @@ class WandbBackend(OutputBackend):
             return
 
         metrics = {
-            "batch/mean_val_loss": event.data.mean_val_loss,
-            "batch/mean_val_accuracy": event.data.mean_val_accuracy,
-            "batch/mean_train_loss": event.data.mean_train_loss,
-            "batch/std_val_loss": event.data.std_val_loss,
-            "batch/std_val_accuracy": event.data.std_val_accuracy,
-            "batch/episode": event.data.episode,
-            "batch/inner_epoch": event.data.inner_epoch,
+            "batch/avg_accuracy": event.data.avg_accuracy,
+            "batch/avg_reward": event.data.avg_reward,
+            "batch/episodes_completed": event.data.episodes_completed,
+            "batch/batch_idx": event.data.batch_idx,
+            "batch/rolling_accuracy": event.data.rolling_accuracy,
         }
 
         wandb.log(metrics, step=self._episode_step)
@@ -262,7 +260,7 @@ class WandbBackend(OutputBackend):
             _logger.debug("PPO_UPDATE_COMPLETED event has non-PPOUpdatePayload data")
             return
 
-        if event.data.skipped:
+        if event.data.update_skipped:
             wandb.log({"ppo/update_skipped": 1}, step=self._episode_step)
             return
 
@@ -270,18 +268,18 @@ class WandbBackend(OutputBackend):
             "ppo/policy_loss": event.data.policy_loss,
             "ppo/value_loss": event.data.value_loss,
             "ppo/entropy": event.data.entropy,
-            "ppo/episodes_so_far": event.data.episodes_so_far,
+            "ppo/kl_divergence": event.data.kl_divergence,
+            "ppo/clip_fraction": event.data.clip_fraction,
+            "ppo/grad_norm": event.data.grad_norm,
         }
 
         # Optional metrics (may be None)
-        if event.data.approx_kl is not None:
-            metrics["ppo/approx_kl"] = event.data.approx_kl
-        if event.data.clip_fraction is not None:
-            metrics["ppo/clip_fraction"] = event.data.clip_fraction
         if event.data.explained_variance is not None:
             metrics["ppo/explained_variance"] = event.data.explained_variance
         if event.data.entropy_coef is not None:
             metrics["ppo/entropy_coef"] = event.data.entropy_coef
+        if event.data.lr is not None:
+            metrics["ppo/lr"] = event.data.lr
 
         wandb.log(metrics, step=self._episode_step)
         self._episode_step += 1
@@ -318,10 +316,9 @@ class WandbBackend(OutputBackend):
 
         slot_id = event.slot_id or "unknown"
 
-        # Log both numeric value (for plotting) and name (for readability)
+        # Log stage name
         metrics = {
-            f"seeds/{slot_id}/stage": event.data.to_stage.value,
-            f"seeds/{slot_id}/stage_name": event.data.to_stage.name,
+            f"seeds/{slot_id}/stage": event.data.to_stage,
         }
 
         wandb.log(metrics, step=self._episode_step)
@@ -341,15 +338,17 @@ class WandbBackend(OutputBackend):
         metrics = {
             "seeds/fossilized_count": 1,
             f"seeds/{slot_id}/improvement": event.data.improvement,
-            f"seeds/{slot_id}/final_accuracy": event.data.final_accuracy,
+            f"seeds/{slot_id}/params_added": event.data.params_added,
         }
+        if event.data.blending_delta is not None:
+            metrics[f"seeds/{slot_id}/blending_delta"] = event.data.blending_delta
 
         wandb.log(metrics, step=self._episode_step)
 
         # Also log to run summary for easy comparison across runs
         # hasattr AUTHORIZED by Code Review 2026-01-01
         # Justification: Defensive check - wandb.Run may not have .summary in disabled mode
-        if hasattr(self._run, "summary"):
+        if self._run is not None and hasattr(self._run, "summary"):
             summary_key = f"best_improvement_{slot_id}"
             # Only update if this is better than previous best
             current_best = self._run.summary.get(summary_key, float("-inf"))

@@ -502,6 +502,11 @@ class PPOAgent:
         log_prob_min_across_epochs: float = float("inf")
         log_prob_max_across_epochs: float = float("-inf")
 
+        # Initialize per-head ratio max tracking (Policy V2 - multi-head ratio explosion detection)
+        # Track max ratio per head across all epochs for telemetry
+        head_ratio_max_across_epochs: dict[str, float] = {head: float("-inf") for head in HEAD_NAMES}
+        joint_ratio_max_across_epochs: float = float("-inf")
+
         for epoch_i in range(self.recurrent_n_epochs):
             if early_stopped:
                 break
@@ -589,13 +594,32 @@ class PPOAgent:
             }
 
             per_head_ratios = {}
+            log_ratios_for_joint: dict[str, torch.Tensor] = {}  # Store for joint ratio computation
             for key in HEAD_NAMES:
                 # Clamp log-ratio to prevent inf/NaN from exp() when probabilities diverge
                 # significantly. log(exp(20)) ≈ 4.85e8 is already extreme; log(exp(88)) overflows.
                 # This provides early protection before ratio explosion detection (lines 809-821).
                 log_ratio = log_probs[key] - old_log_probs[key]
                 log_ratio_clamped = torch.clamp(log_ratio, min=-20.0, max=20.0)
+                log_ratios_for_joint[key] = log_ratio_clamped
                 per_head_ratios[key] = torch.exp(log_ratio_clamped)
+
+            # Track per-head ratio max across epochs (Policy V2 telemetry)
+            # PERF: Batch all 8 head ratio max values into single GPU→CPU transfer
+            with torch.inference_mode():
+                per_head_ratio_max_tensors = [per_head_ratios[k].max() for k in HEAD_NAMES]
+                per_head_ratio_max_values = torch.stack(per_head_ratio_max_tensors).cpu().tolist()
+                for key, max_val in zip(HEAD_NAMES, per_head_ratio_max_values):
+                    head_ratio_max_across_epochs[key] = max(head_ratio_max_across_epochs[key], max_val)
+
+                # Compute joint ratio using log-space summation (numerically stable)
+                # joint_ratio = exp(sum(log_ratio_i)) = product(ratio_i)
+                stacked_log_ratios = torch.stack([log_ratios_for_joint[k] for k in HEAD_NAMES])
+                joint_log_ratio = stacked_log_ratios.sum(dim=0)  # Sum across heads per timestep
+                joint_log_ratio_clamped = torch.clamp(joint_log_ratio, min=-30.0, max=30.0)
+                joint_ratio = torch.exp(joint_log_ratio_clamped)
+                epoch_joint_ratio_max = joint_ratio.max().item()
+                joint_ratio_max_across_epochs = max(joint_ratio_max_across_epochs, epoch_joint_ratio_max)
 
             # Compute KL divergence EARLY (before optimizer step) for effective early stopping
             # BUG-003 FIX: With recurrent_n_epochs=1, the old check at loop end was useless
@@ -850,6 +874,17 @@ class PPOAgent:
             log_prob_max_across_epochs = float("nan")
         aggregated_result["log_prob_min"] = log_prob_min_across_epochs
         aggregated_result["log_prob_max"] = log_prob_max_across_epochs
+
+        # Add per-head ratio max tracking (Policy V2 - multi-head ratio explosion detection)
+        # Guard against no valid data (-inf values indicate no updates occurred)
+        # Use 1.0 (neutral ratio) as default for missing data
+        for key in HEAD_NAMES:
+            ratio_key = f"head_{key}_ratio_max"
+            max_val = head_ratio_max_across_epochs[key]
+            aggregated_result[ratio_key] = max_val if max_val != float("-inf") else 1.0  # type: ignore[literal-required]
+        aggregated_result["joint_ratio_max"] = (
+            joint_ratio_max_across_epochs if joint_ratio_max_across_epochs != float("-inf") else 1.0
+        )
 
         # Add CUDA memory metrics (collected once per update, not averaged)
         if cuda_memory_metrics:

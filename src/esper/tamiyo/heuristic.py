@@ -119,8 +119,8 @@ class HeuristicTamiyo:
         if invalid_blueprints:
             raise ValueError(
                 f"blueprint_rotation contains blueprints not available for "
-                f"topology '{topology}': {sorted(invalid_blueprints)}. "
-                f"Available: {sorted(available_blueprints)}"
+                f"topology '{topology}': {sorted(str(b) for b in invalid_blueprints)}. "
+                f"Available: {sorted(str(b) for b in available_blueprints)}"
             )
 
         self._blueprint_index = 0

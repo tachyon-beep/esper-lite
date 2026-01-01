@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from esper.kasmina.host import CNNHost, MorphogeneticModel, TransformerHost
 from esper.leyline.actions import build_action_enum
@@ -30,8 +30,8 @@ class TaskSpec:
     """
 
     name: str
-    topology: str
-    task_type: str  # "classification" | "lm"
+    topology: Literal["cnn", "transformer"]
+    task_type: Literal["classification", "lm"]
     model_factory: Callable[[str], MorphogeneticModel]
     dataloader_factory: Callable[..., tuple[Any, Any]]
     dataloader_defaults: dict[str, Any] = field(default_factory=dict)

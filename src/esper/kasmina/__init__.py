@@ -46,7 +46,10 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str):
+from typing import Any
+
+
+def __getattr__(name: str) -> Any:
     """Lazy import using PEP 562.
 
     Heavy modules (slot, blueprints, isolation, host with torch) are only
@@ -66,7 +69,7 @@ def __getattr__(name: str):
             GateLevel,
             GateResult,
         )
-        mapping = {
+        mapping: dict[str, Any] = {
             "SeedStage": SeedStage,
             "VALID_TRANSITIONS": VALID_TRANSITIONS,
             "is_valid_transition": is_valid_transition,
@@ -81,43 +84,26 @@ def __getattr__(name: str):
     # Slot (HEAVY - loads torch)
     if name in ("SeedMetrics", "SeedState", "QualityGates", "SeedSlot"):
         from esper.kasmina.slot import SeedMetrics, SeedState, QualityGates, SeedSlot
-        mapping = {
-            "SeedMetrics": SeedMetrics,
-            "SeedState": SeedState,
-            "QualityGates": QualityGates,
-            "SeedSlot": SeedSlot,
-        }
-        return mapping[name]
+        return {"SeedMetrics": SeedMetrics, "SeedState": SeedState,
+                "QualityGates": QualityGates, "SeedSlot": SeedSlot}[name]
 
     # Blueprints (HEAVY - loads torch)
     if name in ("BlueprintRegistry", "BlueprintSpec", "ConvBlock"):
         from esper.kasmina.blueprints import BlueprintRegistry, BlueprintSpec, ConvBlock
-        mapping = {
-            "BlueprintRegistry": BlueprintRegistry,
-            "BlueprintSpec": BlueprintSpec,
-            "ConvBlock": ConvBlock,
-        }
-        return mapping[name]
+        return {"BlueprintRegistry": BlueprintRegistry, "BlueprintSpec": BlueprintSpec,
+                "ConvBlock": ConvBlock}[name]
 
     # Isolation (HEAVY - loads torch)
     if name in ("blend_with_isolation", "GradientHealthMonitor"):
         from esper.kasmina.isolation import blend_with_isolation, GradientHealthMonitor
-        mapping = {
-            "blend_with_isolation": blend_with_isolation,
-            "GradientHealthMonitor": GradientHealthMonitor,
-        }
-        return mapping[name]
+        return {"blend_with_isolation": blend_with_isolation,
+                "GradientHealthMonitor": GradientHealthMonitor}[name]
 
     # Host (HEAVY - loads torch)
     if name in ("CNNHost", "TransformerHost", "TransformerBlock", "MorphogeneticModel"):
         from esper.kasmina.host import CNNHost, TransformerHost, TransformerBlock, MorphogeneticModel
-        mapping = {
-            "CNNHost": CNNHost,
-            "TransformerHost": TransformerHost,
-            "TransformerBlock": TransformerBlock,
-            "MorphogeneticModel": MorphogeneticModel,
-        }
-        return mapping[name]
+        return {"CNNHost": CNNHost, "TransformerHost": TransformerHost,
+                "TransformerBlock": TransformerBlock, "MorphogeneticModel": MorphogeneticModel}[name]
 
     # Protocol & Alpha (lightweight)
     if name == "HostProtocol":

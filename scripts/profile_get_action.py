@@ -97,7 +97,7 @@ def benchmark_get_action(
     for _ in range(num_iterations):
         start = time.perf_counter()
 
-        result = network.get_action(
+        _result = network.get_action(
             state, blueprint_indices, hidden,
             slot_mask=masks["slot"],
             blueprint_mask=masks["blueprint"],
@@ -248,12 +248,12 @@ def main():
     print("\n" + "=" * 70)
     print("SUMMARY: Validation Impact")
     print("=" * 70)
-    print(f"\nStochastic mode:")
+    print("\nStochastic mode:")
     print(f"  Validate ON:  {stochastic_validate_on:.3f}ms")
     print(f"  Validate OFF: {stochastic_validate_off:.3f}ms")
     print(f"  Speedup:      {stochastic_validate_on / stochastic_validate_off:.2f}x")
 
-    print(f"\nDeterministic mode:")
+    print("\nDeterministic mode:")
     print(f"  Validate ON:  {deterministic_validate_on:.3f}ms")
     print(f"  Validate OFF: {deterministic_validate_off:.3f}ms")
     print(f"  Speedup:      {deterministic_validate_on / deterministic_validate_off:.2f}x")
@@ -307,7 +307,7 @@ def main():
     for _ in range(100):
         start = time.perf_counter()
         with torch.inference_mode():
-            output = network.forward(
+            _output = network.forward(
                 state_3d, bp_3d, hidden,
                 slot_mask=masks_3d["slot"],
                 blueprint_mask=masks_3d["blueprint"],

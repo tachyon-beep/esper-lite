@@ -13,7 +13,6 @@ Fix: Store normalized observations in the buffer (src/esper/simic/training/vecto
 """
 
 import torch
-import pytest
 
 from esper.simic.agent.ppo import PPOAgent
 from esper.simic.control import RunningMeanStd

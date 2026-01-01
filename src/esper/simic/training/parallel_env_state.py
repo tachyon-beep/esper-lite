@@ -18,7 +18,7 @@ import torch
 from esper.leyline import LifecycleOp
 
 if TYPE_CHECKING:
-    from torch.amp import GradScaler
+    from torch.amp.grad_scaler import GradScaler
     from esper.tolaria import TolariaGovernor
     from esper.karn.health import HealthMonitor
     from esper.simic.attribution import CounterfactualHelper

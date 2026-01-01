@@ -510,6 +510,8 @@ def compute_contribution_reward(
         # DRL Expert recommended diagnostic fields
         components.val_acc = val_acc
         components.acc_at_germination = acc_at_germination
+        # Wire base_acc_delta for Sanctum ΔAcc display (was never populated - bug fix)
+        components.base_acc_delta = acc_delta if acc_delta is not None else 0.0
 
     reward = 0.0
 
@@ -1097,6 +1099,8 @@ def compute_reward(
         components.epoch = epoch
         components.seed_stage = seed_info.stage if seed_info else None
         components.val_acc = val_acc
+        # Wire base_acc_delta for Sanctum ΔAcc display (was never populated - bug fix)
+        components.base_acc_delta = acc_delta
         return reward, components
 
     return reward

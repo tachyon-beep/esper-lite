@@ -10,7 +10,7 @@ print("=== Before any imports ===")
 print(f"esper.* modules loaded: {len([k for k in sys.modules if k.startswith('esper.')])}")
 
 print("\n=== Importing esper.tolaria ===")
-import esper.tolaria
+import esper.tolaria  # noqa: E402 - deliberate import after sys.modules clear
 print(f"esper.* modules loaded: {len([k for k in sys.modules if k.startswith('esper.')])}")
 
 # Check if heavy modules got loaded
@@ -27,7 +27,7 @@ for mod in heavy_modules:
         print(f"  ✓  {mod} NOT loaded (good)")
 
 print("\n=== Importing esper.runtime ===")
-import esper.runtime
+import esper.runtime  # noqa: E402, F401 - deliberate import after sys.modules clear
 print(f"esper.* modules loaded: {len([k for k in sys.modules if k.startswith('esper.')])}")
 
 for mod in heavy_modules:

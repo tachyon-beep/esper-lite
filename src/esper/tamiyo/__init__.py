@@ -37,7 +37,10 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str):
+from typing import Any
+
+
+def __getattr__(name: str) -> Any:
     """Lazy import using PEP 562.
 
     Heavy modules (policy subpackage with torch, tracker with nissa) are only
@@ -60,7 +63,7 @@ def __getattr__(name: str):
             HeuristicPolicyConfig,
             HeuristicTamiyo,
         )
-        mapping = {
+        mapping: dict[str, Any] = {
             "TamiyoPolicy": TamiyoPolicy,
             "HeuristicPolicyConfig": HeuristicPolicyConfig,
             "HeuristicTamiyo": HeuristicTamiyo,
@@ -80,16 +83,9 @@ def __getattr__(name: str):
             list_policies,
             create_heuristic_policy,
         )
-        mapping = {
-            "PolicyBundle": PolicyBundle,
-            "ActionResult": ActionResult,
-            "EvalResult": EvalResult,
-            "ForwardResult": ForwardResult,
-            "register_policy": register_policy,
-            "get_policy": get_policy,
-            "list_policies": list_policies,
-            "create_heuristic_policy": create_heuristic_policy,
-        }
-        return mapping[name]
+        return {"PolicyBundle": PolicyBundle, "ActionResult": ActionResult,
+                "EvalResult": EvalResult, "ForwardResult": ForwardResult,
+                "register_policy": register_policy, "get_policy": get_policy,
+                "list_policies": list_policies, "create_heuristic_policy": create_heuristic_policy}[name]
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

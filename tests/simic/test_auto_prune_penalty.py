@@ -7,7 +7,6 @@ Verifies that Simic correctly detects auto-prunes from both:
 This test addresses the contract drift bug where step_epoch() used to return
 bool but always returned False, making the penalty path dead code.
 """
-import torch
 import torch.nn as nn
 from esper.kasmina.slot import SeedSlot, SeedState
 from esper.kasmina.alpha_controller import AlphaCurve

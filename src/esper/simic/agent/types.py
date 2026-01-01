@@ -63,6 +63,16 @@ class PPOUpdateMetrics(TypedDict, total=False):
     # Log prob extremes (NaN predictor)
     log_prob_min: float
     log_prob_max: float
+    # Per-head ratio max (for detecting per-head ratio explosion)
+    head_slot_ratio_max: float
+    head_blueprint_ratio_max: float
+    head_style_ratio_max: float
+    head_tempo_ratio_max: float
+    head_alpha_target_ratio_max: float
+    head_alpha_speed_ratio_max: float
+    head_alpha_curve_ratio_max: float
+    head_op_ratio_max: float
+    joint_ratio_max: float
     # Structured metrics
     gradient_stats: GradientStats | None
     head_entropies: dict[str, list[float]]  # Per-head, per-epoch

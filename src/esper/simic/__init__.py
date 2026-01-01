@@ -81,7 +81,10 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str):
+from typing import Any
+
+
+def __getattr__(name: str) -> Any:
     """Lazy import using PEP 562.
 
     Heavy modules (tamiyo policy features/masks with torch, telemetry with torch,
@@ -90,7 +93,7 @@ def __getattr__(name: str):
     # Features (HEAVY - from tamiyo.policy which loads torch)
     if name in ("safe", "TaskConfig"):
         from esper.tamiyo.policy.features import safe, TaskConfig
-        mapping = {
+        mapping: dict[str, Any] = {
             "safe": safe,
             "TaskConfig": TaskConfig,
         }
@@ -106,14 +109,9 @@ def __getattr__(name: str):
             compute_action_masks,
             compute_batch_masks,
         )
-        mapping = {
-            "MaskedCategorical": MaskedCategorical,
-            "InvalidStateMachineError": InvalidStateMachineError,
-            "build_slot_states": build_slot_states,
-            "compute_action_masks": compute_action_masks,
-            "compute_batch_masks": compute_batch_masks,
-        }
-        return mapping[name]
+        return {"MaskedCategorical": MaskedCategorical, "InvalidStateMachineError": InvalidStateMachineError,
+                "build_slot_states": build_slot_states, "compute_action_masks": compute_action_masks,
+                "compute_batch_masks": compute_batch_masks}[name]
 
     # Rewards (lightweight)
     if name in ("LossRewardConfig", "ContributionRewardConfig", "SeedInfo",
@@ -137,23 +135,13 @@ def __getattr__(name: str):
             STAGE_FOSSILIZED,
             RewardComponentsTelemetry,
         )
-        mapping = {
-            "LossRewardConfig": LossRewardConfig,
-            "ContributionRewardConfig": ContributionRewardConfig,
-            "SeedInfo": SeedInfo,
-            "compute_contribution_reward": compute_contribution_reward,
-            "compute_potential": compute_potential,
-            "compute_pbrs_bonus": compute_pbrs_bonus,
-            "compute_pbrs_stage_bonus": compute_pbrs_stage_bonus,
-            "compute_loss_reward": compute_loss_reward,
-            "compute_seed_potential": compute_seed_potential,
-            "get_intervention_cost": get_intervention_cost,
-            "STAGE_TRAINING": STAGE_TRAINING,
-            "STAGE_BLENDING": STAGE_BLENDING,
-            "STAGE_FOSSILIZED": STAGE_FOSSILIZED,
-            "RewardComponentsTelemetry": RewardComponentsTelemetry,
-        }
-        return mapping[name]
+        return {"LossRewardConfig": LossRewardConfig, "ContributionRewardConfig": ContributionRewardConfig,
+                "SeedInfo": SeedInfo, "compute_contribution_reward": compute_contribution_reward,
+                "compute_potential": compute_potential, "compute_pbrs_bonus": compute_pbrs_bonus,
+                "compute_pbrs_stage_bonus": compute_pbrs_stage_bonus, "compute_loss_reward": compute_loss_reward,
+                "compute_seed_potential": compute_seed_potential, "get_intervention_cost": get_intervention_cost,
+                "STAGE_TRAINING": STAGE_TRAINING, "STAGE_BLENDING": STAGE_BLENDING,
+                "STAGE_FOSSILIZED": STAGE_FOSSILIZED, "RewardComponentsTelemetry": RewardComponentsTelemetry}[name]
 
     # Telemetry (HEAVY - uses torch for gradient collection)
     if name in ("TelemetryLevel", "TelemetryConfig", "GradientHealthMetrics",
@@ -189,31 +177,18 @@ def __getattr__(name: str):
             check_performance_degradation,
             aggregate_layer_gradient_health,
         )
-        mapping = {
-            "TelemetryLevel": TelemetryLevel,
-            "TelemetryConfig": TelemetryConfig,
-            "GradientHealthMetrics": GradientHealthMetrics,
-            "DualGradientStats": DualGradientStats,
-            "SeedGradientCollector": SeedGradientCollector,
-            "collect_dual_gradients_async": collect_dual_gradients_async,
-            "materialize_dual_grad_stats": materialize_dual_grad_stats,
-            "materialize_grad_stats": materialize_grad_stats,
-            "collect_seed_gradients": collect_seed_gradients,
-            "collect_seed_gradients_async": collect_seed_gradients_async,
-            "LayerGradientStats": LayerGradientStats,
-            "collect_per_layer_gradients": collect_per_layer_gradients,
-            "NumericalStabilityReport": NumericalStabilityReport,
-            "check_numerical_stability": check_numerical_stability,
-            "RatioExplosionDiagnostic": RatioExplosionDiagnostic,
-            "AnomalyDetector": AnomalyDetector,
-            "AnomalyReport": AnomalyReport,
-            "emit_with_env_context": emit_with_env_context,
-            "emit_batch_completed": emit_batch_completed,
-            "emit_ppo_update_event": emit_ppo_update_event,
-            "check_performance_degradation": check_performance_degradation,
-            "aggregate_layer_gradient_health": aggregate_layer_gradient_health,
-        }
-        return mapping[name]
+        return {"TelemetryLevel": TelemetryLevel, "TelemetryConfig": TelemetryConfig,
+                "GradientHealthMetrics": GradientHealthMetrics, "DualGradientStats": DualGradientStats,
+                "SeedGradientCollector": SeedGradientCollector, "collect_dual_gradients_async": collect_dual_gradients_async,
+                "materialize_dual_grad_stats": materialize_dual_grad_stats, "materialize_grad_stats": materialize_grad_stats,
+                "collect_seed_gradients": collect_seed_gradients, "collect_seed_gradients_async": collect_seed_gradients_async,
+                "LayerGradientStats": LayerGradientStats, "collect_per_layer_gradients": collect_per_layer_gradients,
+                "NumericalStabilityReport": NumericalStabilityReport, "check_numerical_stability": check_numerical_stability,
+                "RatioExplosionDiagnostic": RatioExplosionDiagnostic, "AnomalyDetector": AnomalyDetector,
+                "AnomalyReport": AnomalyReport, "emit_with_env_context": emit_with_env_context,
+                "emit_batch_completed": emit_batch_completed, "emit_ppo_update_event": emit_ppo_update_event,
+                "check_performance_degradation": check_performance_degradation,
+                "aggregate_layer_gradient_health": aggregate_layer_gradient_health}[name]
 
     # Training (lightweight - ParallelEnvState is just a dataclass container)
     if name == "ParallelEnvState":

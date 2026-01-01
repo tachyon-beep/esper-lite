@@ -18,7 +18,10 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str):
+from typing import Any
+
+
+def __getattr__(name: str) -> Any:
     """Lazy import using PEP 562.
 
     Defers heavy imports (torch, telemetry hub) until actual use.

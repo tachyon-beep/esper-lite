@@ -55,7 +55,10 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str):
+from typing import Any
+
+
+def __getattr__(name: str) -> Any:
     """Lazy import using PEP 562.
 
     Heavy modules (tracker with torch dependency) are only loaded when accessed.
@@ -68,7 +71,7 @@ def __getattr__(name: str):
             LossLandscapeConfig,
             PerClassConfig,
         )
-        mapping = {
+        mapping: dict[str, Any] = {
             "TelemetryConfig": TelemetryConfig,
             "GradientConfig": GradientConfig,
             "LossLandscapeConfig": LossLandscapeConfig,
@@ -84,13 +87,8 @@ def __getattr__(name: str):
             GradientHealth,
             EpochSnapshot,
         )
-        mapping = {
-            "DiagnosticTracker": DiagnosticTracker,
-            "GradientStats": GradientStats,
-            "GradientHealth": GradientHealth,
-            "EpochSnapshot": EpochSnapshot,
-        }
-        return mapping[name]
+        return {"DiagnosticTracker": DiagnosticTracker, "GradientStats": GradientStats,
+                "GradientHealth": GradientHealth, "EpochSnapshot": EpochSnapshot}[name]
 
     # Output (lightweight)
     if name in ("OutputBackend", "ConsoleOutput", "FileOutput", "DirectoryOutput",
@@ -105,17 +103,9 @@ def __getattr__(name: str):
             reset_hub,
             emit,
         )
-        mapping = {
-            "OutputBackend": OutputBackend,
-            "ConsoleOutput": ConsoleOutput,
-            "FileOutput": FileOutput,
-            "DirectoryOutput": DirectoryOutput,
-            "NissaHub": NissaHub,
-            "get_hub": get_hub,
-            "reset_hub": reset_hub,
-            "emit": emit,
-        }
-        return mapping[name]
+        return {"OutputBackend": OutputBackend, "ConsoleOutput": ConsoleOutput,
+                "FileOutput": FileOutput, "DirectoryOutput": DirectoryOutput,
+                "NissaHub": NissaHub, "get_hub": get_hub, "reset_hub": reset_hub, "emit": emit}[name]
 
     # Analytics (lightweight)
     if name in ("BlueprintStats", "SeedScoreboard", "BlueprintAnalytics",
@@ -127,13 +117,9 @@ def __getattr__(name: str):
             BLUEPRINT_COMPUTE_MULTIPLIERS,
             compute_cost_for_blueprint,
         )
-        mapping = {
-            "BlueprintStats": BlueprintStats,
-            "SeedScoreboard": SeedScoreboard,
-            "BlueprintAnalytics": BlueprintAnalytics,
-            "BLUEPRINT_COMPUTE_MULTIPLIERS": BLUEPRINT_COMPUTE_MULTIPLIERS,
-            "compute_cost_for_blueprint": compute_cost_for_blueprint,
-        }
-        return mapping[name]
+        return {"BlueprintStats": BlueprintStats, "SeedScoreboard": SeedScoreboard,
+                "BlueprintAnalytics": BlueprintAnalytics,
+                "BLUEPRINT_COMPUTE_MULTIPLIERS": BLUEPRINT_COMPUTE_MULTIPLIERS,
+                "compute_cost_for_blueprint": compute_cost_for_blueprint}[name]
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
