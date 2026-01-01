@@ -80,7 +80,7 @@ class TaskSpec:
         Returns:
             Tuple of (trainset, testset) Dataset objects.
         """
-        if self.name in ("cifar10", "cifar10_deep", "cifar10_blind"):
+        if self.name in ("cifar10", "cifar10_deep", "cifar10_blind", "cifar10_crushed", "cifar10_broken"):
             data_root = self.dataloader_defaults.get("data_root", "./data")
             mock = self.dataloader_defaults.get("mock", False)
             return get_cifar10_datasets(data_root=data_root, mock=mock)
