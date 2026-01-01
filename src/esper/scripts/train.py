@@ -9,6 +9,7 @@ from textwrap import dedent
 import torch
 
 from esper.nissa import ConsoleOutput, DirectoryOutput, FileOutput, get_hub
+from esper.runtime.tasks import VALID_TASKS
 from esper.simic.training import TrainingConfig
 
 _logger = logging.getLogger(__name__)
@@ -215,7 +216,7 @@ def build_parser() -> argparse.ArgumentParser:
     heur_parser.add_argument("--max-epochs", type=int, default=75)
     heur_parser.add_argument("--max-batches", type=int, default=50, help="Batches per epoch (None=all)")
     heur_parser.add_argument("--task", default="cifar10",
-                              choices=["cifar10", "cifar10_deep", "cifar10_blind", "tinystories"])
+                              choices=sorted(VALID_TASKS))
     heur_parser.add_argument("--device", default="cuda:0")
     heur_parser.add_argument("--seed", type=int, default=42)
     heur_parser.add_argument(
@@ -240,9 +241,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Train PPO agent",
         parents=[telemetry_parent],
     )
+    # Presets are task-specific hyperparameter bundles (some tasks have multiple presets)
+    preset_choices = ["cifar10", "cifar10_stable", "cifar10_deep", "cifar10_blind", "tinystories"]
     ppo_parser.add_argument(
         "--preset",
-        choices=["cifar10", "cifar10_stable", "cifar10_deep", "cifar10_blind", "tinystories"],
+        choices=preset_choices,
         default="cifar10",
         help="TrainingConfig preset to use (hyperparameters + slots)",
     )
@@ -254,9 +257,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ppo_parser.add_argument(
         "--task",
-        default="cifar10",
-        choices=["cifar10", "cifar10_deep", "cifar10_blind", "tinystories"],
-        help="Task preset",
+        default=None,
+        choices=sorted(VALID_TASKS),
+        help="Task preset (overrides config.task if set)",
+    )
+    ppo_parser.add_argument(
+        "--slots",
+        nargs="+",
+        default=None,
+        metavar="SLOT",
+        help="Slot IDs to use, e.g., r0c0 r0c1 r0c2 (overrides config.slots)",
+    )
+    ppo_parser.add_argument(
+        "--max-seeds",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Maximum concurrent seeds across all slots (overrides config.max_seeds)",
     )
     ppo_parser.add_argument("--save", help="Path to save model")
     ppo_parser.add_argument("--resume", help="Path to checkpoint to resume from")
@@ -721,6 +738,14 @@ def main() -> None:
                     config.gradient_telemetry_stride = args.gradient_telemetry_stride
                 elif args.telemetry_level == "debug":
                     config.gradient_telemetry_stride = 1
+
+                # === Task/Slot CLI overrides ===
+                if args.task is not None:
+                    config.task = args.task
+                if args.slots is not None:
+                    config.slots = tuple(args.slots)
+                if args.max_seeds is not None:
+                    config.max_seeds = args.max_seeds
 
                 # === Tamiyo-centric CLI overrides ===
                 if args.rounds is not None:
