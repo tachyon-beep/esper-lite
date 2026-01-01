@@ -129,3 +129,67 @@ class TestValidateDevice:
         """Malformed device strings should raise ValueError."""
         with pytest.raises(ValueError, match="Invalid device"):
             validate_device("cuda0")  # Missing colon
+
+
+class TestTolariaPublicAPI:
+    """Tests for Tolaria module's public API and lazy imports."""
+
+    def test_all_public_names_importable(self):
+        """All names in __all__ should be importable from esper.tolaria.
+
+        This catches rename/drift between __all__ and actual exports.
+        """
+        import esper.tolaria as tolaria
+
+        for name in tolaria.__all__:
+            obj = getattr(tolaria, name)
+            assert obj is not None, f"{name} resolved to None"
+
+    def test_direct_imports_work(self):
+        """Direct imports should work for type checkers and runtime."""
+        from esper.tolaria import (
+            create_model,
+            parse_device,
+            validate_device,
+            TolariaGovernor,
+            GovernorReport,
+        )
+
+        # Verify they're callable/classes as expected
+        assert callable(create_model)
+        assert callable(parse_device)
+        assert callable(validate_device)
+        assert isinstance(TolariaGovernor, type)
+        assert isinstance(GovernorReport, type)
+
+    def test_lazy_imports_are_cached(self):
+        """Lazy imports should be cached in module globals after first access."""
+        import esper.tolaria as tolaria
+        import importlib
+
+        # Force fresh module state
+        importlib.reload(tolaria)
+
+        # First access triggers __getattr__
+        _ = tolaria.create_model
+
+        # After access, should be in globals (cached)
+        assert "create_model" in dir(tolaria)
+        # Should be the actual function, not a lazy reference
+        assert tolaria.create_model is tolaria.create_model  # Identity check
+
+    def test_dir_includes_all_exports(self):
+        """dir(esper.tolaria) should include all public API names."""
+        import esper.tolaria as tolaria
+
+        dir_result = dir(tolaria)
+
+        for name in tolaria.__all__:
+            assert name in dir_result, f"{name} missing from dir()"
+
+    def test_invalid_attribute_raises(self):
+        """Accessing non-existent attributes should raise AttributeError."""
+        import esper.tolaria as tolaria
+
+        with pytest.raises(AttributeError, match="has no attribute"):
+            _ = tolaria.nonexistent_attribute
