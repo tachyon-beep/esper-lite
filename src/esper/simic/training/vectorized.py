@@ -478,7 +478,8 @@ def loss_and_correct(
     """
     if task_type == "lm":
         vocab = outputs.size(-1)
-        loss = criterion(outputs.view(-1, vocab), targets.view(-1))
+        # Use reshape instead of view - handles non-contiguous tensors safely
+        loss = criterion(outputs.reshape(-1, vocab), targets.reshape(-1))
         predicted = outputs.argmax(dim=-1)
         correct = predicted.eq(targets)
         if not elementwise:

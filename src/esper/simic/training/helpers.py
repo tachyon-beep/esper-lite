@@ -139,7 +139,8 @@ def _train_step_impl(
     # Reshape for criterion if needed (handles both LM and classification)
     if outputs.dim() == 3:  # LM: (batch, seq, vocab)
         vocab = outputs.size(-1)
-        loss = criterion(outputs.view(-1, vocab), targets.view(-1))
+        # Use reshape instead of view - handles non-contiguous tensors safely
+        loss = criterion(outputs.reshape(-1, vocab), targets.reshape(-1))
     else:  # Classification: (batch, classes)
         loss = criterion(outputs, targets)
     return loss, outputs
@@ -335,6 +336,9 @@ def _convert_flat_to_factored(action: Any, topology: str = "cnn") -> FactoredAct
     """Convert flat action enum to FactoredAction for heuristic path.
 
     Maps flat action names to factored action components.
+
+    Raises:
+        ValueError: If action name is not recognized (fail-fast on misconfiguration)
     """
     from esper.leyline import AlphaTargetAction, BlueprintAction
 
@@ -343,11 +347,14 @@ def _convert_flat_to_factored(action: Any, topology: str = "cnn") -> FactoredAct
     if is_germinate_action_name(action_name):
         # Extract blueprint from action name like "GERMINATE_CONV_LIGHT"
         blueprint_name_upper = action_name[len(GERMINATE_PREFIX):]
-        # Look up BlueprintAction by name, default to NOOP for unknown blueprints
+        # Look up BlueprintAction by name - fail fast on unknown blueprints
         try:
             blueprint = BlueprintAction[blueprint_name_upper]
         except KeyError:
-            blueprint = BlueprintAction.NOOP
+            raise ValueError(
+                f"Unknown blueprint in action name: {action_name!r}. "
+                f"Expected format: GERMINATE_<BLUEPRINT> where BLUEPRINT is one of {[b.name for b in BlueprintAction]}"
+            )
         return FactoredAction.from_indices(
             slot_idx=0,  # Default to first slot
             blueprint_idx=blueprint.value,
@@ -391,7 +398,7 @@ def _convert_flat_to_factored(action: Any, topology: str = "cnn") -> FactoredAct
             alpha_curve_idx=0,
             op_idx=LifecycleOp.ADVANCE,
         )
-    else:  # WAIT or unknown
+    elif action_name == "WAIT":
         return FactoredAction.from_indices(
             slot_idx=0,
             blueprint_idx=0,
@@ -401,6 +408,12 @@ def _convert_flat_to_factored(action: Any, topology: str = "cnn") -> FactoredAct
             alpha_speed_idx=0,
             alpha_curve_idx=0,
             op_idx=LifecycleOp.WAIT,
+        )
+    else:
+        # Fail fast on unknown actions - don't silently map to WAIT
+        raise ValueError(
+            f"Unknown action name: {action_name!r}. "
+            f"Expected one of: WAIT, ADVANCE, FOSSILIZE, PRUNE, or GERMINATE_<BLUEPRINT>"
         )
 
 
@@ -504,8 +517,8 @@ def run_heuristic_episode(
             clip_ratio=0.2,
             entropy_coef=0.01,
             param_budget=0,
-            policy_device="cpu",
-            env_devices=("cpu",),
+            policy_device="cpu",  # Heuristic policy runs on CPU
+            env_devices=(device,),  # Use actual training device, not hardcoded "cpu"
             episode_id=episode_id,
             reward_mode="shaped",  # Heuristic mode uses shaped rewards
         ),
@@ -534,6 +547,15 @@ def run_heuristic_episode(
             slot = model.seed_slots[slot_id]
             slot.telemetry_inner_epoch = epoch
             slot.telemetry_global_epoch = epoch
+
+        # Determine if we should collect gradient telemetry this epoch
+        collect_gradients = (
+            ops_telemetry_enabled
+            and gradient_telemetry_stride > 0
+            and epoch % gradient_telemetry_stride == 0
+        )
+        grad_async: dict[str, Any] | None = None
+
         # Training phase - use tensor accumulation for deferred sync
         model.train()
         running_loss.zero_()
@@ -556,6 +578,10 @@ def run_heuristic_episode(
             loss, correct_batch, batch_total = compute_task_loss_with_metrics(outputs, targets, criterion, task_type)
             loss.backward()  # type: ignore[no-untyped-call]
 
+            # Collect gradient stats (async-safe, overwrites each batch; final value materialized after loop)
+            if collect_gradients:
+                grad_async = collect_seed_gradients_async(model.get_seed_parameters())
+
             host_optimizer.step()
             if seed_optimizer:
                 seed_optimizer.step()
@@ -568,6 +594,11 @@ def run_heuristic_episode(
         # Single sync at end of training
         train_loss = running_loss.item() / max(1, batch_count)
         train_acc = 100.0 * running_correct.item() / total if total > 0 else 0.0
+
+        # Materialize gradient stats after training sync (safe to access .item() now)
+        epoch_grad_stats: GradientHealthStats | None = None
+        if grad_async is not None and not grad_async.get("_empty", False):
+            epoch_grad_stats = materialize_grad_stats(grad_async)
 
         # Validation - use tensor accumulation for deferred sync
         model.eval()
@@ -734,6 +765,20 @@ def run_heuristic_episode(
                 if not gate_result.passed:
                     pass
 
+        # Build seeds telemetry dict if gradient stats were collected
+        seeds_telemetry: dict[str, dict[str, Any]] | None = None
+        if epoch_grad_stats is not None:
+            # Aggregate gradient health across all seeds for this epoch
+            # Access TypedDict fields directly - GradientHealthStats guarantees these keys exist
+            seeds_telemetry = {
+                "__aggregate__": {
+                    "gradient_norm": epoch_grad_stats["gradient_norm"],
+                    "gradient_health": epoch_grad_stats["gradient_health"],
+                    "has_vanishing": epoch_grad_stats["has_vanishing"],
+                    "has_exploding": epoch_grad_stats["has_exploding"],
+                }
+            }
+
         hub.emit(TelemetryEvent(
             event_type=TelemetryEventType.EPOCH_COMPLETED,
             epoch=epoch,
@@ -743,6 +788,9 @@ def run_heuristic_episode(
                 val_accuracy=val_acc,
                 val_loss=val_loss,
                 inner_epoch=epoch,
+                train_loss=train_loss,
+                train_accuracy=train_acc,
+                seeds=seeds_telemetry,
             ),
         ))
 
