@@ -36,15 +36,11 @@ jobs:
         with:
           enable-cache: true
 
-      # Install only what mypy needs (stubs + minimal deps)
-      - name: Install dependencies for type checking
-        run: |
-          uv pip install --system mypy types-PyYAML
-          uv pip install --system -e . --no-deps
-          uv pip install --system torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Install dependencies
+        run: uv sync --extra dev
 
       - name: Type check with mypy
-        run: MYPYPATH=src mypy -p esper
+        run: MYPYPATH=src uv run mypy -p esper
 
   property-tests:
     runs-on: ubuntu-latest

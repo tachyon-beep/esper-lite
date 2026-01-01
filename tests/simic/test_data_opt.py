@@ -5,6 +5,20 @@ Verifies:
 2. Format preservation through advanced indexing
 3. Correct data values and determinism
 4. Model channels-last conversion
+
+CI Requirements:
+    These tests are skipped on CPU-only machines via @pytest.mark.skipif.
+
+    If GPU CI is ever enabled, the following must be configured:
+
+    1. CUDA drivers and runtime must be installed in the CI image
+    2. CIFAR-10 dataset (~160MB) will be downloaded on first run - either:
+       - Cache ./data between runs, OR
+       - Use mock=True fixtures for speed (requires test refactoring)
+    3. Sufficient GPU memory (tests use small models, ~100MB VRAM should suffice)
+
+    The tests use torch.cuda.is_available() as the skip condition, so they
+    will automatically run when CUDA becomes available.
 """
 
 import pytest
