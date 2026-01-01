@@ -113,7 +113,7 @@ class EventLog(Static):
 
     def __init__(
         self,
-        max_lines: int = 36,
+        max_lines: int = 41,
         buffer_seconds: float = 1.0,
         max_delay_seconds: float = 2.0,
         **kwargs: Any,
