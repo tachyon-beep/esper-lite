@@ -23,7 +23,9 @@ Contemporary deep learning largely follows a paradigm of **architectural enginee
 
 *Narset (speculative)* is a slow-timescale coordinator that allocates budgets across zones using telemetry only—not yet part of the system.
 
-A key clarification: Esper is intended to be **two-timescale**. In *Phase 1 (“train the trainer”)*, we spend significant compute on audited credit assignment (including exact, full-retrain Shapley values on small candidate sets) to teach Tamiyo what “good growth” looks like under a defined protocol. In *deployment*, a trained Tamiyo is intended to grow many new models **without** the Shapley harness, using only cheap online signals and learned critics—amortising the cost of the training scaffold across downstream runs.
+A key clarification: Esper is intended to be **two-timescale**. In *Phase 1 ("train the trainer")*, we spend significant compute on audited credit assignment (including exact, full-retrain Shapley values on small candidate sets) to teach Tamiyo what "good growth" looks like under a defined protocol. In *deployment*, a trained Tamiyo is intended to grow many new models **without** the Shapley harness, using only cheap online signals and learned critics—amortising the cost of the training scaffold across downstream runs.
+
+**Crucially:** Shapley values are used as *training-only teacher signals* to shape credit assignment and learning updates; they are **not** included in Tamiyo's observation space, which remains identical to deployment telemetry. This ensures no privileged-information leakage between training and deployment.
 
 ---
 
@@ -273,7 +275,17 @@ We compute Shapley over up to 3 seeds at a time using **full retrain Shapley**:
 
 This is expensive, but it provides an audit trail: did Tamiyo choose the seed because it was truly useful under the protocol, or because of noise?
 
-**Important note:** even “full retrain Shapley” is not metaphysical ground truth; it is a high-quality label *under a specific protocol*. Where feasible, Shapley labels should be treated as expectations over controlled randomness (multiple seeds) rather than single-point estimates.
+**Important note:** even "full retrain Shapley" is not metaphysical ground truth; it is a high-quality label *under a specific protocol*. Where feasible, Shapley labels should be treated as expectations over controlled randomness (multiple seeds) rather than single-point estimates.
+
+**Shapley-as-teacher (no observation leakage).** During Phase 1, Shapley values (φ) are treated as privileged *labels*, not state. Tamiyo's policy receives only deployment-available telemetry in its observation vector. Shapley is computed offline under the audit protocol and then joined to recorded events, where it shapes **learning targets** (reward relabelling, advantage correction, critic supervision). This ensures that:
+
+1. **No deployment mismatch:** the policy's input distribution matches deployment exactly—it never relies on signals it won't have later.
+2. **Anti-cheating:** Shapley cannot become an "oracle feature" the policy learns to game; it is a supervisory signal only.
+
+The causal structure is:
+* Tamiyo **acts** on telemetry (oₜ).
+* Shapley is computed **later** and joined to the trajectory as a label.
+* **Learning** uses Shapley; **acting** does not.
 
 ### 5.4 From oracle to deployment: distillation and critics
 
@@ -355,7 +367,9 @@ Every Tamiyo decision is logged as an immutable event. Currently implemented:
 * slot state at decision time
 * policy outputs (confidence, per-head entropies)
 * expected value V(s) and TD advantage (computed later)
-* delayed labels joined later (Shapley φ, oracle rewards, long-horizon outcomes)
+* delayed teacher labels joined post-hoc (Shapley φ, oracle rewards, long-horizon outcomes)
+
+**Note on delayed labels:** Teacher labels (including Shapley φ) are joined post-hoc to the event log and used for reward relabelling, advantage correction, and critic supervision; they are **not** emitted as online observations and do not appear in Tamiyo's state. This is the mechanism that enables Phase 1's expensive attribution to improve learning without leaking privileged information into the policy's input distribution.
 
 Planned but not yet implemented:
 
