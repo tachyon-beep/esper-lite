@@ -35,11 +35,7 @@ from esper.leyline import (
 )
 # Stage schema for validation and one-hot encoding
 # NOTE: Imported at module level since these are fast O(1) lookups used in hot path
-from esper.leyline.stage_schema import (
-    VALID_STAGE_VALUES as _VALID_STAGE_VALUES,
-    NUM_STAGES as _NUM_STAGE_DIMS,
-    stage_to_one_hot as _stage_to_one_hot,
-)
+from esper.leyline.stage_schema import stage_to_one_hot as _stage_to_one_hot
 
 # HOT PATH: ONLY leyline imports allowed!
 

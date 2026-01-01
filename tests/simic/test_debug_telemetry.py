@@ -10,7 +10,6 @@ from esper.simic.telemetry import (
     NumericalStabilityReport,
     check_numerical_stability,
 )
-from esper.simic.telemetry.debug_telemetry import _MAX_DIAGNOSTIC_EXEMPLARS
 
 
 class TestPerLayerGradients:

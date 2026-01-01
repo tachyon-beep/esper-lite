@@ -358,14 +358,12 @@ async def test_filter_clears_with_esc_after_enter():
     """
     from esper.karn.sanctum.app import SanctumApp
     from esper.karn.sanctum.backend import SanctumBackend
-    from esper.karn.sanctum.widgets.env_overview import EnvOverview
     from textual.widgets import Input
 
     backend = SanctumBackend(num_envs=4)
     app = SanctumApp(backend=backend, num_envs=4)
 
     async with app.run_test() as pilot:
-        overview = app.query_one("#env-overview", EnvOverview)
         filter_input = app.query_one("#filter-input", Input)
 
         # Initial state: filter hidden, no filter value

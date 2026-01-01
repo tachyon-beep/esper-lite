@@ -37,7 +37,7 @@ def _load_config_with_friendly_errors(config_path: str) -> "TrainingConfig":
         sys.exit(1)
     except ValueError as e:
         error_msg = str(e)
-        print(f"\n\033[1;31m✗ Config validation error:\033[0m", file=sys.stderr)
+        print("\n\033[1;31m✗ Config validation error:\033[0m", file=sys.stderr)
         print(f"  {error_msg}", file=sys.stderr)
 
         # Provide helpful hints for common issues
@@ -45,7 +45,7 @@ def _load_config_with_friendly_errors(config_path: str) -> "TrainingConfig":
             print(f"\n\033[1;33m💡 Hint:\033[0m Update the 'task' field in {config_path}", file=sys.stderr)
             print(f"   Valid tasks: {', '.join(sorted(VALID_TASKS))}", file=sys.stderr)
         elif "slots" in error_msg.lower():
-            print(f"\n\033[1;33m💡 Hint:\033[0m Use canonical slot format: r0c0, r0c1, r0c2, etc.", file=sys.stderr)
+            print("\n\033[1;33m💡 Hint:\033[0m Use canonical slot format: r0c0, r0c1, r0c2, etc.", file=sys.stderr)
 
         print()  # Blank line for readability
         sys.exit(1)

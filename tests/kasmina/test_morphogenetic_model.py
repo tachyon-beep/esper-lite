@@ -115,8 +115,6 @@ class TestMorphogeneticModelMultiSlot:
         task_config would silently regress to CNN topology after restore,
         causing blending algorithm mismatches and incorrect gradient isolation.
         """
-        from esper.leyline import SeedStage
-
         host = TransformerHost(
             vocab_size=100,
             n_embd=64,

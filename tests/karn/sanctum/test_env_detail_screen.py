@@ -4,7 +4,6 @@ from io import StringIO
 from rich.console import Console
 
 from esper.karn.constants import DisplayThresholds
-from esper.karn.sanctum.formatting import format_params
 from esper.karn.sanctum.schema import (
     EnvState,
     RewardComponents,

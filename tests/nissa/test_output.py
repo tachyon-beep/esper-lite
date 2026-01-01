@@ -629,8 +629,6 @@ class TestNissaHubTimeoutBehavior:
 
     def test_flush_logs_warning_on_timeout(self, caplog: pytest.LogCaptureFixture):
         """flush() should log warning when timeout expires."""
-        import queue as q
-
         class SlowBackend(OutputBackend):
             def start(self) -> None:
                 pass

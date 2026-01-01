@@ -848,7 +848,7 @@ class NissaHub:
                 remaining = max(0.1, deadline - time.monotonic())
                 if not _join_with_timeout(self._queue, remaining):
                     _logger.warning(
-                        f"Hub main queue drain timed out during close, some events may be lost"
+                        "Hub main queue drain timed out during close, some events may be lost"
                     )
 
                 # Add None to queue as sentinel for worker shutdown.
