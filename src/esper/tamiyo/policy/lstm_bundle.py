@@ -50,17 +50,17 @@ class LSTMPolicyBundle:
             slot_config: Slot configuration (defaults to SlotConfig.default())
             dropout: Dropout rate for LSTM (currently unused by network)
         """
-        self.hidden_dim = hidden_dim
+        self._hidden_dim = hidden_dim
         self.num_lstm_layers = num_lstm_layers
-        self.slot_config = slot_config or SlotConfig.default()
+        self._slot_config = slot_config or SlotConfig.default()
 
         # Auto-compute feature_dim from slot_config if not provided
         # This prevents drift between feature extraction and network input dimensions
         if feature_dim is None:
             from esper.tamiyo.policy.features import get_feature_size
-            feature_dim = get_feature_size(self.slot_config)
+            feature_dim = get_feature_size(self._slot_config)
 
-        self.feature_dim = feature_dim
+        self._feature_dim = feature_dim
 
         # Lazy import to avoid circular dependency
         from esper.tamiyo.networks import FactoredRecurrentActorCritic
@@ -418,6 +418,23 @@ class LSTMPolicyBundle:
     def dtype(self) -> torch.dtype:
         """Get dtype of network parameters."""
         return next(self._network.parameters()).dtype
+
+    # === Configuration Access ===
+
+    @property
+    def slot_config(self) -> SlotConfig:
+        """Slot configuration for action masking."""
+        return self._slot_config
+
+    @property
+    def feature_dim(self) -> int:
+        """Input feature dimension."""
+        return self._feature_dim
+
+    @property
+    def hidden_dim(self) -> int:
+        """LSTM hidden state dimension."""
+        return self._hidden_dim
 
     # === Optional: Gradient Checkpointing ===
 

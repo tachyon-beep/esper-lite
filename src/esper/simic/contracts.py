@@ -9,9 +9,9 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Iterator, Protocol, runtime_checkable
 
-import torch.nn as nn
-
 if TYPE_CHECKING:
+    import torch.nn as nn
+
     from esper.leyline import GateResult, SeedStage
 
 
@@ -115,11 +115,13 @@ class SeedSlotProtocol(Protocol):
         """
         ...
 
-    def step_epoch(self) -> bool:
+    def step_epoch(self) -> None:
         """Advance lifecycle mechanically once per epoch.
 
-        Returns:
-            True if an auto-prune occurred, False otherwise.
+        Auto-prune events are signaled via `state.metrics.auto_pruned`.
+        Callers should check (and clear) this flag immediately AFTER
+        calling `step_epoch()` to catch both governor prunes and scheduled
+        prune completion.
         """
         ...
 

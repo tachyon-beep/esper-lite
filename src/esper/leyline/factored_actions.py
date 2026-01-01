@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import IntEnum
+from typing import Literal
 
 from esper.leyline.slot_config import SlotConfig
 from esper.leyline.alpha import AlphaAlgorithm, AlphaCurve
@@ -435,6 +436,18 @@ def get_action_head_sizes(slot_config: SlotConfig) -> dict[str, int]:
     return {spec.name: spec.size(slot_config) for spec in ACTION_HEAD_SPECS}
 
 
+# =============================================================================
+# Topology Configuration
+# =============================================================================
+
+# Type alias for topology - use this at API boundaries for static type checking
+Topology = Literal["cnn", "transformer"]
+"""Type alias for valid topology values. Use at API boundaries for type safety."""
+
+# Runtime validation set - use for dynamic values from config/CLI
+VALID_TOPOLOGIES: frozenset[str] = frozenset({"cnn", "transformer"})
+"""Valid topology values for runtime validation."""
+
 # Valid blueprints per topology (for action masking)
 CNN_BLUEPRINTS = frozenset({
     BlueprintAction.NOOP,
@@ -482,6 +495,8 @@ __all__ = [
     "get_action_head_sizes",
     "CNN_BLUEPRINTS",
     "TRANSFORMER_BLUEPRINTS",
+    "Topology",
+    "VALID_TOPOLOGIES",
     # Lookup tables for hot path optimization
     "OP_NAMES",
     "BLUEPRINT_IDS",

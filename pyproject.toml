@@ -34,6 +34,9 @@ dashboard = [
 tui = [
     "textual>=0.47.0",
 ]
+wandb = [
+    "wandb>=0.16.0",
+]
 
 [build-system]
 requires = ["setuptools>=61.0"]
@@ -111,5 +114,7 @@ module = [
     "fastapi.*",
     "uvicorn",
     "uvicorn.*",
+    "wandb",
+    "wandb.*",
 ]
 ignore_missing_imports = true

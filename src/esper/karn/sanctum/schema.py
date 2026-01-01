@@ -385,8 +385,8 @@ class EnvState:
     degraded_counter: int = 0
 
     # A/B test cohort (for color coding)
-    # Captured from REWARD_COMPUTED event's ab_group field
-    # Values: "shaped", "simplified", "sparse", or None if not A/B testing
+    # Captured from TRAINING_STARTED payload.reward_mode
+    # Values: "shaped", "simplified", "sparse", etc.
     reward_mode: str | None = None
 
     # Governor rollback state (catastrophic failure indicator)

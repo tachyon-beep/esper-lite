@@ -59,8 +59,12 @@ def register_policy(name: str) -> Callable[[Type[PolicyBundle]], Type[PolicyBund
             'get_action', 'forward', 'evaluate_actions',
             'get_q_values', 'sync_from', 'get_value', 'initial_hidden',
             'state_dict', 'load_state_dict', 'to', 'enable_gradient_checkpointing',
+            'compile',  # Required for torch.compile integration in factory
         ]
-        required_properties = ['is_recurrent', 'supports_off_policy', 'device', 'dtype']
+        required_properties = [
+            'is_recurrent', 'supports_off_policy', 'device', 'dtype',
+            'slot_config', 'feature_dim', 'hidden_dim', 'network', 'is_compiled',
+        ]
 
         # Structural check via hasattr: We verify that the class has required
         # method/property names defined. This is necessary because we can't

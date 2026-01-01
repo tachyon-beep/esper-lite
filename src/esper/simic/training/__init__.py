@@ -6,6 +6,11 @@ This subpackage contains the high-level training coordination:
 - parallel_env_state.py: ParallelEnvState - env context management
 - config.py: TrainingConfig - hyperparameter containers
 - policy_group.py: PolicyGroup - dual-policy A/B testing abstraction
+
+IMPORTANT: Heavy training loops (vectorized, dual_ab) are NOT imported automatically
+to avoid loading torch and CUDA machinery at import time. Import explicitly:
+    from esper.simic.training.vectorized import train_ppo_vectorized
+    from esper.simic.training.dual_ab import train_dual_policy_ab
 """
 
 from .parallel_env_state import ParallelEnvState
@@ -19,9 +24,8 @@ from .helpers import (
     run_heuristic_episode,
 )
 
-from .vectorized import train_ppo_vectorized
-
-from .dual_ab import train_dual_policy_ab
+# NOTE: vectorized and dual_ab are NOT imported here to avoid import-time side effects
+# Import them explicitly when needed
 
 __all__ = [
     # Environment state
@@ -30,9 +34,10 @@ __all__ = [
     "TrainingConfig",
     # A/B testing
     "PolicyGroup",
-    # Training functions
+    # Training functions (light)
     "train_heuristic",
     "run_heuristic_episode",
-    "train_ppo_vectorized",
-    "train_dual_policy_ab",
+    # Heavy training functions (import explicitly)
+    # "train_ppo_vectorized",  # from .vectorized
+    # "train_dual_policy_ab",  # from .dual_ab
 ]

@@ -16,7 +16,7 @@ Performance comparison (4 envs, 4 workers each):
 - New (shared): 4 worker processes, 1× IPC overhead
 
 Usage:
-    from esper.simic.training import train_ppo_vectorized
+    from esper.simic.training.vectorized import train_ppo_vectorized
 
     agent, history = train_ppo_vectorized(
         n_episodes=100,
@@ -530,6 +530,7 @@ def train_ppo_vectorized(
     num_workers: int | None = None,
     batch_size_per_env: int | None = None,
     gpu_preload: bool = False,
+    experimental_gpu_preload_gather: bool = False,
     amp: bool = False,
     amp_dtype: str = "auto",  # "auto", "float16", "bfloat16", or "off"
     max_grad_norm: float | None = None,  # Gradient clipping max norm (None disables)
@@ -981,26 +982,62 @@ def train_ppo_vectorized(
                 "Falling back to standard CPU DataLoader."
             )
             gpu_preload = False
+    if experimental_gpu_preload_gather and not gpu_preload:
+        raise ValueError(
+            "experimental_gpu_preload_gather requires gpu_preload=True for CIFAR-10 tasks"
+        )
+    if experimental_gpu_preload_gather:
+        unique_devices = list(dict.fromkeys(devices))
+        if len(unique_devices) != len(devices):
+            raise ValueError(
+                "experimental_gpu_preload_gather requires a unique devices list (no duplicates)"
+            )
+        if n_envs % len(unique_devices) != 0:
+            raise ValueError(
+                "experimental_gpu_preload_gather requires n_envs to be divisible by number of devices"
+            )
 
     if gpu_preload:
-        from esper.utils.data import SharedGPUBatchIterator
+        if experimental_gpu_preload_gather:
+            from esper.utils.data import SharedGPUGatherBatchIterator
 
-        shared_train_iter = SharedGPUBatchIterator(
-            batch_size_per_env=effective_batch_size_per_env,
-            n_envs=n_envs,
-            env_devices=env_device_map,
-            shuffle=True,
-            data_root=task_spec.dataloader_defaults.get("data_root", "./data"),
-            is_train=True,
-        )
-        shared_test_iter = SharedGPUBatchIterator(
-            batch_size_per_env=effective_batch_size_per_env,
-            n_envs=n_envs,
-            env_devices=env_device_map,
-            shuffle=False,
-            data_root=task_spec.dataloader_defaults.get("data_root", "./data"),
-            is_train=False,
-        )
+            shared_train_iter = SharedGPUGatherBatchIterator(
+                batch_size_per_env=effective_batch_size_per_env,
+                n_envs=n_envs,
+                env_devices=env_device_map,
+                shuffle=True,
+                data_root=task_spec.dataloader_defaults.get("data_root", "./data"),
+                is_train=True,
+                seed=seed,
+            )
+            shared_test_iter = SharedGPUGatherBatchIterator(
+                batch_size_per_env=effective_batch_size_per_env,
+                n_envs=n_envs,
+                env_devices=env_device_map,
+                shuffle=False,
+                data_root=task_spec.dataloader_defaults.get("data_root", "./data"),
+                is_train=False,
+                seed=seed,
+            )
+        else:
+            from esper.utils.data import SharedGPUBatchIterator
+
+            shared_train_iter = SharedGPUBatchIterator(
+                batch_size_per_env=effective_batch_size_per_env,
+                n_envs=n_envs,
+                env_devices=env_device_map,
+                shuffle=True,
+                data_root=task_spec.dataloader_defaults.get("data_root", "./data"),
+                is_train=True,
+            )
+            shared_test_iter = SharedGPUBatchIterator(
+                batch_size_per_env=effective_batch_size_per_env,
+                n_envs=n_envs,
+                env_devices=env_device_map,
+                shuffle=False,
+                data_root=task_spec.dataloader_defaults.get("data_root", "./data"),
+                is_train=False,
+            )
     else:
         shared_train_iter = SharedBatchIterator(
             trainset,
@@ -1125,6 +1162,11 @@ def train_ppo_vectorized(
         # Type assertion: create_model returns MorphogeneticModel
         assert isinstance(model_raw, MorphogeneticModel)
         model: MorphogeneticModel = model_raw
+
+        # Convert host model to channels-last for optimal conv performance.
+        # This matches the channels-last data format from SharedGPUGatherBatchIterator,
+        # avoiding runtime layout permutations in conv layers.
+        model = model.to(memory_format=torch.channels_last)
 
         telemetry_cb = make_telemetry_callback(env_idx, env_device)
         for slot_module in model.seed_slots.values():
@@ -3105,7 +3147,7 @@ def train_ppo_vectorized(
                     step_idx = agent.buffer.step_counts[env_idx]
                     agent.buffer.add(
                         env_id=env_idx,
-                        state=states_batch[env_idx].detach(),
+                        state=states_batch_normalized[env_idx].detach(),
                         blueprint_indices=blueprint_indices_batch[env_idx].detach(),
                         slot_action=slot_action,
                         blueprint_action=blueprint_action,
@@ -3153,10 +3195,20 @@ def train_ppo_vectorized(
                     # Mechanical lifecycle advance
                     for slot_id in slots:
                         slot_for_step = cast(SeedSlotProtocol, model.seed_slots[slot_id])
-                        if slot_for_step.step_epoch():
+
+                        # Advance lifecycle (may set auto_pruned if scheduled prune completes)
+                        slot_for_step.step_epoch()
+
+                        # Check auto-prune flag AFTER step_epoch to catch both:
+                        # - Governor prunes (set flag outside step_epoch, caught on next check)
+                        # - Scheduled prune completions (set flag inside step_epoch, caught immediately)
+                        if slot_for_step.state and slot_for_step.state.metrics.auto_pruned:
                             env_state.pending_auto_prune_penalty += (
                                 reward_config.auto_prune_penalty
                             )
+                            # Clear one-shot flag after reading
+                            slot_for_step.state.metrics.auto_pruned = False
+
                         if not model.has_active_seed_in_slot(slot_id):
                             env_state.seed_optimizers.pop(slot_id, None)
                             env_state.acc_at_germination.pop(slot_id, None)

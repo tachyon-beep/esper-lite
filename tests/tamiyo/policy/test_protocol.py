@@ -43,6 +43,7 @@ def test_policy_bundle_protocol_methods():
         'load_state_dict',
         'to',
         'enable_gradient_checkpointing',
+        'compile',  # torch.compile integration
     ]
     for method in required_methods:
         assert hasattr(PolicyBundle, method), f"Missing method: {method}"
@@ -55,6 +56,11 @@ def test_policy_bundle_protocol_properties():
         'supports_off_policy',
         'device',
         'dtype',
+        'slot_config',
+        'feature_dim',
+        'hidden_dim',
+        'network',
+        'is_compiled',
     ]
     for prop in required_properties:
         assert hasattr(PolicyBundle, prop), f"Missing property: {prop}"

@@ -23,83 +23,12 @@ Training:
 - vectorized: Multi-GPU PPO training
 - parallel_env_state: Per-environment state container
 - config: Hyperparameter configuration
+
+NOTE: This module uses PEP 562 lazy imports. Heavy modules (tamiyo policy features,
+telemetry with torch, training loops) are only loaded when accessed.
 """
 
-# Control (observation/action preprocessing)
-from esper.simic.control import RunningMeanStd
-from esper.tamiyo.policy.features import safe, TaskConfig
-from esper.tamiyo.policy.action_masks import (
-    MaskedCategorical,
-    InvalidStateMachineError,
-    build_slot_states,
-    compute_action_masks,
-    compute_batch_masks,
-)
-
-# Rewards
-from esper.simic.rewards import (
-    LossRewardConfig,
-    ContributionRewardConfig,
-    SeedInfo,
-    compute_contribution_reward,
-    compute_potential,
-    compute_pbrs_bonus,
-    compute_pbrs_stage_bonus,
-    compute_loss_reward,
-    compute_seed_potential,
-    get_intervention_cost,
-    STAGE_TRAINING,
-    STAGE_BLENDING,
-    STAGE_FOSSILIZED,
-)
-
-# Reward telemetry (from rewards subpackage)
-from esper.simic.rewards import (
-    RewardComponentsTelemetry,
-)
-
-# Telemetry (from telemetry subpackage)
-from esper.simic.telemetry import (
-    # Config
-    TelemetryLevel,
-    TelemetryConfig,
-    # Gradient collection
-    GradientHealthMetrics,
-    DualGradientStats,
-    SeedGradientCollector,
-    collect_dual_gradients_async,
-    materialize_dual_grad_stats,
-    materialize_grad_stats,
-    collect_seed_gradients,
-    collect_seed_gradients_async,
-    # Debug telemetry
-    LayerGradientStats,
-    collect_per_layer_gradients,
-    NumericalStabilityReport,
-    check_numerical_stability,
-    RatioExplosionDiagnostic,
-    # Anomaly detection
-    AnomalyDetector,
-    AnomalyReport,
-    # Emitters
-    emit_with_env_context,
-    emit_batch_completed,
-    emit_ppo_update_event,
-    check_performance_degradation,
-    aggregate_layer_gradient_health,
-)
-
-# Training (parallel environment state - light import)
-from esper.simic.training import ParallelEnvState
-
-# NOTE: Heavy modules imported on demand:
-#   from esper.simic.agent import PPOAgent
-#   from esper.simic.training import train_ppo_vectorized, train_heuristic
-
 __all__ = [
-    # Normalization
-    "RunningMeanStd",
-
     # Rewards
     "LossRewardConfig",
     "ContributionRewardConfig",
@@ -114,22 +43,19 @@ __all__ = [
     "STAGE_TRAINING",
     "STAGE_BLENDING",
     "STAGE_FOSSILIZED",
-
-    # Features
+    "RewardComponentsTelemetry",
+    # Features (from tamiyo.policy - HEAVY)
     "safe",
     "TaskConfig",
-
-    # Action Masks
+    # Action Masks (from tamiyo.policy - HEAVY)
     "MaskedCategorical",
     "InvalidStateMachineError",
     "build_slot_states",
     "compute_action_masks",
     "compute_batch_masks",
-
     # Telemetry
     "TelemetryLevel",
     "TelemetryConfig",
-    "RewardComponentsTelemetry",
     "GradientHealthMetrics",
     "DualGradientStats",
     "SeedGradientCollector",
@@ -145,14 +71,153 @@ __all__ = [
     "RatioExplosionDiagnostic",
     "AnomalyDetector",
     "AnomalyReport",
-
-    # Parallel environment state
-    "ParallelEnvState",
-
-    # Telemetry emitters
     "emit_with_env_context",
     "emit_batch_completed",
     "emit_ppo_update_event",
     "check_performance_degradation",
     "aggregate_layer_gradient_health",
+    # Parallel environment state
+    "ParallelEnvState",
 ]
+
+
+def __getattr__(name: str):
+    """Lazy import using PEP 562.
+
+    Heavy modules (tamiyo policy features/masks with torch, telemetry with torch,
+    training loops) are only loaded when accessed, not at package import time.
+    """
+    # Features (HEAVY - from tamiyo.policy which loads torch)
+    if name in ("safe", "TaskConfig"):
+        from esper.tamiyo.policy.features import safe, TaskConfig
+        mapping = {
+            "safe": safe,
+            "TaskConfig": TaskConfig,
+        }
+        return mapping[name]
+
+    # Action Masks (HEAVY - from tamiyo.policy which loads torch)
+    if name in ("MaskedCategorical", "InvalidStateMachineError", "build_slot_states",
+                "compute_action_masks", "compute_batch_masks"):
+        from esper.tamiyo.policy.action_masks import (
+            MaskedCategorical,
+            InvalidStateMachineError,
+            build_slot_states,
+            compute_action_masks,
+            compute_batch_masks,
+        )
+        mapping = {
+            "MaskedCategorical": MaskedCategorical,
+            "InvalidStateMachineError": InvalidStateMachineError,
+            "build_slot_states": build_slot_states,
+            "compute_action_masks": compute_action_masks,
+            "compute_batch_masks": compute_batch_masks,
+        }
+        return mapping[name]
+
+    # Rewards (lightweight)
+    if name in ("LossRewardConfig", "ContributionRewardConfig", "SeedInfo",
+                "compute_contribution_reward", "compute_potential", "compute_pbrs_bonus",
+                "compute_pbrs_stage_bonus", "compute_loss_reward", "compute_seed_potential",
+                "get_intervention_cost", "STAGE_TRAINING", "STAGE_BLENDING",
+                "STAGE_FOSSILIZED", "RewardComponentsTelemetry"):
+        from esper.simic.rewards import (
+            LossRewardConfig,
+            ContributionRewardConfig,
+            SeedInfo,
+            compute_contribution_reward,
+            compute_potential,
+            compute_pbrs_bonus,
+            compute_pbrs_stage_bonus,
+            compute_loss_reward,
+            compute_seed_potential,
+            get_intervention_cost,
+            STAGE_TRAINING,
+            STAGE_BLENDING,
+            STAGE_FOSSILIZED,
+            RewardComponentsTelemetry,
+        )
+        mapping = {
+            "LossRewardConfig": LossRewardConfig,
+            "ContributionRewardConfig": ContributionRewardConfig,
+            "SeedInfo": SeedInfo,
+            "compute_contribution_reward": compute_contribution_reward,
+            "compute_potential": compute_potential,
+            "compute_pbrs_bonus": compute_pbrs_bonus,
+            "compute_pbrs_stage_bonus": compute_pbrs_stage_bonus,
+            "compute_loss_reward": compute_loss_reward,
+            "compute_seed_potential": compute_seed_potential,
+            "get_intervention_cost": get_intervention_cost,
+            "STAGE_TRAINING": STAGE_TRAINING,
+            "STAGE_BLENDING": STAGE_BLENDING,
+            "STAGE_FOSSILIZED": STAGE_FOSSILIZED,
+            "RewardComponentsTelemetry": RewardComponentsTelemetry,
+        }
+        return mapping[name]
+
+    # Telemetry (HEAVY - uses torch for gradient collection)
+    if name in ("TelemetryLevel", "TelemetryConfig", "GradientHealthMetrics",
+                "DualGradientStats", "SeedGradientCollector", "collect_dual_gradients_async",
+                "materialize_dual_grad_stats", "materialize_grad_stats",
+                "collect_seed_gradients", "collect_seed_gradients_async",
+                "LayerGradientStats", "collect_per_layer_gradients",
+                "NumericalStabilityReport", "check_numerical_stability",
+                "RatioExplosionDiagnostic", "AnomalyDetector", "AnomalyReport",
+                "emit_with_env_context", "emit_batch_completed", "emit_ppo_update_event",
+                "check_performance_degradation", "aggregate_layer_gradient_health"):
+        from esper.simic.telemetry import (
+            TelemetryLevel,
+            TelemetryConfig,
+            GradientHealthMetrics,
+            DualGradientStats,
+            SeedGradientCollector,
+            collect_dual_gradients_async,
+            materialize_dual_grad_stats,
+            materialize_grad_stats,
+            collect_seed_gradients,
+            collect_seed_gradients_async,
+            LayerGradientStats,
+            collect_per_layer_gradients,
+            NumericalStabilityReport,
+            check_numerical_stability,
+            RatioExplosionDiagnostic,
+            AnomalyDetector,
+            AnomalyReport,
+            emit_with_env_context,
+            emit_batch_completed,
+            emit_ppo_update_event,
+            check_performance_degradation,
+            aggregate_layer_gradient_health,
+        )
+        mapping = {
+            "TelemetryLevel": TelemetryLevel,
+            "TelemetryConfig": TelemetryConfig,
+            "GradientHealthMetrics": GradientHealthMetrics,
+            "DualGradientStats": DualGradientStats,
+            "SeedGradientCollector": SeedGradientCollector,
+            "collect_dual_gradients_async": collect_dual_gradients_async,
+            "materialize_dual_grad_stats": materialize_dual_grad_stats,
+            "materialize_grad_stats": materialize_grad_stats,
+            "collect_seed_gradients": collect_seed_gradients,
+            "collect_seed_gradients_async": collect_seed_gradients_async,
+            "LayerGradientStats": LayerGradientStats,
+            "collect_per_layer_gradients": collect_per_layer_gradients,
+            "NumericalStabilityReport": NumericalStabilityReport,
+            "check_numerical_stability": check_numerical_stability,
+            "RatioExplosionDiagnostic": RatioExplosionDiagnostic,
+            "AnomalyDetector": AnomalyDetector,
+            "AnomalyReport": AnomalyReport,
+            "emit_with_env_context": emit_with_env_context,
+            "emit_batch_completed": emit_batch_completed,
+            "emit_ppo_update_event": emit_ppo_update_event,
+            "check_performance_degradation": check_performance_degradation,
+            "aggregate_layer_gradient_health": aggregate_layer_gradient_health,
+        }
+        return mapping[name]
+
+    # Training (lightweight - ParallelEnvState is just a dataclass container)
+    if name == "ParallelEnvState":
+        from esper.simic.training import ParallelEnvState
+        return ParallelEnvState
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

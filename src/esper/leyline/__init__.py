@@ -222,7 +222,9 @@ from esper.leyline.factored_actions import (
     STYLE_TO_KASMINA,
     TEMPO_NAMES,
     TEMPO_TO_EPOCHS,
+    Topology,
     TRANSFORMER_BLUEPRINTS,
+    VALID_TOPOLOGIES,
     TempoAction,
     get_action_head_sizes,
 )
@@ -518,7 +520,12 @@ from esper.leyline.injection_spec import InjectionSpec
 from esper.leyline.slot_config import SlotConfig
 
 # Actions (build_action_enum used by HeuristicTamiyo for flat action mapping)
-from esper.leyline.actions import build_action_enum
+from esper.leyline.actions import (
+    GERMINATE_PREFIX,
+    build_action_enum,
+    get_blueprint_from_action_name,
+    is_germinate_action_name,
+)
 
 # Stages and transitions
 from esper.leyline.stages import (
@@ -569,6 +576,7 @@ from esper.leyline.reports import (
 from esper.leyline.telemetry import (
     TelemetryEventType,
     TelemetryEvent,
+    TelemetryCallback,
     PerformanceBudgets,
     DEFAULT_BUDGETS,
     SeedTelemetry,
@@ -601,9 +609,6 @@ from esper.leyline.alpha import (
     AlphaCurve,
     AlphaAlgorithm,
 )
-
-# Causal masks (single source of truth for factored action masking)
-from esper.leyline.causal_masks import compute_causal_masks
 
 # Type contracts for observations
 from esper.leyline.types import (
@@ -688,7 +693,9 @@ __all__ = [
     "TEMPO_NAMES",
     "TEMPO_TO_EPOCHS",
     "TempoAction",
+    "Topology",
     "TRANSFORMER_BLUEPRINTS",
+    "VALID_TOPOLOGIES",
 
     # Reward Shaping Constants
     "DEFAULT_CONTRIBUTION_WEIGHT",
@@ -778,7 +785,10 @@ __all__ = [
     "SlotConfig",
 
     # Actions (build_action_enum used by HeuristicTamiyo)
+    "GERMINATE_PREFIX",
     "build_action_enum",
+    "get_blueprint_from_action_name",
+    "is_germinate_action_name",
 
     # Stages
     "SeedStage",
@@ -818,6 +828,7 @@ __all__ = [
     # Telemetry
     "TelemetryEventType",
     "TelemetryEvent",
+    "TelemetryCallback",
     "PerformanceBudgets",
     "DEFAULT_BUDGETS",
     "SeedTelemetry",
@@ -847,9 +858,6 @@ __all__ = [
     "AlphaMode",
     "AlphaCurve",
     "AlphaAlgorithm",
-
-    # Causal masks
-    "compute_causal_masks",
 
     # Type contracts
     "SeedObservationFields",

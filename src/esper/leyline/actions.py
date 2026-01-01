@@ -12,6 +12,40 @@ from enum import IntEnum
 # Cache for built enums
 _action_enum_cache: dict[str, type[IntEnum]] = {}
 
+# =============================================================================
+# GERMINATE Action Name Utilities
+# =============================================================================
+# These are the single source of truth for parsing GERMINATE_<BLUEPRINT> action names.
+# All domains should import these instead of duplicating the parsing logic.
+
+GERMINATE_PREFIX = "GERMINATE_"
+
+
+def is_germinate_action_name(name: str) -> bool:
+    """Check if action name is a germinate variant.
+
+    Args:
+        name: Action name to check (e.g., "GERMINATE_CONV_LIGHT").
+
+    Returns:
+        True if name starts with GERMINATE_ prefix.
+    """
+    return name.startswith(GERMINATE_PREFIX)
+
+
+def get_blueprint_from_action_name(name: str) -> str | None:
+    """Extract blueprint ID from germinate action name.
+
+    Args:
+        name: Action name (e.g., "GERMINATE_CONV_LIGHT").
+
+    Returns:
+        Lowercase blueprint name (e.g., "conv_light") or None if not a germinate action.
+    """
+    if name.startswith(GERMINATE_PREFIX):
+        return name[len(GERMINATE_PREFIX) :].lower()
+    return None
+
 
 def build_action_enum(topology: str) -> type[IntEnum]:
     """Build action enum from registered blueprints for a topology.
@@ -49,5 +83,8 @@ def build_action_enum(topology: str) -> type[IntEnum]:
 
 
 __all__ = [
+    "GERMINATE_PREFIX",
     "build_action_enum",
+    "get_blueprint_from_action_name",
+    "is_germinate_action_name",
 ]

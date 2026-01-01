@@ -830,8 +830,12 @@ class TestBuildSlotStates:
 class TestActionMaskEdgeCases:
     """Edge case tests for action masking boundary conditions."""
 
-    def test_all_slots_disabled_only_wait_valid(self):
-        """When no slots are enabled, only WAIT should be valid."""
+    def test_all_slots_disabled_raises_error(self):
+        """Empty enabled_slots is a configuration error and should raise ValueError.
+
+        B9-CR-01: Fail fast on misconfiguration. If no slots are enabled,
+        the task cannot be performed - this is always a config error.
+        """
         from esper.leyline.slot_config import SlotConfig
 
         slot_states = {
@@ -840,20 +844,12 @@ class TestActionMaskEdgeCases:
             "r0c2": None,
         }
 
-        masks = compute_action_masks(
-            slot_states,
-            enabled_slots=[],  # No slots enabled
-            slot_config=SlotConfig.default(),
-        )
-
-        # No slots selectable
-        assert not masks["slot"].any(), "No slots should be selectable when none enabled"
-
-        # Only WAIT should be valid
-        assert masks["op"][LifecycleOp.WAIT], "WAIT must always be valid"
-        assert not masks["op"][LifecycleOp.GERMINATE], "GERMINATE requires enabled empty slot"
-        assert not masks["op"][LifecycleOp.PRUNE], "PRUNE requires enabled slot with seed"
-        assert not masks["op"][LifecycleOp.FOSSILIZE], "FOSSILIZE requires enabled HOLDING"
+        with pytest.raises(ValueError, match="cannot be empty"):
+            compute_action_masks(
+                slot_states,
+                enabled_slots=[],  # No slots enabled = config error
+                slot_config=SlotConfig.default(),
+            )
 
     def test_large_config_9_slots(self):
         """9-slot (3x3) grid should mask correctly."""
@@ -1402,3 +1398,145 @@ def test_embargo_duration_correctness():
     assert not masks["op"][LifecycleOp.GERMINATE], (
         "GERMINATE should be blocked during embargo period"
     )
+
+
+# =============================================================================
+# Input Validation Tests (B9-CR-01: fail fast on misconfiguration)
+# =============================================================================
+
+
+class TestComputeActionMasksValidation:
+    """Test input validation in compute_action_masks().
+
+    B9-CR-01: These tests ensure invalid inputs raise ValueError immediately
+    rather than producing incorrect masks or failing cryptically later.
+    """
+
+    def test_invalid_topology_raises_error(self):
+        """Invalid topology string should raise ValueError, not silently fallback."""
+        slot_states = {"r0c0": None}
+
+        with pytest.raises(ValueError, match="Unknown topology"):
+            compute_action_masks(
+                slot_states,
+                enabled_slots=["r0c0"],
+                topology="Transformer",  # type: ignore[arg-type] # Intentional - testing runtime validation
+            )
+
+    def test_topology_case_sensitive(self):
+        """Topology is case-sensitive - 'CNN' is not 'cnn'."""
+        slot_states = {"r0c0": None}
+
+        with pytest.raises(ValueError, match="Unknown topology"):
+            compute_action_masks(
+                slot_states,
+                enabled_slots=["r0c0"],
+                topology="CNN",  # type: ignore[arg-type]
+            )
+
+    def test_topology_whitespace_not_stripped(self):
+        """Topology with whitespace should fail, not be silently trimmed."""
+        slot_states = {"r0c0": None}
+
+        with pytest.raises(ValueError, match="Unknown topology"):
+            compute_action_masks(
+                slot_states,
+                enabled_slots=["r0c0"],
+                topology="cnn ",  # type: ignore[arg-type] # Trailing space
+            )
+
+    def test_unknown_enabled_slot_raises_error(self):
+        """Unknown slot IDs in enabled_slots should raise ValueError."""
+        slot_states = {"r0c0": None}
+
+        with pytest.raises(ValueError, match="unknown slot IDs"):
+            compute_action_masks(
+                slot_states,
+                enabled_slots=["r0c0", "early"],  # "early" is legacy/invalid
+            )
+
+    def test_empty_enabled_slots_raises_error(self):
+        """Empty enabled_slots should raise ValueError."""
+        slot_states = {"r0c0": None}
+
+        with pytest.raises(ValueError, match="cannot be empty"):
+            compute_action_masks(
+                slot_states,
+                enabled_slots=[],
+            )
+
+    def test_valid_topologies_accepted(self):
+        """Valid topology values should work without error."""
+        slot_states = {"r0c0": None}
+
+        # Both valid topologies should work
+        masks_cnn = compute_action_masks(
+            slot_states, enabled_slots=["r0c0"], topology="cnn"
+        )
+        assert "op" in masks_cnn
+
+        masks_transformer = compute_action_masks(
+            slot_states, enabled_slots=["r0c0"], topology="transformer"
+        )
+        assert "op" in masks_transformer
+
+
+class TestComputeBatchMasksValidation:
+    """Test input validation in compute_batch_masks().
+
+    B9-CR-01: Guards for empty batch and mismatched list lengths.
+    """
+
+    def test_empty_batch_raises_error(self):
+        """Empty batch_slot_states should raise ValueError with clear message."""
+        with pytest.raises(ValueError, match="at least one observation"):
+            compute_batch_masks(
+                batch_slot_states=[],
+                enabled_slots=["r0c0"],
+            )
+
+    def test_mismatched_total_seeds_length_raises_error(self):
+        """total_seeds_list must match batch_slot_states length."""
+        batch_slot_states = [{"r0c0": None}, {"r0c0": None}]  # 2 envs
+
+        with pytest.raises(ValueError, match="length"):
+            compute_batch_masks(
+                batch_slot_states,
+                enabled_slots=["r0c0"],
+                total_seeds_list=[0],  # Only 1 element for 2 envs
+            )
+
+    def test_none_total_seeds_list_accepted(self):
+        """total_seeds_list=None should be accepted (defaults to 0 for all)."""
+        batch_slot_states = [{"r0c0": None}, {"r0c0": None}]
+
+        # Should not raise
+        masks = compute_batch_masks(
+            batch_slot_states,
+            enabled_slots=["r0c0"],
+            total_seeds_list=None,
+        )
+        assert masks["op"].shape[0] == 2  # Batch dimension
+
+    def test_matching_total_seeds_list_accepted(self):
+        """total_seeds_list with matching length should work."""
+        batch_slot_states = [{"r0c0": None}, {"r0c0": None}]
+
+        # Should not raise
+        masks = compute_batch_masks(
+            batch_slot_states,
+            enabled_slots=["r0c0"],
+            total_seeds_list=[0, 1],  # Correct length
+        )
+        assert masks["op"].shape[0] == 2
+
+    def test_invalid_topology_propagates_from_compute_action_masks(self):
+        """Invalid topology should raise even when called via compute_batch_masks."""
+        batch_slot_states = [{"r0c0": None}]
+
+        with pytest.raises(ValueError, match="Unknown topology"):
+            compute_batch_masks(
+                batch_slot_states,
+                enabled_slots=["r0c0"],
+                topology="invalid",  # type: ignore[arg-type]
+            )

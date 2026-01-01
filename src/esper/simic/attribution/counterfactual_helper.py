@@ -175,6 +175,14 @@ class CounterfactualHelper:
         """Get the last computed counterfactual matrix."""
         return self._last_matrix
 
+    def reset(self) -> None:
+        """Reset cached state for new episode.
+
+        Call this between episodes to clear stale Shapley/interaction data.
+        Does not affect the engine or config - only clears cached results.
+        """
+        self._last_matrix = None
+
 
 def compute_simple_ablation(
     slot_ids: list[str],

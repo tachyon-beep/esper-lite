@@ -12,7 +12,7 @@ already on the environment's device, ensuring .to() returns the same tensor.
 import pytest
 import torch
 
-from esper.utils.data import SharedGPUBatchIterator
+from esper.utils.data import SharedGPUBatchIterator, SharedGPUGatherBatchIterator
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
@@ -43,6 +43,8 @@ def test_shared_gpu_iterator_returns_device_resident_tensors():
 
     for env_idx, (inputs, targets) in enumerate(env_batches):
         # Verify tensors are on expected device
+        assert inputs.is_cuda, f"Env {env_idx}: inputs expected CUDA tensor"
+        assert targets.is_cuda, f"Env {env_idx}: targets expected CUDA tensor"
         assert inputs.device == torch.device(device), (
             f"Env {env_idx}: inputs on {inputs.device}, expected {device}"
         )
@@ -62,6 +64,70 @@ def test_shared_gpu_iterator_returns_device_resident_tensors():
             f"Env {env_idx}: .to() created new tensor for targets "
             "(expected no-op for GPU-resident data)"
         )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+def test_shared_gpu_gather_iterator_returns_device_resident_tensors():
+    """SharedGPUGatherBatchIterator returns tensors already on the target device."""
+    device = "cuda:0"
+    batch_size = 4
+    n_envs = 2
+
+    iterator = SharedGPUGatherBatchIterator(
+        batch_size_per_env=batch_size,
+        n_envs=n_envs,
+        env_devices=[device] * n_envs,
+        shuffle=False,
+        is_train=False,  # Use smaller test set
+        seed=123,
+    )
+
+    env_batches = next(iter(iterator))
+
+    for env_idx, (inputs, targets) in enumerate(env_batches):
+        assert inputs.is_cuda, f"Env {env_idx}: inputs expected CUDA tensor"
+        assert targets.is_cuda, f"Env {env_idx}: targets expected CUDA tensor"
+        assert inputs.device == torch.device(device), (
+            f"Env {env_idx}: inputs on {inputs.device}, expected {device}"
+        )
+        assert targets.device == torch.device(device), (
+            f"Env {env_idx}: targets on {targets.device}, expected {device}"
+        )
+
+        inputs_after_to = inputs.to(device, non_blocking=True)
+        targets_after_to = targets.to(device, non_blocking=True)
+        assert inputs_after_to is inputs
+        assert targets_after_to is targets
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+def test_shared_gpu_gather_iterator_no_storage_aliasing_across_envs():
+    """SharedGPUGatherBatchIterator must not return views sharing one allocation."""
+    device = "cuda:0"
+    batch_size = 4
+    n_envs = 2
+
+    iterator = SharedGPUGatherBatchIterator(
+        batch_size_per_env=batch_size,
+        n_envs=n_envs,
+        env_devices=[device] * n_envs,
+        shuffle=False,
+        is_train=False,
+        seed=123,
+    )
+
+    env_batches = next(iter(iterator))
+    assert len(env_batches) == n_envs
+
+    input_storage_ptrs = [
+        inputs.untyped_storage().data_ptr() for inputs, _targets in env_batches
+    ]
+    target_storage_ptrs = [
+        targets.untyped_storage().data_ptr() for _inputs, targets in env_batches
+    ]
+
+    assert len(set(input_storage_ptrs)) == n_envs
+    assert len(set(target_storage_ptrs)) == n_envs
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")

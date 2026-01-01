@@ -142,6 +142,59 @@ def build_parser() -> argparse.ArgumentParser:
         help="Export Karn telemetry store to JSONL file after training",
     )
     telemetry_parent.add_argument(
+        "--wandb",
+        action="store_true",
+        help="Enable Weights & Biases logging (requires: pip install wandb)",
+    )
+    telemetry_parent.add_argument(
+        "--wandb-project",
+        type=str,
+        default="esper",
+        help="Wandb project name (default: esper)",
+    )
+    telemetry_parent.add_argument(
+        "--wandb-entity",
+        type=str,
+        default=None,
+        help="Wandb team/user name (optional)",
+    )
+    telemetry_parent.add_argument(
+        "--wandb-tags",
+        type=str,
+        nargs="*",
+        default=None,
+        help="Wandb tags for this run (space-separated)",
+    )
+    telemetry_parent.add_argument(
+        "--wandb-group",
+        type=str,
+        default=None,
+        help="Wandb group name for related runs",
+    )
+    telemetry_parent.add_argument(
+        "--wandb-name",
+        type=str,
+        default=None,
+        help="Custom wandb run name (auto-generated if not specified)",
+    )
+    telemetry_parent.add_argument(
+        "--wandb-mode",
+        type=str,
+        choices=["online", "offline", "disabled"],
+        default="online",
+        help="Wandb mode: online (sync), offline (sync later), disabled (no-op)",
+    )
+    telemetry_parent.add_argument(
+        "--wandb-no-code",
+        action="store_true",
+        help="Disable wandb code logging (git commit, diff)",
+    )
+    telemetry_parent.add_argument(
+        "--wandb-no-system",
+        action="store_true",
+        help="Disable wandb system metrics (GPU, CPU, memory)",
+    )
+    telemetry_parent.add_argument(
         "--sanctum",
         action="store_true",
         help="Launch Sanctum TUI for developer debugging (replaces Rich TUI)",
@@ -226,6 +279,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--gpu-preload",
         action="store_true",
         help="Preload dataset to GPU for 8x faster data loading (CIFAR-10 only, uses ~0.75GB VRAM)",
+    )
+    ppo_parser.add_argument(
+        "--experimental-gpu-preload-gather",
+        action="store_true",
+        help="EXPERIMENTAL: Use a DataLoader-free gather iterator for --gpu-preload (CIFAR-10 only).",
     )
     ppo_parser.add_argument(
         "--amp",
@@ -378,6 +436,8 @@ def main() -> None:
     # Mutual exclusion check for UI modes
     if args.sanctum and args.overwatch:
         parser.error("--sanctum and --overwatch are mutually exclusive")
+    if args.algorithm == "ppo" and args.experimental_gpu_preload_gather and not args.gpu_preload:
+        parser.error("--experimental-gpu-preload-gather requires --gpu-preload")
 
     # Create TelemetryConfig from CLI argument
     from esper.simic.telemetry import TelemetryConfig, TelemetryLevel
@@ -507,6 +567,49 @@ def main() -> None:
         except ImportError:
             print("Warning: Dashboard dependencies not installed.")
             print("  Install with: pip install esper-lite[dashboard]")
+
+    # Add Wandb backend if requested
+    wandb_backend = None
+    if args.wandb:
+        try:
+            from esper.nissa.wandb_backend import WandbBackend
+
+            # Build config dict from training args for wandb logging
+            wandb_config = {
+                "algorithm": args.algorithm,
+            }
+
+            # Add algorithm-specific config
+            if args.algorithm == "ppo":
+                # Add PPO-specific hyperparameters
+                # These will be available after config is created below,
+                # but we can add them to wandb config via wandb.config.update()
+                # during TRAINING_STARTED event handling
+                pass
+
+            wandb_backend = WandbBackend(
+                project=args.wandb_project,
+                entity=args.wandb_entity,
+                config=wandb_config,
+                tags=args.wandb_tags or [],
+                group=args.wandb_group,
+                name=args.wandb_name,
+                mode=args.wandb_mode,
+                log_code=not args.wandb_no_code,
+                log_system=not args.wandb_no_system,
+            )
+            hub.add_backend(wandb_backend)
+
+            print(f"Wandb logging enabled (project: {args.wandb_project}, mode: {args.wandb_mode})")
+            if args.wandb_tags:
+                print(f"  Tags: {', '.join(args.wandb_tags)}")
+            if args.wandb_group:
+                print(f"  Group: {args.wandb_group}")
+
+        except ImportError as e:
+            print(f"Warning: Wandb integration unavailable: {e}")
+            print("  Install with: pip install wandb")
+            sys.exit(1)
 
     # Setup Sanctum backend if requested
     sanctum_backend = None
@@ -696,7 +799,7 @@ def main() -> None:
                     # Use task from config if specified, otherwise CLI arg
                     effective_task = config.task if config.task else args.task
 
-                    from esper.simic.training import train_dual_policy_ab
+                    from esper.simic.training.dual_ab import train_dual_policy_ab
                     train_dual_policy_ab(
                         n_envs_per_group=config.n_envs,
                         group_configs=group_configs,
@@ -717,11 +820,15 @@ def main() -> None:
                     )
                 else:
                     print(config.summary())
+                    if args.experimental_gpu_preload_gather:
+                        print(
+                            "EXPERIMENTAL: Using GPU-preload gather iterator (DataLoader-free)."
+                        )
 
                     # Use task from config if specified, otherwise CLI arg
                     effective_task = config.task if config.task else args.task
 
-                    from esper.simic.training import train_ppo_vectorized
+                    from esper.simic.training.vectorized import train_ppo_vectorized
                     train_ppo_vectorized(
                         device=args.device,
                         devices=args.devices,
@@ -730,6 +837,7 @@ def main() -> None:
                         resume_path=args.resume,
                         num_workers=args.num_workers,
                         gpu_preload=args.gpu_preload,
+                        experimental_gpu_preload_gather=args.experimental_gpu_preload_gather,
                         telemetry_config=telemetry_config,
                         telemetry_lifecycle_only=args.telemetry_lifecycle_only,
                         quiet_analytics=use_sanctum,

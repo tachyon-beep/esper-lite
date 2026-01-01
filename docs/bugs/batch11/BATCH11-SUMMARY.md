@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-Batch 11 was a focused debugging session investigating three reported issues in the PPO training loop, plus three additional findings discovered during fix verification and code review. **All six issues were identified and fixed.**
+Batch 11 was a focused debugging session investigating three reported issues in the PPO training loop, plus four additional findings discovered during fix verification and code review. **All seven issues were identified and fixed.**
 
 **Key outcomes:**
 - **B11-DRL-01 (P0):** LSTM hidden state bootstrap bug affecting every truncated episode - **FIXED**
@@ -16,6 +16,7 @@ Batch 11 was a focused debugging session investigating three reported issues in 
 - **B11-CR-02 (P2):** Death-penalty excluded from EpisodeOutcome (metrics computed before penalty) - **FIXED**
 - **B11-CR-03 (P2):** Episode telemetry uses normalized rewards (uninterpretable) - **FIXED** (regression from B11-CR-01)
 - **B11-CR-04 (P2):** Duplicate EPISODE_OUTCOME emitted on rollback episodes - **FIXED** (regression from B11-CR-02)
+- **B11-CR-05 (P2):** Profiler context not guaranteed to close on exceptions - **FIXED** (resource leak)
 - **B11-DRL-02 (P3):** Adaptive entropy floor inert (architectural jank) - **FIXED** (removed entirely)
 
 ---
@@ -25,9 +26,9 @@ Batch 11 was a focused debugging session investigating three reported issues in 
 | Severity | Count | Tickets |
 |----------|-------|---------|
 | **P0 (FIXED)** | 1 | B11-DRL-01 |
-| **P2 (FIXED)** | 4 | B11-CR-01, B11-CR-02, B11-CR-03, B11-CR-04 |
+| **P2 (FIXED)** | 5 | B11-CR-01, B11-CR-02, B11-CR-03, B11-CR-04, B11-CR-05 |
 | **P3 (FIXED)** | 1 | B11-DRL-02 |
-| **Total** | 6 | **All fixed** |
+| **Total** | 7 | **All fixed** |
 
 ---
 
@@ -177,6 +178,45 @@ With B11-CR-03 (raw telemetry):
 - **Analytics assumptions:** "One outcome per episode" preserved
 
 **Lesson learned:** When fixing telemetry bugs, consider both data correctness (B11-CR-02) AND emission semantics (B11-CR-04). Verify no duplicate events for same entity/episode.
+
+### P2 - Resource Leak / Exception Safety Bug (FIXED)
+
+**B11-CR-05: Profiler Context Not Guaranteed to Close on Exceptions**
+- **Status:** FIXED in current commit (discovered during code review)
+- **Impact:** Torch profiler context opened via `__enter__()` but not protected by exception handling, leaving traces unflushed and resources leaked if training raises exception before `__exit__()` call
+- **Root cause:** Profiler context opened at line 1726, closed at line 3600, but entire training loop (lines 1728-3600) NOT wrapped in try/finally
+- **Why NOT P0/P1:** Training continues to work correctly, but profiling data lost on exceptions and resources leak
+- **Fix:** Wrapped training loop in try/finally block (lines 1728-3608)
+  - **Line 1728:** Added `try:` block after profiler entrance
+  - **Lines 1728-3600:** Indented entire training loop inside try block
+  - **Lines 3601-3608:** Added `finally:` block with profiler cleanup
+- **Tests:** Syntax check passes, integration tests pass
+
+**How it works:**
+```python
+# BEFORE (vulnerable to exceptions):
+prof = profiler_cm.__enter__()
+history = []
+# ... training loop (lines 1728-3600) ...
+profiler_cm.__exit__(None, None, None)  # Only runs if no exception
+
+# AFTER (exception-safe):
+prof = profiler_cm.__enter__()
+try:
+    history = []
+    # ... training loop (lines 1728-3600) ...
+finally:
+    # Guarantee profiler cleanup, even on exceptions
+    profiler_cm.__exit__(None, None, None)
+```
+
+**Affected scenarios:**
+- **CUDA OOM during training:** Profiler left open, TensorBoard trace incomplete
+- **NaN loss triggering ValueError:** Profiler context still open, trace corrupted
+- **User KeyboardInterrupt:** Profiler not flushed, no trace data written
+- **Any runtime error:** Resource leak (CUDA event handlers, file handles, memory)
+
+**Lesson learned:** When using context managers manually (`__enter__()` and `__exit__()`), always wrap in try/finally to guarantee cleanup. Or use `with` statement (handles exceptions automatically).
 
 ### P3 - Architectural Jank / Dead Code (FIXED)
 

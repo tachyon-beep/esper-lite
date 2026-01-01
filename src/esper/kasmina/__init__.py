@@ -8,35 +8,10 @@ Kasmina manages the lifecycle of seed modules:
 
 Named after Kasmina, Planeswalker of Secrets - master of hidden knowledge
 and the art of subtle manipulation.
+
+NOTE: This module uses PEP 562 lazy imports. Heavy modules (slot, blueprints,
+isolation, host with torch dependencies) are only loaded when accessed.
 """
-
-# Re-export Leyline types that Kasmina uses
-from esper.leyline import (
-    SeedStage,
-    VALID_TRANSITIONS,
-    is_valid_transition,
-    is_terminal_stage,
-    is_active_stage,
-    is_failure_stage,
-    GateLevel,
-    GateResult,
-)
-
-# Slot management
-from esper.kasmina.slot import SeedMetrics, SeedState, QualityGates, SeedSlot
-
-# Blueprints / registry
-from esper.kasmina.blueprints import BlueprintRegistry, BlueprintSpec, ConvBlock
-
-# Isolation
-from esper.kasmina.isolation import blend_with_isolation, GradientHealthMonitor
-
-# Host
-from esper.kasmina.protocol import HostProtocol
-from esper.kasmina.host import CNNHost, TransformerHost, TransformerBlock, MorphogeneticModel
-
-# Alpha scheduling
-from esper.kasmina.alpha_controller import AlphaController
 
 __all__ = [
     # Re-exported Leyline types
@@ -69,3 +44,88 @@ __all__ = [
     # Alpha scheduling
     "AlphaController",
 ]
+
+
+def __getattr__(name: str):
+    """Lazy import using PEP 562.
+
+    Heavy modules (slot, blueprints, isolation, host with torch) are only
+    loaded when accessed, not at package import time.
+    """
+    # Leyline re-exports (lightweight)
+    if name in ("SeedStage", "VALID_TRANSITIONS", "is_valid_transition",
+                "is_terminal_stage", "is_active_stage", "is_failure_stage",
+                "GateLevel", "GateResult"):
+        from esper.leyline import (
+            SeedStage,
+            VALID_TRANSITIONS,
+            is_valid_transition,
+            is_terminal_stage,
+            is_active_stage,
+            is_failure_stage,
+            GateLevel,
+            GateResult,
+        )
+        mapping = {
+            "SeedStage": SeedStage,
+            "VALID_TRANSITIONS": VALID_TRANSITIONS,
+            "is_valid_transition": is_valid_transition,
+            "is_terminal_stage": is_terminal_stage,
+            "is_active_stage": is_active_stage,
+            "is_failure_stage": is_failure_stage,
+            "GateLevel": GateLevel,
+            "GateResult": GateResult,
+        }
+        return mapping[name]
+
+    # Slot (HEAVY - loads torch)
+    if name in ("SeedMetrics", "SeedState", "QualityGates", "SeedSlot"):
+        from esper.kasmina.slot import SeedMetrics, SeedState, QualityGates, SeedSlot
+        mapping = {
+            "SeedMetrics": SeedMetrics,
+            "SeedState": SeedState,
+            "QualityGates": QualityGates,
+            "SeedSlot": SeedSlot,
+        }
+        return mapping[name]
+
+    # Blueprints (HEAVY - loads torch)
+    if name in ("BlueprintRegistry", "BlueprintSpec", "ConvBlock"):
+        from esper.kasmina.blueprints import BlueprintRegistry, BlueprintSpec, ConvBlock
+        mapping = {
+            "BlueprintRegistry": BlueprintRegistry,
+            "BlueprintSpec": BlueprintSpec,
+            "ConvBlock": ConvBlock,
+        }
+        return mapping[name]
+
+    # Isolation (HEAVY - loads torch)
+    if name in ("blend_with_isolation", "GradientHealthMonitor"):
+        from esper.kasmina.isolation import blend_with_isolation, GradientHealthMonitor
+        mapping = {
+            "blend_with_isolation": blend_with_isolation,
+            "GradientHealthMonitor": GradientHealthMonitor,
+        }
+        return mapping[name]
+
+    # Host (HEAVY - loads torch)
+    if name in ("CNNHost", "TransformerHost", "TransformerBlock", "MorphogeneticModel"):
+        from esper.kasmina.host import CNNHost, TransformerHost, TransformerBlock, MorphogeneticModel
+        mapping = {
+            "CNNHost": CNNHost,
+            "TransformerHost": TransformerHost,
+            "TransformerBlock": TransformerBlock,
+            "MorphogeneticModel": MorphogeneticModel,
+        }
+        return mapping[name]
+
+    # Protocol & Alpha (lightweight)
+    if name == "HostProtocol":
+        from esper.kasmina.protocol import HostProtocol
+        return HostProtocol
+
+    if name == "AlphaController":
+        from esper.kasmina.alpha_controller import AlphaController
+        return AlphaController
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

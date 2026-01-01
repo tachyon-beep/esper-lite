@@ -243,7 +243,11 @@ class VectorizedEmitter:
 
         action_name = OP_NAMES[action_indices["op"]]
         blueprint_id = BLUEPRINT_IDS[action_indices["blueprint"]]
-        style = STYLE_NAMES[action_indices["style"]]
+        style_idx = action_indices["style"]
+        style = STYLE_NAMES[style_idx]
+        blend_id = STYLE_BLEND_IDS[style_idx]
+        selected_alpha_algorithm = STYLE_ALPHA_ALGORITHMS[style_idx].name
+        alpha_algorithm = active_alpha_algorithm or selected_alpha_algorithm
         tempo_idx = action_indices["tempo"]
         alpha_target = ALPHA_TARGET_VALUES[action_indices["alpha_target"]]
         alpha_speed = ALPHA_SPEED_NAMES[action_indices["alpha_speed"]]
@@ -251,6 +255,11 @@ class VectorizedEmitter:
         alpha_target_masked = bool(masked.get("alpha_target", False))
         alpha_speed_masked = bool(masked.get("alpha_speed", False))
         alpha_curve_masked = bool(masked.get("alpha_curve", False))
+        op_masked = bool(masked.get("op", False))
+        slot_masked = bool(masked.get("slot", False))
+        blueprint_masked = bool(masked.get("blueprint", False))
+        style_masked = bool(masked.get("style", False))
+        tempo_masked = bool(masked.get("tempo", False))
 
         self._emit(TelemetryEvent(
             event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
@@ -260,6 +269,7 @@ class VectorizedEmitter:
             data=AnalyticsSnapshotPayload(
                 kind="last_action",
                 env_id=self.env_id,
+                inner_epoch=epoch,
                 total_reward=total_reward,
                 action_name=action_name,
                 action_confidence=action_confidence,
@@ -276,9 +286,18 @@ class VectorizedEmitter:
                 blueprint_id=blueprint_id,
                 tempo_idx=tempo_idx,
                 style=style,
+                blend_id=blend_id,
                 alpha_target=alpha_target,
                 alpha_speed=alpha_speed,
                 alpha_curve=alpha_curve,
+                alpha_algorithm=alpha_algorithm,
+                alpha_algorithm_selected=selected_alpha_algorithm,
+                action_success=success,
+                op_masked=op_masked,
+                slot_masked=slot_masked,
+                blueprint_masked=blueprint_masked,
+                style_masked=style_masked,
+                tempo_masked=tempo_masked,
                 alpha_target_masked=alpha_target_masked,
                 alpha_speed_masked=alpha_speed_masked,
                 alpha_curve_masked=alpha_curve_masked,
@@ -303,11 +322,7 @@ class VectorizedEmitter:
             return
 
         payload = dict(metrics)
-        payload["train_steps"] = agent.train_steps
         payload["entropy_coef"] = agent.get_entropy_coef()
-        payload["avg_accuracy"] = avg_acc
-        payload["avg_reward"] = avg_reward
-        payload["rolling_avg_accuracy"] = rolling_avg_acc
 
         if self._should_emit("debug"):
             try:
@@ -590,6 +605,7 @@ def emit_last_action(
     payload = AnalyticsSnapshotPayload(
         kind="last_action",
         env_id=env_id,
+        inner_epoch=epoch,
         action_name=OP_NAMES[op_idx],
         slot_id=slot_id,
         blueprint_id=BLUEPRINT_IDS[blueprint_idx],
@@ -610,7 +626,6 @@ def emit_last_action(
         alpha_speed_masked=bool(masked.get("alpha_speed", False)),
         alpha_curve_masked=bool(masked.get("alpha_curve", False)),
         action_success=success,
-        batch=epoch,  # inner_epoch mapped to batch for consistency
     )
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,

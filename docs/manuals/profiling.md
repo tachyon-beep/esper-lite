@@ -24,6 +24,7 @@ PYTHONPATH=src uv run python -m esper.scripts.train ppo \
 Notes:
 - Keep `--torch-profiler-active` small (1–3) to avoid multi-hundred-MB traces.
 - Profiler “steps” correspond to PPO **inner epochs** (the `epoch 1..max_epochs` loop). With `--torch-profiler-wait 10 --torch-profiler-warmup 10 --torch-profiler-active 2`, the first trace only exports after `10+10+2=22` inner epochs; if you stop earlier you’ll get an empty/near-empty summary and no trace file.
+- If you’re profiling with `--gpu-preload`, try `--experimental-gpu-preload-gather` to remove DataLoader collation overhead (experimental).
 - By default, traces do **not** record shapes/memory/stacks. Enable only if needed:
   - `--torch-profiler-record-shapes`
   - `--torch-profiler-profile-memory`

@@ -24,6 +24,7 @@ import torch
 from esper.leyline import (
     DEFAULT_GAMMA,
     DEFAULT_LSTM_HIDDEN_DIM,
+    GerminationStyle,
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
     NUM_ALPHA_TARGETS,
@@ -222,7 +223,11 @@ class TamiyoRolloutBuffer:
         self.blueprint_masks = torch.zeros(n, m, self.num_blueprints, dtype=torch.bool, device=device)
         self.blueprint_masks[:, :, 0] = True  # First blueprint always valid
         self.style_masks = torch.zeros(n, m, self.num_styles, dtype=torch.bool, device=device)
-        self.style_masks[:, :, 0] = True  # First style always valid
+        # Style is special: for op!=GERMINATE/SET_ALPHA_TARGET we force SIGMOID_ADD
+        # (see FactoredRecurrentActorCritic.get_action/evaluate_actions). Use the
+        # same safe default on padded rows to keep log_probs deterministic (0.0).
+        default_style = int(GerminationStyle.SIGMOID_ADD)
+        self.style_masks[:, :, default_style] = True
         self.tempo_masks = torch.zeros(n, m, self.num_tempo, dtype=torch.bool, device=device)
         self.tempo_masks[:, :, 0] = True  # First tempo always valid
         self.alpha_target_masks = torch.zeros(n, m, self.num_alpha_targets, dtype=torch.bool, device=device)
@@ -233,6 +238,9 @@ class TamiyoRolloutBuffer:
         self.alpha_curve_masks[:, :, 0] = True  # First alpha curve always valid
         self.op_masks = torch.zeros(n, m, self.num_ops, dtype=torch.bool, device=device)
         self.op_masks[:, :, 0] = True  # First op always valid
+
+        # Keep padded actions consistent with the default masks above.
+        self.style_actions.fill_(default_style)
 
         # LSTM hidden states: [num_envs, max_steps, lstm_layers, hidden_dim]
         self.hidden_h = torch.zeros(n, m, self.lstm_layers, self.lstm_hidden_dim, device=device)

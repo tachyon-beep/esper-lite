@@ -11,13 +11,13 @@ class TestTrainDualPolicyAB:
 
     def test_function_exists_and_importable(self):
         """Should be able to import train_dual_policy_ab."""
-        from esper.simic.training import train_dual_policy_ab
+        from esper.simic.training.dual_ab import train_dual_policy_ab
 
         assert callable(train_dual_policy_ab)
 
     def test_validates_minimum_groups(self):
         """Should require at least 2 groups for A/B testing."""
-        from esper.simic.training import train_dual_policy_ab
+        from esper.simic.training.dual_ab import train_dual_policy_ab
 
         with pytest.raises(ValueError, match="at least 2 groups"):
             train_dual_policy_ab(
@@ -29,7 +29,7 @@ class TestTrainDualPolicyAB:
 
     def test_validates_device_count_matches_groups(self):
         """Should require same number of devices as groups."""
-        from esper.simic.training import train_dual_policy_ab
+        from esper.simic.training.dual_ab import train_dual_policy_ab
 
         with pytest.raises(ValueError, match="Number of devices"):
             train_dual_policy_ab(
@@ -48,7 +48,7 @@ class TestTrainDualPolicyAB:
     )
     def test_default_group_configs_requires_cuda(self):
         """Should raise error if CUDA not available when using defaults."""
-        from esper.simic.training import train_dual_policy_ab
+        from esper.simic.training.dual_ab import train_dual_policy_ab
 
         # This will fail with CUDA error when CUDA is not available
         with pytest.raises(ValueError, match="requires CUDA"):
@@ -69,7 +69,7 @@ class TestTrainDualPolicyAB:
         This is a smoke test that verifies the basic function works.
         We use very small parameters to make it fast.
         """
-        from esper.simic.training import train_dual_policy_ab
+        from esper.simic.training.dual_ab import train_dual_policy_ab
 
         results = train_dual_policy_ab(
             n_envs_per_group=1,  # Minimal envs

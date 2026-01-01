@@ -193,7 +193,7 @@ class TestFusedForwardAlphaShapeValidation:
         x = torch.randn(4, 3, 32, 32)
         alpha_wrong = torch.full((4, 1, 1), 0.5)
 
-        with pytest.raises(AssertionError, match="expected.*cnn topology"):
+        with pytest.raises(ValueError, match="expected.*cnn topology"):
             model.fused_forward(x, {"r0c1": alpha_wrong})
 
     def test_transformer_correct_shape_accepted(self):
@@ -240,7 +240,7 @@ class TestFusedForwardAlphaShapeValidation:
         x = torch.randint(0, 100, (4, 16))
         alpha_wrong = torch.full((4, 1, 1, 1), 0.5)
 
-        with pytest.raises(AssertionError, match="expected.*transformer topology"):
+        with pytest.raises(ValueError, match="expected.*transformer topology"):
             model.fused_forward(x, {"r0c1": alpha_wrong})
 
     def test_batch_size_mismatch_rejected(self):
@@ -253,7 +253,7 @@ class TestFusedForwardAlphaShapeValidation:
         x = torch.randn(4, 3, 32, 32)
         alpha_wrong_batch = torch.full((2, 1, 1, 1), 0.5)
 
-        with pytest.raises(AssertionError, match="expected"):
+        with pytest.raises(ValueError, match="expected"):
             model.fused_forward(x, {"r0c1": alpha_wrong_batch})
 
     def test_empty_alpha_overrides_allowed(self):

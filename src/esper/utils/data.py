@@ -6,6 +6,8 @@ with room to grow for ImageNet, synthetic datasets, etc.
 
 from __future__ import annotations
 
+import math
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, cast
 import warnings
@@ -197,12 +199,15 @@ def _ensure_cifar10_cached(device: str, data_root: str = "./data", *, refresh: b
         test_x = torch.stack([testset[i][0] for i in range(len(testset))])
         test_y = torch.tensor([testset[i][1] for i in range(len(testset))])
 
-        _GPU_DATASET_CACHE[cache_key] = (
-            train_x.to(device),
-            train_y.to(device),
-            test_x.to(device),
-            test_y.to(device),
-        )
+        # Move to device with channels-last format in a single operation to avoid
+        # 2x VRAM spike from separate .to(device) then .to(memory_format=...).
+        # Channels-last enables Tensor Core acceleration on modern GPUs (Volta+).
+        train_x = train_x.to(device, memory_format=torch.channels_last)
+        train_y = train_y.to(device)
+        test_x = test_x.to(device, memory_format=torch.channels_last)
+        test_y = test_y.to(device)
+
+        _GPU_DATASET_CACHE[cache_key] = (train_x, train_y, test_x, test_y)
 
 
 class SharedGPUBatchIterator:
@@ -290,9 +295,11 @@ class SharedGPUBatchIterator:
                 "drop_last": is_train,  # Drop last for training, keep for validation
             }
             if generator is not None:
-                # Each device gets a deterministically offset generator
+                # Each device gets a deterministically offset generator.
+                # Use _stable_device_index() instead of hash() for reproducibility
+                # across Python processes (hash() is randomized unless PYTHONHASHSEED is set).
                 device_gen = torch.Generator(device='cpu')
-                device_gen.manual_seed(generator.initial_seed() + hash(device) % 2**31)
+                device_gen.manual_seed(generator.initial_seed() + _stable_device_index(device))
                 loader_kwargs["generator"] = device_gen
 
             self._device_loaders[device] = DataLoader(dataset, **loader_kwargs)
@@ -345,6 +352,194 @@ class SharedGPUBatchIterator:
 
         # Type narrowing - all slots should be filled
         return [item for item in result if item is not None and item[0].numel() > 0]
+
+
+def _stable_device_index(device: str) -> int:
+    """Return a stable numeric index for a device string.
+
+    Used for deterministic per-device shuffling without relying on Python's hash()
+    (which is randomized across processes unless PYTHONHASHSEED is pinned).
+    """
+    if device == "cpu":
+        return 0
+    if device == "cuda":
+        return 0
+    if device.startswith("cuda:"):
+        idx_str = device.split(":", 1)[1]
+        try:
+            return int(idx_str)
+        except ValueError as e:
+            raise ValueError(f"Invalid CUDA device string: {device}") from e
+    raise ValueError(f"Unsupported device string: {device}")
+
+
+@dataclass
+class _GatherDeviceState:
+    device: str
+    env_indices: list[int]
+    dataset_x: torch.Tensor
+    dataset_y: torch.Tensor
+    total_batch: int
+    drop_last: bool
+    shuffle: bool
+    cpu_gen: torch.Generator
+    perm: torch.Tensor | None = None
+    cursor: int = 0
+
+
+class SharedGPUGatherBatchIterator:
+    """GPU-preload iterator that avoids DataLoader and uses direct gathers.
+
+    This is an experimental alternative to SharedGPUBatchIterator. It iterates the
+    GPU-cached CIFAR tensors directly, generating a per-device permutation and
+    slicing index windows to build per-env batches via index_select.
+    """
+
+    def __init__(
+        self,
+        *,
+        batch_size_per_env: int,
+        n_envs: int,
+        env_devices: list[str],
+        shuffle: bool,
+        data_root: str = "./data",
+        is_train: bool = True,
+        seed: int,
+    ):
+        if batch_size_per_env < 1:
+            raise ValueError(
+                f"batch_size_per_env must be >= 1 (got {batch_size_per_env})"
+            )
+        if n_envs < 1:
+            raise ValueError(f"n_envs must be >= 1 (got {n_envs})")
+        if len(env_devices) != n_envs:
+            raise ValueError(
+                f"env_devices length ({len(env_devices)}) must match n_envs ({n_envs})"
+            )
+
+        self.n_envs = n_envs
+        self.env_devices = env_devices
+        self.batch_size_per_env = batch_size_per_env
+        self.shuffle = shuffle
+        self.is_train = is_train
+        self.drop_last = is_train
+
+        self._device_to_env_indices: dict[str, list[int]] = {}
+        for env_idx, device in enumerate(env_devices):
+            if device not in self._device_to_env_indices:
+                self._device_to_env_indices[device] = []
+            self._device_to_env_indices[device].append(env_idx)
+
+        for device in self._device_to_env_indices.keys():
+            _ensure_cifar10_cached(device, data_root)
+
+        if torch.cuda.is_available():
+            for device in self._device_to_env_indices.keys():
+                if device.startswith("cuda"):
+                    torch.cuda.synchronize(torch.device(device))
+
+        self._device_states: dict[str, _GatherDeviceState] = {}
+        per_device_lens: list[int] = []
+        for device, env_indices in self._device_to_env_indices.items():
+            cache_key = _cifar10_cache_key(device, data_root)
+            train_x, train_y, test_x, test_y = _GPU_DATASET_CACHE[cache_key]
+            if is_train:
+                dataset_x, dataset_y = train_x, train_y
+            else:
+                dataset_x, dataset_y = test_x, test_y
+
+            n_envs_on_device = len(env_indices)
+            total_batch = batch_size_per_env * n_envs_on_device
+            dataset_len = dataset_x.size(0)
+
+            if self.drop_last:
+                device_len = dataset_len // total_batch
+            else:
+                device_len = int(math.ceil(dataset_len / total_batch))
+            per_device_lens.append(device_len)
+
+            device_gen = torch.Generator(device="cpu")
+            device_seed = seed + 1009 * _stable_device_index(device)
+            device_gen.manual_seed(device_seed)
+
+            self._device_states[device] = _GatherDeviceState(
+                device=device,
+                env_indices=env_indices,
+                dataset_x=dataset_x,
+                dataset_y=dataset_y,
+                total_batch=total_batch,
+                drop_last=self.drop_last,
+                shuffle=shuffle,
+                cpu_gen=device_gen,
+            )
+
+        self._len = min(per_device_lens)
+
+    def __len__(self) -> int:
+        return self._len
+
+    def __iter__(self) -> "SharedGPUGatherBatchIterator":
+        for state in self._device_states.values():
+            dataset_len = state.dataset_x.size(0)
+            if state.shuffle:
+                perm_cpu = torch.randperm(dataset_len, generator=state.cpu_gen)
+                state.perm = perm_cpu.to(state.device)
+            else:
+                state.perm = torch.arange(dataset_len, device=state.device)
+            state.cursor = 0
+        return self
+
+    def __next__(self) -> list[tuple[torch.Tensor, torch.Tensor]]:
+        result: list[tuple[torch.Tensor, torch.Tensor] | None] = [None] * self.n_envs
+
+        for state in self._device_states.values():
+            if state.perm is None:
+                raise RuntimeError("Iterator not initialized - call __iter__ first")
+
+            dataset_len = state.dataset_x.size(0)
+            start = state.cursor
+            if start >= dataset_len:
+                raise StopIteration
+
+            end = start + state.total_batch
+            if end > dataset_len:
+                if state.drop_last:
+                    raise StopIteration
+                end = dataset_len
+
+            batch_indices = state.perm[start:end]
+            state.cursor = end
+
+            n_envs_on_device = len(state.env_indices)
+            index_chunks = torch.tensor_split(batch_indices, n_envs_on_device)
+            for local_idx, idx_chunk in enumerate(index_chunks):
+                if idx_chunk.numel() == 0:
+                    continue
+                env_idx = state.env_indices[local_idx]
+                # Use advanced indexing to preserve channels-last memory format.
+                # torch.index_select returns NCHW-contiguous by default, but
+                # dataset_x[idx_chunk] preserves the source tensor's memory format.
+                inputs = state.dataset_x[idx_chunk]
+                targets = state.dataset_y[idx_chunk]
+                result[env_idx] = (inputs, targets)
+
+        first_missing: int | None = None
+        for i, item in enumerate(result):
+            if item is None or item[0].numel() == 0:
+                first_missing = i
+                break
+        if first_missing is None:
+            return cast(list[tuple[torch.Tensor, torch.Tensor]], result)
+
+        for j in range(first_missing + 1, self.n_envs):
+            item = result[j]
+            if item is not None and item[0].numel() > 0:
+                raise RuntimeError(
+                    "Non-contiguous per-env batches detected; this would misalign env indexing."
+                )
+
+        prefix = result[:first_missing]
+        return cast(list[tuple[torch.Tensor, torch.Tensor]], [item for item in prefix if item is not None])
 
 
 def load_cifar10_gpu(

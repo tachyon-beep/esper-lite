@@ -1,8 +1,11 @@
 """Query execution and result formatting for MCP server."""
 from __future__ import annotations
 
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 import re
 from typing import Any, TYPE_CHECKING
+from uuid import UUID
 
 if TYPE_CHECKING:
     import duckdb
@@ -25,6 +28,36 @@ def format_as_markdown(columns: list[str], rows: list[tuple[Any, ...]]) -> str:
     body = "\n".join("| " + " | ".join(str(v) for v in row) + " |" for row in rows)
 
     return f"{header}\n{separator}\n{body}"
+
+
+def _jsonify_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, timedelta):
+        return value.total_seconds()
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, bytes):
+        return value.hex()
+    return str(value)
+
+
+def rows_to_records(columns: list[str], rows: list[tuple[Any, ...]]) -> list[dict[str, Any]]:
+    return [
+        {column: _jsonify_value(value) for column, value in zip(columns, row)}
+        for row in rows
+    ]
+
+
+def format_as_json(columns: list[str], rows: list[tuple[Any, ...]]) -> dict[str, Any]:
+    """Format query result as JSON-friendly dict."""
+    return {"columns": columns, "rows": rows_to_records(columns, rows), "row_count": len(rows)}
 
 
 def execute_query(

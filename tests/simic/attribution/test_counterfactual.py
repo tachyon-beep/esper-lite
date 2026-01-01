@@ -113,3 +113,77 @@ class TestCounterfactualConfigDefaults:
         """Seed should be settable in config."""
         config = CounterfactualConfig(seed=42)
         assert config.seed == 42
+
+
+class TestCounterfactualHelperReset:
+    """B8-CR-04: Test CounterfactualHelper.reset() behavior.
+
+    Verifies that the public reset() method properly clears cached state,
+    fixing the encapsulation violation where ParallelEnvState was directly
+    accessing _last_matrix.
+    """
+
+    def test_reset_clears_last_matrix(self):
+        """reset() should clear _last_matrix to None."""
+        from esper.simic.attribution.counterfactual_helper import CounterfactualHelper
+
+        helper = CounterfactualHelper(emit_events=False)
+
+        # Manually create a matrix to set cached state
+        matrix = CounterfactualMatrix(epoch=1, strategy_used="ablation_only")
+        matrix.configs.append(
+            CounterfactualResult(
+                config=(True,),
+                slot_ids=("r0c0",),
+                val_accuracy=0.5,
+                val_loss=0.5,
+            )
+        )
+        helper._last_matrix = matrix  # Simulate a computed matrix
+
+        # Verify state is set
+        assert helper.last_matrix is not None
+        assert helper.last_matrix is matrix
+
+        # Call public reset method
+        helper.reset()
+
+        # Verify state is cleared
+        assert helper.last_matrix is None
+
+    def test_reset_idempotent(self):
+        """reset() should be safe to call multiple times."""
+        from esper.simic.attribution.counterfactual_helper import CounterfactualHelper
+
+        helper = CounterfactualHelper(emit_events=False)
+
+        # Call reset on fresh helper (already None)
+        helper.reset()
+        assert helper.last_matrix is None
+
+        # Call reset again
+        helper.reset()
+        assert helper.last_matrix is None
+
+    def test_reset_preserves_engine_config(self):
+        """reset() should only clear cached results, not engine config."""
+        from esper.simic.attribution.counterfactual_helper import CounterfactualHelper
+
+        helper = CounterfactualHelper(
+            strategy="shapley",
+            shapley_samples=50,
+            emit_events=False,
+            seed=42,
+        )
+
+        # Set some cached state
+        matrix = CounterfactualMatrix(epoch=1, strategy_used="shapley")
+        helper._last_matrix = matrix
+
+        # Reset
+        helper.reset()
+
+        # Engine config should be preserved
+        assert helper.engine.config.strategy == "shapley"
+        assert helper.engine.config.shapley_samples == 50
+        assert helper.engine.config.seed == 42

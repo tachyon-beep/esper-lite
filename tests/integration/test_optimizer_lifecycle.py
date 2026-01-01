@@ -147,6 +147,7 @@ class TestOptimizerLifecycle:
                 **config.to_train_kwargs(),
                 device=device,
                 devices=[device],
+                num_workers=0,
                 quiet_analytics=True
             )
         finally:

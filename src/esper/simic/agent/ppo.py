@@ -39,8 +39,8 @@ from esper.leyline import (
     HEAD_NAMES,
     LifecycleOp,
     NUM_OPS,
-    compute_causal_masks,
 )
+from esper.leyline.causal_masks import compute_causal_masks
 from esper.leyline.slot_config import SlotConfig
 import logging
 

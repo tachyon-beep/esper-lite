@@ -16,10 +16,12 @@ from esper.leyline import (
     AnalyticsSnapshotPayload,
     EpochCompletedPayload,
     FactoredAction,
+    GERMINATE_PREFIX,
     LifecycleOp,
     TelemetryEvent,
     TelemetryEventType,
     TrainingStartedPayload,
+    is_germinate_action_name,
 )
 
 if TYPE_CHECKING:
@@ -338,9 +340,9 @@ def _convert_flat_to_factored(action: Any, topology: str = "cnn") -> FactoredAct
 
     action_name = action.name
 
-    if action_name.startswith("GERMINATE_"):
+    if is_germinate_action_name(action_name):
         # Extract blueprint from action name like "GERMINATE_CONV_LIGHT"
-        blueprint_name_upper = action_name.replace("GERMINATE_", "")
+        blueprint_name_upper = action_name[len(GERMINATE_PREFIX):]
         # Look up BlueprintAction by name, default to NOOP for unknown blueprints
         try:
             blueprint = BlueprintAction[blueprint_name_upper]

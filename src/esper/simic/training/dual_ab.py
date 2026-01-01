@@ -18,7 +18,7 @@ Limitations:
       final policy quality rather than exact wall-clock parity during training
 
 Usage:
-    from esper.simic.training import train_dual_policy_ab
+    from esper.simic.training.dual_ab import train_dual_policy_ab
     from esper.simic.rewards import RewardMode
 
     results = train_dual_policy_ab(

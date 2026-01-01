@@ -16,7 +16,7 @@ import dataclasses
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 if TYPE_CHECKING:
     from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
@@ -925,8 +925,8 @@ class SeedStageChangedPayload:
         return cls(
             slot_id=data["slot_id"],
             env_id=data["env_id"],
-            from_stage=data["from"],
-            to_stage=data["to"],
+            from_stage=data["from_stage"],
+            to_stage=data["to_stage"],
             alpha=data.get("alpha"),
             accuracy_delta=data.get("accuracy_delta", 0.0),
             epochs_in_stage=data.get("epochs_in_stage", 0),
@@ -939,16 +939,14 @@ class SeedStageChangedPayload:
     def to_dict(self) -> dict[str, Any]:
         """Convert to dict for telemetry serialization.
 
-        PERF: Avoids dataclasses.asdict() deep-copy overhead and enforces the
-        canonical JSON schema keys (`from`, `to`) required by:
-        - SeedStageChangedPayload.from_dict()
-        - Karn MCP DuckDB views (seed_lifecycle)
+        PERF: Avoids dataclasses.asdict() deep-copy overhead and enforces a
+        stable JSON schema that matches the dataclass field names.
         """
         return {
             "slot_id": self.slot_id,
             "env_id": self.env_id,
-            "from": self.from_stage,
-            "to": self.to_stage,
+            "from_stage": self.from_stage,
+            "to_stage": self.to_stage,
             "alpha": self.alpha,
             "accuracy_delta": self.accuracy_delta,
             "epochs_in_stage": self.epochs_in_stage,
@@ -1619,3 +1617,15 @@ TelemetryPayload = (
     | EpisodeOutcomePayload
     | GovernorRollbackPayload
 )
+
+
+# =============================================================================
+# Telemetry Callback Type Alias
+# =============================================================================
+
+TelemetryCallback = Callable[[TelemetryEvent], None]
+"""Type alias for telemetry event callbacks.
+
+Used by components that accept a telemetry emission callback, e.g.:
+    telemetry_cb: TelemetryCallback | None = None
+"""

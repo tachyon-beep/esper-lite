@@ -23,9 +23,9 @@ def real_server():
 
 def test_runs_view_has_data(real_server):
     """runs view returns real training runs."""
-    result = real_server.query_sql_sync("SELECT run_id, task FROM runs LIMIT 5")
-    # Should have header row at minimum
-    assert "|" in result or "0 rows" in result
+    result = real_server.query_sql_sync("SELECT episode_id, task FROM runs LIMIT 5")
+    assert result["ok"] is True
+    assert "episode_id" in result["columns"]
 
 
 def test_epochs_aggregation_works(real_server):
@@ -33,7 +33,8 @@ def test_epochs_aggregation_works(real_server):
     result = real_server.query_sql_sync(
         "SELECT env_id, MAX(val_accuracy) as peak FROM epochs GROUP BY env_id LIMIT 5"
     )
-    assert "peak" in result or "0 rows" in result
+    assert result["ok"] is True
+    assert "peak" in result["columns"]
 
 
 def test_seed_lifecycle_query_works(real_server):
@@ -42,19 +43,20 @@ def test_seed_lifecycle_query_works(real_server):
         "SELECT blueprint_id, COUNT(*) as cnt FROM seed_lifecycle "
         "WHERE event_type = 'SEED_FOSSILIZED' GROUP BY blueprint_id"
     )
-    # Either has data or returns 0 rows message
-    assert "|" in result or "0 rows" in result
+    assert result["ok"] is True
+    assert "cnt" in result["columns"]
 
 
 def test_complex_join_works(real_server):
     """Can join across views."""
     result = real_server.query_sql_sync("""
         SELECT
-            r.run_id,
+            r.episode_id,
             COUNT(DISTINCT e.env_id) as envs_seen
         FROM runs r
         LEFT JOIN epochs e ON e.timestamp > r.started_at
-        GROUP BY r.run_id
+        GROUP BY r.episode_id
         LIMIT 3
     """)
-    assert "|" in result or "0 rows" in result
+    assert result["ok"] is True
+    assert "envs_seen" in result["columns"]

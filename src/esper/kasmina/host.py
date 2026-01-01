@@ -608,7 +608,7 @@ class MorphogeneticModel(nn.Module):
 
         Raises:
             ValueError: If alpha_overrides contains keys not in seed_slots.
-            AssertionError: If alpha_override shape doesn't match expected topology shape.
+            ValueError: If alpha_override shape doesn't match expected topology shape.
         """
         if not self._active_slots:
             return self.host.forward(x)
@@ -625,11 +625,12 @@ class MorphogeneticModel(nn.Module):
         expected_shape = self._get_expected_alpha_shape(x.shape[0])
         topology = self.host.topology
         for slot_id, alpha in alpha_overrides.items():
-            assert alpha.shape == expected_shape, (
-                f"alpha_override for slot '{slot_id}' has shape {tuple(alpha.shape)}, "
-                f"expected {expected_shape} for {topology} topology. "
-                f"Shape mismatch causes silent broadcasting errors or wrong alpha application."
-            )
+            if alpha.shape != expected_shape:
+                raise ValueError(
+                    f"alpha_override for slot '{slot_id}' has shape {tuple(alpha.shape)}, "
+                    f"expected {expected_shape} for {topology} topology. "
+                    f"Shape mismatch causes silent broadcasting errors or wrong alpha application."
+                )
 
         prev_segment = None
         for slot_id in self._active_slots:

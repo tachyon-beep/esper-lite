@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import torch
 
-from esper.leyline import compute_causal_masks
+from esper.leyline.causal_masks import compute_causal_masks
 
 
 def compute_per_head_advantages(

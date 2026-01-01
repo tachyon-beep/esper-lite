@@ -130,8 +130,8 @@ class TestSeedStageChangedPayloadAlphaCurve:
         )
         assert payload.alpha_curve == "LINEAR"
 
-    def test_to_dict_uses_from_to_keys(self):
-        """to_dict() should emit canonical JSON keys from/to (not from_stage/to_stage)."""
+    def test_to_dict_uses_from_stage_to_stage_keys(self):
+        """to_dict() should emit stable JSON keys matching dataclass fields."""
         payload = SeedStageChangedPayload(
             slot_id="slot_0",
             env_id=0,
@@ -141,18 +141,18 @@ class TestSeedStageChangedPayloadAlphaCurve:
             alpha_curve="SIGMOID_GENTLE",
         )
         data = payload.to_dict()
-        assert data["from"] == "TRAINING"
-        assert data["to"] == "BLENDING"
-        assert "from_stage" not in data
-        assert "to_stage" not in data
+        assert data["from_stage"] == "TRAINING"
+        assert data["to_stage"] == "BLENDING"
+        assert "from" not in data
+        assert "to" not in data
 
     def test_from_dict_restores_alpha_curve(self):
         """from_dict() should restore alpha_curve field."""
         data = {
             "slot_id": "slot_0",
             "env_id": 0,
-            "from": "TRAINING",
-            "to": "BLENDING",
+            "from_stage": "TRAINING",
+            "to_stage": "BLENDING",
             "alpha_curve": "SIGMOID_GENTLE",
         }
         payload = SeedStageChangedPayload.from_dict(data)
@@ -163,8 +163,8 @@ class TestSeedStageChangedPayloadAlphaCurve:
         incomplete_data = {
             "slot_id": "slot_0",
             "env_id": 0,
-            "from": "TRAINING",
-            "to": "BLENDING",
+            "from_stage": "TRAINING",
+            "to_stage": "BLENDING",
             # No alpha_curve - should fail
         }
         with pytest.raises(KeyError):
