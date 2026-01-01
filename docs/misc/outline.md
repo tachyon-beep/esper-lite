@@ -556,3 +556,61 @@ Fossilisation is not destruction but **custody transfer**: a seed becomes *commi
 In Phase 1, we deliberately spend compute on audited attribution (full retrain Shapley over small candidate sets) to ensure the feedback signal is trustworthy while Tamiyo learns. The longer-term plan is to convert that expensive truth into scalable behaviour via distillation, approximation, candidate selection, and durable flight-recorded experience, so a trained Tamiyo can reliably grow many future models without the Phase 1 harness.
 
 The bet is simple: if we define the rules of growth carefully enough, architectures can emerge that no human would think to design, while an explicit accounting system keeps them honest.
+
+---
+
+## Appendix A: Pending Validation (Do Not Publish)
+
+> **Status:** This appendix contains draft observations and claims that require validation before inclusion in any public-facing document. The content here represents early interpretations of experimental results that may be incomplete, overstated, or incorrect.
+
+---
+
+### A.1 Emergent Restoration: The "Lobotomy" Stress Test
+
+To rigorously test Tamiyo's capacity for structural independence, we subjected the system to a catastrophic failure condition termed the **Lobotomy Scenario**.
+
+In this configuration, the host network is severely compromised: a blind 1x1 Convolutional host with broken residual paths, effectively severing gradient flow and spatial awareness. Unlike standard residual tuning (where the seed refines a competent host), this scenario requires the seed to assume full load-bearing responsibility for the task.
+
+**Observed Results (requires validation):**
+
+Rather than collapsing, the policy exhibited a distinct **rescue behaviour**:
+
+1. **Panic Search (Epochs 0-10):** High-entropy exploration characterized by rapid germination and lysis of unsuitable candidates (`depthwise`, `norm`, `conv_small`), leading to a high "infant mortality" rate in the Seed Graveyard.
+2. **Identification (Epoch 11):** Tamiyo identified a `conv_light` blueprint (approx. 2.3k params) capable of restoring spatial vision.
+3. **Bypass Grafting:** Control was routed almost exclusively through the seed. Counterfactual analysis confirms the seed alone achieves **46.1%** accuracy, compared to the host's **0.0%**.
+
+**Tentative Interpretation:**
+
+This result may validate a critical hypothesis: **Esper does not require a competent host.** If the "Gradient Isolation" mechanism is robust enough to train fully independent modules from scratch, the system can perform functional organ transplants on dead infrastructure. The agent did not just *tune* the model; it *rebuilt* it.
+
+If confirmed, this would constitute evidence of **Architectural Self-Repair**: break the spine, and the organism grows an exoskeleton to hold itself up.
+
+---
+
+### A.2 Draft Figure Caption (for TUI screenshot)
+
+**Figure X: Forensic Analysis of a Rescue Operation.**
+
+*Telemetry from the "Lobotomy" stress test on CIFAR-10. Top Right: Best run achieves 46.1% accuracy despite a functional host baseline of 0.0%. Center Right: The "Seed Graveyard" shows the policy rejecting 11 candidate structures (red) before committing the successful `conv_light` module (green). Bottom: Counterfactual analysis confirms the seed provides 100% of the effective signal (+35.5 individual contribution vs 0.0 baseline).*
+
+---
+
+### A.3 Engineering Sanity Checks
+
+Before any publication, validate the following:
+
+1. **Rent Calculation for Broken Host:**
+   - **Risk:** If the host has 0 gradient/accuracy, does the Rent formula (which usually scales based on host size or performance) behave correctly?
+   - **Check:** Ensure `P_host` in the rent formula `log(1 + (Base + P_seed)/P_host)` is the *physical* size of the broken host, not zero. If `P_host` is read as 0, rent explodes to infinity.
+   - **Expected:** Since it's a 1x1 ConvNet, it has parameters (just useless ones), so the math should hold.
+
+2. **Reproducibility:**
+   - Can the rescue behaviour be reproduced across multiple seeds?
+   - Is the "panic search" phase consistent or stochastic?
+
+3. **Counterfactual Validity:**
+   - Confirm the 46.1% vs 0.0% split is from proper ablation (seed zeroed vs host zeroed), not a reporting artifact.
+
+4. **Gradient Isolation Verification:**
+   - Confirm gradients actually flow through the seed in isolation when the host is broken.
+   - Check that the seed isn't accidentally receiving signal through some other path.

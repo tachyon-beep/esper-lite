@@ -6,6 +6,24 @@
 - STOP AND READ `CLAUDE.md` FIRST. Do not proceed without it. It contains the project intro, required reading (e.g., `README.md`, `ROADMAP.md`), and mandatory coding standards/policies.
 - `CLAUDE.md` is the source of truth for non-negotiables (e.g., no legacy/backwards-compat code, no defensive programming, and required metaphors). If anything conflicts, `CLAUDE.md` wins.
 
+## PROHIBITION ON "DEFENSIVE PROGRAMMING" PATTERNS
+
+No Bug-Hiding Patterns: This codebase prohibits defensive patterns that mask bugs instead of fixing them. Do not use .get(), getattr(), hasattr(), isinstance(), or silent exception handling to suppress errors from nonexistent attributes, malformed data, or incorrect types. A common anti-pattern is when an LLM hallucinates a variable or field name, the code fails, and the "fix" is wrapping it in getattr(obj, "hallucinated_field", None) to silence the error—this hides the real bug. When code fails, fix the actual cause: correct the field name, migrate the data source to emit proper types, or fix the broken integration. Typed dataclasses with discriminator fields serve as contracts; access fields directly (obj.field) not defensively (obj.get("field")). If code would fail without a defensive pattern, that failure is a bug to fix, not a symptom to suppress.
+
+### Legitimate Uses
+
+This prohibition does not exclude genuine uses of type checking or error handling where appropriate, such as:
+
+- **PyTorch tensor operations** (9): Converting tensors to scalars, device moves
+- **Device type normalization** (6): `str` → `torch.device` conversion
+- **Typed payload discrimination** (40): Distinguishing between typed dataclass payloads (correct migration pattern)
+- **Enum/bool/int validation** (10): Rejecting bool as int in coercion
+- **Numeric field type guards** (20): Conditional rendering of optional numeric fields
+- **NN module initialization** (2): Layer type detection for weight init
+- **Serialization polymorphism** (3): Enum, datetime, Path handling
+
+For absence of doubt, when using these ask yourself "is this defensive programming to hide a bug that should not be possible in a well designed system, or is this legitimate type handling?' If the former, remove it and fix the underlying issue.
+
 ## Project Structure & Module Organization
 
 - `src/esper/`: main Python package (domain modules: `kasmina/`, `leyline/`, `tamiyo/`, `tolaria/`, `simic/`, `nissa/`, `karn/`, plus `scripts/`).
