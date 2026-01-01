@@ -2556,6 +2556,7 @@ class SeedSlot(nn.Module):
             "blend_algorithm_id": self._blend_algorithm_id,
             "blend_tempo_epochs": self._blend_tempo_epochs,
             "blend_alpha_target": self._blend_alpha_target,
+            "resolved_topology": self._resolved_topology,
         }
 
         if self.state is not None:
@@ -2586,6 +2587,8 @@ class SeedSlot(nn.Module):
             self._blend_tempo_epochs = state["blend_tempo_epochs"]
         if "blend_alpha_target" in state:
             self._blend_alpha_target = state["blend_alpha_target"]
+        if "resolved_topology" in state:
+            self._resolved_topology = state["resolved_topology"]
 
         if state.get("seed_state"):
             self.state = SeedState.from_dict(state["seed_state"])

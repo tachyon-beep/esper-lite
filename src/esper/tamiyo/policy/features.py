@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-import os
 import threading
 from typing import Any, TYPE_CHECKING
 
@@ -44,9 +43,6 @@ from esper.leyline.stage_schema import (
 
 # HOT PATH: ONLY leyline imports allowed!
 
-# Debug flag for paranoia stage validation (set ESPER_DEBUG_STAGE=1 to enable)
-_DEBUG_STAGE_VALIDATION = os.environ.get("ESPER_DEBUG_STAGE", "").lower() in ("1", "true", "yes")
-
 if TYPE_CHECKING:
     # Type hints only - not imported at runtime
     pass
@@ -70,19 +66,29 @@ __all__ = [
 def safe(v: float | int | None, default: float = 0.0, max_val: float = 100.0) -> float:
     """Safely convert value to float, handling None/inf/nan.
 
+    Handles Python floats, numpy scalars, and 0-dim torch tensors.
+    Raises TypeError for non-numeric types to avoid masking contract violations.
+
     Args:
-        v: Value to convert (can be None, float, int, etc.)
+        v: Value to convert (can be None, float, int, numpy scalar, 0-dim tensor)
         default: Default value for None/inf/nan
         max_val: Maximum absolute value (clips to [-max_val, max_val])
 
     Returns:
         Safe float value
+
+    Raises:
+        TypeError: If v is not a numeric type that can be converted to float
     """
     if v is None:
         return default
-    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+    try:
+        v_float = float(v)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"safe() expected numeric, got {type(v)!r}") from exc
+    if not math.isfinite(v_float):
         return default
-    return max(-max_val, min(float(v), max_val))
+    return max(-max_val, min(v_float, max_val))
 
 
 # =============================================================================
@@ -228,18 +234,9 @@ def _extract_slot_features_v3(
         torch.Tensor with shape (30,)
     """
     # Stage one-hot encoding (10 dims)
+    # _stage_to_one_hot raises ValueError for invalid stages - fail fast, don't mask bugs
     stage_val = slot_report.stage.value
-    if _DEBUG_STAGE_VALIDATION:
-        assert stage_val in _VALID_STAGE_VALUES, (
-            f"Invalid stage value {stage_val} for slot {slot_id}; "
-            f"valid values are {sorted(_VALID_STAGE_VALUES)}"
-        )
-
-    if stage_val in _VALID_STAGE_VALUES:
-        stage_one_hot = _stage_to_one_hot(stage_val)
-    else:
-        # Fallback: all zeros (should not happen after Phase 0 validation)
-        stage_one_hot = [0.0] * _NUM_STAGE_DIMS
+    stage_one_hot = _stage_to_one_hot(stage_val)
 
     # Current alpha (1 dim)
     current_alpha = slot_report.metrics.current_alpha
@@ -523,7 +520,7 @@ def batch_obs_to_features(
                 num_training += 1
             elif stage_name == "BLENDING":
                 num_blending += 1
-            elif stage_name in ("HOLDING", "GRAFTED", "FOSSILIZED"):
+            elif stage_name in ("HOLDING", "FOSSILIZED"):
                 num_holding += 1
         stage_distributions.append((num_training, num_blending, num_holding))
 

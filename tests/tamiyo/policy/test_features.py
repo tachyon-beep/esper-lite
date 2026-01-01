@@ -737,3 +737,123 @@ def test_feature_extraction_performance_cuda_synchronized():
         f"Feature extraction too slow: {elapsed * 1000:.3f}ms/batch (target: <1ms). "
         "This may indicate regression in the hot path feature extraction."
     )
+
+
+# =============================================================================
+# safe() Function Tests
+# =============================================================================
+
+
+class TestSafeFunction:
+    """Tests for the safe() numeric conversion function."""
+
+    def test_safe_handles_python_float_nan(self):
+        """safe() should return default for Python float NaN."""
+        from esper.tamiyo.policy.features import safe
+
+        result = safe(float("nan"), default=0.0)
+        assert result == 0.0
+
+    def test_safe_handles_python_float_inf(self):
+        """safe() should return default for Python float inf."""
+        from esper.tamiyo.policy.features import safe
+
+        assert safe(float("inf"), default=0.0) == 0.0
+        assert safe(float("-inf"), default=0.0) == 0.0
+
+    def test_safe_handles_numpy_float32_nan(self):
+        """safe() should return default for numpy float32 NaN.
+
+        Regression test: isinstance(v, float) check failed for numpy scalars,
+        allowing NaN to leak into observation features and poison training.
+        """
+        import numpy as np
+        from esper.tamiyo.policy.features import safe
+
+        result = safe(np.float32(np.nan), default=0.0)
+        assert result == 0.0
+
+    def test_safe_handles_numpy_float64_nan(self):
+        """safe() should return default for numpy float64 NaN."""
+        import numpy as np
+        from esper.tamiyo.policy.features import safe
+
+        result = safe(np.float64(np.nan), default=0.0)
+        assert result == 0.0
+
+    def test_safe_handles_numpy_inf(self):
+        """safe() should return default for numpy inf values."""
+        import numpy as np
+        from esper.tamiyo.policy.features import safe
+
+        assert safe(np.float32(np.inf), default=0.0) == 0.0
+        assert safe(np.float64(-np.inf), default=0.0) == 0.0
+
+    def test_safe_handles_zero_dim_tensor_nan(self):
+        """safe() should return default for 0-dim torch tensor containing NaN.
+
+        Regression test: torch tensors were not checked for NaN before conversion.
+        """
+        from esper.tamiyo.policy.features import safe
+
+        nan_tensor = torch.tensor(float("nan"))
+        result = safe(nan_tensor, default=0.0)
+        assert result == 0.0
+
+    def test_safe_handles_zero_dim_tensor_inf(self):
+        """safe() should return default for 0-dim torch tensor containing inf."""
+        from esper.tamiyo.policy.features import safe
+
+        assert safe(torch.tensor(float("inf")), default=0.0) == 0.0
+        assert safe(torch.tensor(float("-inf")), default=0.0) == 0.0
+
+    def test_safe_preserves_valid_values(self):
+        """safe() should pass through valid numeric values."""
+        import numpy as np
+        from esper.tamiyo.policy.features import safe
+
+        # Python types
+        assert safe(0.5) == 0.5
+        assert safe(42) == 42.0
+        assert safe(-3.14) == -3.14
+
+        # Numpy types
+        assert safe(np.float32(0.5)) == pytest.approx(0.5, rel=1e-5)
+        assert safe(np.float64(0.5)) == 0.5
+        assert safe(np.int32(42)) == 42.0
+
+        # Torch tensors
+        assert safe(torch.tensor(0.5)) == 0.5
+        assert safe(torch.tensor(42)) == 42.0
+
+    def test_safe_clips_to_max_val(self):
+        """safe() should clip values to [-max_val, max_val]."""
+        from esper.tamiyo.policy.features import safe
+
+        assert safe(150.0, max_val=100.0) == 100.0
+        assert safe(-150.0, max_val=100.0) == -100.0
+        assert safe(5.0, max_val=10.0) == 5.0
+
+    def test_safe_returns_default_for_none(self):
+        """safe() should return default for None input."""
+        from esper.tamiyo.policy.features import safe
+
+        assert safe(None, default=0.0) == 0.0
+        assert safe(None, default=1.0) == 1.0
+
+    def test_safe_raises_for_non_numeric(self):
+        """safe() should raise TypeError for non-numeric types.
+
+        This prevents masking contract violations - if a non-numeric
+        value reaches safe(), it indicates a bug upstream.
+        """
+        from esper.tamiyo.policy.features import safe
+
+        with pytest.raises(TypeError, match="expected numeric"):
+            safe("not a number")
+
+        with pytest.raises(TypeError, match="expected numeric"):
+            safe([1, 2, 3])
+
+        with pytest.raises(TypeError, match="expected numeric"):
+            safe({"value": 1})
