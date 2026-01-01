@@ -811,14 +811,16 @@ def main() -> None:
                             "EXPERIMENTAL: Using GPU-preload gather iterator (DataLoader-free)."
                         )
 
-                    # Use task from config if specified, otherwise CLI arg
-                    effective_task = config.task if config.task else args.task
-
                     from esper.simic.training.vectorized import train_ppo_vectorized
+                    # Build train kwargs - config.task is included when set
+                    train_kwargs = config.to_train_kwargs()
+                    # If config didn't specify task, use CLI arg as fallback
+                    if "task" not in train_kwargs:
+                        train_kwargs["task"] = args.task
+
                     train_ppo_vectorized(
                         device=args.device,
                         devices=args.devices,
-                        task=effective_task,
                         save_path=args.save,
                         resume_path=args.resume,
                         num_workers=args.num_workers,
@@ -839,7 +841,7 @@ def main() -> None:
                         torch_profiler_profile_memory=args.torch_profiler_profile_memory,
                         torch_profiler_with_stack=args.torch_profiler_with_stack,
                         torch_profiler_summary=args.torch_profiler_summary,
-                        **config.to_train_kwargs(),
+                        **train_kwargs,
                     )
         except Exception:
             import traceback

@@ -182,3 +182,71 @@ def test_entropy_anneal_alias_conflict_rejected():
             "entropy_anneal_rounds": 50,
             "entropy_anneal_episodes": 100,
         })
+
+
+# =============================================================================
+# Prevention tests for code review issues (2025-01-01)
+# =============================================================================
+
+class TestDocstringImportPath:
+    """Tests to prevent docstring import path rot."""
+
+    def test_documented_import_path_works(self):
+        """Ensure the import path in the docstring is valid.
+
+        The docstring in config.py says:
+            from esper.simic.training import TrainingConfig
+
+        This test verifies that path actually works.
+        """
+        # This import should succeed (same as what the test file uses)
+        from esper.simic.training import TrainingConfig as TC
+        assert TC is TrainingConfig
+
+
+class TestTaskFieldInToTrainKwargs:
+    """Tests for task field inclusion in to_train_kwargs()."""
+
+    def test_task_included_when_set(self):
+        """task field should be in to_train_kwargs() when explicitly set."""
+        config = TrainingConfig(task="tinystories")
+        kwargs = config.to_train_kwargs()
+        assert "task" in kwargs
+        assert kwargs["task"] == "tinystories"
+
+    def test_task_excluded_when_none(self):
+        """task should NOT be in kwargs when not set (use function default)."""
+        config = TrainingConfig()  # task=None by default
+        kwargs = config.to_train_kwargs()
+        assert "task" not in kwargs
+
+    def test_task_from_config_overrides_correctly(self):
+        """Verify task value flows through correctly for all valid tasks."""
+        for task_name in ["cifar10", "cifar10_deep", "cifar10_blind", "tinystories"]:
+            config = TrainingConfig(task=task_name)
+            kwargs = config.to_train_kwargs()
+            assert kwargs.get("task") == task_name
+
+
+class TestSlotsStringRejection:
+    """Tests for slots parameter type validation."""
+
+    def test_slots_string_produces_clear_error(self):
+        """Passing a string for slots should fail with helpful message.
+
+        Before the fix, list("r0c1") would produce ['r','0','c','1'],
+        leading to confusing "Invalid slot 'r'" errors.
+        """
+        with pytest.raises(TypeError, match="slots must be a list"):
+            TrainingConfig(slots="r0c1")
+
+    def test_slots_string_error_suggests_fix(self):
+        """The error message should suggest the correct syntax."""
+        with pytest.raises(TypeError, match=r"Did you mean slots=\['r0c1'\]"):
+            TrainingConfig(slots="r0c1")
+
+    def test_slots_tuple_still_works(self):
+        """Tuple input should still be normalized to list (convenience feature)."""
+        config = TrainingConfig(slots=("r0c0", "r0c1"))
+        assert config.slots == ["r0c0", "r0c1"]
+        assert isinstance(config.slots, list)

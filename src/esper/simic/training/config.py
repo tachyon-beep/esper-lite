@@ -6,7 +6,7 @@ silently drift. Configs can be built from presets or loaded from JSON, with
 unknown keys rejected to avoid “paper surfaces.”
 
 Usage:
-    from esper.simic.config import TrainingConfig
+    from esper.simic.training import TrainingConfig
 
     # Default config (CIFAR-10 optimized)
     config = TrainingConfig()
@@ -147,7 +147,13 @@ class TrainingConfig:
         if self.chunk_length is None:
             self.chunk_length = self.max_epochs
 
-        # Normalize slots to list (allows tuple input for convenience)
+        # Reject string slots with helpful error (list("r0c1") would split to ['r','0','c','1'])
+        if isinstance(self.slots, str):
+            raise TypeError(
+                f"slots must be a list of slot IDs, got string '{self.slots}'. "
+                f"Did you mean slots=['{self.slots}']?"
+            )
+        # Normalize tuple to list for convenience
         if not isinstance(self.slots, list):
             self.slots = list(self.slots)
 
@@ -312,8 +318,12 @@ class TrainingConfig:
         }
 
     def to_train_kwargs(self) -> dict[str, Any]:
-        """Extract train_ppo_vectorized kwargs."""
-        return {
+        """Extract train_ppo_vectorized kwargs.
+
+        Note: task is only included when explicitly set (not None),
+        allowing the function's default to apply when unspecified.
+        """
+        kwargs: dict[str, Any] = {
             "n_episodes": self.n_episodes,
             "n_envs": self.n_envs,
             "max_epochs": self.max_epochs,
@@ -352,6 +362,10 @@ class TrainingConfig:
             "disable_anti_gaming": self.disable_anti_gaming,
             "max_grad_norm": self.max_grad_norm,
         }
+        # Only include task when explicitly set (not None)
+        if self.task is not None:
+            kwargs["task"] = self.task
+        return kwargs
 
     # ------------------------------------------------------------------
     # Validation helpers

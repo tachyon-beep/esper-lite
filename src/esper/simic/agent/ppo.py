@@ -40,7 +40,6 @@ from esper.leyline import (
     LifecycleOp,
     NUM_OPS,
 )
-from esper.leyline.causal_masks import compute_causal_masks
 from esper.leyline.slot_config import SlotConfig
 import logging
 
@@ -572,14 +571,12 @@ class PPOAgent:
             valid_returns = data["returns"][valid_mask]
 
             # Compute per-head advantages with causal masking
+            # Returns both advantages AND masks to avoid redundant computation
             valid_op_actions = data["op_actions"][valid_mask]
-            per_head_advantages = compute_per_head_advantages(
+            per_head_advantages, head_masks = compute_per_head_advantages(
                 valid_advantages, valid_op_actions
             )
-
-            # B4-DRL-01: Use single source of truth for causal masks (from leyline)
-            # Causal structure documented in esper/leyline/causal_masks.py
-            head_masks = compute_causal_masks(valid_op_actions)
+            # B4-DRL-01: Masks from leyline.causal_masks (single source of truth)
 
             # Compute per-head ratios
             old_log_probs = {
@@ -646,7 +643,7 @@ class PPOAgent:
                     kl_per_step = (torch.exp(log_ratio) - 1) - log_ratio
                     n_valid = mask.sum().float().clamp(min=1)
                     # Masked mean KL for this head
-                    head_kl = (kl_per_step * mask.float()).sum() / n_valid
+                    head_kl = (kl_per_step * mask).sum() / n_valid
                     # Weight by fraction of timesteps where head is causally relevant
                     causal_weight = n_valid / total_timesteps
                     weighted_kl_sum = weighted_kl_sum + causal_weight * head_kl
@@ -698,7 +695,7 @@ class PPOAgent:
                 # Masked mean: only average over causally-relevant positions
                 # This prevents zeros from masked positions from biasing the loss
                 n_valid = mask.sum().clamp(min=1)  # Avoid div-by-zero
-                head_loss = -(clipped_surr * mask.float()).sum() / n_valid
+                head_loss = -(clipped_surr * mask).sum() / n_valid
                 policy_loss = policy_loss + head_loss
 
             # Value loss
@@ -729,7 +726,7 @@ class PPOAgent:
                 head_coef = self.entropy_coef_per_head.get(key, 1.0)
                 mask = head_masks[key]
                 n_valid = mask.sum().clamp(min=1)
-                masked_ent = (ent * mask.float()).sum() / n_valid
+                masked_ent = (ent * mask).sum() / n_valid
                 entropy_loss = entropy_loss - head_coef * masked_ent
 
             entropy_coef = self.get_entropy_coef()

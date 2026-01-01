@@ -37,10 +37,10 @@ def compute_causal_masks(op_actions: torch.Tensor) -> dict[str, torch.Tensor]:
 
     Example:
         >>> masks = compute_causal_masks(op_actions)
-        >>> # For advantage masking:
-        >>> masked_adv = advantages * masks["blueprint"].float()
+        >>> # For advantage masking (bool multiplication preserves dtype):
+        >>> masked_adv = advantages * masks["blueprint"]
         >>> # For masked mean:
-        >>> head_loss = (loss * masks["slot"].float()).sum() / masks["slot"].sum()
+        >>> head_loss = (loss * masks["slot"]).sum() / masks["slot"].sum()
     """
     is_wait = op_actions == LifecycleOp.WAIT
     is_germinate = op_actions == LifecycleOp.GERMINATE

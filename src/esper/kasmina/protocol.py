@@ -6,11 +6,11 @@ Slot management is handled by MorphogeneticModel, not hosts directly.
 
 from __future__ import annotations
 
-from typing import Protocol, TYPE_CHECKING, runtime_checkable
-
-from torch import Tensor
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from torch import Tensor
+
     from esper.leyline import InjectionSpec
 
 

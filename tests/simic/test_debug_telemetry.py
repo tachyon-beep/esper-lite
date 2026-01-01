@@ -10,6 +10,7 @@ from esper.simic.telemetry import (
     NumericalStabilityReport,
     check_numerical_stability,
 )
+from esper.simic.telemetry.debug_telemetry import _MAX_DIAGNOSTIC_EXEMPLARS
 
 
 class TestPerLayerGradients:
@@ -83,3 +84,48 @@ class TestNumericalStability:
 
         report = check_numerical_stability(model)
         assert len(report.nan_in_gradients) > 0
+
+
+class TestNonContiguousGradients:
+    """Tests for handling non-contiguous tensors.
+
+    Before the fix, collect_per_layer_gradients used view(-1) which crashes
+    on non-contiguous tensors. The fix uses flatten() which handles all cases.
+    """
+
+    def test_collect_handles_transposed_parameters(self):
+        """collect_per_layer_gradients should not crash on transposed parameters.
+
+        nn.Parameter(tensor.t()) creates a non-contiguous parameter where
+        .view(-1) would fail but .flatten() works.
+        """
+        # Create a model with a non-contiguous parameter (transposed view)
+        class NonContiguousModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                # Create transposed parameter (non-contiguous storage)
+                base = torch.randn(4, 3)
+                self.weight = nn.Parameter(base.t())  # 3x4, non-contiguous
+                self.bias = nn.Parameter(torch.randn(4))
+
+            def forward(self, x):
+                return x @ self.weight + self.bias
+
+        model = NonContiguousModel()
+
+        # Verify the parameter is actually non-contiguous
+        assert not model.weight.is_contiguous()
+
+        # Run forward/backward
+        x = torch.randn(2, 3)
+        loss = model(x).sum()
+        loss.backward()
+
+        # This should NOT raise RuntimeError about view on non-contiguous tensor
+        stats = collect_per_layer_gradients(model)
+
+        # Verify we got stats for both parameters
+        assert len(stats) == 2
+        names = [s.layer_name for s in stats]
+        assert "weight" in names
+        assert "bias" in names

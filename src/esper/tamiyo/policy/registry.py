@@ -96,7 +96,8 @@ def get_policy(name: str, config: dict[str, Any]) -> PolicyBundle:
     """Factory function to instantiate a policy by name.
 
     Args:
-        name: Registered policy name (e.g., "lstm", "heuristic")
+        name: Registered policy name (e.g., "lstm"). Use list_policies()
+            to see available policies.
         config: Configuration dict passed to policy constructor
 
     Returns:
@@ -104,6 +105,11 @@ def get_policy(name: str, config: dict[str, Any]) -> PolicyBundle:
 
     Raises:
         ValueError: If name is not registered
+
+    Note:
+        The heuristic adapter is NOT registered here because it doesn't
+        implement the full PolicyBundle interface. Use create_heuristic_policy()
+        from esper.tamiyo.policy instead.
     """
     if name not in _REGISTRY:
         available = ", ".join(sorted(_REGISTRY.keys())) or "(none registered)"

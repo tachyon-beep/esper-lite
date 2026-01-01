@@ -46,7 +46,55 @@ __all__ = [
 ]
 
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+# TYPE_CHECKING imports for static analysis (mypy, IDE navigation).
+# These are never executed at runtime, preserving lazy import semantics.
+if TYPE_CHECKING:
+    # Leyline re-exports (lightweight at runtime too)
+    from esper.leyline import (
+        GateLevel as GateLevel,
+        GateResult as GateResult,
+        SeedStage as SeedStage,
+        VALID_TRANSITIONS as VALID_TRANSITIONS,
+        is_active_stage as is_active_stage,
+        is_failure_stage as is_failure_stage,
+        is_terminal_stage as is_terminal_stage,
+        is_valid_transition as is_valid_transition,
+    )
+
+    # Slot management (HEAVY at runtime - loads torch)
+    from esper.kasmina.slot import (
+        QualityGates as QualityGates,
+        SeedMetrics as SeedMetrics,
+        SeedSlot as SeedSlot,
+        SeedState as SeedState,
+    )
+
+    # Blueprints (HEAVY at runtime - loads torch)
+    from esper.kasmina.blueprints import (
+        BlueprintRegistry as BlueprintRegistry,
+        BlueprintSpec as BlueprintSpec,
+        ConvBlock as ConvBlock,
+    )
+
+    # Isolation (HEAVY at runtime - loads torch)
+    from esper.kasmina.isolation import (
+        GradientHealthMonitor as GradientHealthMonitor,
+        blend_with_isolation as blend_with_isolation,
+    )
+
+    # Host (HEAVY at runtime - loads torch)
+    from esper.kasmina.host import (
+        CNNHost as CNNHost,
+        MorphogeneticModel as MorphogeneticModel,
+        TransformerBlock as TransformerBlock,
+        TransformerHost as TransformerHost,
+    )
+
+    # Protocol & Alpha (lightweight at runtime)
+    from esper.kasmina.alpha_controller import AlphaController as AlphaController
+    from esper.kasmina.protocol import HostProtocol as HostProtocol
 
 
 def __getattr__(name: str) -> Any:

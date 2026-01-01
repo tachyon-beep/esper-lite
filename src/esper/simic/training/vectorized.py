@@ -625,41 +625,8 @@ def train_ppo_vectorized(
         # environments where multiprocessing locks are healthy.
         _logger.debug("tqdm lock configuration skipped: %s", e)
 
-    from esper.tolaria import create_model
+    from esper.tolaria import create_model, validate_device
     from esper.tamiyo import SignalTracker
-
-    def _parse_device(device_str: str) -> torch.device:
-        """Parse a device string with an actionable error on failure."""
-        try:
-            return torch.device(device_str)
-        except Exception as exc:  # pragma: no cover - torch raises varied exceptions
-            raise ValueError(f"Invalid device '{device_str}': {exc}") from exc
-
-    def _validate_cuda_device(device_str: str, *, require_explicit_index: bool) -> None:
-        """Fail fast on invalid CUDA device requests."""
-        dev = _parse_device(device_str)
-        if dev.type != "cuda":
-            return
-
-        if not torch.cuda.is_available():
-            raise RuntimeError(
-                f"CUDA device '{device_str}' requested but CUDA is not available. "
-                "Use CPU devices or install CUDA drivers."
-            )
-
-        if require_explicit_index and dev.index is None:
-            raise ValueError(
-                f"CUDA device '{device_str}' must include an explicit index like 'cuda:0'."
-            )
-
-        if dev.index is None:
-            return
-
-        available = torch.cuda.device_count()
-        if dev.index >= available:
-            raise RuntimeError(
-                f"CUDA device '{device_str}' requested but only {available} device(s) are available."
-            )
 
     if not slots:
         raise ValueError("slots parameter is required and cannot be empty")
@@ -706,9 +673,9 @@ def train_ppo_vectorized(
         raise ValueError("devices must be a non-empty list")
 
     # Policy device may be specified as "cuda" without an index, but env devices must be explicit.
-    _validate_cuda_device(device, require_explicit_index=False)
+    validate_device(device, require_explicit_index=False)
     for env_device in devices:
-        _validate_cuda_device(env_device, require_explicit_index=True)
+        validate_device(env_device, require_explicit_index=True)
 
     if len(devices) > n_envs:
         raise ValueError(

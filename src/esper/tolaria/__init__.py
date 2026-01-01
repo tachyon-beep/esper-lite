@@ -13,6 +13,8 @@ and the telemetry hub at import time. Imports are deferred until first access.
 
 __all__ = [
     "create_model",
+    "parse_device",
+    "validate_device",
     "TolariaGovernor",
     "GovernorReport",
 ]
@@ -29,6 +31,12 @@ def __getattr__(name: str) -> Any:
     if name == "create_model":
         from esper.tolaria.environment import create_model
         return create_model
+    elif name == "parse_device":
+        from esper.tolaria.environment import parse_device
+        return parse_device
+    elif name == "validate_device":
+        from esper.tolaria.environment import validate_device
+        return validate_device
     elif name == "TolariaGovernor":
         from esper.tolaria.governor import TolariaGovernor
         return TolariaGovernor
