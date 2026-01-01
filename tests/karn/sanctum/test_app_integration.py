@@ -337,3 +337,184 @@ async def test_backend_emits_create_multiple_tamiyo_widgets():
         classes = [" ".join(w.classes) for w in widgets]
         assert any("group-a" in c for c in classes), "Missing group-a widget"
         assert any("group-b" in c for c in classes), "Missing group-b widget"
+
+
+# =============================================================================
+# Filter Workflow Tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_filter_clears_with_esc_after_enter():
+    """ESC should clear filter even after Enter hides the input.
+
+    Regression test for: Filter "stuck" after Enter.
+
+    Workflow:
+    1. Press / to open filter input
+    2. Type a filter value
+    3. Press Enter (hides input, keeps filter applied)
+    4. Press ESC (should clear filter AND restore rows)
+    """
+    from esper.karn.sanctum.app import SanctumApp
+    from esper.karn.sanctum.backend import SanctumBackend
+    from esper.karn.sanctum.widgets.env_overview import EnvOverview
+    from textual.widgets import Input
+
+    backend = SanctumBackend(num_envs=4)
+    app = SanctumApp(backend=backend, num_envs=4)
+
+    async with app.run_test() as pilot:
+        overview = app.query_one("#env-overview", EnvOverview)
+        filter_input = app.query_one("#filter-input", Input)
+
+        # Initial state: filter hidden, no filter value
+        assert "hidden" in filter_input.classes
+        assert filter_input.value == ""
+
+        # 1. Press / to open filter (use action directly for reliability)
+        app.action_start_filter()
+        await pilot.pause()
+        assert "hidden" not in filter_input.classes
+        assert app._filter_active is True
+
+        # 2. Type a filter value (focus is on filter input now)
+        filter_input.value = "1"  # Set directly for reliability
+        await pilot.pause()
+        assert filter_input.value == "1"
+
+        # 3. Simulate Enter by triggering submit (hides input, keeps filter applied)
+        # Post the Submitted event directly since focus/keypress can be flaky
+        from textual.widgets import Input as TextualInput
+        filter_input.post_message(TextualInput.Submitted(filter_input, filter_input.value))
+        await pilot.pause()
+        assert "hidden" in filter_input.classes
+        assert app._filter_active is False
+        # Filter value should still be applied
+        assert filter_input.value == "1"
+
+        # 4. Call action_clear_filter directly (ESC triggers this)
+        app.action_clear_filter()
+        await pilot.pause()
+
+        # Filter should be cleared
+        assert filter_input.value == ""
+        assert "hidden" in filter_input.classes
+
+
+@pytest.mark.asyncio
+async def test_filter_esc_does_nothing_when_no_filter():
+    """ESC should not consume event when no filter is active or applied."""
+    from esper.karn.sanctum.app import SanctumApp
+    from esper.karn.sanctum.backend import SanctumBackend
+    from textual.widgets import Input
+
+    backend = SanctumBackend(num_envs=4)
+    app = SanctumApp(backend=backend, num_envs=4)
+
+    async with app.run_test() as pilot:
+        filter_input = app.query_one("#filter-input", Input)
+
+        # Initial state: no filter
+        assert filter_input.value == ""
+        assert app._filter_active is False
+
+        # Press ESC - should not change anything (action returns early)
+        await pilot.press("escape")
+        await pilot.pause()
+
+        # State unchanged
+        assert filter_input.value == ""
+        assert app._filter_active is False
+
+
+# =============================================================================
+# Best Runs Pin Workflow Tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_pin_toggle_calls_backend():
+    """Pressing 'p' on scoreboard should toggle pin via backend.
+
+    Tests the keyboard shortcut workflow for pinning best runs.
+    """
+    from esper.karn.sanctum.app import SanctumApp
+    from esper.karn.sanctum.schema import BestRunRecord, SanctumSnapshot
+    from esper.karn.sanctum.widgets.scoreboard import Scoreboard
+
+    mock_backend = MagicMock()
+    snapshot = SanctumSnapshot(
+        best_runs=[
+            BestRunRecord(
+                record_id="run-001",
+                env_id=0,
+                episode=5,
+                peak_accuracy=85.0,
+                final_accuracy=82.0,
+                epoch=10,  # Epoch within episode when best was achieved
+                growth_ratio=1.1,
+                host_params=1000000,
+                fossilized_count=1,
+                pruned_count=0,
+                seeds={},
+                slot_ids=["r0c0"],
+                blueprint_spawns={},
+                blueprint_fossilized={},
+                blueprint_prunes={},
+                accuracy_history=[80.0, 85.0, 82.0],
+                reward_history=[0.1, 0.2],
+                action_history=["WAIT", "GERMINATE"],
+                pinned=False,
+            ),
+        ],
+    )
+    mock_backend.get_all_snapshots.return_value = {"default": snapshot}
+    mock_backend.compute_reward_health.return_value = RewardHealthData()
+    mock_backend.toggle_best_run_pin.return_value = True  # Returns new pin status
+
+    app = SanctumApp(backend=mock_backend, num_envs=4)
+
+    async with app.run_test() as pilot:
+        # Trigger initial refresh to populate scoreboard
+        app._poll_and_refresh()
+        await pilot.pause()
+
+        # Focus the scoreboard and ensure cursor is on first row
+        scoreboard = app.query_one("#scoreboard", Scoreboard)
+        scoreboard.table.focus()
+        scoreboard.table.move_cursor(row=0)
+        await pilot.pause()
+
+        # Call action directly (p key triggers this)
+        app.action_toggle_best_run_pin()
+        await pilot.pause()
+
+        # Backend should have been called with record_id
+        mock_backend.toggle_best_run_pin.assert_called_once_with("run-001")
+
+
+@pytest.mark.asyncio
+async def test_pin_toggle_no_op_without_selection():
+    """Pressing 'p' with no valid selection should do nothing."""
+    from esper.karn.sanctum.app import SanctumApp
+    from esper.karn.sanctum.schema import SanctumSnapshot
+
+    mock_backend = MagicMock()
+    # Empty best_runs - no rows to pin
+    snapshot = SanctumSnapshot(best_runs=[])
+    mock_backend.get_all_snapshots.return_value = {"default": snapshot}
+    mock_backend.compute_reward_health.return_value = RewardHealthData()
+
+    app = SanctumApp(backend=mock_backend, num_envs=4)
+
+    async with app.run_test() as pilot:
+        app._poll_and_refresh()
+        await pilot.pause()
+
+        # Press 'p' with no valid selection
+        await pilot.press("p")
+        await pilot.pause()
+
+        # Backend toggle should NOT have been called
+        mock_backend.toggle_best_run_pin.assert_not_called()

@@ -79,7 +79,8 @@ class DecisionDetailScreen(ModalScreen[None]):
         t = Text()
 
         t.append("Summary\n", style="bold cyan")
-        t.append(f"  Decision ID: {d.decision_id or '(missing)'}\n", style="dim")
+        # decision_id is a required field - display directly to surface bugs if None
+        t.append(f"  Decision ID: {d.decision_id}\n", style="dim")
         t.append(f"  Time:       {d.timestamp.isoformat()}\n", style="dim")
         t.append(f"  Age:        {age_str}\n", style="dim")
         t.append(f"  Env:        {d.env_id}\n", style="dim")

@@ -1207,11 +1207,11 @@ class SanctumAggregator:
         self._ensure_env(env_id)
         env = self._envs[env_id]
 
-        # Parse configs
+        # Parse configs - seed_mask and accuracy MUST exist (created by emitter)
         configs = [
             CounterfactualConfig(
-                seed_mask=tuple(cfg.get("seed_mask", [])),
-                accuracy=cfg.get("accuracy", 0.0),
+                seed_mask=tuple(cfg["seed_mask"]),
+                accuracy=cfg["accuracy"],
             )
             for cfg in payload.configs
         ]

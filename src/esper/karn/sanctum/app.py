@@ -40,6 +40,7 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Input, Static
 
 from esper.karn.sanctum.errors import SanctumTelemetryFatalError
+from esper.karn.sanctum.formatting import format_runtime
 from esper.karn.sanctum.widgets import (
     AnomalyStrip,
     EnvDetailScreen,
@@ -179,7 +180,7 @@ class RunInfoScreen(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         """Compose the run info screen."""
         s = self._snapshot
-        runtime_str = self._format_runtime(s.runtime_seconds)
+        runtime_str = format_runtime(s.runtime_seconds, include_seconds_in_hours=True)
 
         info_text = f"""\
 [bold cyan]Run Information[/bold cyan]
@@ -206,20 +207,6 @@ class RunInfoScreen(ModalScreen[None]):
 """
         with Container(id="info-container"):
             yield Static(info_text)
-
-    def _format_runtime(self, seconds: float) -> str:
-        """Format runtime as Xh Ym Zs."""
-        if seconds <= 0:
-            return "--"
-        hours = int(seconds // 3600)
-        minutes = int((seconds % 3600) // 60)
-        secs = int(seconds % 60)
-        if hours > 0:
-            return f"{hours}h {minutes}m {secs}s"
-        elif minutes > 0:
-            return f"{minutes}m {secs}s"
-        else:
-            return f"{secs}s"
 
     def on_click(self) -> None:
         """Dismiss on click."""
@@ -340,6 +327,8 @@ class SanctumApp(App[None]):
         Binding("l", "focus_right_panel", "Right Panel", show=False),
         Binding("left", "focus_left_panel", "Left Panel", show=False),
         Binding("right", "focus_right_panel", "Right Panel", show=False),
+        # Pinning
+        Binding("p", "toggle_best_run_pin", "Pin", show=False),
     ]
 
     def __init__(
@@ -707,12 +696,21 @@ class SanctumApp(App[None]):
             pass
 
     def action_clear_filter(self) -> None:
-        """Clear and hide filter input (triggered by ESC)."""
-        if not self._filter_active:
-            return  # Don't consume ESC if filter not active
+        """Clear and hide filter input (triggered by ESC).
 
+        Clears the filter if:
+        - Filter input is visible (_filter_active), OR
+        - Filter has a value (applied but input hidden after Enter)
+
+        This ensures Esc works both during input AND after Enter hides it.
+        """
         try:
             filter_input = self.query_one("#filter-input", Input)
+
+            # Clear if input is visible OR filter has a value applied
+            if not self._filter_active and not filter_input.value:
+                return  # Nothing to clear - don't consume ESC
+
             filter_input.value = ""
             filter_input.add_class("hidden")
             self._filter_active = False
@@ -953,6 +951,25 @@ class SanctumApp(App[None]):
 
         # Refresh to show updated pin status
         self._poll_and_refresh()
+
+    def action_toggle_best_run_pin(self) -> None:
+        """Toggle pin status for the currently selected Best Run row.
+
+        Keyboard shortcut: p
+
+        Only works when a row in the Scoreboard best runs table is selected.
+        Pinned records are never removed from the leaderboard.
+        """
+        if self._backend is None:
+            return
+
+        try:
+            scoreboard = self.query_one("#scoreboard", Scoreboard)
+        except NoMatches:
+            return
+
+        # Delegate to Scoreboard to emit BestRunPinToggled; app handles backend call.
+        scoreboard.request_pin_toggle()
 
     def on_event_log_detail_requested(
         self, event: EventLog.DetailRequested

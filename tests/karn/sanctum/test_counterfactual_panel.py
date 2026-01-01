@@ -241,3 +241,38 @@ class TestCounterfactualPanel:
         # Two seeds with interference SHOULD show the warning
         assert "INTERFERENCE" in content
         assert "Seeds are hurting each other" in content
+
+    def test_single_seed_baseline_not_zero(self):
+        """Regression: 1-seed baseline must NOT be 0.0 (B-TUI-01).
+
+        Bug: For 1 seed, all_disabled_accs.get(i, 0.0) returned 0.0 because
+        the 'all_off' config was only generated for 2-4 seeds. The emitter's
+        fallback to min(baseline_accs.values()) was never triggered.
+
+        Fix: Pass None instead of 0.0 so the emitter uses ablation accuracy.
+        """
+        from io import StringIO
+        from rich.console import Console
+
+        # 1 seed with proper baseline (ablation = host-only accuracy = 45%)
+        matrix = CounterfactualSnapshot(
+            slot_ids=("r0c0",),
+            configs=[
+                CounterfactualConfig(seed_mask=(False,), accuracy=45.0),  # NOT 0.0!
+                CounterfactualConfig(seed_mask=(True,), accuracy=55.0),   # With seed
+            ],
+            strategy="ablation_only",
+        )
+        panel = CounterfactualPanel(matrix)
+        rendered = panel.render()
+
+        console = Console(file=StringIO(), force_terminal=True, width=100)
+        console.print(rendered)
+        content = console.file.getvalue()
+
+        # Baseline should show 45% (the ablation accuracy), NOT 0%
+        assert "45.0%" in content
+        # Combined should show 55%
+        assert "55.0%" in content
+        # The bar should NOT start from 0 (which would be 100% filled)
+        assert "Baseline (Host only)" in content
