@@ -22,6 +22,8 @@ from typing import Literal, Any
 import yaml  # type: ignore[import-untyped]
 from pydantic import BaseModel, Field, field_validator
 
+from esper.leyline import OBS_V3_NON_BLUEPRINT_DIM
+
 
 def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     """Deep merge override into base dict."""
@@ -108,10 +110,18 @@ class TelemetryConfig(BaseModel):
 
         Returns:
             Validated TelemetryConfig instance.
+
+        Raises:
+            ValueError: If the YAML file is empty, malformed, or not a mapping.
         """
         path = Path(path)
         with open(path) as f:
             data = yaml.safe_load(f)
+
+        if not isinstance(data, dict):
+            raise ValueError(
+                f"Telemetry YAML must be a mapping, got {type(data).__name__}: {path}"
+            )
 
         if overrides:
             data = deep_merge(data, overrides)
@@ -130,7 +140,8 @@ class TelemetryConfig(BaseModel):
             Validated TelemetryConfig instance.
 
         Raises:
-            ValueError: If profile name is not recognized.
+            ValueError: If profile name is not recognized or profiles.yaml is malformed.
+            FileNotFoundError: If profiles.yaml does not exist.
         """
         profiles_path = Path(__file__).parent / "profiles.yaml"
 
@@ -143,7 +154,24 @@ class TelemetryConfig(BaseModel):
         with open(profiles_path) as f:
             all_profiles = yaml.safe_load(f)
 
-        profiles = all_profiles.get("profiles", {})
+        # Validate YAML structure explicitly - fail fast with clear messages
+        if not isinstance(all_profiles, dict):
+            raise ValueError(
+                f"profiles.yaml must be a mapping, got {type(all_profiles).__name__}"
+            )
+
+        if "profiles" not in all_profiles:
+            raise ValueError(
+                f"profiles.yaml is missing required 'profiles' key. "
+                f"Found keys: {list(all_profiles.keys())}"
+            )
+
+        profiles = all_profiles["profiles"]
+        if not isinstance(profiles, dict):
+            raise ValueError(
+                f"'profiles' key must be a mapping, got {type(profiles).__name__}"
+            )
+
         if name not in profiles:
             available = list(profiles.keys())
             raise ValueError(f"Unknown profile: {name}. Available: {available}")
@@ -176,12 +204,22 @@ class TelemetryConfig(BaseModel):
         """Shortcut for research profile."""
         return cls.from_profile("research")
 
-    def feature_count_estimate(self) -> int:
-        """Estimate total feature count for this configuration."""
-        count = 98  # V4 base observation dims (tamiyo.policy.features.MULTISLOT_FEATURE_SIZE)
+    def feature_count_estimate(self, num_classes: int = 10) -> int:
+        """Estimate total feature count for this configuration.
+
+        Args:
+            num_classes: Number of output classes for per-class metrics.
+                Defaults to 10 (CIFAR-10). Pass the actual class count
+                for other tasks (e.g., 100 for CIFAR-100).
+
+        Returns:
+            Estimated feature count based on configuration.
+        """
+        # Base observation dims from leyline (Obs V3 for 3-slot config = 113 dims)
+        count = OBS_V3_NON_BLUEPRINT_DIM
 
         if self.gradients.enabled:
-            # Assume ~4 tracked layers, 3 stats each
+            # Assume ~4 tracked layers when "all", otherwise use explicit list
             n_layers = 4 if self.gradients.layers == "all" else len(self.gradients.layers)
             stats_per_layer = 2  # norm, std
             if self.gradients.percentiles:
@@ -190,11 +228,11 @@ class TelemetryConfig(BaseModel):
             count += 4  # grad_health summary stats
 
         if self.per_class.enabled:
-            count += 10  # CIFAR-10 classes
+            count += num_classes  # Per-class accuracy
             if self.per_class.track_loss:
-                count += 10
+                count += num_classes
             if self.per_class.track_confusion:
-                count += 100  # 10x10 matrix
+                count += num_classes * num_classes  # NxN confusion matrix
 
         if self.loss_landscape.enabled:
             count += 3  # sharpness, curvature estimate, noise
