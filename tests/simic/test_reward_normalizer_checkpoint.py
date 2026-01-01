@@ -71,7 +71,7 @@ def test_resume_restores_reward_normalizer_state(monkeypatch, tmp_path):
             chunk_length=1,
             device="cpu",
             devices=["cpu"],
-            task="cifar10",
+            task="cifar_baseline",
             slots=["r0c1"],
             use_telemetry=False,
             num_workers=0,

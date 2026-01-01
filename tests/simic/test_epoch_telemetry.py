@@ -115,7 +115,7 @@ class TestEpochTelemetryContract:
             n_envs=1,
             max_epochs=10,
             max_batches=100,  # Total episodes in run
-            task="cifar10",
+            task="cifar_baseline",
             host_params=1000000,
             slot_ids=("r0c0",),
             seed=42,

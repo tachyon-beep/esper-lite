@@ -69,7 +69,7 @@ def train_dual_policy_ab(
     devices: list[str] | None = None,
     n_episodes: int = 100,
     max_epochs: int = DEFAULT_EPISODE_LENGTH,
-    task: str = "cifar10",
+    task: str = "cifar_baseline",
     lr: float = DEFAULT_LEARNING_RATE,
     clip_ratio: float = DEFAULT_CLIP_RATIO,
     entropy_coef: float = DEFAULT_ENTROPY_COEF,
@@ -101,7 +101,7 @@ def train_dual_policy_ab(
             Must have one device per group. Defaults to first N available GPUs.
         n_episodes: Total episodes to train (per group)
         max_epochs: Episode length (epochs per episode)
-        task: Task name (e.g., "cifar10")
+        task: Task name (e.g., "cifar_baseline")
         lr: Learning rate for PPO
         clip_ratio: PPO clip ratio
         entropy_coef: Entropy coefficient for exploration

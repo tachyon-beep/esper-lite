@@ -14,7 +14,7 @@ def test_heuristic_episode_germinates_and_prunes_across_slots(monkeypatch) -> No
     from esper.simic.training import run_heuristic_episode
     from esper.tamiyo.decisions import TamiyoDecision
 
-    task_spec = get_task_spec("cifar10")
+    task_spec = get_task_spec("cifar_baseline")
     Action = build_action_enum(task_spec.topology)
 
     class ScriptedPolicy:

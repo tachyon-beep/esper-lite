@@ -24,10 +24,9 @@ from esper.simic.attribution.counterfactual import (
     CounterfactualConfig,
     CounterfactualMatrix,
 )
-from esper.nissa import get_hub
 
 if TYPE_CHECKING:
-    pass
+    from esper.leyline import TelemetryEvent
 
 _logger = logging.getLogger(__name__)
 
@@ -40,7 +39,7 @@ class ContributionResult:
     contribution: float  # Marginal contribution
     shapley_mean: float = 0.0  # Shapley value (if computed)
     shapley_std: float = 0.0  # Shapley uncertainty
-    is_significant: bool = True  # Statistically significant?
+    is_significant: bool = False  # Only True after Shapley computation confirms significance
 
 
 class CounterfactualHelper:
@@ -59,7 +58,7 @@ class CounterfactualHelper:
         self,
         strategy: Literal["auto", "full_factorial", "shapley", "ablation_only"] = "auto",
         shapley_samples: int = 20,
-        emit_events: bool = True,
+        emit_callback: Callable[[TelemetryEvent], None] | None = None,
         seed: int | None = None,
     ):
         """Initialize helper.
@@ -67,7 +66,8 @@ class CounterfactualHelper:
         Args:
             strategy: "auto", "full_factorial", "shapley", or "ablation_only"
             shapley_samples: Number of permutation samples for Shapley
-            emit_events: Whether to emit telemetry events
+            emit_callback: Pre-wired callback for telemetry emission (should include env context).
+                          Use emit_with_env_context pattern from vectorized training.
             seed: RNG seed for reproducible Shapley value computation (B5-CR-01)
         """
         config = CounterfactualConfig(
@@ -75,12 +75,6 @@ class CounterfactualHelper:
             shapley_samples=shapley_samples,
             seed=seed,
         )
-        # Convert emit_events bool to callback
-        emit_callback = None
-        if emit_events:
-            hub = get_hub()
-            if hub is not None:
-                emit_callback = hub.emit
         self.engine = CounterfactualEngine(config, emit_callback=emit_callback)
         self._last_matrix: CounterfactualMatrix | None = None
 
@@ -102,6 +96,8 @@ class CounterfactualHelper:
             return {}
 
         matrix = self.engine.compute_matrix_from_results(slot_ids, results)
+        if epoch is not None:
+            matrix.epoch = epoch  # Propagate epoch for telemetry tagging
         return self._process_matrix(matrix, slot_ids)
 
     def compute_contributions(
@@ -115,7 +111,7 @@ class CounterfactualHelper:
         Args:
             slot_ids: List of slot IDs to evaluate
             evaluate_fn: Function(alpha_settings) -> (loss, accuracy)
-            epoch: Current epoch (for telemetry)
+            epoch: Current epoch (for telemetry tagging)
 
         Returns:
             Dict mapping slot_id to ContributionResult
@@ -125,6 +121,8 @@ class CounterfactualHelper:
 
         # Compute full matrix
         matrix = self.engine.compute_matrix(slot_ids, evaluate_fn)
+        if epoch is not None:
+            matrix.epoch = epoch  # Propagate epoch for telemetry tagging
         return self._process_matrix(matrix, slot_ids)
 
     def _process_matrix(

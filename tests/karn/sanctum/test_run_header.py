@@ -3,12 +3,13 @@ from io import StringIO
 
 from rich.console import Console
 
+from esper.karn.sanctum.formatting import format_runtime
 from esper.karn.sanctum.schema import (
     EnvState,
     SanctumSnapshot,
     SeedState,
 )
-from esper.karn.sanctum.widgets.run_header import RunHeader, _format_runtime
+from esper.karn.sanctum.widgets.run_header import RunHeader
 
 
 def render_to_text(panel) -> str:
@@ -25,25 +26,25 @@ def render_to_text(panel) -> str:
 
 def test_format_runtime_zero():
     """Test runtime formatting for zero or negative."""
-    assert _format_runtime(0) == "--"
-    assert _format_runtime(-5) == "--"
+    assert format_runtime(0) == "--"
+    assert format_runtime(-5) == "--"
 
 
 def test_format_runtime_seconds():
     """Test runtime formatting for seconds only."""
-    assert _format_runtime(45) == "45s"
+    assert format_runtime(45) == "45s"
 
 
 def test_format_runtime_minutes():
     """Test runtime formatting for minutes and seconds."""
-    assert _format_runtime(90) == "1m 30s"
-    assert _format_runtime(180) == "3m 0s"
+    assert format_runtime(90) == "1m 30s"
+    assert format_runtime(180) == "3m 0s"
 
 
 def test_format_runtime_hours():
     """Test runtime formatting for hours and minutes."""
-    assert _format_runtime(3660) == "1h 1m"
-    assert _format_runtime(7200) == "2h 0m"
+    assert format_runtime(3660) == "1h 1m"
+    assert format_runtime(7200) == "2h 0m"
 
 
 # =============================================================================
@@ -194,7 +195,7 @@ def test_run_header_task_name():
     snapshot = SanctumSnapshot(
         connected=True,
         staleness_seconds=1.0,
-        task_name="cifar10_blind",
+        task_name="cifar_impaired",
     )
 
     widget = RunHeader()
@@ -202,7 +203,7 @@ def test_run_header_task_name():
     panel = widget.render()
     rendered = render_to_text(panel)
 
-    assert "cifar10_blind" in rendered
+    assert "cifar_impaired" in rendered
 
 
 def test_run_header_system_alarm_ok():

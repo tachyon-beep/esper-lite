@@ -9,7 +9,7 @@ Related bug report: docs/bugs/CRITICAL-op-value-mismatch.md
 
 import torch
 from esper.tamiyo.policy import create_policy
-from esper.leyline import HEAD_NAMES, OBS_V3_NON_BLUEPRINT_DIM
+from esper.leyline import HEAD_NAMES, OBS_V3_NON_BLUEPRINT_DIM, SlotConfig
 
 
 class TestBootstrapConsistency:
@@ -17,16 +17,17 @@ class TestBootstrapConsistency:
 
     def test_bootstrap_uses_deterministic_op(self):
         """Bootstrap (deterministic=True) should use argmax op for value."""
+        slot_config = SlotConfig.default()
         policy = create_policy(
             policy_type="lstm",
             state_dim=OBS_V3_NON_BLUEPRINT_DIM,
-            num_slots=3,
+            slot_config=slot_config,
             device="cpu",
             compile_mode="off",
         )
 
         state = torch.randn(2, OBS_V3_NON_BLUEPRINT_DIM)
-        bp_idx = torch.randint(0, 13, (2, 3))
+        bp_idx = torch.randint(0, 13, (2, slot_config.num_slots))
 
         # Bootstrap call (as done in vectorized.py line 3236)
         result = policy.get_action(
@@ -57,16 +58,17 @@ class TestBootstrapConsistency:
 
     def test_bootstrap_value_not_from_forward_sample(self):
         """Verify bootstrap doesn't reuse value from forward()'s random sample."""
+        slot_config = SlotConfig.default()
         policy = create_policy(
             policy_type="lstm",
             state_dim=OBS_V3_NON_BLUEPRINT_DIM,
-            num_slots=3,
+            slot_config=slot_config,
             device="cpu",
             compile_mode="off",
         )
 
         state = torch.randn(4, OBS_V3_NON_BLUEPRINT_DIM)
-        bp_idx = torch.randint(0, 13, (4, 3))
+        bp_idx = torch.randint(0, 13, (4, slot_config.num_slots))
 
         # Get forward() output (uses sample)
         with torch.inference_mode():
@@ -96,16 +98,17 @@ class TestBootstrapConsistency:
 
     def test_bootstrap_consistency_across_calls(self):
         """Verify bootstrap is deterministic across multiple calls."""
+        slot_config = SlotConfig.default()
         policy = create_policy(
             policy_type="lstm",
             state_dim=OBS_V3_NON_BLUEPRINT_DIM,
-            num_slots=3,
+            slot_config=slot_config,
             device="cpu",
             compile_mode="off",
         )
 
         state = torch.randn(3, OBS_V3_NON_BLUEPRINT_DIM)
-        bp_idx = torch.randint(0, 13, (3, 3))
+        bp_idx = torch.randint(0, 13, (3, slot_config.num_slots))
         masks = {k: None for k in HEAD_NAMES}
 
         # Call bootstrap multiple times (should be deterministic)

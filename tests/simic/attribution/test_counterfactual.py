@@ -127,7 +127,7 @@ class TestCounterfactualHelperReset:
         """reset() should clear _last_matrix to None."""
         from esper.simic.attribution.counterfactual_helper import CounterfactualHelper
 
-        helper = CounterfactualHelper(emit_events=False)
+        helper = CounterfactualHelper(emit_callback=None)
 
         # Manually create a matrix to set cached state
         matrix = CounterfactualMatrix(epoch=1, strategy_used="ablation_only")
@@ -155,7 +155,7 @@ class TestCounterfactualHelperReset:
         """reset() should be safe to call multiple times."""
         from esper.simic.attribution.counterfactual_helper import CounterfactualHelper
 
-        helper = CounterfactualHelper(emit_events=False)
+        helper = CounterfactualHelper(emit_callback=None)
 
         # Call reset on fresh helper (already None)
         helper.reset()
@@ -172,7 +172,7 @@ class TestCounterfactualHelperReset:
         helper = CounterfactualHelper(
             strategy="shapley",
             shapley_samples=50,
-            emit_events=False,
+            emit_callback=None,
             seed=42,
         )
 

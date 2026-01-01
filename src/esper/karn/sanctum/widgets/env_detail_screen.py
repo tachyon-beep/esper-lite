@@ -24,6 +24,7 @@ from textual.widgets import Static
 from esper.karn.constants import DisplayThresholds
 from esper.karn.sanctum.formatting import format_params
 from esper.karn.sanctum.widgets.counterfactual_panel import CounterfactualPanel
+from esper.karn.sanctum.widgets.shapley_panel import ShapleyPanel
 from esper.leyline import ALPHA_CURVE_GLYPHS, STAGE_COLORS
 
 if TYPE_CHECKING:
@@ -275,11 +276,19 @@ class EnvDetailScreen(ModalScreen[None]):
         border-left: solid $primary-lighten-2;
     }
 
-    EnvDetailScreen .counterfactual-section {
+    EnvDetailScreen .attribution-section {
         height: auto;
         margin-top: 1;
         border-top: solid $primary-lighten-2;
         padding-top: 1;
+    }
+
+    EnvDetailScreen .attribution-section CounterfactualPanel {
+        width: 2fr;
+    }
+
+    EnvDetailScreen .attribution-section ShapleyPanel {
+        width: 1fr;
     }
 
     EnvDetailScreen .footer-hint {
@@ -330,12 +339,17 @@ class EnvDetailScreen(ModalScreen[None]):
                 with Vertical(classes="graveyard-section"):
                     yield Static(self._render_graveyard(), id="seed-graveyard")
 
-            # Counterfactual analysis section (full width below)
-            with Vertical(classes="counterfactual-section"):
+            # Attribution section: Counterfactual + Shapley side by side
+            with Horizontal(classes="attribution-section"):
                 yield CounterfactualPanel(
                     self._env.counterfactual_matrix,
                     seeds=self._env.seeds,
                     id="counterfactual-panel",
+                )
+                yield ShapleyPanel(
+                    self._env.shapley_snapshot,
+                    seeds=self._env.seeds,
+                    id="shapley-panel",
                 )
 
             # Footer hint
@@ -376,6 +390,13 @@ class EnvDetailScreen(ModalScreen[None]):
         try:
             cf_panel = self.query_one("#counterfactual-panel", CounterfactualPanel)
             cf_panel.update_matrix(env_state.counterfactual_matrix, seeds=env_state.seeds)
+        except NoMatches:
+            pass  # Widget may not be mounted yet
+
+        # Update Shapley panel
+        try:
+            shapley_panel = self.query_one("#shapley-panel", ShapleyPanel)
+            shapley_panel.update_snapshot(env_state.shapley_snapshot, seeds=env_state.seeds)
         except NoMatches:
             pass  # Widget may not be mounted yet
 

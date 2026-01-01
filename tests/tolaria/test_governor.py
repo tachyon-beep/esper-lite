@@ -74,6 +74,24 @@ class TestTolariaGovernor:
         assert gov.loss_history.maxlen == 30
         assert gov.min_panics_before_rollback == 3
 
+    def test_history_window_too_small_raises(self):
+        """TolariaGovernor rejects history_window < MIN_GOVERNOR_HISTORY_SAMPLES.
+
+        Regression test: history_window < 10 silently disables anomaly detection
+        because statistical thresholds require minimum samples. Fail-fast validation
+        prevents this misconfiguration from silently crippling the safety system.
+        """
+        from esper.tolaria import TolariaGovernor
+        from esper.leyline import MIN_GOVERNOR_HISTORY_SAMPLES
+
+        # Should raise ValueError for window smaller than minimum
+        with pytest.raises(ValueError, match="history_window.*must be >= MIN_GOVERNOR_HISTORY_SAMPLES"):
+            TolariaGovernor(DummyModel(), history_window=MIN_GOVERNOR_HISTORY_SAMPLES - 1)
+
+        # Edge case: exactly at minimum should succeed
+        gov = TolariaGovernor(DummyModel(), history_window=MIN_GOVERNOR_HISTORY_SAMPLES)
+        assert gov.loss_history.maxlen == MIN_GOVERNOR_HISTORY_SAMPLES
+
     def test_snapshot_saves_state(self):
         """Test that snapshot() saves model state."""
         from esper.tolaria import TolariaGovernor

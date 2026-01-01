@@ -91,8 +91,8 @@ class TestCounterfactualHelperIntegration:
     """Test CounterfactualHelper callback wiring."""
 
     def test_computes_contributions_without_crash(self):
-        """Verify compute_contributions works without emit_events."""
-        helper = CounterfactualHelper(emit_events=False)
+        """Verify compute_contributions works without emit_callback."""
+        helper = CounterfactualHelper(emit_callback=None)
 
         # Simple evaluate function
         def evaluate_fn(alphas: dict[str, float]) -> tuple[float, float]:
@@ -112,7 +112,7 @@ class TestCounterfactualHelperIntegration:
 
     def test_marginal_contribution_calculated(self):
         """Verify marginal contributions are calculated correctly."""
-        helper = CounterfactualHelper(emit_events=False)
+        helper = CounterfactualHelper(emit_callback=None)
 
         # Evaluate function where removing slot drops accuracy
         full_acc = 90.0
@@ -139,7 +139,7 @@ class TestCounterfactualHelperIntegration:
 
     def test_empty_slots_returns_empty(self):
         """Verify empty slot list returns empty dict."""
-        helper = CounterfactualHelper(emit_events=False)
+        helper = CounterfactualHelper(emit_callback=None)
 
         contributions = helper.compute_contributions(
             slot_ids=[],

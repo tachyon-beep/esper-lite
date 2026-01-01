@@ -1061,7 +1061,7 @@ def test_slot_config_filters_to_requested_slots_only():
 
     # Request only a single slot
     requested_slots = ["r0c0"]
-    model = create_model(task="cifar10", device="cpu", slots=requested_slots)
+    model = create_model(task="cifar_baseline", device="cpu", slots=requested_slots)
 
     # Verify the model only has the requested slot
     assert list(model.seed_slots.keys()) == requested_slots
@@ -1099,7 +1099,7 @@ def test_slot_config_preserves_subset_of_slots():
 
     # Request two slots (host has 3 for default cifar10)
     requested_slots = ["r0c0", "r0c2"]  # Skip r0c1
-    model = create_model(task="cifar10", device="cpu", slots=requested_slots)
+    model = create_model(task="cifar_baseline", device="cpu", slots=requested_slots)
 
     # Verify the model has exactly the requested slots
     assert set(model.seed_slots.keys()) == set(requested_slots)

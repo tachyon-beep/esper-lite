@@ -77,7 +77,7 @@ def test_heuristic_gradient_telemetry_stride_wires_into_epoch_completed_payload(
     hub.add_backend(CaptureBackend())
 
     try:
-        task_spec = get_task_spec("cifar10")
+        task_spec = get_task_spec("cifar_baseline")
         policy = _ScriptedPolicy(task_spec.topology)
         trainloader = _single_batch_loader(batch_size=2, num_classes=10)
         testloader = _single_batch_loader(batch_size=2, num_classes=10)

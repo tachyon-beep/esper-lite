@@ -452,7 +452,7 @@ def run_heuristic_episode(
 
     if task_spec is None:
         from esper.runtime import get_task_spec
-        task_spec = get_task_spec("cifar10")
+        task_spec = get_task_spec("cifar_baseline")
     task_type = task_spec.task_type
 
     if slots is None:
@@ -802,7 +802,7 @@ def train_heuristic(
     max_epochs: int = 75,
     max_batches: int | None = 50,
     device: str = "cuda:0",
-    task: str = "cifar10",
+    task: str = "cifar_baseline",
     seed: int = 42,
     slots: list[str] | None = None,
     telemetry_config: TelemetryConfig | None = None,

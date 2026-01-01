@@ -24,6 +24,7 @@ from esper.karn.constants import DisplayThresholds
 from esper.karn.sanctum.formatting import format_params
 from esper.karn.sanctum.widgets.counterfactual_panel import CounterfactualPanel
 from esper.karn.sanctum.widgets.env_detail_screen import SeedCard
+from esper.karn.sanctum.widgets.shapley_panel import ShapleyPanel
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import BestRunRecord
@@ -101,6 +102,13 @@ class HistoricalEnvDetail(ModalScreen[None]):
         padding-top: 1;
     }
 
+    HistoricalEnvDetail .shapley-section {
+        height: auto;
+        margin-top: 1;
+        border-top: solid $secondary-lighten-2;
+        padding-top: 1;
+    }
+
     HistoricalEnvDetail .footer-hint {
         height: 1;
         text-align: center;
@@ -140,7 +148,7 @@ class HistoricalEnvDetail(ModalScreen[None]):
                     yield Static(self._render_graveyard(), id="seed-graveyard")
 
             # Counterfactual analysis section (always visible for stable layout)
-            from esper.karn.sanctum.schema import CounterfactualSnapshot
+            from esper.karn.sanctum.schema import CounterfactualSnapshot, ShapleySnapshot
             matrix = self._record.counterfactual_matrix or CounterfactualSnapshot(
                 strategy="unavailable"
             )
@@ -149,6 +157,15 @@ class HistoricalEnvDetail(ModalScreen[None]):
                     matrix,
                     seeds=self._record.seeds,
                     id="counterfactual-panel",
+                )
+
+            # Shapley attribution section (always visible for stable layout)
+            shapley = self._record.shapley_snapshot or ShapleySnapshot()
+            with Vertical(classes="shapley-section"):
+                yield ShapleyPanel(
+                    shapley,
+                    seeds=self._record.seeds,
+                    id="shapley-panel",
                 )
 
             # Footer hint

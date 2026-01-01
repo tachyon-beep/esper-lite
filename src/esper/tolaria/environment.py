@@ -100,7 +100,7 @@ def _validate_device(device: str) -> None:
 
 
 def create_model(
-    task: "TaskSpec | str" = "cifar10",
+    task: "TaskSpec | str" = "cifar_baseline",
     device: str = "cuda",
     *,
     slots: list[str],

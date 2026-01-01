@@ -513,7 +513,7 @@ def train_ppo_vectorized(
     max_epochs: int = DEFAULT_EPISODE_LENGTH,
     device: str = "cuda:0",
     devices: list[str] | None = None,
-    task: str = "cifar10",
+    task: str = "cifar_baseline",
     use_telemetry: bool = True,
     lr: float = DEFAULT_LEARNING_RATE,
     clip_ratio: float = DEFAULT_CLIP_RATIO,
@@ -736,8 +736,8 @@ def train_ppo_vectorized(
 
     # DataLoader settings (used for SharedBatchIterator + diagnostics).
     default_batch_size_per_env = task_spec.dataloader_defaults.get("batch_size", 128)
-    if task_spec.name == "cifar10":
-        default_batch_size_per_env = 512  # High-throughput setting for CIFAR
+    if task_spec.name.startswith("cifar_"):
+        default_batch_size_per_env = 512  # High-throughput setting for CIFAR tasks
     effective_batch_size_per_env = (
         batch_size_per_env
         if batch_size_per_env is not None
@@ -943,10 +943,10 @@ def train_ppo_vectorized(
     shared_test_iter: SharedBatchIterator | Any
 
     if gpu_preload:
-        if "cifar10" not in task_spec.name.lower():
+        if not task_spec.name.startswith("cifar_"):
             _logger.warning(
                 f"gpu_preload=True is disabled for task '{task_spec.name}' "
-                "(SharedGPUBatchIterator supports CIFAR-10 only). "
+                "(SharedGPUBatchIterator supports CIFAR tasks only). "
                 "Falling back to standard CPU DataLoader."
             )
             gpu_preload = False
@@ -1034,10 +1034,10 @@ def train_ppo_vectorized(
     # Textual can modify terminal file descriptors and break multiprocessing
     # spawn. We therefore warm up both train and test loaders here, before we
     # signal `ready_event`.
-    # Skip warmup when gpu_preload is True for any CIFAR variant (cifar10, cifar10_deep, cifar10_blind)
+    # Skip warmup when gpu_preload is True for any CIFAR variant (cifar_baseline, cifar_scale, etc.)
     # SharedGPUBatchIterator already has num_workers=0, and iterating it during warmup can cause
     # race conditions when accessing GPU-cached tensors across multiple devices before streams sync.
-    is_cifar_task = "cifar10" in task_spec.name.lower()
+    is_cifar_task = task_spec.name.startswith("cifar_")
     if effective_workers > 0 and not (gpu_preload and is_cifar_task):
         _warmup_iter = iter(shared_train_iter)
         try:
@@ -1215,11 +1215,12 @@ def train_ppo_vectorized(
 
         # Create CounterfactualHelper for Shapley value analysis at episode end
         # Use base_seed for reproducible Shapley permutation sampling (B5-CR-01)
+        # Pass telemetry_cb for per-env context (same pattern as HealthMonitor)
         counterfactual_helper = (
             CounterfactualHelper(
                 strategy="auto",  # Full factorial for <=4 slots, Shapley sampling otherwise
                 shapley_samples=20,
-                emit_events=use_telemetry,
+                emit_callback=telemetry_cb,  # Pre-wired with env context
                 seed=base_seed,
             )
             if use_telemetry

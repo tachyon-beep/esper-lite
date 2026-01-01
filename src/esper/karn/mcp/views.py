@@ -331,6 +331,24 @@ VIEW_DEFINITIONS: dict[str, str] = {
             event_type = 'ANALYTICS_SNAPSHOT'
             AND json_extract_string(data, '$.kind') = 'batch_stats'
     """,
+    "shapley_computed": """
+        CREATE OR REPLACE VIEW shapley_computed AS
+        SELECT
+            event_id,
+            timestamp,
+            run_dir,
+            group_id,
+            json_extract(data, '$.env_id')::INTEGER as env_id,
+            json_extract(data, '$.batch')::INTEGER as batch,
+            json_extract(data, '$.num_slots')::INTEGER as num_slots,
+            -- Preserve full Shapley dict as JSON for flexible queries
+            -- Structure: {slot_id: {mean: float, std: float, n_samples: int}}
+            json_extract(data, '$.shapley_values') as shapley_values
+        FROM raw_events
+        WHERE
+            event_type = 'ANALYTICS_SNAPSHOT'
+            AND json_extract_string(data, '$.kind') = 'shapley_computed'
+    """,
     "anomalies": """
         CREATE OR REPLACE VIEW anomalies AS
         SELECT
@@ -350,7 +368,6 @@ VIEW_DEFINITIONS: dict[str, str] = {
             'GRADIENT_ANOMALY',
             'GRADIENT_PATHOLOGY_DETECTED',
             'NUMERICAL_INSTABILITY_DETECTED',
-            'GOVERNOR_PANIC',
             'GOVERNOR_ROLLBACK',
             'PLATEAU_DETECTED'
         )

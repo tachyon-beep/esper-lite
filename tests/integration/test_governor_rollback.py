@@ -55,7 +55,7 @@ class TestGovernorRollback:
     def test_rollback_restores_weights_and_resets_optimizer(self):
         """Verify rollback functionality on NaN injection."""
         device = "cpu"
-        model = create_model(task="cifar10", device=device, slots=["r0c1"])
+        model = create_model(task="cifar_baseline", device=device, slots=["r0c1"])
         
         # Create Governor
         governor = TolariaGovernor(
@@ -115,7 +115,7 @@ class TestGovernorRollback:
     def test_optimizer_state_persistence_after_rollback(self):
         """Verify that Governor does NOT clear optimizer state (caller responsibility)."""
         device = "cpu"
-        model = create_model(task="cifar10", device=device, slots=["r0c1"])
+        model = create_model(task="cifar_baseline", device=device, slots=["r0c1"])
         optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
         governor = TolariaGovernor(model=model, min_panics_before_rollback=1)
         

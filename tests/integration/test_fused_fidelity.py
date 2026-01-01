@@ -172,7 +172,7 @@ class TestFusedValidationFidelity:
         # 1. Setup Model (Standard CIFAR-10 like setup but smaller)
         # using create_model to get the full SlottedHost wrapper
         model = create_model(
-            task="cifar10",  # Triggers ResNet host usually, but we'll mock internals if needed
+            task="cifar_baseline",  # Triggers ResNet host usually, but we'll mock internals if needed
             device=device,
             slots=["r0c1", "r0c2"]
         )
@@ -255,7 +255,7 @@ class TestFusedValidationFidelity:
     def test_batch_norm_stats_frozen(self):
         """Verify that Fused Validation does not update BN running stats."""
         device = "cpu"
-        model = create_model(task="cifar10", device=device, slots=["r0c1"])
+        model = create_model(task="cifar_baseline", device=device, slots=["r0c1"])
         
         # Access a BN layer
         bn_layer = model.host.blocks[0].bn

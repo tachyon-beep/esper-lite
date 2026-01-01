@@ -26,7 +26,7 @@ def server_with_data():
                 "epoch": None,
                 "group_id": "default",
                 "message": "",
-                "data": {"episode_id": "test_run", "task": "cifar10", "n_envs": 4},
+                "data": {"episode_id": "test_run", "task": "cifar_baseline", "n_envs": 4},
                 "severity": "info"
             },
             {

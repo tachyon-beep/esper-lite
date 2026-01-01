@@ -222,7 +222,7 @@ class TestTaskFieldInToTrainKwargs:
 
     def test_task_from_config_overrides_correctly(self):
         """Verify task value flows through correctly for all valid tasks."""
-        for task_name in ["cifar10", "cifar10_deep", "cifar10_blind", "tinystories"]:
+        for task_name in ["cifar_baseline", "cifar_scale", "cifar_impaired", "cifar_minimal", "tinystories"]:
             config = TrainingConfig(task=task_name)
             kwargs = config.to_train_kwargs()
             assert kwargs.get("task") == task_name

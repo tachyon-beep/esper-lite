@@ -44,6 +44,34 @@ from esper.leyline.telemetry import (
 _logger = logging.getLogger(__name__)
 
 
+def _join_with_timeout(q: queue.Queue[Any], timeout: float | None) -> bool:
+    """Join queue with optional timeout.
+
+    Waits for all items in the queue to be processed (task_done() called).
+    Python's queue.Queue.join() has no timeout parameter, so we implement
+    timed waiting using the internal condition variable.
+
+    Args:
+        q: The queue to wait on.
+        timeout: Maximum seconds to wait. None means wait forever.
+
+    Returns:
+        True if queue drained successfully, False if timeout expired.
+    """
+    if timeout is None:
+        q.join()
+        return True
+
+    deadline = time.monotonic() + timeout
+    with q.all_tasks_done:  # type: ignore[attr-defined]
+        while q.unfinished_tasks:  # type: ignore[attr-defined]
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            q.all_tasks_done.wait(timeout=remaining)  # type: ignore[attr-defined]
+    return True
+
+
 def _payload_to_dict(payload: Any) -> Any:
     """Convert a TelemetryEvent.data payload into a JSON-friendly structure.
 
@@ -166,16 +194,24 @@ class BackendWorker:
         to avoid dropping events that are still being enqueued by main worker.
 
         Args:
-            timeout: Maximum time to wait for worker to finish.
+            timeout: Maximum time to wait for worker to finish. The timeout
+                is split between queue drain and thread join phases.
         """
         if self._stopped:
             return
+
+        deadline = time.monotonic() + timeout
 
         # Wait for queue to drain (all pending events processed)
         # Do NOT set _stopped=True yet - enqueue() must still accept events
         # until we've sent the shutdown sentinel
         try:
-            self._queue.join()
+            drained = _join_with_timeout(self._queue, timeout)
+            if not drained:
+                _logger.warning(
+                    f"Backend {self._name} queue drain timed out after {timeout}s, "
+                    f"forcing shutdown (some events may be lost)"
+                )
         except Exception as e:
             _logger.warning(f"Queue join failed during {self._name} shutdown (worker may have died): {e}")
 
@@ -188,9 +224,10 @@ class BackendWorker:
         # NOW it's safe to reject new events - sentinel is in queue
         self._stopped = True
 
-        # Wait for worker to finish
+        # Wait for worker to finish with remaining time budget
+        remaining = max(0.1, deadline - time.monotonic())
         if self._thread.is_alive():
-            self._thread.join(timeout=timeout)
+            self._thread.join(timeout=remaining)
             if self._thread.is_alive():
                 _logger.warning(f"Backend worker {self._name} did not stop within {timeout}s")
 
@@ -353,19 +390,6 @@ class ConsoleOutput(OutputBackend):
             threshold_str = f"{payload.loss_threshold:.4f}" if payload.loss_threshold is not None else "?"
             panics_str = str(payload.consecutive_panics) if payload.consecutive_panics is not None else "?"
             print(f"[{timestamp}] GOVERNOR | 🚨 ROLLBACK: {payload.reason} (loss={loss_str}, threshold={threshold_str}, panics={panics_str})")
-        elif event_type == "GOVERNOR_PANIC":
-            # TODO: [DEAD CODE] - This formatting code for GOVERNOR_PANIC is unreachable
-            # because these events are never emitted. See: leyline/telemetry.py dead event TODOs.
-            if event.data is None:
-                _logger.warning("GOVERNOR_PANIC event has no data payload")
-                return
-            # GOVERNOR_PANIC not yet migrated to typed payload
-            if isinstance(event.data, dict):
-                loss = event.data.get("current_loss", "?")
-                panics = event.data.get("consecutive_panics", 0)
-                if isinstance(loss, float):
-                    loss = f"{loss:.4f}"
-                print(f"[{timestamp}] GOVERNOR | ⚠️  PANIC #{panics}: loss={loss}")
         elif event_type == "BATCH_EPOCH_COMPLETED":
             if event.data is None:
                 _logger.warning("BATCH_EPOCH_COMPLETED event has no data payload")
@@ -384,17 +408,6 @@ class ConsoleOutput(OutputBackend):
                 if env_acc_str:
                     print(f"[{timestamp}]   Env accs: [{env_acc_str}]")
                 print(f"[{timestamp}]   Avg: {avg_acc:.1f}% (rolling: {rolling_acc:.1f}%), reward: {avg_reward:.1f}")
-        elif event_type == "CHECKPOINT_SAVED":
-            # TODO: [DEAD CODE] - This formatting code for CHECKPOINT_SAVED is unreachable
-            # because these events are never emitted. See: leyline/telemetry.py dead event TODOs.
-            if event.data is None:
-                _logger.warning("CHECKPOINT_SAVED event has no data payload")
-                return
-            # CHECKPOINT_SAVED not yet migrated to typed payload
-            if isinstance(event.data, dict):
-                path = event.data.get("path", "?")
-                avg_acc = event.data.get("avg_accuracy", 0.0)
-                print(f"[{timestamp}] CHECKPOINT | Saved to {path} (acc={avg_acc:.1f}%)")
         elif event_type == "CHECKPOINT_LOADED":
             if event.data is None:
                 _logger.warning("CHECKPOINT_LOADED event has no data payload")
@@ -722,7 +735,7 @@ class NissaHub:
                     self._dropped_events,
                 )
 
-    def flush(self, timeout: float | None = None) -> None:
+    def flush(self, timeout: float | None = None) -> bool:
         """Block until all queued events have been processed.
 
         Waits for both the main queue AND all backend worker queues to drain.
@@ -734,25 +747,40 @@ class NissaHub:
 
         Args:
             timeout: Maximum time to wait in seconds. None means wait forever.
+
+        Returns:
+            True if all queues drained successfully, False if timeout expired.
         """
         if self._closed:
-            return
+            return True
         # Only wait if there's actually a worker running to process events
         if self._worker_thread is None or not self._worker_thread.is_alive():
-            return
+            return True
+
+        deadline = time.monotonic() + timeout if timeout is not None else None
 
         # Stage 1: Wait for main queue to drain (fan-out complete)
         # join() blocks until all items in the queue have been processed
         # (i.e., task_done() has been called for each get())
-        self._queue.join()
+        if not _join_with_timeout(self._queue, timeout):
+            _logger.warning(f"NissaHub main queue flush timed out after {timeout}s")
+            return False
 
         # Stage 2: Wait for all backend worker queues to drain (processing complete)
         # Without this, flush() would return while backend workers are still emitting
         for worker in self._backend_workers:
+            remaining = deadline - time.monotonic() if deadline is not None else None
+            if remaining is not None and remaining <= 0:
+                _logger.warning(f"NissaHub flush timed out waiting for backend {worker._name}")
+                return False
             try:
-                worker._queue.join()
+                if not _join_with_timeout(worker._queue, remaining):
+                    _logger.warning(f"Backend {worker._name} flush timed out")
+                    return False
             except Exception as e:
                 _logger.warning(f"Queue join failed for {worker._name} during flush (worker may have died): {e}")
+
+        return True
 
     def get_backend_stats(self) -> dict[str, dict[str, int | float]]:
         """Get performance statistics for all backend workers.
@@ -786,7 +814,7 @@ class NissaHub:
         self._worker_thread = None  # Will be recreated on next add_backend()
         self._dropped_events = 0
 
-    def close(self) -> None:
+    def close(self, timeout: float = 10.0) -> None:
         """Close all backends (idempotent).
 
         Safe to call multiple times - only closes backends once.
@@ -797,9 +825,15 @@ class NissaHub:
             2. Drain main queue and stop main worker
             3. Stop all backend workers (drains their queues)
             4. Close all backends
+
+        Args:
+            timeout: Maximum time to wait for graceful shutdown. The timeout
+                is split across queue drain, worker stop, and backend close phases.
         """
         if self._closed:
             return
+
+        deadline = time.monotonic() + timeout
 
         # CRITICAL: Set _closed FIRST to prevent new events being enqueued
         # after the sentinel. This fixes the race where emit() could add events
@@ -811,23 +845,29 @@ class NissaHub:
             try:
                 # Drain any events already in the queue before sending sentinel.
                 # This ensures the "flushes pending events" guarantee in the docstring.
-                # Use a timeout to avoid blocking forever if worker is stuck.
-                try:
-                    self._queue.join()
-                except Exception as e:
-                    _logger.warning(f"Queue join failed during hub close (worker may have died): {e}")
+                remaining = max(0.1, deadline - time.monotonic())
+                if not _join_with_timeout(self._queue, remaining):
+                    _logger.warning(
+                        f"Hub main queue drain timed out during close, some events may be lost"
+                    )
 
                 # Add None to queue as sentinel for worker shutdown.
                 # Use blocking put with timeout to ensure signal is received.
                 self._queue.put(None, timeout=2.0)
-                self._worker_thread.join(timeout=5.0)
+                remaining = max(0.1, deadline - time.monotonic())
+                self._worker_thread.join(timeout=remaining)
             except (queue.Full, RuntimeError) as e:
                 _logger.warning(f"Hub shutdown interrupted (worker may be dead or queue unreachable): {e}")
 
         # Stop all backend workers (this drains their queues)
-        for worker in self._backend_workers:
+        # Split remaining time among workers
+        n_workers = len(self._backend_workers)
+        for i, worker in enumerate(self._backend_workers):
+            remaining = max(0.1, deadline - time.monotonic())
+            # Give each worker a fair share of remaining time
+            per_worker = remaining / max(1, n_workers - i)
             try:
-                worker.stop(timeout=5.0)
+                worker.stop(timeout=per_worker)
             except Exception as e:
                 _logger.error(f"Error stopping backend worker: {e}")
 

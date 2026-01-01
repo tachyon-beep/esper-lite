@@ -12,9 +12,11 @@ Usage:
     config = TrainingConfig()
 
     # Task-specific presets
-    config = TrainingConfig.for_cifar10()
-    config = TrainingConfig.for_cifar10_stable()
-    config = TrainingConfig.for_cifar10_deep()
+    config = TrainingConfig.for_cifar_baseline()
+    config = TrainingConfig.for_cifar_baseline_stable()
+    config = TrainingConfig.for_cifar_scale()
+    config = TrainingConfig.for_cifar_impaired()
+    config = TrainingConfig.for_cifar_minimal()
     config = TrainingConfig.for_tinystories()
 
     # Load from JSON (fails on unknown keys)
@@ -115,7 +117,7 @@ class TrainingConfig:
     seed: int = 42
 
     # === Task selection ===
-    # If set, overrides CLI --task. Valid: "cifar10", "cifar10_deep", "cifar10_blind", "tinystories"
+    # If set, overrides CLI --task. Valid: "cifar_baseline", "cifar_scale", "cifar_impaired", "cifar_minimal", "tinystories"
     task: str | None = None
 
     # === Gate mode ===
@@ -163,13 +165,13 @@ class TrainingConfig:
     # Presets
     # ------------------------------------------------------------------
     @staticmethod
-    def for_cifar10() -> "TrainingConfig":
-        """Optimized configuration for CIFAR-10 classification."""
+    def for_cifar_baseline() -> "TrainingConfig":
+        """Optimized configuration for cifar_baseline task."""
         return TrainingConfig(entropy_coef=0.1, plateau_threshold=0.4)
 
     @staticmethod
-    def for_cifar10_stable() -> "TrainingConfig":
-        """Conservative configuration for CIFAR-10 (slower, more stable PPO)."""
+    def for_cifar_baseline_stable() -> "TrainingConfig":
+        """Conservative configuration for CIFAR tasks (slower, more stable PPO)."""
         return TrainingConfig(
             n_episodes=200,
             lr=1e-4,
@@ -182,14 +184,19 @@ class TrainingConfig:
         )
 
     @staticmethod
-    def for_cifar10_blind() -> "TrainingConfig":
-        """Configuration for the 'blind' CIFAR-10 host (1x1 convs)."""
-        return TrainingConfig.for_cifar10()
+    def for_cifar_scale() -> "TrainingConfig":
+        """Preset tuned for cifar_scale task (deeper host)."""
+        return TrainingConfig(entropy_coef=0.08, plateau_threshold=0.35)
 
     @staticmethod
-    def for_cifar10_deep() -> "TrainingConfig":
-        """Preset tuned for the deeper CIFAR-10 host."""
-        return TrainingConfig(entropy_coef=0.08, plateau_threshold=0.35)
+    def for_cifar_impaired() -> "TrainingConfig":
+        """Preset for cifar_impaired task (severely constrained host)."""
+        return TrainingConfig.for_cifar_baseline()
+
+    @staticmethod
+    def for_cifar_minimal() -> "TrainingConfig":
+        """Preset for cifar_minimal task (near-random host)."""
+        return TrainingConfig.for_cifar_baseline()
 
     @staticmethod
     def for_tinystories() -> "TrainingConfig":

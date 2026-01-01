@@ -80,7 +80,7 @@ class TaskSpec:
         Returns:
             Tuple of (trainset, testset) Dataset objects.
         """
-        if self.name in ("cifar10", "cifar10_deep", "cifar10_blind", "cifar10_crushed", "cifar10_broken"):
+        if self.name in ("cifar_baseline", "cifar_scale", "cifar_impaired", "cifar_minimal"):
             data_root = self.dataloader_defaults.get("data_root", "./data")
             mock = self.dataloader_defaults.get("mock", False)
             return get_cifar10_datasets(data_root=data_root, mock=mock)
@@ -102,16 +102,28 @@ class TaskSpec:
             raise NotImplementedError(f"get_datasets not implemented for task: {self.name}")
 
 
-def _cifar10_spec() -> TaskSpec:
-    """CIFAR-10 classification with CNN host."""
+def _cifar_baseline_spec() -> TaskSpec:
+    """CIFAR-10 baseline: capable host with headroom for seed augmentation.
+
+    Testing objective: Can seeds AUGMENT an already-capable host?
+
+    Architecture:
+    - Standard 3×3 kernels (spatial features enabled)
+    - Moderate channels: 8→16→32
+    - 3 pooling layers
+    - ~6K parameters
+
+    Expected behavior:
+    - Host alone: ~45-50% accuracy
+    - With seeds: ~65-75% accuracy
+    - Seeds add refinement rather than rescue
+    """
     cifar_config = TaskConfig.for_cifar10()
     loss_cfg = LossRewardConfig.for_cifar10()
 
     def _make_model(
         device: str, slots: list[str] | None = None, permissive_gates: bool = True
     ) -> MorphogeneticModel:
-        # Deliberately weak host (8 base channels vs default 32) to leave
-        # headroom for seeds to demonstrate value. Expected accuracy ~40-50%.
         if not slots:
             raise ValueError("slots parameter is required and cannot be empty")
         host = CNNHost(num_classes=10, base_channels=8)
@@ -121,7 +133,7 @@ def _cifar10_spec() -> TaskSpec:
         )
 
     return TaskSpec(
-        name="cifar10",
+        name="cifar_baseline",
         topology="cnn",
         task_type="classification",
         model_factory=_make_model,
@@ -139,15 +151,22 @@ def _cifar10_spec() -> TaskSpec:
     )
 
 
-def _cifar10_deep_spec() -> TaskSpec:
-    """CIFAR-10 with deeper CNN for better GPU utilization.
+def _cifar_scale_spec() -> TaskSpec:
+    """CIFAR-10 scale: deeper network for multi-slot scaling tests.
 
-    Same narrow channels as cifar10 (base_channels=8) to keep the model
-    weak enough that seeds matter, but 6 blocks instead of 3 to increase
-    compute per sample and better saturate GPU.
+    Testing objective: Does the system SCALE to deeper networks with more slots?
 
-    Use this variant when profiling shows data loading is not the bottleneck
-    but GPU utilization is still low.
+    Architecture:
+    - Standard 3×3 kernels
+    - Deep: 5 blocks (8→16→32→64→128)
+    - 5 pooling layers (32→16→8→4→2→1)
+    - ~100K parameters
+    - 5 injection points at different spatial resolutions
+
+    Expected behavior:
+    - Host alone: ~42% accuracy (aggressive downsampling limits it)
+    - Tests GPU utilization and multi-slot coordination
+    - Use when profiling shows GPU isn't saturated
     """
     cifar_config = TaskConfig.for_cifar10()
     loss_cfg = LossRewardConfig.for_cifar10()
@@ -155,11 +174,6 @@ def _cifar10_deep_spec() -> TaskSpec:
     def _make_model(
         device: str, slots: list[str] | None = None, permissive_gates: bool = True
     ) -> MorphogeneticModel:
-        # Deep but narrow: 5 blocks with 8 base channels (8→16→32→64→128)
-        # 5 pools → spatial: 32→16→8→4→2→1
-        # 4 injection points at 4 distinct spatial resolutions (8×8, 4×4, 2×2, 1×1).
-        # Despite 100K params, baseline accuracy is only ~42% due to aggressive
-        # downsampling - seeds have plenty of room to contribute.
         if not slots:
             raise ValueError("slots parameter is required and cannot be empty")
         host = CNNHost(num_classes=10, base_channels=8, n_blocks=5, pool_layers=5)
@@ -169,7 +183,7 @@ def _cifar10_deep_spec() -> TaskSpec:
         )
 
     return TaskSpec(
-        name="cifar10_deep",
+        name="cifar_scale",
         topology="cnn",
         task_type="classification",
         model_factory=_make_model,
@@ -233,67 +247,22 @@ def _tinystories_spec() -> TaskSpec:
     )
 
 
-def _cifar10_blind_spec() -> TaskSpec:
-    """CIFAR-10 with 1x1 convolutions only ("Spatial Blindness").
+def _cifar_impaired_spec() -> TaskSpec:
+    """CIFAR-10 impaired: severely constrained host requiring seed rescue.
 
-    This host cannot see spatial features (shapes, edges) and relies purely on
-    per-pixel channel statistics. Baseline accuracy caps at ~25-30%.
-    Seeds (which have 3x3 kernels or attention) must be used to restore
-    spatial awareness.
-    """
-    cifar_config = TaskConfig.for_cifar10()
-    loss_cfg = LossRewardConfig.for_cifar10()
+    Testing objective: Can seeds RESCUE a host with severe information bottleneck?
 
-    def _make_model(
-        device: str, slots: list[str] | None = None, permissive_gates: bool = True
-    ) -> MorphogeneticModel:
-        if not slots:
-            raise ValueError("slots parameter is required and cannot be empty")
-        # Medium-Weak blind host: 3 blocks, no pooling, 1x1 convs only.
-        # Exposes 3 injection points (r0c0, r0c1, r0c2) while remaining spatially blind.
-        # Keep final width aligned with the 2-block variant (64 channels) to avoid
-        # inflating baseline accuracy via pure channel bandwidth.
-        host = CNNHost(num_classes=10, base_channels=16, n_blocks=3, pool_layers=0, kernel_size=1)
-        return MorphogeneticModel(
-            host, device=device, slots=slots, task_config=cifar_config,
-            permissive_gates=permissive_gates,
-        )
-
-    return TaskSpec(
-        name="cifar10_blind",
-        topology="cnn",
-        task_type="classification",
-        model_factory=_make_model,
-        dataloader_factory=load_cifar10,
-        dataloader_defaults={
-            "batch_size": DEFAULT_BATCH_SIZE_TRAINING,
-            "data_root": "./data",
-            "num_workers": 4,
-            "mock": False,
-            "generator": None,
-        },
-        task_config=cifar_config,
-        loss_reward_config=loss_cfg,
-        num_classes=10,
-    )
-
-
-def _cifar10_crushed_spec() -> TaskSpec:
-    """CIFAR-10 with pathologically constrained host (information theory floor).
-
-    Designed to test the absolute minimum viable host configuration:
-    - 1-channel bottleneck after first layer (3→1→2→4 progression)
+    Architecture:
     - 1×1 kernels only (no spatial receptive field)
-    - 77 parameters total (vs ~15K for normal weak host)
-    - Expected host-only accuracy: ~18-22% (barely above random 10%)
+    - 1-channel bottleneck (3→1→2→4 progression)
+    - 77 parameters total
+    - MaxPool provides some coarse spatial awareness
 
-    This configuration approaches the information-theoretic floor for CIFAR-10.
-    The single-channel bottleneck crushes RGB to grayscale-equivalent, preserving
-    only luminance. Classes with distinct brightness (planes vs. cars) remain
-    marginally separable, preventing true random-chance performance.
-
-    Use case: Stress-testing whether the training loop handles near-zero-capacity
-    hosts without numerical instability.
+    Expected behavior:
+    - Host alone: ~18-22% accuracy (barely above random)
+    - The 1-channel bottleneck crushes RGB to luminance-only
+    - Seeds must provide nearly all useful capability
+    - Good for testing Tamiyo's rescue decision-making
     """
     cifar_config = TaskConfig.for_cifar10()
     loss_cfg = LossRewardConfig.for_cifar10()
@@ -303,7 +272,7 @@ def _cifar10_crushed_spec() -> TaskSpec:
     ) -> MorphogeneticModel:
         if not slots:
             raise ValueError("slots parameter is required and cannot be empty")
-        # Pathologically weak: 1-channel bottleneck, no spatial features
+        # Severely impaired: 1-channel bottleneck, 1×1 kernels
         # Channel progression: 3→1→2→4 (77 total parameters)
         host = CNNHost(num_classes=10, base_channels=1, n_blocks=3, kernel_size=1)
         return MorphogeneticModel(
@@ -312,7 +281,7 @@ def _cifar10_crushed_spec() -> TaskSpec:
         )
 
     return TaskSpec(
-        name="cifar10_crushed",
+        name="cifar_impaired",
         topology="cnn",
         task_type="classification",
         model_factory=_make_model,
@@ -330,91 +299,23 @@ def _cifar10_crushed_spec() -> TaskSpec:
     )
 
 
-def _cifar10_broken_spec() -> TaskSpec:
-    """CIFAR-10 with a constrained host that seeds should rescue.
+def _cifar_minimal_spec() -> TaskSpec:
+    """CIFAR-10 minimal: extreme constraint where seeds provide ALL capability.
 
-    This configuration creates a spatially coarse host with aggressive pooling,
-    designed to validate Esper's "rescue behavior" - where seeds must assume
-    significant load-bearing responsibility for the task.
-
-    Architecture:
-    - 1×1 kernels only (no spatial receptive field in conv layers)
-    - Aggressive pooling (32→16→8→4 spatial resolution)
-    - Low channel capacity (8→16→32 progression)
-    - ~1K parameters
-
-    Expected behavior:
-    - Host alone: ~28-35% accuracy (MaxPool provides coarse spatial awareness
-      through competitive selection even with 1×1 kernels)
-    - Host counterfactual contribution: ~0% (all useful signal through seed)
-    - With conv_light seed: ~45-50% (seed provides fine spatial awareness)
-
-    NOTE: MaxPool creates implicit spatial features through the max operation.
-    For a truly spatially blind host, use cifar10_truly_blind instead.
-    """
-    cifar_config = TaskConfig.for_cifar10()
-    loss_cfg = LossRewardConfig.for_cifar10()
-
-    def _make_model(
-        device: str, slots: list[str] | None = None, permissive_gates: bool = True
-    ) -> MorphogeneticModel:
-        if not slots:
-            raise ValueError("slots parameter is required and cannot be empty")
-        # Broken host: blind (1x1) + aggressive pooling + narrow channels
-        # The pooling destroys spatial resolution before seeds can use it,
-        # but seeds at early injection points (r0c0, r0c1) can still rescue.
-        host = CNNHost(
-            num_classes=10,
-            base_channels=8,   # Narrow: 8→16→32
-            n_blocks=3,        # 3 injection points for seeds
-            kernel_size=1,     # No spatial features
-            pool_layers=3,     # Aggressive: 32→16→8→4
-        )
-        return MorphogeneticModel(
-            host, device=device, slots=slots, task_config=cifar_config,
-            permissive_gates=permissive_gates,
-        )
-
-    return TaskSpec(
-        name="cifar10_broken",
-        topology="cnn",
-        task_type="classification",
-        model_factory=_make_model,
-        dataloader_factory=load_cifar10,
-        dataloader_defaults={
-            "batch_size": DEFAULT_BATCH_SIZE_TRAINING,
-            "data_root": "./data",
-            "num_workers": 4,
-            "mock": False,
-            "generator": None,
-        },
-        task_config=cifar_config,
-        loss_reward_config=loss_cfg,
-        num_classes=10,
-    )
-
-
-def _cifar10_truly_blind_spec() -> TaskSpec:
-    """CIFAR-10 with the most constrained host possible (information-theory floor).
-
-    This is the "nuclear option" for testing seed rescue capability. The host
-    is crippled to the point where it can barely exceed random chance.
+    Testing objective: Can seeds work as SOLO load-bearers with a near-useless host?
 
     Architecture:
     - 1×1 kernels only (no spatial receptive field)
-    - NO pooling (pool_layers=0) - seeds must add any spatial aggregation
+    - NO pooling (seeds must add spatial aggregation)
     - Ultra-narrow channels: 2→4→8 progression
-    - 3→2 input bottleneck crushes RGB information immediately
+    - 3→2 input bottleneck crushes RGB immediately
     - ~150 parameters total
 
     Expected behavior:
     - Host alone: ~12-18% accuracy (barely above 10% random chance)
-    - The 3→2 bottleneck loses most color discrimination ability
-    - Without pooling, no implicit spatial awareness from max selection
-    - Seeds at r0c0 have full 32×32 spatial resolution to work with
-
-    Use this when you need to verify seeds provide ALL useful capacity.
-    For a less extreme constraint, use cifar10_broken (28-35% ceiling).
+    - No spatial awareness (no MaxPool competition)
+    - Seeds at r0c0 have full 32×32 spatial resolution
+    - This is the "nuclear option" for rescue testing
     """
     cifar_config = TaskConfig.for_cifar10()
     loss_cfg = LossRewardConfig.for_cifar10()
@@ -424,8 +325,8 @@ def _cifar10_truly_blind_spec() -> TaskSpec:
     ) -> MorphogeneticModel:
         if not slots:
             raise ValueError("slots parameter is required and cannot be empty")
-        # Ultra-constrained host: 2→4→8 channels, no pooling, 1×1 kernels
-        # The 3→2 input bottleneck is the key constraint - crushes RGB to 2 dims
+        # Minimal host: 2→4→8 channels, no pooling, 1×1 kernels
+        # The 3→2 input bottleneck crushes RGB to 2 dimensions
         host = CNNHost(
             num_classes=10,
             base_channels=2,   # Ultra-narrow: 2→4→8
@@ -439,7 +340,7 @@ def _cifar10_truly_blind_spec() -> TaskSpec:
         )
 
     return TaskSpec(
-        name="cifar10_truly_blind",
+        name="cifar_minimal",
         topology="cnn",
         task_type="classification",
         model_factory=_make_model,
@@ -458,13 +359,18 @@ def _cifar10_truly_blind_spec() -> TaskSpec:
 
 
 # Registry of valid task names (single source of truth)
+#
+# Naming schema (test-objective focused):
+#   cifar_baseline  - Can seeds AUGMENT a capable host?
+#   cifar_scale     - Does the system SCALE to deeper networks?
+#   cifar_impaired  - Can seeds RESCUE a severely constrained host?
+#   cifar_minimal   - Can seeds work as SOLO load-bearers?
+#
 VALID_TASKS: frozenset[str] = frozenset({
-    "cifar10",
-    "cifar10_deep",
-    "cifar10_blind",
-    "cifar10_crushed",
-    "cifar10_broken",
-    "cifar10_truly_blind",
+    "cifar_baseline",
+    "cifar_scale",
+    "cifar_impaired",
+    "cifar_minimal",
     "tinystories",
 })
 
@@ -472,18 +378,14 @@ VALID_TASKS: frozenset[str] = frozenset({
 def get_task_spec(name: str) -> TaskSpec:
     """Return TaskSpec preset by name."""
     key = name.lower()
-    if key == "cifar10":
-        return _cifar10_spec()
-    if key == "cifar10_deep":
-        return _cifar10_deep_spec()
-    if key == "cifar10_blind":
-        return _cifar10_blind_spec()
-    if key == "cifar10_crushed":
-        return _cifar10_crushed_spec()
-    if key == "cifar10_broken":
-        return _cifar10_broken_spec()
-    if key == "cifar10_truly_blind":
-        return _cifar10_truly_blind_spec()
+    if key == "cifar_baseline":
+        return _cifar_baseline_spec()
+    if key == "cifar_scale":
+        return _cifar_scale_spec()
+    if key == "cifar_impaired":
+        return _cifar_impaired_spec()
+    if key == "cifar_minimal":
+        return _cifar_minimal_spec()
     if key == "tinystories":
         return _tinystories_spec()
     raise ValueError(

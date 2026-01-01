@@ -96,19 +96,10 @@ class TelemetryEventType(Enum):
     NUMERICAL_INSTABILITY_DETECTED = auto()
 
     # === Governor Events (Tolaria) ===
-    # TODO: [DEAD CODE] - GOVERNOR_PANIC is defined and has console formatting in nissa/output.py,
-    # but Governor only emits GOVERNOR_ROLLBACK. Either emit this or remove handler code.
-    GOVERNOR_PANIC = auto()           # Vital signs check failed
     GOVERNOR_ROLLBACK = auto()        # Emergency rollback executed
-    # TODO: [DEAD CODE] - GOVERNOR_SNAPSHOT is defined but never emitted or handled.
-    # Appears to be planned functionality that was never implemented. Delete or implement.
-    GOVERNOR_SNAPSHOT = auto()        # LKG checkpoint saved
 
     # === Training Progress Events ===
     TRAINING_STARTED = auto()         # Training run initialized
-    # TODO: [DEAD CODE] - CHECKPOINT_SAVED is defined and has console formatting,
-    # but checkpoint saves in vectorized.py don't emit this event. Either emit or remove.
-    CHECKPOINT_SAVED = auto()         # Model checkpoint saved
     CHECKPOINT_LOADED = auto()        # Model checkpoint restored
 
     # === Counterfactual Attribution Events ===

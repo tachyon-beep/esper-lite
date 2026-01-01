@@ -332,6 +332,11 @@ DEFAULT_GOVERNOR_DEATH_PENALTY = 10.0
 # Rolling window size for loss history statistics.
 DEFAULT_GOVERNOR_HISTORY_WINDOW = 20
 
+# Minimum samples required for statistical anomaly detection.
+# The governor silently skips detection if history has fewer samples.
+# INVARIANT: history_window MUST be >= this value, or detection is disabled.
+MIN_GOVERNOR_HISTORY_SAMPLES = 10
+
 # Consecutive panics required before triggering a rollback.
 # Higher = more conservative (avoids false positives from transients).
 DEFAULT_MIN_PANICS_BEFORE_ROLLBACK = 3
@@ -747,6 +752,7 @@ __all__ = [
     "DEFAULT_GOVERNOR_ABSOLUTE_THRESHOLD",
     "DEFAULT_GOVERNOR_DEATH_PENALTY",
     "DEFAULT_GOVERNOR_HISTORY_WINDOW",
+    "MIN_GOVERNOR_HISTORY_SAMPLES",
     "DEFAULT_MIN_PANICS_BEFORE_ROLLBACK",
     "DEFAULT_GOVERNOR_LOSS_MULTIPLIER",
 

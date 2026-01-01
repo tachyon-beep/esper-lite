@@ -17,7 +17,7 @@ def smoke_test_vectorized():
             n_envs=1,
             max_epochs=2,  # Short run for smoke testing
             device=device,
-            task="cifar10_blind",
+            task="cifar_impaired",
             slots=["r0c0"],
             use_telemetry=True,
             gpu_preload=True,

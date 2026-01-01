@@ -1,8 +1,7 @@
 """Tests for OverwatchBackend WebSocket server."""
 
 import json
-from unittest.mock import MagicMock
-
+from unittest.mock import MagicMock, patch
 
 from esper.karn.overwatch.backend import OverwatchBackend
 from esper.karn.sanctum.schema import SanctumSnapshot
@@ -181,3 +180,71 @@ class TestOverwatchBackend:
         assert "start_time" in parsed
         # connected should be serialized as bool
         assert parsed["connected"] is True
+
+    def test_rate_limiting_deterministic(self) -> None:
+        """Rate limiting should use monotonic time for deterministic behavior.
+
+        This test patches time.monotonic to verify rate limiting works
+        correctly independent of wall clock. Replaces timing-sensitive
+        test_rate_limiting_throttles_broadcasts for CI reliability.
+        """
+        backend = OverwatchBackend(port=8080, snapshot_rate_hz=10)
+        backend._broadcast = MagicMock()
+        # Reset _last_broadcast_time to allow first broadcast at t=0
+        backend._last_broadcast_time = -1.0
+
+        with patch("esper.karn.overwatch.backend.time.monotonic") as mock_time:
+            # Start at t=0
+            mock_time.return_value = 0.0
+            backend.maybe_broadcast()
+            assert backend._broadcast.call_count == 1
+
+            # At t=0.05 (50ms), should not broadcast (need 100ms at 10Hz)
+            mock_time.return_value = 0.05
+            backend.maybe_broadcast()
+            assert backend._broadcast.call_count == 1
+
+            # At t=0.1 (100ms), should broadcast
+            mock_time.return_value = 0.1
+            backend.maybe_broadcast()
+            assert backend._broadcast.call_count == 2
+
+            # At t=0.15, should not broadcast
+            mock_time.return_value = 0.15
+            backend.maybe_broadcast()
+            assert backend._broadcast.call_count == 2
+
+            # At t=0.2, should broadcast
+            mock_time.return_value = 0.2
+            backend.maybe_broadcast()
+            assert backend._broadcast.call_count == 3
+
+    def test_rate_limiting_immune_to_clock_adjustments(self) -> None:
+        """Rate limiting should not break if clock moves backward.
+
+        Regression test: Using time.time() meant NTP adjustments could
+        freeze broadcasts or cause burst. time.monotonic() is immune.
+        """
+        backend = OverwatchBackend(port=8080, snapshot_rate_hz=10)
+        backend._broadcast = MagicMock()
+        # Reset _last_broadcast_time to allow first broadcast at t=0
+        backend._last_broadcast_time = -1.0
+
+        with patch("esper.karn.overwatch.backend.time.monotonic") as mock_time:
+            # Normal progression
+            mock_time.return_value = 0.0
+            backend.maybe_broadcast()
+            mock_time.return_value = 0.1
+            backend.maybe_broadcast()
+            assert backend._broadcast.call_count == 2
+
+            # Simulate time moving backward (can happen with some systems)
+            mock_time.return_value = 0.05
+            backend.maybe_broadcast()
+            # Should NOT broadcast (last was at 0.1, current is 0.05)
+            assert backend._broadcast.call_count == 2
+
+            # Time progresses forward again
+            mock_time.return_value = 0.2
+            backend.maybe_broadcast()
+            assert backend._broadcast.call_count == 3

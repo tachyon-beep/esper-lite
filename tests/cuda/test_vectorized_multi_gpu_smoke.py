@@ -69,7 +69,7 @@ def test_vectorized_multi_gpu_smoke(monkeypatch):
 
     def get_task_spec_mock(name: str):
         task_spec = real_get_task_spec(name)
-        if task_spec.name in {"cifar10", "cifar10_deep"}:
+        if task_spec.name.startswith("cifar_"):
             task_spec.dataloader_defaults["mock"] = True
             task_spec.dataloader_defaults["batch_size"] = batch_size_per_env
             task_spec.dataloader_defaults["num_workers"] = 0
@@ -87,7 +87,7 @@ def test_vectorized_multi_gpu_smoke(monkeypatch):
     real_create_model = esper.tolaria.create_model
     created_on_devices: list[str] = []
 
-    def create_model_record(task="cifar10", device="cuda", slots=None, permissive_gates=True):
+    def create_model_record(task="cifar_baseline", device="cuda", slots=None, permissive_gates=True):
         created_on_devices.append(device)
         return real_create_model(task=task, device=device, slots=slots, permissive_gates=permissive_gates)
 
@@ -100,7 +100,7 @@ def test_vectorized_multi_gpu_smoke(monkeypatch):
         max_epochs=1,
         devices=devices,
         device=devices[0],
-        task="cifar10_deep",
+        task="cifar_scale",
         use_telemetry=False,
         num_workers=0,
         gpu_preload=False,

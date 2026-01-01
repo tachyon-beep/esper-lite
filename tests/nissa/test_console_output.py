@@ -54,20 +54,6 @@ class TestConsoleOutputFormatters:
         assert "24/100" in captured.out
         assert "67.2%" in captured.out
 
-    def test_formats_checkpoint_saved(self, capsys: pytest.CaptureFixture[str]) -> None:
-        console = ConsoleOutput()
-        event = TelemetryEvent(
-            event_type=TelemetryEventType.CHECKPOINT_SAVED,
-            data={
-                "path": "/tmp/checkpoint.pt",
-                "episode": 50,
-            },
-        )
-        console.emit(event)
-        captured = capsys.readouterr()
-        assert "CHECKPOINT" in captured.out
-        assert "Saved" in captured.out
-
     def test_formats_checkpoint_loaded(self, capsys: pytest.CaptureFixture[str]) -> None:
         console = ConsoleOutput()
         event = TelemetryEvent(

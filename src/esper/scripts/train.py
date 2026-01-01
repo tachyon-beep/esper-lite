@@ -15,6 +15,46 @@ from esper.simic.training import TrainingConfig
 _logger = logging.getLogger(__name__)
 
 
+def _load_config_with_friendly_errors(config_path: str) -> "TrainingConfig":
+    """Load TrainingConfig from JSON with user-friendly error messages.
+
+    Catches validation errors and prints helpful guidance instead of raw tracebacks.
+    """
+    import json
+    from pathlib import Path
+
+    path = Path(config_path)
+    if not path.exists():
+        print(f"\n\033[1;31m✗ Config file not found:\033[0m {config_path}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        config = TrainingConfig.from_json_path(config_path)
+        return config
+    except json.JSONDecodeError as e:
+        print(f"\n\033[1;31m✗ Invalid JSON in config file:\033[0m {config_path}", file=sys.stderr)
+        print(f"  {e}", file=sys.stderr)
+        sys.exit(1)
+    except ValueError as e:
+        error_msg = str(e)
+        print(f"\n\033[1;31m✗ Config validation error:\033[0m", file=sys.stderr)
+        print(f"  {error_msg}", file=sys.stderr)
+
+        # Provide helpful hints for common issues
+        if "Invalid task" in error_msg:
+            print(f"\n\033[1;33m💡 Hint:\033[0m Update the 'task' field in {config_path}", file=sys.stderr)
+            print(f"   Valid tasks: {', '.join(sorted(VALID_TASKS))}", file=sys.stderr)
+        elif "slots" in error_msg.lower():
+            print(f"\n\033[1;33m💡 Hint:\033[0m Use canonical slot format: r0c0, r0c1, r0c2, etc.", file=sys.stderr)
+
+        print()  # Blank line for readability
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n\033[1;31m✗ Error loading config:\033[0m {config_path}", file=sys.stderr)
+        print(f"  {type(e).__name__}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 def _positive_int(value: str) -> int:
     """Argparse type for positive integers (>= 1)."""
     ivalue = int(value)
@@ -215,7 +255,7 @@ def build_parser() -> argparse.ArgumentParser:
     heur_parser.add_argument("--episodes", type=int, default=1)
     heur_parser.add_argument("--max-epochs", type=int, default=75)
     heur_parser.add_argument("--max-batches", type=int, default=50, help="Batches per epoch (None=all)")
-    heur_parser.add_argument("--task", default="cifar10",
+    heur_parser.add_argument("--task", default="cifar_baseline",
                               choices=sorted(VALID_TASKS))
     heur_parser.add_argument("--device", default="cuda:0")
     heur_parser.add_argument("--seed", type=int, default=42)
@@ -242,11 +282,11 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[telemetry_parent],
     )
     # Presets are task-specific hyperparameter bundles (some tasks have multiple presets)
-    preset_choices = ["cifar10", "cifar10_stable", "cifar10_deep", "cifar10_blind", "tinystories"]
+    preset_choices = ["cifar_baseline", "cifar_baseline_stable", "cifar_scale", "cifar_impaired", "cifar_minimal", "tinystories"]
     ppo_parser.add_argument(
         "--preset",
         choices=preset_choices,
-        default="cifar10",
+        default="cifar_baseline",
         help="TrainingConfig preset to use (hyperparameters + slots)",
     )
     ppo_parser.add_argument(
@@ -624,16 +664,18 @@ def main() -> None:
         if args.algorithm == "ppo":
             # For PPO, get from config
             if args.config_json:
-                temp_config = TrainingConfig.from_json_path(args.config_json)
+                temp_config = _load_config_with_friendly_errors(args.config_json)
             else:
-                if args.preset == "cifar10":
-                    temp_config = TrainingConfig.for_cifar10()
-                elif args.preset == "cifar10_stable":
-                    temp_config = TrainingConfig.for_cifar10_stable()
-                elif args.preset == "cifar10_deep":
-                    temp_config = TrainingConfig.for_cifar10_deep()
-                elif args.preset == "cifar10_blind":
-                    temp_config = TrainingConfig.for_cifar10_blind()
+                if args.preset == "cifar_baseline":
+                    temp_config = TrainingConfig.for_cifar_baseline()
+                elif args.preset == "cifar_baseline_stable":
+                    temp_config = TrainingConfig.for_cifar_baseline_stable()
+                elif args.preset == "cifar_scale":
+                    temp_config = TrainingConfig.for_cifar_scale()
+                elif args.preset == "cifar_impaired":
+                    temp_config = TrainingConfig.for_cifar_impaired()
+                elif args.preset == "cifar_minimal":
+                    temp_config = TrainingConfig.for_cifar_minimal()
                 else:
                     temp_config = TrainingConfig.for_tinystories()
             num_envs = temp_config.n_envs
@@ -705,16 +747,18 @@ def main() -> None:
 
             elif args.algorithm == "ppo":
                 if args.config_json:
-                    config = TrainingConfig.from_json_path(args.config_json)
+                    config = _load_config_with_friendly_errors(args.config_json)
                 else:
-                    if args.preset == "cifar10":
-                        config = TrainingConfig.for_cifar10()
-                    elif args.preset == "cifar10_stable":
-                        config = TrainingConfig.for_cifar10_stable()
-                    elif args.preset == "cifar10_deep":
-                        config = TrainingConfig.for_cifar10_deep()
-                    elif args.preset == "cifar10_blind":
-                        config = TrainingConfig.for_cifar10_blind()
+                    if args.preset == "cifar_baseline":
+                        config = TrainingConfig.for_cifar_baseline()
+                    elif args.preset == "cifar_baseline_stable":
+                        config = TrainingConfig.for_cifar_baseline_stable()
+                    elif args.preset == "cifar_scale":
+                        config = TrainingConfig.for_cifar_scale()
+                    elif args.preset == "cifar_impaired":
+                        config = TrainingConfig.for_cifar_impaired()
+                    elif args.preset == "cifar_minimal":
+                        config = TrainingConfig.for_cifar_minimal()
                     else:
                         config = TrainingConfig.for_tinystories()
 

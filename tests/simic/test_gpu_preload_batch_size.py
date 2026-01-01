@@ -34,7 +34,7 @@ def test_gpu_preload_uses_batch_size_override(monkeypatch):
             max_epochs=1,
             device="cpu",
             devices=["cpu"],
-            task="cifar10",
+            task="cifar_baseline",
             slots=["r0c1"],
             use_telemetry=False,
             gpu_preload=True,

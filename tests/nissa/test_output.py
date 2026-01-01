@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from esper.leyline.telemetry import (
     EpochCompletedPayload,
     SeedGerminatedPayload,
 )
-from esper.nissa.output import DirectoryOutput, NissaHub, OutputBackend
+from esper.nissa.output import DirectoryOutput, NissaHub, OutputBackend, _join_with_timeout
 
 
 class TestDirectoryOutput:
@@ -420,3 +421,249 @@ class TestNissaHubShutdownRace:
 
         # Emitting now should not raise, but event should be dropped
         hub.emit(event)  # Should not raise
+
+
+class TestJoinWithTimeout:
+    """Tests for _join_with_timeout helper function."""
+
+    def test_join_with_none_timeout_waits_indefinitely(self):
+        """None timeout should wait until queue drains."""
+        import queue
+        import threading
+
+        q: queue.Queue[int] = queue.Queue()
+        q.put(1)
+
+        # Process item in background after small delay
+        def processor():
+            time.sleep(0.05)
+            q.get()
+            q.task_done()
+
+        t = threading.Thread(target=processor)
+        t.start()
+
+        result = _join_with_timeout(q, timeout=None)
+        t.join()
+
+        assert result is True
+
+    def test_join_with_zero_timeout_returns_immediately(self):
+        """Zero timeout should return False immediately if queue not empty."""
+        import queue
+
+        q: queue.Queue[int] = queue.Queue()
+        q.put(1)  # Put item but don't process
+
+        start = time.monotonic()
+        result = _join_with_timeout(q, timeout=0)
+        elapsed = time.monotonic() - start
+
+        assert result is False
+        assert elapsed < 0.1  # Should be nearly instant
+
+    def test_join_timeout_returns_false_when_exceeded(self):
+        """Timeout should return False when queue doesn't drain in time."""
+        import queue
+
+        q: queue.Queue[int] = queue.Queue()
+        q.put(1)  # Put item but don't process
+
+        start = time.monotonic()
+        result = _join_with_timeout(q, timeout=0.1)
+        elapsed = time.monotonic() - start
+
+        assert result is False
+        assert 0.09 < elapsed < 0.2  # Should wait approximately timeout duration
+
+    def test_join_returns_true_when_queue_drains(self):
+        """Should return True when queue drains within timeout."""
+        import queue
+        import threading
+
+        q: queue.Queue[int] = queue.Queue()
+        q.put(1)
+
+        def processor():
+            time.sleep(0.02)
+            q.get()
+            q.task_done()
+
+        t = threading.Thread(target=processor)
+        t.start()
+
+        result = _join_with_timeout(q, timeout=1.0)
+        t.join()
+
+        assert result is True
+
+
+class TestNissaHubTimeoutBehavior:
+    """Tests for timeout behavior in NissaHub operations.
+
+    These tests verify that flush() and close() respect their timeout parameters
+    and don't hang indefinitely when backends are slow or stuck.
+    """
+
+    def test_flush_returns_within_timeout_on_slow_backend(self):
+        """flush() should return within timeout even if backend is slow."""
+
+        class BlockingBackend(OutputBackend):
+            """Backend that blocks forever on emit()."""
+
+            def start(self) -> None:
+                pass
+
+            def emit(self, event: TelemetryEvent) -> None:
+                # Block forever - simulates stuck backend
+                import threading
+                threading.Event().wait()
+
+            def close(self) -> None:
+                pass
+
+        hub = NissaHub()
+        hub.add_backend(BlockingBackend())
+
+        # Emit an event that will get stuck
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            epoch=0,
+            data=EpochCompletedPayload(
+                env_id=0,
+                val_accuracy=0.5,
+                val_loss=0.1,
+                inner_epoch=0,
+            ),
+        )
+        hub.emit(event)
+
+        # flush() should return within timeout, not hang forever
+        start = time.monotonic()
+        result = hub.flush(timeout=0.2)
+        elapsed = time.monotonic() - start
+
+        assert result is False  # Should indicate timeout
+        assert elapsed < 0.5  # Should return within reasonable time of timeout
+
+        # Cleanup - close with short timeout
+        hub.close(timeout=0.1)
+
+    def test_close_returns_within_timeout_on_stuck_worker(self):
+        """close() should return within timeout even if worker is stuck."""
+
+        class BlockingBackend(OutputBackend):
+            """Backend that blocks forever on emit()."""
+
+            def start(self) -> None:
+                pass
+
+            def emit(self, event: TelemetryEvent) -> None:
+                import threading
+                threading.Event().wait()
+
+            def close(self) -> None:
+                pass
+
+        hub = NissaHub()
+        hub.add_backend(BlockingBackend())
+
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            epoch=0,
+            data=EpochCompletedPayload(
+                env_id=0,
+                val_accuracy=0.5,
+                val_loss=0.1,
+                inner_epoch=0,
+            ),
+        )
+        hub.emit(event)
+
+        # close() should return within timeout, not hang forever
+        start = time.monotonic()
+        hub.close(timeout=0.3)
+        elapsed = time.monotonic() - start
+
+        assert hub._closed is True
+        assert elapsed < 1.0  # Should return within reasonable time of timeout
+
+    def test_flush_returns_true_on_healthy_backend(self):
+        """flush() should return True when all events processed."""
+
+        class FastBackend(OutputBackend):
+            def __init__(self):
+                self.events: list[TelemetryEvent] = []
+
+            def start(self) -> None:
+                pass
+
+            def emit(self, event: TelemetryEvent) -> None:
+                self.events.append(event)
+
+            def close(self) -> None:
+                pass
+
+        backend = FastBackend()
+        hub = NissaHub()
+        hub.add_backend(backend)
+
+        for i in range(10):
+            event = TelemetryEvent(
+                event_type=TelemetryEventType.EPOCH_COMPLETED,
+                epoch=i,
+                data=EpochCompletedPayload(
+                    env_id=0,
+                    val_accuracy=0.5,
+                    val_loss=0.1,
+                    inner_epoch=i,
+                ),
+            )
+            hub.emit(event)
+
+        result = hub.flush(timeout=5.0)
+        hub.close()
+
+        assert result is True
+        assert len(backend.events) == 10
+
+    def test_flush_logs_warning_on_timeout(self, caplog: pytest.LogCaptureFixture):
+        """flush() should log warning when timeout expires."""
+        import queue as q
+
+        class SlowBackend(OutputBackend):
+            def start(self) -> None:
+                pass
+
+            def emit(self, event: TelemetryEvent) -> None:
+                time.sleep(10)  # Very slow
+
+            def close(self) -> None:
+                pass
+
+        hub = NissaHub()
+        hub.add_backend(SlowBackend())
+
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            epoch=0,
+            data=EpochCompletedPayload(
+                env_id=0,
+                val_accuracy=0.5,
+                val_loss=0.1,
+                inner_epoch=0,
+            ),
+        )
+        hub.emit(event)
+
+        with caplog.at_level(logging.WARNING, logger="esper.nissa.output"):
+            hub.flush(timeout=0.1)
+
+        # Should have logged timeout warning
+        timeout_warnings = [
+            r for r in caplog.records
+            if "timed out" in r.message.lower()
+        ]
+        assert len(timeout_warnings) >= 1
+
+        hub.close(timeout=0.1)
