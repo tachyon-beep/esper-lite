@@ -82,6 +82,32 @@ class TestMorphogeneticModelMultiSlot:
         out = model(x)
         assert out.shape == (2, 16, 100)
 
+    def test_transformer_without_task_config_germinates_transformer_seed(self):
+        """TransformerHost should not accidentally germinate a CNN seed when blueprint IDs overlap."""
+        from esper.leyline import SeedStage
+
+        host = TransformerHost(
+            vocab_size=100,
+            n_embd=64,
+            n_head=2,
+            n_layer=6,
+            block_size=32,
+            dropout=0.0,
+        )
+        # No task_config provided - topology must come from host, not default to "cnn".
+        model = MorphogeneticModel(host, device="cpu", slots=["r0c1"])
+
+        # "norm" exists for both CNN and transformer registries; choosing the wrong one
+        # will crash when the seed becomes active and receives transformer-shaped features.
+        model.germinate_seed("norm", "seed_1", slot="r0c1")
+
+        gate = model.seed_slots["r0c1"].advance_stage(SeedStage.TRAINING)
+        assert gate.passed, f"G1 gate should pass: {gate.checks_failed}"
+
+        x = torch.randint(0, 100, (2, 16))
+        out = model(x)
+        assert out.shape == (2, 16, 100)
+
     def test_no_legacy_single_slot_attribute(self):
         """MorphogeneticModel should not have _legacy_single_slot attribute."""
         host = CNNHost(num_classes=10)

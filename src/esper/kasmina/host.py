@@ -599,12 +599,14 @@ class MorphogeneticModel(nn.Module):
         """Fused forward pass for multiple alpha configurations (Zero-Sync Validation).
 
         Args:
-            x: Expanded input tensor of shape [K * B, C, H, W] (CNN) or [K * B, T, C] (transformer).
+            x: Expanded input tensor of shape [K * B, C, H, W] (CNN) or [K * B, T] token indices (transformer).
             alpha_overrides: Dict mapping slot_id -> tensor of shape [K * B, 1, 1, 1] (CNN)
                 or [K * B, 1, 1] (transformer) for broadcasting.
 
         Returns:
-            Output logits for all configurations [K * B, num_classes].
+            Output logits for all configurations:
+                - CNN: [K * B, num_classes]
+                - Transformer: [K * B, T, vocab_size]
 
         Raises:
             ValueError: If alpha_overrides contains keys not in seed_slots.
@@ -680,6 +682,7 @@ class MorphogeneticModel(nn.Module):
             blend_tempo_epochs=blend_tempo_epochs,
             alpha_algorithm=alpha_algorithm,
             alpha_target=alpha_target,
+            topology=self.host.topology,
         )
 
     def prune_seed(self, *, slot: str) -> None:
