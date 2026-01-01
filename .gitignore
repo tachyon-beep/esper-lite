@@ -53,5 +53,9 @@ worktrees/
 
 telemetry/*
 !telemetry/.gitkeep
+
+# Profiling output
+profiler_traces/
+*.pstats
 # Mutation testing output
 mutants/

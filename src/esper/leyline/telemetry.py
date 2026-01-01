@@ -12,6 +12,7 @@ Each domain emits events using these contracts:
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, auto
@@ -532,6 +533,22 @@ class EpochCompletedPayload:
             seeds=data.get("seeds"),
         )
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dict for telemetry serialization.
+
+        PERF: Avoids dataclasses.asdict() deep-copying nested dict payloads (e.g., per-seed telemetry).
+        """
+        return {
+            "env_id": self.env_id,
+            "val_accuracy": self.val_accuracy,
+            "val_loss": self.val_loss,
+            "inner_epoch": self.inner_epoch,
+            "train_loss": self.train_loss,
+            "train_accuracy": self.train_accuracy,
+            "host_grad_norm": self.host_grad_norm,
+            "seeds": self.seeds,
+        }
+
 
 @dataclass(slots=True, frozen=True)
 class BatchEpochCompletedPayload:
@@ -919,6 +936,28 @@ class SeedStageChangedPayload:
             alpha_curve=data["alpha_curve"],
         )
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dict for telemetry serialization.
+
+        PERF: Avoids dataclasses.asdict() deep-copy overhead and enforces the
+        canonical JSON schema keys (`from`, `to`) required by:
+        - SeedStageChangedPayload.from_dict()
+        - Karn MCP DuckDB views (seed_lifecycle)
+        """
+        return {
+            "slot_id": self.slot_id,
+            "env_id": self.env_id,
+            "from": self.from_stage,
+            "to": self.to_stage,
+            "alpha": self.alpha,
+            "accuracy_delta": self.accuracy_delta,
+            "epochs_in_stage": self.epochs_in_stage,
+            "grad_ratio": self.grad_ratio,
+            "has_vanishing": self.has_vanishing,
+            "has_exploding": self.has_exploding,
+            "alpha_curve": self.alpha_curve,
+        }
+
 
 @dataclass(slots=True, frozen=True)
 class SeedFossilizedPayload:
@@ -1110,6 +1149,27 @@ class HeadTelemetry:
             alpha_speed_entropy=data.get("alpha_speed_entropy", 0.0),
             curve_entropy=data.get("curve_entropy", 0.0),
         )
+
+    def to_dict(self) -> dict[str, float]:
+        """Convert to dict for telemetry serialization (avoids dataclasses.asdict deep copy)."""
+        return {
+            "op_confidence": self.op_confidence,
+            "slot_confidence": self.slot_confidence,
+            "blueprint_confidence": self.blueprint_confidence,
+            "style_confidence": self.style_confidence,
+            "tempo_confidence": self.tempo_confidence,
+            "alpha_target_confidence": self.alpha_target_confidence,
+            "alpha_speed_confidence": self.alpha_speed_confidence,
+            "curve_confidence": self.curve_confidence,
+            "op_entropy": self.op_entropy,
+            "slot_entropy": self.slot_entropy,
+            "blueprint_entropy": self.blueprint_entropy,
+            "style_entropy": self.style_entropy,
+            "tempo_entropy": self.tempo_entropy,
+            "alpha_target_entropy": self.alpha_target_entropy,
+            "alpha_speed_entropy": self.alpha_speed_entropy,
+            "curve_entropy": self.curve_entropy,
+        }
 
 
 @dataclass(slots=True, frozen=True)
@@ -1318,6 +1378,23 @@ class AnalyticsSnapshotPayload:
             # Head telemetry (nested dataclass)
             head_telemetry=cls._parse_head_telemetry(data.get("head_telemetry")),
         )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dict for telemetry serialization.
+
+        PERF: Avoids dataclasses.asdict() deep-copying large, already-JSONable containers
+        like slot_states, alternatives, scoreboard_tables, and shapley_values.
+        """
+        payload: dict[str, Any] = {}
+        for dc_field in dataclasses.fields(self):
+            value = getattr(self, dc_field.name)
+            if dc_field.name == "head_telemetry":
+                payload[dc_field.name] = value.to_dict() if value is not None else None
+            elif dc_field.name == "reward_components":
+                payload[dc_field.name] = value.to_dict() if value is not None else None
+            else:
+                payload[dc_field.name] = value
+        return payload
 
     @staticmethod
     def _parse_reward_components(

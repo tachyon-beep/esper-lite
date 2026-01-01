@@ -46,6 +46,61 @@ def build_parser() -> argparse.ArgumentParser:
         help="Telemetry verbosity level (default: normal)",
     )
     telemetry_parent.add_argument(
+        "--torch-profiler",
+        action="store_true",
+        help="Enable torch.profiler trace capture (TensorBoard-compatible)",
+    )
+    telemetry_parent.add_argument(
+        "--torch-profiler-dir",
+        type=str,
+        default="./profiler_traces",
+        help="Output directory for torch.profiler traces (default: ./profiler_traces)",
+    )
+    telemetry_parent.add_argument(
+        "--torch-profiler-wait",
+        type=int,
+        default=1,
+        help="torch.profiler schedule: wait steps before warmup (default: 1)",
+    )
+    telemetry_parent.add_argument(
+        "--torch-profiler-warmup",
+        type=int,
+        default=1,
+        help="torch.profiler schedule: warmup steps (default: 1)",
+    )
+    telemetry_parent.add_argument(
+        "--torch-profiler-active",
+        type=int,
+        default=3,
+        help="torch.profiler schedule: active (recording) steps (default: 3)",
+    )
+    telemetry_parent.add_argument(
+        "--torch-profiler-repeat",
+        type=int,
+        default=1,
+        help="torch.profiler schedule: number of cycles to repeat (default: 1)",
+    )
+    telemetry_parent.add_argument(
+        "--torch-profiler-record-shapes",
+        action="store_true",
+        help="torch.profiler: record tensor shapes (larger traces)",
+    )
+    telemetry_parent.add_argument(
+        "--torch-profiler-profile-memory",
+        action="store_true",
+        help="torch.profiler: profile memory allocations (larger traces)",
+    )
+    telemetry_parent.add_argument(
+        "--torch-profiler-with-stack",
+        action="store_true",
+        help="torch.profiler: record Python stacks (very large traces)",
+    )
+    telemetry_parent.add_argument(
+        "--torch-profiler-summary",
+        action="store_true",
+        help="Print a compact torch.profiler op summary at the end of training",
+    )
+    telemetry_parent.add_argument(
         "--gradient-telemetry-stride",
         type=int,
         default=None,
@@ -680,6 +735,16 @@ def main() -> None:
                         quiet_analytics=use_sanctum,
                         ready_event=dataloader_ready_event,
                         shutdown_event=shutdown_event,
+                        torch_profiler=args.torch_profiler,
+                        torch_profiler_dir=args.torch_profiler_dir,
+                        torch_profiler_wait=args.torch_profiler_wait,
+                        torch_profiler_warmup=args.torch_profiler_warmup,
+                        torch_profiler_active=args.torch_profiler_active,
+                        torch_profiler_repeat=args.torch_profiler_repeat,
+                        torch_profiler_record_shapes=args.torch_profiler_record_shapes,
+                        torch_profiler_profile_memory=args.torch_profiler_profile_memory,
+                        torch_profiler_with_stack=args.torch_profiler_with_stack,
+                        torch_profiler_summary=args.torch_profiler_summary,
                         **config.to_train_kwargs(),
                     )
         except Exception:

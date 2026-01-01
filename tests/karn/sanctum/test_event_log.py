@@ -64,7 +64,8 @@ def test_event_log_with_events():
                 timestamp="10:15:30",
                 event_type="TRAINING_STARTED",
                 env_id=None,
-                message="Training started"
+                message="Training started",
+                metadata={"event_id": "e1"},
             ),
             EventLogEntry(
                 timestamp="10:15:31",
@@ -76,7 +77,8 @@ def test_event_log_with_events():
                 timestamp="10:15:32",
                 event_type="SEED_GERMINATED",
                 env_id=1,
-                message="A1 germinated (dense_m)"
+                message="A1 germinated (dense_m)",
+                metadata={"event_id": "e2"},
             ),
         ]
     )
@@ -167,6 +169,7 @@ def test_event_log_groups_by_second():
                 event_type="SEED_GERMINATED",
                 env_id=0,
                 message="seed germinated",
+                metadata={"event_id": "e3"},
             ),
         ]
     )
@@ -217,6 +220,7 @@ def test_event_log_uses_colors_in_rendering():
                 event_type="SEED_GERMINATED",
                 env_id=0,
                 message="seed germinated",
+                metadata={"event_id": "e4"},
             ),
         ]
     )

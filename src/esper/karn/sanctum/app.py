@@ -47,6 +47,7 @@ from esper.karn.sanctum.widgets import (
     EventLog,
     EventLogDetail,
     HistoricalEnvDetail,
+    RewardHealthData,
     RewardHealthPanel,
     RunHeader,
     Scoreboard,
@@ -375,6 +376,8 @@ class SanctumApp(App[None]):
         self._pending_view: SanctumView | None = None
         self._apply_view_scheduled = False
         self._last_heavy_widget_update_ts: float = 0.0
+        self._last_reward_health_update_ts: float = 0.0
+        self._cached_reward_health: RewardHealthData = RewardHealthData()
 
     def compose(self) -> ComposeResult:
         """Build the Sanctum layout.
@@ -489,7 +492,12 @@ class SanctumApp(App[None]):
 
         try:
             snapshots_by_group = self._backend.get_all_snapshots()
-            reward_health = self._backend.compute_reward_health()
+            reward_health = self._cached_reward_health
+            now = time.monotonic()
+            if (now - self._last_reward_health_update_ts) >= 0.5:
+                reward_health = self._backend.compute_reward_health()
+                self._cached_reward_health = reward_health
+                self._last_reward_health_update_ts = now
         except SanctumTelemetryFatalError as e:
             self._show_telemetry_fatal(e)
             return

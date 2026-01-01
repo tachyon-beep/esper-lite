@@ -406,15 +406,17 @@ class KarnCollector:
         current_epoch.host.train_accuracy = total_train_accuracy / n_envs
         current_epoch.host.host_grad_norm = total_host_grad_norm / n_envs
 
+        # Tier 3: Check for anomalies before mutating slot stage timers.
+        # Stage-transition triggers rely on epochs_in_stage == 0 (just transitioned),
+        # which would be masked if we increment before checking.
+        if self.config.capture_dense_traces:
+            self._check_anomalies_and_capture(current_epoch)
+
         # Increment epochs_in_stage for all occupied slots ONCE per epoch
         # (includes EMBARGOED/RESETTING dwell while excluding PRUNED + terminal).
         for slot in current_epoch.slots.values():
             if slot.stage not in (SeedStage.DORMANT, SeedStage.PRUNED, SeedStage.FOSSILIZED):
                 slot.epochs_in_stage += 1
-
-        # Tier 3: Check for anomalies before committing
-        if self.config.capture_dense_traces:
-            self._check_anomalies_and_capture(current_epoch)
 
         # Commit the epoch
         self.store.commit_epoch()

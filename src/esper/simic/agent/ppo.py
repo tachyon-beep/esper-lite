@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 from pathlib import Path
-import math
 from typing import TYPE_CHECKING, Any
 
 import torch

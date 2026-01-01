@@ -34,6 +34,9 @@ def training_profiler(
     warmup: int = 1,
     active: int = 3,
     repeat: int = 1,
+    record_shapes: bool = False,
+    profile_memory: bool = False,
+    with_stack: bool = False,
 ) -> Iterator[torch.profiler.profile | None]:
     """Context manager for profiling training steps.
 
@@ -44,6 +47,9 @@ def training_profiler(
         warmup: Warmup steps before active profiling (discard JIT overhead)
         active: Steps to actively profile (collect traces)
         repeat: Number of profiling cycles
+        record_shapes: Record tensor shapes (larger traces)
+        profile_memory: Track memory allocations (larger traces)
+        with_stack: Record Python stacks (very large traces)
 
     Yields:
         Profiler instance or None if disabled
@@ -81,9 +87,9 @@ def training_profiler(
         activities=activities,
         schedule=schedule,
         on_trace_ready=torch.profiler.tensorboard_trace_handler(output_dir),
-        record_shapes=True,
-        profile_memory=True,
-        with_stack=True,
+        record_shapes=record_shapes,
+        profile_memory=profile_memory,
+        with_stack=with_stack,
     ) as prof:
         yield prof
 

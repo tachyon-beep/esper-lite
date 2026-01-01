@@ -138,6 +138,9 @@ class EventLog(Static):
         self._line_data: list[_LineData] = []
         # Track processed event IDs to avoid duplicates
         self._processed_ids: set[str] = set()
+        # Insertion order for bounded dedup set (prevents unbounded growth over long runs).
+        self._processed_id_order: deque[str] = deque()
+        self._max_processed_ids: int = max(10_000, self._max_lines * 100)
         # Mapping for in-place updates of aggregated lines
         self._aggregate_line_index: dict[tuple[str, str], int] = {}
         # Keep reference to snapshot for click handler
@@ -156,6 +159,17 @@ class EventLog(Static):
 
         # Stable ordering within same second
         self._next_seq: int = 0
+
+    def _mark_processed(self, event_id: str) -> bool:
+        """Mark event_id as processed, evicting oldest IDs to bound memory."""
+        if event_id in self._processed_ids:
+            return False
+        self._processed_ids.add(event_id)
+        self._processed_id_order.append(event_id)
+        while len(self._processed_id_order) > self._max_processed_ids:
+            oldest = self._processed_id_order.popleft()
+            self._processed_ids.remove(oldest)
+        return True
 
     def on_mount(self) -> None:
         self._last_drip_ts = time.monotonic()
@@ -181,13 +195,10 @@ class EventLog(Static):
         aggregate_events: dict[tuple[str, str], set[int | None]] = defaultdict(set)
 
         for entry in snapshot.event_log:
-            # Create a unique ID for deduplication
-            event_id = f"{entry.timestamp}:{entry.event_type}:{entry.env_id}:{hash(str(entry.metadata))}"
-
             if entry.event_type in _INDIVIDUAL_EVENTS:
-                if event_id not in self._processed_ids:
+                event_id = str(entry.metadata["event_id"])
+                if self._mark_processed(event_id):
                     individual_events.append(entry)
-                    self._processed_ids.add(event_id)
             else:
                 # Aggregate by timestamp and event type (updated live)
                 aggregate_events[(entry.timestamp, entry.event_type)].add(entry.env_id)

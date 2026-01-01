@@ -44,6 +44,47 @@ from esper.leyline.telemetry import (
 _logger = logging.getLogger(__name__)
 
 
+def _payload_to_dict(payload: Any) -> Any:
+    """Convert a TelemetryEvent.data payload into a JSON-friendly structure.
+
+    PERF: Prefer payload.to_dict() when present to avoid dataclasses.asdict() deep-copy overhead
+    on already-JSONable containers (slot_states, per-seed dicts, etc.).
+    """
+    if payload is None:
+        return None
+    if is_dataclass(payload) and not isinstance(payload, type):
+        # hasattr AUTHORIZED by operator on 2026-01-01 00:00:00 UTC
+        # Justification: Serialization - prefer to_dict() for typed payloads that provide it
+        if hasattr(payload, "to_dict") and callable(payload.to_dict):
+            return payload.to_dict()
+        return asdict(payload)
+    return payload
+
+
+def _telemetry_event_to_dict(event: TelemetryEvent) -> dict[str, Any]:
+    """Convert TelemetryEvent to a dict for JSON serialization (fast path)."""
+    # hasattr AUTHORIZED by operator on 2026-01-01 00:00:00 UTC
+    # Justification: Serialization - handle both enum and string event_type values
+    event_type = event.event_type.name if hasattr(event.event_type, "name") else str(event.event_type)
+
+    # hasattr AUTHORIZED by operator on 2026-01-01 00:00:00 UTC
+    # Justification: Serialization - safely handle datetime objects from various sources
+    timestamp = event.timestamp.isoformat() if hasattr(event.timestamp, "isoformat") else str(event.timestamp)
+
+    return {
+        "event_id": event.event_id,
+        "event_type": event_type,
+        "timestamp": timestamp,
+        "seed_id": event.seed_id,
+        "slot_id": event.slot_id,
+        "epoch": event.epoch,
+        "group_id": event.group_id,
+        "message": event.message,
+        "data": _payload_to_dict(event.data),
+        "severity": event.severity,
+    }
+
+
 class BackendWorker:
     """Worker thread that processes events for a single backend.
 
@@ -424,24 +465,7 @@ class ConsoleOutput(OutputBackend):
 
     def _event_to_dict(self, event: TelemetryEvent) -> dict[str, Any]:
         """Convert event to dictionary for serialization."""
-        if is_dataclass(event):
-            data = asdict(event)
-        else:
-            data = event.__dict__
-
-        # Convert datetime objects to ISO format strings
-        # hasattr AUTHORIZED by operator on 2025-11-29 15:05:24 UTC
-        # Justification: Serialization - safely handle datetime objects from various sources
-        if 'timestamp' in data and hasattr(data['timestamp'], 'isoformat'):
-            data['timestamp'] = data['timestamp'].isoformat()
-
-        # Convert enum to string
-        # hasattr AUTHORIZED by operator on 2025-11-29 15:05:24 UTC
-        # Justification: Serialization - safely handle enum objects with .name attribute
-        if 'event_type' in data and hasattr(data['event_type'], 'name'):
-            data['event_type'] = data['event_type'].name
-
-        return data
+        return _telemetry_event_to_dict(event)
 
 
 class FileOutput(OutputBackend):
@@ -490,24 +514,7 @@ class FileOutput(OutputBackend):
 
     def _event_to_dict(self, event: TelemetryEvent) -> dict[str, Any]:
         """Convert event to dictionary for serialization."""
-        if is_dataclass(event):
-            data = asdict(event)
-        else:
-            data = event.__dict__
-
-        # Convert datetime objects to ISO format strings
-        # hasattr AUTHORIZED by operator on 2025-11-29 15:05:24 UTC
-        # Justification: Serialization - safely handle datetime objects from various sources
-        if 'timestamp' in data and hasattr(data['timestamp'], 'isoformat'):
-            data['timestamp'] = data['timestamp'].isoformat()
-
-        # Convert enum to string
-        # hasattr AUTHORIZED by operator on 2025-11-29 15:05:24 UTC
-        # Justification: Serialization - safely handle enum objects with .name attribute
-        if 'event_type' in data and hasattr(data['event_type'], 'name'):
-            data['event_type'] = data['event_type'].name
-
-        return data
+        return _telemetry_event_to_dict(event)
 
     def __del__(self) -> None:
         """Ensure file is closed on deletion."""
@@ -603,6 +610,7 @@ class NissaHub:
         self._queue: queue.Queue[TelemetryEvent | None] = queue.Queue(maxsize=max_queue_size)
         self._worker_thread: threading.Thread | None = None
         self._lock = threading.Lock()
+        self._dropped_events = 0
 
     def _start_worker(self) -> None:
         """Start the background worker thread if not already running."""
@@ -719,7 +727,13 @@ class NissaHub:
             # If queue is full, we drop the event and warn.
             self._queue.put_nowait(event)
         except queue.Full:
-            _logger.warning("NissaHub queue full, dropping telemetry event")
+            self._dropped_events += 1
+            # Log first drop immediately, then throttle to avoid hitching under overload.
+            if self._dropped_events == 1 or self._dropped_events % 1000 == 0:
+                _logger.warning(
+                    "NissaHub queue full, dropped %d telemetry events",
+                    self._dropped_events,
+                )
 
     def flush(self, timeout: float | None = None) -> None:
         """Block until all queued events have been processed.
@@ -783,6 +797,7 @@ class NissaHub:
         # Create fresh queue to ensure no stale events from previous runs
         self._queue = queue.Queue(maxsize=self._queue.maxsize)
         self._worker_thread = None  # Will be recreated on next add_backend()
+        self._dropped_events = 0
 
     def close(self) -> None:
         """Close all backends (idempotent).

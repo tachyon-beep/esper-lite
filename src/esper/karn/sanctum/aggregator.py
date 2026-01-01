@@ -193,6 +193,7 @@ class SanctumAggregator:
     # System vitals
     _vitals: SystemVitals = field(default_factory=SystemVitals)
     _gpu_devices: list[str] = field(default_factory=list)
+    _gpu_total_memory_gb: dict[int, float] = field(default_factory=dict)
 
     # Event log
     _event_log: deque[EventLogEntry] = field(default_factory=lambda: deque(maxlen=100))
@@ -229,6 +230,7 @@ class SanctumAggregator:
         self._tamiyo = TamiyoState()
         self._vitals = SystemVitals()
         self._gpu_devices = []
+        self._gpu_total_memory_gb = {}
         self._best_runs = []
         self._slot_ids = []
         self._slot_ids_locked = False
@@ -454,9 +456,9 @@ class SanctumAggregator:
             aggregate_mean_accuracy=mean_accuracy,
             aggregate_mean_reward=mean_reward,
             # Slot configuration for dynamic columns
-            slot_ids=list(self._slot_ids),
+            slot_ids=self._slot_ids,
             # Per-env state
-            envs=dict(self._envs),
+            envs=self._envs,
             focused_env_id=self._focused_env_id,
             # Last action target (for EnvOverview row highlighting)
             last_action_env_id=self._last_action_env_id,
@@ -470,18 +472,18 @@ class SanctumAggregator:
             # Event log
             event_log=list(self._event_log),
             # Historical best runs
-            best_runs=list(self._best_runs),
+            best_runs=self._best_runs,
             # Rolling mean accuracy history
-            mean_accuracy_history=deque(self._mean_accuracy_history, maxlen=50),
+            mean_accuracy_history=self._mean_accuracy_history,
             # Batch-level aggregates
             batch_avg_reward=self._batch_avg_reward,
             batch_total_episodes=self._batch_total_episodes,
             # Cumulative counts (never reset, tracks entire training run)
             cumulative_fossilized=self._cumulative_fossilized,
             cumulative_pruned=self._cumulative_pruned,
-            cumulative_blueprint_spawns=dict(self._cumulative_blueprint_spawns),
-            cumulative_blueprint_fossilized=dict(self._cumulative_blueprint_fossilized),
-            cumulative_blueprint_prunes=dict(self._cumulative_blueprint_prunes),
+            cumulative_blueprint_spawns=self._cumulative_blueprint_spawns,
+            cumulative_blueprint_fossilized=self._cumulative_blueprint_fossilized,
+            cumulative_blueprint_prunes=self._cumulative_blueprint_prunes,
             # Aggregate slot state across all environments
             slot_stage_counts=slot_stage_counts,
             total_slots=total_slots,
@@ -1509,7 +1511,7 @@ class SanctumAggregator:
             relative_time = f"({age_seconds/3600:.0f}h)"
 
         # Generic message + structured metadata based on event type
-        metadata: dict[str, str | int | float] = {}
+        metadata: dict[str, str | int | float] = {"event_id": event.event_id}
         env_id: int | None = None
 
         if event_type.startswith("SEED_"):
@@ -1617,8 +1619,12 @@ class SanctumAggregator:
                         try:
                             # Use reserved memory (allocator footprint) for OOM risk visibility.
                             mem_reserved = torch.cuda.memory_reserved(device_idx) / (1024**3)
-                            props = torch.cuda.get_device_properties(device_idx)
-                            mem_total = props.total_memory / (1024**3)
+                            if device_idx in self._gpu_total_memory_gb:
+                                mem_total = self._gpu_total_memory_gb[device_idx]
+                            else:
+                                props = torch.cuda.get_device_properties(device_idx)
+                                mem_total = props.total_memory / (1024**3)
+                                self._gpu_total_memory_gb[device_idx] = mem_total
 
                             gpu_stats[device_idx] = GPUStats(
                                 device_id=device_idx,
