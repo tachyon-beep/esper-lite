@@ -670,3 +670,78 @@ wandb.log({
 3. **Value Function Quality**: `explained_variance`, `value_target_correlation`
 4. **Per-Head Entropy**: All 8 head entropies as stacked area chart
 5. **Infrastructure Timeline**: Memory, GPU util, timing breakdowns
+
+## Appendix G: Sanctum UX Telemetry Categories
+
+The Sanctum TUI consumes telemetry across **9 distinct information categories**. These categories must be preserved regardless of event naming changes.
+
+### G.1 Information Categories
+
+| Category | Description | Update Frequency | Widgets Consuming |
+|----------|-------------|------------------|-------------------|
+| **Run Configuration** | Task, hyperparams, devices, slot layout | Once (start) | RunHeader, EnvOverview |
+| **Host Training State** | Per-env accuracy, loss, epoch progress | Per-epoch | EnvOverview, EnvDetail |
+| **Policy Optimization** | Loss, entropy, gradients, clip fraction | Per-PPO-update | TamiyoBrain, HealthStatus |
+| **Per-Head Dynamics** | Head entropies, grad norms, ratios | Per-PPO-update | HeadsGrid, AttentionHeatmap |
+| **Seed Lifecycle** | Stage transitions, alpha, contribution | Per-event | EnvOverview, EnvDetail, SlotsPanel |
+| **Decision Context** | Action choice, confidence, alternatives | Per-step | DecisionsColumn, ActionContext |
+| **Reward Breakdown** | Components: base, PBRS, penalties, credit | Per-step | RewardHealth, EnvDetail |
+| **Attribution Analysis** | Counterfactuals, Shapley values | Per-episode | CounterfactualPanel, ShapleyPanel |
+| **System Health** | GPU/CPU/RAM, throughput, alarms | Continuous | RunHeader, SystemStatus, AnomalyStrip |
+
+### G.2 Domain Mapping of Categories
+
+| Category | Primary Domain | Secondary Domain |
+|----------|----------------|------------------|
+| Run Configuration | Simic | - |
+| Host Training State | **Tolaria** | Kasmina (seed data within) |
+| Policy Optimization | **Tamiyo** | - |
+| Per-Head Dynamics | **Tamiyo** | - |
+| Seed Lifecycle | **Kasmina** | - |
+| Decision Context | **Tamiyo** | - |
+| Reward Breakdown | **Simic** | Tolaria (host contribution) |
+| Attribution Analysis | **Simic** | Kasmina (per-seed values) |
+| System Health | Infrastructure | - |
+
+### G.3 Critical Sanctum Fields by Priority
+
+**TIER 1 - Core Display (Breaks UI if missing):**
+- `task_name`, `current_episode`, `current_epoch`, `max_epochs`
+- `val_accuracy`, `val_loss` (per-env)
+- `policy_loss`, `value_loss`, `entropy`, `kl_divergence`
+- `seed.stage`, `seed.blueprint_id`, `seed.alpha`
+
+**TIER 2 - Health Monitoring (Degrades insight if missing):**
+- `grad_norm`, `clip_fraction`, `explained_variance`
+- `head_*_entropy`, `head_*_grad_norm` (8 heads each)
+- `dead_layers`, `exploding_layers`, `entropy_collapsed`
+- `advantage_mean`, `advantage_std`, `ratio_max`
+
+**TIER 3 - Deep Diagnostics (Nice-to-have):**
+- `log_prob_min`, `log_prob_max` (NaN prediction)
+- `head_*_ratio_max` (per-head PPO ratio extremes)
+- `q_germinate`, `q_advance`, etc. (Q-values)
+- `counterfactual_matrix`, `shapley_values`
+
+### G.4 Identified Gaps
+
+| Gap | Current State | Recommendation |
+|-----|---------------|----------------|
+| `pre_clip_grad_norm` | Not captured (always 1.0) | **BUG FIX** - Phase 1 |
+| `ppo_update_idx` | Incorrect (always 150) | **BUG FIX** - Phase 1 |
+| `training_thread_alive` | Hardcoded true | Add heartbeat event |
+| `total_events_received` | Computed locally | Add to snapshot schema |
+| Per-layer gradient health | Optional dict | Ensure consistent emission |
+| Seed diversity metrics | Not captured | Future enhancement |
+
+### G.5 Backward Compatibility for Sanctum
+
+The Sanctum aggregator (`aggregator.py`) must handle both old and new event types during migration:
+
+```python
+# Example: Handle both PPO_UPDATE_COMPLETED and TAMIYO_POLICY_UPDATE
+if event_type.name in ("TAMIYO_POLICY_UPDATE", "PPO_UPDATE_COMPLETED"):
+    self._handle_tamiyo_policy_update(event)
+```
+
+**Key requirement:** All 9 information categories must continue flowing to widgets regardless of event name changes. The aggregator acts as the translation layer.
