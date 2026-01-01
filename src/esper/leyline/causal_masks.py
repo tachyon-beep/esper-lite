@@ -63,4 +63,40 @@ def compute_causal_masks(op_actions: torch.Tensor) -> dict[str, torch.Tensor]:
     }
 
 
-__all__ = ["compute_causal_masks"]
+# =============================================================================
+# Static Relevance Lookup (for UI - no tensor operations needed)
+# =============================================================================
+
+# Per-op head relevance sets - MUST match compute_causal_masks() logic above
+# Used by Karn TUI to dim irrelevant heads instead of misclassifying as "dead"
+HEAD_RELEVANCE_BY_OP: dict[str, frozenset[str]] = {
+    "WAIT": frozenset({"op"}),
+    "GERMINATE": frozenset({"op", "slot", "blueprint", "style", "tempo", "alpha_target"}),
+    "SET_ALPHA_TARGET": frozenset({"op", "slot", "style", "alpha_target", "alpha_speed", "alpha_curve"}),
+    "PRUNE": frozenset({"op", "slot", "alpha_speed", "alpha_curve"}),
+    "FOSSILIZE": frozenset({"op", "slot"}),
+    "ADVANCE": frozenset({"op", "slot"}),
+}
+
+
+def is_head_relevant(op_name: str, head_name: str) -> bool:
+    """Check if head is causally relevant for given op.
+
+    Args:
+        op_name: LifecycleOp name (e.g., "WAIT", "GERMINATE")
+        head_name: Action head name (e.g., "slot", "blueprint")
+
+    Returns:
+        True if head affects outcome for this op, False otherwise.
+
+    Example:
+        >>> is_head_relevant("WAIT", "slot")
+        False
+        >>> is_head_relevant("GERMINATE", "blueprint")
+        True
+    """
+    relevant_heads = HEAD_RELEVANCE_BY_OP.get(op_name, frozenset())
+    return head_name.lower() in relevant_heads
+
+
+__all__ = ["compute_causal_masks", "HEAD_RELEVANCE_BY_OP", "is_head_relevant"]

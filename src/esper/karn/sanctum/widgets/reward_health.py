@@ -10,13 +10,10 @@ Displays DRL Expert recommended metrics:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from rich.text import Text
 from textual.widgets import Static
-
-if TYPE_CHECKING:
-    from esper.karn.sanctum.schema import SanctumSnapshot
 
 
 @dataclass
@@ -59,38 +56,6 @@ class RewardHealthPanel(Static):
     def update_data(self, data: RewardHealthData) -> None:
         """Update health data and refresh display."""
         self._data = data
-        self.refresh()
-
-    def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
-        """Update from snapshot data.
-
-        Extracts reward health metrics from the snapshot:
-        - EV explained from Tamiyo explained_variance
-        - Gaming rate from focused env
-        - PBRS fraction from reward components (if available)
-        """
-        # EV explained from policy metrics
-        ev = snapshot.tamiyo.explained_variance
-
-        # Gaming rate from focused env
-        gaming_rate = 0.0
-        focused_env = snapshot.envs.get(snapshot.focused_env_id)
-        if focused_env:
-            gaming_rate = focused_env.gaming_rate
-
-        # PBRS fraction - not directly available, use 0 as placeholder
-        # Would need PBRS signal tracking to properly compute
-        pbrs_fraction = 0.0
-
-        # Hypervolume - not tracked in current schema
-        hypervolume = 0.0
-
-        self._data = RewardHealthData(
-            pbrs_fraction=pbrs_fraction,
-            anti_gaming_trigger_rate=gaming_rate,
-            ev_explained=ev,
-            hypervolume=hypervolume,
-        )
         self.refresh()
 
     def render(self) -> Text:

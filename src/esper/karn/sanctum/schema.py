@@ -351,6 +351,13 @@ class EnvState:
     best_accuracy_episode: int = 0
     best_seeds: dict[str, SeedState] = field(default_factory=dict)
 
+    # Snapshot volatile state at peak accuracy (for historical detail modal)
+    # These capture the state AT THE MOMENT best_accuracy was achieved,
+    # not the state at batch end (which would be stale/incorrect).
+    best_reward_components: RewardComponents | None = None
+    best_counterfactual_matrix: CounterfactualSnapshot | None = None
+    best_action_history: list[str] = field(default_factory=list)
+
     # Per-env action tracking
     # ACTION NORMALIZATION: add_action() normalizes factored actions:
     #   GERMINATE_CONV_LIGHT → GERMINATE
@@ -463,6 +470,28 @@ class EnvState:
                 for slot_id, seed in self.seeds.items()
                 if seed.stage in _contributing_stages
             }
+
+            # Snapshot volatile state at peak (for historical detail modal)
+            # Deep copy to preserve state at this moment
+            if isinstance(self.reward_components, RewardComponents):
+                self.best_reward_components = RewardComponents(
+                    **self.reward_components.__dict__
+                )
+            else:
+                self.best_reward_components = None
+
+            if self.counterfactual_matrix and self.counterfactual_matrix.slot_ids:
+                self.best_counterfactual_matrix = CounterfactualSnapshot(
+                    slot_ids=self.counterfactual_matrix.slot_ids,
+                    configs=list(self.counterfactual_matrix.configs),
+                    strategy=self.counterfactual_matrix.strategy,
+                    compute_time_ms=self.counterfactual_matrix.compute_time_ms,
+                )
+            else:
+                self.best_counterfactual_matrix = None
+
+            # Snapshot action history (last 10 actions leading to peak)
+            self.best_action_history = list(self.action_history)
         else:
             self.epochs_since_improvement += 1
 

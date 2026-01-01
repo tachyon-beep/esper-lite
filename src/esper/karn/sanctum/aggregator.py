@@ -1102,16 +1102,10 @@ class SanctumAggregator:
                     # Interactive features
                     record_id=str(uuid.uuid4())[:8],
                     pinned=False,
-                    # Full env snapshot at peak
-                    reward_components=RewardComponents(**env.reward_components.__dict__)
-                        if env.reward_components else None,
-                    counterfactual_matrix=CounterfactualSnapshot(
-                        slot_ids=env.counterfactual_matrix.slot_ids,
-                        configs=list(env.counterfactual_matrix.configs),
-                        strategy=env.counterfactual_matrix.strategy,
-                        compute_time_ms=env.counterfactual_matrix.compute_time_ms,
-                    ) if env.counterfactual_matrix and env.counterfactual_matrix.slot_ids else None,
-                    action_history=list(env.action_history),
+                    # Full env snapshot at peak (captured by EnvState.add_accuracy())
+                    reward_components=env.best_reward_components,
+                    counterfactual_matrix=env.best_counterfactual_matrix,
+                    action_history=env.best_action_history,
                     reward_history=list(env.reward_history),
                     accuracy_history=list(env.accuracy_history),
                     host_loss=env.host_loss,
@@ -1166,6 +1160,11 @@ class SanctumAggregator:
             env.best_accuracy_epoch = 0
             env.best_accuracy_episode = 0
             env.best_seeds.clear()
+
+            # Volatile state snapshots (fresh per episode)
+            env.best_reward_components = None
+            env.best_counterfactual_matrix = None
+            env.best_action_history = []
 
             # Action tracking (fresh distribution each episode)
             env.action_history.clear()
