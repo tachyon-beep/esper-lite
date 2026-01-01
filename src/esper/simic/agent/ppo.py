@@ -573,8 +573,10 @@ class PPOAgent:
             # Compute per-head advantages with causal masking
             # Returns both advantages AND masks to avoid redundant computation
             valid_op_actions = data["op_actions"][valid_mask]
+            # Use effective op (action_for_reward) for causal masks to avoid crediting invalid ops.
+            valid_effective_op_actions = data["effective_op_actions"][valid_mask]
             per_head_advantages, head_masks = compute_per_head_advantages(
-                valid_advantages, valid_op_actions
+                valid_advantages, valid_effective_op_actions
             )
             # B4-DRL-01: Masks from leyline.causal_masks (single source of truth)
 

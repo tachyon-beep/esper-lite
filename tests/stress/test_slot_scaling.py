@@ -264,6 +264,7 @@ class TestEpisodeCycling:
                         alpha_speed_action=0,
                         alpha_curve_action=0,
                         op_action=0,
+                        effective_op_action=0,
                         slot_log_prob=-0.5,
                         blueprint_log_prob=-0.5,
                         style_log_prob=-0.5,

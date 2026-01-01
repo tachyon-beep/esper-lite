@@ -46,7 +46,7 @@ class TamiyoRolloutStep(NamedTuple):
     # Core state
     state: torch.Tensor  # [state_dim]
 
-    # Factored actions (8 heads)
+    # Factored actions (8 heads) + effective op for causal masks
     slot_action: int
     blueprint_action: int
     style_action: int
@@ -55,6 +55,7 @@ class TamiyoRolloutStep(NamedTuple):
     alpha_speed_action: int
     alpha_curve_action: int
     op_action: int
+    effective_op_action: int
 
     # Per-head log probs (NOT joint) - see PyTorch expert rationale
     slot_log_prob: float
@@ -136,6 +137,7 @@ class TamiyoRolloutBuffer:
     alpha_speed_actions: torch.Tensor = field(init=False)
     alpha_curve_actions: torch.Tensor = field(init=False)
     op_actions: torch.Tensor = field(init=False)
+    effective_op_actions: torch.Tensor = field(init=False)
     slot_log_probs: torch.Tensor = field(init=False)
     blueprint_log_probs: torch.Tensor = field(init=False)
     style_log_probs: torch.Tensor = field(init=False)
@@ -196,6 +198,7 @@ class TamiyoRolloutBuffer:
         self.alpha_speed_actions = torch.zeros(n, m, dtype=torch.long, device=device)
         self.alpha_curve_actions = torch.zeros(n, m, dtype=torch.long, device=device)
         self.op_actions = torch.zeros(n, m, dtype=torch.long, device=device)
+        self.effective_op_actions = torch.zeros(n, m, dtype=torch.long, device=device)
 
         # Per-head log probs
         self.slot_log_probs = torch.zeros(n, m, device=device)
@@ -278,6 +281,7 @@ class TamiyoRolloutBuffer:
         alpha_speed_action: int,
         alpha_curve_action: int,
         op_action: int,
+        effective_op_action: int,
         slot_log_prob: float | torch.Tensor,
         blueprint_log_prob: float | torch.Tensor,
         style_log_prob: float | torch.Tensor,
@@ -335,6 +339,7 @@ class TamiyoRolloutBuffer:
         self.alpha_speed_actions[env_id, step_idx] = alpha_speed_action
         self.alpha_curve_actions[env_id, step_idx] = alpha_curve_action
         self.op_actions[env_id, step_idx] = op_action
+        self.effective_op_actions[env_id, step_idx] = effective_op_action
         # CRITICAL: Detach log_probs to prevent gradient graph memory leak.
         # Without detach, computation graphs accumulate unboundedly across rollout steps.
         self.slot_log_probs[env_id, step_idx] = _detach(slot_log_prob)
@@ -495,6 +500,7 @@ class TamiyoRolloutBuffer:
             "alpha_speed_actions": self.alpha_speed_actions.to(device, non_blocking=nb),
             "alpha_curve_actions": self.alpha_curve_actions.to(device, non_blocking=nb),
             "op_actions": self.op_actions.to(device, non_blocking=nb),
+            "effective_op_actions": self.effective_op_actions.to(device, non_blocking=nb),
             "slot_log_probs": self.slot_log_probs.to(device, non_blocking=nb),
             "blueprint_log_probs": self.blueprint_log_probs.to(device, non_blocking=nb),
             "style_log_probs": self.style_log_probs.to(device, non_blocking=nb),

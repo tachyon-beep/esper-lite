@@ -87,6 +87,7 @@ def test_q_values_end_to_end_flow():
                 alpha_speed_action=result.actions["alpha_speed"],
                 alpha_curve_action=result.actions["alpha_curve"],
                 op_action=result.actions["op"],
+                effective_op_action=result.actions["op"],
                 slot_log_prob=result.log_probs["slot"],
                 blueprint_log_prob=result.log_probs["blueprint"],
                 style_log_prob=result.log_probs["style"],

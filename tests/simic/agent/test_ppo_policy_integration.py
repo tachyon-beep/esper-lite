@@ -242,6 +242,7 @@ class TestPPOEndToEnd:
             alpha_speed_action=result.action["alpha_speed"].item(),
             alpha_curve_action=result.action["alpha_curve"].item(),
             op_action=result.action["op"].item(),
+            effective_op_action=result.action["op"].item(),
             slot_log_prob=result.log_prob["slot"].item(),
             blueprint_log_prob=result.log_prob["blueprint"].item(),
             style_log_prob=result.log_prob["style"].item(),

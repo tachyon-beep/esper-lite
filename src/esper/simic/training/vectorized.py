@@ -3113,7 +3113,8 @@ def train_ppo_vectorized(
                     # Store transition directly into rollout buffer.
                     done = epoch == max_epochs
                     truncated = done
-    
+                    effective_op_action = int(action_for_reward)
+
                     step_idx = agent.buffer.step_counts[env_idx]
                     agent.buffer.add(
                         env_id=env_idx,
@@ -3127,6 +3128,7 @@ def train_ppo_vectorized(
                         alpha_speed_action=alpha_speed_action,
                         alpha_curve_action=alpha_curve_action,
                         op_action=op_action,
+                        effective_op_action=effective_op_action,
                         slot_log_prob=slot_log_probs_batch[env_idx],
                         blueprint_log_prob=blueprint_log_probs_batch[env_idx],
                         style_log_prob=style_log_probs_batch[env_idx],

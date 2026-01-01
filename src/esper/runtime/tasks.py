@@ -331,27 +331,26 @@ def _cifar10_crushed_spec() -> TaskSpec:
 
 
 def _cifar10_broken_spec() -> TaskSpec:
-    """CIFAR-10 with a "dead" host that seeds must rescue.
+    """CIFAR-10 with a constrained host that seeds should rescue.
 
-    This configuration creates a spatially blind host with aggressive pooling,
+    This configuration creates a spatially coarse host with aggressive pooling,
     designed to validate Esper's "rescue behavior" - where seeds must assume
-    full load-bearing responsibility for the task.
+    significant load-bearing responsibility for the task.
 
     Architecture:
-    - 1×1 kernels only (no spatial receptive field)
+    - 1×1 kernels only (no spatial receptive field in conv layers)
     - Aggressive pooling (32→16→8→4 spatial resolution)
     - Low channel capacity (8→16→32 progression)
     - ~1K parameters
 
     Expected behavior:
-    - Host alone: ~20-25% accuracy (color patterns only, no spatial features)
+    - Host alone: ~28-35% accuracy (MaxPool provides coarse spatial awareness
+      through competitive selection even with 1×1 kernels)
     - Host counterfactual contribution: ~0% (all useful signal through seed)
-    - With conv_light seed: ~45-50% (seed provides spatial awareness)
+    - With conv_light seed: ~45-50% (seed provides fine spatial awareness)
 
-    This validates the hypothesis: Esper does not require a competent host.
-    The Gradient Isolation mechanism can train fully independent modules from
-    scratch, allowing the system to perform functional organ transplants on
-    dead infrastructure.
+    NOTE: MaxPool creates implicit spatial features through the max operation.
+    For a truly spatially blind host, use cifar10_truly_blind instead.
     """
     cifar_config = TaskConfig.for_cifar10()
     loss_cfg = LossRewardConfig.for_cifar10()
