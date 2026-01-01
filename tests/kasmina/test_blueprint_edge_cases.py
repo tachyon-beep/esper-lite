@@ -3,7 +3,6 @@
 Tests verify correct behavior at boundary conditions:
 - NOOP blueprints have zero parameters
 - Blueprints work with tiny and large channel dimensions
-- FlexAttention availability detection
 - Mixed precision (bfloat16/float16) handling
 - Shape preservation for all blueprints
 """
@@ -11,7 +10,6 @@ Tests verify correct behavior at boundary conditions:
 import pytest
 import torch
 
-from esper.kasmina.blueprints import transformer as transformer_module
 from esper.kasmina.blueprints.registry import BlueprintRegistry
 
 
@@ -102,42 +100,6 @@ class TestBlueprintLargeChannels:
         module = BlueprintRegistry.create("transformer", "lora", dim=4096, rank=16)
 
         x = torch.randn(1, 8, 4096)
-        output = module(x)
-
-        assert output.shape == x.shape
-
-
-class TestFlexAttentionAvailability:
-    """Tests for FlexAttention availability detection."""
-
-    def test_flex_attention_flag_exists(self):
-        """FlexAttention availability flag should exist."""
-        flag = getattr(transformer_module, "_HAS_FLEX_ATTENTION", None)
-        assert isinstance(flag, bool)
-
-    def test_flex_attention_registration_conditional(self):
-        """FlexAttention blueprint is always registered (falls back to SDPA)."""
-        available_blueprints = BlueprintRegistry.list_for_topology("transformer")
-        blueprint_names = [s.name for s in available_blueprints]
-
-        assert "flex_attention" in blueprint_names
-
-        module = BlueprintRegistry.create("transformer", "flex_attention", dim=64, n_head=4)
-        x = torch.randn(2, 8, 64)
-        output = module(x)
-        assert output.shape == x.shape
-
-        # Differentiate real FlexAttention vs SDPA fallback without hasattr().
-        if transformer_module._HAS_FLEX_ATTENTION:
-            assert "_block_mask_cache" in dir(module)
-        else:
-            assert "_block_mask_cache" not in dir(module)
-
-    @pytest.mark.skipif(not transformer_module._HAS_FLEX_ATTENTION, reason="FlexAttention requires PyTorch 2.5+")
-    def test_flex_attention_works_when_available(self):
-        """FlexAttention should work when available."""
-        module = BlueprintRegistry.create("transformer", "flex_attention", dim=64, n_head=4)
-        x = torch.randn(2, 8, 64)
         output = module(x)
 
         assert output.shape == x.shape

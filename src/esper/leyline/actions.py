@@ -52,7 +52,7 @@ def build_action_enum(topology: str) -> type[IntEnum]:
 
     Action layout:
         0: WAIT
-        1-N: GERMINATE_<BLUEPRINT> (sorted by param count)
+        1-N: GERMINATE_<BLUEPRINT> (sorted by param estimate)
         N+1: FOSSILIZE
         N+2: PRUNE
         N+3: ADVANCE

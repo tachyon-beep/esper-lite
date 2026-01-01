@@ -90,7 +90,7 @@ class SeedConvBlock(nn.Module):
         return F.relu(self.gn(self.conv(x)))
 
 
-@BlueprintRegistry.register("norm", "cnn", param_estimate=100, description="GroupNorm enhancement")
+@BlueprintRegistry.register("norm", "cnn", param_estimate=130, description="GroupNorm enhancement")
 def create_norm_seed(channels: int) -> nn.Module:
     """Normalization enhancement seed."""
 
@@ -187,13 +187,12 @@ def create_depthwise_seed(channels: int) -> nn.Module:
 
 
 @BlueprintRegistry.register(
-    "bottleneck", "cnn", param_estimate=12000,
-    description="Bottleneck conv (1x1→3x3→1x1) - fills gap between depthwise and conv_light"
+    "bottleneck", "cnn", param_estimate=4500,
+    description="Bottleneck conv (1x1→3x3→1x1) - same tier as conv_small"
 )
 def create_bottleneck_seed(channels: int, reduction: int = 4) -> nn.Module:
     """Bottleneck convolution seed using 1x1 → 3x3 → 1x1 structure.
 
-    This fills the parameter gap between depthwise (~4.8k) and conv_light (~37k).
     The bottleneck structure reduces dimensionality before the expensive 3x3 conv,
     making it more parameter-efficient than a direct 3x3 conv.
 
@@ -229,13 +228,12 @@ def create_bottleneck_seed(channels: int, reduction: int = 4) -> nn.Module:
 
 
 @BlueprintRegistry.register(
-    "conv_small", "cnn", param_estimate=18000,
-    description="Small 1x1 conv - lighter than conv_light"
+    "conv_small", "cnn", param_estimate=4200,
+    description="Small 1x1 conv - same tier as bottleneck"
 )
 def create_conv_small_seed(channels: int) -> nn.Module:
     """Small 1x1 convolution seed - lightweight channel mixing.
 
-    This provides an option between bottleneck (~12k) and conv_light (~37k).
     Uses 1x1 convolution for channel mixing without spatial convolution,
     making it faster but less expressive than 3x3 convolutions.
 
