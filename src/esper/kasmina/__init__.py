@@ -13,8 +13,9 @@ NOTE: This module uses PEP 562 lazy imports. Heavy modules (slot, blueprints,
 isolation, host with torch dependencies) are only loaded when accessed.
 """
 
-__all__ = [
-    # Re-exported Leyline types
+from typing import TYPE_CHECKING, Any
+
+_LEYLINE_EXPORTS = (
     "SeedStage",
     "VALID_TRANSITIONS",
     "is_valid_transition",
@@ -23,30 +24,24 @@ __all__ = [
     "is_failure_stage",
     "GateLevel",
     "GateResult",
-    # Slot management
-    "SeedMetrics",
-    "SeedState",
-    "QualityGates",
-    "SeedSlot",
-    # Blueprints / registry
-    "BlueprintRegistry",
-    "BlueprintSpec",
-    "ConvBlock",
-    # Isolation
-    "blend_with_isolation",
-    "GradientHealthMonitor",
-    # Host
-    "HostProtocol",
-    "CNNHost",
-    "TransformerHost",
-    "TransformerBlock",
-    "MorphogeneticModel",
-    # Alpha scheduling
-    "AlphaController",
+)
+_SLOT_EXPORTS = ("SeedMetrics", "SeedState", "QualityGates", "SeedSlot")
+_BLUEPRINT_EXPORTS = ("BlueprintRegistry", "BlueprintSpec", "ConvBlock")
+_ISOLATION_EXPORTS = ("blend_with_isolation", "GradientHealthMonitor")
+_HOST_EXPORTS = ("CNNHost", "TransformerHost", "TransformerBlock", "MorphogeneticModel")
+_PROTOCOL_EXPORTS = ("HostProtocol",)
+_ALPHA_EXPORTS = ("AlphaController",)
+
+__all__ = [
+    *_LEYLINE_EXPORTS,
+    *_SLOT_EXPORTS,
+    *_BLUEPRINT_EXPORTS,
+    *_ISOLATION_EXPORTS,
+    *_PROTOCOL_EXPORTS,
+    *_HOST_EXPORTS,
+    *_ALPHA_EXPORTS,
 ]
 
-
-from typing import TYPE_CHECKING, Any
 
 # TYPE_CHECKING imports for static analysis (mypy, IDE navigation).
 # These are never executed at runtime, preserving lazy import semantics.
@@ -97,6 +92,10 @@ if TYPE_CHECKING:
     from esper.kasmina.protocol import HostProtocol as HostProtocol
 
 
+def __dir__() -> list[str]:
+    return sorted(set(globals().keys()) | set(__all__))
+
+
 def __getattr__(name: str) -> Any:
     """Lazy import using PEP 562.
 
@@ -104,9 +103,7 @@ def __getattr__(name: str) -> Any:
     loaded when accessed, not at package import time.
     """
     # Leyline re-exports (lightweight)
-    if name in ("SeedStage", "VALID_TRANSITIONS", "is_valid_transition",
-                "is_terminal_stage", "is_active_stage", "is_failure_stage",
-                "GateLevel", "GateResult"):
+    if name in _LEYLINE_EXPORTS:
         from esper.leyline import (
             SeedStage,
             VALID_TRANSITIONS,
@@ -127,39 +124,64 @@ def __getattr__(name: str) -> Any:
             "GateLevel": GateLevel,
             "GateResult": GateResult,
         }
+        globals().update(mapping)
         return mapping[name]
 
     # Slot (HEAVY - loads torch)
-    if name in ("SeedMetrics", "SeedState", "QualityGates", "SeedSlot"):
+    if name in _SLOT_EXPORTS:
         from esper.kasmina.slot import SeedMetrics, SeedState, QualityGates, SeedSlot
-        return {"SeedMetrics": SeedMetrics, "SeedState": SeedState,
-                "QualityGates": QualityGates, "SeedSlot": SeedSlot}[name]
+        mapping: dict[str, Any] = {
+            "SeedMetrics": SeedMetrics,
+            "SeedState": SeedState,
+            "QualityGates": QualityGates,
+            "SeedSlot": SeedSlot,
+        }
+        globals().update(mapping)
+        return mapping[name]
 
     # Blueprints (HEAVY - loads torch)
-    if name in ("BlueprintRegistry", "BlueprintSpec", "ConvBlock"):
+    if name in _BLUEPRINT_EXPORTS:
         from esper.kasmina.blueprints import BlueprintRegistry, BlueprintSpec, ConvBlock
-        return {"BlueprintRegistry": BlueprintRegistry, "BlueprintSpec": BlueprintSpec,
-                "ConvBlock": ConvBlock}[name]
+        mapping: dict[str, Any] = {
+            "BlueprintRegistry": BlueprintRegistry,
+            "BlueprintSpec": BlueprintSpec,
+            "ConvBlock": ConvBlock,
+        }
+        globals().update(mapping)
+        return mapping[name]
 
     # Isolation (HEAVY - loads torch)
-    if name in ("blend_with_isolation", "GradientHealthMonitor"):
+    if name in _ISOLATION_EXPORTS:
         from esper.kasmina.isolation import blend_with_isolation, GradientHealthMonitor
-        return {"blend_with_isolation": blend_with_isolation,
-                "GradientHealthMonitor": GradientHealthMonitor}[name]
+        mapping: dict[str, Any] = {
+            "blend_with_isolation": blend_with_isolation,
+            "GradientHealthMonitor": GradientHealthMonitor,
+        }
+        globals().update(mapping)
+        return mapping[name]
 
-    # Host (HEAVY - loads torch)
-    if name in ("CNNHost", "TransformerHost", "TransformerBlock", "MorphogeneticModel"):
-        from esper.kasmina.host import CNNHost, TransformerHost, TransformerBlock, MorphogeneticModel
-        return {"CNNHost": CNNHost, "TransformerHost": TransformerHost,
-                "TransformerBlock": TransformerBlock, "MorphogeneticModel": MorphogeneticModel}[name]
-
-    # Protocol & Alpha (lightweight)
-    if name == "HostProtocol":
+    # Protocol (lightweight)
+    if name in _PROTOCOL_EXPORTS:
         from esper.kasmina.protocol import HostProtocol
+        globals()["HostProtocol"] = HostProtocol
         return HostProtocol
 
-    if name == "AlphaController":
+    # Host (HEAVY - loads torch)
+    if name in _HOST_EXPORTS:
+        from esper.kasmina.host import CNNHost, TransformerHost, TransformerBlock, MorphogeneticModel
+        mapping: dict[str, Any] = {
+            "CNNHost": CNNHost,
+            "TransformerHost": TransformerHost,
+            "TransformerBlock": TransformerBlock,
+            "MorphogeneticModel": MorphogeneticModel,
+        }
+        globals().update(mapping)
+        return mapping[name]
+
+    # Alpha (lightweight)
+    if name in _ALPHA_EXPORTS:
         from esper.kasmina.alpha_controller import AlphaController
+        globals()["AlphaController"] = AlphaController
         return AlphaController
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
