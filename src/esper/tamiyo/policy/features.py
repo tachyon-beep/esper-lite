@@ -13,7 +13,6 @@ Policy Migration (PR #31). Re-exported from simic.control for compatibility.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
 import threading
 from typing import Any, TYPE_CHECKING

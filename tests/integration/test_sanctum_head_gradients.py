@@ -607,7 +607,7 @@ def test_log_prob_infinity_under_amp():
         has_neg_inf_fixed = (fixed_log_probs == float('-inf')).any().item()
         min_fixed = fixed_log_probs.min().item()
 
-    print(f"\n=== LOG PROB INFINITY DIAGNOSTIC ===")
+    print("\n=== LOG PROB INFINITY DIAGNOSTIC ===")
     print(f"Raw FP16 Categorical: min={min_raw:.4f}, has_neg_inf={has_neg_inf_raw}")
     print(f"MaskedCategorical (upcast): min={min_fixed:.4f}, has_neg_inf={has_neg_inf_fixed}")
 
@@ -627,8 +627,6 @@ def test_gradient_flow_full_ppo_loss():
     - value_loss
     - entropy_loss
     """
-    import torch.nn as nn
-
     device = "cuda:0"
     slot_config = SlotConfig.default()
     state_dim = get_feature_size(slot_config)
