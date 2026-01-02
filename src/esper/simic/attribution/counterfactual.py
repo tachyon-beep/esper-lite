@@ -452,11 +452,13 @@ class CounterfactualEngine:
                 }
                 for slot_id, estimate in result.items()
             }
+            # Use env_id=-1 sentinel - will be replaced by emit_with_env_context
+            # if callback is properly wired with per-env context
             self._emit_callback(TelemetryEvent(
                 event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
                 data=AnalyticsSnapshotPayload(
                     kind="shapley_computed",
-                    env_id=0,  # Shapley is computed across the full environment
+                    env_id=-1,  # Sentinel: replaced by emit_with_env_context
                     shapley_values=shapley_dict,
                     num_slots=len(result),
                     batch=matrix.epoch,

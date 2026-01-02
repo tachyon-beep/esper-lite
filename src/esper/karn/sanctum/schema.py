@@ -165,6 +165,51 @@ def compute_collapse_risk(
 
 
 @dataclass
+class ShapleyEstimate:
+    """Shapley value estimate for a single slot.
+
+    Contains the mean contribution and uncertainty bounds.
+    """
+    mean: float = 0.0  # Expected marginal contribution
+    std: float = 0.0   # Standard deviation (uncertainty)
+    n_samples: int = 0  # Number of permutation samples used
+
+
+@dataclass
+class ShapleySnapshot:
+    """Shapley value attribution for all slots in an environment.
+
+    Computed via permutation sampling at episode boundaries.
+    More accurate than simple ablation but more expensive.
+    """
+    slot_ids: tuple[str, ...] = ()  # ("r0c0", "r0c1", "r0c2")
+    values: dict[str, ShapleyEstimate] = field(default_factory=dict)
+    epoch: int = 0  # Epoch when computed
+    timestamp: datetime | None = None
+
+    def get_mean(self, slot_id: str) -> float:
+        """Get mean Shapley value for a slot."""
+        if slot_id in self.values:
+            return self.values[slot_id].mean
+        return 0.0
+
+    def get_significance(self, slot_id: str, z: float = 1.96) -> bool:
+        """Check if slot's contribution is statistically significant (95% CI)."""
+        if slot_id not in self.values:
+            return False
+        est = self.values[slot_id]
+        return abs(est.mean) > z * est.std if est.std > 0 else est.mean != 0
+
+    def ranked_slots(self) -> list[tuple[str, float]]:
+        """Return slots ranked by mean contribution (descending)."""
+        return sorted(
+            [(slot_id, est.mean) for slot_id, est in self.values.items()],
+            key=lambda x: x[1],
+            reverse=True,
+        )
+
+
+@dataclass
 class CounterfactualConfig:
     """Single configuration result from factorial evaluation.
 
@@ -339,6 +384,10 @@ class EnvState:
         default_factory=CounterfactualSnapshot
     )
 
+    # Shapley value attribution (from ANALYTICS_SNAPSHOT kind="shapley_computed")
+    # More accurate than counterfactual marginals, computed at episode boundaries
+    shapley_snapshot: ShapleySnapshot = field(default_factory=ShapleySnapshot)
+
     # History for sparklines (maxlen=50)
     reward_history: deque[float] = field(default_factory=lambda: deque(maxlen=50))
     accuracy_history: deque[float] = field(default_factory=lambda: deque(maxlen=50))
@@ -350,6 +399,14 @@ class EnvState:
     best_accuracy_epoch: int = 0
     best_accuracy_episode: int = 0
     best_seeds: dict[str, SeedState] = field(default_factory=dict)
+
+    # Snapshot volatile state at peak accuracy (for historical detail modal)
+    # These capture the state AT THE MOMENT best_accuracy was achieved,
+    # not the state at batch end (which would be stale/incorrect).
+    best_reward_components: RewardComponents | None = None
+    best_counterfactual_matrix: CounterfactualSnapshot | None = None
+    best_shapley_snapshot: ShapleySnapshot | None = None
+    best_action_history: list[str] = field(default_factory=list)
 
     # Per-env action tracking
     # ACTION NORMALIZATION: add_action() normalizes factored actions:
@@ -463,6 +520,34 @@ class EnvState:
                 for slot_id, seed in self.seeds.items()
                 if seed.stage in _contributing_stages
             }
+
+            # Snapshot volatile state at peak (for historical detail modal)
+            # Deep copy to preserve state at this moment
+            if isinstance(self.reward_components, RewardComponents):
+                self.best_reward_components = RewardComponents(
+                    **self.reward_components.__dict__
+                )
+            else:
+                self.best_reward_components = None
+
+            if self.counterfactual_matrix and self.counterfactual_matrix.slot_ids:
+                self.best_counterfactual_matrix = CounterfactualSnapshot(
+                    slot_ids=self.counterfactual_matrix.slot_ids,
+                    configs=list(self.counterfactual_matrix.configs),
+                    strategy=self.counterfactual_matrix.strategy,
+                    compute_time_ms=self.counterfactual_matrix.compute_time_ms,
+                )
+            else:
+                self.best_counterfactual_matrix = None
+
+            # NOTE: best_shapley_snapshot is NOT captured here.
+            # Shapley values are computed at episode END, so at peak accuracy time
+            # the shapley_snapshot contains stale data from the previous episode.
+            # The aggregator updates best_shapley_snapshot when shapley_computed
+            # telemetry arrives, which is the correct time to capture it.
+
+            # Snapshot action history (last 10 actions leading to peak)
+            self.best_action_history = list(self.action_history)
         else:
             self.epochs_since_improvement += 1
 
@@ -1017,6 +1102,8 @@ class BestRunRecord:
     reward_components: "RewardComponents | None" = None
     # Counterfactual matrix at peak (if available)
     counterfactual_matrix: "CounterfactualSnapshot | None" = None
+    # Shapley attribution snapshot at peak (if available)
+    shapley_snapshot: "ShapleySnapshot | None" = None
     # Recent actions leading to peak (last 10)
     action_history: list[str] = field(default_factory=list)
     # Reward/accuracy history up to peak

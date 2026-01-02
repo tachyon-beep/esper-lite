@@ -178,6 +178,8 @@ DEFAULT_RATIO_COLLAPSE_THRESHOLD = 0.1
 # Factored Action Space Constants
 # =============================================================================
 
+import math
+
 # Head names for factored action space (slot selection, blueprint, blend algorithm, tempo,
 # alpha target/speed/curve/algorithm, lifecycle op).
 # Order matters: slot → blueprint → blend → tempo → alpha_target → alpha_speed → alpha_curve
@@ -230,6 +232,20 @@ from esper.leyline.factored_actions import (
 )
 
 HEAD_NAMES: tuple[str, ...] = ACTION_HEAD_NAMES
+
+# Max entropy per action head (ln(N) where N = action space size)
+# Derived from enum sizes to prevent drift. Used by Karn UI for normalization.
+# Keys are lowercase to match causal_masks.py head names.
+HEAD_MAX_ENTROPIES: dict[str, float] = {
+    "op": math.log(NUM_OPS),
+    "slot": math.log(DEFAULT_NUM_SLOTS),  # Runtime config, default=3
+    "blueprint": math.log(NUM_BLUEPRINTS),
+    "style": math.log(NUM_STYLES),
+    "tempo": math.log(NUM_TEMPO),
+    "alpha_target": math.log(NUM_ALPHA_TARGETS),
+    "alpha_speed": math.log(NUM_ALPHA_SPEEDS),
+    "alpha_curve": math.log(NUM_ALPHA_CURVES),
+}
 
 # Action masking constant - safe for FP16/BF16, avoids softmax overflow
 # Used by MaskedCategorical to zero out invalid action probabilities
@@ -315,6 +331,11 @@ DEFAULT_GOVERNOR_DEATH_PENALTY = 10.0
 
 # Rolling window size for loss history statistics.
 DEFAULT_GOVERNOR_HISTORY_WINDOW = 20
+
+# Minimum samples required for statistical anomaly detection.
+# The governor silently skips detection if history has fewer samples.
+# INVARIANT: history_window MUST be >= this value, or detection is disabled.
+MIN_GOVERNOR_HISTORY_SAMPLES = 10
 
 # Consecutive panics required before triggering a rollback.
 # Higher = more conservative (avoids false positives from transients).
@@ -616,6 +637,13 @@ from esper.leyline.types import (
     SlotObservationFields,
 )
 
+# Causal masks for credit assignment (used by PPO + Karn UI)
+from esper.leyline.causal_masks import (
+    compute_causal_masks,
+    HEAD_RELEVANCE_BY_OP,
+    is_head_relevant,
+)
+
 __all__ = [
     # Version
     "LEYLINE_VERSION",
@@ -670,6 +698,10 @@ __all__ = [
     "GerminationStyle",
     "get_action_head_sizes",
     "HEAD_NAMES",
+    "HEAD_MAX_ENTROPIES",
+    "HEAD_RELEVANCE_BY_OP",
+    "is_head_relevant",
+    "compute_causal_masks",
     "LifecycleOp",
     "MASKED_LOGIT_VALUE",
     "NUM_ALPHA_CURVES",
@@ -720,6 +752,7 @@ __all__ = [
     "DEFAULT_GOVERNOR_ABSOLUTE_THRESHOLD",
     "DEFAULT_GOVERNOR_DEATH_PENALTY",
     "DEFAULT_GOVERNOR_HISTORY_WINDOW",
+    "MIN_GOVERNOR_HISTORY_SAMPLES",
     "DEFAULT_MIN_PANICS_BEFORE_ROLLBACK",
     "DEFAULT_GOVERNOR_LOSS_MULTIPLIER",
 

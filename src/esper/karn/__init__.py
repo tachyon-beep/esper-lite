@@ -15,18 +15,16 @@ Usage:
     collector.start_episode(seed=42)
     collector.emit(event)
 
-    # Or for dashboard:
-    from esper.karn import DashboardServer
-    hub.add_backend(DashboardServer(port=8000))
+    # For web dashboard, use Overwatch:
+    from esper.karn.overwatch import OverwatchBackend
+    hub.add_backend(OverwatchBackend(port=8080))
 """
 
-# Dashboard components (lazy import - fastapi may not be installed)
+# WebSocket output (lazy import - fastapi may not be installed)
 try:
     from esper.karn.websocket_output import WebSocketOutput
-    from esper.karn.integrated_dashboard import DashboardServer
 except ImportError:
     WebSocketOutput = None  # type: ignore[misc, assignment]
-    DashboardServer = None  # type: ignore[misc, assignment]
 
 # Store (data models)
 from esper.karn.store import (
@@ -51,7 +49,6 @@ from esper.leyline import SeedStage  # Re-export authoritative definition
 from esper.karn.collector import (
     KarnCollector,
     KarnConfig,
-    OutputBackend,
     get_collector,
     configure,
     emit,
@@ -78,9 +75,8 @@ from esper.karn.health import (
 from esper.karn.sanctum.backend import SanctumBackend
 
 __all__ = [
-    # Dashboard
+    # WebSocket
     "WebSocketOutput",
-    "DashboardServer",
     # Store
     "TelemetryStore",
     "EpisodeContext",
@@ -100,7 +96,6 @@ __all__ = [
     # Collector
     "KarnCollector",
     "KarnConfig",
-    "OutputBackend",
     "get_collector",
     "configure",
     "emit",

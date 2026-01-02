@@ -94,6 +94,75 @@ def test_hypervolume_2d_empty():
     assert compute_hypervolume_2d([], (0.0, 1.0)) == 0.0
 
 
+def test_hypervolume_2d_nonzero_ref_acc():
+    """Verify hypervolume with non-zero reference accuracy.
+
+    This is a regression test for the bug where ref_acc was unpacked but
+    not used in the calculation, making the hypervolume only correct
+    when ref_acc=0.0.
+
+    Single point at (80, 0.2) with ref (50, 1.0)
+    Area = (80 - 50) * (1.0 - 0.2) = 30 * 0.8 = 24
+    """
+    frontier = [make_outcome(80, 0.2)]
+    ref_point = (50.0, 1.0)
+    hv = compute_hypervolume_2d(frontier, ref_point)
+    assert abs(hv - 24.0) < 1e-6, f"Expected 24.0, got {hv}"
+
+
+def test_hypervolume_2d_nonzero_ref_acc_two_points():
+    """Verify hypervolume with two points and non-zero ref_acc.
+
+    Points: (80, 0.3) and (60, 0.1) with ref (50, 1.0)
+    Sorted by acc descending: [(80, 0.3), (60, 0.1)]
+    Area from (80, 0.3): (80 - 50) * (1.0 - 0.3) = 30 * 0.7 = 21
+    Area from (60, 0.1): (60 - 50) * (0.3 - 0.1) = 10 * 0.2 = 2
+    Total = 21 + 2 = 23
+    """
+    frontier = [make_outcome(80, 0.3), make_outcome(60, 0.1)]
+    ref_point = (50.0, 1.0)
+    hv = compute_hypervolume_2d(frontier, ref_point)
+    assert abs(hv - 23.0) < 1e-6, f"Expected 23.0, got {hv}"
+
+
+def test_hypervolume_2d_point_below_ref_acc_excluded():
+    """Points at or below ref_acc should not contribute to hypervolume.
+
+    Points: (80, 0.2) and (40, 0.1) with ref (50, 1.0)
+    Only (80, 0.2) is above ref_acc=50, so:
+    Area = (80 - 50) * (1.0 - 0.2) = 30 * 0.8 = 24
+    (40, 0.1) is below ref_acc and excluded.
+    """
+    frontier = [make_outcome(80, 0.2), make_outcome(40, 0.1)]
+    ref_point = (50.0, 1.0)
+    hv = compute_hypervolume_2d(frontier, ref_point)
+    assert abs(hv - 24.0) < 1e-6, f"Expected 24.0, got {hv}"
+
+
+def test_hypervolume_2d_all_points_below_ref_acc():
+    """All points below ref_acc should yield zero hypervolume."""
+    frontier = [make_outcome(40, 0.2), make_outcome(30, 0.1)]
+    ref_point = (50.0, 1.0)
+    hv = compute_hypervolume_2d(frontier, ref_point)
+    assert hv == 0.0, f"Expected 0.0 for all points below ref_acc, got {hv}"
+
+
+def test_hypervolume_2d_point_at_ref_acc_excluded():
+    """Point exactly at ref_acc should be excluded (not contribute)."""
+    frontier = [make_outcome(50, 0.2)]  # Exactly at ref_acc
+    ref_point = (50.0, 1.0)
+    hv = compute_hypervolume_2d(frontier, ref_point)
+    assert hv == 0.0, f"Expected 0.0 for point exactly at ref_acc, got {hv}"
+
+
+def test_hypervolume_2d_point_at_ref_param_excluded():
+    """Point at or above ref_param should be excluded."""
+    frontier = [make_outcome(80, 1.0)]  # At ref_param
+    ref_point = (0.0, 1.0)
+    hv = compute_hypervolume_2d(frontier, ref_point)
+    assert hv == 0.0, f"Expected 0.0 for point at ref_param, got {hv}"
+
+
 # Property-based tests
 @given(st.lists(
     st.tuples(

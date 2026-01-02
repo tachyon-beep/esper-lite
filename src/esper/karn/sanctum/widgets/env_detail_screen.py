@@ -16,11 +16,15 @@ from collections.abc import Iterable
 
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
+from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import Static
 
+from esper.karn.constants import DisplayThresholds
+from esper.karn.sanctum.formatting import format_params
 from esper.karn.sanctum.widgets.counterfactual_panel import CounterfactualPanel
+from esper.karn.sanctum.widgets.shapley_panel import ShapleyPanel
 from esper.leyline import ALPHA_CURVE_GLYPHS, STAGE_COLORS
 
 if TYPE_CHECKING:
@@ -105,13 +109,7 @@ class SeedCard(Static):
 
         # Parameters (always visible)
         if seed.seed_params and seed.seed_params > 0:
-            if seed.seed_params >= 1_000_000:
-                params_str = f"{seed.seed_params / 1_000_000:.1f}M"
-            elif seed.seed_params >= 1_000:
-                params_str = f"{seed.seed_params / 1_000:.1f}K"
-            else:
-                params_str = str(seed.seed_params)
-            lines.append(Text(f"Params: {params_str}", style="dim"))
+            lines.append(Text(f"Params: {format_params(seed.seed_params)}", style="dim"))
         else:
             lines.append(Text("Params: --", style="dim"))
 
@@ -169,16 +167,17 @@ class SeedCard(Static):
         # Inter-slot interaction metrics (always visible, greyed out when not applicable)
         interaction_text = Text("Synergy: ")
         if seed.stage in ("BLENDING", "HOLDING") and (
-            seed.interaction_sum != 0 or seed.boost_received > 0.1
+            seed.interaction_sum != 0
+            or seed.boost_received > DisplayThresholds.BOOST_RECEIVED_THRESHOLD
         ):
-            if seed.interaction_sum > 0.5:
+            if seed.interaction_sum > DisplayThresholds.INTERACTION_SYNERGY_THRESHOLD:
                 interaction_text.append(f"+{seed.interaction_sum:.1f}", style="green")
-            elif seed.interaction_sum < -0.5:
+            elif seed.interaction_sum < -DisplayThresholds.INTERACTION_SYNERGY_THRESHOLD:
                 interaction_text.append(f"{seed.interaction_sum:.1f}", style="red")
             else:
                 interaction_text.append(f"{seed.interaction_sum:.1f}", style="dim")
             # Add boost indicator if significant
-            if seed.boost_received > 0.1:
+            if seed.boost_received > DisplayThresholds.BOOST_RECEIVED_THRESHOLD:
                 interaction_text.append(f" (↗{seed.boost_received:.1f})", style="cyan")
         else:
             interaction_text.append("--", style="dim")
@@ -186,9 +185,9 @@ class SeedCard(Static):
 
         # Contribution velocity (trend indicator - always visible)
         trend_text = Text("Trend: ")
-        if seed.contribution_velocity > 0.01:
+        if seed.contribution_velocity > DisplayThresholds.CONTRIBUTION_VELOCITY_EPSILON:
             trend_text.append("↗ improving", style="green")
-        elif seed.contribution_velocity < -0.01:
+        elif seed.contribution_velocity < -DisplayThresholds.CONTRIBUTION_VELOCITY_EPSILON:
             trend_text.append("↘ declining", style="yellow")
         else:
             trend_text.append("--", style="dim")
@@ -277,11 +276,19 @@ class EnvDetailScreen(ModalScreen[None]):
         border-left: solid $primary-lighten-2;
     }
 
-    EnvDetailScreen .counterfactual-section {
+    EnvDetailScreen .attribution-section {
         height: auto;
         margin-top: 1;
         border-top: solid $primary-lighten-2;
         padding-top: 1;
+    }
+
+    EnvDetailScreen .attribution-section CounterfactualPanel {
+        width: 2fr;
+    }
+
+    EnvDetailScreen .attribution-section ShapleyPanel {
+        width: 1fr;
     }
 
     EnvDetailScreen .footer-hint {
@@ -332,12 +339,17 @@ class EnvDetailScreen(ModalScreen[None]):
                 with Vertical(classes="graveyard-section"):
                     yield Static(self._render_graveyard(), id="seed-graveyard")
 
-            # Counterfactual analysis section (full width below)
-            with Vertical(classes="counterfactual-section"):
+            # Attribution section: Counterfactual + Shapley side by side
+            with Horizontal(classes="attribution-section"):
                 yield CounterfactualPanel(
                     self._env.counterfactual_matrix,
                     seeds=self._env.seeds,
                     id="counterfactual-panel",
+                )
+                yield ShapleyPanel(
+                    self._env.shapley_snapshot,
+                    seeds=self._env.seeds,
+                    id="shapley-panel",
                 )
 
             # Footer hint
@@ -364,22 +376,29 @@ class EnvDetailScreen(ModalScreen[None]):
         try:
             header = self.query_one("#detail-header", Static)
             header.update(self._render_header())
-        except Exception:
+        except NoMatches:
             pass  # Widget may not be mounted yet
 
         # Update metrics
         try:
             metrics = self.query_one("#detail-metrics", Static)
             metrics.update(self._render_metrics())
-        except Exception:
+        except NoMatches:
             pass  # Widget may not be mounted yet
 
         # Update counterfactual panel
         try:
             cf_panel = self.query_one("#counterfactual-panel", CounterfactualPanel)
             cf_panel.update_matrix(env_state.counterfactual_matrix, seeds=env_state.seeds)
-        except Exception:
-            pass
+        except NoMatches:
+            pass  # Widget may not be mounted yet
+
+        # Update Shapley panel
+        try:
+            shapley_panel = self.query_one("#shapley-panel", ShapleyPanel)
+            shapley_panel.update_snapshot(env_state.shapley_snapshot, seeds=env_state.seeds)
+        except NoMatches:
+            pass  # Widget may not be mounted yet
 
         # Update each seed card
         for slot_id in self._slot_ids:
@@ -387,15 +406,15 @@ class EnvDetailScreen(ModalScreen[None]):
                 seed = self._env.seeds.get(slot_id)
                 card = self.query_one(f"#seed-card-{slot_id}", SeedCard)
                 card.update_seed(seed)
-            except Exception:
+            except NoMatches:
                 pass  # Widget may not be mounted yet
 
         # Update graveyard
         try:
             graveyard = self.query_one("#seed-graveyard", Static)
             graveyard.update(self._render_graveyard())
-        except Exception:
-            pass
+        except NoMatches:
+            pass  # Widget may not be mounted yet
 
     def _render_header(self) -> Text:
         """Render the header bar with env summary."""
@@ -430,7 +449,9 @@ class EnvDetailScreen(ModalScreen[None]):
         # Epochs since improvement (momentum)
         momentum_epochs = env.epochs_since_improvement or 0
         if momentum_epochs > 0:
-            momentum_style = "red" if momentum_epochs > 10 else "yellow"
+            momentum_style = (
+                "red" if momentum_epochs > DisplayThresholds.MOMENTUM_STALL_THRESHOLD else "yellow"
+            )
             header.append(
                 f"Momentum: {momentum_epochs} epochs",
                 style=momentum_style,
@@ -441,17 +462,9 @@ class EnvDetailScreen(ModalScreen[None]):
         # Host params, seed params, and growth ratio
         header.append("  │  ")
 
-        # Format params in human-readable form
-        def _format_params(p: int) -> str:
-            if p >= 1_000_000:
-                return f"{p / 1_000_000:.1f}M"
-            elif p >= 1_000:
-                return f"{p / 1_000:.1f}K"
-            return str(p)
-
-        host_str = _format_params(env.host_params or 0)
+        host_str = format_params(env.host_params or 0)
         fossilized = env.fossilized_params or 0
-        seed_str = _format_params(fossilized)
+        seed_str = format_params(fossilized)
         growth = env.growth_ratio or 1.0
 
         header.append(f"Host: {host_str}", style="dim")
@@ -459,7 +472,7 @@ class EnvDetailScreen(ModalScreen[None]):
 
         # Growth ratio with color coding
         # 1.0x = no growth (dim), 1.0-1.2x = normal (green), >1.2x = significant (yellow)
-        if growth > 1.2:
+        if growth > DisplayThresholds.GROWTH_RATIO_WARNING:
             growth_style = "yellow"
         elif growth > 1.0:
             growth_style = "green"
@@ -504,13 +517,7 @@ class EnvDetailScreen(ModalScreen[None]):
         # Fossilized params (always visible)
         foss_params = env.fossilized_params or 0
         if foss_params > 0:
-            if foss_params >= 1_000_000:
-                params_str = f"{foss_params / 1_000_000:.2f}M"
-            elif foss_params >= 1_000:
-                params_str = f"{foss_params / 1_000:.1f}K"
-            else:
-                params_str = str(foss_params)
-            table.add_row("Fossilized Params", params_str)
+            table.add_row("Fossilized Params", format_params(foss_params))
         else:
             table.add_row("Fossilized Params", dim_placeholder)
 
@@ -541,7 +548,11 @@ class EnvDetailScreen(ModalScreen[None]):
             reward_text.append(f"{rc.total:+.3f}", style=total_style)
             # Add PBRS fraction
             pbrs_fraction = abs(rc.stage_bonus) / abs(rc.total) if rc.total != 0 else 0.0
-            pbrs_healthy = 0.1 <= pbrs_fraction <= 0.4
+            pbrs_healthy = (
+                DisplayThresholds.PBRS_HEALTHY_MIN
+                <= pbrs_fraction
+                <= DisplayThresholds.PBRS_HEALTHY_MAX
+            )
             pbrs_icon = "✓" if pbrs_healthy else "⚠" if pbrs_fraction > 0 else ""
             pbrs_style = "green" if pbrs_healthy else "yellow"
             reward_text.append(f"  PBRS: {pbrs_fraction:.0%} ", style="dim")
@@ -581,7 +592,7 @@ class EnvDetailScreen(ModalScreen[None]):
             signals.append("  │  ")
         gaming_rate = env.gaming_rate
         gaming_active = rc.ratio_penalty != 0 or rc.alpha_shock != 0
-        gaming_healthy = gaming_rate < 0.05
+        gaming_healthy = gaming_rate < DisplayThresholds.GAMING_RATE_HEALTHY_MAX
         if gaming_active:
             gaming_state = "SHOCK" if rc.alpha_shock != 0 else "RATIO"
             signals.append(f"Gaming: {gaming_rate:.1%} ({gaming_state})", style="red")
@@ -695,9 +706,14 @@ class EnvDetailScreen(ModalScreen[None]):
                 # Calculate success rate if any have terminated
                 terminated = fossilized + pruned
                 if terminated > 0:
-                    success_rate = fossilized / terminated * 100
-                    rate_style = "green" if success_rate >= 50 else "yellow" if success_rate >= 25 else "red"
-                    line.append(f"  {success_rate:3.0f}%", style=rate_style)
+                    success_rate = fossilized / terminated
+                    if success_rate >= DisplayThresholds.BLUEPRINT_SUCCESS_GREEN:
+                        rate_style = "green"
+                    elif success_rate >= DisplayThresholds.BLUEPRINT_SUCCESS_YELLOW:
+                        rate_style = "yellow"
+                    else:
+                        rate_style = "red"
+                    line.append(f"  {success_rate * 100:3.0f}%", style=rate_style)
                 else:
                     line.append("    --", style="dim")
 

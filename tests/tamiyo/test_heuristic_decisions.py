@@ -68,8 +68,13 @@ class MockTrainingMetrics:
 class MockTrainingSignals:
     """Mock training signals for testing."""
 
-    def __init__(self, metrics: MockTrainingMetrics | None = None):
+    def __init__(
+        self,
+        metrics: MockTrainingMetrics | None = None,
+        available_slots: int = 1,
+    ):
         self.metrics = metrics or MockTrainingMetrics()
+        self.available_slots = available_slots
 
 
 class TestGerminationDecisions:
@@ -132,6 +137,23 @@ class TestGerminationDecisions:
 
         assert decision.action.name == "WAIT"
         assert "too early" in decision.reason.lower()
+
+    def test_no_germinate_without_available_slots(self):
+        """Should WAIT when no slots are available for germination."""
+        policy = HeuristicTamiyo(topology="cnn")
+        signals = MockTrainingSignals(
+            MockTrainingMetrics(
+                epoch=10,
+                plateau_epochs=5,
+                host_stabilized=1,
+            ),
+            available_slots=0,
+        )
+
+        decision = policy.decide(signals, active_seeds=[])
+
+        assert decision.action.name == "WAIT"
+        assert "available slots" in decision.reason.lower()
 
 
 class TestCullDecisions:

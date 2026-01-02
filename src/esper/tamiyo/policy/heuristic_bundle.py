@@ -1,6 +1,8 @@
-"""Heuristic PolicyBundle for ablations and debugging.
+"""Heuristic PolicyBundle adapter for ablations and debugging.
 
-Wraps HeuristicTamiyo as a PolicyBundle for the registry.
+Wraps HeuristicTamiyo as a PolicyBundle-like interface. This is NOT
+a full PolicyBundle and is NOT registered in the policy registry.
+Use create_heuristic_policy() from esper.tamiyo.policy to create instances.
 """
 
 from __future__ import annotations

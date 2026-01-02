@@ -15,7 +15,7 @@ class TestPerHeadAdvantages:
         op_actions = torch.tensor([LifecycleOp.WAIT, LifecycleOp.WAIT])
         base_advantages = torch.tensor([1.0, 2.0])
 
-        per_head = compute_per_head_advantages(base_advantages, op_actions)
+        per_head, masks = compute_per_head_advantages(base_advantages, op_actions)
 
         # op always gets advantage
         assert torch.allclose(per_head["op"], base_advantages)
@@ -34,7 +34,7 @@ class TestPerHeadAdvantages:
         op_actions = torch.tensor([LifecycleOp.GERMINATE, LifecycleOp.GERMINATE])
         base_advantages = torch.tensor([1.0, 2.0])
 
-        per_head = compute_per_head_advantages(base_advantages, op_actions)
+        per_head, masks = compute_per_head_advantages(base_advantages, op_actions)
 
         # All germination heads active for GERMINATE
         assert torch.allclose(per_head["op"], base_advantages)
@@ -51,7 +51,7 @@ class TestPerHeadAdvantages:
         op_actions = torch.tensor([LifecycleOp.FOSSILIZE])
         base_advantages = torch.tensor([5.0])
 
-        per_head = compute_per_head_advantages(base_advantages, op_actions)
+        per_head, masks = compute_per_head_advantages(base_advantages, op_actions)
 
         assert torch.allclose(per_head["op"], base_advantages)
         assert torch.allclose(per_head["slot"], base_advantages)
@@ -67,7 +67,7 @@ class TestPerHeadAdvantages:
         op_actions = torch.tensor([LifecycleOp.PRUNE])
         base_advantages = torch.tensor([3.0])
 
-        per_head = compute_per_head_advantages(base_advantages, op_actions)
+        per_head, masks = compute_per_head_advantages(base_advantages, op_actions)
 
         assert torch.allclose(per_head["op"], base_advantages)
         assert torch.allclose(per_head["slot"], base_advantages)
@@ -83,7 +83,7 @@ class TestPerHeadAdvantages:
         op_actions = torch.tensor([LifecycleOp.ADVANCE])
         base_advantages = torch.tensor([4.0])
 
-        per_head = compute_per_head_advantages(base_advantages, op_actions)
+        per_head, masks = compute_per_head_advantages(base_advantages, op_actions)
 
         assert torch.allclose(per_head["op"], base_advantages)
         assert torch.allclose(per_head["slot"], base_advantages)
@@ -108,7 +108,7 @@ class TestPerHeadAdvantages:
         op_actions = torch.tensor([LifecycleOp.SET_ALPHA_TARGET])
         base_advantages = torch.tensor([2.0])
 
-        per_head = compute_per_head_advantages(base_advantages, op_actions)
+        per_head, masks = compute_per_head_advantages(base_advantages, op_actions)
 
         # Active heads for SET_ALPHA_TARGET
         assert torch.allclose(per_head["op"], base_advantages)
@@ -132,7 +132,7 @@ class TestPerHeadAdvantages:
         ])
         base_advantages = torch.tensor([1.0, 2.0, 3.0, 4.0])
 
-        per_head = compute_per_head_advantages(base_advantages, op_actions)
+        per_head, masks = compute_per_head_advantages(base_advantages, op_actions)
 
         # op always active
         assert torch.allclose(per_head["op"], base_advantages)
@@ -165,7 +165,7 @@ class TestPerHeadAdvantages:
         ])
         base_advantages = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
 
-        per_head = compute_per_head_advantages(base_advantages, op_actions)
+        per_head, masks = compute_per_head_advantages(base_advantages, op_actions)
 
         # Only op should receive gradients
         assert torch.allclose(per_head["op"], base_advantages)
@@ -190,7 +190,7 @@ class TestPerHeadAdvantages:
             [3.0, 4.0],
         ])
 
-        per_head = compute_per_head_advantages(base_advantages, op_actions)
+        per_head, masks = compute_per_head_advantages(base_advantages, op_actions)
 
         # op always active
         assert torch.allclose(per_head["op"], base_advantages)
@@ -249,9 +249,77 @@ class TestComputeCausalMasks:
         op_actions = torch.tensor([LifecycleOp.GERMINATE, LifecycleOp.PRUNE])
         base_advantages = torch.tensor([1.0, 2.0])
 
-        masks = compute_causal_masks(op_actions)
-        advantages = compute_per_head_advantages(base_advantages, op_actions)
+        masks_standalone = compute_causal_masks(op_actions)
+        advantages, masks_from_fn = compute_per_head_advantages(base_advantages, op_actions)
 
-        assert set(masks.keys()) == set(advantages.keys()), (
+        assert set(masks_standalone.keys()) == set(advantages.keys()), (
             "compute_causal_masks and compute_per_head_advantages must return same keys"
         )
+        assert set(masks_from_fn.keys()) == set(advantages.keys()), (
+            "Returned masks must have same keys as advantages"
+        )
+
+
+class TestDtypePreservation:
+    """Tests for dtype preservation under AMP.
+
+    Before the fix, .float() forced all mask multiplications to float32.
+    Now bool masks multiply directly, preserving base_advantages.dtype.
+    """
+
+    def test_float16_preserved(self):
+        """float16 advantages should produce float16 outputs."""
+        op_actions = torch.tensor([LifecycleOp.GERMINATE, LifecycleOp.PRUNE])
+        base_advantages = torch.tensor([1.0, 2.0], dtype=torch.float16)
+
+        per_head, masks = compute_per_head_advantages(base_advantages, op_actions)
+
+        for head, adv in per_head.items():
+            assert adv.dtype == torch.float16, (
+                f"{head}: expected float16, got {adv.dtype}"
+            )
+
+    def test_bfloat16_preserved(self):
+        """bfloat16 advantages should produce bfloat16 outputs."""
+        op_actions = torch.tensor([LifecycleOp.GERMINATE, LifecycleOp.PRUNE])
+        base_advantages = torch.tensor([1.0, 2.0], dtype=torch.bfloat16)
+
+        per_head, masks = compute_per_head_advantages(base_advantages, op_actions)
+
+        for head, adv in per_head.items():
+            assert adv.dtype == torch.bfloat16, (
+                f"{head}: expected bfloat16, got {adv.dtype}"
+            )
+
+    def test_float32_still_works(self):
+        """float32 advantages should still work correctly."""
+        op_actions = torch.tensor([LifecycleOp.GERMINATE, LifecycleOp.PRUNE])
+        base_advantages = torch.tensor([1.0, 2.0], dtype=torch.float32)
+
+        per_head, masks = compute_per_head_advantages(base_advantages, op_actions)
+
+        for head, adv in per_head.items():
+            assert adv.dtype == torch.float32, (
+                f"{head}: expected float32, got {adv.dtype}"
+            )
+
+    def test_masks_returned_for_reuse(self):
+        """compute_per_head_advantages should return masks for reuse in PPO.
+
+        This tests the API change that eliminates redundant mask computation.
+        """
+        op_actions = torch.tensor([LifecycleOp.GERMINATE, LifecycleOp.PRUNE])
+        base_advantages = torch.tensor([1.0, 2.0])
+
+        per_head, masks = compute_per_head_advantages(base_advantages, op_actions)
+
+        # Masks should be boolean tensors
+        for head, mask in masks.items():
+            assert mask.dtype == torch.bool, f"{head}: mask should be bool"
+
+        # Masks should match compute_causal_masks output
+        expected_masks = compute_causal_masks(op_actions)
+        for head in masks:
+            assert torch.equal(masks[head], expected_masks[head]), (
+                f"{head}: returned mask doesn't match compute_causal_masks"
+            )

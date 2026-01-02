@@ -15,13 +15,50 @@ from esper.simic.telemetry.emitters import (
 )
 
 
+def _make_mandatory_metrics(**overrides) -> dict:
+    """Create metrics dict with all mandatory fields for emit_ppo_update_event.
+
+    This ensures tests fail loudly if required fields are missing.
+    """
+    base = {
+        "policy_loss": 0.1,
+        "value_loss": 0.2,
+        "entropy": 1.5,
+        "approx_kl": 0.01,
+        "clip_fraction": 0.1,
+        "pre_clip_grad_norm": 2.5,
+        "ppo_updates_count": 1,
+        # Advantage statistics (mandatory)
+        "advantage_mean": 0.0,
+        "advantage_std": 1.0,
+        "advantage_skewness": 0.0,
+        "advantage_kurtosis": 0.0,
+        "advantage_positive_ratio": 0.5,
+        # Ratio statistics (mandatory)
+        "ratio_mean": 1.0,
+        "ratio_min": 0.8,
+        "ratio_max": 1.2,
+        "ratio_std": 0.1,
+        # Log prob extremes (mandatory)
+        "log_prob_min": -5.0,
+        "log_prob_max": -0.1,
+        # Value statistics (mandatory)
+        "value_mean": 0.0,
+        "value_std": 1.0,
+        "value_min": -2.0,
+        "value_max": 2.0,
+    }
+    base.update(overrides)
+    return base
+
+
 def test_emit_ppo_update_event_propagates_group_id():
     """emit_ppo_update_event should propagate group_id to TelemetryEvent."""
     hub = MagicMock()
 
     emit_ppo_update_event(
         hub=hub,
-        metrics={"policy_loss": 0.1, "value_loss": 0.2, "entropy": 1.5},
+        metrics=_make_mandatory_metrics(),
         episodes_completed=10,
         batch_idx=5,
         epoch=100,
@@ -45,16 +82,15 @@ def test_emit_ppo_update_event_includes_value_stats():
 
     emit_ppo_update_event(
         hub=hub,
-        metrics={
-            "policy_loss": 0.1,
-            "value_loss": 0.2,
-            "entropy": 1.5,
-            # Value function statistics
-            "value_mean": 5.5,
-            "value_std": 1.2,
-            "value_min": 2.1,
-            "value_max": 9.8,
-        },
+        metrics=_make_mandatory_metrics(
+            pre_clip_grad_norm=3.2,
+            ppo_updates_count=2,
+            # Override value function statistics for verification
+            value_mean=5.5,
+            value_std=1.2,
+            value_min=2.1,
+            value_max=9.8,
+        ),
         episodes_completed=10,
         batch_idx=5,
         epoch=100,
@@ -77,12 +113,16 @@ def test_emit_ppo_update_event_includes_value_stats():
 class TestComputeGradNormSurrogate:
     """Tests for compute_grad_norm_surrogate numerical stability."""
 
-    def test_returns_none_for_no_gradients(self):
-        """Should return None when module has no gradients."""
+    def test_raises_on_no_gradients(self):
+        """Should raise AssertionError when module has no gradients.
+
+        Having no gradients after backward() indicates a bug (e.g., torch.compile wrapper issue).
+        The function fails loudly instead of returning a silent default.
+        """
         model = nn.Linear(10, 5)
-        # No backward pass, so no gradients
-        result = compute_grad_norm_surrogate(model)
-        assert result is None
+        # No backward pass, so no gradients - this is a bug condition
+        with pytest.raises(AssertionError, match="No gradients found"):
+            compute_grad_norm_surrogate(model)
 
     def test_computes_correct_norm_for_simple_case(self):
         """Should compute correct L2 norm for known gradients."""

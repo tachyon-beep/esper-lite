@@ -82,6 +82,79 @@ class TestMorphogeneticModelMultiSlot:
         out = model(x)
         assert out.shape == (2, 16, 100)
 
+    def test_transformer_without_task_config_germinates_transformer_seed(self):
+        """TransformerHost should not accidentally germinate a CNN seed when blueprint IDs overlap."""
+        from esper.leyline import SeedStage
+
+        host = TransformerHost(
+            vocab_size=100,
+            n_embd=64,
+            n_head=2,
+            n_layer=6,
+            block_size=32,
+            dropout=0.0,
+        )
+        # No task_config provided - topology must come from host, not default to "cnn".
+        model = MorphogeneticModel(host, device="cpu", slots=["r0c1"])
+
+        # "norm" exists for both CNN and transformer registries; choosing the wrong one
+        # will crash when the seed becomes active and receives transformer-shaped features.
+        model.germinate_seed("norm", "seed_1", slot="r0c1")
+
+        gate = model.seed_slots["r0c1"].advance_stage(SeedStage.TRAINING)
+        assert gate.passed, f"G1 gate should pass: {gate.checks_failed}"
+
+        x = torch.randint(0, 100, (2, 16))
+        out = model(x)
+        assert out.shape == (2, 16, 100)
+
+    def test_transformer_topology_survives_checkpoint_restore(self):
+        """Verify _resolved_topology persists across checkpoint/restore.
+
+        Without serializing _resolved_topology, a TransformerHost run without
+        task_config would silently regress to CNN topology after restore,
+        causing blending algorithm mismatches and incorrect gradient isolation.
+        """
+        host = TransformerHost(
+            vocab_size=100,
+            n_embd=64,
+            n_head=2,
+            n_layer=6,
+            block_size=32,
+            dropout=0.0,
+        )
+        model = MorphogeneticModel(host, device="cpu", slots=["r0c1"])
+        model.germinate_seed("norm", "seed_1", slot="r0c1")
+
+        # Verify topology was resolved to "transformer"
+        assert model.seed_slots["r0c1"]._resolved_topology == "transformer"
+
+        # Simulate checkpoint save
+        state = model.state_dict()
+
+        # Create fresh model with same structure (germinate before loading weights)
+        host2 = TransformerHost(
+            vocab_size=100,
+            n_embd=64,
+            n_head=2,
+            n_layer=6,
+            block_size=32,
+            dropout=0.0,
+        )
+        model2 = MorphogeneticModel(host2, device="cpu", slots=["r0c1"])
+        # Must germinate to create matching structure before loading weights
+        model2.germinate_seed("norm", "seed_1", slot="r0c1")
+        model2.load_state_dict(state)
+
+        # Critical assertion: topology must survive checkpoint/restore
+        assert model2.seed_slots["r0c1"]._resolved_topology == "transformer"
+        assert model2.seed_slots["r0c1"]._resolve_topology() == "transformer"
+
+        # Verify the restored model can still do a forward pass
+        x = torch.randint(0, 100, (2, 16))
+        out = model2(x)
+        assert out.shape == (2, 16, 100)
+
     def test_no_legacy_single_slot_attribute(self):
         """MorphogeneticModel should not have _legacy_single_slot attribute."""
         host = CNNHost(num_classes=10)

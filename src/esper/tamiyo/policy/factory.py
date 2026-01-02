@@ -19,8 +19,8 @@ VALID_COMPILE_MODES = frozenset({"off", "default", "reduce-overhead", "max-autot
 def create_policy(
     policy_type: str = "lstm",
     state_dim: int | None = None,
-    num_slots: int = 4,
-    slot_config: "SlotConfig | None" = None,
+    *,
+    slot_config: "SlotConfig",
     device: torch.device | str = "cpu",
     compile_mode: str = "off",
     lstm_hidden_dim: int = DEFAULT_LSTM_HIDDEN_DIM,
@@ -36,10 +36,9 @@ def create_policy(
     Args:
         policy_type: Registered policy name (default: "lstm")
         state_dim: Observation feature dimension. If None, computed from slot_config.
-        num_slots: Number of seed slots (deprecated - use slot_config instead)
-        slot_config: Explicit slot configuration. If provided, num_slots is ignored.
-            IMPORTANT: Always pass slot_config when using non-default slot layouts
-            to ensure action heads and masks align correctly.
+        slot_config: Slot configuration for action heads and masks.
+            IMPORTANT: Always pass slot_config to ensure action heads and masks
+            align correctly with environment slot ordering.
         device: Target device for the policy
         compile_mode: torch.compile mode ("off", "default", "reduce-overhead", "max-autotune")
         lstm_hidden_dim: Hidden dimension for LSTM policies
@@ -66,18 +65,12 @@ def create_policy(
     # which is imported at module level here. Keep these local for clean loading.
     from esper.tamiyo.policy.registry import get_policy
     from esper.tamiyo.policy.features import get_feature_size
-    from esper.leyline.slot_config import SlotConfig
 
     # Validate compile_mode
     if compile_mode not in VALID_COMPILE_MODES:
         raise ValueError(
             f"compile_mode must be one of {sorted(VALID_COMPILE_MODES)}, got {compile_mode!r}"
         )
-
-    # Use provided slot_config or create default from num_slots
-    # IMPORTANT: Always prefer explicit slot_config for non-default layouts
-    if slot_config is None:
-        slot_config = SlotConfig.for_grid(rows=1, cols=num_slots)
 
     # Compute state_dim if not provided
     if state_dim is None:

@@ -57,5 +57,9 @@ telemetry/*
 # Profiling output
 profiler_traces/
 *.pstats
+
 # Mutation testing output
 mutants/
+
+# Debug screenshots
+image.png

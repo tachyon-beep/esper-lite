@@ -150,7 +150,7 @@ class OverwatchBackend:
         Only broadcasts if enough time has passed since the last broadcast.
         Thread-safe.
         """
-        now = time.time()
+        now = time.monotonic()
         with self._lock:
             if now - self._last_broadcast_time < self._min_broadcast_interval:
                 return
@@ -170,8 +170,11 @@ class OverwatchBackend:
                 return
 
         snapshot = self.get_snapshot()
-        json_str = self.snapshot_to_json(snapshot)
-        message = json.dumps({"type": "snapshot", "data": json.loads(json_str)})
+        # Serialize once: wrap snapshot in message envelope and serialize together
+        message = json.dumps(
+            {"type": "snapshot", "data": asdict(snapshot)},
+            default=_json_serializer,
+        )
 
         # Queue for async broadcast (bounded to prevent backlog on slow clients)
         # If queue is full, drop oldest message to make room for latest
@@ -223,12 +226,29 @@ class OverwatchBackend:
                         # Check for broadcast messages
                         try:
                             message = self._broadcast_queue.get_nowait()
+                            # Copy client list under lock, release before await
                             with self._clients_lock:
-                                for client in self._clients:
-                                    try:
-                                        await client.send_text(message)
-                                    except Exception:
-                                        pass
+                                clients = list(self._clients)
+
+                            # Send without holding lock - collect failures
+                            dead_clients: list[Any] = []
+                            for client in clients:
+                                try:
+                                    await client.send_text(message)
+                                except WebSocketDisconnect:
+                                    dead_clients.append(client)
+                                except Exception:
+                                    _logger.exception(
+                                        "WebSocket send failed; dropping client"
+                                    )
+                                    dead_clients.append(client)
+
+                            # Prune dead clients under lock
+                            if dead_clients:
+                                with self._clients_lock:
+                                    self._clients = [
+                                        c for c in self._clients if c not in dead_clients
+                                    ]
                         except Empty:
                             pass
 
@@ -244,8 +264,12 @@ class OverwatchBackend:
                             # No message from client - continue checking broadcasts
                             continue
                         except WebSocketDisconnect:
+                            _logger.debug("WebSocket client disconnected normally")
                             break
                         except Exception:
+                            _logger.exception(
+                                "Unexpected error receiving from WebSocket; closing"
+                            )
                             break
                 finally:
                     with self._clients_lock:

@@ -40,7 +40,6 @@ from esper.leyline import (
     LifecycleOp,
     NUM_OPS,
 )
-from esper.leyline.causal_masks import compute_causal_masks
 from esper.leyline.slot_config import SlotConfig
 import logging
 
@@ -572,14 +571,14 @@ class PPOAgent:
             valid_returns = data["returns"][valid_mask]
 
             # Compute per-head advantages with causal masking
+            # Returns both advantages AND masks to avoid redundant computation
             valid_op_actions = data["op_actions"][valid_mask]
-            per_head_advantages = compute_per_head_advantages(
-                valid_advantages, valid_op_actions
+            # Use effective op (action_for_reward) for causal masks to avoid crediting invalid ops.
+            valid_effective_op_actions = data["effective_op_actions"][valid_mask]
+            per_head_advantages, head_masks = compute_per_head_advantages(
+                valid_advantages, valid_effective_op_actions
             )
-
-            # B4-DRL-01: Use single source of truth for causal masks (from leyline)
-            # Causal structure documented in esper/leyline/causal_masks.py
-            head_masks = compute_causal_masks(valid_op_actions)
+            # B4-DRL-01: Masks from leyline.causal_masks (single source of truth)
 
             # Compute per-head ratios
             old_log_probs = {
@@ -646,7 +645,7 @@ class PPOAgent:
                     kl_per_step = (torch.exp(log_ratio) - 1) - log_ratio
                     n_valid = mask.sum().float().clamp(min=1)
                     # Masked mean KL for this head
-                    head_kl = (kl_per_step * mask.float()).sum() / n_valid
+                    head_kl = (kl_per_step * mask).sum() / n_valid
                     # Weight by fraction of timesteps where head is causally relevant
                     causal_weight = n_valid / total_timesteps
                     weighted_kl_sum = weighted_kl_sum + causal_weight * head_kl
@@ -676,11 +675,12 @@ class PPOAgent:
                     metrics["early_stop_epoch"] = [epoch_i]
                     # PERF: Batch ratio metrics into single GPU→CPU transfer
                     ratio_stats = torch.stack([
-                        joint_ratio.mean(), joint_ratio.max(), joint_ratio.min()
+                        joint_ratio.mean(), joint_ratio.max(), joint_ratio.min(), joint_ratio.std()
                     ]).cpu().tolist()
                     metrics["ratio_mean"].append(ratio_stats[0])
                     metrics["ratio_max"].append(ratio_stats[1])
                     metrics["ratio_min"].append(ratio_stats[2])
+                    metrics["ratio_std"].append(ratio_stats[3])
                     break  # Skip loss computation, backward, and optimizer step
 
             # Compute policy loss per head and sum
@@ -698,7 +698,7 @@ class PPOAgent:
                 # Masked mean: only average over causally-relevant positions
                 # This prevents zeros from masked positions from biasing the loss
                 n_valid = mask.sum().clamp(min=1)  # Avoid div-by-zero
-                head_loss = -(clipped_surr * mask.float()).sum() / n_valid
+                head_loss = -(clipped_surr * mask).sum() / n_valid
                 policy_loss = policy_loss + head_loss
 
             # Value loss
@@ -729,7 +729,7 @@ class PPOAgent:
                 head_coef = self.entropy_coef_per_head.get(key, 1.0)
                 mask = head_masks[key]
                 n_valid = mask.sum().clamp(min=1)
-                masked_ent = (ent * mask.float()).sum() / n_valid
+                masked_ent = (ent * mask).sum() / n_valid
                 entropy_loss = entropy_loss - head_coef * masked_ent
 
             entropy_coef = self.get_entropy_coef()
@@ -743,21 +743,18 @@ class PPOAgent:
             # Measures raw gradients to diagnose head dominance
             # PERF: Batch all norm computations, then single .tolist() at end
             with torch.inference_mode():
-                # Handle torch.compile wrapper (_orig_mod)
-                # getattr AUTHORIZED by Code Review 2025-12-17
-                # Justification: torch.compile wraps modules - must unwrap to access head modules
-                base_net_untyped = getattr(self.policy.network, '_orig_mod', self.policy.network)
-                # Type assertion: we know this is the actual network module
-                from esper.tamiyo.networks import FactoredRecurrentActorCritic
-                assert isinstance(base_net_untyped, FactoredRecurrentActorCritic)
-                base_net = base_net_untyped
+                # BUG FIX: torch.compile creates NEW parameter tensors - gradients live on
+                # the compiled module's params, NOT on _orig_mod's params. We must access
+                # head modules from the SAME module the optimizer uses (the compiled one).
+                # DO NOT unwrap to _orig_mod here - that's why grads were always 0.0!
+                network = self.policy.network  # Keep compiled wrapper if present
 
                 head_names = ["slot", "blueprint", "style", "tempo", "alpha_target",
                               "alpha_speed", "alpha_curve", "op", "value"]
                 head_modules = [
-                    base_net.slot_head, base_net.blueprint_head, base_net.style_head,
-                    base_net.tempo_head, base_net.alpha_target_head, base_net.alpha_speed_head,
-                    base_net.alpha_curve_head, base_net.op_head, base_net.value_head,
+                    network.slot_head, network.blueprint_head, network.style_head,
+                    network.tempo_head, network.alpha_target_head, network.alpha_speed_head,
+                    network.alpha_curve_head, network.op_head, network.value_head,
                 ]
 
                 # Collect all head norms as tensors (no .item() yet)
@@ -790,7 +787,13 @@ class PPOAgent:
                     grad_cv = 0.0
                 metrics["gradient_cv"].append(grad_cv)
 
-            nn.utils.clip_grad_norm_(self.policy.network.parameters(), self.max_grad_norm)
+            # Capture pre-clip gradient norm (BUG FIX: was discarding this value)
+            # The return value of clip_grad_norm_ is the total norm BEFORE clipping.
+            # This is critical for detecting gradient explosion vs healthy gradients.
+            pre_clip_norm = nn.utils.clip_grad_norm_(
+                self.policy.network.parameters(), self.max_grad_norm
+            )
+            metrics["pre_clip_grad_norm"].append(float(pre_clip_norm))
             self.optimizer.step()
 
             # Track metrics
@@ -803,6 +806,7 @@ class PPOAgent:
                 joint_ratio.mean(),
                 joint_ratio.max(),
                 joint_ratio.min(),
+                joint_ratio.std(),  # BUG FIX: ratio_std was missing, hidden by .get() default
                 # Value function stats (single GPU sync with rest)
                 values.mean(),
                 values.std(),
@@ -817,10 +821,11 @@ class PPOAgent:
             metrics["ratio_mean"].append(logging_tensors[3])
             metrics["ratio_max"].append(logging_tensors[4])
             metrics["ratio_min"].append(logging_tensors[5])
-            metrics["value_mean"].append(logging_tensors[6])
-            metrics["value_std"].append(logging_tensors[7])
-            metrics["value_min"].append(logging_tensors[8])
-            metrics["value_max"].append(logging_tensors[9])
+            metrics["ratio_std"].append(logging_tensors[6])  # BUG FIX: was missing
+            metrics["value_mean"].append(logging_tensors[7])
+            metrics["value_std"].append(logging_tensors[8])
+            metrics["value_min"].append(logging_tensors[9])
+            metrics["value_max"].append(logging_tensors[10])
             # PERF: Reuse already-transferred ratio stats (indices 4,5) instead of
             # re-computing on GPU which would trigger 2 redundant syncs
             ratio_max_val = logging_tensors[4]

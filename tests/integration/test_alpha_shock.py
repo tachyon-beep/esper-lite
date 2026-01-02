@@ -112,7 +112,7 @@ class TestAlphaShock:
         targets = torch.randint(0, 10, (16,), device=device)
         criterion = nn.CrossEntropyLoss()
         
-        model = create_model(task="cifar10", device=device, slots=["r0c1"])
+        model = create_model(task="cifar_baseline", device=device, slots=["r0c1"])
         slot = cast(SeedSlot, model.seed_slots["r0c1"])
         slot.germinate("conv_small")
         perturb_seed_weights(slot.seed) # Make it random/noisy
@@ -136,7 +136,7 @@ class TestAlphaShock:
         criterion = nn.CrossEntropyLoss()
         
         # --- Control: Random Seed ---
-        model_control = create_model(task="cifar10", device=device, slots=["r0c1"])
+        model_control = create_model(task="cifar_baseline", device=device, slots=["r0c1"])
         model_control.load_state_dict(model_control.state_dict()) # Clone start state not really needed for fresh
         slot_c = cast(SeedSlot, model_control.seed_slots["r0c1"])
         slot_c.germinate("conv_small")
@@ -146,7 +146,7 @@ class TestAlphaShock:
         shock_random = measure_shock(model_control, inputs, targets, criterion, "r0c1")
         
         # --- Experiment: Incubated Seed ---
-        model_exp = create_model(task="cifar10", device=device, slots=["r0c1"])
+        model_exp = create_model(task="cifar_baseline", device=device, slots=["r0c1"])
         slot_e = cast(SeedSlot, model_exp.seed_slots["r0c1"])
         slot_e.germinate("conv_small")
         

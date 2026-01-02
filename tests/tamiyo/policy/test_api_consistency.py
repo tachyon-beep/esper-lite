@@ -240,6 +240,7 @@ def test_ppo_update_uses_blueprint_indices_from_buffer():
                 alpha_speed_action=0,
                 alpha_curve_action=0,
                 op_action=0,
+                effective_op_action=0,
                 slot_log_prob=0.0,
                 blueprint_log_prob=0.0,
                 style_log_prob=0.0,

@@ -16,7 +16,7 @@ def extract_pareto_frontier(outcomes: list["EpisodeOutcome"]) -> list["EpisodeOu
     """Extract non-dominated outcomes from a list.
 
     An outcome is non-dominated (Pareto optimal) if no other outcome
-    is strictly better in all objectives.
+    dominates it (i.e., better or equal on all objectives, strictly better on at least one).
 
     Objectives considered:
     - final_accuracy: maximize
@@ -56,12 +56,17 @@ def compute_hypervolume_2d(
     Uses sweep-line algorithm: sort by accuracy descending, sweep from
     high accuracy to low, accumulating rectangular areas.
 
+    The hypervolume measures the area dominated by the frontier points
+    relative to the reference point. Only points with accuracy > ref_acc
+    and param_ratio < ref_param contribute to the hypervolume.
+
     Args:
         frontier: List of Pareto-optimal outcomes
-        ref_point: (min_accuracy, max_param_ratio) - worst acceptable values
+        ref_point: (min_accuracy, max_param_ratio) - worst acceptable values.
+            Points at or below min_accuracy are excluded from the calculation.
 
     Returns:
-        Hypervolume (area dominated by frontier)
+        Hypervolume (area dominated by frontier relative to ref_point)
     """
     if not frontier:
         return 0.0
@@ -69,8 +74,10 @@ def compute_hypervolume_2d(
     ref_acc, ref_param = ref_point
 
     # Extract and sort by accuracy descending
+    # Filter out points at or below the reference accuracy
     points = sorted(
-        [(o.final_accuracy, o.param_ratio) for o in frontier],
+        [(o.final_accuracy, o.param_ratio) for o in frontier
+         if o.final_accuracy > ref_acc and o.param_ratio < ref_param],
         key=lambda p: -p[0]
     )
 
@@ -80,7 +87,8 @@ def compute_hypervolume_2d(
     for acc, param in points:
         if param < current_param:
             # This point extends the dominated region
-            hv += acc * (current_param - param)
+            # Height is (acc - ref_acc), width is (current_param - param)
+            hv += (acc - ref_acc) * (current_param - param)
             current_param = param
 
     return hv

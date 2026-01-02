@@ -1018,6 +1018,7 @@ class SeedSlot(nn.Module):
         self.telemetry_inner_epoch: int | None = None
         self.telemetry_global_epoch: int | None = None
         self.task_config = task_config
+        self._resolved_topology: str | None = None
 
         self.seed: nn.Module | None = None
         self.state: SeedState | None = None
@@ -1052,6 +1053,20 @@ class SeedSlot(nn.Module):
         self._blend_algorithm_id: str | None = None
         self._blend_alpha_target: float | None = None
         self._blend_tempo_epochs: int | None = None
+
+    def _resolve_topology(self) -> str:
+        """Resolve topology for blueprint + blending behavior.
+
+        Source of truth priority:
+        1) TaskConfig.topology (explicit, required for RL)
+        2) _resolved_topology (captured at germination time by MorphogeneticModel/host)
+        3) Default "cnn" (keeps slot-only unit tests lightweight)
+        """
+        if self.task_config is not None:
+            return self.task_config.topology
+        if self._resolved_topology is not None:
+            return self._resolved_topology
+        return "cnn"
 
     def _get_shape_probe(self, topology: str) -> torch.Tensor:
         """Get cached shape probe for topology, creating if needed."""
@@ -1219,6 +1234,7 @@ class SeedSlot(nn.Module):
         blend_tempo_epochs: int = 5,
         alpha_algorithm: AlphaAlgorithm = AlphaAlgorithm.ADD,
         alpha_target: float | None = None,
+        topology: str | None = None,
     ) -> SeedState:
         """Germinate a new seed in this slot.
 
@@ -1230,6 +1246,8 @@ class SeedSlot(nn.Module):
             blend_tempo_epochs: Number of epochs for blending (3, 5, or 8)
             alpha_algorithm: Blend operator / gating mode (ADD, MULTIPLY, or GATE).
             alpha_target: Initial blend target (defaults to full amplitude).
+            topology: Optional topology override ("cnn" or "transformer").
+                Used by MorphogeneticModel when TaskConfig is not provided.
         """
         from esper.kasmina.blueprints import BlueprintRegistry
 
@@ -1259,17 +1277,27 @@ class SeedSlot(nn.Module):
                 f"Slot {self.slot_id} is unavailable for germination (stage={stage_name})"
             )
 
-        # Default to "cnn" when no TaskConfig is provided to match legacy CNN tests.
-        topology = self.task_config.topology if self.task_config is not None else "cnn"
-        if topology not in ("cnn", "transformer"):
-            raise ValueError(f"Unknown topology '{topology}' for SeedSlot.germinate")
+        if self.task_config is not None:
+            topology_from_task = self.task_config.topology
+            if topology is not None and topology != topology_from_task:
+                raise ValueError(
+                    f"Topology mismatch for slot {self.slot_id}: task_config.topology={topology_from_task!r} "
+                    f"but germinate() received topology={topology!r}."
+                )
+            resolved_topology = topology_from_task
+        else:
+            # Default to "cnn" when no TaskConfig is provided to match slot-only tests.
+            resolved_topology = topology if topology is not None else "cnn"
+        if resolved_topology not in ("cnn", "transformer"):
+            raise ValueError(f"Unknown topology '{resolved_topology}' for SeedSlot.germinate")
+        self._resolved_topology = resolved_topology
         try:
-            self.seed = BlueprintRegistry.create(topology, blueprint_id, self.channels)
+            self.seed = BlueprintRegistry.create(resolved_topology, blueprint_id, self.channels)
         except ValueError as exc:
-            available = BlueprintRegistry.list_for_topology(topology)
+            available = BlueprintRegistry.list_for_topology(resolved_topology)
             names = [s.name for s in available]
             raise ValueError(
-                f"Blueprint '{blueprint_id}' not available for topology '{topology}'. Available: {names}"
+                f"Blueprint '{blueprint_id}' not available for topology '{resolved_topology}'. Available: {names}"
             ) from exc
         self.seed = self.seed.to(self.device)
         if resolved_alpha_algorithm == AlphaAlgorithm.MULTIPLY:
@@ -1279,7 +1307,7 @@ class SeedSlot(nn.Module):
 
         # Validate shape: ensure seed preserves feature shape in a host-agnostic way
         # without mutating host BatchNorm statistics. Smoke test only.
-        shape_probe = self._get_shape_probe(topology)
+        shape_probe = self._get_shape_probe(resolved_topology)
         expected_shape = shape_probe.shape
         seed_was_training = self.seed.training
         try:
@@ -1750,7 +1778,7 @@ class SeedSlot(nn.Module):
                 if self.alpha_schedule is None:
                     from esper.kasmina.blending import BlendCatalog
 
-                    topology = self.task_config.topology if self.task_config else "cnn"
+                    topology = self._resolve_topology()
                     total_steps = max(1, int(steps))
                     # BlendCatalog.create returns BlendAlgorithm which satisfies AlphaScheduleProtocol
                     created_schedule = BlendCatalog.create(
@@ -2128,7 +2156,7 @@ class SeedSlot(nn.Module):
                 alpha_steepness=steepness,
             )
 
-        topology = self.task_config.topology if self.task_config else "cnn"
+        topology = self._resolve_topology()
 
         # Create blend algorithm with appropriate kwargs.
         #
@@ -2159,7 +2187,7 @@ class SeedSlot(nn.Module):
             # Topology-aware gradient isolation:
             # - CNNs: keep isolation (host learns from loss, not seed feedback)
             # - Transformers: allow co-adaptation (host receives seed gradients)
-            topology = self.task_config.topology if self.task_config else "cnn"
+            topology = self._resolve_topology()
             self.isolate_gradients = (topology == "cnn")
 
             # Snapshot accuracy at blending start for true causal attribution
@@ -2528,6 +2556,7 @@ class SeedSlot(nn.Module):
             "blend_algorithm_id": self._blend_algorithm_id,
             "blend_tempo_epochs": self._blend_tempo_epochs,
             "blend_alpha_target": self._blend_alpha_target,
+            "resolved_topology": self._resolved_topology,
         }
 
         if self.state is not None:
@@ -2558,6 +2587,8 @@ class SeedSlot(nn.Module):
             self._blend_tempo_epochs = state["blend_tempo_epochs"]
         if "blend_alpha_target" in state:
             self._blend_alpha_target = state["blend_alpha_target"]
+        if "resolved_topology" in state:
+            self._resolved_topology = state["resolved_topology"]
 
         if state.get("seed_state"):
             self.state = SeedState.from_dict(state["seed_state"])

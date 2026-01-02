@@ -13,7 +13,7 @@ class TestTaskSpecLearningRates:
         """TaskSpec should have host_lr field with default 0.01."""
         from esper.runtime.tasks import get_task_spec
 
-        spec = get_task_spec("cifar10")
+        spec = get_task_spec("cifar_baseline")
 
         # Direct attribute access tests existence and value
         # (AttributeError raised if field doesn't exist)
@@ -23,7 +23,7 @@ class TestTaskSpecLearningRates:
         """TaskSpec should have seed_lr field with default 0.01."""
         from esper.runtime.tasks import get_task_spec
 
-        spec = get_task_spec("cifar10")
+        spec = get_task_spec("cifar_baseline")
 
         # Direct attribute access tests existence and value
         assert spec.seed_lr == 0.01
@@ -59,7 +59,7 @@ class TestTaskSpecLearningRates:
         """LR fields should be float type."""
         from esper.runtime.tasks import get_task_spec
 
-        spec = get_task_spec("cifar10")
+        spec = get_task_spec("cifar_baseline")
 
         assert isinstance(spec.host_lr, float)
         assert isinstance(spec.seed_lr, float)
@@ -68,7 +68,7 @@ class TestTaskSpecLearningRates:
         """Default LRs should be positive values."""
         from esper.runtime.tasks import get_task_spec
 
-        spec = get_task_spec("cifar10")
+        spec = get_task_spec("cifar_baseline")
 
         assert spec.host_lr > 0
         assert spec.seed_lr > 0

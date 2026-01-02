@@ -122,6 +122,49 @@ class Scoreboard(Static):
         self._refresh_table()
         self._refresh_bottom_table()
 
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Handle row selection from either scoreboard table.
+
+        Emits BestRunSelected for both the BEST RUNS and WORST TRAJECTORY panels.
+        Stops propagation so SanctumApp's global DataTable handler doesn't also fire.
+        """
+        if event.data_table is not self.table and event.data_table is not self.bottom_table:
+            return
+
+        event.stop()
+
+        record = self._get_record_for_cursor(event.data_table, event.cursor_row)
+        if record is None:
+            return
+        self.post_message(self.BestRunSelected(record))
+
+    def request_pin_toggle(self) -> None:
+        """Request pin toggle for the currently selected best run.
+
+        Posts BestRunPinToggled when a valid record is selected.
+        Intended to be triggered by SanctumApp's 'p' binding.
+        """
+        record = self._get_focused_record_for_pin()
+        if record is None or not record.record_id:
+            return
+        self.post_message(self.BestRunPinToggled(record.record_id))
+
+    def _get_record_for_cursor(
+        self, table: DataTable[Any], cursor_row: int
+    ) -> "BestRunRecord | None":
+        """Return the BestRunRecord for the given table row, if available."""
+        if cursor_row < 0:
+            return None
+        records = self._displayed_records if table is self.table else self._bottom_records
+        if cursor_row >= len(records):
+            return None
+        return records[cursor_row]
+
+    def _get_focused_record_for_pin(self) -> "BestRunRecord | None":
+        """Return the record to pin based on which table has focus."""
+        table = self.bottom_table if self.bottom_table.has_focus else self.table
+        return self._get_record_for_cursor(table, table.cursor_row)
+
     def _refresh_stats(self) -> None:
         """Refresh the stats header."""
         if self._snapshot is None:

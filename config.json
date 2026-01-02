@@ -1,5 +1,5 @@
 {
-  "task": "cifar10_blind",
+  "task": "cifar_impaired",
   "n_episodes": 6400,
   "n_envs": 16,
   "max_epochs": 150,

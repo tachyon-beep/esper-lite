@@ -92,12 +92,18 @@ def build_slot_states(
 ) -> dict[str, MaskSeedInfo | None]:
     """Build slot_states dict for action masking from slot reports.
 
+    This function ensures all slots have entries, setting None for empty slots.
+    The resulting dict is suitable for compute_action_masks() which requires
+    all enabled slots to be present as keys.
+
     Args:
-        slot_reports: Slot -> SeedStateReport (active slots only)
-        slots: List of slot IDs to check
+        slot_reports: Slot -> SeedStateReport for ACTIVE slots only.
+            Missing keys indicate empty slots (no seed), which is expected.
+        slots: List of slot IDs to include in output (may include empty slots)
 
     Returns:
-        Dict mapping slot_id to MaskSeedInfo or None if slot is empty
+        Dict mapping slot_id to MaskSeedInfo or None if slot is empty.
+        Guaranteed to have an entry for every slot_id in slots.
     """
     slot_states: dict[str, MaskSeedInfo | None] = {}
     for slot_id in slots:
@@ -180,6 +186,16 @@ def compute_action_masks(
     # Order enabled slots according to slot_config order
     ordered = tuple(slot_id for slot_id in slot_config.slot_ids if slot_id in enabled_set)
 
+    # Validate slot_states contains all enabled slots (fail-fast on misconfiguration)
+    # This prevents .get() from silently treating missing keys as empty slots
+    missing_slots = set(ordered) - slot_states.keys()
+    if missing_slots:
+        raise ValueError(
+            f"slot_states missing entries for enabled slots: {sorted(missing_slots)}. "
+            f"slot_states keys: {sorted(slot_states.keys())}. "
+            f"Use build_slot_states() to ensure all enabled slots have entries."
+        )
+
     # Slot mask: only enabled slots are selectable in canonical order
     slot_mask = torch.zeros(slot_config.num_slots, dtype=torch.bool, device=device)
     for slot_id in ordered:
@@ -203,10 +219,14 @@ def compute_action_masks(
     style_mask = torch.zeros(NUM_STYLES, dtype=torch.bool, device=device)
     style_mask[GerminationStyle.SIGMOID_ADD] = True
 
-    # Tempo mask: all tempo values valid (choice only matters during GERMINATE)
+    # Tempo mask: all values valid. Gradient noise from irrelevant sampling is handled
+    # by causal masking in PPO (leyline/causal_masks.py) which zeros gradients when
+    # tempo doesn't affect execution (non-GERMINATE ops).
     tempo_mask = torch.ones(NUM_TEMPO, dtype=torch.bool, device=device)
 
     # Alpha heads: target changes are HOLD-only or germinate.
+    # alpha_speed and alpha_curve are all-True for same reason as tempo: causal masks
+    # zero their gradients when SET_ALPHA_TARGET is not the selected op.
     alpha_target_mask = torch.zeros(NUM_ALPHA_TARGETS, dtype=torch.bool, device=device)
     alpha_speed_mask = torch.ones(NUM_ALPHA_SPEEDS, dtype=torch.bool, device=device)
     alpha_curve_mask = torch.ones(NUM_ALPHA_CURVES, dtype=torch.bool, device=device)
@@ -216,8 +236,9 @@ def compute_action_masks(
     op_mask[LifecycleOp.WAIT] = True  # WAIT always valid
 
     # Check slot states for enabled slots only
+    # Direct access is safe here - we validated all keys exist above
     has_empty_enabled_slot = any(
-        slot_states.get(slot_id) is None
+        slot_states[slot_id] is None
         for slot_id in ordered
     )
 
@@ -232,7 +253,7 @@ def compute_action_masks(
     # (optimistic masking - network learns slot+op associations)
     has_retargetable_hold_slot = False
     for slot_id in ordered:
-        seed_info = slot_states.get(slot_id)
+        seed_info = slot_states[slot_id]  # Safe - validated above
         if seed_info is not None:
             stage = seed_info.stage
             age = seed_info.seed_age_epochs

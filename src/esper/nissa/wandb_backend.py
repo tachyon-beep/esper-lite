@@ -12,7 +12,7 @@ Usage:
     wandb_backend = WandbBackend(
         project="esper-morphogenesis",
         config={"lr": 3e-4, "gamma": 0.99},
-        tags=["ppo", "cifar10"],
+        tags=["ppo", "cifar_baseline"],
     )
 
     collector.add_backend(wandb_backend)
@@ -54,13 +54,13 @@ class WandbBackend(OutputBackend):
     to wandb for experiment tracking and visualization.
 
     Step Model:
-        Two independent step counters are used for different metric granularities:
+        Two independent step axes are used for different metric granularities:
 
-        1. _batch_step: Incremented once per PPO update (i.e., per training batch).
-           Used by: batch/, ppo/, seeds/, anomalies/ metrics.
-           PPO_UPDATE_COMPLETED is the "commit point" - all other batch-level
-           events (BATCH_EPOCH_COMPLETED, seed lifecycle) log with commit=False
-           to share the same x-axis position.
+        1. Batch-level step (from event.epoch): The monotonic batch_epoch_id
+           carried on all batch-level events (PPO_UPDATE_COMPLETED,
+           BATCH_EPOCH_COMPLETED, seed lifecycle, anomalies).
+           All batch-level metrics share this x-axis for correct alignment.
+           Events without epoch are logged with a warning.
 
         2. _env_epoch_step: Incremented once per EPOCH_COMPLETED event.
            Used by: env_<id>/ metrics (per-environment training curves).
@@ -115,8 +115,7 @@ class WandbBackend(OutputBackend):
         self.log_system = log_system
 
         self._run: Any | None = None  # wandb.sdk.wandb_run.Run
-        # Step counters - see class docstring "Step Model" for semantics
-        self._batch_step = 0      # Incremented per PPO update (batch-level x-axis)
+        # Step counter for per-env metrics - see class docstring "Step Model"
         self._env_epoch_step = 0  # Incremented per env epoch (per-env x-axis)
 
     def start(self) -> None:
@@ -200,6 +199,20 @@ class WandbBackend(OutputBackend):
         }:
             self._handle_anomaly(event)
 
+    def _get_batch_step(self, event: TelemetryEvent, event_name: str) -> int | None:
+        """Extract batch step from event.epoch, logging warning if missing.
+
+        Returns None if epoch is not set, which signals the caller to skip
+        logging (emitter bug - batch-level events must carry epoch).
+        """
+        if event.epoch is None:
+            _logger.warning(
+                "%s missing epoch (required for wandb step alignment) - skipping",
+                event_name,
+            )
+            return None
+        return event.epoch
+
     def _handle_training_started(self, event: TelemetryEvent) -> None:
         """Log training configuration to wandb config.
 
@@ -254,6 +267,10 @@ class WandbBackend(OutputBackend):
             _logger.debug("BATCH_EPOCH_COMPLETED event has non-BatchEpochCompletedPayload data")
             return
 
+        step = self._get_batch_step(event, "BATCH_EPOCH_COMPLETED")
+        if step is None:
+            return
+
         metrics = {
             "batch/avg_accuracy": event.data.avg_accuracy,
             "batch/avg_reward": event.data.avg_reward,
@@ -263,14 +280,14 @@ class WandbBackend(OutputBackend):
         }
 
         # commit=False: PPO update is the commit point for batch-level metrics
-        wandb.log(metrics, step=self._batch_step, commit=False)
+        wandb.log(metrics, step=step, commit=False)
 
     def _handle_ppo_update(self, event: TelemetryEvent) -> None:
         """Log PPO training metrics.
 
         This is the COMMIT POINT for batch-level metrics. All batch/, ppo/,
-        seeds/, and anomalies/ metrics share _batch_step as their x-axis.
-        This handler commits (default) and then increments the step.
+        seeds/, and anomalies/ metrics share event.epoch as their x-axis.
+        This handler commits (default) to finalize all pending batch metrics.
 
         These metrics track the RL agent's learning progress:
         - Policy/value losses
@@ -282,10 +299,13 @@ class WandbBackend(OutputBackend):
             _logger.debug("PPO_UPDATE_COMPLETED event has non-PPOUpdatePayload data")
             return
 
+        step = self._get_batch_step(event, "PPO_UPDATE_COMPLETED")
+        if step is None:
+            return
+
         if event.data.update_skipped:
-            # Still commit to advance the step even if update was skipped
-            wandb.log({"ppo/update_skipped": 1}, step=self._batch_step)
-            self._batch_step += 1
+            # Log skipped update marker at the correct step
+            wandb.log({"ppo/update_skipped": 1}, step=step)
             return
 
         metrics = {
@@ -306,8 +326,7 @@ class WandbBackend(OutputBackend):
             metrics["ppo/lr"] = event.data.lr
 
         # Commit point: this log() commits all pending batch-level metrics
-        wandb.log(metrics, step=self._batch_step)
-        self._batch_step += 1
+        wandb.log(metrics, step=step)
 
     def _handle_seed_germinated(self, event: TelemetryEvent) -> None:
         """Log seed germination events.
@@ -321,6 +340,10 @@ class WandbBackend(OutputBackend):
             _logger.debug("SEED_GERMINATED event has non-SeedGerminatedPayload data")
             return
 
+        step = self._get_batch_step(event, "SEED_GERMINATED")
+        if step is None:
+            return
+
         slot_id = event.data.slot_id or event.slot_id or "unknown"
 
         metrics = {
@@ -329,7 +352,7 @@ class WandbBackend(OutputBackend):
             f"seeds/{slot_id}/params": event.data.params,
         }
 
-        wandb.log(metrics, step=self._batch_step, commit=False)
+        wandb.log(metrics, step=step, commit=False)
 
     def _handle_seed_stage_changed(self, event: TelemetryEvent) -> None:
         """Log seed stage transitions.
@@ -343,6 +366,10 @@ class WandbBackend(OutputBackend):
             _logger.debug("SEED_STAGE_CHANGED event has non-SeedStageChangedPayload data")
             return
 
+        step = self._get_batch_step(event, "SEED_STAGE_CHANGED")
+        if step is None:
+            return
+
         slot_id = event.slot_id or "unknown"
 
         # Log stage name
@@ -350,7 +377,7 @@ class WandbBackend(OutputBackend):
             f"seeds/{slot_id}/stage": event.data.to_stage,
         }
 
-        wandb.log(metrics, step=self._batch_step, commit=False)
+        wandb.log(metrics, step=step, commit=False)
 
     def _handle_seed_fossilized(self, event: TelemetryEvent) -> None:
         """Log seed fossilization (successful integration).
@@ -364,6 +391,10 @@ class WandbBackend(OutputBackend):
             _logger.debug("SEED_FOSSILIZED event has non-SeedFossilizedPayload data")
             return
 
+        step = self._get_batch_step(event, "SEED_FOSSILIZED")
+        if step is None:
+            return
+
         slot_id = event.slot_id or "unknown"
 
         metrics = {
@@ -374,7 +405,7 @@ class WandbBackend(OutputBackend):
         if event.data.blending_delta is not None:
             metrics[f"seeds/{slot_id}/blending_delta"] = event.data.blending_delta
 
-        wandb.log(metrics, step=self._batch_step, commit=False)
+        wandb.log(metrics, step=step, commit=False)
 
         # Also log to run summary for easy comparison across runs
         # hasattr AUTHORIZED by Code Review 2026-01-01
@@ -398,6 +429,10 @@ class WandbBackend(OutputBackend):
             _logger.debug("SEED_PRUNED event has non-SeedPrunedPayload data")
             return
 
+        step = self._get_batch_step(event, "SEED_PRUNED")
+        if step is None:
+            return
+
         slot_id = event.slot_id or "unknown"
 
         metrics = {
@@ -405,7 +440,7 @@ class WandbBackend(OutputBackend):
             f"seeds/{slot_id}/prune_reason": event.data.reason or "unknown",
         }
 
-        wandb.log(metrics, step=self._batch_step, commit=False)
+        wandb.log(metrics, step=step, commit=False)
 
     def _handle_anomaly(self, event: TelemetryEvent) -> None:
         """Log training anomalies and send alerts.
@@ -421,6 +456,10 @@ class WandbBackend(OutputBackend):
             _logger.debug("Anomaly event has non-AnomalyDetectedPayload data")
             return
 
+        step = self._get_batch_step(event, event.event_type.name)
+        if step is None:
+            return
+
         anomaly_type = event.event_type.name
 
         # Log anomaly counts
@@ -429,7 +468,7 @@ class WandbBackend(OutputBackend):
             "anomalies/total_count": 1,
         }
 
-        wandb.log(metrics, step=self._batch_step, commit=False)
+        wandb.log(metrics, step=step, commit=False)
 
         # Send alert for real-time notification
         # wandb>=0.16.0 is required (pyproject.toml), so alert() always exists

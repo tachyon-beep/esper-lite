@@ -20,8 +20,11 @@ from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Static
 
+from esper.karn.constants import DisplayThresholds
+from esper.karn.sanctum.formatting import format_params
 from esper.karn.sanctum.widgets.counterfactual_panel import CounterfactualPanel
 from esper.karn.sanctum.widgets.env_detail_screen import SeedCard
+from esper.karn.sanctum.widgets.shapley_panel import ShapleyPanel
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import BestRunRecord
@@ -99,6 +102,13 @@ class HistoricalEnvDetail(ModalScreen[None]):
         padding-top: 1;
     }
 
+    HistoricalEnvDetail .shapley-section {
+        height: auto;
+        margin-top: 1;
+        border-top: solid $secondary-lighten-2;
+        padding-top: 1;
+    }
+
     HistoricalEnvDetail .footer-hint {
         height: 1;
         text-align: center;
@@ -138,7 +148,7 @@ class HistoricalEnvDetail(ModalScreen[None]):
                     yield Static(self._render_graveyard(), id="seed-graveyard")
 
             # Counterfactual analysis section (always visible for stable layout)
-            from esper.karn.sanctum.schema import CounterfactualSnapshot
+            from esper.karn.sanctum.schema import CounterfactualSnapshot, ShapleySnapshot
             matrix = self._record.counterfactual_matrix or CounterfactualSnapshot(
                 strategy="unavailable"
             )
@@ -147,6 +157,15 @@ class HistoricalEnvDetail(ModalScreen[None]):
                     matrix,
                     seeds=self._record.seeds,
                     id="counterfactual-panel",
+                )
+
+            # Shapley attribution section (always visible for stable layout)
+            shapley = self._record.shapley_snapshot or ShapleySnapshot()
+            with Vertical(classes="shapley-section"):
+                yield ShapleyPanel(
+                    shapley,
+                    seeds=self._record.seeds,
+                    id="shapley-panel",
                 )
 
             # Footer hint
@@ -190,7 +209,9 @@ class HistoricalEnvDetail(ModalScreen[None]):
         # Growth ratio
         growth = record.growth_ratio or 1.0
         if growth > 1.0:
-            growth_style = "yellow" if growth > 1.2 else "green"
+            growth_style = (
+                "yellow" if growth > DisplayThresholds.GROWTH_RATIO_WARNING else "green"
+            )
             header.append(f"Growth: {growth:.2f}x", style=growth_style)
         else:
             header.append("Growth: 1.00x", style="dim")
@@ -209,14 +230,7 @@ class HistoricalEnvDetail(ModalScreen[None]):
         # Second line: parameter info
         header.append("\n")
 
-        def _format_params(p: int) -> str:
-            if p >= 1_000_000:
-                return f"{p / 1_000_000:.1f}M"
-            elif p >= 1_000:
-                return f"{p / 1_000:.1f}K"
-            return str(p)
-
-        header.append(f"Host: {_format_params(record.host_params)}", style="dim")
+        header.append(f"Host: {format_params(record.host_params)}", style="dim")
         header.append("  │  ")
         header.append(f"Fossilized: {record.fossilized_count}", style="green")
         header.append("  │  ")
@@ -281,7 +295,11 @@ class HistoricalEnvDetail(ModalScreen[None]):
             reward_text.append(f"{rc.total:+.3f}", style=total_style)
             # Add PBRS fraction
             pbrs_fraction = abs(rc.stage_bonus) / abs(rc.total) if rc.total != 0 else 0.0
-            pbrs_healthy = 0.1 <= pbrs_fraction <= 0.4
+            pbrs_healthy = (
+                DisplayThresholds.PBRS_HEALTHY_MIN
+                <= pbrs_fraction
+                <= DisplayThresholds.PBRS_HEALTHY_MAX
+            )
             pbrs_icon = "✓" if pbrs_healthy else "⚠" if pbrs_fraction > 0 else ""
             pbrs_style = "green" if pbrs_healthy else "yellow"
             reward_text.append(f"  PBRS: {pbrs_fraction:.0%} ", style="dim")
@@ -425,9 +443,14 @@ class HistoricalEnvDetail(ModalScreen[None]):
                 # Calculate success rate if any have terminated
                 terminated = fossilized + pruned
                 if terminated > 0:
-                    success_rate = fossilized / terminated * 100
-                    rate_style = "green" if success_rate >= 50 else "yellow" if success_rate >= 25 else "red"
-                    line.append(f"  {success_rate:3.0f}%", style=rate_style)
+                    success_rate = fossilized / terminated
+                    if success_rate >= DisplayThresholds.BLUEPRINT_SUCCESS_GREEN:
+                        rate_style = "green"
+                    elif success_rate >= DisplayThresholds.BLUEPRINT_SUCCESS_YELLOW:
+                        rate_style = "yellow"
+                    else:
+                        rate_style = "red"
+                    line.append(f"  {success_rate * 100:3.0f}%", style=rate_style)
                 else:
                     line.append("    --", style="dim")
 

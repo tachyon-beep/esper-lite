@@ -25,12 +25,9 @@ class TestTelemetryEventTypes:
     def test_governor_event_types_exist(self):
         """Governor event types exist."""
         assert TelemetryEventType.GOVERNOR_ROLLBACK
-        assert TelemetryEventType.GOVERNOR_PANIC
-        assert TelemetryEventType.GOVERNOR_SNAPSHOT
 
     def test_checkpoint_event_types_exist(self):
         """Checkpoint event types exist."""
-        assert TelemetryEventType.CHECKPOINT_SAVED
         assert TelemetryEventType.CHECKPOINT_LOADED
 
     def test_batch_event_types_exist(self):

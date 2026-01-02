@@ -69,7 +69,7 @@ class TestGradientIsolationFidelity:
         
         # 2. Baseline Run (Clean Host)
         # We create a fresh model to ensure no state contamination
-        baseline_model = create_model(task="cifar10", device=device, slots=["r0c1"])
+        baseline_model = create_model(task="cifar_baseline", device=device, slots=["r0c1"])
         
         # Run forward/backward
         baseline_out = baseline_model(inputs)
@@ -79,7 +79,7 @@ class TestGradientIsolationFidelity:
         baseline_grads = get_all_host_grads(baseline_model)
         
         # 3. Experiment Run (Host + Incubating Seed)
-        exp_model = create_model(task="cifar10", device=device, slots=["r0c1"])
+        exp_model = create_model(task="cifar_baseline", device=device, slots=["r0c1"])
         # Copy weights to ensure identical start point
         exp_model.load_state_dict(baseline_model.state_dict())
         
@@ -144,13 +144,13 @@ class TestGradientIsolationFidelity:
         criterion = nn.CrossEntropyLoss()
         
         # Baseline
-        baseline_model = create_model(task="cifar10", device=device, slots=["r0c1"])
+        baseline_model = create_model(task="cifar_baseline", device=device, slots=["r0c1"])
         baseline_loss = criterion(baseline_model(inputs), targets)
         baseline_loss.backward()
         baseline_grads = get_all_host_grads(baseline_model)
         
         # Experiment (BLENDING)
-        exp_model = create_model(task="cifar10", device=device, slots=["r0c1"])
+        exp_model = create_model(task="cifar_baseline", device=device, slots=["r0c1"])
         exp_model.load_state_dict(baseline_model.state_dict())
         
         slot = cast(SeedSlot, exp_model.seed_slots["r0c1"])

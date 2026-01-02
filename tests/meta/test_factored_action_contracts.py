@@ -214,6 +214,7 @@ class TestPPOAgentFactoredInVectorized:
                 alpha_speed_action=env_idx % NUM_ALPHA_SPEEDS,
                 alpha_curve_action=env_idx % NUM_ALPHA_CURVES,
                 op_action=env_idx % NUM_OPS,
+                effective_op_action=env_idx % NUM_OPS,
                 slot_log_prob=-0.5,
                 blueprint_log_prob=-0.5,
                 style_log_prob=-0.5,

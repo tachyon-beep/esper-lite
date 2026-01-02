@@ -205,13 +205,13 @@ class DecisionCard(Static):
             if decision.td_advantage is not None:
                 result.append(f"TD:{decision.td_advantage:+.2f}", style="bright_cyan")
             else:
-                result.append("TD:...", style="dim italic")
+                result.append("TD:—", style="dim italic")
         else:
             result.append(f"expect:{decision.expected_value:+.2f}", style="cyan")
             result.append("  ", style="dim")
-            result.append("reward:...", style="dim italic")
+            result.append("reward:—", style="dim italic")
             result.append("  ", style="dim")
-            result.append("TD:...", style="dim italic")
+            result.append("TD:—", style="dim italic")
         result.append("\n")
 
         # Line 6: Alternatives

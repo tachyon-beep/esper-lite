@@ -163,3 +163,40 @@ class VitalSignsThresholds:
 
     # Epochs without improvement before stagnation warning
     STAGNATION_EPOCHS: int = 20
+
+
+class DisplayThresholds:
+    """Thresholds for modal panel displays.
+
+    These control styling in EnvDetailScreen, HistoricalEnvDetail, and other modals.
+    All values are presentation-layer only and do not affect training behavior.
+    """
+
+    # Reward health (DRL Expert recommendations)
+    # PBRS should be 10-40% of total reward to shape without dominating
+    PBRS_HEALTHY_MIN: float = 0.1   # 10% of total reward
+    PBRS_HEALTHY_MAX: float = 0.4   # 40% of total reward
+    GAMING_RATE_HEALTHY_MAX: float = 0.05  # <5% anti-gaming triggers
+
+    # Growth ratio (model size overhead from fossilized seeds)
+    # >20% parameter growth = yellow warning
+    GROWTH_RATIO_WARNING: float = 1.2
+
+    # Stagnation (epochs without improvement)
+    # >10 epochs = red momentum indicator
+    MOMENTUM_STALL_THRESHOLD: int = 10
+
+    # Blueprint success rates (graveyard display)
+    # ≥50% fossilized = green, ≥25% = yellow, <25% = red
+    BLUEPRINT_SUCCESS_GREEN: float = 0.50
+    BLUEPRINT_SUCCESS_YELLOW: float = 0.25
+
+    # Interaction synergy thresholds (SeedCard display)
+    # Show synergy indicator if |interaction_sum| > 0.5
+    INTERACTION_SYNERGY_THRESHOLD: float = 0.5
+    # Show boost indicator if boost_received > 0.1
+    BOOST_RECEIVED_THRESHOLD: float = 0.1
+
+    # Contribution velocity (trend arrows)
+    # Show trend if |velocity| > 0.01
+    CONTRIBUTION_VELOCITY_EPSILON: float = 0.01

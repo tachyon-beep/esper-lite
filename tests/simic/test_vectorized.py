@@ -126,9 +126,39 @@ def test_last_action_event_emitted():
         assert emitted.data.style_masked is True
 
 
+def _make_mandatory_metrics(**overrides) -> dict:
+    """Create metrics dict with all mandatory fields for emit_ppo_update_event."""
+    base = {
+        "policy_loss": 0.1,
+        "value_loss": 0.2,
+        "entropy": 1.5,
+        "approx_kl": 0.01,
+        "clip_fraction": 0.1,
+        "pre_clip_grad_norm": 2.5,
+        "ppo_updates_count": 1,
+        "advantage_mean": 0.0,
+        "advantage_std": 1.0,
+        "advantage_skewness": 0.0,
+        "advantage_kurtosis": 0.0,
+        "advantage_positive_ratio": 0.5,
+        "ratio_mean": 1.0,
+        "ratio_min": 0.8,
+        "ratio_max": 1.2,
+        "ratio_std": 0.1,
+        "log_prob_min": -5.0,
+        "log_prob_max": -0.1,
+        "value_mean": 0.0,
+        "value_std": 1.0,
+        "value_min": -2.0,
+        "value_max": 2.0,
+    }
+    base.update(overrides)
+    return base
+
+
 def test_ppo_update_event_includes_vitals():
     hub = Mock()
-    metrics = {"policy_loss": 0.1}
+    metrics = _make_mandatory_metrics()
     emit_ppo_update_event(
         hub=hub,
         metrics=metrics,
@@ -1061,7 +1091,7 @@ def test_slot_config_filters_to_requested_slots_only():
 
     # Request only a single slot
     requested_slots = ["r0c0"]
-    model = create_model(task="cifar10", device="cpu", slots=requested_slots)
+    model = create_model(task="cifar_baseline", device="cpu", slots=requested_slots)
 
     # Verify the model only has the requested slot
     assert list(model.seed_slots.keys()) == requested_slots
@@ -1099,7 +1129,7 @@ def test_slot_config_preserves_subset_of_slots():
 
     # Request two slots (host has 3 for default cifar10)
     requested_slots = ["r0c0", "r0c2"]  # Skip r0c1
-    model = create_model(task="cifar10", device="cpu", slots=requested_slots)
+    model = create_model(task="cifar_baseline", device="cpu", slots=requested_slots)
 
     # Verify the model has exactly the requested slots
     assert set(model.seed_slots.keys()) == set(requested_slots)

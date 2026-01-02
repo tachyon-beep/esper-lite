@@ -12,6 +12,7 @@ Causal structure for Tamiyo's factored action space:
         |   +-- slot_head: WHERE to place seed
         |   +-- blueprint_head: WHAT architecture
         |   +-- style_head: HOW to germinate (blend + alpha algorithm)
+        |   +-- tempo_head: WHEN to germinate (timestep selection)
         |   +-- alpha_target_head: TARGET amplitude for initial blend
         |
         +-- FOSSILIZE:
@@ -46,7 +47,7 @@ from esper.leyline.causal_masks import compute_causal_masks
 def compute_per_head_advantages(
     base_advantages: torch.Tensor,
     op_actions: torch.Tensor,
-) -> dict[str, torch.Tensor]:
+) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
     """Compute advantages with causal masking per head.
 
     Args:
@@ -54,7 +55,13 @@ def compute_per_head_advantages(
         op_actions: Operation actions [batch] or [batch, seq] (LifecycleOp values)
 
     Returns:
-        Dict with per-head advantages, causally masked.
+        Tuple of (per_head_advantages, masks):
+        - per_head_advantages: Dict with per-head advantages, causally masked
+        - masks: Dict with boolean causal masks (for reuse in KL/entropy/loss)
+
+    Note:
+        Boolean masks are multiplied directly (no .float() conversion) to
+        preserve base_advantages.dtype under AMP (float16/bfloat16).
     """
     # B4-DRL-01: Use single source of truth for causal masks
     masks = compute_causal_masks(op_actions)
@@ -63,16 +70,20 @@ def compute_per_head_advantages(
     # op head: always gets advantage (always causally relevant)
     # M8: No clone needed - we're not modifying the tensor, just returning it.
     # Other heads use multiplication which creates new tensors anyway.
-    return {
+    #
+    # PERF: Multiply by bool directly - PyTorch fuses the bool→float conversion
+    # into the multiplication kernel, preserving base_advantages.dtype.
+    per_head_advantages = {
         "op": base_advantages,
-        "slot": base_advantages * masks["slot"].float(),
-        "blueprint": base_advantages * masks["blueprint"].float(),
-        "style": base_advantages * masks["style"].float(),
-        "tempo": base_advantages * masks["tempo"].float(),
-        "alpha_target": base_advantages * masks["alpha_target"].float(),
-        "alpha_speed": base_advantages * masks["alpha_speed"].float(),
-        "alpha_curve": base_advantages * masks["alpha_curve"].float(),
+        "slot": base_advantages * masks["slot"],
+        "blueprint": base_advantages * masks["blueprint"],
+        "style": base_advantages * masks["style"],
+        "tempo": base_advantages * masks["tempo"],
+        "alpha_target": base_advantages * masks["alpha_target"],
+        "alpha_speed": base_advantages * masks["alpha_speed"],
+        "alpha_curve": base_advantages * masks["alpha_curve"],
     }
+    return per_head_advantages, masks
 
 
 __all__ = ["compute_per_head_advantages"]

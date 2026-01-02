@@ -241,7 +241,7 @@ def main() -> int:
     parser.add_argument(
         "--mock-task",
         type=str,
-        default="cifar10",
+        default="cifar_baseline",
         help="Task name for mock runs",
     )
     parser.add_argument(

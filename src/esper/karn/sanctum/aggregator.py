@@ -34,6 +34,8 @@ from esper.karn.sanctum.schema import (
     RunConfig,
     CounterfactualConfig,
     CounterfactualSnapshot,
+    ShapleySnapshot,
+    ShapleyEstimate,
     compute_entropy_velocity,
     compute_collapse_risk,
     compute_correlation,
@@ -592,10 +594,17 @@ class SanctumAggregator:
             env.rolled_back = False
             env.rollback_reason = ""
 
+        # Clear stale Shapley data at episode start
+        # Shapley is computed at episode END, so displaying previous episode's
+        # data during a new episode is misleading. Clear it so the panel shows
+        # "unavailable" until fresh data arrives.
+        inner_epoch = payload.inner_epoch
+        if inner_epoch == 0:
+            env.shapley_snapshot = ShapleySnapshot()
+
         # Update accuracy
         val_acc = payload.val_accuracy
         val_loss = payload.val_loss
-        inner_epoch = payload.inner_epoch
 
         env.host_loss = val_loss
         env.current_epoch = inner_epoch
@@ -1102,16 +1111,11 @@ class SanctumAggregator:
                     # Interactive features
                     record_id=str(uuid.uuid4())[:8],
                     pinned=False,
-                    # Full env snapshot at peak
-                    reward_components=RewardComponents(**env.reward_components.__dict__)
-                        if env.reward_components else None,
-                    counterfactual_matrix=CounterfactualSnapshot(
-                        slot_ids=env.counterfactual_matrix.slot_ids,
-                        configs=list(env.counterfactual_matrix.configs),
-                        strategy=env.counterfactual_matrix.strategy,
-                        compute_time_ms=env.counterfactual_matrix.compute_time_ms,
-                    ) if env.counterfactual_matrix and env.counterfactual_matrix.slot_ids else None,
-                    action_history=list(env.action_history),
+                    # Full env snapshot at peak (captured by EnvState.add_accuracy())
+                    reward_components=env.best_reward_components,
+                    counterfactual_matrix=env.best_counterfactual_matrix,
+                    shapley_snapshot=env.best_shapley_snapshot,
+                    action_history=env.best_action_history,
                     reward_history=list(env.reward_history),
                     accuracy_history=list(env.accuracy_history),
                     host_loss=env.host_loss,
@@ -1167,6 +1171,11 @@ class SanctumAggregator:
             env.best_accuracy_episode = 0
             env.best_seeds.clear()
 
+            # Volatile state snapshots (fresh per episode)
+            env.best_reward_components = None
+            env.best_counterfactual_matrix = None
+            env.best_action_history = []
+
             # Action tracking (fresh distribution each episode)
             env.action_history.clear()
             env.action_counts = {
@@ -1208,11 +1217,11 @@ class SanctumAggregator:
         self._ensure_env(env_id)
         env = self._envs[env_id]
 
-        # Parse configs
+        # Parse configs - seed_mask and accuracy MUST exist (created by emitter)
         configs = [
             CounterfactualConfig(
-                seed_mask=tuple(cfg.get("seed_mask", [])),
-                accuracy=cfg.get("accuracy", 0.0),
+                seed_mask=tuple(cfg["seed_mask"]),
+                accuracy=cfg["accuracy"],
             )
             for cfg in payload.configs
         ]
@@ -1241,6 +1250,44 @@ class SanctumAggregator:
                 counts = {str(action): int(count) for action, count in payload.action_counts.items()}
                 self._tamiyo.action_counts = counts
                 self._tamiyo.total_actions = sum(counts.values())
+            return
+
+        # Per-env Shapley value attribution (computed at episode boundaries)
+        if kind == "shapley_computed":
+            env_id = payload.env_id
+            if env_id is not None and payload.shapley_values is not None:
+                self._ensure_env(env_id)
+                env = self._envs[env_id]
+
+                # Convert telemetry dict to ShapleySnapshot
+                values: dict[str, ShapleyEstimate] = {}
+                slot_ids: list[str] = []
+                for slot_id, metrics in payload.shapley_values.items():
+                    slot_ids.append(slot_id)
+                    values[slot_id] = ShapleyEstimate(
+                        mean=metrics.get("mean", 0.0),
+                        std=metrics.get("std", 0.0),
+                        n_samples=int(metrics.get("n_samples", 0)),
+                    )
+
+                env.shapley_snapshot = ShapleySnapshot(
+                    slot_ids=tuple(slot_ids),
+                    values=values,
+                    epoch=payload.batch or 0,
+                    timestamp=datetime.now(timezone.utc),
+                )
+
+                # Also update best_shapley_snapshot for historical view.
+                # Shapley is computed at episode end, and since envs reset each batch,
+                # this IS the correct attribution data for this episode's peak accuracy.
+                # We copy rather than alias to preserve the snapshot if shapley_snapshot
+                # gets cleared at next episode start.
+                env.best_shapley_snapshot = ShapleySnapshot(
+                    slot_ids=tuple(slot_ids),
+                    values=dict(values),
+                    epoch=payload.batch or 0,
+                    timestamp=env.shapley_snapshot.timestamp,
+                )
             return
 
         # Per-step "last_action" snapshots - update env state and decision tracking

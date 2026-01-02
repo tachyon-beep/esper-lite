@@ -18,6 +18,9 @@ from textual.widgets import Static
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import EventLogEntry
 
+# Display value for events without a specific env_id (global events like PPO updates)
+GLOBAL_EVENT_ENV_DISPLAY = "--"
+
 
 class EventLogDetail(ModalScreen[None]):
     """Modal showing raw event log entries.
@@ -108,7 +111,7 @@ class EventLogDetail(ModalScreen[None]):
 
         # Show events in reverse chronological order (newest first)
         for entry in reversed(self._events):
-            env_str = f"{entry.env_id:02d}" if entry.env_id is not None else "--"
+            env_str = f"{entry.env_id:02d}" if entry.env_id is not None else GLOBAL_EVENT_ENV_DISPLAY
             # Format metadata as key=value pairs
             details = " ".join(
                 f"{k}={v}" for k, v in entry.metadata.items()

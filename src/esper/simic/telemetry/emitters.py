@@ -311,8 +311,8 @@ class VectorizedEmitter:
         batch_idx: int,
         epoch: int,
         agent: Any,
-        ppo_grad_norm: float | None,
-        ppo_update_time_ms: float | None,
+        ppo_grad_norm: float,  # MANDATORY: computed during backward pass
+        ppo_update_time_ms: float,  # MANDATORY: timing always captured
         avg_acc: float,
         avg_reward: float,
         rolling_avg_acc: float,
@@ -662,16 +662,18 @@ def emit_last_action(
     }
 
 
-def compute_grad_norm_surrogate(module: nn.Module) -> float | None:
+def compute_grad_norm_surrogate(module: nn.Module) -> float:
     """Compute gradient L2 norm with float64 overflow protection.
 
     Uses fused _foreach_norm for minimal GPU-CPU sync overhead (single sync).
     Float64 prevents overflow: float32 overflows at ~1e19 due to squaring,
     float64 handles up to ~1e154.
+
+    MUST be called after loss.backward() - having no gradients is a bug.
     """
     grads = [p.grad for p in module.parameters() if p.grad is not None]
-    if not grads:
-        return None
+    # No gradients after backward() indicates a bug (e.g., torch.compile wrapper issue)
+    assert grads, "No gradients found - did loss.backward() run? Check torch.compile wrapper."
     # Upcast to float64 for overflow protection on large norms
     grads_double = [g.double() for g in grads]
     # Fused kernel: computes all per-tensor norms in one launch
@@ -743,11 +745,16 @@ def emit_ppo_update_event(
     batch_idx: int,
     epoch: int,
     optimizer: Any,
-    grad_norm: float | None,
-    update_time_ms: float | None,
+    grad_norm: float,  # MANDATORY: must be provided after backward pass
+    update_time_ms: float,  # MANDATORY: timing must always be captured
     group_id: str = "default",  # A/B testing identifier
 ) -> None:
-    """Emit PPO update completion telemetry with optional vitals."""
+    """Emit PPO update completion telemetry.
+
+    All core metrics are MANDATORY - this function will fail loudly if
+    the metrics dict is missing required keys. This prevents bug-hiding
+    patterns where defaults silently mask missing data.
+    """
     lr = None
     if optimizer is not None:
         try:
@@ -760,47 +767,53 @@ def emit_ppo_update_event(
     head_entropies_avg = {}
     if "head_entropies" in metrics:
         for head, values in metrics["head_entropies"].items():
-            avg_entropy = sum(values) / len(values) if values else 0.0
+            avg_entropy = sum(values) / len(values)  # Fail on empty list
             head_entropies_avg[f"head_{head}_entropy"] = avg_entropy
 
     # Compute per-head gradient norm averages for logging (P4-6)
+    # No defensive pattern - empty lists should fail loudly (indicates PPO bug)
     head_grad_norms_avg = {}
     if "head_grad_norms" in metrics:
         for head, values in metrics["head_grad_norms"].items():
-            avg_grad_norm = sum(values) / len(values) if values else 0.0
+            avg_grad_norm = sum(values) / len(values)  # Fail on empty list
             head_grad_norms_avg[f"head_{head}_grad_norm"] = avg_grad_norm
 
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
         epoch=episodes_completed,  # Monotonic per-batch epoch id (NOT inner epoch!)
         data=PPOUpdatePayload(
-            policy_loss=metrics.get("policy_loss", 0.0),
-            value_loss=metrics.get("value_loss", 0.0),
-            entropy=metrics.get("entropy", 0.0),
-            grad_norm=grad_norm if grad_norm is not None else 0.0,
-            kl_divergence=metrics.get("approx_kl", 0.0),
-            clip_fraction=metrics.get("clip_fraction", 0.0),
+            # MANDATORY metrics - fail loudly if missing (no bug-hiding defaults)
+            policy_loss=metrics["policy_loss"],
+            value_loss=metrics["value_loss"],
+            entropy=metrics["entropy"],
+            grad_norm=grad_norm,
+            kl_divergence=metrics["approx_kl"],
+            clip_fraction=metrics["clip_fraction"],
             nan_grad_count=metrics.get("nan_grad_count", 0),
-            # Optional fields
+            # BUG FIX: Pre-clip gradient norm for detecting explosion vs healthy gradients
+            pre_clip_grad_norm=metrics["pre_clip_grad_norm"],
+            # Optional fields (computed once per update, not per-epoch)
             explained_variance=metrics.get("explained_variance"),
             entropy_loss=0.0,
-            advantage_mean=metrics.get("advantage_mean", 0.0),
-            advantage_std=metrics.get("advantage_std", 0.0),
-            advantage_skewness=metrics.get("advantage_skewness", 0.0),
-            advantage_kurtosis=metrics.get("advantage_kurtosis", 0.0),
-            advantage_positive_ratio=metrics.get("advantage_positive_ratio", 0.5),
-            ratio_mean=metrics.get("ratio_mean", 1.0),
-            ratio_min=metrics.get("ratio_min", 1.0),
-            ratio_max=metrics.get("ratio_max", 1.0),
-            ratio_std=metrics.get("ratio_std", 0.0),
-            # Log prob extremes (NaN predictor)
-            log_prob_min=metrics.get("log_prob_min", 0.0),
-            log_prob_max=metrics.get("log_prob_max", 0.0),
-            # Value function statistics for drift monitoring
-            value_mean=metrics.get("value_mean", 0.0),
-            value_std=metrics.get("value_std", 0.0),
-            value_min=metrics.get("value_min", 0.0),
-            value_max=metrics.get("value_max", 0.0),
+            # MANDATORY advantage statistics - computed in PPO update
+            advantage_mean=metrics["advantage_mean"],
+            advantage_std=metrics["advantage_std"],
+            advantage_skewness=metrics["advantage_skewness"],
+            advantage_kurtosis=metrics["advantage_kurtosis"],
+            advantage_positive_ratio=metrics["advantage_positive_ratio"],
+            # MANDATORY ratio statistics - computed in PPO update
+            ratio_mean=metrics["ratio_mean"],
+            ratio_min=metrics["ratio_min"],
+            ratio_max=metrics["ratio_max"],
+            ratio_std=metrics["ratio_std"],
+            # MANDATORY log prob extremes (NaN predictor)
+            log_prob_min=metrics["log_prob_min"],
+            log_prob_max=metrics["log_prob_max"],
+            # MANDATORY value function statistics for drift monitoring
+            value_mean=metrics["value_mean"],
+            value_std=metrics["value_std"],
+            value_min=metrics["value_min"],
+            value_max=metrics["value_max"],
             # Q-values (Policy V2 op-conditioned critic)
             q_germinate=metrics.get("q_germinate", 0.0),
             q_advance=metrics.get("q_advance", 0.0),
@@ -816,8 +829,8 @@ def emit_ppo_update_event(
             dead_layers=metrics.get("dead_layers", 0),
             exploding_layers=metrics.get("exploding_layers", 0),
             layer_gradient_health=metrics.get("layer_gradient_health"),
-            entropy_collapsed=metrics.get("entropy", 1.0) < DEFAULT_ENTROPY_COLLAPSE_THRESHOLD,
-            update_time_ms=update_time_ms if update_time_ms is not None else 0.0,
+            entropy_collapsed=metrics["entropy"] < DEFAULT_ENTROPY_COLLAPSE_THRESHOLD,
+            update_time_ms=update_time_ms,  # Already validated by assert above
             early_stop_epoch=metrics.get("early_stop_epoch"),
             head_slot_entropy=head_entropies_avg.get("head_slot_entropy"),
             head_blueprint_entropy=head_entropies_avg.get("head_blueprint_entropy"),
@@ -856,6 +869,8 @@ def emit_ppo_update_event(
             cuda_memory_fragmentation=metrics.get("cuda_memory_fragmentation", 0.0),
             inner_epoch=epoch,
             batch=batch_idx + 1,
+            # BUG FIX: Track actual PPO update count (inner_epoch was misleading)
+            ppo_updates_count=metrics["ppo_updates_count"],
         ),
         group_id=group_id,
     ))

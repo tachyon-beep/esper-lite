@@ -41,7 +41,7 @@ class TestTopologyPersistence:
         checkpoint_path = tmp_path / "grown_model.pt"
         
         # --- Phase 1: Grow Model ---
-        original_model = create_model(task="cifar10", device=device, slots=["r0c1", "r0c2"])
+        original_model = create_model(task="cifar_baseline", device=device, slots=["r0c1", "r0c2"])
         
         # Grow seeds in different states
         germinate_and_grow(original_model, "r0c1", SeedStage.BLENDING, 0.5)
@@ -67,7 +67,7 @@ class TestTopologyPersistence:
             
         # --- Phase 2: Resume (Fresh Instance) ---
         # Create fresh model (starts DORMANT)
-        restored_model = create_model(task="cifar10", device=device, slots=["r0c1", "r0c2"])
+        restored_model = create_model(task="cifar_baseline", device=device, slots=["r0c1", "r0c2"])
         
         # Verify it is empty
         assert not restored_model.has_active_seed

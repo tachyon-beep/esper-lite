@@ -7,10 +7,12 @@ This subpackage contains the PolicyBundle protocol and implementations:
 - features.py: Feature extraction for observations
 - action_masks.py: Action masking for valid actions
 - lstm_bundle.py: LSTM-based recurrent policy (Phase 3)
-- heuristic_bundle.py: Rule-based heuristic (Phase 4)
+- heuristic_bundle.py: Rule-based heuristic adapter (NOT a full PolicyBundle)
 
 Note on imports:
-    Importing this package triggers registration of lstm and heuristic policies.
+    Importing this package registers built-in neural policies (currently: "lstm").
+    The heuristic adapter is NOT registered; use create_heuristic_policy() instead.
+
     This imports torch at module level (standard for a DRL package), but does
     NOT construct any models - construction is deferred to get_policy() calls.
     If import cost is a concern for non-training code paths, import specific
@@ -39,15 +41,21 @@ from esper.tamiyo.policy.action_masks import (
 
 # Import to trigger registration (must be after registry is defined)
 from esper.tamiyo.policy import lstm_bundle as _lstm_bundle  # noqa: F401
-# Note: heuristic_bundle is imported but NOT registered
-from esper.tamiyo.policy.heuristic_bundle import HeuristicPolicyBundle
-from esper.tamiyo.heuristic import HeuristicPolicyConfig
+
+# Heuristic imports are lazy - only loaded when accessed via __getattr__ or
+# create_heuristic_policy(). This reduces import cost since heuristic is not
+# registered and many code paths don't need it.
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from esper.tamiyo.policy.heuristic_bundle import HeuristicPolicyBundle
+    from esper.tamiyo.heuristic import HeuristicPolicyConfig
 
 
 def create_heuristic_policy(
-    config: HeuristicPolicyConfig | None = None,
+    config: "HeuristicPolicyConfig | None" = None,
     topology: str = "cnn",
-) -> HeuristicPolicyBundle:
+) -> "HeuristicPolicyBundle":
     """Create a heuristic policy adapter.
 
     This is the recommended way to create heuristic policies. Unlike neural
@@ -61,7 +69,21 @@ def create_heuristic_policy(
     Returns:
         HeuristicPolicyBundle instance.
     """
+    # Lazy import to avoid loading heuristic_bundle at package import time
+    from esper.tamiyo.policy.heuristic_bundle import HeuristicPolicyBundle
+
     return HeuristicPolicyBundle(config=config, topology=topology)
+
+
+def __getattr__(name: str) -> type:
+    """Lazy import for HeuristicPolicyBundle (not needed for registration)."""
+    if name == "HeuristicPolicyBundle":
+        from esper.tamiyo.policy.heuristic_bundle import HeuristicPolicyBundle
+        return HeuristicPolicyBundle
+    if name == "HeuristicPolicyConfig":
+        from esper.tamiyo.heuristic import HeuristicPolicyConfig
+        return HeuristicPolicyConfig
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 __all__ = [
@@ -81,6 +103,7 @@ __all__ = [
     # Note: LSTMPolicyBundle available via get_policy("lstm")
     # Heuristic adapter (NOT registered - use create_heuristic_policy())
     "HeuristicPolicyBundle",
+    "HeuristicPolicyConfig",
     "create_heuristic_policy",
     # Features
     "get_feature_size",

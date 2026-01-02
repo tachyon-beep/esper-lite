@@ -22,7 +22,7 @@ from esper.leyline import (
 from esper.nissa import get_hub
 
 if TYPE_CHECKING:
-    from esper.kasmina import SeedState
+    from esper.simic.contracts import SeedStateProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +95,7 @@ class SignalTracker:
         train_accuracy: float,
         val_loss: float,
         val_accuracy: float,
-        active_seeds: list["SeedState"],
+        active_seeds: list["SeedStateProtocol"],
         available_slots: int = 1,
     ) -> TrainingSignals:
         """Update tracker and return current signals as TrainingSignals."""
@@ -209,7 +209,7 @@ class SignalTracker:
             if len(seed_ids) != len(set(seed_ids)):
                 raise RuntimeError(f"Duplicate seed_id(s) in active_seeds: {seed_ids}")
 
-            def summary_key(seed: "SeedState") -> tuple[int, float, float, str]:
+            def summary_key(seed: "SeedStateProtocol") -> tuple[int, float, float, str]:
                 stage = int(seed.stage)
                 alpha = float(seed.alpha)
                 counterfactual = float("inf")
@@ -253,7 +253,7 @@ class SignalTracker:
         train_accuracy: float,
         val_loss: float,
         val_accuracy: float,
-        active_seeds: list["SeedState"],
+        active_seeds: list["SeedStateProtocol"],
         available_slots: int = 1,
     ) -> TrainingSignals:
         """Build TrainingSignals without modifying tracker state.
@@ -299,7 +299,7 @@ class SignalTracker:
             if len(seed_ids) != len(set(seed_ids)):
                 raise RuntimeError(f"Duplicate seed_id(s) in active_seeds: {seed_ids}")
 
-            def summary_key(seed: "SeedState") -> tuple[int, float, float, str]:
+            def summary_key(seed: "SeedStateProtocol") -> tuple[int, float, float, str]:
                 stage = int(seed.stage)
                 alpha = float(seed.alpha)
                 counterfactual = float("inf")

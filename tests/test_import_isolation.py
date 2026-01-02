@@ -182,6 +182,8 @@ from esper.kasmina import SeedSlot, SeedState
 print(json.dumps({
     "SeedSlot_callable": callable(SeedSlot),
     "SeedState_callable": callable(SeedState),
+    "SeedSlot_cached": "SeedSlot" in vars(esper.kasmina),
+    "SeedState_cached": "SeedState" in vars(esper.kasmina),
     "slot_loaded": "esper.kasmina.slot" in sys.modules,
     "torch_loaded": "torch" in sys.modules,
 }))
@@ -190,8 +192,32 @@ print(json.dumps({
 
     assert result["SeedSlot_callable"] is True
     assert result["SeedState_callable"] is True
+    assert result["SeedSlot_cached"] is True, "lazy attribute should be cached on module"
+    assert result["SeedState_cached"] is True, "lazy attribute should be cached on module"
     assert result["slot_loaded"] is True, "slot should load when SeedSlot accessed"
     assert result["torch_loaded"] is True, "torch should load with slot"
+
+
+def test_kasmina_dir_exposes_public_api():
+    """dir(esper.kasmina) should include __all__ without loading heavy modules."""
+    result = _run_isolated(
+        """
+import json
+import sys
+
+import esper.kasmina
+
+missing = sorted([name for name in esper.kasmina.__all__ if name not in dir(esper.kasmina)])
+
+print(json.dumps({
+    "torch_loaded": "torch" in sys.modules,
+    "missing": missing,
+}))
+""".strip()
+    )
+
+    assert result["torch_loaded"] is False, "dir() must not trigger heavy imports"
+    assert result["missing"] == [], "dir() should expose all public kasmina exports"
 
 
 def test_nissa_import_isolation():
@@ -307,3 +333,59 @@ print(json.dumps({
     assert result["torch_loaded"] is False, "contracts should not load torch (TYPE_CHECKING only)"
     assert ("Protocol" in result["protocol_is_class"] or "ABCMeta" in result["protocol_is_class"]), \
         "SeedSlotProtocol should be a Protocol"
+
+
+def test_kasmina_host_protocol_no_torch():
+    """Importing HostProtocol should NOT load torch (it's a lightweight Protocol).
+
+    HostProtocol is categorized as "lightweight" in kasmina/__init__.py because
+    it's just a structural typing contract. It should use TYPE_CHECKING imports
+    for torch types, not runtime imports.
+
+    Regression test for: torch import leak via protocol.py unconditional import.
+    """
+    result = _run_isolated(
+        """
+import json
+import sys
+
+from esper.kasmina import HostProtocol
+
+print(json.dumps({
+    "torch_loaded": "torch" in sys.modules,
+    "protocol_cached": "HostProtocol" in vars(sys.modules["esper.kasmina"]),
+    "protocol_loaded": "esper.kasmina.protocol" in sys.modules,
+    "protocol_is_class": str(type(HostProtocol)),
+}))
+""".strip()
+    )
+
+    assert result["torch_loaded"] is False, (
+        "HostProtocol is lightweight - torch should not load. "
+        "Fix: move 'from torch import Tensor' to TYPE_CHECKING block in protocol.py"
+    )
+    assert result["protocol_cached"] is True, "lazy attribute should be cached on module"
+    assert result["protocol_loaded"] is True, "protocol module should load"
+    assert "Protocol" in result["protocol_is_class"], "HostProtocol should be a Protocol"
+
+
+def test_kasmina_alpha_controller_no_torch():
+    """Importing AlphaController should NOT load torch (it's pure scheduling logic)."""
+    result = _run_isolated(
+        """
+import json
+import sys
+
+from esper.kasmina import AlphaController
+
+print(json.dumps({
+    "torch_loaded": "torch" in sys.modules,
+    "alpha_cached": "AlphaController" in vars(sys.modules["esper.kasmina"]),
+    "alpha_controller_loaded": "esper.kasmina.alpha_controller" in sys.modules,
+}))
+""".strip()
+    )
+
+    assert result["torch_loaded"] is False, "AlphaController is lightweight - no torch"
+    assert result["alpha_cached"] is True, "lazy attribute should be cached on module"
+    assert result["alpha_controller_loaded"] is True, "alpha_controller module should load"

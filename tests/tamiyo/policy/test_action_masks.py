@@ -1480,6 +1480,32 @@ class TestComputeActionMasksValidation:
         )
         assert "op" in masks_transformer
 
+    def test_missing_slot_states_entry_raises_error(self):
+        """slot_states missing an enabled slot should raise ValueError.
+
+        This prevents .get() from silently treating missing keys as empty slots,
+        which could incorrectly enable GERMINATE due to upstream bugs.
+        """
+        # slot_states only has r0c0, but enabled_slots includes r0c1
+        slot_states = {"r0c0": None}
+
+        with pytest.raises(ValueError, match="slot_states missing entries"):
+            compute_action_masks(
+                slot_states,
+                enabled_slots=["r0c0", "r0c1"],
+            )
+
+    def test_slot_states_subset_of_enabled_slots_raises_error(self):
+        """Partial slot_states should fail-fast, not silently produce wrong masks."""
+        # Three enabled slots, but slot_states only has one
+        slot_states = {"r0c0": MaskSeedInfo(stage=SeedStage.TRAINING.value, seed_age_epochs=5)}
+
+        with pytest.raises(ValueError, match="slot_states missing entries.*r0c1.*r0c2"):
+            compute_action_masks(
+                slot_states,
+                enabled_slots=["r0c0", "r0c1", "r0c2"],
+            )
+
 
 class TestComputeBatchMasksValidation:
     """Test input validation in compute_batch_masks().

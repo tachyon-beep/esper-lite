@@ -6,15 +6,17 @@ silently drift. Configs can be built from presets or loaded from JSON, with
 unknown keys rejected to avoid “paper surfaces.”
 
 Usage:
-    from esper.simic.config import TrainingConfig
+    from esper.simic.training import TrainingConfig
 
     # Default config (CIFAR-10 optimized)
     config = TrainingConfig()
 
     # Task-specific presets
-    config = TrainingConfig.for_cifar10()
-    config = TrainingConfig.for_cifar10_stable()
-    config = TrainingConfig.for_cifar10_deep()
+    config = TrainingConfig.for_cifar_baseline()
+    config = TrainingConfig.for_cifar_baseline_stable()
+    config = TrainingConfig.for_cifar_scale()
+    config = TrainingConfig.for_cifar_impaired()
+    config = TrainingConfig.for_cifar_minimal()
     config = TrainingConfig.for_tinystories()
 
     # Load from JSON (fails on unknown keys)
@@ -115,7 +117,7 @@ class TrainingConfig:
     seed: int = 42
 
     # === Task selection ===
-    # If set, overrides CLI --task. Valid: "cifar10", "cifar10_deep", "cifar10_blind", "tinystories"
+    # If set, overrides CLI --task. Valid: "cifar_baseline", "cifar_scale", "cifar_impaired", "cifar_minimal", "tinystories"
     task: str | None = None
 
     # === Gate mode ===
@@ -147,7 +149,13 @@ class TrainingConfig:
         if self.chunk_length is None:
             self.chunk_length = self.max_epochs
 
-        # Normalize slots to list (allows tuple input for convenience)
+        # Reject string slots with helpful error (list("r0c1") would split to ['r','0','c','1'])
+        if isinstance(self.slots, str):
+            raise TypeError(
+                f"slots must be a list of slot IDs, got string '{self.slots}'. "
+                f"Did you mean slots=['{self.slots}']?"
+            )
+        # Normalize tuple to list for convenience
         if not isinstance(self.slots, list):
             self.slots = list(self.slots)
 
@@ -157,13 +165,13 @@ class TrainingConfig:
     # Presets
     # ------------------------------------------------------------------
     @staticmethod
-    def for_cifar10() -> "TrainingConfig":
-        """Optimized configuration for CIFAR-10 classification."""
+    def for_cifar_baseline() -> "TrainingConfig":
+        """Optimized configuration for cifar_baseline task."""
         return TrainingConfig(entropy_coef=0.1, plateau_threshold=0.4)
 
     @staticmethod
-    def for_cifar10_stable() -> "TrainingConfig":
-        """Conservative configuration for CIFAR-10 (slower, more stable PPO)."""
+    def for_cifar_baseline_stable() -> "TrainingConfig":
+        """Conservative configuration for CIFAR tasks (slower, more stable PPO)."""
         return TrainingConfig(
             n_episodes=200,
             lr=1e-4,
@@ -176,14 +184,19 @@ class TrainingConfig:
         )
 
     @staticmethod
-    def for_cifar10_blind() -> "TrainingConfig":
-        """Configuration for the 'blind' CIFAR-10 host (1x1 convs)."""
-        return TrainingConfig.for_cifar10()
+    def for_cifar_scale() -> "TrainingConfig":
+        """Preset tuned for cifar_scale task (deeper host)."""
+        return TrainingConfig(entropy_coef=0.08, plateau_threshold=0.35)
 
     @staticmethod
-    def for_cifar10_deep() -> "TrainingConfig":
-        """Preset tuned for the deeper CIFAR-10 host."""
-        return TrainingConfig(entropy_coef=0.08, plateau_threshold=0.35)
+    def for_cifar_impaired() -> "TrainingConfig":
+        """Preset for cifar_impaired task (severely constrained host)."""
+        return TrainingConfig.for_cifar_baseline()
+
+    @staticmethod
+    def for_cifar_minimal() -> "TrainingConfig":
+        """Preset for cifar_minimal task (near-random host)."""
+        return TrainingConfig.for_cifar_baseline()
 
     @staticmethod
     def for_tinystories() -> "TrainingConfig":
@@ -312,8 +325,12 @@ class TrainingConfig:
         }
 
     def to_train_kwargs(self) -> dict[str, Any]:
-        """Extract train_ppo_vectorized kwargs."""
-        return {
+        """Extract train_ppo_vectorized kwargs.
+
+        Note: task is only included when explicitly set (not None),
+        allowing the function's default to apply when unspecified.
+        """
+        kwargs: dict[str, Any] = {
             "n_episodes": self.n_episodes,
             "n_envs": self.n_envs,
             "max_epochs": self.max_epochs,
@@ -352,6 +369,10 @@ class TrainingConfig:
             "disable_anti_gaming": self.disable_anti_gaming,
             "max_grad_norm": self.max_grad_norm,
         }
+        # Only include task when explicitly set (not None)
+        if self.task is not None:
+            kwargs["task"] = self.task
+        return kwargs
 
     # ------------------------------------------------------------------
     # Validation helpers
@@ -403,12 +424,14 @@ class TrainingConfig:
         except SlotIdError as e:
             raise ValueError(f"Invalid slot configuration: {e}") from e
 
-        # Validate task if specified
-        valid_tasks = {"cifar10", "cifar10_deep", "cifar10_blind", "tinystories"}
-        if self.task is not None and self.task not in valid_tasks:
-            raise ValueError(
-                f"Invalid task '{self.task}'. Valid options: {sorted(valid_tasks)}"
-            )
+        # Validate task if specified (dynamically lookup valid tasks)
+        if self.task is not None:
+            # Import here to avoid circular dependency at module load time
+            from esper.runtime.tasks import VALID_TASKS
+            if self.task not in VALID_TASKS:
+                raise ValueError(
+                    f"Invalid task '{self.task}'. Valid options: {sorted(VALID_TASKS)}"
+                )
 
         if self.param_budget <= 0:
             raise ValueError("param_budget must be positive")

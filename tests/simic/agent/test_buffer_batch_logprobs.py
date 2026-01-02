@@ -47,6 +47,7 @@ def test_buffer_add_accepts_tensor_log_probs():
         alpha_speed_action=0,
         alpha_curve_action=0,
         op_action=1,
+        effective_op_action=1,
         slot_log_prob=torch.tensor(-0.5),      # tensor, not float
         blueprint_log_prob=torch.tensor(-1.0),
         style_log_prob=torch.tensor(-0.3),
@@ -109,6 +110,7 @@ def test_buffer_add_still_accepts_float_log_probs():
         alpha_speed_action=0,
         alpha_curve_action=0,
         op_action=1,
+        effective_op_action=1,
         slot_log_prob=-0.5,      # float
         blueprint_log_prob=-1.0,
         style_log_prob=-0.3,
@@ -169,6 +171,7 @@ def test_buffer_add_accepts_mixed_float_and_tensor():
         alpha_speed_action=0,
         alpha_curve_action=0,
         op_action=1,
+        effective_op_action=1,
         slot_log_prob=torch.tensor(-0.5),      # tensor
         blueprint_log_prob=-1.0,                # float
         style_log_prob=torch.tensor(-0.3),      # tensor

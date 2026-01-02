@@ -80,7 +80,7 @@ class TestTrainDualPolicyAB:
             devices=["cuda:0", "cuda:1"],
             n_episodes=1,  # Just 1 episode
             max_epochs=5,  # Very short episodes
-            task="cifar10",
+            task="cifar_baseline",
             use_telemetry=False,  # Disable for speed
             slots=["r0c0"],  # Minimal slot configuration
         )

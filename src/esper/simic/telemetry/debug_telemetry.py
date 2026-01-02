@@ -68,7 +68,9 @@ def collect_per_layer_gradients(
             continue
 
         grad = param.grad.detach()
-        flat = grad.view(-1)
+        # Use flatten() instead of view(-1) to handle non-contiguous tensors
+        # (e.g., transposed parameters, tied weights)
+        flat = grad.flatten()
 
         layer_names.append(name)
         param_counts.append(param.numel())
@@ -208,8 +210,9 @@ def check_numerical_stability(
             grad_maxes.append(param.grad.abs().max())
 
     # Single sync for all max values (assumes all params on same device)
-    max_weight = torch.stack(weight_maxes).max().item() if weight_maxes else 0.0
-    max_grad = torch.stack(grad_maxes).max().item() if grad_maxes else 0.0
+    # No defensive pattern - empty lists indicate model has no parameters (bug)
+    max_weight = torch.stack(weight_maxes).max().item()
+    max_grad = torch.stack(grad_maxes).max().item()
 
     # Check loss
     loss_val = 0.0
@@ -230,18 +233,27 @@ def check_numerical_stability(
     )
 
 
+# Maximum number of exemplars to report in diagnostics (prevents payload explosion)
+_MAX_DIAGNOSTIC_EXEMPLARS = 100
+
+
 @dataclass(slots=True)
 class RatioExplosionDiagnostic:
     """Diagnostic data when PPO ratios explode.
 
     Captures the specific transitions that caused ratio explosion
-    for post-hoc debugging.
+    for post-hoc debugging. Lists are capped to _MAX_DIAGNOSTIC_EXEMPLARS
+    to prevent memory/telemetry explosion during widespread instability.
     """
 
-    # Indices of problematic transitions
+    # Indices of problematic transitions (capped to _MAX_DIAGNOSTIC_EXEMPLARS)
     worst_ratio_indices: list[int] = field(default_factory=list)
     worst_ratio_values: list[float] = field(default_factory=list)
     worst_ratio_actions: list[int] = field(default_factory=list)
+
+    # Summary counts (always accurate, unlike capped lists)
+    num_bad_total: int = 0
+    num_nonfinite: int = 0
 
     # Log prob divergence
     logit_diff_mean: float = 0.0
@@ -281,20 +293,42 @@ class RatioExplosionDiagnostic:
                 worst_ratio_indices=[],
                 worst_ratio_values=[],
                 worst_ratio_actions=[],
+                num_bad_total=0,
+                num_nonfinite=0,
                 logit_diff_mean=0.0,
                 logit_diff_max=0.0,
             )
 
-        # Find problematic indices
-        bad_mask = (ratio > max_threshold) | (ratio < min_threshold)
+        # Find problematic indices - include NaN/Inf as "bad" since they indicate
+        # numerical instability that must be debugged. NaN comparisons are always
+        # False, so we must explicitly check with isfinite().
+        nonfinite_mask = ~torch.isfinite(ratio)
+        threshold_mask = (ratio > max_threshold) | (ratio < min_threshold)
+        bad_mask = nonfinite_mask | threshold_mask
+
+        # Count totals before capping
+        num_nonfinite = int(nonfinite_mask.sum().item())
+        num_bad_total = int(bad_mask.sum().item())
 
         # Compute log prob divergence (for diff_stats)
+        # Handle NaN in log probs gracefully
         logit_diff = (new_log_probs - old_log_probs).abs()
-        diff_stats = torch.stack([logit_diff.mean(), logit_diff.max()])
+        finite_diff = logit_diff[torch.isfinite(logit_diff)]
+        if finite_diff.numel() > 0:
+            diff_stats = torch.stack([finite_diff.mean(), finite_diff.max()])
+        else:
+            diff_stats = torch.zeros(2, device=ratio.device)
 
         # PERF: Batch GPU→CPU transfers before calling .tolist()
         # Move all tensors to CPU together, then extract Python values.
         bad_indices_tensor = bad_mask.nonzero(as_tuple=True)[0]
+
+        # Cap to _MAX_DIAGNOSTIC_EXEMPLARS to prevent payload explosion during instability
+        if bad_indices_tensor.numel() > _MAX_DIAGNOSTIC_EXEMPLARS:
+            # Keep first _MAX_DIAGNOSTIC_EXEMPLARS (could also sample randomly, but first-N
+            # is deterministic and often captures the onset of instability)
+            bad_indices_tensor = bad_indices_tensor[:_MAX_DIAGNOSTIC_EXEMPLARS]
+
         bad_indices_cpu = bad_indices_tensor.cpu()
         diff_stats_cpu = diff_stats.cpu()
 
@@ -315,6 +349,8 @@ class RatioExplosionDiagnostic:
             worst_ratio_indices=bad_indices,
             worst_ratio_values=worst_values,
             worst_ratio_actions=worst_actions,
+            num_bad_total=num_bad_total,
+            num_nonfinite=num_nonfinite,
             logit_diff_mean=logit_diff_mean,
             logit_diff_max=logit_diff_max,
         )

@@ -23,6 +23,7 @@ from esper.leyline import (
     DEFAULT_GOVERNOR_ABSOLUTE_THRESHOLD,
     DEFAULT_GOVERNOR_DEATH_PENALTY,
     DEFAULT_GOVERNOR_HISTORY_WINDOW,
+    MIN_GOVERNOR_HISTORY_SAMPLES,
     DEFAULT_MIN_PANICS_BEFORE_ROLLBACK,
     DEFAULT_GOVERNOR_LOSS_MULTIPLIER,
     SeedStage,
@@ -73,6 +74,13 @@ class TolariaGovernor:
         min_panics_before_rollback: int = DEFAULT_MIN_PANICS_BEFORE_ROLLBACK,  # From leyline
         random_guess_loss: float | None = None,  # Task-specific baseline (default: ln(10) for CIFAR-10)
     ):
+        # Fail fast on invalid config that would silently disable detection
+        if history_window < MIN_GOVERNOR_HISTORY_SAMPLES:
+            raise ValueError(
+                f"history_window ({history_window}) must be >= MIN_GOVERNOR_HISTORY_SAMPLES "
+                f"({MIN_GOVERNOR_HISTORY_SAMPLES}). Smaller windows disable anomaly detection."
+            )
+
         self.model = model
         self.sensitivity = sensitivity
         self.multiplier = multiplier
@@ -179,7 +187,7 @@ class TolariaGovernor:
 
         # Lobotomy detection: loss jumped to exactly random guessing
         # This catches "silent failures" where model outputs uniform probabilities
-        if len(self.loss_history) >= 10:
+        if len(self.loss_history) >= MIN_GOVERNOR_HISTORY_SAMPLES:
             avg = sum(self.loss_history) / len(self.loss_history)
             # Relative tolerance: ~6.5% of random guess loss
             # - CIFAR-10 (ln(10)=2.3): tolerance = 0.15
@@ -196,7 +204,7 @@ class TolariaGovernor:
                 return True
 
         # Need sufficient history for stable estimates
-        if len(self.loss_history) < 10:
+        if len(self.loss_history) < MIN_GOVERNOR_HISTORY_SAMPLES:
             self.loss_history.append(current_loss)
             self._panic_reason = None
             return False

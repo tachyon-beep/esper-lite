@@ -20,13 +20,15 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from rich.text import Text
 from textual.widgets import Static
 
-from esper.leyline import DEFAULT_HOST_LSTM_LAYERS
+from esper.leyline import (
+    DEFAULT_HOST_LSTM_LAYERS,
+    HEAD_MAX_ENTROPIES,
+    is_head_relevant,
+)
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot
 
-
-# TODO: This shouldn't be hard coded into the UI!
 
 # Head configuration (label, entropy_field, grad_norm_field, width, entropy_coef)
 # Order and widths match HEAD OUTPUTS panel for vertical alignment
@@ -42,20 +44,23 @@ HEAD_CONFIG: list[tuple[str, str, str, int, float]] = [
     ("Curve", "head_alpha_curve_entropy", "head_alpha_curve_grad_norm", 9, 1.2),
 ]
 
-# Heads that are conditional (only relevant for certain ops) - indexed by label
-CONDITIONAL_HEADS = {"Blueprint", "Style", "Tempo", "αTarget", "αSpeed", "Curve"}
 
-# Max entropy per head (ln(N) where N = action space size)
-HEAD_MAX_ENTROPIES: dict[str, float] = {
-    "Slot": 1.099,  # ln(3)
-    "Blueprint": 2.565,  # ln(13)
-    "Style": 1.386,  # ln(4)
-    "Tempo": 1.099,  # ln(3)
-    "αTarget": 1.099,  # ln(3)
-    "αSpeed": 1.386,  # ln(4)
-    "Curve": 1.609,  # ln(5) - LINEAR, COSINE, SIGMOID_{GENTLE,STD,SHARP}
-    "Op": 1.792,  # ln(6)
-}
+def _get_head_key(entropy_field: str) -> str:
+    """Extract lowercase head key from entropy field name.
+
+    Maps HEAD_CONFIG field names to Leyline's HEAD_MAX_ENTROPIES keys.
+    Example: "head_alpha_target_entropy" -> "alpha_target"
+    """
+    return entropy_field.removeprefix("head_").removesuffix("_entropy")
+
+
+# Drift detection: ensure HEAD_CONFIG matches Leyline's HEAD_MAX_ENTROPIES
+_CONFIG_HEAD_KEYS = {_get_head_key(ent_field) for _, ent_field, *_ in HEAD_CONFIG}
+_LEYLINE_HEAD_KEYS = set(HEAD_MAX_ENTROPIES.keys())
+assert _CONFIG_HEAD_KEYS == _LEYLINE_HEAD_KEYS, (
+    f"HEAD_CONFIG and Leyline's HEAD_MAX_ENTROPIES must have matching keys. "
+    f"Config has: {_CONFIG_HEAD_KEYS}, Leyline has: {_LEYLINE_HEAD_KEYS}"
+)
 
 
 class HeadsPanel(Static):
@@ -122,7 +127,8 @@ class HeadsPanel(Static):
         result.append(" " * self._PRE_OP_GUTTER, style="dim")
         for col_idx, (label, ent_field, _, width, coef) in enumerate(HEAD_CONFIG):
             entropy: float = getattr(tamiyo, ent_field)
-            color = self._entropy_color(label, entropy)
+            head_key = _get_head_key(ent_field)
+            color = self._entropy_color(head_key, entropy)
 
             # Show coefficient for sparse heads (>1.0)
             # Each column is exactly `width` chars, with 2-space gutter between columns
@@ -146,7 +152,8 @@ class HeadsPanel(Static):
         result.append(" " * self._PRE_OP_GUTTER, style="dim")
         for col_idx, (label, ent_field, _, width, _) in enumerate(HEAD_CONFIG):
             entropy = getattr(tamiyo, ent_field)
-            bar = self._render_entropy_bar(label, entropy)
+            head_key = _get_head_key(ent_field)
+            bar = self._render_entropy_bar(head_key, entropy)
             # Right-align the bar in the cell (like HEAD OUTPUTS heat bars)
             padding = width - self.BAR_WIDTH
             result.append(" " * padding)
@@ -190,13 +197,15 @@ class HeadsPanel(Static):
                 result.append(" " * self._column_gutter(label))
         result.append("\n")
 
-        # Row 5: Head state indicators (per DRL expert recommendation)
+        # Row 5: Head state indicators (per DRL expert + causal relevance)
         result.append("State ", style="dim")
         result.append(" " * self._PRE_OP_GUTTER, style="dim")
+        last_op = tamiyo.last_action_op
         for col_idx, (label, ent_field, grad_field, width, _) in enumerate(HEAD_CONFIG):
             entropy = getattr(tamiyo, ent_field)
             grad = getattr(tamiyo, grad_field)
-            state, style_str = self._head_state(label, entropy, grad)
+            head_key = _get_head_key(ent_field)
+            state, style_str = self._head_state(head_key, entropy, grad, last_op)
             # Center state indicator under the 5-char bar (bars are right-aligned)
             # Bar center is at width - 3, so state should be at that position
             # For width=7: 4 spaces + indicator + 2 spaces = 7 chars total
@@ -246,9 +255,14 @@ class HeadsPanel(Static):
         """
         return self._GUTTER_BY_LABEL[label]
 
-    def _entropy_color(self, head: str, entropy: float) -> str:
-        """Get color for entropy value based on normalized level."""
-        max_ent = HEAD_MAX_ENTROPIES.get(head, 1.0)
+    def _entropy_color(self, head_key: str, entropy: float) -> str:
+        """Get color for entropy value based on normalized level.
+
+        Args:
+            head_key: Lowercase head key matching Leyline's HEAD_MAX_ENTROPIES
+                      (e.g., "slot", "alpha_target")
+        """
+        max_ent = HEAD_MAX_ENTROPIES[head_key]  # Direct access - fail fast on drift
         normalized = entropy / max_ent if max_ent > 0 else 0
 
         if normalized > 0.5:
@@ -258,16 +272,20 @@ class HeadsPanel(Static):
         else:
             return "red"  # Collapsed or near-collapsed
 
-    def _render_entropy_bar(self, head: str, entropy: float) -> Text:
-        """Render mini-bar for entropy."""
-        max_ent = HEAD_MAX_ENTROPIES.get(head, 1.0)
+    def _render_entropy_bar(self, head_key: str, entropy: float) -> Text:
+        """Render mini-bar for entropy.
+
+        Args:
+            head_key: Lowercase head key matching Leyline's HEAD_MAX_ENTROPIES
+        """
+        max_ent = HEAD_MAX_ENTROPIES[head_key]  # Direct access - fail fast on drift
         normalized = entropy / max_ent if max_ent > 0 else 0
         normalized = max(0, min(1, normalized))
 
         filled = int(normalized * self.BAR_WIDTH)
         empty = self.BAR_WIDTH - filled
 
-        color = self._entropy_color(head, entropy)
+        color = self._entropy_color(head_key, entropy)
         bar = Text()
         bar.append("█" * filled, style=color)
         bar.append("░" * empty, style="dim")
@@ -325,11 +343,18 @@ class HeadsPanel(Static):
             return "dim"  # Changes are neutral in healthy range
 
     def _head_state(
-        self, head: str, entropy: float, grad_norm: float
+        self, head_key: str, entropy: float, grad_norm: float, last_op: str
     ) -> tuple[str, str]:
-        """Classify head state based on entropy and gradient.
+        """Classify head state based on entropy, gradient, and causal relevance.
 
-        States (per DRL expert):
+        Args:
+            head_key: Lowercase head key (e.g., "slot", "alpha_target")
+            entropy: Current entropy value for the head
+            grad_norm: Current gradient norm for the head
+            last_op: Last LifecycleOp name (e.g., "WAIT", "GERMINATE")
+
+        States (per DRL expert + causal relevance):
+        - · irrelevant: Head not causally relevant for current op (dimmed)
         - ● healthy: Active learning (moderate entropy, normal gradients)
         - ○ dead: Collapsed and not learning (low entropy + vanishing gradients)
         - ◐ confused: Can't discriminate (very high entropy, normal gradients)
@@ -338,7 +363,12 @@ class HeadsPanel(Static):
         Returns:
             Tuple of (indicator_char, style).
         """
-        max_ent = HEAD_MAX_ENTROPIES.get(head, 1.0)
+        # Check causal relevance using Leyline's single source of truth
+        if not is_head_relevant(last_op, head_key):
+            # Head not causally relevant for current op - dim, not dead
+            return "·", "dim"
+
+        max_ent = HEAD_MAX_ENTROPIES[head_key]  # Direct access - fail fast on drift
         normalized_ent = entropy / max_ent if max_ent > 0 else 0
 
         # Gradient health check
@@ -356,11 +386,9 @@ class HeadsPanel(Static):
             return "▲", "red bold"
 
         if normalized_ent < 0.1:
-            # Very low entropy with normal gradients = deterministic (may be OK)
-            # Conditional heads often have low entropy when their op isn't selected
-            if head in CONDITIONAL_HEADS:
-                return "◇", "dim"  # Expected for conditional heads
-            return "◇", "yellow"  # Concerning for always-active heads
+            # Very low entropy with normal gradients = deterministic
+            # This is concerning - the head IS relevant but collapsed
+            return "◇", "yellow"
 
         if normalized_ent > 0.9 and grad_is_normal:
             # High entropy with normal gradients = confused (can't decide)

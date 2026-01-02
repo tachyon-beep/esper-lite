@@ -157,6 +157,9 @@ def test_ppo_update_payload_from_dict_parses_new_fields():
         "kl_divergence": 0.01,
         "clip_fraction": 0.15,
         "nan_grad_count": 0,
+        # Bug fix fields
+        "pre_clip_grad_norm": 4.5,
+        "ppo_updates_count": 3,
         # New fields
         "clip_fraction_positive": 0.12,
         "clip_fraction_negative": 0.08,
@@ -169,6 +172,8 @@ def test_ppo_update_payload_from_dict_parses_new_fields():
 
     payload = PPOUpdatePayload.from_dict(data)
 
+    assert payload.pre_clip_grad_norm == 4.5
+    assert payload.ppo_updates_count == 3
     assert payload.clip_fraction_positive == 0.12
     assert payload.clip_fraction_negative == 0.08
     assert payload.gradient_cv == 0.45
@@ -388,6 +393,8 @@ def test_ppo_update_payload_from_dict_with_q_values():
         "kl_divergence": 0.01,
         "clip_fraction": 0.15,
         "nan_grad_count": 0,
+        "pre_clip_grad_norm": 8.5,
+        "ppo_updates_count": 2,
         "q_germinate": 5.2,
         "q_advance": 3.1,
         "q_fossilize": 2.8,
@@ -400,5 +407,7 @@ def test_ppo_update_payload_from_dict_with_q_values():
 
     payload = PPOUpdatePayload.from_dict(data)
 
+    assert payload.pre_clip_grad_norm == 8.5
+    assert payload.ppo_updates_count == 2
     assert payload.q_germinate == 5.2
     assert payload.q_variance == 2.3

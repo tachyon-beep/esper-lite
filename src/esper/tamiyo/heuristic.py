@@ -182,6 +182,12 @@ class HeuristicTamiyo:
                 reason=f"Too early (epoch {signals.metrics.epoch})"
             )
 
+        if signals.available_slots <= 0:
+            return TamiyoDecision(
+                action=Action.WAIT,
+                reason="No available slots"
+            )
+
         # Check for plateau
         if signals.metrics.plateau_epochs >= self.config.plateau_epochs_to_germinate:
             blueprint_id = self._get_next_blueprint()

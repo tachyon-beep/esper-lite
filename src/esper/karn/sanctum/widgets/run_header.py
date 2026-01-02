@@ -26,23 +26,10 @@ from typing import TYPE_CHECKING, Any
 from rich.text import Text
 from textual.widgets import Static
 
+from esper.karn.sanctum.formatting import format_runtime
+
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot
-
-
-def _format_runtime(seconds: float) -> str:
-    """Format runtime as Xh Ym Zs."""
-    if seconds <= 0:
-        return "--"
-    hours = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    secs = int(seconds % 60)
-    if hours > 0:
-        return f"{hours}h {minutes}m"
-    elif minutes > 0:
-        return f"{minutes}m {secs}s"
-    else:
-        return f"{secs}s"
 
 
 class RunHeader(Static):
@@ -278,7 +265,7 @@ class RunHeader(Static):
         row.append(" │ ", style="dim")
 
         # === Segment 6: Runtime (right-aligned) ===
-        runtime = _format_runtime(s.runtime_seconds)
+        runtime = format_runtime(s.runtime_seconds)
         row.append(f"{runtime:>7}", style="cyan")
 
         row.append(" │ ", style="dim")

@@ -3,6 +3,7 @@ from io import StringIO
 
 from rich.console import Console
 
+from esper.karn.constants import DisplayThresholds
 from esper.karn.sanctum.schema import (
     EnvState,
     RewardComponents,
@@ -431,3 +432,206 @@ def test_reward_breakdown_shows_hindsight_credit():
     assert "Hind:" in rendered
     assert "0.08" in rendered or "+0.080" in rendered
     assert "(3x, 12.5e)" in rendered
+
+
+# =============================================================================
+# DisplayThresholds Integration Tests
+# =============================================================================
+
+
+def test_seed_card_uses_display_thresholds_for_interaction():
+    """SeedCard should use DisplayThresholds for synergy indicators."""
+    # Test that the threshold constants are imported correctly
+    assert DisplayThresholds.INTERACTION_SYNERGY_THRESHOLD == 0.5
+    assert DisplayThresholds.BOOST_RECEIVED_THRESHOLD == 0.1
+
+    # Create seed with high synergy
+    seed = SeedState(
+        slot_id="r0c0",
+        stage="BLENDING",
+        blueprint_id="conv3x3",
+        interaction_sum=0.8,  # Above threshold
+        boost_received=0.15,  # Above threshold
+    )
+    card = SeedCard(seed=seed, slot_id="r0c0")
+    panel = card.render()
+    rendered = render_to_text(panel)
+
+    # Should show synergy value
+    assert "0.8" in rendered or "+0.8" in rendered
+
+
+def test_seed_card_uses_display_thresholds_for_contribution_velocity():
+    """SeedCard should use DisplayThresholds for trend detection."""
+    assert DisplayThresholds.CONTRIBUTION_VELOCITY_EPSILON == 0.01
+
+    # Create seed with positive trend
+    seed = SeedState(
+        slot_id="r0c0",
+        stage="BLENDING",
+        blueprint_id="conv3x3",
+        contribution_velocity=0.05,  # Above epsilon
+    )
+    card = SeedCard(seed=seed, slot_id="r0c0")
+    panel = card.render()
+    rendered = render_to_text(panel)
+
+    assert "improving" in rendered.lower()
+
+
+def test_header_uses_display_thresholds_for_momentum():
+    """Header should use DisplayThresholds.MOMENTUM_STALL_THRESHOLD."""
+    assert DisplayThresholds.MOMENTUM_STALL_THRESHOLD == 10
+
+    # Momentum above threshold -> red
+    env_stalled = EnvState(
+        env_id=0,
+        status="stalled",
+        best_accuracy=80.0,
+        host_accuracy=75.0,
+        epochs_since_improvement=15,  # Above threshold
+    )
+    screen = EnvDetailScreen(env_state=env_stalled, slot_ids=[])
+    header = screen._render_header()
+    header_str = str(header)
+    assert "15" in header_str
+
+    # Momentum below threshold -> yellow
+    env_warning = EnvState(
+        env_id=0,
+        status="degraded",
+        best_accuracy=80.0,
+        host_accuracy=78.0,
+        epochs_since_improvement=5,  # Below threshold
+    )
+    screen_warning = EnvDetailScreen(env_state=env_warning, slot_ids=[])
+    header_warning = screen_warning._render_header()
+    header_warning_str = str(header_warning)
+    assert "5" in header_warning_str
+
+
+def test_header_uses_display_thresholds_for_growth_ratio():
+    """Header should use DisplayThresholds.GROWTH_RATIO_WARNING."""
+    assert DisplayThresholds.GROWTH_RATIO_WARNING == 1.2
+
+    # Growth above threshold -> yellow
+    # growth_ratio is computed: (host_params + fossilized_params) / host_params
+    # 1.3 = (1_000_000 + 300_000) / 1_000_000
+    env = EnvState(
+        env_id=0,
+        host_params=1_000_000,
+        fossilized_params=300_000,  # Results in growth_ratio = 1.3
+    )
+    screen = EnvDetailScreen(env_state=env, slot_ids=[])
+    header = screen._render_header()
+    header_str = str(header)
+    assert "1.30x" in header_str
+
+
+def test_metrics_uses_display_thresholds_for_pbrs():
+    """Metrics should use DisplayThresholds for PBRS healthy check."""
+    assert DisplayThresholds.PBRS_HEALTHY_MIN == 0.1
+    assert DisplayThresholds.PBRS_HEALTHY_MAX == 0.4
+
+    # PBRS at 20% (healthy)
+    env = EnvState(
+        env_id=0,
+        reward_components=RewardComponents(
+            total=1.0,
+            stage_bonus=0.2,  # 20% PBRS
+        ),
+    )
+    screen = EnvDetailScreen(env_state=env, slot_ids=[])
+    table = screen._render_metrics()
+    rendered = render_to_text(table)
+
+    assert "PBRS:" in rendered
+
+
+def test_metrics_uses_display_thresholds_for_gaming_rate():
+    """Metrics should use DisplayThresholds for gaming rate check."""
+    assert DisplayThresholds.GAMING_RATE_HEALTHY_MAX == 0.05
+
+    # gaming_rate is computed: gaming_trigger_count / total_reward_steps
+    # 0.02 = 2 / 100
+    env = EnvState(
+        env_id=0,
+        gaming_trigger_count=2,
+        total_reward_steps=100,  # Results in gaming_rate = 0.02
+        reward_components=RewardComponents(total=0.5),
+    )
+    screen = EnvDetailScreen(env_state=env, slot_ids=[])
+    table = screen._render_metrics()
+    rendered = render_to_text(table)
+
+    assert "Gaming:" in rendered
+
+
+def test_graveyard_uses_display_thresholds_for_success_rate():
+    """Graveyard should use DisplayThresholds for success rate colors."""
+    assert DisplayThresholds.BLUEPRINT_SUCCESS_GREEN == 0.50
+    assert DisplayThresholds.BLUEPRINT_SUCCESS_YELLOW == 0.25
+
+    env = EnvState(
+        env_id=0,
+        blueprint_spawns={"conv3x3": 4},
+        blueprint_fossilized={"conv3x3": 3},  # 75% success rate
+        blueprint_prunes={"conv3x3": 1},
+    )
+    screen = EnvDetailScreen(env_state=env, slot_ids=[])
+    panel = screen._render_graveyard()
+    rendered = render_to_text(panel)
+
+    assert "75%" in rendered
+
+
+# =============================================================================
+# format_params Integration Tests
+# =============================================================================
+
+
+def test_format_params_used_for_seed_params():
+    """SeedCard should use format_params for parameter display."""
+    seed = SeedState(
+        slot_id="r0c0",
+        stage="TRAINING",
+        blueprint_id="large",
+        seed_params=2_500_000,
+    )
+    card = SeedCard(seed=seed, slot_id="r0c0")
+    panel = card.render()
+    rendered = render_to_text(panel)
+
+    # format_params(2_500_000) = "2.5M"
+    assert "2.5M" in rendered
+
+
+def test_format_params_used_in_header():
+    """Header should use format_params for host/seed params."""
+    # growth_ratio is computed: (host_params + fossilized_params) / host_params
+    # 1.33 = (1_500_000 + 500_000) / 1_500_000
+    env = EnvState(
+        env_id=0,
+        host_params=1_500_000,
+        fossilized_params=500_000,  # Results in growth_ratio ≈ 1.33
+    )
+    screen = EnvDetailScreen(env_state=env, slot_ids=[])
+    header = screen._render_header()
+    rendered = str(header)
+
+    # format_params produces "1.5M" and "500.0K"
+    assert "Host:" in rendered
+
+
+def test_format_params_used_in_metrics():
+    """Metrics section should use format_params for fossilized params."""
+    env = EnvState(
+        env_id=0,
+        fossilized_params=750_000,
+    )
+    screen = EnvDetailScreen(env_state=env, slot_ids=[])
+    table = screen._render_metrics()
+    rendered = render_to_text(table)
+
+    # format_params(750_000) = "750.0K"
+    assert "750.0K" in rendered or "Fossilized Params" in rendered

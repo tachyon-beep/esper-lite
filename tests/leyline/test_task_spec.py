@@ -5,8 +5,8 @@ from esper.kasmina.blueprints import BlueprintRegistry
 from esper.kasmina.host import CNNHost, TransformerHost
 
 
-def test_cifar10_spec_builds_model_and_loaders():
-    spec = get_task_spec("cifar10")
+def test_cifar_baseline_spec_builds_model_and_loaders():
+    spec = get_task_spec("cifar_baseline")
 
     model = spec.create_model(device="cpu", slots=["r0c1"])
     assert isinstance(model.host, CNNHost)
@@ -40,8 +40,8 @@ def test_tinystories_spec_builds_model_and_loaders():
     assert len(valloader) > 0
 
 
-def test_cifar10_blind_spec_supports_three_slots():
-    spec = get_task_spec("cifar10_blind")
+def test_cifar_impaired_spec_supports_three_slots():
+    spec = get_task_spec("cifar_impaired")
 
     model = spec.create_model(device="cpu", slots=["r0c0", "r0c1", "r0c2"])
     assert isinstance(model.host, CNNHost)

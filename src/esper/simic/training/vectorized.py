@@ -47,7 +47,7 @@ if TYPE_CHECKING:
     from esper.leyline.reports import SeedStateReport
     from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
 
-from esper.simic.contracts import SeedSlotProtocol, SlottedHostProtocol
+from esper.simic.contracts import SeedSlotProtocol, SeedStateProtocol, SlottedHostProtocol
 
 # NOTE: get_task_spec imported lazily inside train_ppo_vectorized to avoid circular import:
 #   runtime -> simic.rewards -> simic -> simic.training -> vectorized -> runtime
@@ -370,6 +370,11 @@ def _run_ppo_updates(
 
     aggregated_metrics = _aggregate_ppo_metrics(update_metrics)
 
+    # BUG FIX: Track actual PPO update count (was reporting inner_epoch=150 always)
+    # This tells consumers how many PPO gradient updates occurred in this batch.
+    # Early stopping on KL divergence may reduce this below ppo_updates_per_batch.
+    aggregated_metrics["ppo_updates_count"] = len(update_metrics)
+
     return aggregated_metrics
 
 
@@ -478,7 +483,8 @@ def loss_and_correct(
     """
     if task_type == "lm":
         vocab = outputs.size(-1)
-        loss = criterion(outputs.view(-1, vocab), targets.view(-1))
+        # Use reshape instead of view - handles non-contiguous tensors safely
+        loss = criterion(outputs.reshape(-1, vocab), targets.reshape(-1))
         predicted = outputs.argmax(dim=-1)
         correct = predicted.eq(targets)
         if not elementwise:
@@ -512,7 +518,7 @@ def train_ppo_vectorized(
     max_epochs: int = DEFAULT_EPISODE_LENGTH,
     device: str = "cuda:0",
     devices: list[str] | None = None,
-    task: str = "cifar10",
+    task: str = "cifar_baseline",
     use_telemetry: bool = True,
     lr: float = DEFAULT_LEARNING_RATE,
     clip_ratio: float = DEFAULT_CLIP_RATIO,
@@ -617,7 +623,7 @@ def train_ppo_vectorized(
     try:
         from threading import RLock
 
-        from tqdm import tqdm  # type: ignore[import-untyped]
+        from tqdm import tqdm
 
         tqdm.set_lock(RLock())
     except (ImportError, AttributeError) as e:
@@ -625,41 +631,8 @@ def train_ppo_vectorized(
         # environments where multiprocessing locks are healthy.
         _logger.debug("tqdm lock configuration skipped: %s", e)
 
-    from esper.tolaria import create_model
+    from esper.tolaria import create_model, validate_device
     from esper.tamiyo import SignalTracker
-
-    def _parse_device(device_str: str) -> torch.device:
-        """Parse a device string with an actionable error on failure."""
-        try:
-            return torch.device(device_str)
-        except Exception as exc:  # pragma: no cover - torch raises varied exceptions
-            raise ValueError(f"Invalid device '{device_str}': {exc}") from exc
-
-    def _validate_cuda_device(device_str: str, *, require_explicit_index: bool) -> None:
-        """Fail fast on invalid CUDA device requests."""
-        dev = _parse_device(device_str)
-        if dev.type != "cuda":
-            return
-
-        if not torch.cuda.is_available():
-            raise RuntimeError(
-                f"CUDA device '{device_str}' requested but CUDA is not available. "
-                "Use CPU devices or install CUDA drivers."
-            )
-
-        if require_explicit_index and dev.index is None:
-            raise ValueError(
-                f"CUDA device '{device_str}' must include an explicit index like 'cuda:0'."
-            )
-
-        if dev.index is None:
-            return
-
-        available = torch.cuda.device_count()
-        if dev.index >= available:
-            raise RuntimeError(
-                f"CUDA device '{device_str}' requested but only {available} device(s) are available."
-            )
 
     if not slots:
         raise ValueError("slots parameter is required and cannot be empty")
@@ -706,9 +679,9 @@ def train_ppo_vectorized(
         raise ValueError("devices must be a non-empty list")
 
     # Policy device may be specified as "cuda" without an index, but env devices must be explicit.
-    _validate_cuda_device(device, require_explicit_index=False)
+    validate_device(device, require_explicit_index=False)
     for env_device in devices:
-        _validate_cuda_device(env_device, require_explicit_index=True)
+        validate_device(env_device, require_explicit_index=True)
 
     if len(devices) > n_envs:
         raise ValueError(
@@ -768,8 +741,8 @@ def train_ppo_vectorized(
 
     # DataLoader settings (used for SharedBatchIterator + diagnostics).
     default_batch_size_per_env = task_spec.dataloader_defaults.get("batch_size", 128)
-    if task_spec.name == "cifar10":
-        default_batch_size_per_env = 512  # High-throughput setting for CIFAR
+    if task_spec.name.startswith("cifar_"):
+        default_batch_size_per_env = 512  # High-throughput setting for CIFAR tasks
     effective_batch_size_per_env = (
         batch_size_per_env
         if batch_size_per_env is not None
@@ -975,10 +948,10 @@ def train_ppo_vectorized(
     shared_test_iter: SharedBatchIterator | Any
 
     if gpu_preload:
-        if "cifar10" not in task_spec.name.lower():
+        if not task_spec.name.startswith("cifar_"):
             _logger.warning(
                 f"gpu_preload=True is disabled for task '{task_spec.name}' "
-                "(SharedGPUBatchIterator supports CIFAR-10 only). "
+                "(SharedGPUBatchIterator supports CIFAR tasks only). "
                 "Falling back to standard CPU DataLoader."
             )
             gpu_preload = False
@@ -1066,10 +1039,10 @@ def train_ppo_vectorized(
     # Textual can modify terminal file descriptors and break multiprocessing
     # spawn. We therefore warm up both train and test loaders here, before we
     # signal `ready_event`.
-    # Skip warmup when gpu_preload is True for any CIFAR variant (cifar10, cifar10_deep, cifar10_blind)
+    # Skip warmup when gpu_preload is True for any CIFAR variant (cifar_baseline, cifar_scale, etc.)
     # SharedGPUBatchIterator already has num_workers=0, and iterating it during warmup can cause
     # race conditions when accessing GPU-cached tensors across multiple devices before streams sync.
-    is_cifar_task = "cifar10" in task_spec.name.lower()
+    is_cifar_task = task_spec.name.startswith("cifar_")
     if effective_workers > 0 and not (gpu_preload and is_cifar_task):
         _warmup_iter = iter(shared_train_iter)
         try:
@@ -1247,11 +1220,12 @@ def train_ppo_vectorized(
 
         # Create CounterfactualHelper for Shapley value analysis at episode end
         # Use base_seed for reproducible Shapley permutation sampling (B5-CR-01)
+        # Pass telemetry_cb for per-env context (same pattern as HealthMonitor)
         counterfactual_helper = (
             CounterfactualHelper(
                 strategy="auto",  # Full factorial for <=4 slots, Shapley sampling otherwise
                 shapley_samples=20,
-                emit_events=use_telemetry,
+                emit_callback=telemetry_cb,  # Pre-wired with env context
                 seed=base_seed,
             )
             if use_telemetry
@@ -2292,19 +2266,21 @@ def train_ppo_vectorized(
                             active_slots=active_slots,
                             baseline_accs=baseline_accs[i],
                             val_acc=env_state.val_acc,
-                            all_disabled_acc=all_disabled_accs.get(i, 0.0),
+                            all_disabled_acc=all_disabled_accs.get(i),  # None triggers emitter fallback
                             pair_accs=pair_accs.get(i, {}),
                         )
     
                     # Compute interaction terms and populate scaffolding metrics
                     if len(active_slots) >= 2 and i in pair_accs:
-                        all_off_acc = all_disabled_accs.get(i, 0.0)
+                        # Use solo ablation fallback for single-seed: min(baseline_accs) = host-only acc
+                        all_off_acc = all_disabled_accs.get(i) or min(baseline_accs[i].values())
                         for (idx_a, idx_b), pair_acc in pair_accs[i].items():
                             # Map indices to slot IDs
                             slot_a = active_slots[idx_a]
                             slot_b = active_slots[idx_b]
-                            solo_a = baseline_accs[i].get(slot_a, 0.0)
-                            solo_b = baseline_accs[i].get(slot_b, 0.0)
+                            # Solo accuracies MUST exist - active_slots derived from baseline_accs keys
+                            solo_a = baseline_accs[i][slot_a]
+                            solo_b = baseline_accs[i][slot_b]
                             # I_ij = f({i,j}) - f({i}) - f({j}) + f(empty)
                             interaction = pair_acc - solo_a - solo_b + all_off_acc
     
@@ -2802,8 +2778,9 @@ def train_ppo_vectorized(
                             "config": env_reward_configs[env_idx],
                         }
                         if emit_reward_components_event or collect_reward_summary:
+                            # mypy can't verify **dict unpacking into typed function parameters
                             result = compute_reward(
-                                **reward_args, return_components=True
+                                **reward_args, return_components=True  # type: ignore[arg-type]
                             )
                             # compute_reward returns tuple[float, RewardComponents] when return_components=True
                             reward, reward_components = result  # type: ignore[misc]
@@ -2812,7 +2789,7 @@ def train_ppo_vectorized(
                                     env_idx
                                 ][target_slot]
                         else:
-                            reward = compute_reward(**reward_args)
+                            reward = compute_reward(**reward_args)  # type: ignore[arg-type]
                     else:
                         reward = compute_loss_reward(
                             action=action_for_reward,
@@ -3033,7 +3010,15 @@ def train_ppo_vectorized(
                         if slot_id in slot_reports_for_env:
                             report = slot_reports_for_env[slot_id]
                             if report.telemetry is not None:
-                                env_state.gradient_health_prev[slot_id] = report.telemetry.gradient_health
+                                health_val = report.telemetry.gradient_health
+                                # Fail-fast if gradient_health contains NaN/inf
+                                # This would poison observation features and crash get_action()
+                                if not math.isfinite(health_val):
+                                    raise ValueError(
+                                        f"NaN/inf gradient_health from telemetry for slot {slot_id}: "
+                                        f"{health_val}. Check materialize_grad_stats() or sync_telemetry()."
+                                    )
+                                env_state.gradient_health_prev[slot_id] = health_val
     
                             # Obs V3: Increment epochs since last counterfactual measurement
                             # This is reset to 0 when counterfactual_contribution is updated (see line ~2191)
@@ -3143,7 +3128,8 @@ def train_ppo_vectorized(
                     # Store transition directly into rollout buffer.
                     done = epoch == max_epochs
                     truncated = done
-    
+                    effective_op_action = int(action_for_reward)
+
                     step_idx = agent.buffer.step_counts[env_idx]
                     agent.buffer.add(
                         env_id=env_idx,
@@ -3157,6 +3143,7 @@ def train_ppo_vectorized(
                         alpha_speed_action=alpha_speed_action,
                         alpha_curve_action=alpha_curve_action,
                         op_action=op_action,
+                        effective_op_action=effective_op_action,
                         slot_log_prob=slot_log_probs_batch[env_idx],
                         blueprint_log_prob=blueprint_log_probs_batch[env_idx],
                         style_log_prob=style_log_probs_batch[env_idx],
@@ -3226,11 +3213,14 @@ def train_ppo_vectorized(
                                 train_accuracy=env_state.train_acc,
                                 val_loss=env_state.val_loss,
                                 val_accuracy=env_state.val_acc,
-                                active_seeds=[
-                                    s.state
-                                    for s in model.seed_slots.values()
-                                    if s.is_active and s.state
-                                ],
+                                active_seeds=cast(
+                                    list[SeedStateProtocol],
+                                    [
+                                        s.state
+                                        for s in model.seed_slots.values()
+                                        if s.is_active and s.state
+                                    ],
+                                ),
                                 available_slots=sum(
                                     1 for s in model.seed_slots.values() if s.state is None
                                 ),
@@ -3504,7 +3494,7 @@ def train_ppo_vectorized(
                 # B7-DRL-01: Wire up gradient EMA tracking for drift detection
                 # Compute gradient health heuristic from norm (vanishing/exploding detection)
                 drift_metrics: dict[str, float] | None = None
-                if grad_ema_tracker is not None and ppo_grad_norm is not None:
+                if grad_ema_tracker is not None:
                     if ppo_grad_norm < 1e-7:
                         grad_health = 0.3  # Vanishing gradients
                     elif ppo_grad_norm > 100.0:
@@ -3515,9 +3505,10 @@ def train_ppo_vectorized(
     
                 metric_values = [v for v in metrics.values() if isinstance(v, (int, float))]
                 anomaly_report = anomaly_detector.check_all(
-                    ratio_max=metrics.get("ratio_max", 1.0),
-                    ratio_min=metrics.get("ratio_min", 1.0),
-                    explained_variance=metrics.get("explained_variance", 0.0),
+                    # MANDATORY metrics after PPO update - fail loudly if missing
+                    ratio_max=metrics["ratio_max"],
+                    ratio_min=metrics["ratio_min"],
+                    explained_variance=metrics.get("explained_variance", 0.0),  # Optional: computed once
                     has_nan=any(math.isnan(v) for v in metric_values),
                     has_inf=any(math.isinf(v) for v in metric_values),
                     current_episode=batch_epoch_id,

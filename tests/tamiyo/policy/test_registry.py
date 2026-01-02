@@ -224,3 +224,60 @@ def test_heuristic_not_in_neural_policy_registry():
         "HeuristicPolicyBundle should not be in the neural policy registry. "
         "It raises NotImplementedError for most PolicyBundle methods."
     )
+
+
+def test_builtin_policies_documented():
+    """Verify built-in policies match documentation.
+
+    This prevents doc drift where we mention policies that don't exist
+    or forget to document policies that do exist.
+
+    Regression test for: docs/contract mismatch about heuristic registration.
+    """
+    from esper.tamiyo.policy import list_policies
+
+    policies = set(list_policies())
+
+    # These are the policies that SHOULD be registered
+    expected_registered = {"lstm"}
+
+    # These are policies that should NOT be registered (adapters)
+    expected_not_registered = {"heuristic"}
+
+    assert policies == expected_registered, (
+        f"Registered policies mismatch. "
+        f"Got: {policies}, expected: {expected_registered}. "
+        f"Update this test if you add/remove policies."
+    )
+
+    for name in expected_not_registered:
+        assert name not in policies, (
+            f"'{name}' should NOT be in the registry. "
+            f"It's an adapter, not a full PolicyBundle."
+        )
+
+
+def test_create_heuristic_policy_works():
+    """Verify create_heuristic_policy() factory creates working adapter."""
+    from esper.tamiyo.policy import create_heuristic_policy
+
+    adapter = create_heuristic_policy()
+    assert adapter is not None
+    assert adapter.heuristic is not None
+    assert adapter.is_recurrent is False
+    assert adapter.hidden_dim == 0
+
+
+def test_heuristic_policy_bundle_lazy_import():
+    """Verify HeuristicPolicyBundle can be imported lazily via __getattr__."""
+    # This tests the PEP 562 __getattr__ mechanism
+    from esper.tamiyo import policy
+
+    # Access via getattr - should trigger __getattr__
+    HeuristicPolicyBundle = getattr(policy, "HeuristicPolicyBundle")
+    assert HeuristicPolicyBundle is not None
+    assert callable(HeuristicPolicyBundle)
+
+    # Config should also be accessible
+    HeuristicPolicyConfig = getattr(policy, "HeuristicPolicyConfig")
+    assert HeuristicPolicyConfig is not None

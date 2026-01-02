@@ -38,7 +38,7 @@ def test_phase6_regression_baseline():
         n_episodes=5,        # Very short run
         max_epochs=10,       # Only 10 epochs per episode
         n_envs=2,            # Minimal parallelism
-        task="cifar10",
+        task="cifar_baseline",
         use_telemetry=False, # Disable telemetry for speed
         reward_mode=RewardMode.SIMPLIFIED,  # Faster reward computation
         save_path=None,      # Don't save checkpoints

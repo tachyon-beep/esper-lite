@@ -26,10 +26,16 @@ class SeedStateProtocol(Protocol):
     blueprint_id: str
     alpha_controller: Any  # AlphaController
     alpha_algorithm: Any  # AlphaAlgorithm
+    alpha: float  # Current blend weight
 
     @property
     def stage(self) -> "SeedStage":
         """Current lifecycle stage of the seed."""
+        ...
+
+    @property
+    def epochs_in_stage(self) -> int:
+        """Number of epochs in the current lifecycle stage."""
         ...
 
     def can_transition_to(self, new_stage: "SeedStage") -> bool:
