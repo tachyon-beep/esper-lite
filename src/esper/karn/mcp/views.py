@@ -102,9 +102,45 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.clip_fraction')::DOUBLE as clip_fraction,
             json_extract(data, '$.explained_variance')::DOUBLE as explained_variance,
             json_extract(data, '$.grad_norm')::DOUBLE as grad_norm,
+            json_extract(data, '$.pre_clip_grad_norm')::DOUBLE as pre_clip_grad_norm,
             json_extract(data, '$.lr')::DOUBLE as lr,
             json_extract(data, '$.entropy_coef')::DOUBLE as entropy_coef,
             json_extract(data, '$.entropy_collapsed')::BOOLEAN as entropy_collapsed,
+            -- Value collapse diagnostics (2026-01-03 training failure analysis)
+            json_extract(data, '$.pre_norm_advantage_mean')::DOUBLE as pre_norm_advantage_mean,
+            json_extract(data, '$.pre_norm_advantage_std')::DOUBLE as pre_norm_advantage_std,
+            json_extract(data, '$.return_mean')::DOUBLE as return_mean,
+            json_extract(data, '$.return_std')::DOUBLE as return_std,
+            -- Advantage statistics
+            json_extract(data, '$.advantage_mean')::DOUBLE as advantage_mean,
+            json_extract(data, '$.advantage_std')::DOUBLE as advantage_std,
+            json_extract(data, '$.advantage_skewness')::DOUBLE as advantage_skewness,
+            json_extract(data, '$.advantage_kurtosis')::DOUBLE as advantage_kurtosis,
+            json_extract(data, '$.advantage_positive_ratio')::DOUBLE as advantage_positive_ratio,
+            -- Value function statistics
+            json_extract(data, '$.value_mean')::DOUBLE as value_mean,
+            json_extract(data, '$.value_std')::DOUBLE as value_std,
+            json_extract(data, '$.value_min')::DOUBLE as value_min,
+            json_extract(data, '$.value_max')::DOUBLE as value_max,
+            -- Ratio statistics
+            json_extract(data, '$.ratio_mean')::DOUBLE as ratio_mean,
+            json_extract(data, '$.ratio_std')::DOUBLE as ratio_std,
+            json_extract(data, '$.ratio_min')::DOUBLE as ratio_min,
+            json_extract(data, '$.ratio_max')::DOUBLE as ratio_max,
+            json_extract(data, '$.joint_ratio_max')::DOUBLE as joint_ratio_max,
+            -- Clip fractions
+            json_extract(data, '$.clip_fraction_positive')::DOUBLE as clip_fraction_positive,
+            json_extract(data, '$.clip_fraction_negative')::DOUBLE as clip_fraction_negative,
+            -- Q-values (op-conditioned value function)
+            json_extract(data, '$.q_germinate')::DOUBLE as q_germinate,
+            json_extract(data, '$.q_advance')::DOUBLE as q_advance,
+            json_extract(data, '$.q_fossilize')::DOUBLE as q_fossilize,
+            json_extract(data, '$.q_prune')::DOUBLE as q_prune,
+            json_extract(data, '$.q_wait')::DOUBLE as q_wait,
+            json_extract(data, '$.q_set_alpha')::DOUBLE as q_set_alpha,
+            json_extract(data, '$.q_variance')::DOUBLE as q_variance,
+            json_extract(data, '$.q_spread')::DOUBLE as q_spread,
+            -- Per-head entropy
             json_extract(data, '$.head_slot_entropy')::DOUBLE as head_slot_entropy,
             json_extract(data, '$.head_blueprint_entropy')::DOUBLE as head_blueprint_entropy,
             json_extract(data, '$.head_style_entropy')::DOUBLE as head_style_entropy,
@@ -113,6 +149,7 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.head_alpha_speed_entropy')::DOUBLE as head_alpha_speed_entropy,
             json_extract(data, '$.head_alpha_curve_entropy')::DOUBLE as head_alpha_curve_entropy,
             json_extract(data, '$.head_op_entropy')::DOUBLE as head_op_entropy,
+            -- Per-head gradient norms
             json_extract(data, '$.head_slot_grad_norm')::DOUBLE as head_slot_grad_norm,
             json_extract(data, '$.head_blueprint_grad_norm')::DOUBLE as head_blueprint_grad_norm,
             json_extract(data, '$.head_style_grad_norm')::DOUBLE as head_style_grad_norm,

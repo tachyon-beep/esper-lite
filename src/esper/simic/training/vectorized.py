@@ -342,6 +342,23 @@ def _run_ppo_updates(
     amp_dtype: torch.dtype | None = None,  # None=float16 for backwards compat
 ) -> dict[str, Any]:
     """Run one or more PPO updates on the current buffer and aggregate metrics."""
+    # P1 FIX: RECURRENT POLICY STALENESS GUARD
+    # Multiple external PPO updates with LSTM policies cause hidden state staleness:
+    # Update 1 changes policy weights, but Update 2+ uses the SAME hidden states
+    # from rollout collection (computed with old weights). This creates the exact
+    # mismatch that recurrent_n_epochs=1 is designed to prevent.
+    #
+    # The agent's internal recurrent_n_epochs=1 safety is bypassed by this external loop.
+    # Standard R2D2/Recurrent PPO would require burn-in (recomputing hidden states
+    # for each update), which is not implemented here.
+    if ppo_updates_per_batch > 1 and agent.lstm_hidden_dim > 0:
+        raise ValueError(
+            f"ppo_updates_per_batch={ppo_updates_per_batch} is incompatible with recurrent (LSTM) "
+            f"policies. After the first update, policy weights change but hidden states remain "
+            f"from the original rollout, causing gradient corruption. Use ppo_updates_per_batch=1 "
+            f"for LSTM policies, or implement hidden state burn-in. See PPOAgent C4 comment."
+        )
+
     # C5 FIX: Update observation normalizer BEFORE PPO update.
     # This ensures batch N's observations are normalized with stats that include batch N,
     # preventing the one-batch lag that compounds distribution shift over training.
@@ -1719,7 +1736,17 @@ def train_ppo_vectorized(
             assert isinstance(correct_fused, torch.Tensor)
             correct_per_config = correct_fused.view(num_configs, batch_size).sum(dim=1)
 
-            return loss, correct_per_config, total
+            # Compute per-config loss when using reduction='none' criterion
+            # loss shape: [K*B] for classification, [K*B*T] for LM
+            # Reshape to [K, -1] and mean to get per-config loss: [K]
+            # This separates main config (idx 0) from ablations for clean telemetry
+            if loss.dim() > 0 and loss.numel() > 1:
+                loss_per_config = loss.view(num_configs, -1).mean(dim=1)
+            else:
+                # Fallback for scalar loss (regular criterion with reduction='mean')
+                loss_per_config = loss.unsqueeze(0).expand(num_configs)
+
+            return loss_per_config, correct_per_config, total
 
     def batch_signals_to_features(
         batch_signals: list[Any],
@@ -1792,7 +1819,10 @@ def train_ppo_vectorized(
             base_seed = seed + batch_idx * 10000
             env_states = [create_env_state(i, base_seed) for i in range(envs_this_batch)]
             criterion = nn.CrossEntropyLoss()
-    
+            # Per-sample loss for fused validation - enables separating main config
+            # from ablations for Governor telemetry (fixes ablation signal contamination)
+            val_criterion = nn.CrossEntropyLoss(reduction="none")
+
             # Initialize episode for vectorized training
             for env_idx in range(envs_this_batch):
                 env_states[env_idx].reset_episode_state(slots)
@@ -2172,16 +2202,16 @@ def train_ppo_vectorized(
                                     override_vec[start:end].fill_(alpha_value)
                             alpha_overrides[slot_id] = override_vec
     
-                        # Run FUSED validation pass
-                        loss_fused, correct_per_config, _ = process_fused_val_batch(
+                        # Run FUSED validation pass with per-sample loss criterion
+                        loss_per_config, correct_per_config, _ = process_fused_val_batch(
                             env_state,
                             inputs,
                             targets,
-                            criterion,
+                            val_criterion,
                             alpha_overrides,
                             num_configs,
                         )
-    
+
                         stream_ctx = (
                             torch.cuda.stream(env_state.stream)
                             if env_state.stream
@@ -2189,11 +2219,11 @@ def train_ppo_vectorized(
                         )
                         with stream_ctx:
                             env_cfg_correct_accums[i].add_(correct_per_config)
-                            # Accumulate loss for telemetry display (scalar from criterion)
-                            # Note: This is the fused loss across all configs, not just main.
-                            # For display purposes this is acceptable since main dominates.
+                            # Accumulate ONLY main config loss (idx 0) for Governor telemetry.
+                            # Ablation losses would contaminate the signal since they're
+                            # intentionally worse - measuring seed contribution not model health.
                             if env_state.val_loss_accum is not None:
-                                env_state.val_loss_accum.add_(loss_fused)
+                                env_state.val_loss_accum.add_(loss_per_config[0])
                         val_totals[i] += batch_size
     
                 # Single sync point at end

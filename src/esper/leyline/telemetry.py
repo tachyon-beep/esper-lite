@@ -637,6 +637,17 @@ class PPOUpdatePayload:
     advantage_skewness: float = 0.0  # Asymmetry: >0 right-skewed, <0 left-skewed
     advantage_kurtosis: float = 0.0  # Tail heaviness: >0 heavy tails (more outliers), <0 light tails
     advantage_positive_ratio: float = 0.5  # Fraction positive (healthy: 0.4-0.6)
+
+    # Pre-normalization advantage stats (critical for diagnosing value collapse)
+    # If pre_norm_std is tiny but pre_clip_grad_norm is huge → normalization amplifying noise
+    # If pre_norm_std is healthy but grad is huge → raw return scale or value mismatch
+    pre_norm_advantage_mean: float = 0.0
+    pre_norm_advantage_std: float = 0.0
+
+    # Return statistics (for diagnosing value loss scale)
+    return_mean: float = 0.0
+    return_std: float = 0.0
+
     ratio_mean: float = 1.0
     ratio_min: float = 1.0
     ratio_max: float = 1.0
@@ -753,33 +764,39 @@ class PPOUpdatePayload:
             clip_fraction=data["clip_fraction"],
             # DRL-03 fix: nan_grad_count is required (fail-fast on missing)
             nan_grad_count=data["nan_grad_count"],
-            # DRL-04 fix: align with dataclass default
-            pre_clip_grad_norm=data.get("pre_clip_grad_norm", 0.0),
-            # Optional fields
+            # Always emitted - fail loudly if missing
+            pre_clip_grad_norm=data["pre_clip_grad_norm"],
+            # Conditionally optional
             explained_variance=data.get("explained_variance"),
-            entropy_loss=data.get("entropy_loss", 0.0),
-            advantage_mean=data.get("advantage_mean", 0.0),
-            advantage_std=data.get("advantage_std", 0.0),
-            advantage_skewness=data.get("advantage_skewness", 0.0),
-            advantage_kurtosis=data.get("advantage_kurtosis", 0.0),
-            advantage_positive_ratio=data.get("advantage_positive_ratio", 0.5),
-            ratio_mean=data.get("ratio_mean", 1.0),
-            ratio_min=data.get("ratio_min", 1.0),
-            ratio_max=data.get("ratio_max", 1.0),
-            ratio_std=data.get("ratio_std", 0.0),
-            log_prob_min=data.get("log_prob_min", 0.0),
-            log_prob_max=data.get("log_prob_max", 0.0),
+            entropy_loss=data.get("entropy_loss", 0.0),  # Legacy: hardcoded to 0
+            # Advantage stats - always emitted
+            advantage_mean=data["advantage_mean"],
+            advantage_std=data["advantage_std"],
+            advantage_skewness=data["advantage_skewness"],
+            advantage_kurtosis=data["advantage_kurtosis"],
+            advantage_positive_ratio=data["advantage_positive_ratio"],
+            # Ratio stats - always emitted
+            ratio_mean=data["ratio_mean"],
+            ratio_min=data["ratio_min"],
+            ratio_max=data["ratio_max"],
+            ratio_std=data["ratio_std"],
+            # Log prob extremes - always emitted
+            log_prob_min=data["log_prob_min"],
+            log_prob_max=data["log_prob_max"],
             lr=data.get("lr"),
             entropy_coef=data.get("entropy_coef"),
             inf_grad_count=data.get("inf_grad_count", 0),
             dead_layers=data.get("dead_layers", 0),
             exploding_layers=data.get("exploding_layers", 0),
             layer_gradient_health=data.get("layer_gradient_health"),
-            entropy_collapsed=data.get("entropy_collapsed", False),
+            # Always emitted
+            entropy_collapsed=data["entropy_collapsed"],
+            # Conditionally optional (AMP-related)
             loss_scale=data.get("loss_scale"),
             amp_overflow_detected=data.get("amp_overflow_detected", False),
             update_skipped=data.get("update_skipped", False),
-            update_time_ms=data.get("update_time_ms", 0.0),
+            # Always emitted
+            update_time_ms=data["update_time_ms"],
             early_stop_epoch=data.get("early_stop_epoch"),
             head_slot_entropy=data.get("head_slot_entropy"),
             head_blueprint_entropy=data.get("head_blueprint_entropy"),
@@ -807,16 +824,17 @@ class PPOUpdatePayload:
             head_alpha_curve_ratio_max=data.get("head_alpha_curve_ratio_max", 1.0),
             head_op_ratio_max=data.get("head_op_ratio_max", 1.0),
             joint_ratio_max=data.get("joint_ratio_max", 1.0),
-            inner_epoch=data.get("inner_epoch", 0),
-            batch=data.get("batch", 0),
-            # DRL-05 fix: align with dataclass default
-            ppo_updates_count=data.get("ppo_updates_count", 1),
+            # Always emitted
+            inner_epoch=data["inner_epoch"],
+            batch=data["batch"],
+            ppo_updates_count=data["ppo_updates_count"],
+            # Conditionally optional (buffer rollback)
             skipped=data.get("skipped", False),
-            # Value function statistics
-            value_mean=data.get("value_mean", 0.0),
-            value_std=data.get("value_std", 0.0),
-            value_min=data.get("value_min", 0.0),
-            value_max=data.get("value_max", 0.0),
+            # Value function statistics - always emitted
+            value_mean=data["value_mean"],
+            value_std=data["value_std"],
+            value_min=data["value_min"],
+            value_max=data["value_max"],
             # Q-values
             q_germinate=data.get("q_germinate", 0.0),
             q_advance=data.get("q_advance", 0.0),
@@ -826,15 +844,23 @@ class PPOUpdatePayload:
             q_set_alpha=data.get("q_set_alpha", 0.0),
             q_variance=data.get("q_variance", 0.0),
             q_spread=data.get("q_spread", 0.0),
-            # Gradient quality metrics
-            clip_fraction_positive=data.get("clip_fraction_positive", 0.0),
-            clip_fraction_negative=data.get("clip_fraction_negative", 0.0),
-            gradient_cv=data.get("gradient_cv", 0.0),
+            # Gradient quality metrics - always emitted
+            clip_fraction_positive=data["clip_fraction_positive"],
+            clip_fraction_negative=data["clip_fraction_negative"],
+            gradient_cv=data["gradient_cv"],
             # Infrastructure metrics
             cuda_memory_allocated_gb=data.get("cuda_memory_allocated_gb", 0.0),
             cuda_memory_reserved_gb=data.get("cuda_memory_reserved_gb", 0.0),
             cuda_memory_peak_gb=data.get("cuda_memory_peak_gb", 0.0),
             cuda_memory_fragmentation=data.get("cuda_memory_fragmentation", 0.0),
+            # Pre-normalization advantage stats (for diagnosing value collapse)
+            # Always emitted - fail loudly if missing
+            pre_norm_advantage_mean=data["pre_norm_advantage_mean"],
+            pre_norm_advantage_std=data["pre_norm_advantage_std"],
+            # Return statistics (for diagnosing value loss scale)
+            # Always emitted - fail loudly if missing
+            return_mean=data["return_mean"],
+            return_std=data["return_std"],
         )
 
     @classmethod

@@ -29,7 +29,7 @@ import threading
 import time
 import traceback
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -423,7 +423,7 @@ class SanctumApp(App[None]):
         css_class = f"group-{group_id.lower()}"
 
         try:
-            return cast(TamiyoBrain, self.query_one(f"#{widget_id}", TamiyoBrain))
+            return self.query_one(f"#{widget_id}", TamiyoBrain)
         except NoMatches:
             # Create new widget and mount it
             widget = TamiyoBrain(id=widget_id, classes=css_class)

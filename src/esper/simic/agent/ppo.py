@@ -32,7 +32,6 @@ from esper.leyline import (
     DEFAULT_LEARNING_RATE,
     DEFAULT_MAX_GRAD_NORM,
     DEFAULT_N_ENVS,
-    DEFAULT_N_PPO_EPOCHS,
     DEFAULT_RATIO_COLLAPSE_THRESHOLD,
     DEFAULT_RATIO_EXPLOSION_THRESHOLD,
     DEFAULT_VALUE_CLIP,
@@ -121,7 +120,11 @@ class PPOAgent:
         # hurts performance. Consider clip_value=False if value learning is slow.
         value_clip: float = DEFAULT_VALUE_CLIP,
         max_grad_norm: float = DEFAULT_MAX_GRAD_NORM,
-        n_epochs: int = DEFAULT_N_PPO_EPOCHS,
+        # P2 FIX: n_epochs parameter REMOVED - it was dead code (never used in update loop).
+        # The actual epoch count is controlled by:
+        #   - recurrent_n_epochs: INTERNAL epochs within a single update() call (default 1 for LSTM safety)
+        #   - ppo_updates_per_batch: EXTERNAL updates in vectorized.py training loop
+        # Standard PPO "epochs" are configured via ppo_updates_per_batch in train_ppo_vectorized().
         recurrent_n_epochs: int | None = None,  # Default 1 for recurrent (hidden state safety)
         batch_size: int = DEFAULT_BATCH_SIZE,
         target_kl: float | None = 0.015,
@@ -182,7 +185,7 @@ class PPOAgent:
         self.value_clip = value_clip
         self.max_grad_norm = max_grad_norm
         self.lstm_hidden_dim = policy.hidden_dim
-        self.n_epochs = n_epochs
+        # P2 FIX: self.n_epochs removed - was dead code (see __init__ comment)
         self.batch_size = batch_size
         self.target_kl = target_kl
         self.weight_decay = weight_decay
@@ -365,7 +368,7 @@ class PPOAgent:
         self.buffer.compute_advantages_and_returns(
             gamma=self.gamma, gae_lambda=self.gae_lambda
         )
-        self.buffer.normalize_advantages()
+        pre_norm_adv_mean, pre_norm_adv_std = self.buffer.normalize_advantages()
 
         # C3: INTENTIONAL SINGLE-BATCH PROCESSING FOR RECURRENT POLICIES
         # We process the entire rollout as a single batch WITHOUT minibatch shuffling.
@@ -402,6 +405,18 @@ class PPOAgent:
 
         metrics: dict[str, Any] = defaultdict(list)
         metrics["explained_variance"] = [explained_variance]
+
+        # Return statistics for diagnosing value loss scale
+        metrics["return_mean"] = [valid_returns.mean().item()]
+        metrics["return_std"] = [valid_returns.std().item()]
+
+        # Pre-normalization advantage stats for diagnosing advantage collapse
+        # If pre_norm_adv_std is tiny but pre_clip_grad_norm is huge, it indicates
+        # normalization is amplifying noise. If std is healthy but grad is huge,
+        # it's more likely raw return scale or value mismatch.
+        metrics["pre_norm_advantage_mean"] = [pre_norm_adv_mean]
+        metrics["pre_norm_advantage_std"] = [pre_norm_adv_std]
+
         early_stopped = False
 
         # Collect CUDA memory metrics once per update (amortize sync overhead)
@@ -541,7 +556,9 @@ class PPOAgent:
             # sufficient - the full forward pass must run in float32 for stable
             # gradient computation. This is standard practice in RL with AMP:
             # run the policy evaluation in float32, keep backbone/feature extraction in AMP.
-            with torch_amp.autocast(device_type="cuda", enabled=False):  # type: ignore[attr-defined]
+            # Device can be str ("cpu", "cuda:0") or torch.device - normalize to type string
+            device_type = str(self.device).split(":")[0]
+            with torch_amp.autocast(device_type=device_type, enabled=False):  # type: ignore[attr-defined]
                 # Cast inputs to float32 to ensure entire forward pass is float32
                 hidden_h = data["initial_hidden_h"].float()
                 hidden_c = data["initial_hidden_c"].float()
@@ -1010,7 +1027,7 @@ class PPOAgent:
                 'num_envs': self.num_envs,
                 'max_steps_per_env': self.max_steps_per_env,
                 # Training hyperparameters
-                'n_epochs': self.n_epochs,
+                # P2 FIX: n_epochs removed from checkpoint - was dead code
                 'batch_size': self.batch_size,
                 'max_grad_norm': self.max_grad_norm,
                 'weight_decay': self.weight_decay,
@@ -1031,12 +1048,22 @@ class PPOAgent:
         torch.save(save_dict, path)
 
     @classmethod
-    def load(cls, path: str | Path, device: str = "cuda:0") -> "PPOAgent":
+    def load(
+        cls,
+        path: str | Path,
+        device: str = "cuda:0",
+        compile_mode: str | None = None,  # P3 FIX: Runtime override for debugging
+    ) -> "PPOAgent":
         """Load agent from checkpoint file.
 
         Args:
             path: Path to checkpoint file
             device: Device to load model onto
+            compile_mode: Override checkpoint's torch.compile mode. Use "off" for debugging
+                         or to run on incompatible hardware. If None, uses checkpoint's
+                         saved mode. This is the recommended pattern for torch.compile
+                         portability - compiled graphs are hardware-specific and may
+                         not transfer across GPU architectures.
 
         Returns:
             PPOAgent with restored weights and configuration
@@ -1103,7 +1130,10 @@ class PPOAgent:
         state_dim = int(architecture['state_dim'])
 
         # === Extract compile_mode (default "off" for old checkpoints) ===
-        compile_mode = config.get('compile_mode', 'off')
+        # P3 FIX: Allow runtime override of compile_mode for debugging/portability
+        # torch.compile graphs are hardware-specific - compiled on A100 may fail on H100
+        checkpoint_compile_mode = config.get('compile_mode', 'off')
+        effective_compile_mode = compile_mode if compile_mode is not None else checkpoint_compile_mode
 
         # === Create PolicyBundle (uncompiled - compile AFTER loading weights) ===
         from esper.tamiyo.policy.factory import create_policy
@@ -1117,9 +1147,10 @@ class PPOAgent:
         )
 
         # === Create agent with restored config ===
-        # Remove config params that are now part of PolicyBundle
+        # Remove config params that are now part of PolicyBundle or removed
+        # P2 FIX: Also filter 'n_epochs' - removed dead parameter (old checkpoints may have it)
         agent_config = {k: v for k, v in config.items()
-                       if k not in ('lstm_hidden_dim',)}
+                       if k not in ('lstm_hidden_dim', 'n_epochs')}
         agent = cls(
             policy=policy,
             slot_config=slot_config,
@@ -1135,8 +1166,12 @@ class PPOAgent:
         # === Apply torch.compile AFTER loading weights ===
         # Critical: Compile must happen after state_dict to ensure graph traces
         # the actual loaded weights, not random initialization.
-        if compile_mode != "off":
-            agent.policy.compile(mode=compile_mode, dynamic=True)
+        # P3 FIX: Use effective_compile_mode (may be overridden by parameter)
+        if effective_compile_mode != "off":
+            agent.policy.compile(mode=effective_compile_mode, dynamic=True)
+
+        # Update agent's stored compile_mode to reflect what we actually used
+        agent.compile_mode = effective_compile_mode
 
         return agent
 

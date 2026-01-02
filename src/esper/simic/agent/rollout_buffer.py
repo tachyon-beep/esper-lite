@@ -170,6 +170,15 @@ class TamiyoRolloutBuffer:
         default_factory=dict, init=False
     )
 
+    # P2 FIX: Track advantage normalization state to prevent re-normalization corruption.
+    # When ppo_updates_per_batch > 1, agent.update() is called multiple times on the
+    # same buffer. Without this flag, advantages get re-normalized each time:
+    # First: (adv - mean) / std -> μ=0, σ=1
+    # Second: (0 - 0) / 1 -> no change (harmless but wasteful)
+    # However, if GAE is recomputed between updates, advantages change and this
+    # flag ensures we normalize the NEW advantages, not skip them.
+    _advantages_normalized: bool = field(default=False, init=False)
+
     @property
     def num_slots(self) -> int:
         """Number of slots from slot_config."""
@@ -441,8 +450,26 @@ class TamiyoRolloutBuffer:
             self.advantages[env_id, :num_steps] = advantages
             self.returns[env_id, :num_steps] = advantages + values
 
-    def normalize_advantages(self) -> None:
-        """Normalize advantages globally across all environments."""
+        # P2 FIX: New advantages computed - they need normalization
+        self._advantages_normalized = False
+
+    def normalize_advantages(self) -> tuple[float, float]:
+        """Normalize advantages globally across all environments.
+
+        P2 FIX: Idempotent normalization - skips if already normalized.
+        This prevents corruption when agent.update() is called multiple times
+        on the same buffer (ppo_updates_per_batch > 1). Re-normalizing already-
+        normalized data (μ=0, σ=1) is mathematically harmless but wasteful.
+        More importantly, this flag ensures we properly handle the case where
+        GAE is recomputed between updates - new advantages WILL be normalized.
+
+        Returns:
+            Tuple of (pre_norm_mean, pre_norm_std) for telemetry diagnostics.
+            Returns (NaN, NaN) if already normalized or no advantages.
+        """
+        if self._advantages_normalized:
+            return (float("nan"), float("nan"))  # Already normalized
+
         # Collect all valid advantages
         all_advantages = []
         for env_id in range(self.num_envs):
@@ -451,7 +478,7 @@ class TamiyoRolloutBuffer:
                 all_advantages.append(self.advantages[env_id, :num_steps])
 
         if not all_advantages:
-            return
+            return (float("nan"), float("nan"))
 
         # Compute global stats
         all_adv = torch.cat(all_advantages)
@@ -460,6 +487,10 @@ class TamiyoRolloutBuffer:
         # (Bessel correction is undefined for n=1.)
         std = all_adv.std(correction=0)
 
+        # Capture pre-normalization stats for telemetry
+        pre_norm_mean = mean.item()
+        pre_norm_std = std.item()
+
         # Normalize in-place
         for env_id in range(self.num_envs):
             num_steps = self.step_counts[env_id]
@@ -467,6 +498,11 @@ class TamiyoRolloutBuffer:
                 self.advantages[env_id, :num_steps] = (
                     self.advantages[env_id, :num_steps] - mean
                 ) / (std + 1e-8)
+
+        # P2 FIX: Mark as normalized to prevent redundant re-normalization
+        self._advantages_normalized = True
+
+        return (pre_norm_mean, pre_norm_std)
 
     def get_batched_sequences(
         self,
@@ -536,6 +572,7 @@ class TamiyoRolloutBuffer:
         self.step_counts = [0] * self.num_envs
         self._current_episode_start = {}
         self.episode_boundaries = {}
+        self._advantages_normalized = False  # P2 FIX: Reset normalization state
         # Tensors don't need zeroing - step_counts controls valid range
 
     def clear_env(self, env_id: int) -> None:

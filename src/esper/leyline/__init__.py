@@ -139,8 +139,9 @@ DEFAULT_CLIP_RATIO = 0.2
 DEFAULT_GAE_LAMBDA = 0.98
 
 # Value function loss coefficient in combined PPO loss.
-# 0.5 is standard; higher = prioritize value accuracy over policy.
-DEFAULT_VALUE_COEF = 0.5
+# 1.0 gives critic equal weight with policy, important when value head
+# is underfitting (negative explained variance from batch 1).
+DEFAULT_VALUE_COEF = 1.0
 
 # Maximum gradient norm for clipping (prevents exploding gradients).
 # 1.0 allows critic learning with normalized returns; 0.5 was too aggressive

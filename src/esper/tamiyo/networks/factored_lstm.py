@@ -278,12 +278,33 @@ class FactoredRecurrentActorCritic(nn.Module):
             nn.Linear(head_hidden, self.num_blueprints),  # 256 -> 13
         )
 
-        # Op-conditioned value head (Phase 4): Q(s, op) instead of V(s)
-        # Input: lstm_out (lstm_hidden_dim) + op_one_hot (NUM_OPS)
+        # Op-conditioned value head (Phase 5 redesign): Q(s, op) instead of V(s)
+        # Input: lstm_out (lstm_hidden_dim) + op_one_hot (NUM_OPS) = 518
+        #
+        # Architecture redesign to fix value collapse (explained_variance never > 0.12):
+        # 1. Deeper network (4 layers) - shallow 2-layer couldn't learn return predictions
+        # 2. Dedicated value feature layer - don't rely solely on shared LSTM features
+        # 3. LayerNorm for activation stability (matches policy path)
+        # 4. Gradual compression: 518 -> 256 -> 128 -> 64 -> 1
+        # 5. Initialization: gain=0.01 for output (matches policy heads)
+        #
+        # The op-conditioning is preserved: each of 6 ops can learn distinct value functions
+        # via the one-hot input, but now with enough capacity for feature extraction.
+        value_input_dim = lstm_hidden_dim + NUM_OPS  # 512 + 6 = 518
         self.value_head = nn.Sequential(
-            nn.Linear(lstm_hidden_dim + NUM_OPS, head_hidden),
+            # Layer 1: Feature extraction from joint (state, op) representation
+            nn.Linear(value_input_dim, head_hidden),  # 518 -> 256
+            nn.LayerNorm(head_hidden),
             nn.ReLU(),
-            nn.Linear(head_hidden, 1),
+            # Layer 2: Deeper representation learning
+            nn.Linear(head_hidden, head_hidden // 2),  # 256 -> 128
+            nn.LayerNorm(head_hidden // 2),
+            nn.ReLU(),
+            # Layer 3: Final feature compression
+            nn.Linear(head_hidden // 2, head_hidden // 4),  # 128 -> 64
+            nn.ReLU(),
+            # Layer 4: Scalar value output
+            nn.Linear(head_hidden // 4, 1),  # 64 -> 1
         )
 
         self._init_weights()
@@ -310,10 +331,14 @@ class FactoredRecurrentActorCritic(nn.Module):
             last_layer = head[-1]
             if isinstance(last_layer, nn.Linear):
                 nn.init.orthogonal_(last_layer.weight.data, gain=0.01)
-        # value_head[-1] is also a Linear layer
+        # Value head output layer: use gain=0.01 (same as policy heads)
+        # This was previously gain=1.0 which caused value predictions to start
+        # far from zero, contributing to high initial value_loss and slow convergence.
+        # With gain=0.01, initial value predictions cluster near zero, allowing
+        # the critic to learn from actual returns rather than fighting large initial errors.
         last_value_layer = self.value_head[-1]
         if isinstance(last_value_layer, nn.Linear):
-            nn.init.orthogonal_(last_value_layer.weight.data, gain=1.0)
+            nn.init.orthogonal_(last_value_layer.weight.data, gain=0.01)
 
         # LSTM-specific initialization
         for name, param in self.lstm.named_parameters():

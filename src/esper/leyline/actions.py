@@ -12,6 +12,27 @@ from enum import IntEnum
 # Cache for built enums
 _action_enum_cache: dict[str, type[IntEnum]] = {}
 
+
+def invalidate_action_enum_cache(topology: str | None = None) -> None:
+    """Invalidate cached action enums when blueprints change.
+
+    This is the PUBLIC API for cache invalidation. Called by BlueprintRegistry
+    when blueprints are registered/unregistered to ensure build_action_enum()
+    returns fresh enums reflecting the current registry state.
+
+    Args:
+        topology: Specific topology to invalidate ("cnn", "transformer"),
+                  or None to clear all cached enums.
+
+    Note:
+        This primarily affects HeuristicTamiyo (which uses build_action_enum).
+        PPO training uses static BlueprintAction from factored_actions.py.
+    """
+    if topology is None:
+        _action_enum_cache.clear()
+    elif topology in _action_enum_cache:
+        del _action_enum_cache[topology]
+
 # =============================================================================
 # GERMINATE Action Name Utilities
 # =============================================================================
@@ -86,5 +107,6 @@ __all__ = [
     "GERMINATE_PREFIX",
     "build_action_enum",
     "get_blueprint_from_action_name",
+    "invalidate_action_enum_cache",
     "is_germinate_action_name",
 ]

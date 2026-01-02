@@ -670,6 +670,7 @@ def test_run_ppo_updates_runs_multiple_updates_and_updates_normalizer_once():
             self.buffer = _StubBuffer()
             self.update_calls: list[bool] = []
             self.target_kl = None
+            self.lstm_hidden_dim = 0  # Non-recurrent stub
 
         def update(self, clear_buffer: bool = True) -> dict:
             """Return deterministic metrics for aggregation checks."""
@@ -749,6 +750,7 @@ def test_run_ppo_updates_honors_target_kl_early_stop_and_clears_buffer():
             self.buffer = _StubBuffer()
             self.update_calls: list[bool] = []
             self.target_kl = 0.01
+            self.lstm_hidden_dim = 0  # Non-recurrent stub
 
         def update(self, clear_buffer: bool = True) -> dict:
             self.update_calls.append(clear_buffer)

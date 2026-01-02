@@ -2,36 +2,18 @@
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from typing import Any, Callable
 
 import torch.nn as nn
 
-_logger = logging.getLogger(__name__)
-
-
-def _invalidate_action_cache(topology: str | None = None) -> None:
-    """Invalidate Leyline action enum cache for topology.
-
-    Best-effort operation that fails silently during import cycles.
-
-    Args:
-        topology: Specific topology to invalidate, or None to clear all.
-    """
-    try:
-        from esper.leyline import actions as leyline_actions
-    except ImportError:
-        _logger.debug("Cache invalidation skipped: leyline.actions not yet imported")
-        return
-
-    try:
-        if topology is None:
-            leyline_actions._action_enum_cache.clear()
-        else:
-            leyline_actions._action_enum_cache.pop(topology, None)
-    except AttributeError as e:
-        _logger.debug("Cache invalidation skipped: %s", e)
+# Import the public cache invalidation API from Leyline.
+# Note: This creates a Kasmina -> Leyline dependency, but Leyline.actions also
+# imports from Kasmina (BlueprintRegistry). The import cycle is safe because:
+#   1. This module only uses invalidate_action_enum_cache (a simple function)
+#   2. The import happens at module level, not inside a function
+#   3. Both modules complete their definitions before cross-referencing
+from esper.leyline.actions import invalidate_action_enum_cache
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,7 +56,7 @@ class BlueprintRegistry:
                 param_estimate=param_estimate,
                 description=description,
             )
-            _invalidate_action_cache(topology)
+            invalidate_action_enum_cache(topology)
             return factory
 
         return decorator
@@ -122,7 +104,7 @@ class BlueprintRegistry:
         """Remove a blueprint from the registry (primarily for tests)."""
         key = f"{topology}:{name}"
         cls._blueprints.pop(key, None)
-        _invalidate_action_cache(topology)
+        invalidate_action_enum_cache(topology)
 
 
 __all__ = ["BlueprintSpec", "BlueprintRegistry"]
