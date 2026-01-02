@@ -833,18 +833,21 @@ class EnvOverview(Static):
             return f"[red]x{epochs}[/red]"
 
     def _format_row_staleness(self, env: "EnvState") -> str:
-        """Format staleness as time since last env update."""
+        """Format staleness as time since last env update.
+
+        Icons: ● = fresh, ◐ = stale, ○ = bad
+        """
         from datetime import datetime, timezone
 
         if env.last_update is None:
-            return "[red]●BAD[/red]"
+            return "[red]○BAD[/red]"
 
         age_s = (datetime.now(timezone.utc) - env.last_update).total_seconds()
         if age_s < 2.0:
             return "[green]●OK[/green]"
         if age_s <= 5.0:
-            return "[yellow]●WARN[/yellow]"
-        return "[red]●BAD[/red]"
+            return "[yellow]◐WARN[/yellow]"
+        return "[red]○BAD[/red]"
 
     def _format_status(self, env: "EnvState") -> str:
         """Format status with color coding."""
