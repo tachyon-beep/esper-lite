@@ -28,6 +28,8 @@ This document codifies the process for **fixing** bug tickets that have been tri
 
 **Goal:** Verify the bug actually exists as described.
 
+> **Note for Claude Code agents:** Use the `Grep` and `Glob` tools rather than bash grep/find commands. The bash examples below are for human reference and manual debugging.
+
 ### 1.1 Read the Actual Code
 
 ```bash
@@ -143,6 +145,17 @@ If the bug appears NOT real:
 | **WONTFIX** | `docs/bugs/wontfix/` | Bug is real but intentional design or marginal value |
 | **ALREADY FIXED** | `docs/bugs/fixed/` | Bug was fixed by a previous commit |
 
+### Update Ticket Status
+
+Before moving the ticket, update its frontmatter `Status` field:
+
+| Disposition | Status Value |
+|-------------|--------------|
+| FIXED | `closed` |
+| ALREADY FIXED | `closed` |
+| NOT-A-BUG | `invalid` |
+| WONTFIX | `wont-fix` |
+
 ### Resolution Section Template
 
 Add this to the ticket before moving:
@@ -181,6 +194,22 @@ fix({domain}): {TICKET_ID} - brief description
 
 # For NOT-A-BUG/WONTFIX (triage only, no code change):
 triage({TICKET_ID}): {NOT-A-BUG|WONTFIX} - brief reason
+```
+
+For multi-line commit messages, use HEREDOC format:
+
+```bash
+git commit -m "$(cat <<'EOF'
+fix(simic): B7-DRL-01 - correct reward scaling for accuracy delta
+
+The accuracy delta bonus was using absolute values instead of signed
+deltas, causing incorrect reward signals during accuracy drops.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+EOF
+)"
 ```
 
 ---
@@ -265,9 +294,10 @@ Invoke specialists when the fix touches their domain:
 ### For FIXED Resolution
 
 - [ ] Fix addresses root cause (not symptoms)
-- [ ] Tests pass
+- [ ] Tests pass (`uv run pytest`)
 - [ ] mypy passes on modified files
 - [ ] No defensive programming patterns added
+- [ ] Regression test added (for P1/P2 bugs or easily reproducible issues)
 
 ### For ALREADY FIXED Resolution
 
@@ -282,6 +312,7 @@ Invoke specialists when the fix touches their domain:
 ```
 docs/bugs/
 ├── triaged/                    # Validated bugs awaiting fix (start here)
+├── investigations/             # In-progress deep-dive analysis (working folder)
 ├── fixed/                      # Closed tickets (fix verified or already fixed)
 ├── wontfix/                    # Valid but intentional behavior
 ├── not-a-bug/                  # Invalid findings (false positive, exaggerated)
@@ -298,4 +329,4 @@ docs/process/
 
 - **[TRIAGE.md](./TRIAGE.md)** - Triage process (run before this)
 - **[ticket-template.md](../bugs/ticket-template.md)** - Template for new tickets
-- **superpowers:systematic-debugging** - Full systematic debugging skill
+- **superpowers:systematic-debugging** - Invoke this skill for root cause investigation during Phases 1-3. This document manages the *ticket lifecycle*; the skill provides the *debugging methodology*.
