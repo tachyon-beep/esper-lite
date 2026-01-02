@@ -1,6 +1,7 @@
 # Per-Env Reward Health & Always-Visible Metrics
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **Status:** COMPLETED (2026-01-03)
+> **Implementation Gaps:** See notes below
 
 **Goal:** Add per-env PBRS fraction and gaming rate to EnvDetailScreen, and eliminate jarring layout shifts by making all routine data rows always visible with dim placeholders.
 
@@ -10,7 +11,31 @@
 
 ---
 
-## Task 1: Add Gaming Tracking Fields to EnvState
+## Implementation Notes
+
+### Completed Tasks
+
+| Task | Status | Location |
+|------|--------|----------|
+| Task 1: Gaming fields in EnvState | ✅ | `schema.py:434-435, 471-475` |
+| Task 2: Aggregator tracking | ✅ | `aggregator.py:1202-1203, 1351-1353` |
+| Task 3: EnvDetailScreen always-visible | ✅ | `env_detail_screen.py` (15+ rows) |
+| Task 4: HistoricalEnvDetail always-visible | ✅ | `historical_env_detail.py` |
+| Task 5: EsperStatus always-visible | ✅ | `esper_status.py:73-154` |
+| Task 6: RunHeader always-visible | ⚠️ Partial | See gaps below |
+| Task 7: Tests | ✅ | Different file locations |
+
+### Gaps
+
+1. **RunHeader (Task 6):** The H/S/D (Healthy/Stale/Dead) env counts and T/B/F (Training/Blending/Fossilized) seed counts were not implemented. The header focuses on connection, progress, runtime, throughput, and system alarms instead.
+
+2. **Test file location:** Tests were added to existing test files (`test_schema.py`, `test_env_detail_screen.py`, `test_reward_health.py`) rather than creating a dedicated `test_always_visible_metrics.py`.
+
+---
+
+## Original Plan
+
+### Task 1: Add Gaming Tracking Fields to EnvState
 
 **Files:**
 - Modify: `src/esper/karn/sanctum/schema.py`
@@ -38,7 +63,7 @@ def gaming_rate(self) -> float:
 
 ---
 
-## Task 2: Update Aggregator to Track Gaming Rate
+### Task 2: Update Aggregator to Track Gaming Rate
 
 **Files:**
 - Modify: `src/esper/karn/sanctum/aggregator.py`
@@ -63,7 +88,7 @@ env_state.total_reward_steps = 0
 
 ---
 
-## Task 3: Make EnvDetailScreen Metrics Always Visible
+### Task 3: Make EnvDetailScreen Metrics Always Visible
 
 **Files:**
 - Modify: `src/esper/karn/sanctum/widgets/env_detail_screen.py`
@@ -121,7 +146,7 @@ signals.append(f"  {gaming_text}", style=gaming_style)
 
 ---
 
-## Task 4: Make HistoricalEnvDetail Metrics Always Visible
+### Task 4: Make HistoricalEnvDetail Metrics Always Visible
 
 **Files:**
 - Modify: `src/esper/karn/sanctum/widgets/historical_env_detail.py`
@@ -130,7 +155,7 @@ Apply same pattern as Task 3 to `_render_metrics()` method. Note: Historical vie
 
 ---
 
-## Task 5: Make EsperStatus Always Visible
+### Task 5: Make EsperStatus Always Visible
 
 **Files:**
 - Modify: `src/esper/karn/sanctum/widgets/esper_status.py`
@@ -148,7 +173,7 @@ Apply same pattern as Task 3 to `_render_metrics()` method. Note: Historical vie
 
 ---
 
-## Task 6: Make RunHeader Stats Always Visible
+### Task 6: Make RunHeader Stats Always Visible
 
 **Files:**
 - Modify: `src/esper/karn/sanctum/widgets/run_header.py`
@@ -164,7 +189,7 @@ Apply same pattern as Task 3 to `_render_metrics()` method. Note: Historical vie
 
 ---
 
-## Task 7: Write Tests
+### Task 7: Write Tests
 
 **Files:**
 - Create: `tests/karn/sanctum/test_always_visible_metrics.py`

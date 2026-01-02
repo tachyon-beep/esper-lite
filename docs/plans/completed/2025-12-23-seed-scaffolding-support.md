@@ -1,8 +1,6 @@
 # Seed Scaffolding Support Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
-
-**Status:** PARTIALLY IMPLEMENTED (~75%)
+> **Status:** COMPLETED (2026-01-03)
 
 **Goal:** Enable Tamiyo to learn and exploit seed scaffolding behavior - where one seed "primes" another, making the second seed more powerful, then gets pruned after its scaffolding role is complete.
 
@@ -12,26 +10,23 @@
 
 ---
 
-## Implementation Status (Gap Analysis 2025-12-24)
+## Implementation Summary
 
-| Phase | Task | Status |
-|-------|------|--------|
-| **Phase 1** | Use raw contribution_velocity | ✅ Done |
-| **Phase 2.1** | Add interaction fields to SeedMetrics | ✅ Done |
-| **Phase 2.2** | Update feature extraction (SLOT_FEATURE_SIZE=39) | ✅ Done |
-| **Phase 2.3** | Compute interaction metrics in vectorized | ✅ Done |
-| **Phase 3.1** | Add synergy bonus to rewards | ✅ Done |
-| **Phase 3.2** | Scaffold hindsight credit | ❌ **NOT IMPLEMENTED** |
-| **Phase 3.3** | Increase GAE lambda to 0.98 | ❓ Unverified |
-| **Phase 4** | Optional aux value head | ⏸️ Skipped (by design) |
+| Phase | Task | Status | Evidence |
+|-------|------|--------|----------|
+| **Phase 1** | Use raw contribution_velocity | ✅ | `features.py:219,399` |
+| **Phase 2.1** | Add interaction fields to SeedMetrics | ✅ | `reports.py:59` |
+| **Phase 2.2** | Update feature extraction | ✅ | Evolved to OBS_V3 schema |
+| **Phase 2.3** | Compute interaction metrics in vectorized | ✅ | `vectorized.py` |
+| **Phase 3.1** | Add synergy bonus to rewards | ✅ | `rewards.py:721-729` |
+| **Phase 3.2** | Scaffold hindsight credit | ✅ | `vectorized.py:2940`, `rewards.py:1246` |
+| **Phase 3.3** | GAE lambda = 0.98 | ✅ | `leyline/__init__.py:139` |
+| **Phase 4** | Optional aux value head | ⏸️ | Skipped (by design) |
 
-### Gap: Scaffold Hindsight Credit (Phase 3.2)
+### Notes
 
-**What's missing:** `compute_scaffold_hindsight_credit()` function that gives retroactive reward to scaffolds when their beneficiary succeeds.
-
-**Impact:** Scaffolds that get pruned *before* their beneficiary fossilizes won't receive credit. The real-time synergy bonus (Phase 3.1 ✅) partially compensates, but full credit assignment for delayed scaffolding payoff is missing.
-
-**Decision needed:** Is this blocking for Phase 3 Transformers, or is the synergy bonus sufficient?
+- The observation schema evolved beyond the original plan to OBS_V3, but all core scaffolding features are implemented
+- The original plan status table was outdated—Phase 3.2 was marked "NOT IMPLEMENTED" but is fully integrated
 
 ---
 
@@ -962,12 +957,12 @@ explicit temporal ordering beyond what LSTM captures."
 
 After completing all phases, verify:
 
-- [ ] `PYTHONPATH=src uv run pytest tests/tamiyo/policy/test_features.py -v` - All feature tests pass
-- [ ] `PYTHONPATH=src uv run pytest tests/leyline/ -v` - All leyline tests pass
-- [ ] `PYTHONPATH=src uv run pytest tests/simic/rewards/ -v` - All reward tests pass
-- [ ] `PYTHONPATH=src timeout 120 uv run python -m esper.scripts.train ppo --episodes 5 --n-envs 2` - Training runs without errors
-- [ ] Observation dimension matches network input dimension (no shape errors)
-- [ ] Telemetry shows interaction metrics being populated
+- [x] `PYTHONPATH=src uv run pytest tests/tamiyo/policy/test_features.py -v` - All feature tests pass
+- [x] `PYTHONPATH=src uv run pytest tests/leyline/ -v` - All leyline tests pass
+- [x] `PYTHONPATH=src uv run pytest tests/simic/rewards/ -v` - All reward tests pass
+- [x] `PYTHONPATH=src timeout 120 uv run python -m esper.scripts.train ppo --episodes 5 --n-envs 2` - Training runs without errors
+- [x] Observation dimension matches network input dimension (no shape errors)
+- [x] Telemetry shows interaction metrics being populated
 
 ---
 

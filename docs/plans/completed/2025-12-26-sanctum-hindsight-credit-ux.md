@@ -1,12 +1,25 @@
 # Sanctum Hindsight Credit UX Integration
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **Status:** COMPLETED (2026-01-03)
 
 **Goal:** Wire scaffold hindsight credit telemetry to Sanctum's EnvDetailScreen with a refactored multi-row reward breakdown layout.
 
 **Architecture:** Add hindsight credit fields to Sanctum's `RewardComponents` schema, wire aggregator to populate from telemetry, refactor `EnvDetailScreen._render_metrics()` to semantic grouping (Signals/Credits/Warnings), and delete the orphaned `RewardComponents` widget.
 
 **Tech Stack:** Textual TUI, Rich text formatting, dataclasses
+
+---
+
+## Implementation Summary
+
+| Task | Description | Status | Location |
+|------|-------------|--------|----------|
+| 1 | Add hindsight fields to schema | ✅ | `schema.py:981-983` |
+| 2 | Wire aggregator | ✅ | `aggregator.py:1340-1348` |
+| 3 | Multi-row semantic layout | ✅ | `env_detail_screen.py:566-647` |
+| 4 | Delete orphaned widget | ✅ | `reward_components.py` removed |
+| 5 | Add display test | ✅ | `test_env_detail_screen.py:413` |
+| 6 | Final verification | ✅ | All tests pass |
 
 ---
 
@@ -27,7 +40,9 @@ Reward Total     │ +0.150
 
 ---
 
-## Task 1: Add hindsight credit fields to RewardComponents schema
+## Original Plan
+
+### Task 1: Add hindsight credit fields to RewardComponents schema
 
 **Files:**
 - Modify: `src/esper/karn/sanctum/schema.py:539-584`
@@ -66,7 +81,7 @@ git commit -m "feat(sanctum): add hindsight credit fields to RewardComponents sc
 
 ---
 
-## Task 2: Wire aggregator to populate hindsight credit from telemetry
+### Task 2: Wire aggregator to populate hindsight credit from telemetry
 
 **Files:**
 - Modify: `src/esper/karn/sanctum/aggregator.py:1102-1122`
@@ -99,7 +114,7 @@ git commit -m "feat(sanctum): wire hindsight credit from telemetry to RewardComp
 
 ---
 
-## Task 3: Refactor EnvDetailScreen reward display to multi-row layout
+### Task 3: Refactor EnvDetailScreen reward display to multi-row layout
 
 **Files:**
 - Modify: `src/esper/karn/sanctum/widgets/env_detail_screen.py:490-505`
@@ -179,7 +194,7 @@ Hindsight credit shows scaffold context (3x, 12.5e) when active."
 
 ---
 
-## Task 4: Delete orphaned RewardComponents widget
+### Task 4: Delete orphaned RewardComponents widget
 
 **Files:**
 - Delete: `src/esper/karn/sanctum/widgets/reward_components.py`
@@ -220,7 +235,7 @@ Per No Legacy Code Policy."
 
 ---
 
-## Task 5: Add test for hindsight credit display
+### Task 5: Add test for hindsight credit display
 
 **Files:**
 - Modify: `tests/karn/sanctum/test_env_detail_screen.py`
@@ -268,7 +283,7 @@ git commit -m "test(sanctum): add hindsight credit display test"
 
 ---
 
-## Task 6: Final verification
+### Task 6: Final verification
 
 **Step 1: Run full Sanctum test suite**
 
