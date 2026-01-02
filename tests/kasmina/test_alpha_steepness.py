@@ -2,6 +2,8 @@
 
 import math
 
+import pytest
+
 from esper.kasmina.alpha_controller import AlphaController, _curve_progress
 from esper.leyline.alpha import AlphaCurve
 
@@ -94,8 +96,8 @@ class TestAlphaControllerSteepnessSerialization:
         restored = AlphaController.from_dict(data)
         assert restored.alpha_steepness == 24.0
 
-    def test_from_dict_defaults_steepness_for_old_checkpoints(self):
-        """from_dict() should default steepness=12 for old checkpoints."""
+    def test_from_dict_rejects_old_checkpoints_without_steepness(self):
+        """from_dict() should reject checkpoints missing alpha_steepness (no legacy support)."""
         old_data = {
             "alpha": 0.5,
             "alpha_start": 0.0,
@@ -106,5 +108,6 @@ class TestAlphaControllerSteepnessSerialization:
             "alpha_steps_done": 2,
             # No alpha_steepness - old checkpoint
         }
-        restored = AlphaController.from_dict(old_data)
-        assert restored.alpha_steepness == 12.0  # Default
+        # Per no-legacy-code policy: old checkpoints must fail-fast
+        with pytest.raises(KeyError, match="alpha_steepness"):
+            AlphaController.from_dict(old_data)

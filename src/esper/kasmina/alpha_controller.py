@@ -176,7 +176,7 @@ class AlphaController:
             alpha_target=float(data["alpha_target"]),
             alpha_mode=AlphaMode(int(data["alpha_mode"])),
             alpha_curve=AlphaCurve(int(data["alpha_curve"])),
-            alpha_steepness=float(data.get("alpha_steepness", 12.0)),  # Default for old checkpoints
+            alpha_steepness=float(data["alpha_steepness"]),
             alpha_steps_total=int(data["alpha_steps_total"]),
             alpha_steps_done=int(data["alpha_steps_done"]),
         )

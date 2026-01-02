@@ -2288,7 +2288,10 @@ def train_ppo_vectorized(
                     # Compute interaction terms and populate scaffolding metrics
                     if len(active_slots) >= 2 and i in pair_accs:
                         # Use solo ablation fallback for single-seed: min(baseline_accs) = host-only acc
-                        all_off_acc = all_disabled_accs.get(i) or min(baseline_accs[i].values())
+                        # Explicit None check: 0.0 is a valid baseline accuracy (model predicts nothing)
+                        all_off_acc = all_disabled_accs.get(i)
+                        if all_off_acc is None:
+                            all_off_acc = min(baseline_accs[i].values())
                         for (idx_a, idx_b), pair_acc in pair_accs[i].items():
                             # Map indices to slot IDs
                             slot_a = active_slots[idx_a]

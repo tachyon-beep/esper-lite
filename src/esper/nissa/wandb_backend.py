@@ -344,7 +344,9 @@ class WandbBackend(OutputBackend):
         if step is None:
             return
 
-        slot_id = event.data.slot_id or event.slot_id or "unknown"
+        slot_id = event.data.slot_id or event.slot_id
+        if slot_id is None:
+            raise ValueError("slot_id required for SEED_GERMINATED event")
 
         metrics = {
             "seeds/germinated_count": 1,
@@ -370,7 +372,9 @@ class WandbBackend(OutputBackend):
         if step is None:
             return
 
-        slot_id = event.slot_id or "unknown"
+        if event.slot_id is None:
+            raise ValueError("slot_id required for SEED_STAGE_CHANGED event")
+        slot_id = event.slot_id
 
         # Log stage name
         metrics = {
@@ -395,7 +399,9 @@ class WandbBackend(OutputBackend):
         if step is None:
             return
 
-        slot_id = event.slot_id or "unknown"
+        if event.slot_id is None:
+            raise ValueError("slot_id required for SEED_FOSSILIZED event")
+        slot_id = event.slot_id
 
         metrics = {
             "seeds/fossilized_count": 1,
@@ -433,7 +439,9 @@ class WandbBackend(OutputBackend):
         if step is None:
             return
 
-        slot_id = event.slot_id or "unknown"
+        if event.slot_id is None:
+            raise ValueError("slot_id required for SEED_PRUNED event")
+        slot_id = event.slot_id
 
         metrics = {
             "seeds/pruned_count": 1,

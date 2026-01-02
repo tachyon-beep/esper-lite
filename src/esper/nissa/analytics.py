@@ -178,7 +178,9 @@ class BlueprintAnalytics(OutputBackend):
             if isinstance(event.data, SeedGerminatedPayload):
                 bp_id = event.data.blueprint_id
                 env_id = event.data.env_id
-                seed_id = event.seed_id or "unknown"
+                if event.seed_id is None:
+                    raise ValueError("seed_id required for SEED_GERMINATED event")
+                seed_id = event.seed_id
                 params = event.data.params
             else:
                 _logger.warning(f"Unexpected SEED_GERMINATED payload type: {type(event.data)}")
@@ -196,7 +198,9 @@ class BlueprintAnalytics(OutputBackend):
             if isinstance(event.data, SeedFossilizedPayload):
                 bp_id = event.data.blueprint_id
                 env_id = event.data.env_id
-                seed_id = event.seed_id or "unknown"
+                if event.seed_id is None:
+                    raise ValueError("seed_id required for SEED_FOSSILIZED event")
+                seed_id = event.seed_id
                 improvement = event.data.improvement
                 blending_delta = event.data.blending_delta if event.data.blending_delta is not None else 0.0
                 counterfactual = event.data.counterfactual
@@ -228,9 +232,13 @@ class BlueprintAnalytics(OutputBackend):
 
         elif event.event_type == TelemetryEventType.SEED_PRUNED:
             if isinstance(event.data, SeedPrunedPayload):
-                bp_id = event.data.blueprint_id or "unknown"
+                if event.data.blueprint_id is None:
+                    raise ValueError("blueprint_id required for SEED_PRUNED event")
+                bp_id = event.data.blueprint_id
                 env_id = event.data.env_id
-                seed_id = event.seed_id or "unknown"
+                if event.seed_id is None:
+                    raise ValueError("seed_id required for SEED_PRUNED event")
+                seed_id = event.seed_id
                 improvement = event.data.improvement
                 blending_delta = event.data.blending_delta if event.data.blending_delta is not None else 0.0
                 counterfactual = event.data.counterfactual

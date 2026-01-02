@@ -367,9 +367,10 @@ class KarnCollector:
         for payload in payloads_for_epoch:
             total_val_loss += payload.val_loss
             total_val_accuracy += payload.val_accuracy
-            total_train_loss += payload.train_loss or 0.0
-            total_train_accuracy += payload.train_accuracy or 0.0
-            total_host_grad_norm += payload.host_grad_norm or 0.0
+            # Explicit None checks: 0.0 is a valid value (not missing data)
+            total_train_loss += payload.train_loss if payload.train_loss is not None else 0.0
+            total_train_accuracy += payload.train_accuracy if payload.train_accuracy is not None else 0.0
+            total_host_grad_norm += payload.host_grad_norm if payload.host_grad_norm is not None else 0.0
 
         # Update host snapshot with aggregated (mean) metrics
         current_epoch.epoch = inner_epoch

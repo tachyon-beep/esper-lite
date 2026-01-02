@@ -181,7 +181,7 @@ def compute_action_masks(
             f"Valid slot IDs: {slot_config.slot_ids}"
         )
 
-    device = device or torch.device("cpu")
+    device = device if device is not None else torch.device("cpu")
 
     # Order enabled slots according to slot_config order
     ordered = tuple(slot_id for slot_id in slot_config.slot_ids if slot_id in enabled_set)
@@ -338,7 +338,7 @@ def compute_batch_masks(
             f"batch_slot_states length ({len(batch_slot_states)})"
         )
 
-    device = device or torch.device("cpu")
+    device = device if device is not None else torch.device("cpu")
 
     # Delegate to compute_action_masks for each env
     # (topology/enabled_slots validation happens in compute_action_masks)
@@ -492,9 +492,13 @@ class MaskedCategorical:
             _validate_logits(logits)
 
         self.mask = mask
-        # Use Python float directly - masked_fill broadcasts correctly
-        # Avoids tensor allocation on every __init__ (hot path optimization)
-        self.masked_logits = logits.masked_fill(~mask, MASKED_LOGIT_VALUE)
+        # Upcast logits to float32 for numerical stability.
+        # Under AMP, logits may arrive as float16/bfloat16. The log_softmax in
+        # Categorical can produce numerically unstable results in reduced precision.
+        # This is defensive - the main fix is in ppo.py which runs evaluate_actions
+        # outside autocast. But this upcast provides belt-and-suspenders safety.
+        logits_f32 = logits.float()
+        self.masked_logits = logits_f32.masked_fill(~mask, MASKED_LOGIT_VALUE)
         self._dist = Categorical(logits=self.masked_logits)
 
     @property
