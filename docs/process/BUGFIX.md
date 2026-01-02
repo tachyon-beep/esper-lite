@@ -1,6 +1,8 @@
 # Bug Ticket Remediation Process
 
-This document codifies the process for working through bug tickets from the 2712 quality audit.
+This document codifies the process for **fixing** bug tickets that have been triaged.
+
+**Prerequisite:** Tickets should be triaged first using the [TRIAGE.md](./TRIAGE.md) process. This document applies to tickets in `docs/bugs/triaged/`.
 
 ---
 
@@ -159,21 +161,28 @@ Update the ticket's **Status** field and move to the appropriate folder:
 
 ```bash
 # Update status to 'closed' in the ticket, then:
-mv docs/bugs/batch{N}/{TICKET_ID}.md docs/bugs/fixed/
+mv docs/bugs/triaged/{TICKET_ID}.md docs/bugs/fixed/
 ```
 
-### Won't Fix / Invalid / Duplicate
+### Won't Fix (Intentional Behavior)
 
 ```bash
 # Update status to 'wont-fix' in the ticket, add Resolution section explaining why, then:
-mv docs/bugs/batch{N}/{TICKET_ID}.md docs/bugs/closed/
+mv docs/bugs/triaged/{TICKET_ID}.md docs/bugs/wontfix/
+```
+
+### Invalid / Duplicate
+
+```bash
+# Update status to 'invalid' in the ticket, add Resolution section explaining why, then:
+mv docs/bugs/triaged/{TICKET_ID}.md docs/bugs/not-a-bug/
 ```
 
 ### Already Fixed by Another Ticket
 
 ```bash
 # Add to Resolution: "Fixed by {OTHER_TICKET_ID}", then:
-mv docs/bugs/batch{N}/{TICKET_ID}.md docs/bugs/fixed/
+mv docs/bugs/triaged/{TICKET_ID}.md docs/bugs/fixed/
 ```
 
 ---
@@ -182,13 +191,17 @@ mv docs/bugs/batch{N}/{TICKET_ID}.md docs/bugs/fixed/
 
 ```
 docs/bugs/
-├── batch1/ through batch10/    # Open tickets by batch
+├── triaged/                    # Validated bugs awaiting fix (start here)
 ├── fixed/                      # Closed tickets (fix verified)
-├── closed/                     # Closed tickets (won't fix, duplicate, etc.)
+├── wontfix/                    # Valid but intentional behavior
+├── not-a-bug/                  # Invalid findings (false positive, duplicate)
 ├── archive-pre-2712/           # Legacy tickets from before audit
 ├── SUMMARY.md                  # Statistics overview
-├── PROCESS.md                  # This file
 └── ticket-template.md          # Template for new tickets
+
+docs/process/
+├── TRIAGE.md                   # Triage process (run first)
+└── BUGFIX.md                   # This file (fix triaged tickets)
 ```
 
 ---
@@ -225,7 +238,7 @@ Work through tickets in batch order (batch1, batch2, ...) to maintain:
 
 ### Already Fixed
 
-If a ticket was fixed by a previous ticket in the batch:
+If a ticket was fixed by a previous ticket:
 
 1. Document which ticket fixed it
 2. Get sign-off confirming it's resolved
@@ -233,16 +246,31 @@ If a ticket was fixed by a previous ticket in the batch:
 
 ### Won't Fix
 
-If a ticket is invalid or intentional behavior:
+If a ticket describes intentional behavior:
 
 1. Document rationale
 2. Get sign-off confirming decision
-3. Move to `closed/` with note
+3. Move to `wontfix/` with note
+
+### Invalid
+
+If a ticket is a false positive or duplicate:
+
+1. Document rationale
+2. Move to `not-a-bug/` with note
 
 ### Deferred
 
 If a ticket is valid but out of scope for current push:
 
 1. Document why it's deferred
-2. Leave in batch folder
+2. Leave in `triaged/` folder
 3. Update ticket status to "deferred"
+
+---
+
+## Related Documentation
+
+- **[TRIAGE.md](./TRIAGE.md)** - Triage process (run before this)
+- **[ticket-template.md](../bugs/ticket-template.md)** - Template for new tickets
+- **[SUMMARY.md](../bugs/SUMMARY.md)** - Bug statistics overview
