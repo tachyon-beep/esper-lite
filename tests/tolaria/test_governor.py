@@ -922,3 +922,101 @@ class TestTolariaGovernor:
         assert gov._panic_reason is None
         assert gov._pending_panic is False
         assert gov.consecutive_panics == 0
+
+    def test_nan_panic_does_not_falsify_consecutive_panics(self):
+        """NaN-triggered panic should NOT falsify consecutive_panics counter.
+
+        Regression test for telemetry integrity bug: the old code set
+        consecutive_panics = min_panics_before_rollback to force rollback,
+        but this falsified telemetry (claiming 3 consecutive panics when
+        there was only 1 NaN event). The panic_reason field already
+        distinguishes immediate panics from consecutive divergence.
+        """
+        from esper.tolaria import TolariaGovernor
+
+        model = DummyModel()
+        gov = TolariaGovernor(model)
+
+        # Build history for context
+        for _ in range(15):
+            gov.check_vital_signs(1.0)
+
+        # Verify counter is 0 before NaN
+        assert gov.consecutive_panics == 0
+
+        # NaN should trigger immediate panic but NOT falsify the counter
+        result = gov.check_vital_signs(float('nan'))
+        assert result is True
+        assert gov._panic_reason == "governor_nan"
+
+        # CRITICAL: consecutive_panics should remain 0 (one NaN is not
+        # "3 consecutive panics")
+        assert gov.consecutive_panics == 0, (
+            f"NaN panic should not falsify consecutive_panics, got {gov.consecutive_panics}"
+        )
+
+    def test_lobotomy_panic_does_not_falsify_consecutive_panics(self):
+        """Lobotomy-triggered panic should NOT falsify consecutive_panics counter.
+
+        Same telemetry integrity issue as NaN - lobotomy is detected from
+        a single observation, not consecutive anomalies.
+        """
+        from esper.tolaria import TolariaGovernor
+        import math
+
+        model = DummyModel()
+        gov = TolariaGovernor(model, random_guess_loss=math.log(10))
+
+        # Build healthy history (loss ~0.8, well below random guess)
+        for _ in range(15):
+            gov.check_vital_signs(0.8)
+
+        # Verify counter is 0 before lobotomy
+        assert gov.consecutive_panics == 0
+
+        # Jump to random guess loss (lobotomy signature)
+        result = gov.check_vital_signs(math.log(10))
+        assert result is True
+        assert gov._panic_reason == "governor_lobotomy"
+
+        # CRITICAL: consecutive_panics should remain 0
+        assert gov.consecutive_panics == 0, (
+            f"Lobotomy panic should not falsify consecutive_panics, got {gov.consecutive_panics}"
+        )
+
+    def test_rollback_loads_cpu_snapshot_directly(self):
+        """Rollback should load CPU snapshot directly without GPU pre-copy.
+
+        Regression test for OOM bug: the old code created a full GPU copy
+        of the snapshot before loading, doubling memory usage during the
+        most memory-critical moment (recovery from instability).
+
+        This test verifies the snapshot remains on CPU after rollback
+        (not moved to GPU as a side effect of pre-loading).
+        """
+        from esper.tolaria import TolariaGovernor
+
+        model = DummyModel()
+        gov = TolariaGovernor(model)
+
+        # Take snapshot (stored on CPU by design)
+        gov.snapshot()
+
+        # Verify snapshot is on CPU
+        for key, value in gov.last_good_state.items():
+            if isinstance(value, torch.Tensor):
+                assert value.device.type == "cpu", (
+                    f"Snapshot tensor '{key}' should be on CPU before rollback"
+                )
+
+        # Build history and execute rollback
+        for _ in range(5):
+            gov.loss_history.append(1.0)
+        gov.execute_rollback()
+
+        # Snapshot should STILL be on CPU (not moved as side effect)
+        for key, value in gov.last_good_state.items():
+            if isinstance(value, torch.Tensor):
+                assert value.device.type == "cpu", (
+                    f"Snapshot tensor '{key}' should remain on CPU after rollback"
+                )

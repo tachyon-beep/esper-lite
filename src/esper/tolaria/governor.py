@@ -160,11 +160,13 @@ class TolariaGovernor:
         This is a NUCLEAR OPTION - should almost never trigger during normal training.
         """
         # Immediate panic on NaN/Inf - these are always catastrophic
+        # NOTE: We do NOT mutate consecutive_panics here. The counter should reflect
+        # actual consecutive anomalies, not be used as a control knob. The panic_reason
+        # ("governor_nan") already distinguishes this path for telemetry analysis.
         if math.isnan(current_loss) or math.isinf(current_loss):
             self._pending_panic = False
             self._panic_loss = current_loss
             self._panic_reason = "governor_nan"
-            self.consecutive_panics = self.min_panics_before_rollback  # Skip to rollback
             return True
 
         # Lobotomy detection: loss jumped to exactly random guessing
@@ -177,12 +179,12 @@ class TolariaGovernor:
             lobotomy_tolerance = 0.065 * self.random_guess_loss
             # If we were doing well (loss < 60% of random guess) and suddenly
             # hit exactly the random guess loss (±tolerance), that's a lobotomy
+            # NOTE: We do NOT mutate consecutive_panics here (see NaN path comment).
             if (avg < self.random_guess_loss * 0.6 and
                 abs(current_loss - self.random_guess_loss) < lobotomy_tolerance):
                 self._pending_panic = False
                 self._panic_loss = current_loss
                 self._panic_reason = "governor_lobotomy"
-                self.consecutive_panics = self.min_panics_before_rollback
                 return True
 
         # Need sufficient history for stable estimates
@@ -239,8 +241,8 @@ class TolariaGovernor:
 
         Rollback semantics:
         - Restore host + fossilized seeds from snapshot
-        - Discard any live/experimental seeds (not fossilized)
-        - Reset seed slots to empty/DORMANT state
+        - Prune any live/experimental seeds (sets them to PRUNED with embargo)
+        - After embargo period expires, pruned slots become dormant again
 
         IMPORTANT: Caller must clear optimizer state after rollback.
         PyTorch's load_state_dict() copies weights IN-PLACE (same Parameter
@@ -288,14 +290,12 @@ class TolariaGovernor:
         # 1. Snapshot excludes experimental seeds (by design)
         # 2. Current model may have different seed state than snapshot
         # 3. execute_rollback prunes all seeds before restore, so missing keys are expected
-        # Move all tensors to model device in one batch before loading, avoiding
-        # individual CPU->GPU transfers for each parameter.
-        # Use non_blocking=True for async CPU->GPU transfer
-        state_on_device = {
-            k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
-            for k, v in self.last_good_state.items()
-        }
-
+        #
+        # MEMORY OPTIMIZATION: Load CPU snapshot directly instead of pre-copying to GPU.
+        # PyTorch's load_state_dict handles CPU->GPU transfer per-parameter, avoiding
+        # a full GPU duplicate that would double memory usage during rollback.
+        # This is critical because rollback often occurs when memory is already tight.
+        #
         # CRITICAL: Synchronize ALL CUDA streams before load_state_dict
         # Using device-level sync (not just current_stream) for safety - ensures
         # no other operations are modifying model parameters during rollback.
@@ -303,7 +303,9 @@ class TolariaGovernor:
         if device.type == "cuda":
             torch.cuda.synchronize(device)
 
-        missing_keys, unexpected_keys = self.model.load_state_dict(state_on_device, strict=False)
+        missing_keys, unexpected_keys = self.model.load_state_dict(
+            self.last_good_state, strict=False
+        )
 
         # Emit single rollback event with all context (B1-CR-02: no duplicate emissions)
         hub.emit(TelemetryEvent(
