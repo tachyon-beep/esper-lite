@@ -1,4 +1,4 @@
-"""AttentionHeatmapPanel - Per-decision policy head outputs visualization.
+"""DecisionHeatmapPanel - Per-decision policy head outputs visualization.
 
 Shows the output of each policy head for Tamiyo's recent decisions,
 with confidence indicated by heat bar intensity.

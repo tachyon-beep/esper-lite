@@ -36,11 +36,11 @@ from textual.message import Message
 from .status_banner import StatusBanner
 from .ppo_losses_panel import PPOLossesPanel
 from .health_status_panel import HealthStatusPanel
-from .heads_grid import HeadsPanel
-from .action_context import ActionContext
+from .action_heads_panel import HeadsPanel
+from .action_distribution import ActionContext
 from .slots_panel import SlotsPanel
 from .decisions_column import DecisionDetailRequested, DecisionPinRequested, DecisionsColumn
-from .attention_heatmap import AttentionHeatmapPanel
+from .decision_heatmap import AttentionHeatmapPanel
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot

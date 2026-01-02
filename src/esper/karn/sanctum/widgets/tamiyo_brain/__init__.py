@@ -10,8 +10,8 @@ Usage:
     widget.update_snapshot(snapshot)
 """
 
-from .widget import TamiyoBrain
+from .tamiyo_brain import TamiyoBrain
 from .ppo_losses_panel import PPOLossesPanel
-from .attention_heatmap import AttentionHeatmapPanel
+from .decision_heatmap import AttentionHeatmapPanel
 
 __all__ = ["TamiyoBrain", "PPOLossesPanel", "AttentionHeatmapPanel"]

@@ -26,7 +26,7 @@ from textual.widgets import Static
 
 from esper.karn.constants import TUIThresholds
 
-from .primary_metrics import detect_trend, render_sparkline, trend_style
+from .sparkline_utils import detect_trend, render_sparkline, trend_style
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot

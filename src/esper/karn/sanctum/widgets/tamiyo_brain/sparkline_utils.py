@@ -1,8 +1,10 @@
-"""PrimaryMetrics - Episode Return and Entropy sparklines.
+"""Sparkline utilities for TamiyoBrain panels.
 
-Displays the two most important RL metrics prominently at the top:
-    Ep.Return  ▁▂▃▄▅▆▇█  -9.8 ↘    LR:1e-04  EntCoef:0.10
-    Entropy    █▇▆▅▄▃▂▁   7.89 →
+Provides sparkline rendering, trend detection, and styling functions
+used by PPOLossesPanel and other metric displays.
+
+Note: PrimaryMetrics class below is currently unused but retained
+for potential future use.
 """
 
 from __future__ import annotations

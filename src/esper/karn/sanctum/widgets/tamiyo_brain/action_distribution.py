@@ -1,4 +1,4 @@
-"""ActionContext - Action distribution and sequence display.
+"""ActionDistribution - Action distribution and sequence display.
 
 Layout (7 lines, Policy V2):
 1. This batch: [▓▓▓▓░░░░░░░░░░░░░░░░] bar for current training batch

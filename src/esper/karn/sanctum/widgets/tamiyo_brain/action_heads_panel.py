@@ -1,4 +1,4 @@
-"""HeadsPanel - Action head entropy and gradient heatmaps.
+"""ActionHeadsPanel - Action head entropy and gradient heatmaps.
 
 Uses vertical layout to ensure values align directly under their labels:
 

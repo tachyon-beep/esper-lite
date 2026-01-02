@@ -1,4 +1,4 @@
-"""Tests for HeadsPanel widget."""
+"""Tests for ActionHeadsPanel widget."""
 from __future__ import annotations
 
 import math
@@ -11,7 +11,7 @@ def test_heads_config_matches_leyline_head_max_entropies():
     it explicitly to document the contract and provide clear failure messages.
     """
     from esper.leyline import HEAD_MAX_ENTROPIES
-    from esper.karn.sanctum.widgets.tamiyo_brain.heads_grid import (
+    from esper.karn.sanctum.widgets.tamiyo_brain.action_heads_panel import (
         HEAD_CONFIG,
         _get_head_key,
     )
@@ -123,7 +123,7 @@ def test_prune_op_has_alpha_schedule_heads():
 
 def test_head_state_health_classification():
     """HeadsPanel._head_state should classify based on entropy + gradient health."""
-    from esper.karn.sanctum.widgets.tamiyo_brain.heads_grid import HeadsPanel
+    from esper.karn.sanctum.widgets.tamiyo_brain.action_heads_panel import HeadsPanel
 
     panel = HeadsPanel()
 
@@ -170,7 +170,7 @@ def test_heads_panel_shows_gradient_flow_footer():
         SanctumSnapshot,
         TamiyoState,
     )
-    from esper.karn.sanctum.widgets.tamiyo_brain.heads_grid import HeadsPanel
+    from esper.karn.sanctum.widgets.tamiyo_brain.action_heads_panel import HeadsPanel
 
     snapshot = SanctumSnapshot()
     snapshot.tamiyo = TamiyoState()
