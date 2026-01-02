@@ -60,6 +60,7 @@ runner = "PYTHONPATH=src uv run pytest -q -x"
 dev = [
     "mypy>=1.19.1",
     "types-psutil>=7.1.3.20251211",
+    "types-tqdm>=4.67.0",
 ]
 
 # Type checking configuration
