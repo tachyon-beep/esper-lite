@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B9-DRL-03` |
 | **Severity** | `P2` |
-| **Status** | `open` |
+| **Status** | `closed` |
 | **Batch** | 9 |
 | **Agent** | `drl` |
 | **Domain** | `tamiyo/heuristic` |
@@ -112,6 +112,49 @@ assert improvement is not None, "HOLDING seeds must have improvement metric"
 ## Related Findings
 
 - B9-DRL-01: Blueprint selection fallback (related heuristic logic)
+
+---
+
+## Resolution
+
+### Status: NOT-A-BUG
+
+**Closed via Systematic Debugging investigation.**
+
+#### Why This Is Not A Bug
+
+The ticket's premise is incorrect: `improvement` **cannot** be `None`.
+
+| Claim | Status | Evidence |
+|-------|--------|----------|
+| "`improvement` can be `None`" | ❌ FALSE | `total_improvement` defaults to 0.0 |
+| "both metrics are missing" | ❌ FALSE | `total_improvement` always has a value |
+| "TypeError on comparison" | ❌ IMPOSSIBLE | Fallback always yields a float |
+
+#### Data Model Evidence
+
+From `src/esper/leyline/reports.py` (SeedMetrics dataclass):
+```python
+total_improvement: float = 0.0  # DEFAULT VALUE - never None!
+counterfactual_contribution: float | None = None  # Can be None
+```
+
+The fallback logic in `heuristic.py`:
+```python
+improvement = contribution if contribution is not None else total_improvement
+```
+
+If `contribution` is `None`, the fallback is `total_improvement`, which is **always 0.0** (not `None`). The TypeError described in the ticket is structurally impossible.
+
+#### Root Cause of False Report
+
+The ticket author saw `counterfactual_contribution: float | None` and incorrectly assumed `total_improvement` had the same type signature. Checking the actual dataclass definition shows `total_improvement: float = 0.0`.
+
+#### Severity Downgrade
+
+- Original: P2 (Correctness bug)
+- Revised: N/A (Not a bug - impossible scenario)
+- Resolution: NOT-A-BUG
 
 ---
 
