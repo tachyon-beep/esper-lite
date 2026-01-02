@@ -523,6 +523,11 @@ class PPOAgent:
         head_ratio_max_across_epochs: dict[str, float] = {head: float("-inf") for head in HEAD_NAMES}
         joint_ratio_max_across_epochs: float = float("-inf")
 
+        # Per-head NaN/Inf tracking (for indicator lights)
+        # OR across all epochs - once detected, stays detected for this update
+        head_nan_detected: dict[str, bool] = {head: False for head in HEAD_NAMES}
+        head_inf_detected: dict[str, bool] = {head: False for head in HEAD_NAMES}
+
         for epoch_i in range(self.recurrent_n_epochs):
             if early_stopped:
                 break
@@ -586,11 +591,18 @@ class PPOAgent:
             nonfinite_found = False
             nonfinite_sources: list[str] = []
 
-            # Check new log_probs
+            # Check new log_probs - separate NaN from Inf per head
+            # Fast path: only drill down when isfinite fails (preserves 0 syncs in happy path)
             for key in HEAD_NAMES:
-                if not torch.isfinite(log_probs[key]).all():
-                    nonfinite_count = (~torch.isfinite(log_probs[key])).sum().item()
-                    nonfinite_sources.append(f"log_probs[{key}]: {nonfinite_count} non-finite")
+                lp = log_probs[key]
+                if not torch.isfinite(lp).all():
+                    # Slow path: distinguish NaN from Inf
+                    if torch.isnan(lp).any():
+                        head_nan_detected[key] = True
+                        nonfinite_sources.append(f"log_probs[{key}]: NaN detected")
+                    if torch.isinf(lp).any():
+                        head_inf_detected[key] = True
+                        nonfinite_sources.append(f"log_probs[{key}]: Inf detected")
                     nonfinite_found = True
 
             # Check old log_probs (stored as "{key}_log_probs" in data dict)
@@ -978,6 +990,10 @@ class PPOAgent:
         aggregated_result["joint_ratio_max"] = (
             joint_ratio_max_across_epochs if joint_ratio_max_across_epochs != float("-inf") else 1.0
         )
+
+        # Add per-head NaN/Inf flags (for indicator lights)
+        aggregated_result["head_nan_detected"] = head_nan_detected
+        aggregated_result["head_inf_detected"] = head_inf_detected
 
         # Add CUDA memory metrics (collected once per update, not averaged)
         if cuda_memory_metrics:

@@ -857,6 +857,9 @@ def emit_ppo_update_event(
             head_alpha_curve_ratio_max=metrics.get("head_alpha_curve_ratio_max", 1.0),
             head_op_ratio_max=metrics.get("head_op_ratio_max", 1.0),
             joint_ratio_max=metrics.get("joint_ratio_max", 1.0),
+            # Per-head NaN/Inf flags (for indicator lights)
+            head_nan_detected=metrics.get("head_nan_detected"),
+            head_inf_detected=metrics.get("head_inf_detected"),
             # Gradient quality metrics (per DRL expert)
             clip_fraction_positive=metrics.get("clip_fraction_positive", 0.0),
             clip_fraction_negative=metrics.get("clip_fraction_negative", 0.0),
