@@ -758,3 +758,69 @@ def test_aggregator_tracks_previous_gradient_norms():
     assert snapshot2.tamiyo.head_alpha_speed_grad_norm_prev == 0.13
     assert snapshot2.tamiyo.head_alpha_curve_grad_norm == 0.21
     assert snapshot2.tamiyo.head_alpha_curve_grad_norm_prev == 0.11
+
+
+def test_aggregator_latches_per_head_nan_inf():
+    """Aggregator should OR-latch per-head NaN/Inf flags (once set, stays set)."""
+    from esper.karn.sanctum.aggregator import SanctumAggregator
+    from esper.leyline.telemetry import PPOUpdatePayload, TelemetryEvent, TelemetryEventType
+
+    agg = SanctumAggregator()
+
+    # First update: NaN in op head
+    event1 = TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        data=PPOUpdatePayload(
+            policy_loss=0.1, value_loss=0.2, entropy=1.0, grad_norm=0.5,
+            kl_divergence=0.01, clip_fraction=0.1, nan_grad_count=1,
+            pre_clip_grad_norm=0.5,
+            head_nan_detected={"op": True, "slot": False},
+            head_inf_detected={},
+        ),
+    )
+    agg.process_event(event1)
+
+    snapshot = agg.get_snapshot()
+    assert snapshot.tamiyo.head_nan_latch["op"] is True
+    assert snapshot.tamiyo.head_nan_latch["slot"] is False
+
+    # Second update: No NaN, but latch should persist
+    event2 = TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        data=PPOUpdatePayload(
+            policy_loss=0.1, value_loss=0.2, entropy=1.0, grad_norm=0.5,
+            kl_divergence=0.01, clip_fraction=0.1, nan_grad_count=0,
+            pre_clip_grad_norm=0.5,
+            head_nan_detected={"op": False, "slot": False},
+            head_inf_detected={},
+        ),
+    )
+    agg.process_event(event2)
+
+    snapshot = agg.get_snapshot()
+    # op should STILL be latched (OR-latch behavior)
+    assert snapshot.tamiyo.head_nan_latch["op"] is True
+
+
+def test_aggregator_latches_both_nan_and_inf_same_head():
+    """A head can have both NaN and Inf detected - both latches should set."""
+    from esper.karn.sanctum.aggregator import SanctumAggregator
+    from esper.leyline.telemetry import PPOUpdatePayload, TelemetryEvent, TelemetryEventType
+
+    agg = SanctumAggregator()
+
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        data=PPOUpdatePayload(
+            policy_loss=0.1, value_loss=0.2, entropy=1.0, grad_norm=0.5,
+            kl_divergence=0.01, clip_fraction=0.1, nan_grad_count=1,
+            pre_clip_grad_norm=0.5,
+            head_nan_detected={"op": True},
+            head_inf_detected={"op": True},  # Same head has both!
+        ),
+    )
+    agg.process_event(event)
+
+    snapshot = agg.get_snapshot()
+    assert snapshot.tamiyo.head_nan_latch["op"] is True
+    assert snapshot.tamiyo.head_inf_latch["op"] is True

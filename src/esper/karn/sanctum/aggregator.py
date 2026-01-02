@@ -36,6 +36,9 @@ from esper.karn.sanctum.schema import (
     CounterfactualSnapshot,
     ShapleySnapshot,
     ShapleyEstimate,
+    SeedLifecycleStats,
+    ObservationStats,
+    EpisodeStats,
     compute_entropy_velocity,
     compute_collapse_risk,
     compute_correlation,
@@ -88,6 +91,34 @@ ACTION_NORMALIZATION = {
     "FOSSILIZE_G1": "FOSSILIZE",
     "FOSSILIZE_G2": "FOSSILIZE",
 }
+
+
+def detect_rate_trend(history: deque[float]) -> str:
+    """Detect trend in rate history (rising/stable/falling).
+
+    Compares recent 5 samples to older 5 samples.
+    """
+    if len(history) < 5:
+        return "stable"
+
+    recent = list(history)[-5:]
+    older = list(history)[-10:-5] if len(history) >= 10 else list(history)[:5]
+
+    if not older:
+        return "stable"
+
+    recent_mean = sum(recent) / len(recent)
+    older_mean = sum(older) / len(older)
+
+    # 20% change threshold
+    threshold = 0.2 * max(abs(older_mean), 0.01)
+    diff = recent_mean - older_mean
+
+    if diff > threshold:
+        return "rising"
+    elif diff < -threshold:
+        return "falling"
+    return "stable"
 
 
 def normalize_action(action: str) -> str:
@@ -178,6 +209,7 @@ class SanctumAggregator:
     # Cumulative counts (never reset, tracks entire training run)
     _cumulative_fossilized: int = 0
     _cumulative_pruned: int = 0
+    _cumulative_germinated: int = 0
     # Cumulative action counts across all batches
     _cumulative_action_counts: dict[str, int] = field(default_factory=dict)
     _cumulative_total_actions: int = 0
@@ -185,6 +217,12 @@ class SanctumAggregator:
     _cumulative_blueprint_spawns: dict[str, int] = field(default_factory=dict)
     _cumulative_blueprint_fossilized: dict[str, int] = field(default_factory=dict)
     _cumulative_blueprint_prunes: dict[str, int] = field(default_factory=dict)
+
+    # Seed lifecycle tracking for trends
+    _seed_lifespan_history: deque[int] = field(default_factory=lambda: deque(maxlen=100))
+    _germination_rate_history: deque[float] = field(default_factory=lambda: deque(maxlen=20))
+    _prune_rate_history: deque[float] = field(default_factory=lambda: deque(maxlen=20))
+    _fossilize_rate_history: deque[float] = field(default_factory=lambda: deque(maxlen=20))
 
     # Per-env state: env_id -> EnvState
     _envs: dict[int, EnvState] = field(default_factory=dict)
@@ -244,11 +282,18 @@ class SanctumAggregator:
         # Cumulative counters (never reset)
         self._cumulative_fossilized = 0
         self._cumulative_pruned = 0
+        self._cumulative_germinated = 0
         self._cumulative_action_counts = {}
         self._cumulative_total_actions = 0
         self._cumulative_blueprint_spawns = {}
         self._cumulative_blueprint_fossilized = {}
         self._cumulative_blueprint_prunes = {}
+
+        # Seed lifecycle tracking
+        self._seed_lifespan_history = deque(maxlen=100)
+        self._germination_rate_history = deque(maxlen=20)
+        self._prune_rate_history = deque(maxlen=20)
+        self._fossilize_rate_history = deque(maxlen=20)
 
         # Episode outcomes for Pareto analysis (reward health panel)
         self._episode_outcomes: list[EpisodeOutcome] = []
@@ -396,12 +441,30 @@ class SanctumAggregator:
                     break  # Only expire ONE per cycle for smooth rotation
         self._tamiyo.recent_decisions = decisions[:MAX_DECISIONS]
 
-        # Get focused env's reward components for the detail panel
-        focused_rewards = RewardComponents()
-        if self._focused_env_id in self._envs:
+        # Get most interesting reward components for the detail panel
+        # Priority: find env with non-zero bonuses/penalties, else use focused env
+        best_reward = RewardComponents()
+        best_score = 0.0
+        for env in self._envs.values():
+            rc = env.reward_components
+            if not isinstance(rc, RewardComponents):
+                continue
+            # Score based on interesting activity (bonuses/penalties)
+            score = (
+                abs(rc.alpha_shock)
+                + abs(rc.ratio_penalty)
+                + abs(rc.stage_bonus)
+                + abs(rc.fossilize_terminal_bonus)
+                + abs(rc.hindsight_credit)
+            )
+            if score > best_score:
+                best_score = score
+                best_reward = rc
+        # Fallback to focused env if no interesting activity found
+        if best_score == 0.0 and self._focused_env_id in self._envs:
             focused_env = self._envs[self._focused_env_id]
             if isinstance(focused_env.reward_components, RewardComponents):
-                focused_rewards = focused_env.reward_components
+                best_reward = focused_env.reward_components
 
         # Aggregate mean metrics for EnvOverview Σ row
         accuracies = [e.host_accuracy for e in self._envs.values() if e.accuracy_history]
@@ -441,6 +504,39 @@ class SanctumAggregator:
         active_slots = total_slots - slot_stage_counts["DORMANT"]
         avg_epochs = total_epochs_in_stage / non_dormant_count if non_dormant_count > 0 else 0.0
 
+        # Compute seed lifecycle stats
+        blend_success = (
+            self._cumulative_fossilized / max(1, self._cumulative_fossilized + self._cumulative_pruned)
+            if (self._cumulative_fossilized + self._cumulative_pruned) > 0
+            else 0.0
+        )
+        avg_lifespan = (
+            sum(self._seed_lifespan_history) / len(self._seed_lifespan_history)
+            if self._seed_lifespan_history
+            else 0.0
+        )
+        current_ep = max(1, self._current_episode)
+
+        seed_lifecycle = SeedLifecycleStats(
+            germination_count=self._cumulative_germinated,
+            prune_count=self._cumulative_pruned,
+            fossilize_count=self._cumulative_fossilized,
+            active_count=active_slots,
+            total_slots=total_slots,
+            germination_rate=self._cumulative_germinated / current_ep,
+            prune_rate=self._cumulative_pruned / current_ep,
+            fossilize_rate=self._cumulative_fossilized / current_ep,
+            blend_success_rate=blend_success,
+            avg_lifespan_epochs=avg_lifespan,
+            germination_trend=detect_rate_trend(self._germination_rate_history),
+            prune_trend=detect_rate_trend(self._prune_rate_history),
+            fossilize_trend=detect_rate_trend(self._fossilize_rate_history),
+        )
+
+        # Stub observation and episode stats (telemetry not yet wired)
+        observation_stats = ObservationStats()
+        episode_stats = EpisodeStats(total_episodes=self._current_episode)
+
         snapshot = SanctumSnapshot(
             # Run context
             run_id=self._run_id,
@@ -465,8 +561,8 @@ class SanctumAggregator:
             # Last action target (for EnvOverview row highlighting)
             last_action_env_id=self._last_action_env_id,
             last_action_timestamp=self._last_action_timestamp,
-            # Focused env's reward breakdown (for RewardComponents widget)
-            rewards=focused_rewards,
+            # Best reward components for detail panel (most interesting activity)
+            rewards=best_reward,
             # Tamiyo state
             tamiyo=self._tamiyo,
             # System vitals
@@ -491,6 +587,11 @@ class SanctumAggregator:
             total_slots=total_slots,
             active_slots=active_slots,
             avg_epochs_in_stage=avg_epochs,
+            # New diagnostic metrics
+            seed_lifecycle=seed_lifecycle,
+            observation_stats=observation_stats,
+            episode_stats=episode_stats,
+            cumulative_germinated=self._cumulative_germinated,
         )
         return copy_snapshot(snapshot)
 
@@ -763,6 +864,16 @@ class SanctumAggregator:
             self._tamiyo.layer_gradient_health = payload.layer_gradient_health
         self._tamiyo.entropy_collapsed = payload.entropy_collapsed
 
+        # Per-head NaN/Inf OR-latch (once True, stays True for entire run)
+        if payload.head_nan_detected:
+            for head, detected in payload.head_nan_detected.items():
+                if detected:
+                    self._tamiyo.head_nan_latch[head] = True
+        if payload.head_inf_detected:
+            for head, detected in payload.head_inf_detected.items():
+                if detected:
+                    self._tamiyo.head_inf_latch[head] = True
+
         # Performance timing - have defaults
         self._tamiyo.update_time_ms = payload.update_time_ms
         self._tamiyo.early_stop_epoch = payload.early_stop_epoch
@@ -901,6 +1012,7 @@ class SanctumAggregator:
             seed.alpha = germinated_payload.alpha
             seed.alpha_curve = germinated_payload.alpha_curve
             env.active_seed_count += 1
+            self._cumulative_germinated += 1
 
             # Track blueprint spawn for graveyard
             env.blueprint_spawns[seed.blueprint_id] = (
@@ -965,6 +1077,9 @@ class SanctumAggregator:
             seed.counterfactual = fossilized_payload.counterfactual if fossilized_payload.counterfactual is not None else 0.0
             seed.alpha = fossilized_payload.alpha
             env.fossilized_params += fossilized_payload.params_added
+            # Track lifespan for lifecycle stats
+            if fossilized_payload.epochs_total > 0:
+                self._seed_lifespan_history.append(fossilized_payload.epochs_total)
             env.fossilized_count += 1
             self._cumulative_fossilized += 1
             env.active_seed_count = max(0, env.active_seed_count - 1)
@@ -1001,6 +1116,9 @@ class SanctumAggregator:
             seed.auto_pruned = pruned_payload.auto_pruned
             seed.epochs_total = pruned_payload.epochs_total
             seed.counterfactual = pruned_payload.counterfactual if pruned_payload.counterfactual is not None else 0.0
+            # Track lifespan for lifecycle stats
+            if pruned_payload.epochs_total > 0:
+                self._seed_lifespan_history.append(pruned_payload.epochs_total)
             pruned_blueprint = pruned_payload.blueprint_id or seed.blueprint_id
             seed.blueprint_id = pruned_blueprint
 
@@ -1084,6 +1202,15 @@ class SanctumAggregator:
         # Episode Return
         self._tamiyo.current_episode_return = payload.avg_reward
         self._tamiyo.episode_return_history.append(payload.avg_reward)
+
+        # Compute per-episode lifecycle rates for trend tracking
+        if self._current_episode > 0:
+            germ_rate = self._cumulative_germinated / self._current_episode
+            prune_rate = self._cumulative_pruned / self._current_episode
+            foss_rate = self._cumulative_fossilized / self._current_episode
+            self._germination_rate_history.append(germ_rate)
+            self._prune_rate_history.append(prune_rate)
+            self._fossilize_rate_history.append(foss_rate)
 
         # Calculate throughput
         now = time.time()
