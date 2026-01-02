@@ -21,7 +21,7 @@ __all__ = [
     # Core
     "TamiyoDecision",
     "SignalTracker",
-    # Legacy heuristic (kept for backwards compatibility)
+    # Heuristic policy (baseline for comparison)
     "TamiyoPolicy",
     "HeuristicPolicyConfig",
     "HeuristicTamiyo",
