@@ -2,24 +2,27 @@
 
 Displays:
 - Advantage stats with skewness/kurtosis
-- Ratio bounds
-- Gradient norm
-- Layer health
+- Ratio bounds (joint only - per-head shown in ActionHeads)
+- Gradient norm with sparkline
+- KL divergence with sparkline
 - Entropy trend
 - Policy state
 - Value range
+- Observation health
+
+Note: Layer health (dead/exploding) shown in ActionHeads Flow footer.
 """
 
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from rich.text import Text
 from textual.widgets import Static
 
 from esper.karn.constants import TUIThresholds
-from esper.leyline import DEFAULT_HOST_LSTM_LAYERS
+from .sparkline_utils import render_sparkline, detect_trend, trend_style
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
@@ -30,6 +33,8 @@ class HealthStatusPanel(Static):
 
     Extends Static directly for minimal layout overhead.
     """
+
+    SPARKLINE_WIDTH: ClassVar[int] = 10  # Compact sparkline for inline display
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -93,31 +98,52 @@ class HealthStatusPanel(Static):
             result.append(" !", style=self._status_style(joint_status))
         result.append("\n")
 
-        # Per-head ratio max (always visible - dim when healthy, colored when elevated)
-        head_ratios = [
-            ("Op", tamiyo.head_op_ratio_max),
-            ("Sl", tamiyo.head_slot_ratio_max),
-            ("BP", tamiyo.head_blueprint_ratio_max),
-            ("St", tamiyo.head_style_ratio_max),
-            ("Te", tamiyo.head_tempo_ratio_max),
-            ("αT", tamiyo.head_alpha_target_ratio_max),
-            ("αS", tamiyo.head_alpha_speed_ratio_max),
-            ("Cv", tamiyo.head_alpha_curve_ratio_max),
-        ]
-        result.append("  Per-head:  ", style="dim")
-        for i, (label, ratio) in enumerate(head_ratios):
-            if i > 0:
-                result.append(" ")
-            color = "red" if ratio > 2.0 else ("yellow" if ratio > 1.5 else "dim")
-            result.append(f"{label}:{ratio:.1f}", style=color)
-        result.append("\n")
-
-        # Grad norm
+        # Grad norm with sparkline (rising is bad for gradients)
         gn_status = self._get_grad_norm_status(tamiyo.grad_norm)
         result.append("Grad Norm    ", style="dim")
         result.append(f"{tamiyo.grad_norm:>6.3f}", style=self._status_style(gn_status))
         if gn_status != "ok":
             result.append(" !", style=self._status_style(gn_status))
+        result.append(" ")
+        # Sparkline for gradient history
+        if tamiyo.grad_norm_history:
+            sparkline = render_sparkline(
+                tamiyo.grad_norm_history,
+                width=self.SPARKLINE_WIDTH,
+                style=self._status_style(gn_status),
+            )
+            result.append(sparkline)
+            trend = detect_trend(list(tamiyo.grad_norm_history))
+            result.append(trend, style=trend_style(trend, "loss"))  # Rising is bad
+        else:
+            result.append("─" * self.SPARKLINE_WIDTH, style="dim")
+        result.append("\n")
+
+        # KL divergence with sparkline (rising is bad - policy changing too fast)
+        kl_status = self._get_kl_status(tamiyo.kl_divergence)
+        result.append("KL Diverge   ", style="dim")
+        if math.isnan(tamiyo.kl_divergence):
+            result.append("   ---", style="dim")
+            result.append(" ")
+            result.append("─" * self.SPARKLINE_WIDTH, style="dim")
+        else:
+            result.append(f"{tamiyo.kl_divergence:>6.4f}", style=self._status_style(kl_status))
+            if kl_status != "ok":
+                result.append(" !", style=self._status_style(kl_status))
+            else:
+                result.append("  ")
+            # Sparkline for KL history
+            if tamiyo.kl_divergence_history:
+                sparkline = render_sparkline(
+                    tamiyo.kl_divergence_history,
+                    width=self.SPARKLINE_WIDTH,
+                    style=self._status_style(kl_status),
+                )
+                result.append(sparkline)
+                trend = detect_trend(list(tamiyo.kl_divergence_history))
+                result.append(trend, style=trend_style(trend, "loss"))  # Rising is bad
+            else:
+                result.append("─" * self.SPARKLINE_WIDTH, style="dim")
         result.append("\n")
 
         # Log prob extremes (NaN predictor)
@@ -133,15 +159,6 @@ class HealthStatusPanel(Static):
                 result.append(" !", style="yellow")
         result.append("\n")
 
-        # Layer health
-        result.append("Layers       ", style="dim")
-        healthy = DEFAULT_HOST_LSTM_LAYERS - tamiyo.dead_layers - tamiyo.exploding_layers
-        if tamiyo.dead_layers > 0 or tamiyo.exploding_layers > 0:
-            result.append(f"{tamiyo.dead_layers}D/{tamiyo.exploding_layers}E", style="red")
-        else:
-            result.append(f"{healthy}/{DEFAULT_HOST_LSTM_LAYERS} ✓", style="green")
-        result.append("\n")
-
         # Entropy trend
         result.append(self._render_entropy_trend())
         result.append("\n")
@@ -152,6 +169,10 @@ class HealthStatusPanel(Static):
 
         # Value range
         result.append(self._render_value_stats())
+        result.append("\n")
+
+        # Observation stats (input health)
+        result.append(self._render_observation_stats())
 
         return result
 
@@ -261,6 +282,51 @@ class HealthStatusPanel(Static):
             result.append(" !", style=self._status_style(status))
 
         return result
+
+    def _render_observation_stats(self) -> Text:
+        """Render observation space health indicators.
+
+        Shows input distribution health to catch numerical issues early.
+        """
+        if self._snapshot is None:
+            return Text()
+
+        obs = self._snapshot.observation_stats
+        result = Text()
+
+        # Check for NaN/Inf first (critical issue)
+        if obs.nan_count > 0 or obs.inf_count > 0:
+            result.append("Obs Health   ", style="dim")
+            result.append(f"NaN:{obs.nan_count} Inf:{obs.inf_count}", style="red bold")
+            return result
+
+        # Check outlier percentage
+        outlier_status = self._get_outlier_status(obs.outlier_pct)
+        drift_status = self._get_drift_status(obs.normalization_drift)
+
+        # Always show all metrics (dim when ok, colored when warning/critical)
+        result.append("Obs Health   ", style="dim")
+        result.append(f"Out:{obs.outlier_pct:.1%}", style=self._status_style(outlier_status))
+        result.append(" ", style="dim")
+        result.append(f"Drift:{obs.normalization_drift:.2f}", style=self._status_style(drift_status))
+
+        return result
+
+    def _get_outlier_status(self, outlier_pct: float) -> str:
+        """Check if outlier percentage is healthy."""
+        if outlier_pct > 0.1:  # >10% outliers is critical
+            return "critical"
+        if outlier_pct > 0.05:  # >5% is warning
+            return "warning"
+        return "ok"
+
+    def _get_drift_status(self, drift: float) -> str:
+        """Check if normalization drift is healthy."""
+        if drift > 2.0:  # >2σ drift is critical
+            return "critical"
+        if drift > 1.0:  # >1σ is warning
+            return "warning"
+        return "ok"
 
     def _get_value_status(self, tamiyo: "TamiyoState") -> str:
         """Check if value function is healthy using relative thresholds."""
@@ -378,6 +444,20 @@ class HealthStatusPanel(Static):
             return "critical"
         if grad_norm > TUIThresholds.GRAD_NORM_WARNING:
             return "warning"
+        return "ok"
+
+    def _get_kl_status(self, kl: float) -> str:
+        """Check if KL divergence is healthy.
+
+        KL divergence measures how much the policy has changed from the old policy.
+        PPO typically targets KL < 0.01-0.02 for stable updates.
+        """
+        if math.isnan(kl):
+            return "ok"  # No data yet
+        if kl > 0.05:
+            return "critical"  # Policy changing too fast
+        if kl > 0.02:
+            return "warning"  # Elevated but not critical
         return "ok"
 
     def _get_joint_ratio_status(self, joint_ratio: float) -> str:

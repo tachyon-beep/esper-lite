@@ -133,11 +133,12 @@ class PPOLossesPanel(Static):
             status=self._get_clip_status(tamiyo.clip_fraction),
             is_warmup=is_warmup,
         ))
-        # Add directional breakdown with arrows
+        # Add directional breakdown with arrows (always show, dim when zero)
         clip_pos = tamiyo.gradient_quality.clip_fraction_positive
         clip_neg = tamiyo.gradient_quality.clip_fraction_negative
-        if clip_pos > 0 or clip_neg > 0:
-            result.append(f" (\u2191{clip_pos:.1%} \u2193{clip_neg:.1%})", style="dim")
+        # Style: dim when both zero, otherwise show direction that's active
+        dir_style = "dim" if clip_pos == 0 and clip_neg == 0 else "cyan"
+        result.append(f" (\u2191{clip_pos:.1%} \u2193{clip_neg:.1%})", style=dir_style)
 
         return result
 

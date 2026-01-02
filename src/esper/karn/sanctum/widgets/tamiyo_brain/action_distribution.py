@@ -11,7 +11,9 @@ Layout:
     │   Var:0.34✓  Spread:2.3                         │
     │─────────────────────────────────────────────────│
     │ ▶ Reward Signal ────────────────────────────────│
-    │   PBRS:25%✓  Gaming:2%✓  HV:1.2↗                │
+    │   PBRS:25%✓  Gaming:2%✓  HV:1.2                 │
+    │   Σ:+0.35  Sig:+0.42  Rent:-0.07               │
+    │   αShk:-0.01 Stage:+0.10 HS:+0.05              │
     │─────────────────────────────────────────────────│
     │ ▶ Returns ──────────────────────────────────────│
     │   +1.2 -0.3 +2.1 -0.8 +0.5                      │
@@ -283,35 +285,95 @@ class ActionContext(Static):
     # =========================================================================
 
     def _render_reward_signal(self) -> Text:
-        """Render reward health metrics (PBRS, Gaming, HV).
+        """Render reward health metrics and component breakdown.
 
-        Consolidated from RewardHealthPanel for unified view.
+        Line 1: Health metrics (PBRS, Gaming, HV) from RewardHealthData
+        Line 2+: Component breakdown from snapshot.rewards
         """
         result = Text()
 
-        if self._reward_health is None:
-            result.append("  [no reward data]\n", style="dim")
-            return result
+        # Line 1: Health metrics (if available)
+        if self._reward_health is not None:
+            rh = self._reward_health
 
-        rh = self._reward_health
+            # PBRS fraction (10-40% healthy)
+            result.append("  PBRS:", style="dim")
+            pbrs_color = "green" if rh.is_pbrs_healthy else "red"
+            result.append(f"{rh.pbrs_fraction:.0%}", style=pbrs_color)
+            result.append("✓" if rh.is_pbrs_healthy else "✗", style=pbrs_color)
 
-        # PBRS fraction (10-40% healthy)
-        result.append("  PBRS:", style="dim")
-        pbrs_color = "green" if rh.is_pbrs_healthy else "red"
-        result.append(f"{rh.pbrs_fraction:.0%}", style=pbrs_color)
-        result.append("✓" if rh.is_pbrs_healthy else "✗", style=pbrs_color)
+            # Gaming rate (<5% healthy)
+            result.append("  Gaming:", style="dim")
+            gaming_color = "green" if rh.is_gaming_healthy else "red"
+            result.append(f"{rh.anti_gaming_trigger_rate:.0%}", style=gaming_color)
+            result.append("✓" if rh.is_gaming_healthy else "✗", style=gaming_color)
 
-        # Gaming rate (<5% healthy)
-        result.append("  Gaming:", style="dim")
-        gaming_color = "green" if rh.is_gaming_healthy else "red"
-        result.append(f"{rh.anti_gaming_trigger_rate:.0%}", style=gaming_color)
-        result.append("✓" if rh.is_gaming_healthy else "✗", style=gaming_color)
+            # Hypervolume (should increase)
+            result.append("  HV:", style="dim")
+            result.append(f"{rh.hypervolume:.1f}", style="cyan")
+            result.append("\n")
+        else:
+            result.append("  [health data pending]\n", style="dim")
 
-        # Hypervolume (should increase)
-        result.append("  HV:", style="dim")
-        result.append(f"{rh.hypervolume:.1f}", style="cyan")
+        # Line 2+: Component breakdown from snapshot
+        if self._snapshot is not None:
+            rc = self._snapshot.rewards
 
-        result.append("\n")
+            # Show total and key components compactly
+            # Total
+            total_style = "green" if rc.total >= 0 else "red"
+            result.append("  Σ:", style="dim")
+            result.append(f"{rc.total:+.2f}", style=total_style)
+
+            # Signal (bounded_attribution or base_acc_delta)
+            sig = rc.bounded_attribution if rc.bounded_attribution != 0 else rc.base_acc_delta
+            sig_style = "green" if sig >= 0 else "red"
+            result.append("  Sig:", style="dim")
+            result.append(f"{sig:+.2f}", style=sig_style)
+
+            # Costs (compute_rent - always show, dim when zero)
+            rent_style = "yellow" if rc.compute_rent != 0 else "dim"
+            result.append("  Rent:", style="dim")
+            result.append(f"{rc.compute_rent:.2f}", style=rent_style)
+
+            result.append("\n")
+
+            # Line 3: Penalties (always show all - dim when zero)
+            result.append("  ")
+
+            # Alpha shock (penalty when alpha changes too fast)
+            ashk_style = "red" if rc.alpha_shock != 0 else "dim"
+            result.append("αShk:", style="dim")
+            result.append(f"{rc.alpha_shock:.2f}", style=ashk_style)
+            result.append(" ")
+
+            # Ratio penalty (policy deviation too large)
+            ratio_style = "red" if rc.ratio_penalty != 0 else "dim"
+            result.append("Ratio:", style="dim")
+            result.append(f"{rc.ratio_penalty:.2f}", style=ratio_style)
+            result.append(" ")
+
+            # Stage bonus (positive for progressing seeds)
+            stage_style = "green" if rc.stage_bonus != 0 else "dim"
+            result.append("Stage:", style="dim")
+            result.append(f"{rc.stage_bonus:+.2f}", style=stage_style)
+            result.append("\n")
+
+            # Line 4: Terminal bonuses (Foss, HS)
+            result.append("  ")
+
+            # Fossilize terminal bonus (big reward for successful integration)
+            foss_style = "blue bold" if rc.fossilize_terminal_bonus != 0 else "dim"
+            result.append("Foss:", style="dim")
+            result.append(f"{rc.fossilize_terminal_bonus:+.2f}", style=foss_style)
+            result.append(" ")
+
+            # Hindsight credit (retrospective attribution)
+            hs_style = "cyan" if rc.hindsight_credit != 0 else "dim"
+            result.append("HS:", style="dim")
+            result.append(f"{rc.hindsight_credit:+.2f}", style=hs_style)
+            result.append("\n")
+
         return result
 
     # =========================================================================

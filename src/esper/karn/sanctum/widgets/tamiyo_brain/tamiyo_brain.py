@@ -20,11 +20,14 @@ Layout (CSS dimensions):
     ├───────────────────────────────────────────────────────────────────┬──────────┤
     │ VitalsColumn (w:3fr)                                              │Decisions │
     │ ┌─────────┬───────────────────────────────────┬───────────────┐   │(w:1fr,   │
-    │ │PPOLosses│ HealthStatus (1fr)                │ Slots (49ch)  │h13│ min:45)  │
+    │ │PPOLosses│ HealthStatus (1fr)                │ Slots (49ch)  │h14│ min:45)  │
     │ │ (36ch)  │                                   │               │   │          │
-    │ ├─────────┴───────────────────────────────────┴───────────────┤   │          │
-    │ │ ActionHeadsPanel (69%)          │ ActionContext (31%)       │h27│          │
-    │ └─────────────────────────────────┴───────────────────────────┘   │          │
+    │ ├─────────────────────────────────────────────┬───────────────┤   │          │
+    │ │ ActionHeadsPanel (69%)                      │               │   │          │
+    │ │                                             │ ActionContext │1fr│          │
+    │ ├─────────────────────────────────────────────┤ (31%)         │   │          │
+    │ │ EpisodeMetricsPanel (69%)               h:7 │               │   │          │
+    │ └─────────────────────────────────────────────┴───────────────┘   │          │
     └───────────────────────────────────────────────────────────────────┴──────────┘
 """
 
@@ -33,7 +36,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from textual.app import ComposeResult
-from textual.containers import Container, Horizontal, VerticalScroll
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 
 from .status_banner import StatusBanner
@@ -42,6 +45,7 @@ from .health_status_panel import HealthStatusPanel
 from .action_heads_panel import ActionHeadsPanel
 from .action_distribution import ActionContext
 from .slots_panel import SlotsPanel
+from .episode_metrics_panel import EpisodeMetricsPanel
 from .decisions_column import (
     DecisionDetailRequested,
     DecisionPinRequested,
@@ -110,8 +114,9 @@ class TamiyoBrain(Container):
 
     /* Row 1: PPO Losses (narrow) | Health (wide) | Slots */
     #top-row {
-        height: 13;
+        height: 14;
         width: 100%;
+        margin: 0;
     }
 
     #ppo-losses-panel {
@@ -138,23 +143,37 @@ class TamiyoBrain(Container):
         padding: 0 1;
     }
 
-    /* Row 2: ActionHeadsPanel (68%) | ActionContext (32%) */
-    #heads-row {
-        height: 27;  /* Full height for both panels */
+    /* Bottom section: Left column (ActionHeads + Episode) | Right column (ActionContext) */
+    #bottom-row {
+        height: 1fr;
         width: 100%;
+        margin: 0;
+    }
+
+    #left-column {
+        width: 70%;
+        height: 100%;
     }
 
     #action-heads-panel {
-        width: 69%;
+        width: 100%;
         height: 1fr;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
         padding: 0 1;
     }
 
+    #episode-metrics-panel {
+        width: 100%;
+        height: 7;
+        border: round $surface-lighten-2;
+        border-title-color: $text-muted;
+        padding: 0 1;
+    }
+
     #action-context {
-        width: 31%;
-        height: 1fr;
+        width: 30%;
+        height: 100%;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
         padding: 0 1;
@@ -220,9 +239,11 @@ class TamiyoBrain(Container):
                     yield PPOLossesPanel(id="ppo-losses-panel")
                     yield HealthStatusPanel(id="health-panel")
                     yield SlotsPanel(id="slots-panel")
-                # Heads row - ActionHeadsPanel (68%) | ActionContext (32%, full height)
-                with Horizontal(id="heads-row"):
-                    yield ActionHeadsPanel(id="action-heads-panel")
+                # Bottom section: Left column (ActionHeads + Episode) | Right column (ActionContext)
+                with Horizontal(id="bottom-row"):
+                    with Vertical(id="left-column"):
+                        yield ActionHeadsPanel(id="action-heads-panel")
+                        yield EpisodeMetricsPanel(id="episode-metrics-panel")
                     yield ActionContext(id="action-context")
 
             yield DecisionsColumn(id="decisions-column")
@@ -251,6 +272,9 @@ class TamiyoBrain(Container):
         )
         self.query_one("#action-context", ActionContext).update_snapshot(snapshot)
         self.query_one("#slots-panel", SlotsPanel).update_snapshot(snapshot)
+        self.query_one("#episode-metrics-panel", EpisodeMetricsPanel).update_snapshot(
+            snapshot
+        )
         self.query_one("#decisions-column", DecisionsColumn).update_snapshot(snapshot)
 
     def update_reward_health(self, data: "RewardHealthData") -> None:

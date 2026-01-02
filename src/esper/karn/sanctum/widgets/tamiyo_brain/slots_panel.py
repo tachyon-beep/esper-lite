@@ -63,7 +63,9 @@ class SlotsPanel(Static):
         for stage in stages:
             count = counts.get(stage, 0)
             abbrev = stage_abbrevs.get(stage, stage[:4])
-            color = STAGE_COLORS.get(stage, "dim")
+            base_color = STAGE_COLORS.get(stage, "dim")
+            # Dim when zero, colored when active
+            color = base_color if count > 0 else "dim"
 
             # Proportional bar (expanded to fill panel width)
             bar_width = int((count / max(1, total)) * MAX_BAR_WIDTH) if total > 0 else 0
@@ -74,54 +76,63 @@ class SlotsPanel(Static):
             result.append(f"{abbrev:<5}", style="dim")
             result.append(f"{count:>3}", style=color)
             result.append(" ", style="dim")
+            # Always show at least a placeholder bar character (dim when zero)
             if bar:
                 result.append(bar, style=color)
+            else:
+                result.append("·", style="dim")  # Placeholder for zero count
             result.append("\n")
 
-        # Line 7: Summary stats
-        foss = snapshot.cumulative_fossilized
-        pruned = snapshot.cumulative_pruned
-        rate = (foss / max(1, foss + pruned)) * 100 if (foss + pruned) > 0 else 0
-        avg_epochs = snapshot.avg_epochs_in_stage
+        # Separator before lifecycle section
+        result.append("─" * 40, style="dim")
+        result.append("\n")
 
-        result.append("Foss:", style="dim")
-        result.append(f"{foss}", style="blue")
+        # === Seed Lifecycle Section ===
+        lifecycle = snapshot.seed_lifecycle
+
+        # Line 1: Cumulative counts (Active / Fossilized / Pruned / Germinated)
+        result.append("Active:", style="dim")
+        result.append(f"{lifecycle.active_count}/{lifecycle.total_slots}", style="cyan")
+        result.append("  Foss:", style="dim")
+        result.append(f"{lifecycle.fossilize_count}", style="blue")
         result.append("  Prune:", style="dim")
-        result.append(f"{pruned}", style="red" if pruned > foss else "dim")
-        result.append("  Rate:", style="dim")
-        rate_color = "green" if rate >= 70 else "yellow" if rate >= 50 else "red"
-        result.append(f"{rate:.0f}%", style=rate_color)
-        result.append("  AvgAge:", style="dim")
-        result.append(f"{avg_epochs:.1f} eps", style="cyan")
+        prune_style = "red" if lifecycle.prune_count > lifecycle.fossilize_count else "dim"
+        result.append(f"{lifecycle.prune_count}", style=prune_style)
+        result.append("  Germ:", style="dim")
+        result.append(f"{lifecycle.germination_count}", style="green")
         result.append("\n")
 
-        # Line 8-9: Blueprint breakdown (top 3 fossilized blueprints)
-        from collections import Counter
-
-        def render_top_three(label: str, counts: Counter[str]) -> None:
-            result.append(label, style="dim")
-            if counts:
-                top_three = counts.most_common(3)
-                for i, (blueprint_id, count) in enumerate(top_three):
-                    if i > 0:
-                        result.append("  ", style="dim")
-                    bp_abbrev = blueprint_id[:7]  # Abbreviate long blueprint names
-                    result.append(f"{bp_abbrev}({count})", style="blue")
+        # Line 2: Per-episode rates with trend indicators
+        def trend_arrow(trend: str) -> tuple[str, str]:
+            """Return (arrow, style) for trend."""
+            if trend == "rising":
+                return "↗", "green"
+            elif trend == "falling":
+                return "↘", "red"
             else:
-                result.append("none yet", style="dim")
+                return "→", "dim"
 
-        # "This Batch": current fossilized slot contents across all envs
-        batch_counts: Counter[str] = Counter()
-        for env in snapshot.envs.values():
-            for seed in env.seeds.values():
-                if seed.stage == "FOSSILIZED" and seed.blueprint_id:
-                    batch_counts[seed.blueprint_id] += 1
+        g_arrow, g_style = trend_arrow(lifecycle.germination_trend)
+        p_arrow, p_style = trend_arrow(lifecycle.prune_trend)
+        f_arrow, f_style = trend_arrow(lifecycle.fossilize_trend)
 
-        render_top_three("Top 3 (B): ", batch_counts)
+        result.append(f"Germ{g_arrow}", style=g_style)
+        result.append(f"{lifecycle.germination_rate:.1f}/ep", style="dim")
+        result.append("  ", style="dim")
+        result.append(f"Prune{p_arrow}", style=p_style)
+        result.append(f"{lifecycle.prune_rate:.1f}/ep", style="dim")
+        result.append("  ", style="dim")
+        result.append(f"Foss{f_arrow}", style=f_style)
+        result.append(f"{lifecycle.fossilize_rate:.2f}/ep", style="dim")
         result.append("\n")
 
-        # "This Run": cumulative fossilizations across the entire run (all slots)
-        run_counts: Counter[str] = Counter(snapshot.cumulative_blueprint_fossilized)
-        render_top_three("Top 3 (R): ", run_counts)
+        # Line 3: Quality metrics (Blend success rate + avg lifespan)
+        blend_rate = lifecycle.blend_success_rate * 100
+        blend_color = "green" if blend_rate >= 70 else "yellow" if blend_rate >= 50 else "red"
+        result.append("Lifespan:", style="dim")
+        result.append(f"μ{lifecycle.avg_lifespan_epochs:.0f} eps", style="cyan")
+        result.append("  Blend:", style="dim")
+        result.append(f"{blend_rate:.0f}%", style=blend_color)
+        result.append(" success", style="dim")
 
         return result

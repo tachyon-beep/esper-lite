@@ -13,5 +13,6 @@ Usage:
 from .tamiyo_brain import TamiyoBrain
 from .ppo_losses_panel import PPOLossesPanel
 from .action_heads_panel import ActionHeadsPanel
+from .episode_metrics_panel import EpisodeMetricsPanel
 
-__all__ = ["TamiyoBrain", "PPOLossesPanel", "ActionHeadsPanel"]
+__all__ = ["TamiyoBrain", "PPOLossesPanel", "ActionHeadsPanel", "EpisodeMetricsPanel"]

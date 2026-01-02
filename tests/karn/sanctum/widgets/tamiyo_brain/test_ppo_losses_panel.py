@@ -56,7 +56,7 @@ def test_ppo_losses_shows_sparklines():
     assert "P.Loss" in content_str
     assert "V.Loss" in content_str
     # Should show value/policy loss ratio
-    assert "L_v/L_p" in content_str
+    assert "Lv/Lp" in content_str
 
 
 def test_ppo_losses_shows_directional_clip():
