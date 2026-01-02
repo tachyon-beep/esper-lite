@@ -468,7 +468,7 @@ class PPOAgent:
                 q_value_map: dict[LifecycleOp, float] = {}
                 for op_idx in range(NUM_OPS):
                     op_tensor = torch.tensor([[op_idx]], dtype=torch.long, device=self.device)
-                    q_val = self.policy.network._compute_value(lstm_out, op_tensor)  # type: ignore[operator]
+                    q_val = self.policy.network._compute_value(lstm_out, op_tensor)
                     q_value_map[LifecycleOp(op_idx)] = q_val.item()
 
                 # Assign to metrics with correct names using actual LifecycleOp enum
@@ -541,7 +541,7 @@ class PPOAgent:
             # sufficient - the full forward pass must run in float32 for stable
             # gradient computation. This is standard practice in RL with AMP:
             # run the policy evaluation in float32, keep backbone/feature extraction in AMP.
-            with torch_amp.autocast(device_type="cuda", enabled=False):
+            with torch_amp.autocast(device_type="cuda", enabled=False):  # type: ignore[attr-defined]
                 # Cast inputs to float32 to ensure entire forward pass is float32
                 hidden_h = data["initial_hidden_h"].float()
                 hidden_c = data["initial_hidden_c"].float()

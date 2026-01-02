@@ -20,6 +20,8 @@ Example:
 
 # ruff: noqa: E402  # Imports intentionally follow constant definitions for clarity
 
+from typing import Any
+
 # Version
 LEYLINE_VERSION = "0.2.0"
 
@@ -955,7 +957,7 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     """Lazy import for heavy modules (torch-dependent).
 
     This enables `from esper.leyline import compute_causal_masks` to work

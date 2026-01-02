@@ -137,7 +137,7 @@ class WebSocketOutput:
     async def _serve(self) -> None:
         """Main async server loop."""
         try:
-            from websockets.server import serve
+            from websockets.server import serve  # type: ignore[import-not-found]  # no stubs
         except ImportError:
             _logger.error(
                 "websockets not installed. Install with: pip install esper-lite[dashboard]"

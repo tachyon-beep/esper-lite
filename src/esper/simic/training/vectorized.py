@@ -3572,6 +3572,8 @@ def train_ppo_vectorized(
     
             if hub:
                 if not update_skipped:
+                    # Assert non-None: values assigned in same `if not update_skipped` block above
+                    assert ppo_grad_norm is not None and ppo_update_time_ms is not None
                     batch_emitter.on_ppo_update(
                         metrics=metrics,
                         episodes_completed=batch_epoch_id,
