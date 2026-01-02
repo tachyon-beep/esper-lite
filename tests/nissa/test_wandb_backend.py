@@ -1,7 +1,10 @@
-"""Tests for WandbBackend step accounting.
+"""Tests for WandbBackend step accounting and data quality.
 
-Verifies that batch-level metrics use event.epoch for correct x-axis alignment
-and that skipped updates don't collapse multiple batches onto the same step.
+Verifies that:
+- Batch-level metrics use event.epoch for correct x-axis alignment
+- Skipped updates don't collapse multiple batches onto the same step
+- None values are filtered before logging (no data quality issues)
+- API contract is correct (no dead parameters)
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ import pytest
 from esper.leyline import TelemetryEvent, TelemetryEventType
 from esper.leyline.telemetry import (
     BatchEpochCompletedPayload,
+    EpochCompletedPayload,
     PPOUpdatePayload,
     SeedGerminatedPayload,
     AnomalyDetectedPayload,
@@ -69,7 +73,9 @@ class TestBatchStepFromEventEpoch:
         mock_wandb.log.assert_called_once()
         call_kwargs = mock_wandb.log.call_args[1]
         assert call_kwargs["step"] == 42
-        assert call_kwargs["commit"] is False
+        # commit=False was removed - all events now commit independently
+        # wandb handles step alignment when same step value is used
+        assert "commit" not in call_kwargs or call_kwargs.get("commit") is True
 
     def test_ppo_update_uses_event_epoch(self, backend, mock_wandb):
         """PPO_UPDATE_COMPLETED logs at step=event.epoch."""
@@ -356,3 +362,80 @@ class TestStepMonotonicity:
 
         # Skipped update batch (11) should NOT collapse onto previous step (10)
         assert 11 in batch_steps, "Skipped update batch should have its own step"
+
+
+class TestNoneValueFiltering:
+    """Verify that None values are not logged to wandb (data quality fix)."""
+
+    def test_epoch_completed_filters_none_train_loss(self, backend, mock_wandb):
+        """EPOCH_COMPLETED should NOT log train_loss when it's None."""
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            epoch=5,
+            data=EpochCompletedPayload(
+                env_id=0,
+                val_accuracy=0.85,
+                val_loss=0.15,
+                inner_epoch=5,
+                train_loss=None,  # Not computed
+                train_accuracy=None,  # Not computed
+            ),
+        )
+
+        backend.emit(event)
+
+        mock_wandb.log.assert_called_once()
+        logged_metrics = mock_wandb.log.call_args[0][0]
+
+        # Required metrics should be present
+        assert "env_0/val_loss" in logged_metrics
+        assert "env_0/val_accuracy" in logged_metrics
+        assert "env_0/epoch" in logged_metrics
+
+        # Optional None metrics should NOT be present
+        assert "env_0/train_loss" not in logged_metrics
+        assert "env_0/train_accuracy" not in logged_metrics
+
+    def test_epoch_completed_includes_train_loss_when_present(self, backend, mock_wandb):
+        """EPOCH_COMPLETED should include train_loss when it's not None."""
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            epoch=5,
+            data=EpochCompletedPayload(
+                env_id=1,
+                val_accuracy=0.85,
+                val_loss=0.15,
+                inner_epoch=5,
+                train_loss=0.25,  # Present
+                train_accuracy=0.80,  # Present
+            ),
+        )
+
+        backend.emit(event)
+
+        mock_wandb.log.assert_called_once()
+        logged_metrics = mock_wandb.log.call_args[0][0]
+
+        # All metrics should be present
+        assert logged_metrics["env_1/train_loss"] == 0.25
+        assert logged_metrics["env_1/train_accuracy"] == 0.80
+
+
+class TestAPIContract:
+    """Verify API contract - no dead parameters."""
+
+    def test_log_system_parameter_removed(self):
+        """WandbBackend should NOT accept log_system parameter."""
+        with patch.dict("sys.modules", {"wandb": MagicMock()}):
+            with patch("esper.nissa.wandb_backend.WANDB_AVAILABLE", True):
+                from esper.nissa.wandb_backend import WandbBackend
+                import inspect
+
+                # Get __init__ signature
+                sig = inspect.signature(WandbBackend.__init__)
+                param_names = list(sig.parameters.keys())
+
+                # log_system should NOT be a parameter
+                assert "log_system" not in param_names, (
+                    "log_system parameter should be removed - it was a no-op"
+                )
