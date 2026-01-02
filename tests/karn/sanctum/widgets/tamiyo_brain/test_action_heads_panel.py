@@ -191,5 +191,60 @@ def test_heads_panel_shows_gradient_flow_footer():
     # Should show gradient CV with value and status
     assert "CV:0.42" in content_str
     assert "stable" in content_str
-    # Should show directional clip fractions
-    assert "Clip:" in content_str
+    # Should show layer health
+    assert "Dead:" in content_str
+    assert "Exploding:" in content_str
+    # Should show NaN/Inf counts (always visible, dim when zero)
+    assert "NaN:" in content_str
+    assert "Inf:" in content_str
+
+
+def test_heads_panel_shows_nan_inf_indicator_rows():
+    """HeadsPanel should show NaN and Inf indicator rows below State row."""
+    from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
+    from esper.karn.sanctum.widgets.tamiyo_brain.action_heads_panel import HeadsPanel
+
+    snapshot = SanctumSnapshot()
+    snapshot.tamiyo = TamiyoState()
+    # Latch NaN on op head, Inf on slot head
+    snapshot.tamiyo.head_nan_latch["op"] = True
+    snapshot.tamiyo.head_inf_latch["slot"] = True
+
+    panel = HeadsPanel()
+    panel.update_snapshot(snapshot)
+    content = panel.render()
+
+    content_str = str(content)
+    # Should have NaN and Inf row labels
+    assert "NaN" in content_str
+    assert "Inf" in content_str
+    # Should show filled circle (●) for latched heads
+    assert "●" in content_str
+
+
+def test_heads_panel_shows_all_clear_when_no_nan_inf():
+    """HeadsPanel should show all empty indicators when no NaN/Inf latched."""
+    from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
+    from esper.karn.sanctum.widgets.tamiyo_brain.action_heads_panel import HeadsPanel
+
+    snapshot = SanctumSnapshot()
+    snapshot.tamiyo = TamiyoState()
+    # All latches are pre-populated with False (default)
+
+    panel = HeadsPanel()
+    panel.update_snapshot(snapshot)
+    content = panel.render()
+
+    content_str = str(content)
+    # Should have NaN and Inf row labels
+    assert "NaN" in content_str
+    assert "Inf" in content_str
+    # Should show only empty circles (no filled circles)
+    assert "○" in content_str
+    # Count filled circles in NaN/Inf rows only (not State row)
+    # The NaN and Inf rows should have zero filled circles
+    lines = content_str.split("\n")
+    nan_line = next((l for l in lines if l.strip().startswith("NaN")), "")
+    inf_line = next((l for l in lines if l.strip().startswith("Inf")), "")
+    assert "●" not in nan_line
+    assert "●" not in inf_line

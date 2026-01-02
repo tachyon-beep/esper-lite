@@ -73,6 +73,19 @@ HEAD_CONFIG: list[tuple[str, str, str, int, float]] = [
     ("Curve", "head_alpha_curve_entropy", "head_alpha_curve_grad_norm", 9, 1.2),
 ]
 
+# Map display names (from HEAD_CONFIG) to leyline HEAD_NAMES keys
+# Used for NaN/Inf indicator rows to look up latch status
+DISPLAY_TO_LEYLINE_KEY: dict[str, str] = {
+    "Op": "op",
+    "Slot": "slot",
+    "Blueprint": "blueprint",
+    "Style": "style",
+    "Tempo": "tempo",
+    "αTarget": "alpha_target",
+    "αSpeed": "alpha_speed",
+    "Curve": "alpha_curve",
+}
+
 
 def _get_head_key(entropy_field: str) -> str:
     """Extract lowercase head key from entropy field name.
@@ -413,6 +426,40 @@ class ActionHeadsPanel(Static):
                 result.append(" " * self._column_gutter(label))
         result.append("\n")
 
+        # Row 8: NaN indicator row
+        result.append("NaN   ", style="dim")
+        result.append(" " * self._PRE_OP_GUTTER, style="dim")
+        for col_idx, (head_key, _, _, width, _) in enumerate(HEAD_CONFIG):
+            leyline_key = DISPLAY_TO_LEYLINE_KEY[head_key]
+            latched = tamiyo.head_nan_latch[leyline_key]
+            indicator = "●" if latched else "○"
+            style = "red bold" if latched else "dim"
+            left_pad = width - 3
+            right_pad = 2
+            result.append(" " * left_pad, style="dim")
+            result.append(indicator, style=style)
+            result.append(" " * right_pad, style="dim")
+            if col_idx != last_col:
+                result.append(" " * self._column_gutter(head_key))
+        result.append("\n")
+
+        # Row 9: Inf indicator row
+        result.append("Inf   ", style="dim")
+        result.append(" " * self._PRE_OP_GUTTER, style="dim")
+        for col_idx, (head_key, _, _, width, _) in enumerate(HEAD_CONFIG):
+            leyline_key = DISPLAY_TO_LEYLINE_KEY[head_key]
+            latched = tamiyo.head_inf_latch[leyline_key]
+            indicator = "●" if latched else "○"
+            style = "red bold" if latched else "dim"
+            left_pad = width - 3
+            right_pad = 2
+            result.append(" " * left_pad, style="dim")
+            result.append(indicator, style=style)
+            result.append(" " * right_pad, style="dim")
+            if col_idx != last_col:
+                result.append(" " * self._column_gutter(head_key))
+        result.append("\n")
+
         return result
 
     # =========================================================================
@@ -665,14 +712,18 @@ class ActionHeadsPanel(Static):
     # =========================================================================
 
     def _render_flow_footer(self) -> Text:
-        """Render the gradient flow footer (moved from heads section)."""
+        """Render the gradient flow footer with CV status, layer health, and NaN/Inf counts.
+
+        Single line showing aggregate gradient health metrics.
+        Per-head gradient details are shown in the heads section above (bars + trends).
+        """
         if self._snapshot is None:
             return Text()
 
         tamiyo = self._snapshot.tamiyo
         result = Text()
 
-        # Line 1: CV and layer health
+        # CV and layer health
         result.append("Flow: ", style="dim")
 
         cv = tamiyo.gradient_quality.gradient_cv
@@ -689,12 +740,15 @@ class ActionHeadsPanel(Static):
             f"Dead:{dead}/{total}   Exploding:{exploding}/{total}", style=layers_style
         )
 
-        # Line 2: Directional clip
-        result.append("\n")
-        result.append("      ", style="dim")  # Indent to align with "Flow:"
-        clip_pos = tamiyo.gradient_quality.clip_fraction_positive
-        clip_neg = tamiyo.gradient_quality.clip_fraction_negative
-        result.append(f"Clip:↑{clip_pos:.1%}/↓{clip_neg:.1%}", style="dim")
+        # NaN/Inf counts (always visible, dim when zero per visibility philosophy)
+        nan_count = tamiyo.nan_grad_count
+        inf_count = tamiyo.inf_grad_count
+        nan_style = "red bold" if nan_count > 0 else "dim"
+        inf_style = "red bold" if inf_count > 0 else "dim"
+        result.append("   ")
+        result.append(f"NaN:{nan_count}", style=nan_style)
+        result.append("  ")
+        result.append(f"Inf:{inf_count}", style=inf_style)
 
         return result
 
