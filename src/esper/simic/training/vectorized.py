@@ -1731,10 +1731,11 @@ def train_ppo_vectorized(
                 )
 
             # Sum elementwise correctness per configuration
-            # correct_fused shape is [K*B]
+            # correct_fused shape: [K*B] for classification, [K*B, T] for LM
+            # Use view(K, -1) to handle both shapes uniformly (same pattern as loss below)
             # elementwise=True guarantees correct_fused is a Tensor
             assert isinstance(correct_fused, torch.Tensor)
-            correct_per_config = correct_fused.view(num_configs, batch_size).sum(dim=1)
+            correct_per_config = correct_fused.view(num_configs, -1).sum(dim=1)
 
             # Compute per-config loss when using reduction='none' criterion
             # loss shape: [K*B] for classification, [K*B*T] for LM
@@ -1885,6 +1886,7 @@ def train_ppo_vectorized(
     
                 # Reset per-epoch metrics by zeroing pre-allocated accumulators (faster than reallocating)
                 train_totals = [0] * envs_this_batch
+                train_batch_counts = [0] * envs_this_batch  # Track batch count for correct loss averaging
                 for env_state in env_states:
                     env_state.zero_accumulators()
     
@@ -1986,6 +1988,7 @@ def train_ppo_vectorized(
                             env_state.train_loss_accum.add_(loss_tensor)  # type: ignore[union-attr]
                             env_state.train_correct_accum.add_(correct_tensor)  # type: ignore[union-attr]
                         train_totals[i] += total
+                        train_batch_counts[i] += 1
     
                 # Sync all streams ONCE at epoch end
                 for env_state in env_states:
@@ -2004,8 +2007,10 @@ def train_ppo_vectorized(
                 ]
     
                 # Sync train metrics to env_state for telemetry (Sanctum TUI display)
+                # NOTE: Loss is sum of batch means, so divide by batch count (not sample count).
+                # Accuracy is sum of correct samples, so divide by sample count.
                 for i, env_state in enumerate(env_states):
-                    env_state.train_loss = train_losses[i] / max(1, train_totals[i])
+                    env_state.train_loss = train_losses[i] / max(1, train_batch_counts[i])
                     env_state.train_acc = 100.0 * train_corrects[i] / max(1, train_totals[i])
     
                 # ===== VALIDATION + COUNTERFACTUAL (FUSED): Single pass over test data =====
@@ -2090,6 +2095,7 @@ def train_ppo_vectorized(
                 pair_accs: dict[int, dict[tuple[int, int], float]] = {}
                 shapley_results: dict[int, dict[tuple[bool, ...], tuple[float, float]]] = {}
                 val_totals = [0] * envs_this_batch
+                val_batch_counts = [0] * envs_this_batch  # Track batch count for correct loss averaging
     
                 # Accumulators for fused counts: env_cfg_correct_accums[env_idx] = [K] tensor
                 env_cfg_correct_accums: list[torch.Tensor] = []
@@ -2225,6 +2231,7 @@ def train_ppo_vectorized(
                             if env_state.val_loss_accum is not None:
                                 env_state.val_loss_accum.add_(loss_per_config[0])
                         val_totals[i] += batch_size
+                        val_batch_counts[i] += 1
     
                 # Single sync point at end
                 for env_state in env_states:
@@ -2239,9 +2246,10 @@ def train_ppo_vectorized(
                 ]
     
                 # Sync val_loss to env_state (for Sanctum TUI display)
+                # NOTE: Loss is sum of batch means, so divide by batch count (not sample count).
                 for i, env_state in enumerate(env_states):
-                    if env_state.val_loss_accum is not None and val_totals[i] > 0:
-                        env_state.val_loss = env_state.val_loss_accum.item() / val_totals[i]
+                    if env_state.val_loss_accum is not None and val_batch_counts[i] > 0:
+                        env_state.val_loss = env_state.val_loss_accum.item() / val_batch_counts[i]
                     else:
                         env_state.val_loss = 0.0
     

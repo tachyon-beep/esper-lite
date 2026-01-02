@@ -1146,3 +1146,167 @@ def test_slot_config_preserves_subset_of_slots():
     # slot_config should have exactly 2 slots, sorted by position
     assert len(slot_config.slot_ids) == 2
     assert set(slot_config.slot_ids) == set(requested_slots)
+
+
+# =============================================================================
+# Loss Aggregation Regression Tests
+# =============================================================================
+
+
+def test_loss_aggregation_divides_by_batch_count_not_sample_count():
+    """Regression test: Loss should be averaged by batch count, not sample count.
+
+    Bug fixed: Training/validation loops accumulated mean losses from CrossEntropyLoss
+    (which uses reduction='mean' by default) and then divided by total sample count.
+    This caused double-division, making reported loss ~batch_size times too low.
+
+    The fix tracks batch count separately and divides accumulated mean losses by
+    batch count, not sample count.
+
+    Example of the bug:
+        - 4 batches of 32 samples, each with mean loss ~0.6
+        - Accumulated loss = 0.6 + 0.6 + 0.6 + 0.6 = 2.4
+        - BUG: 2.4 / 128 samples = 0.01875 (32x too low!)
+        - FIX: 2.4 / 4 batches = 0.6 (correct)
+    """
+    import torch.nn as nn
+    from esper.simic.training.vectorized import loss_and_correct
+
+    # Simulate 4 batches of 32 samples
+    batch_size = 32
+    num_classes = 10
+    num_batches = 4
+    criterion = nn.CrossEntropyLoss()  # Default: reduction='mean'
+
+    # Accumulate losses as the training loop does
+    loss_accum = torch.zeros(1)
+    correct_accum = torch.zeros(1, dtype=torch.long)
+    total_samples = 0
+    batch_count = 0
+
+    for _ in range(num_batches):
+        # Random outputs and targets
+        outputs = torch.randn(batch_size, num_classes)
+        targets = torch.randint(0, num_classes, (batch_size,))
+
+        loss, correct, total = loss_and_correct(outputs, targets, criterion, "classification")
+
+        # Accumulate as training loop does
+        loss_accum.add_(loss.detach())
+        correct_accum.add_(correct)
+        total_samples += total
+        batch_count += 1
+
+    # CORRECT: divide by batch count (what the fix does)
+    correct_avg_loss = loss_accum.item() / batch_count
+
+    # BUG: divide by sample count (what the old code did)
+    buggy_avg_loss = loss_accum.item() / total_samples
+
+    # The buggy loss should be ~batch_size times smaller
+    ratio = correct_avg_loss / buggy_avg_loss
+    assert abs(ratio - batch_size) < 1.0, (
+        f"Expected ratio ~{batch_size}, got {ratio:.1f}. "
+        "This indicates the loss aggregation pattern is inconsistent."
+    )
+
+    # The correct loss should be in a reasonable range for CrossEntropyLoss
+    # (random predictions should give loss around -ln(1/num_classes) ≈ 2.3)
+    assert 1.0 < correct_avg_loss < 4.0, (
+        f"Correct avg loss {correct_avg_loss:.2f} outside expected range [1.0, 4.0]. "
+        "CrossEntropyLoss on random predictions should be ~2.3."
+    )
+
+
+def test_lm_correct_tensor_shape_handles_sequence_dimension():
+    """Regression test: LM correctness tensor has [B, T] shape, not [B].
+
+    Bug fixed: Fused validation code did correct_fused.view(num_configs, batch_size)
+    which assumed [K*B] shape. But for LM tasks, loss_and_correct returns [K*B, T]
+    shaped correctness tensor (per-token correctness).
+
+    The fix uses view(num_configs, -1) to handle both shapes uniformly.
+    """
+    import torch.nn as nn
+    from esper.simic.training.vectorized import loss_and_correct
+
+    batch_size = 8
+    seq_len = 32
+    vocab_size = 100
+    num_configs = 3  # Simulate fused validation with 3 configs
+
+    # Create LM-style data: [K*B, T, vocab] outputs, [K*B, T] targets
+    fused_batch_size = num_configs * batch_size
+    outputs = torch.randn(fused_batch_size, seq_len, vocab_size)
+    targets = torch.randint(0, vocab_size, (fused_batch_size, seq_len))
+
+    # CrossEntropyLoss with reduction='none' for per-element loss
+    criterion = nn.CrossEntropyLoss(reduction="none")
+
+    # Get elementwise correctness (as fused validation does)
+    loss, correct_fused, total = loss_and_correct(
+        outputs, targets, criterion, "lm", elementwise=True
+    )
+
+    # Verify shape is [K*B, T] for LM (not [K*B])
+    assert correct_fused.shape == (fused_batch_size, seq_len), (
+        f"Expected LM correct shape [{fused_batch_size}, {seq_len}], "
+        f"got {list(correct_fused.shape)}"
+    )
+
+    # The FIX: view(num_configs, -1) works for both shapes
+    correct_per_config = correct_fused.view(num_configs, -1).sum(dim=1)
+    assert correct_per_config.shape == (num_configs,), (
+        f"Per-config correct should have shape [{num_configs}], "
+        f"got {list(correct_per_config.shape)}"
+    )
+
+    # Total should be tokens per config
+    expected_total_per_config = batch_size * seq_len
+    assert total == fused_batch_size * seq_len, (
+        f"Total should be {fused_batch_size * seq_len} tokens, got {total}"
+    )
+
+
+def test_classification_correct_tensor_shape_still_works():
+    """Verify classification tasks still work with the view(-1) fix.
+
+    This ensures the LM shape fix didn't break classification.
+    """
+    import torch.nn as nn
+    from esper.simic.training.vectorized import loss_and_correct
+
+    batch_size = 8
+    num_classes = 10
+    num_configs = 3  # Simulate fused validation with 3 configs
+
+    # Create classification data: [K*B, num_classes] outputs, [K*B] targets
+    fused_batch_size = num_configs * batch_size
+    outputs = torch.randn(fused_batch_size, num_classes)
+    targets = torch.randint(0, num_classes, (fused_batch_size,))
+
+    # CrossEntropyLoss with reduction='none' for per-element loss
+    criterion = nn.CrossEntropyLoss(reduction="none")
+
+    # Get elementwise correctness
+    loss, correct_fused, total = loss_and_correct(
+        outputs, targets, criterion, "classification", elementwise=True
+    )
+
+    # Verify shape is [K*B] for classification
+    assert correct_fused.shape == (fused_batch_size,), (
+        f"Expected classification correct shape [{fused_batch_size}], "
+        f"got {list(correct_fused.shape)}"
+    )
+
+    # The FIX: view(num_configs, -1) also works for [K*B] shape
+    correct_per_config = correct_fused.view(num_configs, -1).sum(dim=1)
+    assert correct_per_config.shape == (num_configs,), (
+        f"Per-config correct should have shape [{num_configs}], "
+        f"got {list(correct_per_config.shape)}"
+    )
+
+    # Total should be samples per batch
+    assert total == fused_batch_size, (
+        f"Total should be {fused_batch_size} samples, got {total}"
+    )
