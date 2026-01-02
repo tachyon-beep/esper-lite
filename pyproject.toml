@@ -17,6 +17,7 @@ dependencies = [
     "PyYAML>=6.0", # Config file parsing
     "duckdb>=1.4.3",
     "mcp>=1.25.0",
+    "psutil>=5.9.0",  # System resource monitoring for Sanctum
 ]
 
 [project.optional-dependencies]
