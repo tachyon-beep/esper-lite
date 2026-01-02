@@ -89,7 +89,7 @@ if TYPE_CHECKING:
 
     # Protocol & Alpha (lightweight at runtime)
     from esper.kasmina.alpha_controller import AlphaController as AlphaController
-    from esper.kasmina.protocol import HostProtocol as HostProtocol
+    from esper.leyline import HostProtocol as HostProtocol
 
 
 def __dir__() -> list[str]:
@@ -160,9 +160,9 @@ def __getattr__(name: str) -> Any:
         globals().update(isolation_exports)
         return isolation_exports[name]
 
-    # Protocol (lightweight)
+    # Protocol (lightweight - now from leyline)
     if name in _PROTOCOL_EXPORTS:
-        from esper.kasmina.protocol import HostProtocol
+        from esper.leyline import HostProtocol
         globals()["HostProtocol"] = HostProtocol
         return HostProtocol
 

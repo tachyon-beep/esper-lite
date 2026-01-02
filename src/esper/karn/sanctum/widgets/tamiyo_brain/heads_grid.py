@@ -2,14 +2,14 @@
 
 Uses vertical layout to ensure values align directly under their labels:
 
-    ┌─ ACTION HEADS ──────────────────────────────────────────────────────────────────────────────────┐
-    │              Op        Slot    Blueprint        Style      Tempo     αTarget      αSpeed      Curve │
-    │ Entr       0.89        1.00         1.00         0.21       1.00        0.57        1.00       1.00 │
-    │            ▓▓▓░        ████         ████         ▓░░░       ████        ▓▓░░        ████       ████ │
-    │ Grad       0.13        0.13         0.21         0.27       0.19        0.10        0.21       0.12 │
-    │            ▓░░░        ▓░░░         ▓░░░         ▓░░░       ▓░░░        ▓░░░        ▓░░░       ▓░░░ │
-    │ State         ●           ◇            ◇            ○          ◇           ●           ◇          ◇ │
-    └─────────────────────────────────────────────────────────────────────────────────────────────────────┘
+    ┌─ ACTION HEADS ─────────────────────────────────────────────────────────────────────────────────────────┐
+    │               Op        Slot     Blueprint        Style       Tempo     αTarget      αSpeed       Curve │
+    │ Entr       0.893       1.000        1.000        0.215       1.000       0.571       1.000       1.000 │
+    │            ▓▓▓░        ████         ████         ▓░░░        ████        ▓▓░░        ████        ████ │
+    │ Grad      0.131→     0.135↗       0.211→       0.275↘      0.192→      0.101↗      0.213→      0.124→ │
+    │            ▓░░░        ▓░░░         ▓░░░         ▓░░░        ▓░░░        ▓░░░        ▓░░░        ▓░░░ │
+    │ State         ●           ◇            ◇            ○           ◇           ●           ◇           ◇ │
+    └────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 """
 
 from __future__ import annotations
@@ -133,16 +133,16 @@ class HeadsPanel(Static):
             # Show coefficient for sparse heads (>1.0)
             # Each column is exactly `width` chars, with 2-space gutter between columns
             if coef > 1.0:
-                # Format: "1.3×0.22" (coefficient first, then value)
+                # Format: "1.3×0.221" (coefficient first, then value)
                 coef_prefix = f"{coef:.1f}×"  # "1.3×" (4 chars)
-                value = f"{entropy:.2f}"  # "0.22" (4 chars)
-                combined = coef_prefix + value  # e.g., "1.3×0.22" (8 chars)
+                value = f"{entropy:.3f}"  # "0.221" (5 chars)
+                combined = coef_prefix + value  # e.g., "1.3×0.221" (9 chars)
                 padding = width - len(combined)
                 result.append(" " * padding, style="dim")
                 result.append(coef_prefix, style="cyan dim")
                 result.append(value, style=color)
             else:
-                result.append(f"{entropy:>{width}.2f}", style=color)
+                result.append(f"{entropy:>{width}.3f}", style=color)
             if col_idx != last_col:
                 result.append(" " * self._column_gutter(label))
         result.append("\n")
@@ -172,9 +172,9 @@ class HeadsPanel(Static):
             color = self._gradient_color(grad)
 
             # Value + trend arrow (1 char) = exactly `width` chars total
-            # e.g., " 0.35↗" (6 chars for width=7: 5 for value + 1 for arrow)
-            value = f"{grad:.2f}"  # "0.35" (4 chars)
-            combined = value + trend  # e.g., "0.35↗" (5 chars)
+            # e.g., "0.350↗" (6 chars for width=7: 5 for value + 1 for arrow)
+            value = f"{grad:.3f}"  # "0.350" (5 chars)
+            combined = value + trend  # e.g., "0.350↗" (6 chars)
             padding = width - len(combined)
             result.append(" " * padding, style="dim")
             result.append(value, style=color)
@@ -227,7 +227,7 @@ class HeadsPanel(Static):
         cv = tamiyo.gradient_quality.gradient_cv
         cv_status = "stable" if cv < 0.5 else ("warn" if cv < 2.0 else "BAD")
         cv_style = "green" if cv < 0.5 else ("yellow" if cv < 2.0 else "red")
-        result.append(f"CV:{cv:.2f} ", style=cv_style)
+        result.append(f"CV:{cv:.3f} ", style=cv_style)
         result.append(f"{cv_status}   ", style="dim")
 
         # Dead/Exploding layers (use existing TamiyoState fields)
@@ -244,7 +244,7 @@ class HeadsPanel(Static):
         result.append("      ", style="dim")  # Indent to align with "Flow:"
         clip_pos = tamiyo.gradient_quality.clip_fraction_positive
         clip_neg = tamiyo.gradient_quality.clip_fraction_negative
-        result.append(f"Clip:\u2191{clip_pos:.0%}/\u2193{clip_neg:.0%}", style="dim")
+        result.append(f"Clip:\u2191{clip_pos:.1%}/\u2193{clip_neg:.1%}", style="dim")
 
         return result
 

@@ -61,7 +61,8 @@ class HealthStatusPanel(Static):
         )
 
         result.append("Advantage    ", style="dim")
-        result.append(f"{tamiyo.advantage_mean:+.2f}±{tamiyo.advantage_std:.2f}", style=self._status_style(adv_status))
+        # Use .3f for mean to distinguish small values from true zero (e.g., -0.005 vs 0.000)
+        result.append(f"{tamiyo.advantage_mean:+.3f}±{tamiyo.advantage_std:.2f}", style=self._status_style(adv_status))
         result.append(" sk:", style="dim")
         # Show "---" for NaN skewness/kurtosis/positive_ratio (no data yet)
         if math.isnan(tamiyo.advantage_skewness):
@@ -87,7 +88,7 @@ class HealthStatusPanel(Static):
         # Ratio bounds (joint ratio for multi-head)
         joint_status = self._get_joint_ratio_status(tamiyo.joint_ratio_max)
         result.append("Ratio Joint  ", style="dim")
-        result.append(f"{tamiyo.joint_ratio_max:.2f}", style=self._status_style(joint_status))
+        result.append(f"{tamiyo.joint_ratio_max:.3f}", style=self._status_style(joint_status))
         if joint_status != "ok":
             result.append(" !", style=self._status_style(joint_status))
         result.append("\n")
@@ -114,7 +115,7 @@ class HealthStatusPanel(Static):
         # Grad norm
         gn_status = self._get_grad_norm_status(tamiyo.grad_norm)
         result.append("Grad Norm    ", style="dim")
-        result.append(f"{tamiyo.grad_norm:>5.2f}", style=self._status_style(gn_status))
+        result.append(f"{tamiyo.grad_norm:>6.3f}", style=self._status_style(gn_status))
         if gn_status != "ok":
             result.append(" !", style=self._status_style(gn_status))
         result.append("\n")
@@ -302,7 +303,7 @@ class HealthStatusPanel(Static):
         result.append("Q Variance   ", style="dim")
 
         var_status = self._get_q_variance_status(tamiyo.q_variance)
-        result.append(f"{tamiyo.q_variance:.2f}", style=self._status_style(var_status))
+        result.append(f"{tamiyo.q_variance:.3f}", style=self._status_style(var_status))
 
         if var_status == "critical":
             result.append(" NO OP COND!", style="red bold")

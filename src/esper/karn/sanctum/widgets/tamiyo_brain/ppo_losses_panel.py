@@ -136,7 +136,7 @@ class PPOLossesPanel(Static):
         clip_pos = tamiyo.gradient_quality.clip_fraction_positive
         clip_neg = tamiyo.gradient_quality.clip_fraction_negative
         if clip_pos > 0 or clip_neg > 0:
-            result.append(f" (\u2191{clip_pos:.0%} \u2193{clip_neg:.0%})", style="dim")
+            result.append(f" (\u2191{clip_pos:.1%} \u2193{clip_neg:.1%})", style="dim")
 
         return result
 

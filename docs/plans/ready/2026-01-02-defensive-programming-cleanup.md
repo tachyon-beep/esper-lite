@@ -1,14 +1,29 @@
 # Defensive Programming Cleanup Sprint
 
 **Created:** 2026-01-02
-**Status:** Ready for Implementation (Triage Complete)
+**Status:** ✅ Ready for Implementation (All Sign-Offs Complete)
 **Scope:** Remove bug-hiding patterns that mask integration issues and schema drift
+
+> **Context:** This sprint was triggered after significant debugging time was spent on faulty telemetry masked by a div/0 guard protecting a value that should never have been zero. These defensive patterns create "silent corruption" where training appears healthy while data is fabricated.
 
 ## Executive Summary
 
 An audit of the Esper codebase identified **~120 instances** of defensive programming patterns. After triage by specialized Explore agents, we've refined this to **19 confirmed bugs** requiring fixes and **~100 legitimate patterns** that should NOT be changed.
 
 **Key principle:** If a defensive pattern would prevent a crash, that crash is a bug to fix upstream, not a symptom to suppress downstream.
+
+---
+
+## Specialist Sign-Off Status
+
+| Specialist | Bugs Reviewed | Status | Date |
+|------------|---------------|--------|------|
+| **DRL Expert** | DRL-01 to DRL-05 | ✅ 5/5 CONFIRMED | 2026-01-02 |
+| **PyTorch Expert** | PT-01 to PT-07 | ✅ 7/7 CONFIRMED | 2026-01-02 |
+
+**DRL Expert Summary:** *"These bugs collectively create a 'silent corruption' pattern where training appears healthy while phantom zero rewards pollute statistics, TD advantages use fabricated bootstrap values, and NaN gradients go unreported."*
+
+**PyTorch Expert Summary:** *"If data is malformed, it's a bug that should surface immediately. All torch.optim.Optimizer subclasses MUST have `param_groups[0]["lr"]` - if they don't, something is fundamentally broken."*
 
 ---
 
@@ -23,11 +38,11 @@ An audit of the Esper codebase identified **~120 instances** of defensive progra
 
 ---
 
-## CONFIRMED BUGS (Specialist Sign-Off Required)
+## CONFIRMED BUGS (All Sign-Offs Complete ✅)
 
-### Category A: RL-Critical Telemetry Bugs (DRL Expert Review)
+### Category A: RL-Critical Telemetry Bugs ✅ (DRL Expert Signed Off)
 
-These affect training signal integrity and should be reviewed by DRL specialist:
+These affect training signal integrity. **All confirmed as genuine bugs.**
 
 | ID | File | Line | Pattern | Impact | Fix |
 |----|------|------|---------|--------|-----|
@@ -37,9 +52,9 @@ These affect training signal integrity and should be reviewed by DRL specialist:
 | **DRL-04** | `leyline/telemetry.py` | 755 | `pre_clip_grad_norm` inconsistent | Dataclass has default but `from_dict()` uses direct access | Align dataclass and deserializer |
 | **DRL-05** | `leyline/telemetry.py` | 810 | `ppo_updates_count` inconsistent | Dataclass has default but `from_dict()` uses direct access | Align dataclass and deserializer |
 
-### Category B: Schema/Data Integrity Bugs (PyTorch Expert Review)
+### Category B: Schema/Data Integrity Bugs ✅ (PyTorch Expert Signed Off)
 
-These affect checkpoint/telemetry data integrity:
+These affect checkpoint/telemetry data integrity. **All confirmed as genuine bugs.**
 
 | ID | File | Line | Pattern | Impact | Fix |
 |----|------|------|---------|--------|-----|
@@ -112,7 +127,7 @@ These affect checkpoint/telemetry data integrity:
 
 ## Implementation Checklist (By Bug ID)
 
-### Phase 1: DRL-Critical Fixes (DRL Expert Sign-Off Required)
+### Phase 1: DRL-Critical Fixes ✅ (DRL Expert Signed Off)
 
 | Bug ID | Task | File:Line | Est. |
 |--------|------|-----------|------|
@@ -124,7 +139,7 @@ These affect checkpoint/telemetry data integrity:
 
 **Total Phase 1:** ~1.5 hours
 
-### Phase 2: Data Integrity Fixes (PyTorch Expert Sign-Off Required)
+### Phase 2: Data Integrity Fixes ✅ (PyTorch Expert Signed Off)
 
 | Bug ID | Task | File:Line | Est. |
 |--------|------|-----------|------|
@@ -159,25 +174,17 @@ These affect checkpoint/telemetry data integrity:
 
 ---
 
-## Specialist Review Protocol
+## Specialist Review Protocol ✅ COMPLETE
 
-Before implementing DRL-01 through DRL-05, dispatch DRL expert agent to confirm:
+**DRL Expert reviewed DRL-01 through DRL-05:**
+- All patterns confirmed as corrupting training signals
+- Recommended fixes: fail-fast on None, remove dataclass defaults for required fields
+- No downstream consumers expect fabricated 0.0 values
 
-```
-For each bug:
-1. Is this pattern actually corrupting training signals?
-2. What's the correct fix (explicit None check vs. raise KeyError)?
-3. Are there downstream consumers that expect the current behavior?
-```
-
-Before implementing PT-01 through PT-07, dispatch PyTorch expert agent to confirm:
-
-```
-For each bug:
-1. Does this affect checkpoint compatibility?
-2. What's the migration path for existing checkpoints?
-3. Should we add validation logging or fail hard?
-```
+**PyTorch Expert reviewed PT-01 through PT-07:**
+- No checkpoint compatibility impact (these are telemetry ingestion bugs)
+- No migration path needed
+- Recommended: fail hard on malformed data, create `coerce_str()` that raises on invalid type
 
 ---
 
@@ -194,7 +201,7 @@ For each bug:
 ## Success Criteria
 
 - [ ] All 19 confirmed bugs fixed
-- [ ] DRL expert signs off on DRL-01 through DRL-05
-- [ ] PyTorch expert signs off on PT-01 through PT-07
+- [x] DRL expert signs off on DRL-01 through DRL-05 ✅ (2026-01-02)
+- [x] PyTorch expert signs off on PT-01 through PT-07 ✅ (2026-01-02)
 - [ ] Test suite passes with no new failures
 - [ ] No silent exception handlers remaining (`except Exception: pass`)

@@ -92,8 +92,7 @@ class SlotsPanel(Static):
         rate_color = "green" if rate >= 70 else "yellow" if rate >= 50 else "red"
         result.append(f"{rate:.0f}%", style=rate_color)
         result.append("  AvgAge:", style="dim")
-        result.append(f"{avg_epochs:.1f}", style="cyan")
-        result.append(" epochs", style="dim")
+        result.append(f"{avg_epochs:.1f} eps", style="cyan")
         result.append("\n")
 
         # Line 8-9: Blueprint breakdown (top 3 fossilized blueprints)
