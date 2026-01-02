@@ -67,6 +67,25 @@ In `DecisionsColumn._render_cards`:
 ### 3. Missing Data Handling
 `HeadsPanel` manual alignment relies on `AttentionHeatmapPanel` column widths, but they have different internal column definitions (`HEAD_CONFIG` widths vs `AttentionHeatmapPanel` `COL_*` constants). While they align mathematically now, any change to one will break the other.
 
+## Suggested Fixes
+
+### Short-term (Quick Fix)
+1. **Enable Horizontal Scrolling:**
+   - Update `styles.tcss` for `#heads-panel` and `#attention-heatmap` to include `overflow-x: auto`.
+   - Ensure the parent container allows scrolling or the widget expands to its content width.
+   - Note: This might degrade UX by requiring scrolling to see all heads.
+
+### Medium-term (Better UX)
+2. **Compact Layout:**
+   - Redesign `AttentionHeatmapPanel` and `HeadsPanel` to use a more compact representation.
+   - Example: Group related heads (e.g., αTarget, αSpeed, Curve) or use abbreviated headers.
+   - Reduce gutter sizes. Currently `Op` has 4 chars gutter, `Blueprint` has 5. Reducing gutters to 1-2 chars could save ~20 chars.
+   - Current: 103 chars. Target: ~80 chars (fits in 120-width terminal with 68% split -> 81 chars).
+   - **Calculation:** Saving 20 chars gets us to 83 chars. Almost there.
+
+3. **Responsive/Adaptive Layout:**
+   - Detect terminal width and switch to a "compact" mode (hiding less critical heads or using shorter abbreviations) if width < 150.
+
 ## Next Steps
 1. Verify if `Static` widgets wrap lines by default (breaking the table).
 2. Confirm if the user considers this the "bug" (highly likely given "Sanctum UX").

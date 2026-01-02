@@ -142,8 +142,18 @@ def test_head_state_health_classification():
     assert state == "▲"
     assert style == "red bold"
 
-    # Deterministic: low entropy but normal gradients
-    state, style = panel._head_state("slot", entropy=0.05, grad_norm=0.5)
+    # Deterministic: low entropy but normal gradients (concerning - multiple slots available)
+    state, style = panel._head_state("slot", entropy=0.05, grad_norm=0.5, n_slots=3)
+    assert state == "◇"
+    assert style == "yellow"
+
+    # Deterministic but expected: slot head with single slot configured
+    state, style = panel._head_state("slot", entropy=0.05, grad_norm=0.5, n_slots=1)
+    assert state == "◇"
+    assert style == "dim"  # Expected determinism, not concerning
+
+    # Deterministic: other head (not slot) remains yellow even if n_slots=1
+    state, style = panel._head_state("op", entropy=0.05, grad_norm=0.5, n_slots=1)
     assert state == "◇"
     assert style == "yellow"
 

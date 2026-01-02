@@ -15,7 +15,8 @@ State indicators synthesize entropy + gradient health:
   ● healthy (green): Moderate entropy + normal gradients
   ○ dead (red): Collapsed entropy + vanishing gradients
   ◐ confused (yellow): Very high entropy
-  ◇ deterministic (yellow): Very low entropy but normal gradients
+  ◇ deterministic (dim): Expected - e.g., slot head with single slot
+  ◇ deterministic (yellow): Concerning - policy collapsed with multiple choices
   ▲ exploding (red): Gradient explosion
 """
 
@@ -206,11 +207,12 @@ class HeadsPanel(Static):
         # Row 5: Head state indicators (synthesizes entropy + gradient health)
         result.append("State ", style="dim")
         result.append(" " * self._PRE_OP_GUTTER, style="dim")
+        n_slots = len(self._snapshot.slot_ids) if self._snapshot else 0
         for col_idx, (label, ent_field, grad_field, width, _) in enumerate(HEAD_CONFIG):
             entropy = getattr(tamiyo, ent_field)
             grad = getattr(tamiyo, grad_field)
             head_key = _get_head_key(ent_field)
-            state, style_str = self._head_state(head_key, entropy, grad)
+            state, style_str = self._head_state(head_key, entropy, grad, n_slots)
             # Center state indicator under the 5-char bar (bars are right-aligned)
             # Bar center is at width - 3, so state should be at that position
             # For width=7: 4 spaces + indicator + 2 spaces = 7 chars total
@@ -348,7 +350,7 @@ class HeadsPanel(Static):
             return "dim"  # Changes are neutral in healthy range
 
     def _head_state(
-        self, head_key: str, entropy: float, grad_norm: float
+        self, head_key: str, entropy: float, grad_norm: float, n_slots: int = 0
     ) -> tuple[str, str]:
         """Classify head state based on entropy and gradient health.
 
@@ -360,12 +362,15 @@ class HeadsPanel(Static):
             head_key: Lowercase head key (e.g., "slot", "alpha_target")
             entropy: Current entropy value for the head (batch average)
             grad_norm: Current gradient norm for the head (batch average)
+            n_slots: Number of slots configured (used to detect expected determinism)
 
         States:
         - ● healthy: Active learning (moderate entropy, normal gradients)
         - ○ dead: Collapsed and not learning (low entropy + vanishing gradients)
         - ◐ confused: Can't discriminate (very high entropy, normal gradients)
         - ◇ deterministic: Converged to specific choice (low entropy, normal gradients)
+          - dim: Expected determinism (e.g., slot head with single slot)
+          - yellow: Concerning policy collapse
         - ▲ exploding: Gradient explosion detected
 
         Returns:
@@ -390,7 +395,11 @@ class HeadsPanel(Static):
 
         if normalized_ent < 0.1:
             # Very low entropy with normal gradients = deterministic
-            # This is concerning - the head IS relevant but collapsed
+            # Check if this is EXPECTED determinism (slot head with single slot)
+            if head_key == "slot" and n_slots == 1:
+                # Single slot = only 1 valid action = expected determinism
+                return "◇", "dim"
+            # Otherwise, concerning policy collapse
             return "◇", "yellow"
 
         if normalized_ent > 0.9 and grad_is_normal:

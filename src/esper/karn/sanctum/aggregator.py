@@ -1162,6 +1162,7 @@ class SanctumAggregator:
             # History (fresh sparklines each episode)
             env.reward_history.clear()
             env.accuracy_history.clear()
+            env.cumulative_reward = 0.0
 
             # Best tracking (fresh per episode)
             env.best_reward = float('-inf')
@@ -1303,6 +1304,7 @@ class SanctumAggregator:
             # Update reward tracking
             total_reward = payload.total_reward or 0.0
             env.reward_history.append(total_reward)
+            env.cumulative_reward += total_reward
             env.current_epoch = epoch
 
             # Update action tracking (with normalization)

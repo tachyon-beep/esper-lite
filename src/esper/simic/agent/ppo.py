@@ -550,6 +550,46 @@ class PPOAgent:
             for key in entropy:
                 entropy[key] = entropy[key][valid_mask]
 
+            # FINITENESS GATE: Detect NaN/Inf early to identify source of numerical instability
+            # This is NOT bug-hiding - it's fail-fast on corrupted probabilities.
+            # Common causes: mask mismatch between rollout and update, degenerate distributions
+            nonfinite_found = False
+            nonfinite_sources: list[str] = []
+
+            # Check new log_probs
+            for key in HEAD_NAMES:
+                if not torch.isfinite(log_probs[key]).all():
+                    nonfinite_count = (~torch.isfinite(log_probs[key])).sum().item()
+                    nonfinite_sources.append(f"log_probs[{key}]: {nonfinite_count} non-finite")
+                    nonfinite_found = True
+
+            # Check old log_probs (stored as "{key}_log_probs" in data dict)
+            for key in HEAD_NAMES:
+                old_key = f"{key}_log_probs"
+                old_lp = data[old_key][valid_mask]
+                if not torch.isfinite(old_lp).all():
+                    nonfinite_count = (~torch.isfinite(old_lp)).sum().item()
+                    nonfinite_sources.append(f"old_log_probs[{key}]: {nonfinite_count} non-finite")
+                    nonfinite_found = True
+
+            # Check values
+            if not torch.isfinite(values).all():
+                nonfinite_count = (~torch.isfinite(values)).sum().item()
+                nonfinite_sources.append(f"values: {nonfinite_count} non-finite")
+                nonfinite_found = True
+
+            if nonfinite_found:
+                logger.warning(
+                    f"FINITENESS GATE FAILED at epoch {epoch_i}: {', '.join(nonfinite_sources)}. "
+                    "Skipping optimizer step to prevent NaN propagation. "
+                    "Likely cause: mask mismatch between rollout and update time."
+                )
+                metrics.setdefault("finiteness_gate_failures", []).append({
+                    "epoch": epoch_i,
+                    "sources": nonfinite_sources,
+                })
+                continue  # Skip this epoch's update, try next epoch
+
             # Track log prob extremes across all heads (NaN predictor)
             # Use HEAD_NAMES for consistent ordering
             all_log_probs = torch.cat([log_probs[k] for k in HEAD_NAMES])
@@ -641,8 +681,13 @@ class PPOAgent:
                 total_weight = torch.tensor(0.0, device=self.device)
                 for key in HEAD_NAMES:
                     mask = head_masks[key]
-                    log_ratio = log_probs[key] - old_log_probs[key]
-                    kl_per_step = (torch.exp(log_ratio) - 1) - log_ratio
+                    # BUGFIX: Reuse CLAMPED log_ratio from line 602 to prevent overflow/NaN
+                    # Previously this recomputed log_ratio without clamping, causing:
+                    # - exp(large_value) → inf → NaN in KL
+                    # - exp(-inf) → 0, but (0-1) - (-inf) → NaN
+                    # The clamped version is already available in log_ratios_for_joint
+                    log_ratio_clamped = log_ratios_for_joint[key]
+                    kl_per_step = (torch.exp(log_ratio_clamped) - 1) - log_ratio_clamped
                     n_valid = mask.sum().float().clamp(min=1)
                     # Masked mean KL for this head
                     head_kl = (kl_per_step * mask).sum() / n_valid
@@ -656,7 +701,9 @@ class PPOAgent:
 
                 # Clip fraction: how often clipping was active
                 # PERF: Batch all 3 clip metrics into single GPU→CPU transfer
-                joint_ratio = per_head_ratios["op"]
+                # BUG FIX: Use TRUE joint_ratio (product of all heads) computed at line 619
+                # Previously this was overwritten with just per_head_ratios["op"], hiding
+                # divergence in other heads (slot, blueprint, style, etc.)
                 clip_fraction_t = ((joint_ratio - 1.0).abs() > self.clip_ratio).float().mean()
                 # Directional clip fractions (per DRL expert recommendation)
                 # Tracks WHERE clipping occurs: asymmetry indicates directional policy drift
@@ -739,22 +786,114 @@ class PPOAgent:
             self.optimizer.zero_grad(set_to_none=True)
             loss.backward()  # type: ignore[no-untyped-call]
 
+            # DEBUG: Check gradient flow to heads (one-time probe)
+            if epoch_i == 0 and not hasattr(self, "_gradient_debug_done"):
+                self._gradient_debug_done = True
+                network = self.policy.network
+                logger.warning("=== GRADIENT DEBUG PROBE ===")
+
+                # Check loss computation graph
+                logger.warning(f"loss: requires_grad={loss.requires_grad}, grad_fn={type(loss.grad_fn).__name__ if loss.grad_fn else None}")
+                logger.warning(f"policy_loss: requires_grad={policy_loss.requires_grad}, grad_fn={type(policy_loss.grad_fn).__name__ if policy_loss.grad_fn else None}")
+                logger.warning(f"value_loss: requires_grad={value_loss.requires_grad}, grad_fn={type(value_loss.grad_fn).__name__ if value_loss.grad_fn else None}")
+
+                # Check if log_probs require grad
+                for key in ["op", "slot", "blueprint"]:
+                    if key in log_probs:
+                        lp = log_probs[key]
+                        logger.warning(f"log_probs[{key}]: requires_grad={lp.requires_grad}, grad_fn={type(lp.grad_fn).__name__ if lp.grad_fn else None}")
+
+                # Check MASK COLLAPSE - if heads have only 1 valid action, no gradient flows
+                logger.warning("=== MASK COLLAPSE CHECK (action validity) ===")
+                for key in ["op", "slot", "blueprint", "style"]:
+                    if key in masks:
+                        mask = masks[key]  # [batch, seq, num_actions] or similar
+                        valid_counts = mask.sum(dim=-1).float()  # How many valid per timestep
+                        min_valid = valid_counts.min().item()
+                        max_valid = valid_counts.max().item()
+                        mean_valid = valid_counts.mean().item()
+                        pct_single = (valid_counts == 1).float().mean().item() * 100
+                        logger.warning(f"{key}_mask: valid_actions min={min_valid:.0f} max={max_valid:.0f} mean={mean_valid:.1f} single_action={pct_single:.1f}%")
+
+                # Check CAUSAL MASKS - whether head contributes to loss at all
+                logger.warning("=== CAUSAL MASK CHECK (head relevance) ===")
+                for key in ["op", "slot", "blueprint", "style"]:
+                    if key in head_masks:
+                        causal_mask = head_masks[key]  # [batch*seq] or similar - True if head is relevant
+                        pct_relevant = causal_mask.float().mean().item() * 100
+                        n_relevant = causal_mask.sum().item()
+                        n_total = causal_mask.numel()
+                        logger.warning(f"{key}_causal: {n_relevant}/{n_total} timesteps relevant ({pct_relevant:.1f}%)")
+
+                # Check ratio computation
+                for key in ["op", "slot"]:
+                    if key in per_head_ratios:
+                        ratio = per_head_ratios[key]
+                        logger.warning(f"per_head_ratios[{key}]: requires_grad={ratio.requires_grad}, grad_fn={type(ratio.grad_fn).__name__ if ratio.grad_fn else None}")
+
+                # Check network type (compiled vs original)
+                logger.warning(f"Network type: {type(network).__name__}")
+                has_orig_mod = hasattr(network, '_orig_mod')
+                logger.warning(f"Is compiled (has _orig_mod): {has_orig_mod}")
+
+                # If compiled, also check original module's params
+                base_network = getattr(network, '_orig_mod', network)
+                logger.warning(f"Base network type: {type(base_network).__name__}")
+
+                # Check which params have grads (on compiled wrapper)
+                debug_params_with_grad = sum(1 for p in network.parameters() if p.grad is not None)
+                total_params = sum(1 for _ in network.parameters())
+                logger.warning(f"Compiled network params with grad: {debug_params_with_grad}/{total_params}")
+
+                # Check which params have grads (on original)
+                if has_orig_mod:
+                    orig_params_with_grad = sum(1 for p in base_network.parameters() if p.grad is not None)
+                    orig_total_params = sum(1 for _ in base_network.parameters())
+                    logger.warning(f"Original network params with grad: {orig_params_with_grad}/{orig_total_params}")
+
+                # Check head params specifically - use BASE network for attribute access
+                # Distinguish: None (not in graph) vs NaN (numerical instability) vs finite (healthy)
+                for name in ["slot_head", "op_head", "value_head"]:
+                    head = getattr(base_network, name)
+                    head_params = list(head.parameters())
+                    none_count = sum(1 for p in head_params if p.grad is None)
+                    nan_count = sum(1 for p in head_params if p.grad is not None and not torch.isfinite(p.grad).all())
+                    finite_count = sum(1 for p in head_params if p.grad is not None and torch.isfinite(p.grad).all())
+                    logger.warning(f"{name}: None={none_count}, NaN/Inf={nan_count}, Finite={finite_count} (of {len(head_params)} params)")
+                    # Show grad norm if any grads exist
+                    grads_exist = [p for p in head_params if p.grad is not None]
+                    if grads_exist:
+                        norm = grads_exist[0].grad.norm().item()
+                        logger.warning(f"  First grad norm: {norm:.6f} ({'NaN!' if not torch.isfinite(torch.tensor(norm)).item() else 'finite'})")
+
+                # Check if optimizer has these params
+                opt_params = set()
+                for pg in self.optimizer.param_groups:
+                    for p in pg['params']:
+                        opt_params.add(id(p))
+                first_slot_param = list(base_network.slot_head.parameters())[0]
+                logger.warning(f"slot_head param in optimizer: {id(first_slot_param) in opt_params}")
+
+                logger.warning("=== END DEBUG PROBE ===")
+
             # Collect per-head gradient norms BEFORE clipping (P4-6)
             # Measures raw gradients to diagnose head dominance
             # PERF: Batch all norm computations, then single .tolist() at end
             with torch.inference_mode():
-                # BUG FIX: torch.compile creates NEW parameter tensors - gradients live on
-                # the compiled module's params, NOT on _orig_mod's params. We must access
-                # head modules from the SAME module the optimizer uses (the compiled one).
-                # DO NOT unwrap to _orig_mod here - that's why grads were always 0.0!
-                network = self.policy.network  # Keep compiled wrapper if present
+                # Use the BASE network to access head modules. torch.compile shares
+                # parameters with the original module, so gradients are on the same
+                # Parameter objects. Using base_network ensures consistency with how
+                # the optimizer was created (which also uses base_network params when
+                # weight_decay > 0).
+                network = self.policy.network
+                base_network = getattr(network, '_orig_mod', network)
 
                 head_names = ["slot", "blueprint", "style", "tempo", "alpha_target",
                               "alpha_speed", "alpha_curve", "op", "value"]
                 head_modules = [
-                    network.slot_head, network.blueprint_head, network.style_head,
-                    network.tempo_head, network.alpha_target_head, network.alpha_speed_head,
-                    network.alpha_curve_head, network.op_head, network.value_head,
+                    base_network.slot_head, base_network.blueprint_head, base_network.style_head,
+                    base_network.tempo_head, base_network.alpha_target_head, base_network.alpha_speed_head,
+                    base_network.alpha_curve_head, base_network.op_head, base_network.value_head,
                 ]
 
                 # Collect all head norms as tensors (no .item() yet)
@@ -766,7 +905,10 @@ class PPOAgent:
                             torch.stack([torch.linalg.vector_norm(p.grad) for p in params_with_grad])
                         )
                     else:
-                        norm_t = torch.tensor(0.0, device=self.device)
+                        # BUG FIX: Use NaN to signal "no gradient data" instead of 0.0
+                        # 0.0 would hide the bug (No Bug-Hiding Patterns rule)
+                        # NaN signals missing data and will surface in telemetry
+                        norm_t = torch.tensor(float("nan"), device=self.device)
                     head_norm_tensors.append(norm_t)
 
                 # Single GPU→CPU sync: stack all norms, then .tolist()
@@ -798,7 +940,8 @@ class PPOAgent:
 
             # Track metrics
             # PERF: Batch all 10 logging metrics into single GPU→CPU transfer
-            joint_ratio = per_head_ratios["op"]  # Use op ratio as representative
+            # BUG FIX: Use TRUE joint_ratio (product of all heads) computed at line 619
+            # Previously this used per_head_ratios["op"] which hid divergence in other heads
             logging_tensors = torch.stack([
                 policy_loss,
                 value_loss,
