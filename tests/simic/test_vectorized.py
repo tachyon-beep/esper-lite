@@ -126,9 +126,39 @@ def test_last_action_event_emitted():
         assert emitted.data.style_masked is True
 
 
+def _make_mandatory_metrics(**overrides) -> dict:
+    """Create metrics dict with all mandatory fields for emit_ppo_update_event."""
+    base = {
+        "policy_loss": 0.1,
+        "value_loss": 0.2,
+        "entropy": 1.5,
+        "approx_kl": 0.01,
+        "clip_fraction": 0.1,
+        "pre_clip_grad_norm": 2.5,
+        "ppo_updates_count": 1,
+        "advantage_mean": 0.0,
+        "advantage_std": 1.0,
+        "advantage_skewness": 0.0,
+        "advantage_kurtosis": 0.0,
+        "advantage_positive_ratio": 0.5,
+        "ratio_mean": 1.0,
+        "ratio_min": 0.8,
+        "ratio_max": 1.2,
+        "ratio_std": 0.1,
+        "log_prob_min": -5.0,
+        "log_prob_max": -0.1,
+        "value_mean": 0.0,
+        "value_std": 1.0,
+        "value_min": -2.0,
+        "value_max": 2.0,
+    }
+    base.update(overrides)
+    return base
+
+
 def test_ppo_update_event_includes_vitals():
     hub = Mock()
-    metrics = {"policy_loss": 0.1}
+    metrics = _make_mandatory_metrics()
     emit_ppo_update_event(
         hub=hub,
         metrics=metrics,

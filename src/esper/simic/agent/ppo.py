@@ -675,11 +675,12 @@ class PPOAgent:
                     metrics["early_stop_epoch"] = [epoch_i]
                     # PERF: Batch ratio metrics into single GPU→CPU transfer
                     ratio_stats = torch.stack([
-                        joint_ratio.mean(), joint_ratio.max(), joint_ratio.min()
+                        joint_ratio.mean(), joint_ratio.max(), joint_ratio.min(), joint_ratio.std()
                     ]).cpu().tolist()
                     metrics["ratio_mean"].append(ratio_stats[0])
                     metrics["ratio_max"].append(ratio_stats[1])
                     metrics["ratio_min"].append(ratio_stats[2])
+                    metrics["ratio_std"].append(ratio_stats[3])
                     break  # Skip loss computation, backward, and optimizer step
 
             # Compute policy loss per head and sum
@@ -742,21 +743,18 @@ class PPOAgent:
             # Measures raw gradients to diagnose head dominance
             # PERF: Batch all norm computations, then single .tolist() at end
             with torch.inference_mode():
-                # Handle torch.compile wrapper (_orig_mod)
-                # getattr AUTHORIZED by Code Review 2025-12-17
-                # Justification: torch.compile wraps modules - must unwrap to access head modules
-                base_net_untyped = getattr(self.policy.network, '_orig_mod', self.policy.network)
-                # Type assertion: we know this is the actual network module
-                from esper.tamiyo.networks import FactoredRecurrentActorCritic
-                assert isinstance(base_net_untyped, FactoredRecurrentActorCritic)
-                base_net = base_net_untyped
+                # BUG FIX: torch.compile creates NEW parameter tensors - gradients live on
+                # the compiled module's params, NOT on _orig_mod's params. We must access
+                # head modules from the SAME module the optimizer uses (the compiled one).
+                # DO NOT unwrap to _orig_mod here - that's why grads were always 0.0!
+                network = self.policy.network  # Keep compiled wrapper if present
 
                 head_names = ["slot", "blueprint", "style", "tempo", "alpha_target",
                               "alpha_speed", "alpha_curve", "op", "value"]
                 head_modules = [
-                    base_net.slot_head, base_net.blueprint_head, base_net.style_head,
-                    base_net.tempo_head, base_net.alpha_target_head, base_net.alpha_speed_head,
-                    base_net.alpha_curve_head, base_net.op_head, base_net.value_head,
+                    network.slot_head, network.blueprint_head, network.style_head,
+                    network.tempo_head, network.alpha_target_head, network.alpha_speed_head,
+                    network.alpha_curve_head, network.op_head, network.value_head,
                 ]
 
                 # Collect all head norms as tensors (no .item() yet)
@@ -808,6 +806,7 @@ class PPOAgent:
                 joint_ratio.mean(),
                 joint_ratio.max(),
                 joint_ratio.min(),
+                joint_ratio.std(),  # BUG FIX: ratio_std was missing, hidden by .get() default
                 # Value function stats (single GPU sync with rest)
                 values.mean(),
                 values.std(),
@@ -822,10 +821,11 @@ class PPOAgent:
             metrics["ratio_mean"].append(logging_tensors[3])
             metrics["ratio_max"].append(logging_tensors[4])
             metrics["ratio_min"].append(logging_tensors[5])
-            metrics["value_mean"].append(logging_tensors[6])
-            metrics["value_std"].append(logging_tensors[7])
-            metrics["value_min"].append(logging_tensors[8])
-            metrics["value_max"].append(logging_tensors[9])
+            metrics["ratio_std"].append(logging_tensors[6])  # BUG FIX: was missing
+            metrics["value_mean"].append(logging_tensors[7])
+            metrics["value_std"].append(logging_tensors[8])
+            metrics["value_min"].append(logging_tensors[9])
+            metrics["value_max"].append(logging_tensors[10])
             # PERF: Reuse already-transferred ratio stats (indices 4,5) instead of
             # re-computing on GPU which would trigger 2 redundant syncs
             ratio_max_val = logging_tensors[4]

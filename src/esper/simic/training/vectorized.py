@@ -3486,7 +3486,7 @@ def train_ppo_vectorized(
                 # B7-DRL-01: Wire up gradient EMA tracking for drift detection
                 # Compute gradient health heuristic from norm (vanishing/exploding detection)
                 drift_metrics: dict[str, float] | None = None
-                if grad_ema_tracker is not None and ppo_grad_norm is not None:
+                if grad_ema_tracker is not None:
                     if ppo_grad_norm < 1e-7:
                         grad_health = 0.3  # Vanishing gradients
                     elif ppo_grad_norm > 100.0:
@@ -3497,9 +3497,10 @@ def train_ppo_vectorized(
     
                 metric_values = [v for v in metrics.values() if isinstance(v, (int, float))]
                 anomaly_report = anomaly_detector.check_all(
-                    ratio_max=metrics.get("ratio_max", 1.0),
-                    ratio_min=metrics.get("ratio_min", 1.0),
-                    explained_variance=metrics.get("explained_variance", 0.0),
+                    # MANDATORY metrics after PPO update - fail loudly if missing
+                    ratio_max=metrics["ratio_max"],
+                    ratio_min=metrics["ratio_min"],
+                    explained_variance=metrics.get("explained_variance", 0.0),  # Optional: computed once
                     has_nan=any(math.isnan(v) for v in metric_values),
                     has_inf=any(math.isinf(v) for v in metric_values),
                     current_episode=batch_epoch_id,

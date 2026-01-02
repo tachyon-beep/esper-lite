@@ -210,8 +210,9 @@ def check_numerical_stability(
             grad_maxes.append(param.grad.abs().max())
 
     # Single sync for all max values (assumes all params on same device)
-    max_weight = torch.stack(weight_maxes).max().item() if weight_maxes else 0.0
-    max_grad = torch.stack(grad_maxes).max().item() if grad_maxes else 0.0
+    # No defensive pattern - empty lists indicate model has no parameters (bug)
+    max_weight = torch.stack(weight_maxes).max().item()
+    max_grad = torch.stack(grad_maxes).max().item()
 
     # Check loss
     loss_val = 0.0
