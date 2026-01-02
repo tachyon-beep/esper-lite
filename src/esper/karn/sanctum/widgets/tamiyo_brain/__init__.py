@@ -12,6 +12,6 @@ Usage:
 
 from .tamiyo_brain import TamiyoBrain
 from .ppo_losses_panel import PPOLossesPanel
-from .decision_heatmap import AttentionHeatmapPanel
+from .action_heads_panel import ActionHeadsPanel
 
-__all__ = ["TamiyoBrain", "PPOLossesPanel", "AttentionHeatmapPanel"]
+__all__ = ["TamiyoBrain", "PPOLossesPanel", "ActionHeadsPanel"]

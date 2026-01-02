@@ -36,10 +36,11 @@ class PPOLossesPanel(Static):
     """Combined PPO health gauges and loss sparklines panel.
 
     Extends Static directly for minimal layout overhead.
+    Designed for narrow width (~38 chars) in the new layout.
     """
 
     WARMUP_BATCHES: ClassVar[int] = 50
-    GAUGE_WIDTH: ClassVar[int] = 10
+    GAUGE_WIDTH: ClassVar[int] = 8  # Narrower for compact layout
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -82,7 +83,7 @@ class PPOLossesPanel(Static):
 
         # Separator line
         result.append("\n")
-        result.append("\u2500" * 50, style="dim")
+        result.append("\u2500" * 32, style="dim")
         result.append("\n")
 
         # Bottom section: Loss sparklines
@@ -151,23 +152,23 @@ class PPOLossesPanel(Static):
     ) -> Text:
         """Render a single gauge row with value-first layout.
 
-        Format: Label      Value  [bar]  Status
+        Format: Label  Value [bar] Status (compact for narrow panel)
         """
         result = Text()
 
-        # Label (left-aligned, 10 chars)
-        result.append(f"{label:<10}", style="dim")
+        # Label (left-aligned, 8 chars for compact layout)
+        result.append(f"{label:<8}", style="dim")
 
-        # Value (right-aligned, 8 chars)
+        # Value (right-aligned, 6 chars)
         if abs(value) < 0.1:
-            result.append(f"{value:>8.3f}", style=self._status_style(status))
+            result.append(f"{value:>6.3f}", style=self._status_style(status))
         else:
-            result.append(f"{value:>8.2f}", style=self._status_style(status))
+            result.append(f"{value:>6.2f}", style=self._status_style(status))
 
         # Gap
-        result.append("  ")
+        result.append(" ")
 
-        # Bar
+        # Bar (compact)
         normalized = (value - min_val) / (max_val - min_val) if max_val != min_val else 0.5
         normalized = max(0, min(1, normalized))
         filled = int(normalized * self.GAUGE_WIDTH)
@@ -196,28 +197,28 @@ class PPOLossesPanel(Static):
         tamiyo = self._snapshot.tamiyo
         result = Text()
 
-        # Policy loss with sparkline
-        result.append("P.Loss    ", style="dim")
+        # Policy loss with sparkline (compact for narrow panel)
+        result.append("P.Loss ", style="dim")
         if tamiyo.policy_loss_history:
-            pl_sparkline = render_sparkline(tamiyo.policy_loss_history, width=8)
+            pl_sparkline = render_sparkline(tamiyo.policy_loss_history, width=5)
             pl_trend = detect_trend(list(tamiyo.policy_loss_history))
             result.append(pl_sparkline)
-            result.append(f" {tamiyo.policy_loss:>6.3f}", style="bright_cyan")
+            result.append(f" {tamiyo.policy_loss:.3f}", style="bright_cyan")
             result.append(pl_trend, style=trend_style(pl_trend, "loss"))
         else:
-            result.append(f"{tamiyo.policy_loss:>6.3f}", style="bright_cyan")
+            result.append(f"{tamiyo.policy_loss:.3f}", style="bright_cyan")
         result.append("\n")
 
         # Value loss with sparkline
-        result.append("V.Loss    ", style="dim")
+        result.append("V.Loss ", style="dim")
         if tamiyo.value_loss_history:
-            vl_sparkline = render_sparkline(tamiyo.value_loss_history, width=8)
+            vl_sparkline = render_sparkline(tamiyo.value_loss_history, width=5)
             vl_trend = detect_trend(list(tamiyo.value_loss_history))
             result.append(vl_sparkline)
-            result.append(f" {tamiyo.value_loss:>6.3f}", style="bright_cyan")
+            result.append(f" {tamiyo.value_loss:.3f}", style="bright_cyan")
             result.append(vl_trend, style=trend_style(vl_trend, "loss"))
         else:
-            result.append(f"{tamiyo.value_loss:>6.3f}", style="bright_cyan")
+            result.append(f"{tamiyo.value_loss:.3f}", style="bright_cyan")
         result.append("\n")
 
         # Value/Policy loss ratio
@@ -228,7 +229,7 @@ class PPOLossesPanel(Static):
     def _render_loss_ratio(self, value_loss: float, policy_loss: float) -> Text:
         """Render Value/Policy loss ratio with DRL-appropriate thresholds."""
         result = Text()
-        result.append("L_v/L_p   ", style="dim")
+        result.append("Lv/Lp  ", style="dim")
 
         # Handle edge cases
         if abs(policy_loss) < 1e-10:

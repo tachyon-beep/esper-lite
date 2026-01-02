@@ -1,13 +1,18 @@
-"""ActionDistribution - Action distribution and sequence display.
+"""ActionDistribution - Action distribution, Q-values, and sequence display.
 
-Layout (7 lines, Policy V2):
+Layout (expanded for full height panel):
 1. This batch: [▓▓▓▓░░░░░░░░░░░░░░░░] bar for current training batch
 2. G:09 A:03 F:00 P:15 V:02 W:71 (this batch percentages)
 3. Total run: [▓▓▓▓▓▓▓▓░░░░░░░░░░░░] cumulative bar across all batches
 4. G:22 A:05 F:00 P:21 V:02 W:50 (total run percentages)
-5. ⚠ STUCK G✓→G✓→A✗→W✓→W✓ (recent sequence + patterns + success markers)
-6. Last: GERMINATE ✓ (action feedback for Policy V2)
-7. Returns: +1.2 -0.3 +2.1 -0.8 +0.5 +1.7  avg:+0.7↗
+5. ─────────────────────────────── separator
+6. Q-Values: G:+1.2 A:+0.8 F:-0.3 P:-1.1 V:+0.5 W:+0.1 (critic's expected values)
+7. Q Var: 0.342  spread: 2.3 (op-conditioning check)
+8. ─────────────────────────────── separator
+9. ⚠ STUCK G✓→G✓→A✗→W✓→W✓ (recent sequence + patterns + success markers)
+10. Last: GERMINATE ✓ (action feedback for Policy V2)
+11. ─────────────────────────────── separator
+12. Returns: +1.2 -0.3 +2.1 -0.8 +0.5 +1.7  avg:+0.7↗
 """
 
 from __future__ import annotations
@@ -109,13 +114,31 @@ class ActionContext(Static):
         self.refresh()  # Trigger render()
 
     def render(self) -> Text:
-        """Render all action context sections (7 lines, Policy V2)."""
+        """Render all action context sections (expanded for full height)."""
         result = Text()
-        result.append(self._render_action_bars())  # Lines 1-4: both bars
+
+        # Action distribution bars
+        result.append(self._render_action_bars())
+
+        # Separator
+        result.append("─" * 35 + "\n", style="dim")
+
+        # Q-values section (moved from Health panel)
+        result.append(self._render_q_values())
+
+        # Separator
+        result.append("─" * 35 + "\n", style="dim")
+
+        # Action sequence with pattern detection
+        result.append(self._render_action_sequence())
         result.append("\n")
-        result.append(self._render_action_sequence())  # Lines 5-6: sequence + last action
-        result.append("\n")
-        result.append(self._render_return_history())  # Line 7
+
+        # Separator
+        result.append("─" * 35 + "\n", style="dim")
+
+        # Returns history
+        result.append(self._render_return_history())
+
         return result
 
     def _render_action_bars(self) -> Text:
@@ -380,3 +403,67 @@ class ActionContext(Static):
             result.append(f"  avg:{history[0]:+.1f}", style="dim")
 
         return result
+
+    def _render_q_values(self) -> Text:
+        """Render op-conditioned Q-values (Policy V2).
+
+        Shows Q(s,op) for each operation and Q-variance metric.
+        Low variance indicates critic is ignoring op conditioning.
+        """
+        if self._snapshot is None:
+            return Text("[no data]", style="dim")
+
+        tamiyo = self._snapshot.tamiyo
+        result = Text()
+
+        # Q-values per operation
+        result.append("Q-Values: ", style="dim")
+
+        # Define ops with colors (matching ACTION_COLORS)
+        ops = [
+            ("G", tamiyo.q_germinate, "green"),
+            ("A", tamiyo.q_advance, "cyan"),
+            ("F", tamiyo.q_fossilize, "blue"),
+            ("P", tamiyo.q_prune, "red"),
+            ("V", tamiyo.q_set_alpha, "cyan"),  # V for set alpha (A is advance)
+            ("W", tamiyo.q_wait, "dim"),
+        ]
+
+        for i, (label, q_val, color) in enumerate(ops):
+            if i > 0:
+                result.append(" ", style="dim")
+            result.append(f"{label}:", style="dim")
+            result.append(f"{q_val:+.1f}", style=color)
+
+        result.append("\n")
+
+        # Q-variance (op-sensitivity check)
+        result.append("Q Var:    ", style="dim")
+
+        q_var = tamiyo.q_variance
+        var_status = self._get_q_variance_status(q_var)
+        var_style = {"ok": "cyan", "warning": "yellow", "critical": "red bold"}[var_status]
+        result.append(f"{q_var:.3f}", style=var_style)
+
+        if var_status == "critical":
+            result.append(" NO OP COND!", style="red bold")
+        elif var_status == "warning":
+            result.append(" weak", style="yellow")
+
+        # Q-spread for context
+        result.append(f"  spread:{tamiyo.q_spread:.1f}", style="dim")
+        result.append("\n")
+
+        return result
+
+    def _get_q_variance_status(self, q_variance: float) -> str:
+        """Check if Q-variance indicates op conditioning is working.
+
+        Low variance means Q(s, op) ≈ Q(s, op') for all ops → critic ignoring op input.
+        High variance means different ops get different value estimates → healthy.
+        """
+        if q_variance < 0.01:
+            return "critical"  # Essentially collapsed to V(s)
+        if q_variance < 0.1:
+            return "warning"  # Weak differentiation between ops
+        return "ok"

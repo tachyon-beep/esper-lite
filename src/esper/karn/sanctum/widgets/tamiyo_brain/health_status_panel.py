@@ -152,10 +152,6 @@ class HealthStatusPanel(Static):
 
         # Value range
         result.append(self._render_value_stats())
-        result.append("\n")
-
-        # Op-conditioned Q-values (Policy V2)
-        result.append(self._render_q_value_stats())
 
         return result
 
@@ -263,55 +259,6 @@ class HealthStatusPanel(Static):
 
         if status != "ok":
             result.append(" !", style=self._status_style(status))
-
-        return result
-
-    def _render_q_value_stats(self) -> Text:
-        """Render op-conditioned Q-values (Policy V2).
-
-        Shows Q(s,op) for each operation and Q-variance metric.
-        Low variance indicates critic is ignoring op conditioning.
-        """
-        if self._snapshot is None:
-            return Text()
-
-        tamiyo = self._snapshot.tamiyo
-        result = Text()
-
-        # Q-values per operation (abbreviated for space)
-        result.append("Q-Values     ", style="dim")
-
-        # Define ops with colors
-        ops = [
-            ("G", tamiyo.q_germinate, "green"),
-            ("A", tamiyo.q_advance, "cyan"),
-            ("F", tamiyo.q_fossilize, "blue"),
-            ("P", tamiyo.q_prune, "red"),
-            ("V", tamiyo.q_set_alpha, "cyan"),  # V for set alpha (A is advance)
-            ("W", tamiyo.q_wait, "dim"),
-        ]
-
-        for i, (label, q_val, color) in enumerate(ops):
-            if i > 0:
-                result.append(" ", style="dim")
-            result.append(f"{label}:", style="dim")
-            result.append(f"{q_val:+.1f}", style=color)
-
-        result.append("\n")
-
-        # Q-variance (op-sensitivity check)
-        result.append("Q Variance   ", style="dim")
-
-        var_status = self._get_q_variance_status(tamiyo.q_variance)
-        result.append(f"{tamiyo.q_variance:.3f}", style=self._status_style(var_status))
-
-        if var_status == "critical":
-            result.append(" NO OP COND!", style="red bold")
-        elif var_status == "warning":
-            result.append(" weak", style="yellow")
-
-        # Q-spread for context
-        result.append(f"  spread:{tamiyo.q_spread:.1f}", style="dim")
 
         return result
 
@@ -431,18 +378,6 @@ class HealthStatusPanel(Static):
             return "critical"
         if grad_norm > TUIThresholds.GRAD_NORM_WARNING:
             return "warning"
-        return "ok"
-
-    def _get_q_variance_status(self, q_variance: float) -> str:
-        """Check if Q-variance indicates op conditioning is working.
-
-        Low variance means Q(s, op) ≈ Q(s, op') for all ops → critic ignoring op input.
-        High variance means different ops get different value estimates → healthy.
-        """
-        if q_variance < 0.01:
-            return "critical"  # Essentially collapsed to V(s)
-        if q_variance < 0.1:
-            return "warning"  # Weak differentiation between ops
         return "ok"
 
     def _get_joint_ratio_status(self, joint_ratio: float) -> str:

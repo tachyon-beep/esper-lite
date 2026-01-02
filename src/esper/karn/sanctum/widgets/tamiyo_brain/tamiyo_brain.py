@@ -15,14 +15,13 @@ composable sub-widgets for better maintainability.
    - critical metrics: red bold
 
 Layout:
-    ┌─────────────────────────────────────────────────────────────────┐
-    │ StatusBanner (1 line)                                           │
-    ├───────────────────────────────────────────────────┬─────────────┤
-    │ VitalsColumn (75%)                                │ Decisions   │
-    │ ├── PPOLosses (50%)  | Health (50%)               │ (25%)       │
-    │ ├── HeadsPanel (68%) | Slots (32%)                │ ├── Card    │
-    │ └── AttentionHeatmap (68%) | ActionContext (32%)  │ └── Card    │
-    └───────────────────────────────────────────────────┴─────────────┘
+    ┌─────────────────────────────────────────────────────────────────────┐
+    │ StatusBanner (1 line)                                               │
+    ├─────────────────────────────────────────────────────────┬───────────┤
+    │ VitalsColumn (75%)                                      │ Decisions │
+    │ ├── PPOLosses (20%) | Health (45%) | Slots (35%)        │ (25%)     │
+    │ └── ActionHeadsPanel (68%)         | ActionContext (32%)│           │
+    └─────────────────────────────────────────────────────────┴───────────┘
 """
 
 from __future__ import annotations
@@ -36,11 +35,14 @@ from textual.message import Message
 from .status_banner import StatusBanner
 from .ppo_losses_panel import PPOLossesPanel
 from .health_status_panel import HealthStatusPanel
-from .action_heads_panel import HeadsPanel
+from .action_heads_panel import ActionHeadsPanel
 from .action_distribution import ActionContext
 from .slots_panel import SlotsPanel
-from .decisions_column import DecisionDetailRequested, DecisionPinRequested, DecisionsColumn
-from .decision_heatmap import AttentionHeatmapPanel
+from .decisions_column import (
+    DecisionDetailRequested,
+    DecisionPinRequested,
+    DecisionsColumn,
+)
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot
@@ -101,58 +103,53 @@ class TamiyoBrain(Container):
         align: left top;
     }
 
-    /* Row containers - explicit heights based on content + border */
-    #ppo-row {
-        height: 14;  /* Increased from 12 - gained 2 lines from heads-row and action-row */
+    /* Row 1: PPO Losses (narrow) | Health (wide) | Slots */
+    #top-row {
+        height: 13;
         width: 100%;
     }
 
-    #heads-row {
-        height: 13;  /* Reduced from 15 - removed 2 more lines of whitespace */
-        width: 100%;
-    }
-
-    #action-row {
-        height: 13;  /* Reduced from 14 - gave 1 line to ppo-row */
-        width: 100%;
-    }
-
-    /* All panels - fill their row heights */
-    #ppo-losses-panel, #health-panel {
-        width: 1fr;
-        height: 1fr;  /* Fill ppo-row height */
-        border: round $surface-lighten-2;
-        border-title-color: $text-muted;
-        padding: 0 1;
-    }
-
-    #heads-panel {
-        width: 68%;
-        height: 1fr;  /* Fill heads-row height */
-        border: round $surface-lighten-2;
-        border-title-color: $text-muted;
-        padding: 0 1;
-    }
-
-    #slots-panel {
-        width: 32%;
-        height: 1fr;  /* Fill heads-row height */
-        border: round $surface-lighten-2;
-        border-title-color: $text-muted;
-        padding: 0 1;
-    }
-
-    #action-context {
-        width: 32%;
+    #ppo-losses-panel {
+        width: 36;  /* Fixed narrow width for content */
         height: 1fr;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
         padding: 0 1;
     }
 
-    #attention-heatmap {
-        width: 68%;
-        height: 1fr;  /* Fill available height in action-row */
+    #health-panel {
+        width: 1fr;  /* Takes remaining space */
+        height: 1fr;
+        border: round $surface-lighten-2;
+        border-title-color: $text-muted;
+        padding: 0 1;
+    }
+
+    #slots-panel {
+        width: 49;  /* Fixed width for slot grid */
+        height: 1fr;
+        border: round $surface-lighten-2;
+        border-title-color: $text-muted;
+        padding: 0 1;
+    }
+
+    /* Row 2: ActionHeadsPanel (68%) | ActionContext (32%) */
+    #heads-row {
+        height: 27;  /* Full height for both panels */
+        width: 100%;
+    }
+
+    #action-heads-panel {
+        width: 69%;
+        height: 1fr;
+        border: round $surface-lighten-2;
+        border-title-color: $text-muted;
+        padding: 0 1;
+    }
+
+    #action-context {
+        width: 31%;
+        height: 1fr;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
         padding: 0 1;
@@ -213,17 +210,14 @@ class TamiyoBrain(Container):
         # Main content: vitals left, decisions right
         with Horizontal(id="main-content"):
             with VerticalScroll(id="vitals-column"):
-                # PPO row - two panels (50/50 split)
-                with Horizontal(id="ppo-row"):
+                # Top row - three panels: PPO (narrow) | Health (wide) | Slots
+                with Horizontal(id="top-row"):
                     yield PPOLossesPanel(id="ppo-losses-panel")
                     yield HealthStatusPanel(id="health-panel")
-                # Heads row - HeadsPanel (60%) | SlotsPanel (40%)
-                with Horizontal(id="heads-row"):
-                    yield HeadsPanel(id="heads-panel")
                     yield SlotsPanel(id="slots-panel")
-                # Action row - AttentionHeatmap | ActionContext
-                with Horizontal(id="action-row"):
-                    yield AttentionHeatmapPanel(id="attention-heatmap")
+                # Heads row - ActionHeadsPanel (68%) | ActionContext (32%, full height)
+                with Horizontal(id="heads-row"):
+                    yield ActionHeadsPanel(id="action-heads-panel")
                     yield ActionContext(id="action-context")
 
             yield DecisionsColumn(id="decisions-column")
@@ -247,21 +241,28 @@ class TamiyoBrain(Container):
         self.query_one("#status-banner", StatusBanner).update_snapshot(snapshot)
         self.query_one("#ppo-losses-panel", PPOLossesPanel).update_snapshot(snapshot)
         self.query_one("#health-panel", HealthStatusPanel).update_snapshot(snapshot)
-        self.query_one("#heads-panel", HeadsPanel).update_snapshot(snapshot)
+        self.query_one("#action-heads-panel", ActionHeadsPanel).update_snapshot(
+            snapshot
+        )
         self.query_one("#action-context", ActionContext).update_snapshot(snapshot)
         self.query_one("#slots-panel", SlotsPanel).update_snapshot(snapshot)
-        self.query_one("#attention-heatmap", AttentionHeatmapPanel).update_snapshot(snapshot)
         self.query_one("#decisions-column", DecisionsColumn).update_snapshot(snapshot)
 
     def on_decision_pin_requested(self, event: DecisionPinRequested) -> None:
         """Toggle pin status for a decision (bubbles to SanctumApp)."""
-        self.post_message(self.DecisionPinToggled(group_id=event.group_id, decision_id=event.decision_id))
+        self.post_message(
+            self.DecisionPinToggled(
+                group_id=event.group_id, decision_id=event.decision_id
+            )
+        )
 
     def on_decision_detail_requested(self, event: DecisionDetailRequested) -> None:
         """Open drill-down screen for a decision."""
         from .decision_detail_screen import DecisionDetailScreen
 
-        self.app.push_screen(DecisionDetailScreen(decision=event.decision, group_id=event.group_id))
+        self.app.push_screen(
+            DecisionDetailScreen(decision=event.decision, group_id=event.group_id)
+        )
 
     @property
     def snapshot(self) -> "SanctumSnapshot | None":
