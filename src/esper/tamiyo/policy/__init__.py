@@ -19,8 +19,8 @@ Note on imports:
     submodules directly (e.g., `from esper.tamiyo.policy.protocol import PolicyBundle`).
 """
 
-from esper.tamiyo.policy.protocol import PolicyBundle
-from esper.tamiyo.policy.types import ActionResult, EvalResult, ForwardResult
+# Core protocol and types now from leyline
+from esper.leyline import PolicyBundle, ActionResult, EvalResult, ForwardResult
 from esper.tamiyo.policy.registry import (
     register_policy,
     get_policy,

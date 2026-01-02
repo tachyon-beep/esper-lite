@@ -644,6 +644,39 @@ from esper.leyline.causal_masks import (
     is_head_relevant,
 )
 
+# Host protocol (Train Anything principle - ROADMAP #5)
+from esper.leyline.host_protocol import HostProtocol
+
+# Policy protocol (swappable Tamiyo policies)
+from esper.leyline.policy_protocol import (
+    ActionResult,
+    EvalResult,
+    ForwardResult,
+    PolicyBundle,
+)
+
+# Seed protocols (decouple training from seed implementation)
+from esper.leyline.seed_protocols import (
+    SeedStateProtocol,
+    SeedSlotProtocol,
+    SlottedHostProtocol,
+)
+
+# Task configuration (cross-subsystem training config)
+from esper.leyline.task_config import TaskConfig
+
+# Episode outcome (cross-subsystem Pareto analysis)
+from esper.leyline.episode_outcome import EpisodeOutcome
+
+# Output protocol (telemetry backend contract)
+from esper.leyline.output_protocol import OutputBackend
+
+# Governor protocol (fail-safe training watchdog)
+from esper.leyline.governor_protocol import GovernorProtocol, GovernorReport
+
+# Utility functions (cross-subsystem pure functions)
+from esper.leyline.utils import safe
+
 __all__ = [
     # Version
     "LEYLINE_VERSION",
@@ -895,4 +928,34 @@ __all__ = [
     # Type contracts
     "SeedObservationFields",
     "SlotObservationFields",
+
+    # Host protocol
+    "HostProtocol",
+
+    # Policy protocol
+    "ActionResult",
+    "EvalResult",
+    "ForwardResult",
+    "PolicyBundle",
+
+    # Seed protocols
+    "SeedStateProtocol",
+    "SeedSlotProtocol",
+    "SlottedHostProtocol",
+
+    # Task configuration
+    "TaskConfig",
+
+    # Episode outcome (Pareto analysis)
+    "EpisodeOutcome",
+
+    # Output protocol (telemetry backends)
+    "OutputBackend",
+
+    # Governor protocol (fail-safe watchdog)
+    "GovernorProtocol",
+    "GovernorReport",
+
+    # Utility functions
+    "safe",
 ]

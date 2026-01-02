@@ -130,6 +130,7 @@ from esper.simic.rewards import (
 )
 from esper.leyline import (
     DEFAULT_MIN_FOSSILIZE_CONTRIBUTION,
+    EpisodeOutcome,  # Cross-subsystem Pareto analysis
     HINDSIGHT_CREDIT_WEIGHT,
     MAX_HINDSIGHT_CREDIT,
     MIN_PRUNE_AGE,
@@ -137,7 +138,6 @@ from esper.leyline import (
 from esper.nissa import get_hub, BlueprintAnalytics, DirectoryOutput
 from esper.tolaria import TolariaGovernor
 from esper.karn.health import HealthMonitor
-from esper.karn.store import EpisodeOutcome
 from esper.simic.attribution import CounterfactualHelper
 from esper.simic.telemetry.emitters import (
     apply_slot_telemetry,

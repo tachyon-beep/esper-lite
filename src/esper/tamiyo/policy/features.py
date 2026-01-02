@@ -32,6 +32,8 @@ from esper.leyline import (
     OBS_V3_BASE_FEATURE_SIZE,
     OBS_V3_NON_BLUEPRINT_DIM,
     OBS_V3_SLOT_FEATURE_SIZE,
+    TaskConfig,  # Cross-subsystem task configuration
+    safe,  # Cross-subsystem safe value conversion
 )
 # Stage schema for validation and one-hot encoding
 # NOTE: Imported at module level since these are fast O(1) lookups used in hot path
@@ -55,36 +57,7 @@ __all__ = [
 ]
 
 
-# =============================================================================
-# Safe Value Conversion
-# =============================================================================
-
-def safe(v: float | int | None, default: float = 0.0, max_val: float = 100.0) -> float:
-    """Safely convert value to float, handling None/inf/nan.
-
-    Handles Python floats, numpy scalars, and 0-dim torch tensors.
-    Raises TypeError for non-numeric types to avoid masking contract violations.
-
-    Args:
-        v: Value to convert (can be None, float, int, numpy scalar, 0-dim tensor)
-        default: Default value for None/inf/nan
-        max_val: Maximum absolute value (clips to [-max_val, max_val])
-
-    Returns:
-        Safe float value
-
-    Raises:
-        TypeError: If v is not a numeric type that can be converted to float
-    """
-    if v is None:
-        return default
-    try:
-        v_float = float(v)
-    except (TypeError, ValueError) as exc:
-        raise TypeError(f"safe() expected numeric, got {type(v)!r}") from exc
-    if not math.isfinite(v_float):
-        return default
-    return max(-max_val, min(v_float, max_val))
+# safe() now lives in leyline/utils.py (re-exported above via leyline import)
 
 
 # =============================================================================
@@ -587,48 +560,7 @@ def batch_obs_to_features(
 
 
 # =============================================================================
-# Task Configuration and Observation Normalization (Phase 2)
+# Task Configuration - now imported from leyline
 # =============================================================================
-
-
-@dataclass(slots=True)
-class TaskConfig:
-    """Task-specific configuration for observation normalization."""
-
-    task_type: str  # "classification" or "lm"
-    topology: str   # "cnn" or "transformer"
-    baseline_loss: float  # Random init loss
-    target_loss: float    # Achievable loss
-    typical_loss_delta_std: float
-    max_epochs: int
-    max_steps: int = 10000
-    train_to_blend_fraction: float = 0.1  # Fraction of max_epochs to stay in TRAINING before blending
-    blending_steps: int = 5  # Steps for alpha ramp during blending
-
-    @property
-    def achievable_range(self) -> float:
-        return self.baseline_loss - self.target_loss
-
-    @staticmethod
-    def for_cifar10() -> "TaskConfig":
-        return TaskConfig(
-            task_type="classification",
-            topology="cnn",
-            baseline_loss=2.3,  # ln(10)
-            target_loss=0.3,
-            typical_loss_delta_std=0.05,
-            max_epochs=25,
-            max_steps=10000,
-        )
-
-    @staticmethod
-    def for_tinystories() -> "TaskConfig":
-        return TaskConfig(
-            task_type="lm",
-            topology="transformer",
-            baseline_loss=10.8,  # ln(50257)
-            target_loss=3.5,
-            typical_loss_delta_std=0.15,
-            max_epochs=50,
-            max_steps=50000,
-        )
+# TaskConfig is imported from esper.leyline at the top of this file.
+# This keeps the hot path clean while providing cross-subsystem access.

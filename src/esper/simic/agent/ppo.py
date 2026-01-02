@@ -19,8 +19,8 @@ from .rollout_buffer import TamiyoRolloutBuffer
 from .advantages import compute_per_head_advantages
 from .types import PPOUpdateMetrics
 from esper.simic.telemetry import RatioExplosionDiagnostic
-from esper.tamiyo.policy.protocol import PolicyBundle
 from esper.leyline import (
+    PolicyBundle,
     DEFAULT_BATCH_SIZE,
     DEFAULT_CLIP_RATIO,
     DEFAULT_ENTROPY_COEF,

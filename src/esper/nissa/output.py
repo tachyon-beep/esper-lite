@@ -24,9 +24,9 @@ import time
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
-from esper.leyline import TelemetryEvent
+from esper.leyline import OutputBackend, TelemetryEvent
 from esper.leyline.telemetry import (
     EpochCompletedPayload,
     BatchEpochCompletedPayload,
@@ -266,41 +266,7 @@ class BackendWorker:
                 _logger.error(f"Unexpected error in backend worker {self._name}: {e}")
 
 
-@runtime_checkable
-class OutputBackend(Protocol):
-    """Protocol for telemetry output backends.
-
-    This is a structural typing protocol - any class with matching methods
-    satisfies this type, no explicit inheritance required. Classes MAY
-    inherit from this Protocol to get default implementations of start()
-    and close().
-
-    Methods:
-        start: Initialize the backend (default: no-op)
-        emit: Process a telemetry event (required)
-        close: Release resources (default: no-op)
-    """
-
-    def start(self) -> bool | None:
-        """Start the backend (e.g., open files, start threads).
-
-        Returns:
-            True if started successfully, False if failed (optional dependencies
-            missing), or None for backends that don't report status.
-        """
-        ...
-
-    def emit(self, event: TelemetryEvent) -> None:
-        """Emit a telemetry event to this backend.
-
-        Args:
-            event: The telemetry event to emit.
-        """
-        ...
-
-    def close(self) -> None:
-        """Close the backend and release resources."""
-        ...
+# OutputBackend Protocol now lives in leyline (re-exported above)
 
 
 class ConsoleOutput(OutputBackend):

@@ -19,6 +19,7 @@ from esper.leyline import (
     TelemetryEvent,
     TelemetryEventType,
     GovernorRollbackPayload,
+    GovernorReport,  # Protocol dataclass from leyline
     DEFAULT_GOVERNOR_SENSITIVITY,
     DEFAULT_GOVERNOR_ABSOLUTE_THRESHOLD,
     DEFAULT_GOVERNOR_DEATH_PENALTY,
@@ -31,24 +32,6 @@ from esper.leyline import (
 from esper.leyline.telemetry import GovernorPanicReason
 
 # NOTE: get_hub imported at function scope to defer telemetry hub initialization
-
-
-@dataclass
-class GovernorReport:
-    """Report from a rollback event.
-
-    Note: consecutive_panics reflects the post-rollback state (always 0 after
-    successful rollback). The pre-rollback count is captured in the
-    GOVERNOR_ROLLBACK telemetry event's GovernorRollbackPayload.
-
-    Note: loss_at_panic is NaN if rollback was triggered without a preceding
-    panic (e.g., manual rollback). Use math.isnan() to check.
-    """
-    reason: str
-    loss_at_panic: float
-    loss_threshold: float
-    consecutive_panics: int
-    rollback_occurred: bool
 
 
 class TolariaGovernor:
