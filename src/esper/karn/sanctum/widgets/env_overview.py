@@ -131,6 +131,7 @@ class EnvOverview(Static):
         # Fixed columns - ordered: Identity → Performance → Trends → Reward breakdown
         self.table.add_column("Env", key="env")
         self.table.add_column("Acc", key="acc")
+        self.table.add_column("∑Rwd", key="cum_rwd")  # Cumulative reward for episode
         self.table.add_column("Loss", key="loss")  # Host loss (for overfitting detection)
         self.table.add_column("CF", key="cf")  # Counterfactual: synergy/interference
         self.table.add_column("Growth", key="growth")  # growth_ratio: (host+foss)/host
@@ -291,6 +292,9 @@ class EnvOverview(Static):
         # Accuracy with color coding
         acc_cell = self._format_accuracy(env)
 
+        # Cumulative reward
+        cum_rwd_cell = self._format_cumulative_reward(env)
+
         # Host loss (for overfitting detection)
         loss_cell = self._format_host_loss(env)
 
@@ -334,6 +338,7 @@ class EnvOverview(Static):
         row = [
             env_id_cell,
             acc_cell,
+            cum_rwd_cell,
             loss_cell,
             cf_cell,
             growth_cell,
@@ -434,10 +439,14 @@ class EnvOverview(Static):
         growth_ratios = [e.growth_ratio for e in self._snapshot.envs.values()]
         mean_growth = sum(growth_ratios) / len(growth_ratios) if growth_ratios else 1.0
 
+        # Calculate total cumulative reward across all envs
+        total_cum_rwd = sum(e.cumulative_reward for e in self._snapshot.envs.values())
+
         # Build aggregate row - order must match column definition
         agg_row = [
             "[bold]Σ[/bold]",
             f"[bold]{self._snapshot.aggregate_mean_accuracy:.1f}%[/bold]",
+            f"[bold]{total_cum_rwd:+.1f}[/bold]",  # Total cumulative reward
             f"[dim]{mean_loss:.3f}[/dim]" if mean_loss > 0 else "─",  # Mean loss
             "",  # CF - not aggregated
             f"[dim]{mean_growth:.2f}x[/dim]",  # Growth ratio mean
@@ -575,6 +584,22 @@ class EnvOverview(Static):
                 return f"[yellow]{trend_arrow}{acc_str}[/yellow]"
 
         return f"{trend_arrow}{acc_str}"
+
+    def _format_cumulative_reward(self, env: "EnvState") -> str:
+        """Format cumulative reward with color coding.
+
+        Color based on value:
+        - Green: > 0 (positive overall)
+        - Red: < -5 (significantly negative)
+        - White: near zero
+        """
+        cum_rwd = env.cumulative_reward
+        if cum_rwd > 0:
+            return f"[green]{cum_rwd:+.1f}[/green]"
+        elif cum_rwd < -5:
+            return f"[red]{cum_rwd:+.1f}[/red]"
+        else:
+            return f"{cum_rwd:+.1f}"
 
     def _compute_trend_arrow(self, history: list[float], window: int = 5) -> str:
         """Compute trend arrow from history.

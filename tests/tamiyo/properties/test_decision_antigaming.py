@@ -65,6 +65,7 @@ class TestAntiThrashing:
             current_epoch = cull_epoch + offset
 
             class MockSignals:
+                available_slots = 1
                 class metrics:
                     epoch = current_epoch
                     plateau_epochs = 100  # Would trigger germination
@@ -97,6 +98,7 @@ class TestAntiThrashing:
         post_embargo_epoch = cull_epoch + embargo_epochs
 
         class MockSignals:
+            available_slots = 1
             class metrics:
                 epoch = post_embargo_epoch
                 plateau_epochs = 100
@@ -147,6 +149,7 @@ class TestBlueprintPenalty:
         policy._blueprint_penalties["conv_light"] = penalty_amount
 
         class MockSignals:
+            available_slots = 1
             class metrics:
                 epoch = 10
                 plateau_epochs = 10
@@ -317,6 +320,7 @@ class TestCounterfactualGuard:
         seed.metrics.counterfactual_contribution = -5.0
 
         class MockSignals:
+            available_slots = 1
             class metrics:
                 epoch = 50
                 plateau_epochs = 0
@@ -356,6 +360,7 @@ class TestCounterfactualGuard:
         })()
 
         class MockSignals:
+            available_slots = 1
             class metrics:
                 epoch = 50
                 plateau_epochs = 0
@@ -379,6 +384,7 @@ class TestCounterfactualGuard:
         seed.metrics.total_improvement = 5.0
 
         class MockSignals:
+            available_slots = 1
             class metrics:
                 epoch = 50
                 plateau_epochs = 0
@@ -433,6 +439,7 @@ class TestRansomwareDetection:
         })()
 
         class MockSignals:
+            available_slots = 1
             class metrics:
                 epoch = 50
                 plateau_epochs = 0

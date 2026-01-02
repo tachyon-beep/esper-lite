@@ -638,22 +638,16 @@ from esper.leyline.types import (
 )
 
 # Causal masks for credit assignment (used by PPO + Karn UI)
-from esper.leyline.causal_masks import (
-    compute_causal_masks,
-    HEAD_RELEVANCE_BY_OP,
-    is_head_relevant,
-)
+# NOTE: Lazy-loaded to avoid torch import at module level.
+# Access via module attribute (e.g., leyline.compute_causal_masks) or explicit import.
+_CAUSAL_MASK_EXPORTS = ("compute_causal_masks", "HEAD_RELEVANCE_BY_OP", "is_head_relevant")
 
 # Host protocol (Train Anything principle - ROADMAP #5)
 from esper.leyline.host_protocol import HostProtocol
 
 # Policy protocol (swappable Tamiyo policies)
-from esper.leyline.policy_protocol import (
-    ActionResult,
-    EvalResult,
-    ForwardResult,
-    PolicyBundle,
-)
+# NOTE: Lazy-loaded to avoid torch import at module level.
+_POLICY_PROTOCOL_EXPORTS = ("ActionResult", "EvalResult", "ForwardResult", "PolicyBundle")
 
 # Seed protocols (decouple training from seed implementation)
 from esper.leyline.seed_protocols import (
@@ -959,3 +953,38 @@ __all__ = [
     # Utility functions
     "safe",
 ]
+
+
+def __getattr__(name: str):
+    """Lazy import for heavy modules (torch-dependent).
+
+    This enables `from esper.leyline import compute_causal_masks` to work
+    while deferring torch import until actually needed.
+    """
+    if name in _CAUSAL_MASK_EXPORTS:
+        from esper.leyline.causal_masks import (
+            compute_causal_masks,
+            HEAD_RELEVANCE_BY_OP,
+            is_head_relevant,
+        )
+        # Cache in module globals for subsequent access
+        globals()["compute_causal_masks"] = compute_causal_masks
+        globals()["HEAD_RELEVANCE_BY_OP"] = HEAD_RELEVANCE_BY_OP
+        globals()["is_head_relevant"] = is_head_relevant
+        return globals()[name]
+
+    if name in _POLICY_PROTOCOL_EXPORTS:
+        from esper.leyline.policy_protocol import (
+            ActionResult,
+            EvalResult,
+            ForwardResult,
+            PolicyBundle,
+        )
+        # Cache in module globals for subsequent access
+        globals()["ActionResult"] = ActionResult
+        globals()["EvalResult"] = EvalResult
+        globals()["ForwardResult"] = ForwardResult
+        globals()["PolicyBundle"] = PolicyBundle
+        return globals()[name]
+
+    raise AttributeError(f"module 'esper.leyline' has no attribute {name!r}")

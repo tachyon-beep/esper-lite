@@ -342,7 +342,7 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.batch')::INTEGER as batch,
             json_extract(data, '$.num_slots')::INTEGER as num_slots,
             -- Preserve full Shapley dict as JSON for flexible queries
-            -- Structure: {slot_id: {mean: float, std: float, n_samples: int}}
+            -- Structure: {{slot_id: {{mean: float, std: float, n_samples: int}}}}
             json_extract(data, '$.shapley_values') as shapley_values
         FROM raw_events
         WHERE

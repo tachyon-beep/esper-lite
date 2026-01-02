@@ -121,45 +121,36 @@ def test_prune_op_has_alpha_schedule_heads():
     assert is_head_relevant("PRUNE", "alpha_target") is False
 
 
-def test_head_state_irrelevant_for_wait():
-    """HeadsPanel._head_state should return 'irrelevant' for non-op heads during WAIT."""
+def test_head_state_health_classification():
+    """HeadsPanel._head_state should classify based on entropy + gradient health."""
     from esper.karn.sanctum.widgets.tamiyo_brain.heads_grid import HeadsPanel
 
     panel = HeadsPanel()
 
-    # During WAIT, all heads except 'op' are irrelevant
-    state, style = panel._head_state("slot", entropy=0.5, grad_norm=0.5, last_op="WAIT")
-    assert state == "·"  # Irrelevant indicator
-    assert style == "dim"
+    # Healthy: moderate entropy + normal gradients
+    state, style = panel._head_state("slot", entropy=0.5, grad_norm=0.5)
+    assert state == "●"
+    assert style == "green"
 
-    state, style = panel._head_state("blueprint", entropy=0.5, grad_norm=0.5, last_op="WAIT")
-    assert state == "·"
-    assert style == "dim"
+    # Dead: low entropy + vanishing gradients
+    state, style = panel._head_state("slot", entropy=0.05, grad_norm=0.005)
+    assert state == "○"
+    assert style == "red"
 
-    # 'op' head IS relevant during WAIT
-    state, style = panel._head_state("op", entropy=0.5, grad_norm=0.5, last_op="WAIT")
-    assert state != "·"  # Should be a real state indicator
+    # Exploding gradients
+    state, style = panel._head_state("slot", entropy=0.5, grad_norm=10.0)
+    assert state == "▲"
+    assert style == "red bold"
 
+    # Deterministic: low entropy but normal gradients
+    state, style = panel._head_state("slot", entropy=0.05, grad_norm=0.5)
+    assert state == "◇"
+    assert style == "yellow"
 
-def test_head_state_relevant_for_germinate():
-    """HeadsPanel._head_state should show real state for relevant heads during GERMINATE."""
-    from esper.karn.sanctum.widgets.tamiyo_brain.heads_grid import HeadsPanel
-
-    panel = HeadsPanel()
-
-    # During GERMINATE, blueprint is relevant - should show real state
-    state, style = panel._head_state(
-        "blueprint", entropy=0.5, grad_norm=0.5, last_op="GERMINATE"
-    )
-    assert state != "·"  # Should be healthy, not irrelevant
-    assert state == "●"  # Healthy (moderate entropy, normal gradients)
-
-    # alpha_speed is NOT relevant during GERMINATE
-    state, style = panel._head_state(
-        "alpha_speed", entropy=0.5, grad_norm=0.5, last_op="GERMINATE"
-    )
-    assert state == "·"
-    assert style == "dim"
+    # Confused: very high entropy with normal gradients
+    state, style = panel._head_state("slot", entropy=1.8, grad_norm=0.5)
+    assert state == "◐"
+    assert style == "yellow"
 
 
 def test_heads_panel_shows_gradient_flow_footer():

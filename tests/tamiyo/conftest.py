@@ -267,11 +267,12 @@ def mock_signals_factory():
             self.accuracy_delta = accuracy_delta
 
     class MockTrainingSignals:
-        def __init__(self, **kwargs):
+        def __init__(self, available_slots: int = 1, **kwargs):
             self.metrics = MockTrainingMetrics(**kwargs)
+            self.available_slots = available_slots
 
-    def factory(**kwargs):
-        return MockTrainingSignals(**kwargs)
+    def factory(available_slots: int = 1, **kwargs):
+        return MockTrainingSignals(available_slots=available_slots, **kwargs)
 
     return factory
 

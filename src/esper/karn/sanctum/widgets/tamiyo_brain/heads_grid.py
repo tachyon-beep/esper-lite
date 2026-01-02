@@ -8,8 +8,15 @@ Uses vertical layout to ensure values align directly under their labels:
     │            ▓▓▓░        ████         ████         ▓░░░        ████        ▓▓░░        ████        ████ │
     │ Grad      0.131→     0.135↗       0.211→       0.275↘      0.192→      0.101↗      0.213→      0.124→ │
     │            ▓░░░        ▓░░░         ▓░░░         ▓░░░        ▓░░░        ▓░░░        ▓░░░        ▓░░░ │
-    │ State         ●           ◇            ◇            ○           ◇           ●           ◇           ◇ │
+    │ State         ●           ●            ●            ○           ●           ●           ●           ● │
     └────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+State indicators synthesize entropy + gradient health:
+  ● healthy (green): Moderate entropy + normal gradients
+  ○ dead (red): Collapsed entropy + vanishing gradients
+  ◐ confused (yellow): Very high entropy
+  ◇ deterministic (yellow): Very low entropy but normal gradients
+  ▲ exploding (red): Gradient explosion
 """
 
 from __future__ import annotations
@@ -23,7 +30,6 @@ from textual.widgets import Static
 from esper.leyline import (
     DEFAULT_HOST_LSTM_LAYERS,
     HEAD_MAX_ENTROPIES,
-    is_head_relevant,
 )
 
 if TYPE_CHECKING:
@@ -197,15 +203,14 @@ class HeadsPanel(Static):
                 result.append(" " * self._column_gutter(label))
         result.append("\n")
 
-        # Row 5: Head state indicators (per DRL expert + causal relevance)
+        # Row 5: Head state indicators (synthesizes entropy + gradient health)
         result.append("State ", style="dim")
         result.append(" " * self._PRE_OP_GUTTER, style="dim")
-        last_op = tamiyo.last_action_op
         for col_idx, (label, ent_field, grad_field, width, _) in enumerate(HEAD_CONFIG):
             entropy = getattr(tamiyo, ent_field)
             grad = getattr(tamiyo, grad_field)
             head_key = _get_head_key(ent_field)
-            state, style_str = self._head_state(head_key, entropy, grad, last_op)
+            state, style_str = self._head_state(head_key, entropy, grad)
             # Center state indicator under the 5-char bar (bars are right-aligned)
             # Bar center is at width - 3, so state should be at that position
             # For width=7: 4 spaces + indicator + 2 spaces = 7 chars total
@@ -343,31 +348,29 @@ class HeadsPanel(Static):
             return "dim"  # Changes are neutral in healthy range
 
     def _head_state(
-        self, head_key: str, entropy: float, grad_norm: float, last_op: str
+        self, head_key: str, entropy: float, grad_norm: float
     ) -> tuple[str, str]:
-        """Classify head state based on entropy, gradient, and causal relevance.
+        """Classify head state based on entropy and gradient health.
+
+        Synthesizes batch-aggregated entropy and gradient metrics into a single
+        health indicator. Does NOT consider causal relevance (which would require
+        per-action context, not batch-aggregated metrics).
 
         Args:
             head_key: Lowercase head key (e.g., "slot", "alpha_target")
-            entropy: Current entropy value for the head
-            grad_norm: Current gradient norm for the head
-            last_op: Last LifecycleOp name (e.g., "WAIT", "GERMINATE")
+            entropy: Current entropy value for the head (batch average)
+            grad_norm: Current gradient norm for the head (batch average)
 
-        States (per DRL expert + causal relevance):
-        - · irrelevant: Head not causally relevant for current op (dimmed)
+        States:
         - ● healthy: Active learning (moderate entropy, normal gradients)
         - ○ dead: Collapsed and not learning (low entropy + vanishing gradients)
         - ◐ confused: Can't discriminate (very high entropy, normal gradients)
         - ◇ deterministic: Converged to specific choice (low entropy, normal gradients)
+        - ▲ exploding: Gradient explosion detected
 
         Returns:
             Tuple of (indicator_char, style).
         """
-        # Check causal relevance using Leyline's single source of truth
-        if not is_head_relevant(last_op, head_key):
-            # Head not causally relevant for current op - dim, not dead
-            return "·", "dim"
-
         max_ent = HEAD_MAX_ENTROPIES[head_key]  # Direct access - fail fast on drift
         normalized_ent = entropy / max_ent if max_ent > 0 else 0
 

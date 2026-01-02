@@ -293,7 +293,9 @@ def _aggregate_ppo_metrics(update_metrics: list[PPOUpdateMetrics]) -> dict[str, 
         ]
         if not values:
             continue
-        if key == "ratio_max":
+        if key == "ratio_max" or key.endswith("_ratio_max"):
+            # All ratio max fields (ratio_max, head_*_ratio_max, joint_ratio_max)
+            # should take the maximum across PPO updates, not average
             aggregated[key] = max(values)
         elif key == "ratio_min":
             aggregated[key] = min(values)
@@ -311,9 +313,19 @@ def _aggregate_ppo_metrics(update_metrics: list[PPOUpdateMetrics]) -> dict[str, 
             aggregated[key] = max(values)
         elif key == "early_stop_epoch":
             aggregated[key] = min(values)
-        elif key == "head_entropies":
-            # Aggregate per-head entropy: concatenate lists from multiple updates
-            aggregated[key] = values[0]  # Just use first update's head_entropies
+        elif key in ("head_entropies", "head_grad_norms"):
+            # Dict[head_name, List[float]] - merge lists from multiple PPO updates
+            # Take max per-head value across all updates (conservative for monitoring)
+            merged: dict[str, float] = {}
+            for update_dict in values:
+                if isinstance(update_dict, dict):
+                    for head, head_values in update_dict.items():
+                        if isinstance(head_values, list) and head_values:
+                            max_val = max(head_values)
+                            if head not in merged or max_val > merged[head]:
+                                merged[head] = max_val
+            # Return in format emitter expects: dict[head, list[float]]
+            aggregated[key] = {h: [v] for h, v in merged.items()}
         elif isinstance(values[0], dict):
             aggregated[key] = values[0]
         else:

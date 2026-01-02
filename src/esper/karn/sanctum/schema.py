@@ -392,6 +392,9 @@ class EnvState:
     reward_history: deque[float] = field(default_factory=lambda: deque(maxlen=50))
     accuracy_history: deque[float] = field(default_factory=lambda: deque(maxlen=50))
 
+    # Reward tracking
+    cumulative_reward: float = 0.0  # Sum of all rewards received (for entire episode)
+
     # Best tracking
     best_reward: float = float('-inf')
     best_reward_epoch: int = 0
@@ -483,8 +486,9 @@ class EnvState:
         return (self.host_params + self.fossilized_params) / self.host_params
 
     def add_reward(self, reward: float, epoch: int) -> None:
-        """Add reward and update best tracking."""
+        """Add reward and update best/cumulative tracking."""
         self.reward_history.append(reward)
+        self.cumulative_reward += reward
         if reward > self.best_reward:
             self.best_reward = reward
             self.best_reward_epoch = epoch
