@@ -10,9 +10,8 @@ from typing import Any
 import torch
 from torch import nn
 
-from esper.tamiyo.policy.protocol import PolicyBundle
+from esper.leyline import PolicyBundle, ActionResult, EvalResult, ForwardResult
 from esper.tamiyo.policy.registry import register_policy
-from esper.tamiyo.policy.types import ActionResult, EvalResult, ForwardResult
 from esper.leyline.slot_config import SlotConfig
 from esper.leyline import DEFAULT_LSTM_HIDDEN_DIM
 

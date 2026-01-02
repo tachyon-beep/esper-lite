@@ -9,8 +9,8 @@ import torch
 from esper.leyline import DEFAULT_LSTM_HIDDEN_DIM
 
 if TYPE_CHECKING:
+    from esper.leyline import PolicyBundle
     from esper.leyline.slot_config import SlotConfig
-    from esper.tamiyo.policy.protocol import PolicyBundle
 
 # Valid torch.compile modes
 VALID_COMPILE_MODES = frozenset({"off", "default", "reduce-overhead", "max-autotune"})

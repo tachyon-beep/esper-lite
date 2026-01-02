@@ -1,13 +1,14 @@
 """Tamiyo Policy - Hotswappable policy implementations.
 
-This subpackage contains the PolicyBundle protocol and implementations:
-- protocol.py: PolicyBundle interface definition
-- types.py: ActionResult, EvalResult, ForwardResult dataclasses
+This subpackage contains the PolicyBundle implementations and registry:
 - registry.py: Policy registration and factory
 - features.py: Feature extraction for observations
 - action_masks.py: Action masking for valid actions
 - lstm_bundle.py: LSTM-based recurrent policy (Phase 3)
 - heuristic_bundle.py: Rule-based heuristic adapter (NOT a full PolicyBundle)
+
+Protocol definitions (PolicyBundle, ActionResult, EvalResult, ForwardResult) are
+in esper.leyline - import from there for type annotations.
 
 Note on imports:
     Importing this package registers built-in neural policies (currently: "lstm").
@@ -15,8 +16,6 @@ Note on imports:
 
     This imports torch at module level (standard for a DRL package), but does
     NOT construct any models - construction is deferred to get_policy() calls.
-    If import cost is a concern for non-training code paths, import specific
-    submodules directly (e.g., `from esper.tamiyo.policy.protocol import PolicyBundle`).
 """
 
 # Core protocol and types now from leyline

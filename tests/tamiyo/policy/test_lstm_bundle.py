@@ -5,7 +5,7 @@ import torch
 
 from esper.tamiyo.policy import get_policy, list_policies
 from esper.tamiyo.policy.lstm_bundle import LSTMPolicyBundle
-from esper.tamiyo.policy.types import ActionResult, EvalResult, ForwardResult
+from esper.leyline import ActionResult, EvalResult, ForwardResult
 from esper.leyline import (
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
