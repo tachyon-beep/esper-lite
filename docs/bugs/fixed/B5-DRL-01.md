@@ -135,59 +135,38 @@ variance = (
 
 ## Resolution
 
-### Status: WONTFIX
+### Status: FIXED
 
-**Closed via Systematic Debugging investigation.**
+**Fixed via Systematic Debugging investigation.**
 
-#### What's True and What's False
+#### The Fix
+
+Changed population variance (`/ len(values)`) to sample variance (`/ (len(values) - 1)`) at line 431 of `counterfactual.py`.
+
+```python
+# Before (population variance):
+sum((v - mean) ** 2 for v in values) / len(values)
+
+# After (sample variance with Bessel's correction):
+sum((v - mean) ** 2 for v in values) / (len(values) - 1)
+```
+
+#### Investigation Summary
 
 | Claim | Status | Evidence |
 |-------|--------|----------|
-| "Uses population variance" | ✅ TRUE | Line 431 uses `/ len(values)` |
-| "Underestimates variance by ~5%" | ✅ TRUE | For n=20: 20/19 = 1.053 factor → std ~2.6% low |
-| "is_significant() makes estimates appear more confident" | ✅ TRUE | CIs are ~2.6% narrower than they should be |
-| "Premature pruning of marginally beneficial seeds" | ❌ FALSE | See evidence below |
+| "Uses population variance" | ✅ TRUE (was) | Line 431 used `/ len(values)` |
+| "Underestimates variance by ~5%" | ✅ TRUE (was) | For n=20: 20/19 = 1.053 factor |
+| "Premature pruning of marginally beneficial seeds" | ❌ FALSE | Pruning is policy-driven, not significance-driven |
 | "Incorrect rent economy signals" | ❌ FALSE | Rewards don't use Shapley significance |
 
-#### Why Impact Claims Are Wrong
+**Note:** While the exaggerated impact claims were incorrect (pruning doesn't use `is_significant`), the statistical bug was real and worth fixing for UI correctness in `ShapleyPanel`'s ★/○ significance indicators.
 
-The ticket claims "For seed pruning decisions that rely on statistical significance, this bias could lead to premature pruning of marginally beneficial seeds."
+#### Severity
 
-**This is FALSE.** Pruning decisions do NOT use `is_significant`:
-
-1. **`SlotAttribution.is_significant` is SET but NEVER READ**:
-   - `grep -rn "is_significant" src/esper` → Only 3 matches: definition, setter, and the method itself
-   - No code reads this field for any decision
-
-2. **Pruning is policy-driven, not significance-driven**:
-   - Pruning done via `target_slot_obj.prune()` or `schedule_prune()` in `vectorized.py:2999-3003`
-   - Actions come from PPO policy, not statistical tests
-   - `grep -rn "is_significant.*prune" src/esper` → No matches
-
-3. **Rewards don't use Shapley significance**:
-   - `grep -rn "is_significant\|shapley" src/esper/simic/rewards` → No matches
-
-#### Actual Impact
-
-The only effect is **UI display** in `ShapleyPanel`:
-- Line 89: Shows `estimate.std` (which is ~2.6% too low)
-- Line 92: Shows ★/○ based on `get_significance()` (may be marginally wrong)
-
-This is a cosmetic/informational issue, not a training correctness issue.
-
-#### Why WONTFIX
-
-1. **Bug IS technically real** - population variance instead of sample variance
-2. **Impact is marginal** - 2.6% std underestimate for n=20 samples
-3. **Only affects UI display** - not training, not pruning, not rewards
-4. **Risk of fix** - Changing variance formula could shift telemetry baselines
-5. **Statistical pedantry** - For Monte Carlo permutation sampling, both N and N-1 are defensible
-
-#### Severity Downgrade
-
-- Original: P2 (based on incorrect impact claims about pruning)
-- Revised: P4 (cosmetic UI display)
-- Resolution: WONTFIX
+- Original: P2 (based on incorrect impact claims)
+- Actual: P4 (affects only UI display)
+- Resolution: FIXED (trivial one-character fix, correct statistics)
 
 ---
 

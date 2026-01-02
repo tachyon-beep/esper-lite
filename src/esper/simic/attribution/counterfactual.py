@@ -428,7 +428,7 @@ class CounterfactualEngine:
             if values:
                 mean = sum(values) / len(values)
                 variance = (
-                    sum((v - mean) ** 2 for v in values) / len(values)
+                    sum((v - mean) ** 2 for v in values) / (len(values) - 1)
                     if len(values) > 1
                     else 0.0
                 )
