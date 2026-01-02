@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B8-DRL-03` |
 | **Severity** | `P2` |
-| **Status** | `open` |
+| **Status** | `closed` |
 | **Batch** | 8 |
 | **Agent** | `drl` |
 | **Domain** | `simic/training` |
@@ -110,6 +110,48 @@ Use multiprocessing to train groups simultaneously on separate GPUs.
 ## Related Findings
 
 - All three reports noted this issue (CR, DRL, PT)
+
+---
+
+## Resolution
+
+### Status: WONTFIX
+
+**Closed via Systematic Debugging investigation.**
+
+#### Why This Is Not A Bug
+
+This is a **documented, intentional design decision**, not a bug.
+
+| Claim | Status | Evidence |
+|-------|--------|----------|
+| "Sequential training at lines 178-225" | ✅ TRUE | Lines 184-224 show sequential for-loop |
+| "Later groups benefit from GPU warmup" | ✅ TRUE | Acknowledged in docs |
+| "This is a bug" | ❌ FALSE | Explicitly documented as intentional Phase 1 design |
+
+#### Documentation Evidence
+
+1. **Module docstring (lines 13-18):**
+   > "Phase 1 Implementation: Groups currently train sequentially, not in parallel lockstep... The current approach is acceptable for initial A/B comparisons where we care about final policy quality rather than exact wall-clock parity during training"
+
+2. **Inline comment (lines 178-181):**
+   > "NOTE: This is a simplified implementation that trains groups sequentially."
+
+3. **Design plan** (`docs/plans/completed/2025-12-24-dual-policy-ab-testing.md`, line 9):
+   > "Phase 1 uses sequential training (not parallel lockstep) for simplicity"
+
+#### Why The Current Design Is Acceptable
+
+The design documentation explicitly states the rationale: A/B testing cares about **final policy quality**, not wall-clock parity during training. The sequential approach:
+- Keeps implementation simple (avoids multiprocessing complexity)
+- Still produces valid A/B comparisons of final policy performance
+- Uses deterministic seeding per group for reproducibility
+
+#### Severity Downgrade
+
+- Original: P2 (Performance bottleneck / API design)
+- Revised: N/A (Not a bug - documented intentional design)
+- Resolution: WONTFIX
 
 ---
 
