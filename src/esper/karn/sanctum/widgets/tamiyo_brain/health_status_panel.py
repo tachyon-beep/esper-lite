@@ -67,25 +67,37 @@ class HealthStatusPanel(Static):
 
         result.append("Advantage    ", style="dim")
         # Use .3f for mean to distinguish small values from true zero (e.g., -0.005 vs 0.000)
-        result.append(f"{tamiyo.advantage_mean:+.3f}±{tamiyo.advantage_std:.2f}", style=self._status_style(adv_status))
+        result.append(
+            f"{tamiyo.advantage_mean:+.3f}±{tamiyo.advantage_std:.2f}",
+            style=self._status_style(adv_status),
+        )
         result.append(" sk:", style="dim")
         # Show "---" for NaN skewness/kurtosis/positive_ratio (no data yet)
         if math.isnan(tamiyo.advantage_skewness):
             result.append("---", style="dim")
         else:
-            result.append(f"{tamiyo.advantage_skewness:+.1f}", style=self._status_style(skew_status))
+            result.append(
+                f"{tamiyo.advantage_skewness:+.1f}",
+                style=self._status_style(skew_status),
+            )
         result.append(self._skewness_hint(tamiyo.advantage_skewness), style="dim")
         result.append(" kt:", style="dim")
         if math.isnan(tamiyo.advantage_kurtosis):
             result.append("---", style="dim")
         else:
-            result.append(f"{tamiyo.advantage_kurtosis:+.1f}", style=self._status_style(kurt_status))
+            result.append(
+                f"{tamiyo.advantage_kurtosis:+.1f}",
+                style=self._status_style(kurt_status),
+            )
         # Adv+ percentage (healthy: 40-60%)
         result.append(" +:", style="dim")
         if math.isnan(tamiyo.advantage_positive_ratio):
             result.append("---", style="dim")
         else:
-            result.append(f"{tamiyo.advantage_positive_ratio:.0%}", style=self._status_style(adv_pos_status))
+            result.append(
+                f"{tamiyo.advantage_positive_ratio:.0%}",
+                style=self._status_style(adv_pos_status),
+            )
         if worst_status != "ok":
             result.append(" !", style=self._status_style(worst_status))
         result.append("\n")
@@ -93,14 +105,16 @@ class HealthStatusPanel(Static):
         # Ratio bounds (joint ratio for multi-head)
         joint_status = self._get_joint_ratio_status(tamiyo.joint_ratio_max)
         result.append("Ratio Joint  ", style="dim")
-        result.append(f"{tamiyo.joint_ratio_max:.3f}", style=self._status_style(joint_status))
+        result.append(
+            f"{tamiyo.joint_ratio_max:.3f}", style=self._status_style(joint_status)
+        )
         if joint_status != "ok":
             result.append(" !", style=self._status_style(joint_status))
         result.append("\n")
 
         # Grad norm with sparkline (rising is bad for gradients)
         gn_status = self._get_grad_norm_status(tamiyo.grad_norm)
-        result.append("Grad Norm    ", style="dim")
+        result.append("Grad Norm   ", style="dim")
         result.append(f"{tamiyo.grad_norm:>6.3f}", style=self._status_style(gn_status))
         if gn_status != "ok":
             result.append(" !", style=self._status_style(gn_status))
@@ -127,7 +141,9 @@ class HealthStatusPanel(Static):
             result.append(" ")
             result.append("─" * self.SPARKLINE_WIDTH, style="dim")
         else:
-            result.append(f"{tamiyo.kl_divergence:>6.4f}", style=self._status_style(kl_status))
+            result.append(
+                f"{tamiyo.kl_divergence:>6.4f}", style=self._status_style(kl_status)
+            )
             if kl_status != "ok":
                 result.append(" !", style=self._status_style(kl_status))
             else:
@@ -152,7 +168,10 @@ class HealthStatusPanel(Static):
         if math.isnan(tamiyo.log_prob_min):
             result.append("[---,---]", style="dim")
         else:
-            result.append(f"[{tamiyo.log_prob_min:.1f},{tamiyo.log_prob_max:.1f}]", style=self._status_style(lp_status))
+            result.append(
+                f"[{tamiyo.log_prob_min:.1f},{tamiyo.log_prob_max:.1f}]",
+                style=self._status_style(lp_status),
+            )
             if lp_status == "critical":
                 result.append(" NaN RISK", style="red bold")
             elif lp_status == "warning":
@@ -237,9 +256,11 @@ class HealthStatusPanel(Static):
         result.append("Policy       ", style="dim")
 
         # The dangerous pattern: entropy falling + clip rising + both concerning
-        if (corr < -0.5 and
-            entropy < TUIThresholds.ENTROPY_WARNING and
-            clip > TUIThresholds.CLIP_WARNING):
+        if (
+            corr < -0.5
+            and entropy < TUIThresholds.ENTROPY_WARNING
+            and clip > TUIThresholds.CLIP_WARNING
+        ):
             result.append("COLLAPSE RISK", style="red bold")
             result.append(f" (r={corr:.2f})", style="dim")
         elif corr < -0.6 and entropy < TUIThresholds.ENTROPY_WARNING:
@@ -306,9 +327,14 @@ class HealthStatusPanel(Static):
 
         # Always show all metrics (dim when ok, colored when warning/critical)
         result.append("Obs Health   ", style="dim")
-        result.append(f"Out:{obs.outlier_pct:.1%}", style=self._status_style(outlier_status))
+        result.append(
+            f"Out:{obs.outlier_pct:.1%}", style=self._status_style(outlier_status)
+        )
         result.append(" ", style="dim")
-        result.append(f"Drift:{obs.normalization_drift:.2f}", style=self._status_style(drift_status))
+        result.append(
+            f"Drift:{obs.normalization_drift:.2f}",
+            style=self._status_style(drift_status),
+        )
 
         return result
 
@@ -433,9 +459,15 @@ class HealthStatusPanel(Static):
             return "<"
 
     def _get_ratio_status(self, ratio_min: float, ratio_max: float) -> str:
-        if ratio_max > TUIThresholds.RATIO_MAX_CRITICAL or ratio_min < TUIThresholds.RATIO_MIN_CRITICAL:
+        if (
+            ratio_max > TUIThresholds.RATIO_MAX_CRITICAL
+            or ratio_min < TUIThresholds.RATIO_MIN_CRITICAL
+        ):
             return "critical"
-        if ratio_max > TUIThresholds.RATIO_MAX_WARNING or ratio_min < TUIThresholds.RATIO_MIN_WARNING:
+        if (
+            ratio_max > TUIThresholds.RATIO_MAX_WARNING
+            or ratio_min < TUIThresholds.RATIO_MIN_WARNING
+        ):
             return "warning"
         return "ok"
 

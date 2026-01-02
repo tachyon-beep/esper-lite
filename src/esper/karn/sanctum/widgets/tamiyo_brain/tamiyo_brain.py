@@ -20,14 +20,14 @@ Layout (CSS dimensions):
     ├───────────────────────────────────────────────────────────────────┬──────────┤
     │ VitalsColumn (w:3fr)                                              │Decisions │
     │ ┌─────────┬───────────────────────────────────┬───────────────┐   │(w:1fr,   │
-    │ │PPOLosses│ HealthStatus (1fr)                │ Slots (49ch)  │h14│ min:45)  │
+    │ │PPOLosses│ HealthStatus (1fr)                │ Slots (49ch)  │h13│ min:45)  │
     │ │ (36ch)  │                                   │               │   │          │
-    │ ├─────────────────────────────────────────────┬───────────────┤   │          │
-    │ │ ActionHeadsPanel (69%)                      │               │   │          │
-    │ │                                             │ ActionContext │1fr│          │
-    │ ├─────────────────────────────────────────────┤ (31%)         │   │          │
-    │ │ EpisodeMetricsPanel (69%)               h:7 │               │   │          │
-    │ └─────────────────────────────────────────────┴───────────────┘   │          │
+    │ ├────────────────────────────────────────────┬────────────────┤   │          │
+    │ │ ActionHeadsPanel (69%)                     │                │   │          │
+    │ │                                            │ ActionContext  │1fr│          │
+    │ ├──────────────────────┬─────────────────────┤ (31%)          │   │          │
+    │ │ EpisodeMetrics (1fr) │ ValueDiagnostics    │                │ h5│          │
+    │ └──────────────────────┴─────────────────────┴────────────────┘   │          │
     └───────────────────────────────────────────────────────────────────┴──────────┘
 """
 
@@ -46,6 +46,7 @@ from .action_heads_panel import ActionHeadsPanel
 from .action_distribution import ActionContext
 from .slots_panel import SlotsPanel
 from .episode_metrics_panel import EpisodeMetricsPanel
+from .value_diagnostics_panel import ValueDiagnosticsPanel
 from .decisions_column import (
     DecisionDetailRequested,
     DecisionPinRequested,
@@ -114,7 +115,7 @@ class TamiyoBrain(Container):
 
     /* Row 1: PPO Losses (narrow) | Health (wide) | Slots */
     #top-row {
-        height: 14;
+        height: 13;
         width: 100%;
         margin: 0;
     }
@@ -151,7 +152,7 @@ class TamiyoBrain(Container):
     }
 
     #left-column {
-        width: 70%;
+        width: 69%;
         height: 100%;
     }
 
@@ -163,16 +164,30 @@ class TamiyoBrain(Container):
         padding: 0 1;
     }
 
-    #episode-metrics-panel {
+    /* Bottom metrics row: Episode Health (left) | Value Diagnostics (right) */
+    #bottom-metrics-row {
         width: 100%;
-        height: 7;
+        height: 5;
+    }
+
+    #episode-metrics-panel {
+        width: 1fr;
+        height: 1fr;
+        border: round $surface-lighten-2;
+        border-title-color: $text-muted;
+        padding: 0 1;
+    }
+
+    #value-diagnostics-panel {
+        width: 1fr;
+        height: 1fr;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
         padding: 0 1;
     }
 
     #action-context {
-        width: 30%;
+        width: 31%;
         height: 100%;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
@@ -239,11 +254,14 @@ class TamiyoBrain(Container):
                     yield PPOLossesPanel(id="ppo-losses-panel")
                     yield HealthStatusPanel(id="health-panel")
                     yield SlotsPanel(id="slots-panel")
-                # Bottom section: Left column (ActionHeads + Episode) | Right column (ActionContext)
+                # Bottom section: Left column (ActionHeads + metrics row) | Right column (ActionContext)
                 with Horizontal(id="bottom-row"):
                     with Vertical(id="left-column"):
                         yield ActionHeadsPanel(id="action-heads-panel")
-                        yield EpisodeMetricsPanel(id="episode-metrics-panel")
+                        # Bottom metrics: Episode Health | Value Diagnostics
+                        with Horizontal(id="bottom-metrics-row"):
+                            yield EpisodeMetricsPanel(id="episode-metrics-panel")
+                            yield ValueDiagnosticsPanel(id="value-diagnostics-panel")
                     yield ActionContext(id="action-context")
 
             yield DecisionsColumn(id="decisions-column")
@@ -275,6 +293,9 @@ class TamiyoBrain(Container):
         self.query_one("#episode-metrics-panel", EpisodeMetricsPanel).update_snapshot(
             snapshot
         )
+        self.query_one(
+            "#value-diagnostics-panel", ValueDiagnosticsPanel
+        ).update_snapshot(snapshot)
         self.query_one("#decisions-column", DecisionsColumn).update_snapshot(snapshot)
 
     def update_reward_health(self, data: "RewardHealthData") -> None:

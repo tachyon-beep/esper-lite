@@ -287,91 +287,82 @@ class ActionContext(Static):
     def _render_reward_signal(self) -> Text:
         """Render reward health metrics and component breakdown.
 
-        Line 1: Health metrics (PBRS, Gaming, HV) from RewardHealthData
-        Line 2+: Component breakdown from snapshot.rewards
+        4 lines × 3 columns grid layout:
+        Line 1: PBRS | Gaming | HV
+        Line 2: Σ | Sig | Rent
+        Line 3: αShk | Ratio | Stage
+        Line 4: Foss | HS | (empty)
         """
         result = Text()
+        col_width = 10  # Fixed column width for alignment
 
-        # Line 1: Health metrics (if available)
+        # Line 1: Health metrics (PBRS, Gaming, HV)
+        result.append("  ")
         if self._reward_health is not None:
             rh = self._reward_health
 
             # PBRS fraction (10-40% healthy)
-            result.append("  PBRS:", style="dim")
             pbrs_color = "green" if rh.is_pbrs_healthy else "red"
-            result.append(f"{rh.pbrs_fraction:.0%}", style=pbrs_color)
-            result.append("✓" if rh.is_pbrs_healthy else "✗", style=pbrs_color)
+            pbrs_icon = "✓" if rh.is_pbrs_healthy else "✗"
+            pbrs_text = f"PBRS:{rh.pbrs_fraction:.0%}{pbrs_icon}"
+            result.append(pbrs_text.ljust(col_width), style=pbrs_color)
+            result.append(" ")
 
             # Gaming rate (<5% healthy)
-            result.append("  Gaming:", style="dim")
             gaming_color = "green" if rh.is_gaming_healthy else "red"
-            result.append(f"{rh.anti_gaming_trigger_rate:.0%}", style=gaming_color)
-            result.append("✓" if rh.is_gaming_healthy else "✗", style=gaming_color)
+            gaming_icon = "✓" if rh.is_gaming_healthy else "✗"
+            gaming_text = f"Gam:{rh.anti_gaming_trigger_rate:.0%}{gaming_icon}"
+            result.append(gaming_text.ljust(col_width), style=gaming_color)
+            result.append(" ")
 
-            # Hypervolume (should increase)
-            result.append("  HV:", style="dim")
-            result.append(f"{rh.hypervolume:.1f}", style="cyan")
-            result.append("\n")
+            # Hypervolume
+            hv_text = f"HV:{rh.hypervolume:.1f}"
+            result.append(hv_text, style="cyan")
         else:
-            result.append("  [health data pending]\n", style="dim")
+            result.append("[health pending]", style="dim")
+        result.append("\n")
 
-        # Line 2+: Component breakdown from snapshot
+        # Lines 2-4: Component breakdown from snapshot
         if self._snapshot is not None:
             rc = self._snapshot.rewards
 
-            # Show total and key components compactly
-            # Total
+            # Line 2: Σ | Sig | Rent
+            result.append("  ")
             total_style = "green" if rc.total >= 0 else "red"
-            result.append("  Σ:", style="dim")
-            result.append(f"{rc.total:+.2f}", style=total_style)
+            result.append(f"Σ:{rc.total:+.2f}".ljust(col_width), style=total_style)
+            result.append(" ")
 
-            # Signal (bounded_attribution or base_acc_delta)
             sig = rc.bounded_attribution if rc.bounded_attribution != 0 else rc.base_acc_delta
             sig_style = "green" if sig >= 0 else "red"
-            result.append("  Sig:", style="dim")
-            result.append(f"{sig:+.2f}", style=sig_style)
+            result.append(f"Sig:{sig:+.2f}".ljust(col_width), style=sig_style)
+            result.append(" ")
 
-            # Costs (compute_rent - always show, dim when zero)
             rent_style = "yellow" if rc.compute_rent != 0 else "dim"
-            result.append("  Rent:", style="dim")
-            result.append(f"{rc.compute_rent:.2f}", style=rent_style)
-
+            result.append(f"Rent:{rc.compute_rent:.2f}", style=rent_style)
             result.append("\n")
 
-            # Line 3: Penalties (always show all - dim when zero)
+            # Line 3: αShk | Ratio | Stage
             result.append("  ")
-
-            # Alpha shock (penalty when alpha changes too fast)
             ashk_style = "red" if rc.alpha_shock != 0 else "dim"
-            result.append("αShk:", style="dim")
-            result.append(f"{rc.alpha_shock:.2f}", style=ashk_style)
+            result.append(f"αShk:{rc.alpha_shock:.2f}".ljust(col_width), style=ashk_style)
             result.append(" ")
 
-            # Ratio penalty (policy deviation too large)
             ratio_style = "red" if rc.ratio_penalty != 0 else "dim"
-            result.append("Ratio:", style="dim")
-            result.append(f"{rc.ratio_penalty:.2f}", style=ratio_style)
+            result.append(f"Rat:{rc.ratio_penalty:.2f}".ljust(col_width), style=ratio_style)
             result.append(" ")
 
-            # Stage bonus (positive for progressing seeds)
             stage_style = "green" if rc.stage_bonus != 0 else "dim"
-            result.append("Stage:", style="dim")
-            result.append(f"{rc.stage_bonus:+.2f}", style=stage_style)
+            result.append(f"Stg:{rc.stage_bonus:+.2f}", style=stage_style)
             result.append("\n")
 
-            # Line 4: Terminal bonuses (Foss, HS)
+            # Line 4: Foss | HS
             result.append("  ")
-
-            # Fossilize terminal bonus (big reward for successful integration)
             foss_style = "blue bold" if rc.fossilize_terminal_bonus != 0 else "dim"
-            result.append("Foss:", style="dim")
-            result.append(f"{rc.fossilize_terminal_bonus:+.2f}", style=foss_style)
+            result.append(f"Foss:{rc.fossilize_terminal_bonus:+.2f}".ljust(col_width), style=foss_style)
             result.append(" ")
 
-            # Hindsight credit (retrospective attribution)
             hs_style = "cyan" if rc.hindsight_credit != 0 else "dim"
-            result.append("HS:", style="dim")
-            result.append(f"{rc.hindsight_credit:+.2f}", style=hs_style)
+            result.append(f"HS:{rc.hindsight_credit:+.2f}", style=hs_style)
             result.append("\n")
 
         return result
@@ -381,7 +372,13 @@ class ActionContext(Static):
     # =========================================================================
 
     def _render_returns(self) -> Text:
-        """Render returns: 5 recent values on line 1, stats on line 2."""
+        """Render returns: 5 recent values + percentiles + stats.
+
+        Layout (3 lines):
+          Line 1: Last 5 returns (most recent first)
+          Line 2: Percentiles p10/p50/p90 + spread warning
+          Line 3: min/max/μ/σ + trend
+        """
         if self._snapshot is None:
             return Text("  [no data]\n", style="dim")
 
@@ -389,7 +386,12 @@ class ActionContext(Static):
         history = list(tamiyo.episode_return_history)
 
         if not history:
-            return Text("  [no episodes yet]\n", style="dim")
+            # Show structure preview in dim grey
+            result = Text()
+            result.append("  ---  ---  ---  ---  ---\n", style="dim")
+            result.append("  p10:---  p50:---  p90:---\n", style="dim")
+            result.append("  min:---  max:---  μ:---  σ:---\n", style="dim")
+            return result
 
         result = Text()
 
@@ -403,7 +405,37 @@ class ActionContext(Static):
                 result.append(" ")
         result.append("\n")
 
-        # Line 2: Stats (min, max, mean, std, trend)
+        # Line 2: Percentiles (p10/p50/p90) - catches bimodal policies
+        result.append("  ")
+        if len(history) >= 5:
+            sorted_h = sorted(history)
+            n = len(sorted_h)
+            p10 = sorted_h[int(n * 0.1)]
+            p50 = sorted_h[int(n * 0.5)]  # Median
+            p90 = sorted_h[int(n * 0.9)]
+
+            p10_style = "red" if p10 < 0 else "green"
+            p50_style = "red" if p50 < 0 else "green"
+            p90_style = "red" if p90 < 0 else "green"
+
+            result.append("p10:", style="dim")
+            result.append(f"{p10:+.1f}", style=p10_style)
+            result.append(" p50:", style="dim")
+            result.append(f"{p50:+.1f}", style=p50_style)
+            result.append(" p90:", style="dim")
+            result.append(f"{p90:+.1f}", style=p90_style)
+
+            # Spread warning: large p90-p10 gap indicates bimodal/inconsistent policy
+            spread = p90 - p10
+            if spread > 50:
+                result.append(" ⚠⚠", style="red bold")
+            elif spread > 20:
+                result.append(" ⚠", style="yellow bold")
+        else:
+            result.append("p10:---  p50:---  p90:---", style="dim")
+        result.append("\n")
+
+        # Line 3: Stats (min, max, mean, std, trend)
         result.append("  ")
 
         if len(history) >= 2:

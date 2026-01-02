@@ -222,10 +222,10 @@ class ActionHeadsPanel(Static):
         "Curve": 2,
     }
 
-    # Decision carousel (5-row with 5s staggering, 2min age-out)
-    MAX_ROWS: ClassVar[int] = 5
+    # Decision carousel (6-row with 5s staggering, 30s age-out)
+    MAX_ROWS: ClassVar[int] = 6
     SWAP_INTERVAL_S: ClassVar[float] = 5.0
-    MAX_DISPLAY_AGE_S: ClassVar[float] = 120.0
+    MAX_DISPLAY_AGE_S: ClassVar[float] = 30.0
     AGE_PIP_CHAR: ClassVar[str] = "●"
     AGE_PIP_EMPTY: ClassVar[str] = "○"
 

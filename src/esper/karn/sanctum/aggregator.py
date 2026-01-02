@@ -428,15 +428,16 @@ class SanctumAggregator:
         self._tamiyo.cumulative_action_counts = dict(self._cumulative_action_counts)
         self._tamiyo.cumulative_total_actions = self._cumulative_total_actions
 
-        # Carousel rotation: expire ONE oldest unpinned decision per cycle if > 30s old
+        # Carousel rotation: expire ONE oldest unpinned decision per cycle if > 2min old
         # This runs every snapshot (250ms), creating natural stagger as each decision
         # expires based on its individual timestamp, not batch replacement.
+        # Must match MAX_DISPLAY_AGE_S in ActionHeadsPanel (120 seconds).
         decisions = self._tamiyo.recent_decisions
         for i in range(len(decisions) - 1, -1, -1):  # Iterate oldest-first
             d = decisions[i]
             if not d.pinned:
                 age = (now_dt - d.timestamp).total_seconds()
-                if age > 30.0:
+                if age > 120.0:
                     decisions.pop(i)
                     break  # Only expire ONE per cycle for smooth rotation
         self._tamiyo.recent_decisions = decisions[:MAX_DECISIONS]

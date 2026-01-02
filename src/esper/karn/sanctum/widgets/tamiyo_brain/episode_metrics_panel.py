@@ -1,10 +1,16 @@
 """EpisodeMetricsPanel - Episode-level training metrics.
 
-Displays:
+Displays (Training mode):
 - Episode length statistics (mean/std/range)
 - Outcome rates (timeout, success, early termination)
-- Steps-per-action metrics
-- Completion trend indicator
+- Steps-per-action metrics + trend
+
+Displays (Warmup mode - before PPO updates):
+- Episodes collected progress
+- Random policy baseline returns
+- Reward sparsity check
+
+Per DRL expert: Warmup metrics establish the floor that PPO needs to beat.
 """
 
 from __future__ import annotations
@@ -19,9 +25,10 @@ if TYPE_CHECKING:
 
 
 class EpisodeMetricsPanel(Static):
-    """Episode-level metrics panel.
+    """Episode-level metrics panel with warmup/training mode switching.
 
-    Extends Static directly for minimal layout overhead.
+    Shows warmup diagnostics before PPO updates start,
+    then switches to training metrics once PPO data arrives.
     """
 
     def __init__(self, **kwargs: Any) -> None:
@@ -33,48 +40,81 @@ class EpisodeMetricsPanel(Static):
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Update with new snapshot data."""
         self._snapshot = snapshot
-        # Update border title with total episodes
-        stats = snapshot.episode_stats
-        if stats.total_episodes > 0:
-            self.border_title = f"EPISODE HEALTH ─ {stats.total_episodes} episodes"
+
+        # Update border title based on mode
+        if not snapshot.tamiyo.ppo_data_received:
+            self.border_title = "WARMUP"
+        else:
+            stats = snapshot.episode_stats
+            if stats.total_episodes > 0:
+                self.border_title = f"EPISODE HEALTH ─ {stats.total_episodes} ep"
+            else:
+                self.border_title = "EPISODE HEALTH"
         self.refresh()
 
     def render(self) -> Text:
-        """Render episode metrics."""
+        """Render episode metrics (warmup or training mode)."""
         if self._snapshot is None:
             return Text("[no data]", style="dim")
 
+        # Check if we're in warmup mode
+        if not self._snapshot.tamiyo.ppo_data_received:
+            return self._render_warmup()
+        else:
+            return self._render_training()
+
+    def _render_warmup(self) -> Text:
+        """Render warmup mode diagnostics.
+
+        Shows metrics relevant before PPO updates start:
+        - Collection progress
+        - Random policy baseline
+        - Data quality indicators
+        """
+        result = Text()
+        tamiyo = self._snapshot.tamiyo
+        history = list(tamiyo.episode_return_history)
+
+        # Line 1: Collection status
+        result.append("Collecting warmup data...\n", style="cyan")
+
+        # Line 2: Random policy baseline (if we have episodes)
+        if history:
+            h_mean = sum(history) / len(history)
+            h_std = (sum((x - h_mean) ** 2 for x in history) / len(history)) ** 0.5
+            mean_style = "green" if h_mean >= 0 else "red"
+            result.append("Baseline ", style="dim")
+            result.append(f"μ:{h_mean:+.1f}", style=mean_style)
+            result.append(f" σ:{h_std:.1f}", style="cyan")
+            result.append(f"  n:{len(history)}", style="dim")
+        else:
+            result.append("Baseline ---  (waiting)", style="dim")
+
+        return result
+
+    def _render_training(self) -> Text:
+        """Render training mode episode metrics."""
         stats = self._snapshot.episode_stats
         result = Text()
 
         # Line 1: Length statistics
-        result.append("Length   ", style="dim")
+        result.append("Length ", style="dim")
         result.append(f"μ:{stats.length_mean:.0f}", style="cyan")
         result.append(f" σ:{stats.length_std:.0f}", style="dim")
-        if stats.length_min > 0 or stats.length_max > 0:
-            result.append(f" [{stats.length_min}-{stats.length_max}]", style="dim")
         result.append("\n")
 
-        # Line 2: Outcome rates
-        result.append("Timeout  ", style="dim")
+        # Line 2: Outcome rates (compact)
+        result.append("✗", style="red dim")
         timeout_style = self._rate_style(stats.timeout_rate, bad_high=True)
         result.append(f"{stats.timeout_rate:.0%}", style=timeout_style)
 
-        result.append("  Success ", style="dim")
+        result.append(" ✓", style="green dim")
         success_style = self._rate_style(stats.success_rate, bad_high=False)
         result.append(f"{stats.success_rate:.0%}", style=success_style)
 
-        result.append("  Early ", style="dim")
+        result.append(" ⊗", style="yellow dim")
         early_style = self._rate_style(stats.early_termination_rate, bad_high=True)
         result.append(f"{stats.early_termination_rate:.0%}", style=early_style)
-        result.append("\n")
-
-        # Line 3: Steps-per-action efficiency + trend
-        result.append("Steps/Op ", style="dim")
-        result.append(f"Germ:{stats.steps_per_germinate:.0f}", style="dim")
-        result.append(f" Foss:{stats.steps_per_fossilize:.0f}", style="dim")
-        result.append(f" Prune:{stats.steps_per_prune:.0f}", style="dim")
-        result.append("  ")
 
         # Trend indicator
         trend_map = {
@@ -83,7 +123,7 @@ class EpisodeMetricsPanel(Static):
             "declining": ("↘", "red"),
         }
         arrow, style = trend_map.get(stats.completion_trend, ("→", "dim"))
-        result.append(arrow, style=style)
+        result.append(f" {arrow}", style=style)
 
         return result
 

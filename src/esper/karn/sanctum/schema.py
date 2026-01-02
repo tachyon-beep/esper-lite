@@ -718,6 +718,51 @@ class EnvState:
 
 
 @dataclass
+class ValueFunctionMetrics:
+    """Value function quality diagnostics for DRL training health.
+
+    Per DRL expert review: Value function quality is THE primary diagnostic
+    for RL training failures. Low V-Return correlation means advantage
+    estimates are garbage, regardless of how healthy policy metrics look.
+
+    Grouped separately to prevent TamiyoState bloat.
+    """
+
+    # V-Return Correlation (PRIMARY VALUE METRIC)
+    # Pearson correlation between V(s) predictions and actual returns
+    # Low (<0.5) = value network isn't learning, advantages are noise
+    # High (>0.8) = value network is well-calibrated
+    v_return_correlation: float = 0.0
+
+    # TD Error Statistics
+    # TD error = r + γV(s') - V(s) (true TD(0) error)
+    # High mean = biased value estimates (target network staleness)
+    # High std = noisy gradient targets (normal in early training)
+    td_error_mean: float = 0.0
+    td_error_std: float = 0.0
+
+    # Bellman Error (|V(s) - (r + γV(s'))|²)
+    # Spikes often PRECEDE NaN losses - early warning signal
+    bellman_error: float = 0.0
+
+    # Return Distribution Percentiles (per DRL expert - catches bimodal policies)
+    # If p90 - p10 is huge, policy is inconsistent (some episodes succeed, others fail)
+    return_p10: float = 0.0
+    return_p50: float = 0.0  # Median (more robust than mean)
+    return_p90: float = 0.0
+
+    # Return distribution shape (for quick diagnosis)
+    return_skewness: float = 0.0  # >0 = right-skewed (few big wins)
+    return_variance: float = 0.0  # High = inconsistent policy
+
+    # Historical tracking for correlation computation
+    # These are populated by aggregator from DecisionSnapshot td_advantage values
+    value_predictions: deque[float] = field(default_factory=lambda: deque(maxlen=100))
+    actual_returns: deque[float] = field(default_factory=lambda: deque(maxlen=100))
+    td_errors: deque[float] = field(default_factory=lambda: deque(maxlen=100))
+
+
+@dataclass
 class GradientQualityMetrics:
     """Gradient quality diagnostics for DRL training health.
 
@@ -919,7 +964,7 @@ class TamiyoState:
     # PPO data received flag
     ppo_data_received: bool = False
 
-    # Recent decisions list (up to 3, each visible for at least 10 seconds)
+    # Recent decisions list (up to MAX_DECISIONS=8, expires at 2 minutes)
     recent_decisions: list["DecisionSnapshot"] = field(default_factory=list)
 
     # A/B testing identification (None when not in A/B mode)
@@ -960,6 +1005,7 @@ class TamiyoState:
     # === Nested Metric Groups (per code review - prevents schema bloat) ===
     infrastructure: InfrastructureMetrics = field(default_factory=InfrastructureMetrics)
     gradient_quality: GradientQualityMetrics = field(default_factory=GradientQualityMetrics)
+    value_function: ValueFunctionMetrics = field(default_factory=ValueFunctionMetrics)
 
 
 @dataclass
