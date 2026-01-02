@@ -665,6 +665,11 @@ class PPOUpdatePayload:
     layer_gradient_health: dict[str, float] | None = None
     entropy_collapsed: bool = False
 
+    # Per-head NaN/Inf detection (for indicator lights with latch behavior)
+    # Keys are HEAD_NAMES: op, slot, blueprint, style, tempo, alpha_target, alpha_speed, alpha_curve
+    head_nan_detected: dict[str, bool] | None = None
+    head_inf_detected: dict[str, bool] | None = None
+
     # AMP diagnostics (PyTorch expert recommendation)
     loss_scale: float | None = None
     amp_overflow_detected: bool = False
@@ -791,6 +796,9 @@ class PPOUpdatePayload:
             layer_gradient_health=data.get("layer_gradient_health"),
             # Always emitted
             entropy_collapsed=data["entropy_collapsed"],
+            # Per-head NaN/Inf detection (optional)
+            head_nan_detected=data.get("head_nan_detected"),
+            head_inf_detected=data.get("head_inf_detected"),
             # Conditionally optional (AMP-related)
             loss_scale=data.get("loss_scale"),
             amp_overflow_detected=data.get("amp_overflow_detected", False),
