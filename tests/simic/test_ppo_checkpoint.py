@@ -91,7 +91,7 @@ class TestPPOCheckpointRoundTrip:
             clip_ratio=0.1,
             entropy_coef=0.02,
             value_coef=0.25,
-            n_epochs=5,
+            # n_epochs was removed (P2 FIX - was dead code)
             batch_size=32,
             max_grad_norm=1.0,
             target_kl=0.02,
@@ -105,7 +105,7 @@ class TestPPOCheckpointRoundTrip:
         assert loaded.clip_ratio == original.clip_ratio
         assert loaded.entropy_coef == original.entropy_coef
         assert loaded.value_coef == original.value_coef
-        assert loaded.n_epochs == original.n_epochs
+        # n_epochs was removed (P2 FIX - was dead code)
         assert loaded.batch_size == original.batch_size
         assert loaded.max_grad_norm == original.max_grad_norm
         assert loaded.target_kl == original.target_kl
