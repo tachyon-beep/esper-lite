@@ -291,7 +291,7 @@ class ActionContext(Static):
             (
                 ACTION_ABBREVS.get(d.chosen_action, "?"),
                 ACTION_COLORS.get(d.chosen_action, "white"),
-                getattr(d, "success", True),  # Success flag (default True for old data)
+                True,  # UI-03 fix: success field doesn't exist in DecisionSnapshot schema
             )
             for d in recent_decisions
         ]

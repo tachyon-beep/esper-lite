@@ -174,7 +174,8 @@ class PPOAgent:
         self.entropy_coef_min = entropy_coef_min
         self.entropy_anneal_steps = entropy_anneal_steps
         # Per-head entropy multipliers (differential coefficients for sparse heads)
-        self.entropy_coef_per_head = entropy_coef_per_head or ENTROPY_COEF_PER_HEAD
+        # MED-01 fix: Use is not None - empty dict {} is falsy but valid
+        self.entropy_coef_per_head = entropy_coef_per_head if entropy_coef_per_head is not None else ENTROPY_COEF_PER_HEAD
         self.value_coef = value_coef
         self.clip_value = clip_value
         self.value_clip = value_clip
@@ -584,7 +585,8 @@ class PPOAgent:
                     "Skipping optimizer step to prevent NaN propagation. "
                     "Likely cause: mask mismatch between rollout and update time."
                 )
-                metrics.setdefault("finiteness_gate_failures", []).append({
+                # RD-01 fix: metrics is defaultdict(list), no need for setdefault
+                metrics["finiteness_gate_failures"].append({
                     "epoch": epoch_i,
                     "sources": nonfinite_sources,
                 })
@@ -985,7 +987,8 @@ class PPOAgent:
                     max_threshold=self.ratio_explosion_threshold,
                     min_threshold=self.ratio_collapse_threshold,
                 )
-                metrics.setdefault("ratio_diagnostic", []).append(diag.to_dict())
+                # RD-01 fix: metrics is defaultdict(list), no need for setdefault
+                metrics["ratio_diagnostic"].append(diag.to_dict())
 
         self.train_steps += 1
 
@@ -1024,8 +1027,11 @@ class PPOAgent:
         aggregated_result["log_prob_max"] = log_prob_max_across_epochs
 
         # Add per-head ratio max tracking (Policy V2 - multi-head ratio explosion detection)
-        # Guard against no valid data (-inf values indicate no updates occurred)
-        # Use 1.0 (neutral ratio) as default for missing data
+        # MED-02: -inf indicates no updates occurred in this epoch.
+        # We use 1.0 (neutral ratio) as default because:
+        # - NaN would propagate and break downstream calculations
+        # - 1.0 is semantically "no clipping occurred" which is correct for zero updates
+        # - Consumers can distinguish "healthy 1.0" from "no data 1.0" via ppo_updates_count
         for key in HEAD_NAMES:
             ratio_key = f"head_{key}_ratio_max"
             max_val = head_ratio_max_across_epochs[key]

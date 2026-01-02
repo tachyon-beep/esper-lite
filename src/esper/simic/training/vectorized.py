@@ -752,6 +752,9 @@ def train_ppo_vectorized(
     env_device_map = [devices[i % len(devices)] for i in range(n_envs)]
 
     # DataLoader settings (used for SharedBatchIterator + diagnostics).
+    # MED-03 fix: Log warning if batch_size not specified (could indicate schema drift)
+    if "batch_size" not in task_spec.dataloader_defaults:
+        _logger.debug("batch_size not in task_spec.dataloader_defaults, using default 128")
     default_batch_size_per_env = task_spec.dataloader_defaults.get("batch_size", 128)
     if task_spec.name.startswith("cifar_"):
         default_batch_size_per_env = 512  # High-throughput setting for CIFAR tasks
@@ -2365,7 +2368,8 @@ def train_ppo_vectorized(
                                 results=shapley_results[i],
                                 epoch=epoch,
                             )
-                        except Exception as e:
+                        except (KeyError, ZeroDivisionError, ValueError) as e:
+                            # HIGH-01 fix: Narrow to expected failures in Shapley computation
                             _logger.warning(f"Shapley computation failed for env {i}: {e}")
     
                 # ===== Compute epoch metrics and get BATCHED actions =====
@@ -3347,7 +3351,8 @@ def train_ppo_vectorized(
                                         evaluate_fn=eval_fn,
                                         epoch=epoch,
                                     )
-                                except Exception as e:
+                                except (KeyError, ZeroDivisionError, ValueError) as e:
+                                    # HIGH-01 fix: Narrow to expected failures in Shapley computation
                                     _logger.warning(
                                         f"Shapley failed for env {env_idx}: {e}"
                                     )
@@ -3696,8 +3701,9 @@ def train_ppo_vectorized(
             ab_groups[mode_name].append(ep_data)
 
         for mode_name, episodes in sorted(ab_groups.items()):
-            rewards = [ep.get("episode_reward", 0) for ep in episodes]
-            accuracies = [ep.get("final_accuracy", 0) for ep in episodes]
+            # Direct access - fail-fast if schema changes (CRIT-02 fix)
+            rewards = [ep["episode_reward"] for ep in episodes]
+            accuracies = [ep["final_accuracy"] for ep in episodes]
             avg_reward = sum(rewards) / len(rewards) if rewards else 0
             avg_acc = sum(accuracies) / len(accuracies) if accuracies else 0
             print(f"\n{mode_name.upper()} ({len(episodes)} episodes):")

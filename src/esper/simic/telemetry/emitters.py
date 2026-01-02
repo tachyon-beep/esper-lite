@@ -330,7 +330,8 @@ class VectorizedEmitter:
                 layer_stats = collect_per_layer_gradients(agent.policy.network)
                 layer_health = aggregate_layer_gradient_health(layer_stats)
                 payload.update(layer_health)
-            except Exception as e:
+            except (RuntimeError, AttributeError) as e:
+                # HIGH-02 fix: Narrow to expected gradient collection failures
                 _logger.warning("Failed to collect per-layer gradient stats: %s", e)
 
         emit_ppo_update_event(
@@ -755,12 +756,9 @@ def emit_ppo_update_event(
     the metrics dict is missing required keys. This prevents bug-hiding
     patterns where defaults silently mask missing data.
     """
-    lr = None
-    if optimizer is not None:
-        try:
-            lr = optimizer.param_groups[0].get("lr")
-        except (AttributeError, IndexError, KeyError, TypeError):
-            lr = None
+    # PT-07 fix: Direct access - all torch.optim.Optimizer subclasses have param_groups[0]["lr"]
+    # If this fails, the optimizer is fundamentally broken and we should fail loudly
+    lr = optimizer.param_groups[0]["lr"] if optimizer is not None else None
 
     # Compute per-head entropy averages for logging (P3-1)
     # Key format: head_{name}_entropy to match aggregator field names
@@ -815,14 +813,15 @@ def emit_ppo_update_event(
             value_min=metrics["value_min"],
             value_max=metrics["value_max"],
             # Q-values (Policy V2 op-conditioned critic)
-            q_germinate=metrics.get("q_germinate", 0.0),
-            q_advance=metrics.get("q_advance", 0.0),
-            q_fossilize=metrics.get("q_fossilize", 0.0),
-            q_prune=metrics.get("q_prune", 0.0),
-            q_wait=metrics.get("q_wait", 0.0),
-            q_set_alpha=metrics.get("q_set_alpha", 0.0),
-            q_variance=metrics.get("q_variance", 0.0),
-            q_spread=metrics.get("q_spread", 0.0),
+            # Use NaN default to distinguish "missing" from "zero" (CRIT-01 fix)
+            q_germinate=metrics.get("q_germinate", float("nan")),
+            q_advance=metrics.get("q_advance", float("nan")),
+            q_fossilize=metrics.get("q_fossilize", float("nan")),
+            q_prune=metrics.get("q_prune", float("nan")),
+            q_wait=metrics.get("q_wait", float("nan")),
+            q_set_alpha=metrics.get("q_set_alpha", float("nan")),
+            q_variance=metrics.get("q_variance", float("nan")),
+            q_spread=metrics.get("q_spread", float("nan")),
             lr=lr,
             entropy_coef=metrics.get("entropy_coef"),
             inf_grad_count=0,

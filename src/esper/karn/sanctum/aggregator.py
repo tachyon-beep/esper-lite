@@ -564,8 +564,9 @@ class SanctumAggregator:
 
         # Compile status (static configuration from training start)
         self._tamiyo.infrastructure.compile_enabled = payload.compile_enabled
-        self._tamiyo.infrastructure.compile_backend = payload.compile_backend or ""
-        self._tamiyo.infrastructure.compile_mode = payload.compile_mode or ""
+        # MED-04 fix: Use explicit None check - empty string is falsy but valid
+        self._tamiyo.infrastructure.compile_backend = payload.compile_backend if payload.compile_backend is not None else ""
+        self._tamiyo.infrastructure.compile_mode = payload.compile_mode if payload.compile_mode is not None else ""
 
         # Reset best runs for new training session
         self._best_runs = []
@@ -621,21 +622,29 @@ class SanctumAggregator:
                 env.seeds[slot_id] = SeedState(slot_id=slot_id)
             seed = env.seeds[slot_id]
 
-            # Update from telemetry (using .get() on inner dict is intentional)
-            seed.stage = seed_telemetry.get("stage", seed.stage)
-            seed.blueprint_id = seed_telemetry.get("blueprint_id", seed.blueprint_id)
-            seed.accuracy_delta = seed_telemetry.get("accuracy_delta", seed.accuracy_delta)
-            seed.epochs_in_stage = seed_telemetry.get("epochs_in_stage", seed.epochs_in_stage)
-            seed.alpha = seed_telemetry.get("alpha", seed.alpha)
-            seed.grad_ratio = seed_telemetry.get("grad_ratio", seed.grad_ratio)
-            seed.has_vanishing = seed_telemetry.get("has_vanishing", seed.has_vanishing)
-            seed.has_exploding = seed_telemetry.get("has_exploding", seed.has_exploding)
-            # Inter-slot interaction metrics (from counterfactual engine)
-            seed.contribution_velocity = seed_telemetry.get("contribution_velocity", seed.contribution_velocity)
-            seed.interaction_sum = seed_telemetry.get("interaction_sum", seed.interaction_sum)
-            seed.boost_received = seed_telemetry.get("boost_received", seed.boost_received)
-            seed.upstream_alpha_sum = seed_telemetry.get("upstream_alpha_sum", seed.upstream_alpha_sum)
-            seed.downstream_alpha_sum = seed_telemetry.get("downstream_alpha_sum", seed.downstream_alpha_sum)
+            # HIGH-03 fix: Direct access for core fields - fail-fast if telemetry contract changes
+            # Core lifecycle fields (always emitted by simic)
+            seed.stage = seed_telemetry["stage"]
+            seed.blueprint_id = seed_telemetry["blueprint_id"]
+            seed.accuracy_delta = seed_telemetry["accuracy_delta"]
+            seed.epochs_in_stage = seed_telemetry["epochs_in_stage"]
+            seed.alpha = seed_telemetry["alpha"]
+            # Gradient health fields (always emitted)
+            seed.grad_ratio = seed_telemetry["grad_ratio"]
+            seed.has_vanishing = seed_telemetry["has_vanishing"]
+            seed.has_exploding = seed_telemetry["has_exploding"]
+            # Inter-slot interaction metrics (optional - only present when counterfactual engine active)
+            # These use .get() with None because absence is semantically meaningful ("not computed")
+            if "contribution_velocity" in seed_telemetry:
+                seed.contribution_velocity = seed_telemetry["contribution_velocity"]
+            if "interaction_sum" in seed_telemetry:
+                seed.interaction_sum = seed_telemetry["interaction_sum"]
+            if "boost_received" in seed_telemetry:
+                seed.boost_received = seed_telemetry["boost_received"]
+            if "upstream_alpha_sum" in seed_telemetry:
+                seed.upstream_alpha_sum = seed_telemetry["upstream_alpha_sum"]
+            if "downstream_alpha_sum" in seed_telemetry:
+                seed.downstream_alpha_sum = seed_telemetry["downstream_alpha_sum"]
 
             # Track slot_ids dynamically (only if not locked by TRAINING_STARTED)
             if not self._slot_ids_locked and slot_id not in self._slot_ids and slot_id != "unknown":
@@ -1301,8 +1310,8 @@ class SanctumAggregator:
             env = self._envs[env_id]
             epoch = event.epoch if event.epoch is not None else 0
 
-            # Update reward tracking
-            total_reward = payload.total_reward or 0.0
+            # Update reward tracking (DRL-01 fix: explicit None check)
+            total_reward = payload.total_reward if payload.total_reward is not None else 0.0
             env.reward_history.append(total_reward)
             env.cumulative_reward += total_reward
             env.current_epoch = epoch
@@ -1345,7 +1354,8 @@ class SanctumAggregator:
 
             # Create decision snapshot
             now_dt = event.timestamp or datetime.now(timezone.utc)
-            value_s = payload.value_estimate or 0.0
+            # DRL-02 fix: explicit None check (0.0 is a valid value estimate)
+            value_s = payload.value_estimate if payload.value_estimate is not None else 0.0
 
             # Compute TD advantage for previous decision from this env
             if env_id in self._pending_decisions:
@@ -1362,9 +1372,11 @@ class SanctumAggregator:
             # Map alpha_target float to enum name (HALF/SEVENTY/FULL)
             chosen_alpha_target: str | None = None
             if payload.alpha_target is not None:
-                # Map float value to enum name
+                # MED-05 fix: Validate alpha_target is in map, log warning if not
                 alpha_target_map = {0.5: "HALF", 0.7: "SEVENTY", 1.0: "FULL"}
                 chosen_alpha_target = alpha_target_map.get(payload.alpha_target)
+                if chosen_alpha_target is None:
+                    _logger.warning("Unknown alpha_target value: %s (expected 0.5, 0.7, or 1.0)", payload.alpha_target)
 
             # Extract HeadTelemetry if present
             ht = payload.head_telemetry

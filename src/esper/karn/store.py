@@ -590,11 +590,11 @@ class TelemetryStore:
 
         def _parse_host_baseline(raw: dict[str, Any]) -> HostBaseline:
             data = filter_dataclass_kwargs(HostBaseline, raw, context="HostBaseline")
-            if "initial_checkpoint_path" in data:
-                data["initial_checkpoint_path"] = coerce_path(
-                    data.get("initial_checkpoint_path"),
-                    field="HostBaseline.initial_checkpoint_path",
-                )
+            # PT-06 fix: Always coerce - remove conditional check (violates no-legacy policy)
+            data["initial_checkpoint_path"] = coerce_path(
+                data.get("initial_checkpoint_path"),
+                field="HostBaseline.initial_checkpoint_path",
+            )
             return HostBaseline(**data)
 
         def _parse_slot_snapshot(raw: dict[str, Any]) -> SlotSnapshot:
@@ -674,7 +674,8 @@ class TelemetryStore:
                 data["observation_summary"] = coerce_float_dict(
                     data.get("observation_summary"), field="PolicySnapshot.observation_summary"
                 )
-            data["action_op"] = coerce_str_or_none(data.get("action_op"), field="PolicySnapshot.action_op") or ""
+            # PT-01 fix: Remove `or ""` - let None propagate to expose schema violations
+            data["action_op"] = coerce_str_or_none(data.get("action_op"), field="PolicySnapshot.action_op")
             data["action_slot"] = coerce_str_or_none(data.get("action_slot"), field="PolicySnapshot.action_slot")
             data["action_blueprint"] = coerce_str_or_none(
                 data.get("action_blueprint"), field="PolicySnapshot.action_blueprint"
@@ -780,11 +781,12 @@ class TelemetryStore:
 
         def _parse_gate_evaluation_trace(raw: dict[str, Any]) -> GateEvaluationTrace:
             data = filter_dataclass_kwargs(GateEvaluationTrace, raw, context="GateEvaluationTrace")
-            data["gate_id"] = coerce_str_or_none(data.get("gate_id"), field="GateEvaluationTrace.gate_id") or ""
-            data["slot_id"] = coerce_str_or_none(data.get("slot_id"), field="GateEvaluationTrace.slot_id") or ""
+            # PT-02, PT-03, PT-04 fix: Remove `or ""` - let None propagate to expose schema violations
+            data["gate_id"] = coerce_str_or_none(data.get("gate_id"), field="GateEvaluationTrace.gate_id")
+            data["slot_id"] = coerce_str_or_none(data.get("slot_id"), field="GateEvaluationTrace.slot_id")
             passed = coerce_bool_or_none(data.get("passed"), field="GateEvaluationTrace.passed")
             data["passed"] = False if passed is None else passed
-            data["reason"] = coerce_str_or_none(data.get("reason"), field="GateEvaluationTrace.reason") or ""
+            data["reason"] = coerce_str_or_none(data.get("reason"), field="GateEvaluationTrace.reason")
             data["metrics_at_evaluation"] = coerce_float_dict(
                 data.get("metrics_at_evaluation"), field="GateEvaluationTrace.metrics_at_evaluation"
             )
@@ -883,7 +885,9 @@ class TelemetryStore:
                 record = json.loads(line)
                 event_type = record.get("event_type", "")
                 data = record.get("data", {})
-                epoch = record.get("epoch") or data.get("epoch", 0)
+                # PT-05 fix: Use explicit None check - epoch=0 is valid and falsy
+                record_epoch = record.get("epoch")
+                epoch = record_epoch if record_epoch is not None else data.get("epoch", 0)
 
                 # Reconstruct store from events
                 if event_type == "TRAINING_STARTED":

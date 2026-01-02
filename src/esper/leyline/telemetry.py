@@ -751,8 +751,10 @@ class PPOUpdatePayload:
             grad_norm=data["grad_norm"],
             kl_divergence=data["kl_divergence"],
             clip_fraction=data["clip_fraction"],
-            nan_grad_count=data.get("nan_grad_count", 0),
-            pre_clip_grad_norm=data["pre_clip_grad_norm"],
+            # DRL-03 fix: nan_grad_count is required (fail-fast on missing)
+            nan_grad_count=data["nan_grad_count"],
+            # DRL-04 fix: align with dataclass default
+            pre_clip_grad_norm=data.get("pre_clip_grad_norm", 0.0),
             # Optional fields
             explained_variance=data.get("explained_variance"),
             entropy_loss=data.get("entropy_loss", 0.0),
@@ -807,7 +809,8 @@ class PPOUpdatePayload:
             joint_ratio_max=data.get("joint_ratio_max", 1.0),
             inner_epoch=data.get("inner_epoch", 0),
             batch=data.get("batch", 0),
-            ppo_updates_count=data["ppo_updates_count"],
+            # DRL-05 fix: align with dataclass default
+            ppo_updates_count=data.get("ppo_updates_count", 1),
             skipped=data.get("skipped", False),
             # Value function statistics
             value_mean=data.get("value_mean", 0.0),

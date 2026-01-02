@@ -2516,7 +2516,9 @@ class SeedSlot(nn.Module):
         # Type narrowing: determine payload type
         payload_data: Any
         if isinstance(data, dict) or data is None:
-            # Legacy dict payload - apply enrichment
+            # RD-02: Legacy dict payload enrichment - verify if still needed
+            # All known callers use typed payloads, so this branch may be dead code.
+            # Kept for backwards compatibility with any external callers passing dicts.
             payload_dict: dict[str, Any] = dict(data) if data else {}
             if self.state is not None:
                 payload_dict.setdefault("alpha", self.state.alpha)

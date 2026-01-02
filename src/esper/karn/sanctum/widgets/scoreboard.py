@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Iterator
 
 from textual.containers import Vertical
+from textual.css.query import NoMatches
 from textual.message import Message
 from textual.widgets import DataTable, Static
 
@@ -172,7 +173,8 @@ class Scoreboard(Static):
 
         try:
             stats_widget = self.query_one("#scoreboard-stats", Static)
-        except Exception:
+        except NoMatches:
+            # UI-01 fix: Narrow to NoMatches - only expected exception from query_one
             return
 
         best_runs = list(self._snapshot.best_runs)
@@ -205,7 +207,8 @@ class Scoreboard(Static):
                 panel.border_title = f"BEST RUNS ({pinned_count} 📌)"
             else:
                 panel.border_title = "BEST RUNS"
-        except Exception:
+        except NoMatches:
+            # UI-02 fix: Narrow to NoMatches - only expected exception from query_one
             pass
 
     def _refresh_table(self) -> None:
