@@ -857,12 +857,13 @@ class EnvOverview(Static):
         }
 
         # Icons provide color-independent status indication (accessibility)
+        # Hierarchy: ★ (excellent) > ● (ok) > ◐ (stall/init) > ○ (degraded)
         status_short = {
             "excellent": "★EXCL",
             "healthy": "●OK",
-            "initializing": "○INIT",
-            "stalled": "◐STAL",
-            "degraded": "▼DEGR",
+            "initializing": "◐INIT",
+            "stalled": "◐STALL",
+            "degraded": "○DEGR",
         }.get(env.status, env.status[:4].upper())
 
         status_style = status_styles.get(env.status, "white")
