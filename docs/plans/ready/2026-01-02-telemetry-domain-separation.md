@@ -1,18 +1,16 @@
-# Telemetry Domain Separation Plan
+# Telemetry Domain Separation Implementation Plan
 
-**Status:** Ready for Implementation
-**Created:** 2026-01-02
-**Author:** Claude Code
-**Priority:** Medium (improves telemetry interpretability)
+> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-## Executive Summary
+**Goal:** Rename telemetry event types to include domain prefixes (TAMIYO_, TOLARIA_) and add critical missing telemetry fields during this breaking change window.
 
-This plan addresses **architectural confusion** in the telemetry system where event types don't indicate which domain (Tamiyo/Tolaria/Kasmina/Simic) they belong to.
+**Architecture:** Pure mechanical refactoring for renames + targeted field additions based on DRL and PyTorch specialist review. Atomic cutover in a single commit per phase.
 
-The solution is to:
-- Rename event types to include domain prefixes
-- Update all consumers (MCP views, Sanctum widgets, Overwatch)
-- Atomic cutover (no backward compatibility period)
+**Tech Stack:** Python dataclasses, enum, grep/sed for find-replace validation.
+
+**Risk Assessment:** MEDIUM - Large blast radius (300+ refs across 28 files) but purely mechanical changes. Mitigated by exhaustive grep validation and test coverage.
+
+---
 
 ## Completed Bug Fixes (2026-01-02)
 
@@ -21,142 +19,201 @@ The following data bugs have been **fixed in the bug-fixes branch** and are no l
 1. ✅ **`pre_clip_grad_norm` now captured**: `ppo.py` captures the return value of `clip_grad_norm_()` before clipping
 2. ✅ **`ppo_updates_count` now tracked**: `vectorized.py` reports actual PPO update count per batch
 
-These fixes add two new fields to `PPOUpdatePayload`:
-- `pre_clip_grad_norm: float` - Gradient norm BEFORE clipping (detects explosion)
-- `ppo_updates_count: int` - Actual number of PPO gradient updates in the batch
+---
 
-## Problem Statement
+## Scope (Full Breaking Change Window)
 
-### Architectural Issue: Domain Confusion
+**IN SCOPE:**
+- Phase 1: Event type renaming (4 events → domain-prefixed names)
+- Phase 2: Payload class renaming (4 payloads → domain-prefixed names)
+- Phase 3: Add DRL specialist recommended fields to PPOUpdatePayload
+- Phase 4: MCP view renaming and documentation updates
+- Phase 5: Dead code cleanup
 
-Current event types don't indicate their source domain:
+**Historical Data:** Accept that pre-migration JSONL telemetry becomes inaccessible via MCP views. This is acceptable for a breaking change window - users can re-run training if historical analysis is needed.
 
-| Event | Emitted By | Semantic Domain | Confusion |
-|-------|-----------|-----------------|-----------|
-| `PPO_UPDATE_COMPLETED` | Simic | **Tamiyo** (policy) | Sounds like Simic |
-| `EPOCH_COMPLETED` | Simic | **Tolaria** (host training) | Generic name |
-| `BATCH_EPOCH_COMPLETED` | Simic | **Tolaria** | Generic name |
-| `GOVERNOR_ROLLBACK` | Tolaria | Tolaria | Partially correct |
+---
 
-When analyzing telemetry, users must know implementation details to understand which subsystem generated each event.
+## Pre-Implementation Checklist
 
-## Design Goals
+Before starting, run these commands to establish baseline:
 
-1. **Self-Documenting Events**: Event type names should indicate their domain
-2. **Accurate Metrics**: Fix `inner_epoch` and `grad_norm` bugs
-3. **Atomic Cutover**: Rename events in single commit, update all consumers together (no dual-emit)
-4. **Safety-First**: Comprehensive test validation before and after migration
+```bash
+# 1. Verify all tests pass
+uv run pytest tests/ -q
 
-## Detailed Changes
+# 2. Capture reference counts for validation
+echo "=== Event Type References ==="
+grep -r "PPO_UPDATE_COMPLETED" src tests --include="*.py" | wc -l
+grep -r "EPOCH_COMPLETED" src tests --include="*.py" | wc -l
+grep -r "BATCH_EPOCH_COMPLETED" src tests --include="*.py" | wc -l
+grep -r "GOVERNOR_ROLLBACK" src tests --include="*.py" | wc -l
 
-### Phase 1: Leyline Contract Changes
+echo "=== Payload Class References ==="
+grep -r "PPOUpdatePayload" src tests --include="*.py" | wc -l
+grep -r "EpochCompletedPayload" src tests --include="*.py" | wc -l
+grep -r "BatchEpochCompletedPayload" src tests --include="*.py" | wc -l
+grep -r "GovernorRollbackPayload" src tests --include="*.py" | wc -l
+```
 
-#### 1.1 New Event Types
+Expected baseline: All tests pass. Record the counts for post-migration validation.
 
-Add to `TelemetryEventType` enum in `src/esper/leyline/telemetry.py`:
+---
+
+## Phase 1: Event Type Renaming
+
+### Task 1.1: Define New Event Types in Leyline
+
+**Files:**
+- Modify: `src/esper/leyline/telemetry.py:61-113`
+
+**Step 1: Add domain-prefixed event types to enum**
+
+Replace the event type definitions with domain-prefixed versions:
 
 ```python
 class TelemetryEventType(Enum):
-    # === Tamiyo Domain (Brain/Policy) ===
-    TAMIYO_POLICY_UPDATE = auto()      # PPO gradient update completed
-    TAMIYO_INITIATED = auto()          # (existing) Host stabilized
-
-    # === Tolaria Domain (Metabolism/Training) ===
-    TOLARIA_EPOCH_COMPLETED = auto()   # Per-env host training epoch
-    TOLARIA_BATCH_COMPLETED = auto()   # Batch of envs finished
-    TOLARIA_ROLLBACK = auto()          # Emergency rollback
+    """Types of telemetry events."""
 
     # === Kasmina Domain (Stem Cells/Seeds) ===
-    # SEED_* events already correctly named - no changes
+    SEED_GERMINATED = auto()
+    SEED_STAGE_CHANGED = auto()
+    SEED_GATE_EVALUATED = auto()
+    SEED_FOSSILIZED = auto()
+    SEED_PRUNED = auto()
 
-    # === Simic Domain (Evolution/Fitness) ===
-    # PLATEAU_DETECTED, DEGRADATION_DETECTED, etc. - keep as-is
-    # These are fitness signals, correctly in Simic domain
+    # === Tolaria Domain (Metabolism/Training) ===
+    TOLARIA_EPOCH_COMPLETED = auto()      # Per-env host training epoch
+    TOLARIA_BATCH_COMPLETED = auto()      # Batch-level epoch summary
+    TOLARIA_ROLLBACK = auto()             # Emergency rollback executed
 
-    # === DELETE (replaced by domain-prefixed versions above) ===
-    # PPO_UPDATE_COMPLETED      -> TAMIYO_POLICY_UPDATE
-    # EPOCH_COMPLETED           -> TOLARIA_EPOCH_COMPLETED
-    # BATCH_EPOCH_COMPLETED     -> TOLARIA_BATCH_COMPLETED
-    # GOVERNOR_ROLLBACK         -> TOLARIA_ROLLBACK
-    # ISOLATION_VIOLATION       -> never emitted, delete
+    # Fitness trend events (Simic observes Tolaria training)
+    PLATEAU_DETECTED = auto()
+    DEGRADATION_DETECTED = auto()
+    IMPROVEMENT_DETECTED = auto()
+
+    # === Tamiyo Domain (Brain/Policy) ===
+    TAMIYO_POLICY_UPDATE = auto()         # PPO gradient update completed
+    TAMIYO_INITIATED = auto()             # Host stabilized, germination allowed
+
+    # === Health Events ===
+    GRADIENT_ANOMALY = auto()
+    PERFORMANCE_DEGRADATION = auto()
+
+    # === Debug Events (Anomalies) ===
+    RATIO_EXPLOSION_DETECTED = auto()
+    RATIO_COLLAPSE_DETECTED = auto()
+    VALUE_COLLAPSE_DETECTED = auto()
+    GRADIENT_PATHOLOGY_DETECTED = auto()
+    NUMERICAL_INSTABILITY_DETECTED = auto()
+
+    # === Training Progress Events ===
+    TRAINING_STARTED = auto()
+    CHECKPOINT_LOADED = auto()
+
+    # === Analytics Events ===
+    COUNTERFACTUAL_MATRIX_COMPUTED = auto()
+    ANALYTICS_SNAPSHOT = auto()
+    EPISODE_OUTCOME = auto()
 ```
 
-#### 1.2 Payload Changes
+**Step 2: Run test to verify enum compiles**
 
-**Rename:** `PPOUpdatePayload` → `TamiyoPolicyUpdatePayload`
+Run: `uv run python -c "from esper.leyline.telemetry import TelemetryEventType; print(TelemetryEventType.TAMIYO_POLICY_UPDATE)"`
+Expected: `TelemetryEventType.TAMIYO_POLICY_UPDATE`
 
-Note: `pre_clip_grad_norm` and `ppo_updates_count` fields have already been added (see "Completed Bug Fixes" section).
+### Task 1.2: Update Emitters to Use New Event Types
 
-**Rename:** `EpochCompletedPayload` → `TolariaEpochPayload`
-**Rename:** `BatchEpochCompletedPayload` → `TolariaBatchPayload`
-**Rename:** `GovernorRollbackPayload` → `TolariaRollbackPayload`
+**Files:**
+- Modify: `src/esper/simic/telemetry/emitters.py`
+- Modify: `src/esper/tolaria/governor.py`
 
-### Phase 2: Emission Changes
+**Step 1: Find all emission sites**
 
-#### 2.1 Emit New Event Types
+```bash
+grep -n "TelemetryEventType\.\(PPO_UPDATE_COMPLETED\|EPOCH_COMPLETED\|BATCH_EPOCH_COMPLETED\|GOVERNOR_ROLLBACK\)" src/esper/simic/telemetry/emitters.py src/esper/tolaria/governor.py
+```
 
-**File:** `src/esper/simic/telemetry/emitters.py`
+**Step 2: Replace event types in emitters.py**
 
-Replace old event types with new domain-prefixed versions (atomic cutover):
+| Old | New |
+|-----|-----|
+| `TelemetryEventType.PPO_UPDATE_COMPLETED` | `TelemetryEventType.TAMIYO_POLICY_UPDATE` |
+| `TelemetryEventType.EPOCH_COMPLETED` | `TelemetryEventType.TOLARIA_EPOCH_COMPLETED` |
+| `TelemetryEventType.BATCH_EPOCH_COMPLETED` | `TelemetryEventType.TOLARIA_BATCH_COMPLETED` |
+
+**Step 3: Replace event types in governor.py**
+
+| Old | New |
+|-----|-----|
+| `TelemetryEventType.GOVERNOR_ROLLBACK` | `TelemetryEventType.TOLARIA_ROLLBACK` |
+
+**Step 4: Verify no old references remain in emitters**
+
+```bash
+grep -c "PPO_UPDATE_COMPLETED\|EPOCH_COMPLETED\|BATCH_EPOCH_COMPLETED\|GOVERNOR_ROLLBACK" src/esper/simic/telemetry/emitters.py src/esper/tolaria/governor.py
+# Expected: 0 for each file
+```
+
+### Task 1.3: Update Consumers
+
+**Files (8 total - code review specialist identified 2 missing from original plan):**
+- Modify: `src/esper/karn/sanctum/aggregator.py`
+- Modify: `src/esper/karn/collector.py`
+- Modify: `src/esper/karn/store.py` ← **ADDED** (line 965, historical replay)
+- Modify: `src/esper/nissa/wandb_backend.py`
+- Modify: `src/esper/nissa/output.py`
+- Modify: `src/esper/nissa/analytics.py`
+- Modify: `src/esper/karn/sanctum/widgets/event_log.py`
+- Modify: `scripts/profile_telemetry_hitches.py` ← **ADDED** (line 90)
+
+**Step 1: Update aggregator.py string comparisons**
+
+In `_process_event_unlocked()`, replace:
 
 ```python
-def emit_ppo_update_event(...):
-    # Use new domain-prefixed event type
-    hub.emit(TelemetryEvent(
-        event_type=TelemetryEventType.TAMIYO_POLICY_UPDATE,
-        data=TamiyoPolicyUpdatePayload(...),
-    ))
+# OLD
+if event_type == "EPOCH_COMPLETED":
+elif event_type == "PPO_UPDATE_COMPLETED":
+elif event_type == "BATCH_EPOCH_COMPLETED":
+elif event_type == "GOVERNOR_ROLLBACK":
+
+# NEW
+if event_type == "TOLARIA_EPOCH_COMPLETED":
+elif event_type == "TAMIYO_POLICY_UPDATE":
+elif event_type == "TOLARIA_BATCH_COMPLETED":
+elif event_type == "TOLARIA_ROLLBACK":
 ```
 
-### Phase 3: Consumption Changes (Atomic Cutover)
+**Step 2: Update collector.py string comparisons**
 
-All consumers must be updated in the same commit as the emission changes.
+Same pattern as aggregator.py.
 
-#### 3.1 MCP View Updates
-
-**File:** `src/esper/karn/mcp/views.py`
-
-Rename views to use new event types:
-
-```sql
-CREATE OR REPLACE VIEW tamiyo_policy_updates AS
-SELECT ...
-FROM raw_events
-WHERE event_type = 'TAMIYO_POLICY_UPDATE'
-```
-
-| Old View | New View | Notes |
-|----------|----------|-------|
-| `epochs` | `tolaria_epochs` | New event type only |
-| `ppo_updates` | `tamiyo_policy_updates` | New event type only |
-| `batch_epochs` | `tolaria_batches` | New event type only |
-
-#### 3.2 Sanctum Aggregator Updates
-
-**File:** `src/esper/karn/sanctum/aggregator.py`
-
-Update event routing to use new event types:
+**Step 3: Update store.py string comparison (line 965)**
 
 ```python
-def _handle_event(self, event: TelemetryEvent) -> None:
-    event_type = event.event_type.name
+# OLD
+elif event_type == "EPOCH_COMPLETED":
 
-    if event_type == "TAMIYO_POLICY_UPDATE":
-        self._handle_tamiyo_policy_update(event)
-    elif event_type == "TOLARIA_EPOCH_COMPLETED":
-        self._handle_tolaria_epoch(event)
-    elif event_type == "TOLARIA_BATCH_COMPLETED":
-        self._handle_tolaria_batch(event)
-    elif event_type == "TOLARIA_ROLLBACK":
-        self._handle_tolaria_rollback(event)
-    # ... etc
+# NEW
+elif event_type == "TOLARIA_EPOCH_COMPLETED":
 ```
 
-#### 3.3 Event Log Widget Updates
+**Step 4: Update wandb_backend.py enum comparisons**
 
-**File:** `src/esper/karn/sanctum/widgets/event_log.py`
+```python
+# OLD
+if event_type == TelemetryEventType.EPOCH_COMPLETED:
+elif event_type == TelemetryEventType.BATCH_EPOCH_COMPLETED:
+elif event_type == TelemetryEventType.PPO_UPDATE_COMPLETED:
 
-Update color mappings to new names only:
+# NEW
+if event_type == TelemetryEventType.TOLARIA_EPOCH_COMPLETED:
+elif event_type == TelemetryEventType.TOLARIA_BATCH_COMPLETED:
+elif event_type == TelemetryEventType.TAMIYO_POLICY_UPDATE:
+```
+
+**Step 5: Update event_log.py color mappings**
 
 ```python
 EVENT_COLORS = {
@@ -164,110 +221,435 @@ EVENT_COLORS = {
     "TOLARIA_EPOCH_COMPLETED": "bright_blue",
     "TOLARIA_BATCH_COMPLETED": "bright_blue",
     "TOLARIA_ROLLBACK": "bright_red",
+    # ... keep existing SEED_* mappings
 }
 ```
 
-#### 3.4 Nissa Output Backends
+**Step 6: Update profile_telemetry_hitches.py (line 90)**
+
+```python
+# OLD
+TelemetryEventType.EPOCH_COMPLETED
+
+# NEW
+TelemetryEventType.TOLARIA_EPOCH_COMPLETED
+```
+
+**Step 7: Verify no old references remain in consumers**
+
+```bash
+grep -c "PPO_UPDATE_COMPLETED\|EPOCH_COMPLETED\|BATCH_EPOCH_COMPLETED\|GOVERNOR_ROLLBACK" \
+  src/esper/karn/sanctum/aggregator.py \
+  src/esper/karn/collector.py \
+  src/esper/karn/store.py \
+  src/esper/nissa/wandb_backend.py \
+  src/esper/nissa/output.py \
+  src/esper/karn/sanctum/widgets/event_log.py \
+  scripts/profile_telemetry_hitches.py
+# Expected: 0 for each file (except comments)
+```
+
+### Task 1.4: Update MCP Views
 
 **Files:**
-- `src/esper/nissa/output.py` - Console output
-- `src/esper/nissa/wandb_backend.py` - WandB logging
+- Modify: `src/esper/karn/mcp/views.py`
 
-Update event type checks to new names.
+**Step 1: Update SQL WHERE clauses**
 
-### Phase 4: Safety Check (Pre-Implementation)
+Replace event type strings in all view definitions:
 
-Before implementing changes, validate test coverage:
+| Old String | New String |
+|------------|------------|
+| `'EPOCH_COMPLETED'` | `'TOLARIA_EPOCH_COMPLETED'` |
+| `'BATCH_EPOCH_COMPLETED'` | `'TOLARIA_BATCH_COMPLETED'` |
+| `'PPO_UPDATE_COMPLETED'` | `'TAMIYO_POLICY_UPDATE'` |
+| `'GOVERNOR_ROLLBACK'` | `'TOLARIA_ROLLBACK'` |
 
-1. **Run baseline tests** - Capture current test pass rate
-2. **Map tests to consumers** - Ensure each consumer has test coverage
-3. **Add missing consumer tests** - Fill gaps before migration
-4. **Verify 1:1 event mapping** - Each old event has exactly one new equivalent
+**Step 2: Rename views**
 
-## File Impact Summary
+| Old View | New View |
+|----------|----------|
+| `epochs` | `tolaria_epochs` |
+| `batch_epochs` | `tolaria_batches` |
+| `ppo_updates` | `tamiyo_policy_updates` |
 
-### Must Change (Core)
+**Step 3: Verify SQL strings updated**
 
-| File | Changes |
-|------|---------|
-| `src/esper/leyline/telemetry.py` | New event types, payload renames, new fields |
-| `src/esper/simic/agent/ppo.py` | Capture pre_clip_grad_norm |
-| `src/esper/simic/training/vectorized.py` | Pass ppo_update_idx, remove epoch |
-| `src/esper/simic/telemetry/emitters.py` | Emit new event types, update payloads |
-| `src/esper/tolaria/governor.py` | Emit TOLARIA_ROLLBACK |
+```bash
+grep -c "'EPOCH_COMPLETED'\|'BATCH_EPOCH_COMPLETED'\|'PPO_UPDATE_COMPLETED'\|'GOVERNOR_ROLLBACK'" \
+  src/esper/karn/mcp/views.py
+# Expected: 0
+```
 
-### Must Change (Consumption) - 4 Consumers
+### Task 1.5: Update All Test Files (24 files)
 
-| Consumer | Files | Changes |
-|----------|-------|---------|
-| **Karn MCP** | `mcp/views.py` | Rename views, update event type filters |
-| **Sanctum TUI** | `sanctum/aggregator.py`, `sanctum/widgets/event_log.py`, `collector.py`, `store.py` | Update event routing |
-| **Console Output** | `nissa/output.py` | Update event type checks |
-| **WandB Backend** | `nissa/wandb_backend.py` | Update event type checks |
+**Files (enumerated by code review specialist):**
 
-**Note:** Overwatch consumes via Sanctum (not a separate consumer).
+**Critical (must pass for CI):**
+- `tests/tolaria/test_governor.py`
+- `tests/nissa/test_wandb_backend.py`
+- `tests/nissa/test_output.py`
+- `tests/nissa/test_analytics.py`
+- `tests/nissa/test_console_output.py`
+- `tests/nissa/test_global_hub_reset.py`
+- `tests/karn/mcp/test_views.py`
+- `tests/karn/mcp/test_server.py`
+- `tests/karn/mcp/test_server_refresh.py`
+- `tests/karn/sanctum/test_aggregator.py`
+- `tests/karn/sanctum/test_backend.py`
+- `tests/karn/sanctum/test_event_log.py`
+- `tests/karn/sanctum/test_registry.py`
+- `tests/karn/sanctum/test_correlation.py`
+- `tests/karn/sanctum/test_app_integration.py`
+- `tests/karn/test_collector_multienv.py`
+- `tests/karn/test_collector_validation.py`
+- `tests/karn/test_triggers.py`
+- `tests/simic/test_epoch_telemetry.py`
+- `tests/simic/test_vectorized.py`
+- `tests/simic/training/test_heuristic_gradient_telemetry_wiring.py`
+- `tests/simic/training/test_dual_ab.py`
+- `tests/leyline/test_telemetry_events.py`
+- `tests/integration/test_q_values_telemetry.py`
 
-### Must Change (Tests)
+**Step 1: Apply find-replace to each test file**
 
-| Pattern | Estimated Count |
-|---------|-----------------|
-| `tests/**/test_*.py` referencing old event types | ~15-20 files |
-| Mock data generators | ~5 files |
+Use the same replacement mapping as source files.
 
-## Migration Timeline (Atomic Cutover)
+**Step 2: Verify no old references remain in tests**
 
-### Day 1: Safety Check
-- [ ] Run full test suite, capture baseline
-- [ ] Map each consumer to its tests
-- [ ] Identify any untested consumers
+```bash
+grep -r "PPO_UPDATE_COMPLETED\|EPOCH_COMPLETED\|BATCH_EPOCH_COMPLETED\|GOVERNOR_ROLLBACK" tests --include="*.py" | wc -l
+# Expected: 0
+```
 
-### Day 2: Implementation (Single Commit)
-- [ ] Add new event types to Leyline
-- [ ] Delete old event types from enum
-- [ ] Rename payload classes
-- [ ] Fix `pre_clip_grad_norm` bug in ppo.py
-- [ ] Fix `ppo_update_idx` bug in vectorized.py
-- [ ] Update all 4 consumers (MCP, Sanctum, Console, WandB)
-- [ ] Update all tests
+### Task 1.6: Run Full Test Suite
 
-### Day 3: Validation
-- [ ] Run full test suite
-- [ ] Manual testing with Sanctum TUI
-- [ ] Manual testing with Overwatch web
-- [ ] Run short training to verify telemetry flow
+**Step 1: Run all tests**
+
+```bash
+uv run pytest tests/ -v
+```
+
+Expected: All tests pass.
+
+**Step 2: Commit Phase 1**
+
+```bash
+git add -A
+git commit -m "refactor(telemetry): rename event types with domain prefixes
+
+BREAKING CHANGE: Event type names changed for domain clarity:
+- PPO_UPDATE_COMPLETED → TAMIYO_POLICY_UPDATE
+- EPOCH_COMPLETED → TOLARIA_EPOCH_COMPLETED
+- BATCH_EPOCH_COMPLETED → TOLARIA_BATCH_COMPLETED
+- GOVERNOR_ROLLBACK → TOLARIA_ROLLBACK
+
+This is a pure rename - no behavioral changes.
+All emitters, consumers, MCP views, and tests updated atomically.
+
+Note: Historical JSONL telemetry data using old event names will not
+be visible via MCP views. Re-run training if historical analysis needed.
+"
+```
+
+---
+
+## Phase 2: Payload Class Renaming
+
+### Task 2.1: Rename Payload Classes in Leyline
+
+**Files:**
+- Modify: `src/esper/leyline/telemetry.py`
+
+**Step 1: Rename payload dataclasses**
+
+| Old Name | New Name |
+|----------|----------|
+| `PPOUpdatePayload` | `TamiyoPolicyUpdatePayload` |
+| `EpochCompletedPayload` | `TolariaEpochPayload` |
+| `BatchEpochCompletedPayload` | `TolariaBatchPayload` |
+| `GovernorRollbackPayload` | `TolariaRollbackPayload` |
+
+**Step 2: Update TelemetryPayload union type**
+
+```python
+TelemetryPayload = (
+    TrainingStartedPayload
+    | TolariaEpochPayload          # was EpochCompletedPayload
+    | TolariaBatchPayload          # was BatchEpochCompletedPayload
+    | TrendDetectedPayload
+    | TamiyoPolicyUpdatePayload    # was PPOUpdatePayload
+    | TamiyoInitiatedPayload
+    # ... rest unchanged
+    | TolariaRollbackPayload       # was GovernorRollbackPayload
+)
+```
+
+### Task 2.2: Update All Payload References
+
+**Step 1: Find all import statements**
+
+```bash
+grep -rn "from esper.leyline.telemetry import.*\(PPOUpdatePayload\|EpochCompletedPayload\|BatchEpochCompletedPayload\|GovernorRollbackPayload\)" src tests
+```
+
+**Step 2: Update imports and usages**
+
+Apply the same replacement mapping to all files.
+
+**Step 3: Run tests**
+
+```bash
+uv run pytest tests/ -v
+```
+
+**Step 4: Commit Phase 2**
+
+```bash
+git add -A
+git commit -m "refactor(telemetry): rename payload classes with domain prefixes
+
+Payload classes now match event type naming convention:
+- PPOUpdatePayload → TamiyoPolicyUpdatePayload
+- EpochCompletedPayload → TolariaEpochPayload
+- BatchEpochCompletedPayload → TolariaBatchPayload
+- GovernorRollbackPayload → TolariaRollbackPayload
+"
+```
+
+---
+
+## Phase 3: Add DRL Specialist Recommended Fields
+
+Based on DRL specialist review, add these critical fields to `TamiyoPolicyUpdatePayload`:
+
+### Task 3.1: Add Trust Region Diagnostics (CRITICAL)
+
+**Files:**
+- Modify: `src/esper/leyline/telemetry.py` (TamiyoPolicyUpdatePayload)
+- Modify: `src/esper/simic/agent/ppo.py` (compute and pass values)
+- Modify: `src/esper/simic/telemetry/emitters.py` (emit values)
+
+**New fields to add:**
+
+```python
+# === Trust Region Diagnostics (DRL expert: CRITICAL for policy collapse debugging) ===
+# Max KL across timesteps - catches localized policy drift hidden by mean KL
+approx_kl_max: float = 0.0
+# Count of timesteps where KL > target_kl - direct measure of trust region violations
+trust_region_violations: int = 0
+```
+
+**Justification:** Mean KL can hide localized policy drift. A single state with KL=5.0 averaged with 99 states at KL=0.01 gives mean=0.05 (looks fine), but that one state is pathological.
+
+### Task 3.2: Add Return Statistics (HIGH PRIORITY)
+
+**New fields to add:**
+
+```python
+# === Return Distribution (DRL expert: reward scale diagnosis) ===
+# Return statistics reveal reward scaling issues:
+# - Returns of 1000+ cause gradient explosion
+# - Returns near 0 cause learning stagnation
+return_mean: float = 0.0
+return_std: float = 0.0
+return_min: float = 0.0
+return_max: float = 0.0
+```
+
+### Task 3.3: Add Value Prediction Quality (MEDIUM PRIORITY)
+
+**New fields to add:**
+
+```python
+# === Value Prediction Quality (DRL expert: catches value function drift) ===
+# Complements explained_variance. EV can be high while value is systematically biased.
+value_prediction_error_mean: float = 0.0  # E[V(s) - G_t] - should be near 0
+value_prediction_error_std: float = 0.0
+
+# TD errors from GAE - large systematic errors indicate value function lag
+td_error_mean: float = 0.0
+```
+
+### Task 3.4: Improve Field Naming Clarity
+
+**Rename for clarity (DRL expert recommendation):**
+
+| Old Name | New Name | Reason |
+|----------|----------|--------|
+| `grad_norm` | `grad_norm_clipped` | Explicit that this is post-clip value |
+
+Note: `pre_clip_grad_norm` stays as-is since it's already clear.
+
+### Task 3.5: Update from_dict() and Emission Sites
+
+Update `TamiyoPolicyUpdatePayload.from_dict()` to parse the new fields.
+Update `emit_ppo_update_event()` in emitters.py to populate the new fields.
+Update PPO agent to compute and pass the new values.
+
+### Task 3.6: Add Tests for New Fields
+
+Create tests verifying the new fields are populated correctly.
+
+### Task 3.7: Commit Phase 3
+
+```bash
+git add -A
+git commit -m "feat(telemetry): add DRL specialist recommended policy metrics
+
+Add critical telemetry fields based on DRL expert review:
+
+Trust Region Diagnostics:
+- approx_kl_max: Max KL across timesteps (catches localized drift)
+- trust_region_violations: Count of timesteps exceeding target KL
+
+Return Statistics:
+- return_mean/std/min/max: Reward scale diagnosis
+
+Value Prediction Quality:
+- value_prediction_error_mean/std: Catches systematic value bias
+- td_error_mean: GAE TD error for value function lag detection
+
+Also rename grad_norm → grad_norm_clipped for clarity (post-clip value).
+"
+```
+
+---
+
+## Phase 4: Update Active Documentation
+
+### Task 4.1: Update Telemetry Documentation
+
+**Files (13 active docs identified by code review specialist):**
+- `docs/specifications/karn.md`
+- `docs/specifications/simic.md`
+- `docs/specifications/telemetry-audit.md`
+- `docs/telemetry/00-index.md`
+- `docs/telemetry/01-run-header.md`
+- `docs/telemetry/02-anomaly-strip.md`
+- `docs/telemetry/03-env-overview.md`
+- `docs/telemetry/04-scoreboard.md`
+- `docs/telemetry/05-reward-health-panel.md`
+- `docs/telemetry/07-tamiyo-brain-ppo.md`
+- `docs/telemetry/08-tamiyo-brain-decisions.md`
+- `docs/telemetry/09-event-log.md`
+- `docs/telemetry/10-tamiyo-brain-sparklines.md`
+
+**Step 1: Apply find-replace to each doc**
+
+Use the same replacement mapping as source files.
+
+**Note:** Do NOT update files in `docs/plans/completed/` - these are historical records.
+
+### Task 4.2: Update Architecture Documentation
+
+**Files:**
+- `docs/architecture/02-subsystem-catalog.md`
+- `docs/architecture/03-diagrams.md`
+
+**Step 1: Update event type references and diagrams**
+
+### Task 4.3: Commit Documentation Updates
+
+```bash
+git add docs/
+git commit -m "docs: update telemetry event names to domain-prefixed versions
+
+Update all active documentation to use new event type names:
+- PPO_UPDATE_COMPLETED → TAMIYO_POLICY_UPDATE
+- EPOCH_COMPLETED → TOLARIA_EPOCH_COMPLETED
+- BATCH_EPOCH_COMPLETED → TOLARIA_BATCH_COMPLETED
+- GOVERNOR_ROLLBACK → TOLARIA_ROLLBACK
+
+Historical plans in docs/plans/completed/ are NOT updated (decision records).
+"
+```
+
+---
+
+## Phase 5: Clean Up Dead Code
+
+### Task 5.1: Remove Unused Event Types
+
+**Files:**
+- Modify: `src/esper/leyline/telemetry.py`
+
+**Step 1: Delete dead event types**
+
+Remove from enum (verified never emitted):
+- `ISOLATION_VIOLATION` (marked TODO: DEAD CODE)
+- `MEMORY_WARNING` (never emitted)
+- `REWARD_HACKING_SUSPECTED` (never emitted)
+
+**Step 2: Verify no references exist**
+
+```bash
+grep -r "ISOLATION_VIOLATION\|MEMORY_WARNING\|REWARD_HACKING_SUSPECTED" src tests --include="*.py"
+# Expected: 0 results (or only in comments)
+```
+
+**Step 3: Commit cleanup**
+
+```bash
+git add -A
+git commit -m "chore(telemetry): remove dead event types
+
+Remove event types that were defined but never emitted:
+- ISOLATION_VIOLATION
+- MEMORY_WARNING
+- REWARD_HACKING_SUSPECTED
+"
+```
+
+---
+
+## Validation Checklist
+
+After completing all phases:
+
+1. **Event type references**
+   ```bash
+   # Should find ONLY the new names
+   grep -r "TAMIYO_POLICY_UPDATE\|TOLARIA_EPOCH_COMPLETED\|TOLARIA_BATCH_COMPLETED\|TOLARIA_ROLLBACK" src --include="*.py" | wc -l
+   # Should match the original count from pre-implementation
+   ```
+
+2. **All tests pass**
+   ```bash
+   uv run pytest tests/ -q
+   ```
+
+3. **Manual smoke test**
+   ```bash
+   # Run short training, check telemetry appears in Sanctum
+   uv run python -m esper.scripts.train ppo --episodes 2 --sanctum
+   ```
+
+4. **MCP queries work with new view names**
+   ```bash
+   # Test via Karn MCP server
+   # SELECT * FROM tolaria_epochs LIMIT 5
+   # SELECT * FROM tamiyo_policy_updates LIMIT 5
+   ```
+
+5. **New DRL fields populated**
+   ```bash
+   # Verify approx_kl_max, trust_region_violations, return_* appear in telemetry
+   ```
+
+---
 
 ## Rollback Plan
 
-If issues arise after the atomic cutover:
+Each phase is a single atomic commit. To rollback any phase:
 
 ```bash
-git revert <commit-hash>  # Single commit to revert
+git revert <commit-hash>
 ```
 
-Atomic cutover means all changes are in one commit - rollback is trivial.
+Since there's no backward compatibility layer, rollback fully restores the previous state.
 
-## Success Criteria
-
-1. **Bug fixes verified:**
-   - `ppo_update_idx` shows 1, 2, 3... (not always 150)
-   - `pre_clip_grad_norm` shows actual gradient magnitude (varies with training)
-   - `grad_norm` shows post-clip value (typically ~1.0 when clipping active)
-
-2. **Domain clarity:**
-   - `TAMIYO_*` events clearly indicate policy/brain operations
-   - `TOLARIA_*` events clearly indicate host training/metabolism
-   - `KASMINA_*` (SEED_*) events clearly indicate seed lifecycle
-
-3. **No regression:**
-   - All existing tests pass
-   - Sanctum TUI displays correctly
-   - Overwatch web dashboard displays correctly
-   - MCP queries return expected data
-
-## Open Questions
-
-1. **View naming:** Should we use `tamiyo_updates` or `tamiyo_policy_updates`?
-2. **ANALYTICS_SNAPSHOT:** This multi-kind event spans domains - should it be split?
+---
 
 ## Appendix A: Complete Event Domain Mapping
 
@@ -283,362 +665,67 @@ Atomic cutover means all changes are in one commit - rollback is trivial.
 | `SEED_GATE_EVALUATED` | Kasmina | Kasmina (slot.py) | SeedGateEvaluatedPayload |
 | `SEED_FOSSILIZED` | Kasmina | Kasmina (slot.py) | SeedFossilizedPayload |
 | `SEED_PRUNED` | Kasmina | Kasmina (slot.py) | SeedPrunedPayload |
-| `PLATEAU_DETECTED` | Simic | Simic (vectorized.py) | TrendDetectedPayload |
-| `DEGRADATION_DETECTED` | Simic | Simic (vectorized.py) | TrendDetectedPayload |
-| `IMPROVEMENT_DETECTED` | Simic | Simic (vectorized.py) | TrendDetectedPayload |
-| `TRAINING_STARTED` | Simic | Simic (vectorized.py) | TrainingStartedPayload |
-| `CHECKPOINT_LOADED` | Simic | Simic (vectorized.py) | (none) |
-| `EPISODE_OUTCOME` | Simic | Simic (vectorized.py) | EpisodeOutcomePayload |
-| `COUNTERFACTUAL_MATRIX_COMPUTED` | Simic | Simic (vectorized.py) | CounterfactualMatrixPayload |
-| `ANALYTICS_SNAPSHOT` | Mixed | Simic (emitters.py) | AnalyticsSnapshotPayload |
-| `GRADIENT_ANOMALY` | Simic | Simic (vectorized.py) | AnomalyDetectedPayload |
-| `RATIO_EXPLOSION_DETECTED` | Simic | Simic (vectorized.py) | AnomalyDetectedPayload |
-| `RATIO_COLLAPSE_DETECTED` | Simic | Simic (vectorized.py) | AnomalyDetectedPayload |
-| `VALUE_COLLAPSE_DETECTED` | Simic | Simic (vectorized.py) | AnomalyDetectedPayload |
-| `GRADIENT_PATHOLOGY_DETECTED` | Simic | Simic (vectorized.py) | AnomalyDetectedPayload |
-| `NUMERICAL_INSTABILITY_DETECTED` | Simic | Simic (vectorized.py) | AnomalyDetectedPayload |
-| `PERFORMANCE_DEGRADATION` | Simic | Simic (emitters.py) | PerformanceDegradationPayload |
-| `MEMORY_WARNING` | Simic | (unused) | - |
-| `REWARD_HACKING_SUSPECTED` | Simic | (unused) | - |
-
-## Appendix B: MCP View Dependency Graph
-
-```
-raw_events (base)
-    │
-    ├── runs ← TRAINING_STARTED
-    │
-    ├── tolaria_epochs ← TOLARIA_EPOCH_COMPLETED, EPOCH_COMPLETED
-    │       │
-    │       └── (used by: Sanctum env_overview, health monitors)
-    │
-    ├── tamiyo_updates ← TAMIYO_POLICY_UPDATE, PPO_UPDATE_COMPLETED
-    │       │
-    │       └── (used by: Sanctum tamiyo_brain, health monitors)
-    │
-    ├── tolaria_batches ← TOLARIA_BATCH_COMPLETED, BATCH_EPOCH_COMPLETED
-    │       │
-    │       └── (used by: Sanctum progress, run_header)
-    │
-    ├── seed_lifecycle ← SEED_* events
-    │       │
-    │       └── (used by: Sanctum event_log, env_detail)
-    │
-    ├── decisions ← ANALYTICS_SNAPSHOT (kind=last_action)
-    │       │
-    │       └── (used by: Sanctum tamiyo_brain)
-    │
-    ├── rewards ← ANALYTICS_SNAPSHOT (kind=last_action) + RewardComponents
-    │       │
-    │       └── (used by: Sanctum reward panels)
-    │
-    ├── anomalies ← All anomaly events
-    │       │
-    │       └── (used by: Sanctum anomaly_strip, health monitors)
-    │
-    └── episode_outcomes ← EPISODE_OUTCOME
-            │
-            └── (used by: Sanctum scoreboard, Pareto analysis)
-```
-
-## Appendix C: DRL Expert Recommendations (Tamiyo Domain)
-
-The following fields are recommended by the DRL specialist for comprehensive policy telemetry.
-
-### C.1 Critical Bug Fixes (TIER 1) - ✅ COMPLETED
-
-| Field | Type | Why It Matters | Status |
-|-------|------|----------------|--------|
-| `pre_clip_grad_norm` | `float` | Detect gradient explosion before clipping | ✅ Implemented |
-| `ppo_updates_count` | `int` | Track PPO update count per batch | ✅ Implemented |
-
-### C.2 Trust Region Diagnostics (HIGH PRIORITY)
-
-| Field | Type | Why It Matters | Audience |
-|-------|------|----------------|----------|
-| `approx_kl_max` | `float` | Maximum KL per timestep. High max with low mean = localized drift | WandB, SQL |
-| `kl_reverse` | `float` | KL(new \|\| old) - asymmetry signals mode collapse direction | WandB, SQL |
-| `trust_region_violations` | `int` | Count of timesteps where ratio exceeded clip bounds | TUI, WandB, SQL |
-
-### C.3 Value Function Quality (HIGH PRIORITY)
-
-| Field | Type | Why It Matters | Audience |
-|-------|------|----------------|----------|
-| `value_prediction_error_mean` | `float` | Mean of (V(s) - returns). Persistent bias = systematic error | WandB, SQL |
-| `value_prediction_error_std` | `float` | Variance in prediction errors | WandB, SQL |
-| `td_error_mean` | `float` | Mean temporal difference error from GAE | WandB |
-| `return_mean` | `float` | Mean of discounted returns | TUI, WandB, SQL |
-| `return_std` | `float` | Return variance - collapsed or unstable rewards | WandB, SQL |
-| `value_target_correlation` | `float` | Correlation between V(s) and returns. <0.5 = value not learning | WandB |
-
-### C.4 Per-Head Policy Dynamics (MEDIUM PRIORITY)
-
-| Field | Type | Why It Matters | Audience |
-|-------|------|----------------|----------|
-| `head_{name}_kl` | `float` (x8) | Per-head KL divergence | WandB, SQL |
-| `head_{name}_clip_fraction` | `float` (x8) | Per-head clipping rates | WandB, SQL |
-| `head_{name}_active_ratio` | `float` (x8) | Fraction of timesteps causally active | TUI, WandB |
-| `causal_mask_coverage` | `dict[str, float]` | Per-head batch relevance fraction | SQL |
-
-### C.5 Policy Quality Assessment (MEDIUM PRIORITY)
-
-| Field | Type | Why It Matters | Audience |
-|-------|------|----------------|----------|
-| `policy_determinism` | `float` | 1 - (entropy / max_entropy). >0.95 = near-deterministic | TUI, WandB |
-| `action_diversity` | `int` | Unique action combinations in batch | WandB |
-| `dominant_action_ratio` | `float` | Fraction taking most common action. >0.8 = collapse | TUI, WandB |
-| `op_distribution` | `dict[str, float]` | Per-op probabilities. WAIT >70% = risk-avoidance | TUI, WandB |
-
-### C.6 Numerical Stability (HIGH for debugging)
-
-| Field | Type | Why It Matters | Audience |
-|-------|------|----------------|----------|
-| `log_prob_underflow_count` | `int` | Timesteps with log_prob < -50. NaN precursor | TUI, WandB |
-| `numerical_stability_score` | `float` | Composite 0-1 score (1=healthy) | TUI |
-| `grad_clip_fraction` | `float` | Fraction of updates where gradients were clipped | WandB |
-
-### C.7 Sample Efficiency (MEDIUM PRIORITY)
-
-| Field | Type | Why It Matters | Audience |
-|-------|------|----------------|----------|
-| `valid_sample_ratio` | `float` | valid_samples / total_samples after masking | WandB |
-| `policy_update_magnitude` | `float` | L2 norm of weight change | WandB |
-| `gradient_utilization` | `float` | Ratio of gradient update to max_grad_norm | WandB |
-
-## Appendix D: PyTorch Expert Recommendations (Tolaria/Simic Infrastructure)
-
-The following fields are recommended by the PyTorch specialist for infrastructure telemetry.
-
-### D.1 torch.compile & Inductor Metrics (PyTorch 2.x)
-
-| Field | Type | Domain | Why It Matters | Overhead |
-|-------|------|--------|----------------|----------|
-| `compile_graph_breaks` | `int` | Tolaria | Graph breaks = suboptimal compilation | Medium |
-| `compile_recompilations` | `int` | Tolaria | Dynamic shape issues or guard failures | Medium |
-| `compile_cache_hits` | `int` | Tolaria | Low ratio = excessive overhead | Medium |
-| `dynamo_guard_failures` | `int` | Tolaria | Guard failures triggering recompile | Medium |
-
-### D.2 GPU Utilization & Memory (CRITICAL)
-
-| Field | Type | Domain | Why It Matters | Overhead |
-|-------|------|--------|----------------|----------|
-| `gpu_utilization_pct` | `float` | Tolaria | SM utilization. Low = CPU-bound | Medium (pynvml) |
-| `cuda_memory_active_gb` | `float` | Tolaria | Actually used memory (more accurate) | Low |
-| `cuda_memory_inactive_gb` | `float` | Tolaria | Cached but not active = fragmentation | Low |
-| `cuda_oom_events` | `int` | Tolaria | Any >0 indicates memory pressure | Low |
-| `memory_allocated_delta_gb` | `float` | Tolaria | Memory change since last batch (leak detection) | Low |
-
-### D.3 Forward/Backward Pass Timing
-
-| Field | Type | Domain | Why It Matters | Overhead |
-|-------|------|--------|----------------|----------|
-| `forward_time_ms` | `float` | Tolaria | Host forward pass time | Low |
-| `backward_time_ms` | `float` | Tolaria | Should be ~2x forward | Low |
-| `optimizer_step_time_ms` | `float` | Tolaria | High = large parameter count | Low |
-| `data_transfer_time_ms` | `float` | Tolaria | High = DataLoader bottleneck | Low |
-| `host_epoch_time_ms` | `float` | Tolaria | Total host training epoch time | Low |
-
-### D.4 Gradient Flow Health (Per-Layer)
-
-| Field | Type | Domain | Why It Matters | Overhead |
-|-------|------|--------|----------------|----------|
-| `grad_norm_per_layer` | `dict[str, float]` | Simic | Per-layer norms (pre-clip) | Medium |
-| `grad_zero_fraction` | `float` | Simic | High = dead neurons | Low |
-| `grad_norm_ratio` | `float` | Simic | max/min layer norm. High = imbalance | Low |
-| `grad_nan_layers` | `list[str]` | Simic | Names of NaN gradient layers | Low |
-
-### D.5 AMP & Loss Scaling
-
-| Field | Type | Domain | Why It Matters | Overhead |
-|-------|------|--------|----------------|----------|
-| `loss_scale_updates` | `int` | Simic | Number of scale adjustments this batch | Low |
-| `amp_overflow_count` | `int` | Simic | Overflows detected. >0 = instability | Low |
-| `grad_scaler_state` | `str` | Simic | "growing" / "stable" / "decaying" | Low |
-
-### D.6 Host Training Metrics (Tolaria-Specific)
-
-| Field | Type | Domain | Why It Matters | Overhead |
-|-------|------|--------|----------------|----------|
-| `host_train_loss` | `float` | Tolaria | Host model training loss (CE) | Low |
-| `host_grad_norm_pre_clip` | `float` | Tolaria | Host gradient norm BEFORE clipping | Low |
-| `host_lr` | `float` | Tolaria | Current learning rate (for schedulers) | Low |
-
-### D.7 New Payload: InfrastructureSnapshot
-
-For periodic (every N batches) infrastructure health checks:
-
-```python
-@dataclass(slots=True, frozen=True)
-class InfrastructureSnapshotPayload:
-    """Periodic infrastructure health snapshot. Collected every N batches."""
-
-    # CUDA Memory (detailed)
-    cuda_memory_allocated_gb: float
-    cuda_memory_reserved_gb: float
-    cuda_memory_active_gb: float
-    cuda_memory_inactive_gb: float
-    cuda_memory_peak_gb: float
-    cuda_memory_fragmentation: float
-
-    # GPU Utilization (requires pynvml)
-    gpu_utilization_pct: float | None = None
-    gpu_memory_bandwidth_pct: float | None = None
-
-    # torch.compile stats
-    compile_graph_breaks: int = 0
-    compile_recompilations: int = 0
-    compile_cache_hits: int = 0
-    compile_cache_misses: int = 0
-
-    # Timing breakdown (CUDA events)
-    avg_forward_time_ms: float = 0.0
-    avg_backward_time_ms: float = 0.0
-    avg_optimizer_time_ms: float = 0.0
-    avg_data_transfer_time_ms: float = 0.0
-
-    # Collection context
-    batch_window: int = 10  # Number of batches this snapshot covers
-```
-
-## Appendix E: Field Priority Matrix
-
-### Implementation Phases
-
-| Phase | Category | Fields | Effort |
-|-------|----------|--------|--------|
-| ~~**1**~~ | ~~Bug Fixes~~ | ~~`pre_clip_grad_norm`, `ppo_updates_count`~~ | ✅ DONE |
-| **2** | Trust Region | `approx_kl_max`, `trust_region_violations` | 2 days |
-| **3** | Value Function | `value_prediction_error_*`, `return_*` | 2 days |
-| **4** | Infrastructure | `forward/backward_time_ms`, memory deltas | 2 days |
-| **5** | Per-Head | `head_{name}_kl`, `head_{name}_clip_fraction` | 3 days |
-| **6** | torch.compile | `compile_graph_breaks`, cache stats | 3 days |
-| **7** | GPU Utilization | `gpu_utilization_pct` (pynvml integration) | 2 days |
-
-### Collection Overhead Summary
-
-| Overhead | Description | When to Collect |
-|----------|-------------|-----------------|
-| **Low** | Already computed or single tensor.item() | Every step |
-| **Medium** | Requires iteration or extra GPU sync | Every N batches (N=5-10) |
-| **High** | Full graph traversal or external tool call | Every N episodes or on-demand |
-
-## Appendix F: WandB Integration Recommendations
-
-### Recommended WandB Logging Groups
-
-```python
-wandb.log({
-    # Tamiyo (Policy) - log every PPO update
-    "tamiyo/policy_loss": ...,
-    "tamiyo/value_loss": ...,
-    "tamiyo/entropy": ...,
-    "tamiyo/kl_divergence": ...,
-    "tamiyo/pre_clip_grad_norm": ...,  # NEW
-    "tamiyo/ppo_update_idx": ...,       # NEW
-
-    # Tamiyo per-head (sparse logging every N updates)
-    "tamiyo/head_slot_entropy": ...,
-    "tamiyo/head_slot_kl": ...,         # NEW
-    "tamiyo/head_op_clip_fraction": ..., # NEW
-
-    # Tolaria (Host Training) - log every epoch
-    "tolaria/train_loss": ...,
-    "tolaria/val_accuracy": ...,
-    "tolaria/forward_time_ms": ...,      # NEW
-    "tolaria/backward_time_ms": ...,     # NEW
-
-    # Simic (Fitness) - log every batch
-    "simic/episode_reward": ...,
-    "simic/stability_score": ...,
-
-    # Infrastructure - log every N batches
-    "infra/gpu_utilization_pct": ...,    # NEW
-    "infra/cuda_memory_active_gb": ...,  # NEW
-    "infra/compile_graph_breaks": ...,   # NEW
-})
-```
-
-### WandB Custom Charts
-
-1. **Gradient Health Dashboard**: `pre_clip_grad_norm` vs `grad_norm` over time
-2. **Trust Region Monitor**: `kl_divergence`, `approx_kl_max`, `clip_fraction`
-3. **Value Function Quality**: `explained_variance`, `value_target_correlation`
-4. **Per-Head Entropy**: All 8 head entropies as stacked area chart
-5. **Infrastructure Timeline**: Memory, GPU util, timing breakdowns
-
-## Appendix G: Sanctum UX Telemetry Categories
-
-The Sanctum TUI consumes telemetry across **9 distinct information categories**. These categories must be preserved regardless of event naming changes.
-
-### G.1 Information Categories
-
-| Category | Description | Update Frequency | Widgets Consuming |
-|----------|-------------|------------------|-------------------|
-| **Run Configuration** | Task, hyperparams, devices, slot layout | Once (start) | RunHeader, EnvOverview |
-| **Host Training State** | Per-env accuracy, loss, epoch progress | Per-epoch | EnvOverview, EnvDetail |
-| **Policy Optimization** | Loss, entropy, gradients, clip fraction | Per-PPO-update | TamiyoBrain, HealthStatus |
-| **Per-Head Dynamics** | Head entropies, grad norms, ratios | Per-PPO-update | HeadsGrid, AttentionHeatmap |
-| **Seed Lifecycle** | Stage transitions, alpha, contribution | Per-event | EnvOverview, EnvDetail, SlotsPanel |
-| **Decision Context** | Action choice, confidence, alternatives | Per-step | DecisionsColumn, ActionContext |
-| **Reward Breakdown** | Components: base, PBRS, penalties, credit | Per-step | RewardHealth, EnvDetail |
-| **Attribution Analysis** | Counterfactuals, Shapley values | Per-episode | CounterfactualPanel, ShapleyPanel |
-| **System Health** | GPU/CPU/RAM, throughput, alarms | Continuous | RunHeader, SystemStatus, AnomalyStrip |
-
-### G.2 Domain Mapping of Categories
-
-| Category | Primary Domain | Secondary Domain |
-|----------|----------------|------------------|
-| Run Configuration | Simic | - |
-| Host Training State | **Tolaria** | Kasmina (seed data within) |
-| Policy Optimization | **Tamiyo** | - |
-| Per-Head Dynamics | **Tamiyo** | - |
-| Seed Lifecycle | **Kasmina** | - |
-| Decision Context | **Tamiyo** | - |
-| Reward Breakdown | **Simic** | Tolaria (host contribution) |
-| Attribution Analysis | **Simic** | Kasmina (per-seed values) |
-| System Health | Infrastructure | - |
-
-### G.3 Critical Sanctum Fields by Priority
-
-**TIER 1 - Core Display (Breaks UI if missing):**
-- `task_name`, `current_episode`, `current_epoch`, `max_epochs`
-- `val_accuracy`, `val_loss` (per-env)
-- `policy_loss`, `value_loss`, `entropy`, `kl_divergence`
-- `seed.stage`, `seed.blueprint_id`, `seed.alpha`
-
-**TIER 2 - Health Monitoring (Degrades insight if missing):**
-- `grad_norm`, `clip_fraction`, `explained_variance`
-- `head_*_entropy`, `head_*_grad_norm` (8 heads each)
-- `dead_layers`, `exploding_layers`, `entropy_collapsed`
-- `advantage_mean`, `advantage_std`, `ratio_max`
-
-**TIER 3 - Deep Diagnostics (Nice-to-have):**
-- `log_prob_min`, `log_prob_max` (NaN prediction)
-- `head_*_ratio_max` (per-head PPO ratio extremes)
-- `q_germinate`, `q_advance`, etc. (Q-values)
-- `counterfactual_matrix`, `shapley_values`
-
-### G.4 Identified Gaps
-
-| Gap | Current State | Recommendation |
-|-----|---------------|----------------|
-| ~~`pre_clip_grad_norm`~~ | ~~Not captured~~ | ✅ Fixed |
-| ~~`ppo_updates_count`~~ | ~~Incorrect~~ | ✅ Fixed |
-| `training_thread_alive` | Hardcoded true | Add heartbeat event |
-| `total_events_received` | Computed locally | Add to snapshot schema |
-| Per-layer gradient health | Optional dict | Ensure consistent emission |
-| Seed diversity metrics | Not captured | Future enhancement |
-
-### G.5 Atomic Cutover for Sanctum
-
-With atomic cutover, the aggregator uses new event types only:
-
-```python
-# After migration: new event types only
-if event_type.name == "TAMIYO_POLICY_UPDATE":
-    self._handle_tamiyo_policy_update(event)
-elif event_type.name == "TOLARIA_EPOCH_COMPLETED":
-    self._handle_tolaria_epoch(event)
-```
-
-**Key requirement:** All 9 information categories continue flowing to widgets. The aggregator translates domain-prefixed events to the same internal state.
+
+---
+
+## Appendix B: DRL Specialist Review - New Fields Summary
+
+### CRITICAL (Add in Phase 3)
+
+| Field | Type | Why It Matters |
+|-------|------|----------------|
+| `approx_kl_max` | `float` | Max KL per timestep - catches localized drift hidden by mean |
+| `trust_region_violations` | `int` | Count of timesteps where KL > target_kl |
+| `return_mean` | `float` | Reward scale diagnosis (too high = explosion, too low = stagnation) |
+| `return_std` | `float` | Return variance |
+| `return_min` | `float` | Return extremes |
+| `return_max` | `float` | Return extremes |
+
+### MEDIUM (Add in Phase 3)
+
+| Field | Type | Why It Matters |
+|-------|------|----------------|
+| `value_prediction_error_mean` | `float` | E[V(s) - G_t] - catches systematic value bias |
+| `value_prediction_error_std` | `float` | Value prediction variance |
+| `td_error_mean` | `float` | GAE TD error mean - value function lag indicator |
+
+### Already Excellent (No Changes)
+
+The DRL specialist noted these existing fields demonstrate strong PPO engineering:
+- `pre_clip_grad_norm` - Essential for gradient explosion detection
+- `advantage_skewness/kurtosis` - Advanced diagnostics (rare in implementations)
+- `advantage_positive_ratio` - Simple but powerful bias indicator
+- Per-head metrics - Proper factored PPO instrumentation
+- `log_prob_min/max` - NaN prediction via log-prob extremes
+- Q-values per operation - Operation-conditioned value telemetry
+
+---
+
+## Appendix C: Python Specialist Review Notes
+
+The Python code reviewer found:
+
+**Acceptable for Now:**
+- String-based event routing in aggregator.py/collector.py
+- Handler registration with string keys
+
+**Recommendations for Future (Not This PR):**
+- Consider enum-based routing for type safety
+- Consider payload discriminator literals
+- Consider shared EventRouter base class
+
+**No Dead Code Found:** All event types and payloads are actively used.
+
+---
+
+## Appendix D: Historical Data Impact
+
+**Decision:** Accept that pre-migration JSONL telemetry becomes inaccessible via MCP views.
+
+**Rationale:**
+1. CLAUDE.md prohibits backward compatibility code
+2. Migration scripts add complexity for diminishing returns
+3. Breaking change window is the appropriate time to accept data format changes
+4. Users can re-run training if historical analysis is needed
+
+**Documentation:** The Phase 1 commit message explicitly notes this impact.

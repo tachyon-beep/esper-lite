@@ -287,6 +287,13 @@ def _extract_slot_features_v3(
     # gradient_health_prev (1 dim) - from env_state tracking
     # Default to 1.0 (healthy) if not yet tracked for this slot
     gradient_health_prev = env_state.gradient_health_prev.get(slot_id, 1.0)
+    # Fail-fast if NaN was stored in gradient_health_prev (indicates upstream bug)
+    if not math.isfinite(gradient_health_prev):
+        raise ValueError(
+            f"NaN/inf in gradient_health_prev for slot {slot_id}. "
+            f"Value: {gradient_health_prev}. This indicates a bug in the gradient "
+            f"telemetry pipeline - check vectorized.py where gradient_health is stored."
+        )
 
     # epochs_in_stage_norm (1 dim) - normalize to [0, 1] using runtime max_epochs.
     # Must use full episode length to preserve temporal resolution for multi-seed chaining.

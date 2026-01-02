@@ -3010,7 +3010,15 @@ def train_ppo_vectorized(
                         if slot_id in slot_reports_for_env:
                             report = slot_reports_for_env[slot_id]
                             if report.telemetry is not None:
-                                env_state.gradient_health_prev[slot_id] = report.telemetry.gradient_health
+                                health_val = report.telemetry.gradient_health
+                                # Fail-fast if gradient_health contains NaN/inf
+                                # This would poison observation features and crash get_action()
+                                if not math.isfinite(health_val):
+                                    raise ValueError(
+                                        f"NaN/inf gradient_health from telemetry for slot {slot_id}: "
+                                        f"{health_val}. Check materialize_grad_stats() or sync_telemetry()."
+                                    )
+                                env_state.gradient_health_prev[slot_id] = health_val
     
                             # Obs V3: Increment epochs since last counterfactual measurement
                             # This is reset to 0 when counterfactual_contribution is updated (see line ~2191)
