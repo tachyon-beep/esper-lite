@@ -8,36 +8,13 @@
 |-------|-------|
 | **Ticket ID** | `B8-DRL-02` |
 | **Severity** | `P1` |
-| **Status** | `closed` |
+| **Status** | `open` |
 | **Batch** | 8 |
 | **Agent** | `drl` |
 | **Domain** | `simic/training` |
 | **Assignee** | |
 | **Created** | 2025-12-27 |
-| **Updated** | 2025-12-29 |
-
----
-
-## Resolution
-
-**Status:** FIXED
-
-**Root Cause:** The seed optimizer lifecycle had three bugs:
-
-1. **FOSSILIZE missing pop**: When a seed was fossilized via `_advance_active_seed()`, its optimizer was never removed from `seed_optimizers` — memory leak.
-
-2. **SET_ALPHA_TARGET incorrect pop**: When setting alpha target, the optimizer was popped despite the seed still being active — caused optimizer to be recreated with fresh momentum on next training batch.
-
-3. **ADVANCE unconditional pop**: On any successful `advance_stage()`, the optimizer was popped regardless of whether the seed terminated — wrong for non-terminal transitions like GERMINATED→TRAINING.
-
-**Fixes Applied:**
-
-1. Added `seed_optimizers.pop()` after successful fossilization (line ~2801)
-2. Removed incorrect `seed_optimizers.pop()` from SET_ALPHA_TARGET (line ~2850)
-3. Changed ADVANCE to only pop if seed is no longer active (line ~2861)
-
-**Verification:**
-- 50 tests pass (test_vectorized.py + test_ppo.py)
+| **Updated** | 2025-12-27 |
 
 ---
 
@@ -46,7 +23,7 @@
 | Field | Value |
 |-------|-------|
 | **File(s)** | `/home/john/esper-lite/src/esper/simic/training/vectorized.py` |
-| **Line(s)** | `2741-2862` (action execution block) |
+| **Line(s)** | `1411-1422, 2693, 2776` |
 | **Function/Class** | `train_ppo_vectorized()` |
 
 ---
@@ -83,17 +60,53 @@ env_state.seed_optimizers.pop(slot_id, None)
 # when the slot has an active seed
 ```
 
-The seed optimizer lifecycle had these issues:
+The seed optimizer lifecycle has these issues:
 
-1. **FOSSILIZE**: No cleanup — optimizer leaked
-2. **SET_ALPHA_TARGET**: Incorrect cleanup — seed still active
-3. **ADVANCE**: Unconditional cleanup — wrong for non-terminal stages
+1. **Failed actions don't clean up**: If `action_success = False` (line 2696), the optimizer is NOT popped but seed state may have changed
+
+2. **Order dependency**: If a seed is germinated in epoch N but pruned in epoch N+1 BEFORE any training batch runs, the optimizer will never have been created. The `pop()` is a no-op but the flow is fragile.
+
+3. **Stale optimizer state**: If dynamic seed changes happen between PPO update phases, the optimizer may reference stale param groups
 
 ### Impact
 
-- **Memory leaks**: Fossilized seed optimizers accumulated
-- **Training instability**: SET_ALPHA_TARGET caused optimizer momentum reset
-- **Stale state**: ADVANCE could leave orphaned optimizers
+- **Silent no-ops**: Popping non-existent optimizers doesn't raise errors
+- **Memory leaks**: Optimizers for removed seeds might not be cleaned up on failed actions
+- **Training instability**: Stale optimizer state could cause learning rate or momentum inconsistencies
+
+---
+
+## Recommended Fix
+
+Make optimizer lifecycle explicit and robust:
+
+```python
+def _ensure_seed_optimizer(env_state, slot_id, model, lr):
+    """Create optimizer for seed if not exists."""
+    if slot_id not in env_state.seed_optimizers:
+        params = list(model.get_seed_parameters(slot_id))
+        if params:
+            env_state.seed_optimizers[slot_id] = torch.optim.Adam(params, lr=lr)
+
+def _remove_seed_optimizer(env_state, slot_id):
+    """Remove optimizer for seed, logging if it didn't exist."""
+    opt = env_state.seed_optimizers.pop(slot_id, None)
+    if opt is None:
+        _logger.debug(f"Optimizer for {slot_id} already removed or never created")
+```
+
+Call `_remove_seed_optimizer` ONLY when action succeeds, and verify state consistency.
+
+---
+
+## Verification
+
+### How to Verify the Fix
+
+- [ ] Add explicit optimizer lifecycle methods
+- [ ] Verify optimizer cleanup happens only on successful actions
+- [ ] Add test for optimizer state after failed actions
+- [ ] Add assertion that optimizer exists before stepping
 
 ---
 
