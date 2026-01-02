@@ -14,14 +14,18 @@ composable sub-widgets for better maintainability.
    - warning metrics: yellow
    - critical metrics: red bold
 
-Layout:
-    ┌─────────────────────────────────────────────────────────────────────┐
-    │ StatusBanner (1 line)                                               │
-    ├─────────────────────────────────────────────────────────┬───────────┤
-    │ VitalsColumn (75%)                                      │ Decisions │
-    │ ├── PPOLosses (20%) | Health (45%) | Slots (35%)        │ (25%)     │
-    │ └── ActionHeadsPanel (68%)         | ActionContext (32%)│           │
-    └─────────────────────────────────────────────────────────┴───────────┘
+Layout (CSS dimensions):
+    ┌──────────────────────────────────────────────────────────────────────────────┐
+    │ StatusBanner (h:1)                                                           │
+    ├───────────────────────────────────────────────────────────────────┬──────────┤
+    │ VitalsColumn (w:3fr)                                              │Decisions │
+    │ ┌─────────┬───────────────────────────────────┬───────────────┐   │(w:1fr,   │
+    │ │PPOLosses│ HealthStatus (1fr)                │ Slots (49ch)  │h13│ min:45)  │
+    │ │ (36ch)  │                                   │               │   │          │
+    │ ├─────────┴───────────────────────────────────┴───────────────┤   │          │
+    │ │ ActionHeadsPanel (69%)          │ ActionContext (31%)       │h27│          │
+    │ └─────────────────────────────────┴───────────────────────────┘   │          │
+    └───────────────────────────────────────────────────────────────────┴──────────┘
 """
 
 from __future__ import annotations
@@ -46,6 +50,7 @@ from .decisions_column import (
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot
+    from esper.karn.sanctum.widgets.reward_health import RewardHealthData
 
 
 class TamiyoBrain(Container):
@@ -247,6 +252,13 @@ class TamiyoBrain(Container):
         self.query_one("#action-context", ActionContext).update_snapshot(snapshot)
         self.query_one("#slots-panel", SlotsPanel).update_snapshot(snapshot)
         self.query_one("#decisions-column", DecisionsColumn).update_snapshot(snapshot)
+
+    def update_reward_health(self, data: "RewardHealthData") -> None:
+        """Update ActionContext with reward health data.
+
+        Called by SanctumApp to pass reward health metrics to ActionContext.
+        """
+        self.query_one("#action-context", ActionContext).update_reward_health(data)
 
     def on_decision_pin_requested(self, event: DecisionPinRequested) -> None:
         """Toggle pin status for a decision (bubbles to SanctumApp)."""

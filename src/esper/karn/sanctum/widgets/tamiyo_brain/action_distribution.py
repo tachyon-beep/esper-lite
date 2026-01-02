@@ -1,32 +1,51 @@
-"""ActionDistribution - Action distribution, Q-values, and sequence display.
+"""ActionContext - Consolidated decision context panel.
 
-Layout (expanded for full height panel):
-1. This batch: [▓▓▓▓░░░░░░░░░░░░░░░░] bar for current training batch
-2. G:09 A:03 F:00 P:15 V:02 W:71 (this batch percentages)
-3. Total run: [▓▓▓▓▓▓▓▓░░░░░░░░░░░░] cumulative bar across all batches
-4. G:22 A:05 F:00 P:21 V:02 W:50 (total run percentages)
-5. ─────────────────────────────── separator
-6. Q-Values: G:+1.2 A:+0.8 F:-0.3 P:-1.1 V:+0.5 W:+0.1 (critic's expected values)
-7. Q Var: 0.342  spread: 2.3 (op-conditioning check)
-8. ─────────────────────────────── separator
-9. ⚠ STUCK G✓→G✓→A✗→W✓→W✓ (recent sequence + patterns + success markers)
-10. Last: GERMINATE ✓ (action feedback for Policy V2)
-11. ─────────────────────────────── separator
-12. Returns: +1.2 -0.3 +2.1 -0.8 +0.5 +1.7  avg:+0.7↗
+Unified view of critic preferences, reward health, returns, and action distribution.
+
+Layout:
+    ┌─ ACTION CONTEXT ─────────────────────────────────┐
+    │ ▶ Critic Preference ────────────────────────────│
+    │   GERM ████████░░░░░░░░░  +1.2  ← BEST          │
+    │   ADVN █████░░░░░░░░░░░░  +0.5                  │
+    │   ...                                           │
+    │   Var:0.34✓  Spread:2.3                         │
+    │─────────────────────────────────────────────────│
+    │ ▶ Reward Signal ────────────────────────────────│
+    │   PBRS:25%✓  Gaming:2%✓  HV:1.2↗                │
+    │─────────────────────────────────────────────────│
+    │ ▶ Returns ──────────────────────────────────────│
+    │   +1.2 -0.3 +2.1 -0.8 +0.5                      │
+    │   min:-0.8 max:+2.1 μ:+0.5 σ:1.1 ↗              │
+    │─────────────────────────────────────────────────│
+    │ ▶ Chosen Actions ───────────────────────────────│
+    │   Batch: [▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░]       │
+    │          G:09 A:03 F:00 P:15 V:02 W:71          │
+    │   Run:   [▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░]       │
+    │          G:22 A:05 F:00 P:21 V:02 W:50          │
+    │─────────────────────────────────────────────────│
+    │ ▶ Sequence ─────────────────────────────────────│
+    │   G✓→G✓→A✗→W✓→W✓→W✓→W✓→W✓→P✓→G✓→A✓→F✓           │
+    │   Last: GERMINATE ✓                             │
+    └─────────────────────────────────────────────────┘
+
+Section order follows decision causality:
+  Critic → Reward → Returns → Actions → Sequence
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+import math
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from rich.text import Text
 from textual.widgets import Static
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import DecisionSnapshot, SanctumSnapshot
+    from esper.karn.sanctum.widgets.reward_health import RewardHealthData
 
 
-# Action colors (must match decisions_column.py and attention_heatmap.py)
+# Action colors (must match decisions_column.py and action_heads_panel.py)
 ACTION_COLORS: dict[str, str] = {
     "GERMINATE": "green",
     "SET_ALPHA_TARGET": "cyan",
@@ -43,6 +62,16 @@ ACTION_ABBREVS: dict[str, str] = {
     "PRUNE": "P",
     "WAIT": "W",
     "ADVANCE": "V",  # V for adVance (A is taken by SET_ALPHA_TARGET)
+}
+
+# Full names for Q-value display (sorted by preference)
+ACTION_NAMES: dict[str, str] = {
+    "GERMINATE": "GERM",
+    "SET_ALPHA_TARGET": "ALPH",
+    "FOSSILIZE": "FOSS",
+    "PRUNE": "PRUN",
+    "WAIT": "WAIT",
+    "ADVANCE": "ADVN",
 }
 
 
@@ -89,203 +118,397 @@ def detect_action_patterns(
 
 
 class ActionContext(Static):
-    """Action context panel with distribution, sequence, and returns (Policy V2).
+    """Consolidated decision context panel.
 
-    Extends Static directly (like DecisionCard) to eliminate Container
-    layout overhead that causes whitespace issues.
-
-    Layout (7 lines):
-    1-2. This batch: bar + percentages
-    3-4. Total run: bar + percentages
-    5. Recent sequence with pattern warnings + success markers
-    6. Last action feedback (execution status)
-    7. Returns with trend
+    Combines critic preferences, reward health, returns, action distribution,
+    and sequence into a unified view following decision causality order.
     """
+
+    # Q-value bar rendering
+    Q_BAR_WIDTH: ClassVar[int] = 16
+    SEPARATOR_WIDTH: ClassVar[int] = 38
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
+        self._reward_health: RewardHealthData | None = None
         self.classes = "panel"
         self.border_title = "ACTION CONTEXT"
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Update with new snapshot data."""
         self._snapshot = snapshot
-        self.refresh()  # Trigger render()
+        self.refresh()
+
+    def update_reward_health(self, data: "RewardHealthData") -> None:
+        """Update reward health data (from SanctumApp)."""
+        self._reward_health = data
+        self.refresh()
 
     def render(self) -> Text:
-        """Render all action context sections (expanded for full height)."""
+        """Render consolidated action context."""
         result = Text()
 
-        # Action distribution bars
+        # Section 1: Critic Preference (sorted Q-values with bars)
+        result.append("▶ Critic Preference\n", style="bold")
+        result.append(self._render_critic_preference())
+
+        # Separator
+        result.append("─" * self.SEPARATOR_WIDTH + "\n", style="dim")
+
+        # Section 2: Reward Signal
+        result.append("▶ Reward Signal\n", style="bold")
+        result.append(self._render_reward_signal())
+
+        # Separator
+        result.append("─" * self.SEPARATOR_WIDTH + "\n", style="dim")
+
+        # Section 3: Returns (5 values + stats)
+        result.append("▶ Returns\n", style="bold")
+        result.append(self._render_returns())
+
+        # Separator
+        result.append("─" * self.SEPARATOR_WIDTH + "\n", style="dim")
+
+        # Section 4: Chosen Actions (batch + run bars)
+        result.append("▶ Chosen Actions\n", style="bold")
         result.append(self._render_action_bars())
 
         # Separator
-        result.append("─" * 35 + "\n", style="dim")
+        result.append("─" * self.SEPARATOR_WIDTH + "\n", style="dim")
 
-        # Q-values section (moved from Health panel)
-        result.append(self._render_q_values())
-
-        # Separator
-        result.append("─" * 35 + "\n", style="dim")
-
-        # Action sequence with pattern detection
+        # Section 5: Sequence
+        result.append("▶ Sequence\n", style="bold")
         result.append(self._render_action_sequence())
-        result.append("\n")
-
-        # Separator
-        result.append("─" * 35 + "\n", style="dim")
-
-        # Returns history
-        result.append(self._render_return_history())
 
         return result
 
-    def _render_action_bars(self) -> Text:
-        """Render both action bars (this batch + total run).
+    # =========================================================================
+    # Section 1: Critic Preference
+    # =========================================================================
 
-        Lines 1-2: This batch bar + percentages
-        Lines 3-4: Total run bar + percentages
+    def _render_critic_preference(self) -> Text:
+        """Render Q-values sorted by preference with normalized bars.
 
-        Format:
-        This batch: [▓▓▓▓░░░░░░░░░░░░░░░░]
-        G:09 A:03 F:00 P:15 V:02 W:71
-        Total run: [▓▓▓▓▓▓▓▓░░░░░░░░░░░░]
-        G:22 A:05 F:00 P:21 V:02 W:50
+        Shows critic's preference ranking across operations.
+        Bars are min-max normalized to show relative preference.
         """
         if self._snapshot is None:
-            return Text("[no data]", style="dim")
+            return Text("  [no data]\n", style="dim")
 
         tamiyo = self._snapshot.tamiyo
         result = Text()
 
-        # This batch: use tamiyo.action_counts (batch-specific, resets at BATCH_EPOCH_COMPLETED)
+        # Collect Q-values with action info
+        q_values = [
+            ("GERMINATE", tamiyo.q_germinate),
+            ("ADVANCE", tamiyo.q_advance),
+            ("SET_ALPHA_TARGET", tamiyo.q_set_alpha),
+            ("FOSSILIZE", tamiyo.q_fossilize),
+            ("PRUNE", tamiyo.q_prune),
+            ("WAIT", tamiyo.q_wait),
+        ]
+
+        # Handle NaN values
+        valid_qs = [(a, q) for a, q in q_values if not math.isnan(q)]
+        if not valid_qs:
+            result.append("  [waiting for data]\n", style="dim")
+            return result
+
+        # Sort by Q-value (highest first)
+        sorted_qs = sorted(valid_qs, key=lambda x: x[1], reverse=True)
+
+        # Get min/max for normalization
+        q_min = min(q for _, q in sorted_qs)
+        q_max = max(q for _, q in sorted_qs)
+        q_range = q_max - q_min if q_max != q_min else 1.0
+
+        # Render each Q-value row
+        for i, (action, q_val) in enumerate(sorted_qs):
+            name = ACTION_NAMES.get(action, action[:4])
+            color = ACTION_COLORS.get(action, "white")
+
+            # Normalize to 0-1 for bar fill
+            fill_pct = (q_val - q_min) / q_range
+
+            # Render: "  GERM ████████░░░░░░░░  +1.2"
+            result.append(f"  {name:<4} ", style=color)
+
+            # Bar
+            filled = int(fill_pct * self.Q_BAR_WIDTH)
+            empty = self.Q_BAR_WIDTH - filled
+            result.append("█" * filled, style=color)
+            result.append("░" * empty, style="dim")
+
+            # Value
+            result.append(f"  {q_val:+.1f}", style=color)
+
+            # Best/Worst markers
+            if i == 0:
+                result.append("  ← BEST", style="green dim")
+            elif i == len(sorted_qs) - 1:
+                result.append("  ← WORST", style="red dim")
+
+            result.append("\n")
+
+        # Q-variance and spread on one line
+        q_var = tamiyo.q_variance
+        var_status = self._get_q_variance_status(q_var)
+        var_style = {"ok": "green", "warning": "yellow", "critical": "red bold"}[var_status]
+
+        result.append("  Var:", style="dim")
+        result.append(f"{q_var:.2f}", style=var_style)
+
+        if var_status == "critical":
+            result.append("✗", style="red")
+        elif var_status == "ok":
+            result.append("✓", style="green")
+
+        result.append(f"  Spread:{tamiyo.q_spread:.1f}\n", style="dim")
+
+        return result
+
+    def _get_q_variance_status(self, q_variance: float) -> str:
+        """Check if Q-variance indicates op conditioning is working."""
+        if math.isnan(q_variance):
+            return "ok"
+        if q_variance < 0.01:
+            return "critical"
+        if q_variance < 0.1:
+            return "warning"
+        return "ok"
+
+    # =========================================================================
+    # Section 2: Reward Signal
+    # =========================================================================
+
+    def _render_reward_signal(self) -> Text:
+        """Render reward health metrics (PBRS, Gaming, HV).
+
+        Consolidated from RewardHealthPanel for unified view.
+        """
+        result = Text()
+
+        if self._reward_health is None:
+            result.append("  [no reward data]\n", style="dim")
+            return result
+
+        rh = self._reward_health
+
+        # PBRS fraction (10-40% healthy)
+        result.append("  PBRS:", style="dim")
+        pbrs_color = "green" if rh.is_pbrs_healthy else "red"
+        result.append(f"{rh.pbrs_fraction:.0%}", style=pbrs_color)
+        result.append("✓" if rh.is_pbrs_healthy else "✗", style=pbrs_color)
+
+        # Gaming rate (<5% healthy)
+        result.append("  Gaming:", style="dim")
+        gaming_color = "green" if rh.is_gaming_healthy else "red"
+        result.append(f"{rh.anti_gaming_trigger_rate:.0%}", style=gaming_color)
+        result.append("✓" if rh.is_gaming_healthy else "✗", style=gaming_color)
+
+        # Hypervolume (should increase)
+        result.append("  HV:", style="dim")
+        result.append(f"{rh.hypervolume:.1f}", style="cyan")
+
+        result.append("\n")
+        return result
+
+    # =========================================================================
+    # Section 3: Returns
+    # =========================================================================
+
+    def _render_returns(self) -> Text:
+        """Render returns: 5 recent values on line 1, stats on line 2."""
+        if self._snapshot is None:
+            return Text("  [no data]\n", style="dim")
+
+        tamiyo = self._snapshot.tamiyo
+        history = list(tamiyo.episode_return_history)
+
+        if not history:
+            return Text("  [no episodes yet]\n", style="dim")
+
+        result = Text()
+
+        # Line 1: Last 5 returns (most recent first)
+        result.append("  ")
+        recent = history[-5:][::-1]
+        for i, ret in enumerate(recent):
+            style = "green" if ret >= 0 else "red"
+            result.append(f"{ret:+.1f}", style=style)
+            if i < len(recent) - 1:
+                result.append(" ")
+        result.append("\n")
+
+        # Line 2: Stats (min, max, mean, std, trend)
+        result.append("  ")
+
+        if len(history) >= 2:
+            h_min = min(history)
+            h_max = max(history)
+            h_mean = sum(history) / len(history)
+
+            # Std dev
+            variance = sum((x - h_mean) ** 2 for x in history) / len(history)
+            h_std = variance ** 0.5
+
+            # Trend (compare recent half to older half)
+            mid = len(history) // 2
+            if mid > 0:
+                old_mean = sum(history[:mid]) / mid
+                new_mean = sum(history[mid:]) / (len(history) - mid)
+                delta = new_mean - old_mean
+
+                if delta > 0.3:
+                    trend = "↗"
+                    trend_style = "green bold"
+                elif delta < -0.3:
+                    trend = "↘"
+                    trend_style = "red bold"
+                else:
+                    trend = "─"
+                    trend_style = "dim"
+            else:
+                trend = ""
+                trend_style = "dim"
+
+            min_style = "red" if h_min < 0 else "green"
+            max_style = "green" if h_max >= 0 else "red"
+            mean_style = "green" if h_mean >= 0 else "red"
+
+            result.append("min:", style="dim")
+            result.append(f"{h_min:+.1f}", style=min_style)
+            result.append(" max:", style="dim")
+            result.append(f"{h_max:+.1f}", style=max_style)
+            result.append(" μ:", style="dim")
+            result.append(f"{h_mean:+.1f}", style=mean_style)
+            result.append(" σ:", style="dim")
+            result.append(f"{h_std:.1f}", style="cyan")
+            result.append(f" {trend}", style=trend_style)
+        else:
+            # Single value
+            result.append(f"μ:{history[0]:+.1f}", style="dim")
+
+        result.append("\n")
+        return result
+
+    # =========================================================================
+    # Section 4: Chosen Actions
+    # =========================================================================
+
+    def _render_action_bars(self) -> Text:
+        """Render batch and run action distribution bars."""
+        if self._snapshot is None:
+            return Text("  [no data]\n", style="dim")
+
+        tamiyo = self._snapshot.tamiyo
+        result = Text()
+
+        actions = [
+            "GERMINATE",
+            "SET_ALPHA_TARGET",
+            "FOSSILIZE",
+            "PRUNE",
+            "ADVANCE",
+            "WAIT",
+        ]
+        bar_width = 28
+
+        # === THIS BATCH ===
         batch_counts = tamiyo.action_counts
         batch_total = tamiyo.total_actions
 
-        # === THIS BATCH (lines 1-2) ===
-        bar_width = 30
-        result.append("This Batch: [")
-
+        result.append("  Batch: [")
         if batch_total > 0:
-            # Calculate widths proportionally, ensuring total = bar_width
-            actions = [
-                "GERMINATE",
-                "SET_ALPHA_TARGET",
-                "FOSSILIZE",
-                "PRUNE",
-                "ADVANCE",
-                "WAIT",
-            ]
-            widths = []
-            for action in actions:
-                count = batch_counts.get(action, 0)
-                pct = (count / batch_total) * 100
-                widths.append(int((pct / 100) * bar_width))
-
-            # Fix rounding errors: distribute remainder to actions with counts
-            total_width = sum(widths)
-            if total_width < bar_width:
-                remainder = bar_width - total_width
-                # Add remainder to first action with non-zero count
-                for i, action in enumerate(actions):
-                    if batch_counts.get(action, 0) > 0:
-                        widths[i] += remainder
-                        break
-
-            # Render segments
+            widths = self._compute_bar_widths(batch_counts, actions, batch_total, bar_width)
             for action, width in zip(actions, widths):
                 if width > 0:
                     result.append("▓" * width, style=ACTION_COLORS.get(action, "white"))
         else:
             result.append("░" * bar_width, style="dim")
-
         result.append("]\n")
 
-        # This batch percentages
-        for i, action in enumerate(
-            ["GERMINATE", "SET_ALPHA_TARGET", "FOSSILIZE", "PRUNE", "ADVANCE", "WAIT"]
-        ):
+        # Batch percentages
+        result.append("         ")
+        for i, action in enumerate(actions):
             count = batch_counts.get(action, 0)
             pct = int((count / batch_total) * 100) if batch_total > 0 else 0
             abbrev = ACTION_ABBREVS[action]
             color = ACTION_COLORS[action] if count > 0 else "dim"
-
             if i > 0:
                 result.append(" ")
             result.append(f"{abbrev}:", style="dim")
             result.append(f"{pct:02d}", style=color)
+        result.append("\n")
 
-        result.append("\n\n")  # Extra newline for spacing between sections
-
-        # === TOTAL RUN (lines 3-4) ===
-        # Use cumulative counts across all batches
+        # === THIS RUN ===
         cumulative_counts = tamiyo.cumulative_action_counts
         cumulative_total = tamiyo.cumulative_total_actions
-        result.append("This Run:   [")
 
+        result.append("  Run:   [")
         if cumulative_total > 0:
-            # Calculate widths proportionally, ensuring total = bar_width
-            widths = []
-            for action in actions:
-                count = cumulative_counts.get(action, 0)
-                pct = (count / cumulative_total) * 100
-                widths.append(int((pct / 100) * bar_width))
-
-            # Fix rounding errors: distribute remainder to actions with counts
-            total_width = sum(widths)
-            if total_width < bar_width:
-                remainder = bar_width - total_width
-                # Add remainder to first action with non-zero count
-                for i, action in enumerate(actions):
-                    if cumulative_counts.get(action, 0) > 0:
-                        widths[i] += remainder
-                        break
-
-            # Render segments
+            widths = self._compute_bar_widths(cumulative_counts, actions, cumulative_total, bar_width)
             for action, width in zip(actions, widths):
                 if width > 0:
                     result.append("▓" * width, style=ACTION_COLORS.get(action, "white"))
         else:
             result.append("░" * bar_width, style="dim")
-
         result.append("]\n")
 
-        # Total run percentages
-        for i, action in enumerate(
-            ["GERMINATE", "SET_ALPHA_TARGET", "FOSSILIZE", "PRUNE", "ADVANCE", "WAIT"]
-        ):
+        # Run percentages
+        result.append("         ")
+        for i, action in enumerate(actions):
             count = cumulative_counts.get(action, 0)
             pct = int((count / cumulative_total) * 100) if cumulative_total > 0 else 0
             abbrev = ACTION_ABBREVS[action]
             color = ACTION_COLORS[action] if count > 0 else "dim"
-
             if i > 0:
                 result.append(" ")
             result.append(f"{abbrev}:", style="dim")
             result.append(f"{pct:02d}", style=color)
-
-        result.append("\n")  # Blank line between Total Run and Recent:
+        result.append("\n")
 
         return result
 
+    def _compute_bar_widths(
+        self,
+        counts: dict[str, int],
+        actions: list[str],
+        total: int,
+        bar_width: int,
+    ) -> list[int]:
+        """Compute proportional bar segment widths."""
+        widths = []
+        for action in actions:
+            count = counts.get(action, 0)
+            pct = (count / total) * 100 if total > 0 else 0
+            widths.append(int((pct / 100) * bar_width))
+
+        # Fix rounding: add remainder to first non-zero action
+        total_width = sum(widths)
+        if total_width < bar_width:
+            remainder = bar_width - total_width
+            for i, action in enumerate(actions):
+                if counts.get(action, 0) > 0:
+                    widths[i] += remainder
+                    break
+
+        return widths
+
+    # =========================================================================
+    # Section 5: Sequence
+    # =========================================================================
+
     def _render_action_sequence(self) -> Text:
-        """Render recent action sequence with pattern warnings FIRST.
-
-        Format (Policy V2):
-        ⚠ STUCK  G✓→G✓→A✗→W✓→W✓→W✓→W✓→W✓→P✓→G✓→A✓→F✓
-        Last: GERMINATE ✓ (slot_0)
-
-        Pattern warnings are placed first for visibility.
-        Success markers show execution feedback.
-        """
+        """Render recent action sequence with pattern warnings."""
         if self._snapshot is None:
-            return Text("[no data]", style="dim")
+            return Text("  [no data]\n", style="dim")
 
         tamiyo = self._snapshot.tamiyo
         decisions = tamiyo.recent_decisions[:24]
         if not decisions:
-            return Text("[no actions yet]", style="dim")
+            return Text("  [no actions yet]\n", style="dim")
 
         # Get slot states for pattern detection
         slot_states = decisions[0].slot_states if decisions else {}
@@ -293,11 +516,12 @@ class ActionContext(Static):
 
         result = Text()
 
-        # Pattern warnings FIRST (prominent placement)
+        # Pattern warnings (prominent)
         is_stuck = "STUCK" in patterns
         is_thrash = "THRASH" in patterns
         is_alpha_osc = "ALPHA_OSC" in patterns
 
+        result.append("  ")
         if is_stuck:
             result.append("⚠ STUCK ", style="yellow bold reverse")
         if is_thrash:
@@ -305,165 +529,41 @@ class ActionContext(Static):
         if is_alpha_osc:
             result.append("↔ ALPHA ", style="cyan bold reverse")
 
-        if not patterns:
-            result.append("Recent: ", style="dim")
-
-        # Recent row (most recent 12) with arrows and success markers
+        # Recent actions (12 most recent, oldest first for L→R reading)
         recent_decisions = decisions[:12]
         recent_actions = [
             (
                 ACTION_ABBREVS.get(d.chosen_action, "?"),
                 ACTION_COLORS.get(d.chosen_action, "white"),
-                True,  # UI-03 fix: success field doesn't exist in DecisionSnapshot schema
             )
             for d in recent_decisions
         ]
-        recent_actions.reverse()  # Oldest first for left-to-right reading
+        recent_actions.reverse()
 
-        for i, (char, color, success) in enumerate(recent_actions):
-            # Override color if pattern detected
+        for i, (char, color) in enumerate(recent_actions):
+            style = color
             if is_stuck:
                 style = "yellow"
             elif is_thrash:
                 style = "red"
-            else:
-                style = color
 
             result.append(char, style=style)
-            # Success marker
-            marker = "✓" if success else "✗"
-            marker_style = "green" if success else "red"
-            result.append(marker, style=marker_style)
+            result.append("✓", style="green")
 
-            # Arrow separator (except for last)
             if i < len(recent_actions) - 1:
                 result.append("→", style="dim")
 
-        # Add last action context (Policy V2)
         result.append("\n")
-        result.append("Last: ", style="dim")
-        result.append(f"{tamiyo.last_action_op} ", style=ACTION_COLORS.get(tamiyo.last_action_op, "white"))
+
+        # Last action
+        result.append("  Last: ", style="dim")
+        result.append(
+            f"{tamiyo.last_action_op} ",
+            style=ACTION_COLORS.get(tamiyo.last_action_op, "white"),
+        )
         marker = "✓" if tamiyo.last_action_success else "✗"
         marker_style = "green" if tamiyo.last_action_success else "red bold"
         result.append(marker, style=marker_style)
-
-        return result
-
-    def _render_return_history(self) -> Text:
-        """Render recent episode returns with mean and trend.
-
-        Format: Returns: +1.2 -0.3 +2.1 -0.8 +0.5 +1.7  avg:+0.7↗
-        Compact values (no EpN: prefix), mean + trend arrow at end.
-        """
-        if self._snapshot is None:
-            return Text("[no data]", style="dim")
-
-        tamiyo = self._snapshot.tamiyo
-        history = list(tamiyo.episode_return_history)
-
-        if not history:
-            return Text("Returns: [no episodes yet]", style="dim")
-
-        result = Text()
-        result.append("Returns: ", style="dim")
-
-        # Show last 8 returns (most recent first), compact format
-        recent_returns = history[-8:][::-1]
-
-        for i, ret in enumerate(recent_returns):
-            style = "green" if ret >= 0 else "red"
-            result.append(f"{ret:+.1f}", style=style)
-            if i < len(recent_returns) - 1:
-                result.append(" ")
-
-        # Calculate mean and trend
-        if len(history) >= 2:
-            mean_ret = sum(history) / len(history)
-            # Trend: compare recent half to older half
-            mid = len(history) // 2
-            if mid > 0:
-                old_mean = sum(history[:mid]) / mid
-                new_mean = sum(history[mid:]) / (len(history) - mid)
-                delta = new_mean - old_mean
-
-                result.append("  ", style="dim")
-                # Mean with trend arrow
-                mean_style = "green" if mean_ret >= 0 else "red"
-                result.append(f"avg:{mean_ret:+.1f}", style=mean_style)
-
-                # Trend arrow
-                if delta > 0.3:
-                    result.append("↗", style="green bold")
-                elif delta < -0.3:
-                    result.append("↘", style="red bold")
-                else:
-                    result.append("─", style="dim")
-        elif len(history) == 1:
-            # Single episode - just show it
-            result.append(f"  avg:{history[0]:+.1f}", style="dim")
-
-        return result
-
-    def _render_q_values(self) -> Text:
-        """Render op-conditioned Q-values (Policy V2).
-
-        Shows Q(s,op) for each operation and Q-variance metric.
-        Low variance indicates critic is ignoring op conditioning.
-        """
-        if self._snapshot is None:
-            return Text("[no data]", style="dim")
-
-        tamiyo = self._snapshot.tamiyo
-        result = Text()
-
-        # Q-values per operation
-        result.append("Q-Values: ", style="dim")
-
-        # Define ops with colors (matching ACTION_COLORS)
-        ops = [
-            ("G", tamiyo.q_germinate, "green"),
-            ("A", tamiyo.q_advance, "cyan"),
-            ("F", tamiyo.q_fossilize, "blue"),
-            ("P", tamiyo.q_prune, "red"),
-            ("V", tamiyo.q_set_alpha, "cyan"),  # V for set alpha (A is advance)
-            ("W", tamiyo.q_wait, "dim"),
-        ]
-
-        for i, (label, q_val, color) in enumerate(ops):
-            if i > 0:
-                result.append(" ", style="dim")
-            result.append(f"{label}:", style="dim")
-            result.append(f"{q_val:+.1f}", style=color)
-
-        result.append("\n")
-
-        # Q-variance (op-sensitivity check)
-        result.append("Q Var:    ", style="dim")
-
-        q_var = tamiyo.q_variance
-        var_status = self._get_q_variance_status(q_var)
-        var_style = {"ok": "cyan", "warning": "yellow", "critical": "red bold"}[var_status]
-        result.append(f"{q_var:.3f}", style=var_style)
-
-        if var_status == "critical":
-            result.append(" NO OP COND!", style="red bold")
-        elif var_status == "warning":
-            result.append(" weak", style="yellow")
-
-        # Q-spread for context
-        result.append(f"  spread:{tamiyo.q_spread:.1f}", style="dim")
         result.append("\n")
 
         return result
-
-    def _get_q_variance_status(self, q_variance: float) -> str:
-        """Check if Q-variance indicates op conditioning is working.
-
-        Low variance means Q(s, op) ≈ Q(s, op') for all ops → critic ignoring op input.
-        High variance means different ops get different value estimates → healthy.
-        """
-        if q_variance < 0.01:
-            return "critical"  # Essentially collapsed to V(s)
-        if q_variance < 0.1:
-            return "warning"  # Weak differentiation between ops
-        return "ok"

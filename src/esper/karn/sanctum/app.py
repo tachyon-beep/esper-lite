@@ -49,7 +49,6 @@ from esper.karn.sanctum.widgets import (
     EventLogDetail,
     HistoricalEnvDetail,
     RewardHealthData,
-    RewardHealthPanel,
     RunHeader,
     Scoreboard,
     TamiyoBrain,
@@ -60,7 +59,6 @@ if TYPE_CHECKING:
     from esper.karn.sanctum.backend import SanctumBackend
     from esper.karn.sanctum.schema import SanctumSnapshot
     from textual.timer import Timer
-    from esper.karn.sanctum.widgets.reward_health import RewardHealthData
 
 
 HELP_TEXT = """\
@@ -394,7 +392,6 @@ class SanctumApp(App[None]):
                 yield EnvOverview(num_envs=self._num_envs, id="env-overview")
                 with Vertical(id="metrics-column"):
                     yield Scoreboard(id="scoreboard")
-                    yield RewardHealthPanel(id="metrics-reward-health")
 
             # Bottom section: TamiyoBrain (left) | Event Log (right)
             with Horizontal(id="bottom-section"):
@@ -435,7 +432,11 @@ class SanctumApp(App[None]):
                 self.log.warning(f"Cannot mount TamiyoBrain for {group_id}: container not found")
                 raise
 
-    def _refresh_tamiyo_widgets(self, snapshots: dict[str, "SanctumSnapshot"]) -> None:
+    def _refresh_tamiyo_widgets(
+        self,
+        snapshots: dict[str, "SanctumSnapshot"],
+        reward_health: RewardHealthData,
+    ) -> None:
         """Refresh TamiyoBrain widgets from multi-group snapshots."""
 
         # Handle empty case (no events yet) - create default widget
@@ -444,6 +445,7 @@ class SanctumApp(App[None]):
                 widget = self._get_or_create_tamiyo_widget("default")
                 from esper.karn.sanctum.schema import SanctumSnapshot as SnapshotClass
                 widget.update_snapshot(SnapshotClass())
+                widget.update_reward_health(reward_health)
             except NoMatches:
                 pass
             return
@@ -453,6 +455,7 @@ class SanctumApp(App[None]):
             try:
                 widget = self._get_or_create_tamiyo_widget(group_id)
                 widget.update_snapshot(group_snapshot)
+                widget.update_reward_health(reward_health)
             except NoMatches:
                 pass  # Container hasn't mounted yet
 
@@ -602,16 +605,11 @@ class SanctumApp(App[None]):
             except NoMatches:
                 pass  # Widget hasn't mounted yet
 
-            # Update reward health panel (metrics column)
-            try:
-                self.query_one("#metrics-reward-health", RewardHealthPanel).update_data(view.reward_health)
-            except NoMatches:
-                pass  # Widget hasn't mounted yet
-
             self._last_heavy_widget_update_ts = now
 
         # Update TamiyoBrain widgets using multi-group snapshots
-        self._refresh_tamiyo_widgets(view.snapshots_by_group)
+        # Pass reward_health to each widget (now displayed in ActionContext)
+        self._refresh_tamiyo_widgets(view.snapshots_by_group, view.reward_health)
 
         try:
             self.query_one("#event-log", EventLog).update_snapshot(snapshot)
