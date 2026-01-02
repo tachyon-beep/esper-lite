@@ -18,6 +18,8 @@ from datetime import datetime
 
 import numpy as np
 
+from esper.leyline import HEAD_NAMES
+
 
 def compute_entropy_velocity(entropy_history: deque[float] | list[float]) -> float:
     """Compute rate of entropy change (d(entropy)/d(batch)).
@@ -162,6 +164,96 @@ def compute_collapse_risk(
         return previous_risk
 
     return min(1.0, max(0.0, base_risk))
+
+
+@dataclass
+class SeedLifecycleStats:
+    """Seed lifecycle aggregate metrics for TamiyoBrain display.
+
+    Tracks germination, pruning, and fossilization rates over the training run.
+    Used by SlotsPanel to show lifecycle health beyond current slot states.
+    """
+    # Cumulative counts (entire run)
+    germination_count: int = 0
+    prune_count: int = 0
+    fossilize_count: int = 0
+
+    # Current active count
+    active_count: int = 0
+    total_slots: int = 0
+
+    # Rates (per episode) - computed from counts / current_episode
+    germination_rate: float = 0.0  # Germinations per episode
+    prune_rate: float = 0.0  # Prunes per episode
+    fossilize_rate: float = 0.0  # Fossilizations per episode
+
+    # Quality metrics
+    blend_success_rate: float = 0.0  # fossilized / (fossilized + pruned)
+    avg_lifespan_epochs: float = 0.0  # Mean epochs a seed lives before terminal state
+
+    # Trend indicators (computed from rate history)
+    germination_trend: str = "stable"  # "rising", "stable", "falling"
+    prune_trend: str = "stable"
+    fossilize_trend: str = "stable"
+
+
+@dataclass
+class ObservationStats:
+    """Observation space health metrics.
+
+    Tracks feature statistics to catch input distribution issues
+    before they propagate to NaN gradients.
+    """
+    # Per-feature-group statistics (mean/std across batch)
+    slot_features_mean: float = 0.0
+    slot_features_std: float = 0.0
+    host_features_mean: float = 0.0
+    host_features_std: float = 0.0
+    context_features_mean: float = 0.0  # Epoch progress, action history, etc.
+    context_features_std: float = 0.0
+
+    # Outlier detection
+    outlier_pct: float = 0.0  # % of observations outside 3σ
+
+    # Numerical health
+    nan_count: int = 0  # NaN values detected in observations
+    inf_count: int = 0  # Inf values detected in observations
+
+    # Normalization drift (running stats divergence)
+    normalization_drift: float = 0.0  # How much running mean/std has shifted
+
+
+@dataclass
+class EpisodeStats:
+    """Episode-level aggregate metrics.
+
+    Provides insight into episode structure beyond just returns.
+    Helps diagnose timeout issues, early termination, and success rates.
+    """
+    # Episode length statistics
+    length_mean: float = 0.0
+    length_std: float = 0.0
+    length_min: int = 0
+    length_max: int = 0
+
+    # Outcome tracking (over recent N episodes)
+    total_episodes: int = 0
+    timeout_count: int = 0  # Episodes that hit max steps
+    success_count: int = 0  # Episodes that achieved goal
+    early_termination_count: int = 0  # Episodes terminated early (failure/reset)
+
+    # Derived rates
+    timeout_rate: float = 0.0  # timeout_count / total_episodes
+    success_rate: float = 0.0  # success_count / total_episodes
+    early_termination_rate: float = 0.0  # early_termination_count / total_episodes
+
+    # Steps per action type (insight into action efficiency)
+    steps_per_germinate: float = 0.0  # Avg steps between GERMINATE actions
+    steps_per_prune: float = 0.0  # Avg steps between PRUNE actions
+    steps_per_fossilize: float = 0.0  # Avg steps between FOSSILIZE actions
+
+    # Completion trend
+    completion_trend: str = "stable"  # "improving", "stable", "declining"
 
 
 @dataclass
@@ -738,6 +830,15 @@ class TamiyoState:
     exploding_layers: int = 0
     nan_grad_count: int = 0  # NaN gradient count
     inf_grad_count: int = 0  # Inf gradient count
+    # Per-head NaN/Inf latch (indicator lights - once True, stays True for entire run)
+    # Pre-populated with all HEAD_NAMES keys to enable direct access without .get()
+    # Keys: slot, blueprint, style, tempo, alpha_target, alpha_speed, alpha_curve, op
+    head_nan_latch: dict[str, bool] = field(
+        default_factory=lambda: {head: False for head in HEAD_NAMES}
+    )
+    head_inf_latch: dict[str, bool] = field(
+        default_factory=lambda: {head: False for head in HEAD_NAMES}
+    )
     layer_gradient_health: dict[str, float] | None = None  # Per-layer gradient health metrics
     entropy_collapsed: bool = False  # Entropy collapse detected
 
@@ -1206,6 +1307,7 @@ class SanctumSnapshot:
     best_runs: list[BestRunRecord] = field(default_factory=list)
 
     # Cumulative counts (never reset, tracks entire training run)
+    cumulative_germinated: int = 0  # Total germinations across run
     cumulative_fossilized: int = 0
     cumulative_pruned: int = 0
     # Cumulative graveyard (per-blueprint lifecycle stats across entire run)
@@ -1223,6 +1325,16 @@ class SanctumSnapshot:
     # Timestamps for staleness detection
     last_ppo_update: datetime | None = None
     last_reward_update: datetime | None = None
+
+    # === New Diagnostic Metrics (Panel Expansion) ===
+    # Seed lifecycle aggregate stats (for SlotsPanel expansion)
+    seed_lifecycle: SeedLifecycleStats = field(default_factory=SeedLifecycleStats)
+
+    # Observation health stats (for HealthStatusPanel expansion)
+    observation_stats: ObservationStats = field(default_factory=ObservationStats)
+
+    # Episode-level metrics (for new EpisodeMetricsPanel)
+    episode_stats: EpisodeStats = field(default_factory=EpisodeStats)
 
     # Focused env for detail panel
     focused_env_id: int = 0
