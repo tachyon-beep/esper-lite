@@ -123,8 +123,8 @@ class AnomalyDetector:
     def check_value_function(
         self,
         explained_variance: float,
-        current_episode: int = 0,
-        total_episodes: int = 0,
+        current_episode: int,
+        total_episodes: int,
     ) -> AnomalyReport:
         """Check for value function collapse with phase-dependent thresholds.
 
@@ -134,8 +134,8 @@ class AnomalyDetector:
 
         Args:
             explained_variance: Explained variance metric (1 - Var(returns-values)/Var(returns))
-            current_episode: Current episode number for phase detection (0 = use static threshold)
-            total_episodes: Total configured episodes (0 = use static threshold)
+            current_episode: Current episode number for phase detection (required, must be > 0)
+            total_episodes: Total configured episodes (required, must be > 0)
 
         Returns:
             AnomalyReport with any detected issues
@@ -299,10 +299,10 @@ class AnomalyDetector:
         ratio_max: float,
         ratio_min: float,
         explained_variance: float,
+        current_episode: int,
+        total_episodes: int,
         has_nan: bool = False,
         has_inf: bool = False,
-        current_episode: int = 0,
-        total_episodes: int = 0,
         entropy: float | None = None,
         kl: float | None = None,
     ) -> AnomalyReport:
@@ -312,10 +312,10 @@ class AnomalyDetector:
             ratio_max: Maximum ratio in batch
             ratio_min: Minimum ratio in batch
             explained_variance: Explained variance metric
+            current_episode: Current episode for phase-dependent value collapse threshold (required)
+            total_episodes: Total configured episodes for phase detection (required)
             has_nan: Whether NaN values were detected
             has_inf: Whether Inf values were detected
-            current_episode: Current episode for phase-dependent value collapse threshold
-            total_episodes: Total configured episodes for phase detection
             entropy: Policy entropy (0-1 normalized). If provided, checks for entropy collapse.
             kl: KL divergence between old and new policy. If provided, checks for KL spikes.
 
