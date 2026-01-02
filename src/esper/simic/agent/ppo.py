@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import torch
+import torch.amp as torch_amp
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -533,13 +534,24 @@ class PPOAgent:
                 "alpha_curve": data["alpha_curve_masks"],
                 "op": data["op_masks"],
             }
-            result = self.policy.evaluate_actions(
-                data["states"],
-                data["blueprint_indices"],
-                actions,
-                masks,
-                hidden=(data["initial_hidden_h"], data["initial_hidden_c"]),
-            )
+            # B11-PT-01 FIX: Run evaluate_actions outside autocast context.
+            # When PPO update runs under AMP autocast, the network forward pass
+            # produces float16 logits and LSTM states. Even though MaskedCategorical
+            # upcasts logits to float32 for the distribution math, this is not
+            # sufficient - the full forward pass must run in float32 for stable
+            # gradient computation. This is standard practice in RL with AMP:
+            # run the policy evaluation in float32, keep backbone/feature extraction in AMP.
+            with torch_amp.autocast(device_type="cuda", enabled=False):
+                # Cast inputs to float32 to ensure entire forward pass is float32
+                hidden_h = data["initial_hidden_h"].float()
+                hidden_c = data["initial_hidden_c"].float()
+                result = self.policy.evaluate_actions(
+                    data["states"].float(),
+                    data["blueprint_indices"],
+                    actions,
+                    masks,
+                    hidden=(hidden_h, hidden_c),
+                )
             log_probs = result.log_prob
             values = result.value
             entropy = result.entropy
@@ -787,96 +799,6 @@ class PPOAgent:
 
             self.optimizer.zero_grad(set_to_none=True)
             loss.backward()  # type: ignore[no-untyped-call]
-
-            # DEBUG: Check gradient flow to heads (one-time probe)
-            if epoch_i == 0 and not hasattr(self, "_gradient_debug_done"):
-                self._gradient_debug_done = True
-                network = self.policy.network
-                logger.warning("=== GRADIENT DEBUG PROBE ===")
-
-                # Check loss computation graph
-                logger.warning(f"loss: requires_grad={loss.requires_grad}, grad_fn={type(loss.grad_fn).__name__ if loss.grad_fn else None}")
-                logger.warning(f"policy_loss: requires_grad={policy_loss.requires_grad}, grad_fn={type(policy_loss.grad_fn).__name__ if policy_loss.grad_fn else None}")
-                logger.warning(f"value_loss: requires_grad={value_loss.requires_grad}, grad_fn={type(value_loss.grad_fn).__name__ if value_loss.grad_fn else None}")
-
-                # Check if log_probs require grad
-                for key in ["op", "slot", "blueprint"]:
-                    if key in log_probs:
-                        lp = log_probs[key]
-                        logger.warning(f"log_probs[{key}]: requires_grad={lp.requires_grad}, grad_fn={type(lp.grad_fn).__name__ if lp.grad_fn else None}")
-
-                # Check MASK COLLAPSE - if heads have only 1 valid action, no gradient flows
-                logger.warning("=== MASK COLLAPSE CHECK (action validity) ===")
-                for key in ["op", "slot", "blueprint", "style"]:
-                    if key in masks:
-                        mask = masks[key]  # [batch, seq, num_actions] or similar
-                        valid_counts = mask.sum(dim=-1).float()  # How many valid per timestep
-                        min_valid = valid_counts.min().item()
-                        max_valid = valid_counts.max().item()
-                        mean_valid = valid_counts.mean().item()
-                        pct_single = (valid_counts == 1).float().mean().item() * 100
-                        logger.warning(f"{key}_mask: valid_actions min={min_valid:.0f} max={max_valid:.0f} mean={mean_valid:.1f} single_action={pct_single:.1f}%")
-
-                # Check CAUSAL MASKS - whether head contributes to loss at all
-                logger.warning("=== CAUSAL MASK CHECK (head relevance) ===")
-                for key in ["op", "slot", "blueprint", "style"]:
-                    if key in head_masks:
-                        causal_mask = head_masks[key]  # [batch*seq] or similar - True if head is relevant
-                        pct_relevant = causal_mask.float().mean().item() * 100
-                        n_relevant = causal_mask.sum().item()
-                        n_total = causal_mask.numel()
-                        logger.warning(f"{key}_causal: {n_relevant}/{n_total} timesteps relevant ({pct_relevant:.1f}%)")
-
-                # Check ratio computation
-                for key in ["op", "slot"]:
-                    if key in per_head_ratios:
-                        ratio = per_head_ratios[key]
-                        logger.warning(f"per_head_ratios[{key}]: requires_grad={ratio.requires_grad}, grad_fn={type(ratio.grad_fn).__name__ if ratio.grad_fn else None}")
-
-                # Check network type (compiled vs original)
-                logger.warning(f"Network type: {type(network).__name__}")
-                has_orig_mod = hasattr(network, '_orig_mod')
-                logger.warning(f"Is compiled (has _orig_mod): {has_orig_mod}")
-
-                # If compiled, also check original module's params
-                base_network = getattr(network, '_orig_mod', network)
-                logger.warning(f"Base network type: {type(base_network).__name__}")
-
-                # Check which params have grads (on compiled wrapper)
-                debug_params_with_grad = sum(1 for p in network.parameters() if p.grad is not None)
-                total_params = sum(1 for _ in network.parameters())
-                logger.warning(f"Compiled network params with grad: {debug_params_with_grad}/{total_params}")
-
-                # Check which params have grads (on original)
-                if has_orig_mod:
-                    orig_params_with_grad = sum(1 for p in base_network.parameters() if p.grad is not None)
-                    orig_total_params = sum(1 for _ in base_network.parameters())
-                    logger.warning(f"Original network params with grad: {orig_params_with_grad}/{orig_total_params}")
-
-                # Check head params specifically - use BASE network for attribute access
-                # Distinguish: None (not in graph) vs NaN (numerical instability) vs finite (healthy)
-                for name in ["slot_head", "op_head", "value_head"]:
-                    head = getattr(base_network, name)
-                    head_params = list(head.parameters())
-                    none_count = sum(1 for p in head_params if p.grad is None)
-                    nan_count = sum(1 for p in head_params if p.grad is not None and not torch.isfinite(p.grad).all())
-                    finite_count = sum(1 for p in head_params if p.grad is not None and torch.isfinite(p.grad).all())
-                    logger.warning(f"{name}: None={none_count}, NaN/Inf={nan_count}, Finite={finite_count} (of {len(head_params)} params)")
-                    # Show grad norm if any grads exist
-                    grads_exist = [p for p in head_params if p.grad is not None]
-                    if grads_exist:
-                        norm = grads_exist[0].grad.norm().item()
-                        logger.warning(f"  First grad norm: {norm:.6f} ({'NaN!' if not torch.isfinite(torch.tensor(norm)).item() else 'finite'})")
-
-                # Check if optimizer has these params
-                opt_params = set()
-                for pg in self.optimizer.param_groups:
-                    for p in pg['params']:
-                        opt_params.add(id(p))
-                first_slot_param = list(base_network.slot_head.parameters())[0]
-                logger.warning(f"slot_head param in optimizer: {id(first_slot_param) in opt_params}")
-
-                logger.warning("=== END DEBUG PROBE ===")
 
             # Collect per-head gradient norms BEFORE clipping (P4-6)
             # Measures raw gradients to diagnose head dominance
