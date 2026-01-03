@@ -167,7 +167,7 @@ class TamiyoBrain(Container):
     /* Bottom metrics row: Episode Health (left) | Value Diagnostics (right) */
     #bottom-metrics-row {
         width: 100%;
-        height: 7;
+        height: 9;
     }
 
     #episode-metrics-panel {

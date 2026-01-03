@@ -380,59 +380,69 @@ class DecisionsColumn(Container):
         yield Vertical(id="cards-container")
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
-        """Update with new snapshot data using throttled card replacement."""
+        """Update with new snapshot data using throttled card replacement.
+
+        "Firehose" model: when it's time to add/swap, grab the MOST RECENT
+        decision available - no backlog, no queueing. Age starts at 0 when
+        a decision goes on display.
+        """
         self._snapshot = snapshot
         self._group_id = snapshot.tamiyo.group_id or "default"
         now = time.time()
 
         incoming = snapshot.tamiyo.recent_decisions
 
-        # If no incoming decisions and we have none displayed, ensure placeholder shows
+        # If no incoming decisions and we have none displayed, show placeholder
         if not incoming and not self._displayed_decisions:
             self._render_cards()
             return
 
-        # If no incoming decisions but we have displayed ones, keep them stable
+        # If no incoming decisions but we have displayed ones, just refresh ages
         if not incoming:
-            return
-
-        # Throttled update logic:
-        # - Growing phase (< MAX_CARDS): add cards immediately, no throttle
-        # - Steady state (= MAX_CARDS): swap one card every CARD_SWAP_INTERVAL
-        displayed_ids = {d.decision_id for d in self._displayed_decisions}
-        candidates = [d for d in incoming if d.decision_id not in displayed_ids]
-        new_decision = max(candidates, key=lambda d: d.timestamp) if candidates else None
-
-        if not new_decision:
-            # No new decisions, but refresh existing cards to update ages
             self._refresh_cards()
             return
 
+        # Firehose: always grab the MOST RECENT decision (no backlog)
+        # Only exclude if it's currently the #1 displayed card (avoid immediate re-add)
+        current_top_id = self._displayed_decisions[0].decision_id if self._displayed_decisions else None
+        candidates = [d for d in incoming if d.decision_id != current_top_id]
+        newest = max(candidates, key=lambda d: d.timestamp) if candidates else None
+
+        if not newest:
+            # No new decision available, refresh existing cards
+            self._refresh_cards()
+            return
+
+        # Throttled update logic
         is_growing = len(self._displayed_decisions) < self.MAX_CARDS
         is_empty = len(self._displayed_decisions) == 0
         time_since_swap = now - self._last_card_swap_time
         can_add = is_empty or time_since_swap >= self.CARD_SWAP_INTERVAL
 
-        if is_growing and can_add:
-            # Growing phase: add one card every CARD_SWAP_INTERVAL (first card immediate)
-            self._displayed_decisions.insert(0, new_decision)
-            if new_decision.decision_id:
-                self._display_timestamps[new_decision.decision_id] = datetime.now(timezone.utc)
-            self._last_card_swap_time = now
-            self._render_cards()
-        elif not is_growing and can_add:
-            # Steady state: swap oldest for newest, respecting throttle
-            old_decision = self._displayed_decisions.pop()
-            if old_decision.decision_id and old_decision.decision_id in self._display_timestamps:
-                del self._display_timestamps[old_decision.decision_id]
-            self._displayed_decisions.insert(0, new_decision)
-            if new_decision.decision_id:
-                self._display_timestamps[new_decision.decision_id] = datetime.now(timezone.utc)
-            self._last_card_swap_time = now
-            self._render_cards()
-        else:
-            # New decision waiting, but throttled - refresh to update ages
+        if not can_add:
+            # Throttled - just refresh ages
             self._refresh_cards()
+            return
+
+        # Time to add/swap - use the newest decision, age starts at 0
+        display_now = datetime.now(timezone.utc)
+
+        if is_growing:
+            # Growing phase: add to front
+            self._displayed_decisions.insert(0, newest)
+        else:
+            # Steady state: swap oldest for newest
+            old_decision = self._displayed_decisions.pop()
+            if old_decision.decision_id in self._display_timestamps:
+                del self._display_timestamps[old_decision.decision_id]
+            self._displayed_decisions.insert(0, newest)
+
+        # Age starts at 0 - record when this decision went on display
+        if newest.decision_id:
+            self._display_timestamps[newest.decision_id] = display_now
+
+        self._last_card_swap_time = now
+        self._render_cards()
 
     def _render_cards(self) -> None:
         """Re-render all decision cards."""
