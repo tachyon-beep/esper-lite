@@ -545,10 +545,9 @@ from esper.leyline.slot_id import (
 from esper.leyline.injection_spec import InjectionSpec
 from esper.leyline.slot_config import SlotConfig
 
-# Actions (build_action_enum used by HeuristicTamiyo for flat action mapping)
+# Action name parsing utilities (build_action_enum moved to tamiyo.action_enums)
 from esper.leyline.actions import (
     GERMINATE_PREFIX,
-    build_action_enum,
     get_blueprint_from_action_name,
     is_germinate_action_name,
 )
@@ -609,6 +608,7 @@ from esper.leyline.telemetry import (
     # Typed payloads (see docs/plans/2025-12-25-typed-telemetry-payloads-design.md)
     TelemetryPayload,
     TrainingStartedPayload,
+    CheckpointLoadedPayload,
     EpochCompletedPayload,
     BatchEpochCompletedPayload,
     TrendDetectedPayload,
@@ -849,9 +849,8 @@ __all__ = [
     "InjectionSpec",
     "SlotConfig",
 
-    # Actions (build_action_enum used by HeuristicTamiyo)
+    # Action name parsing (build_action_enum moved to tamiyo.action_enums)
     "GERMINATE_PREFIX",
-    "build_action_enum",
     "get_blueprint_from_action_name",
     "is_germinate_action_name",
 
@@ -900,6 +899,7 @@ __all__ = [
     # Typed payloads
     "TelemetryPayload",
     "TrainingStartedPayload",
+    "CheckpointLoadedPayload",
     "EpochCompletedPayload",
     "BatchEpochCompletedPayload",
     "TrendDetectedPayload",

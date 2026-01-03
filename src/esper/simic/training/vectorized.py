@@ -74,6 +74,7 @@ from esper.leyline import (
     DEFAULT_LSTM_HIDDEN_DIM,
     DEFAULT_MIN_PANICS_BEFORE_ROLLBACK,
     DEFAULT_N_ENVS,
+    CheckpointLoadedPayload,
     EpisodeOutcomePayload,
     HEAD_NAMES,
     HeadTelemetry,
@@ -883,14 +884,15 @@ def train_ppo_vectorized(
         if "n_episodes" in metadata:
             start_episode = metadata["n_episodes"]
 
-        # Emit checkpoint loaded event
-        # TODO: [FUTURE FUNCTIONALITY] - Create CheckpointLoadedPayload for type safety
+        # Emit checkpoint loaded event with typed payload
         hub.emit(
             TelemetryEvent(
                 event_type=TelemetryEventType.CHECKPOINT_LOADED,
                 group_id=group_id,
-                data=None,
-                message=f"Checkpoint loaded from {resume_path} at episode {start_episode}",
+                data=CheckpointLoadedPayload(
+                    path=str(resume_path),
+                    start_episode=start_episode,
+                ),
             )
         )
     else:

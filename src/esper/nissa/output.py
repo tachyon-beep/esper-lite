@@ -28,6 +28,7 @@ from typing import Any
 
 from esper.leyline import OutputBackend, TelemetryEvent
 from esper.leyline.telemetry import (
+    CheckpointLoadedPayload,
     EpochCompletedPayload,
     BatchEpochCompletedPayload,
     AnomalyDetectedPayload,
@@ -142,6 +143,7 @@ class BackendWorker:
             daemon=True,
         )
         self._stopped = False
+        self._stop_lock = threading.Lock()  # Guards _stopped to prevent sentinel race
         self._dropped_events = 0
         self._processed_events = 0
         self._total_processing_time = 0.0
@@ -153,18 +155,20 @@ class BackendWorker:
         Args:
             event: The telemetry event to process.
         """
-        if self._stopped:
-            return
+        # Use lock to prevent race with stop() - ensures no events enqueued after sentinel
+        with self._stop_lock:
+            if self._stopped:
+                return
 
-        try:
-            # Non-blocking put - if backend is slow and queue is full, drop event
-            self._queue.put_nowait(event)
-        except queue.Full:
-            self._dropped_events += 1
-            if self._dropped_events % 100 == 1:  # Log every 100th drop
-                _logger.warning(
-                    f"Backend {self._name} queue full, dropped {self._dropped_events} events"
-                )
+            try:
+                # Non-blocking put - if backend is slow and queue is full, drop event
+                self._queue.put_nowait(event)
+            except queue.Full:
+                self._dropped_events += 1
+                if self._dropped_events % 100 == 1:  # Log every 100th drop
+                    _logger.warning(
+                        f"Backend {self._name} queue full, dropped {self._dropped_events} events"
+                    )
 
     def get_stats(self) -> dict[str, int | float]:
         """Get performance statistics for this backend worker.
@@ -189,21 +193,24 @@ class BackendWorker:
 
         Waits for all pending events to be processed before stopping.
 
-        CRITICAL: Does NOT set _stopped=True until after sending sentinel,
-        to avoid dropping events that are still being enqueued by main worker.
+        Thread-safety: Sets _stopped=True under lock BEFORE putting sentinel,
+        ensuring no events can be enqueued after the sentinel. This fixes the
+        race where events could land after sentinel but before _stopped=True.
 
         Args:
             timeout: Maximum time to wait for worker to finish. The timeout
                 is split between queue drain and thread join phases.
         """
-        if self._stopped:
-            return
+        # Acquire lock and set _stopped atomically - prevents enqueue() race
+        with self._stop_lock:
+            if self._stopped:
+                return
+            self._stopped = True
 
         deadline = time.monotonic() + timeout
 
         # Wait for queue to drain (all pending events processed)
-        # Do NOT set _stopped=True yet - enqueue() must still accept events
-        # until we've sent the shutdown sentinel
+        # _stopped is already True so no new events can be enqueued
         try:
             drained = _join_with_timeout(self._queue, timeout)
             if not drained:
@@ -214,14 +221,11 @@ class BackendWorker:
         except Exception as e:
             _logger.warning(f"Queue join failed during {self._name} shutdown (worker may have died): {e}")
 
-        # Send shutdown signal
+        # Send shutdown signal - no race possible since _stopped=True prevents new enqueues
         try:
             self._queue.put(None, timeout=1.0)
         except queue.Full:
             _logger.warning(f"Queue full during {self._name} shutdown, forcing stop")
-
-        # NOW it's safe to reject new events - sentinel is in queue
-        self._stopped = True
 
         # Wait for worker to finish with remaining time budget
         remaining = max(0.1, deadline - time.monotonic())
@@ -398,18 +402,14 @@ class ConsoleOutput(OutputBackend):
                     print(f"[{timestamp}]   Env accs: [{env_acc_str}]")
                 print(f"[{timestamp}]   Avg: {avg_acc:.1f}% (rolling: {rolling_acc:.1f}%), reward: {avg_reward:.1f}")
         elif event_type == "CHECKPOINT_LOADED":
-            if event.data is None:
-                _logger.warning("CHECKPOINT_LOADED event has no data payload")
-                return
-            # CHECKPOINT_LOADED not yet migrated to typed payload
-            if isinstance(event.data, dict):
-                path = event.data.get("path", "?")
-                episode = event.data.get("start_episode", 0)
-                source = event.data.get("source", "")
-                if source:
-                    print(f"[{timestamp}] CHECKPOINT | Loaded {source} (acc={event.data.get('avg_accuracy', 0.0):.1f}%)")
-                else:
-                    print(f"[{timestamp}] CHECKPOINT | Loaded from {path} (resuming at episode {episode})")
+            if not isinstance(event.data, CheckpointLoadedPayload):
+                raise TypeError(f"CHECKPOINT_LOADED event has invalid payload type: {type(event.data)}")
+            payload = event.data
+            if payload.source:
+                acc_str = f" (acc={payload.avg_accuracy:.1f}%)" if payload.avg_accuracy is not None else ""
+                print(f"[{timestamp}] CHECKPOINT | Loaded {payload.source}{acc_str}")
+            else:
+                print(f"[{timestamp}] CHECKPOINT | Loaded from {payload.path} (resuming at episode {payload.start_episode})")
         elif event_type == "TAMIYO_INITIATED":
             if event.data is None:
                 _logger.warning("TAMIYO_INITIATED event has no data payload")
@@ -624,6 +624,9 @@ class NissaHub:
         This is the main multiplexer: it dequeues events from the central queue
         and distributes them to all per-backend worker queues in parallel.
         Backends process independently, so slow backends don't block fast ones.
+
+        Thread-safety: Snapshots _backend_workers under lock to prevent races
+        with add_backend()/remove_backend() modifying the list during iteration.
         """
         while True:
             try:
@@ -632,8 +635,12 @@ class NissaHub:
                     self._queue.task_done()
                     break
 
-                # Fan out to all backend workers
-                for worker in self._backend_workers:
+                # Snapshot workers under lock to prevent race with add/remove
+                with self._lock:
+                    workers = list(self._backend_workers)
+
+                # Fan out to all backend workers (outside lock to avoid blocking)
+                for worker in workers:
                     worker.enqueue(event)
 
                 self._queue.task_done()
@@ -648,6 +655,8 @@ class NissaHub:
         The backend is started immediately and wrapped in a BackendWorker
         with its own processing thread. This ensures slow backends don't
         block fast ones.
+
+        Thread-safety: Acquires lock when modifying backend lists.
 
         Args:
             backend: The output backend to add.
@@ -664,14 +673,17 @@ class NissaHub:
             )
         try:
             backend.start()
-            self._backends.append(backend)
 
             # Create worker thread for this backend
             worker = BackendWorker(
                 backend=backend,
                 max_queue_size=self._backend_queue_size,
             )
-            self._backend_workers.append(worker)
+
+            # Add to lists under lock
+            with self._lock:
+                self._backends.append(backend)
+                self._backend_workers.append(worker)
 
             self._start_worker()
         except Exception:
@@ -683,25 +695,33 @@ class NissaHub:
 
         Stops the backend's worker thread and closes the backend.
 
+        Thread-safety: Removes from lists under lock BEFORE stopping worker,
+        ensuring the worker loop won't target this worker after removal.
+
         Args:
             backend: The output backend to remove.
         """
-        if backend in self._backends:
+        worker = None
+
+        # Remove from lists under lock - must happen BEFORE stop()
+        # so worker loop snapshot won't include this worker
+        with self._lock:
+            if backend not in self._backends:
+                return
             idx = self._backends.index(backend)
-
-            # Stop the backend worker
-            if idx < len(self._backend_workers):
-                worker = self._backend_workers[idx]
-                worker.stop()
-                self._backend_workers.pop(idx)
-
-            # Close the backend
-            try:
-                backend.close()
-            except Exception as e:
-                _logger.error(f"Error closing backend {backend.__class__.__name__}: {e}")
-
             self._backends.remove(backend)
+            if idx < len(self._backend_workers):
+                worker = self._backend_workers.pop(idx)
+
+        # Stop worker outside lock (can take time, don't block other operations)
+        if worker is not None:
+            worker.stop()
+
+        # Close the backend
+        try:
+            backend.close()
+        except Exception as e:
+            _logger.error(f"Error closing backend {backend.__class__.__name__}: {e}")
 
     def emit(self, event: TelemetryEvent) -> None:
         """Emit a telemetry event to all backends (asynchronously).

@@ -493,6 +493,19 @@ class TrainingStartedPayload:
 
 
 @dataclass(slots=True, frozen=True)
+class CheckpointLoadedPayload:
+    """Payload for CHECKPOINT_LOADED event. Emitted when training resumes from checkpoint."""
+
+    # REQUIRED
+    path: str  # Path to the checkpoint file
+    start_episode: int  # Episode number to resume from
+
+    # OPTIONAL
+    source: str | None = None  # Human-readable source description (e.g., "best checkpoint")
+    avg_accuracy: float | None = None  # Accuracy at checkpoint time (if available)
+
+
+@dataclass(slots=True, frozen=True)
 class EpochCompletedPayload:
     """Payload for EPOCH_COMPLETED event. Emitted per environment per epoch."""
 
@@ -1707,6 +1720,7 @@ class GovernorRollbackPayload:
 
 TelemetryPayload = (
     TrainingStartedPayload
+    | CheckpointLoadedPayload
     | EpochCompletedPayload
     | BatchEpochCompletedPayload
     | TrendDetectedPayload
