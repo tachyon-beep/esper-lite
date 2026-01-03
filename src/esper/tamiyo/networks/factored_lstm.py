@@ -113,6 +113,7 @@ class BlueprintEmbedding(nn.Module):
         embed_dim: int = DEFAULT_BLUEPRINT_EMBED_DIM,
     ):
         super().__init__()
+        self.num_blueprints = num_blueprints  # Store for validation in forward()
         # Index 13 = null embedding for inactive slots (from leyline)
         self.embedding = nn.Embedding(num_blueprints + 1, embed_dim)
 
@@ -135,9 +136,23 @@ class BlueprintEmbedding(nn.Module):
         Returns:
             Float tensor [batch, num_slots, embed_dim]
         """
+        # Validate indices are in valid range: -1 (inactive) or [0, num_blueprints)
+        # FAIL-FAST: Catch upstream bugs that emit invalid sentinel values (e.g., -2, -999)
+        # rather than silently treating them as inactive. This prevents hard-to-debug
+        # training degradation from silently wrong embeddings.
+        if MaskedCategorical.validate:
+            invalid_mask = (blueprint_indices < -1) | (blueprint_indices >= self.num_blueprints)
+            if invalid_mask.any():
+                invalid_vals = blueprint_indices[invalid_mask].unique().tolist()
+                raise ValueError(
+                    f"BlueprintEmbedding received invalid indices: {invalid_vals}. "
+                    f"Valid range is -1 (inactive) or [0, {self.num_blueprints})."
+                )
+
         # _null_idx is already on correct device via module.to(device)
         null_idx = cast(torch.Tensor, self._null_idx)
-        safe_idx = torch.where(blueprint_indices < 0, null_idx, blueprint_indices)
+        # Map exactly -1 to null index (not all negatives, to catch bugs)
+        safe_idx = torch.where(blueprint_indices == -1, null_idx, blueprint_indices)
         return cast(torch.Tensor, self.embedding(safe_idx))
 
 
@@ -574,6 +589,18 @@ class FactoredRecurrentActorCritic(nn.Module):
         # Ensure blueprint_indices is 3D [batch, seq, num_slots]
         if blueprint_indices.dim() == 2:
             blueprint_indices = blueprint_indices.unsqueeze(1)
+
+        # CONTRACT ENFORCEMENT: get_action() is designed for single-step inference.
+        # It samples from timestep 0 but advances hidden through the full sequence,
+        # which would corrupt rollouts if seq_len > 1. Fail fast instead of silently
+        # producing actions/values for the wrong timestep.
+        seq_len = state.shape[1]
+        if seq_len != 1:
+            raise ValueError(
+                f"get_action() requires seq_len=1, got {seq_len}. "
+                "This method is for single-step rollout collection. "
+                "For multi-step sequence processing, use forward() directly."
+            )
 
         # Reshape masks to [batch, 1, dim] if provided as [batch, dim]
         if slot_mask is not None and slot_mask.dim() == 2:
