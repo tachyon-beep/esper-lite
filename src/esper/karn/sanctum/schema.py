@@ -887,6 +887,15 @@ class TamiyoState:
     layer_gradient_health: dict[str, float] | None = None  # Per-layer gradient health metrics
     entropy_collapsed: bool = False  # Entropy collapse detected
 
+    # LSTM hidden state health (B7-DRL-04)
+    # LSTM states can become corrupted during BPTT - tracked for early warning
+    lstm_h_norm: float | None = None  # L2 norm of hidden state (None = no LSTM)
+    lstm_c_norm: float | None = None  # L2 norm of cell state
+    lstm_h_max: float | None = None   # Max absolute value in h
+    lstm_c_max: float | None = None   # Max absolute value in c
+    lstm_has_nan: bool = False  # NaN detected in LSTM hidden state
+    lstm_has_inf: bool = False  # Inf detected in LSTM hidden state
+
     # Performance timing (for throughput monitoring)
     update_time_ms: float = 0.0  # PPO update duration in milliseconds
     early_stop_epoch: int | None = None  # KL early stopping triggered at this epoch

@@ -869,6 +869,13 @@ def emit_ppo_update_event(
             cuda_memory_reserved_gb=metrics.get("cuda_memory_reserved_gb", 0.0),
             cuda_memory_peak_gb=metrics.get("cuda_memory_peak_gb", 0.0),
             cuda_memory_fragmentation=metrics.get("cuda_memory_fragmentation", 0.0),
+            # LSTM health metrics (B7-DRL-04)
+            lstm_h_norm=metrics.get("lstm_h_norm"),
+            lstm_c_norm=metrics.get("lstm_c_norm"),
+            lstm_h_max=metrics.get("lstm_h_max"),
+            lstm_c_max=metrics.get("lstm_c_max"),
+            lstm_has_nan=metrics.get("lstm_has_nan", False),
+            lstm_has_inf=metrics.get("lstm_has_inf", False),
             inner_epoch=epoch,
             batch=batch_idx + 1,
             # BUG FIX: Track actual PPO update count (inner_epoch was misleading)

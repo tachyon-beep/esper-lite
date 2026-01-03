@@ -865,6 +865,15 @@ class SanctumAggregator:
             self._tamiyo.layer_gradient_health = payload.layer_gradient_health
         self._tamiyo.entropy_collapsed = payload.entropy_collapsed
 
+        # LSTM hidden state health (B7-DRL-04)
+        # None values indicate no LSTM in the policy (non-recurrent architecture)
+        self._tamiyo.lstm_h_norm = payload.lstm_h_norm
+        self._tamiyo.lstm_c_norm = payload.lstm_c_norm
+        self._tamiyo.lstm_h_max = payload.lstm_h_max
+        self._tamiyo.lstm_c_max = payload.lstm_c_max
+        self._tamiyo.lstm_has_nan = payload.lstm_has_nan
+        self._tamiyo.lstm_has_inf = payload.lstm_has_inf
+
         # Per-head NaN/Inf OR-latch (once True, stays True for entire run)
         if payload.head_nan_detected:
             for head, detected in payload.head_nan_detected.items():

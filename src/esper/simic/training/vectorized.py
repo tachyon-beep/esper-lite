@@ -3612,6 +3612,13 @@ def train_ppo_vectorized(
                         anomaly_report.has_anomaly = True
                         anomaly_report.anomaly_types.extend(lstm_report.anomaly_types)
                         anomaly_report.details.update(lstm_report.details)
+                    # Add LSTM health to metrics for telemetry display in Sanctum
+                    metrics["lstm_h_norm"] = lstm_health.h_norm
+                    metrics["lstm_c_norm"] = lstm_health.c_norm
+                    metrics["lstm_h_max"] = lstm_health.h_max
+                    metrics["lstm_c_max"] = lstm_health.c_max
+                    metrics["lstm_has_nan"] = lstm_health.has_nan
+                    metrics["lstm_has_inf"] = lstm_health.has_inf
 
                 _handle_telemetry_escalation(anomaly_report, telemetry_config)
                 _emit_anomaly_diagnostics(

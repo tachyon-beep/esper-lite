@@ -757,6 +757,16 @@ class PPOUpdatePayload:
     cuda_memory_peak_gb: float = 0.0       # torch.cuda.max_memory_allocated()
     cuda_memory_fragmentation: float = 0.0 # 1 - (allocated/reserved), >0.3 = pressure
 
+    # === LSTM Hidden State Health (B7-DRL-04) ===
+    # Tracks LSTM hidden state stability after PPO updates (BPTT can corrupt states)
+    # h = hidden state, c = cell state
+    lstm_h_norm: float | None = None  # L2 norm of hidden state (None = no LSTM)
+    lstm_c_norm: float | None = None  # L2 norm of cell state
+    lstm_h_max: float | None = None   # Max absolute value in h
+    lstm_c_max: float | None = None   # Max absolute value in c
+    lstm_has_nan: bool = False  # NaN detected in hidden state
+    lstm_has_inf: bool = False  # Inf detected in hidden state
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "PPOUpdatePayload":
         """Parse from dict. Raises KeyError on missing required fields."""
@@ -861,6 +871,13 @@ class PPOUpdatePayload:
             cuda_memory_reserved_gb=data.get("cuda_memory_reserved_gb", 0.0),
             cuda_memory_peak_gb=data.get("cuda_memory_peak_gb", 0.0),
             cuda_memory_fragmentation=data.get("cuda_memory_fragmentation", 0.0),
+            # LSTM health metrics (B7-DRL-04)
+            lstm_h_norm=data.get("lstm_h_norm"),
+            lstm_c_norm=data.get("lstm_c_norm"),
+            lstm_h_max=data.get("lstm_h_max"),
+            lstm_c_max=data.get("lstm_c_max"),
+            lstm_has_nan=data.get("lstm_has_nan", False),
+            lstm_has_inf=data.get("lstm_has_inf", False),
             # Pre-normalization advantage stats (for diagnosing value collapse)
             # Always emitted - fail loudly if missing
             pre_norm_advantage_mean=data["pre_norm_advantage_mean"],

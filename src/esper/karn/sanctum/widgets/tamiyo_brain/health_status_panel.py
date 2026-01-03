@@ -192,6 +192,10 @@ class HealthStatusPanel(Static):
 
         # Observation stats (input health)
         result.append(self._render_observation_stats())
+        result.append("\n")
+
+        # LSTM hidden state health (B7-DRL-04)
+        result.append(self._render_lstm_health())
 
         return result
 
@@ -337,6 +341,75 @@ class HealthStatusPanel(Static):
         )
 
         return result
+
+    def _render_lstm_health(self) -> Text:
+        """Render LSTM hidden state health indicators (B7-DRL-04).
+
+        LSTM hidden states can become corrupted during BPTT:
+        - Explosion: norm > 100 (gradients accumulating)
+        - Vanishing: norm < 1e-6 (gradients dying)
+        - NaN/Inf: numerical instability
+        """
+        if self._snapshot is None:
+            return Text()
+
+        tamiyo = self._snapshot.tamiyo
+        result = Text()
+
+        # If no LSTM data, show placeholder (non-recurrent policy or no data yet)
+        if tamiyo.lstm_h_norm is None:
+            result.append("LSTM Health  ", style="dim")
+            result.append("---", style="dim")
+            return result
+
+        # Check for NaN/Inf first (critical issue)
+        if tamiyo.lstm_has_nan or tamiyo.lstm_has_inf:
+            result.append("LSTM Health  ", style="dim")
+            issues = []
+            if tamiyo.lstm_has_nan:
+                issues.append("NaN")
+            if tamiyo.lstm_has_inf:
+                issues.append("Inf")
+            result.append(" ".join(issues), style="red bold")
+            return result
+
+        # Check h and c norms
+        h_status = self._get_lstm_norm_status(tamiyo.lstm_h_norm)
+        c_status = self._get_lstm_norm_status(tamiyo.lstm_c_norm)
+        worst_status = max(
+            [h_status, c_status],
+            key=lambda s: ["ok", "warning", "critical"].index(s),
+        )
+
+        result.append("LSTM Health  ", style="dim")
+        result.append(
+            f"h:{tamiyo.lstm_h_norm:.1f}",
+            style=self._status_style(h_status),
+        )
+        result.append(" ", style="dim")
+        result.append(
+            f"c:{tamiyo.lstm_c_norm:.1f}",
+            style=self._status_style(c_status),
+        )
+
+        if worst_status != "ok":
+            result.append(" !", style=self._status_style(worst_status))
+
+        return result
+
+    def _get_lstm_norm_status(self, norm: float | None) -> str:
+        """Check if LSTM hidden state norm is healthy."""
+        if norm is None:
+            return "ok"  # No LSTM - neutral status
+        if norm > 100.0:  # Explosion threshold
+            return "critical"
+        if norm > 50.0:  # Warning threshold
+            return "warning"
+        if norm < 1e-6:  # Vanishing threshold
+            return "critical"
+        if norm < 1e-4:  # Low warning
+            return "warning"
+        return "ok"
 
     def _get_outlier_status(self, outlier_pct: float) -> str:
         """Check if outlier percentage is healthy."""

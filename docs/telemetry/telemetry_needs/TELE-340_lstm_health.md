@@ -104,14 +104,26 @@ def compute_lstm_health(
 | **2. Collection** | Via `AnomalyDetector.check_lstm_health()` | `anomaly_detector.py:301` |
 | **3. Aggregation** | Merged into `AnomalyReport` | `vectorized.py:3611-3614` |
 | **4. Delivery** | Via `_handle_telemetry_escalation()` | `vectorized.py:3616` |
+| **5. TUI Display** | Added to metrics dict, flows to PPOUpdatePayload | `vectorized.py:3615-3621` |
 
 ```
 [batched_lstm_hidden]
   --> compute_lstm_health()
-  --> anomaly_detector.check_lstm_health()
-  --> anomaly_report
-  --> _handle_telemetry_escalation()
-  --> _emit_anomaly_diagnostics()
+  |
+  |--> anomaly_detector.check_lstm_health()  (anomaly path)
+  |      --> anomaly_report
+  |      --> _handle_telemetry_escalation()
+  |      --> _emit_anomaly_diagnostics()
+  |
+  `--> metrics["lstm_*"] = lstm_health.*     (standard telemetry path)
+         --> emit_ppo_update_event()
+         --> PPOUpdatePayload (leyline contract)
+         --> TelemetryHub.emit(PPO_UPDATE_COMPLETED)
+               |
+               +--> SanctumAggregator (TUI consumer)
+               +--> WandBBackend (cloud consumer)
+               +--> KarnCollector (analytics consumer)
+               +--> [any subscriber]
 ```
 
 ### Schema Location
@@ -131,6 +143,8 @@ def compute_lstm_health(
 | AnomalyReport | Internal | Merged with other anomalies for escalation |
 | TelemetryHub | Event | Emitted via `_emit_anomaly_diagnostics()` |
 | Logger | Warning | Logged when anomaly detected |
+| **Sanctum TUI** | Visual | HealthStatusPanel shows LSTM h/c norms with status colors |
+| **TamiyoState** | Schema | `lstm_h_norm`, `lstm_c_norm`, `lstm_has_nan`, `lstm_has_inf` |
 
 ---
 
@@ -143,7 +157,7 @@ def compute_lstm_health(
 - [x] **Schema field exists** — Anomaly types defined in AnomalyDetector
 - [x] **Default is correct** — Returns None when no LSTM
 - [x] **Consumer reads it** — AnomalyReport aggregates findings
-- [x] **Display is correct** — Escalates to DEBUG level
+- [x] **Display is correct** — Escalates to DEBUG level; Sanctum TUI shows in HEALTH panel
 - [x] **Thresholds applied** — 100.0 max, 1e-6 min
 
 ### Test Coverage
@@ -153,7 +167,9 @@ def compute_lstm_health(
 | Unit (emitter) | `test_lstm_health.py` | `TestComputeLstmHealth` | `[x]` |
 | Unit (detector) | `test_anomaly_detector.py` | `TestCheckLstmHealth` | `[x]` |
 | Integration | `test_anomaly_detector.py` | `test_multiple_anomalies` | `[x]` |
-| Visual (TUI) | N/A | Not displayed directly | N/A |
+| Telemetry flow | `test_emitters.py` | `test_emit_ppo_update_event_includes_lstm_health` | `[x]` |
+| Telemetry default | `test_emitters.py` | `test_emit_ppo_update_event_lstm_health_defaults_to_none` | `[x]` |
+| Visual (TUI) | Manual | HealthStatusPanel shows LSTM h/c norms | `[x]` |
 
 ### Manual Verification Steps
 
@@ -187,7 +203,7 @@ def compute_lstm_health(
 | Date | Author | Change |
 |------|--------|--------|
 | 2026-01-03 | Claude | Initial creation (B7-DRL-04 fix) |
-| | | |
+| 2026-01-03 | Claude | Added Sanctum TUI display via PPOUpdatePayload telemetry path |
 
 ---
 

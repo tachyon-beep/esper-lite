@@ -115,13 +115,13 @@ class TamiyoBrain(Container):
 
     /* Row 1: PPO Losses (narrow) | Health (wide) | Slots */
     #top-row {
-        height: 13;
+        height: 14;
         width: 100%;
         margin: 0;
     }
 
     #ppo-losses-panel {
-        width: 36;  /* Fixed narrow width for content */
+        width: 47;  /* Fixed narrow width for content */
         height: 1fr;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
@@ -137,7 +137,7 @@ class TamiyoBrain(Container):
     }
 
     #slots-panel {
-        width: 55;  /* Fixed width for slot grid */
+        width: 50;  /* Fixed width for slot grid */
         height: 1fr;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
@@ -152,7 +152,7 @@ class TamiyoBrain(Container):
     }
 
     #left-column {
-        width: 69%;
+        width: 1fr;  /* Takes remaining space after action-context */
         height: 100%;
     }
 
@@ -187,7 +187,7 @@ class TamiyoBrain(Container):
     }
 
     #action-context {
-        width: 31%;
+        width: 50;  /* Same fixed width as slots-panel for vertical alignment */
         height: 100%;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;

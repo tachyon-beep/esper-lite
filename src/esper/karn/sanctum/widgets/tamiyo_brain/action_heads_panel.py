@@ -221,8 +221,8 @@ class ActionHeadsPanel(Static):
         "Curve": 2,
     }
 
-    # Decision carousel (6-row with 5s staggering, 30s age-out)
-    MAX_ROWS: ClassVar[int] = 6
+    # Decision carousel (5-row with 5s staggering, 30s age-out)
+    MAX_ROWS: ClassVar[int] = 5
     SWAP_INTERVAL_S: ClassVar[float] = 5.0
     MAX_DISPLAY_AGE_S: ClassVar[float] = 30.0
     AGE_PIP_CHAR: ClassVar[str] = "●"
@@ -468,58 +468,53 @@ class ActionHeadsPanel(Static):
     # =========================================================================
 
     def _refresh_carousel(self, incoming: list["DecisionSnapshot"]) -> None:
-        """Firehose model: grab MOST RECENT decision, no backlog.
+        """Firehose model: grab MOST RECENT decision, rate-limited.
 
         Key behaviors:
-        1. Age starts at 0 when added to display (not decision's original timestamp)
-        2. Always grab the NEWEST decision when swapping (no queue/backlog)
-        3. Only exclude the current #1 card to prevent immediate re-add
+        1. Only add one decision per SWAP_INTERVAL_S (5s)
+        2. If below capacity, add one extra per interval (faster fill)
+        3. Always grab the NEWEST decision when adding (no queue/backlog)
+        4. Age starts at 0 when added to display (real time, not synthetic)
         """
         now = time.monotonic()
 
-        # Only exclude the current top card (to prevent immediate re-add)
-        current_top_id = (
-            self._displayed_decisions[0].decision_id
-            if self._displayed_decisions
-            else None
-        )
-        candidates = [
-            d for d in incoming
-            if d.decision_id and d.decision_id != current_top_id
-        ]
+        # Rate limit: only add decisions per interval
+        if self._last_swap_ts > 0 and now - self._last_swap_ts < self.SWAP_INTERVAL_S:
+            return
+
+        # Get displayed IDs to exclude from candidates
+        displayed_ids = {d.decision_id for d in self._displayed_decisions if d.decision_id}
+
+        candidates = [d for d in incoming if d.decision_id and d.decision_id not in displayed_ids]
         if not candidates:
             return
 
         # Always get the NEWEST decision (firehose - no backlog)
         newest = max(candidates, key=lambda d: d.timestamp)
+        self._add_decision(newest, now)
 
-        # Growing phase: add immediately until full
+        # If still below capacity, add one extra (faster fill)
         if len(self._displayed_decisions) < self.MAX_ROWS:
-            if newest.decision_id:
-                self._display_timestamps[newest.decision_id] = now
-            self._displayed_decisions.insert(0, newest)
-            if len(self._displayed_decisions) == self.MAX_ROWS and self._last_swap_ts == 0.0:
-                self._last_swap_ts = now
-            return
+            remaining = [d for d in candidates if d.decision_id != newest.decision_id]
+            if remaining:
+                second = max(remaining, key=lambda d: d.timestamp)
+                self._add_decision(second, now - self.SWAP_INTERVAL_S)  # Stagger timestamp
 
-        # Steady state: swap at most once per interval
-        if now - self._last_swap_ts < self.SWAP_INTERVAL_S:
-            return
+        self._last_swap_ts = now
 
-        # Record display timestamp for new decision (age starts at 0)
-        if newest.decision_id:
-            self._display_timestamps[newest.decision_id] = now
+    def _add_decision(self, decision: "DecisionSnapshot", timestamp: float) -> None:
+        """Add a decision to the carousel."""
+        if decision.decision_id:
+            self._display_timestamps[decision.decision_id] = timestamp
 
-        # Remove the oldest displayed decision's timestamp
+        # Remove oldest if at capacity
         if len(self._displayed_decisions) >= self.MAX_ROWS:
             oldest = self._displayed_decisions[-1]
             if oldest.decision_id:
                 self._display_timestamps.pop(oldest.decision_id, None)
-
-        self._displayed_decisions.insert(0, newest)
-        if len(self._displayed_decisions) > self.MAX_ROWS:
             self._displayed_decisions.pop()
-        self._last_swap_ts = now
+
+        self._displayed_decisions.insert(0, decision)
 
     def _render_decision_table(self) -> Text:
         """Render the decision output table."""
