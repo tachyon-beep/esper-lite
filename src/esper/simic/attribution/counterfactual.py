@@ -394,7 +394,14 @@ class CounterfactualEngine:
         # Sample permutations (FIX BUG-027: Avoid materializing all permutations)
         # We sample up to 100 random permutations (or use the config limit)
         n_samples = self.config.shapley_samples
-        n_perms = min(100, n_samples)
+        max_perms = 100  # Computational tractability limit
+        if n_samples > max_perms:
+            _logger.warning(
+                "Shapley permutations capped at %d (requested %d via shapley_samples)",
+                max_perms,
+                n_samples,
+            )
+        n_perms = min(max_perms, n_samples)
         
         # If n is very small (e.g. <= 4), we could theoretically use all perms,
         # but random sampling is still safe and avoids branching logic.

@@ -8,6 +8,8 @@ Tests mathematical invariants that must hold for ALL inputs:
 """
 
 import math
+
+import pytest
 from hypothesis import given, assume, settings
 from hypothesis import strategies as st
 from tests.strategies import (
@@ -17,6 +19,9 @@ from tests.strategies import (
     seed_infos,
     seed_stages,
 )
+
+# Mark all tests in this module as property tests for CI
+pytestmark = pytest.mark.property
 
 from esper.simic.rewards import (
     compute_contribution_reward,

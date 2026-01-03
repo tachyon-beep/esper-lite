@@ -49,7 +49,6 @@ where = ["src"]
 # Default: Tamiyo + Kasmina state engine (slot.py). Expand to full Kasmina if needed.
 paths_to_mutate = ["src/esper/tamiyo/", "src/esper/kasmina/slot.py"]
 tests_dir = ["tests/"]
-runner = "PYTHONPATH=src uv run pytest -q -x"
 
 [dependency-groups]
 dev = [

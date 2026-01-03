@@ -15,7 +15,11 @@ Key invariants tested:
 
 from __future__ import annotations
 
+import pytest
 import torch
+
+# Mark all tests in this module as property tests for CI
+pytestmark = pytest.mark.property
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from hypothesis.stateful import (

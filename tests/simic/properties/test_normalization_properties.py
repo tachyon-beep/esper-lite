@@ -9,10 +9,15 @@ The actual RunningMeanStd API:
 """
 
 import math
+
+import pytest
 import torch
 from hypothesis import given, assume, settings
 from hypothesis import strategies as st
 from tests.strategies import bounded_floats
+
+# Mark all tests in this module as property tests for CI
+pytestmark = pytest.mark.property
 
 from esper.simic.control import RunningMeanStd
 
