@@ -260,7 +260,7 @@ class RunHeader(Static):
 
         # === Segment 5b: Batch progress (Tamiyo's epochs = system batches) ===
         batch_progress = self._render_batch_progress(s.current_batch, s.max_batches)
-        row.append(batch_progress, style="magenta")
+        row.append(batch_progress, style="yellow")
 
         row.append(" │ ", style="dim")
 

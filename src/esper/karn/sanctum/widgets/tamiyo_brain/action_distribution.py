@@ -242,8 +242,8 @@ class ActionContext(Static):
             result.append("█" * filled, style=color)
             result.append("░" * empty, style="dim")
 
-            # Value
-            result.append(f"  {q_val:+.1f}", style=color)
+            # Value (3 decimal places for small Q differences)
+            result.append(f"  {q_val:+.3f}", style=color)
 
             # Best/Worst markers
             if i == 0:
