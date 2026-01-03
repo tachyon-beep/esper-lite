@@ -137,7 +137,7 @@ class TamiyoBrain(Container):
     }
 
     #slots-panel {
-        width: 49;  /* Fixed width for slot grid */
+        width: 55;  /* Fixed width for slot grid */
         height: 1fr;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;

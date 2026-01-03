@@ -4,7 +4,7 @@ This folder contains **telemetry records** — structured documentation for each
 
 ## Purpose
 
-While the audit documents in `docs/tele_audit_2/` describe what widgets **consume**, telemetry records describe what telemetry **should exist** and how it flows from source to display.
+While the audit documents in `docs/telemetry/` describe what widgets **consume**, telemetry records describe what telemetry **should exist** and how it flows from source to display.
 
 | Document Type | Perspective | Question Answered |
 |--------------|-------------|-------------------|
@@ -18,6 +18,7 @@ TELE-XXX_short_name.md
 ```
 
 Examples:
+
 - `TELE-001_entropy.md`
 - `TELE-015_grad_norm.md`
 - `TELE-042_seed_interaction_sum.md`
@@ -55,6 +56,7 @@ See `EXAMPLE_TELE-001_entropy.md` for a fully filled-in example.
 ## Creating a New Record
 
 1. Copy the template:
+
    ```bash
    cp TELEMETRY_RECORD_TEMPLATE.md TELE-XXX_name.md
    ```
