@@ -403,9 +403,9 @@ class DecisionsColumn(Container):
             return
 
         # Firehose: always grab the MOST RECENT decision (no backlog)
-        # Only exclude if it's currently the #1 displayed card (avoid immediate re-add)
-        current_top_id = self._displayed_decisions[0].decision_id if self._displayed_decisions else None
-        candidates = [d for d in incoming if d.decision_id != current_top_id]
+        # Exclude ALL currently displayed decisions to prevent duplicates
+        displayed_ids = {d.decision_id for d in self._displayed_decisions if d.decision_id}
+        candidates = [d for d in incoming if d.decision_id and d.decision_id not in displayed_ids]
         newest = max(candidates, key=lambda d: d.timestamp) if candidates else None
 
         if not newest:
