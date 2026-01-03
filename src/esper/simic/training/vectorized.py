@@ -592,6 +592,7 @@ def train_ppo_vectorized(
     disable_terminal_reward: bool = False,  # Disable terminal accuracy bonus
     disable_anti_gaming: bool = False,  # Disable ratio_penalty and alpha_shock
     quiet_analytics: bool = False,
+    force_compile: bool = False,
     telemetry_dir: str | None = None,
     ready_event: "threading.Event | None" = None,
     shutdown_event: "threading.Event | None" = None,
@@ -897,7 +898,11 @@ def train_ppo_vectorized(
         # torch.compile here to avoid TorchInductor failures that are difficult
         # to recover from in an interactive session.
         # Determine effective compile mode: quiet_analytics disables compilation
-        effective_compile_mode = compile_mode if not quiet_analytics else "off"
+        # unless force_compile is set (for testing compilation with TUI).
+        if force_compile:
+            effective_compile_mode = compile_mode
+        else:
+            effective_compile_mode = compile_mode if not quiet_analytics else "off"
 
         # Create policy via Tamiyo factory
         # IMPORTANT: Pass actual slot_config to ensure action heads/masks align
@@ -970,6 +975,10 @@ def train_ppo_vectorized(
             reward_mode=reward_mode,
             start_episode=start_episode,
             entropy_anneal=entropy_anneal_summary,
+            # torch.compile status (wired to ValueDiagnosticsPanel)
+            compile_enabled=(agent.compile_mode != "off"),
+            compile_backend="inductor" if agent.compile_mode != "off" else None,
+            compile_mode=agent.compile_mode if agent.compile_mode != "off" else None,
         ),
     ))
 

@@ -346,6 +346,12 @@ def build_parser() -> argparse.ArgumentParser:
              "reduce-overhead (minimal overhead), or off. (default: default)",
     )
     ppo_parser.add_argument(
+        "--force-compile",
+        action="store_true",
+        help="Force torch.compile even in TUI mode (normally disabled for debuggability). "
+             "Use when testing compilation performance with Sanctum/Overwatch.",
+    )
+    ppo_parser.add_argument(
         "--seed",
         type=int,
         default=None,
@@ -829,6 +835,7 @@ def main() -> None:
                         telemetry_config=telemetry_config,
                         telemetry_lifecycle_only=args.telemetry_lifecycle_only,
                         quiet_analytics=use_sanctum,
+                        force_compile=args.force_compile,
                         ready_event=dataloader_ready_event,
                         shutdown_event=shutdown_event,
                         torch_profiler=args.torch_profiler,
