@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B7-DRL-03` |
 | **Severity** | `P3` |
-| **Status** | `open` |
+| **Status** | `closed` |
 | **Batch** | 7 |
 | **Agent** | `drl` |
 | **Domain** | `simic/telemetry` |
@@ -159,3 +159,36 @@ Add docstring explaining `check_gradient_drift()` is intentionally separate and 
 
 **Report file:** `docs/temp/2712reports/batch7-codereview.md`
 **Section:** "check_all does not pass entropy/kl to gradient drift check"
+
+---
+
+## Resolution
+
+### Status: ALREADY FIXED
+
+**Fixed in commit 322fb1d1 as part of B7-DRL-01.**
+
+#### Evidence
+
+| Claim | Status | Evidence |
+|-------|--------|----------|
+| "`check_gradient_drift()` exists at lines 262-295" | ✅ TRUE | Verified in `anomaly_detector.py:262-295` |
+| "`check_all()` does NOT call `check_gradient_drift()`" | ✅ TRUE | Verified, but this is intentional design |
+| "The method exists but is orphaned" | ❌ FALSE | Called in `vectorized.py:3590` |
+| "Callers using `check_all()` miss gradient drift detection" | ❌ FALSE | `vectorized.py` calls it separately and merges results |
+
+#### Why Separation from check_all() is Intentional
+
+The `check_gradient_drift()` method is intentionally kept separate from `check_all()` because:
+
+1. **Different data sources**: `check_all()` takes standard PPO update metrics (ratios, EV, entropy, KL). `check_gradient_drift()` requires drift metrics from `GradientEMATracker` - a separate component.
+
+2. **Conditional availability**: The tracker may not always be present (`if grad_ema_tracker is not None`).
+
+3. **Fixed by B7-DRL-01**: Commit `322fb1d1` wired up the gradient drift detection as part of the B7-DRL-01 fix. The code at `vectorized.py:3588-3597` calls `check_gradient_drift()` and merges results into the anomaly report.
+
+#### Severity Confirmation
+
+- Original: P3 (dead code / unwired functionality)
+- Revised: P3 → Closed (functionality was wired up by B7-DRL-01)
+- Resolution: ALREADY FIXED
