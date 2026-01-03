@@ -166,7 +166,8 @@ class SeedMetrics:
     # Gradient-based seed activity metric (parameter-normalized)
     # Formula: (seed_norm / host_norm) * sqrt(host_params / seed_params)
     # This measures per-parameter gradient intensity, scale-invariant across architectures
-    seed_gradient_norm_ratio: float = 0.0
+    # NOTE: None = never measured (distinct from 0.0 which means measured but inactive)
+    seed_gradient_norm_ratio: float | None = None
 
     # Parameter counts for normalization (set once at germination)
     host_param_count: int = 0
@@ -805,11 +806,16 @@ class QualityGates:
 
         # Gradient-based seed activity: detect if seed is actively learning
         # vs. riding host improvements. Ratio is parameter-normalized EMA.
-        if state.metrics.seed_gradient_norm_ratio >= self.min_seed_gradient_ratio:
-            checks_passed.append(f"seed_gradient_active_{state.metrics.seed_gradient_norm_ratio:.2f}")
+        # NOTE: None means gradient stats were never collected (training loop coupling issue)
+        ratio = state.metrics.seed_gradient_norm_ratio
+        if ratio is None:
+            checks_failed.append("gradient_stats_never_measured")
+            gradient_ok = False
+        elif ratio >= self.min_seed_gradient_ratio:
+            checks_passed.append(f"seed_gradient_active_{ratio:.2f}")
             gradient_ok = True
         else:
-            checks_failed.append(f"seed_gradient_low_{state.metrics.seed_gradient_norm_ratio:.2f}")
+            checks_failed.append(f"seed_gradient_low_{ratio:.2f}")
             gradient_ok = False
 
         passed = perf_ok and seed_ok and gradient_ok
