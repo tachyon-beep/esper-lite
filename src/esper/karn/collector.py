@@ -403,10 +403,11 @@ class KarnCollector:
         if self.config.capture_dense_traces:
             self._check_anomalies_and_capture(current_epoch)
 
-        # Increment epochs_in_stage for all occupied slots ONCE per epoch
-        # (includes EMBARGOED/RESETTING dwell while excluding PRUNED + terminal).
+        # Increment epochs_in_stage for all occupied slots ONCE per epoch.
+        # Only DORMANT is excluded (truly empty slot); PRUNED/FOSSILIZED are
+        # terminal but still track dwell time for analytics.
         for slot in current_epoch.slots.values():
-            if slot.stage not in (SeedStage.DORMANT, SeedStage.PRUNED, SeedStage.FOSSILIZED):
+            if slot.stage != SeedStage.DORMANT:
                 slot.epochs_in_stage += 1
 
         # Commit the epoch
@@ -460,9 +461,9 @@ class KarnCollector:
             current_epoch.host.val_accuracy = payload.avg_accuracy
             # BATCH doesn't have val_loss - leave at default 0.0
 
-            # Increment epochs_in_stage for active slots
+            # Increment epochs_in_stage for all occupied slots (only DORMANT excluded)
             for slot in current_epoch.slots.values():
-                if slot.stage not in (SeedStage.DORMANT, SeedStage.PRUNED, SeedStage.FOSSILIZED):
+                if slot.stage != SeedStage.DORMANT:
                     slot.epochs_in_stage += 1
 
             # Commit and start next
