@@ -29,6 +29,7 @@ from esper.karn.ingest import (
     coerce_int,
     coerce_path,
     coerce_seed_stage,
+    coerce_str,
     coerce_str_or_none,
     filter_dataclass_kwargs,
 )
@@ -50,8 +51,6 @@ __all__ = [
     "BatchMetrics",
     "GateEvaluationTrace",
     "DenseTrace",
-    # Pareto Analysis
-    "EpisodeOutcome",
     # Store
     "TelemetryStore",
 ]
@@ -355,13 +354,6 @@ class DenseTrace:
     # Gate internals (if gate event)
     gate_evaluation_details: GateEvaluationTrace | None = None
 
-
-# =============================================================================
-# Episode Outcome (Pareto Analysis) - Now in leyline
-# =============================================================================
-
-# Re-export from leyline for backwards compatibility
-from esper.leyline import EpisodeOutcome  # noqa: E402
 
 # =============================================================================
 # Telemetry Store (In-Memory)
@@ -674,8 +666,8 @@ class TelemetryStore:
                 data["observation_summary"] = coerce_float_dict(
                     data.get("observation_summary"), field="PolicySnapshot.observation_summary"
                 )
-            # PT-01 fix: Remove `or ""` - let None propagate to expose schema violations
-            data["action_op"] = coerce_str_or_none(data.get("action_op"), field="PolicySnapshot.action_op")
+            # action_op is non-optional (str = ""), use coerce_str to maintain contract
+            data["action_op"] = coerce_str(data.get("action_op"), field="PolicySnapshot.action_op", default="")
             data["action_slot"] = coerce_str_or_none(data.get("action_slot"), field="PolicySnapshot.action_slot")
             data["action_blueprint"] = coerce_str_or_none(
                 data.get("action_blueprint"), field="PolicySnapshot.action_blueprint"
@@ -781,12 +773,12 @@ class TelemetryStore:
 
         def _parse_gate_evaluation_trace(raw: dict[str, Any]) -> GateEvaluationTrace:
             data = filter_dataclass_kwargs(GateEvaluationTrace, raw, context="GateEvaluationTrace")
-            # PT-02, PT-03, PT-04 fix: Remove `or ""` - let None propagate to expose schema violations
-            data["gate_id"] = coerce_str_or_none(data.get("gate_id"), field="GateEvaluationTrace.gate_id")
-            data["slot_id"] = coerce_str_or_none(data.get("slot_id"), field="GateEvaluationTrace.slot_id")
+            # Non-optional string fields use coerce_str to maintain dataclass contract
+            data["gate_id"] = coerce_str(data.get("gate_id"), field="GateEvaluationTrace.gate_id", default="")
+            data["slot_id"] = coerce_str(data.get("slot_id"), field="GateEvaluationTrace.slot_id", default="")
             passed = coerce_bool_or_none(data.get("passed"), field="GateEvaluationTrace.passed")
             data["passed"] = False if passed is None else passed
-            data["reason"] = coerce_str_or_none(data.get("reason"), field="GateEvaluationTrace.reason")
+            data["reason"] = coerce_str(data.get("reason"), field="GateEvaluationTrace.reason", default="")
             data["metrics_at_evaluation"] = coerce_float_dict(
                 data.get("metrics_at_evaluation"), field="GateEvaluationTrace.metrics_at_evaluation"
             )
@@ -911,13 +903,6 @@ class TelemetryStore:
                     if store.current_epoch:
                         store.current_epoch.host.val_loss = data.get("val_loss", 0.0)
                         store.current_epoch.host.val_accuracy = data.get("val_accuracy", 0.0)
-                elif event_type == "REWARD_COMPUTED":
-                    # Legacy event type (kept for backwards compat with old JSONL files)
-                    if store.current_epoch and not store.current_epoch.policy:
-                        store.current_epoch.policy = PolicySnapshot()
-                    if store.current_epoch and store.current_epoch.policy:
-                        store.current_epoch.policy.reward_total = data.get("total_reward", 0.0)
-                        store.current_epoch.policy.action_op = data.get("action_name", "")
                 elif event_type == "ANALYTICS_SNAPSHOT":
                     # New event type: handle kind="last_action" for policy data
                     kind = data.get("kind")

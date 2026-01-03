@@ -531,6 +531,7 @@ class KarnCollector:
                         slot.last_gate_reason = ",".join(str(c) for c in event.data.checks_failed)
         elif event_type == "SEED_FOSSILIZED":
             slot.stage = SeedStage.FOSSILIZED
+            slot.epochs_in_stage = 0  # Reset to trigger "just transitioned" detection
         elif event_type == "SEED_PRUNED":
             slot.stage = SeedStage.PRUNED
             slot.epochs_in_stage = 0

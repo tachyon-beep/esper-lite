@@ -67,8 +67,7 @@ from esper.leyline import (
 )
 
 if TYPE_CHECKING:
-    from esper.karn.store import EpisodeOutcome
-    from esper.leyline import TelemetryEvent
+    from esper.leyline import EpisodeOutcome, TelemetryEvent
 
 _logger = logging.getLogger(__name__)
 
@@ -1678,7 +1677,7 @@ class SanctumAggregator:
 
     def _handle_episode_outcome(self, event: "TelemetryEvent") -> None:
         """Handle incoming episode outcome events."""
-        from esper.karn.store import EpisodeOutcome
+        from esper.leyline import EpisodeOutcome
 
         data = event.data
         if data is None:

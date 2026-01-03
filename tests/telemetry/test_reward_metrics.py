@@ -21,7 +21,7 @@ from esper.leyline import (
 from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
 from esper.karn.sanctum.widgets.reward_health import RewardHealthData
 from esper.karn.sanctum.schema import RewardComponents
-from esper.karn.store import EpisodeOutcome
+from esper.leyline import EpisodeOutcome
 from esper.karn.pareto import extract_pareto_frontier, compute_hypervolume_2d
 
 from tests.telemetry.conftest import CaptureBackend, CaptureHubResult

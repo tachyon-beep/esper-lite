@@ -5,7 +5,7 @@ Architecture:
 - Tracks which events have been processed by ID
 - Queues individual events and drip-feeds them at observed events/sec
 - Shows rich inline metadata for actionable events (GERMINATED, FOSSILIZED, etc.)
-- Aggregates high-frequency events (EPOCH_COMPLETED, REWARD_COMPUTED)
+- Aggregates high-frequency events (EPOCH_COMPLETED, BATCH_EPOCH_COMPLETED)
 - Updates aggregated lines live as new events arrive
 - On render: formats timestamps based on visible line order for proper clock flow
 
@@ -38,7 +38,6 @@ _EVENT_COLORS: dict[str, str] = {
     # PPO events
     "PPO_UPDATE_COMPLETED": "bright_magenta",
     # High-frequency (aggregated)
-    "REWARD_COMPUTED": "dim",
     "TRAINING_STARTED": "bright_green",
     "EPOCH_COMPLETED": "bright_blue",
     "BATCH_EPOCH_COMPLETED": "bright_blue",
@@ -98,7 +97,7 @@ class EventLog(Static):
     """Append-only scrolling event log with rich metadata display.
 
     - Shows individual entries for actionable events (seed lifecycle, PPO)
-    - Aggregates high-frequency events (EPOCH_COMPLETED, REWARD_COMPUTED)
+    - Aggregates high-frequency events (EPOCH_COMPLETED, BATCH_EPOCH_COMPLETED)
     - Displays key metadata inline (slot, blueprint, stage transition, etc.)
     - Timestamp abbreviation computed at render time for proper clock flow
     - Click anywhere to open raw event detail modal
