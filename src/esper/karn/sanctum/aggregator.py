@@ -1556,11 +1556,18 @@ class SanctumAggregator:
                 # bounded_attribution is None for LOSS family (not computed) - leave at default
                 if rc.bounded_attribution is not None:
                     env.reward_components.bounded_attribution = rc.bounded_attribution
+                # seed_contribution is None for non-contribution modes - leave at default
+                if rc.seed_contribution is not None:
+                    env.reward_components.seed_contribution = rc.seed_contribution
                 env.reward_components.compute_rent = rc.compute_rent
                 env.reward_components.stage_bonus = rc.stage_bonus
                 env.reward_components.ratio_penalty = rc.ratio_penalty
                 env.reward_components.alpha_shock = rc.alpha_shock
                 env.reward_components.hindsight_credit = rc.hindsight_credit
+                # Wiring fix: these fields were defined in schema but never populated
+                env.reward_components.fossilize_terminal_bonus = rc.fossilize_terminal_bonus
+                env.reward_components.blending_warning = rc.blending_warning
+                env.reward_components.holding_warning = rc.holding_warning
                 env.reward_components.total = rc.total_reward
                 env.reward_components.last_action = action_name
                 env.reward_components.env_id = env_id

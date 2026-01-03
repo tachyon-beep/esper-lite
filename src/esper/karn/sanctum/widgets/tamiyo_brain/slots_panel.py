@@ -19,6 +19,23 @@ if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot
 
 
+def _format_count(count: int) -> str:
+    """Format count with k suffix for values >= 1000.
+
+    Examples:
+        999 -> "999"
+        1000 -> "1.00k"
+        1500 -> "1.50k"
+        9999 -> "9.99k"
+        12345 -> "12.3k"
+    """
+    if count >= 10000:
+        return f"{count / 1000:.1f}k"
+    elif count >= 1000:
+        return f"{count / 1000:.2f}k"
+    return str(count)
+
+
 class SlotsPanel(Static):
     """Slot stage summary panel.
 
@@ -90,16 +107,19 @@ class SlotsPanel(Static):
         # === Seed Lifecycle Section ===
         lifecycle = snapshot.seed_lifecycle
 
-        # Line 1: Cumulative counts (Active / Fossilized / Pruned / Germinated)
+        # Line 1: Active slot count
         result.append("Active:", style="dim")
         result.append(f"{lifecycle.active_count}/{lifecycle.total_slots}", style="cyan")
-        result.append("  Foss:", style="dim")
-        result.append(f"{lifecycle.fossilize_count}", style="blue")
+        result.append("\n")
+
+        # Line 2: Cumulative counts (Foss / Prune / Germ) with k-formatting for large values
+        result.append("Foss:", style="dim")
+        result.append(f"{_format_count(lifecycle.fossilize_count):>6}", style="blue")
         result.append("  Prune:", style="dim")
         prune_style = "red" if lifecycle.prune_count > lifecycle.fossilize_count else "dim"
-        result.append(f"{lifecycle.prune_count}", style=prune_style)
+        result.append(f"{_format_count(lifecycle.prune_count):>6}", style=prune_style)
         result.append("  Germ:", style="dim")
-        result.append(f"{lifecycle.germination_count}", style="green")
+        result.append(f"{_format_count(lifecycle.germination_count):>6}", style="green")
         result.append("\n")
 
         # Line 2: Per-episode rates with trend indicators
