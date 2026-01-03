@@ -47,8 +47,6 @@ if TYPE_CHECKING:
     from esper.leyline.reports import SeedStateReport
     from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
 
-from esper.simic.contracts import SeedSlotProtocol, SeedStateProtocol, SlottedHostProtocol
-
 # NOTE: get_task_spec imported lazily inside train_ppo_vectorized to avoid circular import:
 #   runtime -> simic.rewards -> simic -> simic.training -> vectorized -> runtime
 from esper.utils.data import SharedBatchIterator
@@ -56,6 +54,9 @@ from esper.leyline import (
     ALPHA_SPEED_TO_STEPS,
     ALPHA_TARGET_VALUES,
     AlphaAlgorithm,
+    SeedSlotProtocol,
+    SeedStateProtocol,
+    SlottedHostProtocol,
     AlphaCurveAction,
     AlphaMode,
     AlphaSpeedAction,

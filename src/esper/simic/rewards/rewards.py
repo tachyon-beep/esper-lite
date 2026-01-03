@@ -113,15 +113,19 @@ class RewardFamily(Enum):
 # Using different potentials across reward functions breaks telescoping.
 # =============================================================================
 
-STAGE_POTENTIALS = {
-    0: 0.0,   # UNKNOWN
-    1: 0.0,   # DORMANT
-    2: 1.0,   # GERMINATED
-    3: 2.0,   # TRAINING
-    4: 3.5,   # BLENDING (largest increment - this is where value is created)
+STAGE_POTENTIALS: dict[SeedStage, float] = {
+    SeedStage.UNKNOWN: 0.0,
+    SeedStage.DORMANT: 0.0,
+    SeedStage.GERMINATED: 1.0,
+    SeedStage.TRAINING: 2.0,
+    SeedStage.BLENDING: 3.5,  # Largest increment - this is where value is created
     # Value 5 intentionally skipped (was SHADOWING, removed)
-    6: 5.5,   # HOLDING
-    7: 6.0,   # FOSSILIZED (smallest increment - not a farming target)
+    SeedStage.HOLDING: 5.5,
+    SeedStage.FOSSILIZED: 6.0,  # Smallest increment - not a farming target
+    # Failure/recycling stages have zero potential (same as DORMANT)
+    SeedStage.PRUNED: 0.0,
+    SeedStage.EMBARGOED: 0.0,
+    SeedStage.RESETTING: 0.0,
 }
 
 # DEFAULT_GAMMA imported from leyline - single source of truth for PPO/PBRS gamma.
@@ -770,7 +774,7 @@ def compute_contribution_reward(
             # PBRS bonus for successful germination (no existing seed)
             # Balances the PBRS penalty applied when pruning seeds
             # Skip if disable_pbrs is True (ablation experiment)
-            phi_germinated = STAGE_POTENTIALS.get(STAGE_GERMINATED, 0.0)
+            phi_germinated = STAGE_POTENTIALS[SeedStage.GERMINATED]
             phi_no_seed = 0.0
             pbrs_germinate = config.gamma * phi_germinated - phi_no_seed
             action_shaping += config.pbrs_weight * pbrs_germinate
@@ -1187,7 +1191,7 @@ def _contribution_pbrs_bonus(
     phi(s') at timestep t equals phi(s) at timestep t+1.
     """
     # Current potential
-    phi_current = STAGE_POTENTIALS.get(seed_info.stage, 0.0)
+    phi_current = STAGE_POTENTIALS[SeedStage(seed_info.stage)]
     phi_current += min(
         seed_info.epochs_in_stage * config.epoch_progress_bonus,
         config.max_progress_bonus,
@@ -1202,14 +1206,14 @@ def _contribution_pbrs_bonus(
                 "phi_prev will be underestimated. This indicates SeedInfo was constructed incorrectly.",
                 seed_info.previous_stage,
             )
-        phi_prev = STAGE_POTENTIALS.get(seed_info.previous_stage, 0.0)
+        phi_prev = STAGE_POTENTIALS[SeedStage(seed_info.previous_stage)]
         phi_prev += min(
             seed_info.previous_epochs_in_stage * config.epoch_progress_bonus,
             config.max_progress_bonus,
         )
     else:
         # Same stage, one fewer epoch
-        phi_prev = STAGE_POTENTIALS.get(seed_info.stage, 0.0)
+        phi_prev = STAGE_POTENTIALS[SeedStage(seed_info.stage)]
         phi_prev += min(
             (seed_info.epochs_in_stage - 1) * config.epoch_progress_bonus,
             config.max_progress_bonus,
@@ -1547,7 +1551,7 @@ def compute_seed_potential(obs: dict[str, Any]) -> float:
         return 0.0
 
     # Use unified STAGE_POTENTIALS for PBRS consistency across all reward functions
-    base_potential = STAGE_POTENTIALS.get(seed_stage, 0.0)
+    base_potential = STAGE_POTENTIALS[SeedStage(seed_stage)]
 
     # Progress bonus matches ContributionRewardConfig defaults for PBRS consistency
     # epoch_progress_bonus=0.3, max_progress_bonus=2.0
@@ -1572,8 +1576,8 @@ def compute_pbrs_stage_bonus(
     """
     previous_stage = seed_info.previous_stage
 
-    current_potential = STAGE_POTENTIALS.get(seed_info.stage, 0.0)
-    previous_potential = STAGE_POTENTIALS.get(previous_stage, 0.0)
+    current_potential = STAGE_POTENTIALS[SeedStage(seed_info.stage)]
+    previous_potential = STAGE_POTENTIALS[SeedStage(previous_stage)]
 
     return config.stage_potential_weight * (
         gamma * current_potential - previous_potential

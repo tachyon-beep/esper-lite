@@ -37,7 +37,7 @@ from esper.simic.telemetry import (
     TelemetryConfig,
 )
 from esper.simic.telemetry.gradient_collector import GradientHealthStats
-from esper.simic.contracts import SlottedHostProtocol
+from esper.leyline import SlottedHostProtocol
 from esper.leyline.slot_config import SlotConfig
 from esper.leyline.slot_id import validate_slot_ids
 from esper.nissa import get_hub
