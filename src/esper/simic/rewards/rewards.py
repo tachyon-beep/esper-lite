@@ -718,8 +718,10 @@ def compute_contribution_reward(
 
     # === 2b. SCAFFOLDING: Synergy Bonus ===
     # Reward seeds that have positive interactions with others
+    # B6-DRL-03: Gate on positive attribution to prevent ransomware seeds from
+    # receiving synergy bonus. Same anti-stacking pattern as ratio_penalty.
     synergy_bonus = 0.0
-    if seed_info is not None:
+    if seed_info is not None and attribution_discount >= 0.5 and bounded_attribution > 0:
         synergy_bonus = _compute_synergy_bonus(
             seed_info.interaction_sum,
         )

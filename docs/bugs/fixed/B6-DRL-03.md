@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B6-DRL-03` |
 | **Severity** | `P3` |
-| **Status** | `open` |
+| **Status** | `closed` |
 | **Batch** | 6 |
 | **Agent** | `drl` |
 | **Domain** | `simic/rewards` |
@@ -144,3 +144,46 @@ if attribution_discount >= 0.5 and bounded_attribution > 0:
 | **Reviewer** | Code Review Specialist |
 
 **Evaluation:** Valid finding with clear code evidence. Lines 714-721 show `synergy_bonus` is computed and added to reward unconditionally when `seed_info is not None`, without the `attribution_discount >= 0.5` gate applied to `ratio_penalty` and `holding_warning`. The recommended fix to gate synergy bonus on positive attribution is consistent with the anti-stacking design pattern already established in the function. Should be fixed to prevent ransomware seeds from receiving synergy rewards.
+
+---
+
+## Resolution
+
+### Status: FIXED
+
+**Fixed by adding anti-stacking gate to synergy bonus computation.**
+
+#### The Fix (rewards.py line 724)
+
+```python
+# Before:
+if seed_info is not None:
+    synergy_bonus = _compute_synergy_bonus(seed_info.interaction_sum)
+
+# After:
+if seed_info is not None and attribution_discount >= 0.5 and bounded_attribution > 0:
+    synergy_bonus = _compute_synergy_bonus(seed_info.interaction_sum)
+```
+
+#### DRL Expert Review
+
+The fix was reviewed and **APPROVED** by the DRL expert agent:
+- `attribution_discount >= 0.5` threshold is correct (matches ratio_penalty)
+- `bounded_attribution > 0` check ensures genuine contribution
+- No edge cases where legitimate seeds lose synergy bonus incorrectly
+- `disable_anti_gaming` flag not needed (synergy is scaffolding, not penalty)
+
+#### Tests Added
+
+- `TestRansomwarePattern.test_ransomware_no_synergy_bonus` - property test verifying ransomware seeds receive `synergy_bonus == 0.0`
+
+#### Verification Checklist
+
+- [x] Add anti-stacking gate to synergy bonus
+- [x] Add property test: ransomware seed gets synergy_bonus=0
+- [x] Verify existing synergy tests still pass (6/6 passed)
+
+#### Severity Confirmation
+
+- Original: P3 (API design / contract violation)
+- Confirmed: P3 (appropriate for this reward hacking vulnerability)
