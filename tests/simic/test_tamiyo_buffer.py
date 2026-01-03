@@ -580,3 +580,118 @@ class TestTamiyoRolloutBuffer:
 
         with pytest.raises(ValueError, match="out of range"):
             buffer.mark_terminal_with_penalty(env_id=5, penalty=-10.0)
+
+    def test_td_errors_stored_during_gae(self):
+        """TD errors should be stored during GAE computation (TELE-221/222/223)."""
+        buffer = TamiyoRolloutBuffer(
+            num_envs=2,
+            max_steps_per_env=4,
+            state_dim=50,
+            lstm_hidden_dim=DEFAULT_LSTM_HIDDEN_DIM,
+        )
+
+        # Fill buffer with minimal data for 2 envs, 3 steps each
+        for env_id in range(2):
+            buffer.start_episode(env_id=env_id)
+            for step in range(3):
+                buffer.add(
+                    env_id=env_id,
+                    state=torch.randn(50),
+                    blueprint_indices=torch.zeros(buffer.num_slots, dtype=torch.long),
+                    slot_action=0,
+                    blueprint_action=0,
+                    style_action=0,
+                    tempo_action=0,
+                    alpha_target_action=0,
+                    alpha_speed_action=0,
+                    alpha_curve_action=0,
+                    op_action=0,
+                    effective_op_action=0,
+                    slot_log_prob=-1.0,
+                    blueprint_log_prob=-1.0,
+                    style_log_prob=-1.0,
+                    tempo_log_prob=-1.0,
+                    alpha_target_log_prob=-1.0,
+                    alpha_speed_log_prob=-1.0,
+                    alpha_curve_log_prob=-1.0,
+                    op_log_prob=-1.0,
+                    value=1.0 + step * 0.5,  # Increasing values: 1.0, 1.5, 2.0
+                    reward=0.1,
+                    done=(step == 2),
+                    slot_mask=torch.ones(buffer.num_slots, dtype=torch.bool),
+                    blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
+                    style_mask=torch.ones(NUM_STYLES, dtype=torch.bool),
+                    tempo_mask=torch.ones(NUM_TEMPO, dtype=torch.bool),
+                    alpha_target_mask=torch.ones(NUM_ALPHA_TARGETS, dtype=torch.bool),
+                    alpha_speed_mask=torch.ones(NUM_ALPHA_SPEEDS, dtype=torch.bool),
+                    alpha_curve_mask=torch.ones(NUM_ALPHA_CURVES, dtype=torch.bool),
+                    op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
+                    hidden_h=torch.zeros(1, 1, DEFAULT_LSTM_HIDDEN_DIM),
+                    hidden_c=torch.zeros(1, 1, DEFAULT_LSTM_HIDDEN_DIM),
+                )
+            buffer.end_episode(env_id=env_id)
+
+        # Compute GAE
+        buffer.compute_advantages_and_returns(gamma=0.99, gae_lambda=0.95)
+
+        # TD errors should be populated with non-zero values
+        assert buffer.td_errors.shape == (2, 4)
+        # At least some TD errors should be non-zero (rewards vs value estimates)
+        assert buffer.td_errors[:, :3].abs().sum() > 0, "TD errors should be non-zero"
+
+    def test_td_errors_in_batched_sequences(self):
+        """TD errors should be included in get_batched_sequences output."""
+        buffer = TamiyoRolloutBuffer(
+            num_envs=1,
+            max_steps_per_env=3,
+            state_dim=50,
+            lstm_hidden_dim=DEFAULT_LSTM_HIDDEN_DIM,
+        )
+
+        buffer.start_episode(env_id=0)
+        for step in range(2):
+            buffer.add(
+                env_id=0,
+                state=torch.randn(50),
+                blueprint_indices=torch.zeros(buffer.num_slots, dtype=torch.long),
+                slot_action=0,
+                blueprint_action=0,
+                style_action=0,
+                tempo_action=0,
+                alpha_target_action=0,
+                alpha_speed_action=0,
+                alpha_curve_action=0,
+                op_action=0,
+                effective_op_action=0,
+                slot_log_prob=-1.0,
+                blueprint_log_prob=-1.0,
+                style_log_prob=-1.0,
+                tempo_log_prob=-1.0,
+                alpha_target_log_prob=-1.0,
+                alpha_speed_log_prob=-1.0,
+                alpha_curve_log_prob=-1.0,
+                op_log_prob=-1.0,
+                value=1.0,
+                reward=0.5,
+                done=(step == 1),
+                slot_mask=torch.ones(buffer.num_slots, dtype=torch.bool),
+                blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
+                style_mask=torch.ones(NUM_STYLES, dtype=torch.bool),
+                tempo_mask=torch.ones(NUM_TEMPO, dtype=torch.bool),
+                alpha_target_mask=torch.ones(NUM_ALPHA_TARGETS, dtype=torch.bool),
+                alpha_speed_mask=torch.ones(NUM_ALPHA_SPEEDS, dtype=torch.bool),
+                alpha_curve_mask=torch.ones(NUM_ALPHA_CURVES, dtype=torch.bool),
+                op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
+                hidden_h=torch.zeros(1, 1, DEFAULT_LSTM_HIDDEN_DIM),
+                hidden_c=torch.zeros(1, 1, DEFAULT_LSTM_HIDDEN_DIM),
+            )
+        buffer.end_episode(env_id=0)
+
+        buffer.compute_advantages_and_returns(gamma=0.99, gae_lambda=0.95)
+
+        # Get batched sequences
+        data = buffer.get_batched_sequences()
+
+        # td_errors should be present in the returned dict
+        assert "td_errors" in data
+        assert data["td_errors"].shape == (1, 3)

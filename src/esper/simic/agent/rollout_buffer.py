@@ -163,6 +163,7 @@ class TamiyoRolloutBuffer:
     hidden_c: torch.Tensor = field(init=False)
     advantages: torch.Tensor = field(init=False)
     returns: torch.Tensor = field(init=False)
+    td_errors: torch.Tensor = field(init=False)
 
     # Episode boundary tracking
     _current_episode_start: dict[int, int] = field(default_factory=dict, init=False)
@@ -261,6 +262,7 @@ class TamiyoRolloutBuffer:
         # Computed during finalization
         self.advantages = torch.zeros(n, m, device=device)
         self.returns = torch.zeros(n, m, device=device)
+        self.td_errors = torch.zeros(n, m, device=device)
 
     def start_episode(self, env_id: int) -> None:
         """Mark start of a new episode for an environment."""
@@ -420,6 +422,7 @@ class TamiyoRolloutBuffer:
             bootstrap_values = self.bootstrap_values[env_id, :num_steps]
 
             advantages = torch.zeros(num_steps, device=self.device)
+            td_errors = torch.zeros(num_steps, device=self.device)
             last_gae = zero_tensor.clone()  # Clone to avoid in-place modification
 
             for t in reversed(range(num_steps)):
@@ -446,9 +449,12 @@ class TamiyoRolloutBuffer:
                 delta = rewards[t] + gamma_t * next_value * next_non_terminal - values[t]
                 last_gae = delta + gamma_lambda_t * next_non_terminal * last_gae
                 advantages[t] = last_gae
+                # Store TD error for telemetry (TELE-221/222/223)
+                td_errors[t] = delta
 
             self.advantages[env_id, :num_steps] = advantages
             self.returns[env_id, :num_steps] = advantages + values
+            self.td_errors[env_id, :num_steps] = td_errors
 
         # P2 FIX: New advantages computed - they need normalization
         self._advantages_normalized = False
@@ -549,6 +555,7 @@ class TamiyoRolloutBuffer:
             "rewards": self.rewards.to(device, non_blocking=nb),
             "advantages": self.advantages.to(device, non_blocking=nb),
             "returns": self.returns.to(device, non_blocking=nb),
+            "td_errors": self.td_errors.to(device, non_blocking=nb),
             "slot_masks": self.slot_masks.to(device, non_blocking=nb),
             "blueprint_masks": self.blueprint_masks.to(device, non_blocking=nb),
             "style_masks": self.style_masks.to(device, non_blocking=nb),
