@@ -245,3 +245,62 @@ class TestDeepMerge:
 
         # Base should be unchanged
         assert "y" not in base["nested"]
+
+
+class TestExtraKeyRejection:
+    """Test that unknown/typo keys are rejected (extra='forbid')."""
+
+    def test_top_level_unknown_key_raises(self) -> None:
+        """Unknown top-level key in TelemetryConfig raises ValidationError."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="unknown_field"):
+            TelemetryConfig(history_length=10, unknown_field=123)
+
+    def test_nested_gradient_typo_raises(self) -> None:
+        """Typo in nested GradientConfig raises ValidationError.
+
+        Regression test for: typo like 'enabeld' silently ignored,
+        causing gradients to not be collected.
+        """
+        from pydantic import ValidationError
+        from esper.nissa.config import GradientConfig
+
+        with pytest.raises(ValidationError, match="enabeld"):
+            GradientConfig(enabeld=True)  # typo: 'enabeld' vs 'enabled'
+
+    def test_nested_loss_landscape_typo_raises(self) -> None:
+        """Typo in nested LossLandscapeConfig raises ValidationError."""
+        from pydantic import ValidationError
+        from esper.nissa.config import LossLandscapeConfig
+
+        with pytest.raises(ValidationError, match="estiamte_sharpness"):
+            LossLandscapeConfig(enabled=True, estiamte_sharpness=False)
+
+    def test_nested_per_class_typo_raises(self) -> None:
+        """Typo in nested PerClassConfig raises ValidationError."""
+        from pydantic import ValidationError
+        from esper.nissa.config import PerClassConfig
+
+        with pytest.raises(ValidationError, match="track_accruacy"):
+            PerClassConfig(enabled=True, track_accruacy=True)  # typo
+
+    def test_from_yaml_with_typo_raises(self, tmp_path: Path) -> None:
+        """YAML file with typo key raises ValidationError."""
+        from pydantic import ValidationError
+
+        typo_file = tmp_path / "typo.yaml"
+        typo_file.write_text("history_length: 10\ngradients:\n  enabeld: true")
+
+        with pytest.raises(ValidationError, match="enabeld"):
+            TelemetryConfig.from_yaml(typo_file)
+
+    def test_overrides_with_typo_raises(self, tmp_path: Path) -> None:
+        """Overrides dict with typo key raises ValidationError."""
+        from pydantic import ValidationError
+
+        valid_file = tmp_path / "valid.yaml"
+        valid_file.write_text("history_length: 10")
+
+        with pytest.raises(ValidationError, match="unknwon_override"):
+            TelemetryConfig.from_yaml(valid_file, overrides={"unknwon_override": 42})

@@ -257,8 +257,8 @@ class BackendWorker:
                 try:
                     self._backend.emit(event)
                     self._processed_events += 1
-                except Exception as e:
-                    _logger.error(f"Error in backend {self._name}: {e}")
+                except Exception:
+                    _logger.exception("Error in backend %s", self._name)
                 finally:
                     elapsed = time.time() - start_time
                     self._total_processing_time += elapsed
@@ -266,8 +266,8 @@ class BackendWorker:
                 self._queue.task_done()
             except queue.Empty:
                 continue
-            except Exception as e:
-                _logger.error(f"Unexpected error in backend worker {self._name}: {e}")
+            except Exception:
+                _logger.exception("Unexpected error in backend worker %s", self._name)
 
 
 # OutputBackend Protocol now lives in leyline (re-exported above)
@@ -638,8 +638,8 @@ class NissaHub:
                 self._queue.task_done()
             except queue.Empty:
                 continue
-            except Exception as e:
-                _logger.error(f"Unexpected error in NissaHub worker loop: {e}")
+            except Exception:
+                _logger.exception("Unexpected error in NissaHub worker loop")
 
     def add_backend(self, backend: OutputBackend) -> None:
         """Add an output backend to the hub.

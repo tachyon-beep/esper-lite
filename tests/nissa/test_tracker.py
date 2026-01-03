@@ -197,3 +197,130 @@ class TestPlateauDetection:
         )
 
         tracker.cleanup()
+
+
+class TestConfigToggles:
+    """Test that config flags are honored by DiagnosticTracker."""
+
+    def test_track_norm_false_skips_norm_computation(self) -> None:
+        """When track_norm=False, gradient stats.norm stays at default 0.0.
+
+        Regression test for: config flags existed but were not honored.
+        """
+        config = TelemetryConfig.from_profile("standard")
+        config.gradients.enabled = True
+        config.gradients.layers = "all"  # Track all layers (test model doesn't have 'host.*' prefix)
+        config.gradients.track_norm = False
+        config.gradients.track_std = True  # keep std on for comparison
+
+        model = _SimpleModel()
+        tracker = DiagnosticTracker(model, config, device="cpu")
+
+        # Run a backward pass to trigger gradient hooks
+        x = torch.randn(4, 10)
+        y = model(x)
+        loss = y.sum()
+        loss.backward()
+
+        # Check gradient stats
+        assert len(tracker._grad_stats) > 0, "Should have captured gradient stats"
+        for stats in tracker._grad_stats.values():
+            # norm should be 0.0 (not computed) since track_norm=False
+            assert stats.norm == 0.0, f"norm should be 0.0 when track_norm=False, got {stats.norm}"
+            # std should be non-zero since track_std=True
+            assert stats.std != 0.0, "std should be computed when track_std=True"
+
+        tracker.cleanup()
+
+    def test_track_std_false_skips_std_computation(self) -> None:
+        """When track_std=False, gradient stats.std stays at default 0.0."""
+        config = TelemetryConfig.from_profile("standard")
+        config.gradients.enabled = True
+        config.gradients.layers = "all"  # Track all layers (test model doesn't have 'host.*' prefix)
+        config.gradients.track_norm = True  # keep norm on for comparison
+        config.gradients.track_std = False
+
+        model = _SimpleModel()
+        tracker = DiagnosticTracker(model, config, device="cpu")
+
+        # Run a backward pass
+        x = torch.randn(4, 10)
+        y = model(x)
+        loss = y.sum()
+        loss.backward()
+
+        # Check gradient stats
+        assert len(tracker._grad_stats) > 0, "Should have captured gradient stats"
+        for stats in tracker._grad_stats.values():
+            # std should be 0.0 (not computed) since track_std=False
+            assert stats.std == 0.0, f"std should be 0.0 when track_std=False, got {stats.std}"
+            # norm should be non-zero since track_norm=True
+            assert stats.norm != 0.0, "norm should be computed when track_norm=True"
+
+        tracker.cleanup()
+
+    def test_estimate_sharpness_false_skips_sharpness(self) -> None:
+        """When estimate_sharpness=False, snapshot.sharpness is None.
+
+        Regression test for: estimate_sharpness flag existed but only
+        loss_landscape.enabled was checked.
+        """
+        config = TelemetryConfig.from_profile("diagnostic")
+        config.loss_landscape.enabled = True  # Enable loss landscape analysis
+        config.loss_landscape.estimate_sharpness = False  # But disable sharpness specifically
+
+        model = _SimpleModel()
+        tracker = DiagnosticTracker(model, config, device="cpu")
+
+        # Create minimal validation loader
+        val_data = [(torch.randn(4, 10), torch.randint(0, 2, (4,))) for _ in range(2)]
+        criterion = nn.CrossEntropyLoss()
+
+        snapshot = tracker.end_epoch(
+            epoch=1,
+            train_loss=0.5,
+            val_loss=0.4,
+            val_accuracy=60.0,
+            val_loader=val_data,
+            criterion=criterion,
+        )
+
+        # Sharpness should be None since estimate_sharpness=False
+        assert snapshot.sharpness is None, (
+            f"sharpness should be None when estimate_sharpness=False, got {snapshot.sharpness}"
+        )
+
+        tracker.cleanup()
+
+    def test_estimate_sharpness_true_computes_sharpness(self) -> None:
+        """When estimate_sharpness=True (default), snapshot.sharpness is computed."""
+        config = TelemetryConfig.from_profile("diagnostic")
+        config.loss_landscape.enabled = True
+        config.loss_landscape.estimate_sharpness = True  # Explicitly enable
+        config.loss_landscape.perturbation_samples = 1  # Minimize test time
+
+        model = _SimpleModel()
+        tracker = DiagnosticTracker(model, config, device="cpu")
+
+        # Create minimal validation loader
+        val_data = [(torch.randn(4, 10), torch.randint(0, 2, (4,))) for _ in range(2)]
+        criterion = nn.CrossEntropyLoss()
+
+        snapshot = tracker.end_epoch(
+            epoch=1,
+            train_loss=0.5,
+            val_loss=0.4,
+            val_accuracy=60.0,
+            val_loader=val_data,
+            criterion=criterion,
+        )
+
+        # Sharpness should be computed (non-None float)
+        assert snapshot.sharpness is not None, (
+            "sharpness should be computed when estimate_sharpness=True"
+        )
+        assert isinstance(snapshot.sharpness, float), (
+            f"sharpness should be float, got {type(snapshot.sharpness)}"
+        )
+
+        tracker.cleanup()

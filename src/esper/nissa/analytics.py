@@ -49,8 +49,13 @@ BLUEPRINT_COMPUTE_MULTIPLIERS: dict[str, float] = {
 
 
 def compute_cost_for_blueprint(blueprint_id: str) -> float:
-    """Return compute multiplier for a blueprint type."""
-    return BLUEPRINT_COMPUTE_MULTIPLIERS.get(blueprint_id, 1.1)
+    """Return compute multiplier for a blueprint type.
+
+    Raises:
+        KeyError: If blueprint_id is not registered in BLUEPRINT_COMPUTE_MULTIPLIERS.
+            New blueprints must be explicitly registered with their compute cost.
+    """
+    return BLUEPRINT_COMPUTE_MULTIPLIERS[blueprint_id]
 
 
 # =============================================================================

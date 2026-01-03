@@ -175,6 +175,10 @@ class DiagnosticTracker:
 
         Uses batched tensor ops with single .tolist() sync to avoid
         per-metric GPU synchronization in this hot path (called every backward).
+
+        Respects config flags:
+        - track_norm: If False, skip norm computation (stats.norm stays 0.0)
+        - track_std: If False, skip std computation (stats.std stays 0.0)
         """
         if grad is None:
             return
@@ -185,19 +189,30 @@ class DiagnosticTracker:
         grad_flat = grad.abs().flatten()
 
         # Batch all scalar computations into a single tensor for one sync
-        stats_tensors = [
-            grad.norm(),
-            grad.std(),
-            grad.mean(),
-        ]
+        # Track which metrics we're computing for correct unpacking
+        stats_tensors: list[torch.Tensor] = []
+        metric_keys: list[str] = []
+
+        if cfg.track_norm:
+            stats_tensors.append(grad.norm())
+            metric_keys.append("norm")
+        if cfg.track_std:
+            stats_tensors.append(grad.std())
+            metric_keys.append("std")
+
+        # Mean is always tracked (no config flag for it)
+        stats_tensors.append(grad.mean())
+        metric_keys.append("mean")
 
         if cfg.detect_vanishing:
             stats_tensors.append((grad_flat < cfg.vanishing_threshold).float().mean())
+            metric_keys.append("vanishing_pct")
         if cfg.detect_exploding:
             stats_tensors.append((grad_flat > cfg.exploding_threshold).float().mean())
+            metric_keys.append("exploding_pct")
 
         # Percentiles (expensive, only if configured)
-        percentile_keys = []
+        percentile_keys: list[int] = []
         if cfg.percentiles:
             grad_float = grad_flat.float()
             for p in cfg.percentiles:
@@ -207,19 +222,22 @@ class DiagnosticTracker:
         # Single GPU sync for all stats
         all_values = torch.stack(stats_tensors).tolist()
 
-        # Unpack values
+        # Unpack values using tracked metric keys
         stats = GradientStats(layer_name=name)
-        stats.norm = all_values[0]
-        stats.std = all_values[1]
-        stats.mean = all_values[2]
+        idx = 0
+        for key in metric_keys:
+            if key == "norm":
+                stats.norm = all_values[idx]
+            elif key == "std":
+                stats.std = all_values[idx]
+            elif key == "mean":
+                stats.mean = all_values[idx]
+            elif key == "vanishing_pct":
+                stats.vanishing_pct = all_values[idx]
+            elif key == "exploding_pct":
+                stats.exploding_pct = all_values[idx]
+            idx += 1
 
-        idx = 3
-        if cfg.detect_vanishing:
-            stats.vanishing_pct = all_values[idx]
-            idx += 1
-        if cfg.detect_exploding:
-            stats.exploding_pct = all_values[idx]
-            idx += 1
         for p in percentile_keys:
             stats.percentiles[p] = all_values[idx]
             idx += 1
@@ -277,11 +295,14 @@ class DiagnosticTracker:
         Note: This method temporarily sets model.eval() for inference but
         restores the original training mode on exit. Telemetry collection
         should be side-effect free with respect to training state.
-        """
-        if not self.config.loss_landscape.enabled:
-            return None
 
+        Respects config flags:
+        - enabled: If False, skip all loss landscape analysis
+        - estimate_sharpness: If False, skip sharpness estimation specifically
+        """
         cfg = self.config.loss_landscape
+        if not cfg.enabled or not cfg.estimate_sharpness:
+            return None
 
         # Preserve and restore training mode to avoid leaking state into training loop
         was_training = self.model.training
