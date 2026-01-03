@@ -722,7 +722,6 @@ def compute_contribution_reward(
     if seed_info is not None:
         synergy_bonus = _compute_synergy_bonus(
             seed_info.interaction_sum,
-            seed_info.boost_received,
         )
         reward += synergy_bonus
     if components:
@@ -1219,7 +1218,6 @@ def _contribution_pbrs_bonus(
 
 def _compute_synergy_bonus(
     interaction_sum: float,
-    boost_received: float,
     synergy_weight: float = 0.1,
 ) -> float:
     """Compute synergy bonus for scaffolding behavior.
@@ -1227,9 +1225,12 @@ def _compute_synergy_bonus(
     Rewards seeds that have positive interactions with others.
     Uses tanh to bound the bonus and prevent reward hacking.
 
+    Note: boost_received (max single interaction) is intentionally NOT used here.
+    It feeds into hindsight credit via scaffold_boost_ledger instead. Using it
+    in both places would create concentration attack vulnerabilities.
+
     Args:
         interaction_sum: Total interaction I_ij with all other seeds
-        boost_received: Maximum single interaction
         synergy_weight: Scaling factor for bonus (default 0.1)
 
     Returns:
