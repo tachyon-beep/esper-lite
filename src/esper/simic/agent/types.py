@@ -90,6 +90,13 @@ class PPOUpdateMetrics(TypedDict, total=False):
     # Per-head NaN/Inf detection (for indicator lights)
     head_nan_detected: dict[str, bool]
     head_inf_detected: dict[str, bool]
+    # LSTM hidden state health (TELE-340)
+    lstm_h_norm: float | None
+    lstm_c_norm: float | None
+    lstm_h_max: float | None
+    lstm_c_max: float | None
+    lstm_has_nan: bool | None
+    lstm_has_inf: bool | None
 
 
 class HeadLogProbs(TypedDict):
