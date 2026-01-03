@@ -20,6 +20,7 @@ from .rollout_buffer import TamiyoRolloutBuffer
 from .advantages import compute_per_head_advantages
 from .types import PPOUpdateMetrics
 from esper.simic.telemetry import RatioExplosionDiagnostic
+from esper.simic.telemetry.lstm_health import compute_lstm_health
 from esper.leyline import (
     PolicyBundle,
     DEFAULT_BATCH_SIZE,
