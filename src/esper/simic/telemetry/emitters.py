@@ -707,6 +707,7 @@ def aggregate_layer_gradient_health(
     dead = sum(1 for s in layer_stats if s.zero_fraction > 0.9)
     exploding = sum(1 for s in layer_stats if s.large_fraction > 0.1)
     nan_count = sum(s.nan_count for s in layer_stats)
+    inf_count = sum(s.inf_count for s in layer_stats)
 
     # Per-layer health scores: 1.0 = perfect, penalize based on stats
     # Score indicates: 1.0=healthy, 0.5=warning, 0.0=dead/exploding
@@ -734,6 +735,7 @@ def aggregate_layer_gradient_health(
         "dead_layers": dead,
         "exploding_layers": exploding,
         "nan_grad_count": nan_count,
+        "inf_grad_count": inf_count,
         "layer_gradient_health": per_layer_health,
     }
 
@@ -799,6 +801,14 @@ def emit_ppo_update_event(
             advantage_skewness=metrics["advantage_skewness"],
             advantage_kurtosis=metrics["advantage_kurtosis"],
             advantage_positive_ratio=metrics["advantage_positive_ratio"],
+            # Pre-normalization advantage stats for diagnosing advantage collapse
+            pre_norm_advantage_mean=metrics["pre_norm_advantage_mean"],
+            pre_norm_advantage_std=metrics["pre_norm_advantage_std"],
+            # Return statistics for diagnosing value loss scale
+            return_mean=metrics["return_mean"],
+            return_std=metrics["return_std"],
+            # Value target scale: std used to normalize returns before value loss
+            value_target_scale=metrics["value_target_scale"],
             # MANDATORY ratio statistics - computed in PPO update
             ratio_mean=metrics["ratio_mean"],
             ratio_min=metrics["ratio_min"],
@@ -824,7 +834,7 @@ def emit_ppo_update_event(
             q_spread=metrics.get("q_spread", float("nan")),
             lr=lr,
             entropy_coef=metrics.get("entropy_coef"),
-            inf_grad_count=0,
+            inf_grad_count=metrics.get("inf_grad_count", 0),
             dead_layers=metrics.get("dead_layers", 0),
             exploding_layers=metrics.get("exploding_layers", 0),
             layer_gradient_health=metrics.get("layer_gradient_health"),
@@ -876,6 +886,16 @@ def emit_ppo_update_event(
             lstm_c_max=metrics.get("lstm_c_max"),
             lstm_has_nan=metrics.get("lstm_has_nan", False),
             lstm_has_inf=metrics.get("lstm_has_inf", False),
+            # Value function metrics (TELE-220 to TELE-228)
+            v_return_correlation=metrics.get("v_return_correlation", 0.0),
+            td_error_mean=metrics.get("td_error_mean", 0.0),
+            td_error_std=metrics.get("td_error_std", 0.0),
+            bellman_error=metrics.get("bellman_error", 0.0),
+            return_p10=metrics.get("return_p10", 0.0),
+            return_p50=metrics.get("return_p50", 0.0),
+            return_p90=metrics.get("return_p90", 0.0),
+            return_variance=metrics.get("return_variance", 0.0),
+            return_skewness=metrics.get("return_skewness", 0.0),
             inner_epoch=epoch,
             batch=batch_idx + 1,
             # BUG FIX: Track actual PPO update count (inner_epoch was misleading)
