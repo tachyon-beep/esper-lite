@@ -294,20 +294,15 @@ class TolariaGovernor:
         if self.last_good_state is None:
             raise RuntimeError("Governor panic before first snapshot!")
 
-        # Clear any live (non-fossilized) seeds FIRST
-        # This removes seed parameters so state_dict keys match snapshot
-        # Implements "revert to stable organism, dump all temporary grafts"
-        # hasattr AUTHORIZED by John on 2025-12-01 16:30:00 UTC
-        # Justification: Feature detection - MorphogeneticModel has seed_slots, base models may not
-        if hasattr(self.model, 'seed_slots'):
-            for slot in self.model.seed_slots.values():  # type: ignore[operator]
-                slot.prune(panic_reason, initiator="governor")
-
-        # Restore host + fossilized seeds from snapshot
-        # Use strict=False because:
+        # =========================================================================
+        # STEP 1: RESTORE HOST WEIGHTS FIRST (SAFETY-CRITICAL)
+        # =========================================================================
+        # Restore host + fossilized seeds from snapshot BEFORE pruning seeds.
+        # This ordering ensures rollback succeeds even if seed pruning fails
+        # (e.g., telemetry callback raises). Use strict=False because:
         # 1. Snapshot excludes experimental seeds (by design)
-        # 2. Current model may have different seed state than snapshot
-        # 3. execute_rollback prunes all seeds before restore, so missing keys are expected
+        # 2. Current model may have orphaned seed parameters not in snapshot
+        # 3. Seed keys are validated separately after restore
         #
         # MEMORY OPTIMIZATION: Load CPU snapshot directly instead of pre-copying to GPU.
         # PyTorch's load_state_dict handles CPU->GPU transfer per-parameter, avoiding
@@ -324,6 +319,32 @@ class TolariaGovernor:
         missing_keys, unexpected_keys = self.model.load_state_dict(
             self.last_good_state, strict=False
         )
+
+        # =========================================================================
+        # STEP 2: PRUNE LIVE SEEDS (NON-CRITICAL CLEANUP)
+        # =========================================================================
+        # Clear any live (non-fossilized) seeds AFTER restoring weights.
+        # Implements "revert to stable organism, dump all temporary grafts".
+        #
+        # SAFETY INVARIANT: Host weights are already restored at this point.
+        # Seed pruning is cleanup, not a prerequisite for recovery. If pruning
+        # fails (e.g., telemetry callback raises), training can still continue
+        # with orphaned seed parameters that will be ignored by the host.
+        #
+        # hasattr AUTHORIZED by John on 2025-12-01 16:30:00 UTC
+        # Justification: Feature detection - MorphogeneticModel has seed_slots, base models may not
+        if hasattr(self.model, 'seed_slots'):
+            for slot in self.model.seed_slots.values():  # type: ignore[operator]
+                try:
+                    slot.prune(panic_reason, initiator="governor")
+                except Exception as e:
+                    # Seed prune failed (likely telemetry callback raised).
+                    # Log but don't abort - host weights are already restored.
+                    import sys
+                    print(
+                        f"WARNING: Seed prune failed during rollback for slot {slot.slot_id}: {e}",
+                        file=sys.stderr,
+                    )
 
         # INTEGRITY CHECK: Validate that mismatches are within expected namespaces.
         # Seed-related mismatches are expected (seeds may be pruned/fossilized between
