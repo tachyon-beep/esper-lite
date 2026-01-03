@@ -455,6 +455,88 @@ def test_aggregator_reads_reward_components_dataclass():
     assert env.reward_components.hindsight_credit == 0.05
 
 
+def test_aggregator_wires_all_reward_component_fields():
+    """Aggregator should wire ALL RewardComponentsTelemetry fields to schema.
+
+    Regression test for wiring gap where fossilize_terminal_bonus, blending_warning,
+    holding_warning, and seed_contribution were defined in schema but never populated
+    from telemetry.
+
+    TELE-662: fossilize_terminal_bonus
+    TELE-663: blending_warning
+    TELE-664: holding_warning
+    """
+    from datetime import datetime, timezone
+    from esper.karn.sanctum.aggregator import SanctumAggregator
+    from esper.leyline.telemetry import AnalyticsSnapshotPayload, TelemetryEvent, TelemetryEventType
+    from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
+
+    agg = SanctumAggregator(num_envs=1)
+    agg._connected = True
+    agg._ensure_env(0)
+
+    # Create telemetry with ALL reward component fields populated
+    rc = RewardComponentsTelemetry(
+        # Core signals
+        base_acc_delta=0.02,
+        bounded_attribution=0.3,
+        seed_contribution=0.15,  # Now wired
+        # Penalties
+        compute_rent=-0.05,
+        alpha_shock=-0.01,
+        ratio_penalty=-0.02,
+        blending_warning=-0.08,  # Now wired (TELE-663)
+        holding_warning=-0.03,   # Now wired (TELE-664)
+        # Bonuses
+        stage_bonus=0.1,
+        hindsight_credit=0.05,
+        fossilize_terminal_bonus=0.25,  # Now wired (TELE-662)
+        total_reward=0.58,
+    )
+
+    payload = AnalyticsSnapshotPayload(
+        kind="last_action",
+        env_id=0,
+        total_reward=0.58,
+        action_name="FOSSILIZE",
+        action_confidence=0.95,
+        reward_components=rc,
+    )
+
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+        timestamp=datetime.now(timezone.utc),
+        data=payload,
+        epoch=50,
+    )
+
+    agg.process_event(event)
+
+    env = agg._envs[0]
+
+    # Verify ALL fields are wired (not just the original subset)
+    assert env.reward_components.base_acc_delta == 0.02
+    assert env.reward_components.bounded_attribution == 0.3
+    assert env.reward_components.seed_contribution == 0.15, (
+        "seed_contribution should be wired from telemetry"
+    )
+    assert env.reward_components.compute_rent == -0.05
+    assert env.reward_components.alpha_shock == -0.01
+    assert env.reward_components.ratio_penalty == -0.02
+    assert env.reward_components.blending_warning == -0.08, (
+        "TELE-663: blending_warning should be wired from telemetry"
+    )
+    assert env.reward_components.holding_warning == -0.03, (
+        "TELE-664: holding_warning should be wired from telemetry"
+    )
+    assert env.reward_components.stage_bonus == 0.1
+    assert env.reward_components.hindsight_credit == 0.05
+    assert env.reward_components.fossilize_terminal_bonus == 0.25, (
+        "TELE-662: fossilize_terminal_bonus should be wired from telemetry"
+    )
+    assert env.reward_components.total == 0.58
+
+
 def test_aggregator_populates_nested_metrics():
     """Aggregator should populate infrastructure and gradient_quality nested fields."""
     agg = SanctumAggregator(num_envs=4)
