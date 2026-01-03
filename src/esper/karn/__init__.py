@@ -20,11 +20,8 @@ Usage:
     hub.add_backend(OverwatchBackend(port=8080))
 """
 
-# WebSocket output (lazy import - fastapi may not be installed)
-try:
-    from esper.karn.websocket_output import WebSocketOutput
-except ImportError:
-    WebSocketOutput = None  # type: ignore[misc, assignment]
+# WebSocket output (websockets dependency is lazy-imported at runtime)
+from esper.karn.websocket_output import WebSocketOutput
 
 # Store (data models)
 from esper.karn.store import (

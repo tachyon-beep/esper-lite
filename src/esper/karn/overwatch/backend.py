@@ -207,6 +207,45 @@ class OverwatchBackend:
             # Create FastAPI app
             app = FastAPI(title="Overwatch Dashboard")
 
+            # Broadcaster task - single coroutine owns queue and sends to all clients
+            # This avoids concurrent send_text() calls on the same WebSocket
+            async def broadcaster_loop() -> None:
+                while self._running:
+                    try:
+                        message = self._broadcast_queue.get_nowait()
+                    except Empty:
+                        await asyncio.sleep(0.05)  # 50ms poll interval
+                        continue
+
+                    # Copy client list under lock, release before await
+                    with self._clients_lock:
+                        clients = list(self._clients)
+
+                    # Send without holding lock - collect failures
+                    dead_clients: list[Any] = []
+                    for client in clients:
+                        try:
+                            await client.send_text(message)
+                        except WebSocketDisconnect:
+                            dead_clients.append(client)
+                        except Exception:
+                            _logger.exception(
+                                "WebSocket send failed; dropping client"
+                            )
+                            dead_clients.append(client)
+
+                    # Prune dead clients under lock
+                    if dead_clients:
+                        with self._clients_lock:
+                            self._clients = [
+                                c for c in self._clients if c not in dead_clients
+                            ]
+
+            # Start broadcaster task on app startup
+            @app.on_event("startup")  # type: ignore[untyped-decorator]
+            async def start_broadcaster() -> None:
+                asyncio.create_task(broadcaster_loop())
+
             @app.websocket("/ws")  # type: ignore[untyped-decorator]
             async def websocket_endpoint(websocket: WebSocket) -> None:
                 await websocket.accept()
@@ -222,46 +261,15 @@ class OverwatchBackend:
                     self._clients.append(websocket)
 
                 try:
+                    # Client handler just waits for disconnect (dashboard is passive)
                     while self._running:
-                        # Check for broadcast messages
-                        try:
-                            message = self._broadcast_queue.get_nowait()
-                            # Copy client list under lock, release before await
-                            with self._clients_lock:
-                                clients = list(self._clients)
-
-                            # Send without holding lock - collect failures
-                            dead_clients: list[Any] = []
-                            for client in clients:
-                                try:
-                                    await client.send_text(message)
-                                except WebSocketDisconnect:
-                                    dead_clients.append(client)
-                                except Exception:
-                                    _logger.exception(
-                                        "WebSocket send failed; dropping client"
-                                    )
-                                    dead_clients.append(client)
-
-                            # Prune dead clients under lock
-                            if dead_clients:
-                                with self._clients_lock:
-                                    self._clients = [
-                                        c for c in self._clients if c not in dead_clients
-                                    ]
-                        except Empty:
-                            pass
-
-                        # Check for client messages with short timeout
-                        # Dashboard is passive (receives only), so we use timeout
-                        # to continue polling broadcast queue
                         try:
                             await asyncio.wait_for(
                                 websocket.receive_text(),
-                                timeout=0.1,
+                                timeout=1.0,
                             )
                         except TimeoutError:
-                            # No message from client - continue checking broadcasts
+                            # No message from client - continue waiting
                             continue
                         except WebSocketDisconnect:
                             _logger.debug("WebSocket client disconnected normally")
