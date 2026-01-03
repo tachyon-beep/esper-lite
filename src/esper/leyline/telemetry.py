@@ -1619,6 +1619,13 @@ class EpisodeOutcomePayload:
     stability_score: float  # 1 - variance(recent_losses)
     reward_mode: str  # "shaped", "simplified", etc.
 
+    # Episode diagnostics (TELE-610)
+    episode_length: int = 0  # Steps in this episode (usually max_epochs)
+    outcome_type: str = "unknown"  # "success", "timeout", "early_termination"
+    germinate_count: int = 0  # GERMINATE actions this episode
+    prune_count: int = 0  # PRUNE actions this episode
+    fossilize_count: int = 0  # FOSSILIZE actions this episode
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "EpisodeOutcomePayload":
         """Parse from dict. Raises KeyError on missing required fields."""
@@ -1632,6 +1639,11 @@ class EpisodeOutcomePayload:
             episode_reward=data["episode_reward"],
             stability_score=data["stability_score"],
             reward_mode=data["reward_mode"],
+            episode_length=data.get("episode_length", 0),
+            outcome_type=data.get("outcome_type", "unknown"),
+            germinate_count=data.get("germinate_count", 0),
+            prune_count=data.get("prune_count", 0),
+            fossilize_count=data.get("fossilize_count", 0),
         )
 
 
