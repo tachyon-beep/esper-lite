@@ -244,13 +244,7 @@ class KarnCollector:
 
     def _update_store(self, event: "TelemetryEvent") -> None:
         """Update TelemetryStore based on event type."""
-        # hasattr AUTHORIZED by John on 2025-12-14 03:30:00 UTC
-        # Justification: Serialization - handle both enum and string event_type values
-        event_type = (
-            event.event_type.name
-            if hasattr(event.event_type, "name")
-            else str(event.event_type)
-        )
+        event_type = event.event_type.name
 
         # Auto-start episode on TRAINING_STARTED (Nissa backend integration)
         if event_type == "TRAINING_STARTED":
@@ -476,13 +470,7 @@ class KarnCollector:
         if not self.store.current_epoch:
             return
 
-        # hasattr AUTHORIZED by John on 2025-12-14 03:30:00 UTC
-        # Justification: Serialization - handle both enum and string event_type values
-        event_type = (
-            event.event_type.name
-            if hasattr(event.event_type, "name")
-            else str(event.event_type)
-        )
+        event_type = event.event_type.name
 
         # Extract env_id and slot_id
         env_id: int = -1

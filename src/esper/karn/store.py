@@ -12,11 +12,12 @@ analytics consume them, and outputs serialize them.
 from __future__ import annotations
 
 import logging
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any
-from collections import deque
 
 from esper.karn.constants import AnomalyThresholds
 from esper.leyline import SeedStage
@@ -475,10 +476,8 @@ class TelemetryStore:
                 return obj.isoformat()
             if isinstance(obj, Path):
                 return str(obj)
-            # hasattr AUTHORIZED by John on 2025-12-14 15:00:00 UTC
-            # Justification: Serialization - handle Enum values in JSON export
-            if hasattr(obj, "name") and hasattr(obj, "value"):
-                return str(obj.name)  # Serialize enum as name string
+            if isinstance(obj, Enum):
+                return obj.name
             raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
         path = Path(path)

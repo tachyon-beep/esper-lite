@@ -330,13 +330,7 @@ class SanctumAggregator:
             self._last_event_ts = time.time()
 
         # Get event type name
-        # hasattr AUTHORIZED by operator on 2025-12-18 15:00:00 UTC
-        # Justification: Serialization - handle both enum and string event_type values
-        event_type = (
-            event.event_type.name
-            if hasattr(event.event_type, "name")
-            else str(event.event_type)
-        )
+        event_type = event.event_type.name
 
         # Log event
         self._add_event_log(event, event_type)

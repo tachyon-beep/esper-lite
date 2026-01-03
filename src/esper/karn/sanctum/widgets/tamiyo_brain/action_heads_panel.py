@@ -386,7 +386,7 @@ class ActionHeadsPanel(Static):
         for col_idx, (label, ent_field, _, width, _) in enumerate(HEAD_CONFIG):
             head_key = _get_head_key(ent_field)
             ratio_field = f"head_{head_key}_ratio_max"
-            ratio: float = getattr(tamiyo, ratio_field, 1.0)
+            ratio: float = getattr(tamiyo, ratio_field)
             color = self._ratio_color(ratio)
 
             result.append(f"{ratio:>{width}.3f}", style=color)
@@ -400,7 +400,7 @@ class ActionHeadsPanel(Static):
         for col_idx, (label, ent_field, _, width, _) in enumerate(HEAD_CONFIG):
             head_key = _get_head_key(ent_field)
             ratio_field = f"head_{head_key}_ratio_max"
-            ratio = getattr(tamiyo, ratio_field, 1.0)
+            ratio = getattr(tamiyo, ratio_field)
             bar = self._render_ratio_bar(ratio)
             padding = width - self.BAR_WIDTH
             result.append(" " * padding)

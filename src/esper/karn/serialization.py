@@ -77,12 +77,8 @@ def serialize_event(event: "TelemetryEventLike") -> str:
     Returns:
         JSON string representation of the event
     """
-    # Extract event_type (handle both enum and string)
-    # hasattr AUTHORIZED by John on 2025-12-17 15:00:00 UTC
-    # Justification: Serialization - handle both enum and string event_type values
-    event_type = event.event_type
-    if hasattr(event_type, "name"):
-        event_type = event_type.name
+    # Extract event_type name from Enum
+    event_type = event.event_type.name
 
     # Extract timestamp (handle datetime objects)
     # hasattr AUTHORIZED by John on 2025-12-17 15:00:00 UTC
