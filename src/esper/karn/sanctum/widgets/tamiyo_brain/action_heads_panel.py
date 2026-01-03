@@ -956,7 +956,3 @@ class ActionHeadsPanel(Static):
         bar.append("█" * filled, style=color)
         bar.append("░" * empty, style="dim")
         return bar
-
-
-# Backwards compatibility alias (temporary - remove after layout update)
-HeadsPanel = ActionHeadsPanel
