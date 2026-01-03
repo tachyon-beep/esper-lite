@@ -271,6 +271,11 @@ class SeedMetrics:
 
     def to_leyline(self) -> LeylineSeedMetrics:
         """Convert to Leyline contract type."""
+        # NOTE: Leyline's SeedMetrics contract treats this as a float; internally we
+        # use None to represent "never measured" for fail-loud gate behavior.
+        seed_gradient_norm_ratio = (
+            0.0 if self.seed_gradient_norm_ratio is None else float(self.seed_gradient_norm_ratio)
+        )
         return LeylineSeedMetrics(
             epochs_total=self.epochs_total,
             epochs_in_current_stage=self.epochs_in_current_stage,
@@ -281,7 +286,7 @@ class SeedMetrics:
             total_improvement=self.total_improvement,
             improvement_since_stage_start=self.improvement_since_stage_start,
             counterfactual_contribution=self.counterfactual_contribution,
-            seed_gradient_norm_ratio=self.seed_gradient_norm_ratio,
+            seed_gradient_norm_ratio=seed_gradient_norm_ratio,
             seed_param_count=self.seed_param_count,
             host_param_count=self.host_param_count,
             gradient_norm_avg=self.gradient_norm_avg,
@@ -1471,11 +1476,7 @@ class SeedSlot(nn.Module):
                         epochs_in_stage=epochs_in_stage,
                         alpha_curve=self.state.alpha_controller.alpha_curve.name,
                         # Optional gradient health fields
-                        grad_ratio=(
-                            self.state.metrics.seed_gradient_norm_ratio
-                            if self.state.telemetry and self.state.telemetry.epoch > 0
-                            else 0.0
-                        ),
+                        grad_ratio=self._telemetry_grad_ratio(),
                         has_vanishing=(
                             self.state.telemetry.has_vanishing
                             if self.state.telemetry and self.state.telemetry.epoch > 0
@@ -1567,11 +1568,7 @@ class SeedSlot(nn.Module):
                 epochs_in_stage=epochs_in_stage,
                 alpha_curve=self.state.alpha_controller.alpha_curve.name,
                 # Optional gradient health fields
-                grad_ratio=(
-                    self.state.metrics.seed_gradient_norm_ratio
-                    if self.state.telemetry and self.state.telemetry.epoch > 0
-                    else 0.0
-                ),
+                grad_ratio=self._telemetry_grad_ratio(),
                 has_vanishing=(
                     self.state.telemetry.has_vanishing
                     if self.state.telemetry and self.state.telemetry.epoch > 0
@@ -1674,11 +1671,7 @@ class SeedSlot(nn.Module):
                     epochs_in_stage=epochs_in_stage,
                     alpha_curve=self.state.alpha_controller.alpha_curve.name,
                     # Optional gradient health fields
-                    grad_ratio=(
-                        self.state.metrics.seed_gradient_norm_ratio
-                        if self.state.telemetry and self.state.telemetry.epoch > 0
-                        else 0.0
-                    ),
+                    grad_ratio=self._telemetry_grad_ratio(),
                     has_vanishing=(
                         self.state.telemetry.has_vanishing
                         if self.state.telemetry and self.state.telemetry.epoch > 0
@@ -1760,11 +1753,7 @@ class SeedSlot(nn.Module):
                     epochs_in_stage=epochs_in_stage,
                     alpha_curve=self.state.alpha_controller.alpha_curve.name,
                     # Optional gradient health fields
-                    grad_ratio=(
-                        self.state.metrics.seed_gradient_norm_ratio
-                        if self.state.telemetry and self.state.telemetry.epoch > 0
-                        else 0.0
-                    ),
+                    grad_ratio=self._telemetry_grad_ratio(),
                     has_vanishing=(
                         self.state.telemetry.has_vanishing
                         if self.state.telemetry and self.state.telemetry.epoch > 0
@@ -1817,7 +1806,8 @@ class SeedSlot(nn.Module):
         """Calculate gradient norms via the health monitor and update internal metrics.
 
         CRITICAL: Call this from Tolaria after loss.backward() to enable the G2 gate.
-        Without this, seed_gradient_norm_ratio remains 0.0 and G2 always fails.
+        Without this, seed_gradient_norm_ratio remains None and G2 fails with
+        checks_failed=["gradient_stats_never_measured"] in strict gate mode.
 
         Performance note: Calls compute_gradient_health() which internally performs
         .item() sync. The actual CUDA→CPU transfer happens in materialize_gradient_stats()
@@ -2379,11 +2369,7 @@ class SeedSlot(nn.Module):
                     epochs_in_stage=epochs_in_stage,
                     alpha_curve=self.state.alpha_controller.alpha_curve.name,
                     # Optional gradient health fields
-                    grad_ratio=(
-                        self.state.metrics.seed_gradient_norm_ratio
-                        if self.state.telemetry and self.state.telemetry.epoch > 0
-                        else 0.0
-                    ),
+                    grad_ratio=self._telemetry_grad_ratio(),
                     has_vanishing=(
                         self.state.telemetry.has_vanishing
                         if self.state.telemetry and self.state.telemetry.epoch > 0
@@ -2428,11 +2414,7 @@ class SeedSlot(nn.Module):
                     epochs_in_stage=epochs_in_stage,
                     alpha_curve=self.state.alpha_controller.alpha_curve.name,
                     # Optional gradient health fields
-                    grad_ratio=(
-                        self.state.metrics.seed_gradient_norm_ratio
-                        if self.state.telemetry and self.state.telemetry.epoch > 0
-                        else 0.0
-                    ),
+                    grad_ratio=self._telemetry_grad_ratio(),
                     has_vanishing=(
                         self.state.telemetry.has_vanishing
                         if self.state.telemetry and self.state.telemetry.epoch > 0
@@ -2473,11 +2455,7 @@ class SeedSlot(nn.Module):
                     epochs_in_stage=epochs_in_stage,
                     alpha_curve=self.state.alpha_controller.alpha_curve.name,
                     # Optional gradient health fields
-                    grad_ratio=(
-                        self.state.metrics.seed_gradient_norm_ratio
-                        if self.state.telemetry and self.state.telemetry.epoch > 0
-                        else 0.0
-                    ),
+                    grad_ratio=self._telemetry_grad_ratio(),
                     has_vanishing=(
                         self.state.telemetry.has_vanishing
                         if self.state.telemetry and self.state.telemetry.epoch > 0
@@ -2497,6 +2475,19 @@ class SeedSlot(nn.Module):
         if not self.state:
             return None
         return self.state.to_report()
+
+    def _telemetry_grad_ratio(self) -> float:
+        """Return a float grad_ratio for telemetry payloads.
+
+        Internal SeedMetrics uses None to mean "never measured". Telemetry payload
+        schemas use float defaults, so we coalesce None -> 0.0.
+        """
+        if self.state is None or self.state.telemetry is None or self.state.telemetry.epoch <= 0:
+            return 0.0
+        ratio = self.state.metrics.seed_gradient_norm_ratio
+        if ratio is None:
+            return 0.0
+        return float(ratio)
 
     def _emit_telemetry(
         self,
