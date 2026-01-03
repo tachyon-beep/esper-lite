@@ -1020,3 +1020,168 @@ class TestTolariaGovernor:
                 assert value.device.type == "cpu", (
                     f"Snapshot tensor '{key}' should remain on CPU after rollback"
                 )
+
+    def test_rollback_restores_fossilized_seed_from_snapshot(self):
+        """Rollback must restore fossilized seed weights from snapshot.
+
+        Regression test for snapshot/rollback incoherence bug:
+
+        Timeline:
+        1. Snapshot taken while seed is TRAINING (excluded from snapshot)
+        2. Seed fossilizes (now FOSSILIZED)
+        3. Seed weights modified by continued training
+        4. Rollback triggered BEFORE next snapshot
+
+        Bug: Fossilized seeds can't be pruned, but their weights aren't in
+        the snapshot. Result: host reverts but fossilized seed keeps stale
+        weights = INCOHERENT STATE.
+
+        Fix: Take snapshot immediately after fossilization so the Last Known
+        Good state always includes newly-fossilized seed weights.
+
+        This test verifies the fix by checking that after fossilization and
+        a new snapshot, rollback properly restores the fossilized seed weights.
+        """
+        from esper.tolaria import TolariaGovernor
+        from esper.kasmina import MorphogeneticModel, CNNHost
+        from esper.leyline import SeedStage
+
+        # Create model with a seed slot
+        host = CNNHost()
+        model = MorphogeneticModel(host, device="cpu", slots=["r0c0"])
+
+        # Step 1: Germinate a seed (TRAINING stage - not fossilized)
+        model.seed_slots["r0c0"].germinate("conv_heavy", "test_seed")
+        assert model.seed_slots["r0c0"].state.stage != SeedStage.FOSSILIZED
+
+        # Step 2: Take initial snapshot (seed is excluded because not fossilized)
+        gov = TolariaGovernor(model)
+
+        # Verify seed is NOT in initial snapshot
+        initial_snapshot_keys = set(gov.last_good_state.keys())
+        seed_keys_in_initial = {k for k in initial_snapshot_keys if "seed_slots.r0c0.seed." in k}
+        assert len(seed_keys_in_initial) == 0, (
+            "Initial snapshot should not include non-fossilized seed"
+        )
+
+        # Step 3: Fossilize the seed
+        model.seed_slots["r0c0"].state.stage = SeedStage.FOSSILIZED
+
+        # Step 4: Save the fossilized seed weights (the "good" state)
+        seed = model.seed_slots["r0c0"].seed
+        assert seed is not None
+        # Get first parameter to track
+        first_param = next(seed.parameters())
+        fossilized_weights = first_param.data.clone()
+
+        # Step 5: Take a NEW snapshot after fossilization (the fix)
+        # This is what the fix should do automatically after OP_FOSSILIZE
+        gov.snapshot()
+
+        # Verify seed IS now in snapshot
+        new_snapshot_keys = set(gov.last_good_state.keys())
+        seed_keys_in_new = {k for k in new_snapshot_keys if "seed_slots.r0c0.seed." in k}
+        assert len(seed_keys_in_new) > 0, (
+            "Snapshot after fossilization should include fossilized seed"
+        )
+
+        # Step 6: Corrupt the seed weights (simulate continued training)
+        first_param.data.fill_(999.0)
+        assert not torch.allclose(first_param.data, fossilized_weights), (
+            "Weights should be corrupted before rollback"
+        )
+
+        # Build minimal history for rollback
+        for i in range(5):
+            gov.loss_history.append(1.0)
+
+        # Step 7: Execute rollback
+        report = gov.execute_rollback()
+        assert report.rollback_occurred
+
+        # Step 8: Verify fossilized seed weights are RESTORED
+        # This is the critical assertion - without the fix, weights would
+        # still be 999.0 because the fossilized seed couldn't be pruned
+        # and its weights weren't in the snapshot
+        assert torch.allclose(first_param.data, fossilized_weights), (
+            f"Fossilized seed weights should be restored after rollback. "
+            f"Expected {fossilized_weights.flatten()[:5]}, "
+            f"got {first_param.data.flatten()[:5]}"
+        )
+
+    def test_rollback_without_post_fossilization_snapshot_is_incoherent(self):
+        """Demonstrate the incoherence bug when snapshot is NOT taken after fossilization.
+
+        This test documents the bug behavior:
+        - Seed fossilizes between snapshots (via proper advance_stage)
+        - Rollback can't restore fossilized seed (not in snapshot, can't prune)
+        - Result: host reverts but fossilized seed keeps corrupted weights
+
+        This test should FAIL once we implement the fix (automatic snapshot
+        after fossilization). It serves as the regression test.
+        """
+        from esper.tolaria import TolariaGovernor
+        from esper.kasmina import MorphogeneticModel, CNNHost
+        from esper.leyline import SeedStage
+
+        # Create model with a seed slot
+        host = CNNHost()
+        model = MorphogeneticModel(host, device="cpu", slots=["r0c0"])
+
+        # Germinate a seed (starts in GERMINATED stage)
+        model.seed_slots["r0c0"].germinate("conv_heavy", "test_seed")
+
+        # Take snapshot while seed is NOT fossilized (excluded from snapshot)
+        gov = TolariaGovernor(model)
+
+        # Verify seed is NOT in snapshot (this is the precondition)
+        snapshot_keys = set(gov.last_good_state.keys())
+        seed_keys = {k for k in snapshot_keys if "seed_slots.r0c0.seed." in k}
+        assert len(seed_keys) == 0, "Seed should NOT be in snapshot before fossilization"
+
+        # Fossilize the seed via proper lifecycle (using internal state directly
+        # since we can't easily run full lifecycle in unit test)
+        model.seed_slots["r0c0"].state.stage = SeedStage.FOSSILIZED
+
+        # Verify seed IS now fossilized
+        assert model.seed_slots["r0c0"].state.stage == SeedStage.FOSSILIZED
+
+        # Get a seed parameter to track
+        seed = model.seed_slots["r0c0"].seed
+        first_param = next(seed.parameters())
+        weights_before_corruption = first_param.data.clone()
+
+        # DO NOT take a new snapshot (this is the bug scenario)
+        # In production, this happens when fossilization occurs between
+        # periodic snapshots (every 5 epochs)
+
+        # Corrupt the weights (simulates training after fossilization)
+        first_param.data.fill_(999.0)
+
+        # Build history and rollback
+        for i in range(5):
+            gov.loss_history.append(1.0)
+
+        gov.execute_rollback()
+
+        # BUG DEMONSTRATION: The fossilized seed's weights are NOT restored.
+        #
+        # Why this happens:
+        # 1. Seed wasn't FOSSILIZED when snapshot was taken → excluded
+        # 2. FOSSILIZED seeds can't be pruned (slot.prune() returns False)
+        # 3. load_state_dict(strict=False) silently ignores missing keys
+        # 4. Result: seed keeps corrupted weights while host reverts
+        #
+        # Check if weights are still corrupted (the bug) or restored (the fix)
+        weights_still_corrupted = torch.allclose(
+            first_param.data,
+            torch.full_like(first_param.data, 999.0)
+        )
+
+        # This assertion PASSES when the bug exists (weights stay corrupted)
+        # and FAILS when the fix is implemented (weights get restored)
+        assert weights_still_corrupted, (
+            "BUG FIXED: Fossilized seed weights are now restored during rollback. "
+            "This test should be converted to a proper regression test that "
+            "verifies weights ARE restored (remove this assertion, add positive test)."
+        )

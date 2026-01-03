@@ -2440,9 +2440,12 @@ def train_ppo_vectorized(
                     env_state.host_max_acc = max(env_state.host_max_acc, env_state.val_acc)
     
                     # Governor watchdog: snapshot when loss is stable (every 5 epochs)
-                    if epoch % 5 == 0:
+                    # Also snapshot immediately after fossilization to prevent incoherent rollback
+                    # (see BUG FIX comment in OP_FOSSILIZE handling above)
+                    if epoch % 5 == 0 or env_state.needs_governor_snapshot:
                         env_state.governor.snapshot()
-    
+                        env_state.needs_governor_snapshot = False
+
                     # Governor watchdog: check vital signs after validation
                     is_panic = env_state.governor.check_vital_signs(val_loss)
                     if is_panic:
@@ -2986,6 +2989,16 @@ def train_ppo_vectorized(
                                     # B8-DRL-02 FIX: Clean up seed optimizer after fossilization
                                     # (was missing - memory leak for fossilized seed optimizers)
                                     env_state.seed_optimizers.pop(target_slot, None)
+
+                                    # BUG FIX: Trigger governor snapshot after fossilization
+                                    # Without this, a rollback between fossilization and the next
+                                    # periodic snapshot (every 5 epochs) produces an incoherent state:
+                                    # - Fossilized seed weights not in snapshot (excluded when TRAINING)
+                                    # - Fossilized seeds can't be pruned during rollback
+                                    # - Result: host reverts but fossilized seed keeps stale weights
+                                    # The snapshot must be taken OUTSIDE the CUDA stream context,
+                                    # so we set a flag here and take the snapshot later.
+                                    env_state.needs_governor_snapshot = True
                             elif (
                                 op_action == OP_PRUNE
                                 and model.has_active_seed_in_slot(target_slot)

@@ -38,6 +38,7 @@ class ParallelEnvState:
     host_optimizer: torch.optim.Optimizer
     signal_tracker: "SignalTracker"  # Tracks training signals (accuracy, loss trends)
     governor: "TolariaGovernor"  # Fail-safe watchdog for catastrophic failure detection
+    needs_governor_snapshot: bool = False  # Flag to trigger snapshot after fossilization
     health_monitor: "HealthMonitor | None" = None  # System health monitoring (GPU memory warnings)
     counterfactual_helper: "CounterfactualHelper | None" = None  # Shapley value analysis at episode end
     seed_optimizers: dict[str, torch.optim.Optimizer] = field(default_factory=dict)
@@ -211,6 +212,7 @@ class ParallelEnvState:
 
         self.signal_tracker.reset()
         self.governor.reset()
+        self.needs_governor_snapshot = False
         if self.health_monitor is not None:
             self.health_monitor.reset()
         if self.counterfactual_helper is not None:
