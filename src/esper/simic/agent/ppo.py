@@ -1057,6 +1057,14 @@ class PPOAgent:
             elif k == "ratio_diagnostic":
                 # Complex diagnostic dict - take first (only one per explosion event)
                 aggregated_result[k] = first  # type: ignore[literal-required]
+            elif k in ("ratio_max", "value_max", "pre_clip_grad_norm"):
+                # Threshold-based anomaly detection needs WORST CASE, not average.
+                # Averaging dilutes single-epoch explosions below detection thresholds.
+                # Used by: health_status_panel.py:534, anomaly_detector.py:109
+                aggregated_result[k] = max(v)  # type: ignore[literal-required]
+            elif k in ("ratio_min", "value_min"):
+                # Threshold-based anomaly detection needs WORST CASE, not average.
+                aggregated_result[k] = min(v)  # type: ignore[literal-required]
             else:
                 # Average across epochs (converts list[float] to float)
                 aggregated_result[k] = sum(v) / len(v)  # type: ignore[literal-required]
