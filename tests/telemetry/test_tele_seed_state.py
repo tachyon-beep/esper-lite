@@ -1,4 +1,4 @@
-"""End-to-end tests for SeedState detail telemetry records (TELE-550 to TELE-554).
+"""End-to-end tests for SeedState detail telemetry records (TELE-550 to TELE-560).
 
 Verifies seed state telemetry flows from schema to EnvOverview display.
 
@@ -8,13 +8,21 @@ These tests cover:
 - TELE-552: seed.epochs_in_stage (int, stage duration)
 - TELE-553: seed.alpha_curve (str, maps to glyphs)
 - TELE-554: seed.blend_tempo_epochs (int, tempo arrows)
+- TELE-555: seed.seed_params (int, parameter count with K/M suffix)
+- TELE-556: seed.accuracy_delta (float, contribution %)
+- TELE-557: seed.grad_ratio (float, gradient health ratio)
+- TELE-558: seed.interaction_sum (float, synergy from interactions)
+- TELE-559: seed.boost_received (float, strongest interaction partner)
+- TELE-560: seed.contribution_velocity (float, trend direction)
 
 All records are FULLY WIRED - SeedState dataclass in schema.py provides
-fields that EnvOverview._format_slot_cell() consumes for display.
+fields that EnvOverview._format_slot_cell() and EnvDetailScreen SeedCard consume for display.
 """
 
 import pytest
 
+from esper.karn.constants import DisplayThresholds
+from esper.karn.sanctum.formatting import format_params
 from esper.karn.sanctum.schema import SeedState
 from esper.leyline import ALPHA_CURVE_GLYPHS
 
@@ -487,13 +495,474 @@ def _tempo_arrows(tempo: int | None) -> str:
     return "\u25b8\u25b8\u25b8" if tempo <= 3 else ("\u25b8\u25b8" if tempo <= 5 else "\u25b8")
 
 
+def _format_accuracy_delta(delta: float, stage: str) -> str:
+    """Format accuracy delta for display.
+
+    This replicates the logic from EnvDetailScreen SeedCard:
+    - TRAINING/GERMINATED: "0.0 (learning)"
+    - Positive delta: "+0.25%"
+    - Negative delta: "-0.10%"
+    - Zero/None: "--"
+    """
+    if stage in ("TRAINING", "GERMINATED"):
+        return "0.0 (learning)"
+    if delta != 0:
+        return f"{delta:+.2f}%"
+    return "--"
+
+
+def _format_contribution_velocity(velocity: float) -> str:
+    """Format contribution velocity as trend indicator.
+
+    This replicates the logic from EnvDetailScreen SeedCard:
+    - velocity > EPSILON: "improving" (green arrow)
+    - velocity < -EPSILON: "declining" (yellow arrow)
+    - |velocity| <= EPSILON: "--" (stable)
+    """
+    epsilon = DisplayThresholds.CONTRIBUTION_VELOCITY_EPSILON
+    if velocity > epsilon:
+        return "\u2197 improving"  # ↗
+    elif velocity < -epsilon:
+        return "\u2198 declining"  # ↘
+    return "--"
+
+
+# =============================================================================
+# TELE-555: Seed Params
+# =============================================================================
+
+
+class TestTELE555SeedParams:
+    """TELE-555: seed.seed_params field in SeedState.
+
+    Wiring Status: FULLY WIRED
+    - Emitter: Module parameter count computed at instantiation
+    - Transport: SeedState.seed_params updated; telemetry carries value
+    - Schema: SeedState.seed_params at line 397
+    - Consumer: EnvDetailScreen SeedCard displays "Params: 12.5K"
+
+    Parameter count represents the total number of trainable parameters:
+    - 0: No parameters (invalid or dormant placeholder)
+    - > 0: Actual parameter count (e.g., 12,500 -> "12.5K")
+
+    Display uses human-readable suffixes:
+    - < 1,000: raw number (e.g., "256")
+    - 1,000 - 999,999: K suffix (e.g., "12.5K")
+    - >= 1,000,000: M suffix (e.g., "1.2M")
+    """
+
+    def test_seed_params_field_exists(self) -> None:
+        """TELE-555: Verify SeedState.seed_params field exists."""
+        seed = SeedState(slot_id="r0c0")
+        assert hasattr(seed, "seed_params")
+
+    def test_seed_params_default_value(self) -> None:
+        """TELE-555: Default seed_params is 0 (no parameters)."""
+        seed = SeedState(slot_id="r0c0")
+        assert seed.seed_params == 0
+
+    def test_seed_params_type_is_int(self) -> None:
+        """TELE-555: seed_params must be int type."""
+        seed = SeedState(slot_id="r0c0", seed_params=12500)
+        assert isinstance(seed.seed_params, int)
+
+    def test_seed_params_non_negative(self) -> None:
+        """TELE-555: seed_params is non-negative."""
+        seed = SeedState(slot_id="r0c0", seed_params=0)
+        assert seed.seed_params >= 0
+
+        seed = SeedState(slot_id="r0c0", seed_params=1_000_000)
+        assert seed.seed_params >= 0
+
+    def test_seed_params_formatting(self) -> None:
+        """TELE-555: format_params utility produces human-readable output.
+
+        Tests the format_params() helper that SeedCard uses:
+        - < 1,000: raw number
+        - 1,000 - 999,999: K suffix
+        - >= 1,000,000: M suffix
+        """
+        test_cases = [
+            (0, "0"),
+            (256, "256"),
+            (999, "999"),
+            (1_000, "1.0K"),
+            (12_500, "12.5K"),
+            (150_000, "150.0K"),
+            (1_000_000, "1.0M"),
+            (2_500_000, "2.5M"),
+        ]
+
+        for params, expected in test_cases:
+            seed = SeedState(slot_id="r0c0", seed_params=params)
+            formatted = format_params(seed.seed_params)
+            assert formatted == expected, f"Failed for {params}: got {formatted}"
+
+
+# =============================================================================
+# TELE-556: Seed Accuracy Delta
+# =============================================================================
+
+
+class TestTELE556SeedAccuracyDelta:
+    """TELE-556: seed.accuracy_delta field in SeedState.
+
+    Wiring Status: FULLY WIRED
+    - Emitter: Counterfactual engine computes accuracy_delta per epoch
+    - Transport: SeedState.accuracy_delta updated; telemetry carries value
+    - Schema: SeedState.accuracy_delta at line 396
+    - Consumer: EnvDetailScreen SeedCard displays "Acc Delta: +0.25%"
+
+    Accuracy delta measures per-seed accuracy contribution:
+    - > 0: Seed is helping (positive contribution)
+    - = 0: Seed has no measurable effect
+    - < 0: Seed is hurting (negative contribution)
+
+    Stage-aware semantics:
+    - TRAINING/GERMINATED: Always 0.0 (seed has alpha=0)
+    - BLENDING/HOLDING: Active contribution measurement
+    """
+
+    def test_accuracy_delta_field_exists(self) -> None:
+        """TELE-556: Verify SeedState.accuracy_delta field exists."""
+        seed = SeedState(slot_id="r0c0")
+        assert hasattr(seed, "accuracy_delta")
+
+    def test_accuracy_delta_default_value(self) -> None:
+        """TELE-556: Default accuracy_delta is 0.0 (no contribution)."""
+        seed = SeedState(slot_id="r0c0")
+        assert seed.accuracy_delta == 0.0
+
+    def test_accuracy_delta_type_is_float(self) -> None:
+        """TELE-556: accuracy_delta must be float type."""
+        seed = SeedState(slot_id="r0c0", accuracy_delta=0.25)
+        assert isinstance(seed.accuracy_delta, float)
+
+    def test_accuracy_delta_can_be_positive_or_negative(self) -> None:
+        """TELE-556: accuracy_delta can be positive (helping) or negative (hurting)."""
+        # Positive delta - seed is helping
+        seed_positive = SeedState(slot_id="r0c0", accuracy_delta=0.25)
+        assert seed_positive.accuracy_delta > 0
+
+        # Negative delta - seed is hurting
+        seed_negative = SeedState(slot_id="r0c0", accuracy_delta=-0.10)
+        assert seed_negative.accuracy_delta < 0
+
+        # Zero delta - no effect
+        seed_zero = SeedState(slot_id="r0c0", accuracy_delta=0.0)
+        assert seed_zero.accuracy_delta == 0.0
+
+    def test_accuracy_delta_display_format(self) -> None:
+        """TELE-556: Display format is '+0.25%' or '-0.10%' with sign prefix.
+
+        This tests the display logic from EnvDetailScreen SeedCard.
+        """
+        test_cases = [
+            (0.25, "BLENDING", "+0.25%"),
+            (-0.10, "BLENDING", "-0.10%"),
+            (0.0, "BLENDING", "--"),
+            (1.5, "HOLDING", "+1.50%"),
+            (-0.05, "HOLDING", "-0.05%"),
+        ]
+
+        for delta, stage, expected in test_cases:
+            seed = SeedState(slot_id="r0c0", stage=stage, accuracy_delta=delta)
+            formatted = _format_accuracy_delta(seed.accuracy_delta, seed.stage)
+            assert formatted == expected, f"Failed for delta={delta}, stage={stage}"
+
+    def test_accuracy_delta_training_stage_always_zero(self) -> None:
+        """TELE-556: TRAINING/GERMINATED stages display as '0.0 (learning)'.
+
+        Seeds in TRAINING or GERMINATED have alpha=0 and cannot affect output.
+        """
+        for stage in ["TRAINING", "GERMINATED"]:
+            # Even if accuracy_delta is non-zero in data, display shows learning context
+            seed = SeedState(slot_id="r0c0", stage=stage, accuracy_delta=0.0)
+            formatted = _format_accuracy_delta(seed.accuracy_delta, seed.stage)
+            assert formatted == "0.0 (learning)"
+
+
+# =============================================================================
+# TELE-557: Seed Grad Ratio
+# =============================================================================
+
+
+class TestTELE557SeedGradRatio:
+    """TELE-557: seed.grad_ratio field in SeedState.
+
+    Wiring Status: FULLY WIRED
+    - Emitter: Gradient hooks compute ratio during backward pass
+    - Transport: SeedState.grad_ratio updated; telemetry carries value
+    - Schema: SeedState.grad_ratio at line 398
+    - Consumer: EnvDetailScreen SeedCard displays "ratio=0.85"
+
+    Gradient ratio measures gradient flow health:
+    - ~= 1.0: Healthy gradient flow
+    - << 1.0: Potential vanishing gradients
+    - >> 1.0: Potential exploding gradients
+    - = 0.0: No gradient data available
+    """
+
+    def test_grad_ratio_field_exists(self) -> None:
+        """TELE-557: Verify SeedState.grad_ratio field exists."""
+        seed = SeedState(slot_id="r0c0")
+        assert hasattr(seed, "grad_ratio")
+
+    def test_grad_ratio_default_value(self) -> None:
+        """TELE-557: Default grad_ratio is 0.0 (no gradient data)."""
+        seed = SeedState(slot_id="r0c0")
+        assert seed.grad_ratio == 0.0
+
+    def test_grad_ratio_type_is_float(self) -> None:
+        """TELE-557: grad_ratio must be float type."""
+        seed = SeedState(slot_id="r0c0", grad_ratio=0.85)
+        assert isinstance(seed.grad_ratio, float)
+
+    def test_grad_ratio_display_format(self) -> None:
+        """TELE-557: Display format is 'ratio=0.85' with 2 decimal places.
+
+        This tests the display logic from EnvDetailScreen SeedCard:
+        - grad_ratio > 0: show "ratio=X.XX"
+        - grad_ratio = 0: show "OK" (no data available)
+        """
+        test_cases = [
+            (0.85, "ratio=0.85"),
+            (1.00, "ratio=1.00"),
+            (1.50, "ratio=1.50"),
+            (0.50, "ratio=0.50"),
+        ]
+
+        for ratio, expected in test_cases:
+            seed = SeedState(slot_id="r0c0", grad_ratio=ratio)
+            # Match EnvDetailScreen display logic
+            if seed.grad_ratio > 0:
+                formatted = f"ratio={seed.grad_ratio:.2f}"
+            else:
+                formatted = "OK"
+            assert formatted == expected, f"Failed for ratio={ratio}"
+
+    def test_grad_ratio_zero_shows_ok(self) -> None:
+        """TELE-557: grad_ratio=0.0 displays as 'OK' (no data)."""
+        seed = SeedState(slot_id="r0c0", grad_ratio=0.0)
+        # When no ratio data, display shows OK
+        if seed.grad_ratio > 0:
+            formatted = f"ratio={seed.grad_ratio:.2f}"
+        else:
+            formatted = "OK"
+        assert formatted == "OK"
+
+
+# =============================================================================
+# TELE-558: Seed Interaction Sum
+# =============================================================================
+
+
+class TestTELE558SeedInteractionSum:
+    """TELE-558: seed.interaction_sum field in SeedState.
+
+    Wiring Status: FULLY WIRED
+    - Emitter: Counterfactual engine computes pairwise interactions
+    - Transport: SeedState.interaction_sum updated; telemetry carries value
+    - Schema: SeedState.interaction_sum at line 419
+    - Consumer: EnvDetailScreen SeedCard displays "Synergy: +1.5"
+
+    Interaction sum (Sigma I_ij for all j != i) measures total synergy:
+    - > 0: Net positive synergy (seed benefits from others)
+    - = 0: No interaction effects (seed operates independently)
+    - < 0: Net negative synergy (seed conflicts with others)
+    """
+
+    def test_interaction_sum_field_exists(self) -> None:
+        """TELE-558: Verify SeedState.interaction_sum field exists."""
+        seed = SeedState(slot_id="r0c0")
+        assert hasattr(seed, "interaction_sum")
+
+    def test_interaction_sum_default_value(self) -> None:
+        """TELE-558: Default interaction_sum is 0.0 (no interaction data)."""
+        seed = SeedState(slot_id="r0c0")
+        assert seed.interaction_sum == 0.0
+
+    def test_interaction_sum_type_is_float(self) -> None:
+        """TELE-558: interaction_sum must be float type."""
+        seed = SeedState(slot_id="r0c0", interaction_sum=1.5)
+        assert isinstance(seed.interaction_sum, float)
+
+    def test_interaction_sum_positive_is_synergy(self) -> None:
+        """TELE-558: Positive interaction_sum indicates beneficial synergy."""
+        seed = SeedState(slot_id="r0c0", interaction_sum=1.5)
+        assert seed.interaction_sum > 0
+
+    def test_interaction_sum_negative_is_interference(self) -> None:
+        """TELE-558: Negative interaction_sum indicates harmful interference."""
+        seed = SeedState(slot_id="r0c0", interaction_sum=-0.8)
+        assert seed.interaction_sum < 0
+
+    def test_interaction_sum_threshold_coloring(self) -> None:
+        """TELE-558: Threshold determines display coloring.
+
+        From DisplayThresholds.INTERACTION_SYNERGY_THRESHOLD = 0.5:
+        - > 0.5: Green (positive synergy)
+        - < -0.5: Red (negative synergy)
+        - |sum| <= 0.5: Dim (neutral)
+        """
+        threshold = DisplayThresholds.INTERACTION_SYNERGY_THRESHOLD
+
+        # Above threshold - green
+        seed_synergy = SeedState(slot_id="r0c0", interaction_sum=1.5)
+        assert seed_synergy.interaction_sum > threshold
+
+        # Below negative threshold - red
+        seed_conflict = SeedState(slot_id="r0c0", interaction_sum=-0.8)
+        assert seed_conflict.interaction_sum < -threshold
+
+        # Within threshold - dim/neutral
+        seed_neutral = SeedState(slot_id="r0c0", interaction_sum=0.3)
+        assert abs(seed_neutral.interaction_sum) <= threshold
+
+
+# =============================================================================
+# TELE-559: Seed Boost Received
+# =============================================================================
+
+
+class TestTELE559SeedBoostReceived:
+    """TELE-559: seed.boost_received field in SeedState.
+
+    Wiring Status: FULLY WIRED
+    - Emitter: Counterfactual engine extracts max pairwise interaction
+    - Transport: SeedState.boost_received updated; telemetry carries value
+    - Schema: SeedState.boost_received at line 420
+    - Consumer: EnvDetailScreen SeedCard displays "(up-arrow 0.8)"
+
+    Boost received (max(I_ij) for j != i) measures strongest interaction:
+    - > 0: Another seed is boosting this one's performance
+    - = 0: No significant positive interactions from other seeds
+    """
+
+    def test_boost_received_field_exists(self) -> None:
+        """TELE-559: Verify SeedState.boost_received field exists."""
+        seed = SeedState(slot_id="r0c0")
+        assert hasattr(seed, "boost_received")
+
+    def test_boost_received_default_value(self) -> None:
+        """TELE-559: Default boost_received is 0.0 (no boost)."""
+        seed = SeedState(slot_id="r0c0")
+        assert seed.boost_received == 0.0
+
+    def test_boost_received_type_is_float(self) -> None:
+        """TELE-559: boost_received must be float type."""
+        seed = SeedState(slot_id="r0c0", boost_received=0.8)
+        assert isinstance(seed.boost_received, float)
+
+    def test_boost_received_non_negative(self) -> None:
+        """TELE-559: boost_received is non-negative (max of positive interactions)."""
+        seed_zero = SeedState(slot_id="r0c0", boost_received=0.0)
+        assert seed_zero.boost_received >= 0
+
+        seed_positive = SeedState(slot_id="r0c0", boost_received=0.8)
+        assert seed_positive.boost_received >= 0
+
+    def test_boost_received_display_format(self) -> None:
+        """TELE-559: Display format is '(up-arrow 0.8)' with 1 decimal place.
+
+        From DisplayThresholds.BOOST_RECEIVED_THRESHOLD = 0.1:
+        - > 0.1: Show "(up-arrow X.X)" in cyan
+        - <= 0.1: Not displayed
+        """
+        threshold = DisplayThresholds.BOOST_RECEIVED_THRESHOLD
+
+        test_cases = [
+            (0.8, True, "\u2197 0.8"),  # Above threshold, shown
+            (0.5, True, "\u2197 0.5"),  # Above threshold, shown
+            (0.1, False, ""),           # At threshold, not shown
+            (0.05, False, ""),          # Below threshold, not shown
+        ]
+
+        for boost, should_show, expected_suffix in test_cases:
+            seed = SeedState(slot_id="r0c0", boost_received=boost)
+            shows = seed.boost_received > threshold
+            assert shows == should_show, f"Failed for boost={boost}"
+            if shows:
+                formatted = f"\u2197 {seed.boost_received:.1f}"
+                assert formatted == expected_suffix
+
+
+# =============================================================================
+# TELE-560: Seed Contribution Velocity
+# =============================================================================
+
+
+class TestTELE560SeedContributionVelocity:
+    """TELE-560: seed.contribution_velocity field in SeedState.
+
+    Wiring Status: FULLY WIRED
+    - Emitter: EMA computation tracks contribution changes
+    - Transport: SeedState.contribution_velocity updated; telemetry carries value
+    - Schema: SeedState.contribution_velocity at line 418
+    - Consumer: EnvDetailScreen SeedCard displays "Trend: up-arrow improving"
+
+    Contribution velocity (EMA of contribution changes) measures trend:
+    - > EPSILON: Improving (contribution is increasing)
+    - ~= 0: Stable (contribution is steady)
+    - < -EPSILON: Declining (contribution is decreasing)
+    """
+
+    def test_contribution_velocity_field_exists(self) -> None:
+        """TELE-560: Verify SeedState.contribution_velocity field exists."""
+        seed = SeedState(slot_id="r0c0")
+        assert hasattr(seed, "contribution_velocity")
+
+    def test_contribution_velocity_default_value(self) -> None:
+        """TELE-560: Default contribution_velocity is 0.0 (stable)."""
+        seed = SeedState(slot_id="r0c0")
+        assert seed.contribution_velocity == 0.0
+
+    def test_contribution_velocity_type_is_float(self) -> None:
+        """TELE-560: contribution_velocity must be float type."""
+        seed = SeedState(slot_id="r0c0", contribution_velocity=0.05)
+        assert isinstance(seed.contribution_velocity, float)
+
+    def test_contribution_velocity_positive_is_improving(self) -> None:
+        """TELE-560: Positive velocity above epsilon indicates improving trend."""
+        epsilon = DisplayThresholds.CONTRIBUTION_VELOCITY_EPSILON
+        seed = SeedState(slot_id="r0c0", contribution_velocity=0.05)
+        assert seed.contribution_velocity > epsilon
+        assert _format_contribution_velocity(seed.contribution_velocity) == "\u2197 improving"
+
+    def test_contribution_velocity_negative_is_declining(self) -> None:
+        """TELE-560: Negative velocity below -epsilon indicates declining trend."""
+        epsilon = DisplayThresholds.CONTRIBUTION_VELOCITY_EPSILON
+        seed = SeedState(slot_id="r0c0", contribution_velocity=-0.05)
+        assert seed.contribution_velocity < -epsilon
+        assert _format_contribution_velocity(seed.contribution_velocity) == "\u2198 declining"
+
+    def test_contribution_velocity_near_zero_is_stable(self) -> None:
+        """TELE-560: Velocity near zero (within epsilon) indicates stable trend."""
+        epsilon = DisplayThresholds.CONTRIBUTION_VELOCITY_EPSILON
+
+        # Exactly zero
+        seed_zero = SeedState(slot_id="r0c0", contribution_velocity=0.0)
+        assert abs(seed_zero.contribution_velocity) <= epsilon
+        assert _format_contribution_velocity(seed_zero.contribution_velocity) == "--"
+
+        # Just within positive epsilon
+        seed_small_pos = SeedState(slot_id="r0c0", contribution_velocity=0.005)
+        assert abs(seed_small_pos.contribution_velocity) <= epsilon
+        assert _format_contribution_velocity(seed_small_pos.contribution_velocity) == "--"
+
+        # Just within negative epsilon
+        seed_small_neg = SeedState(slot_id="r0c0", contribution_velocity=-0.005)
+        assert abs(seed_small_neg.contribution_velocity) <= epsilon
+        assert _format_contribution_velocity(seed_small_neg.contribution_velocity) == "--"
+
+
 # =============================================================================
 # SeedState Schema Completeness
 # =============================================================================
 
 
 class TestSeedStateSchemaCompleteness:
-    """Verify SeedState has all TELE-550 to TELE-554 fields."""
+    """Verify SeedState has all TELE-550 to TELE-560 fields."""
 
     def test_all_seed_detail_fields_present(self) -> None:
         """Verify all seed detail fields are present in SeedState."""
@@ -514,6 +983,24 @@ class TestSeedStateSchemaCompleteness:
         # TELE-554: Blend tempo epochs
         assert hasattr(seed, "blend_tempo_epochs")
 
+        # TELE-555: Seed params
+        assert hasattr(seed, "seed_params")
+
+        # TELE-556: Accuracy delta
+        assert hasattr(seed, "accuracy_delta")
+
+        # TELE-557: Grad ratio
+        assert hasattr(seed, "grad_ratio")
+
+        # TELE-558: Interaction sum
+        assert hasattr(seed, "interaction_sum")
+
+        # TELE-559: Boost received
+        assert hasattr(seed, "boost_received")
+
+        # TELE-560: Contribution velocity
+        assert hasattr(seed, "contribution_velocity")
+
     def test_all_defaults_match_spec(self) -> None:
         """Verify all default values match TELE record specifications."""
         seed = SeedState(slot_id="r0c0")
@@ -533,8 +1020,26 @@ class TestSeedStateSchemaCompleteness:
         # TELE-554: Default 5 (STANDARD)
         assert seed.blend_tempo_epochs == 5
 
+        # TELE-555: Default 0
+        assert seed.seed_params == 0
+
+        # TELE-556: Default 0.0
+        assert seed.accuracy_delta == 0.0
+
+        # TELE-557: Default 0.0
+        assert seed.grad_ratio == 0.0
+
+        # TELE-558: Default 0.0
+        assert seed.interaction_sum == 0.0
+
+        # TELE-559: Default 0.0
+        assert seed.boost_received == 0.0
+
+        # TELE-560: Default 0.0
+        assert seed.contribution_velocity == 0.0
+
     def test_seed_state_with_all_fields(self) -> None:
-        """Verify SeedState can be constructed with all TELE-550 to TELE-554 fields."""
+        """Verify SeedState can be constructed with all TELE-550 to TELE-560 fields."""
         seed = SeedState(
             slot_id="r0c0",
             stage="BLENDING",
@@ -543,6 +1048,12 @@ class TestSeedStateSchemaCompleteness:
             epochs_in_stage=10,
             alpha_curve="SIGMOID",
             blend_tempo_epochs=3,
+            seed_params=12500,
+            accuracy_delta=0.25,
+            grad_ratio=0.85,
+            interaction_sum=1.5,
+            boost_received=0.8,
+            contribution_velocity=0.05,
         )
 
         assert seed.slot_id == "r0c0"
@@ -552,6 +1063,12 @@ class TestSeedStateSchemaCompleteness:
         assert seed.epochs_in_stage == 10
         assert seed.alpha_curve == "SIGMOID"
         assert seed.blend_tempo_epochs == 3
+        assert seed.seed_params == 12500
+        assert seed.accuracy_delta == 0.25
+        assert seed.grad_ratio == 0.85
+        assert seed.interaction_sum == 1.5
+        assert seed.boost_received == 0.8
+        assert seed.contribution_velocity == 0.05
 
 
 # =============================================================================

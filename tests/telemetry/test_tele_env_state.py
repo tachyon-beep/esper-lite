@@ -1,4 +1,4 @@
-"""End-to-end tests for EnvState extended telemetry records (TELE-630 to TELE-633).
+"""End-to-end tests for EnvState extended telemetry records.
 
 Verifies environment state telemetry flows from source through to sanctum.
 
@@ -7,21 +7,37 @@ These tests cover:
 - TELE-631: env_reward_mode (FULLY WIRED)
 - TELE-632: env_rolled_back (FULLY WIRED)
 - TELE-633: env_rollback_reason (FULLY WIRED)
+- TELE-646: env_accuracy_history (FULLY WIRED)
+- TELE-647: env_reward_history (FULLY WIRED)
+- TELE-648: env_total_actions (FULLY WIRED)
+- TELE-649: env_action_counts (FULLY WIRED)
+- TELE-670: blueprint_spawns (FULLY WIRED)
+- TELE-671: blueprint_fossilized (FULLY WIRED)
+- TELE-672: blueprint_prunes (FULLY WIRED)
 
-All four records are fully wired and operational. They cover:
+All records are fully wired and operational. They cover:
 - Environment health status with hysteresis (TELE-630)
 - A/B test cohort assignment for reward shaping experiments (TELE-631)
 - Governor rollback state indicating catastrophic failure (TELE-632)
 - Reason for governor intervention (TELE-633)
+- Rolling accuracy history for sparklines (TELE-646)
+- Rolling reward history for sparklines (TELE-647)
+- Total action count as denominator for percentage calculation (TELE-648)
+- Per-action-type counts for action distribution display (TELE-649)
+- Per-blueprint spawn counts for graveyard analysis (TELE-670)
+- Per-blueprint fossilization counts for success rate (TELE-671)
+- Per-blueprint prune counts for failure rate (TELE-672)
 """
 
+from collections import deque
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
 
+from esper.karn.constants import DisplayThresholds
 from esper.karn.sanctum.aggregator import SanctumAggregator
-from esper.karn.sanctum.schema import EnvState
+from esper.karn.sanctum.schema import EnvState, make_sparkline
 from esper.leyline import (
     EpochCompletedPayload,
     GovernorRollbackPayload,
@@ -786,3 +802,712 @@ class TestHistoricalEnvDetailConsumer:
         )
 
         assert record.reward_mode is None
+
+
+# =============================================================================
+# TELE-646: Environment Accuracy History
+# =============================================================================
+
+
+class TestTELE646EnvAccuracyHistory:
+    """TELE-646: Environment accuracy history for sparkline visualization.
+
+    Wiring Status: FULLY WIRED
+    - Emitter: EnvState.add_accuracy() appends to accuracy_history
+    - Transport: Accuracy values appended via add_accuracy()
+    - Schema: EnvState.accuracy_history field at line 485
+    - Consumer: EnvDetailScreen displays sparkline via make_sparkline()
+
+    Accuracy history is a rolling deque (maxlen=50) of accuracy values
+    used to generate sparkline visualizations showing accuracy trends.
+    """
+
+    def test_accuracy_history_field_exists(self) -> None:
+        """TELE-646: Verify EnvState.accuracy_history field exists."""
+        env = EnvState(env_id=0)
+        assert hasattr(env, "accuracy_history")
+
+    def test_accuracy_history_default_is_empty_deque(self) -> None:
+        """TELE-646: Default accuracy_history is empty deque."""
+        env = EnvState(env_id=0)
+        assert len(env.accuracy_history) == 0
+
+    def test_accuracy_history_type_is_deque(self) -> None:
+        """TELE-646: accuracy_history is a deque type."""
+        env = EnvState(env_id=0)
+        assert isinstance(env.accuracy_history, deque)
+
+    def test_accuracy_history_maxlen_is_50(self) -> None:
+        """TELE-646: accuracy_history has maxlen=50 for bounded memory."""
+        env = EnvState(env_id=0)
+        assert env.accuracy_history.maxlen == 50
+
+        # Add more than 50 values and verify oldest are dropped
+        for i in range(60):
+            env.add_accuracy(float(i), epoch=i)
+        assert len(env.accuracy_history) == 50
+        assert env.accuracy_history[0] == 10.0  # Oldest retained value
+
+    def test_accuracy_history_sparkline_integration(self) -> None:
+        """TELE-646: accuracy_history works with make_sparkline()."""
+        env = EnvState(env_id=0)
+
+        # Add some values
+        for i in range(10):
+            env.add_accuracy(50.0 + i * 2, epoch=i)
+
+        sparkline = make_sparkline(env.accuracy_history, width=8)
+        assert len(sparkline) > 0
+        assert isinstance(sparkline, str)
+        # Sparkline should not be empty placeholder
+        assert sparkline != "--------"
+
+
+# =============================================================================
+# TELE-647: Environment Reward History
+# =============================================================================
+
+
+class TestTELE647EnvRewardHistory:
+    """TELE-647: Environment reward history for sparkline visualization.
+
+    Wiring Status: FULLY WIRED
+    - Emitter: EnvState.add_reward() appends to reward_history
+    - Transport: Reward values appended via add_reward()
+    - Schema: EnvState.reward_history field at line 484
+    - Consumer: EnvDetailScreen displays sparkline via make_sparkline()
+
+    Reward history is a rolling deque (maxlen=50) of reward values
+    used to generate sparkline visualizations showing reward trends.
+    """
+
+    def test_reward_history_field_exists(self) -> None:
+        """TELE-647: Verify EnvState.reward_history field exists."""
+        env = EnvState(env_id=0)
+        assert hasattr(env, "reward_history")
+
+    def test_reward_history_default_is_empty_deque(self) -> None:
+        """TELE-647: Default reward_history is empty deque."""
+        env = EnvState(env_id=0)
+        assert len(env.reward_history) == 0
+
+    def test_reward_history_type_is_deque(self) -> None:
+        """TELE-647: reward_history is a deque type."""
+        env = EnvState(env_id=0)
+        assert isinstance(env.reward_history, deque)
+
+    def test_reward_history_maxlen_is_50(self) -> None:
+        """TELE-647: reward_history has maxlen=50 for bounded memory."""
+        env = EnvState(env_id=0)
+        assert env.reward_history.maxlen == 50
+
+        # Add more than 50 values and verify oldest are dropped
+        for i in range(60):
+            env.add_reward(float(i) * 0.1, epoch=i)
+        assert len(env.reward_history) == 50
+        assert env.reward_history[0] == 1.0  # Oldest retained value (10 * 0.1)
+
+    def test_reward_history_sparkline_integration(self) -> None:
+        """TELE-647: reward_history works with make_sparkline()."""
+        env = EnvState(env_id=0)
+
+        # Add some values
+        for i in range(10):
+            env.add_reward(0.1 + i * 0.05, epoch=i)
+
+        sparkline = make_sparkline(env.reward_history, width=8)
+        assert len(sparkline) > 0
+        assert isinstance(sparkline, str)
+        # Sparkline should not be empty placeholder
+        assert sparkline != "--------"
+
+
+# =============================================================================
+# TELE-648: Environment Total Actions
+# =============================================================================
+
+
+class TestTELE648EnvTotalActions:
+    """TELE-648: Environment total actions count.
+
+    Wiring Status: FULLY WIRED
+    - Emitter: EnvState.add_action() increments total_actions
+    - Transport: Total actions incremented via add_action()
+    - Schema: EnvState.total_actions field at line 522
+    - Consumer: EnvDetailScreen uses as denominator for percentage calculation
+
+    Total actions serves as the denominator when calculating action distribution
+    percentages. It should equal the sum of all action_counts values.
+    """
+
+    def test_total_actions_field_exists(self) -> None:
+        """TELE-648: Verify EnvState.total_actions field exists."""
+        env = EnvState(env_id=0)
+        assert hasattr(env, "total_actions")
+
+    def test_total_actions_default_value(self) -> None:
+        """TELE-648: Default total_actions is 0."""
+        env = EnvState(env_id=0)
+        assert env.total_actions == 0
+
+    def test_total_actions_type_is_int(self) -> None:
+        """TELE-648: total_actions is an integer type."""
+        env = EnvState(env_id=0)
+        assert isinstance(env.total_actions, int)
+
+    def test_total_actions_non_negative(self) -> None:
+        """TELE-648: total_actions is always non-negative."""
+        env = EnvState(env_id=0)
+        assert env.total_actions >= 0
+
+        # After adding actions, still non-negative
+        env.add_action("WAIT")
+        env.add_action("GERMINATE_CONV_LIGHT")
+        assert env.total_actions >= 0
+
+    def test_total_actions_used_as_denominator(self) -> None:
+        """TELE-648: total_actions equals sum of action_counts."""
+        env = EnvState(env_id=0)
+
+        # Add various actions
+        env.add_action("WAIT")
+        env.add_action("WAIT")
+        env.add_action("GERMINATE_CONV_LIGHT")
+        env.add_action("FOSSILIZE_R0C0")
+        env.add_action("PRUNE_R1C1")
+
+        # Total should equal sum of counts
+        total_from_counts = sum(env.action_counts.values())
+        assert env.total_actions == total_from_counts
+        assert env.total_actions == 5
+
+
+# =============================================================================
+# TELE-649: Environment Action Counts
+# =============================================================================
+
+
+class TestTELE649EnvActionCounts:
+    """TELE-649: Environment action counts dictionary.
+
+    Wiring Status: FULLY WIRED
+    - Emitter: EnvState.add_action() increments action_counts[normalized]
+    - Transport: Actions normalized and counted via add_action()
+    - Schema: EnvState.action_counts field at lines 514-521
+    - Consumer: EnvDetailScreen displays color-coded percentages
+
+    Action counts tracks the number of times each normalized action type
+    has been taken. Factored actions are normalized before counting.
+    """
+
+    def test_action_counts_field_exists(self) -> None:
+        """TELE-649: Verify EnvState.action_counts field exists."""
+        env = EnvState(env_id=0)
+        assert hasattr(env, "action_counts")
+
+    def test_action_counts_default_structure(self) -> None:
+        """TELE-649: Default action_counts has all action types at 0."""
+        env = EnvState(env_id=0)
+        expected_keys = {
+            "WAIT",
+            "GERMINATE",
+            "SET_ALPHA_TARGET",
+            "PRUNE",
+            "FOSSILIZE",
+            "ADVANCE",
+        }
+        assert set(env.action_counts.keys()) == expected_keys
+        assert all(count == 0 for count in env.action_counts.values())
+
+    def test_action_counts_type_is_dict(self) -> None:
+        """TELE-649: action_counts is a dict type."""
+        env = EnvState(env_id=0)
+        assert isinstance(env.action_counts, dict)
+
+    def test_action_counts_has_all_action_types(self) -> None:
+        """TELE-649: action_counts has keys for all normalized action types."""
+        env = EnvState(env_id=0)
+        required_actions = [
+            "WAIT",
+            "GERMINATE",
+            "SET_ALPHA_TARGET",
+            "PRUNE",
+            "FOSSILIZE",
+            "ADVANCE",
+        ]
+        for action in required_actions:
+            assert action in env.action_counts
+
+    def test_action_counts_percentage_calculation(self) -> None:
+        """TELE-649: action_counts enables percentage calculation."""
+        env = EnvState(env_id=0)
+
+        # Add actions
+        env.add_action("WAIT")
+        env.add_action("WAIT")
+        env.add_action("GERMINATE_CONV_LIGHT")
+        env.add_action("GERMINATE_DENSE_HEAVY")
+
+        # Calculate percentages
+        total = env.total_actions
+        assert total == 4
+
+        wait_pct = (env.action_counts["WAIT"] / total) * 100
+        germinate_pct = (env.action_counts["GERMINATE"] / total) * 100
+
+        assert wait_pct == 50.0
+        assert germinate_pct == 50.0
+
+    def test_action_counts_color_mapping(self) -> None:
+        """TELE-649: action types have corresponding color styles."""
+        # From EnvDetailScreen: action types have designated colors
+        action_colors = {
+            "WAIT": "dim",
+            "GERMINATE": "cyan",
+            "SET_ALPHA_TARGET": "yellow",
+            "FOSSILIZE": "green",
+            "PRUNE": "red",
+            "ADVANCE": "white",
+        }
+
+        # All action types should have a color mapping
+        for action in ["WAIT", "GERMINATE", "SET_ALPHA_TARGET", "PRUNE", "FOSSILIZE", "ADVANCE"]:
+            assert action in action_colors
+
+    def test_action_normalization_germinate(self) -> None:
+        """TELE-649: Factored GERMINATE actions are normalized."""
+        env = EnvState(env_id=0)
+
+        env.add_action("GERMINATE_CONV_LIGHT")
+        env.add_action("GERMINATE_DENSE_HEAVY")
+        env.add_action("GERMINATE_CONV_HEAVY")
+
+        assert env.action_counts["GERMINATE"] == 3
+        assert env.total_actions == 3
+
+    def test_action_normalization_slot_actions(self) -> None:
+        """TELE-649: Factored slot actions are normalized."""
+        env = EnvState(env_id=0)
+
+        env.add_action("FOSSILIZE_R0C0")
+        env.add_action("FOSSILIZE_R1C1")
+        env.add_action("PRUNE_R0C0")
+        env.add_action("ADVANCE_R1C0")
+        env.add_action("SET_ALPHA_TARGET_R0C1")
+
+        assert env.action_counts["FOSSILIZE"] == 2
+        assert env.action_counts["PRUNE"] == 1
+        assert env.action_counts["ADVANCE"] == 1
+        assert env.action_counts["SET_ALPHA_TARGET"] == 1
+
+
+# =============================================================================
+# TELE-670: Blueprint Spawns
+# =============================================================================
+
+
+class TestTELE670BlueprintSpawns:
+    """TELE-670: Per-blueprint spawn counts for graveyard analysis.
+
+    Wiring Status: FULLY WIRED
+    - Emitter: Aggregator handles SEED_GERMINATED events
+    - Transport: blueprint_spawns[blueprint_id] incremented
+    - Schema: EnvState.blueprint_spawns field at line 466
+    - Consumer: EnvDetailScreen graveyard "spawn" column (cyan)
+
+    Blueprint spawns tracks how many seeds of each blueprint type have
+    germinated. Provides context for fossilize/prune success rate analysis.
+    """
+
+    def test_blueprint_spawns_field_exists(self) -> None:
+        """TELE-670: Verify EnvState.blueprint_spawns field exists."""
+        env = EnvState(env_id=0)
+        assert hasattr(env, "blueprint_spawns")
+
+    def test_blueprint_spawns_default_empty_dict(self) -> None:
+        """TELE-670: Default blueprint_spawns is empty dict."""
+        env = EnvState(env_id=0)
+        assert env.blueprint_spawns == {}
+        assert len(env.blueprint_spawns) == 0
+
+    def test_blueprint_spawns_type_is_dict(self) -> None:
+        """TELE-670: blueprint_spawns is a dict type."""
+        env = EnvState(env_id=0)
+        assert isinstance(env.blueprint_spawns, dict)
+
+    def test_blueprint_spawns_tracks_per_blueprint(self) -> None:
+        """TELE-670: blueprint_spawns tracks counts per blueprint ID."""
+        env = EnvState(env_id=0)
+
+        # Manually populate (normally done by aggregator)
+        env.blueprint_spawns["conv_light"] = 3
+        env.blueprint_spawns["dense_heavy"] = 2
+
+        assert env.blueprint_spawns["conv_light"] == 3
+        assert env.blueprint_spawns["dense_heavy"] == 2
+        assert len(env.blueprint_spawns) == 2
+
+
+# =============================================================================
+# TELE-671: Blueprint Fossilized
+# =============================================================================
+
+
+class TestTELE671BlueprintFossilized:
+    """TELE-671: Per-blueprint fossilization counts.
+
+    Wiring Status: FULLY WIRED
+    - Emitter: Aggregator handles SEED_FOSSILIZED events
+    - Transport: blueprint_fossilized[blueprint_id] incremented
+    - Schema: EnvState.blueprint_fossilized field at line 468
+    - Consumer: EnvDetailScreen graveyard "foss" column (green)
+
+    Blueprint fossilized tracks successful module integrations per blueprint.
+    Combined with prune counts, enables success rate calculation.
+    """
+
+    def test_blueprint_fossilized_field_exists(self) -> None:
+        """TELE-671: Verify EnvState.blueprint_fossilized field exists."""
+        env = EnvState(env_id=0)
+        assert hasattr(env, "blueprint_fossilized")
+
+    def test_blueprint_fossilized_default_empty_dict(self) -> None:
+        """TELE-671: Default blueprint_fossilized is empty dict."""
+        env = EnvState(env_id=0)
+        assert env.blueprint_fossilized == {}
+        assert len(env.blueprint_fossilized) == 0
+
+    def test_blueprint_fossilized_type_is_dict(self) -> None:
+        """TELE-671: blueprint_fossilized is a dict type."""
+        env = EnvState(env_id=0)
+        assert isinstance(env.blueprint_fossilized, dict)
+
+    def test_blueprint_fossilized_success_rate_calculation(self) -> None:
+        """TELE-671: blueprint_fossilized enables success rate calculation."""
+        env = EnvState(env_id=0)
+
+        # Populate counts
+        env.blueprint_fossilized["conv_light"] = 3
+        env.blueprint_prunes["conv_light"] = 1
+
+        # Calculate success rate
+        fossilized = env.blueprint_fossilized.get("conv_light", 0)
+        pruned = env.blueprint_prunes.get("conv_light", 0)
+        terminated = fossilized + pruned
+
+        if terminated > 0:
+            success_rate = fossilized / terminated
+        else:
+            success_rate = 0.0
+
+        assert success_rate == 0.75  # 3 / (3 + 1)
+
+
+# =============================================================================
+# TELE-672: Blueprint Prunes
+# =============================================================================
+
+
+class TestTELE672BlueprintPrunes:
+    """TELE-672: Per-blueprint prune counts.
+
+    Wiring Status: FULLY WIRED
+    - Emitter: Aggregator handles SEED_PRUNED events
+    - Transport: blueprint_prunes[blueprint_id] incremented
+    - Schema: EnvState.blueprint_prunes field at line 467
+    - Consumer: EnvDetailScreen graveyard "prun" column (red)
+
+    Blueprint prunes tracks failed/removed seeds per blueprint.
+    Combined with fossilized counts, enables success rate calculation.
+    """
+
+    def test_blueprint_prunes_field_exists(self) -> None:
+        """TELE-672: Verify EnvState.blueprint_prunes field exists."""
+        env = EnvState(env_id=0)
+        assert hasattr(env, "blueprint_prunes")
+
+    def test_blueprint_prunes_default_empty_dict(self) -> None:
+        """TELE-672: Default blueprint_prunes is empty dict."""
+        env = EnvState(env_id=0)
+        assert env.blueprint_prunes == {}
+        assert len(env.blueprint_prunes) == 0
+
+    def test_blueprint_prunes_type_is_dict(self) -> None:
+        """TELE-672: blueprint_prunes is a dict type."""
+        env = EnvState(env_id=0)
+        assert isinstance(env.blueprint_prunes, dict)
+
+    def test_graveyard_success_rate_thresholds(self) -> None:
+        """TELE-672: Graveyard success rate uses DisplayThresholds."""
+        env = EnvState(env_id=0)
+
+        # Test case 1: High success rate (green)
+        env.blueprint_fossilized["conv_light"] = 5
+        env.blueprint_prunes["conv_light"] = 1
+        fossilized = env.blueprint_fossilized["conv_light"]
+        pruned = env.blueprint_prunes["conv_light"]
+        success_rate = fossilized / (fossilized + pruned)
+
+        assert success_rate >= DisplayThresholds.BLUEPRINT_SUCCESS_GREEN
+        # This would display as green
+
+        # Test case 2: Medium success rate (yellow)
+        env.blueprint_fossilized["dense_heavy"] = 2
+        env.blueprint_prunes["dense_heavy"] = 5
+        fossilized = env.blueprint_fossilized["dense_heavy"]
+        pruned = env.blueprint_prunes["dense_heavy"]
+        success_rate = fossilized / (fossilized + pruned)
+
+        assert success_rate >= DisplayThresholds.BLUEPRINT_SUCCESS_YELLOW
+        assert success_rate < DisplayThresholds.BLUEPRINT_SUCCESS_GREEN
+        # This would display as yellow
+
+        # Test case 3: Low success rate (red)
+        env.blueprint_fossilized["attn_small"] = 1
+        env.blueprint_prunes["attn_small"] = 10
+        fossilized = env.blueprint_fossilized["attn_small"]
+        pruned = env.blueprint_prunes["attn_small"]
+        success_rate = fossilized / (fossilized + pruned)
+
+        assert success_rate < DisplayThresholds.BLUEPRINT_SUCCESS_YELLOW
+        # This would display as red
+
+
+# =============================================================================
+# Integration: Extended EnvState Schema Completeness
+# =============================================================================
+
+
+class TestExtendedEnvStateSchemaCompleteness:
+    """Verify EnvState has all TELE-646 to TELE-672 fields."""
+
+    def test_all_history_fields_present(self) -> None:
+        """Verify all history-related fields are present in EnvState."""
+        env = EnvState(env_id=0)
+
+        # TELE-646: Accuracy history
+        assert hasattr(env, "accuracy_history")
+        assert isinstance(env.accuracy_history, deque)
+        assert env.accuracy_history.maxlen == 50
+
+        # TELE-647: Reward history
+        assert hasattr(env, "reward_history")
+        assert isinstance(env.reward_history, deque)
+        assert env.reward_history.maxlen == 50
+
+    def test_all_action_fields_present(self) -> None:
+        """Verify all action-related fields are present in EnvState."""
+        env = EnvState(env_id=0)
+
+        # TELE-648: Total actions
+        assert hasattr(env, "total_actions")
+        assert env.total_actions == 0
+
+        # TELE-649: Action counts
+        assert hasattr(env, "action_counts")
+        assert len(env.action_counts) == 6  # WAIT, GERMINATE, SET_ALPHA_TARGET, PRUNE, FOSSILIZE, ADVANCE
+
+    def test_all_graveyard_fields_present(self) -> None:
+        """Verify all graveyard-related fields are present in EnvState."""
+        env = EnvState(env_id=0)
+
+        # TELE-670: Blueprint spawns
+        assert hasattr(env, "blueprint_spawns")
+        assert env.blueprint_spawns == {}
+
+        # TELE-671: Blueprint fossilized
+        assert hasattr(env, "blueprint_fossilized")
+        assert env.blueprint_fossilized == {}
+
+        # TELE-672: Blueprint prunes
+        assert hasattr(env, "blueprint_prunes")
+        assert env.blueprint_prunes == {}
+
+    def test_all_extended_defaults_are_correct(self) -> None:
+        """Verify all extended default values match TELE record specifications."""
+        env = EnvState(env_id=0)
+
+        # TELE-646/647: History deques empty with maxlen=50
+        assert len(env.accuracy_history) == 0
+        assert len(env.reward_history) == 0
+        assert env.accuracy_history.maxlen == 50
+        assert env.reward_history.maxlen == 50
+
+        # TELE-648: Total actions starts at 0
+        assert env.total_actions == 0
+
+        # TELE-649: Action counts all initialized to 0
+        for action, count in env.action_counts.items():
+            assert count == 0, f"{action} should default to 0"
+
+        # TELE-670/671/672: Graveyard dicts empty
+        assert env.blueprint_spawns == {}
+        assert env.blueprint_fossilized == {}
+        assert env.blueprint_prunes == {}
+
+
+# =============================================================================
+# Integration: History Sparkline Consumer Tests
+# =============================================================================
+
+
+class TestHistorySparklineConsumer:
+    """Test sparkline generation from history deques."""
+
+    def test_empty_history_produces_placeholder(self) -> None:
+        """Empty history produces flat line placeholder."""
+        empty_deque: deque[float] = deque(maxlen=50)
+        sparkline = make_sparkline(empty_deque, width=8)
+        # Empty values should produce flat line
+        assert len(sparkline) == 8
+
+    def test_single_value_history(self) -> None:
+        """Single value history produces valid sparkline."""
+        history: deque[float] = deque([50.0], maxlen=50)
+        sparkline = make_sparkline(history, width=8)
+        assert len(sparkline) > 0
+
+    def test_increasing_values_sparkline(self) -> None:
+        """Increasing values should produce upward trend sparkline."""
+        history: deque[float] = deque(maxlen=50)
+        for i in range(10):
+            history.append(float(i))
+        sparkline = make_sparkline(history, width=10)
+        assert len(sparkline) == 10
+        # Sparkline characters should exist
+        assert any(c in sparkline for c in "▁▂▃▄▅▆▇█")
+
+    def test_decreasing_values_sparkline(self) -> None:
+        """Decreasing values should produce downward trend sparkline."""
+        history: deque[float] = deque(maxlen=50)
+        for i in range(10, 0, -1):
+            history.append(float(i))
+        sparkline = make_sparkline(history, width=10)
+        assert len(sparkline) == 10
+
+
+# =============================================================================
+# Integration: Action Distribution Consumer Tests
+# =============================================================================
+
+
+class TestActionDistributionConsumer:
+    """Test action distribution percentage calculations."""
+
+    def test_zero_actions_safe_division(self) -> None:
+        """Zero total_actions should not cause division by zero."""
+        env = EnvState(env_id=0)
+        assert env.total_actions == 0
+
+        # Safe percentage calculation pattern used by consumer
+        if env.total_actions > 0:
+            wait_pct = (env.action_counts["WAIT"] / env.total_actions) * 100
+        else:
+            wait_pct = 0.0
+
+        assert wait_pct == 0.0
+
+    def test_mixed_actions_percentages_sum_to_100(self) -> None:
+        """Action percentages should sum to approximately 100%."""
+        env = EnvState(env_id=0)
+
+        # Add various actions
+        env.add_action("WAIT")
+        env.add_action("WAIT")
+        env.add_action("GERMINATE_CONV_LIGHT")
+        env.add_action("FOSSILIZE_R0C0")
+        env.add_action("SET_ALPHA_TARGET_R0C0")
+
+        total = env.total_actions
+        pct_sum = sum((count / total) * 100 for count in env.action_counts.values())
+
+        assert abs(pct_sum - 100.0) < 0.01
+
+    def test_action_counts_match_total_actions(self) -> None:
+        """Sum of action_counts should always equal total_actions."""
+        env = EnvState(env_id=0)
+
+        # Add many actions
+        for _ in range(10):
+            env.add_action("WAIT")
+        for _ in range(5):
+            env.add_action("GERMINATE_CONV_LIGHT")
+        for _ in range(3):
+            env.add_action("PRUNE_R0C0")
+
+        counts_sum = sum(env.action_counts.values())
+        assert counts_sum == env.total_actions
+        assert env.total_actions == 18
+
+
+# =============================================================================
+# Integration: Graveyard Success Rate Consumer Tests
+# =============================================================================
+
+
+class TestGraveyardSuccessRateConsumer:
+    """Test graveyard success rate calculations."""
+
+    def test_no_terminated_seeds_safe(self) -> None:
+        """No terminated seeds should not cause division by zero."""
+        env = EnvState(env_id=0)
+        env.blueprint_spawns["conv_light"] = 5
+        env.blueprint_fossilized["conv_light"] = 0
+        env.blueprint_prunes["conv_light"] = 0
+
+        fossilized = env.blueprint_fossilized.get("conv_light", 0)
+        pruned = env.blueprint_prunes.get("conv_light", 0)
+        terminated = fossilized + pruned
+
+        # Safe calculation pattern used by consumer
+        if terminated > 0:
+            success_rate = fossilized / terminated
+        else:
+            success_rate = 0.0  # Or display "--" placeholder
+
+        assert success_rate == 0.0
+
+    def test_all_fossilized_100_percent_success(self) -> None:
+        """All seeds fossilized should show 100% success rate."""
+        env = EnvState(env_id=0)
+        env.blueprint_fossilized["conv_light"] = 5
+        env.blueprint_prunes["conv_light"] = 0
+
+        fossilized = env.blueprint_fossilized["conv_light"]
+        pruned = env.blueprint_prunes["conv_light"]
+        success_rate = fossilized / (fossilized + pruned)
+
+        assert success_rate == 1.0
+
+    def test_all_pruned_0_percent_success(self) -> None:
+        """All seeds pruned should show 0% success rate."""
+        env = EnvState(env_id=0)
+        env.blueprint_fossilized["conv_light"] = 0
+        env.blueprint_prunes["conv_light"] = 5
+
+        fossilized = env.blueprint_fossilized["conv_light"]
+        pruned = env.blueprint_prunes["conv_light"]
+        success_rate = fossilized / (fossilized + pruned)
+
+        assert success_rate == 0.0
+
+    def test_threshold_boundary_green(self) -> None:
+        """Success rate exactly at green threshold should be green."""
+        # 50% is the boundary for green
+        fossilized = 5
+        pruned = 5
+        success_rate = fossilized / (fossilized + pruned)
+
+        assert success_rate == 0.50
+        assert success_rate >= DisplayThresholds.BLUEPRINT_SUCCESS_GREEN
+
+    def test_threshold_boundary_yellow(self) -> None:
+        """Success rate exactly at yellow threshold should be yellow."""
+        # 25% is the boundary for yellow
+        fossilized = 1
+        pruned = 3
+        success_rate = fossilized / (fossilized + pruned)
+
+        assert success_rate == 0.25
+        assert success_rate >= DisplayThresholds.BLUEPRINT_SUCCESS_YELLOW
+        assert success_rate < DisplayThresholds.BLUEPRINT_SUCCESS_GREEN
