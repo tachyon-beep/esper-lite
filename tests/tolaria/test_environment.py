@@ -39,6 +39,20 @@ class TestEnvironment:
         assert hasattr(model, "get_host_parameters")
         assert hasattr(model, "host")
 
+    def test_create_model_rejects_duplicate_slots(self):
+        """Duplicate slot IDs should raise ValueError with helpful message.
+
+        This prevents silent overwrites in MorphogeneticModel's ModuleDict
+        which would cause action/mask dimension mismatches in training.
+        """
+        with pytest.raises(ValueError, match="slots contains duplicates.*r0c1"):
+            create_model(device="cpu", slots=["r0c1", "r0c2", "r0c1"])
+
+    def test_create_model_rejects_multiple_duplicates(self):
+        """Multiple different duplicates should all be reported."""
+        with pytest.raises(ValueError, match="slots contains duplicates"):
+            create_model(device="cpu", slots=["r0c1", "r0c1", "r0c2", "r0c2"])
+
 
 class TestParseDevice:
     """Tests for parse_device function."""

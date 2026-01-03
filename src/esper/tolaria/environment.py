@@ -91,14 +91,6 @@ def validate_device(device: str, *, require_explicit_index: bool = False) -> tor
     return dev
 
 
-def _validate_device(device: str) -> None:
-    """Validate requested device (backward-compatible wrapper).
-
-    Deprecated: Use validate_device() directly for new code.
-    """
-    validate_device(device, require_explicit_index=False)
-
-
 def create_model(
     task: "TaskSpec | str" = "cifar_baseline",
     device: str = "cuda",
@@ -121,9 +113,13 @@ def create_model(
     else:
         task_spec = task
 
-    _validate_device(device)
+    validate_device(device, require_explicit_index=False)
 
     if not slots:
         raise ValueError("slots cannot be empty")
+
+    if len(slots) != len(set(slots)):
+        duplicates = [s for s in slots if slots.count(s) > 1]
+        raise ValueError(f"slots contains duplicates: {sorted(set(duplicates))}")
 
     return task_spec.create_model(device=device, slots=slots, permissive_gates=permissive_gates)
