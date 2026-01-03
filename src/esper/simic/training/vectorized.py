@@ -2926,12 +2926,14 @@ def train_ppo_vectorized(
                                 )
                                 env_state.init_obs_v3_slot_tracking(target_slot)
                                 env_state.seeds_created += 1
+                                env_state.germinate_count += 1  # TELE-610
                                 env_state.seed_optimizers.pop(target_slot, None)
                                 action_success = True
                             elif op_action == OP_FOSSILIZE:
                                 action_success = _advance_active_seed(model, target_slot)
                                 if action_success:
                                     env_state.seeds_fossilized += 1
+                                    env_state.fossilize_count += 1  # TELE-610
                                     if seed_info is not None and (
                                         seed_info.total_improvement
                                         >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
@@ -3025,6 +3027,7 @@ def train_ppo_vectorized(
                                         steps=speed_steps, curve=curve, steepness=steepness, initiator="policy"
                                     )
                                 if action_success:
+                                    env_state.prune_count += 1  # TELE-610
                                     env_state.seed_optimizers.pop(target_slot, None)
                                     env_state.acc_at_germination.pop(target_slot, None)
                             elif (

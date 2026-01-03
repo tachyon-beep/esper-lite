@@ -48,6 +48,10 @@ class ParallelEnvState:
     seeds_created: int = 0
     seeds_fossilized: int = 0  # Total seeds fossilized this episode
     contributing_fossilized: int = 0  # Seeds with total_improvement >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
+    # Action counters for episode diagnostics (TELE-610)
+    germinate_count: int = 0
+    prune_count: int = 0
+    fossilize_count: int = 0
     episode_rewards: list[float] = field(default_factory=list)
     action_counts: dict[str, int] = field(default_factory=dict)
     successful_action_counts: dict[str, int] = field(default_factory=dict)
@@ -183,6 +187,10 @@ class ParallelEnvState:
         self.seeds_created = 0
         self.seeds_fossilized = 0
         self.contributing_fossilized = 0
+        # Reset action counters for episode diagnostics (TELE-610)
+        self.germinate_count = 0
+        self.prune_count = 0
+        self.fossilize_count = 0
         self.episode_rewards.clear()
 
         base_counts = {op.name: 0 for op in LifecycleOp}
