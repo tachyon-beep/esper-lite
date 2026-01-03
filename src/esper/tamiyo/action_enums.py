@@ -18,23 +18,19 @@ from enum import IntEnum
 
 from esper.kasmina.blueprints import BlueprintRegistry
 
-# Cache for built enums, keyed by (topology, registry_version)
-# The version ensures we rebuild when blueprints change without needing callbacks
-_action_enum_cache: dict[tuple[str, int], type[IntEnum]] = {}
-
-# Simple version counter - incremented when we detect registry changes
-_registry_version: int = 0
+# Cache for built enums, keyed by (topology, blueprint_names_tuple)
+# Using the actual blueprint names as key is collision-proof (unlike hash)
+_action_enum_cache: dict[tuple[str, tuple[str, ...]], type[IntEnum]] = {}
 
 
-def _get_registry_version(topology: str) -> int:
-    """Get a version number representing current registry state for topology.
+def _get_registry_key(topology: str) -> tuple[str, tuple[str, ...]]:
+    """Get a cache key representing current registry state for topology.
 
-    Uses blueprint count + names as a cheap proxy for "has registry changed".
+    Returns (topology, tuple_of_blueprint_names) which is collision-proof.
     This avoids needing a callback from BlueprintRegistry -> Tamiyo.
     """
     blueprints = BlueprintRegistry.list_for_topology(topology)
-    # Hash the blueprint names to detect changes
-    return hash(tuple(spec.name for spec in blueprints))
+    return (topology, tuple(spec.name for spec in blueprints))
 
 
 def build_action_enum(topology: str) -> type[IntEnum]:
@@ -56,8 +52,7 @@ def build_action_enum(topology: str) -> type[IntEnum]:
     Returns:
         IntEnum class with action members for this topology.
     """
-    version = _get_registry_version(topology)
-    cache_key = (topology, version)
+    cache_key = _get_registry_key(topology)
 
     if cache_key in _action_enum_cache:
         return _action_enum_cache[cache_key]

@@ -152,9 +152,9 @@ class SignalTracker:
                     if self._stable_count >= self.stabilization_epochs:
                         self._is_stabilized = True
                         # Emit TAMIYO_INITIATED telemetry (console output via Nissa backend)
-                        hub = get_hub()
-                        # Only emit if env_id is set (telemetry requires env context)
+                        # Only access hub and emit if env_id is set (telemetry requires env context)
                         if self.env_id is not None:
+                            hub = get_hub()
                             hub.emit(TelemetryEvent(
                                 event_type=TelemetryEventType.TAMIYO_INITIATED,
                                 epoch=epoch,
