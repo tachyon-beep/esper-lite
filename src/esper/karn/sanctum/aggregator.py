@@ -603,8 +603,12 @@ class SanctumAggregator:
             # Slot utilization: active_slots / total_slots
             slot_utilization = active_slots / total_slots if total_slots > 0 else 0.0
 
+            # Episodes per second (throughput)
+            episodes_per_second = total / runtime if runtime > 0 else 0.0
+
             episode_stats = EpisodeStats(
                 total_episodes=total,
+                episodes_per_second=episodes_per_second,
                 length_mean=length_mean,
                 length_std=length_std,
                 length_min=length_min,
@@ -643,8 +647,12 @@ class SanctumAggregator:
 
             slot_utilization = active_slots / total_slots if total_slots > 0 else 0.0
 
+            # Episodes per second (throughput)
+            episodes_per_second = total / runtime if runtime > 0 else 0.0
+
             episode_stats = EpisodeStats(
                 total_episodes=total,
+                episodes_per_second=episodes_per_second,
                 action_entropy=action_entropy,
                 yield_rate=yield_rate,
                 slot_utilization=slot_utilization,

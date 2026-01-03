@@ -241,6 +241,7 @@ class EpisodeStats:
 
     # Outcome tracking (over recent N episodes)
     total_episodes: int = 0
+    episodes_per_second: float = 0.0  # Throughput: inner episodes completed per second
     timeout_count: int = 0  # Episodes that hit max steps
     success_count: int = 0  # Episodes that achieved goal
     early_termination_count: int = 0  # Episodes terminated early (failure/reset)

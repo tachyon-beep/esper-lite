@@ -1,12 +1,12 @@
-"""EpisodeMetricsPanel - Episode-level training metrics.
+"""EpisodeMetricsPanel - Inner loop training metrics.
+
+Border title shows: "INNER LOOP ─ 128 ep @ 2.3/s" (episode count + throughput)
 
 Displays (Training mode - DRL diagnostic metrics per expert review):
-- Action entropy: Policy sharpness (0=deterministic, 1=random)
-- Yield rate: Seed efficiency (fossilizations / germinations)
-- Slot utilization: Capacity usage (active_slots / max_slots)
-- Steps-per-action metrics
-- Trend indicator
+- Columnar display: Entropy, Yield, Slots (policy health indicators)
 - Interpretation: Human-readable diagnosis based on metric patterns
+- Steps-per-action metrics (germ, prune, foss)
+- Trend indicator
 
 Displays (Warmup mode - before PPO updates):
 - Collection progress
@@ -49,7 +49,7 @@ class EpisodeMetricsPanel(Static):
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
         self.classes = "panel"
-        self.border_title = "EPISODE HEALTH"
+        self.border_title = "INNER LOOP"
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Update with new snapshot data."""
@@ -61,9 +61,16 @@ class EpisodeMetricsPanel(Static):
         else:
             stats = snapshot.episode_stats
             if stats.total_episodes > 0:
-                self.border_title = f"EPISODE ─ {stats.total_episodes} ep"
+                # Show episode count and throughput in title
+                eps = stats.episodes_per_second
+                if eps >= 1.0:
+                    self.border_title = f"INNER LOOP ─ {stats.total_episodes} ep @ {eps:.1f}/s"
+                elif eps > 0:
+                    self.border_title = f"INNER LOOP ─ {stats.total_episodes} ep @ {eps:.2f}/s"
+                else:
+                    self.border_title = f"INNER LOOP ─ {stats.total_episodes} ep"
             else:
-                self.border_title = "EPISODE HEALTH"
+                self.border_title = "INNER LOOP"
         self.refresh()
 
     def render(self) -> Text:
