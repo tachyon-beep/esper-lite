@@ -1,17 +1,19 @@
 """EpisodeMetricsPanel - Episode-level training metrics.
 
-Displays (Training mode):
-- Episode length statistics (mean/std/range)
-- Outcome rates (timeout, success, early termination)
+Displays (Training mode - DRL diagnostic metrics per expert review):
+- Action entropy: Policy sharpness (0=deterministic, 1=random)
+- Yield rate: Seed efficiency (fossilizations / germinations)
+- Slot utilization: Capacity usage (active_slots / max_slots)
 - Steps-per-action metrics
-- Episode count and trend
+- Trend indicator
+- Interpretation: Human-readable diagnosis based on metric patterns
 
 Displays (Warmup mode - before PPO updates):
 - Collection progress
 - Random policy baseline returns
 - Episode count
 
-Per DRL expert: Warmup metrics establish the floor that PPO needs to beat.
+Per DRL expert: These replace useless Length/Outcomes for fixed-length episodes.
 """
 
 from __future__ import annotations
@@ -22,18 +24,26 @@ from rich.text import Text
 from textual.widgets import Static
 
 if TYPE_CHECKING:
-    from esper.karn.sanctum.schema import SanctumSnapshot
+    from esper.karn.sanctum.schema import EpisodeStats, SanctumSnapshot
 
 
 class EpisodeMetricsPanel(Static):
     """Episode-level metrics panel with warmup/training mode switching.
 
     Shows warmup diagnostics before PPO updates start,
-    then switches to training metrics once PPO data arrives.
+    then switches to DRL diagnostic metrics once PPO data arrives.
     """
 
     # Column width for label alignment
     COL1 = 13
+
+    # Thresholds for metric interpretation
+    ENTROPY_HIGH = 0.8  # Random policy
+    ENTROPY_LOW = 0.15  # Collapsed policy
+    YIELD_LOW = 0.2  # Thrashing
+    YIELD_HIGH = 0.9  # Too conservative
+    SLOTS_LOW = 0.2  # WAIT spam
+    SLOTS_HIGH = 0.95  # Germinate spam
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -114,43 +124,39 @@ class EpisodeMetricsPanel(Static):
         return result
 
     def _render_training(self) -> Text:
-        """Render training mode episode metrics.
+        """Render training mode DRL diagnostic metrics.
 
-        Layout (5 lines):
-            Length       μ:123  σ:45   [12─500]
-            Outcomes     ✗10%  ✓75%  ⊗15%   ↗improving
-            Steps/Act    germ:45  prune:120  fossil:200
+        Layout (4 lines):
+            Entropy:0.42  Yield:58%  Slots:62%
+            Steps/Act    germ:12  prune:45  foss:89
             Trend        improving ↗
+            → Healthy - policy converging
         """
         assert self._snapshot is not None  # Guarded by render()
         stats = self._snapshot.episode_stats
         result = Text()
 
-        # Line 1: Length statistics with range
-        result.append("Length".ljust(self.COL1), style="dim")
-        result.append(f"μ:{stats.length_mean:.0f}", style="cyan")
-        result.append(f"  σ:{stats.length_std:.0f}", style="dim")
-        if stats.length_min > 0 or stats.length_max > 0:
-            result.append(f"   [{stats.length_min}─{stats.length_max}]", style="dim")
+        # Line 1: DRL diagnostic metrics (Entropy, Yield, Slot Util)
+        # Entropy
+        entropy = stats.action_entropy
+        entropy_style = self._entropy_style(entropy)
+        result.append("Entropy:", style="dim")
+        result.append(f"{entropy:.2f}", style=entropy_style)
+
+        # Yield
+        result.append("  Yield:", style="dim")
+        yield_rate = stats.yield_rate
+        yield_style = self._yield_style(yield_rate)
+        result.append(f"{yield_rate:.0%}", style=yield_style)
+
+        # Slot utilization
+        result.append("  Slots:", style="dim")
+        slot_util = stats.slot_utilization
+        slot_style = self._slot_util_style(slot_util)
+        result.append(f"{slot_util:.0%}", style=slot_style)
         result.append("\n")
 
-        # Line 2: Outcome rates with labels
-        result.append("Outcomes".ljust(self.COL1), style="dim")
-
-        result.append("✗", style="red dim")
-        timeout_style = self._rate_style(stats.timeout_rate, bad_high=True)
-        result.append(f"{stats.timeout_rate:.0%}", style=timeout_style)
-
-        result.append("  ✓", style="green dim")
-        success_style = self._rate_style(stats.success_rate, bad_high=False)
-        result.append(f"{stats.success_rate:.0%}", style=success_style)
-
-        result.append("  ⊗", style="yellow dim")
-        early_style = self._rate_style(stats.early_termination_rate, bad_high=True)
-        result.append(f"{stats.early_termination_rate:.0%}", style=early_style)
-        result.append("\n")
-
-        # Line 3: Steps per action type
+        # Line 2: Steps per action type
         result.append("Steps/Act".ljust(self.COL1), style="dim")
         result.append("germ:", style="dim")
         result.append(f"{stats.steps_per_germinate:.0f}".ljust(5), style="cyan")
@@ -160,7 +166,7 @@ class EpisodeMetricsPanel(Static):
         result.append(f"{stats.steps_per_fossilize:.0f}", style="cyan")
         result.append("\n")
 
-        # Line 4: Trend indicator
+        # Line 3: Trend indicator
         result.append("Trend".ljust(self.COL1), style="dim")
         trend_map = {
             "improving": ("improving ↗", "green"),
@@ -171,27 +177,73 @@ class EpisodeMetricsPanel(Static):
             stats.completion_trend, ("stable →", "dim")
         )
         result.append(trend_text, style=trend_style)
+        result.append("\n")
+
+        # Line 4: Interpretation - human-readable diagnosis
+        interpretation, interp_style = self._interpret_metrics(stats)
+        result.append("→ ", style="dim")
+        result.append(interpretation, style=interp_style)
 
         return result
 
-    def _rate_style(self, rate: float, bad_high: bool = True) -> str:
-        """Get style for a rate based on whether high is bad.
+    def _entropy_style(self, entropy: float) -> str:
+        """Style for entropy: 0.3-0.5 is healthy (green)."""
+        if entropy > self.ENTROPY_HIGH:
+            return "red"  # Random policy
+        if entropy < self.ENTROPY_LOW:
+            return "red bold"  # Collapsed
+        if entropy < 0.3:
+            return "yellow"  # Getting sharp (watch for collapse)
+        return "green"  # Healthy range
 
-        Args:
-            rate: Value between 0 and 1.
-            bad_high: If True, high values are bad (red). If False, high is good (green).
+    def _yield_style(self, yield_rate: float) -> str:
+        """Style for yield rate: 0.4-0.7 is healthy."""
+        if yield_rate < self.YIELD_LOW:
+            return "red"  # Thrashing
+        if yield_rate > self.YIELD_HIGH:
+            return "yellow"  # Too conservative
+        return "green"
+
+    def _slot_util_style(self, slot_util: float) -> str:
+        """Style for slot utilization: 0.4-0.8 is healthy."""
+        if slot_util < self.SLOTS_LOW:
+            return "red"  # WAIT spam
+        if slot_util > self.SLOTS_HIGH:
+            return "yellow"  # Germinate spam
+        return "green"
+
+    def _interpret_metrics(self, stats: "EpisodeStats") -> tuple[str, str]:
+        """Generate human-readable interpretation from metric patterns.
+
+        Returns (message, style) tuple.
         """
-        if bad_high:
-            # High is bad (timeout, early termination)
-            if rate > 0.2:
-                return "red"
-            if rate > 0.1:
-                return "yellow"
-            return "green"
-        else:
-            # High is good (success rate)
-            if rate > 0.7:
-                return "green"
-            if rate > 0.5:
-                return "yellow"
-            return "red" if rate < 0.3 else "dim"
+        entropy = stats.action_entropy
+        yield_rate = stats.yield_rate
+        slot_util = stats.slot_utilization
+
+        # Priority 1: Detect degenerate policies
+        if entropy < self.ENTROPY_LOW and slot_util < self.SLOTS_LOW:
+            return "WAIT spam - policy collapsed", "red bold"
+
+        if entropy < self.ENTROPY_LOW and slot_util > self.SLOTS_HIGH:
+            return "Germinate spam - degenerate", "red bold"
+
+        if entropy > self.ENTROPY_HIGH:
+            return "Random policy - not learning", "yellow"
+
+        # Priority 2: Efficiency issues
+        if yield_rate < self.YIELD_LOW and slot_util > 0.3:
+            return "Thrashing - seeds pruned before contributing", "red"
+
+        if slot_util < self.SLOTS_LOW:
+            return "Under-utilizing slots - too passive", "yellow"
+
+        # Priority 3: Healthy patterns
+        if entropy < 0.5 and yield_rate > 0.4 and 0.3 < slot_util < 0.9:
+            return "Healthy - policy converging with good yield", "green"
+
+        if entropy < 0.3 and yield_rate > 0.6:
+            return "Converged - efficient policy", "green bold"
+
+        # Default: still learning
+        return "Learning - policy sharpening", "cyan"

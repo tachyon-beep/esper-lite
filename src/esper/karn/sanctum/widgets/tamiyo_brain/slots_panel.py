@@ -148,7 +148,7 @@ class SlotsPanel(Static):
         result.append(f"Prune{p_arrow}", style=p_style)
         result.append(f"{lifecycle.prune_rate:>3.1f}/ep", style="dim")
         result.append("  ", style="dim")
-        result.append(f"Foss{f_arrow}", style=f_style)
+        result.append(f" Foss{f_arrow}", style=f_style)
         result.append(f"{lifecycle.fossilize_rate:>4.2f}/ep", style="dim")
         result.append("\n")
 

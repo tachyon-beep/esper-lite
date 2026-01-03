@@ -113,11 +113,15 @@ class HealthStatusPanel(Static):
         result.append("\n")
 
         # Grad norm with sparkline (rising is bad for gradients)
+        # Fixed layout: Label(13) + Value(7) + Indicator(1) + Space(1) + Sparkline(10) + Trend(1)
+        # Use space flag for sign alignment: " 0.123" vs "-0.123"
         gn_status = self._get_grad_norm_status(tamiyo.grad_norm)
-        result.append("Grad Norm   ", style="dim")
-        result.append(f"{tamiyo.grad_norm:>6.3f}", style=self._status_style(gn_status))
+        result.append("Grad Norm    ", style="dim")  # 13 chars
+        result.append(f"{tamiyo.grad_norm: 6.3f}", style=self._status_style(gn_status))
         if gn_status != "ok":
-            result.append(" !", style=self._status_style(gn_status))
+            result.append("!", style=self._status_style(gn_status))
+        else:
+            result.append(" ", style="dim")
         result.append(" ")
         # Sparkline for gradient history
         if tamiyo.grad_norm_history:
@@ -134,20 +138,23 @@ class HealthStatusPanel(Static):
         result.append("\n")
 
         # KL divergence with sparkline (rising is bad - policy changing too fast)
+        # Fixed layout: Label(13) + Value(7) + Indicator(1) + Space(1) + Sparkline(10) + Trend(1)
+        # Use space flag for sign alignment: " 0.0089" vs "-0.0089"
         kl_status = self._get_kl_status(tamiyo.kl_divergence)
-        result.append("KL Diverge   ", style="dim")
+        result.append("KL Diverge   ", style="dim")  # 13 chars
         if math.isnan(tamiyo.kl_divergence):
-            result.append("   ---", style="dim")
-            result.append(" ")
+            result.append("    ---", style="dim")  # 7 chars to match value width
+            result.append("  ")  # Placeholder for indicator + space
             result.append("─" * self.SPARKLINE_WIDTH, style="dim")
         else:
             result.append(
-                f"{tamiyo.kl_divergence:>6.4f}", style=self._status_style(kl_status)
+                f"{tamiyo.kl_divergence: 6.4f}", style=self._status_style(kl_status)
             )
             if kl_status != "ok":
-                result.append(" !", style=self._status_style(kl_status))
+                result.append("!", style=self._status_style(kl_status))
             else:
-                result.append("  ")
+                result.append(" ", style="dim")
+            result.append(" ")
             # Sparkline for KL history
             if tamiyo.kl_divergence_history:
                 sparkline = render_sparkline(

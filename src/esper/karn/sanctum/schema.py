@@ -255,6 +255,22 @@ class EpisodeStats:
     steps_per_prune: float = 0.0  # Avg steps between PRUNE actions
     steps_per_fossilize: float = 0.0  # Avg steps between FOSSILIZE actions
 
+    # === DRL Diagnostic Metrics (per DRL expert review) ===
+    # These replace the useless Length/Outcomes metrics for fixed-length episodes
+
+    # Action entropy: Policy sharpness indicator (0=deterministic, 1=uniform random)
+    # Normalized Shannon entropy: H = -sum(p(a)*log(p(a))) / log(|A|)
+    # Good: 0.3-0.5 (converging), Bad high: >0.8 (random), Bad low: <0.1 (collapsed)
+    action_entropy: float = 0.0
+
+    # Yield rate: Seed efficiency (fossilizations / germinations)
+    # Good: 0.4-0.7 (healthy churn), Bad low: <0.2 (thrashing), Bad high: >0.9 (too conservative)
+    yield_rate: float = 0.0
+
+    # Slot utilization: Capacity usage (active_slots / max_slots)
+    # Good: 0.4-0.8, Bad low: <0.2 (WAIT spam), Bad high: 1.0 constant (germinate spam)
+    slot_utilization: float = 0.0
+
     # Completion trend
     completion_trend: str = "stable"  # "improving", "stable", "declining"
 

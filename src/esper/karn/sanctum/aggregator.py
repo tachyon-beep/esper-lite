@@ -10,6 +10,7 @@ access from training thread (process_event) and UI thread (get_snapshot).
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import time
 import uuid
@@ -577,6 +578,31 @@ class SanctumAggregator:
             steps_per_prune = total_steps / max(1, self._total_prune)
             steps_per_fossilize = total_steps / max(1, self._total_fossilize)
 
+            # === DRL Diagnostic Metrics ===
+            # Action entropy: Normalized Shannon entropy of cumulative action distribution
+            # H = -sum(p(a)*log(p(a))) / log(|A|), normalized to [0, 1]
+            action_entropy = 0.0
+            if self._cumulative_action_counts:
+                total_actions = sum(self._cumulative_action_counts.values())
+                if total_actions > 0:
+                    num_actions = len(self._cumulative_action_counts)
+                    if num_actions > 1:
+                        entropy_sum = 0.0
+                        for count in self._cumulative_action_counts.values():
+                            if count > 0:
+                                p = count / total_actions
+                                entropy_sum -= p * math.log(p)
+                        # Normalize by max entropy (log of action count)
+                        action_entropy = entropy_sum / math.log(num_actions)
+
+            # Yield rate: fossilizations / germinations (seed efficiency)
+            yield_rate = 0.0
+            if self._cumulative_germinated > 0:
+                yield_rate = self._cumulative_fossilized / self._cumulative_germinated
+
+            # Slot utilization: active_slots / total_slots
+            slot_utilization = active_slots / total_slots if total_slots > 0 else 0.0
+
             episode_stats = EpisodeStats(
                 total_episodes=total,
                 length_mean=length_mean,
@@ -591,10 +617,38 @@ class SanctumAggregator:
                 steps_per_germinate=steps_per_germinate,
                 steps_per_prune=steps_per_prune,
                 steps_per_fossilize=steps_per_fossilize,
+                action_entropy=action_entropy,
+                yield_rate=yield_rate,
+                slot_utilization=slot_utilization,
                 completion_trend=trend,
             )
         else:
-            episode_stats = EpisodeStats(total_episodes=total)
+            # Minimal stats - still compute DRL metrics from cumulative data
+            action_entropy = 0.0
+            if self._cumulative_action_counts:
+                total_actions = sum(self._cumulative_action_counts.values())
+                if total_actions > 0:
+                    num_actions = len(self._cumulative_action_counts)
+                    if num_actions > 1:
+                        entropy_sum = 0.0
+                        for count in self._cumulative_action_counts.values():
+                            if count > 0:
+                                p = count / total_actions
+                                entropy_sum -= p * math.log(p)
+                        action_entropy = entropy_sum / math.log(num_actions)
+
+            yield_rate = 0.0
+            if self._cumulative_germinated > 0:
+                yield_rate = self._cumulative_fossilized / self._cumulative_germinated
+
+            slot_utilization = active_slots / total_slots if total_slots > 0 else 0.0
+
+            episode_stats = EpisodeStats(
+                total_episodes=total,
+                action_entropy=action_entropy,
+                yield_rate=yield_rate,
+                slot_utilization=slot_utilization,
+            )
 
         snapshot = SanctumSnapshot(
             # Run context

@@ -242,8 +242,8 @@ class ActionContext(Static):
             result.append("█" * filled, style=color)
             result.append("░" * empty, style="dim")
 
-            # Value (3 decimal places for small Q differences)
-            result.append(f"  {q_val:+.3f}", style=color)
+            # Value (4 decimal places for small Q differences)
+            result.append(f"  {q_val:+.4f}", style=color)
 
             # Best/Worst markers
             if i == 0:
@@ -259,14 +259,14 @@ class ActionContext(Static):
         var_style = {"ok": "green", "warning": "yellow", "critical": "red bold"}[var_status]
 
         result.append("  Var:", style="dim")
-        result.append(f"{q_var:.2f}", style=var_style)
+        result.append(f"{q_var:.4f}", style=var_style)
 
         if var_status == "critical":
             result.append("✗", style="red")
         elif var_status == "ok":
             result.append("✓", style="green")
 
-        result.append(f"  Spread:{tamiyo.q_spread:.1f}\n", style="dim")
+        result.append(f"  Spread:{tamiyo.q_spread:.3f}\n", style="dim")
 
         return result
 
@@ -316,7 +316,7 @@ class ActionContext(Static):
             result.append(" ")
 
             # Hypervolume
-            hv_text = f"HV:{rh.hypervolume:.1f}"
+            hv_text = f"HV:{rh.hypervolume:.3f}"
             result.append(hv_text, style="cyan")
         else:
             result.append("[health pending]", style="dim")
@@ -329,40 +329,40 @@ class ActionContext(Static):
             # Line 2: Σ | Sig | Rent
             result.append("  ")
             total_style = "green" if rc.total >= 0 else "red"
-            result.append(f"Σ:{rc.total:+.2f}".ljust(col_width), style=total_style)
+            result.append(f"Σ:{rc.total:+.3f}".ljust(col_width), style=total_style)
             result.append(" ")
 
             sig = rc.bounded_attribution if rc.bounded_attribution != 0 else rc.base_acc_delta
             sig_style = "green" if sig >= 0 else "red"
-            result.append(f"Sig:{sig:+.2f}".ljust(col_width), style=sig_style)
+            result.append(f"Sig:{sig:+.3f}".ljust(col_width), style=sig_style)
             result.append(" ")
 
             rent_style = "yellow" if rc.compute_rent != 0 else "dim"
-            result.append(f"Rent:{rc.compute_rent:.2f}", style=rent_style)
+            result.append(f"Rent:{rc.compute_rent:.3f}", style=rent_style)
             result.append("\n")
 
             # Line 3: αShk | Ratio | Stage
             result.append("  ")
             ashk_style = "red" if rc.alpha_shock != 0 else "dim"
-            result.append(f"αShk:{rc.alpha_shock:.2f}".ljust(col_width), style=ashk_style)
+            result.append(f"αShk:{rc.alpha_shock:.3f}".ljust(col_width), style=ashk_style)
             result.append(" ")
 
             ratio_style = "red" if rc.ratio_penalty != 0 else "dim"
-            result.append(f"Rat:{rc.ratio_penalty:.2f}".ljust(col_width), style=ratio_style)
+            result.append(f"Rat:{rc.ratio_penalty:.3f}".ljust(col_width), style=ratio_style)
             result.append(" ")
 
             stage_style = "green" if rc.stage_bonus != 0 else "dim"
-            result.append(f"Stg:{rc.stage_bonus:+.2f}", style=stage_style)
+            result.append(f"Stg:{rc.stage_bonus:+.3f}", style=stage_style)
             result.append("\n")
 
             # Line 4: Foss | HS
             result.append("  ")
             foss_style = "blue bold" if rc.fossilize_terminal_bonus != 0 else "dim"
-            result.append(f"Foss:{rc.fossilize_terminal_bonus:+.2f}".ljust(col_width), style=foss_style)
+            result.append(f"Foss:{rc.fossilize_terminal_bonus:+.3f}".ljust(col_width), style=foss_style)
             result.append(" ")
 
             hs_style = "cyan" if rc.hindsight_credit != 0 else "dim"
-            result.append(f"HS:{rc.hindsight_credit:+.2f}", style=hs_style)
+            result.append(f"HS:{rc.hindsight_credit:+.3f}", style=hs_style)
             result.append("\n")
 
         return result
@@ -400,7 +400,7 @@ class ActionContext(Static):
         recent = history[-5:][::-1]
         for i, ret in enumerate(recent):
             style = "green" if ret >= 0 else "red"
-            result.append(f"{ret:+.1f}", style=style)
+            result.append(f"{ret:+.2f}", style=style)
             if i < len(recent) - 1:
                 result.append(" ")
         result.append("\n")
@@ -419,11 +419,11 @@ class ActionContext(Static):
             p90_style = "red" if p90 < 0 else "green"
 
             result.append("p10:", style="dim")
-            result.append(f"{p10:+.1f}", style=p10_style)
+            result.append(f"{p10:+.2f}", style=p10_style)
             result.append(" p50:", style="dim")
-            result.append(f"{p50:+.1f}", style=p50_style)
+            result.append(f"{p50:+.2f}", style=p50_style)
             result.append(" p90:", style="dim")
-            result.append(f"{p90:+.1f}", style=p90_style)
+            result.append(f"{p90:+.2f}", style=p90_style)
 
             # Spread warning: large p90-p10 gap indicates bimodal/inconsistent policy
             spread = p90 - p10
@@ -472,17 +472,17 @@ class ActionContext(Static):
             mean_style = "green" if h_mean >= 0 else "red"
 
             result.append("min:", style="dim")
-            result.append(f"{h_min:+.1f}", style=min_style)
+            result.append(f"{h_min:+.2f}", style=min_style)
             result.append(" max:", style="dim")
-            result.append(f"{h_max:+.1f}", style=max_style)
+            result.append(f"{h_max:+.2f}", style=max_style)
             result.append(" μ:", style="dim")
-            result.append(f"{h_mean:+.1f}", style=mean_style)
+            result.append(f"{h_mean:+.2f}", style=mean_style)
             result.append(" σ:", style="dim")
-            result.append(f"{h_std:.1f}", style="cyan")
+            result.append(f"{h_std:.2f}", style="cyan")
             result.append(f" {trend}", style=trend_style)
         else:
             # Single value
-            result.append(f"μ:{history[0]:+.1f}", style="dim")
+            result.append(f"μ:{history[0]:+.2f}", style="dim")
 
         result.append("\n")
         return result
