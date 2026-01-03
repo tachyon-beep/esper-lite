@@ -3764,7 +3764,22 @@ def train_ppo_vectorized(
         agent.policy.load_state_dict(best_state)
 
     if save_path:
-        agent.save(save_path)
+        # B5-PT-02 FIX: Save normalizer state for correct training resume.
+        # Load code at lines 859-880 expects these keys in metadata.
+        checkpoint_metadata = {
+            # Observation normalizer (RunningMeanStd)
+            "obs_normalizer_mean": obs_normalizer.mean.tolist(),
+            "obs_normalizer_var": obs_normalizer.var.tolist(),
+            "obs_normalizer_count": obs_normalizer.count.item(),
+            "obs_normalizer_momentum": obs_normalizer.momentum,
+            # Reward normalizer (RewardNormalizer)
+            "reward_normalizer_mean": reward_normalizer.mean,
+            "reward_normalizer_m2": reward_normalizer.m2,
+            "reward_normalizer_count": reward_normalizer.count,
+            # Episode count for resume
+            "n_episodes": episodes_completed,
+        }
+        agent.save(save_path, metadata=checkpoint_metadata)
 
     # A/B/n Test Summary
     if reward_mode_per_env is not None:
