@@ -39,7 +39,6 @@ class ContributionResult:
     contribution: float  # Marginal contribution
     shapley_mean: float = 0.0  # Shapley value (if computed)
     shapley_std: float = 0.0  # Shapley uncertainty
-    is_significant: bool = False  # Only True after Shapley computation confirms significance
 
 
 class CounterfactualHelper:
@@ -147,7 +146,6 @@ class CounterfactualHelper:
                 if slot_id in results:
                     results[slot_id].shapley_mean = estimate.mean
                     results[slot_id].shapley_std = estimate.std
-                    results[slot_id].is_significant = estimate.is_significant()
 
         _logger.debug(
             f"Counterfactual computed: {len(matrix.configs)} configs, "

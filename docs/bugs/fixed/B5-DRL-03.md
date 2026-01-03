@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B5-DRL-03` |
 | **Severity** | `P3` |
-| **Status** | `wont-fix` |
+| **Status** | `closed` |
 | **Batch** | 5 |
 | **Agent** | `drl` |
 | **Domain** | `simic/attribution` |
@@ -39,10 +39,10 @@
 - [ ] Performance bottleneck
 - [ ] Numerical stability
 - [ ] torch.compile compatibility
-- [ ] Dead code / unwired functionality
-- [ ] API design / contract violation
+- [x] Dead code / unwired functionality
+- [x] API design / contract violation
 - [ ] Test coverage gap
-- [x] Documentation / naming
+- [ ] Documentation / naming
 - [ ] Defensive programming violation
 - [ ] Legacy code policy violation
 
@@ -160,36 +160,33 @@ Z_SCORES = {0.90: 1.645, 0.95: 1.96, 0.99: 2.58}
 
 ## Resolution
 
-### Status: WONTFIX
+### Status: FIXED
 
-**Closed via Systematic Debugging investigation.**
+**Fixed by removing dead code.**
 
-#### Evidence Table
+#### Investigation Findings
 
 | Claim | Status | Evidence |
 |-------|--------|----------|
-| "Code at lines 155-159" | ❌ FALSE | Code shifted to lines 160-164 |
-| "Uses `self.value` field" | ❌ FALSE | Actually uses `self.mean` field |
-| "Only handles 0.95 and 0.99" | ✅ TRUE | Line 163: `z = 1.96 if confidence == 0.95 else 2.58` |
-| "Passing 0.90 uses 1.96" | ❌ FALSE | Uses 2.58 (else clause = 99% z-score) |
-| "API design issue exists" | ✅ TRUE | Signature accepts `float`, only 2 values work correctly |
+| "API design issue exists" | ✅ TRUE | Signature accepts `float`, only 2 values work |
+| "is_significant() is used" | ❌ FALSE | Only 1 call site, uses default |
+| "Result field is read somewhere" | ❌ FALSE | `ContributionResult.is_significant` never read |
 
-#### Why This Is WONTFIX
+#### Root Cause Analysis
 
-1. **Single call site, default only:** The one call site (`counterfactual_helper.py:150`) calls `estimate.is_significant()` with no arguments. The bug where passing 0.90 silently uses the wrong z-score is unreachable in practice.
+The `is_significant()` method on `simic.attribution.ShapleyEstimate` set a field on `ContributionResult` that was **never read by any code**. The Karn UI uses a completely separate implementation: `karn.sanctum.schema.ShapleySnapshot.get_significance()`.
 
-2. **UI-only impact:** The significance indicator is purely informational for the Shapley panel. It does not affect:
-   - Seed pruning decisions
-   - Rent economy signals
-   - Training dynamics
-   - Grafting/blending thresholds
+This was dead code with a misleading API - the cleanest fix was deletion, not repair.
 
-3. **Statistical validity already approximate:** With n=20 samples (default), the normal approximation introduces ~10-15% error in tail probabilities. The difference between confidence levels is within this approximation error.
+#### The Fix
 
-4. **Fix adds no behavioral value:** Using `Literal[0.95, 0.99]` would make the API "honest" but changes no behavior for the only call site.
+1. Removed `ShapleyEstimate.is_significant()` method from `counterfactual.py`
+2. Removed `is_significant` field from `ContributionResult` in `counterfactual_helper.py`
+3. Removed the call site that set the field
+4. Removed tests that only tested the dead code path
 
 #### Severity Assessment
 
-- Original: P3 (documentation/code quality)
-- Revised: P4 (cosmetic/theoretical)
-- Resolution: WONTFIX - marginal value, zero practical impact
+- Original: P3 (documentation/API design)
+- Revised: P3 (dead code removal)
+- Resolution: FIXED via deletion

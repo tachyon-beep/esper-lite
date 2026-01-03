@@ -157,12 +157,6 @@ class ShapleyEstimate:
     n_samples: int = 0
     algorithm: str = "permutation_antithetic"
 
-    def is_significant(self, confidence: float = 0.95) -> bool:
-        """True if contribution is significantly different from zero."""
-        # Using normal approximation: mean - 2*std > 0
-        z = 1.96 if confidence == 0.95 else 2.58  # 95% or 99%
-        return abs(self.mean) > z * self.std if self.std > 0 else self.mean != 0
-
 
 @dataclass
 class InteractionTerm:
