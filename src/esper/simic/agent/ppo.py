@@ -679,8 +679,8 @@ class PPOAgent:
             log_ratios_for_joint: dict[str, torch.Tensor] = {}  # Store for joint ratio computation
             for key in HEAD_NAMES:
                 # Clamp log-ratio to prevent inf/NaN from exp() when probabilities diverge
-                # significantly. log(exp(20)) ≈ 4.85e8 is already extreme; log(exp(88)) overflows.
-                # This provides early protection before ratio explosion detection (lines 809-821).
+                # significantly. exp(20) ≈ 4.85e8 is already extreme; exp(88) overflows float32.
+                # This provides early protection before ratio explosion detection.
                 log_ratio = log_probs[key] - old_log_probs[key]
                 log_ratio_clamped = torch.clamp(log_ratio, min=-20.0, max=20.0)
                 log_ratios_for_joint[key] = log_ratio_clamped
