@@ -168,12 +168,19 @@ def check_numerical_stability(
     Call after backward() but before optimizer.step() to catch issues
     before they propagate.
 
-    PERF NOTE: This function intentionally does O(num_params) GPU syncs via
-    torch.isnan().any() and torch.isinf().any() per parameter. This is
-    acceptable because:
-    1. This is a DEBUG function, not hot-path production code
-    2. We need to identify WHICH specific parameters have issues
-    3. Batching would require stacking all params (memory-expensive)
+    PERF NOTE (B7-PT-02): This function batches all NaN/Inf checks and transfers
+    results in a single GPU sync, reducing from O(4n) syncs to O(1). The trick:
+    torch.isnan().any() returns a 0-d tensor without syncing - the sync only
+    happens when evaluated in Python boolean context. By collecting all check
+    tensors first, then stacking and transferring to CPU once, we preserve
+    per-parameter diagnostics while avoiding the sync overhead.
+
+    DEVICE ASSUMPTION: All model parameters must be on the same device. The
+    batched torch.stack() will fail if parameters are split across devices
+    (e.g., manual pipeline parallelism). This is acceptable because:
+    1. This function is called after backward(), which requires consistent devices
+    2. Multi-device models in this codebase use FSDP/DeviceMesh abstractions
+       that present a single logical device to this function
 
     When debugging is disabled (the normal case), this function is not called.
 
@@ -184,42 +191,90 @@ def check_numerical_stability(
     Returns:
         NumericalStabilityReport
     """
-    nan_weights = []
-    nan_grads = []
-    inf_weights = []
-    inf_grads = []
+    # Collect parameter metadata and check tensors - NO GPU SYNC YET
+    # (.any() returns a 0-d tensor; sync happens only on CPU transfer)
+    param_names: list[str] = []
+    has_grad: list[bool] = []
+    nan_weight_checks: list[torch.Tensor] = []
+    inf_weight_checks: list[torch.Tensor] = []
+    nan_grad_checks: list[torch.Tensor] = []
+    inf_grad_checks: list[torch.Tensor] = []
+    weight_maxes: list[torch.Tensor] = []
+    grad_maxes: list[torch.Tensor] = []
 
-    # Collect max values as tensors, then sync once at the end
-    weight_maxes = []
-    grad_maxes = []
+    # Determine device from first parameter
+    device: torch.device | None = None
 
     for name, param in model.named_parameters():
-        # Check weights (.any() triggers GPU sync per param - acceptable for debug)
-        if torch.isnan(param.data).any():
-            nan_weights.append(name)
-        if torch.isinf(param.data).any():
-            inf_weights.append(name)
+        if device is None:
+            device = param.device
+
+        param_names.append(name)
+        nan_weight_checks.append(torch.isnan(param.data).any())
+        inf_weight_checks.append(torch.isinf(param.data).any())
         weight_maxes.append(param.data.abs().max())
 
-        # Check gradients
         if param.grad is not None:
-            if torch.isnan(param.grad).any():
-                nan_grads.append(name)
-            if torch.isinf(param.grad).any():
-                inf_grads.append(name)
+            has_grad.append(True)
+            nan_grad_checks.append(torch.isnan(param.grad).any())
+            inf_grad_checks.append(torch.isinf(param.grad).any())
             grad_maxes.append(param.grad.abs().max())
+        else:
+            has_grad.append(False)
+            # Placeholder tensors for stacking - won't be used in results
+            placeholder = torch.tensor(False, device=device)
+            nan_grad_checks.append(placeholder)
+            inf_grad_checks.append(placeholder)
 
-    # Single sync for all max values (assumes all params on same device)
-    # No defensive pattern - empty lists indicate model has no parameters (bug)
-    max_weight = torch.stack(weight_maxes).max().item()
-    max_grad = torch.stack(grad_maxes).max().item()
-
-    # Check loss
+    # Check loss separately if provided (single tensor, minimal overhead)
     loss_val = 0.0
     loss_finite = True
     if loss is not None:
         loss_val = loss.item()
         loss_finite = not (math.isnan(loss_val) or math.isinf(loss_val))
+
+    # Early exit if model has no parameters
+    if not param_names:
+        return NumericalStabilityReport(
+            nan_in_weights=[],
+            nan_in_gradients=[],
+            inf_in_weights=[],
+            inf_in_gradients=[],
+            max_weight=0.0,
+            max_gradient=0.0,
+            loss_value=loss_val,
+            loss_is_finite=loss_finite,
+        )
+
+    # SINGLE GPU SYNC: stack all checks and transfer to CPU
+    # Shape: [4, num_params] for nan_weight, inf_weight, nan_grad, inf_grad
+    all_checks = torch.stack([
+        torch.stack(nan_weight_checks),
+        torch.stack(inf_weight_checks),
+        torch.stack(nan_grad_checks),
+        torch.stack(inf_grad_checks),
+    ]).cpu()
+
+    # Also sync max values in one operation
+    max_weight = torch.stack(weight_maxes).max().item()
+    max_grad = torch.stack(grad_maxes).max().item() if grad_maxes else 0.0
+
+    # Map results back to parameter names
+    nan_weights: list[str] = []
+    inf_weights: list[str] = []
+    nan_grads: list[str] = []
+    inf_grads: list[str] = []
+
+    for i, name in enumerate(param_names):
+        if all_checks[0, i]:
+            nan_weights.append(name)
+        if all_checks[1, i]:
+            inf_weights.append(name)
+        if has_grad[i]:
+            if all_checks[2, i]:
+                nan_grads.append(name)
+            if all_checks[3, i]:
+                inf_grads.append(name)
 
     return NumericalStabilityReport(
         nan_in_weights=nan_weights,
