@@ -299,6 +299,15 @@ class SanctumAggregator:
         # Episode outcomes for Pareto analysis (reward health panel)
         self._episode_outcomes: list[EpisodeOutcome] = []
 
+        # Episode diagnostics (TELE-610)
+        self._episode_lengths: deque[int] = deque(maxlen=100)  # Rolling window
+        self._success_count: int = 0
+        self._timeout_count: int = 0
+        self._total_germinate: int = 0
+        self._total_prune: int = 0
+        self._total_fossilize: int = 0
+        self._recent_outcomes: deque[bool] = deque(maxlen=20)  # For trend detection (True=success)
+
         # Pre-create env states
         for i in range(self.num_envs):
             self._ensure_env(i)
@@ -535,9 +544,61 @@ class SanctumAggregator:
             fossilize_trend=detect_rate_trend(self._fossilize_rate_history),
         )
 
-        # Stub observation and episode stats (telemetry not yet wired)
+        # Stub observation stats (telemetry not yet wired)
         observation_stats = ObservationStats()
-        episode_stats = EpisodeStats(total_episodes=self._current_episode)
+
+        # Episode stats (TELE-610)
+        total = self._current_episode
+        if total > 0 and self._episode_lengths:
+            lengths = list(self._episode_lengths)
+            length_mean = sum(lengths) / len(lengths)
+            length_std = (sum((x - length_mean) ** 2 for x in lengths) / len(lengths)) ** 0.5
+            length_min = min(lengths)
+            length_max = max(lengths)
+
+            success_rate = self._success_count / total
+            timeout_rate = self._timeout_count / total
+
+            # Trend detection (DRL expert: compare rolling windows, not single samples)
+            outcomes = list(self._recent_outcomes)
+            if len(outcomes) >= 10:
+                recent = outcomes[-10:]  # Last 10 episodes
+                older = outcomes[-20:-10] if len(outcomes) >= 20 else outcomes[:len(outcomes)//2]
+                recent_rate = sum(recent) / len(recent)
+                older_rate = sum(older) / len(older) if older else recent_rate
+                if recent_rate > older_rate + 0.1:
+                    trend = "improving"
+                elif recent_rate < older_rate - 0.1:
+                    trend = "declining"
+                else:
+                    trend = "stable"
+            else:
+                trend = "stable"  # Not enough data for trend
+
+            # Action efficiency
+            total_steps = sum(lengths)
+            steps_per_germinate = total_steps / max(1, self._total_germinate)
+            steps_per_prune = total_steps / max(1, self._total_prune)
+            steps_per_fossilize = total_steps / max(1, self._total_fossilize)
+
+            episode_stats = EpisodeStats(
+                total_episodes=total,
+                length_mean=length_mean,
+                length_std=length_std,
+                length_min=length_min,
+                length_max=length_max,
+                success_count=self._success_count,
+                timeout_count=self._timeout_count,
+                success_rate=success_rate,
+                timeout_rate=timeout_rate,
+                early_termination_rate=0.0,  # Not applicable for fixed-length episodes
+                steps_per_germinate=steps_per_germinate,
+                steps_per_prune=steps_per_prune,
+                steps_per_fossilize=steps_per_fossilize,
+                completion_trend=trend,
+            )
+        else:
+            episode_stats = EpisodeStats(total_episodes=total)
 
         snapshot = SanctumSnapshot(
             # Run context
@@ -1623,6 +1684,18 @@ class SanctumAggregator:
         # Keep only last 100 outcomes to bound memory
         if len(self._episode_outcomes) > 100:
             self._episode_outcomes = self._episode_outcomes[-100:]
+
+        # TELE-610: Track episode diagnostics
+        self._episode_lengths.append(data.episode_length)
+        is_success = data.outcome_type == "success"
+        self._recent_outcomes.append(is_success)
+        if is_success:
+            self._success_count += 1
+        elif data.outcome_type == "timeout":
+            self._timeout_count += 1
+        self._total_germinate += data.germinate_count
+        self._total_prune += data.prune_count
+        self._total_fossilize += data.fossilize_count
 
     def _handle_governor_rollback(self, event: "TelemetryEvent") -> None:
         """Handle GOVERNOR_ROLLBACK event - catastrophic failure indicator.
