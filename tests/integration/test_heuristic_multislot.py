@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader, TensorDataset
 def test_heuristic_episode_germinates_and_prunes_across_slots(monkeypatch) -> None:
     """Heuristic path should target multiple slots and resolve target_seed_id → slot."""
     from esper.kasmina.host import MorphogeneticModel
-    from esper.leyline.actions import build_action_enum
+    from esper.tamiyo.action_enums import build_action_enum
     from esper.runtime import get_task_spec
     from esper.simic.training import run_heuristic_episode
     from esper.tamiyo.decisions import TamiyoDecision

@@ -2495,53 +2495,24 @@ class SeedSlot(nn.Module):
     def _emit_telemetry(
         self,
         event_type: TelemetryEventType,
-        data: dict[str, Any] | SeedGerminatedPayload | SeedStageChangedPayload | SeedGateEvaluatedPayload | SeedFossilizedPayload | SeedPrunedPayload | None = None,
+        data: SeedGerminatedPayload | SeedStageChangedPayload | SeedGateEvaluatedPayload | SeedFossilizedPayload | SeedPrunedPayload,
     ) -> None:
-        """Emit a telemetry event.
+        """Emit a telemetry event with a typed payload.
 
         Skipped entirely in fast_mode for zero overhead in PPO rollouts.
-
-        Accepts either a dict (for events without typed payloads) or a typed payload.
-        For typed payloads, no additional enrichment is done (all fields should be
-        passed in the payload constructor). For dicts, optional enrichment adds
-        alpha, epochs, and gradient health fields if available.
+        All payloads are typed dataclasses - dicts are not supported.
         """
         if self.on_telemetry is None:
             return
         if self.fast_mode and not self.telemetry_lifecycle_only:
             return
 
-        # Type narrowing: determine payload type
-        payload_data: Any
-        if isinstance(data, dict) or data is None:
-            # RD-02: Legacy dict payload enrichment - verify if still needed
-            # All known callers use typed payloads, so this branch may be dead code.
-            # Kept for backwards compatibility with any external callers passing dicts.
-            payload_dict: dict[str, Any] = dict(data) if data else {}
-            if self.state is not None:
-                payload_dict.setdefault("alpha", self.state.alpha)
-            if self.telemetry_inner_epoch is not None:
-                payload_dict.setdefault("inner_epoch", self.telemetry_inner_epoch)
-            if (
-                self.state is not None
-                and self.state.telemetry is not None
-                and self.state.telemetry.epoch > 0
-            ):
-                payload_dict.setdefault("seed_gradient_norm_ratio", self.state.metrics.seed_gradient_norm_ratio)
-                payload_dict.setdefault("gradient_health", self.state.telemetry.gradient_health)
-                payload_dict.setdefault("has_vanishing", self.state.telemetry.has_vanishing)
-                payload_dict.setdefault("has_exploding", self.state.telemetry.has_exploding)
-            payload_data = payload_dict
-        else:
-            # Typed payload - use as-is (no enrichment)
-            payload_data = data
-
         event = TelemetryEvent(
             event_type=event_type,
             seed_id=self.state.seed_id if self.state else None,
             slot_id=self.slot_id,
             epoch=self.telemetry_global_epoch,
-            data=payload_data,
+            data=data,
         )
         self.on_telemetry(event)
 

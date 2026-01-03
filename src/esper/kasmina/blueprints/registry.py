@@ -3,17 +3,33 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
 import torch.nn as nn
 
-# Import the public cache invalidation API from Leyline.
-# Note: This creates a Kasmina -> Leyline dependency, but Leyline.actions also
-# imports from Kasmina (BlueprintRegistry). The import cycle is safe because:
-#   1. This module only uses invalidate_action_enum_cache (a simple function)
-#   2. The import happens at module level, not inside a function
-#   3. Both modules complete their definitions before cross-referencing
-from esper.leyline.actions import invalidate_action_enum_cache
+
+class BlueprintFactory(Protocol):
+    """Protocol for blueprint factory functions.
+
+    Blueprint factories create nn.Module instances for seed injection.
+    They take a dimension parameter and optional kwargs for blueprint-specific
+    configuration (e.g., LoRA rank, attention heads).
+
+    This protocol fixes the type mismatch where BlueprintSpec.factory was typed
+    as Callable[[int], nn.Module] but called with **kwargs.
+    """
+
+    def __call__(self, dim: int, **kwargs: Any) -> nn.Module:
+        """Create a module for the given dimension.
+
+        Args:
+            dim: Channel dimension (CNN) or embed dimension (transformer)
+            **kwargs: Blueprint-specific options (e.g., rank for LoRA)
+
+        Returns:
+            Instantiated nn.Module ready for seed injection.
+        """
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,7 +38,7 @@ class BlueprintSpec:
 
     name: str
     topology: str
-    factory: Callable[[int], nn.Module]
+    factory: BlueprintFactory
     param_estimate: int
     description: str = ""
 
@@ -44,10 +60,14 @@ class BlueprintRegistry:
         topology: str,
         param_estimate: int,
         description: str = "",
-    ) -> Callable[[Callable[[int], nn.Module]], Callable[[int], nn.Module]]:
-        """Decorator to register a blueprint factory."""
+    ) -> Callable[[BlueprintFactory], BlueprintFactory]:
+        """Decorator to register a blueprint factory.
 
-        def decorator(factory: Callable[[int], nn.Module]) -> Callable[[int], nn.Module]:
+        Note: Action enum caches (in tamiyo.action_enums) are automatically
+        invalidated by version-keying on registry state. No callback needed.
+        """
+
+        def decorator(factory: BlueprintFactory) -> BlueprintFactory:
             key = f"{topology}:{name}"
             cls._blueprints[key] = BlueprintSpec(
                 name=name,
@@ -56,7 +76,6 @@ class BlueprintRegistry:
                 param_estimate=param_estimate,
                 description=description,
             )
-            invalidate_action_enum_cache(topology)
             return factory
 
         return decorator
@@ -101,10 +120,13 @@ class BlueprintRegistry:
 
     @classmethod
     def unregister(cls, topology: str, name: str) -> None:
-        """Remove a blueprint from the registry (primarily for tests)."""
+        """Remove a blueprint from the registry (primarily for tests).
+
+        Note: Action enum caches (in tamiyo.action_enums) are automatically
+        invalidated by version-keying on registry state. No callback needed.
+        """
         key = f"{topology}:{name}"
         cls._blueprints.pop(key, None)
-        invalidate_action_enum_cache(topology)
 
 
-__all__ = ["BlueprintSpec", "BlueprintRegistry"]
+__all__ = ["BlueprintFactory", "BlueprintSpec", "BlueprintRegistry"]

@@ -34,7 +34,7 @@ from esper.leyline import (
     DEFAULT_BLUEPRINT_PENALTY_THRESHOLD,
     DEFAULT_MIN_IMPROVEMENT_TO_FOSSILIZE,
 )
-from esper.leyline.actions import build_action_enum
+from esper.tamiyo.action_enums import build_action_enum
 from esper.tamiyo.decisions import TamiyoDecision
 
 if TYPE_CHECKING:

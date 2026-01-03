@@ -117,60 +117,44 @@ def test_legacy_catalog_still_works():
         from esper.kasmina.blueprints import BlueprintCatalog  # noqa: F401
 
 
-def test_cache_invalidation_on_register_unregister():
-    """Registration/unregistration invalidates the action enum cache.
+def test_action_enum_reflects_registry_changes():
+    """Action enum reflects blueprint registry state via version-keyed caching.
 
-    This test proves the fix for the bug-hiding defensive code issue:
-    - build_action_enum() caches results
-    - register/unregister must invalidate the cache
-    - Without proper invalidation, stale enums would persist
+    build_action_enum uses version-keyed caching: the cache key includes a
+    version derived from the registry state. When blueprints are registered
+    or unregistered, the version changes, causing the next build_action_enum
+    call to generate a fresh enum reflecting the new state.
 
-    The old code swallowed exceptions silently; the new code uses a public API.
+    This test verifies the contract without relying on cache implementation details.
     """
     from esper.kasmina.blueprints import BlueprintRegistry
-    from esper.leyline.actions import build_action_enum, _action_enum_cache
+    from esper.tamiyo.action_enums import build_action_enum
 
-    # Clear any existing cache to start fresh
-    _action_enum_cache.clear()
-
-    # Build initial enum (should cache it)
+    # Build initial enum
     enum_before = build_action_enum("cnn")
     initial_members = set(enum_before.__members__.keys())
 
-    # Verify it's cached
-    assert "cnn" in _action_enum_cache
-
     # Register a test blueprint
-    @BlueprintRegistry.register("test_cache_check", "cnn", param_estimate=99999)
+    @BlueprintRegistry.register("test_registry_change", "cnn", param_estimate=99999)
     def create_test(dim: int) -> nn.Module:
         return nn.Linear(dim, dim)
 
     try:
-        # Cache should have been invalidated by register
-        assert "cnn" not in _action_enum_cache, (
-            "Cache should be invalidated after registering new blueprint"
-        )
-
         # Rebuild enum - should now include the new blueprint
         enum_after = build_action_enum("cnn")
         new_members = set(enum_after.__members__.keys())
 
-        # The new blueprint should appear as GERMINATE_TEST_CACHE_CHECK
-        assert "GERMINATE_TEST_CACHE_CHECK" in new_members, (
+        # The new blueprint should appear as GERMINATE_TEST_REGISTRY_CHANGE
+        assert "GERMINATE_TEST_REGISTRY_CHANGE" in new_members, (
             f"New blueprint not in rebuilt enum. Members: {new_members}"
         )
 
     finally:
         # Clean up
-        BlueprintRegistry.unregister("cnn", "test_cache_check")
-
-    # Cache should be invalidated again after unregister
-    assert "cnn" not in _action_enum_cache, (
-        "Cache should be invalidated after unregistering blueprint"
-    )
+        BlueprintRegistry.unregister("cnn", "test_registry_change")
 
     # Final rebuild should NOT have the test blueprint
     enum_final = build_action_enum("cnn")
     final_members = set(enum_final.__members__.keys())
-    assert "GERMINATE_TEST_CACHE_CHECK" not in final_members
+    assert "GERMINATE_TEST_REGISTRY_CHANGE" not in final_members
     assert final_members == initial_members, "Should return to original state"

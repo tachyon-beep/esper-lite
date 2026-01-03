@@ -13,7 +13,7 @@ import torch
 from torch.utils.data import DataLoader, TensorDataset
 
 from esper.leyline import TelemetryEventType
-from esper.leyline.actions import build_action_enum
+from esper.tamiyo.action_enums import build_action_enum
 from esper.leyline.telemetry import EpochCompletedPayload, TrainingStartedPayload
 from esper.nissa import get_hub, reset_hub
 from esper.runtime import get_task_spec

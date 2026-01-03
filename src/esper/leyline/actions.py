@@ -1,37 +1,16 @@
-"""Leyline Actions - Action space definitions for Esper agents.
+"""Leyline Actions - Action name parsing utilities for Esper agents.
 
-Actions represent the discrete choices available to the strategic controller.
-Per-topology action enums are built dynamically from registered blueprints.
+This module provides the single source of truth for parsing GERMINATE_<BLUEPRINT>
+action names. All domains should import these utilities instead of duplicating
+the parsing logic.
 
-Note: The flat action enum is used only by HeuristicTamiyo for baseline comparison.
+Note: For building dynamic action enums from blueprints, use
+esper.tamiyo.action_enums.build_action_enum(). That function lives in Tamiyo
+(not Leyline) because it depends on Kasmina's BlueprintRegistry, and Leyline
+must remain free of domain package dependencies.
+
 PPO training uses factored actions from esper.leyline.factored_actions.
 """
-
-from enum import IntEnum
-
-# Cache for built enums
-_action_enum_cache: dict[str, type[IntEnum]] = {}
-
-
-def invalidate_action_enum_cache(topology: str | None = None) -> None:
-    """Invalidate cached action enums when blueprints change.
-
-    This is the PUBLIC API for cache invalidation. Called by BlueprintRegistry
-    when blueprints are registered/unregistered to ensure build_action_enum()
-    returns fresh enums reflecting the current registry state.
-
-    Args:
-        topology: Specific topology to invalidate ("cnn", "transformer"),
-                  or None to clear all cached enums.
-
-    Note:
-        This primarily affects HeuristicTamiyo (which uses build_action_enum).
-        PPO training uses static BlueprintAction from factored_actions.py.
-    """
-    if topology is None:
-        _action_enum_cache.clear()
-    elif topology in _action_enum_cache:
-        del _action_enum_cache[topology]
 
 # =============================================================================
 # GERMINATE Action Name Utilities
@@ -68,45 +47,8 @@ def get_blueprint_from_action_name(name: str) -> str | None:
     return None
 
 
-def build_action_enum(topology: str) -> type[IntEnum]:
-    """Build action enum from registered blueprints for a topology.
-
-    Action layout:
-        0: WAIT
-        1-N: GERMINATE_<BLUEPRINT> (sorted by param estimate)
-        N+1: FOSSILIZE
-        N+2: PRUNE
-        N+3: ADVANCE
-
-    Note: This is used by HeuristicTamiyo for baseline comparison.
-    PPO training uses factored actions instead.
-    """
-    if topology in _action_enum_cache:
-        return _action_enum_cache[topology]
-
-    from esper.kasmina.blueprints import BlueprintRegistry
-
-    blueprints = BlueprintRegistry.list_for_topology(topology)
-
-    members = {"WAIT": 0}
-    for i, spec in enumerate(blueprints, start=1):
-        members[f"GERMINATE_{spec.name.upper()}"] = i
-    members["FOSSILIZE"] = len(blueprints) + 1
-    members["PRUNE"] = len(blueprints) + 2
-    members["ADVANCE"] = len(blueprints) + 3
-
-    # Build list of tuples for IntEnum (avoids string literal requirement)
-    member_list = list(members.items())
-    # Type ignore needed: IntEnum expects string literal but we build dynamically
-    action_enum = IntEnum(f"{topology.title()}Action", member_list)  # type: ignore[misc]
-    _action_enum_cache[topology] = action_enum
-    return action_enum
-
-
 __all__ = [
     "GERMINATE_PREFIX",
-    "build_action_enum",
     "get_blueprint_from_action_name",
-    "invalidate_action_enum_cache",
     "is_germinate_action_name",
 ]

@@ -9,10 +9,10 @@ from hypothesis import strategies as st
 
 from esper.kasmina.blueprints import BlueprintRegistry
 from esper.leyline.actions import (
-    build_action_enum,
     get_blueprint_from_action_name,
     is_germinate_action_name,
 )
+from esper.tamiyo.action_enums import build_action_enum
 
 
 class TestActionBijection:

@@ -3,7 +3,7 @@
 import pytest
 
 from esper.tamiyo.decisions import TamiyoDecision
-from esper.leyline.actions import build_action_enum
+from esper.tamiyo.action_enums import build_action_enum
 
 
 @pytest.mark.tamiyo
