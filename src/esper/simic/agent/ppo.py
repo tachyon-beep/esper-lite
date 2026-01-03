@@ -22,6 +22,7 @@ from .types import PPOUpdateMetrics
 from esper.simic.telemetry import RatioExplosionDiagnostic
 from esper.simic.telemetry.lstm_health import compute_lstm_health
 from esper.simic.telemetry.value_metrics import compute_value_function_metrics
+from esper.simic.control.normalization import ValueNormalizer
 from esper.leyline import (
     PolicyBundle,
     DEFAULT_BATCH_SIZE,
@@ -246,6 +247,12 @@ class PPOAgent:
         self.ratio_explosion_threshold = DEFAULT_RATIO_EXPLOSION_THRESHOLD
         self.ratio_collapse_threshold = DEFAULT_RATIO_COLLAPSE_THRESHOLD
 
+        # P1 BUG FIX: Value normalization for GAE consistency
+        # The critic is trained on normalized returns (std~1), but GAE needs
+        # denormalized values to compute δ = r + γV(s') - V(s) correctly.
+        # ValueNormalizer tracks running stats and provides denormalize() for GAE.
+        self.value_normalizer = ValueNormalizer(device=device)
+
         # [PyTorch 2.9] Use fused=True for CUDA, foreach=True for CPU
         use_cuda = device.startswith("cuda")
         optimizer_kwargs: dict[str, float | bool] = {'lr': lr, 'eps': 1e-5}
@@ -403,9 +410,14 @@ class PPOAgent:
         if len(self.buffer) == 0:
             return {}
 
-        # Compute GAE per-environment (fixes P0 bug)
+        # P1 BUG FIX: Pass value_normalizer to GAE so it can denormalize critic outputs
+        # The critic learns normalized values (std~1), but GAE needs raw scale values
+        # to compute delta = r + γV' - V correctly. Without this, scale mismatch
+        # corrupts advantages and breaks training.
         self.buffer.compute_advantages_and_returns(
-            gamma=self.gamma, gae_lambda=self.gae_lambda
+            gamma=self.gamma,
+            gae_lambda=self.gae_lambda,
+            value_normalizer=self.value_normalizer,
         )
         pre_norm_adv_mean, pre_norm_adv_std = self.buffer.normalize_advantages()
 
@@ -452,12 +464,17 @@ class PPOAgent:
         metrics["return_mean"] = [valid_returns.mean().item()]
         metrics["return_std"] = [valid_returns.std().item()]
 
-        # Normalize returns by std for stable value learning (specialist-approved)
-        # Preserve mean to avoid non-stationary targets; scale variance to ~1
-        # This prevents critic collapse when return scale changes (e.g., -5 → +6)
-        value_target_scale = valid_returns.std().clamp(min=1e-6)
-        normalized_returns = (valid_returns / value_target_scale).detach()
-        metrics["value_target_scale"] = [value_target_scale.item()]
+        # P1 BUG FIX: Use running value normalizer instead of batch std
+        # 1. Update normalizer with current batch returns (tracks running distribution)
+        # 2. Normalize returns using running std (consistent scale across batches)
+        # This ensures GAE denormalization and critic training use the SAME scale.
+        #
+        # Old (broken): batch_std varies each update, GAE uses stale scale
+        # New (fixed): running_std is consistent, GAE denormalizes with same scale
+        self.value_normalizer.update(valid_returns)
+        normalized_returns = self.value_normalizer.normalize(valid_returns).detach()
+        value_target_scale = self.value_normalizer.get_scale()
+        metrics["value_target_scale"] = [value_target_scale]
 
         # Pre-normalization advantage stats for diagnosing advantage collapse
         # If pre_norm_adv_std is tiny but pre_clip_grad_norm is huge, it indicates
@@ -1115,6 +1132,7 @@ class PPOAgent:
             'checkpoint_version': CHECKPOINT_VERSION,
             'network_state_dict': self.policy.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
+            'value_normalizer_state_dict': self.value_normalizer.state_dict(),
             'train_steps': self.train_steps,
             'config': {
                 'gamma': self.gamma,
@@ -1198,6 +1216,10 @@ class PPOAgent:
                 f"Please retrain the model to create a compatible checkpoint."
             ) from e
 
+        # P1 FIX: Extract value_normalizer state (optional for old checkpoints)
+        # Old checkpoints without value_normalizer will start with fresh stats
+        value_normalizer_state = checkpoint.get('value_normalizer_state_dict')
+
         # M6: Free checkpoint memory immediately after extracting needed data.
         # Checkpoint holds a full copy of all model weights; waiting for GC to
         # free this can cause OOM when loading large models on GPU.
@@ -1272,6 +1294,11 @@ class PPOAgent:
         agent.policy.load_state_dict(state_dict)
         agent.optimizer.load_state_dict(optimizer_state_dict)
         agent.train_steps = train_steps
+
+        # P1 FIX: Restore value_normalizer state if present
+        # This ensures consistent normalization scale across training resumption
+        if value_normalizer_state is not None:
+            agent.value_normalizer.load_state_dict(value_normalizer_state)
 
         # === Apply torch.compile AFTER loading weights ===
         # Critical: Compile must happen after state_dict to ensure graph traces

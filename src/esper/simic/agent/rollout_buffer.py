@@ -17,9 +17,12 @@ Design rationale:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 import torch
+
+if TYPE_CHECKING:
+    from esper.simic.control.normalization import ValueNormalizer
 
 from esper.leyline import (
     DEFAULT_GAMMA,
@@ -386,11 +389,24 @@ class TamiyoRolloutBuffer:
         self,
         gamma: float = DEFAULT_GAMMA,
         gae_lambda: float = 0.95,
+        value_normalizer: "ValueNormalizer | None" = None,
     ) -> None:
         """Compute GAE advantages per-environment (no cross-contamination).
 
         This is the P0 bug fix: each environment's GAE is computed
         independently using only that environment's values and rewards.
+
+        P1 BUG FIX: When value_normalizer is provided, denormalizes critic
+        outputs before GAE computation. This fixes the scale mismatch where:
+        - Critic learns normalized values (std~1)
+        - GAE mixes raw rewards with normalized values (corrupted delta)
+
+        Args:
+            gamma: Discount factor
+            gae_lambda: GAE lambda for bias-variance tradeoff
+            value_normalizer: If provided, denormalizes values for GAE.
+                The critic outputs normalized-scale values; this converts
+                them to raw reward scale for correct TD error computation.
 
         PERF NOTE: The backward loop has inherent data dependencies (last_gae
         depends on previous last_gae), making full vectorization complex.
@@ -415,11 +431,20 @@ class TamiyoRolloutBuffer:
                 continue
 
             # Work with valid slice only
+            # P1 FIX: Denormalize values for GAE if normalizer provided
+            # The critic outputs are on normalized scale (std~1); we need
+            # raw reward scale for correct delta = r + γV' - V computation.
             values = self.values[env_id, :num_steps]
+            if value_normalizer is not None:
+                values = value_normalizer.denormalize(values)
+
             rewards = self.rewards[env_id, :num_steps]
             dones = self.dones[env_id, :num_steps]
             truncated = self.truncated[env_id, :num_steps]
             bootstrap_values = self.bootstrap_values[env_id, :num_steps]
+            # P1 FIX: Bootstrap values are also critic outputs - denormalize them too
+            if value_normalizer is not None:
+                bootstrap_values = value_normalizer.denormalize(bootstrap_values)
 
             advantages = torch.zeros(num_steps, device=self.device)
             td_errors = torch.zeros(num_steps, device=self.device)
@@ -453,6 +478,10 @@ class TamiyoRolloutBuffer:
                 td_errors[t] = delta
 
             self.advantages[env_id, :num_steps] = advantages
+            # P1 FIX: Returns = advantages + denormalized values (raw scale)
+            # These are the TRUE returns on reward scale, used for:
+            # 1. Updating the value normalizer with accurate return distribution
+            # 2. Normalizing for critic training (value_normalizer.normalize())
             self.returns[env_id, :num_steps] = advantages + values
             self.td_errors[env_id, :num_steps] = td_errors
 
