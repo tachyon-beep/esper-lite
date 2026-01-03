@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B9-DRL-05` |
 | **Severity** | `P3` |
-| **Status** | `open` |
+| **Status** | `wont-fix` |
 | **Batch** | 9 |
 | **Agent** | `drl` |
 | **Domain** | `tamiyo/networks` |
@@ -139,3 +139,42 @@ def get_initial_hidden(
 
 **Report file:** `docs/temp/2712reports/batch9-drl.md`
 **Section:** "N3 - Hidden state detachment is caller responsibility"
+
+---
+
+## Resolution
+
+### Status: WONTFIX
+
+**Closed via Systematic Debugging investigation.**
+
+#### Evidence
+
+| Claim | Status | Evidence |
+|-------|--------|----------|
+| "Docstring explains detachment requirement" | ✅ TRUE | Lines 360-374 comprehensive documentation |
+| "vectorized.py correctly detaches" | ✅ TRUE | Lines 3235-3236 call `.detach()` |
+| "Memory leaks if caller forgets" | ✅ TRUE | Standard PyTorch LSTM behavior |
+| "Easy to forget" | ⚠️ SUBJECTIVE | True of many PyTorch patterns |
+
+#### Why This Is Acceptable Design
+
+1. **Comprehensive documentation**: The docstring at lines 360-374 clearly explains:
+   - Why detachment is needed
+   - What happens if you forget (OOM after ~100-1000 episodes)
+   - That vectorized.py handles it automatically
+
+2. **Standard PyTorch idiom**: LSTM hidden state detachment is a well-known pattern. Similar "caller responsibility" patterns exist throughout PyTorch:
+   - `model.eval()` before inference
+   - `with torch.no_grad()` for inference
+   - `.backward()` before optimizer step
+
+3. **Main use case handled**: The training loop in `vectorized.py` correctly detaches hidden states at episode boundaries (lines 3235-3236).
+
+4. **Helper method doesn't prevent misuse**: Adding `detach_hidden()` would be ergonomic but wouldn't prevent callers from forgetting to call it - same as the current pattern.
+
+#### Severity Downgrade
+
+- Original: P3 (API design / memory leak potential)
+- Revised: WONTFIX (documented behavior, standard PyTorch idiom)
+- Resolution: No action required
