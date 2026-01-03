@@ -160,6 +160,15 @@ class CNNHost(nn.Module):
         target_block = self._segment_to_block[segment]
         start_block = 0 if from_segment is None else self._segment_to_block[from_segment] + 1
 
+        # Detect backwards/same-segment routing: if start_block > target_block, the range
+        # range(start_block, target_block + 1) would be empty and the function would silently
+        # return input unchanged - this is always a bug
+        if from_segment is not None and start_block > target_block:
+            raise ValueError(
+                f"Cannot route backwards: segment '{segment}' (block {target_block}) "
+                f"is before or same as from_segment '{from_segment}' (block {start_block - 1})"
+            )
+
         # Forward through blocks in range [start_block, target_block]
         for idx in range(start_block, target_block + 1):
             x = self.blocks[idx](x)
@@ -434,6 +443,15 @@ class TransformerHost(nn.Module):
 
         # Forward through layers in range [start_layer, end_layer)
         end_layer = self._segment_boundaries[segment]
+
+        # Detect backwards routing: if start_layer >= end_layer, the range would be empty
+        # and the function would silently return input unchanged - this is always a bug
+        if from_segment is not None and start_layer >= end_layer:
+            raise ValueError(
+                f"Cannot route backwards: segment '{segment}' (layer {end_layer}) "
+                f"is before from_segment '{from_segment}' (layer {start_layer})"
+            )
+
         for i in range(start_layer, end_layer):
             h = self.layers[i](h)
 
@@ -702,11 +720,16 @@ class MorphogeneticModel(nn.Module):
                 yield from cast(SeedSlot, slot_module).get_parameters()
 
     def get_host_parameters(self) -> Generator[torch.nn.Parameter, None, None]:
-        """Return host backbone parameters only (exclude seed slots)."""
-        for name, param in cast(nn.Module, self.host).named_parameters():
-            if "slots" in name:
-                continue
-            yield param
+        """Return host backbone parameters only (exclude seed slots).
+
+        Uses id() comparison to exclude parameters that belong to seed_slots,
+        avoiding fragile string matching on parameter names.
+        """
+        # Build set of seed slot parameter ids for O(1) lookup
+        seed_param_ids = {id(p) for slot in self.seed_slots.values() for p in slot.parameters()}
+        for param in cast(nn.Module, self.host).parameters():
+            if id(param) not in seed_param_ids:
+                yield param
 
     @property
     def has_active_seed(self) -> bool:

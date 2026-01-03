@@ -334,10 +334,12 @@ class SeedMetrics:
         """Reconstruct from primitive dict.
 
         Raises KeyError if required fields are missing (no silent defaults).
+        Optional fields (counterfactual_contribution, _prev_contribution,
+        contribution_velocity) may be absent in early-lifecycle checkpoints.
         """
-        # Check schema version - fail fast on mismatch
-        schema_version = data.get("_schema_version")
-        if schema_version is not None and schema_version != cls._SCHEMA_VERSION:
+        # Check schema version - fail fast on mismatch or missing
+        schema_version = data["_schema_version"]  # Required - KeyError if missing
+        if schema_version != cls._SCHEMA_VERSION:
             raise ValueError(
                 f"SeedMetrics schema version mismatch: "
                 f"expected {cls._SCHEMA_VERSION}, got {schema_version}"
