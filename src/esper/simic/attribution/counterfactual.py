@@ -478,6 +478,10 @@ class CounterfactualEngine:
         n = len(slot_ids)
 
         if n > 3:
+            _logger.debug(
+                "Skipping interaction terms for %d seeds (complexity cap at n=3)",
+                n,
+            )
             return {}  # Too expensive for more than 3 seeds
 
         # Build lookup

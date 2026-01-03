@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B5-DRL-08` |
 | **Severity** | `P3` |
-| **Status** | `open` |
+| **Status** | `closed` |
 | **Batch** | 5 |
 | **Agent** | `drl` |
 | **Domain** | `simic/attribution` |
@@ -146,3 +146,40 @@ None.
 | **Reviewer** | DRL Specialist |
 
 **Evaluation:** The n<=3 cap is reasonable for full pairwise interactions (O(n^2) pairs, each requiring 2^n evaluations for exact computation). However, the silent empty-dict return is poor API design -- callers cannot distinguish "no interactions detected" from "interactions not computed due to complexity cap." The recommended debug log is minimal overhead. For n>3, consider computing only top-k strongest pairwise interactions using the ablation configs already generated (comparing f({i,j}) - f({i}) - f({j}) + f(empty) for the subset of pairs where all four configs happen to exist in the matrix).
+
+---
+
+## Resolution
+
+### Status: FIXED
+
+**Fixed via Systematic Debugging investigation.**
+
+#### Evidence
+
+| Claim | Status | Evidence |
+|-------|--------|----------|
+| "`compute_interaction_terms` returns empty for n>3" | ✅ TRUE | Verified at line 480-485 |
+| "No logging or warning" | ✅ TRUE (was) | Silent `return {}` confirmed |
+| "Docstring documents limitation" | ✅ TRUE | Line 472: "Only valid for n <= 3 active seeds" |
+
+#### The Fix
+
+Added debug log before early return:
+
+```python
+if n > 3:
+    _logger.debug(
+        "Skipping interaction terms for %d seeds (complexity cap at n=3)",
+        n,
+    )
+    return {}
+```
+
+This allows callers/operators to distinguish "no interactions detected" from "interactions not computed due to complexity cap" by checking debug logs.
+
+#### Severity Confirmation
+
+- Original: P3 (API design issue)
+- Revised: P3 confirmed (silent failure pattern)
+- Resolution: FIXED with minimal debug log
