@@ -15,6 +15,13 @@ These metrics are critical for detecting value function health issues:
 
 Per TELE records: Schema fields exist in ValueFunctionMetrics dataclass,
 consumer is ValueDiagnosticsPanel widget.
+
+WIRING STATUS (as of 2026-01-04):
+- Schema fields exist in ValueFunctionMetrics (karn/sanctum/schema.py)
+- Consumer widget (ValueDiagnosticsPanel) reads from schema correctly
+- Emitters compute and emit values from PPO update loop
+- Aggregator wires values to ValueFunctionMetrics
+- Full end-to-end wiring is complete
 """
 
 import math
@@ -834,3 +841,16 @@ class TestValueFunctionMetricsIntegration:
         assert metrics.return_p90 == 85.0
         assert metrics.return_variance == 100.0
         assert metrics.return_skewness == -0.3
+
+
+# =============================================================================
+# WIRING TESTS - End-to-End Data Flow Verification
+#
+# TELE-220 to TELE-228 wiring is tested in tests/simic/test_ppo_value_metrics.py
+# and tests/simic/telemetry/test_value_metrics.py. These tests verify:
+# - PPO update loop computes and returns all 9 value function metrics
+# - Metrics are in valid ranges (correlation in [-1,1], percentiles ordered)
+# - Integration from buffer data through compute_value_function_metrics()
+#
+# As of 2026-01-04, all wiring is complete.
+# =============================================================================
