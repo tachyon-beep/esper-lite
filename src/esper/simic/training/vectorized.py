@@ -343,7 +343,7 @@ def _run_ppo_updates(
     raw_states_for_normalizer_update: list[torch.Tensor],
     obs_normalizer: RunningMeanStd,
     use_amp: bool,
-    amp_dtype: torch.dtype | None = None,  # None=float16 for backwards compat
+    amp_dtype: torch.dtype | None,  # Required: explicit dtype or None for no AMP
 ) -> dict[str, Any]:
     """Run one or more PPO updates on the current buffer and aggregate metrics."""
     # P1 FIX: RECURRENT POLICY STALENESS GUARD
@@ -381,10 +381,8 @@ def _run_ppo_updates(
 
     for update_idx in range(updates_to_run):
         clear_buffer = update_idx == updates_to_run - 1
-        if use_amp and torch.cuda.is_available():
-            # Use provided dtype, default to float16 for backwards compatibility
-            dtype = amp_dtype if amp_dtype is not None else torch.float16
-            with torch_amp.autocast(device_type="cuda", dtype=dtype):  # type: ignore[attr-defined]
+        if use_amp and torch.cuda.is_available() and amp_dtype is not None:
+            with torch_amp.autocast(device_type="cuda", dtype=amp_dtype):  # type: ignore[attr-defined]
                 metrics = agent.update(clear_buffer=clear_buffer)
         else:
             metrics = agent.update(clear_buffer=clear_buffer)

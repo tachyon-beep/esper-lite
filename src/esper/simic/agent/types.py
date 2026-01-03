@@ -59,7 +59,9 @@ class PPOUpdateMetrics(TypedDict, total=False):
     ratio_mean: float
     ratio_max: float
     ratio_min: float
-    early_stop_epoch: int
+    ratio_std: float  # Standard deviation of importance sampling ratio
+    early_stop_epoch: int | None  # None when early stopping didn't occur
+    pre_clip_grad_norm: float  # Gradient norm before clipping (for telemetry)
     # Log prob extremes (NaN predictor)
     log_prob_min: float
     log_prob_max: float

@@ -53,7 +53,8 @@ logger = logging.getLogger(__name__)
 
 # Checkpoint format version for forward compatibility
 # Increment when checkpoint structure changes in backwards-incompatible ways
-CHECKPOINT_VERSION = 1
+# Version 2: value_normalizer_state_dict and compile_mode are now required fields
+CHECKPOINT_VERSION = 2
 
 # Sparse heads need higher entropy coefficients to maintain exploration
 # when they receive fewer training signals due to causal masking
@@ -1216,9 +1217,15 @@ class PPOAgent:
                 f"Please retrain the model to create a compatible checkpoint."
             ) from e
 
-        # P1 FIX: Extract value_normalizer state (optional for old checkpoints)
-        # Old checkpoints without value_normalizer will start with fresh stats
-        value_normalizer_state = checkpoint.get('value_normalizer_state_dict')
+        # Extract value_normalizer state (required since CHECKPOINT_VERSION 2)
+        try:
+            value_normalizer_state = checkpoint['value_normalizer_state_dict']
+        except KeyError as e:
+            raise RuntimeError(
+                f"Incompatible checkpoint format: missing required field {e}. "
+                f"This checkpoint was saved with an older version (before v2). "
+                f"Please retrain the model to create a compatible checkpoint."
+            ) from e
 
         # M6: Free checkpoint memory immediately after extracting needed data.
         # Checkpoint holds a full copy of all model weights; waiting for GC to
@@ -1261,10 +1268,15 @@ class PPOAgent:
             )
         state_dim = int(architecture['state_dim'])
 
-        # === Extract compile_mode (default "off" for old checkpoints) ===
+        # === Extract compile_mode (required since CHECKPOINT_VERSION 2) ===
         # P3 FIX: Allow runtime override of compile_mode for debugging/portability
         # torch.compile graphs are hardware-specific - compiled on A100 may fail on H100
-        checkpoint_compile_mode = config.get('compile_mode', 'off')
+        if 'compile_mode' not in config:
+            raise RuntimeError(
+                "Incompatible checkpoint: config.compile_mode is required. "
+                "Please retrain the model to create a compatible checkpoint."
+            )
+        checkpoint_compile_mode = config['compile_mode']
         effective_compile_mode = compile_mode if compile_mode is not None else checkpoint_compile_mode
 
         # === Create PolicyBundle (uncompiled - compile AFTER loading weights) ===

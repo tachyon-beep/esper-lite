@@ -303,9 +303,13 @@ def _train_one_epoch(
         # Collect gradient stats as tensors (async-safe, no .item() sync)
         # Overwrites each batch; final value materialized after loop
         if collect_gradients:
-            # cast() needed because nn.Module doesn't expose get_seed_parameters in stubs
-            host_model = cast(_HasSeedParameters, model)
-            grad_stats = collect_seed_gradients_async(host_model.get_seed_parameters())
+            # cast() needed because nn.Module doesn't expose get_seed_parameters/seed_slots in stubs
+            slotted_model = cast(SlottedHostProtocol, model)
+            grad_stats = collect_seed_gradients_async(slotted_model.get_seed_parameters())
+            # Keep Kasmina's per-seed G2 metric fresh in strict gate runs.
+            # This uses SeedSlot's async capture (no .item() sync in hot path).
+            for slot in slotted_model.seed_slots.values():
+                slot.capture_gradient_telemetry_async()
 
         host_optimizer.step()
         if seed_optimizer:
@@ -319,6 +323,12 @@ def _train_one_epoch(
     # Single sync at epoch end (forces all CUDA ops to complete)
     epoch_loss = running_loss.item()
     epoch_correct = running_correct.item()
+
+    # Finalize per-slot gradient stats AFTER the sync above (safe to call .item()).
+    if collect_gradients:
+        slotted_model = cast(SlottedHostProtocol, model)
+        for slot in slotted_model.seed_slots.values():
+            slot.finalize_gradient_telemetry()
 
     # Now safe to materialize gradient tensors (after implicit sync above)
     materialized_grad_stats: GradientHealthStats | None = None
@@ -466,8 +476,7 @@ def run_heuristic_episode(
     episode_id = f"heur_{base_seed}"
     model = cast(SlottedHostProtocol, create_model(task=task_spec, device=device, slots=slots))
 
-    if len(slots) != len(set(slots)):
-        raise ValueError(f"slots contains duplicates: {slots}")
+    # Note: create_model() already validates for duplicate slots, no need to check here
     enabled_slots = validate_slot_ids(list(slots))
 
     # Wire telemetry
@@ -581,6 +590,9 @@ def run_heuristic_episode(
             # Collect gradient stats (async-safe, overwrites each batch; final value materialized after loop)
             if collect_gradients:
                 grad_async = collect_seed_gradients_async(model.get_seed_parameters())
+                # Keep Kasmina's per-seed G2 metric fresh in strict gate runs.
+                for slot_id in enabled_slots:
+                    model.seed_slots[slot_id].capture_gradient_telemetry_async()
 
             host_optimizer.step()
             if seed_optimizer:
@@ -594,6 +606,11 @@ def run_heuristic_episode(
         # Single sync at end of training
         train_loss = running_loss.item() / max(1, batch_count)
         train_acc = 100.0 * running_correct.item() / total if total > 0 else 0.0
+
+        # Finalize per-slot gradient stats AFTER the sync above (safe to call .item()).
+        if collect_gradients:
+            for slot_id in enabled_slots:
+                model.seed_slots[slot_id].finalize_gradient_telemetry()
 
         # Materialize gradient stats after training sync (safe to access .item() now)
         epoch_grad_stats: GradientHealthStats | None = None

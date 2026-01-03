@@ -716,6 +716,7 @@ def test_run_ppo_updates_runs_multiple_updates_and_updates_normalizer_once():
         raw_states_for_normalizer_update=raw_states,
         obs_normalizer=normalizer,
         use_amp=False,
+        amp_dtype=None,  # Explicit: no AMP
     )
 
     # Expect three updates, buffer cleared only on final update
@@ -793,6 +794,7 @@ def test_run_ppo_updates_honors_target_kl_early_stop_and_clears_buffer():
         raw_states_for_normalizer_update=raw_states,
         obs_normalizer=normalizer,
         use_amp=False,
+        amp_dtype=None,  # Explicit: no AMP
     )
 
     # Should stop after second update due to KL threshold (1.5 * 0.01 = 0.015)

@@ -43,7 +43,7 @@ def validate_device(device: str, *, require_explicit_index: bool = False) -> tor
     implementing device checks inline.
 
     Args:
-        device: Device string like "cpu", "cuda", "cuda:0".
+        device: Device string like "cpu", "cuda", "cuda:0", "mps".
         require_explicit_index: If True, require explicit CUDA index (e.g., "cuda:0"
             instead of bare "cuda"). Use for multi-GPU training where device
             assignment must be unambiguous.
@@ -53,15 +53,25 @@ def validate_device(device: str, *, require_explicit_index: bool = False) -> tor
 
     Raises:
         ValueError: If device string is malformed or violates require_explicit_index.
-        RuntimeError: If CUDA is requested but unavailable, or if CUDA index is
+        RuntimeError: If CUDA/MPS is requested but unavailable, or if CUDA index is
             out of range.
 
     Example:
         >>> validate_device("cuda:0")  # OK
         >>> validate_device("cuda", require_explicit_index=True)  # Raises ValueError
         >>> validate_device("cuda:999")  # Raises RuntimeError if only 2 GPUs
+        >>> validate_device("mps")  # OK on Apple Silicon, error otherwise
     """
     dev = parse_device(device)
+
+    # MPS validation (Apple Silicon)
+    if dev.type == "mps":
+        if not torch.backends.mps.is_available():
+            raise RuntimeError(
+                f"MPS device '{device}' requested but MPS is not available. "
+                f"Use device='cpu' or check your Apple Silicon configuration."
+            )
+        return dev
 
     if dev.type != "cuda":
         return dev

@@ -639,7 +639,7 @@ def emit_last_action(
         message="Last action",
         data=payload,
     ))
-    # Return dict for backwards compatibility with tests
+    # Return dict for test assertions (see B7-CR-05: this is the primary test interface)
     return {
         "kind": "last_action",
         "env_id": env_id,
