@@ -201,35 +201,44 @@ class PPOLossesPanel(Static):
         return result
 
     def _render_sparklines(self) -> Text:
-        """Render the loss sparkline rows."""
+        """Render the loss sparkline rows.
+
+        Fixed layout: Label(7) + Sparkline(12) + Value(8) + Trend(1)
+        Values use space flag for sign alignment: " 0.123" vs "-0.123"
+        """
         if self._snapshot is None:
             return Text("No data", style="dim")
 
         tamiyo = self._snapshot.tamiyo
         result = Text()
 
-        # Policy loss with sparkline (compact for narrow panel)
-        result.append("P.Loss ", style="dim")
+        # Sparkline width - longer for better trend visibility
+        SPARK_W = 12
+
+        # Policy loss with sparkline
+        result.append("P.Loss ", style="dim")  # 7 chars
         if tamiyo.policy_loss_history:
-            pl_sparkline = render_sparkline(tamiyo.policy_loss_history, width=5)
+            pl_sparkline = render_sparkline(tamiyo.policy_loss_history, width=SPARK_W)
             pl_trend = detect_trend(list(tamiyo.policy_loss_history))
             result.append(pl_sparkline)
-            result.append(f" {tamiyo.policy_loss:.3f}", style="bright_cyan")
+            result.append(f" {tamiyo.policy_loss: 7.4f}", style="bright_cyan")
             result.append(pl_trend, style=trend_style(pl_trend, "loss"))
         else:
-            result.append(f"{tamiyo.policy_loss:.3f}", style="bright_cyan")
+            result.append("─" * SPARK_W, style="dim")
+            result.append(f" {tamiyo.policy_loss: 7.4f}", style="bright_cyan")
         result.append("\n")
 
         # Value loss with sparkline
-        result.append("V.Loss ", style="dim")
+        result.append("V.Loss ", style="dim")  # 7 chars
         if tamiyo.value_loss_history:
-            vl_sparkline = render_sparkline(tamiyo.value_loss_history, width=5)
+            vl_sparkline = render_sparkline(tamiyo.value_loss_history, width=SPARK_W)
             vl_trend = detect_trend(list(tamiyo.value_loss_history))
             result.append(vl_sparkline)
-            result.append(f" {tamiyo.value_loss:.3f}", style="bright_cyan")
+            result.append(f" {tamiyo.value_loss: 7.4f}", style="bright_cyan")
             result.append(vl_trend, style=trend_style(vl_trend, "loss"))
         else:
-            result.append(f"{tamiyo.value_loss:.3f}", style="bright_cyan")
+            result.append("─" * SPARK_W, style="dim")
+            result.append(f" {tamiyo.value_loss: 7.4f}", style="bright_cyan")
         result.append("\n")
 
         # Value/Policy loss ratio
@@ -238,13 +247,19 @@ class PPOLossesPanel(Static):
         return result
 
     def _render_loss_ratio(self, value_loss: float, policy_loss: float) -> Text:
-        """Render Value/Policy loss ratio with DRL-appropriate thresholds."""
+        """Render Value/Policy loss ratio with DRL-appropriate thresholds.
+
+        Aligned with sparkline rows: Label(7) + Pad(12) + Space(1) + Value(8)
+        """
         result = Text()
-        result.append("Lv/Lp  ", style="dim")
+        result.append("Lv/Lp  ", style="dim")  # 7 chars
+
+        # Padding to align with sparkline rows (12 chars for sparkline)
+        result.append(" " * 12, style="dim")
 
         # Handle edge cases
         if abs(policy_loss) < 1e-10:
-            result.append("---", style="dim")
+            result.append("     ---", style="dim")  # 8 chars
             return result
 
         ratio = abs(value_loss) / abs(policy_loss)
@@ -260,11 +275,12 @@ class PPOLossesPanel(Static):
         style = {"ok": "bright_cyan", "warning": "yellow", "critical": "red bold"}[
             status
         ]
-        result.append(f"{ratio:>7.2f}", style=style)
+        # Use space flag for sign alignment (ratio is always positive but aligns with losses)
+        result.append(f" {ratio: 7.2f}", style=style)  # 8 chars total
 
         # Add interpretation hint
         if status == "ok":
-            result.append(" \u2713", style="green dim")
+            result.append(" ✓", style="green dim")
         elif ratio < 0.2:
             result.append(" P>V", style=style)  # Policy dominating
         elif ratio > 5.0:
