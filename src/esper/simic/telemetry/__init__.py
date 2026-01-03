@@ -71,6 +71,12 @@ from .emitters import (
     apply_slot_telemetry,
 )
 
+# Value function metrics (TELE-220 to TELE-228)
+from .value_metrics import (
+    compute_value_function_metrics,
+    ValueFunctionMetricsDict,
+)
+
 __all__ = [
     # Config
     "TelemetryLevel",
@@ -115,4 +121,7 @@ __all__ = [
     "emit_mask_hit_rates",
     "check_performance_degradation",
     "apply_slot_telemetry",
+    # Value function metrics (TELE-220 to TELE-228)
+    "compute_value_function_metrics",
+    "ValueFunctionMetricsDict",
 ]
