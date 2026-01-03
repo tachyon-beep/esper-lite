@@ -46,19 +46,21 @@ class ValueDiagnosticsPanel(Static):
         self._snapshot = snapshot
         self.refresh()
 
-    # Column positions for alignment
-    COL1 = 13  # Label column width
-    COL2 = 20  # Second column start
+    # Column layout: two sub-columns with label + value each
+    # |  Label1  |  Val1  |  Label2  |  Val2  |
+    LABEL_W = 10  # Label width
+    VAL_W = 8     # Value width
+    GAP = 2       # Gap between sub-columns
 
     def render(self) -> Text:
         """Render value function diagnostics.
 
-        Layout (5 lines, columnar):
-            V-Ret Corr   0.87↗
-            TD μ/σ       2.4/8.1      Bellman   12.3
-            Returns      p10:-12  p50:+34  p90:+78 ⚠
-            Ret Stats    σ:14.2       skew:+0.3
-            Compile      inductor:reduce-overhead ✓
+        Layout (5 lines, two sub-columns):
+            V-Corr     0.87↗     Bellman      12.3
+            TD Mean    +2.4      TD Std        8.1
+            Returns    p10:-12   p50:+34   p90:+78 ⚠
+            Ret σ      14.2      Skew        +0.3
+            Compile    inductor:reduce-overhead ✓
         """
         if self._snapshot is None:
             return Text("[no data]", style="dim")
@@ -66,28 +68,27 @@ class ValueDiagnosticsPanel(Static):
         vf = self._snapshot.tamiyo.value_function
         result = Text()
 
-        # Line 1: V-Return Correlation (primary diagnostic)
-        result.append("V-Ret Corr".ljust(self.COL1), style="dim")
+        # Line 1: V-Return Correlation | Bellman Error
+        self._render_label(result, "V-Corr")
         corr_style, corr_icon = self._get_correlation_style(vf.v_return_correlation)
-        result.append(f"{vf.v_return_correlation:.2f}", style=corr_style)
-        result.append(corr_icon, style=corr_style)
-        result.append("\n")
+        self._render_value(result, f"{vf.v_return_correlation:.2f}{corr_icon}", corr_style)
 
-        # Line 2: TD Error + Bellman Error
-        result.append("TD μ/σ".ljust(self.COL1), style="dim")
-        td_style = self._get_td_error_style(vf.td_error_mean, vf.td_error_std)
-        result.append(f"{vf.td_error_mean:.1f}", style=td_style)
-        result.append("/", style="dim")
-        result.append(f"{vf.td_error_std:.1f}".ljust(8), style="cyan")
-
-        result.append("Bellman ".rjust(10), style="dim")
+        self._render_label(result, "Bellman")
         bellman_style = self._get_bellman_style(vf.bellman_error)
-        result.append(f"{vf.bellman_error:.1f}", style=bellman_style)
+        self._render_value(result, f"{vf.bellman_error:.1f}", bellman_style, last=True)
         result.append("\n")
 
-        # Line 3: Return Percentiles (catches bimodal policies)
-        result.append("Returns".ljust(self.COL1), style="dim")
-        # Color code percentiles: negative = red, positive = green
+        # Line 2: TD Mean | TD Std
+        self._render_label(result, "TD Mean")
+        td_style = self._get_td_error_style(vf.td_error_mean, vf.td_error_std)
+        self._render_value(result, f"{vf.td_error_mean:+.1f}", td_style)
+
+        self._render_label(result, "TD Std")
+        self._render_value(result, f"{vf.td_error_std:.1f}", "cyan", last=True)
+        result.append("\n")
+
+        # Line 3: Return Percentiles (three values, special layout)
+        self._render_label(result, "Returns")
         p10_style = "red" if vf.return_p10 < 0 else "green"
         p50_style = "red" if vf.return_p50 < 0 else "green"
         p90_style = "red" if vf.return_p90 < 0 else "green"
@@ -105,19 +106,18 @@ class ValueDiagnosticsPanel(Static):
             result.append(" ⚠", style="yellow bold")
         result.append("\n")
 
-        # Line 4: Return distribution stats (variance + skewness)
-        result.append("Ret Stats".ljust(self.COL1), style="dim")
-        result.append("σ:", style="dim")
+        # Line 4: Return Std Dev | Skewness
+        self._render_label(result, "Ret σ")
         var_style = "yellow" if vf.return_variance > 100 else "cyan"
-        result.append(f"{vf.return_variance ** 0.5:.1f}".ljust(10), style=var_style)
+        self._render_value(result, f"{vf.return_variance ** 0.5:.1f}", var_style)
 
-        result.append("skew:", style="dim")
+        self._render_label(result, "Skew")
         skew_style = self._get_skewness_style(vf.return_skewness)
-        result.append(f"{vf.return_skewness:+.1f}", style=skew_style)
+        self._render_value(result, f"{vf.return_skewness:+.1f}", skew_style, last=True)
         result.append("\n")
 
-        # Line 5: Compile status (critical for performance)
-        result.append("Compile".ljust(self.COL1), style="dim")
+        # Line 5: Compile status (full width)
+        self._render_label(result, "Compile")
         infra = self._snapshot.tamiyo.infrastructure
 
         if infra.compile_enabled:
@@ -130,6 +130,18 @@ class ValueDiagnosticsPanel(Static):
             result.append(" (3-5x slower)", style="dim")
 
         return result
+
+    def _render_label(self, result: Text, label: str) -> None:
+        """Render a column label with fixed width."""
+        result.append(label.ljust(self.LABEL_W), style="dim")
+
+    def _render_value(
+        self, result: Text, value: str, style: str, *, last: bool = False
+    ) -> None:
+        """Render a column value with fixed width and gap."""
+        result.append(value.ljust(self.VAL_W), style=style)
+        if not last:
+            result.append(" " * self.GAP)
 
     def _get_correlation_style(self, corr: float) -> tuple[str, str]:
         """Get style and trend icon for V-Return correlation.

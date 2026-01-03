@@ -40,7 +40,6 @@ from __future__ import annotations
 
 import math
 import time
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from rich.text import Text
@@ -248,6 +247,8 @@ class ActionHeadsPanel(Static):
         self._snapshot: SanctumSnapshot | None = None
         self._displayed_decisions: list[DecisionSnapshot] = []
         self._last_swap_ts: float = 0.0
+        # Track when each decision was added to display (for age calculation)
+        self._display_timestamps: dict[str, float] = {}
         self.classes = "panel"
         self.border_title = "ACTION HEADS"
 
@@ -467,21 +468,36 @@ class ActionHeadsPanel(Static):
     # =========================================================================
 
     def _refresh_carousel(self, incoming: list["DecisionSnapshot"]) -> None:
-        """Update the displayed rows with a 5s-staggered carousel."""
-        displayed_ids = {d.decision_id for d in self._displayed_decisions if d.decision_id}
-        candidates = [d for d in incoming if d.decision_id and d.decision_id not in displayed_ids]
+        """Firehose model: grab MOST RECENT decision, no backlog.
+
+        Key behaviors:
+        1. Age starts at 0 when added to display (not decision's original timestamp)
+        2. Always grab the NEWEST decision when swapping (no queue/backlog)
+        3. Only exclude the current #1 card to prevent immediate re-add
+        """
+        now = time.monotonic()
+
+        # Only exclude the current top card (to prevent immediate re-add)
+        current_top_id = (
+            self._displayed_decisions[0].decision_id
+            if self._displayed_decisions
+            else None
+        )
+        candidates = [
+            d for d in incoming
+            if d.decision_id and d.decision_id != current_top_id
+        ]
         if not candidates:
             return
 
-        candidates.sort(key=lambda d: d.timestamp, reverse=True)
-        now = time.monotonic()
+        # Always get the NEWEST decision (firehose - no backlog)
+        newest = max(candidates, key=lambda d: d.timestamp)
 
         # Growing phase: add immediately until full
         if len(self._displayed_decisions) < self.MAX_ROWS:
-            needed = self.MAX_ROWS - len(self._displayed_decisions)
-            to_add = candidates[:needed]
-            for decision in reversed(to_add):
-                self._displayed_decisions.insert(0, decision)
+            if newest.decision_id:
+                self._display_timestamps[newest.decision_id] = now
+            self._displayed_decisions.insert(0, newest)
             if len(self._displayed_decisions) == self.MAX_ROWS and self._last_swap_ts == 0.0:
                 self._last_swap_ts = now
             return
@@ -490,7 +506,17 @@ class ActionHeadsPanel(Static):
         if now - self._last_swap_ts < self.SWAP_INTERVAL_S:
             return
 
-        self._displayed_decisions.insert(0, candidates[0])
+        # Record display timestamp for new decision (age starts at 0)
+        if newest.decision_id:
+            self._display_timestamps[newest.decision_id] = now
+
+        # Remove the oldest displayed decision's timestamp
+        if len(self._displayed_decisions) >= self.MAX_ROWS:
+            oldest = self._displayed_decisions[-1]
+            if oldest.decision_id:
+                self._display_timestamps.pop(oldest.decision_id, None)
+
+        self._displayed_decisions.insert(0, newest)
         if len(self._displayed_decisions) > self.MAX_ROWS:
             self._displayed_decisions.pop()
         self._last_swap_ts = now
@@ -501,7 +527,7 @@ class ActionHeadsPanel(Static):
         if not decisions:
             return self._render_decision_placeholder()
 
-        now_dt = datetime.now(timezone.utc)
+        now_mono = time.monotonic()
         result = Text()
 
         # Header row
@@ -520,9 +546,9 @@ class ActionHeadsPanel(Static):
         for i in range(self.MAX_ROWS):
             decision = decisions[i] if i < len(decisions) else None
             if decision is not None:
-                self._render_decision_row(result, i, decision, now_dt=now_dt)
+                self._render_decision_row(result, i, decision, now_mono=now_mono)
             else:
-                self._render_empty_row(result, i, now_dt=now_dt)
+                self._render_empty_row(result, i, now_mono=now_mono)
             if i < self.MAX_ROWS - 1:
                 result.append("\n")
 
@@ -531,6 +557,7 @@ class ActionHeadsPanel(Static):
     def _render_decision_placeholder(self) -> Text:
         """Render placeholder when no decision data is available."""
         result = Text()
+        now_mono = time.monotonic()
 
         # Header row
         self._rjust_cell(result, "Dec", self.COL_DEC, "dim bold")
@@ -545,7 +572,7 @@ class ActionHeadsPanel(Static):
         result.append("\n")
 
         for i in range(self.MAX_ROWS):
-            self._render_dec_cell(result, row_index=i, decision=None, now_dt=datetime.now(timezone.utc))
+            self._render_dec_cell(result, row_index=i, decision=None, now_mono=now_mono)
             self._rjust_cell(result, "---", self.COL_OP, "dim")
             self._rjust_cell(result, "---", self.COL_SLOT, "dim")
             self._rjust_cell(result, "---", self.COL_BLUEPRINT, "dim")
@@ -558,9 +585,9 @@ class ActionHeadsPanel(Static):
                 result.append("\n")
         return result
 
-    def _render_empty_row(self, result: Text, index: int, *, now_dt: datetime) -> None:
+    def _render_empty_row(self, result: Text, index: int, *, now_mono: float) -> None:
         """Render an empty decision row."""
-        self._render_dec_cell(result, row_index=index, decision=None, now_dt=now_dt)
+        self._render_dec_cell(result, row_index=index, decision=None, now_mono=now_mono)
         self._rjust_cell(result, "---", self.COL_OP, "dim")
         self._rjust_cell(result, "---", self.COL_SLOT, "dim")
         self._rjust_cell(result, "---", self.COL_BLUEPRINT, "dim")
@@ -571,10 +598,10 @@ class ActionHeadsPanel(Static):
         self._rjust_cell(result, "---", self.COL_CURVE, "dim")
 
     def _render_decision_row(
-        self, result: Text, index: int, decision: "DecisionSnapshot", *, now_dt: datetime
+        self, result: Text, index: int, decision: "DecisionSnapshot", *, now_mono: float
     ) -> None:
         """Render a single decision row with head choices."""
-        self._render_dec_cell(result, row_index=index, decision=decision, now_dt=now_dt)
+        self._render_dec_cell(result, row_index=index, decision=decision, now_mono=now_mono)
 
         # Op (action) with confidence heat
         action = decision.chosen_action
@@ -664,16 +691,23 @@ class ActionHeadsPanel(Static):
         *,
         row_index: int,
         decision: "DecisionSnapshot | None",
-        now_dt: datetime,
+        now_mono: float,
     ) -> None:
-        """Render the decision number cell with age pip."""
+        """Render the decision number cell with age pip.
+
+        Age is calculated from when the decision was added to display,
+        NOT from the decision's original timestamp (firehose model).
+        """
         label = f"#{row_index + 1}"
         if decision is None:
             content = f"{self.AGE_PIP_EMPTY}{label}"
             self._rjust_cell(result, content, self.COL_DEC, "dim")
             return
 
-        age_s = max(0.0, (now_dt - decision.timestamp).total_seconds())
+        # Use display timestamp for age (firehose: age starts at 0 on add)
+        display_ts = self._display_timestamps.get(decision.decision_id or "", now_mono)
+        age_s = max(0.0, now_mono - display_ts)
+
         padding = max(0, self.COL_DEC - (len(self.AGE_PIP_CHAR) + len(label)))
         result.append(" " * padding, style="dim")
         result.append(self.AGE_PIP_CHAR, style=self._age_pip_style(age_s))
