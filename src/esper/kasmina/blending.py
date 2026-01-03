@@ -176,7 +176,11 @@ class GatedBlend(BlendAlgorithm):
             raise ValueError("GatedBlend requires total_steps > 0")
         self.topology = topology
         self.total_steps = total_steps
-        hidden_dim = max(1, channels // 4)
+        # B2-PT-05: Minimum hidden_dim=8 ensures non-degenerate learning capacity.
+        # For channels=3 (RGB): 8 hidden dims (was 1, which can only learn a single threshold)
+        # For channels=64: 16 hidden dims
+        # For channels=256: 64 hidden dims
+        hidden_dim = max(8, channels // 4)
         self.gate = nn.Sequential(
             nn.Linear(channels, hidden_dim),
             nn.ReLU(),
