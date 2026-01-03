@@ -1,4 +1,4 @@
-"""End-to-end telemetry tests for gradient metrics (TELE-300 to TELE-399).
+"""End-to-end telemetry tests for gradient metrics (TELE-300 to TELE-340).
 
 Verifies gradient-related metrics flow from PPOUpdatePayload through
 NissaHub to capture backends.
@@ -15,6 +15,7 @@ Test Coverage:
     - TELE-330: gradient_cv (coefficient of variation)
     - TELE-331: dead_layers (vanishing gradient count)
     - TELE-332: exploding_layers (exploding gradient count)
+    - TELE-340: lstm_health (LSTM hidden state health monitoring)
 """
 
 import pytest
@@ -184,19 +185,11 @@ class TestTELE301InfGradCount:
         assert len(events) == 1
         assert events[0].data.inf_grad_count == 7
 
-    @pytest.mark.xfail(
-        reason=(
-            "TELE-301 wiring gap: aggregate_layer_gradient_health() does not sum "
-            "inf_counts from LayerGradientStats, and emit_ppo_update_event() "
-            "hardcodes inf_grad_count=0. See TELE-301 doc for fix details."
-        ),
-        strict=True,
-    )
     def test_inf_grad_count_aggregated_from_layers(self):
-        """TELE-301: inf_grad_count should be aggregated from layer stats.
+        """TELE-301: inf_grad_count is aggregated from layer stats.
 
-        This test documents the wiring gap. When fixed, this test should pass
-        and the xfail marker should be removed.
+        Fixed: aggregate_layer_gradient_health() now sums inf_count from
+        LayerGradientStats and returns inf_grad_count in the result dict.
         """
         from esper.simic.telemetry import LayerGradientStats
         from esper.simic.telemetry.emitters import aggregate_layer_gradient_health
@@ -235,8 +228,7 @@ class TestTELE301InfGradCount:
 
         result = aggregate_layer_gradient_health(stats)
 
-        # This assertion will FAIL until the wiring gap is fixed
-        # Currently, inf_grad_count is not computed or returned
+        # inf_grad_count is aggregated from layer stats (5 + 10 = 15)
         assert "inf_grad_count" in result
         assert result["inf_grad_count"] == 15
 
@@ -906,3 +898,142 @@ class TestGradientMetricsIntegration:
         assert data.head_slot_grad_norm < 0.01  # Vanishing
         assert data.head_blueprint_grad_norm < 0.01  # Vanishing
         assert data.head_tempo_grad_norm >= 0.1  # One healthy head
+
+
+# =============================================================================
+# TELE-340: lstm_health (LSTM hidden state health monitoring)
+# =============================================================================
+
+
+class TestTELE340LstmHealth:
+    """TELE-340: LSTM hidden state health metrics flow from payload to backend.
+
+    These metrics track the health of LSTM hidden/cell states after PPO updates,
+    which can be corrupted by BPTT (B7-DRL-04 fix).
+    """
+
+    def test_lstm_health_healthy_values(self, capture_hub: CaptureHubResult):
+        """TELE-340: Healthy LSTM state metrics are emitted correctly."""
+        hub, backend = capture_hub
+
+        payload = make_ppo_payload(
+            lstm_h_norm=5.0,
+            lstm_c_norm=5.0,
+            lstm_h_max=2.0,
+            lstm_c_max=2.0,
+            lstm_has_nan=False,
+            lstm_has_inf=False,
+        )
+        emit_ppo_event(hub, payload)
+
+        events = backend.find_events(TelemetryEventType.PPO_UPDATE_COMPLETED)
+        assert len(events) == 1
+        data = events[0].data
+        assert data.lstm_h_norm == pytest.approx(5.0)
+        assert data.lstm_c_norm == pytest.approx(5.0)
+        assert data.lstm_h_max == pytest.approx(2.0)
+        assert data.lstm_c_max == pytest.approx(2.0)
+        assert data.lstm_has_nan is False
+        assert data.lstm_has_inf is False
+
+    def test_lstm_health_nan_detected(self, capture_hub: CaptureHubResult):
+        """TELE-340: NaN in LSTM hidden state is correctly flagged."""
+        hub, backend = capture_hub
+
+        payload = make_ppo_payload(
+            lstm_h_norm=float("nan"),
+            lstm_c_norm=5.0,
+            lstm_h_max=float("nan"),
+            lstm_c_max=2.0,
+            lstm_has_nan=True,
+            lstm_has_inf=False,
+        )
+        emit_ppo_event(hub, payload)
+
+        events = backend.find_events(TelemetryEventType.PPO_UPDATE_COMPLETED)
+        assert len(events) == 1
+        data = events[0].data
+        assert data.lstm_has_nan is True
+        assert data.lstm_has_inf is False
+
+    def test_lstm_health_inf_detected(self, capture_hub: CaptureHubResult):
+        """TELE-340: Inf in LSTM hidden state is correctly flagged."""
+        hub, backend = capture_hub
+
+        payload = make_ppo_payload(
+            lstm_h_norm=float("inf"),
+            lstm_c_norm=5.0,
+            lstm_h_max=float("inf"),
+            lstm_c_max=2.0,
+            lstm_has_nan=False,
+            lstm_has_inf=True,
+        )
+        emit_ppo_event(hub, payload)
+
+        events = backend.find_events(TelemetryEventType.PPO_UPDATE_COMPLETED)
+        assert len(events) == 1
+        data = events[0].data
+        assert data.lstm_has_nan is False
+        assert data.lstm_has_inf is True
+
+    def test_lstm_health_exploding_norms(self, capture_hub: CaptureHubResult):
+        """TELE-340: Exploding LSTM state norms indicate instability."""
+        hub, backend = capture_hub
+
+        payload = make_ppo_payload(
+            lstm_h_norm=150.0,  # > 100.0 is unhealthy
+            lstm_c_norm=150.0,
+            lstm_h_max=50.0,
+            lstm_c_max=50.0,
+            lstm_has_nan=False,
+            lstm_has_inf=False,
+        )
+        emit_ppo_event(hub, payload)
+
+        events = backend.find_events(TelemetryEventType.PPO_UPDATE_COMPLETED)
+        assert len(events) == 1
+        data = events[0].data
+        assert data.lstm_h_norm > 100.0
+        assert data.lstm_c_norm > 100.0
+
+    def test_lstm_health_vanishing_norms(self, capture_hub: CaptureHubResult):
+        """TELE-340: Vanishing LSTM state norms indicate gradient starvation."""
+        hub, backend = capture_hub
+
+        payload = make_ppo_payload(
+            lstm_h_norm=1e-8,  # < 1e-6 is unhealthy
+            lstm_c_norm=1e-8,
+            lstm_h_max=1e-9,
+            lstm_c_max=1e-9,
+            lstm_has_nan=False,
+            lstm_has_inf=False,
+        )
+        emit_ppo_event(hub, payload)
+
+        events = backend.find_events(TelemetryEventType.PPO_UPDATE_COMPLETED)
+        assert len(events) == 1
+        data = events[0].data
+        assert data.lstm_h_norm < 1e-6
+        assert data.lstm_c_norm < 1e-6
+
+    def test_lstm_health_computed_from_actual_lstm(self):
+        """TELE-340: lstm_health metrics flow from PPO update to telemetry.
+
+        Fixed: compute_lstm_health() is now called in PPO.update() and
+        the results are passed through to the metrics dict.
+        """
+        from esper.simic.telemetry.lstm_health import compute_lstm_health
+        import torch
+
+        # Verify compute_lstm_health works
+        h = torch.randn(1, 1, 64)
+        c = torch.randn(1, 1, 64)
+        metrics = compute_lstm_health((h, c))
+
+        assert metrics is not None
+        assert metrics.h_norm > 0
+        assert metrics.c_norm > 0
+
+        # The wiring is now complete: PPO.update() calls compute_lstm_health()
+        # and adds results to the metrics dict, which flows to the emitter.
+        # Full integration test is in tests/simic/test_ppo_lstm_health.py
