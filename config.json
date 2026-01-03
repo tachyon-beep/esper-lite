@@ -1,9 +1,9 @@
 {
   "task": "cifar_impaired",
   "n_episodes": 5000,
-  "n_envs": 16,
+  "n_envs": 64,
   "max_epochs": 150,
-  "lr": 0.0001,
+  "lr": 0.0003,
   "clip_ratio": 0.2,
   "gamma": 0.995,
   "ppo_updates_per_batch": 1,
@@ -18,10 +18,9 @@
   "chunk_length": 150,
   "slots": [
     "r0c0",
-    "r0c1",
-    "r0c2"
+    "r0c1"
   ],
-  "max_seeds": 2,
+  "max_seeds": 1,
   "reward_mode": "shaped",
   "reward_family": "contribution",
   "param_budget": 500000,
