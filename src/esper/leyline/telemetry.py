@@ -648,6 +648,22 @@ class PPOUpdatePayload:
     return_mean: float = 0.0
     return_std: float = 0.0
 
+    # Value function quality metrics (TELE-220 to TELE-228)
+    # These measure value network calibration and return distribution shape
+    v_return_correlation: float = 0.0
+    td_error_mean: float = 0.0
+    td_error_std: float = 0.0
+    bellman_error: float = 0.0
+    return_p10: float = 0.0
+    return_p50: float = 0.0
+    return_p90: float = 0.0
+    return_variance: float = 0.0
+    return_skewness: float = 0.0
+
+    # Value target scale: the std used to normalize returns before value loss
+    # Tracks raw return variance; normalized_returns = valid_returns / value_target_scale
+    value_target_scale: float = 1.0
+
     ratio_mean: float = 1.0
     ratio_min: float = 1.0
     ratio_max: float = 1.0
