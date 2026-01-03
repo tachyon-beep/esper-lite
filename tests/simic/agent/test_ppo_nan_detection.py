@@ -1,6 +1,5 @@
 """Tests for per-head NaN/Inf detection in PPO training."""
 
-import pytest
 import torch
 from esper.leyline import HEAD_NAMES
 

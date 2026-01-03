@@ -1149,7 +1149,6 @@ class TestTolariaGovernor:
         # Get a seed parameter to track
         seed = model.seed_slots["r0c0"].seed
         first_param = next(seed.parameters())
-        weights_before_corruption = first_param.data.clone()
 
         # DO NOT take a new snapshot (this is the bug scenario)
         # In production, this happens when fossilization occurs between

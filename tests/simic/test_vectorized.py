@@ -1261,8 +1261,7 @@ def test_lm_correct_tensor_shape_handles_sequence_dimension():
         f"got {list(correct_per_config.shape)}"
     )
 
-    # Total should be tokens per config
-    expected_total_per_config = batch_size * seq_len
+    # Total should be tokens per config (fused_batch_size * seq_len)
     assert total == fused_batch_size * seq_len, (
         f"Total should be {fused_batch_size * seq_len} tokens, got {total}"
     )

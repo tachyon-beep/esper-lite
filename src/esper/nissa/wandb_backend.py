@@ -81,6 +81,7 @@ class WandbBackend(OutputBackend):
         name: Custom run name (auto-generated if None)
         mode: "online", "offline", or "disabled"
         log_code: Whether to log git commit and code diff
+        log_system: Whether to log system metrics (GPU, CPU, memory)
 
     Raises:
         ImportError: If wandb is not installed
@@ -96,6 +97,7 @@ class WandbBackend(OutputBackend):
         name: str | None = None,
         mode: str = "online",
         log_code: bool = True,
+        log_system: bool = True,
     ):
         if not WANDB_AVAILABLE:
             raise ImportError(
@@ -110,6 +112,7 @@ class WandbBackend(OutputBackend):
         self.name = name
         self.mode = mode
         self.log_code = log_code
+        self.log_system = log_system
 
         self._run: Any | None = None  # wandb.sdk.wandb_run.Run
         # Step counter for per-env metrics - see class docstring "Step Model"
@@ -127,6 +130,10 @@ class WandbBackend(OutputBackend):
 
         # wandb.init is type-hinted to return Run | RunDisabled | None
         # We check for None and log appropriately
+        #
+        # Settings for system metrics: _disable_stats controls GPU/CPU/memory logging
+        # See: https://docs.wandb.ai/support/how_can_i_disable_logging_of_system_metrics_to_wb/
+        settings = wandb.Settings(_disable_stats=not self.log_system)
         self._run = wandb.init(
             project=self.project,
             entity=self.entity,
@@ -136,6 +143,7 @@ class WandbBackend(OutputBackend):
             name=self.name,
             mode=self.mode,
             save_code=self.log_code,
+            settings=settings,
         )
 
         if self._run is None:

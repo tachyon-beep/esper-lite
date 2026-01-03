@@ -1685,7 +1685,6 @@ def train_ppo_vectorized(
         """
         model = env_state.model
         env_dev = env_state.env_device
-        batch_size = inputs.size(0)
 
         stream_ctx = (
             torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()

@@ -244,7 +244,7 @@ def test_heads_panel_shows_all_clear_when_no_nan_inf():
     # Count filled circles in NaN/Inf rows only (not State row)
     # The NaN and Inf rows should have zero filled circles
     lines = content_str.split("\n")
-    nan_line = next((l for l in lines if l.strip().startswith("NaN")), "")
-    inf_line = next((l for l in lines if l.strip().startswith("Inf")), "")
+    nan_line = next((line for line in lines if line.strip().startswith("NaN")), "")
+    inf_line = next((line for line in lines if line.strip().startswith("Inf")), "")
     assert "●" not in nan_line
     assert "●" not in inf_line

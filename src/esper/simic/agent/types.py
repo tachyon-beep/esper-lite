@@ -87,6 +87,9 @@ class PPOUpdateMetrics(TypedDict, total=False):
     q_set_alpha: float
     q_variance: float
     q_spread: float
+    # Per-head NaN/Inf detection (for indicator lights)
+    head_nan_detected: dict[str, bool]
+    head_inf_detected: dict[str, bool]
 
 
 class HeadLogProbs(TypedDict):

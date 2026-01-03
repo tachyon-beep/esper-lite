@@ -76,6 +76,7 @@ class EpisodeMetricsPanel(Static):
             Episodes     n:45 collected
             (waiting for PPO updates...)
         """
+        assert self._snapshot is not None  # Guarded by render()
         result = Text()
         tamiyo = self._snapshot.tamiyo
         history = list(tamiyo.episode_return_history)
@@ -121,6 +122,7 @@ class EpisodeMetricsPanel(Static):
             Steps/Act    germ:45  prune:120  fossil:200
             Trend        improving ↗
         """
+        assert self._snapshot is not None  # Guarded by render()
         stats = self._snapshot.episode_stats
         result = Text()
 
