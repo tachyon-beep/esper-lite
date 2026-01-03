@@ -328,14 +328,6 @@ class ConsoleOutput(OutputBackend):
                 acc = event.data.val_accuracy
                 epoch = event.epoch if event.epoch is not None else "?"
                 print(f"[{timestamp}] {seed_id} | Epoch {epoch}: loss={loss} acc={acc}")
-        elif "COMMAND" in event_type:
-            if event.data is None:
-                _logger.warning("COMMAND event has no data payload")
-                return
-            # COMMAND events not yet migrated to typed payloads
-            if isinstance(event.data, dict):
-                action = event.data.get("action", "unknown")
-                print(f"[{timestamp}] {seed_id} | Command: {action}")
         elif event_type.startswith("SEED_"):
             if event.data is None:
                 _logger.warning("SEED_%s event has no data payload", event_type)

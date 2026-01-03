@@ -273,35 +273,45 @@ class DiagnosticTracker:
         """Estimate loss landscape sharpness via perturbation.
 
         Higher sharpness = sharper minimum = less generalizable.
+
+        Note: This method temporarily sets model.eval() for inference but
+        restores the original training mode on exit. Telemetry collection
+        should be side-effect free with respect to training state.
         """
         if not self.config.loss_landscape.enabled:
             return None
 
         cfg = self.config.loss_landscape
+
+        # Preserve and restore training mode to avoid leaking state into training loop
+        was_training = self.model.training
         self.model.eval()
 
-        # Get baseline loss
-        baseline_loss = self._compute_val_loss(val_loader, criterion)
+        try:
+            # Get baseline loss
+            baseline_loss = self._compute_val_loss(val_loader, criterion)
 
-        # Perturb weights and measure loss changes
-        perturbations = []
-        original_state = {k: v.clone() for k, v in self.model.state_dict().items()}
+            # Perturb weights and measure loss changes
+            perturbations = []
+            original_state = {k: v.clone() for k, v in self.model.state_dict().items()}
 
-        for _ in range(cfg.perturbation_samples):
-            # Add random perturbation to weights
-            with torch.no_grad():
-                for param in self.model.parameters():
-                    noise = torch.randn_like(param) * cfg.perturbation_scale
-                    param.add_(noise)
+            for _ in range(cfg.perturbation_samples):
+                # Add random perturbation to weights
+                with torch.no_grad():
+                    for param in self.model.parameters():
+                        noise = torch.randn_like(param) * cfg.perturbation_scale
+                        param.add_(noise)
 
-            # Measure perturbed loss
-            perturbed_loss = self._compute_val_loss(val_loader, criterion)
-            perturbations.append(abs(perturbed_loss - baseline_loss))
+                # Measure perturbed loss
+                perturbed_loss = self._compute_val_loss(val_loader, criterion)
+                perturbations.append(abs(perturbed_loss - baseline_loss))
 
-            # Restore original weights
-            self.model.load_state_dict(original_state)
+                # Restore original weights
+                self.model.load_state_dict(original_state)
 
-        return float(np.mean(perturbations)) / cfg.perturbation_scale
+            return float(np.mean(perturbations)) / cfg.perturbation_scale
+        finally:
+            self.model.train(was_training)
 
     def _compute_val_loss(self, val_loader: Any, criterion: Any) -> float:
         """Compute validation loss."""
@@ -400,8 +410,9 @@ class DiagnosticTracker:
         """Generate human/LLM-readable summary of current state."""
         parts = []
 
-        # Loss trajectory
-        if len(self.history) >= 2:
+        # Loss trajectory (compare current snapshot to most recent in history)
+        # Note: snapshot is NOT in history yet when this is called from end_epoch()
+        if self.history:
             prev = self.history[-1]
             loss_delta = prev.val_loss - snapshot.val_loss
             if loss_delta > 0.01:
@@ -409,7 +420,7 @@ class DiagnosticTracker:
             elif loss_delta < -0.01:
                 parts.append(f"Loss degrading ({prev.val_loss:.3f} -> {snapshot.val_loss:.3f})")
             else:
-                plateau_len = self._plateau_length()
+                plateau_len = self._plateau_length(snapshot.val_loss)
                 if plateau_len >= 3:
                     parts.append(f"Loss plateaued for {plateau_len} epochs at ~{snapshot.val_loss:.3f}")
 
@@ -439,17 +450,34 @@ class DiagnosticTracker:
 
         return " | ".join(parts) if parts else "Training normally"
 
-    def _plateau_length(self) -> int:
-        """Count epochs in current plateau."""
-        if len(self.history) < 2:
-            return 0
+    def _plateau_length(self, current_loss: float | None = None) -> int:
+        """Count epochs in current plateau (including current epoch).
 
+        Args:
+            current_loss: The current epoch's validation loss. If provided,
+                counts from current backward. If None, uses history[-1].
+
+        Returns:
+            Number of consecutive epochs with similar loss values.
+            Returns 0 if no history and no current_loss provided.
+        """
         threshold = 0.005
-        count = 0
-        recent_loss = self.history[-1].val_loss
 
-        for snap in reversed(list(self.history)[:-1]):
-            if abs(snap.val_loss - recent_loss) < threshold:
+        # Determine reference loss: current_loss if given, else history[-1]
+        if current_loss is not None:
+            ref_loss = current_loss
+            count = 1  # Start at 1 to include current epoch
+            search_history = self.history  # Compare against all history
+        elif self.history:
+            ref_loss = self.history[-1].val_loss
+            count = 1  # Start at 1 to include most recent
+            search_history = list(self.history)[:-1]  # Compare against all but last
+        else:
+            return 0  # No reference point
+
+        # Count consecutive epochs with similar loss going backwards
+        for snap in reversed(list(search_history)):
+            if abs(snap.val_loss - ref_loss) < threshold:
                 count += 1
             else:
                 break
@@ -465,7 +493,7 @@ class DiagnosticTracker:
         """Detect issues that might need attention."""
         flags = []
 
-        if self._plateau_length() >= 3:
+        if self._plateau_length(snapshot.val_loss) >= 3:
             flags.append("sustained_plateau")
 
         if snapshot.gradient_health:
