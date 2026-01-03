@@ -8,13 +8,13 @@
 |-------|-------|
 | **Ticket ID** | `B7-DRL-04` |
 | **Severity** | `P3` |
-| **Status** | `open` |
+| **Status** | `closed` |
 | **Batch** | 7 |
 | **Agent** | `drl` |
 | **Domain** | `simic/telemetry` |
 | **Assignee** | |
 | **Created** | 2024-12-27 |
-| **Updated** | 2024-12-27 |
+| **Updated** | 2026-01-03 |
 
 ---
 
@@ -92,9 +92,9 @@ Per No Legacy Code Policy, remove unused code.
 
 ### How to Verify the Fix
 
-- [ ] Determine if policy uses LSTM
-- [ ] If yes, wire up monitoring
-- [ ] If no, delete lstm_health.py
+- [x] Determine if policy uses LSTM
+- [x] If yes, wire up monitoring
+- [ ] ~~If no, delete lstm_health.py~~
 
 ---
 
@@ -135,6 +135,51 @@ Per No Legacy Code Policy, remove unused code.
 | **Reviewer** | Code Review Specialist |
 
 **Evaluation:** Function exported but never imported elsewhere. Per CLAUDE.md telemetry guidance: wire up (don't delete) since policy uses LSTM architecture.
+
+---
+
+## Resolution
+
+### Status: FIXED
+
+**Fixed by wiring up LSTM health monitoring into the PPO training loop.**
+
+#### The Fix
+
+| Claim | Status | Evidence |
+|-------|--------|----------|
+| `compute_lstm_health()` never called | ✅ TRUE (was) | grep showed no callers outside telemetry module |
+| Policy uses LSTM | ✅ TRUE | `batched_lstm_hidden` tracked throughout vectorized.py |
+| Function should be wired up | ✅ DONE | Now called after PPO updates |
+
+#### Changes Made
+
+1. **`src/esper/simic/telemetry/anomaly_detector.py`**:
+   - Added `check_lstm_health()` method to AnomalyDetector
+   - Added `lstm_max_norm` and `lstm_min_norm` threshold fields
+   - Detects: NaN, Inf, h/c explosion (>100), h/c vanishing (<1e-6)
+
+2. **`src/esper/simic/training/vectorized.py`**:
+   - Import `compute_lstm_health` from telemetry module
+   - Call after PPO updates (line ~3603), alongside gradient drift check
+   - Merge LSTM health anomalies into main anomaly report
+
+3. **`tests/simic/telemetry/test_anomaly_detector.py`**:
+   - Added `TestCheckLstmHealth` class with 9 test cases
+   - Tests: healthy state, NaN, Inf, h/c explosion, h/c vanishing, custom thresholds, multiple anomalies
+
+#### Why After PPO Updates?
+
+Per DRL specialist analysis:
+- BPTT through LSTM layers during PPO updates is when gradient-induced corruption occurs
+- Checking every `get_action()` would be excessive overhead with marginal benefit
+- 1 check per batch (~1ms) is negligible overhead
+
+#### Severity Confirmation
+
+- Original: P3 (dead code / unwired functionality)
+- Confirmed: P3 (telemetry gap, not correctness bug)
+- Resolution: FIXED
 
 ---
 

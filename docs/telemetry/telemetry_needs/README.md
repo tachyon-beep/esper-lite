@@ -1,6 +1,6 @@
 # Telemetry Audit Records
 
-This folder contains **89 telemetry records** documenting the complete data flow for every metric consumed by the Sanctum TUI system.
+This folder contains **90 telemetry records** documenting the complete data flow for every metric consumed by the Sanctum TUI system.
 
 ## Audit Scope
 
@@ -17,17 +17,17 @@ Each record traces a metric's journey:
 | Training | 001-099 | 7 | Core training loop metrics (episode, epoch, batch, runtime) |
 | Policy | 100-199 | 20 | Policy network metrics (entropy, KL, clip fraction, advantages) |
 | Value | 200-299 | 6 | Value function metrics (explained variance, value stats) |
-| Gradient | 300-399 | 10 | Gradient health (norms, NaN/Inf counts, per-head tracking) |
+| Gradient | 300-399 | 11 | Gradient health (norms, NaN/Inf counts, per-head tracking, LSTM health) |
 | Reward | 400-499 | 3 | Reward signal health (PBRS, anti-gaming, hypervolume) |
 | Seed | 500-599 | 16 | Seed lifecycle (counts, rates, trends, gradient flags) |
 | Environment | 600-699 | 6 | Per-environment state (observation stats, env status) |
 | Infrastructure | 700-799 | 20 | System resources (GPU, CPU, memory, connection status) |
 | Decision | 800-899 | 1 | Tamiyo decision snapshots |
-| **Total** | | **89** | |
+| **Total** | | **90** | |
 
 ## Wiring Status Summary
 
-### Fully Wired (83 metrics)
+### Fully Wired (84 metrics)
 
 The vast majority of metrics have complete data pipelines from emitter through aggregator to widget display. These are marked with all checkboxes checked in their Wiring Verification section.
 

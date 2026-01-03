@@ -110,6 +110,7 @@ from esper.simic.telemetry import (
     TelemetryConfig,
     GradientEMATracker,  # P4-9
     training_profiler,
+    compute_lstm_health,  # B7-DRL-04
 )
 from esper.simic.control import RunningMeanStd, RewardNormalizer
 from esper.tamiyo.policy.features import (
@@ -3595,6 +3596,23 @@ def train_ppo_vectorized(
                         anomaly_report.has_anomaly = True
                         anomaly_report.anomaly_types.extend(drift_report.anomaly_types)
                         anomaly_report.details.update(drift_report.details)
+
+                # B7-DRL-04: Check LSTM hidden state health after PPO update
+                # LSTM hidden states can become corrupted during BPTT - monitor for
+                # explosion (norm > 100), vanishing (norm < 1e-6), or NaN/Inf.
+                lstm_health = compute_lstm_health(batched_lstm_hidden)
+                if lstm_health is not None:
+                    lstm_report = anomaly_detector.check_lstm_health(
+                        h_norm=lstm_health.h_norm,
+                        c_norm=lstm_health.c_norm,
+                        has_nan=lstm_health.has_nan,
+                        has_inf=lstm_health.has_inf,
+                    )
+                    if lstm_report.has_anomaly:
+                        anomaly_report.has_anomaly = True
+                        anomaly_report.anomaly_types.extend(lstm_report.anomaly_types)
+                        anomaly_report.details.update(lstm_report.details)
+
                 _handle_telemetry_escalation(anomaly_report, telemetry_config)
                 _emit_anomaly_diagnostics(
                     hub,

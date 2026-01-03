@@ -294,6 +294,76 @@ class AnomalyDetector:
 
         return report
 
+    # B7-DRL-04: LSTM hidden state health thresholds
+    lstm_max_norm: float = 100.0  # Upper bound for healthy norm (explosion threshold)
+    lstm_min_norm: float = 1e-6  # Lower bound for healthy norm (vanishing threshold)
+
+    def check_lstm_health(
+        self,
+        h_norm: float,
+        c_norm: float,
+        has_nan: bool,
+        has_inf: bool,
+    ) -> AnomalyReport:
+        """Check LSTM hidden state health (B7-DRL-04).
+
+        LSTM hidden states can drift during training due to:
+        - Gradient explosion: h/c norms spike above threshold
+        - Gradient vanishing: h/c norms collapse below threshold
+        - Numerical instability: NaN/Inf propagates through hidden state
+
+        This should be called after PPO updates, when gradient-induced
+        corruption is most likely to occur (BPTT through LSTM layers).
+
+        Args:
+            h_norm: L2 norm of hidden state tensor
+            c_norm: L2 norm of cell state tensor
+            has_nan: Whether NaN was detected in hidden state
+            has_inf: Whether Inf was detected in hidden state
+
+        Returns:
+            AnomalyReport with any detected LSTM health issues
+        """
+        report = AnomalyReport()
+
+        # Critical: NaN/Inf in hidden state is irrecoverable
+        if has_nan:
+            report.add_anomaly(
+                "lstm_nan",
+                f"NaN in LSTM hidden state (h_norm={h_norm:.3f}, c_norm={c_norm:.3f})",
+            )
+        if has_inf:
+            report.add_anomaly(
+                "lstm_inf",
+                f"Inf in LSTM hidden state (h_norm={h_norm:.3f}, c_norm={c_norm:.3f})",
+            )
+
+        # Warning: Hidden state explosion
+        if h_norm > self.lstm_max_norm:
+            report.add_anomaly(
+                "lstm_h_explosion",
+                f"h_norm={h_norm:.3f} > {self.lstm_max_norm}",
+            )
+        if c_norm > self.lstm_max_norm:
+            report.add_anomaly(
+                "lstm_c_explosion",
+                f"c_norm={c_norm:.3f} > {self.lstm_max_norm}",
+            )
+
+        # Warning: Hidden state vanishing
+        if h_norm < self.lstm_min_norm:
+            report.add_anomaly(
+                "lstm_h_vanishing",
+                f"h_norm={h_norm:.6f} < {self.lstm_min_norm}",
+            )
+        if c_norm < self.lstm_min_norm:
+            report.add_anomaly(
+                "lstm_c_vanishing",
+                f"c_norm={c_norm:.6f} < {self.lstm_min_norm}",
+            )
+
+        return report
+
     def check_all(
         self,
         ratio_max: float,
