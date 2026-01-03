@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B2-DRL-08` |
 | **Severity** | `P3` |
-| **Status** | `open` |
+| **Status** | `invalid` |
 | **Batch** | 2 |
 | **Agent** | `drl` |
 | **Domain** | `kasmina` |
@@ -139,3 +139,37 @@ Add clear docstrings explaining when each is appropriate.
 | Verdict | **ENDORSE** |
 |---------|-------------|
 | **Evaluation** | The semantic overloading is confusing: `get_alpha(step)` returns time-based progress (for G3 gate lifecycle tracking), while `get_alpha_for_blend(x)` returns learned per-sample gates (actual blending weights). Callers must understand this distinction or risk mixing schedule progress with gate outputs. Rename to `get_blending_progress()` and `get_gate_output()` for clarity. |
+
+---
+
+## Resolution
+
+### Status: NOT-A-BUG
+
+**Closed via systematic debugging investigation.**
+
+#### Why This Is Not A Bug
+
+| Claim | Status | Evidence |
+|-------|--------|----------|
+| "Same name, different semantics" | ✅ TRUE | `get_alpha()` returns progress, `get_alpha_for_blend()` returns gate output |
+| "Could confuse callers" | ❌ FALSE | No production callers of `get_alpha()` - only tests |
+| "Missing documentation" | ❌ FALSE | Docstrings are clear (lines 192-199, 207) |
+
+#### Evidence
+
+1. **Zero production callers of `get_alpha()`**: Grep search found no `.get_alpha(` calls in `src/` production code. Only `get_alpha_for_blend()` is called (in `slot.py:2045`).
+
+2. **Docstrings already distinguish the methods**:
+   - `get_alpha()`: "Return blending progress for lifecycle tracking"
+   - `get_alpha_for_blend()`: "Compute per-sample alpha from input features"
+
+3. **Tests explicitly document intentional design**: `test_gated_blending_characterization.py` includes:
+   - `test_get_alpha_vs_get_alpha_for_blend_have_different_purposes()`
+   - Comments at lines 339-340 explaining the dual-purpose design
+
+#### Severity Assessment
+
+- Original: P3 (API design concern)
+- Revised: P4 (theoretical confusion with no practical impact)
+- Resolution: NOT-A-BUG - the "confusion risk" doesn't exist since there are no production callers
