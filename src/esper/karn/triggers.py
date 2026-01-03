@@ -136,14 +136,15 @@ class AnomalyDetector:
                     f"(acc={snapshot.host.val_accuracy:.1f}%)"
                 )
 
-        # Check gradient explosion
-        if snapshot.host.host_grad_norm > 0:
-            grad_ratio = self.stats.update_grad_norm(snapshot.host.host_grad_norm)
+        # Check gradient explosion (only if gradient norm was computed)
+        host_grad_norm = snapshot.host.host_grad_norm
+        if host_grad_norm is not None and host_grad_norm > 0:
+            grad_ratio = self.stats.update_grad_norm(host_grad_norm)
             if grad_ratio > self.config.gradient_explosion:
                 reasons.append(f"gradient_explosion:{grad_ratio:.0f}x")
                 _logger.warning(
                     f"Gradient explosion detected: {grad_ratio:.0f}x baseline "
-                    f"(norm={snapshot.host.host_grad_norm:.2f})"
+                    f"(norm={host_grad_norm:.2f})"
                 )
 
         # Check stage transitions

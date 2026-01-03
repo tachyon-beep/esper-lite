@@ -16,6 +16,7 @@ import uuid
 from collections import deque
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
+from enum import Enum
 from typing import TYPE_CHECKING
 
 import psutil
@@ -329,8 +330,9 @@ class SanctumAggregator:
         else:
             self._last_event_ts = time.time()
 
-        # Get event type name
-        event_type = event.event_type.name
+        # Get event type name - handle both Enum (with .name) and string
+        event_type_raw = event.event_type
+        event_type = event_type_raw.name if hasattr(event_type_raw, "name") else event_type_raw
 
         # Log event
         self._add_event_log(event, event_type)

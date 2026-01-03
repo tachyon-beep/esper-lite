@@ -352,28 +352,50 @@ class KarnCollector:
             return
 
         n_envs = len(payloads_for_epoch)
+
+        # Required metrics - always present, sum over all envs
         total_val_loss = 0.0
         total_val_accuracy = 0.0
+
+        # Optional metrics - track count of non-None values separately
+        # None means "not computed", 0.0 means "computed as zero"
         total_train_loss = 0.0
+        train_loss_count = 0
         total_train_accuracy = 0.0
+        train_accuracy_count = 0
         total_host_grad_norm = 0.0
+        host_grad_norm_count = 0
 
         for payload in payloads_for_epoch:
             total_val_loss += payload.val_loss
             total_val_accuracy += payload.val_accuracy
-            # Explicit None checks: 0.0 is a valid value (not missing data)
-            total_train_loss += payload.train_loss if payload.train_loss is not None else 0.0
-            total_train_accuracy += payload.train_accuracy if payload.train_accuracy is not None else 0.0
-            total_host_grad_norm += payload.host_grad_norm if payload.host_grad_norm is not None else 0.0
+            # Only accumulate non-None values and track count
+            if payload.train_loss is not None:
+                total_train_loss += payload.train_loss
+                train_loss_count += 1
+            if payload.train_accuracy is not None:
+                total_train_accuracy += payload.train_accuracy
+                train_accuracy_count += 1
+            if payload.host_grad_norm is not None:
+                total_host_grad_norm += payload.host_grad_norm
+                host_grad_norm_count += 1
 
         # Update host snapshot with aggregated (mean) metrics
         current_epoch.epoch = inner_epoch
         current_epoch.host.epoch = inner_epoch
         current_epoch.host.val_loss = total_val_loss / n_envs
         current_epoch.host.val_accuracy = total_val_accuracy / n_envs
-        current_epoch.host.train_loss = total_train_loss / n_envs
-        current_epoch.host.train_accuracy = total_train_accuracy / n_envs
-        current_epoch.host.host_grad_norm = total_host_grad_norm / n_envs
+
+        # Optional metrics: mean of present values, or None if all were None
+        current_epoch.host.train_loss = (
+            total_train_loss / train_loss_count if train_loss_count > 0 else None
+        )
+        current_epoch.host.train_accuracy = (
+            total_train_accuracy / train_accuracy_count if train_accuracy_count > 0 else None
+        )
+        current_epoch.host.host_grad_norm = (
+            total_host_grad_norm / host_grad_norm_count if host_grad_norm_count > 0 else None
+        )
 
         # Tier 3: Check for anomalies before mutating slot stage timers.
         # Stage-transition triggers rely on epochs_in_stage == 0 (just transitioned),

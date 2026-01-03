@@ -160,11 +160,13 @@ class HostSnapshot:
 
     epoch: int = 0
 
-    # Performance
-    train_loss: float = 0.0
-    train_accuracy: float = 0.0
+    # Performance (required metrics)
     val_loss: float = 0.0
     val_accuracy: float = 0.0
+
+    # Performance (optional metrics - None = not computed, 0.0 = computed as zero)
+    train_loss: float | None = None
+    train_accuracy: float | None = None
 
     # Parameter accounting
     host_params: int = 0  # Fixed host parameters
@@ -172,8 +174,8 @@ class HostSnapshot:
     total_params: int = 0  # host + seeds
     fossilized_params: int = 0  # Permanently added params
 
-    # Gradient health
-    host_grad_norm: float = 0.0
+    # Gradient health (optional - None = not computed)
+    host_grad_norm: float | None = None
     seed_grad_norms: dict[str, float] = field(default_factory=dict)  # Per-slot
     grad_isolation_leakage: float | None = None  # If monitoring isolation
 
@@ -615,9 +617,12 @@ class TelemetryStore:
         def _parse_host_snapshot(raw: dict[str, Any]) -> HostSnapshot:
             data = filter_dataclass_kwargs(HostSnapshot, raw, context="HostSnapshot")
             data["epoch"] = coerce_int(data.get("epoch"), field="HostSnapshot.epoch", default=0, minimum=0)
-            data["train_loss"] = coerce_float(data.get("train_loss"), field="HostSnapshot.train_loss", default=0.0)
-            data["train_accuracy"] = coerce_float(
-                data.get("train_accuracy"), field="HostSnapshot.train_accuracy", default=0.0
+            # Optional training metrics (None = not computed, 0.0 = computed as zero)
+            data["train_loss"] = coerce_float_or_none(
+                data.get("train_loss"), field="HostSnapshot.train_loss"
+            )
+            data["train_accuracy"] = coerce_float_or_none(
+                data.get("train_accuracy"), field="HostSnapshot.train_accuracy"
             )
             data["val_loss"] = coerce_float(data.get("val_loss"), field="HostSnapshot.val_loss", default=0.0)
             data["val_accuracy"] = coerce_float(data.get("val_accuracy"), field="HostSnapshot.val_accuracy", default=0.0)
@@ -629,7 +634,10 @@ class TelemetryStore:
             data["fossilized_params"] = coerce_int(
                 data.get("fossilized_params"), field="HostSnapshot.fossilized_params", default=0, minimum=0
             )
-            data["host_grad_norm"] = coerce_float(data.get("host_grad_norm"), field="HostSnapshot.host_grad_norm", default=0.0)
+            # Optional gradient metric (None = not computed)
+            data["host_grad_norm"] = coerce_float_or_none(
+                data.get("host_grad_norm"), field="HostSnapshot.host_grad_norm"
+            )
             data["seed_grad_norms"] = coerce_float_dict(
                 data.get("seed_grad_norms"), field="HostSnapshot.seed_grad_norms"
             )

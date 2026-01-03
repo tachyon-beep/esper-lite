@@ -68,6 +68,7 @@ def serialize_event(event: "TelemetryEventLike") -> str:
 
     Handles:
     - Enum event_type → string name
+    - String event_type → pass through
     - datetime timestamp → ISO format string
     - All standard TelemetryEventLike protocol fields
 
@@ -77,8 +78,9 @@ def serialize_event(event: "TelemetryEventLike") -> str:
     Returns:
         JSON string representation of the event
     """
-    # Extract event_type name from Enum
-    event_type = event.event_type.name
+    # Extract event_type - handle both Enum (with .name) and string
+    event_type_raw = event.event_type
+    event_type = event_type_raw.name if isinstance(event_type_raw, Enum) else event_type_raw
 
     # Extract timestamp (handle datetime objects)
     # hasattr AUTHORIZED by John on 2025-12-17 15:00:00 UTC

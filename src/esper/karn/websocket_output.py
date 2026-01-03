@@ -304,16 +304,19 @@ class WebSocketOutput:
             return
 
         # Broadcast to all clients
+        # Use tuple() snapshot to prevent RuntimeError if _handle_client() adds/removes
+        # clients while we're awaiting send() (set mutation during iteration)
         disconnected: set[Any] = set()
-        for client in self._clients:
+        for client in tuple(self._clients):
             try:
                 for msg in messages:
                     await client.send(msg)
             except Exception:
                 disconnected.add(client)
 
-        # Remove disconnected clients
-        self._clients -= disconnected
+        # Remove disconnected clients (discard is safe for clients already removed)
+        for client in disconnected:
+            self._clients.discard(client)
 
     @property
     def client_count(self) -> int:
