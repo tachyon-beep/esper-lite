@@ -47,6 +47,14 @@ def _make_mandatory_metrics(**overrides) -> dict:
         "value_std": 1.0,
         "value_min": -2.0,
         "value_max": 2.0,
+        # Pre-normalization advantage statistics (mandatory)
+        "pre_norm_advantage_mean": 0.5,
+        "pre_norm_advantage_std": 1.2,
+        # Return statistics (mandatory)
+        "return_mean": 0.3,
+        "return_std": 0.8,
+        # Value target scale (mandatory) - std used to normalize returns
+        "value_target_scale": 0.8,
     }
     base.update(overrides)
     return base

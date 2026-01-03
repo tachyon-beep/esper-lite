@@ -171,10 +171,13 @@ class TrainingConfig:
 
     @staticmethod
     def for_cifar_baseline_stable() -> "TrainingConfig":
-        """Conservative configuration for CIFAR tasks (slower, more stable PPO)."""
+        """Conservative configuration for CIFAR tasks (slower, more stable PPO).
+
+        Note: lr=1e-4 was removed after max_grad_norm increased from 1.0 to 5.0.
+        The low LR was compensating for aggressive clipping; now uses default 3e-4.
+        """
         return TrainingConfig(
             n_episodes=200,
-            lr=1e-4,
             clip_ratio=0.1,
             entropy_coef=0.06,
             entropy_coef_start=0.06,

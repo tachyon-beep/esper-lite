@@ -141,6 +141,14 @@ def _make_mandatory_metrics(**overrides) -> dict:
         "advantage_skewness": 0.0,
         "advantage_kurtosis": 0.0,
         "advantage_positive_ratio": 0.5,
+        # Pre-normalization advantage stats (for diagnosing advantage collapse)
+        "pre_norm_advantage_mean": 0.0,
+        "pre_norm_advantage_std": 1.0,
+        # Return statistics (for diagnosing value loss scale)
+        "return_mean": 0.5,
+        "return_std": 0.3,
+        # Value target scale (std used to normalize returns)
+        "value_target_scale": 0.3,
         "ratio_mean": 1.0,
         "ratio_min": 0.8,
         "ratio_max": 1.2,
@@ -151,6 +159,9 @@ def _make_mandatory_metrics(**overrides) -> dict:
         "value_std": 1.0,
         "value_min": -2.0,
         "value_max": 2.0,
+        # Per-head stats (optional but expected by emitter loop)
+        "head_entropies": {},
+        "head_grad_norms": {},
     }
     base.update(overrides)
     return base
