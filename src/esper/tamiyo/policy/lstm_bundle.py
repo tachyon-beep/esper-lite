@@ -160,12 +160,15 @@ class LSTMPolicyBundle:
         if blueprint_indices.dim() == 2:
             blueprint_indices = blueprint_indices.unsqueeze(1)
 
-        # Normalize masks to match feature shape (network expects 3D masks)
+        # Normalize masks to 3D based on mask rank, not features rank
+        # FIX: Previously gated on `need_expand` (features was 2D), but if features
+        # is already 3D [B, 1, F] and masks are 2D [B, A], the mask wasn't expanded,
+        # causing PyTorch broadcasting to align [B, A] against [B, 1, A] incorrectly.
         def expand_mask(mask: torch.Tensor | None) -> torch.Tensor | None:
             if mask is None:
                 return None
-            if need_expand and mask.dim() == 2:
-                return mask.unsqueeze(1)  # [batch, action_dim] -> [batch, 1, action_dim]
+            if mask.dim() == 2:
+                return mask.unsqueeze(1)  # [B, A] -> [B, 1, A]
             return mask
 
         output = self._network.forward(

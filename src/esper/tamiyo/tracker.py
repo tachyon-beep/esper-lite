@@ -22,7 +22,7 @@ from esper.leyline import (
 from esper.nissa import get_hub
 
 if TYPE_CHECKING:
-    from esper.simic.contracts import SeedStateProtocol
+    from esper.leyline import SeedStateProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +86,11 @@ class SignalTracker:
         # Recreate deques with the correct maxlen from history_window parameter
         self._loss_history = deque(self._loss_history, maxlen=self.history_window)
         self._accuracy_history = deque(self._accuracy_history, maxlen=self.history_window)
+
+        # True disable: stabilization_epochs=0 means "skip stabilization entirely"
+        # Without this, the latch would still require at least one stable epoch
+        if self.stabilization_epochs == 0:
+            self._is_stabilized = True
 
     def update(
         self,
@@ -338,8 +343,8 @@ class SignalTracker:
         self._prev_accuracy = 0.0
         self._prev_loss = float('inf')
 
-        # Reset stabilization latch
-        self._is_stabilized = False
+        # Reset stabilization latch (respecting stabilization_epochs=0 = disabled)
+        self._is_stabilized = self.stabilization_epochs == 0
         self._stable_count = 0
 
     @property
