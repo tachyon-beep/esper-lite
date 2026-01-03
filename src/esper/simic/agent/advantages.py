@@ -68,8 +68,11 @@ def compute_per_head_advantages(
 
     # Apply causal masks to advantages
     # op head: always gets advantage (always causally relevant)
-    # M8: No clone needed - we're not modifying the tensor, just returning it.
-    # Other heads use multiplication which creates new tensors anyway.
+    # M8: No clone needed for op_advantages. The caller (PPO.update) only reads
+    # these values for loss computation - it never modifies them in-place.
+    # All arithmetic operations (advantage * ratio, etc.) create new tensors.
+    # If this contract changes, we'd need to clone to prevent mutation of
+    # base_advantages. Other heads use multiplication which creates new tensors.
     #
     # PERF: Multiply by bool directly - PyTorch fuses the bool→float conversion
     # into the multiplication kernel, preserving base_advantages.dtype.
