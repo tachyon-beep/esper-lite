@@ -21,6 +21,7 @@ from .advantages import compute_per_head_advantages
 from .types import PPOUpdateMetrics
 from esper.simic.telemetry import RatioExplosionDiagnostic
 from esper.simic.telemetry.lstm_health import compute_lstm_health
+from esper.simic.telemetry.value_metrics import compute_value_function_metrics
 from esper.leyline import (
     PolicyBundle,
     DEFAULT_BATCH_SIZE,
@@ -115,10 +116,10 @@ class PPOAgent:
         # are only active during GERMINATE actions (less frequent than slot/op).
         entropy_coef_per_head: dict[str, float] | None = None,
         value_coef: float = DEFAULT_VALUE_COEF,
-        clip_value: bool = True,
+        clip_value: bool = False,  # Disabled: return normalization provides stability
         # Separate clip range for value function (larger than policy clip_ratio)
-        # Note: Some research (Engstrom et al., 2020) suggests value clipping often
-        # hurts performance. Consider clip_value=False if value learning is slow.
+        # Note: Research (Engstrom et al., 2020) suggests value clipping often hurts.
+        # With return normalization (std-only), clipping conflicts with normalized scale.
         value_clip: float = DEFAULT_VALUE_CLIP,
         max_grad_norm: float = DEFAULT_MAX_GRAD_NORM,
         # P2 FIX: n_epochs parameter REMOVED - it was dead code (never used in update loop).
@@ -348,6 +349,43 @@ class PPOAgent:
             "cuda_memory_fragmentation": fragmentation,
         }
 
+    def _compute_value_function_metrics(self) -> dict[str, float]:
+        """Compute value function metrics from buffer data.
+
+        Called after compute_advantages_and_returns() to extract
+        TELE-220 to TELE-228 metrics.
+        """
+        # Collect valid data from all environments
+        all_td_errors = []
+        all_values = []
+        all_returns = []
+
+        for env_id in range(self.buffer.num_envs):
+            num_steps = self.buffer.step_counts[env_id]
+            if num_steps > 0:
+                all_td_errors.append(self.buffer.td_errors[env_id, :num_steps])
+                all_values.append(self.buffer.values[env_id, :num_steps])
+                all_returns.append(self.buffer.returns[env_id, :num_steps])
+
+        if not all_td_errors:
+            return {
+                "v_return_correlation": 0.0,
+                "td_error_mean": 0.0,
+                "td_error_std": 0.0,
+                "bellman_error": 0.0,
+                "return_p10": 0.0,
+                "return_p50": 0.0,
+                "return_p90": 0.0,
+                "return_variance": 0.0,
+                "return_skewness": 0.0,
+            }
+
+        td_errors = torch.cat(all_td_errors)
+        values = torch.cat(all_values)
+        returns = torch.cat(all_returns)
+
+        return compute_value_function_metrics(td_errors, values, returns)
+
     def update(
         self,
         clear_buffer: bool = True,
@@ -370,6 +408,9 @@ class PPOAgent:
             gamma=self.gamma, gae_lambda=self.gae_lambda
         )
         pre_norm_adv_mean, pre_norm_adv_std = self.buffer.normalize_advantages()
+
+        # Compute value function metrics (TELE-220 to TELE-228)
+        value_func_metrics = self._compute_value_function_metrics()
 
         # C3: INTENTIONAL SINGLE-BATCH PROCESSING FOR RECURRENT POLICIES
         # We process the entire rollout as a single batch WITHOUT minibatch shuffling.
@@ -410,6 +451,13 @@ class PPOAgent:
         # Return statistics for diagnosing value loss scale
         metrics["return_mean"] = [valid_returns.mean().item()]
         metrics["return_std"] = [valid_returns.std().item()]
+
+        # Normalize returns by std for stable value learning (specialist-approved)
+        # Preserve mean to avoid non-stationary targets; scale variance to ~1
+        # This prevents critic collapse when return scale changes (e.g., -5 → +6)
+        value_target_scale = valid_returns.std().clamp(min=1e-6)
+        normalized_returns = (valid_returns / value_target_scale).detach()
+        metrics["value_target_scale"] = [value_target_scale.item()]
 
         # Pre-normalization advantage stats for diagnosing advantage collapse
         # If pre_norm_adv_std is tiny but pre_clip_grad_norm is huge, it indicates
@@ -812,19 +860,21 @@ class PPOAgent:
                 head_loss = -(clipped_surr * mask).sum() / n_valid
                 policy_loss = policy_loss + head_loss
 
-            # Value loss
+            # Value loss (uses normalized_returns for stable learning)
+            # normalized_returns has same mean as valid_returns but std~1
             valid_old_values = data["values"][valid_mask]
             if self.clip_value:
                 # Use separate value_clip (not policy clip_ratio) since value scale differs
-                # Value predictions can range from -10 to +50, so clip_ratio=0.2 is too tight
+                # Note: With return normalization, value clipping is less critical and
+                # may conflict (old values on old scale). Consider clip_value=False.
                 values_clipped = valid_old_values + torch.clamp(
                     values - valid_old_values, -self.value_clip, self.value_clip
                 )
-                value_loss_unclipped = (values - valid_returns) ** 2
-                value_loss_clipped = (values_clipped - valid_returns) ** 2
+                value_loss_unclipped = (values - normalized_returns) ** 2
+                value_loss_clipped = (values_clipped - normalized_returns) ** 2
                 value_loss = 0.5 * torch.max(value_loss_unclipped, value_loss_clipped).mean()
             else:
-                value_loss = F.mse_loss(values, valid_returns)
+                value_loss = F.mse_loss(values, normalized_returns)
 
             # Entropy loss with per-head weighting and causal masking.
             # H3 FIX: Use masked mean for sparse heads (blueprint, style).
@@ -1035,6 +1085,9 @@ class PPOAgent:
             aggregated_result["lstm_c_max"] = None
             aggregated_result["lstm_has_nan"] = None
             aggregated_result["lstm_has_inf"] = None
+
+        # Add value function metrics (TELE-220 to TELE-228)
+        aggregated_result.update(value_func_metrics)
 
         # Add CUDA memory metrics (collected once per update, not averaged)
         if cuda_memory_metrics:
