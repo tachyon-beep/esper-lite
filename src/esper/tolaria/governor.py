@@ -103,6 +103,25 @@ class TolariaGovernor:
         Current call site (vectorized.py) satisfies this by calling snapshot() after
         stream.synchronize() and outside the per-env stream context.
         """
+        # STREAM CONTRACT ENFORCEMENT: Fail fast if called within non-default stream.
+        # This catches incorrect call sites that could produce torn snapshots.
+        # Check is CUDA-only since CPU has no stream concept.
+        # Get device from model parameters (fallback to CPU if no params)
+        try:
+            device = next(self.model.parameters()).device
+        except StopIteration:
+            device = torch.device("cpu")
+
+        if device.type == "cuda":
+            current_stream = torch.cuda.current_stream(device)
+            default_stream = torch.cuda.default_stream(device)
+            if current_stream != default_stream:
+                raise RuntimeError(
+                    f"snapshot() called within non-default CUDA stream (stream={current_stream}). "
+                    f"This violates the stream contract and may produce a torn snapshot. "
+                    f"Call snapshot() outside stream context after synchronization."
+                )
+
         # C7 FIX: Explicitly free old snapshot to allow garbage collection
         # NOTE: We intentionally do NOT call torch.cuda.empty_cache() here.
         # The CUDA caching allocator is designed to hold freed memory for fast
@@ -130,9 +149,12 @@ class TolariaGovernor:
                     experimental_prefixes.append(f"seed_slots.{slot_id}.alpha_schedule.")
 
             # Filter state dict
+            # Use tuple prefix matching for O(1) C-level check per key instead of
+            # Python-level generator iteration over experimental_prefixes
+            prefix_tuple = tuple(experimental_prefixes)
             filtered_state = {
                 k: v for k, v in full_state.items()
-                if not any(k.startswith(prefix) for prefix in experimental_prefixes)
+                if not k.startswith(prefix_tuple)
             }
         else:
             filtered_state = full_state
@@ -306,6 +328,24 @@ class TolariaGovernor:
         missing_keys, unexpected_keys = self.model.load_state_dict(
             self.last_good_state, strict=False
         )
+
+        # INTEGRITY CHECK: Validate that mismatches are within expected namespaces.
+        # Seed-related mismatches are expected (seeds may be pruned/fossilized between
+        # snapshot and rollback), but non-seed mismatches indicate snapshot corruption
+        # or architecture drift—fail fast to prevent silent partial restoration.
+        allowed_prefixes = ("seed_slots.",)
+        bad_missing = [k for k in missing_keys if not k.startswith(allowed_prefixes)]
+        bad_unexpected = [k for k in unexpected_keys if not k.startswith(allowed_prefixes)]
+
+        if bad_missing or bad_unexpected:
+            raise RuntimeError(
+                f"Rollback state_dict mismatch in non-seed parameters. "
+                f"This indicates snapshot corruption or architecture drift. "
+                f"Missing host keys: {bad_missing[:5]}"
+                + (f"... ({len(bad_missing)} total)" if len(bad_missing) > 5 else "")
+                + f", Unexpected host keys: {bad_unexpected[:5]}"
+                + (f"... ({len(bad_unexpected)} total)" if len(bad_unexpected) > 5 else "")
+            )
 
         # Emit single rollback event with all context (B1-CR-02: no duplicate emissions)
         hub.emit(TelemetryEvent(

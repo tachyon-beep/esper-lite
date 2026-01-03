@@ -1184,3 +1184,124 @@ class TestTolariaGovernor:
             "This test should be converted to a proper regression test that "
             "verifies weights ARE restored (remove this assertion, add positive test)."
         )
+
+    def test_rollback_fails_on_host_key_mismatch(self):
+        """Rollback should fail fast if non-seed parameters are missing from snapshot.
+
+        Regression test for silent partial restoration bug:
+        - strict=False allows ANY key mismatch silently
+        - If a host parameter is missing (snapshot corruption, architecture drift),
+          rollback "succeeds" but model is partially restored
+        - Fix: Validate mismatches are within seed_slots.* namespace only
+        """
+        from esper.tolaria import TolariaGovernor
+
+        model = DummyModel()
+        gov = TolariaGovernor(model)
+        gov.snapshot()
+
+        # Simulate snapshot corruption: remove a host key
+        del gov.last_good_state['linear.weight']
+
+        # Build history for rollback
+        for i in range(5):
+            gov.loss_history.append(1.0)
+
+        # Rollback should raise because host key is missing
+        with pytest.raises(RuntimeError, match="non-seed parameters"):
+            gov.execute_rollback()
+
+    def test_rollback_fails_on_unexpected_host_key(self):
+        """Rollback should fail fast if snapshot has unexpected non-seed keys.
+
+        This catches the inverse case: snapshot has keys that model doesn't.
+        Could happen if model architecture changed since snapshot.
+        """
+        from esper.tolaria import TolariaGovernor
+
+        model = DummyModel()
+        gov = TolariaGovernor(model)
+        gov.snapshot()
+
+        # Add an unexpected host key to snapshot
+        gov.last_good_state['nonexistent_layer.weight'] = torch.randn(10, 10)
+
+        # Build history for rollback
+        for i in range(5):
+            gov.loss_history.append(1.0)
+
+        # Rollback should raise because unexpected host key exists
+        with pytest.raises(RuntimeError, match="non-seed parameters"):
+            gov.execute_rollback()
+
+    def test_rollback_allows_seed_key_mismatches(self):
+        """Rollback should tolerate seed_slots.* key mismatches.
+
+        Seed key mismatches are expected:
+        - Seeds may be pruned between snapshot and rollback (missing keys)
+        - Seeds may be germinated after snapshot (unexpected keys)
+
+        The integrity check should NOT fail for these cases.
+        """
+        from esper.tolaria import TolariaGovernor
+        from esper.kasmina import MorphogeneticModel, CNNHost
+
+        # Create model with seed slot
+        host = CNNHost()
+        model = MorphogeneticModel(host, device="cpu", slots=["r0c0"])
+        gov = TolariaGovernor(model)
+
+        # Germinate a seed AFTER snapshot (creates unexpected keys on restore)
+        model.seed_slots["r0c0"].germinate("conv_heavy", "test_seed")
+
+        # Build history for rollback
+        for i in range(5):
+            gov.loss_history.append(1.0)
+
+        # Rollback should succeed despite seed key mismatches
+        # (The execute_rollback will prune the seed first, creating missing keys)
+        report = gov.execute_rollback()
+        assert report.rollback_occurred is True
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_snapshot_rejects_non_default_stream(self):
+        """snapshot() should fail fast if called within non-default CUDA stream.
+
+        This enforces the stream contract documented in snapshot() docstring.
+        Snapshotting within a non-default stream while that stream has pending
+        writes could produce a torn (partially updated) snapshot.
+        """
+        from esper.tolaria import TolariaGovernor
+
+        device = torch.device("cuda:0")
+        model = nn.Sequential(nn.Linear(10, 10)).to(device)
+        gov = TolariaGovernor(model)
+
+        # Create a non-default stream
+        secondary_stream = torch.cuda.Stream(device)
+
+        # Snapshot within non-default stream should raise
+        with torch.cuda.stream(secondary_stream):
+            with pytest.raises(RuntimeError, match="non-default CUDA stream"):
+                gov.snapshot()
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_snapshot_allows_default_stream(self):
+        """snapshot() should succeed on default stream (no false positives).
+
+        Verifies the stream check doesn't reject valid calls on the default stream.
+        """
+        from esper.tolaria import TolariaGovernor
+
+        device = torch.device("cuda:0")
+        model = nn.Sequential(nn.Linear(10, 10)).to(device)
+        gov = TolariaGovernor(model)
+
+        # Explicitly on default stream (should succeed)
+        with torch.cuda.stream(torch.cuda.default_stream(device)):
+            gov.snapshot()  # Should not raise
+
+        # Outside any stream context (implicitly default stream)
+        gov.snapshot()  # Should not raise
+
+        assert gov.last_good_state is not None
