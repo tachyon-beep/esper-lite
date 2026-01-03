@@ -664,6 +664,9 @@ from esper.leyline.seed_protocols import (
 # Task configuration (cross-subsystem training config)
 from esper.leyline.task_config import TaskConfig
 
+# Reward configuration (cross-subsystem reward hyperparameters)
+from esper.leyline.reward_config import LossRewardConfig
+
 # Episode outcome (cross-subsystem Pareto analysis)
 from esper.leyline.episode_outcome import EpisodeOutcome
 
@@ -944,6 +947,9 @@ __all__ = [
 
     # Task configuration
     "TaskConfig",
+
+    # Reward configuration
+    "LossRewardConfig",
 
     # Episode outcome (Pareto analysis)
     "EpisodeOutcome",
