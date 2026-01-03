@@ -34,17 +34,21 @@ _logger = logging.getLogger(__name__)
 # =============================================================================
 
 BLUEPRINT_COMPUTE_MULTIPLIERS: dict[str, float] = {
-    # CNN blueprints
-    "noop": 1.0,            # Identity seed - no compute impact
-    "norm": 1.02,           # Minimal - normalization only
-    "depthwise": 1.08,      # Cheap - depthwise separable
-    "conv_light": 1.15,     # Moderate - single conv block
-    "conv_heavy": 1.25,     # Heavier - double conv block
-    # Transformer blueprints
-    "lora": 1.05,           # Low-rank adapter - lightweight
-    "attention": 1.35,      # Additional self-attention head (O(n²))
+    # CNN blueprints (sorted by param count)
+    "noop": 1.0,            # Identity seed - no compute impact (0 params)
+    "norm": 1.02,           # Minimal - normalization only (~130-800 params)
+    "conv_small": 1.05,     # Small 1x1 conv (~4.2K params)
+    "bottleneck": 1.05,     # Bottleneck conv 1x1->3x3->1x1 (~4.5K params)
+    "depthwise": 1.08,      # Depthwise-separable conv (~4.8K params)
+    "conv_light": 1.15,     # Moderate - single conv block (~37K params)
+    "conv_heavy": 1.25,     # Heavier - double conv block (~74K params)
+    # Transformer blueprints (sorted by param count)
+    "lora": 1.05,           # Low-rank adapter rank=8 (~6K params)
+    "lora_large": 1.08,     # Low-rank adapter rank=32 (~25K params)
+    "mlp_small": 1.15,      # Small MLP 2x expansion (~591K params)
+    "mlp": 1.20,            # Full MLP 4x expansion (~1.2M params)
+    "attention": 1.35,      # Self-attention head O(n²) (~591K params)
     "flex_attention": 1.35, # FlexAttention variant - similar cost envelope
-    "mlp": 1.20,            # Extra MLP block
 }
 
 

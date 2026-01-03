@@ -211,16 +211,28 @@ class DiagnosticTracker:
             stats_tensors.append((grad_flat > cfg.exploding_threshold).float().mean())
             metric_keys.append("exploding_pct")
 
-        # Percentiles (expensive, only if configured)
-        percentile_keys: list[int] = []
+        # Percentiles (expensive, batched for single sort operation)
+        # torch.quantile with a tensor of q values does ONE sort instead of N sorts
+        percentile_keys: list[int] = list(cfg.percentiles) if cfg.percentiles else []
+        percentile_results: torch.Tensor | None = None
         if cfg.percentiles:
             grad_float = grad_flat.float()
-            for p in cfg.percentiles:
-                stats_tensors.append(torch.quantile(grad_float, p / 100))
-                percentile_keys.append(p)
+            q_tensor = torch.tensor(
+                [p / 100 for p in cfg.percentiles],
+                device=grad.device,
+                dtype=grad_float.dtype,
+            )
+            percentile_results = torch.quantile(grad_float, q_tensor)
 
-        # Single GPU sync for all stats
-        all_values = torch.stack(stats_tensors).tolist()
+        # Single GPU sync for all stats - concatenate scalars with percentile vector
+        if stats_tensors and percentile_results is not None:
+            all_values = torch.cat([torch.stack(stats_tensors), percentile_results]).tolist()
+        elif stats_tensors:
+            all_values = torch.stack(stats_tensors).tolist()
+        elif percentile_results is not None:
+            all_values = percentile_results.tolist()
+        else:
+            all_values = []
 
         # Unpack values using tracked metric keys
         stats = GradientStats(layer_name=name)

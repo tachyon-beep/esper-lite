@@ -218,8 +218,12 @@ class BackendWorker:
                     f"Backend {self._name} queue drain timed out after {timeout}s, "
                     f"forcing shutdown (some events may be lost)"
                 )
-        except Exception as e:
-            _logger.warning(f"Queue join failed during {self._name} shutdown (worker may have died): {e}")
+        except Exception:
+            _logger.warning(
+                "Queue join failed during %s shutdown (worker may have died)",
+                self._name,
+                exc_info=True,
+            )
 
         # Send shutdown signal - no race possible since _stopped=True prevents new enqueues
         try:
@@ -712,8 +716,8 @@ class NissaHub:
         # Close the backend
         try:
             backend.close()
-        except Exception as e:
-            _logger.error(f"Error closing backend {backend.__class__.__name__}: {e}")
+        except Exception:
+            _logger.exception("Error closing backend %s", backend.__class__.__name__)
 
     def emit(self, event: TelemetryEvent) -> None:
         """Emit a telemetry event to all backends (asynchronously).
@@ -786,8 +790,12 @@ class NissaHub:
                 if not _join_with_timeout(worker._queue, remaining):
                     _logger.warning(f"Backend {worker._name} flush timed out")
                     return False
-            except Exception as e:
-                _logger.warning(f"Queue join failed for {worker._name} during flush (worker may have died): {e}")
+            except Exception:
+                _logger.warning(
+                    "Queue join failed for %s during flush (worker may have died)",
+                    worker._name,
+                    exc_info=True,
+                )
 
         return True
 
@@ -865,8 +873,11 @@ class NissaHub:
                 self._queue.put(None, timeout=2.0)
                 remaining = max(0.1, deadline - time.monotonic())
                 self._worker_thread.join(timeout=remaining)
-            except (queue.Full, RuntimeError) as e:
-                _logger.warning(f"Hub shutdown interrupted (worker may be dead or queue unreachable): {e}")
+            except (queue.Full, RuntimeError):
+                _logger.warning(
+                    "Hub shutdown interrupted (worker may be dead or queue unreachable)",
+                    exc_info=True,
+                )
 
         # Stop all backend workers (this drains their queues)
         # Split remaining time among workers
@@ -877,15 +888,15 @@ class NissaHub:
             per_worker = remaining / max(1, n_workers - i)
             try:
                 worker.stop(timeout=per_worker)
-            except Exception as e:
-                _logger.error(f"Error stopping backend worker: {e}")
+            except Exception:
+                _logger.exception("Error stopping backend worker %s", worker._name)
 
         # Close all backends
         for backend in self._backends:
             try:
                 backend.close()
-            except Exception as e:
-                _logger.error(f"Error closing backend {backend.__class__.__name__}: {e}")
+            except Exception:
+                _logger.exception("Error closing backend %s", backend.__class__.__name__)
 
     def __del__(self) -> None:
         """Ensure all backends are closed on deletion."""
