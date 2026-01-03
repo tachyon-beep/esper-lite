@@ -25,21 +25,37 @@ class _AlphaCacheLocal(threading.local):
 
 
 class AlphaScheduleProtocol(Protocol):
-    """Protocol defining required attributes for alpha schedule objects.
+    """Protocol defining required interface for alpha schedule objects.
 
-    When SeedSlot.alpha_schedule is not None, it MUST provide these attributes
-    to support serialization and lifecycle tracking. All BlendAlgorithm subclasses
-    satisfy this protocol.
+    When SeedSlot.alpha_schedule is not None, it MUST satisfy this protocol
+    to support serialization, lifecycle tracking, and forward-pass blending.
+    All BlendAlgorithm subclasses satisfy this protocol.
 
     Contract:
-        - algorithm_id: Identifies the blending algorithm type
-        - total_steps: Total number of steps for the blending schedule
-        - _current_step: Current step in the blending schedule
+        Attributes:
+            - algorithm_id: Identifies the blending algorithm type
+            - total_steps: Total number of steps for the blending schedule
+            - _current_step: Current step in the blending schedule
+        Methods:
+            - get_alpha_for_blend: Compute per-sample alpha tensor for blending
     """
 
     algorithm_id: str
     total_steps: int
     _current_step: int
+
+    def get_alpha_for_blend(self, x: torch.Tensor) -> torch.Tensor:
+        """Compute alpha tensor for blending.
+
+        Args:
+            x: Host features tensor. Shape depends on topology:
+               - CNN: (B, C, H, W)
+               - Transformer: (B, T, C)
+
+        Returns:
+            Alpha tensor broadcastable to x's shape.
+        """
+        ...
 
 
 class BlendAlgorithm(nn.Module, ABC):
@@ -133,11 +149,6 @@ class BlendAlgorithm(nn.Module, ABC):
         """
         pass
 
-    def get_alpha(self, step: int) -> float:
-        """Get scalar alpha for inspection/testing. Override in subclasses."""
-        self._current_step = step
-        return 0.5
-
 
 class GatedBlend(BlendAlgorithm):
     """Learned gating mechanism for adaptive blending.
@@ -161,8 +172,10 @@ class GatedBlend(BlendAlgorithm):
             raise ValueError("GatedBlend requires channels > 0")
         if topology not in ("cnn", "transformer"):
             raise ValueError(f"Unknown topology '{topology}' for GatedBlend")
+        if total_steps <= 0:
+            raise ValueError("GatedBlend requires total_steps > 0")
         self.topology = topology
-        self.total_steps = max(1, total_steps)
+        self.total_steps = total_steps
         hidden_dim = max(1, channels // 4)
         self.gate = nn.Sequential(
             nn.Linear(channels, hidden_dim),
@@ -187,21 +200,6 @@ class GatedBlend(BlendAlgorithm):
             )
             # (B, T, C) -> (B, C)
             return x.mean(dim=1)
-
-    def get_alpha(self, step: int | None = None) -> float:
-        """Return blending progress for lifecycle tracking.
-
-        Unlike schedule-based blends, gated blending uses learned gates
-        during forward(). For lifecycle/G3 gate compatibility, we report
-        step-based progress: step / total_steps.
-
-        This ensures G3 gate can pass naturally when blending completes.
-        """
-        if step is not None:
-            self._current_step = step
-
-        current = step if step is not None else self._current_step
-        return min(1.0, current / self.total_steps)
 
     def get_alpha_for_blend(self, x: torch.Tensor) -> torch.Tensor:
         """Compute per-sample alpha from input features."""

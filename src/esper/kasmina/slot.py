@@ -2040,9 +2040,7 @@ class SeedSlot(nn.Module):
                 if self.alpha_schedule is None:
                     raise RuntimeError("alpha_schedule is required when alpha_algorithm=GATE.")
                 # Isolation contract: use the same input reference that the seed sees.
-                # Type: ignore because AlphaScheduleProtocol is a structural protocol,
-                # but all actual instances are BlendAlgorithm (nn.Module) which have this method
-                gate = self.alpha_schedule.get_alpha_for_blend(seed_input)  # type: ignore[attr-defined]
+                gate = self.alpha_schedule.get_alpha_for_blend(seed_input)
                 return blend_gate(host_features, seed_features, alpha_amplitude, gate)
             case algo:
                 raise ValueError(f"Unknown alpha_algorithm: {algo!r}")
