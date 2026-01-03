@@ -68,7 +68,7 @@ class LSTMPolicyBundle:
         # Note: The network's first parameter is "state_dim" which is our feature_dim
         self._network = FactoredRecurrentActorCritic(
             state_dim=feature_dim,
-            num_slots=self.slot_config.num_slots,
+            slot_config=self.slot_config,
             lstm_hidden_dim=hidden_dim,
             lstm_layers=num_lstm_layers,
         )

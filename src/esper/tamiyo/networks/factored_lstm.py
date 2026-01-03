@@ -37,7 +37,6 @@ from esper.leyline import (
     LifecycleOp,
     MASKED_LOGIT_VALUE,
     NUM_BLUEPRINTS,
-    NUM_OPS,
     get_action_head_sizes,
 )
 from esper.leyline.slot_config import SlotConfig
@@ -152,14 +151,6 @@ class FactoredRecurrentActorCritic(nn.Module):
     def __init__(
         self,
         state_dim: int,
-        num_slots: int | None = None,
-        num_blueprints: int | None = None,
-        num_styles: int | None = None,
-        num_tempo: int | None = None,
-        num_alpha_targets: int | None = None,
-        num_alpha_speeds: int | None = None,
-        num_alpha_curves: int | None = None,
-        num_ops: int | None = None,
         feature_dim: int = DEFAULT_FEATURE_DIM,
         lstm_hidden_dim: int = DEFAULT_LSTM_HIDDEN_DIM,
         lstm_layers: int = 1,
@@ -170,23 +161,18 @@ class FactoredRecurrentActorCritic(nn.Module):
         if slot_config is None:
             slot_config = SlotConfig.default()
 
+        # Action head sizes derived from leyline (the authority for all action dimensions)
         head_sizes = get_action_head_sizes(slot_config)
 
         self.state_dim = state_dim
-        self.num_slots = head_sizes["slot"] if num_slots is None else num_slots
-        self.num_blueprints = head_sizes["blueprint"] if num_blueprints is None else num_blueprints
-        self.num_styles = head_sizes["style"] if num_styles is None else num_styles
-        self.num_tempo = head_sizes["tempo"] if num_tempo is None else num_tempo
-        self.num_alpha_targets = (
-            head_sizes["alpha_target"] if num_alpha_targets is None else num_alpha_targets
-        )
-        self.num_alpha_speeds = (
-            head_sizes["alpha_speed"] if num_alpha_speeds is None else num_alpha_speeds
-        )
-        self.num_alpha_curves = (
-            head_sizes["alpha_curve"] if num_alpha_curves is None else num_alpha_curves
-        )
-        self.num_ops = head_sizes["op"] if num_ops is None else num_ops
+        self.num_slots = head_sizes["slot"]
+        self.num_blueprints = head_sizes["blueprint"]
+        self.num_styles = head_sizes["style"]
+        self.num_tempo = head_sizes["tempo"]
+        self.num_alpha_targets = head_sizes["alpha_target"]
+        self.num_alpha_speeds = head_sizes["alpha_speed"]
+        self.num_alpha_curves = head_sizes["alpha_curve"]
+        self.num_ops = head_sizes["op"]
         self.lstm_hidden_dim = lstm_hidden_dim
         self.lstm_layers = lstm_layers
 
@@ -263,7 +249,7 @@ class FactoredRecurrentActorCritic(nn.Module):
 
         # Blueprint embedding for Obs V3 (Phase 3)
         self.blueprint_embedding = BlueprintEmbedding(
-            num_blueprints=NUM_BLUEPRINTS,
+            num_blueprints=self.num_blueprints,
             embed_dim=DEFAULT_BLUEPRINT_EMBED_DIM,
         )
         # Total embedding contribution: num_slots * embed_dim
@@ -279,18 +265,18 @@ class FactoredRecurrentActorCritic(nn.Module):
         )
 
         # Op-conditioned value head (Phase 5 redesign): Q(s, op) instead of V(s)
-        # Input: lstm_out (lstm_hidden_dim) + op_one_hot (NUM_OPS) = 518
+        # Input: lstm_out (lstm_hidden_dim) + op_one_hot (self.num_ops)
         #
         # Architecture redesign to fix value collapse (explained_variance never > 0.12):
         # 1. Deeper network (4 layers) - shallow 2-layer couldn't learn return predictions
         # 2. Dedicated value feature layer - don't rely solely on shared LSTM features
         # 3. LayerNorm for activation stability (matches policy path)
-        # 4. Gradual compression: 518 -> 256 -> 128 -> 64 -> 1
+        # 4. Gradual compression: input -> 256 -> 128 -> 64 -> 1
         # 5. Initialization: gain=0.01 for output (matches policy heads)
         #
-        # The op-conditioning is preserved: each of 6 ops can learn distinct value functions
+        # The op-conditioning is preserved: each op can learn distinct value functions
         # via the one-hot input, but now with enough capacity for feature extraction.
-        value_input_dim = lstm_hidden_dim + NUM_OPS  # 512 + 6 = 518
+        value_input_dim = lstm_hidden_dim + self.num_ops
         self.value_head = nn.Sequential(
             # Layer 1: Feature extraction from joint (state, op) representation
             nn.Linear(value_input_dim, head_hidden),  # 518 -> 256
@@ -401,13 +387,16 @@ class FactoredRecurrentActorCritic(nn.Module):
         evaluate_actions() (with stored op from buffer).
 
         Args:
-            lstm_out: LSTM output [batch, seq_len, lstm_hidden_dim]
-            op: Operation indices [batch, seq_len]
+            lstm_out: LSTM output [batch, seq_len, lstm_hidden_dim], any dtype
+            op: Operation indices [batch, seq_len], int64
 
         Returns:
-            Value estimates [batch, seq_len]
+            Value estimates [batch, seq_len], same dtype as lstm_out
         """
-        op_one_hot = F.one_hot(op, num_classes=NUM_OPS).float()
+        # One-hot encode and match dtype/device to lstm_out.
+        # Using .to(lstm_out) ensures correct dtype under AMP/mixed-precision
+        # (e.g., bfloat16) without hardcoding .float().
+        op_one_hot = F.one_hot(op, num_classes=self.num_ops).to(lstm_out)
         value_input = torch.cat([lstm_out, op_one_hot], dim=-1)
         value = cast(torch.Tensor, self.value_head(value_input))
         return value.squeeze(-1)

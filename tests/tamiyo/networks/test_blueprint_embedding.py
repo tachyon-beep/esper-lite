@@ -147,7 +147,7 @@ def test_blueprint_embedding_in_model_context():
     """Verify BlueprintEmbedding works correctly within full model."""
     from esper.tamiyo.networks.factored_lstm import FactoredRecurrentActorCritic
 
-    model = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM, num_slots=3)
+    model = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM)
 
     # Test with valid indices including inactive slots
     state = torch.randn(2, 1, OBS_V3_NON_BLUEPRINT_DIM)

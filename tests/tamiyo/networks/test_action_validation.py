@@ -16,7 +16,7 @@ class TestActionValidation:
 
     @pytest.fixture
     def network(self):
-        return FactoredRecurrentActorCritic(state_dim=126, num_slots=3)
+        return FactoredRecurrentActorCritic(state_dim=126)
 
     @pytest.fixture(autouse=True)
     def enable_validation(self):
