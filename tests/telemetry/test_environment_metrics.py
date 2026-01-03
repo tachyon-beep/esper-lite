@@ -7,10 +7,10 @@ These tests cover:
 - TELE-601: obs_inf_count (WIRING GAP - xfail)
 - TELE-602: outlier_pct (WIRING GAP - xfail)
 - TELE-603: normalization_drift (WIRING GAP - xfail)
-- TELE-610: episode_stats (PARTIALLY WIRED - only total_episodes works)
+- TELE-610: episode_stats (FULLY WIRED)
 - TELE-650: env_status (FULLY WIRED)
 
-Note: TELE-600 to TELE-603 and most of TELE-610 are documented wiring gaps.
+Note: TELE-600 to TELE-603 are documented wiring gaps.
 The schema fields exist, consumers read them, but no emitters populate the data.
 Tests are marked xfail to document expected behavior when wiring is complete.
 """
@@ -30,6 +30,7 @@ from esper.karn.sanctum.schema import (
 from esper.leyline import (
     BatchEpochCompletedPayload,
     EpochCompletedPayload,
+    EpisodeOutcomePayload,
     TelemetryEvent,
     TelemetryEventType,
 )
@@ -82,6 +83,41 @@ def make_batch_epoch_event(
         avg_reward=avg_reward,
         total_episodes=total_episodes,
         n_envs=n_envs,
+    )
+    return event
+
+
+def make_episode_outcome_event(
+    env_id: int = 0,
+    episode_idx: int = 0,
+    final_accuracy: float = 75.0,
+    param_ratio: float = 0.2,
+    episode_length: int = 100,
+    outcome_type: str = "success",
+    germinate_count: int = 0,
+    prune_count: int = 0,
+    fossilize_count: int = 0,
+) -> MagicMock:
+    """Create a mock EPISODE_OUTCOME event for testing TELE-610 wiring."""
+    event = MagicMock()
+    event.event_type = MagicMock()
+    event.event_type.name = "EPISODE_OUTCOME"
+    event.timestamp = datetime.now(timezone.utc)
+    event.data = EpisodeOutcomePayload(
+        env_id=env_id,
+        episode_idx=episode_idx,
+        final_accuracy=final_accuracy,
+        param_ratio=param_ratio,
+        num_fossilized=1,
+        num_contributing_fossilized=1,
+        episode_reward=1.0,
+        stability_score=0.9,
+        reward_mode="shaped",
+        episode_length=episode_length,
+        outcome_type=outcome_type,
+        germinate_count=germinate_count,
+        prune_count=prune_count,
+        fossilize_count=fossilize_count,
     )
     return event
 
@@ -352,19 +388,27 @@ class TestTELE603NormalizationDrift:
 
 
 # =============================================================================
-# TELE-610: Episode Statistics (PARTIALLY WIRED)
+# TELE-610: Episode Statistics (FULLY WIRED)
 # =============================================================================
 
 
 class TestTELE610EpisodeStats:
     """TELE-610: Episode statistics for aggregate episode-level metrics.
 
-    Wiring Status:
+    Wiring Status: FULLY WIRED
     - Schema exists: EpisodeStats dataclass with all fields
     - Consumer reads it: EpisodeMetricsPanel displays all fields
-    - WIRED: total_episodes (from aggregator._current_episode)
-    - NOT WIRED: length_mean/std/min/max, timeout_rate, success_rate,
-                 early_termination_rate, steps_per_*, completion_trend
+    - Emitter: EPISODE_OUTCOME events from vectorized.py carry episode diagnostics
+    - Aggregator: _handle_episode_outcome populates episode_lengths, outcome counts
+    - Computation: _get_snapshot_unlocked computes stats from rolling window
+
+    All fields now wired:
+    - total_episodes (from BATCH_EPOCH_COMPLETED via _current_episode)
+    - length_mean/std/min/max (from EPISODE_OUTCOME.episode_length)
+    - timeout_rate, success_rate (from EPISODE_OUTCOME.outcome_type)
+    - early_termination_rate (always 0.0 for fixed-length episodes)
+    - steps_per_germinate/prune/fossilize (from EPISODE_OUTCOME action counts)
+    - completion_trend (from rolling window success rate comparison)
     """
 
     def test_episode_stats_schema_exists(self) -> None:
@@ -417,9 +461,6 @@ class TestTELE610EpisodeStats:
         assert isinstance(snapshot.episode_stats, EpisodeStats)
         assert snapshot.episode_stats.total_episodes >= 0
 
-    @pytest.mark.xfail(
-        reason="TELE-610 partial wiring gap: length statistics not implemented"
-    )
     def test_episode_length_stats_populated(self) -> None:
         """TELE-610: Episode length statistics should be computed.
 
@@ -428,58 +469,81 @@ class TestTELE610EpisodeStats:
         - length_std: Variance in episode length
         - length_min/max: Range for anomaly detection
 
-        Currently stubbed - returns all zeros.
+        Wiring: EPISODE_OUTCOME events populate episode_lengths deque,
+        BATCH_EPOCH_COMPLETED sets _current_episode for rate calculations.
         """
         agg = SanctumAggregator(num_envs=1)
 
-        # Simulate multiple epochs
-        for epoch in range(50):
-            event = make_epoch_event(env_id=0, val_accuracy=75.0, inner_epoch=epoch)
+        # Simulate multiple episode outcomes with varying lengths
+        for episode_idx in range(10):
+            event = make_episode_outcome_event(
+                env_id=0,
+                episode_idx=episode_idx,
+                final_accuracy=75.0,
+                episode_length=100 + episode_idx,  # Varying lengths: 100-109
+                outcome_type="success",
+            )
             agg.process_event(event)
+
+        # Also emit BATCH_EPOCH_COMPLETED to set _current_episode count
+        batch_event = make_batch_epoch_event(
+            episodes_completed=10,
+            batch_idx=1,
+            total_episodes=10,
+            n_envs=1,
+        )
+        agg.process_event(batch_event)
 
         snapshot = agg.get_snapshot()
 
-        # These should be non-zero after episodes complete
-        # Currently fails - length tracking not implemented
+        # Episode length stats should be populated from EPISODE_OUTCOME events
         assert snapshot.episode_stats.length_mean > 0
         assert snapshot.episode_stats.length_max >= snapshot.episode_stats.length_min
+        assert snapshot.episode_stats.length_min == 100
+        assert snapshot.episode_stats.length_max == 109
 
-    @pytest.mark.xfail(
-        reason="TELE-610 partial wiring gap: outcome rates not implemented"
-    )
     def test_episode_outcome_rates_populated(self) -> None:
         """TELE-610: Outcome rates should be computed from episode endings.
 
         Expected fields when wiring is complete:
         - timeout_rate: Fraction hitting max_steps without terminal
         - success_rate: Fraction achieving goal state
-        - early_termination_rate: Fraction terminated early
+        - early_termination_rate: Fraction terminated early (always 0 for fixed-length)
 
-        Currently stubbed - returns all zeros.
+        Wiring: EPISODE_OUTCOME events with outcome_type populate counts and rates,
+        BATCH_EPOCH_COMPLETED sets _current_episode for rate calculations.
         """
         agg = SanctumAggregator(num_envs=1)
 
-        event = make_batch_epoch_event(
+        # Emit mix of success and timeout outcomes
+        for episode_idx in range(10):
+            outcome = "success" if episode_idx < 7 else "timeout"
+            event = make_episode_outcome_event(
+                env_id=0,
+                episode_idx=episode_idx,
+                final_accuracy=85.0 if outcome == "success" else 65.0,
+                episode_length=100,
+                outcome_type=outcome,
+            )
+            agg.process_event(event)
+
+        # Also emit BATCH_EPOCH_COMPLETED to set _current_episode count
+        batch_event = make_batch_epoch_event(
             episodes_completed=10,
             batch_idx=1,
-            total_episodes=100,
+            total_episodes=10,
             n_envs=1,
         )
-        agg.process_event(event)
+        agg.process_event(batch_event)
 
         snapshot = agg.get_snapshot()
 
-        # At least one rate should be non-zero after episodes complete
-        has_any_rate = (
-            snapshot.episode_stats.timeout_rate > 0
-            or snapshot.episode_stats.success_rate > 0
-            or snapshot.episode_stats.early_termination_rate > 0
-        )
-        assert has_any_rate, "Expected at least one outcome rate to be non-zero"
+        # Success rate should be 7/10 = 0.7, timeout rate should be 3/10 = 0.3
+        assert snapshot.episode_stats.success_rate > 0, "Expected success_rate > 0"
+        assert snapshot.episode_stats.timeout_rate > 0, "Expected timeout_rate > 0"
+        assert abs(snapshot.episode_stats.success_rate - 0.7) < 0.01
+        assert abs(snapshot.episode_stats.timeout_rate - 0.3) < 0.01
 
-    @pytest.mark.xfail(
-        reason="TELE-610 partial wiring gap: action efficiency not implemented"
-    )
     def test_steps_per_action_populated(self) -> None:
         """TELE-610: Steps-per-action metrics should track action efficiency.
 
@@ -488,24 +552,46 @@ class TestTELE610EpisodeStats:
         - steps_per_prune: Avg steps between PRUNE actions
         - steps_per_fossilize: Avg steps between FOSSILIZE actions
 
-        Currently stubbed - returns all zeros.
+        Wiring: EPISODE_OUTCOME events with action counts populate efficiency metrics,
+        BATCH_EPOCH_COMPLETED sets _current_episode for rate calculations.
         """
         agg = SanctumAggregator(num_envs=1)
 
-        # Simulate training with actions
-        for epoch in range(20):
-            event = make_epoch_event(env_id=0, val_accuracy=75.0, inner_epoch=epoch)
+        # Simulate episodes with action counts
+        for episode_idx in range(5):
+            event = make_episode_outcome_event(
+                env_id=0,
+                episode_idx=episode_idx,
+                final_accuracy=80.0,
+                episode_length=100,
+                outcome_type="success",
+                germinate_count=2,  # 2 germinates per episode
+                prune_count=1,  # 1 prune per episode
+                fossilize_count=1,  # 1 fossilize per episode
+            )
             agg.process_event(event)
+
+        # Also emit BATCH_EPOCH_COMPLETED to set _current_episode count
+        batch_event = make_batch_epoch_event(
+            episodes_completed=5,
+            batch_idx=1,
+            total_episodes=5,
+            n_envs=1,
+        )
+        agg.process_event(batch_event)
 
         snapshot = agg.get_snapshot()
 
-        # At least one action rate should be non-zero after training
-        has_any_action_rate = (
-            snapshot.episode_stats.steps_per_germinate > 0
-            or snapshot.episode_stats.steps_per_prune > 0
-            or snapshot.episode_stats.steps_per_fossilize > 0
-        )
-        assert has_any_action_rate, "Expected action efficiency metrics to be populated"
+        # 5 episodes * 100 steps = 500 total steps
+        # 5 episodes * 2 germinates = 10 total germinates -> 500/10 = 50 steps/germinate
+        # 5 episodes * 1 prune = 5 total prunes -> 500/5 = 100 steps/prune
+        # 5 episodes * 1 fossilize = 5 total fossilizes -> 500/5 = 100 steps/fossilize
+        assert snapshot.episode_stats.steps_per_germinate > 0
+        assert snapshot.episode_stats.steps_per_prune > 0
+        assert snapshot.episode_stats.steps_per_fossilize > 0
+        assert abs(snapshot.episode_stats.steps_per_germinate - 50.0) < 0.1
+        assert abs(snapshot.episode_stats.steps_per_prune - 100.0) < 0.1
+        assert abs(snapshot.episode_stats.steps_per_fossilize - 100.0) < 0.1
 
 
 # =============================================================================
