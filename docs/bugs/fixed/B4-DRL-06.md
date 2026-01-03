@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B4-DRL-06` |
 | **Severity** | `P3` |
-| **Status** | `open` |
+| **Status** | `closed` |
 | **Batch** | 4 |
 | **Agent** | `drl` |
 | **Domain** | `simic` |
@@ -145,3 +145,40 @@ None.
 |---------|---------|
 
 **Evaluation:** The subtle contract between inference-mode collection and training-mode evaluation deserves documentation; the proposed comment is accurate and prevents well-intentioned but incorrect "fixes".
+
+---
+
+## Resolution
+
+### Status: FIXED
+
+**Fixed via Systematic Debugging investigation.**
+
+#### Evidence
+
+| Claim | Status | Evidence |
+|-------|--------|----------|
+| "Hidden states from rollout buffer" | ✅ TRUE | Lines 574-575 use `data["initial_hidden_h/c"]` |
+| "Detached during collection" | ✅ TRUE | `rollout_buffer.py:377-378` calls `.detach()` |
+| "No clarifying comment exists" | ✅ TRUE (was) | Now added at lines 568-573 |
+
+#### The Fix
+
+Added clarifying comment explaining the hidden state contract:
+
+```python
+# NOTE: initial_hidden_h/c are detached tensors from rollout collection.
+# This is CORRECT for recurrent PPO:
+# 1. We use them as starting points for LSTM reconstruction
+# 2. The LSTM forward pass produces new, gradient-enabled hidden states
+# 3. BPTT happens within the reconstructed sequence, not through initial_hidden
+# See rollout_buffer.py lines 377-378 for detach() calls.
+```
+
+This prevents future developers from incorrectly "fixing" the detachment.
+
+#### Severity Confirmation
+
+- Original: P3 (documentation)
+- Revised: P3 confirmed
+- Resolution: FIXED with documentation comment

@@ -565,6 +565,12 @@ class PPOAgent:
             device_type = str(self.device).split(":")[0]
             with torch_amp.autocast(device_type=device_type, enabled=False):  # type: ignore[attr-defined]
                 # Cast inputs to float32 to ensure entire forward pass is float32
+                # NOTE: initial_hidden_h/c are detached tensors from rollout collection.
+                # This is CORRECT for recurrent PPO:
+                # 1. We use them as starting points for LSTM reconstruction
+                # 2. The LSTM forward pass produces new, gradient-enabled hidden states
+                # 3. BPTT happens within the reconstructed sequence, not through initial_hidden
+                # See rollout_buffer.py lines 377-378 for detach() calls.
                 hidden_h = data["initial_hidden_h"].float()
                 hidden_c = data["initial_hidden_c"].float()
                 result = self.policy.evaluate_actions(
