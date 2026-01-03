@@ -1,681 +1,316 @@
-Esper: Architectural Ecology in Neural Networks
+# Esper master roadmap: Tamiyo (growth) and Emrakul (decay)
 
-Draft Discussion Paper on Morphogenetic AI (Revised v2.1)
+This is a capability roadmap, not a calendar. Each horizon describes what the system can reliably do, plus the infrastructure you need before moving on. The demo stages then turn that capability roadmap into a sequence of storyboardable, auditable milestones.
 
-Abstract
+---
 
-Contemporary deep learning largely follows a paradigm of architectural engineering: models are statically designed, initialised, and trained as monolithic blocks. Neural Architecture Search (NAS) automates parts of this process, but typically remains a discrete, offline optimisation loop.
+## 1) System premise and contracts
 
-Esper proposes a shift to architectural ecology: an online, continuous process where neural modules (seeds) germinate, compete, and stabilise inside a living host network during training. Esper separates concerns across a substrate that executes and prices decisions, and an organism layer that grows and prunes structure online.
+### Operating premise
 
-Organism (agents and organs)
+You set the physics (topology boundaries, determinism, observability). The agents discover tactics. You validate by Pareto frontier movement and robustness, not by vibes or cherry-picked hero runs.
 
-Kasmina (The Body): A differentiable host that supports controlled growth via SeedSlots and blending.
+### Core safety and determinism contract
 
-Tamiyo (The Brain, Growth Policy): A policy that germinates and develops Kasmina seeds during training.
+* **Topology changes happen only at predefined boundaries**: SeedSlots, phage ports, safe compaction boundaries.
+* **“Micro-surgery beats amputation”**: smaller blast radius than module deletion whenever possible.
+* **Hardware-aware sparsity or it is theatre**: if it cannot run faster in real step-time, it does not count.
 
-Emrakul (The Immune System, Decay Policy): Custodian of committed structure, enforcing long-term ROI via probe-and-lysis protocols.
+---
 
-Substrate (infrastructure and physics)
+## 2) Summary table (capability horizons)
 
-Tolaria (The Metabolism): The training engine for Model Alpha: high-throughput execution, deterministic replay, and flight-recorded data capture. Includes an internal safety governor for NaNs and divergence rollback.
+| Horizon   | Tamiyo (growth)                                                                                    | Emrakul (decay)                                                                              | Core contract                                                                            |
+| --------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Near term | Module-level seeds in SeedSlots, learns development programmes (incubate, blend, scaffold, commit) | Module-level probe-and-lysis on phages, leaves a ScarSlot (SeedSlot-like regrowth surface)   | Topology changes only at predefined boundaries (SeedSlots, phage ports, safe compaction) |
+| Mid term  | Submodule morphogenesis (heads, channels, neuron groups, width multipliers), zone-level control    | Submodule surgery (head/channel pruning, low-rank swaps, merges, quantisation), evidence-led | “Micro-surgery beats amputation”: smaller blast radius than module deletion              |
+| Far term  | Parameter-level placement and rewiring (dynamic sparse growth), mostly research mode               | Parameter-level sedation and deletion (saliency ranked), plus compaction pipelines           | Hardware-aware sparsity or it is theatre                                                 |
 
-Simic (The Selective Pressure): The economy and accounting layer that prices complexity (Rent and Churn) and provides credit signals (including Shapley audits in Phase 1).
+---
 
-Kasmina seeds and phages are peer primitives. Seeds are creative tissue (can become anything, Tamiyo-managed), while phages are infrastructure wrappers (measured, priced, lysable, Emrakul-managed). Fossilisation rewraps a seed as a phage and transfers custodianship.
+## 3) Near term: make the ecology stable and legible
 
-A key clarification is that Esper is intended to be two-timescale:
+### Tamiyo v1: module-based morphogenesis (what you largely have now)
 
-In Phase 1 (train the trainer), we deliberately spend compute on audited credit assignment (including exact, full-retrain Shapley values on small candidate sets) to teach Tamiyo what “good growth” looks like under a fixed protocol.
+**Capabilities**
 
-In deployment, a trained Tamiyo is intended to grow many new models without the Shapley harness, using only cheap online signals and learned critics. This amortises Phase 1 scaffolding across downstream runs.
+* Choose slot, blueprint, and a development protocol (incubator → blending → commit).
+* Use scaffolding motifs: train-behind, blend-in then blend-out, staged replacement.
+* Learn placement and ordering under Simic pricing (rent/churn), with Phase 1 teacher labels (Shapley / full counterfactual harness).
 
-Key point: Shapley values are used as training-only teacher labels to shape learning updates. They are not included in Tamiyo’s observation space, which remains identical to deployment telemetry. This prevents privileged-information leakage between training and deployment.
+**Deliverables**
 
-1. Introduction: From Fossils to Flora
+* Stable behavioural competence: improves the Pareto frontier (performance vs cost) across many seeds, not just best-run.
+* Developmental motifs become repeatable and measurable (style curves, tempo, hold time, swap patterns).
 
-A standard ResNet or Transformer is a fossil: its skeletal structure is fixed before the first gradient is calculated. If the task proves more complex than anticipated, the model cannot grow. If the task is simpler, the model wastes compute on redundant parameters.
+**Telemetry you need (non-negotiable)**
 
-We argue that network topology should be a function of training history, not solely its creator’s intuition. Biology does not build a brain and then switch it on. The brain grows in response to stimuli while paying ongoing metabolic costs.
+* For each action: sampled action, resolved config actually applied (blend algorithm, curve, tempo), and resulting state transition.
+* Per-head logits, masks, probabilities, entropy, logprob (so you can prove a head is real and not dead).
+* Slot-local stats: activation moments, gradient norms, gradient alignment at the slot boundary, gate stability.
 
-Esper aims to build an environment where networks can grow safely, and where growth is not free. Seeds are introduced, evaluated under selective pressure, and either integrated (Committed) or removed (Pruned). The focus is not “the perfect architecture”, but the physics of a system in which useful architectures can emerge under cost and stability constraints.
+---
 
-1.1 Two-timescale learning: training models vs training Tamiyo
+### Emrakul v0: module-level probe-and-lysis plus scar
 
-A common failure mode in describing morphogenetic systems is accidentally selling them as “we trained many expensive models”. Esper is not primarily about producing thousands of partially trained CIFAR-10 models.
+**Capabilities**
 
-Esper is about training a reusable architect policy:
+* Operate only on committed phages (plus baseline infrastructure phages).
+* Do reversible sedation probes, maintain an immune ledger (debt, antibodies, criticality lock).
+* Schedule physical lysis only at safe boundaries.
+* On lysis, collapse the wrapper into a **ScarSlot** (identity SeedSlot with metadata plus quarantine) that Tamiyo may regrow into.
 
-Inner loop (model training): Kasmina’s weights learn the task while the architecture changes online.
+**Coordination mechanism (no direct policy chat needed)**
 
-Outer loop (policy training): Tamiyo learns how to cause beneficial architectural change across runs, checkpoints, and hosts.
+* Either enrich slot state with:
 
-In Phase 1, expensive audits (for example Shapley on small candidate sets) act as teacher labels. The intended outcome is a Tamiyo that can later be deployed to grow new models without repeating full audit machinery.
+  * `slot_kind = SCAR`, `scar_age`, `last_removed_blueprint`, `probe_outcome_summary`, `quarantine_remaining`
+* Or add a fixed-size dropshute event buffer (8–16 events) as extra observation tokens.
 
-1. System Overview and Terminology
+**Success criteria**
 
-2.1 The loop (online morphogenesis)
+* Emrakul can delete some modules without quality loss (after probation), and does not oscillate.
+* ScarSlots do not proliferate uncontrollably (expiry timers, rent ramps, quarantine).
 
-At a high level, Esper runs a closed feedback loop across substrate and organism.
+**Estimative probability:** very likely feasible and high value. This fits determinism and boundary contracts.
 
-Substrate (executes and prices):
+---
 
-Tolaria executes training and evaluation, enforces determinism, records events, and rolls back on divergence.
+## 4) Mid term: submodule control and evidence-led efficiency
 
-Simic defines rewards and costs, computes rent and churn, and produces credit labels (Phase 1 audits only).
+This is where both agents operate on structured subtargets, not whole modules.
 
-Organism (decides and acts):
+### Tamiyo v2: submodule morphogenesis
 
-1. Kasmina performs forward and backward passes while supporting dormant and active SeedSlots.
+**What she controls**
 
-2. Tamiyo observes training dynamics and slot states, then chooses growth actions (germinate, blend, commit).
+* Attention: head count, head selection, KV dims, projection width.
+* Conv: channel groups, kernel families, depthwise plus pointwise staging.
+* MLP: neuron-group growth, width multipliers, gated branches.
+* Blueprint specialisation: seeds become containers that can spawn internal substructure under a contract.
 
-3. Emrakul observes phage ledgers and global stress, then chooses decay actions (probe, sedate, lyse).
+**Policy shape**
 
-Schematic:
+* Hierarchical or token-based policy (transformer over slot tokens, possibly with inbox tokens for recent events).
+* Curriculum training: start with a limited action set, then expand submodule levers once stable.
 
-Data -> Tolaria (training engine incl. governor) -> Kasmina (Host + Seeds/Phages) -> Loss / Metrics
+**Telemetry upgrades**
 
-                     |                                          ^
+* Define a subtarget inventory per phage/seed: list of deletable or growable units with stable IDs (heads, channels, groups).
+* Boundary gradients: dL/d(mask) or dL/d(alpha) style signals for marginal utility estimates without full counterfactuals.
 
-                     v                                          |
+---
 
-              Slot and wrapper state                  Tamiyo (growth) + Emrakul (decay)
+### Emrakul v1: submodule surgery and maintenance
 
-                     |                                          ^
+**What she controls**
 
-                     v                                          |
+* Micro-surgery: head and channel sedation/lysis, neuron-group pruning.
+* Maintenance: low-rank factorisation swaps, branch merges (internal distil), quantisation of stable phages.
+* Evidence engine: sedation probes become the primary data source, optional short ablation sweeps remain diagnostics.
 
-                        Simic (Reward + Accounting + Phase 1 Audits)
+**Why this matters**
 
-2.2 Train-the-trainer vs deploy-the-trainer
+* Smaller blast radius means she can act more often and learn faster.
+* It also gives hardware-aligned efficiency wins (structured pruning beats random sparsity).
 
-Esper has two operational modes.
+**Success criteria**
 
-Train-the-trainer (Phase 1):
+* Shift from delete whole module to shave cost while preserving function.
+* Learn the trade: growth now, prune later, without requiring expensive counterfactual loops.
 
-Instrumented runs generate high-quality credit signals, including expensive audits on small candidate sets.
+**Estimative probability:** likely feasible. Main risks are action-space explosion and the need for clean, persistent subtarget IDs and compaction boundaries.
 
-Tamiyo and its critics are trained to predict value and credit, and to choose actions reliably.
+---
 
-Emrakul’s pruning components are calibrated using probe outcomes and optional short-horizon ablation sweeps (Section 9.4), not full retrain Shapley.
+## 5) Far term: parameter-level morphogenesis and surgery (research frontier)
 
-Deployment (Phase 2):
+This can work, but it will try to eat your time budget.
 
-Tamiyo grows new models with cheap online signals (loss trends, gradient statistics, gate stability, cost signals, critic predictions), without full retrain Shapley.
+### Tamiyo v3: parameter-level placement and rewiring
 
-Emrakul maintains efficiency using probe-and-lysis protocols, primarily via reversible sedation and ledger-based safety.
+**What “placing individual parameters” means in practice**
 
-A useful cost framing is:
+* Not literal arbitrary single-weight edits in the live graph.
+* More realistic: dynamic sparse training and regrowth rules (block-sparse masks, RigL-style regrowth, learned sparse patterns), or per-parameter gating inside a guild that owns the tensor.
 
-[
+**Guardrails**
 
-C_{\text{total}} = C_{\text{meta}} + N \cdot C_{\text{deploy}}
+* Restrict to hardware-friendly sparsity (block, N:M, structured) or you will get slow sparse matmuls that only look good in spreadsheets.
+* Maintain determinism and compaction protocols.
 
-]
+**Success criteria**
 
-Where (C_{\text{meta}}) is the one-time Phase 1 meta-training and auditing cost, (C_{\text{deploy}}) is the cost per downstream run, and (N) is the number of downstream runs.
+* At matched accuracy, deployed model is smaller or faster than mid-term structured approaches.
+* Patterns generalise across runs and do not require constant counterfactual supervision.
 
-2.3 Glossary (working definitions)
+---
 
-Substrate terms
+### Emrakul v2: parameter-level sedation and deletion
 
-Host: The base backbone (for example ResNet, Transformer) plus insertion points for seeds and phage-wrapped infrastructure.
+**What she actually does**
 
-Tolaria: The training engine for Model Alpha, responsible for high-throughput execution, determinism and replay, and event-sourced telemetry capture.
+* Rank parameters or blocks by saliency proxies (first-order Taylor, Fisher-ish approximations, learned critics).
+* Apply reversible sedation masks, accumulate evidence, then compact at safe boundaries.
+* Treat module-level lysis as a last resort.
 
-TolariaGovernor: A safety subsystem inside Tolaria that monitors training health (NaNs, divergence, loss explosions) and can trigger rollback or emergency interventions.
+**Infrastructure prerequisites**
 
-Rent: The ongoing cost of keeping a structure active (compute, memory, latency proxy). Defined by Simic.
+* A real compaction pipeline (tensor resize, weight packing, codegen or kernel selection).
+* Per-parameter work must be measurable in step-time, not just “parameters saved”.
 
-Churn: A penalty for structural volatility (rapid add and remove, oscillating gates, frequent state flips). Defined by Simic.
+**Estimative probability:** roughly even odds this beats staying structured, unless deployment strongly rewards sparsity and you can exploit real hardware support.
 
-Shapley value (φ): A principled attribution of marginal contribution that shares interaction gains across participants.
+---
 
-Organism terms
+## 6) Cross-cutting milestones (unlock each step)
 
-SeedSlot: A pre-allocated insertion point. When dormant, it behaves as an identity (or no-op) under a defined contract. The heavy wrapper for growth.
+1. **Telemetry integrity (near-term prerequisite)**
+   If you cannot prove “sampled action → resolved config → executed behaviour”, you will chase ghosts.
 
-Kasmina seed: A growable module instantiated in a SeedSlot during exploration and development. Creative tissue that can become anything, Tamiyo-managed.
+2. **Stable identifiers for everything (mid-term prerequisite)**
+   Slots, phages, and subtargets need persistent IDs so ledgers, probes, and flight recorder joins stay correct.
 
-Phage (wrapper): A standard infrastructure wrapper that exposes telemetry and a lysis interface. Committed seeds are rewrapped as phage-wrapped infrastructure.
+3. **Compaction and safe-boundary discipline (mid and far prerequisite)**
+   If physical rewrites happen outside controlled boundaries, determinism and debugging die.
 
-Blueprint: The family or type of module a seed can become (the genome library).
+4. **Pareto evaluation as the primary scoreboard**
+   Accuracy alone rewards bloat and hides local optima. Track frontier movement and reliability (median/q25), not just champions.
 
-Alpha (α): A continuous gate controlling a seed’s contribution to the host forward path (SeedSlot only). Phages run at effective α = 1.
+5. **Anti-oscillation primitives**
+   Quarantine, cooldown, criticality locks, age-based rent ramps. Otherwise multi-agent behaviour becomes churn theatre.
 
-Lifecycle terms
+---
 
-Committed (Tamiyo-locked): A seed state where Tamiyo will not modify the slot further. Custodianship transfers to Emrakul.
+## 7) Demo-stage roadmap (storyboarded milestones)
 
-Compacted: A physical rewrite step (optional) that removes edit machinery and fuses committed structure at a safe boundary (end of training or checkpoint compaction).
+These stages translate the capability horizons into demo-grade exits. Rough mapping:
 
-Lysis: Controlled dissolution via a sedation mask (distinct from α). Phages expose apply_sedation_mask() for soft gating and physical_lysis() for reclamation at safe boundaries.
+* Stages 0–3: near term
+* Stage 4: mid term
+* Stage 5: far term (optional)
 
-Emrakul: The immune system policy that controls phages and decides when to trigger lysis.
+### Stage 0: demo foundation
 
-Value terms
+**Goal:** you can trust what you are seeing.
 
-Online return: Discounted reward used by PPO (γ, GAE λ) for short-horizon control and stability.
+**Must-haves**
 
-Audit value (v(S)): Used for Phase 1 Shapley labels: a fixed training budget under a specified protocol with a final evaluation metric (for example validation loss).
+* Deterministic replay works often enough to debug (same run, same decisions, same outcomes within tight tolerances).
+* Telemetry is end-to-end correct: sampled action → resolved config → executed behaviour.
+* Flight recorder can reconstruct an episode at the “why did this happen” level.
 
-2.4 Seed lifecycle (state machine)
+**Exit criteria**
 
-Esper treats growth as a controlled state machine rather than ad hoc graph surgery:
+* You can take a suspicious screenshot, jump to the exact event, and prove whether it was a policy choice, a mask bug, or an env wiring issue.
 
-Dormant: Slot is identity, no effect (α = 0).
+---
 
-Germinated: Module instantiated, sanity checks complete.
+### Stage 1: Tamiyo demo (module-level growth)
 
-Training (Incubator): Seed receives surrogate gradients via STE while host forward-path is unchanged.
+**Goal:** Tamiyo can grow useful structure safely and repeatably.
 
-Blending: Seed is gradually introduced via 0 < α < 1.
+**Capabilities**
 
-Holding: Final validation period before commitment.
+* Seeds are module-level blueprints in fixed SeedSlots.
+* Incubator plus blending prevents destabilisation.
+* Tamiyo reliably improves task performance under rent/churn across many runs (not just cherry-picked).
 
-Committed (Tamiyo-locked): Tamiyo will not modify this slot thereafter. The module is rewrapped as a phage and becomes subject to Emrakul. Not yet compacted.
+**Exit criteria (demo-grade, not SOTA)**
 
-Pruned → Embargoed → Resetting: Seed fades out, slot enters cooldown, then returns to Dormant.
+* Across a fixed benchmark setup, median performance improves vs baseline under matched or better cost profile.
+* Behavioural sanity: no endless oscillation, no NOOP collapse, no dead action heads.
 
-DORMANT → GERMINATED → TRAINING → BLENDING → HOLDING → COMMITTED (Tamiyo-locked)
+---
 
-   ^                      │          │          │               │
+### Stage 2: Emrakul demo (module-level decay plus ScarSlot)
 
-   │                      │          │          │               v
+**Goal:** Emrakul can remove redundant modules without wrecking the run, and it is auditable.
 
-   │                      │          │          │        (rewrap) PHAGE-WRAPPED
+**Capabilities**
 
-   │                      │          │          │               │
+* Operates on committed phages only.
+* Uses reversible sedation probes plus immune ledger (debt, antibodies, criticality lock).
+* Schedules physical lysis only at safe boundaries.
+* On lysis, leaves a ScarSlot (identity regrowth surface) with quarantine metadata.
 
-   │                      │          │          │        (Emrakul) LYSIS
+**Exit criteria**
 
-   │                      │          │          │               │
+* Emrakul performs N successful prunes (module removals) in live training where:
 
-   │                      └──────────┴──────────┴───────────────┴─→ PRUNED → EMBARGOED → RESETTING ─┘
+  * loss does not permanently spike
+  * criticality locks prevent repeated bad probes
+  * the system ends up cheaper (rent proxy down) without losing achieved accuracy
 
-Authority over lifecycle transitions
+---
 
-ActorCan modify α?Can change lifecycle?ScopeTamiyoYes, pre-commitYes, up to Commit (including Prune)Seeds in Dormant through HoldingEmrakulNo (uses sedation mask)Yes (lysis only)Committed seeds (phage-wrapped) plus baseline phage infrastructureTolariaYes (emergency)Yes (rollback, emergency lysis)Anything, catastrophic triggers only3. Physiology: Kasmina as a Morphogenetic Host
+### Stage 3: handoff demo (Emrakul cuts, Tamiyo heals)
 
-3.1 The morphogenetic plane (SeedSlots)
+**Goal:** demonstrate the “trauma surgeon” loop end-to-end.
 
-Instead of cutting and pasting network graphs mid-training, Esper uses pre-allocated SeedSlots placed at structurally meaningful points (for example residual branches, MLP blocks, attention subpaths). Each SeedSlot is an identity when dormant, ensuring the host’s baseline function is intact.
+**Capabilities**
 
-A typical residual-style integration is:
+* When Emrakul lyses a module, Tamiyo notices the ScarSlot and can:
 
-[
+  * leave it dormant (identity is sufficient), or
+  * regrow a replacement seed inside it and stabilise it
 
-y = h(x) + \alpha \cdot s(x)
+**Exit criteria**
 
-]
+* At least one repeatable scenario where:
 
-Where:
+  * a module is removed
+  * a scar remains
+  * the run stays stable
+  * Tamiyo regrows capacity at that site and recovers the lost metric (or proves the module was not needed)
 
-(h(x)) is the host path
+This is the first genuinely compelling “ecology” demo.
 
-(s(x)) is the seed module
+---
 
-(\alpha) gates how “real” the seed is
+### Stage 4: submodule work (only if Stage 3 is boringly stable)
 
-This turns “adding a module” into “activating a pre-existing dormant organ”.
+**Goal:** finer granularity without adding chaos.
 
-3.2 The incubator: gradient isolation via Straight-Through Estimator
+**Tamiyo**
 
-A recurring failure mode in naive morphogenesis is destabilisation: a newly initialised seed produces noisy outputs that disrupt the host.
+* Adjust submodule structure through pre-defined knobs (head count, channel groups, width multipliers).
 
-Esper mitigates this via Gradient Isolation. During the Training stage, the seed receives the same inputs as it would in production, but its output does not affect the host’s forward computation.
+**Emrakul**
 
-Implementation uses a Straight-Through Estimator (STE):
+* Submodule surgery (heads/channels/neuron groups) with the same probe-and-ledger safety.
 
-# Forward: returns host_features (seed contribution cancels out)
+**Exit criteria**
 
-# Backward: gradients flow to both host AND seed parameters
+* Demonstrable reduction in cost at the same performance, with better stability than module-level amputation.
 
-return host_features + (seed_features - seed_features.detach())
+---
 
-This provides a surrogate gradient so the seed receives task-aligned gradient signal while its forward contribution is cancelled. Training behaves like α = 0 in the forward pass and approximately α = 1 in the backward pass.
+### Stage 5: parameter-level work (optional, likely unnecessary for a demo)
 
-Additional isolation: Host input into the seed path is detached during Training, ensuring host gradients remain identical to a host-only model.
+Only pursue if you need it for a specific narrative or deployment constraint. It explodes engineering scope and kernel complexity.
 
-Maturity gate (G2): A GradientHealthMonitor tracks the seed’s gradient-to-host ratio. Maturity gating uses gradient health plus a bounded activation-stat probe under a small test blend to reduce blend-time distribution shock. Once the seed passes stability criteria (bounded norm, healthy gradients, acceptable blend probe), it transitions to Blending.
+---
 
-3.3 Blending and gate schedules
+## 8) The meta-rule for a tech demo (applies to every stage)
 
-Blending is the controlled ramp of α from 0 towards an operational value. This is the primary safety valve against destabilisation.
+Each stage needs:
 
-Practical notes:
+1. A storyboarded scenario (for example: underfit host → Tamiyo grows; redundant phage → Emrakul trims; cut → scar → regrow).
+2. A single page of metrics (median/q25, cost proxy, churn, failure counts).
+3. A forensic trace you can replay to explain one run.
 
-α can be scheduled (handcrafted ramps) or policy-controlled (Tamiyo selects step sizes).
+---
 
-Rent can be made α-dependent to prevent “gate gaming” (paying almost nothing at tiny α while still extracting benefit).
+## 9) Glossary (compact)
 
-1. Metabolism: Tolaria and High Throughput
+* **SeedSlot**: a fixed insertion point where growth can occur under a strict contract.
+* **Seed**: a blueprint instance placed into a SeedSlot (module-level in near term).
+* **Phage**: a committed module wrapper (a unit of structure subject to maintenance or removal).
+* **Sedation**: reversible masking or dampening for probes.
+* **Lysis**: physical removal at safe boundaries.
+* **ScarSlot**: an identity SeedSlot left after lysis, with metadata and quarantine, used as a regrowth surface.
+* **Rent/churn (Simic pricing)**: cost pressure and penalties that shape when to keep, replace, or remove structure.
+* **Safe boundary / compaction boundary**: the only allowed places to physically rewrite topology or pack tensors.
 
-4.1 Inverted control flow
-
-Morphogenesis multiplies evaluation. Python stepping and the GIL become bottlenecks.
-
-Tolaria implements inverted control flow: the high-performance execution engine drives training and evaluation rather than a Python agent stepping the environment. Multiple environments, candidate sets, and evaluation branches can be executed in parallel, treating the GPU as a batch-processing metabolic substrate.
-
-4.2 Vectorised determinism (the determinism contract)
-
-A core engineering goal is replayability. If a specific architecture emerges, we should be able to reproduce the history that produced it.
-
-Determinism contract (intended): Given fixed seeds, fixed data order and augmentations, and deterministic kernel settings, the morphogenetic stack (including seed germination decisions and policy updates) replays identically.
-
-Boundary conditions: In practice, determinism depends on framework and kernel settings, reduction order, and careful RNG handling. Esper treats determinism as a first-class system feature: RNG states, action events, and relevant execution settings are logged so that replay drift becomes diagnosable rather than mysterious.
-
-1. Selection Pressure: Simic’s Economy
-
-5.1 The rent and churn economy
-
-Tamiyo is not rewarded solely for task accuracy. It plays an ROI game: improve task performance while paying ongoing costs.
-
-A generic shaping form:
-
-[
-
-R_{\text{total}} = R_{\text{task}} - W_{\text{rent}} \cdot C_{\text{rent}} - W_{\text{churn}} \cdot C_{\text{churn}}
-
-]
-
-To make this auditable, rent can be expressed in parameter-proxy units with logarithmic scaling:
-
-C_rent = log(1 + (BaseSlotRent + α · P_seed) / P_host)
-
-Where:
-
-BaseSlotRent ≈ 0.0039 × P_host: a fixed overhead per occupied slot
-
-P_seed: seed parameter count
-
-P_host: host parameter count
-
-log scaling prevents runaway penalties while preserving sensitivity to growth
-
-Rent penalty may be capped (max_rent) to avoid overwhelming the task signal.
-
-Churn penalises structural volatility (edits per window, oscillations, frequent state flips). Its purpose is to discourage tax-loophole behaviours such as rapid add/remove cycles or α oscillation around thresholds.
-
-5.2 Value functions and horizons
-
-Esper uses two value definitions on different timescales:
-
-Online return is the discounted reward used by PPO (for example γ = 0.995, GAE λ = 0.98) for short-horizon control and stability.
-
-Audit value (v(S)) is used for Phase 1 Shapley labels: a fixed training budget under a specified protocol with a final evaluation metric.
-
-Phase 1 learns critics that predict audit credit from cheap online telemetry, enabling deployment without repeated Shapley runs.
-
-5.3 Credit assignment: exact Shapley as a calibration oracle (Phase 1)
-
-Credit assignment is hard because contributions are contextual. A seed can be useful only in combination with others, or only at a particular stage of training.
-
-For small candidate sets, Esper uses exact Shapley values as an oracle-style calibration signal. Given a candidate set (C) of size (n) and a value function (v(S)) over subsets (S \subseteq C), the Shapley value for seed (i) is:
-
-[
-
-\phi_i = \sum_{S \subseteq C \setminus {i}} \frac{|S|!,(n-|S|-1)!}{n!}\left[v(S \cup {i}) - v(S)\right]
-
-]
-
-Phase 1 protocol (example, CIFAR-10, small n):
-
-For each subset (S), train the model under a fixed budget with only the seeds in (S) enabled.
-
-Evaluate (v(S)) via a fixed metric (validation accuracy or loss).
-
-Compute (\phi_i) across all subsets.
-
-This is expensive, but provides an audit trail.
-
-Shapley-as-teacher (no observation leakage): Shapley values (\phi) are treated as privileged labels, not state. Tamiyo receives only deployment telemetry in its observations. Shapley is computed offline and joined post hoc to recorded events to shape learning targets (reward relabelling, advantage correction, critic supervision). Acting never conditions on Shapley.
-
-5.4 From oracle to deployment: distillation and critics
-
-The intended path is to convert expensive oracle labels into cheap deployment behaviour:
-
-Shapley-labelled runs become a dataset.
-
-Critics learn to predict credit or cost-adjusted advantage from telemetry.
-
-Tamiyo’s policy is trained to act using critic outputs and cheap online features.
-
-Deployment uses the trained policy and critics, not the Shapley harness.
-
-1. Tamiyo: Policies and Scaling
-
-Tamiyo uses a factored action space with 8 independent heads, enabling compositional control:
-
-HeadOptionsPurposeslotN slotsWhich slot to targetblueprint13 typesModule type to germinate (NOOP, CONV_LIGHT, ATTENTION, NORM, etc.)style4 stylesGermination style combining blend algorithm and alpha algorithmtempo3 speedsBlending tempo (FAST 3 epochs, STANDARD 5, SLOW 8)alpha_target3 valuesTarget alpha amplitude (0.5, 0.7, 1.0)alpha_speed4 speedsSchedule speed in controller ticksalpha_curve5 curvesSchedule curve (LINEAR, COSINE, SIGMOID variants)op6 operationsLifecycle operation
-
-Lifecycle operations:
-
-WAIT
-
-GERMINATE
-
-SET_ALPHA_TARGET
-
-ADVANCE
-
-PRUNE
-
-COMMIT
-
-Scaling to large networks is treated as a curriculum problem. A policy that does “2 seeds, 3 slots on CIFAR-10” well is not automatically a policy that can manage 1000 seeds across diverse hosts.
-
-A plausible scaling path:
-
-Oracle bootcamp (small n, Shapley audits)
-
-Distillation (critics to predict φ or cost-adjusted advantage)
-
-Candidate selection (Scouts propose K << N candidates for expensive eval)
-
-Approximate credit (Monte Carlo Shapley, leave-one-out, short proxies, learned critics), validated by periodic audits
-
-Full scale (many slots and blueprints, bounded by shortlists and occasional audits)
-
-1. Case Study: The Rise of the Norm (Phase 1, CIFAR-10)
-
-In early CIFAR-10 runs we observed Norm Dominance. Given a blueprint library (Conv, Attention, Norm), Tamiyo strongly preferred normalisation layers.
-
-Low rent
-
-High stability
-
-Interpretable: policy exploits optimisation physics, buying stability before buying capacity
-
-This validates that the economy is real (Tamiyo optimises ROI), and warns that local optima and reward hacking are default behaviours.
-
-We propose reporting not only best-run accuracy, but reliability under fixed budget, for example median and lower-quantile accuracy across seeds at matched compute.
-
-SettingTask metric (median / q25)Added paramsFLOPs deltaBlueprint distributionNotesBaseline hostTBD00none
-
-Esper (low rent)TBDTBDTBDTBDexpect more growthEsper (high rent)TBDTBDTBDTBDexpect norm-heavyNo churn penaltyTBDTBDTBDTBDexpect oscillation8. Engineering for Learning: The Flight Recorder
-
-Because Tolaria is designed for replayability, Esper treats runs as dataset generation, not just online training.
-
-8.1 Event-sourced logging
-
-Every Tamiyo decision is logged as an immutable event. Currently implemented:
-
-explicit action (seed, slot, blueprint, gate changes)
-
-slot state at decision time
-
-policy outputs (confidence, per-head entropies)
-
-expected value V(s) and TD advantage (computed later)
-
-delayed teacher labels joined post hoc (Shapley φ, oracle rewards, long-horizon outcomes)
-
-Teacher labels are joined post hoc and used for learning targets. They are not emitted as online observations.
-
-Planned:
-
-observation vectors (pre-action and post-action)
-
-action masks and full logit vectors
-
-identifiers for specs and versions (observation spec, reward spec, seed library, host manifest)
-
-8.2 Forensic replay and counterfactuals
-
-Combined with determinism, the Flight Recorder enables forensic replay:
-
-reload exact universe state at decision step t
-
-inject a counterfactual action
-
-replay forward to observe divergence
-
-Current: determinism infrastructure exists; episode-end counterfactual analysis exists. Full step-level forensic replay is planned.
-
-1. Emrakul: The Immune System (Probe-and-Lysis)
-
-Esper’s growth story is incomplete without decay. Emrakul is the peer policy to Tamiyo. Tamiyo controls growth (seeds) via prediction; Emrakul controls decay (phages) via empirical evidence.
-
-Pruning is asymmetric. Growth is reversible and stabilised by blending. Deletion can silently remove a capability that only becomes obvious long after the event. Emrakul therefore does not rely on guesses from telemetry alone. She probes, validates, and lyses.
-
-9.1 The Magistrate pattern: phage wrappers as local controllers
-
-Rather than treating Emrakul as a single agent that micromanages every parameter, Esper uses a Magistrate pattern:
-
-Emrakul (global): emits a scalar metabolic stress signal ( \beta ) that expresses how strongly efficiency is valued relative to redundancy.
-
-Phage wrappers (local): run a lightweight, shared policy per guild (the Magistrate) that interprets local telemetry and outputs control laws (thresholds and severities), not individual per-weight decisions.
-
-This design keeps the global action space small and pushes local detail into standardised wrappers.
-
-9.2 Saliency estimation: first-order Taylor proxy (deployment-safe)
-
-To prioritise what to probe and sedate, phages use a cheap saliency proxy derived from local gradients.
-
-For a weight (w_j) with gradient (g_j = \partial L/\partial w_j), a first-order estimate of loss change under deletion (setting (w_j \to 0)) is:
-
-[
-
-\Delta L \approx - w_j , g_j
-
-]
-
-For ranking, use magnitude:
-
-[
-
-s_j = |w_j , g_j|
-
-]
-
-For a subtarget group (G) (for example a channel, head, neuron-group), use:
-
-[
-
-s_G = \sum_{j \in G} s_j
-
-]
-
-Important: Most deployments should default to grouped subtargets (channels, heads, neuron-groups), not raw parameter-level pruning. Parameter-level masking can be enabled as a research mode, but it is not assumed to be the default.
-
-The Magistrate observes summary statistics of saliency (mean, variance, sparsity, top-k mass) and stress ( \beta ), then outputs:
-
-( \tau ): saliency threshold for candidate selection
-
-( \kappa ): severity or steepness for soft-gating (how aggressively to sedate)
-
-9.3 Defining “contribution” without expensive counterfactuals
-
-Emrakul’s ledger requires a definition of contribution that does not rely on expensive counterfactual retrains.
-
-Esper supports two deployment-safe estimators:
-
-Probe delta (primary): During sedation probes (Section 9.4), measure the short-horizon change in loss trend and stability metrics. This is treated as empirical evidence of marginal utility or redundancy.
-
-Critic prediction (optional): A learned utility critic trained during Phase 1 predicts expected probe harm or benefit from local telemetry.
-
-This keeps the deployment contract aligned: no full Shapley, no privileged labels in observations.
-
-9.4 The probe-and-lysis protocol
-
-Phages do not delete immediately. They test hypotheses.
-
-Stage 1: Sedation probe (reversible)
-
-Trigger: high metabolic debt (defined below) or low saliency mass under stress ( \beta ).
-
-Action: apply a sedation mask to selected subtargets below threshold ( \tau ).
-
-Probation: hold sedation for a window of (W) steps while monitoring:
-
-loss trend delta (EWMA)
-
-gradient norm and gradient noise changes at the phage boundary
-
-activation distribution stability
-
-proxy cost reduction (rent proxy, step-time proxy if available)
-
-Stage 2: Immune ledger (persistent memory)
-
-Each phage maintains a non-differentiable ledger:
-
-Ledger itemMeaningUpdate behaviourMetabolic debtaccumulated wasted rentincreases when contribution estimate < rent, decays slowlyAntibodiesconfidence that subtargets are redundantincreases when probes cause negligible harmCriticality lockdo-not-touch safety flagset if probe causes a spike (loss explosion, instability), decays or cools down
-
-This prevents oscillation (sedate, regret, unsedate, repeat) and turns pruning into evidence accumulation.
-
-Stage 3: Physical lysis (irreversible, safe boundary only)
-
-Only when antibodies exceed a safety threshold and no criticality lock is active does the system schedule physical lysis:
-
-weights are permanently removed, or tensors are compacted or reshaped
-
-performed only at safe boundaries (checkpoint compaction, end of training, or a governed maintenance step)
-
-9.5 Tolaria as an optional ablation lab (not Phase 1 Shapley)
-
-To accelerate immune calibration without destabilising the main run, Tolaria can optionally perform batched ablation sweeps at checkpoints:
-
-Fork K short clones of the current state.
-
-Apply different sedation masks to each clone (different phages or subtargets).
-
-Run a short safety horizon (for example 50 steps).
-
-Use outcomes to update antibody and criticality signals.
-
-Discard clones and return to the main line.
-
-These sweeps are optional diagnostics and can be disabled in deployment. They are short-horizon safety probes, not the Phase 1 Shapley harness.
-
-9.6 The granularity ladder (default: micro-surgery)
-
-Emrakul follows a hierarchy of intervention by blast radius and safety:
-
-Micro-surgery (default): heads, channels, neuron-groups (low blast radius, hardware-friendly)
-
-Compression maintenance: low-rank factorisation, merge near-identical branches, quantisation of stable phages
-
-Module lysis: remove entire module (highest blast radius, requires strongest evidence)
-
-Parameter-level unstructured pruning is considered research mode, not the default.
-
-1. Limitations and Failure Modes
-
-Esper’s promises come with sharp edges:
-
-Reward hacking and local optima (for example norm dominance)
-
-Non-stationarity: the environment changes as architecture changes
-
-Credit assignment cost: exact Shapley does not scale, approximations must be audited
-
-Objective mismatch: long-horizon audit labels and short-horizon control can disagree
-
-Protocol overfitting: Tamiyo can over-specialise to host family, optimiser, dataset, or cost model
-
-Gate gaming: continuous α can be exploited unless rent and churn close loopholes
-
-Determinism brittleness: reproducibility depends on kernel determinism, RNG control, distributed reduction order
-
-Oscillation: repeated sedation and reversal without learning, mitigated by criticality locks and immune memory
-
-These are not footnotes. They constrain curriculum design, reward shaping, and engineering choices.
-
-1. Future Directions
-
-These extensions are speculative and not required for the core ecology.
-
-11.1 Narset: meta-coordination
-
-A slow-timescale coordinator that allocates per-zone budgets using telemetry only (performance trends, cost, churn, health). Narset does not observe architecture or seed inventory and cannot directly select modules.
-
-11.2 Fractal growth
-
-A seed can become a container for another morphogenetic model, enabling zoom-in growth at bottlenecks. This depends on stabilising the non-recursive ecology first.
-
-11.3 Blueprint meta-loop
-
-Another policy observes telemetry and generates new blueprints (offline evolutionary search), expanding the genome library.
-
-11.4 Phage healing
-
-Beyond lysis, Emrakul could authorise healing operations: merging similar branches via internal distillation, or quantising stable phages to reduce cost without removing function.
-
-11.5 Weaning from counterfactual supervision (Phase 1 to deployment)
-
-A critical practical question is whether Tamiyo can learn comparable behaviour under non-counterfactual reward signals. Phase 1 uses Shapley-labelled supervision and counterfactual evaluation to reduce variance. Deployment must rely on cheap telemetry and learned critics. A principled ablation is to progressively remove counterfactual teacher signals while preserving observation parity, then measure whether behavioural fingerprints (module mixtures, ordering statistics, Pareto efficiency) remain stable.
-
-1. Conclusion
-
-Esper proposes a move away from the intelligent-designer model of architecture. The goal is not to build the perfect network by hand. The goal is to build a world with rules, then let ecology happen inside it.
-
-The system has two layers.
-
-Substrate (infrastructure and physics):
-
-Tolaria: execution engine for Model Alpha, high throughput, determinism, replay, safety
-
-Simic: economy and accounting, rent, churn, Phase 1 Shapley-based credit
-
-Organism (agents and organs):
-
-Kasmina: body, SeedSlots and phages as peer primitives for growth and decay
-
-Tamiyo: growth policy, controls seeds via factored RL
-
-Emrakul: decay policy, controls phages via probe-and-lysis protocols
-
-Fossilisation is custody transfer: a seed becomes committed (Tamiyo-locked), rewrapped as a phage, and handed to Emrakul. Compaction occurs later at safe boundaries.
-
-In Phase 1, we deliberately spend compute on audited attribution to ensure the feedback signal is trustworthy while Tamiyo learns. The longer-term plan is to convert expensive truth into scalable behaviour via distillation, approximation, candidate selection, and durable flight-recorded experience, so a trained Tamiyo can reliably grow many future models without the Phase 1 harness.
-
-Appendix A: Pending Validation (Do Not Publish)
-
-Status: This appendix contains draft observations and claims that require validation before inclusion in any public-facing document.
-
-A.1 Emergent restoration: the “Lobotomy” stress test
-
-To test Tamiyo’s capacity for structural independence, we subjected the system to a stress configuration (“Lobotomy”) in which the host model was intentionally under-structured and performed poorly on CIFAR-10.
-
-Observed results (requires validation):
-
-Panic search (early epochs): high-entropy exploration with rapid germination and pruning.
-
-Identification: Tamiyo selects a conv-light blueprint capable of restoring spatial processing.
-
-Bypass grafting: the seed carries most of the effective signal, with strong ablation separation versus the host.
-
-Tentative interpretation: If confirmed, this suggests Esper can grow load-bearing modules when the host lacks necessary inductive bias or capacity, and can do so without destabilising optimisation due to gradient isolation and blending.
-
-A.2 Draft figure caption (for TUI screenshot)
-
-Figure X: Forensic analysis of a rescue operation.
-
-Telemetry from the “Lobotomy” stress test on CIFAR-10. Best run reaches 46.1% accuracy under an intentionally weak host baseline. The Seed Graveyard shows rejection of multiple candidates before committing a successful conv-light module. Counterfactual analysis indicates the committed seed provides the majority of the effective signal.
-
-A.3 Engineering sanity checks
-
-Before any publication, validate:
-
-Rent calculation under weak hosts
-
-Ensure P_host is physical parameter count, not tied to performance. Avoid division-by-zero behaviour.
-
-Reproducibility
-
-Confirm rescue behaviour across multiple RNG seeds.
-
-Characterise variance of the “panic search” phase.
-
-Counterfactual validity
-
-Confirm seed-versus-host split is from correct ablations (seed zeroed vs host zeroed), not a logging artefact.
-
-Gradient isolation verification
-
-Confirm gradients flow to seed in isolation.
-
-Confirm no unintended signal path leaks to or from the host.
+---
