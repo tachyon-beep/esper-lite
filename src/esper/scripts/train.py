@@ -416,13 +416,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     # Entropy annealing: uses type=int (not _positive_int) since 0 is valid (no annealing)
     # Semantics: total env-episodes over which to anneal. With K envs, produces ceil(N/K) PPO batches.
+    # This keeps total training experience constant across different --envs values.
     ppo_parser.add_argument(
         "--entropy-anneal-episodes",
         type=int,
         default=None,
         metavar="N",
-        help="Total env-episodes over which to anneal entropy coefficient from start to end. "
-             "With K envs, this produces ceil(N/K) PPO batches of annealing. "
+        help="Total env-EPISODES (complete training runs) over which to anneal entropy "
+             "coefficient from start to end. With K envs running in parallel, the policy "
+             "sees K episodes per batch, so annealing completes in ceil(N/K) PPO batches. "
+             "This keeps total training experience constant across different --envs values. "
              "0 = no annealing. (Default: 0)",
     )
 

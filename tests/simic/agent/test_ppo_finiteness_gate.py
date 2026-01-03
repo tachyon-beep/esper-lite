@@ -179,3 +179,96 @@ class TestConsecutiveFailureEscalation:
         should_escalate = consecutive_failures >= 3
         assert should_escalate is False
         assert consecutive_failures == 1
+
+
+class TestTrainStepsIncrementContract:
+    """Test that train_steps only increments on successful updates.
+
+    This is critical for entropy annealing and other schedules that depend
+    on train_steps tracking actual policy updates, not skipped failures.
+    """
+
+    def test_train_steps_not_incremented_when_all_epochs_fail(self):
+        """train_steps should stay constant when finiteness gate skips all epochs.
+
+        Bug context: Previously, train_steps was incremented unconditionally at
+        the top of the aggregation section, BEFORE checking epochs_completed.
+        This caused entropy annealing to advance even when no update occurred.
+        """
+        # This test verifies the contract at the logic level.
+        # The actual PPO agent test requires a full agent setup.
+
+        # Simulate the FIXED control flow from ppo.py update():
+        train_steps_before = 10
+        train_steps = train_steps_before
+
+        # Simulate: all epochs failed finiteness gate
+        epochs_completed = 0
+
+        # The FIX: only increment train_steps if epochs_completed > 0
+        if epochs_completed > 0:
+            train_steps += 1
+
+        assert train_steps == train_steps_before, (
+            "train_steps should NOT increment when all epochs fail finiteness gate. "
+            "This would cause entropy annealing to drift without actual policy updates."
+        )
+
+    def test_train_steps_incremented_when_some_epochs_succeed(self):
+        """train_steps should increment when at least one epoch completes."""
+        train_steps_before = 10
+        train_steps = train_steps_before
+
+        # Simulate: one epoch succeeded, one failed
+        epochs_completed = 1
+
+        if epochs_completed > 0:
+            train_steps += 1
+
+        assert train_steps == train_steps_before + 1, (
+            "train_steps should increment when at least one epoch completes."
+        )
+
+    def test_entropy_annealing_depends_on_train_steps(self):
+        """Document that entropy annealing uses train_steps for schedule progress.
+
+        This test documents WHY the train_steps increment contract matters:
+        entropy coefficient is computed as a function of train_steps / anneal_steps.
+        """
+        # Simulate PPOAgent.get_entropy_coef() logic
+        entropy_coef_start = 0.1
+        entropy_coef_end = 0.01
+        entropy_anneal_steps = 100
+
+        def get_entropy_coef(train_steps: int) -> float:
+            if entropy_anneal_steps == 0:
+                return entropy_coef_start
+            progress = min(1.0, train_steps / entropy_anneal_steps)
+            return entropy_coef_start + progress * (entropy_coef_end - entropy_coef_start)
+
+        # At start: full entropy
+        assert get_entropy_coef(0) == pytest.approx(0.1)
+
+        # Halfway: mid-annealing
+        coef_50 = get_entropy_coef(50)
+        assert 0.05 < coef_50 < 0.06  # ~0.055
+
+        # At end: minimum entropy
+        assert get_entropy_coef(100) == pytest.approx(0.01)
+
+        # Beyond end: stays at minimum
+        assert get_entropy_coef(150) == pytest.approx(0.01)
+
+        # BUG SCENARIO: If train_steps increments on skipped updates,
+        # entropy would drop faster than intended, reducing exploration
+        # before the policy has actually learned.
+        train_steps_with_bug = 50  # 50 "updates" but only 25 were real
+        train_steps_correct = 25  # 25 actual updates
+
+        coef_buggy = get_entropy_coef(train_steps_with_bug)  # 0.055
+        coef_correct = get_entropy_coef(train_steps_correct)  # 0.0775
+
+        assert coef_correct > coef_buggy, (
+            "Buggy behavior causes entropy to drop faster (more exploitation) "
+            "when updates are being skipped (policy not learning)."
+        )

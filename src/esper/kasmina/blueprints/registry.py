@@ -83,6 +83,9 @@ class BlueprintRegistry:
     @classmethod
     def list_for_topology(cls, topology: str) -> list[BlueprintSpec]:
         """All blueprints for a topology, sorted by param estimate."""
+        from .loader import ensure_loaded
+
+        ensure_loaded(topology)
         return sorted(
             [s for s in cls._blueprints.values() if s.topology == topology],
             key=lambda s: s.param_estimate,
@@ -91,6 +94,9 @@ class BlueprintRegistry:
     @classmethod
     def get(cls, topology: str, name: str) -> BlueprintSpec:
         """Get a specific blueprint spec."""
+        from .loader import ensure_loaded
+
+        ensure_loaded(topology)
         key = f"{topology}:{name}"
         if key not in cls._blueprints:
             available = cls.list_for_topology(topology)

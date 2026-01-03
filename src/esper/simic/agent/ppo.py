@@ -1034,7 +1034,9 @@ class PPOAgent:
                 # RD-01 fix: metrics is defaultdict(list), no need for setdefault
                 metrics["ratio_diagnostic"].append(diag.to_dict())
 
-        self.train_steps += 1
+        # NOTE: train_steps increment is deferred until after finiteness gate check.
+        # If all epochs fail finiteness checks, we should NOT advance train_steps
+        # because entropy annealing and other schedules depend on actual updates.
 
         if clear_buffer:
             self.buffer.reset()
@@ -1072,6 +1074,11 @@ class PPOAgent:
         # At least one epoch completed successfully
         aggregated_result["ppo_update_performed"] = True
         aggregated_result["finiteness_gate_skip_count"] = len(finiteness_failures)
+
+        # Only increment train_steps when an actual update occurred.
+        # This ensures entropy annealing and other schedules track real updates,
+        # not skipped finiteness-gate failures.
+        self.train_steps += 1
 
         for k, v in metrics.items():
             if not v:
