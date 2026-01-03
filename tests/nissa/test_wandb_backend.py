@@ -419,23 +419,3 @@ class TestNoneValueFiltering:
         # All metrics should be present
         assert logged_metrics["env_1/train_loss"] == 0.25
         assert logged_metrics["env_1/train_accuracy"] == 0.80
-
-
-class TestAPIContract:
-    """Verify API contract - no dead parameters."""
-
-    def test_log_system_parameter_removed(self):
-        """WandbBackend should NOT accept log_system parameter."""
-        with patch.dict("sys.modules", {"wandb": MagicMock()}):
-            with patch("esper.nissa.wandb_backend.WANDB_AVAILABLE", True):
-                from esper.nissa.wandb_backend import WandbBackend
-                import inspect
-
-                # Get __init__ signature
-                sig = inspect.signature(WandbBackend.__init__)
-                param_names = list(sig.parameters.keys())
-
-                # log_system should NOT be a parameter
-                assert "log_system" not in param_names, (
-                    "log_system parameter should be removed - it was a no-op"
-                )

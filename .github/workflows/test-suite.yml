@@ -37,7 +37,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --extra dev --extra tui
+        run: uv sync --extra tui
 
       - name: Type check with mypy
         run: MYPYPATH=src uv run mypy -p esper
@@ -60,14 +60,15 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync
 
       - name: Run property tests
         env:
           HYPOTHESIS_PROFILE: ci
+          PYTHONPATH: src
         run: |
-          uv run pytest tests/properties/ \
-            -v \
+          uv run pytest -m property \
+            -v -x \
             --hypothesis-show-statistics \
             --tb=short
 
@@ -89,26 +90,34 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync
 
       - name: Run unit tests
+        env:
+          PYTHONPATH: src
         run: |
-          uv run pytest tests/unit/ -v --cov=src --cov-report=json
+          uv run pytest -m "not integration and not stress and not property" -x --cov=src --cov-report=json
 
       - name: Check coverage threshold
         run: |
-          COVERAGE=$(python -c "import json; print(json.load(open('coverage.json'))['totals']['percent_covered'])")
-          echo "Coverage: $COVERAGE%"
-          if (( $(echo "$COVERAGE < 80" | bc -l) )); then
-            echo "Coverage $COVERAGE% below 80% threshold"
-            exit 1
-          fi
+          python3 -c "
+          import json, sys
+          data = json.load(open('coverage.json'))
+          coverage = data['totals']['percent_covered']
+          print(f'Coverage: {coverage:.1f}%')
+          if coverage < 80:
+              print(f'Coverage {coverage:.1f}% below 80% threshold')
+              sys.exit(1)
+          "
 
       - name: Run integration tests
+        env:
+          PYTHONPATH: src
         run: |
-          uv run pytest tests/integration/ -v
+          uv run pytest -m integration -v -x
 
   e2e-smoke-tests:
+    if: ${{ hashFiles('tests/e2e/**') != '' }}
     runs-on: ubuntu-latest
     needs: [property-tests, unit-and-integration-tests]
     timeout-minutes: 10
@@ -126,11 +135,13 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync
 
       - name: Run E2E smoke tests
+        env:
+          PYTHONPATH: src
         run: |
-          uv run pytest tests/e2e/ -v -m "not slow"
+          uv run pytest tests/e2e/ -v -x -m "not slow"
 
   nightly-full-suite:
     if: github.event_name == 'schedule'
@@ -150,18 +161,25 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync
 
       - name: Run full property tests (thorough)
         env:
           HYPOTHESIS_PROFILE: thorough
+          PYTHONPATH: src
         run: |
-          uv run pytest tests/properties/ -v --hypothesis-show-statistics
+          uv run pytest -m property -v --hypothesis-show-statistics
 
       - name: Run all E2E tests
+        if: ${{ hashFiles('tests/e2e/**') != '' }}
+        env:
+          PYTHONPATH: src
         run: |
           uv run pytest tests/e2e/ -v  # All tests, including slow ones
 
       - name: Run performance benchmarks
+        if: ${{ hashFiles('tests/benchmarks/**') != '' }}
+        env:
+          PYTHONPATH: src
         run: |
           uv run pytest tests/benchmarks/ -v
