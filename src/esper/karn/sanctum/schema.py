@@ -222,6 +222,9 @@ class ObservationStats:
     # Normalization drift (running stats divergence)
     normalization_drift: float = 0.0  # How much running mean/std has shifted
 
+    # Batch context
+    batch_size: int = 0  # Number of environments in the batch
+
 
 @dataclass
 class EpisodeStats:

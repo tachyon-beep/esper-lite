@@ -269,6 +269,7 @@ class SanctumAggregator:
         self._envs = {}
         self._event_log = deque(maxlen=self.max_event_log)
         self._tamiyo = TamiyoState()
+        self._observation_stats = ObservationStats()  # Updated when telemetry provides stats
         self._vitals = SystemVitals()
         self._gpu_devices = []
         self._gpu_total_memory_gb = {}
@@ -544,8 +545,8 @@ class SanctumAggregator:
             fossilize_trend=detect_rate_trend(self._fossilize_rate_history),
         )
 
-        # Stub observation stats (telemetry not yet wired)
-        observation_stats = ObservationStats()
+        # Observation stats from telemetry (updated when present in ANALYTICS_SNAPSHOT)
+        observation_stats = self._observation_stats
 
         # Episode stats (TELE-610)
         total = self._current_episode
@@ -1466,6 +1467,23 @@ class SanctumAggregator:
         payload = event.data
         kind = payload.kind
 
+        # Update observation stats if present (can be on any kind of ANALYTICS_SNAPSHOT)
+        if payload.observation_stats is not None:
+            obs = payload.observation_stats
+            self._observation_stats = ObservationStats(
+                slot_features_mean=obs.slot_features_mean,
+                slot_features_std=obs.slot_features_std,
+                host_features_mean=obs.host_features_mean,
+                host_features_std=obs.host_features_std,
+                context_features_mean=obs.context_features_mean,
+                context_features_std=obs.context_features_std,
+                outlier_pct=obs.outlier_pct,
+                nan_count=obs.nan_count,
+                inf_count=obs.inf_count,
+                normalization_drift=obs.normalization_drift,
+                batch_size=obs.batch_size,
+            )
+
         # Batch-level action distribution
         if kind == "action_distribution":
             if payload.action_counts:
@@ -1650,6 +1668,11 @@ class SanctumAggregator:
             if len(decisions) < MAX_DECISIONS:
                 decisions.insert(0, decision)
                 self._tamiyo.recent_decisions = decisions
+
+            # Update last action tracking for Sequence section display
+            self._tamiyo.last_action_op = action_name
+            if payload.action_success is not None:
+                self._tamiyo.last_action_success = payload.action_success
 
             return
 

@@ -77,6 +77,9 @@ from .value_metrics import (
     ValueFunctionMetricsDict,
 )
 
+# Observation statistics (TELE-OBS)
+from .observation_stats import ObservationStatsTelemetry, compute_observation_stats
+
 __all__ = [
     # Config
     "TelemetryLevel",
@@ -124,4 +127,7 @@ __all__ = [
     # Value function metrics (TELE-220 to TELE-228)
     "compute_value_function_metrics",
     "ValueFunctionMetricsDict",
+    # Observation statistics (TELE-OBS)
+    "ObservationStatsTelemetry",
+    "compute_observation_stats",
 ]

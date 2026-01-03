@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Callable, Literal
 
 if TYPE_CHECKING:
     from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
+    from esper.simic.telemetry.observation_stats import ObservationStatsTelemetry
 from uuid import uuid4
 
 from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
@@ -1340,6 +1341,8 @@ class AnalyticsSnapshotPayload:
     alpha_shock: float | None = None  # Convex penalty on alpha deltas
     # Full reward components dataclass (replaces individual fields)
     reward_components: "RewardComponentsTelemetry | None" = None
+    # Observation space health (for early NaN detection)
+    observation_stats: "ObservationStatsTelemetry | None" = None
     # Decision context for TamiyoBrain Decision Cards
     slot_states: dict[str, str] | None = None  # slot_id -> "Training 12%" or "Empty"
     alternatives: list[tuple[str, float]] | None = None  # Top-2 alternative (action, prob)
@@ -1481,6 +1484,8 @@ class AnalyticsSnapshotPayload:
             num_slots=data.get("num_slots"),
             # Reward components (nested dataclass)
             reward_components=cls._parse_reward_components(data.get("reward_components")),
+            # Observation stats (nested dataclass)
+            observation_stats=cls._parse_observation_stats(data.get("observation_stats")),
             # Head telemetry (nested dataclass)
             head_telemetry=cls._parse_head_telemetry(data.get("head_telemetry")),
         )
@@ -1497,6 +1502,8 @@ class AnalyticsSnapshotPayload:
             if dc_field.name == "head_telemetry":
                 payload[dc_field.name] = value.to_dict() if value is not None else None
             elif dc_field.name == "reward_components":
+                payload[dc_field.name] = value.to_dict() if value is not None else None
+            elif dc_field.name == "observation_stats":
                 payload[dc_field.name] = value.to_dict() if value is not None else None
             else:
                 payload[dc_field.name] = value
@@ -1522,6 +1529,20 @@ class AnalyticsSnapshotPayload:
         if data is None:
             return None
         return HeadTelemetry.from_dict(data)
+
+    @staticmethod
+    def _parse_observation_stats(
+        data: dict[str, Any] | None,
+    ) -> "ObservationStatsTelemetry | None":
+        """Parse observation_stats from dict if present.
+
+        Uses late import to avoid circular dependency at module load time.
+        """
+        if data is None:
+            return None
+        from esper.simic.telemetry.observation_stats import ObservationStatsTelemetry
+
+        return ObservationStatsTelemetry.from_dict(data)
 
 
 @dataclass(slots=True, frozen=True)

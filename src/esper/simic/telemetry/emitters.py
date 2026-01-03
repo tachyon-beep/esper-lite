@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
     from esper.simic.training.parallel_env_state import ParallelEnvState
 
+    from .observation_stats import ObservationStatsTelemetry
     from .telemetry_config import TelemetryConfig
 
 _logger = logging.getLogger(__name__)
@@ -204,6 +205,7 @@ class VectorizedEmitter:
         decision_entropy: float | None = None,
         reward_components: "RewardComponentsTelemetry | None" = None,
         head_telemetry: HeadTelemetry | None = None,
+        observation_stats: "ObservationStatsTelemetry | None" = None,
     ) -> None:
         """Emit last-action telemetry from the training loop.
 
@@ -232,6 +234,7 @@ class VectorizedEmitter:
             decision_entropy: Entropy of the action distribution
             reward_components: Typed dataclass with full reward breakdown (may be None for LOSS family)
             head_telemetry: Typed dataclass with per-head confidence and entropy values
+            observation_stats: Observation space health metrics (only passed for env_idx==0 to avoid redundancy)
         """
         if not self._should_emit("ops_normal"):
             return
@@ -301,6 +304,7 @@ class VectorizedEmitter:
                 alpha_target_masked=alpha_target_masked,
                 alpha_speed_masked=alpha_speed_masked,
                 alpha_curve_masked=alpha_curve_masked,
+                observation_stats=observation_stats,
             ),
         ))
 

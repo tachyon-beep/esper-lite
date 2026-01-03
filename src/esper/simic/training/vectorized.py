@@ -113,6 +113,7 @@ from esper.simic.telemetry import (
     GradientEMATracker,  # P4-9
     training_profiler,
     compute_lstm_health,  # B7-DRL-04
+    compute_observation_stats,  # TELE-OBS: Observation space health
 )
 from esper.simic.control import RunningMeanStd, RewardNormalizer
 from esper.tamiyo.policy.features import (
@@ -800,6 +801,8 @@ def train_ppo_vectorized(
     # Use EMA momentum for stable normalization during long training runs
     # (prevents distribution shift that can break PPO ratio calculations)
     obs_normalizer = RunningMeanStd((state_dim,), device=device, momentum=0.99)
+    # TELE-OBS: Capture initial normalizer mean for drift detection
+    initial_obs_normalizer_mean = obs_normalizer.mean.clone()
 
     # Reward normalizer for critic stability (prevents value loss explosion)
     # Essential after ransomware fix where reward magnitudes changed significantly
@@ -2593,7 +2596,18 @@ def train_ppo_vectorized(
     
                 # Accumulate raw states for deferred normalizer update
                 raw_states_for_normalizer_update.append(states_batch.detach())
-    
+
+                # TELE-OBS: Compute observation stats once per step (for Sanctum ObservationStats panel)
+                # Only computed when ops telemetry is enabled to avoid overhead
+                step_obs_stats = None
+                if ops_telemetry_enabled:
+                    step_obs_stats = compute_observation_stats(
+                        states_batch,
+                        normalizer_mean=obs_normalizer.mean,
+                        normalizer_var=obs_normalizer.var,
+                        initial_normalizer_mean=initial_obs_normalizer_mean,
+                    )
+
                 # Normalize using FROZEN statistics during rollout collection.
                 states_batch_normalized = obs_normalizer.normalize(states_batch)
     
@@ -3208,6 +3222,8 @@ def train_ppo_vectorized(
                             decision_entropy=decision_entropy,
                             reward_components=reward_components,  # Pass directly (may be None for LOSS family)
                             head_telemetry=head_telem,
+                            # TELE-OBS: Only pass for env 0 to avoid redundant data (batch-level stat)
+                            observation_stats=step_obs_stats if env_idx == 0 else None,
                         )
     
                     # Store transition directly into rollout buffer.
