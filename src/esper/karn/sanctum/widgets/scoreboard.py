@@ -56,14 +56,14 @@ class Scoreboard(Static):
     }
 
     #best-runs-panel {
-        height: 1fr;  /* Equal split with worst-runs-panel */
+        height: 6fr;  /* Larger - has stats header + 4 data rows */
         border: round $surface-lighten-2;
         border-title-color: cyan;
         padding: 0 1;
     }
 
     #worst-runs-panel {
-        height: 1fr;  /* Equal split with best-runs-panel - shows 5 runs */
+        height: 5fr;  /* Smaller - just 4 data rows, gives 1 row to bottom */
         border: round $surface-lighten-2;
         border-title-color: red;
         padding: 0 1;

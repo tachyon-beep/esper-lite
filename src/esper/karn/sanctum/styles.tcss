@@ -34,10 +34,10 @@
     padding: 0 1;
 }
 
-/* Top section: Env Overview + Scoreboard (~27% of main area) */
+/* Top section: Env Overview + Scoreboard (~26% of main area) */
 #top-section {
-    height: 27%;
-    min-height: 16;
+    height: 26%;
+    min-height: 15;
 }
 
 /* Environment Overview - main table (80% width, expanded from 70%) */
@@ -61,7 +61,7 @@
 
 /* Scoreboard - contains Best Runs and Worst Trajectory panels */
 #scoreboard {
-    height: 5fr;  /* Shows 5 best runs + 5 worst trajectory runs */
+    height: 4fr;  /* Reduced to give 1 row to bottom section */
     overflow-y: auto;
     padding: 0;
 }
@@ -79,10 +79,10 @@
     padding: 0 1;
 }
 
-/* Bottom section: Event Log + TamiyoBrain (~72% of main area) */
+/* Bottom section: Event Log + TamiyoBrain (~73% of main area) */
 #bottom-section {
-    height: 72%;
-    min-height: 23;
+    height: 73%;
+    min-height: 24;
     width: 100%;
 }
 
