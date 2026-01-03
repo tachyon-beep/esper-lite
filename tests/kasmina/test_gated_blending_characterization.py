@@ -1,7 +1,7 @@
 """Tests for gated blending behavior.
 
-These tests document the fixed gated blending behavior after M2.
-GatedBlend.get_alpha() now tracks step-based progress for lifecycle compatibility.
+These tests document gated blending behavior and integration with SeedSlot.
+GatedBlend uses a learned gate network for per-sample blending decisions.
 """
 
 import pytest
@@ -14,17 +14,8 @@ from esper.leyline.stages import SeedStage
 from esper.tamiyo.policy.features import TaskConfig
 
 
-class TestGatedBlendGetAlpha:
-    """Test GatedBlend.get_alpha() behavior."""
-
-    def test_get_alpha_tracks_progress(self):
-        """FIXED BEHAVIOR: get_alpha() now tracks step-based progress."""
-        gate = GatedBlend(channels=64, topology="cnn", total_steps=10)
-
-        # Progress increases with step
-        assert gate.get_alpha(0) == 0.0
-        assert gate.get_alpha(5) == 0.5
-        assert gate.get_alpha(10) == 1.0
+class TestGatedBlendGetAlphaForBlend:
+    """Test GatedBlend.get_alpha_for_blend() behavior."""
 
     def test_get_alpha_for_blend_is_dynamic(self):
         """get_alpha_for_blend() computes per-sample alpha from input features."""
@@ -42,23 +33,6 @@ class TestGatedBlendGetAlpha:
 
         # Different inputs produce different alphas (with high probability)
         # Gate network is randomly initialized, so outputs differ
-
-    def test_get_alpha_vs_get_alpha_for_blend_have_different_purposes(self):
-        """get_alpha() tracks lifecycle progress; get_alpha_for_blend() uses learned gate."""
-        gate = GatedBlend(channels=64, topology="cnn", total_steps=10)
-
-        x = torch.randn(1, 64, 8, 8)
-
-        scalar_alpha = gate.get_alpha(step=5)
-        tensor_alpha = gate.get_alpha_for_blend(x)
-
-        # get_alpha() returns step-based progress for lifecycle
-        assert scalar_alpha == 0.5  # Step 5 of 10 = 0.5
-
-        # get_alpha_for_blend() returns per-sample gate output
-        assert tensor_alpha.shape == (1, 1, 1, 1)  # Computed from gate network
-
-        # These serve different purposes: lifecycle tracking vs. forward pass blending
 
 
 class TestSeedSlotWithGatedBlend:
@@ -309,44 +283,29 @@ class TestGatedBlendParameterRegistration:
 
 
 # =============================================================================
-# FIXED BEHAVIOR SUMMARY (Post M2)
+# GATED BLENDING ARCHITECTURE SUMMARY
 # =============================================================================
 #
-# Gated Blending Fixed Behavior Summary:
-# =======================================
+# Alpha Tracking (Two Separate Mechanisms):
+# =========================================
 #
-# 1. GatedBlend.get_alpha(step) now tracks step-based progress
-#    - Returns min(1.0, step / total_steps)
-#    - Provides lifecycle compatibility for G3 gate
+# 1. AlphaController (lifecycle tracking):
+#    - Owns state.alpha and alpha scheduling (ramp up/down)
+#    - G3 gate checks controller.alpha >= 1.0 for completion
+#    - SeedMetrics.current_alpha mirrors controller.alpha
 #
-# 2. GatedBlend.get_alpha_for_blend(x) computes dynamic per-sample alpha
-#    - Uses the gate network on pooled features
-#    - This is what forward() actually uses for blending
+# 2. GatedBlend.get_alpha_for_blend(x) (forward pass blending):
+#    - Computes per-sample alpha from input features via learned gate
+#    - Used only in slot.py forward() for actual blend computation
+#    - Parameters trained via the seed optimizer
 #
-# 3. SeedSlot.update_alpha_for_step() calls get_alpha()
-#    - Sets state.alpha to step-based progress
-#    - state.alpha now tracks lifecycle progress correctly
+# Key Design Points:
+# ==================
 #
-# 4. G3 gate checks state.alpha >= threshold
-#    - With fixed gated blending, state.alpha tracks progress (0.0 -> 1.0)
-#    - G3 PASSES naturally when blending completes (alpha = 1.0)
-#
-# 5. GatedBlend parameters ARE trained
-#    - PyTorch's nn.Module automatically registers submodules
-#    - alpha_schedule IS visible in slot.parameters()
-#
-# 6. Dual-purpose alpha methods
-#    - get_alpha() serves lifecycle tracking (step-based progress)
-#    - get_alpha_for_blend() serves forward pass (learned per-sample gates)
-#    - This separation allows both lifecycle compatibility and learned blending
-#
-# 7. GatedBlend now requires total_steps parameter
-#    - Added in __init__ to support step-based progress tracking
-#    - Defaults to 10 steps if not specified
-#
-# M2 COMPLETED:
-# - GatedBlend.get_alpha() now tracks progress for lifecycle compatibility
-# - G3 gate passes naturally when blending completes
-# - Gated blending is now fully compatible with the seed lifecycle
+# - AlphaController handles WHEN to blend (temporal scheduling)
+# - GatedBlend handles HOW MUCH to blend per-sample (learned gate network)
+# - G3 gate uses AlphaController for lifecycle decisions
+# - GatedBlend parameters ARE registered as submodule (optimizer can train them)
+# - GatedBlend requires total_steps parameter for initialization
 #
 # =============================================================================

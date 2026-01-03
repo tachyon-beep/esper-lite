@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B2-DRL-08` |
 | **Severity** | `P3` |
-| **Status** | `invalid` |
+| **Status** | `closed` |
 | **Batch** | 2 |
 | **Agent** | `drl` |
 | **Domain** | `kasmina` |
@@ -144,32 +144,38 @@ Add clear docstrings explaining when each is appropriate.
 
 ## Resolution
 
-### Status: NOT-A-BUG
+### Status: FIXED
 
-**Closed via systematic debugging investigation.**
+**Dead code removed after systematic investigation.**
 
-#### Why This Is Not A Bug
+#### Investigation Findings
 
 | Claim | Status | Evidence |
 |-------|--------|----------|
-| "Same name, different semantics" | ✅ TRUE | `get_alpha()` returns progress, `get_alpha_for_blend()` returns gate output |
-| "Could confuse callers" | ❌ FALSE | No production callers of `get_alpha()` - only tests |
-| "Missing documentation" | ❌ FALSE | Docstrings are clear (lines 192-199, 207) |
+| "Same name, different semantics" | ✅ TRUE | `get_alpha()` returned progress, `get_alpha_for_blend()` returns gate output |
+| "Could confuse callers" | ❌ FALSE | Zero production callers of `get_alpha()` |
+| "`get_alpha()` was used by G3 gate" | ❌ FALSE | G3 gate uses `AlphaController.alpha`, not `BlendAlgorithm.get_alpha()` |
 
-#### Evidence
+#### Root Cause: Dead Code Never Wired Up
 
-1. **Zero production callers of `get_alpha()`**: Grep search found no `.get_alpha(` calls in `src/` production code. Only `get_alpha_for_blend()` is called (in `slot.py:2045`).
+1. **Commit `64dd86bb`** added `get_alpha()` claiming "for G3 gate compatibility"
+2. **But G3 gate** (`slot.py:848`) uses `controller.alpha` from `AlphaController`
+3. **`SeedSlot.update_alpha_for_step()`** mentioned in commit message **never existed**
+4. **Result**: `get_alpha()` was dead code from the moment it was added
 
-2. **Docstrings already distinguish the methods**:
-   - `get_alpha()`: "Return blending progress for lifecycle tracking"
-   - `get_alpha_for_blend()`: "Compute per-sample alpha from input features"
+#### Fix Applied
 
-3. **Tests explicitly document intentional design**: `test_gated_blending_characterization.py` includes:
-   - `test_get_alpha_vs_get_alpha_for_blend_have_different_purposes()`
-   - Comments at lines 339-340 explaining the dual-purpose design
+Removed dead code per CLAUDE.md "No Legacy Code Policy":
+
+- Deleted `BlendAlgorithm.get_alpha()` (base class)
+- Deleted `GatedBlend.get_alpha()` (override)
+- Deleted `test_gated_blend_fixed.py` (tested only dead code)
+- Updated `test_gated_blending_characterization.py` (removed dead code tests)
+- Updated `test_blending_properties.py` (removed dead code property test)
+- Preserved topology mismatch tests (moved to `test_blending.py`)
 
 #### Severity Assessment
 
 - Original: P3 (API design concern)
-- Revised: P4 (theoretical confusion with no practical impact)
-- Resolution: NOT-A-BUG - the "confusion risk" doesn't exist since there are no production callers
+- Final: P4 (dead code removal)
+- Resolution: FIXED - dead code eliminated
