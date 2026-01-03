@@ -351,6 +351,23 @@ DEFAULT_MIN_PANICS_BEFORE_ROLLBACK = 3
 DEFAULT_GOVERNOR_LOSS_MULTIPLIER = 3.0
 
 # =============================================================================
+# Device Constants (Tolaria validation)
+# =============================================================================
+
+# Supported device types for Esper training.
+# cpu: Universal fallback, always available
+# cuda: NVIDIA GPU via CUDA
+# mps: Apple Silicon GPU via Metal Performance Shaders
+#
+# Device types NOT supported (and why):
+# - meta: Fake device with no storage - forward passes work but training silently fails
+# - xla: TPU backend - requires separate torch_xla package and different training patterns
+# - xpu: Intel GPUs - still maturing in PyTorch, needs explicit testing/support
+# - hpu: Habana Gaudi - requires Intel Gaudi SDK
+# - privateuseone: Custom backend - undefined behavior
+SUPPORTED_DEVICE_TYPES: frozenset[str] = frozenset({"cpu", "cuda", "mps"})
+
+# =============================================================================
 # Display Thresholds (Karn UI)
 # =============================================================================
 
@@ -790,6 +807,9 @@ __all__ = [
     "MIN_GOVERNOR_HISTORY_SAMPLES",
     "DEFAULT_MIN_PANICS_BEFORE_ROLLBACK",
     "DEFAULT_GOVERNOR_LOSS_MULTIPLIER",
+
+    # Device Constants (Tolaria validation)
+    "SUPPORTED_DEVICE_TYPES",
 
     # Display Thresholds (Karn UI)
     "DEFAULT_GROWTH_RATIO_GREEN_MAX",

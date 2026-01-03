@@ -1305,3 +1305,100 @@ class TestTolariaGovernor:
         gov.snapshot()  # Should not raise
 
         assert gov.last_good_state is not None
+
+    def test_rollback_succeeds_when_hub_unavailable(self):
+        """Rollback must succeed even if telemetry hub fails to initialize.
+
+        Regression test for Issue 2 (Tolaria audit 2026-01-04):
+        Hub acquisition failure should not prevent the safety-critical
+        rollback operation from completing. The rollback is the critical path;
+        telemetry is best-effort observability.
+
+        Safety hierarchy:
+        1. Rollback succeeds + telemetry succeeds (ideal)
+        2. Rollback succeeds + telemetry fails (acceptable - this test)
+        3. Rollback fails + telemetry succeeds (bad)
+        4. Rollback fails + telemetry fails (worst - old behavior)
+        """
+        from unittest.mock import patch
+        from esper.tolaria import TolariaGovernor
+
+        model = DummyModel()
+        gov = TolariaGovernor(model)
+
+        original_weight = model.linear.weight.data.clone()
+        gov.snapshot()
+
+        # Corrupt model
+        model.linear.weight.data.fill_(999.0)
+
+        # Build history
+        for i in range(5):
+            gov.loss_history.append(1.0)
+
+        # Make get_hub raise - simulates hub not initialized
+        with patch("esper.nissa.get_hub") as mock_get_hub:
+            mock_get_hub.side_effect = RuntimeError("Hub not initialized")
+
+            # Rollback should still succeed despite hub failure
+            report = gov.execute_rollback()
+
+        # Verify model was restored despite hub failure
+        assert torch.allclose(model.linear.weight.data, original_weight)
+        assert report.rollback_occurred is True
+
+    def test_rollback_succeeds_when_emit_raises(self):
+        """Rollback must succeed even if hub.emit() raises.
+
+        Edge case: Hub initializes successfully but emit fails
+        (network error, serialization error, disk full, etc.).
+        """
+        from unittest.mock import Mock, patch
+        from esper.tolaria import TolariaGovernor
+
+        model = DummyModel()
+        gov = TolariaGovernor(model)
+
+        original_weight = model.linear.weight.data.clone()
+        gov.snapshot()
+        model.linear.weight.data.fill_(999.0)
+
+        for i in range(5):
+            gov.loss_history.append(1.0)
+
+        with patch("esper.nissa.get_hub") as mock_get_hub:
+            hub = Mock()
+            hub.emit.side_effect = RuntimeError("Emit failed: disk full")
+            mock_get_hub.return_value = hub
+
+            report = gov.execute_rollback()
+
+        # Model should be restored despite emit failure
+        assert torch.allclose(model.linear.weight.data, original_weight)
+        assert report.rollback_occurred is True
+
+    def test_rollback_logs_telemetry_failure_to_stderr(self, capsys):
+        """Telemetry failures should be logged to stderr for visibility.
+
+        The rollback succeeds silently in terms of exceptions, but the
+        telemetry failure should be visible in logs for debugging.
+        """
+        from unittest.mock import patch
+        from esper.tolaria import TolariaGovernor
+
+        model = DummyModel()
+        gov = TolariaGovernor(model)
+        gov.snapshot()
+
+        for i in range(5):
+            gov.loss_history.append(1.0)
+
+        with patch("esper.nissa.get_hub") as mock_get_hub:
+            mock_get_hub.side_effect = RuntimeError("Hub init failed")
+
+            gov.execute_rollback()
+
+        captured = capsys.readouterr()
+        assert "WARNING" in captured.err
+        assert "rollback succeeded" in captured.err
+        assert "telemetry" in captured.err.lower()

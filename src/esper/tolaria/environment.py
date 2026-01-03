@@ -52,7 +52,8 @@ def validate_device(device: str, *, require_explicit_index: bool = False) -> tor
         Parsed torch.device object.
 
     Raises:
-        ValueError: If device string is malformed or violates require_explicit_index.
+        ValueError: If device string is malformed, unsupported device type,
+            or violates require_explicit_index.
         RuntimeError: If CUDA/MPS is requested but unavailable, or if CUDA index is
             out of range.
 
@@ -61,8 +62,20 @@ def validate_device(device: str, *, require_explicit_index: bool = False) -> tor
         >>> validate_device("cuda", require_explicit_index=True)  # Raises ValueError
         >>> validate_device("cuda:999")  # Raises RuntimeError if only 2 GPUs
         >>> validate_device("mps")  # OK on Apple Silicon, error otherwise
+        >>> validate_device("meta")  # Raises ValueError - unsupported device type
     """
+    from esper.leyline import SUPPORTED_DEVICE_TYPES
+
     dev = parse_device(device)
+
+    # Fail-fast on unsupported device types (meta, xla, xpu, hpu, etc.)
+    # These are valid PyTorch devices but not supported for Esper training.
+    if dev.type not in SUPPORTED_DEVICE_TYPES:
+        raise ValueError(
+            f"Unsupported device type '{dev.type}' (from '{device}'). "
+            f"Esper supports: {', '.join(sorted(SUPPORTED_DEVICE_TYPES))}. "
+            f"Device types like 'meta', 'xla', 'xpu' are not supported for training."
+        )
 
     # MPS validation (Apple Silicon)
     if dev.type == "mps":

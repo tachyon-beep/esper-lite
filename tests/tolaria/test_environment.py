@@ -144,6 +144,37 @@ class TestValidateDevice:
         with pytest.raises(ValueError, match="Invalid device"):
             validate_device("cuda0")  # Missing colon
 
+    def test_validate_meta_device_raises(self):
+        """Meta device is valid PyTorch but unsupported by Esper.
+
+        Meta device creates tensors with shape/dtype but no actual storage.
+        Forward passes work but backward passes produce empty gradients,
+        causing silent training failures where the model appears to train
+        but never actually updates.
+        """
+        with pytest.raises(ValueError, match="Unsupported device.*meta"):
+            validate_device("meta")
+
+    def test_validate_xpu_device_raises(self):
+        """XPU (Intel GPU) is valid PyTorch but unsupported by Esper."""
+        with pytest.raises(ValueError, match="Unsupported device.*xpu"):
+            validate_device("xpu")
+
+    def test_validate_xla_device_raises(self):
+        """XLA (TPU) is valid PyTorch but unsupported by Esper."""
+        with pytest.raises(ValueError, match="Unsupported device.*xla"):
+            validate_device("xla")
+
+    def test_validate_hpu_device_raises(self):
+        """HPU (Habana Gaudi) is valid PyTorch but unsupported by Esper."""
+        with pytest.raises(ValueError, match="Unsupported device.*hpu"):
+            validate_device("hpu")
+
+    def test_validate_privateuseone_device_raises(self):
+        """Custom backend devices are unsupported by Esper."""
+        with pytest.raises(ValueError, match="Unsupported device.*privateuseone"):
+            validate_device("privateuseone")
+
 
 class TestTolariaPublicAPI:
     """Tests for Tolaria module's public API and lazy imports."""

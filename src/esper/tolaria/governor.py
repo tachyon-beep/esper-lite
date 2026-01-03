@@ -288,10 +288,6 @@ class TolariaGovernor:
         std = math.sqrt(variance) if variance > 0 else 0.0
         threshold = avg + (self.sensitivity * std)
 
-        # Prepare telemetry data (emitted after rollback completes)
-        # Import hub at function scope to defer initialization
-        from esper.nissa import get_hub
-        hub = get_hub()
         # Cast is safe: _panic_reason is only set to valid GovernorPanicReason values
         panic_reason = cast(GovernorPanicReason, self._panic_reason or "governor_rollback")
 
@@ -347,24 +343,43 @@ class TolariaGovernor:
                 + (f"... ({len(bad_unexpected)} total)" if len(bad_unexpected) > 5 else "")
             )
 
-        # Emit single rollback event with all context (B1-CR-02: no duplicate emissions)
-        hub.emit(TelemetryEvent(
-            event_type=TelemetryEventType.GOVERNOR_ROLLBACK,
-            severity="critical",
-            message="Critical instability detected - rollback complete",
-            data=GovernorRollbackPayload(
-                env_id=env_id,
-                device=str(device),
-                reason="Structural Collapse",
-                loss_at_panic=self._panic_loss,
-                loss_threshold=threshold,
-                consecutive_panics=self.consecutive_panics,
-                panic_reason=panic_reason,
-                # Include key mismatch info if present (diagnostic context)
-                missing_keys=list(missing_keys) if missing_keys else None,
-                unexpected_keys=list(unexpected_keys) if unexpected_keys else None,
-            ),
-        ))
+        # =========================================================================
+        # TELEMETRY EMISSION (best-effort, AFTER rollback succeeds)
+        # =========================================================================
+        # SAFETY INVARIANT: Rollback is the critical path. Telemetry is observability.
+        # If telemetry fails (hub not initialized, emit raises, etc.), the rollback
+        # has already succeeded. We log to stderr as fallback but DO NOT abort.
+        #
+        # This ordering ensures the safety mechanism never fails due to a telemetry
+        # subsystem issue. See Issue 2 in Tolaria audit (2026-01-04).
+        try:
+            from esper.nissa import get_hub
+            hub = get_hub()
+            hub.emit(TelemetryEvent(
+                event_type=TelemetryEventType.GOVERNOR_ROLLBACK,
+                severity="critical",
+                message="Critical instability detected - rollback complete",
+                data=GovernorRollbackPayload(
+                    env_id=env_id,
+                    device=str(device),
+                    reason="Structural Collapse",
+                    loss_at_panic=self._panic_loss,
+                    loss_threshold=threshold,
+                    consecutive_panics=self.consecutive_panics,
+                    panic_reason=panic_reason,
+                    # Include key mismatch info if present (diagnostic context)
+                    missing_keys=list(missing_keys) if missing_keys else None,
+                    unexpected_keys=list(unexpected_keys) if unexpected_keys else None,
+                ),
+            ))
+        except Exception as e:
+            # Rollback succeeded but telemetry failed - acceptable degradation.
+            # Log to stderr so the failure is visible but doesn't abort training.
+            import sys
+            print(
+                f"WARNING: Governor rollback succeeded but telemetry emission failed: {e}",
+                file=sys.stderr,
+            )
 
         # IMPORTANT: Optimizer state must be cleared by the CALLER after rollback.
         #
