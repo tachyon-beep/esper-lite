@@ -48,6 +48,7 @@ from esper.karn.constants import TUIThresholds
 from esper.karn.sanctum.widgets.reward_health import RewardHealthData
 from esper.karn.pareto import extract_pareto_frontier, compute_hypervolume_2d
 from esper.leyline import (
+    DEFAULT_EPISODE_LENGTH,
     DEFAULT_GAMMA,
     TrainingStartedPayload,
     EpochCompletedPayload,
@@ -187,7 +188,7 @@ class SanctumAggregator:
     # Run context
     _run_id: str = ""
     _task_name: str = ""
-    _max_epochs: int = 75
+    _max_epochs: int = DEFAULT_EPISODE_LENGTH
     _max_batches: int = 100
     _start_time: float = field(default_factory=time.time)
     _connected: bool = False
@@ -941,6 +942,19 @@ class SanctumAggregator:
         self._tamiyo.value_std = payload.value_std
         self._tamiyo.value_min = payload.value_min
         self._tamiyo.value_max = payload.value_max
+
+        # Value function quality metrics (TELE-220 to TELE-228)
+        # Update the nested ValueFunctionMetrics dataclass
+        vf = self._tamiyo.value_function
+        vf.v_return_correlation = payload.v_return_correlation
+        vf.td_error_mean = payload.td_error_mean
+        vf.td_error_std = payload.td_error_std
+        vf.bellman_error = payload.bellman_error
+        vf.return_p10 = payload.return_p10
+        vf.return_p50 = payload.return_p50
+        vf.return_p90 = payload.return_p90
+        vf.return_variance = payload.return_variance
+        vf.return_skewness = payload.return_skewness
 
         # Op-conditioned Q-values (Policy V2)
         self._tamiyo.q_germinate = payload.q_germinate
