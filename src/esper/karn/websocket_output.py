@@ -9,6 +9,12 @@ Architecture:
     | emit(event) |-- queue --->| broadcast(msg)  |
     +-------------+             +-----------------+
 
+Thread-Safety Design:
+    - _state_lock protects all state transitions (_running, _loop, _thread)
+    - _shutdown_event signals the async loop to exit gracefully
+    - close() is idempotent and safe to call multiple times
+    - Loop is only accessed via call_soon_threadsafe when confirmed running
+
 Usage:
     from esper.karn import WebSocketOutput
 
@@ -74,6 +80,8 @@ class WebSocketOutput:
         self._thread: threading.Thread | None = None
         self._running = False
         self._server_ready = threading.Event()
+        self._shutdown_event: asyncio.Event | None = None  # Created in async context
+        self._state_lock = threading.Lock()  # Protects _running, _loop, _thread
 
         if start_server:
             self.start()
@@ -95,47 +103,116 @@ class WebSocketOutput:
 
     def start(self) -> None:
         """Start WebSocket server in background thread."""
-        if self._running:
-            return
+        with self._state_lock:
+            if self._running:
+                return
 
-        self._running = True
-        self._thread = threading.Thread(
-            target=self._run_event_loop,
-            daemon=True,
-            name="karn-websocket",
-        )
-        self._thread.start()
+            # Reset ready event in case of restart attempt
+            self._server_ready.clear()
+
+            self._thread = threading.Thread(
+                target=self._run_event_loop,
+                daemon=True,
+                name="karn-websocket",
+            )
+            self._thread.start()
 
         # Wait for server to be ready (with timeout)
+        # Note: _running is set by the thread once loop is established
         if not self._server_ready.wait(timeout=5.0):
             _logger.warning("WebSocket server startup timed out")
 
     def close(self) -> None:
-        """Stop WebSocket server and cleanup."""
-        self._running = False
+        """Stop WebSocket server and cleanup.
 
-        if self._loop:
-            self._loop.call_soon_threadsafe(self._loop.stop)
+        This method is idempotent and safe to call:
+        - Multiple times
+        - After failed startup
+        - From any thread
+        """
+        with self._state_lock:
+            if not self._running:
+                return
 
-        if self._thread and self._thread.is_alive():
+            self._running = False
+            loop = self._loop
+            shutdown_event = self._shutdown_event
+
+        # Signal async shutdown outside lock to avoid deadlock
+        if loop is not None and shutdown_event is not None:
+            try:
+                # Use call_soon_threadsafe to set the event from this thread
+                loop.call_soon_threadsafe(shutdown_event.set)
+            except RuntimeError:
+                # Loop already closed - thread will exit on its own
+                pass
+
+        if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=2.0)
+            if self._thread.is_alive():
+                _logger.warning("WebSocket thread did not exit cleanly")
+
+        # Clear references after thread exits
+        with self._state_lock:
+            self._loop = None
+            self._shutdown_event = None
+            self._thread = None
 
         _logger.info("WebSocket server stopped")
 
     def _run_event_loop(self) -> None:
-        """Run asyncio event loop in background thread."""
-        self._loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self._loop)
+        """Run asyncio event loop in background thread.
+
+        Lifecycle:
+        1. Create new event loop for this thread
+        2. Create shutdown event (must be in async context)
+        3. Set _running = True under lock (signals successful init)
+        4. Run _serve() until shutdown_event is set
+        5. Clean up pending tasks
+        6. Close loop and clear references
+        """
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        # Create shutdown event in the loop's context
+        shutdown_event = asyncio.Event()
+
+        # Atomically publish loop and shutdown_event, mark as running
+        with self._state_lock:
+            self._loop = loop
+            self._shutdown_event = shutdown_event
+            self._running = True
 
         try:
-            self._loop.run_until_complete(self._serve())
+            loop.run_until_complete(self._serve(shutdown_event))
         except Exception as e:
             _logger.error(f"WebSocket server error: {e}")
         finally:
-            self._loop.close()
+            # Cancel any pending tasks
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
 
-    async def _serve(self) -> None:
-        """Main async server loop."""
+            # Allow cancelled tasks to complete
+            if pending:
+                loop.run_until_complete(
+                    asyncio.gather(*pending, return_exceptions=True)
+                )
+
+            loop.close()
+
+            # Clear state under lock
+            with self._state_lock:
+                self._loop = None
+                self._shutdown_event = None
+                self._running = False
+
+    async def _serve(self, shutdown_event: asyncio.Event) -> None:
+        """Main async server loop.
+
+        Args:
+            shutdown_event: Event signaled by close() to trigger graceful shutdown
+        """
         try:
             from websockets.server import serve  # type: ignore[import-not-found]  # no stubs
         except ImportError:
@@ -158,10 +235,17 @@ class WebSocketOutput:
                 )
                 self._server_ready.set()
 
-                # Broadcast loop - poll queue and send to clients
-                while self._running:
+                # Broadcast loop - wait for shutdown or poll interval
+                while not shutdown_event.is_set():
                     await self._broadcast_queued_events()
-                    await asyncio.sleep(0.05)  # 50ms poll interval (20 Hz)
+                    # Use wait with timeout for responsive shutdown
+                    try:
+                        await asyncio.wait_for(
+                            shutdown_event.wait(),
+                            timeout=0.05,  # 50ms poll interval (20 Hz)
+                        )
+                    except asyncio.TimeoutError:
+                        pass  # Continue broadcasting
 
         except OSError as e:
             _logger.error(f"Failed to start WebSocket server: {e}")
