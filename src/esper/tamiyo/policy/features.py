@@ -319,6 +319,16 @@ def _extract_slot_features_v3(
 # =============================================================================
 # Vectorized Construction (Task 2d)
 # =============================================================================
+# TODO: [FUTURE FUNCTIONALITY] - Wire vectorized one-hot into batch_obs_to_features().
+# This infrastructure is implemented but not yet integrated into the hot path.
+# Full benefit requires vectorizing batch_obs_to_features() to:
+#   1. Pre-allocate output tensor on device
+#   2. Batch-extract stage indices across all envs/slots
+#   3. Use _vectorized_one_hot() instead of per-slot _stage_to_one_hot()
+#   4. Fill features with advanced indexing rather than Python loops
+# Current scalar implementation is correct but creates many small tensor
+# allocations. The one-hot cache alone provides minimal speedup without
+# the surrounding loop vectorization.
 
 # Module-level one-hot table for stage encoding
 _STAGE_ONE_HOT_TABLE = torch.eye(NUM_STAGES, dtype=torch.float32)
@@ -531,8 +541,8 @@ def batch_obs_to_features(
                     max_epochs=max_epochs,
                 )
             else:
-                # Inactive slot - all zeros (30 dims)
-                slot_features = torch.zeros(30, dtype=torch.float32)
+                # Inactive slot - all zeros
+                slot_features = torch.zeros(SLOT_FEATURE_SIZE, dtype=torch.float32)
             slot_features_list.append(slot_features)
 
         # Concatenate base + all slot features

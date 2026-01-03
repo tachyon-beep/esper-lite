@@ -205,3 +205,63 @@ class TestTELE220to228ValueFunctionMetrics:
         metrics = ppo_agent.update()
 
         assert metrics == {}, "Empty buffer should return empty metrics dict"
+
+
+class TestExplainedVarianceScaling:
+    """Test that explained_variance is computed on consistent scales.
+
+    Regression test for: EV was computed mixing normalized-scale values
+    (from buffer) with raw-scale returns, producing incorrect results.
+    """
+
+    def test_explained_variance_in_valid_range(self, ppo_agent):
+        """explained_variance should be in reasonable range [-1, 1] typically.
+
+        With properly scaled computation, EV should not be wildly negative
+        or exceed 1.0 (which would indicate scale mismatch issues).
+        """
+        _fill_buffer_with_rollout(ppo_agent, varied_rewards=True)
+
+        metrics = ppo_agent.update()
+
+        ev = metrics["explained_variance"]
+        # EV should be in [-1, 1] range for properly scaled computation
+        # Extremely negative values (< -10) indicate scale mismatch
+        assert ev >= -10.0, (
+            f"explained_variance {ev} is extremely negative, "
+            "suggesting scale mismatch between values and returns"
+        )
+        assert ev <= 1.0 + 1e-6, (
+            f"explained_variance {ev} exceeds 1.0, "
+            "which is mathematically impossible for correctly computed EV"
+        )
+
+    def test_explained_variance_with_active_normalizer(self, ppo_agent):
+        """EV computed correctly when value normalizer has non-trivial scale.
+
+        This test forces the value normalizer into a state with large std,
+        then verifies EV is still in valid range (not corrupted by scale mismatch).
+        """
+        # Warm up the value normalizer with large-scale returns
+        large_returns = torch.tensor([100.0, 200.0, 300.0, 400.0])
+        for _ in range(10):  # Ensure we exceed warmup threshold (32 samples)
+            ppo_agent.value_normalizer.update(large_returns)
+
+        # Verify normalizer has non-trivial scale
+        scale = ppo_agent.value_normalizer.get_scale()
+        assert scale > 10.0, f"Expected large normalizer scale, got {scale}"
+
+        # Fill buffer and update
+        _fill_buffer_with_rollout(ppo_agent, varied_rewards=True)
+        metrics = ppo_agent.update()
+
+        ev = metrics["explained_variance"]
+        # Even with large normalizer scale, EV should be in valid range
+        # if values are properly denormalized before EV computation
+        assert ev >= -10.0, (
+            f"explained_variance {ev} is extremely negative with active normalizer "
+            f"(scale={scale}), suggesting values not denormalized"
+        )
+        assert ev <= 1.0 + 1e-6, (
+            f"explained_variance {ev} exceeds 1.0 with active normalizer"
+        )

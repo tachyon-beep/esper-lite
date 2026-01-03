@@ -448,12 +448,16 @@ class PPOAgent:
         # This measures how well the value function from rollout collection predicts returns.
         # Post-update EV would measure the updated value function against stale returns,
         # which is less meaningful. High pre-update EV (>0.8) indicates good value estimates.
+        #
+        # SCALE FIX: Values from buffer are on normalized scale (critic trained on normalized
+        # returns), but returns are on raw scale. Denormalize values to match returns scale.
         valid_values = data["values"][valid_mask]
         valid_returns = data["returns"][valid_mask]
+        raw_values = self.value_normalizer.denormalize(valid_values)
         var_returns = valid_returns.var()
         explained_variance: float
         if var_returns > 1e-8:
-            ev_tensor = 1.0 - (valid_returns - valid_values).var() / var_returns
+            ev_tensor = 1.0 - (valid_returns - raw_values).var() / var_returns
             explained_variance = ev_tensor.item()
         else:
             explained_variance = 0.0

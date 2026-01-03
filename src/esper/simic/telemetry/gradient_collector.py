@@ -194,7 +194,7 @@ def materialize_grad_stats(async_stats: dict[str, bool | int | float | torch.Ten
     Returns:
         GradientHealthStats with Python float/bool values ready for telemetry
     """
-    if async_stats.get('_empty', False):
+    if async_stats['_empty']:
         # Already materialized (empty case returns Python values directly)
         return {
             'gradient_norm': float(async_stats['gradient_norm']),

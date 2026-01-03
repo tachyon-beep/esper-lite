@@ -123,6 +123,13 @@ class HeuristicTamiyo:
                 f"Available: {sorted(str(b) for b in available_blueprints)}"
             )
 
+        if not self.config.blueprint_rotation:
+            raise ValueError(
+                f"blueprint_rotation cannot be empty for topology '{topology}'. "
+                f"At least one blueprint is required. "
+                f"Available: {sorted(str(b) for b in available_blueprints)}"
+            )
+
         self._blueprint_index = 0
         self._germination_count = 0
         self._decisions_made: list[TamiyoDecision] = []
