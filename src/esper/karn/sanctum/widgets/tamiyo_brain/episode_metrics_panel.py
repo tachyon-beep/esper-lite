@@ -126,37 +126,47 @@ class EpisodeMetricsPanel(Static):
     def _render_training(self) -> Text:
         """Render training mode DRL diagnostic metrics.
 
-        Layout (4 lines):
-            Entropy:0.42  Yield:58%  Slots:62%
+        Layout (5 lines):
+            Entropy      Yield        Slots
+            0.42         58%          62%
+            → Healthy - policy converging
             Steps/Act    germ:12  prune:45  foss:89
             Trend        improving ↗
-            → Healthy - policy converging
         """
         assert self._snapshot is not None  # Guarded by render()
         stats = self._snapshot.episode_stats
         result = Text()
 
-        # Line 1: DRL diagnostic metrics (Entropy, Yield, Slot Util)
-        # Entropy
+        # Column width for metric display (13 chars each)
+        COL_W = 13
+
+        # Line 1: Column headers
+        result.append("Entropy".ljust(COL_W), style="dim")
+        result.append("Yield".ljust(COL_W), style="dim")
+        result.append("Slots", style="dim")
+        result.append("\n")
+
+        # Line 2: Values in columns
         entropy = stats.action_entropy
         entropy_style = self._entropy_style(entropy)
-        result.append("Entropy:", style="dim")
-        result.append(f"{entropy:.2f}", style=entropy_style)
+        result.append(f"{entropy:.2f}".ljust(COL_W), style=entropy_style)
 
-        # Yield
-        result.append("  Yield:", style="dim")
         yield_rate = stats.yield_rate
         yield_style = self._yield_style(yield_rate)
-        result.append(f"{yield_rate:.0%}", style=yield_style)
+        result.append(f"{yield_rate:.0%}".ljust(COL_W), style=yield_style)
 
-        # Slot utilization
-        result.append("  Slots:", style="dim")
         slot_util = stats.slot_utilization
         slot_style = self._slot_util_style(slot_util)
         result.append(f"{slot_util:.0%}", style=slot_style)
         result.append("\n")
 
-        # Line 2: Steps per action type
+        # Line 3: Interpretation - human-readable diagnosis
+        interpretation, interp_style = self._interpret_metrics(stats)
+        result.append("→ ", style="dim")
+        result.append(interpretation, style=interp_style)
+        result.append("\n")
+
+        # Line 4: Steps per action type
         result.append("Steps/Act".ljust(self.COL1), style="dim")
         result.append("germ:", style="dim")
         result.append(f"{stats.steps_per_germinate:.0f}".ljust(5), style="cyan")
@@ -166,7 +176,7 @@ class EpisodeMetricsPanel(Static):
         result.append(f"{stats.steps_per_fossilize:.0f}", style="cyan")
         result.append("\n")
 
-        # Line 3: Trend indicator
+        # Line 5: Trend indicator
         result.append("Trend".ljust(self.COL1), style="dim")
         trend_map = {
             "improving": ("improving ↗", "green"),
@@ -177,12 +187,6 @@ class EpisodeMetricsPanel(Static):
             stats.completion_trend, ("stable →", "dim")
         )
         result.append(trend_text, style=trend_style)
-        result.append("\n")
-
-        # Line 4: Interpretation - human-readable diagnosis
-        interpretation, interp_style = self._interpret_metrics(stats)
-        result.append("→ ", style="dim")
-        result.append(interpretation, style=interp_style)
 
         return result
 
