@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B5-DRL-04` |
 | **Severity** | `P3` |
-| **Status** | `open` |
+| **Status** | `closed` |
 | **Batch** | 5 |
 | **Agent** | `drl` |
 | **Domain** | `simic/attribution` |
@@ -134,6 +134,48 @@ None.
 | **Reviewer** | Code Review Specialist |
 
 **Evaluation:** Confirmed at line 396: `n_perms = min(100, n_samples)`. This silently ignores user-requested values above 100, which violates the principle of least surprise. The recommended fix (adding a warning log) is appropriate and low-risk. Making it configurable via `CounterfactualConfig.max_permutations` would be overkill for a reasonable performance guard.
+
+---
+
+## Resolution
+
+### Status: FIXED
+
+**Fixed by adding a warning log when shapley_samples exceeds the 100 permutation cap.**
+
+#### Evidence
+
+| Claim | Status | Evidence |
+|-------|--------|----------|
+| "Line 396 silently caps at 100" | ✅ TRUE (line 397) | `n_perms = min(100, n_samples)` confirmed |
+| "User config is ignored" | ✅ TRUE | `shapley_samples > 100` gets truncated |
+| "No warning is logged" | ✅ TRUE (was) | Now fixed with warning log |
+
+#### The Fix
+
+Added warning log in `compute_shapley_values()` when `shapley_samples > 100`:
+
+```python
+max_perms = 100  # Computational tractability limit
+if n_samples > max_perms:
+    _logger.warning(
+        "Shapley permutations capped at %d (requested %d via shapley_samples)",
+        max_perms,
+        n_samples,
+    )
+n_perms = min(max_perms, n_samples)
+```
+
+#### Tests Added
+
+- `TestShapleyPermutationCap.test_warning_logged_when_samples_exceed_cap`
+- `TestShapleyPermutationCap.test_no_warning_when_samples_within_cap`
+
+#### Severity Confirmation
+
+- Original: P3 (API contract violation)
+- Confirmed: P3 (no change - appropriate severity for this issue)
+- Resolution: FIXED
 
 ---
 
