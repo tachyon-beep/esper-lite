@@ -191,7 +191,7 @@ These flags control Tamiyo's training directly. All are optional - presets provi
 | `--episode-length L`        | 150     | Timesteps per environment per round                      |
 | `--ppo-epochs E`            | 1       | Gradient steps per round (passes over rollout data)      |
 | `--memory-size H`           | 512     | Tamiyo LSTM hidden dimension                             |
-| `--entropy-anneal-rounds R` | 0       | Rounds over which to anneal entropy (0 = no annealing)   |
+| `--entropy-anneal-episodes N` | 0     | Env-episodes for entropy annealing (N/K batches with K envs) |
 
 Each round produces `K × L` transitions for Tamiyo's PPO update.
 Doubling `--rounds` = 2× training time. Doubling `--envs` = richer data per round, same training time.

@@ -45,7 +45,17 @@ class PPOUpdateMetrics(TypedDict, total=False):
     Important: PPOAgent.update() aggregates metrics across epochs before
     returning, so scalar metrics are float (not list[float]). Only
     head_entropies and head_grad_norms retain per-epoch structure.
+
+    Finiteness Gate Contract:
+    - ppo_update_performed: True if at least one epoch completed successfully
+    - finiteness_gate_skip_count: Number of epochs skipped due to non-finite values
+    - When all epochs skip: ppo_update_performed=False, other metrics are NaN
+    - Callers should check ppo_update_performed before using other metrics
     """
+
+    # Update status (finiteness gate contract)
+    ppo_update_performed: bool  # True if at least one epoch completed
+    finiteness_gate_skip_count: int  # Number of epochs skipped due to NaN/Inf
 
     # Scalar metrics (aggregated across epochs)
     policy_loss: float

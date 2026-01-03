@@ -1806,6 +1806,7 @@ def train_ppo_vectorized(
         best_state = None
         recent_accuracies = []
         recent_rewards = []
+        consecutive_finiteness_failures = 0  # Track PPO updates with all epochs skipped
         prev_rolling_avg_acc: float | None = (
             None  # Track previous rolling avg for trend detection
         )
@@ -3631,6 +3632,29 @@ def train_ppo_vectorized(
                         grad_health = 1.0  # Healthy range
                     drift_metrics = grad_ema_tracker.update(ppo_grad_norm, grad_health)
     
+                # FINITENESS GATE CONTRACT: Check if PPO update actually occurred
+                if not metrics.get("ppo_update_performed", True):
+                    # All epochs skipped due to non-finite values
+                    skip_count = metrics.get("finiteness_gate_skip_count", 0)
+                    consecutive_finiteness_failures += 1
+                    logger.warning(
+                        f"PPO update skipped (all {skip_count} epochs hit finiteness gate). "
+                        f"Consecutive failures: {consecutive_finiteness_failures}/3"
+                    )
+
+                    # Escalate after 3 consecutive failures (DRL best practice)
+                    if consecutive_finiteness_failures >= 3:
+                        raise RuntimeError(
+                            f"PPO training failed: {consecutive_finiteness_failures} consecutive updates "
+                            "skipped due to non-finite values. Check policy/value network outputs for NaN. "
+                            f"Last failure: {metrics.get('finiteness_gate_failures', 'unknown')}"
+                        )
+                    # Skip anomaly detection for this batch - metrics are NaN
+                    continue
+
+                # Reset counter on successful update
+                consecutive_finiteness_failures = 0
+
                 metric_values = [v for v in metrics.values() if isinstance(v, (int, float))]
                 anomaly_report = anomaly_detector.check_all(
                     # MANDATORY metrics after PPO update - fail loudly if missing

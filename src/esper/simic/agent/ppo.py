@@ -1043,6 +1043,36 @@ class PPOAgent:
         # TypedDict doesn't support dynamic key assignment, so we use type: ignore
         # The aggregation converts list[float] to float for most metrics
         aggregated_result: PPOUpdateMetrics = {}
+
+        # FINITENESS GATE CONTRACT: Check if any epochs actually completed
+        # ratio_max is only populated when an epoch successfully computes losses
+        finiteness_failures = metrics.get("finiteness_gate_failures", [])
+        epochs_completed = len(metrics.get("ratio_max", []))
+
+        if epochs_completed == 0:
+            # All epochs skipped - return explicit signal with NaN values
+            # This prevents downstream code from treating 0.0 as a valid measurement
+            aggregated_result["ppo_update_performed"] = False
+            aggregated_result["finiteness_gate_skip_count"] = len(finiteness_failures)
+            # Use NaN for metrics that weren't computed (not 0.0 which looks "normal")
+            aggregated_result["ratio_max"] = float("nan")
+            aggregated_result["ratio_min"] = float("nan")
+            aggregated_result["policy_loss"] = float("nan")
+            aggregated_result["value_loss"] = float("nan")
+            aggregated_result["entropy"] = float("nan")
+            aggregated_result["approx_kl"] = float("nan")
+            aggregated_result["clip_fraction"] = float("nan")
+            aggregated_result["explained_variance"] = float("nan")
+            aggregated_result["pre_clip_grad_norm"] = float("nan")
+            # Keep failure details for diagnostics
+            if finiteness_failures:
+                aggregated_result["finiteness_gate_failures"] = finiteness_failures  # type: ignore[literal-required]
+            return aggregated_result
+
+        # At least one epoch completed successfully
+        aggregated_result["ppo_update_performed"] = True
+        aggregated_result["finiteness_gate_skip_count"] = len(finiteness_failures)
+
         for k, v in metrics.items():
             if not v:
                 aggregated_result[k] = 0.0  # type: ignore[literal-required]

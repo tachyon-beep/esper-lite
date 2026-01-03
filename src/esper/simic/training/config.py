@@ -75,6 +75,10 @@ class TrainingConfig:
     entropy_coef_start: float | None = None
     entropy_coef_end: float | None = None
     entropy_coef_min: float = DEFAULT_ENTROPY_COEF_MIN
+    # Total env-episodes over which to anneal entropy from start to end.
+    # With n_envs=K, this produces ceil(entropy_anneal_episodes / K) PPO batches
+    # of annealing. Note: this is env-episode-based, not PPO-update-based.
+    # Changing n_envs changes the number of PPO updates but not the total env experience.
     entropy_anneal_episodes: int = 0
 
     # === Telemetry and runtime flags ===
