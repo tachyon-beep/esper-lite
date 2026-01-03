@@ -20,7 +20,14 @@ Infrastructure metrics fall into two categories:
 
 This test file covers EMITTED metrics end-to-end. Aggregator-computed metrics
 are tested in tests/karn/sanctum/test_aggregator.py and test_schema.py.
+
+AUDIT NOTE: Tests for aggregator-computed metrics (TELE-701 through TELE-730) only
+verify schema structure, not real data flow through the aggregator. These are
+marked xfail pending integration tests that verify the aggregator actually
+computes these values from telemetry events.
 """
+
+import pytest
 
 from esper.leyline import TelemetryEvent, TelemetryEventType
 from esper.leyline.telemetry import TrainingStartedPayload, PPOUpdatePayload
