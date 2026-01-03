@@ -65,7 +65,7 @@ def compute_value_function_metrics(
     # TD Error Statistics (TELE-221/222/223)
     td_mean = td_errors.mean()
     td_std = td_errors.std(correction=0)
-    bellman = (td_errors**2).mean()  # Mean squared TD error
+    bellman = td_errors.abs().mean()  # Mean absolute TD error
 
     # V-Return Correlation (TELE-220)
     # Pearson: cov(X,Y) / (std(X) * std(Y))

@@ -19,8 +19,8 @@ class TestComputeValueFunctionMetrics:
 
         assert abs(metrics["td_error_mean"] - 2.5) < 0.01
         assert metrics["td_error_std"] > 0
-        # Bellman = mean(delta^2) = mean([1, 4, 9, 16]) = 7.5
-        assert abs(metrics["bellman_error"] - 7.5) < 0.01
+        # Bellman = mean(|delta|) = mean([1, 2, 3, 4]) = 2.5
+        assert abs(metrics["bellman_error"] - 2.5) < 0.01
 
     def test_computes_v_return_correlation(self):
         """Should compute Pearson correlation between values and returns."""
