@@ -593,6 +593,137 @@ class TestTELE610EpisodeStats:
         assert abs(snapshot.episode_stats.steps_per_prune - 100.0) < 0.1
         assert abs(snapshot.episode_stats.steps_per_fossilize - 100.0) < 0.1
 
+    def test_rollback_episodes_include_tele610_fields(self) -> None:
+        """TELE-610: Rollback episodes must emit all diagnostic fields.
+
+        Regression test for bug where vectorized.py rollback emission path
+        (line ~3573) was missing TELE-610 fields:
+        - episode_length
+        - outcome_type
+        - germinate_count
+        - prune_count
+        - fossilize_count
+
+        Both emission paths (main at ~3387 and rollback at ~3573) must emit
+        complete EpisodeOutcomePayload with identical field coverage.
+
+        This test verifies the aggregator correctly handles payloads that
+        simulate rollback scenarios (low accuracy after rollback penalty).
+        """
+        agg = SanctumAggregator(num_envs=1)
+
+        # Simulate a rollback episode: low final accuracy due to penalty
+        # Rollback episodes typically have final_accuracy < SUCCESS_THRESHOLD (0.8)
+        rollback_event = make_episode_outcome_event(
+            env_id=0,
+            episode_idx=0,
+            final_accuracy=45.0,  # Low accuracy after rollback
+            param_ratio=0.3,
+            episode_length=50,  # Rollback may happen mid-episode
+            outcome_type="timeout",  # Rollback episodes classified as timeout
+            germinate_count=3,
+            prune_count=1,
+            fossilize_count=0,
+        )
+        agg.process_event(rollback_event)
+
+        # Need BATCH_EPOCH_COMPLETED to set _current_episode for rate calculation
+        batch_event = make_batch_epoch_event(
+            episodes_completed=1,
+            batch_idx=0,
+            total_episodes=1,
+            n_envs=1,
+        )
+        agg.process_event(batch_event)
+
+        snapshot = agg.get_snapshot()
+
+        # Verify all TELE-610 fields are populated (not default zeros)
+        assert snapshot.episode_stats.length_mean == 50.0, (
+            "Rollback episode_length should populate length_mean"
+        )
+        assert snapshot.episode_stats.timeout_rate == 1.0, (
+            "Rollback outcome_type='timeout' should populate timeout_rate"
+        )
+        assert snapshot.episode_stats.steps_per_germinate > 0, (
+            "Rollback germinate_count should populate steps_per_germinate"
+        )
+
+
+# =============================================================================
+# TELE-610: Emitter Contract Tests
+# =============================================================================
+
+
+class TestTELE610EmitterContract:
+    """Tests verifying EpisodeOutcomePayload contract for TELE-610 fields.
+
+    These tests verify that the emission contract is maintained by testing
+    the payload dataclass directly. If vectorized.py emits incomplete payloads,
+    the aggregator tests above will still pass (using mock data), but these
+    contract tests document what fields MUST be present.
+    """
+
+    def test_episode_outcome_payload_has_all_tele610_fields(self) -> None:
+        """EpisodeOutcomePayload must include all TELE-610 diagnostic fields."""
+        # Verify required TELE-610 fields exist on the payload class
+        payload = EpisodeOutcomePayload(
+            env_id=0,
+            episode_idx=0,
+            final_accuracy=75.0,
+            param_ratio=0.2,
+            num_fossilized=1,
+            num_contributing_fossilized=1,
+            episode_reward=1.0,
+            stability_score=0.9,
+            reward_mode="shaped",
+            # TELE-610 fields - these must be explicitly settable
+            episode_length=100,
+            outcome_type="success",
+            germinate_count=2,
+            prune_count=1,
+            fossilize_count=1,
+        )
+
+        # Verify all fields are accessible
+        assert payload.episode_length == 100
+        assert payload.outcome_type == "success"
+        assert payload.germinate_count == 2
+        assert payload.prune_count == 1
+        assert payload.fossilize_count == 1
+
+    def test_episode_outcome_payload_defaults_document_wiring_gap(self) -> None:
+        """EpisodeOutcomePayload defaults reveal when emitter omits fields.
+
+        If an emitter creates EpisodeOutcomePayload without TELE-610 fields,
+        the defaults (0, "unknown") will be used. This test documents those
+        defaults so we can detect incomplete emissions in aggregator tests.
+        """
+        # Create payload WITHOUT TELE-610 fields (simulates old/broken emitter)
+        incomplete_payload = EpisodeOutcomePayload(
+            env_id=0,
+            episode_idx=0,
+            final_accuracy=75.0,
+            param_ratio=0.2,
+            num_fossilized=1,
+            num_contributing_fossilized=1,
+            episode_reward=1.0,
+            stability_score=0.9,
+            reward_mode="shaped",
+            # TELE-610 fields omitted - will use defaults
+        )
+
+        # These defaults indicate wiring gap when seen in production
+        assert incomplete_payload.episode_length == 0, (
+            "Default episode_length=0 indicates emitter didn't set the field"
+        )
+        assert incomplete_payload.outcome_type == "unknown", (
+            "Default outcome_type='unknown' indicates emitter didn't set the field"
+        )
+        assert incomplete_payload.germinate_count == 0
+        assert incomplete_payload.prune_count == 0
+        assert incomplete_payload.fossilize_count == 0
+
 
 # =============================================================================
 # TELE-650: Environment Status (FULLY WIRED)

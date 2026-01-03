@@ -3574,6 +3574,14 @@ def train_ppo_vectorized(
                                 # B11-CR-04 fix: First emission was suppressed for rollback episodes
                                 # (see line 3213), so we emit the corrected outcome here (one event total).
                                 if env_state.telemetry_cb:
+                                    # TELE-610: Classify rollback episode outcome
+                                    # Use same threshold as main path (line 3381)
+                                    SUCCESS_THRESHOLD = 0.8
+                                    if corrected_outcome.final_accuracy >= SUCCESS_THRESHOLD:
+                                        rollback_outcome_type = "success"
+                                    else:
+                                        rollback_outcome_type = "timeout"
+
                                     env_state.telemetry_cb(TelemetryEvent(
                                         event_type=TelemetryEventType.EPISODE_OUTCOME,
                                         epoch=corrected_outcome.episode_idx,
@@ -3587,6 +3595,12 @@ def train_ppo_vectorized(
                                             episode_reward=corrected_outcome.episode_reward,
                                             stability_score=corrected_outcome.stability_score,
                                             reward_mode=corrected_outcome.reward_mode,
+                                            # TELE-610: Episode diagnostics (was missing for rollback path)
+                                            episode_length=epoch,
+                                            outcome_type=rollback_outcome_type,
+                                            germinate_count=env_state.action_counts["GERMINATE"],
+                                            prune_count=env_state.action_counts["PRUNE"],
+                                            fossilize_count=env_state.action_counts["FOSSILIZE"],
                                         ),
                                     ))
                                 break
