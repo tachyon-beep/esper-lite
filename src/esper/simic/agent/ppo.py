@@ -1045,8 +1045,17 @@ class PPOAgent:
                 continue
 
             first = v[0]
-            if isinstance(first, dict):
-                # Diagnostic payloads (ratio_diagnostic) are not aggregated
+            # Metrics that should NOT be averaged across epochs
+            # Note: head_nan_detected/head_inf_detected are ORed in the epoch loop
+            # and added directly to aggregated_result at lines 1091-1092, not here.
+            if k == "finiteness_gate_failures":
+                # Keep ALL failure dicts (one per epoch that failed)
+                aggregated_result[k] = v  # type: ignore[literal-required]
+            elif k == "early_stop_epoch":
+                # int|None, not float - take the value (there's only ever one)
+                aggregated_result[k] = first  # type: ignore[literal-required]
+            elif k == "ratio_diagnostic":
+                # Complex diagnostic dict - take first (only one per explosion event)
                 aggregated_result[k] = first  # type: ignore[literal-required]
             else:
                 # Average across epochs (converts list[float] to float)
