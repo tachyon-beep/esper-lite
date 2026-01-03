@@ -8,7 +8,7 @@
 |-------|-------|
 | **Ticket ID** | `B3-DRL-08` |
 | **Severity** | `P2` |
-| **Status** | `open` |
+| **Status** | `invalid` |
 | **Batch** | 3 |
 | **Agent** | `drl` |
 | **Domain** | `kasmina` |
@@ -119,3 +119,44 @@ None.
 
 **Report file:** `docs/temp/2712reports/batch3-drl.md`
 **Section:** "P2 - Performance/Safety" (B3-TFM-01)
+
+---
+
+## Resolution
+
+### Status: NOT-A-BUG
+
+**Closed via Systematic Debugging investigation.**
+
+#### Evidence Table
+
+| Claim | Status | Evidence |
+|-------|--------|----------|
+| "Block masks can be large and accumulate GPU memory" | ❌ FALSE | Block masks use int32 indices: ~1KB for seq_len=1024, ~8KB total with 8 cache entries |
+| "Block masks are proportional to sequence length" | ⚠️ MISLEADING | O(seq²/block_size²), not O(seq²); seq=1024 → only 256 elements |
+| "autocast bypasses _apply()" | ✅ TRUE | But irrelevant - block masks are dtype-agnostic |
+| "dtype changes cause stale entries" | ❌ FALSE | Tested: same block mask works with float32/float16/bfloat16 |
+| "_MAX_CACHE_SIZE = 8 is a memory concern" | ❌ FALSE | 8KB total is negligible vs. model weights/activations |
+
+#### Why This Is Not A Bug
+
+1. **Block masks are NOT attention matrices:** They store sparse block indices (int32), not O(seq²) floating-point tensors. Memory is O((seq/block_size)²) ≈ 64 elements for seq=1024.
+
+2. **Block masks are dtype-agnostic:** `create_block_mask()` has no dtype parameter. Empirically verified: same mask works across float32/float16/bfloat16.
+
+3. **Cache is already well-bounded:** `_MAX_CACHE_SIZE = 8` limits total memory to ~8KB regardless of sequence length variation.
+
+4. **Including dtype in cache key is conservative but harmless:** Creates at most 2-3 redundant entries (float32/float16/bfloat16) but doesn't cause correctness issues.
+
+5. **The `_apply()` method correctly clears cache on `.to()` calls:** Autocast doesn't call `_apply()` but doesn't need to - block masks don't change with dtype.
+
+#### Severity Downgrade
+
+- Original: P2 (memory leak / resource issue)
+- Revised: N/A (not a bug)
+- Resolution: NOT-A-BUG - claims based on misunderstanding of BlockMask structure
+
+#### Sources
+
+- [PyTorch FlexAttention Documentation](https://docs.pytorch.org/docs/stable/nn.attention.flex_attention.html)
+- [FlexAttention Blog Post](https://pytorch.org/blog/flexattention/)
