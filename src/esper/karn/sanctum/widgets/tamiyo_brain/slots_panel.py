@@ -112,17 +112,22 @@ class SlotsPanel(Static):
         result.append(f"{lifecycle.active_count}/{lifecycle.total_slots}", style="cyan")
         result.append("\n")
 
-        # Line 2: Cumulative counts (Foss / Prune / Germ) with k-formatting for large values
-        result.append("Foss:", style="dim")
-        result.append(f"{_format_count(lifecycle.fossilize_count):>6}", style="blue")
-        result.append("  Prune:", style="dim")
+        # Line 2: Cumulative counts (Germ / Prune / Foss) with k-formatting
+        # Column order matches rate line below for vertical alignment
+        # Fixed column widths: label(6) + value(6) + spacer(2) = 14 chars per column
         prune_style = "red" if lifecycle.prune_count > lifecycle.fossilize_count else "dim"
-        result.append(f"{_format_count(lifecycle.prune_count):>6}", style=prune_style)
-        result.append("  Germ:", style="dim")
+
+        result.append("Germ: ", style="dim")
         result.append(f"{_format_count(lifecycle.germination_count):>6}", style="green")
+        result.append("  ", style="dim")
+        result.append("Prune:", style="dim")
+        result.append(f"{_format_count(lifecycle.prune_count):>6}", style=prune_style)
+        result.append("  ", style="dim")
+        result.append("Foss: ", style="dim")
+        result.append(f"{_format_count(lifecycle.fossilize_count):>6}", style="blue")
         result.append("\n")
 
-        # Line 2: Per-episode rates with trend indicators
+        # Line 3: Per-episode rates with trend indicators (same column order)
         def trend_arrow(trend: str) -> tuple[str, str]:
             """Return (arrow, style) for trend."""
             if trend == "rising":
@@ -136,14 +141,15 @@ class SlotsPanel(Static):
         p_arrow, p_style = trend_arrow(lifecycle.prune_trend)
         f_arrow, f_style = trend_arrow(lifecycle.fossilize_trend)
 
+        # Align with cumulative counts above: Germ | Prune | Foss
         result.append(f"Germ{g_arrow}", style=g_style)
-        result.append(f"{lifecycle.germination_rate:.1f}/ep", style="dim")
+        result.append(f"{lifecycle.germination_rate:>4.1f}/ep", style="dim")
         result.append("  ", style="dim")
         result.append(f"Prune{p_arrow}", style=p_style)
-        result.append(f"{lifecycle.prune_rate:.1f}/ep", style="dim")
+        result.append(f"{lifecycle.prune_rate:>3.1f}/ep", style="dim")
         result.append("  ", style="dim")
         result.append(f"Foss{f_arrow}", style=f_style)
-        result.append(f"{lifecycle.fossilize_rate:.2f}/ep", style="dim")
+        result.append(f"{lifecycle.fossilize_rate:>4.2f}/ep", style="dim")
         result.append("\n")
 
         # Line 3: Quality metrics (Blend success rate + avg lifespan)
