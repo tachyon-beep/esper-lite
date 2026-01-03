@@ -18,6 +18,21 @@ def _clamp01(value: float) -> float:
     return max(0.0, min(1.0, value))
 
 
+def _sigmoid(x: float) -> float:
+    """Numerically stable sigmoid function.
+
+    For large positive x, exp(-x) is tiny → safe.
+    For large negative x, exp(x) is tiny → safe.
+    This avoids OverflowError from math.exp() with extreme steepness values.
+    """
+    if x >= 0.0:
+        z = math.exp(-x)
+        return 1.0 / (1.0 + z)
+    else:
+        z = math.exp(x)
+        return z / (1.0 + z)
+
+
 def _curve_progress(t: float, curve: AlphaCurve, steepness: float = 12.0) -> float:
     """Apply easing curve to linear progress t.
 
@@ -39,9 +54,11 @@ def _curve_progress(t: float, curve: AlphaCurve, steepness: float = 12.0) -> flo
             return 0.5 * (1.0 - math.cos(math.pi * t))
         case AlphaCurve.SIGMOID:
             # Logistic curve normalized to [0, 1] at t in [0, 1].
-            raw = 1.0 / (1.0 + math.exp(-steepness * (t - 0.5)))
-            raw0 = 1.0 / (1.0 + math.exp(-steepness * (0.0 - 0.5)))
-            raw1 = 1.0 / (1.0 + math.exp(-steepness * (1.0 - 0.5)))
+            # Uses _sigmoid() to avoid OverflowError with extreme steepness.
+            x = steepness * (t - 0.5)
+            raw = _sigmoid(x)
+            raw0 = _sigmoid(-0.5 * steepness)
+            raw1 = _sigmoid(0.5 * steepness)
             if raw1 == raw0:
                 # Guard against division by zero if steepness -> 0
                 return t
