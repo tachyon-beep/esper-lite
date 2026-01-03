@@ -3350,6 +3350,14 @@ def train_ppo_vectorized(
                         # Emit EPISODE_OUTCOME telemetry for Pareto analysis
                         # B11-CR-04 fix: Skip emission for rollback episodes (will emit corrected outcome later)
                         if env_state.telemetry_cb and not env_rollback_occurred[env_idx]:
+                            # TELE-610: Classify episode outcome
+                            # SUCCESS_THRESHOLD is configurable; 0.8 = 80% accuracy considered "success"
+                            SUCCESS_THRESHOLD = 0.8
+                            if env_state.val_acc >= SUCCESS_THRESHOLD:
+                                outcome_type = "success"
+                            else:
+                                outcome_type = "timeout"  # Fixed-length episodes that don't hit goal
+
                             env_state.telemetry_cb(TelemetryEvent(
                                 event_type=TelemetryEventType.EPISODE_OUTCOME,
                                 epoch=episodes_completed + env_idx,
@@ -3363,6 +3371,12 @@ def train_ppo_vectorized(
                                     episode_reward=episode_outcome.episode_reward,
                                     stability_score=episode_outcome.stability_score,
                                     reward_mode=episode_outcome.reward_mode,
+                                    # TELE-610: Episode diagnostics
+                                    episode_length=epoch,  # Current epoch = episode length
+                                    outcome_type=outcome_type,
+                                    germinate_count=env_state.action_counts["GERMINATE"],
+                                    prune_count=env_state.action_counts["PRUNE"],
+                                    fossilize_count=env_state.action_counts["FOSSILIZE"],
                                 ),
                             ))
     
