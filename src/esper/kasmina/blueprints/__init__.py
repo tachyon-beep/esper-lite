@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .registry import BlueprintSpec, BlueprintRegistry
+from .registry import BlueprintFactory, BlueprintSpec, BlueprintRegistry
 
 # Import blueprints to trigger registration
 from . import cnn  # noqa: F401
@@ -12,6 +12,7 @@ from . import transformer  # noqa: F401
 from .cnn import ConvBlock
 
 __all__ = [
+    "BlueprintFactory",
     "BlueprintSpec",
     "BlueprintRegistry",
     "ConvBlock",
