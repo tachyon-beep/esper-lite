@@ -511,6 +511,9 @@ class PPOAgent:
 
         # Initialize per-head entropy tracking (P3-1)
         head_entropy_history: dict[str, list[float]] = {head: [] for head in HEAD_NAMES}
+
+        # LSTM health tracking (TELE-340)
+        lstm_health_history: dict[str, list[float | bool]] = defaultdict(list)
         # Initialize per-head gradient norm tracking (P4-6)
         head_grad_norm_history: dict[str, list[float]] = {head: [] for head in HEAD_NAMES + ("value",)}
         # Initialize log prob extremes tracking (NaN predictor)
@@ -584,6 +587,17 @@ class PPOAgent:
             log_probs = result.log_prob
             values = result.value
             entropy = result.entropy
+
+            # Track LSTM hidden state health (TELE-340)
+            if result.hidden is not None:
+                lstm_health = compute_lstm_health(result.hidden)
+                if lstm_health is not None:
+                    lstm_health_history["lstm_h_norm"].append(lstm_health.h_norm)
+                    lstm_health_history["lstm_c_norm"].append(lstm_health.c_norm)
+                    lstm_health_history["lstm_h_max"].append(lstm_health.h_max)
+                    lstm_health_history["lstm_c_max"].append(lstm_health.c_max)
+                    lstm_health_history["lstm_has_nan"].append(lstm_health.has_nan)
+                    lstm_health_history["lstm_has_inf"].append(lstm_health.has_inf)
 
             # Extract valid timesteps
             for key in log_probs:
@@ -1001,6 +1015,26 @@ class PPOAgent:
         # Add per-head NaN/Inf flags (for indicator lights)
         aggregated_result["head_nan_detected"] = head_nan_detected
         aggregated_result["head_inf_detected"] = head_inf_detected
+
+        # Add LSTM health metrics (TELE-340)
+        if lstm_health_history["lstm_h_norm"]:
+            # Average norms across epochs
+            aggregated_result["lstm_h_norm"] = sum(lstm_health_history["lstm_h_norm"]) / len(lstm_health_history["lstm_h_norm"])
+            aggregated_result["lstm_c_norm"] = sum(lstm_health_history["lstm_c_norm"]) / len(lstm_health_history["lstm_c_norm"])
+            # Max values across epochs (worst-case for spike detection)
+            aggregated_result["lstm_h_max"] = max(lstm_health_history["lstm_h_max"])
+            aggregated_result["lstm_c_max"] = max(lstm_health_history["lstm_c_max"])
+            # Boolean OR across epochs (once NaN/Inf detected, stays detected)
+            aggregated_result["lstm_has_nan"] = any(lstm_health_history["lstm_has_nan"])
+            aggregated_result["lstm_has_inf"] = any(lstm_health_history["lstm_has_inf"])
+        else:
+            # No LSTM health data (non-recurrent policy or early stopped before first epoch)
+            aggregated_result["lstm_h_norm"] = None
+            aggregated_result["lstm_c_norm"] = None
+            aggregated_result["lstm_h_max"] = None
+            aggregated_result["lstm_c_max"] = None
+            aggregated_result["lstm_has_nan"] = None
+            aggregated_result["lstm_has_inf"] = None
 
         # Add CUDA memory metrics (collected once per update, not averaged)
         if cuda_memory_metrics:
