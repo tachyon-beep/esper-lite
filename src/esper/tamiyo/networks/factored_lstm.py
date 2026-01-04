@@ -461,6 +461,14 @@ class FactoredRecurrentActorCritic(nn.Module):
         lstm_out, new_hidden = self.lstm(features, hidden)
         # lstm_out: [batch, seq_len, hidden_dim]
 
+        # Soft clamp cell state to prevent saturation (DRL Expert recommendation).
+        # Positive-biased inputs cause cell state accumulation. tanh(c/50)*50
+        # bounds |c| ≤ 50 while preserving gradients. LSTM output tanh(c) saturates
+        # around 20-30 anyway, so larger values are degenerate.
+        h, c = new_hidden
+        c = torch.tanh(c / 50.0) * 50.0
+        new_hidden = (h, c)
+
         # LayerNorm on LSTM output (prevents magnitude drift)
         lstm_out = self.lstm_ln(lstm_out)
 
@@ -841,6 +849,12 @@ class FactoredRecurrentActorCritic(nn.Module):
         # Feature extraction and LSTM (same as forward)
         features = self.feature_net(state_with_bp)
         lstm_out, new_hidden = self.lstm(features, hidden)
+
+        # Soft clamp cell state (same as forward)
+        h, c = new_hidden
+        c = torch.tanh(c / 50.0) * 50.0
+        new_hidden = (h, c)
+
         lstm_out = self.lstm_ln(lstm_out)
 
         # Compute logits for each head
