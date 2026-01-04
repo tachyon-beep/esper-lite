@@ -8,7 +8,7 @@ from esper.karn.sanctum.widgets.historical_env_detail import HistoricalEnvDetail
 from esper.karn.sanctum.widgets.reward_health import RewardHealthData, RewardHealthPanel
 from esper.karn.sanctum.widgets.run_header import RunHeader
 from esper.karn.sanctum.widgets.scoreboard import Scoreboard
-from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+from esper.karn.sanctum.widgets.tamiyo import TamiyoBrain
 from esper.karn.sanctum.widgets.thread_death_modal import ThreadDeathModal
 
 __all__ = [

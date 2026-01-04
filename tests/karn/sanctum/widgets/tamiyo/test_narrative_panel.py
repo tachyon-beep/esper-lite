@@ -3,7 +3,7 @@
 import pytest
 
 from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
-from esper.karn.sanctum.widgets.tamiyo_brain.narrative_panel import NarrativePanel
+from esper.karn.sanctum.widgets.tamiyo.narrative_panel import NarrativePanel
 
 
 # =============================================================================

@@ -850,7 +850,7 @@ class InfrastructureMetrics:
 class TamiyoState:
     """Tamiyo policy agent state - ALL metrics from existing TUI.
 
-    Reference: tui.py TUIState policy metrics + _render_tamiyo_brain()
+    Reference: tui.py TUIState policy metrics + Tamiyo panel renderer
 
     FIX: Added total_actions field (required for action percentage calculation)
     FIX: Added advantage stats, entropy_coef, gradient health fields from aggregator

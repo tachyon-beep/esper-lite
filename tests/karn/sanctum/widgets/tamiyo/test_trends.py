@@ -1,6 +1,6 @@
 """Tests for shared Tamiyo trend indicator semantics."""
 
-from esper.karn.sanctum.widgets.tamiyo_brain.trends import trend_arrow_for_history
+from esper.karn.sanctum.widgets.tamiyo.trends import trend_arrow_for_history
 
 
 def test_loss_improving_is_up_green() -> None:
@@ -44,4 +44,3 @@ def test_short_history_returns_no_arrow() -> None:
     arrow, style = trend_arrow_for_history([1.0, 2.0, 3.0], metric_name="policy_loss", metric_type="loss")
     assert arrow == ""
     assert style == "dim"
-

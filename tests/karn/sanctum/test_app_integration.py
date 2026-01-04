@@ -130,7 +130,7 @@ async def test_sanctum_app_shows_multiple_tamiyo_widgets():
     """A/B mode should show two TamiyoBrain widgets side-by-side."""
     from esper.karn.sanctum.app import SanctumApp
     from esper.karn.sanctum.backend import SanctumBackend
-    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.widgets.tamiyo import TamiyoBrain
     from esper.leyline import TelemetryEvent, TelemetryEventType
 
     backend = SanctumBackend(num_envs=4)
@@ -174,7 +174,7 @@ async def test_keyboard_switches_between_policies():
     """Tab key should cycle focus between policy widgets."""
     from esper.karn.sanctum.app import SanctumApp
     from esper.karn.sanctum.backend import SanctumBackend
-    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.widgets.tamiyo import TamiyoBrain
     from esper.leyline import TelemetryEvent, TelemetryEventType
 
     backend = SanctumBackend(num_envs=4)
@@ -300,7 +300,7 @@ async def test_backend_emits_create_multiple_tamiyo_widgets():
     """Backend emitting A/B events should create two TamiyoBrain widgets via production path."""
     from esper.karn.sanctum.app import SanctumApp
     from esper.karn.sanctum.backend import SanctumBackend
-    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.widgets.tamiyo import TamiyoBrain
     from esper.leyline import TelemetryEvent, TelemetryEventType
 
     backend = SanctumBackend(num_envs=4)
@@ -424,4 +424,3 @@ async def test_filter_esc_does_nothing_when_no_filter():
         # State unchanged
         assert filter_input.value == ""
         assert app._filter_active is False
-

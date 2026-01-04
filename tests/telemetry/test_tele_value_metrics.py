@@ -24,7 +24,6 @@ WIRING STATUS (as of 2026-01-04):
 - Full end-to-end wiring is complete
 """
 
-import math
 from dataclasses import fields
 from collections import deque
 
@@ -36,7 +35,7 @@ from esper.karn.sanctum.schema import (
     TamiyoState,
     InfrastructureMetrics,
 )
-from esper.karn.sanctum.widgets.tamiyo_brain.value_diagnostics_panel import (
+from esper.karn.sanctum.widgets.tamiyo.value_diagnostics_panel import (
     ValueDiagnosticsPanel,
 )
 

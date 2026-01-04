@@ -273,39 +273,39 @@ allow_hits:
   # ============================================================================
   # TUI widgets access dynamically-named fields for rendering multiple heads.
 
-  - key: "src/esper/karn/sanctum/widgets/tamiyo_brain/action_heads_panel.py:_render_heads_section:getattr"
+  - key: "src/esper/karn/sanctum/widgets/tamiyo/action_heads_panel.py:_render_heads_section:getattr"
     owner: "john"
     reason: "TUI - accessing dynamically-named entropy fields for action heads"
 
-  - key: "src/esper/karn/sanctum/widgets/tamiyo_brain/action_heads_panel.py:_render_heads_section:getattr:2"
+  - key: "src/esper/karn/sanctum/widgets/tamiyo/action_heads_panel.py:_render_heads_section:getattr:2"
     owner: "john"
     reason: "TUI - accessing dynamically-named entropy fields for action heads"
 
-  - key: "src/esper/karn/sanctum/widgets/tamiyo_brain/action_heads_panel.py:_render_heads_section:getattr:3"
+  - key: "src/esper/karn/sanctum/widgets/tamiyo/action_heads_panel.py:_render_heads_section:getattr:3"
     owner: "john"
     reason: "TUI - accessing dynamically-named gradient fields for action heads"
 
-  - key: "src/esper/karn/sanctum/widgets/tamiyo_brain/action_heads_panel.py:_render_heads_section:getattr:4"
+  - key: "src/esper/karn/sanctum/widgets/tamiyo/action_heads_panel.py:_render_heads_section:getattr:4"
     owner: "john"
     reason: "TUI - accessing dynamically-named gradient fields for action heads"
 
-  - key: "src/esper/karn/sanctum/widgets/tamiyo_brain/action_heads_panel.py:_render_heads_section:getattr:5"
+  - key: "src/esper/karn/sanctum/widgets/tamiyo/action_heads_panel.py:_render_heads_section:getattr:5"
     owner: "john"
     reason: "TUI - accessing dynamically-named gradient fields for action heads"
 
-  - key: "src/esper/karn/sanctum/widgets/tamiyo_brain/action_heads_panel.py:_render_heads_section:getattr:6"
+  - key: "src/esper/karn/sanctum/widgets/tamiyo/action_heads_panel.py:_render_heads_section:getattr:6"
     owner: "john"
     reason: "TUI - accessing dynamically-named ratio fields for action heads"
 
-  - key: "src/esper/karn/sanctum/widgets/tamiyo_brain/action_heads_panel.py:_render_heads_section:getattr:7"
+  - key: "src/esper/karn/sanctum/widgets/tamiyo/action_heads_panel.py:_render_heads_section:getattr:7"
     owner: "john"
     reason: "TUI - accessing dynamically-named ratio fields for action heads"
 
-  - key: "src/esper/karn/sanctum/widgets/tamiyo_brain/action_heads_panel.py:_render_heads_section:getattr:8"
+  - key: "src/esper/karn/sanctum/widgets/tamiyo/action_heads_panel.py:_render_heads_section:getattr:8"
     owner: "john"
     reason: "TUI - accessing dynamically-named entropy fields for action heads"
 
-  - key: "src/esper/karn/sanctum/widgets/tamiyo_brain/action_heads_panel.py:_render_heads_section:getattr:9"
+  - key: "src/esper/karn/sanctum/widgets/tamiyo/action_heads_panel.py:_render_heads_section:getattr:9"
     owner: "john"
     reason: "TUI - accessing dynamically-named gradient fields for action heads"
 

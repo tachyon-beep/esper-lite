@@ -13,7 +13,7 @@ from rich.console import Console
 from rich.text import Text
 
 from esper.karn.sanctum.schema import DecisionSnapshot
-from esper.karn.sanctum.widgets.tamiyo_brain.decision_detail_screen import (
+from esper.karn.sanctum.widgets.tamiyo.decision_detail_screen import (
     DecisionDetailScreen,
 )
 
