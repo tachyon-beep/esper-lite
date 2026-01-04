@@ -736,6 +736,17 @@ def compute_contribution_reward(
         action_shaping += config.fossilize_cost
 
     elif action == LifecycleOp.PRUNE:
+        if seed_info is not None and not config.disable_pbrs:
+            # PBRS penalty for culling a seed: transition to no-seed potential (0.0).
+            # This closes the Germinate→(Wait...)→Prune farming loop by ensuring
+            # the potential drop is paid when the policy chooses to prune.
+            phi_current = STAGE_POTENTIALS[SeedStage(seed_info.stage)]
+            phi_current += min(
+                seed_info.epochs_in_stage * config.epoch_progress_bonus,
+                config.max_progress_bonus,
+            )
+            pbrs_cull = config.gamma * 0.0 - phi_current
+            action_shaping += config.pbrs_weight * pbrs_cull
         action_shaping += _contribution_prune_shaping(seed_info, seed_contribution, config)
         action_shaping += config.prune_cost
     elif action == LifecycleOp.SET_ALPHA_TARGET:
