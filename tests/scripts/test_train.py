@@ -120,7 +120,7 @@ class TestABTestingCLI:
         from esper.simic.training import TrainingConfig
 
         # Simulate CLI logic from train.py
-        config = TrainingConfig.for_cifar10()
+        config = TrainingConfig.for_cifar_baseline()
         ab_test = "shaped-vs-simplified"
 
         # Apply A/B test to config (as train.py now does)
@@ -148,7 +148,7 @@ class TestABTestingCLI:
         """--ab-test should require even n_envs for equal split."""
         from esper.simic.training import TrainingConfig
 
-        config = TrainingConfig.for_cifar10()
+        config = TrainingConfig.for_cifar_baseline()
         config.n_envs = 3  # Odd number
 
         # This check happens in train.py before setting reward_mode_per_env
@@ -263,7 +263,7 @@ class TestTamiyoCentricFlags:
         from esper.simic.training import TrainingConfig
 
         # Simulate what main() does: start with preset, apply CLI overrides
-        config = TrainingConfig.for_cifar10()
+        config = TrainingConfig.for_cifar_baseline()
         assert config.n_episodes == 100  # Default
 
         # CLI would set rounds=50, which maps to n_episodes
@@ -274,7 +274,7 @@ class TestTamiyoCentricFlags:
         """--envs should override n_envs from preset."""
         from esper.simic.training import TrainingConfig
 
-        config = TrainingConfig.for_cifar10()
+        config = TrainingConfig.for_cifar_baseline()
         config.n_envs = 8
         assert config.n_envs == 8
 
@@ -286,7 +286,7 @@ class TestTamiyoCentricFlags:
         """
         from esper.simic.training import TrainingConfig
 
-        config = TrainingConfig.for_cifar10()
+        config = TrainingConfig.for_cifar_baseline()
 
         # Apply override as main() does
         new_length = 30
@@ -327,7 +327,7 @@ class TestTamiyoCentricFlags:
         """--entropy-anneal-rounds should override config.entropy_anneal_episodes."""
         from esper.simic.training import TrainingConfig
 
-        config = TrainingConfig.for_cifar10()
+        config = TrainingConfig.for_cifar_baseline()
         assert config.entropy_anneal_episodes == 0  # Default
 
         # CLI would set entropy_anneal_rounds=50, which maps to entropy_anneal_episodes

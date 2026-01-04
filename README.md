@@ -191,7 +191,7 @@ These flags control Tamiyo's training directly. All are optional - presets provi
 | `--episode-length L`        | 150     | Timesteps per environment per round                      |
 | `--ppo-epochs E`            | 1       | Gradient steps per round (passes over rollout data)      |
 | `--memory-size H`           | 512     | Tamiyo LSTM hidden dimension                             |
-| `--entropy-anneal-rounds R` | 0       | Rounds over which to anneal entropy (0 = no annealing)   |
+| `--entropy-anneal-episodes N` | 0     | Env-episodes for entropy annealing (N/K batches with K envs) |
 
 Each round produces `K × L` transitions for Tamiyo's PPO update.
 Doubling `--rounds` = 2× training time. Doubling `--envs` = richer data per round, same training time.
@@ -214,6 +214,10 @@ Doubling `--rounds` = 2× training time. Doubling `--envs` = richer data per rou
 | `--num-workers` | (task default) | DataLoader workers per environment                   |
 | `--gpu-preload` | off            | Preload dataset to GPU (CIFAR-10 only, ~0.75GB VRAM) |
 | `--experimental-gpu-preload-gather` | off | EXPERIMENTAL: DataLoader-free gather iterator for `--gpu-preload` (CIFAR-10 only) |
+| `--compile-mode` | `default`     | torch.compile mode: `default`, `max-autotune`, `reduce-overhead`, or `off` |
+| `--force-compile` | off          | Force torch.compile even in TUI mode (normally disabled for debuggability) |
+
+> **Note:** When using Sanctum TUI (`--sanctum`) or Overwatch (`--overwatch`), torch.compile is disabled by default to avoid TorchInductor errors in interactive sessions. Use `--force-compile` to override this when testing compilation performance.
 
 #### Checkpointing
 

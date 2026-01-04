@@ -1082,3 +1082,206 @@ class TestResetClearsMultiEnvState:
             "If this fails, reset() may not be clearing _n_envs."
         )
         assert collector.store.epoch_snapshots[0].host.val_accuracy == 0.95
+
+
+class TestOptionalMetricsAggregation:
+    """Tests for proper handling of optional metrics (train_loss, train_accuracy, host_grad_norm).
+
+    These fields are optional in EpochCompletedPayload:
+    - None means "not computed" (e.g., ops_normal=False)
+    - 0.0 means "computed as zero"
+
+    The aggregation must preserve this semantic: mean of present values only,
+    or None if all values are None.
+    """
+
+    def test_none_train_metrics_excluded_from_mean(self):
+        """None values should be excluded from mean calculation, not treated as 0.0.
+
+        Bug: Prior to fix, None was coerced to 0.0, diluting the mean.
+        Example: 2 envs with train_loss=None, 2 with train_loss=0.5
+        Bug gave: (0 + 0 + 0.5 + 0.5) / 4 = 0.25
+        Correct: (0.5 + 0.5) / 2 = 0.5
+        """
+        from esper.karn.collector import KarnCollector
+
+        collector = KarnCollector()
+        n_envs = 4
+
+        collector.emit(TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data=TrainingStartedPayload(
+                n_envs=n_envs,
+                max_epochs=10,
+                max_batches=100,
+                task="test_task",
+                host_params=1000,
+                slot_ids=("r0c0",),
+                seed=42,
+                n_episodes=100,
+                lr=0.001,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=10000,
+                reward_mode="shaped",
+                policy_device="cpu",
+                env_devices=("cpu",) * n_envs,
+                episode_id="test_none_aggregation",
+            )
+        ))
+
+        # Envs 0 and 1: train_loss=None (not computed, e.g., ops_normal=False)
+        # Envs 2 and 3: train_loss=0.5 (computed)
+        for env_id in range(n_envs):
+            train_loss = None if env_id < 2 else 0.5
+            collector.emit(TelemetryEvent(
+                event_type=TelemetryEventType.EPOCH_COMPLETED,
+                epoch=1,
+                data=EpochCompletedPayload(
+                    env_id=env_id,
+                    val_accuracy=0.8,
+                    val_loss=0.2,
+                    inner_epoch=1,
+                    train_loss=train_loss,
+                ),
+            ))
+
+        # Epoch should be committed (all 4 envs reported)
+        assert len(collector.store.epoch_snapshots) == 1
+        host = collector.store.epoch_snapshots[0].host
+
+        # Mean should be 0.5 (mean of [0.5, 0.5]), not 0.25 (mean of [0, 0, 0.5, 0.5])
+        assert host.train_loss == 0.5, (
+            f"Expected train_loss=0.5 (mean of present values), got {host.train_loss}. "
+            f"Bug: treating None as 0.0 dilutes the mean."
+        )
+
+    def test_all_none_train_metrics_gives_none(self):
+        """When all envs have train_loss=None, result should be None, not 0.0.
+
+        Bug: Prior to fix, all-None gave 0.0 (sum of zeros / n_envs).
+        Correct: None (no data computed).
+        """
+        from esper.karn.collector import KarnCollector
+
+        collector = KarnCollector()
+        n_envs = 4
+
+        collector.emit(TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data=TrainingStartedPayload(
+                n_envs=n_envs,
+                max_epochs=10,
+                max_batches=100,
+                task="test_task",
+                host_params=1000,
+                slot_ids=("r0c0",),
+                seed=42,
+                n_episodes=100,
+                lr=0.001,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=10000,
+                reward_mode="shaped",
+                policy_device="cpu",
+                env_devices=("cpu",) * n_envs,
+                episode_id="test_all_none",
+            )
+        ))
+
+        # All envs have train_loss=None
+        for env_id in range(n_envs):
+            collector.emit(TelemetryEvent(
+                event_type=TelemetryEventType.EPOCH_COMPLETED,
+                epoch=1,
+                data=EpochCompletedPayload(
+                    env_id=env_id,
+                    val_accuracy=0.8,
+                    val_loss=0.2,
+                    inner_epoch=1,
+                    train_loss=None,
+                    train_accuracy=None,
+                    host_grad_norm=None,
+                ),
+            ))
+
+        assert len(collector.store.epoch_snapshots) == 1
+        host = collector.store.epoch_snapshots[0].host
+
+        # All optional metrics should be None
+        assert host.train_loss is None, (
+            f"Expected train_loss=None (no data), got {host.train_loss}"
+        )
+        assert host.train_accuracy is None, (
+            f"Expected train_accuracy=None (no data), got {host.train_accuracy}"
+        )
+        assert host.host_grad_norm is None, (
+            f"Expected host_grad_norm=None (no data), got {host.host_grad_norm}"
+        )
+
+    def test_zero_train_loss_is_not_treated_as_none(self):
+        """train_loss=0.0 should be included in mean, not treated as missing.
+
+        Regression test: Ensure the fix for None handling doesn't break
+        legitimate zero values.
+        """
+        from esper.karn.collector import KarnCollector
+
+        collector = KarnCollector()
+        n_envs = 2
+
+        collector.emit(TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data=TrainingStartedPayload(
+                n_envs=n_envs,
+                max_epochs=10,
+                max_batches=100,
+                task="test_task",
+                host_params=1000,
+                slot_ids=("r0c0",),
+                seed=42,
+                n_episodes=100,
+                lr=0.001,
+                clip_ratio=0.2,
+                entropy_coef=0.01,
+                param_budget=10000,
+                reward_mode="shaped",
+                policy_device="cpu",
+                env_devices=("cpu",) * n_envs,
+                episode_id="test_zero_value",
+            )
+        ))
+
+        # Env 0: train_loss=0.0, Env 1: train_loss=1.0
+        # Mean should be 0.5
+        collector.emit(TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            epoch=1,
+            data=EpochCompletedPayload(
+                env_id=0,
+                val_accuracy=0.8,
+                val_loss=0.2,
+                inner_epoch=1,
+                train_loss=0.0,  # Zero, not None
+            ),
+        ))
+        collector.emit(TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            epoch=1,
+            data=EpochCompletedPayload(
+                env_id=1,
+                val_accuracy=0.8,
+                val_loss=0.2,
+                inner_epoch=1,
+                train_loss=1.0,
+            ),
+        ))
+
+        assert len(collector.store.epoch_snapshots) == 1
+        host = collector.store.epoch_snapshots[0].host
+
+        # Mean should be 0.5, not 1.0 (if 0.0 was treated as None)
+        assert host.train_loss == 0.5, (
+            f"Expected train_loss=0.5 (mean of [0.0, 1.0]), got {host.train_loss}. "
+            f"Bug: 0.0 may have been treated as None and excluded."
+        )

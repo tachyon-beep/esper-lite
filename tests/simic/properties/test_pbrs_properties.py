@@ -258,14 +258,14 @@ class TestPBRSTelescopingHighLevel:
 
         # Expected: gamma^T * phi(final) - phi(initial)
         final_stage, final_epoch_in_stage = trajectory[-1]
-        initial_stage = SeedStage.DORMANT.value
+        initial_stage = SeedStage.DORMANT
 
-        # Include epoch progress in potential
-        phi_final = STAGE_POTENTIALS.get(final_stage, 0.0) + min(
+        # Include epoch progress in potential (use SeedStage enum keys, not int)
+        phi_final = STAGE_POTENTIALS[SeedStage(final_stage)] + min(
             final_epoch_in_stage * config.epoch_progress_bonus, config.max_progress_bonus
         )
         # Initial potential includes 1 epoch in DORMANT to match prev_epochs_total=1
-        phi_initial = STAGE_POTENTIALS.get(initial_stage, 0.0) + min(
+        phi_initial = STAGE_POTENTIALS[initial_stage] + min(
             1 * config.epoch_progress_bonus, config.max_progress_bonus
         )
 
@@ -371,15 +371,15 @@ class TestPotentialMonotonicity:
     def test_potentials_monotonic(self):
         """Potentials increase through the lifecycle."""
         stages = [
-            SeedStage.DORMANT.value,
-            SeedStage.GERMINATED.value,
-            SeedStage.TRAINING.value,
-            SeedStage.BLENDING.value,
-            SeedStage.HOLDING.value,
-            SeedStage.FOSSILIZED.value,
+            SeedStage.DORMANT,
+            SeedStage.GERMINATED,
+            SeedStage.TRAINING,
+            SeedStage.BLENDING,
+            SeedStage.HOLDING,
+            SeedStage.FOSSILIZED,
         ]
 
-        potentials = [STAGE_POTENTIALS.get(s, 0.0) for s in stages]
+        potentials = [STAGE_POTENTIALS[s] for s in stages]
 
         for i in range(len(potentials) - 1):
             assert potentials[i] <= potentials[i + 1], (
@@ -393,13 +393,20 @@ class TestPotentialMonotonicity:
         This ensures that advancing through the lifecycle is always rewarded,
         which aligns the PBRS incentive with the desired behavior.
         """
-        stages = [2, 3, 4, 6, 7]  # GERMINATED through FOSSILIZED (5 skipped)
+        # Use SeedStage enum keys (SHADOWING=5 was removed, so skip it)
+        stages = [
+            SeedStage.GERMINATED,
+            SeedStage.TRAINING,
+            SeedStage.BLENDING,
+            SeedStage.HOLDING,
+            SeedStage.FOSSILIZED,
+        ]
         for i in range(len(stages) - 1):
             current = STAGE_POTENTIALS[stages[i]]
-            next_stage = STAGE_POTENTIALS[stages[i + 1]]
-            assert next_stage >= current, (
+            next_val = STAGE_POTENTIALS[stages[i + 1]]
+            assert next_val >= current, (
                 f"Potential should not decrease: stage {stages[i]}={current} "
-                f"> stage {stages[i + 1]}={next_stage}"
+                f"> stage {stages[i + 1]}={next_val}"
             )
 
     def test_dormant_has_zero_potential(self):
@@ -407,15 +414,15 @@ class TestPotentialMonotonicity:
 
         These are baseline states with no expected future value from a seed.
         """
-        assert STAGE_POTENTIALS[0] == 0.0, "UNKNOWN should have zero potential"
-        assert STAGE_POTENTIALS[1] == 0.0, "DORMANT should have zero potential"
+        assert STAGE_POTENTIALS[SeedStage.UNKNOWN] == 0.0, "UNKNOWN should have zero potential"
+        assert STAGE_POTENTIALS[SeedStage.DORMANT] == 0.0, "DORMANT should have zero potential"
 
     def test_fossilized_has_highest_potential(self):
         """FOSSILIZED should have the highest potential.
 
         This is the terminal success state, representing maximum achieved value.
         """
-        fossilized_potential = STAGE_POTENTIALS[7]  # FOSSILIZED
+        fossilized_potential = STAGE_POTENTIALS[SeedStage.FOSSILIZED]
         for stage, potential in STAGE_POTENTIALS.items():
             assert fossilized_potential >= potential, (
                 f"FOSSILIZED ({fossilized_potential}) should be >= "
@@ -438,11 +445,11 @@ class TestStageIncrementProperties:
         property is that BLENDING increment >= GERMINATED and FOSSILIZED.
         """
         increments = {
-            "GERMINATED": STAGE_POTENTIALS[2] - STAGE_POTENTIALS[1],
-            "TRAINING": STAGE_POTENTIALS[3] - STAGE_POTENTIALS[2],
-            "BLENDING": STAGE_POTENTIALS[4] - STAGE_POTENTIALS[3],
-            "HOLDING": STAGE_POTENTIALS[6] - STAGE_POTENTIALS[4],  # 5 skipped
-            "FOSSILIZED": STAGE_POTENTIALS[7] - STAGE_POTENTIALS[6],
+            "GERMINATED": STAGE_POTENTIALS[SeedStage.GERMINATED] - STAGE_POTENTIALS[SeedStage.DORMANT],
+            "TRAINING": STAGE_POTENTIALS[SeedStage.TRAINING] - STAGE_POTENTIALS[SeedStage.GERMINATED],
+            "BLENDING": STAGE_POTENTIALS[SeedStage.BLENDING] - STAGE_POTENTIALS[SeedStage.TRAINING],
+            "HOLDING": STAGE_POTENTIALS[SeedStage.HOLDING] - STAGE_POTENTIALS[SeedStage.BLENDING],
+            "FOSSILIZED": STAGE_POTENTIALS[SeedStage.FOSSILIZED] - STAGE_POTENTIALS[SeedStage.HOLDING],
         }
 
         blending_increment = increments["BLENDING"]
@@ -463,26 +470,26 @@ class TestStageIncrementProperties:
         # attribution becomes available. HOLDING has the largest delta (2.0) as seeds
         # must prove their worth before fossilization.
         blending_delta = (
-            STAGE_POTENTIALS[SeedStage.BLENDING.value]
-            - STAGE_POTENTIALS[SeedStage.TRAINING.value]
+            STAGE_POTENTIALS[SeedStage.BLENDING]
+            - STAGE_POTENTIALS[SeedStage.TRAINING]
         )
 
         # Compare to other transitions
         germinated_delta = (
-            STAGE_POTENTIALS[SeedStage.GERMINATED.value]
-            - STAGE_POTENTIALS[SeedStage.DORMANT.value]
+            STAGE_POTENTIALS[SeedStage.GERMINATED]
+            - STAGE_POTENTIALS[SeedStage.DORMANT]
         )
         training_delta = (
-            STAGE_POTENTIALS[SeedStage.TRAINING.value]
-            - STAGE_POTENTIALS[SeedStage.GERMINATED.value]
+            STAGE_POTENTIALS[SeedStage.TRAINING]
+            - STAGE_POTENTIALS[SeedStage.GERMINATED]
         )
         holding_delta = (
-            STAGE_POTENTIALS[SeedStage.HOLDING.value]
-            - STAGE_POTENTIALS[SeedStage.BLENDING.value]
+            STAGE_POTENTIALS[SeedStage.HOLDING]
+            - STAGE_POTENTIALS[SeedStage.BLENDING]
         )
         fossilized_delta = (
-            STAGE_POTENTIALS[SeedStage.FOSSILIZED.value]
-            - STAGE_POTENTIALS[SeedStage.HOLDING.value]
+            STAGE_POTENTIALS[SeedStage.FOSSILIZED]
+            - STAGE_POTENTIALS[SeedStage.HOLDING]
         )
 
         # Either BLENDING or HOLDING should have the largest increment
@@ -502,11 +509,11 @@ class TestStageIncrementProperties:
         seeds for the terminal bonus rather than maximizing actual value.
         """
         increments = {
-            "GERMINATED": STAGE_POTENTIALS[2] - STAGE_POTENTIALS[1],
-            "TRAINING": STAGE_POTENTIALS[3] - STAGE_POTENTIALS[2],
-            "BLENDING": STAGE_POTENTIALS[4] - STAGE_POTENTIALS[3],
-            "HOLDING": STAGE_POTENTIALS[6] - STAGE_POTENTIALS[4],  # 5 skipped
-            "FOSSILIZED": STAGE_POTENTIALS[7] - STAGE_POTENTIALS[6],
+            "GERMINATED": STAGE_POTENTIALS[SeedStage.GERMINATED] - STAGE_POTENTIALS[SeedStage.DORMANT],
+            "TRAINING": STAGE_POTENTIALS[SeedStage.TRAINING] - STAGE_POTENTIALS[SeedStage.GERMINATED],
+            "BLENDING": STAGE_POTENTIALS[SeedStage.BLENDING] - STAGE_POTENTIALS[SeedStage.TRAINING],
+            "HOLDING": STAGE_POTENTIALS[SeedStage.HOLDING] - STAGE_POTENTIALS[SeedStage.BLENDING],
+            "FOSSILIZED": STAGE_POTENTIALS[SeedStage.FOSSILIZED] - STAGE_POTENTIALS[SeedStage.HOLDING],
         }
 
         fossilized_increment = increments["FOSSILIZED"]

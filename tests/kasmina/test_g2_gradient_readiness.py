@@ -77,3 +77,32 @@ class TestG2GradientReadiness:
         # Should fail despite global improvement
         assert not result.passed
         assert any("seed_gradient_low" in check for check in result.checks_failed)
+
+    def test_g2_fails_loudly_when_gradient_stats_never_measured(self):
+        """G2 should explicitly report when gradient stats were never collected.
+
+        This catches training loop coupling issues where the loop forgets to
+        call capture_gradient_telemetry(). Without this check, the gate would
+        silently fail with 'gradient_low_0.00' which is misleading.
+        """
+        gates = QualityGates()
+
+        # Create state with good metrics but gradient ratio never set (None)
+        state = SeedState(
+            seed_id="test",
+            blueprint_id="norm",
+            slot_id="test_slot",
+            stage=SeedStage.TRAINING,
+        )
+        state.metrics = SeedMetrics()
+        state.metrics.accuracy_at_stage_start = 50.0
+        state.metrics.current_val_accuracy = 60.0  # Excellent improvement
+        state.metrics.epochs_in_current_stage = 10
+        # NOTE: seed_gradient_norm_ratio defaults to None (never measured)
+        assert state.metrics.seed_gradient_norm_ratio is None
+
+        result = gates._check_g2(state)
+
+        # Should fail with explicit "never measured" message
+        assert not result.passed
+        assert "gradient_stats_never_measured" in result.checks_failed

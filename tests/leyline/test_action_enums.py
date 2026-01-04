@@ -1,4 +1,9 @@
-"""Tests for per-topology action enums."""
+"""Tests for per-topology action enums.
+
+Note: build_action_enum was moved from leyline.actions to tamiyo.action_enums
+to break the Leyline <-> Kasmina import cycle. These tests remain here for
+continuity but import from the new location.
+"""
 
 from enum import IntEnum
 
@@ -7,7 +12,7 @@ from esper.leyline.actions import get_blueprint_from_action_name
 
 def test_build_action_enum_cnn():
     """build_action_enum creates CNN action enum."""
-    from esper.leyline.actions import build_action_enum
+    from esper.tamiyo.action_enums import build_action_enum
 
     CNNAction = build_action_enum("cnn")
 
@@ -21,7 +26,7 @@ def test_build_action_enum_cnn():
 
 def test_build_action_enum_transformer():
     """build_action_enum creates Transformer action enum."""
-    from esper.leyline.actions import build_action_enum
+    from esper.tamiyo.action_enums import build_action_enum
 
     TransformerAction = build_action_enum("transformer")
 
@@ -35,7 +40,7 @@ def test_build_action_enum_transformer():
 
 def test_action_enum_values_sequential():
     """Action values are sequential integers."""
-    from esper.leyline.actions import build_action_enum
+    from esper.tamiyo.action_enums import build_action_enum
 
     Action = build_action_enum("cnn")
     values = [a.value for a in Action]
@@ -45,7 +50,7 @@ def test_action_enum_values_sequential():
 
 def test_action_enum_advance_is_last():
     """ADVANCE is always the last action."""
-    from esper.leyline.actions import build_action_enum
+    from esper.tamiyo.action_enums import build_action_enum
 
     Action = build_action_enum("cnn")
 
@@ -54,7 +59,7 @@ def test_action_enum_advance_is_last():
 
 def test_get_blueprint_from_action():
     """Can get blueprint name from germinate action."""
-    from esper.leyline.actions import build_action_enum
+    from esper.tamiyo.action_enums import build_action_enum
 
     Action = build_action_enum("cnn")
 

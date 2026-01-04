@@ -115,3 +115,46 @@ def test_legacy_catalog_still_works():
     """Legacy BlueprintCatalog API is removed (registry only)."""
     with pytest.raises(ImportError):
         from esper.kasmina.blueprints import BlueprintCatalog  # noqa: F401
+
+
+def test_action_enum_reflects_registry_changes():
+    """Action enum reflects blueprint registry state via version-keyed caching.
+
+    build_action_enum uses version-keyed caching: the cache key includes a
+    version derived from the registry state. When blueprints are registered
+    or unregistered, the version changes, causing the next build_action_enum
+    call to generate a fresh enum reflecting the new state.
+
+    This test verifies the contract without relying on cache implementation details.
+    """
+    from esper.kasmina.blueprints import BlueprintRegistry
+    from esper.tamiyo.action_enums import build_action_enum
+
+    # Build initial enum
+    enum_before = build_action_enum("cnn")
+    initial_members = set(enum_before.__members__.keys())
+
+    # Register a test blueprint
+    @BlueprintRegistry.register("test_registry_change", "cnn", param_estimate=99999)
+    def create_test(dim: int) -> nn.Module:
+        return nn.Linear(dim, dim)
+
+    try:
+        # Rebuild enum - should now include the new blueprint
+        enum_after = build_action_enum("cnn")
+        new_members = set(enum_after.__members__.keys())
+
+        # The new blueprint should appear as GERMINATE_TEST_REGISTRY_CHANGE
+        assert "GERMINATE_TEST_REGISTRY_CHANGE" in new_members, (
+            f"New blueprint not in rebuilt enum. Members: {new_members}"
+        )
+
+    finally:
+        # Clean up
+        BlueprintRegistry.unregister("cnn", "test_registry_change")
+
+    # Final rebuild should NOT have the test blueprint
+    enum_final = build_action_enum("cnn")
+    final_members = set(enum_final.__members__.keys())
+    assert "GERMINATE_TEST_REGISTRY_CHANGE" not in final_members
+    assert final_members == initial_members, "Should return to original state"

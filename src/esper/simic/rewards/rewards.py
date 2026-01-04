@@ -36,6 +36,7 @@ from esper.leyline import (
     DEFAULT_GAMMA,
     DEFAULT_MIN_FOSSILIZE_CONTRIBUTION,
     LifecycleOp,
+    LossRewardConfig,
     MIN_HOLDING_EPOCHS,
     MIN_PRUNE_AGE,
     SeedStage,
@@ -113,15 +114,19 @@ class RewardFamily(Enum):
 # Using different potentials across reward functions breaks telescoping.
 # =============================================================================
 
-STAGE_POTENTIALS = {
-    0: 0.0,   # UNKNOWN
-    1: 0.0,   # DORMANT
-    2: 1.0,   # GERMINATED
-    3: 2.0,   # TRAINING
-    4: 3.5,   # BLENDING (largest increment - this is where value is created)
+STAGE_POTENTIALS: dict[SeedStage, float] = {
+    SeedStage.UNKNOWN: 0.0,
+    SeedStage.DORMANT: 0.0,
+    SeedStage.GERMINATED: 1.0,
+    SeedStage.TRAINING: 2.0,
+    SeedStage.BLENDING: 3.5,  # Largest increment - this is where value is created
     # Value 5 intentionally skipped (was SHADOWING, removed)
-    6: 5.5,   # HOLDING
-    7: 6.0,   # FOSSILIZED (smallest increment - not a farming target)
+    SeedStage.HOLDING: 5.5,
+    SeedStage.FOSSILIZED: 6.0,  # Smallest increment - not a farming target
+    # Failure/recycling stages have zero potential (same as DORMANT)
+    SeedStage.PRUNED: 0.0,
+    SeedStage.EMBARGOED: 0.0,
+    SeedStage.RESETTING: 0.0,
 }
 
 # DEFAULT_GAMMA imported from leyline - single source of truth for PPO/PBRS gamma.
@@ -269,57 +274,7 @@ class ContributionRewardConfig:
         return ContributionRewardConfig()
 
 
-@dataclass(slots=True)
-class LossRewardConfig:
-    """Configuration for loss-primary reward computation.
-
-    All weights are tunable hyperparameters optimized for
-    cross-task comparability using normalized loss delta.
-    """
-
-    # Loss delta scaling
-    loss_delta_weight: float = 5.0
-    max_loss_delta: float = 5.0  # After normalization
-    regression_penalty_scale: float = 0.5  # Asymmetric clipping
-    typical_loss_delta_std: float = 0.1  # Task-specific normalization
-
-    # Compute rent (logarithmic scaling)
-    compute_rent_weight: float = 0.05
-    max_rent_penalty: float = 5.0
-    grace_epochs: int = 3  # Rent-free grace period for new seeds
-
-    # Stage bonuses (PBRS-compatible)
-    stage_potential_weight: float = 0.1
-
-    # Terminal bonus
-    baseline_loss: float = 2.3  # Task-specific (random init loss)
-    target_loss: float = 0.3  # Task-specific (achievable loss)
-    terminal_loss_weight: float = 1.0
-
-    @property
-    def achievable_range(self) -> float:
-        return self.baseline_loss - self.target_loss
-
-    @staticmethod
-    def default() -> "LossRewardConfig":
-        return LossRewardConfig()
-
-    @staticmethod
-    def for_cifar10() -> "LossRewardConfig":
-        return LossRewardConfig(
-            baseline_loss=2.3,  # ln(10)
-            target_loss=0.3,
-            typical_loss_delta_std=0.05,
-        )
-
-    @staticmethod
-    def for_tinystories() -> "LossRewardConfig":
-        return LossRewardConfig(
-            baseline_loss=10.8,  # ln(50257)
-            target_loss=3.5,
-            typical_loss_delta_std=0.15,
-            compute_rent_weight=0.01,
-        )
+# LossRewardConfig is now in esper.leyline.reward_config (breaks import cycle)
 
 
 # =============================================================================
@@ -718,11 +673,12 @@ def compute_contribution_reward(
 
     # === 2b. SCAFFOLDING: Synergy Bonus ===
     # Reward seeds that have positive interactions with others
+    # B6-DRL-03: Gate on positive attribution to prevent ransomware seeds from
+    # receiving synergy bonus. Same anti-stacking pattern as ratio_penalty.
     synergy_bonus = 0.0
-    if seed_info is not None:
+    if seed_info is not None and attribution_discount >= 0.5 and bounded_attribution > 0:
         synergy_bonus = _compute_synergy_bonus(
             seed_info.interaction_sum,
-            seed_info.boost_received,
         )
         reward += synergy_bonus
     if components:
@@ -769,7 +725,7 @@ def compute_contribution_reward(
             # PBRS bonus for successful germination (no existing seed)
             # Balances the PBRS penalty applied when pruning seeds
             # Skip if disable_pbrs is True (ablation experiment)
-            phi_germinated = STAGE_POTENTIALS.get(STAGE_GERMINATED, 0.0)
+            phi_germinated = STAGE_POTENTIALS[SeedStage.GERMINATED]
             phi_no_seed = 0.0
             pbrs_germinate = config.gamma * phi_germinated - phi_no_seed
             action_shaping += config.pbrs_weight * pbrs_germinate
@@ -1186,7 +1142,7 @@ def _contribution_pbrs_bonus(
     phi(s') at timestep t equals phi(s) at timestep t+1.
     """
     # Current potential
-    phi_current = STAGE_POTENTIALS.get(seed_info.stage, 0.0)
+    phi_current = STAGE_POTENTIALS[SeedStage(seed_info.stage)]
     phi_current += min(
         seed_info.epochs_in_stage * config.epoch_progress_bonus,
         config.max_progress_bonus,
@@ -1201,14 +1157,14 @@ def _contribution_pbrs_bonus(
                 "phi_prev will be underestimated. This indicates SeedInfo was constructed incorrectly.",
                 seed_info.previous_stage,
             )
-        phi_prev = STAGE_POTENTIALS.get(seed_info.previous_stage, 0.0)
+        phi_prev = STAGE_POTENTIALS[SeedStage(seed_info.previous_stage)]
         phi_prev += min(
             seed_info.previous_epochs_in_stage * config.epoch_progress_bonus,
             config.max_progress_bonus,
         )
     else:
         # Same stage, one fewer epoch
-        phi_prev = STAGE_POTENTIALS.get(seed_info.stage, 0.0)
+        phi_prev = STAGE_POTENTIALS[SeedStage(seed_info.stage)]
         phi_prev += min(
             (seed_info.epochs_in_stage - 1) * config.epoch_progress_bonus,
             config.max_progress_bonus,
@@ -1219,7 +1175,6 @@ def _contribution_pbrs_bonus(
 
 def _compute_synergy_bonus(
     interaction_sum: float,
-    boost_received: float,
     synergy_weight: float = 0.1,
 ) -> float:
     """Compute synergy bonus for scaffolding behavior.
@@ -1227,9 +1182,12 @@ def _compute_synergy_bonus(
     Rewards seeds that have positive interactions with others.
     Uses tanh to bound the bonus and prevent reward hacking.
 
+    Note: boost_received (max single interaction) is intentionally NOT used here.
+    It feeds into hindsight credit via scaffold_boost_ledger instead. Using it
+    in both places would create concentration attack vulnerabilities.
+
     Args:
         interaction_sum: Total interaction I_ij with all other seeds
-        boost_received: Maximum single interaction
         synergy_weight: Scaling factor for bonus (default 0.1)
 
     Returns:
@@ -1544,7 +1502,7 @@ def compute_seed_potential(obs: dict[str, Any]) -> float:
         return 0.0
 
     # Use unified STAGE_POTENTIALS for PBRS consistency across all reward functions
-    base_potential = STAGE_POTENTIALS.get(seed_stage, 0.0)
+    base_potential = STAGE_POTENTIALS[SeedStage(seed_stage)]
 
     # Progress bonus matches ContributionRewardConfig defaults for PBRS consistency
     # epoch_progress_bonus=0.3, max_progress_bonus=2.0
@@ -1569,8 +1527,8 @@ def compute_pbrs_stage_bonus(
     """
     previous_stage = seed_info.previous_stage
 
-    current_potential = STAGE_POTENTIALS.get(seed_info.stage, 0.0)
-    previous_potential = STAGE_POTENTIALS.get(previous_stage, 0.0)
+    current_potential = STAGE_POTENTIALS[SeedStage(seed_info.stage)]
+    previous_potential = STAGE_POTENTIALS[SeedStage(previous_stage)]
 
     return config.stage_potential_weight * (
         gamma * current_potential - previous_potential

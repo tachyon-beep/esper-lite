@@ -101,6 +101,74 @@ class TestShapleyReproducibility:
         assert configs1 != configs2, "Different seeds should produce different configs"
 
 
+class TestShapleyPermutationCap:
+    """B5-DRL-04: Verify warning when shapley_samples exceeds cap."""
+
+    def test_warning_logged_when_samples_exceed_cap(self, caplog):
+        """Warning should be logged when shapley_samples > 100."""
+        import logging
+
+        slot_ids = ["r0c0", "r0c1", "r0c2"]
+
+        # Create a matrix with full factorial configs
+        matrix = CounterfactualMatrix(epoch=1, strategy_used="shapley")
+        for i in range(8):
+            config_tuple = tuple(bool(i & (1 << j)) for j in range(3))
+            matrix.configs.append(
+                CounterfactualResult(
+                    config=config_tuple,
+                    slot_ids=tuple(slot_ids),
+                    val_accuracy=0.5,
+                    val_loss=0.5,
+                )
+            )
+
+        # Configure with samples exceeding the cap
+        config = CounterfactualConfig(shapley_samples=200, seed=42)
+        engine = CounterfactualEngine(config)
+
+        with caplog.at_level(logging.WARNING):
+            engine.compute_shapley_values(matrix)
+
+        # Verify warning was logged
+        assert any(
+            "Shapley permutations capped at 100" in record.message
+            and "requested 200" in record.message
+            for record in caplog.records
+        ), "Expected warning about Shapley permutation cap"
+
+    def test_no_warning_when_samples_within_cap(self, caplog):
+        """No warning should be logged when shapley_samples <= 100."""
+        import logging
+
+        slot_ids = ["r0c0", "r0c1", "r0c2"]
+
+        matrix = CounterfactualMatrix(epoch=1, strategy_used="shapley")
+        for i in range(8):
+            config_tuple = tuple(bool(i & (1 << j)) for j in range(3))
+            matrix.configs.append(
+                CounterfactualResult(
+                    config=config_tuple,
+                    slot_ids=tuple(slot_ids),
+                    val_accuracy=0.5,
+                    val_loss=0.5,
+                )
+            )
+
+        # Configure within cap
+        config = CounterfactualConfig(shapley_samples=50, seed=42)
+        engine = CounterfactualEngine(config)
+
+        with caplog.at_level(logging.WARNING):
+            engine.compute_shapley_values(matrix)
+
+        # Verify no warning was logged
+        assert not any(
+            "Shapley permutations capped" in record.message
+            for record in caplog.records
+        ), "No warning expected when within cap"
+
+
 class TestCounterfactualConfigDefaults:
     """Test CounterfactualConfig default behavior."""
 

@@ -346,6 +346,12 @@ def build_parser() -> argparse.ArgumentParser:
              "reduce-overhead (minimal overhead), or off. (default: default)",
     )
     ppo_parser.add_argument(
+        "--force-compile",
+        action="store_true",
+        help="Force torch.compile even in TUI mode (normally disabled for debuggability). "
+             "Use when testing compilation performance with Sanctum/Overwatch.",
+    )
+    ppo_parser.add_argument(
         "--seed",
         type=int,
         default=None,
@@ -408,14 +414,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Tamiyo's LSTM hidden dimension (temporal reasoning capacity). "
              "Smaller = faster but less temporal memory. (Maps to lstm_hidden_dim. Default: 128)",
     )
-    # Note: Uses type=int (not _positive_int) since 0 is valid (no annealing)
+    # Entropy annealing: uses type=int (not _positive_int) since 0 is valid (no annealing)
+    # Semantics: total env-episodes over which to anneal. With K envs, produces ceil(N/K) PPO batches.
+    # This keeps total training experience constant across different --envs values.
     ppo_parser.add_argument(
-        "--entropy-anneal-rounds",
+        "--entropy-anneal-episodes",
         type=int,
         default=None,
-        metavar="R",
-        help="Rounds over which to anneal entropy coefficient. 0 = no annealing. "
-             "(Maps to entropy_anneal_episodes. Default: 0)",
+        metavar="N",
+        help="Total env-EPISODES (complete training runs) over which to anneal entropy "
+             "coefficient from start to end. With K envs running in parallel, the policy "
+             "sees K episodes per batch, so annealing completes in ceil(N/K) PPO batches. "
+             "This keeps total training experience constant across different --envs values. "
+             "0 = no annealing. (Default: 0)",
     )
 
     ppo_parser.epilog = dedent("""
@@ -735,8 +746,8 @@ def main() -> None:
                     config.ppo_updates_per_batch = args.ppo_epochs
                 if args.memory_size is not None:
                     config.lstm_hidden_dim = args.memory_size
-                if args.entropy_anneal_rounds is not None:
-                    config.entropy_anneal_episodes = args.entropy_anneal_rounds
+                if args.entropy_anneal_episodes is not None:
+                    config.entropy_anneal_episodes = args.entropy_anneal_episodes
 
                 # Handle A/B testing - set on config for validation
                 if args.ab_test:
@@ -829,6 +840,7 @@ def main() -> None:
                         telemetry_config=telemetry_config,
                         telemetry_lifecycle_only=args.telemetry_lifecycle_only,
                         quiet_analytics=use_sanctum,
+                        force_compile=args.force_compile,
                         ready_event=dataloader_ready_event,
                         shutdown_event=shutdown_event,
                         torch_profiler=args.torch_profiler,

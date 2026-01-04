@@ -23,6 +23,7 @@ def test_view_definitions_exist():
         "batch_stats",
         "anomalies",
         "episode_outcomes",
+        "shapley_computed",
     }
     assert set(VIEW_DEFINITIONS.keys()) == expected
 

@@ -17,7 +17,7 @@ from .parallel_env_state import ParallelEnvState
 
 from .config import TrainingConfig
 
-from .policy_group import PolicyGroup
+from .policy_group import EpisodeRecord, PolicyGroup
 
 from .helpers import (
     train_heuristic,
@@ -33,6 +33,7 @@ __all__ = [
     # Config
     "TrainingConfig",
     # A/B testing
+    "EpisodeRecord",
     "PolicyGroup",
     # Training functions (light)
     "train_heuristic",

@@ -922,3 +922,483 @@ class TestTolariaGovernor:
         assert gov._panic_reason is None
         assert gov._pending_panic is False
         assert gov.consecutive_panics == 0
+
+    def test_nan_panic_does_not_falsify_consecutive_panics(self):
+        """NaN-triggered panic should NOT falsify consecutive_panics counter.
+
+        Regression test for telemetry integrity bug: the old code set
+        consecutive_panics = min_panics_before_rollback to force rollback,
+        but this falsified telemetry (claiming 3 consecutive panics when
+        there was only 1 NaN event). The panic_reason field already
+        distinguishes immediate panics from consecutive divergence.
+        """
+        from esper.tolaria import TolariaGovernor
+
+        model = DummyModel()
+        gov = TolariaGovernor(model)
+
+        # Build history for context
+        for _ in range(15):
+            gov.check_vital_signs(1.0)
+
+        # Verify counter is 0 before NaN
+        assert gov.consecutive_panics == 0
+
+        # NaN should trigger immediate panic but NOT falsify the counter
+        result = gov.check_vital_signs(float('nan'))
+        assert result is True
+        assert gov._panic_reason == "governor_nan"
+
+        # CRITICAL: consecutive_panics should remain 0 (one NaN is not
+        # "3 consecutive panics")
+        assert gov.consecutive_panics == 0, (
+            f"NaN panic should not falsify consecutive_panics, got {gov.consecutive_panics}"
+        )
+
+    def test_lobotomy_panic_does_not_falsify_consecutive_panics(self):
+        """Lobotomy-triggered panic should NOT falsify consecutive_panics counter.
+
+        Same telemetry integrity issue as NaN - lobotomy is detected from
+        a single observation, not consecutive anomalies.
+        """
+        from esper.tolaria import TolariaGovernor
+        import math
+
+        model = DummyModel()
+        gov = TolariaGovernor(model, random_guess_loss=math.log(10))
+
+        # Build healthy history (loss ~0.8, well below random guess)
+        for _ in range(15):
+            gov.check_vital_signs(0.8)
+
+        # Verify counter is 0 before lobotomy
+        assert gov.consecutive_panics == 0
+
+        # Jump to random guess loss (lobotomy signature)
+        result = gov.check_vital_signs(math.log(10))
+        assert result is True
+        assert gov._panic_reason == "governor_lobotomy"
+
+        # CRITICAL: consecutive_panics should remain 0
+        assert gov.consecutive_panics == 0, (
+            f"Lobotomy panic should not falsify consecutive_panics, got {gov.consecutive_panics}"
+        )
+
+    def test_rollback_loads_cpu_snapshot_directly(self):
+        """Rollback should load CPU snapshot directly without GPU pre-copy.
+
+        Regression test for OOM bug: the old code created a full GPU copy
+        of the snapshot before loading, doubling memory usage during the
+        most memory-critical moment (recovery from instability).
+
+        This test verifies the snapshot remains on CPU after rollback
+        (not moved to GPU as a side effect of pre-loading).
+        """
+        from esper.tolaria import TolariaGovernor
+
+        model = DummyModel()
+        gov = TolariaGovernor(model)
+
+        # Take snapshot (stored on CPU by design)
+        gov.snapshot()
+
+        # Verify snapshot is on CPU
+        for key, value in gov.last_good_state.items():
+            if isinstance(value, torch.Tensor):
+                assert value.device.type == "cpu", (
+                    f"Snapshot tensor '{key}' should be on CPU before rollback"
+                )
+
+        # Build history and execute rollback
+        for _ in range(5):
+            gov.loss_history.append(1.0)
+        gov.execute_rollback()
+
+        # Snapshot should STILL be on CPU (not moved as side effect)
+        for key, value in gov.last_good_state.items():
+            if isinstance(value, torch.Tensor):
+                assert value.device.type == "cpu", (
+                    f"Snapshot tensor '{key}' should remain on CPU after rollback"
+                )
+
+    def test_rollback_restores_fossilized_seed_from_snapshot(self):
+        """Rollback must restore fossilized seed weights from snapshot.
+
+        Regression test for snapshot/rollback incoherence bug:
+
+        Timeline:
+        1. Snapshot taken while seed is TRAINING (excluded from snapshot)
+        2. Seed fossilizes (now FOSSILIZED)
+        3. Seed weights modified by continued training
+        4. Rollback triggered BEFORE next snapshot
+
+        Bug: Fossilized seeds can't be pruned, but their weights aren't in
+        the snapshot. Result: host reverts but fossilized seed keeps stale
+        weights = INCOHERENT STATE.
+
+        Fix: Take snapshot immediately after fossilization so the Last Known
+        Good state always includes newly-fossilized seed weights.
+
+        This test verifies the fix by checking that after fossilization and
+        a new snapshot, rollback properly restores the fossilized seed weights.
+        """
+        from esper.tolaria import TolariaGovernor
+        from esper.kasmina import MorphogeneticModel, CNNHost
+        from esper.leyline import SeedStage
+
+        # Create model with a seed slot
+        host = CNNHost()
+        model = MorphogeneticModel(host, device="cpu", slots=["r0c0"])
+
+        # Step 1: Germinate a seed (TRAINING stage - not fossilized)
+        model.seed_slots["r0c0"].germinate("conv_heavy", "test_seed")
+        assert model.seed_slots["r0c0"].state.stage != SeedStage.FOSSILIZED
+
+        # Step 2: Take initial snapshot (seed is excluded because not fossilized)
+        gov = TolariaGovernor(model)
+
+        # Verify seed is NOT in initial snapshot
+        initial_snapshot_keys = set(gov.last_good_state.keys())
+        seed_keys_in_initial = {k for k in initial_snapshot_keys if "seed_slots.r0c0.seed." in k}
+        assert len(seed_keys_in_initial) == 0, (
+            "Initial snapshot should not include non-fossilized seed"
+        )
+
+        # Step 3: Fossilize the seed
+        model.seed_slots["r0c0"].state.stage = SeedStage.FOSSILIZED
+
+        # Step 4: Save the fossilized seed weights (the "good" state)
+        seed = model.seed_slots["r0c0"].seed
+        assert seed is not None
+        # Get first parameter to track
+        first_param = next(seed.parameters())
+        fossilized_weights = first_param.data.clone()
+
+        # Step 5: Take a NEW snapshot after fossilization (the fix)
+        # This is what the fix should do automatically after OP_FOSSILIZE
+        gov.snapshot()
+
+        # Verify seed IS now in snapshot
+        new_snapshot_keys = set(gov.last_good_state.keys())
+        seed_keys_in_new = {k for k in new_snapshot_keys if "seed_slots.r0c0.seed." in k}
+        assert len(seed_keys_in_new) > 0, (
+            "Snapshot after fossilization should include fossilized seed"
+        )
+
+        # Step 6: Corrupt the seed weights (simulate continued training)
+        first_param.data.fill_(999.0)
+        assert not torch.allclose(first_param.data, fossilized_weights), (
+            "Weights should be corrupted before rollback"
+        )
+
+        # Build minimal history for rollback
+        for i in range(5):
+            gov.loss_history.append(1.0)
+
+        # Step 7: Execute rollback
+        report = gov.execute_rollback()
+        assert report.rollback_occurred
+
+        # Step 8: Verify fossilized seed weights are RESTORED
+        # This is the critical assertion - without the fix, weights would
+        # still be 999.0 because the fossilized seed couldn't be pruned
+        # and its weights weren't in the snapshot
+        assert torch.allclose(first_param.data, fossilized_weights), (
+            f"Fossilized seed weights should be restored after rollback. "
+            f"Expected {fossilized_weights.flatten()[:5]}, "
+            f"got {first_param.data.flatten()[:5]}"
+        )
+
+    def test_rollback_without_post_fossilization_snapshot_is_incoherent(self):
+        """Demonstrate the incoherence bug when snapshot is NOT taken after fossilization.
+
+        This test documents the bug behavior:
+        - Seed fossilizes between snapshots (via proper advance_stage)
+        - Rollback can't restore fossilized seed (not in snapshot, can't prune)
+        - Result: host reverts but fossilized seed keeps corrupted weights
+
+        This test should FAIL once we implement the fix (automatic snapshot
+        after fossilization). It serves as the regression test.
+        """
+        from esper.tolaria import TolariaGovernor
+        from esper.kasmina import MorphogeneticModel, CNNHost
+        from esper.leyline import SeedStage
+
+        # Create model with a seed slot
+        host = CNNHost()
+        model = MorphogeneticModel(host, device="cpu", slots=["r0c0"])
+
+        # Germinate a seed (starts in GERMINATED stage)
+        model.seed_slots["r0c0"].germinate("conv_heavy", "test_seed")
+
+        # Take snapshot while seed is NOT fossilized (excluded from snapshot)
+        gov = TolariaGovernor(model)
+
+        # Verify seed is NOT in snapshot (this is the precondition)
+        snapshot_keys = set(gov.last_good_state.keys())
+        seed_keys = {k for k in snapshot_keys if "seed_slots.r0c0.seed." in k}
+        assert len(seed_keys) == 0, "Seed should NOT be in snapshot before fossilization"
+
+        # Fossilize the seed via proper lifecycle (using internal state directly
+        # since we can't easily run full lifecycle in unit test)
+        model.seed_slots["r0c0"].state.stage = SeedStage.FOSSILIZED
+
+        # Verify seed IS now fossilized
+        assert model.seed_slots["r0c0"].state.stage == SeedStage.FOSSILIZED
+
+        # Get a seed parameter to track
+        seed = model.seed_slots["r0c0"].seed
+        first_param = next(seed.parameters())
+
+        # DO NOT take a new snapshot (this is the bug scenario)
+        # In production, this happens when fossilization occurs between
+        # periodic snapshots (every 5 epochs)
+
+        # Corrupt the weights (simulates training after fossilization)
+        first_param.data.fill_(999.0)
+
+        # Build history and rollback
+        for i in range(5):
+            gov.loss_history.append(1.0)
+
+        gov.execute_rollback()
+
+        # BUG DEMONSTRATION: The fossilized seed's weights are NOT restored.
+        #
+        # Why this happens:
+        # 1. Seed wasn't FOSSILIZED when snapshot was taken → excluded
+        # 2. FOSSILIZED seeds can't be pruned (slot.prune() returns False)
+        # 3. load_state_dict(strict=False) silently ignores missing keys
+        # 4. Result: seed keeps corrupted weights while host reverts
+        #
+        # Check if weights are still corrupted (the bug) or restored (the fix)
+        weights_still_corrupted = torch.allclose(
+            first_param.data,
+            torch.full_like(first_param.data, 999.0)
+        )
+
+        # This assertion PASSES when the bug exists (weights stay corrupted)
+        # and FAILS when the fix is implemented (weights get restored)
+        assert weights_still_corrupted, (
+            "BUG FIXED: Fossilized seed weights are now restored during rollback. "
+            "This test should be converted to a proper regression test that "
+            "verifies weights ARE restored (remove this assertion, add positive test)."
+        )
+
+    def test_rollback_fails_on_host_key_mismatch(self):
+        """Rollback should fail fast if non-seed parameters are missing from snapshot.
+
+        Regression test for silent partial restoration bug:
+        - strict=False allows ANY key mismatch silently
+        - If a host parameter is missing (snapshot corruption, architecture drift),
+          rollback "succeeds" but model is partially restored
+        - Fix: Validate mismatches are within seed_slots.* namespace only
+        """
+        from esper.tolaria import TolariaGovernor
+
+        model = DummyModel()
+        gov = TolariaGovernor(model)
+        gov.snapshot()
+
+        # Simulate snapshot corruption: remove a host key
+        del gov.last_good_state['linear.weight']
+
+        # Build history for rollback
+        for i in range(5):
+            gov.loss_history.append(1.0)
+
+        # Rollback should raise because host key is missing
+        with pytest.raises(RuntimeError, match="non-seed parameters"):
+            gov.execute_rollback()
+
+    def test_rollback_fails_on_unexpected_host_key(self):
+        """Rollback should fail fast if snapshot has unexpected non-seed keys.
+
+        This catches the inverse case: snapshot has keys that model doesn't.
+        Could happen if model architecture changed since snapshot.
+        """
+        from esper.tolaria import TolariaGovernor
+
+        model = DummyModel()
+        gov = TolariaGovernor(model)
+        gov.snapshot()
+
+        # Add an unexpected host key to snapshot
+        gov.last_good_state['nonexistent_layer.weight'] = torch.randn(10, 10)
+
+        # Build history for rollback
+        for i in range(5):
+            gov.loss_history.append(1.0)
+
+        # Rollback should raise because unexpected host key exists
+        with pytest.raises(RuntimeError, match="non-seed parameters"):
+            gov.execute_rollback()
+
+    def test_rollback_allows_seed_key_mismatches(self):
+        """Rollback should tolerate seed_slots.* key mismatches.
+
+        Seed key mismatches are expected:
+        - Seeds may be pruned between snapshot and rollback (missing keys)
+        - Seeds may be germinated after snapshot (unexpected keys)
+
+        The integrity check should NOT fail for these cases.
+        """
+        from esper.tolaria import TolariaGovernor
+        from esper.kasmina import MorphogeneticModel, CNNHost
+
+        # Create model with seed slot
+        host = CNNHost()
+        model = MorphogeneticModel(host, device="cpu", slots=["r0c0"])
+        gov = TolariaGovernor(model)
+
+        # Germinate a seed AFTER snapshot (creates unexpected keys on restore)
+        model.seed_slots["r0c0"].germinate("conv_heavy", "test_seed")
+
+        # Build history for rollback
+        for i in range(5):
+            gov.loss_history.append(1.0)
+
+        # Rollback should succeed despite seed key mismatches
+        # (The execute_rollback will prune the seed first, creating missing keys)
+        report = gov.execute_rollback()
+        assert report.rollback_occurred is True
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_snapshot_rejects_non_default_stream(self):
+        """snapshot() should fail fast if called within non-default CUDA stream.
+
+        This enforces the stream contract documented in snapshot() docstring.
+        Snapshotting within a non-default stream while that stream has pending
+        writes could produce a torn (partially updated) snapshot.
+        """
+        from esper.tolaria import TolariaGovernor
+
+        device = torch.device("cuda:0")
+        model = nn.Sequential(nn.Linear(10, 10)).to(device)
+        gov = TolariaGovernor(model)
+
+        # Create a non-default stream
+        secondary_stream = torch.cuda.Stream(device)
+
+        # Snapshot within non-default stream should raise
+        with torch.cuda.stream(secondary_stream):
+            with pytest.raises(RuntimeError, match="non-default CUDA stream"):
+                gov.snapshot()
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_snapshot_allows_default_stream(self):
+        """snapshot() should succeed on default stream (no false positives).
+
+        Verifies the stream check doesn't reject valid calls on the default stream.
+        """
+        from esper.tolaria import TolariaGovernor
+
+        device = torch.device("cuda:0")
+        model = nn.Sequential(nn.Linear(10, 10)).to(device)
+        gov = TolariaGovernor(model)
+
+        # Explicitly on default stream (should succeed)
+        with torch.cuda.stream(torch.cuda.default_stream(device)):
+            gov.snapshot()  # Should not raise
+
+        # Outside any stream context (implicitly default stream)
+        gov.snapshot()  # Should not raise
+
+        assert gov.last_good_state is not None
+
+    def test_rollback_succeeds_when_hub_unavailable(self):
+        """Rollback must succeed even if telemetry hub fails to initialize.
+
+        Regression test for Issue 2 (Tolaria audit 2026-01-04):
+        Hub acquisition failure should not prevent the safety-critical
+        rollback operation from completing. The rollback is the critical path;
+        telemetry is best-effort observability.
+
+        Safety hierarchy:
+        1. Rollback succeeds + telemetry succeeds (ideal)
+        2. Rollback succeeds + telemetry fails (acceptable - this test)
+        3. Rollback fails + telemetry succeeds (bad)
+        4. Rollback fails + telemetry fails (worst - old behavior)
+        """
+        from unittest.mock import patch
+        from esper.tolaria import TolariaGovernor
+
+        model = DummyModel()
+        gov = TolariaGovernor(model)
+
+        original_weight = model.linear.weight.data.clone()
+        gov.snapshot()
+
+        # Corrupt model
+        model.linear.weight.data.fill_(999.0)
+
+        # Build history
+        for i in range(5):
+            gov.loss_history.append(1.0)
+
+        # Make get_hub raise - simulates hub not initialized
+        with patch("esper.nissa.get_hub") as mock_get_hub:
+            mock_get_hub.side_effect = RuntimeError("Hub not initialized")
+
+            # Rollback should still succeed despite hub failure
+            report = gov.execute_rollback()
+
+        # Verify model was restored despite hub failure
+        assert torch.allclose(model.linear.weight.data, original_weight)
+        assert report.rollback_occurred is True
+
+    def test_rollback_succeeds_when_emit_raises(self):
+        """Rollback must succeed even if hub.emit() raises.
+
+        Edge case: Hub initializes successfully but emit fails
+        (network error, serialization error, disk full, etc.).
+        """
+        from unittest.mock import Mock, patch
+        from esper.tolaria import TolariaGovernor
+
+        model = DummyModel()
+        gov = TolariaGovernor(model)
+
+        original_weight = model.linear.weight.data.clone()
+        gov.snapshot()
+        model.linear.weight.data.fill_(999.0)
+
+        for i in range(5):
+            gov.loss_history.append(1.0)
+
+        with patch("esper.nissa.get_hub") as mock_get_hub:
+            hub = Mock()
+            hub.emit.side_effect = RuntimeError("Emit failed: disk full")
+            mock_get_hub.return_value = hub
+
+            report = gov.execute_rollback()
+
+        # Model should be restored despite emit failure
+        assert torch.allclose(model.linear.weight.data, original_weight)
+        assert report.rollback_occurred is True
+
+    def test_rollback_logs_telemetry_failure_to_stderr(self, capsys):
+        """Telemetry failures should be logged to stderr for visibility.
+
+        The rollback succeeds silently in terms of exceptions, but the
+        telemetry failure should be visible in logs for debugging.
+        """
+        from unittest.mock import patch
+        from esper.tolaria import TolariaGovernor
+
+        model = DummyModel()
+        gov = TolariaGovernor(model)
+        gov.snapshot()
+
+        for i in range(5):
+            gov.loss_history.append(1.0)
+
+        with patch("esper.nissa.get_hub") as mock_get_hub:
+            mock_get_hub.side_effect = RuntimeError("Hub init failed")
+
+            gov.execute_rollback()
+
+        captured = capsys.readouterr()
+        assert "WARNING" in captured.err
+        assert "rollback succeeded" in captured.err
+        assert "telemetry" in captured.err.lower()

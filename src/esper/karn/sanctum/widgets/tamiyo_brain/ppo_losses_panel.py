@@ -26,7 +26,7 @@ from textual.widgets import Static
 
 from esper.karn.constants import TUIThresholds
 
-from .primary_metrics import detect_trend, render_sparkline, trend_style
+from .sparkline_utils import detect_trend, render_sparkline, trend_style
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot
@@ -36,10 +36,11 @@ class PPOLossesPanel(Static):
     """Combined PPO health gauges and loss sparklines panel.
 
     Extends Static directly for minimal layout overhead.
+    Designed for narrow width (~38 chars) in the new layout.
     """
 
     WARMUP_BATCHES: ClassVar[int] = 50
-    GAUGE_WIDTH: ClassVar[int] = 10
+    GAUGE_WIDTH: ClassVar[int] = 8  # Narrower for compact layout
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -64,7 +65,9 @@ class PPOLossesPanel(Static):
             else:
                 self.border_title = "PPO LOSSES"
         elif batch < self.WARMUP_BATCHES:
-            self.border_title = f"PPO LOSSES \u2500 WARMING UP [{batch}/{self.WARMUP_BATCHES}]"
+            self.border_title = (
+                f"PPO LOSSES \u2500 WARMING UP [{batch}/{self.WARMUP_BATCHES}]"
+            )
         else:
             self.border_title = "PPO LOSSES"
 
@@ -82,7 +85,7 @@ class PPOLossesPanel(Static):
 
         # Separator line
         result.append("\n")
-        result.append("\u2500" * 50, style="dim")
+        result.append("\u2500" * 32, style="dim")
         result.append("\n")
 
         # Bottom section: Loss sparklines
@@ -102,41 +105,48 @@ class PPOLossesPanel(Static):
         result = Text()
 
         # Row 1: Explained Variance
-        result.append(self._render_gauge_row(
-            label="Expl.Var",
-            value=tamiyo.explained_variance,
-            min_val=-1.0,
-            max_val=1.0,
-            status=self._get_ev_status(tamiyo.explained_variance),
-            is_warmup=is_warmup,
-        ))
+        result.append(
+            self._render_gauge_row(
+                label="Expl.Var ",
+                value=tamiyo.explained_variance,
+                min_val=-1.0,
+                max_val=1.0,
+                status=self._get_ev_status(tamiyo.explained_variance),
+                is_warmup=is_warmup,
+            )
+        )
         result.append("\n")
 
         # Row 2: Entropy
-        result.append(self._render_gauge_row(
-            label="Entropy",
-            value=tamiyo.entropy,
-            min_val=0.0,
-            max_val=2.0,
-            status=self._get_entropy_status(tamiyo.entropy),
-            is_warmup=is_warmup,
-        ))
+        result.append(
+            self._render_gauge_row(
+                label="Entropy  ",
+                value=tamiyo.entropy,
+                min_val=0.0,
+                max_val=2.0,
+                status=self._get_entropy_status(tamiyo.entropy),
+                is_warmup=is_warmup,
+            )
+        )
         result.append("\n")
 
         # Row 3: Clip Fraction (with directional breakdown)
-        result.append(self._render_gauge_row(
-            label="Clip Frac",
-            value=tamiyo.clip_fraction,
-            min_val=0.0,
-            max_val=0.5,
-            status=self._get_clip_status(tamiyo.clip_fraction),
-            is_warmup=is_warmup,
-        ))
-        # Add directional breakdown with arrows
+        result.append(
+            self._render_gauge_row(
+                label="Clip Frac",
+                value=tamiyo.clip_fraction,
+                min_val=0.0,
+                max_val=0.5,
+                status=self._get_clip_status(tamiyo.clip_fraction),
+                is_warmup=is_warmup,
+            )
+        )
+        # Add directional breakdown with arrows (always show, dim when zero)
         clip_pos = tamiyo.gradient_quality.clip_fraction_positive
         clip_neg = tamiyo.gradient_quality.clip_fraction_negative
-        if clip_pos > 0 or clip_neg > 0:
-            result.append(f" (\u2191{clip_pos:.0%} \u2193{clip_neg:.0%})", style="dim")
+        # Style: dim when both zero, otherwise show direction that's active
+        dir_style = "dim" if clip_pos == 0 and clip_neg == 0 else "cyan"
+        result.append(f" (\u2191{clip_pos:.1%} \u2193{clip_neg:.1%})", style=dir_style)
 
         return result
 
@@ -151,24 +161,26 @@ class PPOLossesPanel(Static):
     ) -> Text:
         """Render a single gauge row with value-first layout.
 
-        Format: Label      Value  [bar]  Status
+        Format: Label  Value [bar] Status (compact for narrow panel)
         """
         result = Text()
 
-        # Label (left-aligned, 10 chars)
-        result.append(f"{label:<10}", style="dim")
+        # Label (left-aligned, 8 chars for compact layout)
+        result.append(f"{label:<8}", style="dim")
 
-        # Value (right-aligned, 8 chars)
+        # Value (right-aligned, 6 chars)
         if abs(value) < 0.1:
-            result.append(f"{value:>8.3f}", style=self._status_style(status))
+            result.append(f"{value:>6.3f}", style=self._status_style(status))
         else:
-            result.append(f"{value:>8.2f}", style=self._status_style(status))
+            result.append(f"{value:>6.2f}", style=self._status_style(status))
 
         # Gap
-        result.append("  ")
+        result.append(" ")
 
-        # Bar
-        normalized = (value - min_val) / (max_val - min_val) if max_val != min_val else 0.5
+        # Bar (compact)
+        normalized = (
+            (value - min_val) / (max_val - min_val) if max_val != min_val else 0.5
+        )
         normalized = max(0, min(1, normalized))
         filled = int(normalized * self.GAUGE_WIDTH)
         empty = self.GAUGE_WIDTH - filled
@@ -189,35 +201,44 @@ class PPOLossesPanel(Static):
         return result
 
     def _render_sparklines(self) -> Text:
-        """Render the loss sparkline rows."""
+        """Render the loss sparkline rows.
+
+        Fixed layout: Label(7) + Sparkline(12) + Value(8) + Trend(1)
+        Values use space flag for sign alignment: " 0.123" vs "-0.123"
+        """
         if self._snapshot is None:
             return Text("No data", style="dim")
 
         tamiyo = self._snapshot.tamiyo
         result = Text()
 
+        # Sparkline width - longer for better trend visibility
+        SPARK_W = 12
+
         # Policy loss with sparkline
-        result.append("P.Loss    ", style="dim")
+        result.append("P.Loss ", style="dim")  # 7 chars
         if tamiyo.policy_loss_history:
-            pl_sparkline = render_sparkline(tamiyo.policy_loss_history, width=8)
+            pl_sparkline = render_sparkline(tamiyo.policy_loss_history, width=SPARK_W)
             pl_trend = detect_trend(list(tamiyo.policy_loss_history))
             result.append(pl_sparkline)
-            result.append(f" {tamiyo.policy_loss:>6.3f}", style="bright_cyan")
+            result.append(f" {tamiyo.policy_loss: 7.4f}", style="bright_cyan")
             result.append(pl_trend, style=trend_style(pl_trend, "loss"))
         else:
-            result.append(f"{tamiyo.policy_loss:>6.3f}", style="bright_cyan")
+            result.append("─" * SPARK_W, style="dim")
+            result.append(f" {tamiyo.policy_loss: 7.4f}", style="bright_cyan")
         result.append("\n")
 
         # Value loss with sparkline
-        result.append("V.Loss    ", style="dim")
+        result.append("V.Loss ", style="dim")  # 7 chars
         if tamiyo.value_loss_history:
-            vl_sparkline = render_sparkline(tamiyo.value_loss_history, width=8)
+            vl_sparkline = render_sparkline(tamiyo.value_loss_history, width=SPARK_W)
             vl_trend = detect_trend(list(tamiyo.value_loss_history))
             result.append(vl_sparkline)
-            result.append(f" {tamiyo.value_loss:>6.3f}", style="bright_cyan")
+            result.append(f" {tamiyo.value_loss: 7.4f}", style="bright_cyan")
             result.append(vl_trend, style=trend_style(vl_trend, "loss"))
         else:
-            result.append(f"{tamiyo.value_loss:>6.3f}", style="bright_cyan")
+            result.append("─" * SPARK_W, style="dim")
+            result.append(f" {tamiyo.value_loss: 7.4f}", style="bright_cyan")
         result.append("\n")
 
         # Value/Policy loss ratio
@@ -226,13 +247,19 @@ class PPOLossesPanel(Static):
         return result
 
     def _render_loss_ratio(self, value_loss: float, policy_loss: float) -> Text:
-        """Render Value/Policy loss ratio with DRL-appropriate thresholds."""
+        """Render Value/Policy loss ratio with DRL-appropriate thresholds.
+
+        Aligned with sparkline rows: Label(7) + Pad(12) + Space(1) + Value(8)
+        """
         result = Text()
-        result.append("L_v/L_p   ", style="dim")
+        result.append("Lv/Lp  ", style="dim")  # 7 chars
+
+        # Padding to align with sparkline rows (12 chars for sparkline)
+        result.append(" " * 12, style="dim")
 
         # Handle edge cases
         if abs(policy_loss) < 1e-10:
-            result.append("---", style="dim")
+            result.append("     ---", style="dim")  # 8 chars
             return result
 
         ratio = abs(value_loss) / abs(policy_loss)
@@ -245,12 +272,15 @@ class PPOLossesPanel(Static):
         else:
             status = "ok"
 
-        style = {"ok": "bright_cyan", "warning": "yellow", "critical": "red bold"}[status]
-        result.append(f"{ratio:>7.2f}", style=style)
+        style = {"ok": "bright_cyan", "warning": "yellow", "critical": "red bold"}[
+            status
+        ]
+        # Use space flag for sign alignment (ratio is always positive but aligns with losses)
+        result.append(f" {ratio: 7.2f}", style=style)  # 8 chars total
 
         # Add interpretation hint
         if status == "ok":
-            result.append(" \u2713", style="green dim")
+            result.append(" ✓", style="green dim")
         elif ratio < 0.2:
             result.append(" P>V", style=style)  # Policy dominating
         elif ratio > 5.0:

@@ -134,6 +134,7 @@ class TestActionReachability:
         seed.metrics.total_improvement = 3.0  # Positive to avoid ransomware pattern
 
         class MockSignals:
+            available_slots = 1
             class metrics:
                 epoch = 50
                 plateau_epochs = 0
@@ -161,6 +162,7 @@ class TestActionReachability:
         seed.epochs_in_stage = 10
 
         class MockSignals:
+            available_slots = 1
             class metrics:
                 epoch = 50
                 plateau_epochs = 0
@@ -208,6 +210,7 @@ class TestTargetConsistency:
         seed.metrics.counterfactual_contribution = 5.0
 
         class MockSignals:
+            available_slots = 1
             class metrics:
                 epoch = 50
                 plateau_epochs = 0
@@ -235,6 +238,7 @@ class TestTargetConsistency:
         seed.epochs_in_stage = 10
 
         class MockSignals:
+            available_slots = 1
             class metrics:
                 epoch = 50
                 plateau_epochs = 0
@@ -294,6 +298,7 @@ class TestWaitDefault:
         seed.alpha_controller.alpha = seed.alpha
 
         class MockSignals:
+            available_slots = 1
             class metrics:
                 epoch = 50
                 plateau_epochs = 0
@@ -342,6 +347,7 @@ class TestStageAppropriateness:
         policy = HeuristicTamiyo(topology="cnn")
 
         class MockSignals:
+            available_slots = 1
             class metrics:
                 epoch = 50
                 plateau_epochs = 0
@@ -361,6 +367,7 @@ class TestStageAppropriateness:
         policy = HeuristicTamiyo(topology="cnn")
 
         class MockSignals:
+            available_slots = 1
             class metrics:
                 epoch = 50
                 plateau_epochs = 0
@@ -380,6 +387,7 @@ class TestStageAppropriateness:
         policy = HeuristicTamiyo(topology="cnn")
 
         class MockSignals:
+            available_slots = 1
             class metrics:
                 epoch = 50
                 plateau_epochs = 0

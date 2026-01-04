@@ -158,3 +158,96 @@ class TestGovernorRollback:
         # 5. Verify Manual Clear works (Simulation of vectorized.py)
         optimizer.state.clear()
         assert len(optimizer.state) == 0
+
+    def test_rollback_survives_telemetry_failure(self):
+        """Verify rollback completes even when slot telemetry callback raises.
+
+        Regression test for the bug where Governor.execute_rollback() could fail
+        if SeedSlot.prune() raised an exception from its telemetry callback.
+        The safety mechanism (rollback) must not be blocked by observability
+        failures (telemetry).
+
+        The fix involves:
+        1. Reordering execute_rollback() to restore weights BEFORE pruning seeds
+        2. Making _emit_telemetry fault-tolerant with try/except
+        3. Wrapping the prune loop in try/except in governor.py
+        """
+        device = "cpu"
+        model = create_model(task="cifar_baseline", device=device, slots=["r0c1"])
+        governor = TolariaGovernor(
+            model=model,
+            sensitivity=3.0,
+            absolute_threshold=100.0,
+            min_panics_before_rollback=1,
+        )
+
+        # 1. Germinate a seed so there's something to prune during rollback
+        model.germinate_seed("conv_light", "test_seed", slot="r0c1")
+        slot = model.seed_slots["r0c1"]
+
+        # Enable telemetry path (disable fast_mode)
+        slot.fast_mode = False
+
+        # 2. Set up a telemetry callback that ALWAYS raises
+        telemetry_calls = []
+        def failing_callback(event):
+            telemetry_calls.append(event.event_type.name)
+            raise IOError("Disk full - simulated telemetry failure")
+
+        slot.on_telemetry = failing_callback
+
+        # 3. Warmup and snapshot
+        for _ in range(10):
+            governor.check_vital_signs(2.3)
+        governor.snapshot()
+
+        # Capture pre-rollback state for verification
+        pre_rollback_state = {
+            k: v.clone() if isinstance(v, torch.Tensor) else v
+            for k, v in governor.last_good_state.items()
+        }
+
+        # 4. Corrupt model and trigger panic
+        with torch.no_grad():
+            for p in model.parameters():
+                p.data.fill_(float('nan'))
+
+        # Verify model is broken
+        assert torch.isnan(next(model.parameters())).all()
+
+        # 5. Execute rollback - MUST NOT raise despite telemetry failure
+        panic = governor.check_vital_signs(float('nan'))
+        assert panic, "Expected panic to trigger"
+
+        # This is the critical assertion: rollback must complete
+        report = governor.execute_rollback()
+
+        # 6. Verify rollback succeeded
+        assert report.rollback_occurred
+
+        # Weights should be restored (no longer NaN)
+        current_param = next(model.parameters())
+        assert not torch.isnan(current_param).any(), \
+            "Weights are still NaN after rollback - rollback failed!"
+
+        # Verify host weights match pre-rollback snapshot
+        current_state = model.state_dict()
+        for key, expected in pre_rollback_state.items():
+            if isinstance(expected, torch.Tensor):
+                assert key in current_state, f"Missing key after rollback: {key}"
+                actual = current_state[key]
+                if isinstance(actual, torch.Tensor):
+                    assert torch.equal(actual, expected), \
+                        f"Key {key} not restored correctly"
+
+        # 7. Verify seed was pruned (even though telemetry failed)
+        # The slot should be in PRUNED stage or have no state
+        if slot.state is not None:
+            from esper.leyline import SeedStage
+            assert slot.state.stage == SeedStage.PRUNED, \
+                f"Seed not pruned during rollback: {slot.state.stage}"
+
+        # 8. Verify telemetry was attempted (callback was called)
+        # The fault-tolerant _emit_telemetry should have caught the exception
+        assert len(telemetry_calls) > 0, \
+            "Telemetry callback was never called - test setup issue"

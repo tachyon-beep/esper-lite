@@ -47,8 +47,6 @@ if TYPE_CHECKING:
     from esper.leyline.reports import SeedStateReport
     from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
 
-from esper.simic.contracts import SeedSlotProtocol, SeedStateProtocol, SlottedHostProtocol
-
 # NOTE: get_task_spec imported lazily inside train_ppo_vectorized to avoid circular import:
 #   runtime -> simic.rewards -> simic -> simic.training -> vectorized -> runtime
 from esper.utils.data import SharedBatchIterator
@@ -56,6 +54,9 @@ from esper.leyline import (
     ALPHA_SPEED_TO_STEPS,
     ALPHA_TARGET_VALUES,
     AlphaAlgorithm,
+    SeedSlotProtocol,
+    SeedStateProtocol,
+    SlottedHostProtocol,
     AlphaCurveAction,
     AlphaMode,
     AlphaSpeedAction,
@@ -74,6 +75,7 @@ from esper.leyline import (
     DEFAULT_LSTM_HIDDEN_DIM,
     DEFAULT_MIN_PANICS_BEFORE_ROLLBACK,
     DEFAULT_N_ENVS,
+    CheckpointLoadedPayload,
     EpisodeOutcomePayload,
     HEAD_NAMES,
     HeadTelemetry,
@@ -110,6 +112,8 @@ from esper.simic.telemetry import (
     TelemetryConfig,
     GradientEMATracker,  # P4-9
     training_profiler,
+    compute_lstm_health,  # B7-DRL-04
+    compute_observation_stats,  # TELE-OBS: Observation space health
 )
 from esper.simic.control import RunningMeanStd, RewardNormalizer
 from esper.tamiyo.policy.features import (
@@ -130,6 +134,7 @@ from esper.simic.rewards import (
 )
 from esper.leyline import (
     DEFAULT_MIN_FOSSILIZE_CONTRIBUTION,
+    EpisodeOutcome,  # Cross-subsystem Pareto analysis
     HINDSIGHT_CREDIT_WEIGHT,
     MAX_HINDSIGHT_CREDIT,
     MIN_PRUNE_AGE,
@@ -137,7 +142,6 @@ from esper.leyline import (
 from esper.nissa import get_hub, BlueprintAnalytics, DirectoryOutput
 from esper.tolaria import TolariaGovernor
 from esper.karn.health import HealthMonitor
-from esper.karn.store import EpisodeOutcome
 from esper.simic.attribution import CounterfactualHelper
 from esper.simic.telemetry.emitters import (
     apply_slot_telemetry,
@@ -293,7 +297,9 @@ def _aggregate_ppo_metrics(update_metrics: list[PPOUpdateMetrics]) -> dict[str, 
         ]
         if not values:
             continue
-        if key == "ratio_max":
+        if key == "ratio_max" or key.endswith("_ratio_max"):
+            # All ratio max fields (ratio_max, head_*_ratio_max, joint_ratio_max)
+            # should take the maximum across PPO updates, not average
             aggregated[key] = max(values)
         elif key == "ratio_min":
             aggregated[key] = min(values)
@@ -311,9 +317,19 @@ def _aggregate_ppo_metrics(update_metrics: list[PPOUpdateMetrics]) -> dict[str, 
             aggregated[key] = max(values)
         elif key == "early_stop_epoch":
             aggregated[key] = min(values)
-        elif key == "head_entropies":
-            # Aggregate per-head entropy: concatenate lists from multiple updates
-            aggregated[key] = values[0]  # Just use first update's head_entropies
+        elif key in ("head_entropies", "head_grad_norms"):
+            # Dict[head_name, List[float]] - merge lists from multiple PPO updates
+            # Take max per-head value across all updates (conservative for monitoring)
+            merged: dict[str, float] = {}
+            for update_dict in values:
+                if isinstance(update_dict, dict):
+                    for head, head_values in update_dict.items():
+                        if isinstance(head_values, list) and head_values:
+                            max_val = max(head_values)
+                            if head not in merged or max_val > merged[head]:
+                                merged[head] = max_val
+            # Return in format emitter expects: dict[head, list[float]]
+            aggregated[key] = {h: [v] for h, v in merged.items()}
         elif isinstance(values[0], dict):
             aggregated[key] = values[0]
         else:
@@ -327,9 +343,26 @@ def _run_ppo_updates(
     raw_states_for_normalizer_update: list[torch.Tensor],
     obs_normalizer: RunningMeanStd,
     use_amp: bool,
-    amp_dtype: torch.dtype | None = None,  # None=float16 for backwards compat
+    amp_dtype: torch.dtype | None,  # Required: explicit dtype or None for no AMP
 ) -> dict[str, Any]:
     """Run one or more PPO updates on the current buffer and aggregate metrics."""
+    # P1 FIX: RECURRENT POLICY STALENESS GUARD
+    # Multiple external PPO updates with LSTM policies cause hidden state staleness:
+    # Update 1 changes policy weights, but Update 2+ uses the SAME hidden states
+    # from rollout collection (computed with old weights). This creates the exact
+    # mismatch that recurrent_n_epochs=1 is designed to prevent.
+    #
+    # The agent's internal recurrent_n_epochs=1 safety is bypassed by this external loop.
+    # Standard R2D2/Recurrent PPO would require burn-in (recomputing hidden states
+    # for each update), which is not implemented here.
+    if ppo_updates_per_batch > 1 and agent.lstm_hidden_dim > 0:
+        raise ValueError(
+            f"ppo_updates_per_batch={ppo_updates_per_batch} is incompatible with recurrent (LSTM) "
+            f"policies. After the first update, policy weights change but hidden states remain "
+            f"from the original rollout, causing gradient corruption. Use ppo_updates_per_batch=1 "
+            f"for LSTM policies, or implement hidden state burn-in. See PPOAgent C4 comment."
+        )
+
     # C5 FIX: Update observation normalizer BEFORE PPO update.
     # This ensures batch N's observations are normalized with stats that include batch N,
     # preventing the one-batch lag that compounds distribution shift over training.
@@ -348,10 +381,8 @@ def _run_ppo_updates(
 
     for update_idx in range(updates_to_run):
         clear_buffer = update_idx == updates_to_run - 1
-        if use_amp and torch.cuda.is_available():
-            # Use provided dtype, default to float16 for backwards compatibility
-            dtype = amp_dtype if amp_dtype is not None else torch.float16
-            with torch_amp.autocast(device_type="cuda", dtype=dtype):  # type: ignore[attr-defined]
+        if use_amp and torch.cuda.is_available() and amp_dtype is not None:
+            with torch_amp.autocast(device_type="cuda", dtype=amp_dtype):  # type: ignore[attr-defined]
                 metrics = agent.update(clear_buffer=clear_buffer)
         else:
             metrics = agent.update(clear_buffer=clear_buffer)
@@ -562,6 +593,7 @@ def train_ppo_vectorized(
     disable_terminal_reward: bool = False,  # Disable terminal accuracy bonus
     disable_anti_gaming: bool = False,  # Disable ratio_penalty and alpha_shock
     quiet_analytics: bool = False,
+    force_compile: bool = False,
     telemetry_dir: str | None = None,
     ready_event: "threading.Event | None" = None,
     shutdown_event: "threading.Event | None" = None,
@@ -740,6 +772,9 @@ def train_ppo_vectorized(
     env_device_map = [devices[i % len(devices)] for i in range(n_envs)]
 
     # DataLoader settings (used for SharedBatchIterator + diagnostics).
+    # MED-03 fix: Log warning if batch_size not specified (could indicate schema drift)
+    if "batch_size" not in task_spec.dataloader_defaults:
+        _logger.debug("batch_size not in task_spec.dataloader_defaults, using default 128")
     default_batch_size_per_env = task_spec.dataloader_defaults.get("batch_size", 128)
     if task_spec.name.startswith("cifar_"):
         default_batch_size_per_env = 512  # High-throughput setting for CIFAR tasks
@@ -764,6 +799,8 @@ def train_ppo_vectorized(
     # Use EMA momentum for stable normalization during long training runs
     # (prevents distribution shift that can break PPO ratio calculations)
     obs_normalizer = RunningMeanStd((state_dim,), device=device, momentum=0.99)
+    # TELE-OBS: Capture initial normalizer mean for drift detection
+    initial_obs_normalizer_mean = obs_normalizer.mean.clone()
 
     # Reward normalizer for critic stability (prevents value loss explosion)
     # Essential after ransomware fix where reward magnitudes changed significantly
@@ -849,14 +886,15 @@ def train_ppo_vectorized(
         if "n_episodes" in metadata:
             start_episode = metadata["n_episodes"]
 
-        # Emit checkpoint loaded event
-        # TODO: [FUTURE FUNCTIONALITY] - Create CheckpointLoadedPayload for type safety
+        # Emit checkpoint loaded event with typed payload
         hub.emit(
             TelemetryEvent(
                 event_type=TelemetryEventType.CHECKPOINT_LOADED,
                 group_id=group_id,
-                data=None,
-                message=f"Checkpoint loaded from {resume_path} at episode {start_episode}",
+                data=CheckpointLoadedPayload(
+                    path=str(resume_path),
+                    start_episode=start_episode,
+                ),
             )
         )
     else:
@@ -864,7 +902,11 @@ def train_ppo_vectorized(
         # torch.compile here to avoid TorchInductor failures that are difficult
         # to recover from in an interactive session.
         # Determine effective compile mode: quiet_analytics disables compilation
-        effective_compile_mode = compile_mode if not quiet_analytics else "off"
+        # unless force_compile is set (for testing compilation with TUI).
+        if force_compile:
+            effective_compile_mode = compile_mode
+        else:
+            effective_compile_mode = compile_mode if not quiet_analytics else "off"
 
         # Create policy via Tamiyo factory
         # IMPORTANT: Pass actual slot_config to ensure action heads/masks align
@@ -937,6 +979,10 @@ def train_ppo_vectorized(
             reward_mode=reward_mode,
             start_episode=start_episode,
             entropy_anneal=entropy_anneal_summary,
+            # torch.compile status (wired to ValueDiagnosticsPanel)
+            compile_enabled=(agent.compile_mode != "off"),
+            compile_backend="inductor" if agent.compile_mode != "off" else None,
+            compile_mode=agent.compile_mode if agent.compile_mode != "off" else None,
         ),
     ))
 
@@ -1653,7 +1699,6 @@ def train_ppo_vectorized(
         """
         model = env_state.model
         env_dev = env_state.env_device
-        batch_size = inputs.size(0)
 
         stream_ctx = (
             torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
@@ -1699,12 +1744,23 @@ def train_ppo_vectorized(
                 )
 
             # Sum elementwise correctness per configuration
-            # correct_fused shape is [K*B]
+            # correct_fused shape: [K*B] for classification, [K*B, T] for LM
+            # Use view(K, -1) to handle both shapes uniformly (same pattern as loss below)
             # elementwise=True guarantees correct_fused is a Tensor
             assert isinstance(correct_fused, torch.Tensor)
-            correct_per_config = correct_fused.view(num_configs, batch_size).sum(dim=1)
+            correct_per_config = correct_fused.view(num_configs, -1).sum(dim=1)
 
-            return loss, correct_per_config, total
+            # Compute per-config loss when using reduction='none' criterion
+            # loss shape: [K*B] for classification, [K*B*T] for LM
+            # Reshape to [K, -1] and mean to get per-config loss: [K]
+            # This separates main config (idx 0) from ablations for clean telemetry
+            if loss.dim() > 0 and loss.numel() > 1:
+                loss_per_config = loss.view(num_configs, -1).mean(dim=1)
+            else:
+                # Fallback for scalar loss (regular criterion with reduction='mean')
+                loss_per_config = loss.unsqueeze(0).expand(num_configs)
+
+            return loss_per_config, correct_per_config, total
 
     def batch_signals_to_features(
         batch_signals: list[Any],
@@ -1750,6 +1806,7 @@ def train_ppo_vectorized(
         best_state = None
         recent_accuracies = []
         recent_rewards = []
+        consecutive_finiteness_failures = 0  # Track PPO updates with all epochs skipped
         prev_rolling_avg_acc: float | None = (
             None  # Track previous rolling avg for trend detection
         )
@@ -1777,7 +1834,10 @@ def train_ppo_vectorized(
             base_seed = seed + batch_idx * 10000
             env_states = [create_env_state(i, base_seed) for i in range(envs_this_batch)]
             criterion = nn.CrossEntropyLoss()
-    
+            # Per-sample loss for fused validation - enables separating main config
+            # from ablations for Governor telemetry (fixes ablation signal contamination)
+            val_criterion = nn.CrossEntropyLoss(reduction="none")
+
             # Initialize episode for vectorized training
             for env_idx in range(envs_this_batch):
                 env_states[env_idx].reset_episode_state(slots)
@@ -1840,6 +1900,7 @@ def train_ppo_vectorized(
     
                 # Reset per-epoch metrics by zeroing pre-allocated accumulators (faster than reallocating)
                 train_totals = [0] * envs_this_batch
+                train_batch_counts = [0] * envs_this_batch  # Track batch count for correct loss averaging
                 for env_state in env_states:
                     env_state.zero_accumulators()
     
@@ -1941,6 +2002,7 @@ def train_ppo_vectorized(
                             env_state.train_loss_accum.add_(loss_tensor)  # type: ignore[union-attr]
                             env_state.train_correct_accum.add_(correct_tensor)  # type: ignore[union-attr]
                         train_totals[i] += total
+                        train_batch_counts[i] += 1
     
                 # Sync all streams ONCE at epoch end
                 for env_state in env_states:
@@ -1959,8 +2021,10 @@ def train_ppo_vectorized(
                 ]
     
                 # Sync train metrics to env_state for telemetry (Sanctum TUI display)
+                # NOTE: Loss is sum of batch means, so divide by batch count (not sample count).
+                # Accuracy is sum of correct samples, so divide by sample count.
                 for i, env_state in enumerate(env_states):
-                    env_state.train_loss = train_losses[i] / max(1, train_totals[i])
+                    env_state.train_loss = train_losses[i] / max(1, train_batch_counts[i])
                     env_state.train_acc = 100.0 * train_corrects[i] / max(1, train_totals[i])
     
                 # ===== VALIDATION + COUNTERFACTUAL (FUSED): Single pass over test data =====
@@ -2045,6 +2109,7 @@ def train_ppo_vectorized(
                 pair_accs: dict[int, dict[tuple[int, int], float]] = {}
                 shapley_results: dict[int, dict[tuple[bool, ...], tuple[float, float]]] = {}
                 val_totals = [0] * envs_this_batch
+                val_batch_counts = [0] * envs_this_batch  # Track batch count for correct loss averaging
     
                 # Accumulators for fused counts: env_cfg_correct_accums[env_idx] = [K] tensor
                 env_cfg_correct_accums: list[torch.Tensor] = []
@@ -2157,16 +2222,16 @@ def train_ppo_vectorized(
                                     override_vec[start:end].fill_(alpha_value)
                             alpha_overrides[slot_id] = override_vec
     
-                        # Run FUSED validation pass
-                        loss_fused, correct_per_config, _ = process_fused_val_batch(
+                        # Run FUSED validation pass with per-sample loss criterion
+                        loss_per_config, correct_per_config, _ = process_fused_val_batch(
                             env_state,
                             inputs,
                             targets,
-                            criterion,
+                            val_criterion,
                             alpha_overrides,
                             num_configs,
                         )
-    
+
                         stream_ctx = (
                             torch.cuda.stream(env_state.stream)
                             if env_state.stream
@@ -2174,12 +2239,13 @@ def train_ppo_vectorized(
                         )
                         with stream_ctx:
                             env_cfg_correct_accums[i].add_(correct_per_config)
-                            # Accumulate loss for telemetry display (scalar from criterion)
-                            # Note: This is the fused loss across all configs, not just main.
-                            # For display purposes this is acceptable since main dominates.
+                            # Accumulate ONLY main config loss (idx 0) for Governor telemetry.
+                            # Ablation losses would contaminate the signal since they're
+                            # intentionally worse - measuring seed contribution not model health.
                             if env_state.val_loss_accum is not None:
-                                env_state.val_loss_accum.add_(loss_fused)
+                                env_state.val_loss_accum.add_(loss_per_config[0])
                         val_totals[i] += batch_size
+                        val_batch_counts[i] += 1
     
                 # Single sync point at end
                 for env_state in env_states:
@@ -2194,9 +2260,10 @@ def train_ppo_vectorized(
                 ]
     
                 # Sync val_loss to env_state (for Sanctum TUI display)
+                # NOTE: Loss is sum of batch means, so divide by batch count (not sample count).
                 for i, env_state in enumerate(env_states):
-                    if env_state.val_loss_accum is not None and val_totals[i] > 0:
-                        env_state.val_loss = env_state.val_loss_accum.item() / val_totals[i]
+                    if env_state.val_loss_accum is not None and val_batch_counts[i] > 0:
+                        env_state.val_loss = env_state.val_loss_accum.item() / val_batch_counts[i]
                     else:
                         env_state.val_loss = 0.0
     
@@ -2273,7 +2340,10 @@ def train_ppo_vectorized(
                     # Compute interaction terms and populate scaffolding metrics
                     if len(active_slots) >= 2 and i in pair_accs:
                         # Use solo ablation fallback for single-seed: min(baseline_accs) = host-only acc
-                        all_off_acc = all_disabled_accs.get(i) or min(baseline_accs[i].values())
+                        # Explicit None check: 0.0 is a valid baseline accuracy (model predicts nothing)
+                        all_off_acc = all_disabled_accs.get(i)
+                        if all_off_acc is None:
+                            all_off_acc = min(baseline_accs[i].values())
                         for (idx_a, idx_b), pair_acc in pair_accs[i].items():
                             # Map indices to slot IDs
                             slot_a = active_slots[idx_a]
@@ -2353,7 +2423,8 @@ def train_ppo_vectorized(
                                 results=shapley_results[i],
                                 epoch=epoch,
                             )
-                        except Exception as e:
+                        except (KeyError, ZeroDivisionError, ValueError) as e:
+                            # HIGH-01 fix: Narrow to expected failures in Shapley computation
                             _logger.warning(f"Shapley computation failed for env {i}: {e}")
     
                 # ===== Compute epoch metrics and get BATCHED actions =====
@@ -2383,9 +2454,12 @@ def train_ppo_vectorized(
                     env_state.host_max_acc = max(env_state.host_max_acc, env_state.val_acc)
     
                     # Governor watchdog: snapshot when loss is stable (every 5 epochs)
-                    if epoch % 5 == 0:
+                    # Also snapshot immediately after fossilization to prevent incoherent rollback
+                    # (see BUG FIX comment in OP_FOSSILIZE handling above)
+                    if epoch % 5 == 0 or env_state.needs_governor_snapshot:
                         env_state.governor.snapshot()
-    
+                        env_state.needs_governor_snapshot = False
+
                     # Governor watchdog: check vital signs after validation
                     is_panic = env_state.governor.check_vital_signs(val_loss)
                     if is_panic:
@@ -2521,7 +2595,18 @@ def train_ppo_vectorized(
     
                 # Accumulate raw states for deferred normalizer update
                 raw_states_for_normalizer_update.append(states_batch.detach())
-    
+
+                # TELE-OBS: Compute observation stats once per step (for Sanctum ObservationStats panel)
+                # Only computed when ops telemetry is enabled to avoid overhead
+                step_obs_stats = None
+                if ops_telemetry_enabled:
+                    step_obs_stats = compute_observation_stats(
+                        states_batch,
+                        normalizer_mean=obs_normalizer.mean,
+                        normalizer_var=obs_normalizer.var,
+                        initial_normalizer_mean=initial_obs_normalizer_mean,
+                    )
+
                 # Normalize using FROZEN statistics during rollout collection.
                 states_batch_normalized = obs_normalizer.normalize(states_batch)
     
@@ -2559,7 +2644,7 @@ def train_ppo_vectorized(
     
                 # OPTIMIZATION: Update batched hidden state directly (eliminates per-env slice/cat)
                 batched_lstm_hidden = action_result.hidden
-    
+
                 # Convert to list of dicts for per-env processing
                 # PERF NOTE: Consolidate action head transfers into a single D2H copy.
                 # This matters for larger env counts (16+), where per-head transfers and
@@ -2866,12 +2951,14 @@ def train_ppo_vectorized(
                                 )
                                 env_state.init_obs_v3_slot_tracking(target_slot)
                                 env_state.seeds_created += 1
+                                env_state.germinate_count += 1  # TELE-610
                                 env_state.seed_optimizers.pop(target_slot, None)
                                 action_success = True
                             elif op_action == OP_FOSSILIZE:
                                 action_success = _advance_active_seed(model, target_slot)
                                 if action_success:
                                     env_state.seeds_fossilized += 1
+                                    env_state.fossilize_count += 1  # TELE-610
                                     if seed_info is not None and (
                                         seed_info.total_improvement
                                         >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
@@ -2929,6 +3016,16 @@ def train_ppo_vectorized(
                                     # B8-DRL-02 FIX: Clean up seed optimizer after fossilization
                                     # (was missing - memory leak for fossilized seed optimizers)
                                     env_state.seed_optimizers.pop(target_slot, None)
+
+                                    # BUG FIX: Trigger governor snapshot after fossilization
+                                    # Without this, a rollback between fossilization and the next
+                                    # periodic snapshot (every 5 epochs) produces an incoherent state:
+                                    # - Fossilized seed weights not in snapshot (excluded when TRAINING)
+                                    # - Fossilized seeds can't be pruned during rollback
+                                    # - Result: host reverts but fossilized seed keeps stale weights
+                                    # The snapshot must be taken OUTSIDE the CUDA stream context,
+                                    # so we set a flag here and take the snapshot later.
+                                    env_state.needs_governor_snapshot = True
                             elif (
                                 op_action == OP_PRUNE
                                 and model.has_active_seed_in_slot(target_slot)
@@ -2955,6 +3052,7 @@ def train_ppo_vectorized(
                                         steps=speed_steps, curve=curve, steepness=steepness, initiator="policy"
                                     )
                                 if action_success:
+                                    env_state.prune_count += 1  # TELE-610
                                     env_state.seed_optimizers.pop(target_slot, None)
                                     env_state.acc_at_germination.pop(target_slot, None)
                             elif (
@@ -3123,6 +3221,8 @@ def train_ppo_vectorized(
                             decision_entropy=decision_entropy,
                             reward_components=reward_components,  # Pass directly (may be None for LOSS family)
                             head_telemetry=head_telem,
+                            # TELE-OBS: Only pass for env 0 to avoid redundant data (batch-level stat)
+                            observation_stats=step_obs_stats if env_idx == 0 else None,
                         )
     
                     # Store transition directly into rollout buffer.
@@ -3277,6 +3377,14 @@ def train_ppo_vectorized(
                         # Emit EPISODE_OUTCOME telemetry for Pareto analysis
                         # B11-CR-04 fix: Skip emission for rollback episodes (will emit corrected outcome later)
                         if env_state.telemetry_cb and not env_rollback_occurred[env_idx]:
+                            # TELE-610: Classify episode outcome
+                            # SUCCESS_THRESHOLD is configurable; 0.8 = 80% accuracy considered "success"
+                            SUCCESS_THRESHOLD = 0.8
+                            if env_state.val_acc >= SUCCESS_THRESHOLD:
+                                outcome_type = "success"
+                            else:
+                                outcome_type = "timeout"  # Fixed-length episodes that don't hit goal
+
                             env_state.telemetry_cb(TelemetryEvent(
                                 event_type=TelemetryEventType.EPISODE_OUTCOME,
                                 epoch=episodes_completed + env_idx,
@@ -3290,6 +3398,12 @@ def train_ppo_vectorized(
                                     episode_reward=episode_outcome.episode_reward,
                                     stability_score=episode_outcome.stability_score,
                                     reward_mode=episode_outcome.reward_mode,
+                                    # TELE-610: Episode diagnostics
+                                    episode_length=epoch,  # Current epoch = episode length
+                                    outcome_type=outcome_type,
+                                    germinate_count=env_state.action_counts["GERMINATE"],
+                                    prune_count=env_state.action_counts["PRUNE"],
+                                    fossilize_count=env_state.action_counts["FOSSILIZE"],
                                 ),
                             ))
     
@@ -3335,7 +3449,8 @@ def train_ppo_vectorized(
                                         evaluate_fn=eval_fn,
                                         epoch=epoch,
                                     )
-                                except Exception as e:
+                                except (KeyError, ZeroDivisionError, ValueError) as e:
+                                    # HIGH-01 fix: Narrow to expected failures in Shapley computation
                                     _logger.warning(
                                         f"Shapley failed for env {env_idx}: {e}"
                                     )
@@ -3460,6 +3575,14 @@ def train_ppo_vectorized(
                                 # B11-CR-04 fix: First emission was suppressed for rollback episodes
                                 # (see line 3213), so we emit the corrected outcome here (one event total).
                                 if env_state.telemetry_cb:
+                                    # TELE-610: Classify rollback episode outcome
+                                    # Use same threshold as main path (line 3381)
+                                    SUCCESS_THRESHOLD = 0.8
+                                    if corrected_outcome.final_accuracy >= SUCCESS_THRESHOLD:
+                                        rollback_outcome_type = "success"
+                                    else:
+                                        rollback_outcome_type = "timeout"
+
                                     env_state.telemetry_cb(TelemetryEvent(
                                         event_type=TelemetryEventType.EPISODE_OUTCOME,
                                         epoch=corrected_outcome.episode_idx,
@@ -3473,6 +3596,12 @@ def train_ppo_vectorized(
                                             episode_reward=corrected_outcome.episode_reward,
                                             stability_score=corrected_outcome.stability_score,
                                             reward_mode=corrected_outcome.reward_mode,
+                                            # TELE-610: Episode diagnostics (was missing for rollback path)
+                                            episode_length=epoch,
+                                            outcome_type=rollback_outcome_type,
+                                            germinate_count=env_state.action_counts["GERMINATE"],
+                                            prune_count=env_state.action_counts["PRUNE"],
+                                            fossilize_count=env_state.action_counts["FOSSILIZE"],
                                         ),
                                     ))
                                 break
@@ -3503,6 +3632,29 @@ def train_ppo_vectorized(
                         grad_health = 1.0  # Healthy range
                     drift_metrics = grad_ema_tracker.update(ppo_grad_norm, grad_health)
     
+                # FINITENESS GATE CONTRACT: Check if PPO update actually occurred
+                if not metrics.get("ppo_update_performed", True):
+                    # All epochs skipped due to non-finite values
+                    skip_count = metrics.get("finiteness_gate_skip_count", 0)
+                    consecutive_finiteness_failures += 1
+                    logger.warning(
+                        f"PPO update skipped (all {skip_count} epochs hit finiteness gate). "
+                        f"Consecutive failures: {consecutive_finiteness_failures}/3"
+                    )
+
+                    # Escalate after 3 consecutive failures (DRL best practice)
+                    if consecutive_finiteness_failures >= 3:
+                        raise RuntimeError(
+                            f"PPO training failed: {consecutive_finiteness_failures} consecutive updates "
+                            "skipped due to non-finite values. Check policy/value network outputs for NaN. "
+                            f"Last failure: {metrics.get('finiteness_gate_failures', 'unknown')}"
+                        )
+                    # Skip anomaly detection for this batch - metrics are NaN
+                    continue
+
+                # Reset counter on successful update
+                consecutive_finiteness_failures = 0
+
                 metric_values = [v for v in metrics.values() if isinstance(v, (int, float))]
                 anomaly_report = anomaly_detector.check_all(
                     # MANDATORY metrics after PPO update - fail loudly if missing
@@ -3525,6 +3677,27 @@ def train_ppo_vectorized(
                         anomaly_report.has_anomaly = True
                         anomaly_report.anomaly_types.extend(drift_report.anomaly_types)
                         anomaly_report.details.update(drift_report.details)
+
+                # B7-DRL-04: Check LSTM hidden state health after PPO update
+                # LSTM hidden states can become corrupted during BPTT - monitor for
+                # explosion/saturation (RMS > threshold), vanishing (RMS < 1e-6), or NaN/Inf.
+                lstm_health = compute_lstm_health(batched_lstm_hidden)
+                if lstm_health is not None:
+                    lstm_report = anomaly_detector.check_lstm_health(
+                        h_rms=lstm_health.h_rms,
+                        c_rms=lstm_health.c_rms,
+                        h_env_rms_max=lstm_health.h_env_rms_max,
+                        c_env_rms_max=lstm_health.c_env_rms_max,
+                        has_nan=lstm_health.has_nan,
+                        has_inf=lstm_health.has_inf,
+                    )
+                    if lstm_report.has_anomaly:
+                        anomaly_report.has_anomaly = True
+                        anomaly_report.anomaly_types.extend(lstm_report.anomaly_types)
+                        anomaly_report.details.update(lstm_report.details)
+                    # Add LSTM health to metrics for telemetry display in Sanctum
+                    metrics.update(lstm_health.to_dict())
+
                 _handle_telemetry_escalation(anomaly_report, telemetry_config)
                 _emit_anomaly_diagnostics(
                     hub,
@@ -3552,6 +3725,8 @@ def train_ppo_vectorized(
     
             if hub:
                 if not update_skipped:
+                    # Assert non-None: values assigned in same `if not update_skipped` block above
+                    assert ppo_grad_norm is not None and ppo_update_time_ms is not None
                     batch_emitter.on_ppo_update(
                         metrics=metrics,
                         episodes_completed=batch_epoch_id,
@@ -3667,7 +3842,22 @@ def train_ppo_vectorized(
         agent.policy.load_state_dict(best_state)
 
     if save_path:
-        agent.save(save_path)
+        # B5-PT-02 FIX: Save normalizer state for correct training resume.
+        # Load code at lines 859-880 expects these keys in metadata.
+        checkpoint_metadata = {
+            # Observation normalizer (RunningMeanStd)
+            "obs_normalizer_mean": obs_normalizer.mean.tolist(),
+            "obs_normalizer_var": obs_normalizer.var.tolist(),
+            "obs_normalizer_count": obs_normalizer.count.item(),
+            "obs_normalizer_momentum": obs_normalizer.momentum,
+            # Reward normalizer (RewardNormalizer)
+            "reward_normalizer_mean": reward_normalizer.mean,
+            "reward_normalizer_m2": reward_normalizer.m2,
+            "reward_normalizer_count": reward_normalizer.count,
+            # Episode count for resume
+            "n_episodes": episodes_completed,
+        }
+        agent.save(save_path, metadata=checkpoint_metadata)
 
     # A/B/n Test Summary
     if reward_mode_per_env is not None:
@@ -3684,8 +3874,9 @@ def train_ppo_vectorized(
             ab_groups[mode_name].append(ep_data)
 
         for mode_name, episodes in sorted(ab_groups.items()):
-            rewards = [ep.get("episode_reward", 0) for ep in episodes]
-            accuracies = [ep.get("final_accuracy", 0) for ep in episodes]
+            # Direct access - fail-fast if schema changes (CRIT-02 fix)
+            rewards = [ep["episode_reward"] for ep in episodes]
+            accuracies = [ep["final_accuracy"] for ep in episodes]
             avg_reward = sum(rewards) / len(rewards) if rewards else 0
             avg_acc = sum(accuracies) / len(accuracies) if accuracies else 0
             print(f"\n{mode_name.upper()} ({len(episodes)} episodes):")

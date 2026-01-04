@@ -5,7 +5,12 @@ DRL Expert Review: These tests verify critical invariants for sparse rewards.
 """
 
 import math
+
+import pytest
 from hypothesis import given, strategies as st, settings
+
+# Mark all tests in this module as property tests for CI
+pytestmark = pytest.mark.property
 
 from esper.leyline import LifecycleOp
 from esper.simic.rewards import (

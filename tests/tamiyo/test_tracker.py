@@ -202,3 +202,71 @@ class TestTamiyoInitiatedEvent:
 
         # But stabilization should still be recorded internally
         assert tracker._is_stabilized is True
+
+
+class TestStabilizationEpochsZero:
+    """Tests for stabilization_epochs=0 truly disabling stabilization."""
+
+    def test_stabilization_epochs_zero_starts_stabilized(self):
+        """stabilization_epochs=0 should pre-set _is_stabilized=True.
+
+        Regression test for contract mismatch: Previously, setting
+        stabilization_epochs=0 didn't actually disable stabilization because
+        the __post_init__ didn't check for this value and pre-set the latch.
+
+        Fix: In __post_init__, if stabilization_epochs == 0, set
+        _is_stabilized = True immediately.
+        """
+        tracker = SignalTracker(stabilization_epochs=0)
+
+        # Should be stabilized immediately, without any epochs
+        assert tracker.is_stabilized is True
+        assert tracker._is_stabilized is True
+
+    def test_stabilization_epochs_zero_no_waiting(self):
+        """With stabilization_epochs=0, germination should be allowed from epoch 0."""
+        tracker = SignalTracker(stabilization_epochs=0, env_id=42)
+
+        # Even on the first update, should be stabilized
+        signals = tracker.update(
+            epoch=0,
+            global_step=0,
+            train_loss=2.0,
+            train_accuracy=10.0,
+            val_loss=2.0,
+            val_accuracy=10.0,
+            active_seeds=[],
+        )
+
+        # host_stabilized should be 1 (stabilized) from the very first epoch
+        assert signals.metrics.host_stabilized == 1
+        assert tracker.is_stabilized is True
+
+    def test_stabilization_epochs_zero_persists_after_reset(self):
+        """reset() should respect stabilization_epochs=0 and keep stabilized."""
+        tracker = SignalTracker(stabilization_epochs=0)
+        assert tracker.is_stabilized is True
+
+        # Reset should NOT un-stabilize
+        tracker.reset()
+
+        assert tracker.is_stabilized is True
+        assert tracker._is_stabilized is True
+
+    def test_stabilization_epochs_nonzero_requires_stable_epochs(self):
+        """Sanity check: Non-zero stabilization_epochs requires actual stable epochs."""
+        tracker = SignalTracker(stabilization_epochs=3)
+
+        # Should NOT be stabilized initially
+        assert tracker.is_stabilized is False
+        assert tracker._is_stabilized is False
+
+        # First few epochs with explosive growth - should NOT stabilize
+        tracker._prev_loss = 2.0
+        tracker.update(
+            epoch=0, global_step=0,
+            train_loss=1.6, train_accuracy=50.0,  # 20% improvement
+            val_loss=1.6, val_accuracy=50.0,
+            active_seeds=[],
+        )
+        assert tracker.is_stabilized is False

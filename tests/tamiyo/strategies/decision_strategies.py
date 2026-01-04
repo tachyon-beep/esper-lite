@@ -114,8 +114,9 @@ class MockTrainingSignals:
     Matches the TrainingSignals interface expected by HeuristicTamiyo.decide().
     """
 
-    def __init__(self, metrics: MockTrainingMetrics):
+    def __init__(self, metrics: MockTrainingMetrics, available_slots: int = 1):
         self.metrics = metrics
+        self.available_slots = available_slots
 
 
 # =============================================================================

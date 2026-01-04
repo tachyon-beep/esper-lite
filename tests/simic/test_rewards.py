@@ -408,13 +408,17 @@ class TestContributionRewardComponents:
         )
 
         # Components should sum to total (within floating point tolerance)
+        # B6-CR-01: Include ALL components for accurate accounting
         component_sum = (
             (components.bounded_attribution or 0.0)
+            + components.blending_warning
+            + components.holding_warning
             + components.compute_rent
             + components.alpha_shock
             + components.pbrs_bonus
             + components.action_shaping
             + components.terminal_bonus
+            + components.synergy_bonus
         )
         assert abs(reward - component_sum) < 0.001, f"Sum {component_sum} != total {reward}"
         assert components.total_reward == reward

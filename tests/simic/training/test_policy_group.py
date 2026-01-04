@@ -4,8 +4,8 @@ import pytest
 import torch
 
 from esper.simic.agent import PPOAgent
-from esper.simic.rewards import ContributionRewardConfig
-from esper.simic.training import PolicyGroup
+from esper.simic.rewards import ContributionRewardConfig, RewardMode
+from esper.simic.training import EpisodeRecord, PolicyGroup
 from esper.tamiyo.policy.factory import create_policy
 from esper.leyline.slot_config import SlotConfig
 
@@ -29,12 +29,11 @@ class TestPolicyGroupInitialization:
     def test_creates_with_required_fields(self, mock_agent):
         """PolicyGroup should initialize with required fields."""
         device = torch.device("cpu")
-        reward_config = ContributionRewardConfig()
+        reward_config = ContributionRewardConfig(reward_mode=RewardMode.SHAPED)
 
         group = PolicyGroup(
             group_id="A",
             device=device,
-            reward_mode="SHAPED",
             agent=mock_agent,
             envs=[],
             reward_config=reward_config,
@@ -42,7 +41,7 @@ class TestPolicyGroupInitialization:
 
         assert group.group_id == "A"
         assert group.device == device
-        assert group.reward_mode == "SHAPED"
+        assert group.reward_mode == RewardMode.SHAPED  # Now a property
         assert group.agent is mock_agent
         assert group.reward_config is reward_config
 
@@ -51,10 +50,9 @@ class TestPolicyGroupInitialization:
         group = PolicyGroup(
             group_id="B",
             device=torch.device("cpu"),
-            reward_mode="SIMPLIFIED",
             agent=mock_agent,
             envs=[],
-            reward_config=ContributionRewardConfig(),
+            reward_config=ContributionRewardConfig(reward_mode=RewardMode.SIMPLIFIED),
         )
 
         assert group.total_episodes == 0
@@ -66,10 +64,9 @@ class TestPolicyGroupInitialization:
         group = PolicyGroup(
             group_id="C",
             device=torch.device("cpu"),
-            reward_mode="SPARSE",
             agent=mock_agent,
             envs=[],
-            reward_config=ContributionRewardConfig(),
+            reward_config=ContributionRewardConfig(reward_mode=RewardMode.SPARSE),
         )
 
         assert group.episode_history == []
@@ -85,10 +82,9 @@ class TestPolicyGroupInitialization:
         group = PolicyGroup(
             group_id="A",
             device=device,
-            reward_mode="SHAPED",
             agent=mock_agent,
             envs=[],
-            reward_config=ContributionRewardConfig(),
+            reward_config=ContributionRewardConfig(reward_mode=RewardMode.SHAPED),
         )
 
         assert group.device == device
@@ -103,30 +99,31 @@ class TestPolicyGroupMetricsTracking:
         group = PolicyGroup(
             group_id="A",
             device=torch.device("cpu"),
-            reward_mode="SHAPED",
             agent=mock_agent,
             envs=[],
-            reward_config=ContributionRewardConfig(),
+            reward_config=ContributionRewardConfig(reward_mode=RewardMode.SHAPED),
         )
 
-        # Simulate recording three episodes
-        group.episode_history.append({"episode": 1, "final_accuracy": 45.0, "episode_reward": 10.5})
-        group.episode_history.append({"episode": 2, "final_accuracy": 52.3, "episode_reward": 12.1})
-        group.episode_history.append({"episode": 3, "final_accuracy": 58.9, "episode_reward": 15.7})
+        # Simulate recording three episodes using EpisodeRecord schema
+        record1: EpisodeRecord = {"env_id": 0, "final_accuracy": 45.0, "episode_reward": 10.5}
+        record2: EpisodeRecord = {"env_id": 1, "final_accuracy": 52.3, "episode_reward": 12.1}
+        record3: EpisodeRecord = {"env_id": 2, "final_accuracy": 58.9, "episode_reward": 15.7}
+        group.episode_history.append(record1)
+        group.episode_history.append(record2)
+        group.episode_history.append(record3)
 
         assert len(group.episode_history) == 3
         assert group.episode_history[0]["final_accuracy"] == 45.0
-        assert group.episode_history[-1]["episode"] == 3
+        assert group.episode_history[-1]["env_id"] == 2
 
     def test_metrics_can_be_updated(self, mock_agent):
         """Metrics like total_episodes and best_accuracy should be mutable."""
         group = PolicyGroup(
             group_id="B",
             device=torch.device("cpu"),
-            reward_mode="SIMPLIFIED",
             agent=mock_agent,
             envs=[],
-            reward_config=ContributionRewardConfig(),
+            reward_config=ContributionRewardConfig(reward_mode=RewardMode.SIMPLIFIED),
         )
 
         # Simulate training progress
@@ -153,23 +150,22 @@ class TestPolicyGroupIndependence:
         group_a = PolicyGroup(
             group_id="A",
             device=torch.device("cpu"),
-            reward_mode="SHAPED",
             agent=agent_a,
             envs=[],
-            reward_config=ContributionRewardConfig(),
+            reward_config=ContributionRewardConfig(reward_mode=RewardMode.SHAPED),
         )
 
         group_b = PolicyGroup(
             group_id="B",
             device=torch.device("cpu"),
-            reward_mode="SIMPLIFIED",
             agent=agent_b,
             envs=[],
-            reward_config=ContributionRewardConfig(),
+            reward_config=ContributionRewardConfig(reward_mode=RewardMode.SIMPLIFIED),
         )
 
-        # Add to group A only
-        group_a.episode_history.append({"episode": 1, "final_accuracy": 50.0})
+        # Add to group A only using EpisodeRecord schema
+        record: EpisodeRecord = {"env_id": 0, "final_accuracy": 50.0, "episode_reward": 10.0}
+        group_a.episode_history.append(record)
 
         # Group B should remain empty
         assert len(group_a.episode_history) == 1
@@ -185,19 +181,17 @@ class TestPolicyGroupIndependence:
         group_a = PolicyGroup(
             group_id="A",
             device=torch.device("cpu"),
-            reward_mode="SHAPED",
             agent=agent_a,
             envs=[],
-            reward_config=ContributionRewardConfig(),
+            reward_config=ContributionRewardConfig(reward_mode=RewardMode.SHAPED),
         )
 
         group_b = PolicyGroup(
             group_id="B",
             device=torch.device("cpu"),  # In real usage, this would be cuda:1
-            reward_mode="SIMPLIFIED",
             agent=agent_b,
             envs=[],
-            reward_config=ContributionRewardConfig(),
+            reward_config=ContributionRewardConfig(reward_mode=RewardMode.SIMPLIFIED),
         )
 
         # Groups should have different agents and independent configurations
@@ -212,11 +206,13 @@ class TestPolicyGroupRewardConfig:
     def test_groups_can_have_different_reward_configs(self):
         """Each group should be able to use a different reward configuration."""
         config_a = ContributionRewardConfig(
+            reward_mode=RewardMode.SHAPED,
             contribution_weight=1.0,
             pbrs_weight=0.1,
         )
 
         config_b = ContributionRewardConfig(
+            reward_mode=RewardMode.SIMPLIFIED,
             contribution_weight=0.5,
             pbrs_weight=0.2,
         )
@@ -229,7 +225,6 @@ class TestPolicyGroupRewardConfig:
         group_a = PolicyGroup(
             group_id="A",
             device=torch.device("cpu"),
-            reward_mode="SHAPED",
             agent=agent_a,
             envs=[],
             reward_config=config_a,
@@ -238,7 +233,6 @@ class TestPolicyGroupRewardConfig:
         group_b = PolicyGroup(
             group_id="B",
             device=torch.device("cpu"),
-            reward_mode="SIMPLIFIED",
             agent=agent_b,
             envs=[],
             reward_config=config_b,
@@ -248,6 +242,9 @@ class TestPolicyGroupRewardConfig:
         assert group_a.reward_config.contribution_weight == 1.0
         assert group_b.reward_config.contribution_weight == 0.5
         assert group_a.reward_config is not group_b.reward_config
+        # Verify reward_mode is derived from config
+        assert group_a.reward_mode == RewardMode.SHAPED
+        assert group_b.reward_mode == RewardMode.SIMPLIFIED
 
     def test_environment_list_independence(self):
         """Each group should maintain its own independent environment list."""
@@ -262,19 +259,17 @@ class TestPolicyGroupRewardConfig:
         group_a = PolicyGroup(
             group_id="A",
             device=torch.device("cpu"),
-            reward_mode="SHAPED",
             agent=agent_a,
             envs=[],
-            reward_config=ContributionRewardConfig(),
+            reward_config=ContributionRewardConfig(reward_mode=RewardMode.SHAPED),
         )
 
         group_b = PolicyGroup(
             group_id="B",
             device=torch.device("cpu"),
-            reward_mode="SIMPLIFIED",
             agent=agent_b,
             envs=[],
-            reward_config=ContributionRewardConfig(),
+            reward_config=ContributionRewardConfig(reward_mode=RewardMode.SIMPLIFIED),
         )
 
         # Create mock environments
@@ -299,3 +294,37 @@ class TestPolicyGroupRewardConfig:
         assert len(group_b.envs) == 0
         assert group_a.envs is not group_b.envs
         assert group_a.envs[0] is env_a
+
+
+class TestRewardModeProperty:
+    """Test that reward_mode is derived from reward_config (single source of truth)."""
+
+    def test_reward_mode_derived_from_config(self, mock_agent):
+        """reward_mode should be derived from reward_config.reward_mode."""
+        config = ContributionRewardConfig(reward_mode=RewardMode.SIMPLIFIED)
+
+        group = PolicyGroup(
+            group_id="A",
+            device=torch.device("cpu"),
+            agent=mock_agent,
+            reward_config=config,
+        )
+
+        assert group.reward_mode == RewardMode.SIMPLIFIED
+        assert group.reward_mode == group.reward_config.reward_mode
+
+    def test_reward_mode_matches_config_value(self, mock_agent):
+        """reward_mode.value should match lowercase enum string."""
+        config = ContributionRewardConfig(reward_mode=RewardMode.SHAPED)
+
+        group = PolicyGroup(
+            group_id="A",
+            device=torch.device("cpu"),
+            agent=mock_agent,
+            reward_config=config,
+        )
+
+        # No more case mismatch - both use the enum
+        assert group.reward_mode.value == "shaped"
+        assert group.reward_config.reward_mode.value == "shaped"
+        assert group.reward_mode.value == group.reward_config.reward_mode.value

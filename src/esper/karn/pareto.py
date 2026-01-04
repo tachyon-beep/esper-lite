@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from esper.karn.store import EpisodeOutcome
+    from esper.leyline import EpisodeOutcome
 
 
 def extract_pareto_frontier(outcomes: list["EpisodeOutcome"]) -> list["EpisodeOutcome"]:

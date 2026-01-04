@@ -63,6 +63,78 @@ class TestSeedGradientCollector:
 class TestSeedGradientCollectorEdgeCases:
     """Edge-case tests for gradient health and norms."""
 
+    def test_gradient_norm_matches_pytorch_clip_grad_norm_semantics(self):
+        """Gradient norm matches torch.nn.utils.clip_grad_norm_ (global L2).
+
+        This regression test ensures gradient_norm is the global L2 norm
+        (sqrt of sum of squared per-tensor norms), NOT divided by n_grads.
+
+        Historical context: A bug divided by n_grads, which made telemetry
+        values incomparable to clipping thresholds. For a 50-tensor model,
+        the bug understated gradient magnitude by 50x.
+        """
+        # Multi-layer model to have multiple gradient tensors
+        model = nn.Sequential(
+            nn.Linear(10, 20),
+            nn.Linear(20, 15),
+            nn.Linear(15, 10),
+            nn.Linear(10, 5),
+        )
+
+        # Forward/backward to create gradients
+        x = torch.randn(4, 10)
+        loss = model(x).sum()
+        loss.backward()
+
+        # Compute expected norm using PyTorch's canonical implementation
+        # clip_grad_norm_ with max_norm=inf returns the pre-clip norm
+        params_with_grads = [p for p in model.parameters() if p.grad is not None]
+        expected_norm = torch.nn.utils.clip_grad_norm_(params_with_grads, float('inf'))
+
+        # Compute via gradient_collector
+        collector = SeedGradientCollector()
+        stats = collector.collect(model.parameters())
+
+        # Should match within floating point tolerance
+        assert abs(stats["gradient_norm"] - expected_norm.item()) < 1e-4, (
+            f"gradient_norm={stats['gradient_norm']:.6f} != "
+            f"clip_grad_norm_={expected_norm.item():.6f}. "
+            "The gradient_norm should be global L2 norm, not divided by n_grads."
+        )
+
+    def test_gradient_norm_scales_with_magnitude_not_tensor_count(self):
+        """Gradient norm scales with gradient magnitude, not number of tensors.
+
+        Regression test: a bug divided gradient_norm by n_grads (tensor count),
+        which caused larger models to show artificially small gradient norms.
+        The correct behavior is: doubling all gradient magnitudes should double
+        the reported gradient_norm, regardless of how many tensors there are.
+        """
+        model = nn.Sequential(
+            nn.Linear(10, 20),
+            nn.Linear(20, 10),
+        )
+
+        # Set known gradients with magnitude 1.0 per element
+        for p in model.parameters():
+            p.grad = torch.ones_like(p)
+
+        collector = SeedGradientCollector()
+        stats_1x = collector.collect(model.parameters())
+
+        # Double all gradients
+        for p in model.parameters():
+            p.grad = torch.ones_like(p) * 2.0
+
+        stats_2x = collector.collect(model.parameters())
+
+        # Gradient norm should double (within tolerance)
+        ratio = stats_2x["gradient_norm"] / stats_1x["gradient_norm"]
+        assert abs(ratio - 2.0) < 1e-4, (
+            f"Doubling gradients should double norm, but ratio={ratio:.4f}. "
+            "The gradient_norm should not be divided by n_grads."
+        )
+
     def test_gradient_norm_matches_analytic_single_weight(self):
         """Gradient norm matches analytic value for a 1×1 linear weight."""
         model = nn.Linear(1, 1, bias=False)

@@ -38,6 +38,7 @@ class ParallelEnvState:
     host_optimizer: torch.optim.Optimizer
     signal_tracker: "SignalTracker"  # Tracks training signals (accuracy, loss trends)
     governor: "TolariaGovernor"  # Fail-safe watchdog for catastrophic failure detection
+    needs_governor_snapshot: bool = False  # Flag to trigger snapshot after fossilization
     health_monitor: "HealthMonitor | None" = None  # System health monitoring (GPU memory warnings)
     counterfactual_helper: "CounterfactualHelper | None" = None  # Shapley value analysis at episode end
     seed_optimizers: dict[str, torch.optim.Optimizer] = field(default_factory=dict)
@@ -47,6 +48,10 @@ class ParallelEnvState:
     seeds_created: int = 0
     seeds_fossilized: int = 0  # Total seeds fossilized this episode
     contributing_fossilized: int = 0  # Seeds with total_improvement >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
+    # Action counters for episode diagnostics (TELE-610)
+    germinate_count: int = 0
+    prune_count: int = 0
+    fossilize_count: int = 0
     episode_rewards: list[float] = field(default_factory=list)
     action_counts: dict[str, int] = field(default_factory=dict)
     successful_action_counts: dict[str, int] = field(default_factory=dict)
@@ -182,6 +187,10 @@ class ParallelEnvState:
         self.seeds_created = 0
         self.seeds_fossilized = 0
         self.contributing_fossilized = 0
+        # Reset action counters for episode diagnostics (TELE-610)
+        self.germinate_count = 0
+        self.prune_count = 0
+        self.fossilize_count = 0
         self.episode_rewards.clear()
 
         base_counts = {op.name: 0 for op in LifecycleOp}
@@ -211,6 +220,7 @@ class ParallelEnvState:
 
         self.signal_tracker.reset()
         self.governor.reset()
+        self.needs_governor_snapshot = False
         if self.health_monitor is not None:
             self.health_monitor.reset()
         if self.counterfactual_helper is not None:

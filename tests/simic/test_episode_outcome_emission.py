@@ -1,7 +1,7 @@
 """Tests that EpisodeOutcome is emitted at episode end."""
 
 import numpy as np
-from esper.karn.store import EpisodeOutcome
+from esper.leyline import EpisodeOutcome
 
 
 def test_episode_outcome_created_at_episode_end():

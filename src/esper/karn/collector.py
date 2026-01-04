@@ -244,13 +244,7 @@ class KarnCollector:
 
     def _update_store(self, event: "TelemetryEvent") -> None:
         """Update TelemetryStore based on event type."""
-        # hasattr AUTHORIZED by John on 2025-12-14 03:30:00 UTC
-        # Justification: Serialization - handle both enum and string event_type values
-        event_type = (
-            event.event_type.name
-            if hasattr(event.event_type, "name")
-            else str(event.event_type)
-        )
+        event_type = event.event_type.name
 
         # Auto-start episode on TRAINING_STARTED (Nissa backend integration)
         if event_type == "TRAINING_STARTED":
@@ -358,27 +352,50 @@ class KarnCollector:
             return
 
         n_envs = len(payloads_for_epoch)
+
+        # Required metrics - always present, sum over all envs
         total_val_loss = 0.0
         total_val_accuracy = 0.0
+
+        # Optional metrics - track count of non-None values separately
+        # None means "not computed", 0.0 means "computed as zero"
         total_train_loss = 0.0
+        train_loss_count = 0
         total_train_accuracy = 0.0
+        train_accuracy_count = 0
         total_host_grad_norm = 0.0
+        host_grad_norm_count = 0
 
         for payload in payloads_for_epoch:
             total_val_loss += payload.val_loss
             total_val_accuracy += payload.val_accuracy
-            total_train_loss += payload.train_loss or 0.0
-            total_train_accuracy += payload.train_accuracy or 0.0
-            total_host_grad_norm += payload.host_grad_norm or 0.0
+            # Only accumulate non-None values and track count
+            if payload.train_loss is not None:
+                total_train_loss += payload.train_loss
+                train_loss_count += 1
+            if payload.train_accuracy is not None:
+                total_train_accuracy += payload.train_accuracy
+                train_accuracy_count += 1
+            if payload.host_grad_norm is not None:
+                total_host_grad_norm += payload.host_grad_norm
+                host_grad_norm_count += 1
 
         # Update host snapshot with aggregated (mean) metrics
         current_epoch.epoch = inner_epoch
         current_epoch.host.epoch = inner_epoch
         current_epoch.host.val_loss = total_val_loss / n_envs
         current_epoch.host.val_accuracy = total_val_accuracy / n_envs
-        current_epoch.host.train_loss = total_train_loss / n_envs
-        current_epoch.host.train_accuracy = total_train_accuracy / n_envs
-        current_epoch.host.host_grad_norm = total_host_grad_norm / n_envs
+
+        # Optional metrics: mean of present values, or None if all were None
+        current_epoch.host.train_loss = (
+            total_train_loss / train_loss_count if train_loss_count > 0 else None
+        )
+        current_epoch.host.train_accuracy = (
+            total_train_accuracy / train_accuracy_count if train_accuracy_count > 0 else None
+        )
+        current_epoch.host.host_grad_norm = (
+            total_host_grad_norm / host_grad_norm_count if host_grad_norm_count > 0 else None
+        )
 
         # Tier 3: Check for anomalies before mutating slot stage timers.
         # Stage-transition triggers rely on epochs_in_stage == 0 (just transitioned),
@@ -386,10 +403,11 @@ class KarnCollector:
         if self.config.capture_dense_traces:
             self._check_anomalies_and_capture(current_epoch)
 
-        # Increment epochs_in_stage for all occupied slots ONCE per epoch
-        # (includes EMBARGOED/RESETTING dwell while excluding PRUNED + terminal).
+        # Increment epochs_in_stage for all occupied slots ONCE per epoch.
+        # Only DORMANT is excluded (truly empty slot); PRUNED/FOSSILIZED are
+        # terminal but still track dwell time for analytics.
         for slot in current_epoch.slots.values():
-            if slot.stage not in (SeedStage.DORMANT, SeedStage.PRUNED, SeedStage.FOSSILIZED):
+            if slot.stage != SeedStage.DORMANT:
                 slot.epochs_in_stage += 1
 
         # Commit the epoch
@@ -443,9 +461,9 @@ class KarnCollector:
             current_epoch.host.val_accuracy = payload.avg_accuracy
             # BATCH doesn't have val_loss - leave at default 0.0
 
-            # Increment epochs_in_stage for active slots
+            # Increment epochs_in_stage for all occupied slots (only DORMANT excluded)
             for slot in current_epoch.slots.values():
-                if slot.stage not in (SeedStage.DORMANT, SeedStage.PRUNED, SeedStage.FOSSILIZED):
+                if slot.stage != SeedStage.DORMANT:
                     slot.epochs_in_stage += 1
 
             # Commit and start next
@@ -475,13 +493,7 @@ class KarnCollector:
         if not self.store.current_epoch:
             return
 
-        # hasattr AUTHORIZED by John on 2025-12-14 03:30:00 UTC
-        # Justification: Serialization - handle both enum and string event_type values
-        event_type = (
-            event.event_type.name
-            if hasattr(event.event_type, "name")
-            else str(event.event_type)
-        )
+        event_type = event.event_type.name
 
         # Extract env_id and slot_id
         env_id: int = -1
@@ -530,6 +542,7 @@ class KarnCollector:
                         slot.last_gate_reason = ",".join(str(c) for c in event.data.checks_failed)
         elif event_type == "SEED_FOSSILIZED":
             slot.stage = SeedStage.FOSSILIZED
+            slot.epochs_in_stage = 0  # Reset to trigger "just transitioned" detection
         elif event_type == "SEED_PRUNED":
             slot.stage = SeedStage.PRUNED
             slot.epochs_in_stage = 0

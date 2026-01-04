@@ -45,7 +45,17 @@ class PPOUpdateMetrics(TypedDict, total=False):
     Important: PPOAgent.update() aggregates metrics across epochs before
     returning, so scalar metrics are float (not list[float]). Only
     head_entropies and head_grad_norms retain per-epoch structure.
+
+    Finiteness Gate Contract:
+    - ppo_update_performed: True if at least one epoch completed successfully
+    - finiteness_gate_skip_count: Number of epochs skipped due to non-finite values
+    - When all epochs skip: ppo_update_performed=False, other metrics are NaN
+    - Callers should check ppo_update_performed before using other metrics
     """
+
+    # Update status (finiteness gate contract)
+    ppo_update_performed: bool  # True if at least one epoch completed
+    finiteness_gate_skip_count: int  # Number of epochs skipped due to NaN/Inf
 
     # Scalar metrics (aggregated across epochs)
     policy_loss: float
@@ -59,7 +69,9 @@ class PPOUpdateMetrics(TypedDict, total=False):
     ratio_mean: float
     ratio_max: float
     ratio_min: float
-    early_stop_epoch: int
+    ratio_std: float  # Standard deviation of importance sampling ratio
+    early_stop_epoch: int | None  # None when early stopping didn't occur
+    pre_clip_grad_norm: float  # Gradient norm before clipping (for telemetry)
     # Log prob extremes (NaN predictor)
     log_prob_min: float
     log_prob_max: float
@@ -87,6 +99,22 @@ class PPOUpdateMetrics(TypedDict, total=False):
     q_set_alpha: float
     q_variance: float
     q_spread: float
+    # Per-head NaN/Inf detection (for indicator lights)
+    head_nan_detected: dict[str, bool]
+    head_inf_detected: dict[str, bool]
+    # LSTM hidden state health (TELE-340)
+    lstm_h_l2_total: float | None
+    lstm_c_l2_total: float | None
+    lstm_h_rms: float | None
+    lstm_c_rms: float | None
+    lstm_h_env_rms_mean: float | None
+    lstm_h_env_rms_max: float | None
+    lstm_c_env_rms_mean: float | None
+    lstm_c_env_rms_max: float | None
+    lstm_h_max: float | None
+    lstm_c_max: float | None
+    lstm_has_nan: bool | None
+    lstm_has_inf: bool | None
 
 
 class HeadLogProbs(TypedDict):

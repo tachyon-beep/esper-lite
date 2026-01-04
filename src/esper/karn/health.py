@@ -276,9 +276,12 @@ class HealthMonitor:
         if not self.store or not self.store.epoch_snapshots:
             return grad_health
 
-        # Get recent gradient norms
+        # Get recent gradient norms (filter out None = not computed)
         recent = list(self.store.epoch_snapshots)[-10:]
-        norms = [s.host.host_grad_norm for s in recent if s.host.host_grad_norm > 0]
+        norms = [
+            s.host.host_grad_norm for s in recent
+            if s.host.host_grad_norm is not None and s.host.host_grad_norm > 0
+        ]
 
         if not norms:
             return grad_health

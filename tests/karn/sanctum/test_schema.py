@@ -699,6 +699,25 @@ def test_tamiyo_state_has_nested_metrics():
 # =============================================================================
 
 
+def test_tamiyo_state_has_nan_inf_latch_fields():
+    """TamiyoState should have per-head NaN/Inf latch dicts pre-populated."""
+    from esper.leyline import HEAD_NAMES
+    from esper.karn.sanctum.schema import TamiyoState
+
+    state = TamiyoState()
+
+    # Should have latch dicts pre-populated with all heads set to False
+    assert hasattr(state, "head_nan_latch")
+    assert hasattr(state, "head_inf_latch")
+
+    # All HEAD_NAMES keys should exist (no .get() needed in display code)
+    for head in HEAD_NAMES:
+        assert head in state.head_nan_latch
+        assert head in state.head_inf_latch
+        assert state.head_nan_latch[head] is False
+        assert state.head_inf_latch[head] is False
+
+
 def test_decision_snapshot_has_entropy_fields():
     """DecisionSnapshot should have per-head entropy fields."""
     from datetime import datetime, timezone

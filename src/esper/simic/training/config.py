@@ -75,6 +75,10 @@ class TrainingConfig:
     entropy_coef_start: float | None = None
     entropy_coef_end: float | None = None
     entropy_coef_min: float = DEFAULT_ENTROPY_COEF_MIN
+    # Total env-episodes over which to anneal entropy from start to end.
+    # With n_envs=K, this produces ceil(entropy_anneal_episodes / K) PPO batches
+    # of annealing. Note: this is env-episode-based, not PPO-update-based.
+    # Changing n_envs changes the number of PPO updates but not the total env experience.
     entropy_anneal_episodes: int = 0
 
     # === Telemetry and runtime flags ===
@@ -171,10 +175,13 @@ class TrainingConfig:
 
     @staticmethod
     def for_cifar_baseline_stable() -> "TrainingConfig":
-        """Conservative configuration for CIFAR tasks (slower, more stable PPO)."""
+        """Conservative configuration for CIFAR tasks (slower, more stable PPO).
+
+        Note: lr=1e-4 was removed after max_grad_norm increased from 1.0 to 5.0.
+        The low LR was compensating for aggressive clipping; now uses default 3e-4.
+        """
         return TrainingConfig(
             n_episodes=200,
-            lr=1e-4,
             clip_ratio=0.1,
             entropy_coef=0.06,
             entropy_coef_start=0.06,

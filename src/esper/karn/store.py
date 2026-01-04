@@ -12,11 +12,12 @@ analytics consume them, and outputs serialize them.
 from __future__ import annotations
 
 import logging
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any
-from collections import deque
 
 from esper.karn.constants import AnomalyThresholds
 from esper.leyline import SeedStage
@@ -29,6 +30,7 @@ from esper.karn.ingest import (
     coerce_int,
     coerce_path,
     coerce_seed_stage,
+    coerce_str,
     coerce_str_or_none,
     filter_dataclass_kwargs,
 )
@@ -50,8 +52,6 @@ __all__ = [
     "BatchMetrics",
     "GateEvaluationTrace",
     "DenseTrace",
-    # Pareto Analysis
-    "EpisodeOutcome",
     # Store
     "TelemetryStore",
 ]
@@ -160,11 +160,13 @@ class HostSnapshot:
 
     epoch: int = 0
 
-    # Performance
-    train_loss: float = 0.0
-    train_accuracy: float = 0.0
+    # Performance (required metrics)
     val_loss: float = 0.0
     val_accuracy: float = 0.0
+
+    # Performance (optional metrics - None = not computed, 0.0 = computed as zero)
+    train_loss: float | None = None
+    train_accuracy: float | None = None
 
     # Parameter accounting
     host_params: int = 0  # Fixed host parameters
@@ -172,8 +174,8 @@ class HostSnapshot:
     total_params: int = 0  # host + seeds
     fossilized_params: int = 0  # Permanently added params
 
-    # Gradient health
-    host_grad_norm: float = 0.0
+    # Gradient health (optional - None = not computed)
+    host_grad_norm: float | None = None
     seed_grad_norms: dict[str, float] = field(default_factory=dict)  # Per-slot
     grad_isolation_leakage: float | None = None  # If monitoring isolation
 
@@ -357,77 +359,6 @@ class DenseTrace:
 
 
 # =============================================================================
-# Episode Outcome (Pareto Analysis)
-# =============================================================================
-
-
-@dataclass(frozen=True)
-class EpisodeOutcome:
-    """Multi-objective outcome for Pareto analysis.
-
-    Captures the key metrics we're optimizing:
-    - final_accuracy: Task performance (higher = better)
-    - param_ratio: Parameter efficiency (lower = better)
-    - stability_score: Training stability (higher = better)
-    """
-
-    env_id: int
-    episode_idx: int
-    final_accuracy: float
-    param_ratio: float  # total_params / host_params
-    num_fossilized: int
-    num_contributing_fossilized: int  # Seeds that contributed to learning
-    episode_reward: float  # Total reward for the episode
-    stability_score: float  # 1 - variance(recent_losses)
-    reward_mode: str  # "shaped", "simplified", etc.
-    timestamp: datetime = field(default_factory=_utc_now)
-
-    def dominates(self, other: "EpisodeOutcome") -> bool:
-        """Pareto dominance check.
-
-        Returns True if self dominates other (better or equal on all objectives,
-        strictly better on at least one).
-
-        Objectives (higher is better):
-        - final_accuracy
-        - stability_score
-
-        Objectives (lower is better):
-        - param_ratio
-        """
-        # Check: self >= other on all objectives
-        geq_accuracy = self.final_accuracy >= other.final_accuracy
-        geq_stability = self.stability_score >= other.stability_score
-        leq_ratio = self.param_ratio <= other.param_ratio
-
-        all_geq = geq_accuracy and geq_stability and leq_ratio
-
-        # Check: self > other on at least one objective
-        gt_accuracy = self.final_accuracy > other.final_accuracy
-        gt_stability = self.stability_score > other.stability_score
-        lt_ratio = self.param_ratio < other.param_ratio
-
-        any_gt = gt_accuracy or gt_stability or lt_ratio
-
-        return all_geq and any_gt
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to JSON-serializable dict."""
-        return {
-            "env_id": self.env_id,
-            "episode_idx": self.episode_idx,
-            "reward_mode": self.reward_mode,
-            "final_accuracy": self.final_accuracy,
-            "param_ratio": self.param_ratio,
-            "stability_score": self.stability_score,
-            "num_fossilized": self.num_fossilized,
-            "num_contributing_fossilized": self.num_contributing_fossilized,
-            "episode_reward": self.episode_reward,
-            "timestamp": self.timestamp.isoformat(),
-        }
-
-
-# =============================================================================
 # Telemetry Store (In-Memory)
 # =============================================================================
 
@@ -547,10 +478,8 @@ class TelemetryStore:
                 return obj.isoformat()
             if isinstance(obj, Path):
                 return str(obj)
-            # hasattr AUTHORIZED by John on 2025-12-14 15:00:00 UTC
-            # Justification: Serialization - handle Enum values in JSON export
-            if hasattr(obj, "name") and hasattr(obj, "value"):
-                return str(obj.name)  # Serialize enum as name string
+            if isinstance(obj, Enum):
+                return obj.name
             raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
         path = Path(path)
@@ -654,11 +583,11 @@ class TelemetryStore:
 
         def _parse_host_baseline(raw: dict[str, Any]) -> HostBaseline:
             data = filter_dataclass_kwargs(HostBaseline, raw, context="HostBaseline")
-            if "initial_checkpoint_path" in data:
-                data["initial_checkpoint_path"] = coerce_path(
-                    data.get("initial_checkpoint_path"),
-                    field="HostBaseline.initial_checkpoint_path",
-                )
+            # PT-06 fix: Always coerce - remove conditional check (violates no-legacy policy)
+            data["initial_checkpoint_path"] = coerce_path(
+                data.get("initial_checkpoint_path"),
+                field="HostBaseline.initial_checkpoint_path",
+            )
             return HostBaseline(**data)
 
         def _parse_slot_snapshot(raw: dict[str, Any]) -> SlotSnapshot:
@@ -688,9 +617,12 @@ class TelemetryStore:
         def _parse_host_snapshot(raw: dict[str, Any]) -> HostSnapshot:
             data = filter_dataclass_kwargs(HostSnapshot, raw, context="HostSnapshot")
             data["epoch"] = coerce_int(data.get("epoch"), field="HostSnapshot.epoch", default=0, minimum=0)
-            data["train_loss"] = coerce_float(data.get("train_loss"), field="HostSnapshot.train_loss", default=0.0)
-            data["train_accuracy"] = coerce_float(
-                data.get("train_accuracy"), field="HostSnapshot.train_accuracy", default=0.0
+            # Optional training metrics (None = not computed, 0.0 = computed as zero)
+            data["train_loss"] = coerce_float_or_none(
+                data.get("train_loss"), field="HostSnapshot.train_loss"
+            )
+            data["train_accuracy"] = coerce_float_or_none(
+                data.get("train_accuracy"), field="HostSnapshot.train_accuracy"
             )
             data["val_loss"] = coerce_float(data.get("val_loss"), field="HostSnapshot.val_loss", default=0.0)
             data["val_accuracy"] = coerce_float(data.get("val_accuracy"), field="HostSnapshot.val_accuracy", default=0.0)
@@ -702,7 +634,10 @@ class TelemetryStore:
             data["fossilized_params"] = coerce_int(
                 data.get("fossilized_params"), field="HostSnapshot.fossilized_params", default=0, minimum=0
             )
-            data["host_grad_norm"] = coerce_float(data.get("host_grad_norm"), field="HostSnapshot.host_grad_norm", default=0.0)
+            # Optional gradient metric (None = not computed)
+            data["host_grad_norm"] = coerce_float_or_none(
+                data.get("host_grad_norm"), field="HostSnapshot.host_grad_norm"
+            )
             data["seed_grad_norms"] = coerce_float_dict(
                 data.get("seed_grad_norms"), field="HostSnapshot.seed_grad_norms"
             )
@@ -738,7 +673,8 @@ class TelemetryStore:
                 data["observation_summary"] = coerce_float_dict(
                     data.get("observation_summary"), field="PolicySnapshot.observation_summary"
                 )
-            data["action_op"] = coerce_str_or_none(data.get("action_op"), field="PolicySnapshot.action_op") or ""
+            # action_op is non-optional (str = ""), use coerce_str to maintain contract
+            data["action_op"] = coerce_str(data.get("action_op"), field="PolicySnapshot.action_op", default="")
             data["action_slot"] = coerce_str_or_none(data.get("action_slot"), field="PolicySnapshot.action_slot")
             data["action_blueprint"] = coerce_str_or_none(
                 data.get("action_blueprint"), field="PolicySnapshot.action_blueprint"
@@ -844,11 +780,12 @@ class TelemetryStore:
 
         def _parse_gate_evaluation_trace(raw: dict[str, Any]) -> GateEvaluationTrace:
             data = filter_dataclass_kwargs(GateEvaluationTrace, raw, context="GateEvaluationTrace")
-            data["gate_id"] = coerce_str_or_none(data.get("gate_id"), field="GateEvaluationTrace.gate_id") or ""
-            data["slot_id"] = coerce_str_or_none(data.get("slot_id"), field="GateEvaluationTrace.slot_id") or ""
+            # Non-optional string fields use coerce_str to maintain dataclass contract
+            data["gate_id"] = coerce_str(data.get("gate_id"), field="GateEvaluationTrace.gate_id", default="")
+            data["slot_id"] = coerce_str(data.get("slot_id"), field="GateEvaluationTrace.slot_id", default="")
             passed = coerce_bool_or_none(data.get("passed"), field="GateEvaluationTrace.passed")
             data["passed"] = False if passed is None else passed
-            data["reason"] = coerce_str_or_none(data.get("reason"), field="GateEvaluationTrace.reason") or ""
+            data["reason"] = coerce_str(data.get("reason"), field="GateEvaluationTrace.reason", default="")
             data["metrics_at_evaluation"] = coerce_float_dict(
                 data.get("metrics_at_evaluation"), field="GateEvaluationTrace.metrics_at_evaluation"
             )
@@ -947,7 +884,9 @@ class TelemetryStore:
                 record = json.loads(line)
                 event_type = record.get("event_type", "")
                 data = record.get("data", {})
-                epoch = record.get("epoch") or data.get("epoch", 0)
+                # PT-05 fix: Use explicit None check - epoch=0 is valid and falsy
+                record_epoch = record.get("epoch")
+                epoch = record_epoch if record_epoch is not None else data.get("epoch", 0)
 
                 # Reconstruct store from events
                 if event_type == "TRAINING_STARTED":
@@ -971,13 +910,6 @@ class TelemetryStore:
                     if store.current_epoch:
                         store.current_epoch.host.val_loss = data.get("val_loss", 0.0)
                         store.current_epoch.host.val_accuracy = data.get("val_accuracy", 0.0)
-                elif event_type == "REWARD_COMPUTED":
-                    # Legacy event type (kept for backwards compat with old JSONL files)
-                    if store.current_epoch and not store.current_epoch.policy:
-                        store.current_epoch.policy = PolicySnapshot()
-                    if store.current_epoch and store.current_epoch.policy:
-                        store.current_epoch.policy.reward_total = data.get("total_reward", 0.0)
-                        store.current_epoch.policy.action_op = data.get("action_name", "")
                 elif event_type == "ANALYTICS_SNAPSHOT":
                     # New event type: handle kind="last_action" for policy data
                     kind = data.get("kind")

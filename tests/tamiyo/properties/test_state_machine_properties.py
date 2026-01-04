@@ -71,6 +71,7 @@ class HeuristicPolicyStateMachine(RuleBasedStateMachine):
     def make_decision_no_seeds(self, plateau, stabilized):
         """Make decision with no active seeds."""
         class MockSignals:
+            available_slots = 1
             class metrics:
                 pass
 
@@ -113,6 +114,7 @@ class HeuristicPolicyStateMachine(RuleBasedStateMachine):
         })()
 
         class MockSignals:
+            available_slots = 1
             class metrics:
                 pass
 
@@ -153,6 +155,7 @@ class HeuristicPolicyStateMachine(RuleBasedStateMachine):
         })()
 
         class MockSignals:
+            available_slots = 1
             class metrics:
                 pass
 
@@ -432,6 +435,7 @@ class TestResetCompleteness:
 
         # Build up some state
         class MockSignals:
+            available_slots = 1
             class metrics:
                 epoch = 10
                 plateau_epochs = 5

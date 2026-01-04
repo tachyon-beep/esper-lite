@@ -25,6 +25,18 @@ def _clamp_unit_interval(x: torch.Tensor) -> torch.Tensor:
     return x.clamp(0.0, 1.0)
 
 
+def _to_dtype_if_needed(x: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    """Convert tensor to dtype only if necessary.
+
+    Avoids the ~7x overhead of unconditional .to() calls when dtype already matches.
+    torch.lerp requires matching dtypes, so conversion is required for correctness
+    under mixed-precision training, but can be skipped when dtypes already match.
+    """
+    if x.dtype != dtype:
+        return x.to(dtype)
+    return x
+
+
 def blend_add(
     host_features: torch.Tensor,
     seed_features: torch.Tensor,
@@ -38,8 +50,8 @@ def blend_add(
     alpha = _clamp_unit_interval(alpha)
     # Ensure all tensors match host_features dtype (required for BF16 autocast compatibility)
     target_dtype = host_features.dtype
-    seed_features = seed_features.to(target_dtype)
-    alpha = alpha.to(target_dtype)
+    seed_features = _to_dtype_if_needed(seed_features, target_dtype)
+    alpha = _to_dtype_if_needed(alpha, target_dtype)
     return torch.lerp(host_features, seed_features, alpha)
 
 
@@ -85,10 +97,10 @@ def blend_multiply(
     """
     # Ensure all tensors match host_features dtype (required for BF16 autocast compatibility)
     target_dtype = host_features.dtype
-    seed_features = seed_features.to(target_dtype)
-    alpha = alpha.to(target_dtype)
+    seed_features = _to_dtype_if_needed(seed_features, target_dtype)
+    alpha = _to_dtype_if_needed(alpha, target_dtype)
 
-    seed_input = host_features if seed_input is None else seed_input.to(target_dtype)
+    seed_input = host_features if seed_input is None else _to_dtype_if_needed(seed_input, target_dtype)
     seed_modulation = seed_features - seed_input
     multiplier = multiply_valve_multiplier(alpha, seed_modulation)
     return host_features * multiplier
@@ -119,8 +131,8 @@ def blend_gate(
     effective_alpha = gate_effective_alpha(alpha, gate)
     # Ensure all tensors match host_features dtype (required for BF16 autocast compatibility)
     target_dtype = host_features.dtype
-    seed_features = seed_features.to(target_dtype)
-    effective_alpha = effective_alpha.to(target_dtype)
+    seed_features = _to_dtype_if_needed(seed_features, target_dtype)
+    effective_alpha = _to_dtype_if_needed(effective_alpha, target_dtype)
     return torch.lerp(host_features, seed_features, effective_alpha)
 
 

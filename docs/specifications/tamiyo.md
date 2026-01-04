@@ -110,7 +110,7 @@ class TamiyoPolicy(Protocol):
 > Immutable decision structure with action, target, reason, and confidence.
 
 ```python
-@dataclass
+@dataclass(frozen=True, slots=True)
 class TamiyoDecision:
     action: IntEnum           # From build_action_enum(topology)
     target_seed_id: str | None = None
@@ -118,12 +118,13 @@ class TamiyoDecision:
     confidence: float = 1.0
 ```
 
-**Key Methods:**
-- `to_command() -> AdaptationCommand` - Convert to Leyline's canonical command format
-
 **Computed Properties:**
 - `blueprint_id: str | None` - Extracted from GERMINATE_* action names
 - `action` includes `WAIT`, `GERMINATE_<BLUEPRINT>`, `FOSSILIZE`, `PRUNE`, `ADVANCE`
+
+**Note on action identity:**
+IntEnum values from different topologies can collide (e.g., `CnnAction.WAIT == TransformerAction.WAIT`).
+Always use `action.name` for grouping/counting, not the enum member or its value.
 
 ## 2.2 Configuration Schema
 

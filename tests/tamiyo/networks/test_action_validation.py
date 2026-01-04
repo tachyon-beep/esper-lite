@@ -16,7 +16,7 @@ class TestActionValidation:
 
     @pytest.fixture
     def network(self):
-        return FactoredRecurrentActorCritic(state_dim=126, num_slots=3)
+        return FactoredRecurrentActorCritic(state_dim=126)
 
     @pytest.fixture(autouse=True)
     def enable_validation(self):
@@ -110,3 +110,38 @@ class TestActionValidation:
 
         with pytest.raises(InvalidStateMachineError, match="No valid op actions available in forward"):
             network.forward(state, bp_idx, hidden=None, op_mask=empty_op_mask)
+
+    def test_get_action_rejects_sequence_longer_than_one(self, network):
+        """get_action() should reject seq_len > 1 to prevent timestep mixing.
+
+        BUG FIX TEST: get_action() samples actions from timestep 0 but returns
+        hidden state from the last timestep. If seq_len > 1, this mismatch
+        would corrupt rollouts (actions for wrong timestep). Fail fast.
+        """
+        batch_size = 2
+        seq_len = 5  # Invalid: get_action() is single-step only
+        state = torch.randn(batch_size, seq_len, 126)  # Already 3D with seq_len > 1
+        bp_idx = torch.randint(0, 13, (batch_size, seq_len, 3))
+
+        with pytest.raises(ValueError, match="get_action.*requires seq_len=1.*got 5"):
+            network.get_action(state, bp_idx, hidden=None, deterministic=False)
+
+    def test_get_action_accepts_2d_input(self, network):
+        """get_action() should accept 2D input (unsqueezes to seq_len=1)."""
+        batch_size = 2
+        state = torch.randn(batch_size, 126)  # 2D, will be unsqueezed
+        bp_idx = torch.randint(0, 13, (batch_size, 3))
+
+        # Should succeed - 2D gets unsqueezed to [batch, 1, dim]
+        result = network.get_action(state, bp_idx, hidden=None, deterministic=False)
+        assert result.values.shape == (batch_size,)
+
+    def test_get_action_accepts_3d_input_with_seq_len_1(self, network):
+        """get_action() should accept 3D input with seq_len=1."""
+        batch_size = 2
+        state = torch.randn(batch_size, 1, 126)  # Explicit seq_len=1
+        bp_idx = torch.randint(0, 13, (batch_size, 1, 3))
+
+        # Should succeed - seq_len=1 is valid
+        result = network.get_action(state, bp_idx, hidden=None, deterministic=False)
+        assert result.values.shape == (batch_size,)

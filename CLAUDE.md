@@ -70,6 +70,40 @@ Legacy code and backwards compatibility create:
 - Claude Code MUST delete old code completely when making changes
 - Any legacy code patterns MUST be flagged and removed immediately
 
+## Git Safety
+
+**STRICT REQUIREMENT:** Never run destructive git commands without explicit user permission.
+
+### Destructive Commands (REQUIRE PERMISSION)
+
+The following commands can destroy uncommitted work or rewrite history. **ALWAYS ask before running:**
+
+- `git reset --hard` - Discards uncommitted changes
+- `git clean -f` - Deletes untracked files permanently
+- `git checkout -- <file>` - Discards uncommitted changes to file
+- `git stash drop` - Permanently deletes stashed changes
+- `git push --force` - Rewrites remote history
+- `git rebase` (on pushed branches) - Rewrites shared history
+
+### When You Think You Need a Destructive Command
+
+**Don't.** Go back and get clarification from the user.
+
+### The Rule
+
+**A messy commit or wrong files in a commit is a minor, fixable problem. Lost uncommitted work is permanent.**
+
+If you make a mistake (wrong files staged, bad commit message, etc.):
+1. Make another commit to fix it
+2. Or ask the user if they want to do an interactive rebase
+3. NEVER unilaterally run destructive commands to "clean up"
+
+### Enforcement
+
+- Claude Code MUST ask permission before any destructive git command
+- Claude Code MUST prefer safe alternatives (stash, backup branch)
+- Claude Code MUST NOT prioritize "clean history" over "don't lose work"
+
 ## Plans Organization
 
 Plans are grouped into:

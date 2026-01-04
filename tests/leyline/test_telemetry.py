@@ -150,6 +150,7 @@ def test_ppo_update_payload_from_dict_parses_new_fields():
     from esper.leyline.telemetry import PPOUpdatePayload
 
     data = {
+        # Core required fields
         "policy_loss": 0.1,
         "value_loss": 0.2,
         "entropy": 1.5,
@@ -157,17 +158,47 @@ def test_ppo_update_payload_from_dict_parses_new_fields():
         "kl_divergence": 0.01,
         "clip_fraction": 0.15,
         "nan_grad_count": 0,
-        # Bug fix fields
         "pre_clip_grad_norm": 4.5,
+        # Advantage stats (always emitted)
+        "advantage_mean": 0.5,
+        "advantage_std": 1.0,
+        "advantage_skewness": 0.1,
+        "advantage_kurtosis": 3.0,
+        "advantage_positive_ratio": 0.55,
+        # Ratio stats (always emitted)
+        "ratio_mean": 1.0,
+        "ratio_min": 0.8,
+        "ratio_max": 1.2,
+        "ratio_std": 0.1,
+        # Log prob extremes (always emitted)
+        "log_prob_min": -5.0,
+        "log_prob_max": -0.5,
+        # Always emitted
+        "entropy_collapsed": False,
+        "update_time_ms": 150.0,
+        "inner_epoch": 0,
+        "batch": 1,
         "ppo_updates_count": 3,
-        # New fields
+        # Value function statistics (always emitted)
+        "value_mean": 5.0,
+        "value_std": 2.0,
+        "value_min": 0.0,
+        "value_max": 10.0,
+        # Gradient quality metrics (always emitted)
         "clip_fraction_positive": 0.12,
         "clip_fraction_negative": 0.08,
         "gradient_cv": 0.45,
+        # Infrastructure metrics (optional with defaults)
         "cuda_memory_allocated_gb": 5.0,
         "cuda_memory_reserved_gb": 10.0,
         "cuda_memory_peak_gb": 7.5,
         "cuda_memory_fragmentation": 0.30,
+        # Pre-normalization advantage stats (always emitted)
+        "pre_norm_advantage_mean": 0.8,
+        "pre_norm_advantage_std": 2.5,
+        # Return statistics (always emitted)
+        "return_mean": 10.0,
+        "return_std": 3.0,
     }
 
     payload = PPOUpdatePayload.from_dict(data)
@@ -381,11 +412,116 @@ def test_ppo_update_payload_with_q_values():
     assert payload.q_spread == 6.7
 
 
+# =============================================================================
+# Per-Head NaN/Inf Flags (for indicator lights with latch behavior)
+# =============================================================================
+
+
+def test_ppo_update_payload_has_per_head_nan_inf_flags():
+    """PPOUpdatePayload should have per-head NaN/Inf flag dicts."""
+    from esper.leyline.telemetry import PPOUpdatePayload
+
+    payload = PPOUpdatePayload(
+        policy_loss=0.1,
+        value_loss=0.2,
+        entropy=1.0,
+        grad_norm=0.5,
+        kl_divergence=0.01,
+        clip_fraction=0.1,
+        nan_grad_count=0,
+        pre_clip_grad_norm=0.5,
+        head_nan_detected={"op": True, "slot": False},
+        head_inf_detected={"op": False, "slot": True},
+    )
+
+    assert payload.head_nan_detected == {"op": True, "slot": False}
+    assert payload.head_inf_detected == {"op": False, "slot": True}
+
+
+def test_ppo_update_payload_per_head_nan_inf_defaults_to_none():
+    """Per-head NaN/Inf flags should default to None."""
+    from esper.leyline.telemetry import PPOUpdatePayload
+
+    payload = PPOUpdatePayload(
+        policy_loss=0.1,
+        value_loss=0.2,
+        entropy=1.0,
+        grad_norm=0.5,
+        kl_divergence=0.01,
+        clip_fraction=0.1,
+        nan_grad_count=0,
+    )
+
+    assert payload.head_nan_detected is None
+    assert payload.head_inf_detected is None
+
+
+def test_ppo_update_payload_from_dict_with_per_head_nan_inf_flags():
+    """PPOUpdatePayload.from_dict parses per-head NaN/Inf flags."""
+    from esper.leyline.telemetry import PPOUpdatePayload
+
+    data = {
+        # Core required fields
+        "policy_loss": 0.1,
+        "value_loss": 0.2,
+        "entropy": 1.0,
+        "grad_norm": 0.5,
+        "kl_divergence": 0.01,
+        "clip_fraction": 0.1,
+        "nan_grad_count": 0,
+        "pre_clip_grad_norm": 0.5,
+        # Advantage stats (always emitted)
+        "advantage_mean": 0.0,
+        "advantage_std": 1.0,
+        "advantage_skewness": 0.0,
+        "advantage_kurtosis": 0.0,
+        "advantage_positive_ratio": 0.5,
+        # Ratio stats (always emitted)
+        "ratio_mean": 1.0,
+        "ratio_min": 1.0,
+        "ratio_max": 1.0,
+        "ratio_std": 0.0,
+        # Log prob extremes (always emitted)
+        "log_prob_min": -1.0,
+        "log_prob_max": 0.0,
+        # Always emitted
+        "entropy_collapsed": False,
+        "update_time_ms": 100.0,
+        "inner_epoch": 0,
+        "batch": 0,
+        "ppo_updates_count": 1,
+        # Value function statistics (always emitted)
+        "value_mean": 0.0,
+        "value_std": 1.0,
+        "value_min": -1.0,
+        "value_max": 1.0,
+        # Gradient quality metrics (always emitted)
+        "clip_fraction_positive": 0.0,
+        "clip_fraction_negative": 0.0,
+        "gradient_cv": 0.0,
+        # Pre-normalization advantage stats (always emitted)
+        "pre_norm_advantage_mean": 0.0,
+        "pre_norm_advantage_std": 1.0,
+        # Return statistics (always emitted)
+        "return_mean": 0.0,
+        "return_std": 1.0,
+        # Per-head NaN/Inf detection - what this test focuses on
+        "head_nan_detected": {"op": True, "slot": False, "blueprint": False},
+        "head_inf_detected": {"op": False, "slot": True, "blueprint": False},
+    }
+
+    payload = PPOUpdatePayload.from_dict(data)
+
+    assert payload.head_nan_detected == {"op": True, "slot": False, "blueprint": False}
+    assert payload.head_inf_detected == {"op": False, "slot": True, "blueprint": False}
+
+
 def test_ppo_update_payload_from_dict_with_q_values():
     """PPOUpdatePayload.from_dict parses Q-values."""
     from esper.leyline.telemetry import PPOUpdatePayload
 
     data = {
+        # Core required fields
         "policy_loss": 0.5,
         "value_loss": 0.3,
         "entropy": 1.2,
@@ -394,7 +530,36 @@ def test_ppo_update_payload_from_dict_with_q_values():
         "clip_fraction": 0.15,
         "nan_grad_count": 0,
         "pre_clip_grad_norm": 8.5,
+        # Advantage stats (always emitted)
+        "advantage_mean": 0.3,
+        "advantage_std": 0.8,
+        "advantage_skewness": -0.1,
+        "advantage_kurtosis": 2.5,
+        "advantage_positive_ratio": 0.48,
+        # Ratio stats (always emitted)
+        "ratio_mean": 1.02,
+        "ratio_min": 0.85,
+        "ratio_max": 1.15,
+        "ratio_std": 0.08,
+        # Log prob extremes (always emitted)
+        "log_prob_min": -4.5,
+        "log_prob_max": -0.8,
+        # Always emitted
+        "entropy_collapsed": False,
+        "update_time_ms": 120.0,
+        "inner_epoch": 1,
+        "batch": 2,
         "ppo_updates_count": 2,
+        # Value function statistics (always emitted)
+        "value_mean": 4.5,
+        "value_std": 1.8,
+        "value_min": 0.5,
+        "value_max": 9.0,
+        # Gradient quality metrics (always emitted)
+        "clip_fraction_positive": 0.10,
+        "clip_fraction_negative": 0.05,
+        "gradient_cv": 0.35,
+        # Q-values (optional but what this test focuses on)
         "q_germinate": 5.2,
         "q_advance": 3.1,
         "q_fossilize": 2.8,
@@ -403,6 +568,12 @@ def test_ppo_update_payload_from_dict_with_q_values():
         "q_set_alpha": 4.0,
         "q_variance": 2.3,
         "q_spread": 6.7,
+        # Pre-normalization advantage stats (always emitted)
+        "pre_norm_advantage_mean": 0.6,
+        "pre_norm_advantage_std": 2.0,
+        # Return statistics (always emitted)
+        "return_mean": 8.5,
+        "return_std": 2.5,
     }
 
     payload = PPOUpdatePayload.from_dict(data)

@@ -8,8 +8,7 @@ This subpackage contains:
 from .reward_telemetry import RewardComponentsTelemetry
 
 from .rewards import (
-    # Config classes
-    LossRewardConfig,
+    # Config classes (LossRewardConfig moved to esper.leyline)
     ContributionRewardConfig,
     RewardMode,
     RewardFamily,
@@ -51,8 +50,7 @@ from .rewards import (
 __all__ = [
     # Telemetry
     "RewardComponentsTelemetry",
-    # Config classes
-    "LossRewardConfig",
+    # Config classes (LossRewardConfig moved to esper.leyline)
     "ContributionRewardConfig",
     "RewardMode",
     "RewardFamily",

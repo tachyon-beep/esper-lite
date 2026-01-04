@@ -116,8 +116,8 @@ class TestSeedSlotAsyncGradientCapture:
         loss = out.sum()
         loss.backward()
 
-        # Initial gradient ratio should be 0
-        assert slot.state.metrics.seed_gradient_norm_ratio == 0.0
+        # Initial gradient ratio should be None (never measured)
+        assert slot.state.metrics.seed_gradient_norm_ratio is None
 
         # Async capture + finalize
         slot.capture_gradient_telemetry_async()
@@ -125,6 +125,8 @@ class TestSeedSlotAsyncGradientCapture:
 
         # Metrics should be updated
         assert slot._pending_gradient_stats is None  # Cleared after finalize
+        # After finalize, ratio should be set to a real value (not None)
+        assert slot.state.metrics.seed_gradient_norm_ratio is not None
         assert slot.state.metrics.seed_gradient_norm_ratio >= 0.0
         assert slot.state.metrics.gradient_norm_avg >= 0.0
 

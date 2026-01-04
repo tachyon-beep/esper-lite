@@ -2,36 +2,34 @@
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
 import torch.nn as nn
 
-_logger = logging.getLogger(__name__)
 
+class BlueprintFactory(Protocol):
+    """Protocol for blueprint factory functions.
 
-def _invalidate_action_cache(topology: str | None = None) -> None:
-    """Invalidate Leyline action enum cache for topology.
+    Blueprint factories create nn.Module instances for seed injection.
+    They take a dimension parameter and optional kwargs for blueprint-specific
+    configuration (e.g., LoRA rank, attention heads).
 
-    Best-effort operation that fails silently during import cycles.
-
-    Args:
-        topology: Specific topology to invalidate, or None to clear all.
+    This protocol fixes the type mismatch where BlueprintSpec.factory was typed
+    as Callable[[int], nn.Module] but called with **kwargs.
     """
-    try:
-        from esper.leyline import actions as leyline_actions
-    except ImportError:
-        _logger.debug("Cache invalidation skipped: leyline.actions not yet imported")
-        return
 
-    try:
-        if topology is None:
-            leyline_actions._action_enum_cache.clear()
-        else:
-            leyline_actions._action_enum_cache.pop(topology, None)
-    except AttributeError as e:
-        _logger.debug("Cache invalidation skipped: %s", e)
+    def __call__(self, dim: int, **kwargs: Any) -> nn.Module:
+        """Create a module for the given dimension.
+
+        Args:
+            dim: Channel dimension (CNN) or embed dimension (transformer)
+            **kwargs: Blueprint-specific options (e.g., rank for LoRA)
+
+        Returns:
+            Instantiated nn.Module ready for seed injection.
+        """
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,7 +38,7 @@ class BlueprintSpec:
 
     name: str
     topology: str
-    factory: Callable[[int], nn.Module]
+    factory: BlueprintFactory
     param_estimate: int
     description: str = ""
 
@@ -62,10 +60,14 @@ class BlueprintRegistry:
         topology: str,
         param_estimate: int,
         description: str = "",
-    ) -> Callable[[Callable[[int], nn.Module]], Callable[[int], nn.Module]]:
-        """Decorator to register a blueprint factory."""
+    ) -> Callable[[BlueprintFactory], BlueprintFactory]:
+        """Decorator to register a blueprint factory.
 
-        def decorator(factory: Callable[[int], nn.Module]) -> Callable[[int], nn.Module]:
+        Note: Action enum caches (in tamiyo.action_enums) are automatically
+        invalidated by version-keying on registry state. No callback needed.
+        """
+
+        def decorator(factory: BlueprintFactory) -> BlueprintFactory:
             key = f"{topology}:{name}"
             cls._blueprints[key] = BlueprintSpec(
                 name=name,
@@ -74,7 +76,6 @@ class BlueprintRegistry:
                 param_estimate=param_estimate,
                 description=description,
             )
-            _invalidate_action_cache(topology)
             return factory
 
         return decorator
@@ -82,6 +83,9 @@ class BlueprintRegistry:
     @classmethod
     def list_for_topology(cls, topology: str) -> list[BlueprintSpec]:
         """All blueprints for a topology, sorted by param estimate."""
+        from .loader import ensure_loaded
+
+        ensure_loaded(topology)
         return sorted(
             [s for s in cls._blueprints.values() if s.topology == topology],
             key=lambda s: s.param_estimate,
@@ -90,6 +94,9 @@ class BlueprintRegistry:
     @classmethod
     def get(cls, topology: str, name: str) -> BlueprintSpec:
         """Get a specific blueprint spec."""
+        from .loader import ensure_loaded
+
+        ensure_loaded(topology)
         key = f"{topology}:{name}"
         if key not in cls._blueprints:
             available = cls.list_for_topology(topology)
@@ -119,10 +126,13 @@ class BlueprintRegistry:
 
     @classmethod
     def unregister(cls, topology: str, name: str) -> None:
-        """Remove a blueprint from the registry (primarily for tests)."""
+        """Remove a blueprint from the registry (primarily for tests).
+
+        Note: Action enum caches (in tamiyo.action_enums) are automatically
+        invalidated by version-keying on registry state. No callback needed.
+        """
         key = f"{topology}:{name}"
         cls._blueprints.pop(key, None)
-        _invalidate_action_cache(topology)
 
 
-__all__ = ["BlueprintSpec", "BlueprintRegistry"]
+__all__ = ["BlueprintFactory", "BlueprintSpec", "BlueprintRegistry"]

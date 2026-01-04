@@ -8,53 +8,13 @@
 |-------|-------|
 | **Ticket ID** | `B9-DRL-02` |
 | **Severity** | `P1` |
-| **Status** | `closed` |
+| **Status** | `open` |
 | **Batch** | 9 |
 | **Agent** | `drl` |
 | **Domain** | `tamiyo/tracker` |
 | **Assignee** | |
 | **Created** | 2025-12-27 |
-| **Updated** | 2025-12-29 |
-
----
-
-## Resolution
-
-**Status:** FIXED
-
-**Root Cause:** The stabilization logic had two flaws:
-
-1. **Too Strict:** `loss_delta >= 0` rejected ANY loss increase, even normal PPO stochastic noise (+1-2% fluctuation). This could prevent germination indefinitely in noisy training.
-
-2. **Too Loose:** The fallback `val_loss < self._prev_loss * 1.5` allowed up to 50% regression, but this was dead code since condition 1 already rejected any increase.
-
-**Fix Applied - Symmetric Stability Window:**
-
-Replaced the old logic with a symmetric threshold approach:
-
-```python
-# Old (flawed):
-is_stable_epoch = (
-    loss_delta >= 0 and  # Too strict - rejects all noise
-    relative_improvement < self.stabilization_threshold and
-    val_loss < self._prev_loss * 1.5  # Dead code
-)
-
-# New (B9-DRL-02):
-is_stable_epoch = (
-    relative_improvement > -self.regression_threshold and  # -5%
-    relative_improvement < self.stabilization_threshold    # +3%
-)
-```
-
-The symmetric window:
-- **Explosive growth (>3% improvement):** NOT stable (blocks germination during rapid training)
-- **Divergence (>5% regression):** NOT stable (catches failing training)
-- **Plateau/noise (-5% to +3%):** Stable (tolerates PPO variance)
-
-**Verification:**
-- 328 tamiyo tests pass
-- 15 stabilization tests pass (6 new tests for edge cases)
+| **Updated** | 2025-12-27 |
 
 ---
 
@@ -63,8 +23,8 @@ The symmetric window:
 | Field | Value |
 |-------|-------|
 | **File(s)** | `/home/john/esper-lite/src/esper/tamiyo/tracker.py` |
-| **Line(s)** | `131-144` |
-| **Function/Class** | `SignalTracker.update()` |
+| **Line(s)** | `133-137` |
+| **Function/Class** | `SignalTracker._update_stabilization()` |
 
 ---
 
@@ -92,40 +52,53 @@ The symmetric window:
 
 ### What's Wrong
 
-The old stabilization logic had conflicting design:
-
 ```python
-# Lines 133-137 (old)
-is_stable_epoch = (
-    loss_delta >= 0 and  # Rejects ANY regression (too strict)
-    relative_improvement < self.stabilization_threshold and
-    val_loss < self._prev_loss * 1.5  # Allows 50% regression (dead code)
-)
+# Lines 133-137 (approximate)
+if loss_delta >= 0:  # Prevents regression from counting
+    return  # Epoch doesn't count toward stabilization
+
+# But the condition `val_loss < self._prev_loss * 1.5` allows up to 50% increase
 ```
 
-**Impact in PPO training:**
-- Normal stochastic variance (+1-2% loss fluctuation) would reset the stable counter
-- This could delay or prevent germination indefinitely
-- Seeds might never get a chance to train on a "stable" host
+The check `loss_delta >= 0` prevents regression epochs from counting as stable. However, there's a subtle interaction:
+
+1. If `relative_improvement` is negative (loss increased) but `loss_delta` is exactly 0.0 (no change), the epoch still counts
+2. The condition `val_loss < self._prev_loss * 1.5` allows up to 50% loss increase while still counting toward stabilization if other conditions pass
 
 ### Impact
 
-- **Premature stabilization blocking:** Host could be blocked from germination indefinitely due to normal noise
-- **Incorrect germination timing:** Tamiyo may never allow germination in noisy training
-- **Training inefficiency:** Seeds wait longer than necessary before starting
+- **Premature stabilization**: Host could be declared "stabilized" during a regression phase
+- **Incorrect germination timing**: Tamiyo may germinate seeds during unstable training
+- **Training instability**: Seeds germinated during host instability may fail
 
 ---
 
-## Tests Added
+## Recommended Fix
 
-New test class `TestSymmetricStabilityWindow` with 6 tests:
+Tighten the stabilization criteria:
 
-1. `test_small_regression_counts_as_stable` - 2% regression counts (PPO noise)
-2. `test_large_regression_resets_counter` - 10% regression resets (divergence)
-3. `test_boundary_at_five_percent_regression` - Exact boundary behavior
-4. `test_unchanged_loss_counts_as_stable` - Plateau counts as stable
-5. `test_stabilization_with_noise_tolerance` - Noisy but bounded epochs stabilize
-6. `test_custom_regression_threshold` - Custom threshold respected
+```python
+# Option 1: Stricter loss delta check
+if loss_delta > 0:  # Any increase disqualifies (was >= 0)
+    return
+
+# Option 2: Lower the threshold
+if val_loss > self._prev_loss * 1.05:  # Only 5% regression allowed
+    return
+```
+
+Or document that the 50% threshold is intentional (perhaps for noisy training runs).
+
+---
+
+## Verification
+
+### How to Verify the Fix
+
+- [ ] Add test case for edge case: loss_delta = 0.0 exactly
+- [ ] Add test case for edge case: loss increased by 49% (should not count as stable)
+- [ ] Verify stabilization behavior in noisy training scenarios
+- [ ] Document intended threshold in docstring
 
 ---
 

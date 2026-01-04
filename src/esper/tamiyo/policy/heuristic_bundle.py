@@ -11,8 +11,7 @@ from typing import Any
 
 import torch
 
-from esper.tamiyo.policy.protocol import PolicyBundle
-from esper.tamiyo.policy.types import ActionResult, EvalResult, ForwardResult
+from esper.leyline import PolicyBundle, ActionResult, EvalResult, ForwardResult
 from esper.tamiyo.heuristic import HeuristicTamiyo, HeuristicPolicyConfig
 
 

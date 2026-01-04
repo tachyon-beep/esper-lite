@@ -296,6 +296,7 @@ class TestEmbargoEnforcementProperties:
                 host_stabilized = 1  # Stabilized
 
             class MockSignals:
+                available_slots = 1
                 metrics = MockMetrics()
 
             decision = policy.decide(MockSignals(), active_seeds=[])

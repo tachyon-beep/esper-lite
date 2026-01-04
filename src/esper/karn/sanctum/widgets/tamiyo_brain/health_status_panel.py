@@ -2,24 +2,27 @@
 
 Displays:
 - Advantage stats with skewness/kurtosis
-- Ratio bounds
-- Gradient norm
-- Layer health
+- Ratio bounds (joint only - per-head shown in ActionHeads)
+- Gradient norm with sparkline
+- KL divergence with sparkline
 - Entropy trend
 - Policy state
 - Value range
+- Observation health
+
+Note: Layer health (dead/exploding) shown in ActionHeads Flow footer.
 """
 
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from rich.text import Text
 from textual.widgets import Static
 
 from esper.karn.constants import TUIThresholds
-from esper.leyline import DEFAULT_HOST_LSTM_LAYERS
+from .sparkline_utils import render_sparkline, detect_trend, trend_style
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
@@ -30,6 +33,8 @@ class HealthStatusPanel(Static):
 
     Extends Static directly for minimal layout overhead.
     """
+
+    SPARKLINE_WIDTH: ClassVar[int] = 10  # Compact sparkline for inline display
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -61,25 +66,38 @@ class HealthStatusPanel(Static):
         )
 
         result.append("Advantage    ", style="dim")
-        result.append(f"{tamiyo.advantage_mean:+.2f}±{tamiyo.advantage_std:.2f}", style=self._status_style(adv_status))
+        # Use .3f for mean to distinguish small values from true zero (e.g., -0.005 vs 0.000)
+        result.append(
+            f"{tamiyo.advantage_mean:+.3f}±{tamiyo.advantage_std:.2f}",
+            style=self._status_style(adv_status),
+        )
         result.append(" sk:", style="dim")
         # Show "---" for NaN skewness/kurtosis/positive_ratio (no data yet)
         if math.isnan(tamiyo.advantage_skewness):
             result.append("---", style="dim")
         else:
-            result.append(f"{tamiyo.advantage_skewness:+.1f}", style=self._status_style(skew_status))
+            result.append(
+                f"{tamiyo.advantage_skewness:+.1f}",
+                style=self._status_style(skew_status),
+            )
         result.append(self._skewness_hint(tamiyo.advantage_skewness), style="dim")
         result.append(" kt:", style="dim")
         if math.isnan(tamiyo.advantage_kurtosis):
             result.append("---", style="dim")
         else:
-            result.append(f"{tamiyo.advantage_kurtosis:+.1f}", style=self._status_style(kurt_status))
+            result.append(
+                f"{tamiyo.advantage_kurtosis:+.1f}",
+                style=self._status_style(kurt_status),
+            )
         # Adv+ percentage (healthy: 40-60%)
         result.append(" +:", style="dim")
         if math.isnan(tamiyo.advantage_positive_ratio):
             result.append("---", style="dim")
         else:
-            result.append(f"{tamiyo.advantage_positive_ratio:.0%}", style=self._status_style(adv_pos_status))
+            result.append(
+                f"{tamiyo.advantage_positive_ratio:.0%}",
+                style=self._status_style(adv_pos_status),
+            )
         if worst_status != "ok":
             result.append(" !", style=self._status_style(worst_status))
         result.append("\n")
@@ -87,36 +105,69 @@ class HealthStatusPanel(Static):
         # Ratio bounds (joint ratio for multi-head)
         joint_status = self._get_joint_ratio_status(tamiyo.joint_ratio_max)
         result.append("Ratio Joint  ", style="dim")
-        result.append(f"{tamiyo.joint_ratio_max:.2f}", style=self._status_style(joint_status))
+        result.append(
+            f"{tamiyo.joint_ratio_max:.3f}", style=self._status_style(joint_status)
+        )
         if joint_status != "ok":
             result.append(" !", style=self._status_style(joint_status))
         result.append("\n")
 
-        # Per-head ratio max (always visible - dim when healthy, colored when elevated)
-        head_ratios = [
-            ("Op", tamiyo.head_op_ratio_max),
-            ("Sl", tamiyo.head_slot_ratio_max),
-            ("BP", tamiyo.head_blueprint_ratio_max),
-            ("St", tamiyo.head_style_ratio_max),
-            ("Te", tamiyo.head_tempo_ratio_max),
-            ("αT", tamiyo.head_alpha_target_ratio_max),
-            ("αS", tamiyo.head_alpha_speed_ratio_max),
-            ("Cv", tamiyo.head_alpha_curve_ratio_max),
-        ]
-        result.append("  Per-head:  ", style="dim")
-        for i, (label, ratio) in enumerate(head_ratios):
-            if i > 0:
-                result.append(" ")
-            color = "red" if ratio > 2.0 else ("yellow" if ratio > 1.5 else "dim")
-            result.append(f"{label}:{ratio:.1f}", style=color)
+        # Grad norm with sparkline (rising is bad for gradients)
+        # Fixed layout: Label(13) + Value(7) + Indicator(1) + Space(1) + Sparkline(10) + Trend(1)
+        # Use space flag for sign alignment: "  0.123" vs " -0.123"
+        gn_status = self._get_grad_norm_status(tamiyo.grad_norm)
+        result.append("Grad Norm    ", style="dim")  # 13 chars
+        result.append(f"{tamiyo.grad_norm: 7.3f}", style=self._status_style(gn_status))
+        if gn_status != "ok":
+            result.append("!", style=self._status_style(gn_status))
+        else:
+            result.append(" ", style="dim")
+        result.append(" ")
+        # Sparkline for gradient history
+        if tamiyo.grad_norm_history:
+            sparkline = render_sparkline(
+                tamiyo.grad_norm_history,
+                width=self.SPARKLINE_WIDTH,
+                style=self._status_style(gn_status),
+            )
+            result.append(sparkline)
+            trend = detect_trend(list(tamiyo.grad_norm_history))
+            result.append(trend, style=trend_style(trend, "loss"))  # Rising is bad
+        else:
+            result.append("─" * self.SPARKLINE_WIDTH, style="dim")
         result.append("\n")
 
-        # Grad norm
-        gn_status = self._get_grad_norm_status(tamiyo.grad_norm)
-        result.append("Grad Norm    ", style="dim")
-        result.append(f"{tamiyo.grad_norm:>5.2f}", style=self._status_style(gn_status))
-        if gn_status != "ok":
-            result.append(" !", style=self._status_style(gn_status))
+        # KL divergence with sparkline (rising is bad - policy changing too fast)
+        # Fixed layout: Label(13) + Value(7) + Indicator(1) + Space(1) + Sparkline(10) + Trend(1)
+        # Use space flag for sign alignment: " 0.0089" vs "-0.0089"
+        kl_status = self._get_kl_status(tamiyo.kl_divergence)
+        result.append("KL Diverge   ", style="dim")  # 13 chars
+        if math.isnan(tamiyo.kl_divergence):
+            result.append("    ---", style="dim")  # 7 chars to match value width
+            result.append(" ")  # Placeholder for indicator
+            result.append(" ")  # Space before sparkline
+            result.append("─" * self.SPARKLINE_WIDTH, style="dim")
+        else:
+            result.append(
+                f"{tamiyo.kl_divergence: 7.4f}", style=self._status_style(kl_status)
+            )
+            if kl_status != "ok":
+                result.append("!", style=self._status_style(kl_status))
+            else:
+                result.append(" ", style="dim")
+            result.append(" ")
+            # Sparkline for KL history
+            if tamiyo.kl_divergence_history:
+                sparkline = render_sparkline(
+                    tamiyo.kl_divergence_history,
+                    width=self.SPARKLINE_WIDTH,
+                    style=self._status_style(kl_status),
+                )
+                result.append(sparkline)
+                trend = detect_trend(list(tamiyo.kl_divergence_history))
+                result.append(trend, style=trend_style(trend, "loss"))  # Rising is bad
+            else:
+                result.append("─" * self.SPARKLINE_WIDTH, style="dim")
         result.append("\n")
 
         # Log prob extremes (NaN predictor)
@@ -125,20 +176,14 @@ class HealthStatusPanel(Static):
         if math.isnan(tamiyo.log_prob_min):
             result.append("[---,---]", style="dim")
         else:
-            result.append(f"[{tamiyo.log_prob_min:.1f},{tamiyo.log_prob_max:.1f}]", style=self._status_style(lp_status))
+            result.append(
+                f"[{tamiyo.log_prob_min:.1f},{tamiyo.log_prob_max:.1f}]",
+                style=self._status_style(lp_status),
+            )
             if lp_status == "critical":
                 result.append(" NaN RISK", style="red bold")
             elif lp_status == "warning":
                 result.append(" !", style="yellow")
-        result.append("\n")
-
-        # Layer health
-        result.append("Layers       ", style="dim")
-        healthy = DEFAULT_HOST_LSTM_LAYERS - tamiyo.dead_layers - tamiyo.exploding_layers
-        if tamiyo.dead_layers > 0 or tamiyo.exploding_layers > 0:
-            result.append(f"{tamiyo.dead_layers}D/{tamiyo.exploding_layers}E", style="red")
-        else:
-            result.append(f"{healthy}/{DEFAULT_HOST_LSTM_LAYERS} ✓", style="green")
         result.append("\n")
 
         # Entropy trend
@@ -153,8 +198,12 @@ class HealthStatusPanel(Static):
         result.append(self._render_value_stats())
         result.append("\n")
 
-        # Op-conditioned Q-values (Policy V2)
-        result.append(self._render_q_value_stats())
+        # Observation stats (input health)
+        result.append(self._render_observation_stats())
+        result.append("\n")
+
+        # LSTM hidden state health (B7-DRL-04)
+        result.append(self._render_lstm_health())
 
         return result
 
@@ -219,9 +268,11 @@ class HealthStatusPanel(Static):
         result.append("Policy       ", style="dim")
 
         # The dangerous pattern: entropy falling + clip rising + both concerning
-        if (corr < -0.5 and
-            entropy < TUIThresholds.ENTROPY_WARNING and
-            clip > TUIThresholds.CLIP_WARNING):
+        if (
+            corr < -0.5
+            and entropy < TUIThresholds.ENTROPY_WARNING
+            and clip > TUIThresholds.CLIP_WARNING
+        ):
             result.append("COLLAPSE RISK", style="red bold")
             result.append(f" (r={corr:.2f})", style="dim")
         elif corr < -0.6 and entropy < TUIThresholds.ENTROPY_WARNING:
@@ -265,11 +316,47 @@ class HealthStatusPanel(Static):
 
         return result
 
-    def _render_q_value_stats(self) -> Text:
-        """Render op-conditioned Q-values (Policy V2).
+    def _render_observation_stats(self) -> Text:
+        """Render observation space health indicators.
 
-        Shows Q(s,op) for each operation and Q-variance metric.
-        Low variance indicates critic is ignoring op conditioning.
+        Shows input distribution health to catch numerical issues early.
+        """
+        if self._snapshot is None:
+            return Text()
+
+        obs = self._snapshot.observation_stats
+        result = Text()
+
+        # Check for NaN/Inf first (critical issue)
+        if obs.nan_count > 0 or obs.inf_count > 0:
+            result.append("Obs Health   ", style="dim")
+            result.append(f"NaN:{obs.nan_count} Inf:{obs.inf_count}", style="red bold")
+            return result
+
+        # Check outlier percentage
+        outlier_status = self._get_outlier_status(obs.outlier_pct)
+        drift_status = self._get_drift_status(obs.normalization_drift)
+
+        # Always show all metrics (dim when ok, colored when warning/critical)
+        result.append("Obs Health   ", style="dim")
+        result.append(
+            f"Out:{obs.outlier_pct:.1%}", style=self._status_style(outlier_status)
+        )
+        result.append(" ", style="dim")
+        result.append(
+            f"Drift:{obs.normalization_drift:.2f}",
+            style=self._status_style(drift_status),
+        )
+
+        return result
+
+    def _render_lstm_health(self) -> Text:
+        """Render LSTM hidden state health indicators (B7-DRL-04).
+
+        LSTM hidden states can become corrupted during BPTT:
+        - Explosion/saturation: RMS > threshold
+        - Vanishing: RMS < threshold
+        - NaN/Inf: numerical instability
         """
         if self._snapshot is None:
             return Text()
@@ -277,42 +364,76 @@ class HealthStatusPanel(Static):
         tamiyo = self._snapshot.tamiyo
         result = Text()
 
-        # Q-values per operation (abbreviated for space)
-        result.append("Q-Values     ", style="dim")
+        # If no LSTM data, show placeholder (non-recurrent policy or no data yet)
+        if tamiyo.lstm_h_rms is None:
+            result.append("LSTM RMS     ", style="dim")
+            result.append("---", style="dim")
+            return result
 
-        # Define ops with colors
-        ops = [
-            ("G", tamiyo.q_germinate, "green"),
-            ("A", tamiyo.q_advance, "cyan"),
-            ("F", tamiyo.q_fossilize, "blue"),
-            ("P", tamiyo.q_prune, "red"),
-            ("V", tamiyo.q_set_alpha, "cyan"),  # V for set alpha (A is advance)
-            ("W", tamiyo.q_wait, "dim"),
-        ]
+        # Check for NaN/Inf first (critical issue)
+        if tamiyo.lstm_has_nan or tamiyo.lstm_has_inf:
+            result.append("LSTM RMS     ", style="dim")
+            issues = []
+            if tamiyo.lstm_has_nan:
+                issues.append("NaN")
+            if tamiyo.lstm_has_inf:
+                issues.append("Inf")
+            result.append(" ".join(issues), style="red bold")
+            return result
 
-        for i, (label, q_val, color) in enumerate(ops):
-            if i > 0:
-                result.append(" ", style="dim")
-            result.append(f"{label}:", style="dim")
-            result.append(f"{q_val:+.1f}", style=color)
+        # Check h and c RMS magnitudes (scale-free across batch size / hidden dim)
+        h_status = self._get_lstm_rms_status(tamiyo.lstm_h_rms)
+        c_status = self._get_lstm_rms_status(tamiyo.lstm_c_rms)
+        worst_status = max(
+            [h_status, c_status],
+            key=lambda s: ["ok", "warning", "critical"].index(s),
+        )
 
-        result.append("\n")
+        result.append("LSTM RMS     ", style="dim")
+        result.append(
+            f"h:{tamiyo.lstm_h_rms:.2f}",
+            style=self._status_style(h_status),
+        )
+        result.append(" ", style="dim")
+        result.append(
+            f"c:{tamiyo.lstm_c_rms:.2f}",
+            style=self._status_style(c_status),
+        )
 
-        # Q-variance (op-sensitivity check)
-        result.append("Q Variance   ", style="dim")
-
-        var_status = self._get_q_variance_status(tamiyo.q_variance)
-        result.append(f"{tamiyo.q_variance:.2f}", style=self._status_style(var_status))
-
-        if var_status == "critical":
-            result.append(" NO OP COND!", style="red bold")
-        elif var_status == "warning":
-            result.append(" weak", style="yellow")
-
-        # Q-spread for context
-        result.append(f"  spread:{tamiyo.q_spread:.1f}", style="dim")
+        if worst_status != "ok":
+            result.append(" !", style=self._status_style(worst_status))
 
         return result
+
+    def _get_lstm_rms_status(self, rms: float | None) -> str:
+        """Check if LSTM hidden state RMS magnitude is healthy."""
+        if rms is None:
+            return "ok"  # No LSTM - neutral status
+        if rms > 10.0:  # Explosion/saturation threshold
+            return "critical"
+        if rms > 5.0:  # Warning threshold
+            return "warning"
+        if rms < 1e-6:  # Vanishing threshold
+            return "critical"
+        if rms < 1e-4:  # Low warning
+            return "warning"
+        return "ok"
+
+    def _get_outlier_status(self, outlier_pct: float) -> str:
+        """Check if outlier percentage is healthy."""
+        if outlier_pct > 0.1:  # >10% outliers is critical
+            return "critical"
+        if outlier_pct > 0.05:  # >5% is warning
+            return "warning"
+        return "ok"
+
+    def _get_drift_status(self, drift: float) -> str:
+        """Check if normalization drift is healthy."""
+        if drift > 2.0:  # >2σ drift is critical
+            return "critical"
+        if drift > 1.0:  # >1σ is warning
+            return "warning"
+        return "ok"
 
     def _get_value_status(self, tamiyo: "TamiyoState") -> str:
         """Check if value function is healthy using relative thresholds."""
@@ -419,9 +540,15 @@ class HealthStatusPanel(Static):
             return "<"
 
     def _get_ratio_status(self, ratio_min: float, ratio_max: float) -> str:
-        if ratio_max > TUIThresholds.RATIO_MAX_CRITICAL or ratio_min < TUIThresholds.RATIO_MIN_CRITICAL:
+        if (
+            ratio_max > TUIThresholds.RATIO_MAX_CRITICAL
+            or ratio_min < TUIThresholds.RATIO_MIN_CRITICAL
+        ):
             return "critical"
-        if ratio_max > TUIThresholds.RATIO_MAX_WARNING or ratio_min < TUIThresholds.RATIO_MIN_WARNING:
+        if (
+            ratio_max > TUIThresholds.RATIO_MAX_WARNING
+            or ratio_min < TUIThresholds.RATIO_MIN_WARNING
+        ):
             return "warning"
         return "ok"
 
@@ -432,16 +559,18 @@ class HealthStatusPanel(Static):
             return "warning"
         return "ok"
 
-    def _get_q_variance_status(self, q_variance: float) -> str:
-        """Check if Q-variance indicates op conditioning is working.
+    def _get_kl_status(self, kl: float) -> str:
+        """Check if KL divergence is healthy.
 
-        Low variance means Q(s, op) ≈ Q(s, op') for all ops → critic ignoring op input.
-        High variance means different ops get different value estimates → healthy.
+        KL divergence measures how much the policy has changed from the old policy.
+        PPO typically targets KL < 0.01-0.02 for stable updates.
         """
-        if q_variance < 0.01:
-            return "critical"  # Essentially collapsed to V(s)
-        if q_variance < 0.1:
-            return "warning"  # Weak differentiation between ops
+        if math.isnan(kl):
+            return "ok"  # No data yet
+        if kl > 0.05:
+            return "critical"  # Policy changing too fast
+        if kl > 0.02:
+            return "warning"  # Elevated but not critical
         return "ok"
 
     def _get_joint_ratio_status(self, joint_ratio: float) -> str:

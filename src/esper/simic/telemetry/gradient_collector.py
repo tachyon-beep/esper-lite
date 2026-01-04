@@ -194,7 +194,7 @@ def materialize_grad_stats(async_stats: dict[str, bool | int | float | torch.Ten
     Returns:
         GradientHealthStats with Python float/bool values ready for telemetry
     """
-    if async_stats.get('_empty', False):
+    if async_stats['_empty']:
         # Already materialized (empty case returns Python values directly)
         return {
             'gradient_norm': float(async_stats['gradient_norm']),
@@ -220,8 +220,10 @@ def materialize_grad_stats(async_stats: dict[str, bool | int | float | torch.Ten
     assert isinstance(n_exploding_val, torch.Tensor)
     n_exploding = int(n_exploding_val.item())
 
-    # Compute derived statistics
-    gradient_norm = (total_squared_norm ** 0.5) / n_grads
+    # Compute global L2 norm (matches torch.nn.utils.clip_grad_norm_ semantics)
+    # NOTE: Previous code divided by n_grads, producing values incomparable to
+    # clipping thresholds. Global L2 = sqrt(sum(||g_i||²)) without division.
+    gradient_norm = total_squared_norm ** 0.5
 
     # Compute health score (0-1, higher is healthier)
     vanishing_ratio = n_vanishing / n_grads
@@ -332,8 +334,10 @@ def collect_seed_gradients(
     stats = stats_tensor.tolist()
 
     total_squared_val, min_norm, max_norm, n_vanishing, n_exploding, zero_count, nan_count, inf_count = stats
-    total_norm = total_squared_val ** 0.5
-    avg_norm = total_norm / n_grads
+    # Global L2 norm (matches torch.nn.utils.clip_grad_norm_ semantics)
+    # NOTE: Previous code divided by n_grads, producing values incomparable to
+    # clipping thresholds. Global L2 = sqrt(sum(||g_i||²)) without division.
+    gradient_norm = total_squared_val ** 0.5
     n_vanishing = int(n_vanishing)
     n_exploding = int(n_exploding)
     zero_fraction = zero_count / max(total_elements, 1)
@@ -353,7 +357,7 @@ def collect_seed_gradients(
 
     if return_enhanced:
         return GradientHealthMetrics(
-            gradient_norm=avg_norm,
+            gradient_norm=gradient_norm,
             gradient_health=health,
             has_vanishing=n_vanishing > 0,
             has_exploding=n_exploding > 0,
@@ -366,7 +370,7 @@ def collect_seed_gradients(
         )
 
     return {
-        'gradient_norm': avg_norm,
+        'gradient_norm': gradient_norm,
         'gradient_health': health,
         'has_vanishing': n_vanishing > 0,
         'has_exploding': n_exploding > 0,

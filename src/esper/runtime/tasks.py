@@ -6,10 +6,9 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Literal
 
 from esper.kasmina.host import CNNHost, MorphogeneticModel, TransformerHost
-from esper.leyline.actions import build_action_enum
-from esper.leyline import DEFAULT_HOST_LR, DEFAULT_SEED_LR, DEFAULT_BATCH_SIZE_TRAINING, DEFAULT_DROPOUT
+from esper.tamiyo.action_enums import build_action_enum
+from esper.leyline import DEFAULT_HOST_LR, DEFAULT_SEED_LR, DEFAULT_BATCH_SIZE_TRAINING, DEFAULT_DROPOUT, LossRewardConfig
 from esper.tamiyo.policy.features import TaskConfig
-from esper.simic.rewards import LossRewardConfig
 from torch.utils.data import Dataset
 
 from esper.utils.data import load_cifar10, load_tinystories, get_cifar10_datasets

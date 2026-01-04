@@ -1,7 +1,7 @@
 """Tests for Pareto frontier computation."""
 
 from hypothesis import given, strategies as st
-from esper.karn.store import EpisodeOutcome
+from esper.leyline import EpisodeOutcome
 from esper.karn.pareto import extract_pareto_frontier, compute_hypervolume_2d
 
 

@@ -1,9 +1,8 @@
 """Tests for reward mode enum and sparse reward functions."""
 
-from esper.leyline import LifecycleOp
+from esper.leyline import LifecycleOp, LossRewardConfig
 from esper.simic.rewards import (
     ContributionRewardConfig,
-    LossRewardConfig,
     RewardFamily,
     RewardMode,
     compute_reward_for_family,

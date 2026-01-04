@@ -3,8 +3,8 @@
 
 def test_rent_not_applied_during_grace():
     """No rent during grace period."""
-    from esper.simic.rewards import compute_loss_reward, LossRewardConfig, SeedInfo
-    from esper.leyline import SeedStage
+    from esper.leyline import LossRewardConfig, SeedStage
+    from esper.simic.rewards import compute_loss_reward, SeedInfo
 
     config = LossRewardConfig.default()
     config.grace_epochs = 3
@@ -59,8 +59,8 @@ def test_rent_not_applied_during_grace():
 
 def test_rent_applied_after_grace():
     """Rent applied after grace period ends."""
-    from esper.simic.rewards import compute_loss_reward, LossRewardConfig, SeedInfo
-    from esper.leyline import SeedStage
+    from esper.leyline import LossRewardConfig, SeedStage
+    from esper.simic.rewards import compute_loss_reward, SeedInfo
 
     config = LossRewardConfig.default()
     config.grace_epochs = 3

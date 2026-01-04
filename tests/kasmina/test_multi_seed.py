@@ -72,7 +72,8 @@ class TestSequentialSeedsInSameSlot:
         # Second seed should have fresh state
         assert slot.state.metrics.epochs_total == 0
         assert slot.state.metrics.best_val_accuracy == 0.0
-        assert slot.state.metrics.seed_gradient_norm_ratio == 0.0
+        # Fresh seed has None (never measured) not 0.0 (measured but inactive)
+        assert slot.state.metrics.seed_gradient_norm_ratio is None
 
     def test_multiple_germinate_cull_cycles(self):
         """Slot should handle many germinate/cull cycles without issues."""

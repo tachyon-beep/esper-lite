@@ -5,14 +5,14 @@ import torch
 
 def test_host_protocol_is_importable():
     """HostProtocol can be imported."""
-    from esper.kasmina.protocol import HostProtocol
+    from esper.leyline import HostProtocol
 
     assert HostProtocol is not None
 
 
 def test_host_protocol_has_required_methods():
     """HostProtocol should define required interface methods."""
-    from esper.kasmina.protocol import HostProtocol
+    from esper.leyline import HostProtocol
 
     required = {
         "injection_specs",
@@ -29,7 +29,7 @@ def test_host_protocol_has_required_methods():
 
 def test_host_cnn_implements_protocol():
     """CNNHost implements HostProtocol."""
-    from esper.kasmina.protocol import HostProtocol
+    from esper.leyline import HostProtocol
     from esper.kasmina.host import CNNHost
 
     host = CNNHost()
@@ -64,7 +64,7 @@ def test_host_cnn_forward():
 
 def test_transformer_host_implements_protocol():
     """TransformerHost implements HostProtocol."""
-    from esper.kasmina.protocol import HostProtocol
+    from esper.leyline import HostProtocol
     from esper.kasmina.host import TransformerHost
 
     host = TransformerHost(vocab_size=1000, n_embd=64, n_head=2, n_layer=3, num_segments=3)

@@ -72,7 +72,7 @@ class TestRewardComposition:
         """Sum of components should equal total reward (within tolerance)."""
         reward, components = compute_contribution_reward(**inputs, return_components=True)
 
-        # Sum the major components
+        # Sum ALL reward components (must match total exactly)
         component_sum = (
             components.bounded_attribution
             + components.blending_warning
@@ -82,6 +82,7 @@ class TestRewardComposition:
             + components.alpha_shock
             + components.action_shaping
             + components.terminal_bonus
+            + components.synergy_bonus  # B6-CR-01: was missing, caused silent failures
         )
 
         assert abs(component_sum - reward) < 1e-6, (

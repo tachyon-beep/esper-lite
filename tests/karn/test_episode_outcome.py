@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import pytest
 from dataclasses import FrozenInstanceError
 
-from esper.karn.store import EpisodeOutcome
+from esper.leyline import EpisodeOutcome
 
 
 def test_episode_outcome_creation():
