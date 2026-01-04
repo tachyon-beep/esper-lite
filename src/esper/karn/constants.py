@@ -149,6 +149,16 @@ class TUIThresholds:
     GRAD_HEALTH_WARNING: float = 0.8   # >80% healthy layers is OK
     GRAD_HEALTH_CRITICAL: float = 0.5  # <50% healthy is critical
 
+    # Observation stats (raw outliers + normalized saturation/clipping)
+    OBS_OUTLIER_WARNING: float = 0.05   # >5% outside 3σ (batch z-score)
+    OBS_OUTLIER_CRITICAL: float = 0.10  # >10%
+    OBS_DRIFT_WARNING: float = 1.0
+    OBS_DRIFT_CRITICAL: float = 2.0
+    OBS_SAT_WARNING: float = 0.01       # >1% near clip (|x| >= 0.9*clip)
+    OBS_SAT_CRITICAL: float = 0.05      # >5%
+    OBS_CLIP_WARNING: float = 0.001     # >0.1% clamped at |x|==clip
+    OBS_CLIP_CRITICAL: float = 0.01     # >1%
+
 
 class VitalSignsThresholds:
     """Thresholds for vital signs monitoring.

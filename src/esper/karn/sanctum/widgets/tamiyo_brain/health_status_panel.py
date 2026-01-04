@@ -347,6 +347,8 @@ class HealthStatusPanel(Static):
 
         # Check outlier percentage
         outlier_status = self._get_outlier_status(obs.outlier_pct)
+        sat_status = self._get_obs_saturation_status(obs.near_clip_pct)
+        clip_status = self._get_obs_clip_status(obs.clip_pct)
         drift_status = self._get_drift_status(obs.normalization_drift)
 
         # Always show all metrics (dim when ok, colored when warning/critical)
@@ -356,9 +358,27 @@ class HealthStatusPanel(Static):
         )
         result.append(" ", style="dim")
         result.append(
+            f"Sat:{obs.near_clip_pct:.1%}", style=self._status_style(sat_status)
+        )
+        result.append(" ", style="dim")
+        result.append(
             f"Drift:{obs.normalization_drift:.2f}",
             style=self._status_style(drift_status),
         )
+        if obs.clip_pct > 0.0:
+            result.append(" ", style="dim")
+            result.append(
+                f"Clip:{obs.clip_pct:.1%}", style=self._status_style(clip_status)
+            )
+
+        # Group std (now real, not placeholder)
+        result.append("\n")
+        result.append("Obs σ        ", style="dim")
+        result.append(f"H:{obs.host_features_std:.2f}", style="dim")
+        result.append(" ", style="dim")
+        result.append(f"C:{obs.context_features_std:.2f}", style="dim")
+        result.append(" ", style="dim")
+        result.append(f"S:{obs.slot_features_std:.2f}", style="dim")
 
         return result
 
@@ -433,17 +453,33 @@ class HealthStatusPanel(Static):
 
     def _get_outlier_status(self, outlier_pct: float) -> str:
         """Check if outlier percentage is healthy."""
-        if outlier_pct > 0.1:  # >10% outliers is critical
+        if outlier_pct > TUIThresholds.OBS_OUTLIER_CRITICAL:
             return "critical"
-        if outlier_pct > 0.05:  # >5% is warning
+        if outlier_pct > TUIThresholds.OBS_OUTLIER_WARNING:
+            return "warning"
+        return "ok"
+
+    def _get_obs_saturation_status(self, near_clip_pct: float) -> str:
+        """Check if normalized observations are saturating near the clip bound."""
+        if near_clip_pct > TUIThresholds.OBS_SAT_CRITICAL:
+            return "critical"
+        if near_clip_pct > TUIThresholds.OBS_SAT_WARNING:
+            return "warning"
+        return "ok"
+
+    def _get_obs_clip_status(self, clip_pct: float) -> str:
+        """Check if normalized observations are being clamped."""
+        if clip_pct > TUIThresholds.OBS_CLIP_CRITICAL:
+            return "critical"
+        if clip_pct > TUIThresholds.OBS_CLIP_WARNING:
             return "warning"
         return "ok"
 
     def _get_drift_status(self, drift: float) -> str:
         """Check if normalization drift is healthy."""
-        if drift > 2.0:  # >2σ drift is critical
+        if drift > TUIThresholds.OBS_DRIFT_CRITICAL:
             return "critical"
-        if drift > 1.0:  # >1σ is warning
+        if drift > TUIThresholds.OBS_DRIFT_WARNING:
             return "warning"
         return "ok"
 

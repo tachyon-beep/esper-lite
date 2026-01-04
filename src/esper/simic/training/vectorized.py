@@ -2596,20 +2596,22 @@ def train_ppo_vectorized(
                 # Accumulate raw states for deferred normalizer update
                 raw_states_for_normalizer_update.append(states_batch.detach())
 
+                # Normalize using FROZEN statistics during rollout collection.
+                states_batch_normalized = obs_normalizer.normalize(states_batch)
+
                 # TELE-OBS: Compute observation stats once per step (for Sanctum ObservationStats panel)
                 # Only computed when ops telemetry is enabled to avoid overhead
                 step_obs_stats = None
                 if ops_telemetry_enabled:
                     step_obs_stats = compute_observation_stats(
                         states_batch,
+                        normalized_obs_tensor=states_batch_normalized,
+                        clip=10.0,
                         normalizer_mean=obs_normalizer.mean,
                         normalizer_var=obs_normalizer.var,
                         initial_normalizer_mean=initial_obs_normalizer_mean,
                     )
-
-                # Normalize using FROZEN statistics during rollout collection.
-                states_batch_normalized = obs_normalizer.normalize(states_batch)
-    
+	    
                 # Get BATCHED actions from policy network with action masking (single forward pass!)
                 pre_step_hiddens: list[tuple[torch.Tensor, torch.Tensor]] = []
     
@@ -3637,7 +3639,7 @@ def train_ppo_vectorized(
                     # All epochs skipped due to non-finite values
                     skip_count = metrics.get("finiteness_gate_skip_count", 0)
                     consecutive_finiteness_failures += 1
-                    logger.warning(
+                    _logger.warning(
                         f"PPO update skipped (all {skip_count} epochs hit finiteness gate). "
                         f"Consecutive failures: {consecutive_finiteness_failures}/3"
                     )

@@ -15,6 +15,7 @@ The schema fields exist, consumers read them, but no emitters populate the data.
 Tests are marked xfail to document expected behavior when wiring is complete.
 """
 
+from dataclasses import fields
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
@@ -25,17 +26,13 @@ from esper.karn.sanctum.schema import (
     EpisodeStats,
     EnvState,
     ObservationStats,
-    SanctumSnapshot,
 )
 from esper.leyline import (
     BatchEpochCompletedPayload,
     EpochCompletedPayload,
     EpisodeOutcomePayload,
-    TelemetryEvent,
     TelemetryEventType,
 )
-
-from .conftest import CaptureBackend, CaptureHubResult
 
 
 # =============================================================================
@@ -177,8 +174,6 @@ class TestTELE600ObsNanCount:
         event = make_epoch_event(env_id=0, val_accuracy=75.0)
         agg.process_event(event)
 
-        snapshot = agg.get_snapshot()
-
         # WIRING GAP: We cannot set nan_count > 0 because:
         # 1. EpochCompletedPayload doesn't have obs_nan_count field
         # 2. There's no OBSERVATION_STATS event type
@@ -237,7 +232,6 @@ class TestTELE601ObsInfCount:
         # WIRING GAP: No event type carries obs_inf_count.
         # When wired, there should be an OBSERVATION_STATS event or
         # EpochCompletedPayload should include these fields.
-        from esper.leyline import TelemetryEventType
 
         # Verify the event type doesn't exist yet
         event_types = [e.name for e in TelemetryEventType]
@@ -896,29 +890,33 @@ class TestObservationStatsSchemaCompleteness:
 
     def test_feature_group_statistics_fields(self) -> None:
         """Schema should include per-feature-group statistics fields."""
-        obs_stats = ObservationStats()
+        field_names = {f.name for f in fields(ObservationStats)}
 
         # Per-feature-group mean/std for slot, host, context features
-        assert hasattr(obs_stats, "slot_features_mean")
-        assert hasattr(obs_stats, "slot_features_std")
-        assert hasattr(obs_stats, "host_features_mean")
-        assert hasattr(obs_stats, "host_features_std")
-        assert hasattr(obs_stats, "context_features_mean")
-        assert hasattr(obs_stats, "context_features_std")
+        assert "slot_features_mean" in field_names
+        assert "slot_features_std" in field_names
+        assert "host_features_mean" in field_names
+        assert "host_features_std" in field_names
+        assert "context_features_mean" in field_names
+        assert "context_features_std" in field_names
 
     def test_numerical_health_fields(self) -> None:
         """Schema should include numerical health detection fields."""
-        obs_stats = ObservationStats()
+        field_names = {f.name for f in fields(ObservationStats)}
 
         # NaN/Inf detection
-        assert hasattr(obs_stats, "nan_count")
-        assert hasattr(obs_stats, "inf_count")
+        assert "nan_count" in field_names
+        assert "inf_count" in field_names
 
         # Outlier detection
-        assert hasattr(obs_stats, "outlier_pct")
+        assert "outlier_pct" in field_names
+
+        # Normalized saturation/clipping detection
+        assert "near_clip_pct" in field_names
+        assert "clip_pct" in field_names
 
         # Normalization drift
-        assert hasattr(obs_stats, "normalization_drift")
+        assert "normalization_drift" in field_names
 
     def test_all_defaults_are_zero(self) -> None:
         """All ObservationStats fields should default to 0/0.0 (stub state)."""
@@ -931,6 +929,8 @@ class TestObservationStatsSchemaCompleteness:
         assert obs_stats.context_features_mean == 0.0
         assert obs_stats.context_features_std == 0.0
         assert obs_stats.outlier_pct == 0.0
+        assert obs_stats.near_clip_pct == 0.0
+        assert obs_stats.clip_pct == 0.0
         assert obs_stats.nan_count == 0
         assert obs_stats.inf_count == 0
         assert obs_stats.normalization_drift == 0.0

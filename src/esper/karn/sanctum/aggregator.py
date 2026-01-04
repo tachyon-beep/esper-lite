@@ -1542,6 +1542,8 @@ class SanctumAggregator:
                 context_features_mean=obs.context_features_mean,
                 context_features_std=obs.context_features_std,
                 outlier_pct=obs.outlier_pct,
+                near_clip_pct=obs.near_clip_pct,
+                clip_pct=obs.clip_pct,
                 nan_count=obs.nan_count,
                 inf_count=obs.inf_count,
                 normalization_drift=obs.normalization_drift,

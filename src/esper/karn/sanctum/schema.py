@@ -215,6 +215,10 @@ class ObservationStats:
     # Outlier detection
     outlier_pct: float = 0.0  # Fraction of observations outside 3σ (rendered as X.X%)
 
+    # Saturation / clipping indicators (computed on NORMALIZED obs)
+    near_clip_pct: float = 0.0  # Fraction with |x_norm| >= 0.9*clip
+    clip_pct: float = 0.0  # Fraction clamped at |x_norm| == clip
+
     # Numerical health
     nan_count: int = 0  # NaN values detected in observations
     inf_count: int = 0  # Inf values detected in observations
