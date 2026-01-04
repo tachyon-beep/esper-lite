@@ -233,16 +233,17 @@ def test_batch_obs_to_features_base_features():
     # Check epoch normalization (50 / max_epochs)
     assert abs(base[0].item() - (50.0 / MAX_EPOCHS)) < 1e-6
 
-    # Check loss normalization: log(1 + 1.5) / log(16) ≈ 0.3296
-    expected_loss_norm = math.log(1 + 1.5) / math.log(16)
+    # Check loss normalization: symlog(1.5) / 7 ≈ 0.131
+    # symlog(x) = log1p(x) for x >= 0, normalized by 7 to keep in ~[0,1] range
+    expected_loss_norm = math.log1p(1.5) / 7.0
     assert abs(base[1].item() - expected_loss_norm) < 1e-4
 
     # Check accuracy normalization (85 / 100 = 0.85)
     assert abs(base[2].item() - 0.85) < 1e-6
 
-    # Check loss history (5 dims, indices 3-7)
+    # Check loss history (5 dims, indices 3-7) - symlog normalized
     for i, loss in enumerate(loss_history):
-        expected = math.log(1 + loss) / math.log(16)
+        expected = math.log1p(loss) / 7.0  # symlog(x) / _SYMLOG_NORM
         assert abs(base[3 + i].item() - expected) < 1e-4
 
     # Check accuracy history (5 dims, indices 8-12)

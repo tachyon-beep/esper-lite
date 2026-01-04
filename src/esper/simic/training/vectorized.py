@@ -2644,7 +2644,17 @@ def train_ppo_vectorized(
     
                 # OPTIMIZATION: Update batched hidden state directly (eliminates per-env slice/cat)
                 batched_lstm_hidden = action_result.hidden
-    
+
+                # LSTM saturation prevention: Dampen hidden state every 50 epochs
+                # to prevent cell state accumulation over 150-step episodes.
+                # DRL Expert recommendation: With 150-step episodes and positive-biased
+                # inputs, LSTM cell state can accumulate to extreme values (c=372+).
+                # Dampening by 0.95 every 50 steps provides soft reset while preserving
+                # enough memory for credit assignment.
+                if batched_lstm_hidden is not None and epoch % 50 == 0:
+                    h, c = batched_lstm_hidden
+                    batched_lstm_hidden = (h * 0.95, c * 0.95)
+
                 # Convert to list of dicts for per-env processing
                 # PERF NOTE: Consolidate action head transfers into a single D2H copy.
                 # This matters for larger env counts (16+), where per-head transfers and

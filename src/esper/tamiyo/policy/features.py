@@ -44,6 +44,47 @@ from esper.leyline.stage_schema import (
 
 # HOT PATH: ONLY leyline imports allowed!
 
+
+# =============================================================================
+# Symlog Transform for LSTM Saturation Prevention
+# =============================================================================
+# LSTM hidden/cell states were saturating (h=70.9, c=337.6) due to high-magnitude
+# inputs like gradient norms (can be 100+). Symlog compresses these while preserving
+# sign and relative ordering. Used in DreamerV3/MuZero for exactly this purpose.
+#
+# Compression examples: 1→0.69, 10→2.4, 100→4.6, 1000→6.9
+# Gradient: d/dx = 1/(|x|+1) - dampens large inputs, never zero.
+
+# Symlog normalization constant: symlog(1000) ≈ 6.91, divide by 7 for ~[0,1] range
+_SYMLOG_NORM = 7.0
+
+
+def symlog(x: float) -> float:
+    """Symmetric log transform for magnitude compression (scalar version).
+
+    Compresses large telemetry values to prevent LSTM saturation.
+    Applied to gradient norms and other potentially unbounded metrics.
+
+    Properties:
+        - symlog(0) = 0
+        - Monotonic, bijective
+        - Preserves sign
+        - Dampens gradients for large |x|: d/dx = 1/(|x|+1)
+    """
+    if x >= 0:
+        return math.log1p(x)
+    else:
+        return -math.log1p(-x)
+
+
+def symlog_tensor(x: torch.Tensor) -> torch.Tensor:
+    """Symmetric log transform for magnitude compression (tensor version).
+
+    torch.compile-friendly formulation using log1p for better kernel fusion.
+    """
+    return torch.where(x >= 0, torch.log1p(x), -torch.log1p(-x))
+
+
 if TYPE_CHECKING:
     # Type hints only - not imported at runtime
     pass
@@ -51,6 +92,8 @@ if TYPE_CHECKING:
 
 __all__ = [
     "safe",
+    "symlog",
+    "symlog_tensor",
     "batch_obs_to_features",
     "MULTISLOT_FEATURE_SIZE",
     "get_feature_size",
@@ -122,16 +165,16 @@ def _extract_base_features_v3(
     # Normalize epoch to [0, 1] range using runtime max_epochs
     max_epochs_den = float(max_epochs)
     epoch_norm = float(signal.metrics.epoch) / max_epochs_den
-    # Loss normalization: log(1 + loss) / log(16)
-    # Range: [0.0, 1.0] supporting loss values up to 15 before saturation
-    # CIFAR-10 baseline 2.3 → 0.4311, TinyStories baseline 10.8 → 0.8954
-    val_loss_norm = math.log(1 + signal.metrics.val_loss) / math.log(16)
+    # Loss normalization: symlog to prevent LSTM saturation
+    # Old: log(1+loss)/log(16) allowed loss=100 → 1.67 (exceeded 1.0)
+    # New: symlog(loss)/7 keeps all values in ~[0, 1] range
+    # CIFAR-10 baseline 2.3 → 0.17, loss=100 → 0.66, loss=1000 → 0.99
+    val_loss_norm = symlog(signal.metrics.val_loss) / _SYMLOG_NORM
     val_accuracy_norm = signal.metrics.val_accuracy / 100.0
 
-    # Extract and normalize loss history (5 dims) - log-scale normalization
-    # Same normalization as current val_loss: log(1 + loss) / log(16)
+    # Extract and normalize loss history (5 dims) - symlog normalization
     loss_history_padded = _pad_history(signal.loss_history, 5)
-    loss_history_norm = [math.log(1 + x) / math.log(16) for x in loss_history_padded]
+    loss_history_norm = [symlog(x) / _SYMLOG_NORM for x in loss_history_padded]
 
     # Extract and normalize accuracy history (5 dims)
     acc_history_padded = _pad_history(signal.accuracy_history, 5)
@@ -249,7 +292,12 @@ def _extract_slot_features_v3(
     # Telemetry merged (4 dims)
     # Access telemetry fields from slot_report.telemetry if available
     if slot_report.telemetry is not None:
-        gradient_norm = safe(slot_report.telemetry.gradient_norm, 0.0, max_val=10.0) / 10.0
+        # gradient_norm: Apply symlog to compress high magnitudes (100+ → ~4.6)
+        grad_norm_raw = slot_report.telemetry.gradient_norm
+        if grad_norm_raw is not None and math.isfinite(grad_norm_raw):
+            gradient_norm = symlog(grad_norm_raw) / _SYMLOG_NORM
+        else:
+            gradient_norm = 0.0
         gradient_health = safe(slot_report.telemetry.gradient_health, 1.0, max_val=1.0)
         has_vanishing = 1.0 if slot_report.telemetry.has_vanishing else 0.0
         has_exploding = 1.0 if slot_report.telemetry.has_exploding else 0.0
@@ -556,7 +604,6 @@ def batch_obs_to_features(
     # Pre-compute normalization constants
     max_epochs_den = float(max_epochs)
     max_slots = float(num_slots)
-    log_16 = math.log(16)
 
     # Fill features for each environment
     for env_idx in range(n_envs):
@@ -582,17 +629,18 @@ def batch_obs_to_features(
 
         # Current metrics (3 dims: epoch, val_loss, val_accuracy)
         epoch_norm = float(signal.metrics.epoch) / max_epochs_den
-        val_loss_norm = math.log(1 + signal.metrics.val_loss) / log_16
+        # Loss normalization: symlog to prevent LSTM saturation
+        val_loss_norm = symlog(signal.metrics.val_loss) / _SYMLOG_NORM
         val_accuracy_norm = signal.metrics.val_accuracy / 100.0
 
         obs[env_idx, 0] = epoch_norm
         obs[env_idx, 1] = val_loss_norm
         obs[env_idx, 2] = val_accuracy_norm
 
-        # Loss history (5 dims) - log-normalized
+        # Loss history (5 dims) - symlog normalized
         loss_history_padded = _pad_history(signal.loss_history, 5)
         for i, loss_val in enumerate(loss_history_padded):
-            obs[env_idx, 3 + i] = math.log(1 + loss_val) / log_16
+            obs[env_idx, 3 + i] = symlog(loss_val) / _SYMLOG_NORM
 
         # Accuracy history (5 dims) - normalized to [0, 1]
         acc_history_padded = _pad_history(signal.accuracy_history, 5)
@@ -663,7 +711,14 @@ def batch_obs_to_features(
 
             # Telemetry merged (4 dims)
             if report.telemetry is not None:
-                obs[env_idx, slot_offset + 23] = safe(report.telemetry.gradient_norm, 0.0, max_val=10.0) / 10.0
+                # gradient_norm: Apply symlog to compress high magnitudes (100+ → ~4.6)
+                # Old: clipped to 10.0 then /10 - lost information for large gradients
+                # New: symlog preserves relative ordering, divided by 7 for ~[0,1] range
+                grad_norm_raw = report.telemetry.gradient_norm
+                if grad_norm_raw is not None and math.isfinite(grad_norm_raw):
+                    obs[env_idx, slot_offset + 23] = symlog(grad_norm_raw) / _SYMLOG_NORM
+                else:
+                    obs[env_idx, slot_offset + 23] = 0.0
                 obs[env_idx, slot_offset + 24] = safe(report.telemetry.gradient_health, 1.0, max_val=1.0)
                 obs[env_idx, slot_offset + 25] = 1.0 if report.telemetry.has_vanishing else 0.0
                 obs[env_idx, slot_offset + 26] = 1.0 if report.telemetry.has_exploding else 0.0

@@ -163,6 +163,18 @@ class RunningMeanStd:
         self.var = state["var"].to(self._device)
         self.count = state["count"].to(self._device)
 
+    def reset(self) -> None:
+        """Reset running statistics to initial state.
+
+        Call this after changing input transforms (e.g., adding symlog) to avoid
+        stale statistics causing LSTM saturation or other normalization issues.
+
+        The normalizer will re-learn statistics from scratch on subsequent updates.
+        """
+        self.mean.zero_()
+        self.var.fill_(1.0)
+        self.count.fill_(self.epsilon)
+
 
 class RewardNormalizer:
     """Running reward normalization for critic stability.
