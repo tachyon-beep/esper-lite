@@ -661,6 +661,7 @@ class SanctumAggregator:
             # Run context
             run_id=self._run_id,
             task_name=self._task_name,
+            reward_mode=self._reward_mode or None,
             run_config=self._run_config,
             current_episode=self._current_episode,
             current_batch=self._current_batch or self._batches_completed,

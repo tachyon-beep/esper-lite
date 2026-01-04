@@ -4,12 +4,13 @@ Single-line status bar showing essential training state at a glance.
 Designed with fixed-width segments to prevent text jumping.
 
 Layout:
-│ ● LIVE ✓ │ run_name │ Ep 47 ████████░░░░ 150/500 │ 1h 23m │ 0.8e/s 2.1r/m │
+│ ● LIVE ✓ │ run_name │ RWD:shaped │ Ep 47 ████████░░░░ 150/500 │ 1h 23m │ 0.8e/s 2.1r/m │
 
 Segments (all fixed-width):
 - Connection: ● LIVE / ◐ SLOW / ○ STALE (6 chars)
 - Thread: ✓ / ✗ (1 char, bold red if dead)
 - Run name: Task/experiment name (14 chars max, truncated)
+- Reward mode: RWD:shaped or RWD:shaped/sparse (18 chars max, truncated)
 - Episode: Current episode number
 - Progress: Visual bar + epoch fraction
 - Runtime: Elapsed time
@@ -49,12 +50,18 @@ class RunHeader(Static):
         """Initialize RunHeader widget."""
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
+        self._snapshots_by_group: dict[str, SanctumSnapshot] = {}
         self._ui_tick_times: deque[float] = deque(maxlen=32)
         self._ui_hz: float = 0.0
 
-    def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
+    def update_snapshot(
+        self,
+        snapshot: "SanctumSnapshot",
+        snapshots_by_group: dict[str, "SanctumSnapshot"] | None = None,
+    ) -> None:
         """Update widget with new snapshot data."""
         self._snapshot = snapshot
+        self._snapshots_by_group = snapshots_by_group or {}
         now = time.monotonic()
         self._ui_tick_times.append(now)
         if len(self._ui_tick_times) >= 2:
@@ -187,6 +194,31 @@ class RunHeader(Static):
             return name[: max_width - 1] + "…"
         return f"{name:<{max_width}}"
 
+    def _format_reward_mode(self, max_width: int = 18) -> tuple[str, str]:
+        """Format reward mode label with truncation to fixed width."""
+        if self._snapshot is None:
+            return (" " * max_width, "dim")
+
+        modes: list[str] = []
+        if self._snapshots_by_group:
+            for group_snapshot in self._snapshots_by_group.values():
+                mode = group_snapshot.reward_mode
+                if mode and mode not in modes:
+                    modes.append(mode)
+        else:
+            mode = self._snapshot.reward_mode
+            if mode:
+                modes.append(mode)
+
+        if not modes:
+            label = "RWD:—"
+            return (f"{label:<{max_width}}", "dim")
+
+        label = f"RWD:{'/'.join(modes)}"
+        if len(label) > max_width:
+            label = label[: max_width - 1] + "…"
+        return (f"{label:<{max_width}}", "magenta")
+
     def _format_throughput(self, eps: float, bpm: float) -> str:
         """Format throughput metrics to fixed width.
 
@@ -244,6 +276,12 @@ class RunHeader(Static):
         # === Segment 3: Run name (14 chars fixed) ===
         run_name = self._format_run_name(s.task_name)
         row.append(run_name, style="italic cyan")
+
+        row.append(" │ ", style="dim")
+
+        # === Segment 3b: Reward mode (18 chars fixed) ===
+        reward_label, reward_style = self._format_reward_mode()
+        row.append(reward_label, style=reward_style)
 
         row.append(" │ ", style="dim")
 

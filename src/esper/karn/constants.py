@@ -159,6 +159,22 @@ class TUIThresholds:
     OBS_CLIP_WARNING: float = 0.001     # >0.1% clamped at |x|==clip
     OBS_CLIP_CRITICAL: float = 0.01     # >1%
 
+    # Telemetry freshness (seconds since last update)
+    TELEMETRY_STALE_WARNING: float = 2.0
+    TELEMETRY_STALE_CRITICAL: float = 5.0
+
+    # Value-function correlation (critic calibration)
+    V_RETURN_CORR_WARNING: float = 0.6
+    V_RETURN_CORR_CRITICAL: float = 0.3
+
+    # Behavioral efficiency (episode stats)
+    ACTION_ENTROPY_LOW: float = 0.1
+    ACTION_ENTROPY_HIGH: float = 0.8
+    SLOT_UTILIZATION_LOW: float = 0.2
+    SLOT_UTILIZATION_HIGH: float = 0.9
+    YIELD_RATE_LOW: float = 0.2
+    YIELD_RATE_HIGH: float = 0.9
+
 
 class VitalSignsThresholds:
     """Thresholds for vital signs monitoring.

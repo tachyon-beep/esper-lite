@@ -118,19 +118,17 @@ def test_legacy_catalog_still_works():
 
 
 def test_action_enum_reflects_registry_changes():
-    """Action enum reflects blueprint registry state via version-keyed caching.
+    """Action enum is independent of runtime registry mutations.
 
-    build_action_enum uses version-keyed caching: the cache key includes a
-    version derived from the registry state. When blueprints are registered
-    or unregistered, the version changes, causing the next build_action_enum
-    call to generate a fresh enum reflecting the new state.
-
-    This test verifies the contract without relying on cache implementation details.
+    build_action_enum is constructed from Leyline's static BlueprintAction sets.
+    It must not depend on BlueprintRegistry state (which would pull in Kasmina
+    as a dependency and make the action space mutable at runtime).
     """
     from esper.kasmina.blueprints import BlueprintRegistry
-    from esper.tamiyo.action_enums import build_action_enum
+    from esper.tamiyo.action_enums import build_action_enum, clear_action_enum_cache
 
     # Build initial enum
+    clear_action_enum_cache()
     enum_before = build_action_enum("cnn")
     initial_members = set(enum_before.__members__.keys())
 
@@ -140,20 +138,19 @@ def test_action_enum_reflects_registry_changes():
         return nn.Linear(dim, dim)
 
     try:
-        # Rebuild enum - should now include the new blueprint
+        # Rebuild enum - MUST NOT include the new blueprint (registry is not the source of truth)
+        clear_action_enum_cache()
         enum_after = build_action_enum("cnn")
         new_members = set(enum_after.__members__.keys())
 
-        # The new blueprint should appear as GERMINATE_TEST_REGISTRY_CHANGE
-        assert "GERMINATE_TEST_REGISTRY_CHANGE" in new_members, (
-            f"New blueprint not in rebuilt enum. Members: {new_members}"
-        )
+        assert "GERMINATE_TEST_REGISTRY_CHANGE" not in new_members
 
     finally:
         # Clean up
         BlueprintRegistry.unregister("cnn", "test_registry_change")
 
     # Final rebuild should NOT have the test blueprint
+    clear_action_enum_cache()
     enum_final = build_action_enum("cnn")
     final_members = set(enum_final.__members__.keys())
     assert "GERMINATE_TEST_REGISTRY_CHANGE" not in final_members

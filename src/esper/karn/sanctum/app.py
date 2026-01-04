@@ -625,7 +625,9 @@ class SanctumApp(App[None]):
 
         # Update run header first (most important context)
         try:
-            self.query_one("#run-header", RunHeader).update_snapshot(snapshot)
+            self.query_one("#run-header", RunHeader).update_snapshot(
+                snapshot, view.snapshots_by_group
+            )
         except NoMatches:
             pass  # Widget hasn't mounted yet
 

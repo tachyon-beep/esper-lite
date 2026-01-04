@@ -1351,6 +1351,7 @@ class SanctumSnapshot:
     max_epochs: int = 0
     run_id: str = ""
     task_name: str = ""
+    reward_mode: str | None = None  # Primary reward mode for this policy group
     run_config: RunConfig = field(default_factory=RunConfig)
     start_time: datetime | None = None
 

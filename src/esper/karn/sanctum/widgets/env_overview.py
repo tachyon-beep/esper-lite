@@ -164,7 +164,8 @@ class EnvOverview(Static):
 
         # Save cursor and scroll position before clearing
         saved_cursor_row = self.table.cursor_row
-        saved_scroll_y = self.table.scroll_y
+        saved_scroll_x = self.table.scroll_target_x
+        saved_scroll_y = self.table.scroll_target_y
 
         # Clear existing rows
         self.table.clear()
@@ -199,15 +200,12 @@ class EnvOverview(Static):
         # Restore cursor position (clamped to valid range)
         if self.table.row_count > 0 and saved_cursor_row is not None:
             target_row = min(saved_cursor_row, self.table.row_count - 1)
-            self.table.move_cursor(row=target_row)
+            if target_row != self.table.cursor_row:
+                self.table.move_cursor(row=target_row)
 
-        # Restore scroll position after layout is computed
-        # Direct assignment to scroll_y doesn't work before layout pass completes
-        if saved_scroll_y > 0:
-            # Capture value in default arg to avoid closure issues
-            self.table.call_after_refresh(
-                lambda y=saved_scroll_y: setattr(self.table, "scroll_y", y)
-            )
+        # Restore scroll position (must restore scroll_target_* too; use scroll_to API)
+        if saved_scroll_x or saved_scroll_y:
+            self.table.scroll_to(x=saved_scroll_x, y=saved_scroll_y, animate=False)
 
     def _compute_top5_accuracy_ids(self, envs: list["EnvState"]) -> set[int]:
         """Compute env IDs of top 5 by current accuracy.

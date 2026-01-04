@@ -8,6 +8,7 @@ This panel replaces the old StatusBanner and provides a single place to answer:
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from rich.text import Text
@@ -77,9 +78,25 @@ class NarrativePanel(Static):
         result.append("  ", style="dim")
         result.append_text(self._render_now_line(status, label, status_style, tamiyo))
         result.append("\n")
+        if tamiyo.ppo_data_received:
+            pulse = self._render_pulse_line()
+            if pulse.plain:
+                result.append("  ", style="dim")
+                result.append_text(pulse)
+                result.append("\n")
+            context = self._render_context_line()
+            if context.plain:
+                result.append("  ", style="dim")
+                result.append_text(context)
+                result.append("\n")
+            efficiency = self._render_efficiency_line()
+            if efficiency.plain:
+                result.append("  ", style="dim")
+                result.append_text(efficiency)
+                result.append("\n")
 
         result.append("WHY", style="bold")
-        drivers = self._top_drivers(max_items=2)
+        drivers = self._top_drivers(max_items=3)
         if not drivers:
             result.append("  —", style="dim")
             result.append("\n")
@@ -150,16 +167,12 @@ class NarrativePanel(Static):
         # Metrics (only after PPO data received)
         if tamiyo.ppo_data_received:
             self._append_metrics(now, tamiyo)
-            now_tail = self._render_now_tail()
-            if now_tail.plain:
-                now.append("\n  ", style="dim")
-                now.append(now_tail)
         else:
             now.append("Waiting for PPO data...", style="cyan italic")
 
         return now
 
-    def _render_now_tail(self) -> Text:
+    def _render_context_line(self) -> Text:
         if self._snapshot is None:
             return Text()
 
@@ -217,6 +230,85 @@ class NarrativePanel(Static):
 
         return parts
 
+    def _render_pulse_line(self) -> Text:
+        if self._snapshot is None:
+            return Text()
+
+        snapshot = self._snapshot
+        tamiyo = snapshot.tamiyo
+
+        parts = Text()
+
+        acc = snapshot.aggregate_mean_accuracy
+        parts.append("acc:", style="dim")
+        parts.append(f"{acc:.1f}%", style="dim")
+        acc_arrow, acc_arrow_style = self._trend_arrow(
+            snapshot.mean_accuracy_history,
+            "default",
+            "accuracy",
+        )
+        if acc_arrow:
+            parts.append(acc_arrow, style=acc_arrow_style)
+
+        if tamiyo.episode_return_history or tamiyo.value_function.return_p50 != 0.0:
+            parts.append("  ", style="dim")
+            parts.append("R50:", style="dim")
+            parts.append(f"{tamiyo.value_function.return_p50:.2f}", style="dim")
+            ret_arrow, ret_arrow_style = self._trend_arrow(
+                tamiyo.episode_return_history,
+                "episode_return",
+                "accuracy",
+            )
+            if ret_arrow:
+                parts.append(ret_arrow, style=ret_arrow_style)
+
+        if tamiyo.update_time_ms > 0:
+            parts.append("  ", style="dim")
+            parts.append("upd:", style="dim")
+            parts.append(f"{tamiyo.update_time_ms:.0f}ms", style="dim")
+
+        return parts
+
+    def _render_efficiency_line(self) -> Text:
+        if self._snapshot is None:
+            return Text()
+
+        stats = self._snapshot.episode_stats
+        if stats.total_episodes <= 0:
+            return Text()
+
+        parts = Text()
+
+        util_style = "dim"
+        if (
+            stats.slot_utilization < TUIThresholds.SLOT_UTILIZATION_LOW
+            or stats.slot_utilization > TUIThresholds.SLOT_UTILIZATION_HIGH
+        ):
+            util_style = "yellow"
+        parts.append("util:", style="dim")
+        parts.append(f"{stats.slot_utilization:.0%}", style=util_style)
+
+        yield_style = "dim"
+        if stats.yield_rate < TUIThresholds.YIELD_RATE_LOW:
+            yield_style = "yellow"
+        elif stats.yield_rate > TUIThresholds.YIELD_RATE_HIGH:
+            yield_style = "yellow"
+        parts.append("  ", style="dim")
+        parts.append("yield:", style="dim")
+        parts.append(f"{stats.yield_rate:.0%}", style=yield_style)
+
+        entropy_style = "dim"
+        if (
+            stats.action_entropy < TUIThresholds.ACTION_ENTROPY_LOW
+            or stats.action_entropy > TUIThresholds.ACTION_ENTROPY_HIGH
+        ):
+            entropy_style = "yellow"
+        parts.append("  ", style="dim")
+        parts.append("H:", style="dim")
+        parts.append(f"{stats.action_entropy:.2f}", style=entropy_style)
+
+        return parts
+
     def _top_drivers(self, *, max_items: int) -> list[str]:
         if self._snapshot is None:
             return []
@@ -225,6 +317,21 @@ class NarrativePanel(Static):
         tamiyo = snapshot.tamiyo
 
         scored: list[tuple[float, str]] = []
+
+        if not snapshot.connected:
+            scored.append((1.0, "telemetry → disconnected"))
+
+        if snapshot.training_thread_alive is False:
+            scored.append((1.0, "trainer → thread dead"))
+
+        staleness = snapshot.staleness_seconds
+        if math.isfinite(staleness):
+            if staleness >= TUIThresholds.TELEMETRY_STALE_CRITICAL:
+                scored.append((0.95, f"telemetry → stale {staleness:.0f}s"))
+            elif staleness >= TUIThresholds.TELEMETRY_STALE_WARNING:
+                scored.append((0.7, f"telemetry → slow {staleness:.0f}s"))
+        else:
+            scored.append((0.95, "telemetry → stale"))
 
         if not tamiyo.ppo_data_received:
             scored.append((1.0, "telemetry → waiting PPO update"))
@@ -259,6 +366,64 @@ class NarrativePanel(Static):
         if tamiyo.explained_variance < TUIThresholds.EXPLAINED_VAR_WARNING:
             scored.append((0.7, f"critic → EV {tamiyo.explained_variance:.2f}"))
 
+        value_fn = tamiyo.value_function
+        if value_fn.value_predictions and value_fn.actual_returns:
+            v_corr = value_fn.v_return_correlation
+            if v_corr < TUIThresholds.V_RETURN_CORR_CRITICAL:
+                scored.append((0.85, f"critic → v-corr {v_corr:.2f}"))
+            elif v_corr < TUIThresholds.V_RETURN_CORR_WARNING:
+                scored.append((0.65, f"critic → v-corr {v_corr:.2f}"))
+
+        obs = snapshot.observation_stats
+        if obs.batch_size > 0:
+            if obs.nan_pct > 0 or obs.inf_pct > 0:
+                scored.append(
+                    (0.9, f"obs → NaN {obs.nan_pct:.1%} Inf {obs.inf_pct:.1%}")
+                )
+            if obs.clip_pct > TUIThresholds.OBS_CLIP_CRITICAL:
+                scored.append((0.85, f"obs → clip {obs.clip_pct:.1%}"))
+            elif obs.clip_pct > TUIThresholds.OBS_CLIP_WARNING:
+                scored.append((0.65, f"obs → clip {obs.clip_pct:.1%}"))
+            if obs.near_clip_pct > TUIThresholds.OBS_SAT_CRITICAL:
+                scored.append((0.8, f"obs → sat {obs.near_clip_pct:.1%}"))
+            elif obs.near_clip_pct > TUIThresholds.OBS_SAT_WARNING:
+                scored.append((0.6, f"obs → sat {obs.near_clip_pct:.1%}"))
+            if obs.outlier_pct > TUIThresholds.OBS_OUTLIER_CRITICAL:
+                scored.append((0.7, f"obs → outliers {obs.outlier_pct:.1%}"))
+            elif obs.outlier_pct > TUIThresholds.OBS_OUTLIER_WARNING:
+                scored.append((0.5, f"obs → outliers {obs.outlier_pct:.1%}"))
+            if obs.normalization_drift > TUIThresholds.OBS_DRIFT_CRITICAL:
+                scored.append((0.7, f"obs → drift {obs.normalization_drift:.1f}"))
+            elif obs.normalization_drift > TUIThresholds.OBS_DRIFT_WARNING:
+                scored.append((0.5, f"obs → drift {obs.normalization_drift:.1f}"))
+
+        episode_stats = snapshot.episode_stats
+        if episode_stats.total_episodes > 0:
+            if episode_stats.slot_utilization < TUIThresholds.SLOT_UTILIZATION_LOW:
+                scored.append(
+                    (0.6, f"util → low {episode_stats.slot_utilization:.0%}")
+                )
+            elif episode_stats.slot_utilization > TUIThresholds.SLOT_UTILIZATION_HIGH:
+                scored.append(
+                    (0.6, f"util → high {episode_stats.slot_utilization:.0%}")
+                )
+            if episode_stats.yield_rate < TUIThresholds.YIELD_RATE_LOW:
+                scored.append(
+                    (0.55, f"yield → low {episode_stats.yield_rate:.0%}")
+                )
+            elif episode_stats.yield_rate > TUIThresholds.YIELD_RATE_HIGH:
+                scored.append(
+                    (0.55, f"yield → high {episode_stats.yield_rate:.0%}")
+                )
+            if episode_stats.action_entropy < TUIThresholds.ACTION_ENTROPY_LOW:
+                scored.append(
+                    (0.6, f"action → entropy {episode_stats.action_entropy:.2f}")
+                )
+            elif episode_stats.action_entropy > TUIThresholds.ACTION_ENTROPY_HIGH:
+                scored.append(
+                    (0.6, f"action → entropy {episode_stats.action_entropy:.2f}")
+                )
+
         # Policy instability
         if tamiyo.collapse_risk_score > 0.7:
             scored.append((0.85, "policy → collapse risk"))
@@ -276,11 +441,41 @@ class NarrativePanel(Static):
         tamiyo = snapshot.tamiyo
         batch = snapshot.current_batch
 
+        if not snapshot.connected:
+            return "reconnect telemetry; dashboard disconnected"
+
+        if snapshot.training_thread_alive is False:
+            return "trainer stopped; restart process"
+
+        staleness = snapshot.staleness_seconds
+        if staleness >= TUIThresholds.TELEMETRY_STALE_CRITICAL:
+            return "telemetry stale; check event loop / IO"
+        if staleness >= TUIThresholds.TELEMETRY_STALE_WARNING:
+            return "telemetry slow; wait for catch-up"
+
         if not tamiyo.ppo_data_received:
             return "wait for first PPO update (watch Round tick + KL)"
 
         if batch < self.WARMUP_BATCHES:
             return f"warmup ends at {self.WARMUP_BATCHES} rounds; watch EV + Lv/Lp stabilize"
+
+        obs = snapshot.observation_stats
+        if obs.batch_size > 0:
+            if obs.nan_pct > 0 or obs.inf_pct > 0:
+                return "obs has NaN/Inf; check normalization pipeline"
+            if obs.clip_pct > TUIThresholds.OBS_CLIP_WARNING:
+                return "reduce obs clipping (<0.1%)"
+            if obs.near_clip_pct > TUIThresholds.OBS_SAT_WARNING:
+                return "reduce obs saturation (<1%)"
+            if obs.outlier_pct > TUIThresholds.OBS_OUTLIER_WARNING:
+                return "reduce obs outliers (<5%)"
+            if obs.normalization_drift > TUIThresholds.OBS_DRIFT_WARNING:
+                return "watch obs drift <1.0"
+
+        value_fn = tamiyo.value_function
+        if value_fn.value_predictions and value_fn.actual_returns:
+            if value_fn.v_return_correlation < TUIThresholds.V_RETURN_CORR_WARNING:
+                return "watch v-corr > 0.6 and EV > 0.3"
 
         if snapshot.total_slots > 0:
             empty = snapshot.total_slots - snapshot.active_slots
@@ -291,6 +486,19 @@ class NarrativePanel(Static):
             wait_rate = tamiyo.action_counts["WAIT"] / tamiyo.total_actions
             if wait_rate > 0.8:
                 return "watch WAIT% drop; indicates masks opened / actions diversified"
+
+        episode_stats = snapshot.episode_stats
+        if episode_stats.total_episodes > 0:
+            if episode_stats.slot_utilization < TUIThresholds.SLOT_UTILIZATION_LOW:
+                return "increase slot utilization (>40%)"
+            if episode_stats.slot_utilization > TUIThresholds.SLOT_UTILIZATION_HIGH:
+                return "reduce slot saturation (<90%)"
+            if episode_stats.yield_rate < TUIThresholds.YIELD_RATE_LOW:
+                return "watch yield > 40% (fossilize/germinate balance)"
+            if episode_stats.action_entropy < TUIThresholds.ACTION_ENTROPY_LOW:
+                return "watch action entropy rise into 0.3-0.5"
+            if episode_stats.action_entropy > TUIThresholds.ACTION_ENTROPY_HIGH:
+                return "watch action entropy fall into 0.3-0.5"
 
         if tamiyo.explained_variance < TUIThresholds.EXPLAINED_VAR_WARNING:
             return "watch EV rise above warning; critic learning signal recovering"
@@ -393,7 +601,26 @@ class NarrativePanel(Static):
         if self._snapshot is None:
             return "ok", "WAITING", "cyan"
 
-        tamiyo = self._snapshot.tamiyo
+        snapshot = self._snapshot
+        tamiyo = snapshot.tamiyo
+
+        if not snapshot.connected:
+            return "critical", "DISCONNECTED", "red bold"
+
+        if snapshot.training_thread_alive is False:
+            return "critical", "TRAINER DOWN", "red bold"
+
+        staleness = snapshot.staleness_seconds
+        if staleness >= TUIThresholds.TELEMETRY_STALE_CRITICAL:
+            label = "STALE"
+            if math.isfinite(staleness):
+                label = f"STALE {staleness:.0f}s"
+            return "critical", label, "red bold"
+        if staleness >= TUIThresholds.TELEMETRY_STALE_WARNING:
+            label = "SLOW"
+            if math.isfinite(staleness):
+                label = f"SLOW {staleness:.0f}s"
+            return "warning", label, "yellow"
 
         if not tamiyo.ppo_data_received:
             return "ok", "WAITING", "cyan"
@@ -405,7 +632,7 @@ class NarrativePanel(Static):
             return "critical", "Inf DETECTED", "red bold"
 
         # Warmup period
-        current_batch = self._snapshot.current_batch
+        current_batch = snapshot.current_batch
         if current_batch < self.WARMUP_BATCHES:
             return (
                 "warmup",

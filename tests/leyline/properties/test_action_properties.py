@@ -18,7 +18,15 @@ from esper.tamiyo.action_enums import build_action_enum
 class TestActionBijection:
     """Test that blueprint ↔ action mapping is a bijection."""
 
-    @given(blueprint_id=st.sampled_from([s.name for s in BlueprintRegistry.list_for_topology("cnn")]))
+    @given(
+        blueprint_id=st.sampled_from(
+            [
+                s.name
+                for s in BlueprintRegistry.list_for_topology("cnn")
+                if s.name != "noop"
+            ]
+        )
+    )
     def test_blueprint_action_round_trip(self, blueprint_id):
         """Property: blueprint → action → blueprint is identity."""
         ActionEnum = build_action_enum("cnn")
@@ -32,7 +40,9 @@ class TestActionSpaceCompleteness:
 
     def test_all_blueprints_have_actions(self):
         """Every blueprint maps to exactly one germinate action."""
-        specs = BlueprintRegistry.list_for_topology("cnn")
+        specs = [
+            s for s in BlueprintRegistry.list_for_topology("cnn") if s.name != "noop"
+        ]
         ActionEnum = build_action_enum("cnn")
         for spec in specs:
             action = getattr(ActionEnum, f"GERMINATE_{spec.name.upper()}")
@@ -40,7 +50,9 @@ class TestActionSpaceCompleteness:
 
     def test_no_duplicate_mappings(self):
         """Each blueprint maps to a unique action."""
-        specs = BlueprintRegistry.list_for_topology("cnn")
+        specs = [
+            s for s in BlueprintRegistry.list_for_topology("cnn") if s.name != "noop"
+        ]
         ActionEnum = build_action_enum("cnn")
         actions = [getattr(ActionEnum, f"GERMINATE_{s.name.upper()}") for s in specs]
         assert len(actions) == len(set(actions))

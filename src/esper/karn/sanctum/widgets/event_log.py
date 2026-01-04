@@ -39,6 +39,7 @@ _EVENT_COLORS: dict[str, str] = {
     "PPO_UPDATE_COMPLETED": "bright_magenta",
     # High-frequency (aggregated)
     "TRAINING_STARTED": "bright_green",
+    "REWARD_COMPUTED": "dim",
     "EPOCH_COMPLETED": "bright_blue",
     "BATCH_EPOCH_COMPLETED": "bright_blue",
 }

@@ -30,7 +30,7 @@ def test_event_log_creation():
     assert widget is not None
     assert widget._max_lines == 41  # Default max lines
     # Border title is set but may be truncated by Textual based on widget width
-    assert widget.border_title.startswith("EVENTS")
+    assert widget.border_title.startswith("EVENT LOG")
 
 
 def test_event_log_no_events():
