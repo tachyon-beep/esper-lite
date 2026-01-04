@@ -18,15 +18,14 @@ Layout (CSS dimensions):
     ┌──────────────────────────────────────────────────────────────────────────────┐
     ├───────────────────────────────────────────────────────────────────┬──────────┤
     │ VitalsColumn (w:4fr)                                              │ Decisions│
-    │ ┌─────────┬────────────┬──────────────────────┬───────────────┐   │ (1fr)   │
-    │ │Narrative│ PPOLosses  │ HealthStatus (1fr-3) │ Slots (49ch)  │h13│          │
-    │ │ (1fr+3) │ (36ch)     │                      │               │   │          │
-    │ ├────────────────────────────────────────────┬────────────────┤   │          │
-    │ │ ActionHeadsPanel (69%)                     │                │   │          │
-    │ │                                            │ ActionContext  │ Sidecar │
-    │ ├──────────────────────┬─────────────────────┼────────────────┤   │          │
-    │ │ EpisodeMetrics (1fr) │ ValueDiagnostics    │ (50ch)         │ h5│          │
-    │ └──────────────────────┴─────────────────────┴────────────────┘   │ EventLog │
+    │ ┌─────────┬────────────┬───────────────┐                         │ (1fr)   │
+    │ │Narrative│ PPOLosses  │ Slots (52ch)  │ h13                     │          │
+    │ ├──────────────────────┬──────────┬──────────────┐              │          │
+    │ │ ActionHeadsPanel     │ Health   │ ActionContext │             │          │
+    │ │ ┌────────┬─────────┐ │ (54ch)   │ (52ch)        │              │          │
+    │ │ │Episode │ Value   │ │          │               │              │          │
+    │ │ └────────┴─────────┘ │          │               │              │          │
+    │ └──────────────────────┴──────────┴──────────────┘              │ EventLog │
     └───────────────────────────────────────────────────────────────────┴──────────┘
 """
 
@@ -36,7 +35,6 @@ from typing import TYPE_CHECKING, Any
 
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
-from textual.widgets import Static
 
 from esper.karn.sanctum.widgets.event_log import EventLog
 
@@ -122,7 +120,7 @@ class TamiyoBrain(Container):
         overflow-y: auto;
     }
 
-    /* Row 1: PPO Losses (narrow) | Health (wide) | Slots */
+    /* Row 1: Narrative | PPO | Slots */
     #top-row {
         height: 14;
         width: 100%;
@@ -130,7 +128,7 @@ class TamiyoBrain(Container):
     }
 
     #ppo-losses-panel {
-        width: 47;  /* Fixed narrow width for content */
+        width: 54;  /* Wider for PPO diagnostics */
         height: 1fr;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
@@ -138,23 +136,23 @@ class TamiyoBrain(Container):
     }
 
     #health-panel {
-        width: 1fr;  /* Takes remaining space */
+        width: 54;  /* Match PPO width */
         min-width: 0;
-        height: 1fr;
+        height: 100%;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
         padding: 0 1;
     }
 
     #slots-panel {
-        width: 50;  /* Fixed width for slot grid */
+        width: 52;  /* Slightly narrower than PPO/Health */
         height: 1fr;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
         padding: 0 1;
     }
 
-    /* Bottom section: Left column (ActionHeads + Episode) | Right column (ActionContext) */
+    /* Bottom section: Left column (ActionHeads + metrics) | Health | ActionContext */
     #bottom-row {
         height: 1fr;
         width: 100%;
@@ -162,7 +160,7 @@ class TamiyoBrain(Container):
     }
 
     #left-column {
-        width: 1fr;  /* Takes remaining space after action-context */
+        width: 1fr;  /* Expand to fill remaining space */
         height: 100%;
     }
 
@@ -197,15 +195,7 @@ class TamiyoBrain(Container):
     }
 
     #action-context {
-        width: 50;  /* Same fixed width as slots-panel for vertical alignment */
-        height: 100%;
-        border: round $surface-lighten-2;
-        border-title-color: $text-muted;
-        padding: 0 1;
-    }
-
-    #action-context-sidecar {
-        width: 50;
+        width: 52;  /* Match slots width */
         height: 100%;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
@@ -260,13 +250,12 @@ class TamiyoBrain(Container):
         # Main content: vitals left, narrative/events right
         with Horizontal(id="main-content"):
             with VerticalScroll(id="vitals-column"):
-                # Top row - four panels: Narrative | PPO (narrow) | Health | Slots
+                # Top row - three panels: Narrative | PPO | Slots
                 with Horizontal(id="top-row"):
                     yield NarrativePanel(id="narrative-panel")
                     yield PPOLossesPanel(id="ppo-losses-panel")
-                    yield HealthStatusPanel(id="health-panel")
                     yield SlotsPanel(id="slots-panel")
-                # Bottom section: Left column (ActionHeads + metrics row) | Right column (ActionContext)
+                # Bottom section: Left column (ActionHeads + metrics) | Health | ActionContext
                 with Horizontal(id="bottom-row"):
                     with Vertical(id="left-column"):
                         yield ActionHeadsPanel(id="action-heads-panel")
@@ -274,8 +263,8 @@ class TamiyoBrain(Container):
                         with Horizontal(id="bottom-metrics-row"):
                             yield EpisodeMetricsPanel(id="episode-metrics-panel")
                             yield ValueDiagnosticsPanel(id="value-diagnostics-panel")
+                    yield HealthStatusPanel(id="health-panel")
                     yield ActionContext(id="action-context")
-                    yield Static(id="action-context-sidecar")
 
             with Vertical(id="right-column"):
                 yield DecisionsColumn(id="decisions-panel")

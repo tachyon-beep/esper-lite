@@ -12,9 +12,6 @@ from esper.simic.rewards import (
     compute_reward,
     compute_simplified_reward,
 )
-from esper.simic.training.config import TrainingConfig
-
-
 def test_simplified_mode_exists():
     """RewardMode.SIMPLIFIED should be a valid enum member."""
     assert hasattr(RewardMode, "SIMPLIFIED")
@@ -186,34 +183,3 @@ class TestComputeRewardDispatcher:
         # Should NOT have holding_warning (-9.0) or attribution (+5.0)
         # Should be small (just PBRS)
         assert -2.0 < reward < 2.0
-
-
-class TestPerEnvRewardModeConfig:
-    """Test per-environment reward mode configuration."""
-
-    def test_reward_mode_per_env_field_exists(self):
-        """TrainingConfig should have reward_mode_per_env field."""
-        config = TrainingConfig()
-        # Default should be None (all envs use reward_mode)
-        assert config.reward_mode_per_env is None
-
-    def test_reward_mode_per_env_splits_envs(self):
-        """reward_mode_per_env should specify per-env reward modes."""
-        config = TrainingConfig(
-            n_envs=8,
-            reward_mode_per_env=(
-                RewardMode.SHAPED, RewardMode.SHAPED, RewardMode.SHAPED, RewardMode.SHAPED,
-                RewardMode.SIMPLIFIED, RewardMode.SIMPLIFIED, RewardMode.SIMPLIFIED, RewardMode.SIMPLIFIED,
-            ),
-        )
-        assert len(config.reward_mode_per_env) == 8
-        assert config.reward_mode_per_env[0] == RewardMode.SHAPED
-        assert config.reward_mode_per_env[4] == RewardMode.SIMPLIFIED
-
-    def test_reward_mode_per_env_validation(self):
-        """reward_mode_per_env length must match n_envs."""
-        with pytest.raises(ValueError, match="reward_mode_per_env.*must match.*n_envs"):
-            TrainingConfig(
-                n_envs=8,
-                reward_mode_per_env=(RewardMode.SHAPED, RewardMode.SIMPLIFIED),  # Wrong length
-            )

@@ -1,4 +1,4 @@
-# Finding Ticket: reward_mode_per_env Not Validated Against reward_family
+# Finding Ticket: reward_mode_per_env Removed (Obsolete)
 
 ---
 
@@ -8,13 +8,13 @@
 |-------|-------|
 | **Ticket ID** | `B8-DRL-09` |
 | **Severity** | `P3` |
-| **Status** | `open` |
+| **Status** | `closed` |
 | **Batch** | 8 |
 | **Agent** | `drl` |
 | **Domain** | `simic/training` |
 | **Assignee** | |
 | **Created** | 2025-12-27 |
-| **Updated** | 2025-12-27 |
+| **Updated** | 2026-01-04 |
 
 ---
 
@@ -22,15 +22,15 @@
 
 | Field | Value |
 |-------|-------|
-| **File(s)** | `/home/john/esper-lite/src/esper/simic/training/config.py` |
-| **Line(s)** | `433-445` |
-| **Function/Class** | `TrainingConfig._validate()` |
+| **File(s)** | `src/esper/simic/training/config.py` |
+| **Line(s)** | `N/A` |
+| **Function/Class** | `TrainingConfig` |
 
 ---
 
 ## Summary
 
-**One-line summary:** `reward_mode_per_env` validates length and type but not compatibility with `reward_family`.
+**One-line summary:** `reward_mode_per_env` (mixed reward-mode A/B) was removed; true A/B uses `--dual-ab` with separate policies.
 
 **Category:**
 - [ ] Correctness bug
@@ -51,6 +51,8 @@
 ## Detailed Description
 
 ### What's Wrong
+
+This ticket is obsolete: the `reward_mode_per_env` surface no longer exists, so the validation gap cannot occur.
 
 ```python
 # Line 433-445 (validation)
@@ -73,24 +75,9 @@ If `reward_family == RewardFamily.LOSS` but `reward_mode_per_env` contains `Rewa
 
 ---
 
-## Recommended Fix
+## Resolution
 
-Add cross-validation:
-
-```python
-if self.reward_mode_per_env is not None:
-    # ... existing checks ...
-
-    # Validate compatibility with reward_family
-    valid_modes = get_valid_modes_for_family(self.reward_family)
-    for mode in self.reward_mode_per_env:
-        if mode not in valid_modes:
-            raise ValueError(
-                f"RewardMode.{mode.name} is not valid for "
-                f"RewardFamily.{self.reward_family.name}. "
-                f"Valid modes: {[m.name for m in valid_modes]}"
-            )
-```
+The mixed-mode A/B mechanism was removed. Use the dual-policy A/B runner (`--dual-ab`) to compare reward modes without shared normalization/state.
 
 ---
 
@@ -98,9 +85,8 @@ if self.reward_mode_per_env is not None:
 
 ### How to Verify the Fix
 
-- [ ] Add reward_family/mode compatibility validation
-- [ ] Add test for incompatible mode/family combinations
-- [ ] Verify helpful error message is raised
+- [x] Confirm `reward_mode_per_env` is removed from `TrainingConfig`
+- [x] Confirm the CLI rejects `--ab-test`
 
 ---
 

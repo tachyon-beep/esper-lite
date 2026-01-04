@@ -198,7 +198,7 @@ class FactoredRecurrentActorCritic(nn.Module):
 
         # Feature extraction before LSTM (reduces dimensionality)
         # M7: Pre-LSTM LayerNorm stabilizes input distribution to LSTM
-        # Input: state_dim (113 for default 3 slots) + blueprint embeddings (num_slots * embed_dim = 3 * 4 = 12) = 125 total
+        # Input: state_dim (116 for default 3 slots) + blueprint embeddings (num_slots * embed_dim = 3 * 4 = 12) = 128 total
         blueprint_embed_size = self.num_slots * DEFAULT_BLUEPRINT_EMBED_DIM
         self.feature_net = nn.Sequential(
             nn.Linear(state_dim + blueprint_embed_size, feature_dim),

@@ -94,69 +94,6 @@ class TestSlotValidation:
         assert args.slots == ["r1c5", "r2c3"]
 
 
-class TestABTestingCLI:
-    """Test CLI --ab-test argument and config integration."""
-
-    def test_ab_test_argument_parsed(self):
-        """--ab-test argument should be parsed correctly."""
-        from esper.scripts.train import build_parser
-
-        parser = build_parser()
-
-        args = parser.parse_args(["ppo", "--ab-test", "shaped-vs-simplified"])
-        assert args.ab_test == "shaped-vs-simplified"
-
-        args = parser.parse_args(["ppo", "--ab-test", "shaped-vs-sparse"])
-        assert args.ab_test == "shaped-vs-sparse"
-
-    def test_ab_test_sets_config_reward_mode_per_env(self):
-        """--ab-test should set config.reward_mode_per_env, not pass separately.
-
-        This test catches the bug where reward_mode_per_env was passed both
-        explicitly AND via config.to_train_kwargs(), causing duplicate
-        keyword argument errors.
-        """
-        from esper.simic.rewards import RewardMode
-        from esper.simic.training import TrainingConfig
-
-        # Simulate CLI logic from train.py
-        config = TrainingConfig.for_cifar_baseline()
-        ab_test = "shaped-vs-simplified"
-
-        # Apply A/B test to config (as train.py now does)
-        if ab_test:
-            half = config.n_envs // 2
-            if ab_test == "shaped-vs-simplified":
-                config.reward_mode_per_env = (
-                    (RewardMode.SHAPED,) * half + (RewardMode.SIMPLIFIED,) * half
-                )
-            elif ab_test == "shaped-vs-sparse":
-                config.reward_mode_per_env = (
-                    (RewardMode.SHAPED,) * half + (RewardMode.SPARSE,) * half
-                )
-
-        # Verify config has reward_mode_per_env set
-        assert config.reward_mode_per_env is not None
-        assert len(config.reward_mode_per_env) == config.n_envs
-
-        # Verify to_train_kwargs() includes reward_mode_per_env (no separate passing needed)
-        kwargs = config.to_train_kwargs()
-        assert "reward_mode_per_env" in kwargs
-        assert kwargs["reward_mode_per_env"] == config.reward_mode_per_env
-
-    def test_ab_test_requires_even_envs(self):
-        """--ab-test should require even n_envs for equal split."""
-        from esper.simic.training import TrainingConfig
-
-        config = TrainingConfig.for_cifar_baseline()
-        config.n_envs = 3  # Odd number
-
-        # This check happens in train.py before setting reward_mode_per_env
-        with pytest.raises(ValueError, match="even"):
-            if config.n_envs % 2 != 0:
-                raise ValueError("--ab-test requires even number of envs")
-
-
 class TestDualABTestingCLI:
     """Test CLI --dual-ab argument for dual-policy A/B testing."""
 
@@ -184,22 +121,11 @@ class TestDualABTestingCLI:
         args = parser.parse_args(["ppo"])
         assert args.dual_ab is None
 
-    def test_dual_ab_mutually_exclusive_concept(self):
-        """--dual-ab and --ab-test represent different testing modes.
-
-        Note: They are not enforced as mutually exclusive at the parser level,
-        but --dual-ab takes precedence in the training logic (checked first).
-        This test documents the expected behavior.
-        """
-        from esper.scripts.train import build_parser
-
+    def test_ab_test_flag_removed(self):
+        """--ab-test is removed (legacy mixed-reward A/B)."""
         parser = build_parser()
-
-        # Both flags can be parsed together (no parser error)
-        args = parser.parse_args(["ppo", "--ab-test", "shaped-vs-simplified", "--dual-ab", "shaped-vs-sparse"])
-        assert args.ab_test == "shaped-vs-simplified"
-        assert args.dual_ab == "shaped-vs-sparse"
-        # In actual training, dual_ab would take precedence (checked first in if statement)
+        with pytest.raises(SystemExit):
+            parser.parse_args(["ppo", "--ab-test", "shaped-vs-simplified"])
 
 
 class TestTamiyoCentricFlags:
@@ -232,7 +158,7 @@ class TestTamiyoCentricFlags:
         assert args.episode_length is None
         assert args.ppo_epochs is None
         assert args.memory_size is None
-        assert args.entropy_anneal_rounds is None
+        assert args.entropy_anneal_episodes is None
 
     def test_positive_int_validator_rejects_zero(self):
         """_positive_int should reject zero."""
@@ -311,26 +237,26 @@ class TestTamiyoCentricFlags:
         args = parser.parse_args(["ppo", "--memory-size", "256"])
         assert args.memory_size == 256
 
-    def test_entropy_anneal_rounds_flag_accepted(self):
-        """--entropy-anneal-rounds should parse correctly."""
+    def test_entropy_anneal_episodes_flag_accepted(self):
+        """--entropy-anneal-episodes should parse correctly."""
         parser = build_parser()
-        args = parser.parse_args(["ppo", "--entropy-anneal-rounds", "50"])
-        assert args.entropy_anneal_rounds == 50
+        args = parser.parse_args(["ppo", "--entropy-anneal-episodes", "50"])
+        assert args.entropy_anneal_episodes == 50
 
-    def test_entropy_anneal_rounds_accepts_zero(self):
-        """--entropy-anneal-rounds should accept 0 (no annealing)."""
+    def test_entropy_anneal_episodes_accepts_zero(self):
+        """--entropy-anneal-episodes should accept 0 (no annealing)."""
         parser = build_parser()
-        args = parser.parse_args(["ppo", "--entropy-anneal-rounds", "0"])
-        assert args.entropy_anneal_rounds == 0
+        args = parser.parse_args(["ppo", "--entropy-anneal-episodes", "0"])
+        assert args.entropy_anneal_episodes == 0
 
-    def test_entropy_anneal_rounds_overrides_config(self):
-        """--entropy-anneal-rounds should override config.entropy_anneal_episodes."""
+    def test_entropy_anneal_episodes_overrides_config(self):
+        """--entropy-anneal-episodes should override config.entropy_anneal_episodes."""
         from esper.simic.training import TrainingConfig
 
         config = TrainingConfig.for_cifar_baseline()
         assert config.entropy_anneal_episodes == 0  # Default
 
-        # CLI would set entropy_anneal_rounds=50, which maps to entropy_anneal_episodes
+        # CLI would set entropy_anneal_episodes=50.
         config.entropy_anneal_episodes = 50  # Simulating the override
         assert config.entropy_anneal_episodes == 50
 
@@ -344,7 +270,7 @@ class TestTamiyoCentricFlags:
             "--episode-length", "30",
             "--ppo-epochs", "2",
             "--memory-size", "256",
-            "--entropy-anneal-rounds", "25",
+            "--entropy-anneal-episodes", "25",
         ])
 
         assert args.rounds == 50
@@ -352,7 +278,7 @@ class TestTamiyoCentricFlags:
         assert args.episode_length == 30
         assert args.ppo_epochs == 2
         assert args.memory_size == 256
-        assert args.entropy_anneal_rounds == 25
+        assert args.entropy_anneal_episodes == 25
 
     def test_invalid_rounds_rejected(self):
         """--rounds 0 should fail with clear error at parse time."""

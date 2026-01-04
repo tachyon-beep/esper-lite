@@ -31,8 +31,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import asdict, dataclass, field, fields
-from collections.abc import Sequence
-from typing import Any, Self
+from typing import Any
 
 from esper.leyline import (
     DEFAULT_GAMMA,
@@ -105,12 +104,6 @@ class TrainingConfig:
     param_budget: int = 500_000
     param_penalty_weight: float = 0.1
     sparse_reward_scale: float = 1.0
-
-    # === Per-Environment Reward Mode ===
-    # Per-environment reward mode override for A/B/n testing.
-    # If None, all envs use reward_mode. If tuple, must match n_envs length.
-    # Use with_reward_split() factory for ergonomic configuration.
-    reward_mode_per_env: tuple[RewardMode, ...] | None = None
 
     # === Diagnostics thresholds ===
     plateau_threshold: float = 0.5
@@ -217,37 +210,6 @@ class TrainingConfig:
         )
 
     # ------------------------------------------------------------------
-    # Factory Methods
-    # ------------------------------------------------------------------
-    @classmethod
-    def with_reward_split(cls, num_envs: int, modes: Sequence[RewardMode]) -> Self:
-        """Create config with per-env reward mode assignment.
-
-        Cycles through the provided modes to assign each environment a reward mode.
-        This enables A/B/n testing with any number of reward mode groups.
-
-        Args:
-            num_envs: Total number of environments
-            modes: Sequence of modes to cycle through
-
-        Returns:
-            Config with reward_mode_per_env set
-
-        Example:
-            # 4 envs, 2 modes: [SHAPED, SIMPLIFIED, SHAPED, SIMPLIFIED]
-            cfg = TrainingConfig.with_reward_split(4, [RewardMode.SHAPED, RewardMode.SIMPLIFIED])
-
-            # 6 envs, 3 modes: [SHAPED, SIMPLIFIED, SPARSE, SHAPED, SIMPLIFIED, SPARSE]
-            cfg = TrainingConfig.with_reward_split(6, [RewardMode.SHAPED, RewardMode.SIMPLIFIED, RewardMode.SPARSE])
-        """
-        if not modes:
-            raise ValueError("modes cannot be empty")
-        return cls(
-            n_envs=num_envs,
-            reward_mode_per_env=tuple(modes[i % len(modes)] for i in range(num_envs)),
-        )
-
-    # ------------------------------------------------------------------
     # Serialization
     # ------------------------------------------------------------------
     @classmethod
@@ -282,10 +244,6 @@ class TrainingConfig:
             parsed["reward_mode"] = RewardMode(parsed["reward_mode"])
         if "slots" in parsed and parsed["slots"] is not None:
             parsed["slots"] = list(parsed["slots"])
-        if "reward_mode_per_env" in parsed and parsed["reward_mode_per_env"] is not None:
-            parsed["reward_mode_per_env"] = tuple(
-                RewardMode(m) for m in parsed["reward_mode_per_env"]
-            )
         return cls(**parsed)
 
     @classmethod
@@ -302,8 +260,6 @@ class TrainingConfig:
         raw = asdict(self)
         raw["reward_family"] = self.reward_family.value
         raw["reward_mode"] = self.reward_mode.value
-        if self.reward_mode_per_env is not None:
-            raw["reward_mode_per_env"] = [m.value for m in self.reward_mode_per_env]
         return raw
 
     # ------------------------------------------------------------------
@@ -369,7 +325,6 @@ class TrainingConfig:
             "improvement_threshold": self.improvement_threshold,
             "gradient_telemetry_stride": self.gradient_telemetry_stride,
             "seed": self.seed,
-            "reward_mode_per_env": self.reward_mode_per_env,
             "permissive_gates": self.permissive_gates,
             "disable_pbrs": self.disable_pbrs,
             "disable_terminal_reward": self.disable_terminal_reward,
@@ -468,21 +423,6 @@ class TrainingConfig:
             and self.reward_mode != RewardMode.SHAPED
         ):
             raise ValueError("reward_mode applies only to contribution rewards")
-
-        # Per-env reward mode validation
-        if self.reward_mode_per_env is not None:
-            if len(self.reward_mode_per_env) != self.n_envs:
-                raise ValueError(
-                    f"reward_mode_per_env length ({len(self.reward_mode_per_env)}) "
-                    f"must match n_envs ({self.n_envs})"
-                )
-            # Type validation - each entry must be a RewardMode enum
-            for i, mode in enumerate(self.reward_mode_per_env):
-                if not isinstance(mode, RewardMode):
-                    raise TypeError(
-                        f"reward_mode_per_env[{i}] must be a RewardMode enum, "
-                        f"got {type(mode).__name__}"
-                    )
 
         # PPO hyperparameter ranges
         self._validate_range(self.gamma, "gamma", 0.0, 1.0, min_inclusive=False, max_inclusive=True)

@@ -221,11 +221,11 @@ class PPOLossesPanel(Static):
         # Label (left-aligned, 8 chars for compact layout)
         result.append(f"{label:<8}", style="dim")
 
-        # Value (right-aligned, 6 chars)
+        # Value (right-aligned, 7 chars with extra precision)
         if abs(value) < 0.1:
-            result.append(f"{value:>6.3f}", style=self._status_style(status))
+            result.append(f"{value: 7.4f}", style=self._status_style(status))
         else:
-            result.append(f"{value:>6.2f}", style=self._status_style(status))
+            result.append(f"{value: 7.3f}", style=self._status_style(status))
 
         # Gap
         result.append(" ")

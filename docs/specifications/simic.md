@@ -181,7 +181,7 @@ config = ContributionRewardConfig(reward_mode=RewardMode.MINIMAL)
 ```python
 # FactoredRecurrentActorCritic
 # Input
-features: [batch, seq_len, 113]   # Obs V3 non-blueprint (23 base + 30 per slot * 3)
+features: [batch, seq_len, 116]   # Obs V3 non-blueprint (23 base + 31 per slot * 3)
 blueprint_indices: [batch, seq_len, 3]  # Per-slot blueprint indices
 # Network concatenates blueprint embeddings (num_slots * 4) before feature_net
 
@@ -216,7 +216,7 @@ value: [batch, seq_len]           # Q(s, op) baseline
 ```python
 # TamiyoRolloutBuffer pre-allocated tensors
 # Shape: [num_envs, max_steps_per_env, ...]
-states: [4, 150, 113]
+states: [4, 150, 116]
 slot_actions: [4, 150]             # dtype=torch.long
 values: [4, 150]
 rewards: [4, 150]
@@ -228,7 +228,7 @@ hidden_h: [4, 150, 1, 512]         # [envs, steps, layers, hidden]
 ### Feature Vector Composition
 
 ```python
-# Total non-blueprint dims: 23 base + 30 per-slot * num_slots (113 for 3 slots)
+# Total non-blueprint dims: 23 base + 31 per-slot * num_slots (116 for 3 slots)
 # Blueprint identity moved to embeddings inside the network (4 dims per slot).
 
 # Base features (23 dims): tamiyo/policy/features.py
@@ -238,7 +238,7 @@ hidden_h: [4, 150, 1, 512]         # [envs, steps, layers, hidden]
 - stage distribution (num_training/blending/holding) (3)
 - action feedback: last_action_success + last_action_op one-hot (7)
 
-# Per-slot features (30 dims each)
+# Per-slot features (31 dims each)
 - is_active (1)
 - stage one-hot (10)
 - current_alpha (1)
@@ -250,6 +250,7 @@ hidden_h: [4, 150, 1, 512]         # [envs, steps, layers, hidden]
 - gradient_health_prev (1)
 - epochs_in_stage_norm (1)
 - counterfactual_fresh (1)
+- seed_age_norm (1)
 ```
 
 ---

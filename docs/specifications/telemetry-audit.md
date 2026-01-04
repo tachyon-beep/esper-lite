@@ -6,7 +6,7 @@ Reference of what telemetry we capture, how it is produced, and where it flows. 
 - **Hub/backends:** `nissa.output.NissaHub` fan-outs to Console/File/Directory/TUI/Dashboard/Karn backends wired in `scripts/train.py`. Severity filter follows CLI telemetry level (debug shows all, normal hides debug).
 - **Profiles (Nissa):** `nissa/config.py` + `profiles.yaml` control heavy diagnostics (gradient stats, per-class, loss landscape, weight norms). Default `standard` enables gradient stats for select layers.
 - **Levels (Simic):** `simic/telemetry_config.py` levels OFF/MINIMAL/NORMAL/DEBUG with auto-escalation on anomalies. Slot telemetry uses `use_telemetry` flag and level; `fast_mode` disables slot events entirely.
-- **Contracts:** Event types in `leyline/telemetry.py`; TrainingSignals in `leyline/signals.py`; Obs V3 feature construction in `tamiyo/policy/features.py` (113 non-blueprint dims + blueprint embeddings).
+- **Contracts:** Event types in `leyline/telemetry.py`; TrainingSignals in `leyline/signals.py`; Obs V3 feature construction in `tamiyo/policy/features.py` (116 non-blueprint dims + blueprint embeddings).
 
 ## Seed Lifecycle Telemetry (Kasmina)
 - **Emitter:** `kasmina/slot.py` via `on_telemetry` callback (skipped when `fast_mode=True`).

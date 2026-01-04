@@ -488,11 +488,11 @@ BLUEPRINT_NULL_INDEX = NUM_BLUEPRINTS
 DEFAULT_BLUEPRINT_EMBED_DIM = 4
 
 # Obs V3 base observation dimension (before blueprint embeddings are concatenated).
-# For DEFAULT_NUM_SLOTS=3: 23 + (30 × 3) = 113 dims.
+# For DEFAULT_NUM_SLOTS=3: 23 + (31 × 3) = 116 dims.
 # The full Obs V3 input to the network is:
-#   OBS_V3_NON_BLUEPRINT_DIM + (DEFAULT_NUM_SLOTS × DEFAULT_BLUEPRINT_EMBED_DIM) = 125 dims.
+#   OBS_V3_NON_BLUEPRINT_DIM + (DEFAULT_NUM_SLOTS × DEFAULT_BLUEPRINT_EMBED_DIM) = 128 dims.
 OBS_V3_BASE_FEATURE_SIZE = 23
-OBS_V3_SLOT_FEATURE_SIZE = 30
+OBS_V3_SLOT_FEATURE_SIZE = 31
 OBS_V3_NON_BLUEPRINT_DIM = OBS_V3_BASE_FEATURE_SIZE + (OBS_V3_SLOT_FEATURE_SIZE * DEFAULT_NUM_SLOTS)
 
 # Number of independent action heads in Tamiyo's factored action space.

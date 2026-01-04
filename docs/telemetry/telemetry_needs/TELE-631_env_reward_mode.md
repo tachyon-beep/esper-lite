@@ -150,10 +150,10 @@ class TrainingStartedPayload:
 
 ### Manual Verification Steps
 
-1. Start training with A/B testing enabled: `PYTHONPATH=src uv run python -m esper.scripts.train ppo --ab-test`
+1. Start training with a non-default reward mode (e.g. dual-policy A/B): `PYTHONPATH=src uv run python -m esper.scripts.train ppo --dual-ab shaped-vs-simplified`
 2. Launch Sanctum TUI
 3. Observe EnvOverview Env column — colored pips should appear next to env IDs
-4. Verify pip colors match cohort assignment (blue=shaped, yellow=simplified, white=sparse)
+4. Verify pip colors match reward mode (blue=shaped, yellow=simplified, white=sparse)
 
 ---
 

@@ -4,7 +4,7 @@ Goal: document how Simic constructs the Obs V3 “sensory surface” that feeds 
 
 ## Executive Summary
 
-- Obs V3 is a **113‑dim float vector** (default 3 slots) plus **per-slot blueprint indices** that are embedded inside the network (total input 125 dims).
+- Obs V3 is a **116‑dim float vector** (default 3 slots) plus **per-slot blueprint indices** that are embedded inside the network (total input 128 dims).
 - Most scalars are already bounded or compressed before global normalization (symlog, `[0,1]` scaling, or `[-1,1]` clamps), then a `RunningMeanStd` normaliser (EMA, clip) produces stable inputs for the LSTM.
 - The “large numbers” humans see in the UI are usually **instrumentation semantics**, not “the LSTM going feral”: raw L2 norms and raw outlier counters scale with tensor size and feature sparsity.
 - The primary correctness risk in Obs V3 today is one feature: **`interaction_sum_norm` is only upper-clamped**, even though the interaction term can be negative; this can push raw observations outside the intended range.
@@ -15,7 +15,7 @@ Goal: document how Simic constructs the Obs V3 “sensory surface” that feeds 
 
 Obs V3 is produced by `batch_obs_to_features()` (`src/esper/tamiyo/policy/features.py`):
 
-- `obs`: `float32[n_envs, 23 + 30*num_slots]` (default: 113)
+- `obs`: `float32[n_envs, 23 + 31*num_slots]` (default: 116)
 - `blueprint_indices`: `int64[n_envs, num_slots]` (`-1` for inactive slots)
 
 The network uses `BlueprintEmbedding` (`src/esper/tamiyo/networks/factored_lstm.py`) to convert `blueprint_indices` into learned vectors (`R^4` per slot) and concatenates them with `obs` before the feature net and LSTM. `BlueprintEmbedding` maps exactly `-1` to a dedicated trainable “null” embedding for inactive slots and (when validation is enabled) raises if it receives invalid indices outside `-1` or `[0, num_blueprints)`.
@@ -25,7 +25,7 @@ The network uses `BlueprintEmbedding` (`src/esper/tamiyo/networks/factored_lstm.
 Obs V3 has:
 
 - **23 base features**: episode progress, host validation loss/accuracy + short history, stage counts, and last-action feedback.
-- **30 per-slot features** per enabled slot: stage one-hot, alpha schedule state, counterfactual contribution signals, gradient telemetry, and a small amount of “staleness memory”.
+- **31 per-slot features** per enabled slot: stage one-hot, alpha schedule state, counterfactual contribution signals, gradient telemetry, and a small amount of “staleness memory”.
 
 Full index-by-index mapping is in `docs/scratch/obs_deep_dive/WORKING_NOTES.md`.
 

@@ -54,7 +54,8 @@ def _make_mock_training_signals(epoch=10, val_loss=0.5, val_accuracy=70.0,
 
 def _make_mock_seed_state_report(slot_id="r0c0", stage=3, alpha=0.5,
                                   improvement=2.5, blueprint_id="conv_light",
-                                  blueprint_index=1, gradient_health=0.95):
+                                  blueprint_index=1, gradient_health=0.95,
+                                  epochs_total: int = 0):
     """Create mock SeedStateReport for testing."""
     from esper.leyline.reports import SeedStateReport, SeedMetrics
     from esper.leyline.stages import SeedStage
@@ -62,6 +63,7 @@ def _make_mock_seed_state_report(slot_id="r0c0", stage=3, alpha=0.5,
     from esper.leyline.telemetry import SeedTelemetry
 
     metrics = SeedMetrics(
+        epochs_total=epochs_total,
         current_alpha=alpha,
         counterfactual_contribution=improvement,
         contribution_velocity=0.5,
@@ -177,8 +179,8 @@ def test_batch_obs_to_features_basic():
         max_epochs=MAX_EPOCHS,
     )
 
-    # Obs V3: 23 base + 30 per slot × 3 slots = 113 dims
-    assert obs.shape == (2, 113), f"Expected (2, 113), got {obs.shape}"
+    # Obs V3: 23 base + 31 per slot × 3 slots = 116 dims
+    assert obs.shape == (2, 116), f"Expected (2, 116), got {obs.shape}"
     assert blueprint_indices.shape == (2, 3), f"Expected (2, 3), got {blueprint_indices.shape}"
 
     # Check blueprint indices
@@ -265,7 +267,7 @@ def test_batch_obs_to_features_base_features():
 
 
 def test_batch_obs_to_features_slot_features():
-    """Slot features should be 30 dims per slot with proper normalization."""
+    """Slot features should be 31 dims per slot with proper normalization."""
     from esper.tamiyo.policy.features import batch_obs_to_features
     from esper.leyline.slot_config import SlotConfig
     from esper.leyline import DEFAULT_GAMMA
@@ -277,7 +279,7 @@ def test_batch_obs_to_features_slot_features():
     # Create environment with one active slot
     batch_signals = [_make_mock_training_signals()]
     batch_slot_reports = [
-        {"r0c0": _make_mock_seed_state_report("r0c0", stage=3, alpha=0.5, improvement=2.5)}
+        {"r0c0": _make_mock_seed_state_report("r0c0", stage=3, alpha=0.5, improvement=2.5, epochs_total=40)}
     ]
     batch_env_states = [
         _make_mock_parallel_env_state(
@@ -295,8 +297,8 @@ def test_batch_obs_to_features_slot_features():
         max_epochs=MAX_EPOCHS,
     )
 
-    # Extract first slot features (indices 23-52)
-    slot = obs[0, 23:53]
+    # Extract first slot features (indices 23-53)
+    slot = obs[0, 23:54]
 
     # is_active (index 0 of slot)
     assert slot[0].item() == 1.0
@@ -324,6 +326,9 @@ def test_batch_obs_to_features_slot_features():
     # Check counterfactual_fresh (index 29) - DEFAULT_GAMMA ** 5
     expected_fresh = DEFAULT_GAMMA ** 5
     assert abs(slot[29].item() - expected_fresh) < 1e-6
+
+    # Check seed_age_norm (index 30) - epochs_total / max_epochs
+    assert abs(slot[30].item() - 0.4) < 1e-6
 
 
 def test_batch_obs_to_features_normalization_ranges():
@@ -533,8 +538,8 @@ def test_batch_obs_to_features_dynamic_slots():
         max_epochs=MAX_EPOCHS,
     )
 
-    # Obs V3 with 5 slots: 23 base + 30 × 5 = 173 dims
-    assert obs.shape == (1, 173), f"Expected (1, 173) for 5 slots, got {obs.shape}"
+    # Obs V3 with 5 slots: 23 base + 31 × 5 = 178 dims
+    assert obs.shape == (1, 178), f"Expected (1, 178) for 5 slots, got {obs.shape}"
     assert blueprint_indices.shape == (1, 5)
 
     # Check blueprint indices
@@ -668,7 +673,7 @@ def test_batch_obs_to_features_batch_processing():
     )
 
     # Check shapes
-    assert obs.shape == (4, 113)
+    assert obs.shape == (4, 116)
     assert blueprint_indices.shape == (4, 3)
 
     # Check each environment has different epoch values
@@ -707,12 +712,12 @@ def test_batch_obs_to_features_inactive_slots_are_zeros():
         max_epochs=MAX_EPOCHS,
     )
 
-    # Check r0c1 slot (indices 53-82) is all zeros
-    r0c1_features = obs[0, 53:83]
+    # Check r0c1 slot (indices 54-84) is all zeros
+    r0c1_features = obs[0, 54:85]
     assert torch.all(r0c1_features == 0.0), "Inactive slot should be all zeros"
 
-    # Check r0c2 slot (indices 83-112) is all zeros
-    r0c2_features = obs[0, 83:113]
+    # Check r0c2 slot (indices 85-115) is all zeros
+    r0c2_features = obs[0, 85:116]
     assert torch.all(r0c2_features == 0.0), "Inactive slot should be all zeros"
 
 

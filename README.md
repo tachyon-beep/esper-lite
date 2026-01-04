@@ -9,9 +9,9 @@ Esper is a framework for **Morphogenetic AI**—neural networks that dynamically
 As of **Tamiyo Next**, the RL-controlled policy stack has been upgraded to support long-horizon, multi-seed scaffolding:
 
 - **Obs V3:** reduced observation redundancy and moved blueprint identity to **learned embeddings**
-  - Non-blueprint obs: **113 dims** (23 base + 30 per-slot × 3 slots)
+  - Non-blueprint obs: **116 dims** (23 base + 31 per-slot × 3 slots)
   - Blueprint embedding: **4 × slots** (e.g., 12 dims for 3 slots)
-  - Total policy input: **125 dims**
+  - Total policy input: **128 dims**
 - **Policy V2:** **512-dim feature net + 512 hidden LSTM**, designed for ~150-epoch decision horizons
 - **Critic:** action-conditioned **Q(s, op)** baseline (removes value aliasing)
 - **Q-values telemetry:** Op-conditioned Q(s,op) values now visible in Sanctum UI with variance diagnostic
@@ -369,28 +369,6 @@ Gates enforce hard-coded thresholds for gradient ratios, improvement metrics, st
 | `param_budget`         | `500000`         | Parameter budget for seeds (penalty if exceeded)                              |
 | `param_penalty_weight` | `0.1`            | Weight of parameter budget penalty in reward                                  |
 
-#### A/B/n Testing
+#### A/B Testing (True)
 
-| Parameter             | Default | Description                                                           |
-| --------------------- | ------- | --------------------------------------------------------------------- |
-| `reward_mode_per_env` | `null`  | Per-environment reward mode override (tuple matching `n_envs` length) |
-
-```json
-{
-  "n_envs": 8,
-  "reward_mode_per_env": ["shaped", "shaped", "shaped", "shaped", "simplified", "simplified", "simplified", "simplified"]
-}
-```
-
-For programmatic configuration, use the `with_reward_split()` factory:
-
-```python
-from esper.simic.training import TrainingConfig
-from esper.simic.rewards import RewardMode
-
-# A/B test: 4 envs each with SHAPED and SIMPLIFIED
-cfg = TrainingConfig.with_reward_split(8, [RewardMode.SHAPED, RewardMode.SIMPLIFIED])
-
-# A/B/C test: 3-way split across 6 envs
-cfg = TrainingConfig.with_reward_split(6, [RewardMode.SHAPED, RewardMode.SIMPLIFIED, RewardMode.SPARSE])
-```
+Use `--dual-ab` to train separate policies on separate GPUs (e.g. `shaped-vs-simplified`).

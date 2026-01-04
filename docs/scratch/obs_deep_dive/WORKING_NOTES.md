@@ -38,14 +38,14 @@ In the vectorized PPO loop (`src/esper/simic/training/vectorized.py`), for each 
 From `batch_obs_to_features(...)` (`src/esper/tamiyo/policy/features.py`):
 
 - `obs`: `float32[n_envs, obs_dim]`
-  - `obs_dim = 23 + 30 * num_slots` (default 3 slots → 113).
+  - `obs_dim = 23 + 31 * num_slots` (default 3 slots → 116).
 - `blueprint_indices`: `int64[n_envs, num_slots]`
   - `-1` means slot inactive (mapped to a trainable null embedding in the network).
 
 The network concatenates `obs` with learned blueprint embeddings:
 
 - `BlueprintEmbedding` (`src/esper/tamiyo/networks/factored_lstm.py`) maps indices `[-1, 0..12] → R^4`.
-- Total network input (default): `113 + 3*4 = 125`.
+- Total network input (default): `116 + 3*4 = 128`.
 
 ### 3.2 Base features (23 dims)
 
@@ -60,11 +60,11 @@ All base features live at fixed indices `0..22`:
 - `16` `last_action_success` (0/1)
 - `17..22` `last_action_op_one_hot` (6 dims, `NUM_OPS`)
 
-### 3.3 Per-slot features (30 dims × num_slots)
+### 3.3 Per-slot features (31 dims × num_slots)
 
 For slot index `s` with offset:
 
-- `slot_offset = 23 + 30*s`
+- `slot_offset = 23 + 31*s`
 
 Fields:
 
@@ -144,4 +144,3 @@ Caveat: one-hot and sparse binary features can legitimately register as “outli
 - Stage schema (one-hot mapping): `src/esper/leyline/stage_schema.py`
 - Blueprint embedding: `src/esper/tamiyo/networks/factored_lstm.py`
 - Observation stats telemetry: `src/esper/simic/telemetry/observation_stats.py`
-

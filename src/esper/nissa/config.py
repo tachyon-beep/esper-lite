@@ -219,7 +219,7 @@ class TelemetryConfig(BaseModel):
         Returns:
             Estimated feature count based on configuration.
         """
-        # Base observation dims from leyline (Obs V3 for 3-slot config = 113 dims)
+        # Base observation dims from leyline (Obs V3 for 3-slot config = 116 dims)
         count = OBS_V3_NON_BLUEPRINT_DIM
 
         if self.gradients.enabled:

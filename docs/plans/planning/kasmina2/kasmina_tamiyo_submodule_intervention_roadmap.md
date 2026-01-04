@@ -563,11 +563,11 @@ This is a bounded alternative that avoids adding a new action head in Phase 3.
 ```bash
 PYTHONPATH=src uv run python -m esper.scripts.train ppo \
   --preset cifar_scale --task cifar_scale \
-  --slots r0c0 r0c1 r0c2 r0c3 r0c4 \
-  --max-seeds 2 \
-  --rounds 100 --envs 8 --episode-length 150 \
-  --ab-test shaped-vs-simplified \
-  --sanctum
+	  --slots r0c0 r0c1 r0c2 r0c3 r0c4 \
+	  --max-seeds 2 \
+	  --rounds 100 --envs 8 --episode-length 150 \
+	  --dual-ab shaped-vs-simplified \
+	  --sanctum
 ```
 
 Expected outcomes:
@@ -585,11 +585,11 @@ Telemetry to watch:
 ```bash
 PYTHONPATH=src uv run python -m esper.scripts.train ppo \
   --preset cifar_scale --task cifar_scale \
-  --slots r0c0 r0c1 r0c2 r0c3 r0c4 \
-  --max-seeds 4 \
-  --rounds 100 --envs 8 --episode-length 200 \
-  --ab-test shaped-vs-simplified \
-  --sanctum
+	  --slots r0c0 r0c1 r0c2 r0c3 r0c4 \
+	  --max-seeds 4 \
+	  --rounds 100 --envs 8 --episode-length 200 \
+	  --dual-ab shaped-vs-simplified \
+	  --sanctum
 ```
 
 Expected outcomes:

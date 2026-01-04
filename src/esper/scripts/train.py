@@ -369,13 +369,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override seed (otherwise use config value)",
     )
     ppo_parser.add_argument(
-        "--ab-test",
-        type=str,
-        choices=["shaped-vs-simplified", "shaped-vs-sparse"],
-        default=None,
-        help="Run A/B test: split envs between two reward modes (requires even n_envs)",
-    )
-    ppo_parser.add_argument(
         "--dual-ab",
         type=str,
         choices=["shaped-vs-simplified", "shaped-vs-sparse", "simplified-vs-sparse"],
@@ -768,22 +761,6 @@ def main() -> None:
                     config.lstm_hidden_dim = args.memory_size
                 if args.entropy_anneal_episodes is not None:
                     config.entropy_anneal_episodes = args.entropy_anneal_episodes
-
-                # Handle A/B testing - set on config for validation
-                if args.ab_test:
-                    from esper.simic.rewards import RewardMode
-                    if config.n_envs % 2 != 0:
-                        raise ValueError("--ab-test requires even number of envs")
-                    half = config.n_envs // 2
-                    if args.ab_test == "shaped-vs-simplified":
-                        config.reward_mode_per_env = (
-                            (RewardMode.SHAPED,) * half + (RewardMode.SIMPLIFIED,) * half
-                        )
-                    elif args.ab_test == "shaped-vs-sparse":
-                        config.reward_mode_per_env = (
-                            (RewardMode.SHAPED,) * half + (RewardMode.SPARSE,) * half
-                        )
-                    print(f"[A/B Test] {half} envs SHAPED vs {half} envs {args.ab_test.split('-vs-')[1].upper()}")
 
                 # Handle dual-policy A/B testing
                 if args.dual_ab:

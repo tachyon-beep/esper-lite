@@ -220,7 +220,7 @@ def _extract_slot_features_v3(
     slot_id: str,
     max_epochs: int,
 ) -> torch.Tensor:
-    """Extract per-slot features (30 dims) for Obs V3.
+    """Extract per-slot features (31 dims) for Obs V3.
 
     Features:
     - is_active (1 dim) - always 1.0 since this function is called for active slots
@@ -234,8 +234,9 @@ def _extract_slot_features_v3(
     - gradient_health_prev (1 dim) - enables LSTM trend detection
     - epochs_in_stage_norm (1 dim) - normalized epochs in current stage
     - counterfactual_fresh (1 dim) - DEFAULT_GAMMA ** epochs_since_cf
+    - seed_age_norm (1 dim) - normalized epochs since germination (metrics.epochs_total)
 
-    Total: 30 dims
+    Total: 31 dims
 
     Note: boost_received, upstream_alpha_sum, and downstream_alpha_sum from V2 are REMOVED in V3.
 
@@ -331,7 +332,13 @@ def _extract_slot_features_v3(
     epochs_since_cf = env_state.epochs_since_counterfactual.get(slot_id, 0)
     counterfactual_fresh = DEFAULT_GAMMA ** epochs_since_cf
 
-    # Combine all slot features (30 dims total)
+    # seed_age_norm (1 dim) - normalize to [0, 1] using runtime max_epochs.
+    # This exposes prune-age gating and distinguishes "new vs old" seeds even
+    # after multiple stage transitions (epochs_in_stage resets on transitions).
+    seed_age = slot_report.metrics.epochs_total
+    seed_age_norm = min(float(seed_age), max_epochs_den) / max_epochs_den
+
+    # Combine all slot features (31 dims total)
     slot_features = (
         [1.0] +  # is_active (1 dim) - always 1.0 for active slots
         stage_one_hot +  # 10 dims
@@ -362,6 +369,7 @@ def _extract_slot_features_v3(
             gradient_health_prev,
             epochs_in_stage_norm,
             counterfactual_fresh,
+            seed_age_norm,
         ]
     )
 
@@ -500,11 +508,12 @@ BASE_FEATURE_SIZE = OBS_V3_BASE_FEATURE_SIZE
 # + 1 gradient_health_prev
 # + 1 epochs_in_stage_norm
 # + 1 counterfactual_fresh
-# Total: 1 + 10 + 1 + 1 + 1 + 1 + 8 + 4 + 1 + 1 + 1 = 30 dims per slot (blueprint moved to embedding)
+# + 1 seed_age_norm (metrics.epochs_total / max_epochs)
+# Total: 1 + 10 + 1 + 1 + 1 + 1 + 8 + 4 + 1 + 1 + 1 + 1 = 31 dims per slot (blueprint moved to embedding)
 SLOT_FEATURE_SIZE = OBS_V3_SLOT_FEATURE_SIZE
 
-# Obs V3 total for 3 slots: 23 base + 3 slots × 30 features = 113 dims (excludes blueprint embeddings)
-# Blueprint embeddings (4 dims × 3 slots = 12) are added inside the network, making total network input 125
+# Obs V3 total for 3 slots: 23 base + 3 slots × 31 features = 116 dims (excludes blueprint embeddings)
+# Blueprint embeddings (4 dims × 3 slots = 12) are added inside the network, making total network input 128
 # NOTE: Default for 3-slot configuration. Use get_feature_size(slot_config) for dynamic slot counts.
 MULTISLOT_FEATURE_SIZE = OBS_V3_NON_BLUEPRINT_DIM
 
@@ -524,13 +533,13 @@ def get_feature_size(slot_config: SlotConfig) -> int:
                                     loss_history_5, accuracy_history_5,
                                     stage distribution,
                                     action feedback: last_action_success + last_action_op one-hot)
-        Per-slot features: 30 dims × num_slots (stage one-hot, alpha, gradient health,
+        Per-slot features: 31 dims × num_slots (stage one-hot, alpha, gradient health,
                                                  contribution, telemetry, etc.)
 
-    For 3 slots: 23 + (30 × 3) = 113 dims
+    For 3 slots: 23 + (31 × 3) = 116 dims
 
     Note: Blueprint embeddings (4 dims × num_slots) are added inside the network
-    via BlueprintEmbedding module, making total network input 113 + 12 = 125 for 3 slots.
+    via BlueprintEmbedding module, making total network input 116 + 12 = 128 for 3 slots.
 
     Args:
         slot_config: Slot configuration defining number of slots
@@ -569,9 +578,9 @@ def batch_obs_to_features(
     Feature breakdown:
     - Base features: 23 dims (epoch, loss, accuracy, raw history, stage counts)
     - Action feedback: 7 dims (last_action_success + last_action_op one-hot) - INCLUDED in base
-    - Per-slot features: 30 dims × num_slots (stage, alpha, gradient health, contribution, etc.)
+    - Per-slot features: 31 dims × num_slots (stage, alpha, gradient health, contribution, etc.)
 
-    For 3 slots: 23 + (30 × 3) = 113 dims
+    For 3 slots: 23 + (31 × 3) = 116 dims
 
     Args:
         batch_signals: List of TrainingSignals with metrics and history
@@ -746,6 +755,10 @@ def batch_obs_to_features(
             # counterfactual_fresh (1 dim)
             epochs_since_cf = env_state.epochs_since_counterfactual.get(slot_id, 0)
             obs[env_idx, slot_offset + 29] = DEFAULT_GAMMA ** epochs_since_cf
+
+            # seed_age_norm (1 dim)
+            seed_age = report.metrics.epochs_total
+            obs[env_idx, slot_offset + 30] = min(float(seed_age), max_epochs_den) / max_epochs_den
 
     # Single H2D transfer at end (after all Python-loop filling is complete)
     return obs.to(device), blueprint_indices.to(device)

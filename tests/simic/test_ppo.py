@@ -582,10 +582,10 @@ def test_signals_to_features_with_multislot_params():
         max_epochs=100,
     )
 
-    # Obs V3: 23 base + 30*3 slots = 113 dims (excluding blueprint embeddings)
+    # Obs V3: 23 base + 31*3 slots = 116 dims (excluding blueprint embeddings)
     expected_dim = get_feature_size(slot_config)
     assert obs.shape == (1, expected_dim)
-    assert obs.shape[1] == 113
+    assert obs.shape[1] == 116
 
 
 def test_signals_to_features_telemetry_slot_alignment() -> None:
@@ -673,15 +673,15 @@ def test_signals_to_features_telemetry_slot_alignment() -> None:
 
     # V3: Telemetry is embedded in slot features (4 dims: gradient_norm, gradient_health, has_vanishing, has_exploding)
     # Base features: 23 dims
-    # Slot 0 (r0c0): 30 dims - all zeros (inactive)
-    # Slot 1 (r0c1): 30 dims - active with telemetry
-    # Slot 2 (r0c2): 30 dims - all zeros (inactive)
+    # Slot 0 (r0c0): 31 dims - all zeros (inactive)
+    # Slot 1 (r0c1): 31 dims - active with telemetry
+    # Slot 2 (r0c2): 31 dims - all zeros (inactive)
 
-    # Extract slot 1 features (r0c1) - starts at index 23 + 30 = 53
-    slot1_start = 23 + 30  # Skip base + slot0
-    slot1_features = obs[0, slot1_start:slot1_start + 30].tolist()
+    # Extract slot 1 features (r0c1) - starts at index 23 + 31 = 54
+    slot1_start = 23 + 31  # Skip base + slot0
+    slot1_features = obs[0, slot1_start:slot1_start + 31].tolist()
 
-    # Slot features layout (30 dims):
+    # Slot features layout (31 dims):
     # [0] is_active = 1.0
     # [1-10] stage one-hot
     # [11] current_alpha
@@ -693,21 +693,23 @@ def test_signals_to_features_telemetry_slot_alignment() -> None:
     # [27] gradient_health_prev
     # [28] epochs_in_stage_norm
     # [29] counterfactual_fresh
+    # [30] seed_age_norm
 
     # Check telemetry fields are present (indices 23-26 in slot features)
     assert slot1_features[23] > 0.0  # gradient_norm (normalized, should be > 0)
     assert 0.0 <= slot1_features[24] <= 1.0  # gradient_health
     assert slot1_features[25] == 1.0  # has_vanishing = True
     assert slot1_features[26] == 0.0  # has_exploding = False
+    assert abs(slot1_features[30] - 0.07) < 1e-6  # seed_age_norm (epochs_total=7, max_epochs=100)
 
     # Check slot 0 and slot 2 are all zeros (inactive)
     slot0_start = 23
-    slot0_features = obs[0, slot0_start:slot0_start + 30].tolist()
-    assert slot0_features == [0.0] * 30  # r0c0 (disabled)
+    slot0_features = obs[0, slot0_start:slot0_start + 31].tolist()
+    assert slot0_features == [0.0] * 31  # r0c0 (disabled)
 
-    slot2_start = 23 + 60  # Skip base + slot0 + slot1
-    slot2_features = obs[0, slot2_start:slot2_start + 30].tolist()
-    assert slot2_features == [0.0] * 30  # r0c2 (disabled)
+    slot2_start = 23 + 62  # Skip base + slot0 + slot1
+    slot2_features = obs[0, slot2_start:slot2_start + 31].tolist()
+    assert slot2_features == [0.0] * 31  # r0c2 (disabled)
 
 
 def test_ppo_agent_accepts_slot_config():
