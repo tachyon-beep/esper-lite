@@ -288,7 +288,9 @@ def _extract_slot_features_v3(
 
     alpha_velocity = max(-1.0, min(slot_report.alpha_velocity, 1.0))
     alpha_algorithm_norm = float(slot_report.alpha_algorithm - _ALPHA_ALGO_MIN) / _ALPHA_ALGO_RANGE
-    interaction_sum_norm = min(slot_report.metrics.interaction_sum / 10.0, 1.0)
+    interaction_sum_norm = max(
+        -1.0, min(slot_report.metrics.interaction_sum / 10.0, 1.0)
+    )
 
     # Telemetry merged (4 dims)
     # Access telemetry fields from slot_report.telemetry if available
@@ -716,7 +718,9 @@ def batch_obs_to_features(
             obs[env_idx, slot_offset + 19] = min(float(report.time_to_target), max_epochs_den) / max_epochs_den
             obs[env_idx, slot_offset + 20] = max(-1.0, min(report.alpha_velocity, 1.0))
             obs[env_idx, slot_offset + 21] = float(report.alpha_algorithm - _ALPHA_ALGO_MIN) / _ALPHA_ALGO_RANGE
-            obs[env_idx, slot_offset + 22] = min(report.metrics.interaction_sum / 10.0, 1.0)
+            obs[env_idx, slot_offset + 22] = max(
+                -1.0, min(report.metrics.interaction_sum / 10.0, 1.0)
+            )
 
             # Telemetry merged (4 dims)
             if report.telemetry is not None:
