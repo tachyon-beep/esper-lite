@@ -130,7 +130,7 @@ class EventLog(Static):
         self._max_lines = max_lines
         self._buffer_seconds = buffer_seconds
         self._max_delay_seconds = max_delay_seconds
-        self.border_title = "EVENTS [click for detail]"
+        self.border_title = "EVENT LOG [click for detail]"
 
         # === APPEND-ONLY STATE ===
         # Line data: list of _LineData for render-time formatting

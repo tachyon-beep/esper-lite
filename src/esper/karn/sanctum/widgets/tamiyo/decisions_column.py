@@ -342,7 +342,7 @@ class DecisionsColumn(Container):
         self._rendering: bool = False  # Guard against concurrent renders
         self._render_generation: int = 0  # Unique ID suffix for each render
         self._group_id: str = "default"
-        self.border_title = "EVENTS"
+        self.border_title = "DECISIONS"
 
     def compose(self) -> ComposeResult:
         """Compose the decisions column."""

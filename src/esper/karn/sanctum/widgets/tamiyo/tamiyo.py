@@ -96,7 +96,7 @@ class TamiyoBrain(Container):
         padding: 0 1;
     }
 
-    #events-panel {
+    #decisions-panel {
         width: 100%;
         height: 1fr;
         border: round $surface-lighten-2;
@@ -252,7 +252,7 @@ class TamiyoBrain(Container):
 
             with Vertical(id="right-column"):
                 yield NarrativePanel(id="narrative-panel")
-                yield DecisionsColumn(id="events-panel")
+                yield DecisionsColumn(id="decisions-panel")
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Update all child widgets with new snapshot data.
@@ -292,7 +292,7 @@ class TamiyoBrain(Container):
         self.query_one(
             "#value-diagnostics-panel", ValueDiagnosticsPanel
         ).update_snapshot(snapshot)
-        self.query_one("#events-panel", DecisionsColumn).update_snapshot(snapshot)
+        self.query_one("#decisions-panel", DecisionsColumn).update_snapshot(snapshot)
 
     def update_reward_health(self, data: "RewardHealthData") -> None:
         """Update ActionContext with reward health data.
