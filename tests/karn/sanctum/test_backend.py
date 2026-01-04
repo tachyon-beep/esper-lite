@@ -1185,6 +1185,7 @@ class TestSanctumBackend:
         assert hasattr(backend, "emit")
         assert hasattr(backend, "close")
         assert hasattr(backend, "get_snapshot")
+        assert hasattr(backend, "compute_reward_health_by_group")
 
     def test_emit_ignored_before_start(self):
         """emit() before start() should fail loud (misconfigured telemetry)."""
@@ -1231,6 +1232,62 @@ class TestSanctumBackend:
         snapshot = backend.get_snapshot()
 
         assert snapshot.run_id == "test-run"
+
+    def test_reward_health_is_group_scoped(self) -> None:
+        """compute_reward_health_by_group should compute metrics per group."""
+        from esper.karn.sanctum.widgets.reward_health import RewardHealthData
+
+        backend = SanctumBackend(num_envs=1)
+        backend.start()
+
+        event_a = MagicMock()
+        event_a.group_id = "A"
+        event_a.event_type = MagicMock()
+        event_a.event_type.name = "ANALYTICS_SNAPSHOT"
+        event_a.timestamp = datetime.now(timezone.utc)
+        event_a.epoch = 1
+        event_a.data = AnalyticsSnapshotPayload(
+            kind="last_action",
+            env_id=0,
+            total_reward=2.0,
+            action_name="WAIT",
+            action_confidence=0.5,
+            reward_components=RewardComponentsTelemetry(
+                stage_bonus=1.0,
+                total_reward=2.0,
+            ),
+        )
+
+        event_b = MagicMock()
+        event_b.group_id = "B"
+        event_b.event_type = MagicMock()
+        event_b.event_type.name = "ANALYTICS_SNAPSHOT"
+        event_b.timestamp = datetime.now(timezone.utc)
+        event_b.epoch = 1
+        event_b.data = AnalyticsSnapshotPayload(
+            kind="last_action",
+            env_id=0,
+            total_reward=2.0,
+            action_name="WAIT",
+            action_confidence=0.5,
+            reward_components=RewardComponentsTelemetry(
+                stage_bonus=0.2,
+                total_reward=2.0,
+            ),
+        )
+
+        backend.emit(event_a)
+        backend.emit(event_b)
+
+        by_group = backend.compute_reward_health_by_group()
+        assert set(by_group.keys()) == {"A", "B"}
+
+        health_a = by_group["A"]
+        health_b = by_group["B"]
+        assert isinstance(health_a, RewardHealthData)
+        assert isinstance(health_b, RewardHealthData)
+        assert health_a.pbrs_fraction == pytest.approx(0.5)
+        assert health_b.pbrs_fraction == pytest.approx(0.1)
 
     def test_fatal_telemetry_error_is_sticky(self):
         """A telemetry contract violation should permanently trip the backend."""

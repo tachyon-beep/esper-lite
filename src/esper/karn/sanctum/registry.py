@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import threading
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -20,34 +21,37 @@ class AggregatorRegistry:
     """
 
     def __init__(self, num_envs: int = 4, max_event_log: int = 100) -> None:
+        self._lock = threading.Lock()
         self._num_envs = num_envs
         self._max_event_log = max_event_log
         self._aggregators: dict[str, SanctumAggregator] = {}
 
     def get_or_create(self, group_id: str) -> "SanctumAggregator":
         """Get existing aggregator or create new one for group."""
-        if group_id not in self._aggregators:
-            from esper.karn.sanctum.aggregator import SanctumAggregator
-            self._aggregators[group_id] = SanctumAggregator(
-                num_envs=self._num_envs,
-                max_event_log=self._max_event_log,
-            )
-        return self._aggregators[group_id]
+        with self._lock:
+            if group_id not in self._aggregators:
+                from esper.karn.sanctum.aggregator import SanctumAggregator
+
+                self._aggregators[group_id] = SanctumAggregator(
+                    num_envs=self._num_envs,
+                    max_event_log=self._max_event_log,
+                )
+            return self._aggregators[group_id]
 
     @property
     def group_ids(self) -> set[str]:
         """Return set of all registered group IDs."""
-        return set(self._aggregators.keys())
+        with self._lock:
+            return set(self._aggregators.keys())
 
     def get_all_snapshots(self) -> dict[str, "SanctumSnapshot"]:
         """Return snapshots from all aggregators."""
-        return {
-            group_id: agg.get_snapshot()
-            for group_id, agg in self._aggregators.items()
-        }
+        with self._lock:
+            items = list(self._aggregators.items())
+
+        return {group_id: agg.get_snapshot() for group_id, agg in items}
 
     def process_event(self, event: "TelemetryEvent") -> None:
         """Route event to appropriate aggregator based on group_id."""
-        group_id = event.group_id
-        agg = self.get_or_create(group_id)
+        agg = self.get_or_create(event.group_id)
         agg.process_event(event)

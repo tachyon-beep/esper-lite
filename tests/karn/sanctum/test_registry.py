@@ -1,5 +1,7 @@
 # tests/karn/sanctum/test_registry.py
 
+import threading
+
 from esper.karn.sanctum.registry import AggregatorRegistry
 from esper.karn.sanctum.aggregator import SanctumAggregator
 from esper.leyline.telemetry import EpochCompletedPayload, TelemetryEvent, TelemetryEventType
@@ -92,3 +94,53 @@ def test_registry_default_group_for_missing_group_id():
     # Verify default aggregator was created
     assert "default" in registry.group_ids
     assert len(registry.group_ids) == 1
+
+
+def test_registry_get_all_snapshots_safe_during_group_creation() -> None:
+    """get_all_snapshots should not crash if a new group appears mid-iteration.
+
+    Regression test for RuntimeError: dictionary changed size during iteration.
+    """
+    registry = AggregatorRegistry(num_envs=1)
+    agg_a = registry.get_or_create("A")
+
+    started = threading.Event()
+    allow_continue = threading.Event()
+
+    original_get_snapshot = agg_a.get_snapshot
+
+    def blocking_get_snapshot():
+        started.set()
+        if not allow_continue.wait(timeout=5.0):
+            raise RuntimeError("Test timed out waiting to continue snapshot")
+        return original_get_snapshot()
+
+    agg_a.get_snapshot = blocking_get_snapshot  # type: ignore[method-assign]
+
+    result: dict[str, object] = {}
+
+    def worker() -> None:
+        try:
+            result["snapshots"] = registry.get_all_snapshots()
+        except Exception as e:
+            result["error"] = e
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+
+    assert started.wait(timeout=5.0)
+
+    event_b = TelemetryEvent(
+        event_type=TelemetryEventType.EPOCH_COMPLETED,
+        group_id="B",
+        message="Group B event",
+        data=EpochCompletedPayload(env_id=0, val_accuracy=0.0, val_loss=0.0, inner_epoch=0),
+    )
+    registry.process_event(event_b)
+
+    allow_continue.set()
+    thread.join(timeout=5.0)
+
+    assert not thread.is_alive()
+    assert "error" not in result
+    assert "B" in registry.group_ids

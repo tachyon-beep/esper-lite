@@ -13,7 +13,7 @@ async def test_app_launches():
 
     mock_backend = MagicMock()
     mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
-    mock_backend.compute_reward_health.return_value = RewardHealthData()
+    mock_backend.compute_reward_health_by_group.return_value = {"default": RewardHealthData()}
 
     app = SanctumApp(backend=mock_backend)
     async with app.run_test():
@@ -27,7 +27,7 @@ async def test_app_has_main_panels():
 
     mock_backend = MagicMock()
     mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
-    mock_backend.compute_reward_health.return_value = RewardHealthData()
+    mock_backend.compute_reward_health_by_group.return_value = {"default": RewardHealthData()}
 
     app = SanctumApp(backend=mock_backend)
     async with app.run_test():
@@ -45,7 +45,7 @@ async def test_app_quit_binding():
 
     mock_backend = MagicMock()
     mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
-    mock_backend.compute_reward_health.return_value = RewardHealthData()
+    mock_backend.compute_reward_health_by_group.return_value = {"default": RewardHealthData()}
 
     app = SanctumApp(backend=mock_backend)
     quit_called = False
@@ -75,7 +75,7 @@ async def test_app_focus_navigation():
 
     mock_backend = MagicMock()
     mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
-    mock_backend.compute_reward_health.return_value = RewardHealthData()
+    mock_backend.compute_reward_health_by_group.return_value = {"default": RewardHealthData()}
 
     app = SanctumApp(backend=mock_backend)
     async with app.run_test() as pilot:
@@ -92,7 +92,7 @@ async def test_app_has_anomaly_strip():
 
     mock_backend = MagicMock()
     mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
-    mock_backend.compute_reward_health.return_value = RewardHealthData()
+    mock_backend.compute_reward_health_by_group.return_value = {"default": RewardHealthData()}
 
     app = SanctumApp(backend=mock_backend, num_envs=4)
     async with app.run_test():
@@ -109,7 +109,7 @@ async def test_app_shows_thread_death_modal():
 
     mock_backend = MagicMock()
     mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
-    mock_backend.compute_reward_health.return_value = RewardHealthData()
+    mock_backend.compute_reward_health_by_group.return_value = {"default": RewardHealthData()}
 
     # Create a thread that immediately stops
     dead_thread = threading.Thread(target=lambda: None)
@@ -125,4 +125,3 @@ async def test_app_shows_thread_death_modal():
 
         # Check that modal was shown
         assert app._thread_death_shown is True
-

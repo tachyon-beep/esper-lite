@@ -5,8 +5,6 @@ These are pure functions with no side effects - ideal for unit testing.
 
 from __future__ import annotations
 
-import pytest
-
 from esper.karn.sanctum.formatting import format_runtime, format_params
 
 

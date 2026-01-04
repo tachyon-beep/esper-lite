@@ -169,7 +169,7 @@ class SanctumBackend:
         return aggregator.toggle_best_run_pin(record_id)
 
     def compute_reward_health(self) -> "RewardHealthData":
-        """Compute reward health metrics from first aggregator.
+        """Compute reward health metrics for one policy group.
 
         Returns:
             RewardHealthData with computed metrics.
@@ -180,6 +180,22 @@ class SanctumBackend:
         group_ids = self._registry.group_ids
         if not group_ids:
             return RewardHealthData()
-        group_id = sorted(group_ids)[0]
-        aggregator = self._registry.get_or_create(group_id)
+        if "default" in group_ids:
+            chosen_group_id = "default"
+        else:
+            chosen_group_id = sorted(group_ids)[0]
+        aggregator = self._registry.get_or_create(chosen_group_id)
         return aggregator.compute_reward_health()
+
+    def compute_reward_health_by_group(self) -> dict[str, "RewardHealthData"]:
+        """Compute reward health metrics for all policy groups."""
+        self._raise_if_fatal()
+        group_ids = sorted(self._registry.group_ids)
+        if not group_ids:
+            return {}
+
+        by_group: dict[str, "RewardHealthData"] = {}
+        for group_id in group_ids:
+            aggregator = self._registry.get_or_create(group_id)
+            by_group[group_id] = aggregator.compute_reward_health()
+        return by_group

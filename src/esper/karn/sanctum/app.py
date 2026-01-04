@@ -108,7 +108,7 @@ class SanctumView:
 
     primary: "SanctumSnapshot"
     snapshots_by_group: dict[str, "SanctumSnapshot"]
-    reward_health: "RewardHealthData"
+    reward_health_by_group: dict[str, "RewardHealthData"]
 
 
 class HelpScreen(ModalScreen[None]):
@@ -364,7 +364,7 @@ class SanctumApp(App[None]):
         self._apply_view_scheduled = False
         self._last_heavy_widget_update_ts: float = 0.0
         self._last_reward_health_update_ts: float = 0.0
-        self._cached_reward_health: RewardHealthData = RewardHealthData()
+        self._cached_reward_health_by_group: dict[str, RewardHealthData] = {}
 
     def compose(self) -> ComposeResult:
         """Build the Sanctum layout.
@@ -435,7 +435,7 @@ class SanctumApp(App[None]):
     def _refresh_tamiyo_widgets(
         self,
         snapshots: dict[str, "SanctumSnapshot"],
-        reward_health: RewardHealthData,
+        reward_health_by_group: dict[str, RewardHealthData],
     ) -> None:
         """Refresh TamiyoBrain widgets from multi-group snapshots."""
 
@@ -445,7 +445,7 @@ class SanctumApp(App[None]):
                 widget = self._get_or_create_tamiyo_widget("default")
                 from esper.karn.sanctum.schema import SanctumSnapshot as SnapshotClass
                 widget.update_snapshot(SnapshotClass())
-                widget.update_reward_health(reward_health)
+                widget.update_reward_health(RewardHealthData())
             except NoMatches:
                 pass
             return
@@ -455,7 +455,10 @@ class SanctumApp(App[None]):
             try:
                 widget = self._get_or_create_tamiyo_widget(group_id)
                 widget.update_snapshot(group_snapshot)
-                widget.update_reward_health(reward_health)
+                if group_id in reward_health_by_group:
+                    widget.update_reward_health(reward_health_by_group[group_id])
+                else:
+                    widget.update_reward_health(RewardHealthData())
             except NoMatches:
                 pass  # Container hasn't mounted yet
 
@@ -484,11 +487,11 @@ class SanctumApp(App[None]):
 
         try:
             snapshots_by_group = self._backend.get_all_snapshots()
-            reward_health = self._cached_reward_health
+            reward_health_by_group = self._cached_reward_health_by_group
             now = time.monotonic()
             if (now - self._last_reward_health_update_ts) >= 0.5:
-                reward_health = self._backend.compute_reward_health()
-                self._cached_reward_health = reward_health
+                reward_health_by_group = self._backend.compute_reward_health_by_group()
+                self._cached_reward_health_by_group = reward_health_by_group
                 self._last_reward_health_update_ts = now
         except SanctumTelemetryFatalError as e:
             self._show_telemetry_fatal(e)
@@ -542,7 +545,7 @@ class SanctumApp(App[None]):
             self.view = SanctumView(
                 primary=primary,
                 snapshots_by_group=snapshots_by_group,
-                reward_health=reward_health,
+                reward_health_by_group=reward_health_by_group,
             )
         except SanctumTelemetryFatalError as e:
             self._show_telemetry_fatal(e)
@@ -607,9 +610,9 @@ class SanctumApp(App[None]):
 
             self._last_heavy_widget_update_ts = now
 
-        # Update TamiyoBrain widgets using multi-group snapshots
-        # Pass reward_health to each widget (now displayed in ActionContext)
-        self._refresh_tamiyo_widgets(view.snapshots_by_group, view.reward_health)
+        # Update TamiyoBrain widgets using multi-group snapshots.
+        # Pass per-group reward health (displayed in ActionContext).
+        self._refresh_tamiyo_widgets(view.snapshots_by_group, view.reward_health_by_group)
 
         try:
             self.query_one("#event-log", EventLog).update_snapshot(snapshot)

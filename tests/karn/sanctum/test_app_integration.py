@@ -18,7 +18,7 @@ class TestSanctumAppIntegration:
 
         mock_backend = MagicMock()
         mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
-        mock_backend.compute_reward_health.return_value = RewardHealthData()
+        mock_backend.compute_reward_health_by_group.return_value = {"default": RewardHealthData()}
 
         app = SanctumApp(backend=mock_backend, num_envs=4)
 
@@ -40,7 +40,7 @@ class TestSanctumAppIntegration:
             envs={0: EnvState(env_id=0, host_accuracy=75.5)},
         )
         mock_backend.get_all_snapshots.return_value = {"default": snapshot}
-        mock_backend.compute_reward_health.return_value = RewardHealthData()
+        mock_backend.compute_reward_health_by_group.return_value = {"default": RewardHealthData()}
 
         # Use a fast refresh rate so timer fires quickly
         app = SanctumApp(backend=mock_backend, num_envs=4, refresh_rate=10.0)
@@ -61,7 +61,7 @@ class TestSanctumAppIntegration:
 
         mock_backend = MagicMock()
         mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
-        mock_backend.compute_reward_health.return_value = RewardHealthData()
+        mock_backend.compute_reward_health_by_group.return_value = {"default": RewardHealthData()}
 
         app = SanctumApp(backend=mock_backend, num_envs=16)
 
@@ -87,7 +87,7 @@ class TestSanctumAppIntegration:
 
         mock_backend = MagicMock()
         mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
-        mock_backend.compute_reward_health.return_value = RewardHealthData()
+        mock_backend.compute_reward_health_by_group.return_value = {"default": RewardHealthData()}
 
         app = SanctumApp(backend=mock_backend, num_envs=4)
 
@@ -468,7 +468,7 @@ async def test_pin_toggle_calls_backend():
         ],
     )
     mock_backend.get_all_snapshots.return_value = {"default": snapshot}
-    mock_backend.compute_reward_health.return_value = RewardHealthData()
+    mock_backend.compute_reward_health_by_group.return_value = {"default": RewardHealthData()}
     mock_backend.toggle_best_run_pin.return_value = True  # Returns new pin status
 
     app = SanctumApp(backend=mock_backend, num_envs=4)
@@ -502,7 +502,7 @@ async def test_pin_toggle_no_op_without_selection():
     # Empty best_runs - no rows to pin
     snapshot = SanctumSnapshot(best_runs=[])
     mock_backend.get_all_snapshots.return_value = {"default": snapshot}
-    mock_backend.compute_reward_health.return_value = RewardHealthData()
+    mock_backend.compute_reward_health_by_group.return_value = {"default": RewardHealthData()}
 
     app = SanctumApp(backend=mock_backend, num_envs=4)
 
