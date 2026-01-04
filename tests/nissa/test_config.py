@@ -151,10 +151,11 @@ class TestBuiltInProfiles:
         assert config.per_class.enabled is True
 
     def test_research_profile_loads(self) -> None:
-        """Research profile loads successfully."""
+        """Research profile loads successfully with extended percentiles."""
         config = TelemetryConfig.research()
         assert config.profile_name == "research"
-        assert config.gradients.full_histogram is True
+        # Research profile has extended percentiles for deeper gradient analysis
+        assert len(config.gradients.percentiles) == 9  # [1, 5, 10, 25, 50, 75, 90, 95, 99]
 
 
 class TestFeatureCountEstimate:
@@ -175,10 +176,7 @@ class TestFeatureCountEstimate:
 
     def test_per_class_uses_num_classes_parameter(self) -> None:
         """Per-class features scale with num_classes parameter."""
-        config = TelemetryConfig.from_profile(
-            "diagnostic",
-            overrides={"per_class": {"track_loss": False, "track_confusion": False}},
-        )
+        config = TelemetryConfig.from_profile("diagnostic")
 
         # Get counts for different class counts
         count_10 = config.feature_count_estimate(num_classes=10)
@@ -186,24 +184,6 @@ class TestFeatureCountEstimate:
 
         # The difference should be exactly 90 (100 - 10) for per-class accuracy
         assert count_100 - count_10 == 90
-
-    def test_confusion_matrix_scales_quadratically(self) -> None:
-        """Confusion matrix features scale as num_classes^2."""
-        config = TelemetryConfig.from_profile(
-            "research",  # Has track_confusion: true
-        )
-
-        count_10 = config.feature_count_estimate(num_classes=10)
-        count_5 = config.feature_count_estimate(num_classes=5)
-
-        # With confusion matrix, per_class adds: N + N (if track_loss) + N*N
-        # Research has track_accuracy=True, track_loss=True, track_confusion=True
-        # Difference for N=10 vs N=5:
-        # (10 + 10 + 100) - (5 + 5 + 25) = 120 - 35 = 85
-        expected_diff = (10 + 10 + 100) - (5 + 5 + 25)
-        actual_diff = count_10 - count_5
-
-        assert actual_diff == expected_diff
 
 
 class TestDeepMerge:

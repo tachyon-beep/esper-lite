@@ -21,7 +21,6 @@ profiles:
     loss_landscape:
       enabled: false
     track_weight_norms: false
-    track_activation_stats: false
 
   # Default for data generation
   # Use for: building training datasets, normal operation
@@ -45,7 +44,6 @@ profiles:
     loss_landscape:
       enabled: false
     track_weight_norms: false
-    track_activation_stats: false
 
   # Deep analysis runs
   # Use for: understanding training dynamics, debugging policy decisions
@@ -63,18 +61,14 @@ profiles:
       exploding_threshold: 1000.0
     per_class:
       enabled: true
-      track_accuracy: true
-      track_loss: true
-      track_confusion: false
     loss_landscape:
       enabled: true
       perturbation_samples: 5
       perturbation_scale: 0.01
       estimate_sharpness: true
     track_weight_norms: true
-    track_activation_stats: false
 
-  # Kitchen sink - everything
+  # Kitchen sink - everything implemented
   # Use for: research, detailed analysis, when you need ALL the data
   research:
     history_length: 50
@@ -88,16 +82,11 @@ profiles:
       detect_exploding: true
       vanishing_threshold: 1.0e-7
       exploding_threshold: 1000.0
-      full_histogram: true
     per_class:
       enabled: true
-      track_accuracy: true
-      track_loss: true
-      track_confusion: true
     loss_landscape:
       enabled: true
       perturbation_samples: 10
       perturbation_scale: 0.01
       estimate_sharpness: true
     track_weight_norms: true
-    track_activation_stats: true

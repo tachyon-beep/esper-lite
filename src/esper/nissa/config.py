@@ -50,7 +50,6 @@ class GradientConfig(BaseModel):
     detect_exploding: bool = True
     vanishing_threshold: float = Field(default=1e-7, gt=0)
     exploding_threshold: float = Field(default=1e3, gt=0)
-    full_histogram: bool = False
 
     @field_validator("percentiles")
     @classmethod
@@ -78,9 +77,6 @@ class PerClassConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
-    track_accuracy: bool = True
-    track_loss: bool = False
-    track_confusion: bool = False  # Full NxN confusion matrix
 
 
 class TelemetryConfig(BaseModel):
@@ -95,7 +91,6 @@ class TelemetryConfig(BaseModel):
         loss_landscape: Loss landscape analysis configuration.
         per_class: Per-class metrics configuration.
         track_weight_norms: Track weight norms per layer.
-        track_activation_stats: Track activation statistics.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -108,7 +103,6 @@ class TelemetryConfig(BaseModel):
     per_class: PerClassConfig = Field(default_factory=PerClassConfig)
 
     track_weight_norms: bool = False
-    track_activation_stats: bool = False
 
     @classmethod
     def from_yaml(cls, path: Path | str, overrides: dict[str, Any] | None = None) -> TelemetryConfig:
@@ -239,10 +233,6 @@ class TelemetryConfig(BaseModel):
 
         if self.per_class.enabled:
             count += num_classes  # Per-class accuracy
-            if self.per_class.track_loss:
-                count += num_classes
-            if self.per_class.track_confusion:
-                count += num_classes * num_classes  # NxN confusion matrix
 
         if self.loss_landscape.enabled:
             count += 3  # sharpness, curvature estimate, noise
