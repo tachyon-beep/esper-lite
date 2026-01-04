@@ -79,17 +79,17 @@
     padding: 0 1;
 }
 
-/* Bottom section: Event Log + TamiyoBrain (~73% of main area) */
+/* Bottom section: Tamiyo (full width) */
 #bottom-section {
     height: 73%;
     min-height: 24;
     width: 100%;
 }
 
-/* Tamiyo Container - holds multiple TamiyoBrain widgets for A/B testing (80% width, expanded from 70%) */
+/* Tamiyo Container - holds multiple TamiyoBrain widgets for A/B testing (full width) */
 #tamiyo-container {
     layout: horizontal;
-    width: 80%;
+    width: 100%;
     height: 1fr;
 }
 
@@ -147,22 +147,6 @@
 }
 
 #tamiyo-container TamiyoBrain:focus {
-    border: double $accent;
-}
-
-/* Event Log - system velocity (20% width, reduced from 30%) */
-#event-log {
-    width: 20%;
-    height: 1fr;
-    border: solid $warning;
-    border-title-color: $warning;
-    overflow-x: hidden;
-    overflow-y: auto;
-    scrollbar-size: 0 0;  /* Hide scrollbar to avoid double vertical line */
-    padding: 0 1;
-}
-
-#event-log:focus {
     border: double $accent;
 }
 

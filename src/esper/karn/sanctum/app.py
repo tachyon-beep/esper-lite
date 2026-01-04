@@ -4,7 +4,7 @@ Developer diagnostic TUI for debugging PPO training runs.
 Layout matches existing Rich TUI (tui.py _render() method).
 
 LAYOUT FIX: TamiyoBrain spans full width as dedicated row (size=11),
-NOT embedded in right column. Event Log included at bottom-left.
+NOT embedded in right column. EventLog is rendered inside Tamiyo.
 
 UNICODE GLYPH REQUIREMENTS:
     Sanctum requires a terminal with Unicode support and a font that includes:
@@ -434,13 +434,11 @@ class SanctumApp(App[None]):
                 with Vertical(id="metrics-column"):
                     yield Scoreboard(id="scoreboard")
 
-            # Bottom section: TamiyoBrain (left) | Event Log (right)
+            # Bottom section: Tamiyo (full width)
             with Horizontal(id="bottom-section"):
-                # Left side: TamiyoBrain container (70%) - widgets created dynamically
+                # TamiyoBrain container - widgets created dynamically
                 with Horizontal(id="tamiyo-container"):
                     pass  # TamiyoBrain widgets mounted dynamically
-                # Right side: Event Log (30%)
-                yield EventLog(id="event-log")
 
         yield Footer()
 
@@ -654,11 +652,6 @@ class SanctumApp(App[None]):
         # Update TamiyoBrain widgets using multi-group snapshots.
         # Pass per-group reward health (displayed in ActionContext).
         self._refresh_tamiyo_widgets(view.snapshots_by_group, view.reward_health_by_group)
-
-        try:
-            self.query_one("#event-log", EventLog).update_snapshot(snapshot)
-        except NoMatches:
-            pass  # Widget hasn't mounted yet
 
         # Update EnvDetailScreen modal if displayed
         # Check if we have a modal screen on the stack

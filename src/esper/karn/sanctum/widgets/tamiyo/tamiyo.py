@@ -37,6 +37,8 @@ from typing import TYPE_CHECKING, Any
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 
+from esper.karn.sanctum.widgets.event_log import EventLog
+
 from .narrative_panel import NarrativePanel
 from .ppo_losses_panel import PPOLossesPanel
 from .health_status_panel import HealthStatusPanel
@@ -85,6 +87,17 @@ class TamiyoBrain(Container):
         width: 1fr;
         min-width: 45;
         height: 100%;
+        padding: 0 1;
+    }
+
+    EventLog {
+        width: 1fr;
+        height: 100%;
+        border: round $surface-lighten-2;
+        border-title-color: $text-muted;
+        overflow-x: hidden;
+        overflow-y: auto;
+        scrollbar-size: 0 0;
         padding: 0 1;
     }
 
@@ -253,6 +266,7 @@ class TamiyoBrain(Container):
             with Vertical(id="right-column"):
                 yield NarrativePanel(id="narrative-panel")
                 yield DecisionsColumn(id="decisions-panel")
+            yield EventLog()
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Update all child widgets with new snapshot data.
@@ -293,6 +307,7 @@ class TamiyoBrain(Container):
             "#value-diagnostics-panel", ValueDiagnosticsPanel
         ).update_snapshot(snapshot)
         self.query_one("#decisions-panel", DecisionsColumn).update_snapshot(snapshot)
+        self.query_one(EventLog).update_snapshot(snapshot)
 
     def update_reward_health(self, data: "RewardHealthData") -> None:
         """Update ActionContext with reward health data.

@@ -13,8 +13,10 @@ class TestSanctumAppIntegration:
 
     @pytest.mark.asyncio
     async def test_app_creates_all_widgets(self):
-        """All required widgets should be created on compose."""
+        """All required scaffold widgets should be created on compose."""
         from esper.karn.sanctum.app import SanctumApp
+        from esper.karn.sanctum.widgets.event_log import EventLog
+        from esper.karn.sanctum.widgets.tamiyo import TamiyoBrain
 
         mock_backend = MagicMock()
         mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
@@ -22,12 +24,17 @@ class TestSanctumAppIntegration:
 
         app = SanctumApp(backend=mock_backend, num_envs=4)
 
-        async with app.run_test():
+        async with app.run_test() as pilot:
             # Verify all widgets exist
             assert app.query_one("#env-overview") is not None
             assert app.query_one("#scoreboard") is not None
             assert app.query_one("#tamiyo-container") is not None  # Container for dynamic widgets
-            assert app.query_one("#event-log") is not None
+
+            # Tamiyo widgets mount dynamically; force a refresh for deterministic tests.
+            app._poll_and_refresh()
+            await pilot.pause()
+            tamiyo = app.query_one(TamiyoBrain)
+            assert tamiyo.query_one(EventLog) is not None
 
     @pytest.mark.asyncio
     async def test_snapshot_propagates_to_all_widgets(self):
@@ -104,18 +111,25 @@ async def test_new_layout_structure():
     """Test that new layout has correct panel structure."""
     from esper.karn.sanctum.app import SanctumApp
     from esper.karn.sanctum.backend import SanctumBackend
+    from esper.karn.sanctum.widgets.event_log import EventLog
+    from esper.karn.sanctum.widgets.tamiyo import TamiyoBrain
 
     backend = SanctumBackend()
     app = SanctumApp(backend=backend, num_envs=4)
 
-    async with app.run_test():
+    async with app.run_test() as pilot:
         # Should have EnvOverview and Scoreboard in top section
         assert app.query_one("#env-overview") is not None
         assert app.query_one("#scoreboard") is not None
 
-        # Should have EventLog and TamiyoBrain container in bottom section
-        assert app.query_one("#event-log") is not None
+        # Tamiyo container exists; Tamiyo widgets mount dynamically.
         assert app.query_one("#tamiyo-container") is not None  # Container for dynamic widgets
+
+        app._poll_and_refresh()
+        await pilot.pause()
+
+        tamiyo = app.query_one(TamiyoBrain)
+        assert tamiyo.query_one(EventLog) is not None
 
         # Should NOT have SystemResources or TrainingHealth
         from textual.css.query import NoMatches
