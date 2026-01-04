@@ -4,6 +4,10 @@ import pytest
 import torch
 
 from esper.leyline import (
+    AlphaCurveAction,
+    AlphaSpeedAction,
+    AlphaTargetAction,
+    BlueprintAction,
     GerminationStyle,
     LifecycleOp,
     NUM_ALPHA_CURVES,
@@ -14,6 +18,7 @@ from esper.leyline import (
     NUM_STYLES,
     NUM_TEMPO,
     OBS_V3_NON_BLUEPRINT_DIM,
+    TempoAction,
 )
 from esper.leyline.slot_config import SlotConfig
 from esper.tamiyo.policy.action_masks import InvalidStateMachineError
@@ -269,6 +274,41 @@ def test_style_not_forced_for_set_alpha_target():
 
     assert (result.actions["op"] == LifecycleOp.SET_ALPHA_TARGET).all()
     assert (result.actions["style"] == int(GerminationStyle.GATED_GATE)).all()
+
+
+def test_irrelevant_heads_forced_to_defaults_when_wait():
+    """Irrelevant heads should be canonicalized to stable defaults when op=WAIT."""
+    net = FactoredRecurrentActorCritic(state_dim=20)
+    state = torch.randn(3, 20)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (3, 3))
+
+    # Force op = WAIT and provide all-True head masks to ensure the override is active.
+    op_mask = torch.zeros(3, NUM_OPS, dtype=torch.bool)
+    op_mask[:, LifecycleOp.WAIT] = True
+    blueprint_mask = torch.ones(3, NUM_BLUEPRINTS, dtype=torch.bool)
+    tempo_mask = torch.ones(3, NUM_TEMPO, dtype=torch.bool)
+    alpha_target_mask = torch.ones(3, NUM_ALPHA_TARGETS, dtype=torch.bool)
+    alpha_speed_mask = torch.ones(3, NUM_ALPHA_SPEEDS, dtype=torch.bool)
+    alpha_curve_mask = torch.ones(3, NUM_ALPHA_CURVES, dtype=torch.bool)
+
+    result = net.get_action(
+        state,
+        bp_idx,
+        op_mask=op_mask,
+        blueprint_mask=blueprint_mask,
+        tempo_mask=tempo_mask,
+        alpha_target_mask=alpha_target_mask,
+        alpha_speed_mask=alpha_speed_mask,
+        alpha_curve_mask=alpha_curve_mask,
+    )
+
+    assert (result.actions["op"] == LifecycleOp.WAIT).all()
+    assert (result.actions["style"] == int(GerminationStyle.SIGMOID_ADD)).all()
+    assert (result.actions["blueprint"] == int(BlueprintAction.NOOP)).all()
+    assert (result.actions["tempo"] == int(TempoAction.STANDARD)).all()
+    assert (result.actions["alpha_target"] == int(AlphaTargetAction.FULL)).all()
+    assert (result.actions["alpha_speed"] == int(AlphaSpeedAction.INSTANT)).all()
+    assert (result.actions["alpha_curve"] == int(AlphaCurveAction.LINEAR)).all()
 
 
 def test_masking_produces_valid_softmax():

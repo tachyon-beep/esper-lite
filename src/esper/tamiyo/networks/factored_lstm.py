@@ -28,7 +28,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from esper.leyline import (
+    AlphaCurveAction,
+    AlphaSpeedAction,
+    AlphaTargetAction,
     BLUEPRINT_NULL_INDEX,
+    BlueprintAction,
     DEFAULT_BLUEPRINT_EMBED_DIM,
     DEFAULT_LSTM_HIDDEN_DIM,
     DEFAULT_FEATURE_DIM,
@@ -37,6 +41,7 @@ from esper.leyline import (
     LifecycleOp,
     MASKED_LOGIT_VALUE,
     NUM_BLUEPRINTS,
+    TempoAction,
     get_action_head_sizes,
 )
 from esper.leyline.slot_config import SlotConfig
@@ -771,16 +776,75 @@ class FactoredRecurrentActorCritic(nn.Module):
             style_mask_override[style_irrelevant, int(GerminationStyle.SIGMOID_ADD)] = True
             _sample_head("style", mask_override=style_mask_override)
 
-            # Sample remaining heads (unchanged)
-            for key in [
-                "slot",
-                "blueprint",
-                "tempo",
-                "alpha_target",
-                "alpha_speed",
-                "alpha_curve",
-            ]:
-                _sample_head(key)
+            # Canonicalize irrelevant heads based on selected_op.
+            # This keeps rollouts/telemetry well-defined and prevents irrelevant heads
+            # from polluting joint ratio/KL metrics during PPO.
+            blueprint_mask_override = masks["blueprint"]
+            if blueprint_mask_override is None:
+                blueprint_mask_override = torch.ones_like(
+                    head_logits["blueprint"], dtype=torch.bool
+                )
+            blueprint_mask_override = blueprint_mask_override.clone()
+            blueprint_irrelevant = selected_op != LifecycleOp.GERMINATE
+            blueprint_mask_override[blueprint_irrelevant] = False
+            blueprint_mask_override[blueprint_irrelevant, int(BlueprintAction.NOOP)] = True
+
+            tempo_mask_override = masks["tempo"]
+            if tempo_mask_override is None:
+                tempo_mask_override = torch.ones_like(
+                    head_logits["tempo"], dtype=torch.bool
+                )
+            tempo_mask_override = tempo_mask_override.clone()
+            tempo_irrelevant = selected_op != LifecycleOp.GERMINATE
+            tempo_mask_override[tempo_irrelevant] = False
+            tempo_mask_override[tempo_irrelevant, int(TempoAction.STANDARD)] = True
+
+            alpha_target_mask_override = masks["alpha_target"]
+            if alpha_target_mask_override is None:
+                alpha_target_mask_override = torch.ones_like(
+                    head_logits["alpha_target"], dtype=torch.bool
+                )
+            alpha_target_mask_override = alpha_target_mask_override.clone()
+            alpha_target_irrelevant = (selected_op != LifecycleOp.GERMINATE) & (
+                selected_op != LifecycleOp.SET_ALPHA_TARGET
+            )
+            alpha_target_mask_override[alpha_target_irrelevant] = False
+            alpha_target_mask_override[
+                alpha_target_irrelevant, int(AlphaTargetAction.FULL)
+            ] = True
+
+            alpha_schedule_irrelevant = (selected_op != LifecycleOp.SET_ALPHA_TARGET) & (
+                selected_op != LifecycleOp.PRUNE
+            )
+
+            alpha_speed_mask_override = masks["alpha_speed"]
+            if alpha_speed_mask_override is None:
+                alpha_speed_mask_override = torch.ones_like(
+                    head_logits["alpha_speed"], dtype=torch.bool
+                )
+            alpha_speed_mask_override = alpha_speed_mask_override.clone()
+            alpha_speed_mask_override[alpha_schedule_irrelevant] = False
+            alpha_speed_mask_override[
+                alpha_schedule_irrelevant, int(AlphaSpeedAction.INSTANT)
+            ] = True
+
+            alpha_curve_mask_override = masks["alpha_curve"]
+            if alpha_curve_mask_override is None:
+                alpha_curve_mask_override = torch.ones_like(
+                    head_logits["alpha_curve"], dtype=torch.bool
+                )
+            alpha_curve_mask_override = alpha_curve_mask_override.clone()
+            alpha_curve_mask_override[alpha_schedule_irrelevant] = False
+            alpha_curve_mask_override[
+                alpha_schedule_irrelevant, int(AlphaCurveAction.LINEAR)
+            ] = True
+
+            _sample_head("slot")
+            _sample_head("blueprint", mask_override=blueprint_mask_override)
+            _sample_head("tempo", mask_override=tempo_mask_override)
+            _sample_head("alpha_target", mask_override=alpha_target_mask_override)
+            _sample_head("alpha_speed", mask_override=alpha_speed_mask_override)
+            _sample_head("alpha_curve", mask_override=alpha_curve_mask_override)
 
             # Value and sampled_op are already set above based on deterministic mode
             new_hidden = output["hidden"]
@@ -893,6 +957,17 @@ class FactoredRecurrentActorCritic(nn.Module):
         entropy: dict[str, torch.Tensor] = {}
 
         op_actions = actions["op"]
+        style_irrelevant = (op_actions != LifecycleOp.GERMINATE) & (
+            op_actions != LifecycleOp.SET_ALPHA_TARGET
+        )
+        blueprint_irrelevant = op_actions != LifecycleOp.GERMINATE
+        tempo_irrelevant = op_actions != LifecycleOp.GERMINATE
+        alpha_target_irrelevant = (op_actions != LifecycleOp.GERMINATE) & (
+            op_actions != LifecycleOp.SET_ALPHA_TARGET
+        )
+        alpha_schedule_irrelevant = (op_actions != LifecycleOp.SET_ALPHA_TARGET) & (
+            op_actions != LifecycleOp.PRUNE
+        )
 
         masks = {
             "slot": slot_mask,
@@ -931,9 +1006,6 @@ class FactoredRecurrentActorCritic(nn.Module):
             if key == "style":
                 # When op is not GERMINATE or SET_ALPHA_TARGET, style is irrelevant.
                 # Force selection of SIGMOID_ADD (the default/no-op style).
-                style_irrelevant = (op_actions != LifecycleOp.GERMINATE) & (
-                    op_actions != LifecycleOp.SET_ALPHA_TARGET
-                )
                 # For 3D mask [batch, seq_len, num_styles], use masked_fill pattern
                 # to avoid incorrect advanced indexing. Expand style_irrelevant to match.
                 expanded_irrelevant = style_irrelevant.unsqueeze(-1).expand_as(mask)
@@ -941,6 +1013,36 @@ class FactoredRecurrentActorCritic(nn.Module):
                 # Set SIGMOID_ADD column to True for irrelevant rows
                 sigmoid_add_idx = int(GerminationStyle.SIGMOID_ADD)
                 mask[..., sigmoid_add_idx] = mask[..., sigmoid_add_idx] | style_irrelevant
+            elif key == "blueprint":
+                # Blueprint only matters for GERMINATE; use NOOP as canonical placeholder otherwise.
+                expanded_irrelevant = blueprint_irrelevant.unsqueeze(-1).expand_as(mask)
+                mask = mask.masked_fill(expanded_irrelevant, False)
+                noop_idx = int(BlueprintAction.NOOP)
+                mask[..., noop_idx] = mask[..., noop_idx] | blueprint_irrelevant
+            elif key == "tempo":
+                # Tempo only matters for GERMINATE; use STANDARD as canonical placeholder otherwise.
+                expanded_irrelevant = tempo_irrelevant.unsqueeze(-1).expand_as(mask)
+                mask = mask.masked_fill(expanded_irrelevant, False)
+                standard_idx = int(TempoAction.STANDARD)
+                mask[..., standard_idx] = mask[..., standard_idx] | tempo_irrelevant
+            elif key == "alpha_target":
+                # Alpha target only matters for GERMINATE/SET_ALPHA_TARGET.
+                expanded_irrelevant = alpha_target_irrelevant.unsqueeze(-1).expand_as(mask)
+                mask = mask.masked_fill(expanded_irrelevant, False)
+                full_idx = int(AlphaTargetAction.FULL)
+                mask[..., full_idx] = mask[..., full_idx] | alpha_target_irrelevant
+            elif key == "alpha_speed":
+                # Alpha schedule only matters for SET_ALPHA_TARGET/PRUNE.
+                expanded_irrelevant = alpha_schedule_irrelevant.unsqueeze(-1).expand_as(mask)
+                mask = mask.masked_fill(expanded_irrelevant, False)
+                instant_idx = int(AlphaSpeedAction.INSTANT)
+                mask[..., instant_idx] = mask[..., instant_idx] | alpha_schedule_irrelevant
+            elif key == "alpha_curve":
+                # Alpha schedule only matters for SET_ALPHA_TARGET/PRUNE.
+                expanded_irrelevant = alpha_schedule_irrelevant.unsqueeze(-1).expand_as(mask)
+                mask = mask.masked_fill(expanded_irrelevant, False)
+                linear_idx = int(AlphaCurveAction.LINEAR)
+                mask[..., linear_idx] = mask[..., linear_idx] | alpha_schedule_irrelevant
             mask_flat = mask.reshape(-1, action_dim)
 
             dist = MaskedCategorical(logits=logits_flat, mask=mask_flat)
