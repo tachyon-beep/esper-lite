@@ -11,11 +11,10 @@ from esper.karn.sanctum.widgets.tamiyo_brain.ppo_losses_panel import PPOLossesPa
 
 
 def test_ppo_losses_shows_gauges():
-    """PPOLossesPanel should show the 3 main PPO gauge metrics."""
+    """PPOLossesPanel should show PPO update health rows."""
     snapshot = SanctumSnapshot()
     snapshot.tamiyo = TamiyoState(
         explained_variance=0.85,
-        entropy=1.2,
         clip_fraction=0.15,
         kl_divergence=0.02,
     )
@@ -26,10 +25,11 @@ def test_ppo_losses_shows_gauges():
     content = panel.render()
 
     content_str = str(content)
-    # Should show 3 main gauge labels (Expl.Var, Entropy, Clip Frac)
+    # Should show update health labels
     assert "Expl.Var" in content_str
-    assert "Entropy" in content_str
+    assert "KL Diver" in content_str
     assert "Clip Frac" in content_str
+    assert "RatioJnt" in content_str
     # Should have gauge bars
     assert "[" in content_str and "]" in content_str
 
@@ -83,7 +83,6 @@ def test_ppo_losses_has_separator():
     snapshot = SanctumSnapshot()
     snapshot.tamiyo = TamiyoState(
         explained_variance=0.85,
-        entropy=1.2,
         clip_fraction=0.15,
         kl_divergence=0.02,
         policy_loss=0.05,

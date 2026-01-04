@@ -2,10 +2,9 @@
 
 Displays:
 - Advantage stats with skewness/kurtosis
-- Ratio bounds (joint only - per-head shown in ActionHeads)
 - Gradient norm with sparkline
-- KL divergence with sparkline
-- Entropy trend
+- Log prob extremes (NaN risk)
+- Entropy level + trend
 - Policy state
 - Value range
 - Observation health
@@ -104,16 +103,6 @@ class HealthStatusPanel(Static):
             result.append(" !", style=self._status_style(worst_status))
         result.append("\n")
 
-        # Ratio bounds (joint ratio for multi-head)
-        joint_status = self._get_joint_ratio_status(tamiyo.joint_ratio_max)
-        result.append("Ratio Joint  ", style="dim")
-        result.append(
-            f"{tamiyo.joint_ratio_max:.3f}", style=self._status_style(joint_status)
-        )
-        if joint_status != "ok":
-            result.append(" !", style=self._status_style(joint_status))
-        result.append("\n")
-
         # Grad norm with sparkline (rising is bad for gradients)
         # Fixed layout: Label(13) + Value(7) + Indicator(1) + Space(1) + Sparkline(10) + Trend(1)
         # Use space flag for sign alignment: "  0.123" vs " -0.123"
@@ -144,44 +133,6 @@ class HealthStatusPanel(Static):
             result.append("─" * self.SPARKLINE_WIDTH, style="dim")
         result.append("\n")
 
-        # KL divergence with sparkline (rising is bad - policy changing too fast)
-        # Fixed layout: Label(13) + Value(7) + Indicator(1) + Space(1) + Sparkline(10) + Trend(1)
-        # Use space flag for sign alignment: " 0.0089" vs "-0.0089"
-        kl_status = self._get_kl_status(tamiyo.kl_divergence)
-        result.append("KL Diverge   ", style="dim")  # 13 chars
-        if math.isnan(tamiyo.kl_divergence):
-            result.append("    ---", style="dim")  # 7 chars to match value width
-            result.append(" ")  # Placeholder for indicator
-            result.append(" ")  # Space before sparkline
-            result.append("─" * self.SPARKLINE_WIDTH, style="dim")
-        else:
-            result.append(
-                f"{tamiyo.kl_divergence: 7.4f}", style=self._status_style(kl_status)
-            )
-            if kl_status != "ok":
-                result.append("!", style=self._status_style(kl_status))
-            else:
-                result.append(" ", style="dim")
-            result.append(" ")
-            # Sparkline for KL history
-            if tamiyo.kl_divergence_history:
-                sparkline = render_sparkline(
-                    tamiyo.kl_divergence_history,
-                    width=self.SPARKLINE_WIDTH,
-                    style=self._status_style(kl_status),
-                )
-                result.append(sparkline)
-                arrow, arrow_style = trend_arrow_for_history(
-                    tamiyo.kl_divergence_history,
-                    metric_name="kl_divergence",
-                    metric_type="loss",
-                )
-                if arrow:
-                    result.append(arrow, style=arrow_style)
-            else:
-                result.append("─" * self.SPARKLINE_WIDTH, style="dim")
-        result.append("\n")
-
         # Log prob extremes (NaN predictor)
         lp_status = self._get_log_prob_status(tamiyo.log_prob_min)
         result.append("Log Prob     ", style="dim")
@@ -196,6 +147,14 @@ class HealthStatusPanel(Static):
                 result.append(" NaN RISK", style="red bold")
             elif lp_status == "warning":
                 result.append(" !", style="yellow")
+        result.append("\n")
+
+        # Entropy level
+        ent_status = self._get_entropy_status(tamiyo.entropy)
+        result.append("Entropy      ", style="dim")
+        result.append(f"{tamiyo.entropy: 7.3f}", style=self._status_style(ent_status))
+        if ent_status != "ok":
+            result.append(" !", style=self._status_style(ent_status))
         result.append("\n")
 
         # Entropy trend
@@ -607,30 +566,11 @@ class HealthStatusPanel(Static):
             return "warning"
         return "ok"
 
-    def _get_kl_status(self, kl: float) -> str:
-        """Check if KL divergence is healthy.
-
-        KL divergence measures how much the policy has changed from the old policy.
-        PPO typically targets KL < 0.01-0.02 for stable updates.
-        """
-        if math.isnan(kl):
-            return "ok"  # No data yet
-        if kl > 0.05:
-            return "critical"  # Policy changing too fast
-        if kl > 0.02:
-            return "warning"  # Elevated but not critical
-        return "ok"
-
-    def _get_joint_ratio_status(self, joint_ratio: float) -> str:
-        """Check joint ratio (product of per-head ratios).
-
-        With 8 heads, individual ratios at 1.15 produce joint ratio ~3.06.
-        Standard PPO clip range is [0.8, 1.2] → joint should be close to 1.0.
-        """
-        if joint_ratio > 3.0 or joint_ratio < 0.33:
-            return "critical"  # Severe explosion/collapse
-        if joint_ratio > 2.0 or joint_ratio < 0.5:
-            return "warning"  # Elevated but not critical
+    def _get_entropy_status(self, entropy: float) -> str:
+        if entropy < TUIThresholds.ENTROPY_CRITICAL:
+            return "critical"
+        if entropy < TUIThresholds.ENTROPY_WARNING:
+            return "warning"
         return "ok"
 
     def _status_style(self, status: str) -> str:

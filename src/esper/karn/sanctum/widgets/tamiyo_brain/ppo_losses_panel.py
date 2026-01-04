@@ -1,24 +1,22 @@
-"""PPOLossesPanel - Combined PPO gauges and loss sparklines.
+"""PPOLossesPanel - PPO update diagnostics (losses + trust region).
 
-Displays PPO health metrics with visual gauges in top section,
-and loss sparklines with trends in bottom section.
-
-Top Section (PPO Gauges):
-- Explained Variance (gauge bar)
-- Entropy (gauge bar)
-- Clip Fraction (gauge bar) + directional breakdown (↑↓)
+Top Section (Update Health):
+- Explained Variance (gauge)
+- KL divergence (sparkline)
+- Clip fraction (gauge) + directional breakdown (↑↓)
+- Joint ratio max (π_new/π_old product)
 
 Separator line
 
-Bottom Section (Loss Sparklines):
-- Episode Return (sparkline + value + trend)
+Bottom Section (Optimization Losses):
 - Policy Loss (sparkline + value + trend)
 - Value Loss (sparkline + value + trend)
-- Loss Ratio (value + status)
+- Lv/Lp ratio (value + hint)
 """
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from rich.text import Text
@@ -47,7 +45,7 @@ class PPOLossesPanel(Static):
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
         self.classes = "panel"
-        self.border_title = "PPO LOSSES"
+        self.border_title = "PPO UPDATE"
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Update with new snapshot data."""
@@ -62,15 +60,15 @@ class PPOLossesPanel(Static):
                 # Clamp negative distance (already below critical) to 0
                 distance = max(0.0, distance)
                 batches = int(distance / abs(velocity)) if velocity != 0 else 999
-                self.border_title = f"PPO LOSSES !! COLLAPSE ~{batches}b"
+                self.border_title = f"PPO UPDATE !! COLLAPSE ~{batches}b"
             else:
-                self.border_title = "PPO LOSSES"
+                self.border_title = "PPO UPDATE"
         elif batch < self.WARMUP_BATCHES:
             self.border_title = (
-                f"PPO LOSSES \u2500 WARMING UP [{batch}/{self.WARMUP_BATCHES}]"
+                f"PPO UPDATE \u2500 WARMING UP [{batch}/{self.WARMUP_BATCHES}]"
             )
         else:
-            self.border_title = "PPO LOSSES"
+            self.border_title = "PPO UPDATE"
 
         self.refresh()  # Trigger render()
 
@@ -95,7 +93,7 @@ class PPOLossesPanel(Static):
         return result
 
     def _render_gauges(self) -> Text:
-        """Render the PPO gauge rows."""
+        """Render PPO update health rows."""
         if self._snapshot is None:
             return Text("No data", style="dim")
 
@@ -118,17 +116,8 @@ class PPOLossesPanel(Static):
         )
         result.append("\n")
 
-        # Row 2: Entropy
-        result.append(
-            self._render_gauge_row(
-                label="Entropy  ",
-                value=tamiyo.entropy,
-                min_val=0.0,
-                max_val=2.0,
-                status=self._get_entropy_status(tamiyo.entropy),
-                is_warmup=is_warmup,
-            )
-        )
+        # Row 2: KL divergence (trust-region pressure)
+        result.append(self._render_kl_row(is_warmup=is_warmup))
         result.append("\n")
 
         # Row 3: Clip Fraction (with directional breakdown)
@@ -148,6 +137,69 @@ class PPOLossesPanel(Static):
         # Style: dim when both zero, otherwise show direction that's active
         dir_style = "dim" if clip_pos == 0 and clip_neg == 0 else "cyan"
         result.append(f" (\u2191{clip_pos:.1%} \u2193{clip_neg:.1%})", style=dir_style)
+        result.append("\n")
+
+        # Row 4: Joint ratio max (multi-head product)
+        result.append(self._render_joint_ratio_row(is_warmup=is_warmup))
+
+        return result
+
+    def _render_kl_row(self, *, is_warmup: bool) -> Text:
+        if self._snapshot is None:
+            return Text("No data", style="dim")
+
+        tamiyo = self._snapshot.tamiyo
+        kl = tamiyo.kl_divergence
+
+        result = Text()
+        result.append("KL Diver ", style="dim")
+
+        if math.isnan(kl):
+            result.append("    ---", style="dim")
+            return result
+
+        kl_status = self._get_kl_status(kl)
+        result.append(f"{kl: 7.4f}", style=self._status_style(kl_status))
+        if not is_warmup and kl_status != "ok":
+            result.append("!", style=self._status_style(kl_status))
+        else:
+            result.append(" ", style="dim")
+        result.append(" ")
+
+        spark_w = 12
+        if tamiyo.kl_divergence_history:
+            sparkline = render_sparkline(
+                tamiyo.kl_divergence_history,
+                width=spark_w,
+                style=self._status_style(kl_status),
+            )
+            result.append(sparkline)
+            arrow, arrow_style = trend_arrow_for_history(
+                tamiyo.kl_divergence_history,
+                metric_name="kl_divergence",
+                metric_type="loss",
+            )
+            if arrow:
+                result.append(arrow, style=arrow_style)
+        else:
+            result.append("─" * spark_w, style="dim")
+
+        return result
+
+    def _render_joint_ratio_row(self, *, is_warmup: bool) -> Text:
+        if self._snapshot is None:
+            return Text("No data", style="dim")
+
+        tamiyo = self._snapshot.tamiyo
+        joint_ratio = tamiyo.joint_ratio_max
+        joint_status = self._get_joint_ratio_status(joint_ratio)
+
+        result = Text()
+        result.append("RatioJnt", style="dim")
+        result.append(" ", style="dim")
+        result.append(f"{joint_ratio: 7.3f}", style=self._status_style(joint_status))
+        if not is_warmup and joint_status != "ok":
+            result.append(" !", style=self._status_style(joint_status))
 
         return result
 
@@ -307,10 +359,21 @@ class PPOLossesPanel(Static):
             return "warning"
         return "ok"
 
-    def _get_entropy_status(self, entropy: float) -> str:
-        if entropy < TUIThresholds.ENTROPY_CRITICAL:
+    def _get_kl_status(self, kl: float) -> str:
+        """Check if KL divergence is healthy (policy changing too fast)."""
+        if math.isnan(kl):
+            return "ok"  # No data yet
+        if kl > 0.05:
             return "critical"
-        if entropy < TUIThresholds.ENTROPY_WARNING:
+        if kl > 0.02:
+            return "warning"
+        return "ok"
+
+    def _get_joint_ratio_status(self, joint_ratio: float) -> str:
+        """Check joint ratio (product of per-head ratios)."""
+        if joint_ratio > 3.0 or joint_ratio < 0.33:
+            return "critical"
+        if joint_ratio > 2.0 or joint_ratio < 0.5:
             return "warning"
         return "ok"
 
