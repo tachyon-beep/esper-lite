@@ -310,6 +310,10 @@ class SanctumAggregator:
         self._total_fossilize: int = 0
         self._recent_outcomes: deque[bool] = deque(maxlen=20)  # For trend detection (True=success)
 
+        # Sliding window for instantaneous throughput (episodes per second)
+        # Stores (timestamp, episode_count) tuples for rate calculation
+        self._episode_completion_times: deque[tuple[float, int]] = deque(maxlen=100)
+
         # Pre-create env states
         for i in range(self.num_envs):
             self._ensure_env(i)
@@ -401,6 +405,36 @@ class SanctumAggregator:
                     record.pinned = not record.pinned
                     return record.pinned
         return False
+
+    def _compute_instantaneous_throughput(self, now: float) -> float:
+        """Compute episodes per second using sliding window.
+
+        Uses recent episode completion timestamps to calculate instantaneous
+        throughput, unaffected by warmup time. Falls back to 0.0 if insufficient
+        data (need at least 2 data points spanning > 1 second).
+
+        Args:
+            now: Current timestamp (time.time()).
+
+        Returns:
+            Episodes per second based on recent completions.
+        """
+        if len(self._episode_completion_times) < 2:
+            return 0.0
+
+        # Get oldest and newest timestamps in window
+        oldest_time, oldest_count = self._episode_completion_times[0]
+        newest_time, newest_count = self._episode_completion_times[-1]
+
+        # Calculate time span and episode delta
+        time_span = newest_time - oldest_time
+        episode_delta = newest_count - oldest_count
+
+        # Need meaningful time span to avoid division issues
+        if time_span < 1.0:
+            return 0.0
+
+        return episode_delta / time_span
 
     def _get_snapshot_unlocked(self) -> SanctumSnapshot:
         """Get snapshot without locking (caller must hold lock)."""
@@ -603,8 +637,10 @@ class SanctumAggregator:
             # Slot utilization: active_slots / total_slots
             slot_utilization = active_slots / total_slots if total_slots > 0 else 0.0
 
-            # Episodes per second (throughput)
-            episodes_per_second = total / runtime if runtime > 0 else 0.0
+            # Episodes per second (instantaneous throughput via sliding window)
+            # Uses recent episode completions rather than cumulative average to show
+            # current rate, unaffected by warmup time
+            episodes_per_second = self._compute_instantaneous_throughput(now)
 
             episode_stats = EpisodeStats(
                 total_episodes=total,
@@ -647,8 +683,8 @@ class SanctumAggregator:
 
             slot_utilization = active_slots / total_slots if total_slots > 0 else 0.0
 
-            # Episodes per second (throughput)
-            episodes_per_second = total / runtime if runtime > 0 else 0.0
+            # Episodes per second (instantaneous throughput via sliding window)
+            episodes_per_second = self._compute_instantaneous_throughput(now)
 
             episode_stats = EpisodeStats(
                 total_episodes=total,
@@ -780,6 +816,9 @@ class SanctumAggregator:
         self._envs.clear()
         for i in range(self.num_envs):
             self._ensure_env(i)
+
+        # Reset sliding window for throughput calculation
+        self._episode_completion_times.clear()
 
         # Reset Tamiyo state
         self._tamiyo = TamiyoState()
@@ -1334,6 +1373,9 @@ class SanctumAggregator:
 
         self._current_episode = payload.episodes_completed
         self._batches_completed += 1
+
+        # Record timestamp for instantaneous throughput calculation
+        self._episode_completion_times.append((time.time(), payload.episodes_completed))
 
         # Capture batch-level aggregates - all required fields
         self._current_batch = payload.batch_idx
