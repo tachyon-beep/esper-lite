@@ -14,7 +14,7 @@ UNICODE GLYPH REQUIREMENTS:
     Sparklines:       ▁ ▂ ▃ ▄ ▅ ▆ ▇ █
     Arrows:           ↑ ↓ → ↗ ↘ ▶ ▸
     Alpha curves:     ⌒ ⌢ ⌣ −
-    Medals:           🥇 🥈 🥉 📌
+    Medals:           🥇 🥈 🥉
     Severity:         💀 🔥 ⚠️
     Separators:       │ ─
 
@@ -79,11 +79,6 @@ HELP_TEXT = """\
   [cyan]i[/cyan]         Show full run info (untruncated)
   [cyan]r[/cyan]         Manual refresh
   [cyan]q[/cyan]         Quit Sanctum
-
-[bold]Pinning (in Best Runs / Decisions)[/bold]
-  [cyan]p[/cyan]         Toggle pin on selected Best Runs item
-  [cyan]Click[/cyan]     Click decision card to toggle pin (📌)
-  [dim]Pinned items are never removed from the display[/dim]
 
 [bold]Click Actions[/bold]
   [cyan]Click[/cyan]     Event Log → raw event detail view
@@ -325,8 +320,6 @@ class SanctumApp(App[None]):
         Binding("l", "focus_right_panel", "Right Panel", show=False),
         Binding("left", "focus_left_panel", "Left Panel", show=False),
         Binding("right", "focus_right_panel", "Right Panel", show=False),
-        # Pinning
-        Binding("p", "toggle_best_run_pin", "Pin", show=False),
     ]
 
     def __init__(
@@ -890,28 +883,6 @@ class SanctumApp(App[None]):
 
         self.push_screen(HistoricalEnvDetail(record=record))
 
-    def on_tamiyo_brain_decision_pin_toggled(
-        self, event: TamiyoBrain.DecisionPinToggled
-    ) -> None:
-        """Handle click on decision panel to toggle pin status.
-
-        Args:
-            event: The pin toggle event with decision_id.
-        """
-        if self._backend is None:
-            return
-
-        # Toggle pin in aggregator
-        try:
-            new_status = self._backend.toggle_decision_pin(event.group_id, event.decision_id)
-        except SanctumTelemetryFatalError as e:
-            self._show_telemetry_fatal(e)
-            return
-        self.log.info(f"Decision {event.decision_id} pin toggled: {new_status}")
-
-        # Refresh to show updated pin status
-        self._poll_and_refresh()
-
     def on_scoreboard_best_run_selected(
         self, event: Scoreboard.BestRunSelected
     ) -> None:
@@ -928,49 +899,6 @@ class SanctumApp(App[None]):
             f"Opened historical detail for Ep {event.record.episode + 1} "
             f"(peak: {event.record.peak_accuracy:.1f}%)"
         )
-
-    def on_scoreboard_best_run_pin_toggled(
-        self, event: Scoreboard.BestRunPinToggled
-    ) -> None:
-        """Handle right-click on Best Runs row to toggle pin status.
-
-        Pinned records are never removed from the leaderboard.
-
-        Args:
-            event: The pin toggle event with record_id.
-        """
-        if self._backend is None:
-            return
-
-        # Toggle pin in aggregator
-        try:
-            new_status = self._backend.toggle_best_run_pin(event.record_id)
-        except SanctumTelemetryFatalError as e:
-            self._show_telemetry_fatal(e)
-            return
-        self.log.info(f"Best run {event.record_id} pin toggled: {new_status}")
-
-        # Refresh to show updated pin status
-        self._poll_and_refresh()
-
-    def action_toggle_best_run_pin(self) -> None:
-        """Toggle pin status for the currently selected Best Run row.
-
-        Keyboard shortcut: p
-
-        Only works when a row in the Scoreboard best runs table is selected.
-        Pinned records are never removed from the leaderboard.
-        """
-        if self._backend is None:
-            return
-
-        try:
-            scoreboard = self.query_one("#scoreboard", Scoreboard)
-        except NoMatches:
-            return
-
-        # Delegate to Scoreboard to emit BestRunPinToggled; app handles backend call.
-        scoreboard.request_pin_toggle()
 
     def on_event_log_detail_requested(
         self, event: EventLog.DetailRequested

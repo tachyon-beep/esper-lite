@@ -50,6 +50,8 @@ from esper.leyline import (
     HEAD_MAX_ENTROPIES,
 )
 
+from .action_display import ACTION_ABBREVS_4 as ACTION_ABBREVS, ACTION_COLORS
+
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import DecisionSnapshot, SanctumSnapshot
 
@@ -107,26 +109,6 @@ assert _CONFIG_HEAD_KEYS == _LEYLINE_HEAD_KEYS, (
 # =============================================================================
 # Decision Output Abbreviations
 # =============================================================================
-
-# Action abbreviations (4 chars max)
-ACTION_ABBREVS = {
-    "GERMINATE": "GERM",
-    "SET_ALPHA_TARGET": "ALPH",
-    "FOSSILIZE": "FOSS",
-    "PRUNE": "PRUN",
-    "WAIT": "WAIT",
-    "ADVANCE": "ADVN",
-}
-
-# Action colors
-ACTION_COLORS = {
-    "GERMINATE": "green",
-    "SET_ALPHA_TARGET": "cyan",
-    "FOSSILIZE": "blue",
-    "PRUNE": "red",
-    "WAIT": "dim",
-    "ADVANCE": "cyan",
-}
 
 # Tempo abbreviations
 TEMPO_ABBREVS = {

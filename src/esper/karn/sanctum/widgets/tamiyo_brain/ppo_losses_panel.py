@@ -26,7 +26,8 @@ from textual.widgets import Static
 
 from esper.karn.constants import TUIThresholds
 
-from .sparkline_utils import detect_trend, render_sparkline, trend_style
+from .sparkline_utils import render_sparkline
+from .trends import trend_arrow_for_history
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot
@@ -219,10 +220,15 @@ class PPOLossesPanel(Static):
         result.append("P.Loss ", style="dim")  # 7 chars
         if tamiyo.policy_loss_history:
             pl_sparkline = render_sparkline(tamiyo.policy_loss_history, width=SPARK_W)
-            pl_trend = detect_trend(list(tamiyo.policy_loss_history))
             result.append(pl_sparkline)
             result.append(f" {tamiyo.policy_loss: 7.4f}", style="bright_cyan")
-            result.append(pl_trend, style=trend_style(pl_trend, "loss"))
+            arrow, arrow_style = trend_arrow_for_history(
+                tamiyo.policy_loss_history,
+                metric_name="policy_loss",
+                metric_type="loss",
+            )
+            if arrow:
+                result.append(arrow, style=arrow_style)
         else:
             result.append("─" * SPARK_W, style="dim")
             result.append(f" {tamiyo.policy_loss: 7.4f}", style="bright_cyan")
@@ -232,10 +238,15 @@ class PPOLossesPanel(Static):
         result.append("V.Loss ", style="dim")  # 7 chars
         if tamiyo.value_loss_history:
             vl_sparkline = render_sparkline(tamiyo.value_loss_history, width=SPARK_W)
-            vl_trend = detect_trend(list(tamiyo.value_loss_history))
             result.append(vl_sparkline)
             result.append(f" {tamiyo.value_loss: 7.4f}", style="bright_cyan")
-            result.append(vl_trend, style=trend_style(vl_trend, "loss"))
+            arrow, arrow_style = trend_arrow_for_history(
+                tamiyo.value_loss_history,
+                metric_name="value_loss",
+                metric_type="loss",
+            )
+            if arrow:
+                result.append(arrow, style=arrow_style)
         else:
             result.append("─" * SPARK_W, style="dim")
             result.append(f" {tamiyo.value_loss: 7.4f}", style="bright_cyan")

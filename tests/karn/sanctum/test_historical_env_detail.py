@@ -56,7 +56,6 @@ def make_minimal_record(
         accuracy_history=[80.0, 82.0, 85.0],
         reward_history=[0.1, 0.2, 0.3],
         action_history=["WAIT", "GERMINATE"],
-        pinned=False,
         reward_mode=None,
         counterfactual_matrix=None,
     )
@@ -181,16 +180,6 @@ class TestHistoricalEnvDetailThresholds:
 
 class TestHistoricalEnvDetailIntegration:
     """Test HistoricalEnvDetail integration with schema types."""
-
-    def test_handles_pinned_record(self):
-        """Pinned records should show pin indicator."""
-        record = make_minimal_record()
-        record.pinned = True
-
-        modal = HistoricalEnvDetail(record)
-        header = modal._render_header()
-
-        assert "PINNED" in header.plain
 
     def test_handles_reward_mode(self):
         """A/B cohort should be displayed."""

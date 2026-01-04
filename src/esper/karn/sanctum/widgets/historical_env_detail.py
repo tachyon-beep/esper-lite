@@ -169,9 +169,8 @@ class HistoricalEnvDetail(ModalScreen[None]):
                 )
 
             # Footer hint
-            pin_status = "📌 Pinned" if self._record.pinned else "Not pinned (right-click to pin)"
             yield Static(
-                f"[dim]Press ESC, Q, or click to close  │  {pin_status}[/dim]",
+                "[dim]Press ESC, Q, or click to close[/dim]",
                 classes="footer-hint",
             )
 
@@ -221,11 +220,6 @@ class HistoricalEnvDetail(ModalScreen[None]):
             header.append("  │  ")
             cohort_color = "cyan" if record.reward_mode == "A" else "magenta"
             header.append(f"Cohort {record.reward_mode}", style=cohort_color)
-
-        # Pin status
-        if record.pinned:
-            header.append("  │  ")
-            header.append("📌 PINNED", style="bold cyan")
 
         # Second line: parameter info
         header.append("\n")

@@ -16,7 +16,6 @@ function createBestRunRecord(overrides: Partial<BestRunRecord> = {}): BestRunRec
     slot_ids: ['slot_0', 'slot_1'],
     growth_ratio: 1.05,
     record_id: 'run-001',
-    pinned: false,
     reward_components: null,
     counterfactual_matrix: null,
     action_history: ['OBSERVE', 'GERMINATE'],
@@ -110,23 +109,6 @@ describe('LeaderboardTable', () => {
 
     const rows = wrapper.findAll('[data-testid^="leaderboard-row-"]')
     expect(rows).toHaveLength(3)
-  })
-
-  it('highlights pinned rows', () => {
-    const runs: BestRunRecord[] = [
-      createBestRunRecord({ record_id: 'run-001', pinned: true }),
-      createBestRunRecord({ record_id: 'run-002', pinned: false })
-    ]
-
-    const wrapper = mount(LeaderboardTable, {
-      props: { runs }
-    })
-
-    const pinnedRow = wrapper.find('[data-testid="leaderboard-row-run-001"]')
-    const unpinnedRow = wrapper.find('[data-testid="leaderboard-row-run-002"]')
-
-    expect(pinnedRow.classes()).toContain('pinned')
-    expect(unpinnedRow.classes()).not.toContain('pinned')
   })
 
   it('shows correct rank numbers', () => {

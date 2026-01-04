@@ -280,8 +280,7 @@ This schema defines the telemetry data structures used by Sanctum (TUI/web dashb
 | `expected_value` | `float` | required | Value estimate before action |
 | `actual_reward` | `float \| None` | required | Actual reward (None if pending) |
 | `alternatives` | `list[tuple[str, float]]` | required | [(action_name, probability), ...] |
-| `decision_id` | `str` | `""` | Unique ID for click-to-pin |
-| `pinned` | `bool` | `False` | Pinned decisions never get replaced |
+| `decision_id` | `str` | `""` | Unique ID for click targeting |
 | `env_id` | `int` | `0` | Environment that made decision |
 | `epoch` | `int` | `0` | Epoch when decision was made |
 | `batch` | `int` | `0` | Batch when decision was made |
@@ -448,7 +447,7 @@ This schema defines the telemetry data structures used by Sanctum (TUI/web dashb
 
 ## BestRunRecord
 
-**Purpose:** Historical record of a best run for the leaderboard. Supports left-click (detail modal) and right-click (pin).
+**Purpose:** Historical record of a best run for the leaderboard. Supports left-click (detail modal).
 
 | Field | Type | Default | Purpose |
 |-------|------|---------|---------|
@@ -461,7 +460,6 @@ This schema defines the telemetry data structures used by Sanctum (TUI/web dashb
 | `slot_ids` | `list[str]` | `[]` | All slot IDs |
 | `growth_ratio` | `float` | `1.0` | Model size ratio |
 | `record_id` | `str` | `""` | Unique ID for click targeting |
-| `pinned` | `bool` | `False` | Pinned records never removed |
 | `reward_components` | `RewardComponents \| None` | `None` | Reward breakdown at peak |
 | `counterfactual_matrix` | `CounterfactualSnapshot \| None` | `None` | Counterfactual at peak |
 | `shapley_snapshot` | `ShapleySnapshot \| None` | `None` | Shapley at peak |

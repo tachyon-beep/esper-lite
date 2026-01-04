@@ -43,13 +43,6 @@ class Scoreboard(Static):
             super().__init__()
             self.record = record
 
-    class BestRunPinToggled(Message):
-        """Posted when a best run's pin status is toggled."""
-
-        def __init__(self, record_id: str) -> None:
-            super().__init__()
-            self.record_id = record_id
-
     DEFAULT_CSS = """
     Scoreboard {
         layout: vertical;
@@ -139,17 +132,6 @@ class Scoreboard(Static):
             return
         self.post_message(self.BestRunSelected(record))
 
-    def request_pin_toggle(self) -> None:
-        """Request pin toggle for the currently selected best run.
-
-        Posts BestRunPinToggled when a valid record is selected.
-        Intended to be triggered by SanctumApp's 'p' binding.
-        """
-        record = self._get_focused_record_for_pin()
-        if record is None or not record.record_id:
-            return
-        self.post_message(self.BestRunPinToggled(record.record_id))
-
     def _get_record_for_cursor(
         self, table: DataTable[Any], cursor_row: int
     ) -> "BestRunRecord | None":
@@ -160,11 +142,6 @@ class Scoreboard(Static):
         if cursor_row >= len(records):
             return None
         return records[cursor_row]
-
-    def _get_focused_record_for_pin(self) -> "BestRunRecord | None":
-        """Return the record to pin based on which table has focus."""
-        table = self.bottom_table if self.bottom_table.has_focus else self.table
-        return self._get_record_for_cursor(table, table.cursor_row)
 
     def _refresh_stats(self) -> None:
         """Refresh the stats header."""
@@ -202,11 +179,7 @@ class Scoreboard(Static):
         # Update panel title
         try:
             panel = self.query_one("#best-runs-panel", Vertical)
-            pinned_count = sum(1 for r in best_runs if r.pinned)
-            if pinned_count > 0:
-                panel.border_title = f"BEST RUNS ({pinned_count} 📌)"
-            else:
-                panel.border_title = "BEST RUNS"
+            panel.border_title = "BEST RUNS"
         except NoMatches:
             # UI-02 fix: Narrow to NoMatches - only expected exception from query_one
             pass

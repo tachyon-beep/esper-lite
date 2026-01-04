@@ -37,7 +37,6 @@ from typing import TYPE_CHECKING, Any
 
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
-from textual.message import Message
 
 from .status_banner import StatusBanner
 from .ppo_losses_panel import PPOLossesPanel
@@ -49,7 +48,6 @@ from .episode_metrics_panel import EpisodeMetricsPanel
 from .value_diagnostics_panel import ValueDiagnosticsPanel
 from .decisions_column import (
     DecisionDetailRequested,
-    DecisionPinRequested,
     DecisionsColumn,
 )
 
@@ -63,14 +61,6 @@ class TamiyoBrain(Container):
 
     Policy agent diagnostics with composable architecture.
     """
-
-    class DecisionPinToggled(Message):
-        """Posted when a decision card's pin status is toggled."""
-
-        def __init__(self, *, group_id: str, decision_id: str) -> None:
-            super().__init__()
-            self.group_id = group_id
-            self.decision_id = decision_id
 
     DEFAULT_CSS = """
     TamiyoBrain {
@@ -220,10 +210,6 @@ class TamiyoBrain(Container):
         border: round $warning-darken-1;
     }
 
-    DecisionCard.pinned {
-        border: double $success;
-    }
-
     /* Remove padding from decision column internals */
     #cards-container {
         padding: 0;
@@ -304,14 +290,6 @@ class TamiyoBrain(Container):
         Called by SanctumApp to pass reward health metrics to ActionContext.
         """
         self.query_one("#action-context", ActionContext).update_reward_health(data)
-
-    def on_decision_pin_requested(self, event: DecisionPinRequested) -> None:
-        """Toggle pin status for a decision (bubbles to SanctumApp)."""
-        self.post_message(
-            self.DecisionPinToggled(
-                group_id=event.group_id, decision_id=event.decision_id
-            )
-        )
 
     def on_decision_detail_requested(self, event: DecisionDetailRequested) -> None:
         """Open drill-down screen for a decision."""

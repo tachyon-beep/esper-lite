@@ -106,7 +106,6 @@ This widget uses minimal color coding - all data is displayed with `dim` style f
 
 The following DecisionSnapshot fields exist in the schema but are NOT displayed by this widget:
 
-- `pinned` — Whether decision is pinned (UI state, not telemetry)
 - `op_confidence` — Confidence for the op head specifically
 - `op_entropy` — Entropy for the op head
 - `slot_confidence` — Confidence for slot selection

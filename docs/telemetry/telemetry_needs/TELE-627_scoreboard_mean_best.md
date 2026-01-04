@@ -185,6 +185,6 @@ if best_runs:
 >
 > **Fallback Behavior:** Like global_best, when `best_runs` is empty, the widget falls back to computing mean from `EnvState.best_accuracy` across all environments (lines 188-191).
 >
-> **Note on Population:** The mean is computed over all records in best_runs, which is capped at 10 unpinned records plus any pinned records. This means the mean reflects recent performance, not necessarily the entire training history.
+> **Note on Population:** The mean is computed over all records in `best_runs`, which is capped at the top 10 records. This means the mean reflects recent peak performance, not necessarily the entire training history.
 >
 > **Wiring Status:** Fully wired and operational. This is a derived metric computed from stored peak_accuracy fields.

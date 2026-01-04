@@ -733,9 +733,8 @@ class TestBestRunRecordSchemaCompleteness:
         # Seed snapshot
         assert hasattr(record, "seeds")
 
-        # Interactive features
+        # Click targeting
         assert hasattr(record, "record_id")
-        assert hasattr(record, "pinned")
 
     def test_default_values(self) -> None:
         """Verify default values for optional fields."""
@@ -750,7 +749,6 @@ class TestBestRunRecordSchemaCompleteness:
         assert record.growth_ratio == 1.0
         assert record.seeds == {}
         assert record.record_id == ""
-        assert record.pinned is False
 
     def test_seeds_field_accepts_seed_state_dict(self) -> None:
         """Verify seeds field accepts dict of SeedState."""

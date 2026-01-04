@@ -26,14 +26,13 @@
 
 | Field | Type | Default | Usage |
 |-------|------|---------|-------|
-| `record_id` | `str` | `""` | Row key for DataTable; used for pin toggle targeting |
+| `record_id` | `str` | `""` | Row key for DataTable; used for selection and historical detail targeting |
 | `episode` | `int` | N/A | Displayed as "Ep" column (1-indexed: `episode + 1`) |
 | `epoch` | `int` | `0` | Displayed as "@" column with color coding based on when peak was achieved |
 | `peak_accuracy` | `float` | N/A | Displayed as "Peak" column; used for sorting Best Runs and computing trajectory delta |
 | `final_accuracy` | `float` | N/A | Used to compute trajectory delta (`final - peak`); displayed in "Traj" column with arrow |
 | `growth_ratio` | `float` | `1.0` | Displayed as "Grw" column showing model size ratio |
 | `seeds` | `dict[str, SeedState]` | `{}` | Displayed as "Seeds" column; counts by stage (blending/holding/fossilized) |
-| `pinned` | `bool` | `False` | Pinned count shown in panel title as "BEST RUNS (N pin)" |
 
 ### Source: SeedState (via `record.seeds.values()`)
 
@@ -103,7 +102,7 @@
 2. Computes `mean_best` (average peak_accuracy across all best_runs)
 3. Fallback: if no best_runs, uses `best_accuracy` from all EnvState entries
 4. Displays: `Best: {global_best}%  Mean: {mean_best}%  Foss: {total_fossilized}  Prune: {total_pruned}`
-5. Updates panel title with pinned count if any records are pinned
+5. Uses fixed panel title "BEST RUNS"
 
 ### Best Runs Table (`_refresh_table`)
 
@@ -133,7 +132,7 @@ SanctumSnapshot
     +-- best_runs: list[BestRunRecord]
     |       |
     |       +-- record_id, episode, epoch, peak_accuracy, final_accuracy
-    |       +-- growth_ratio, pinned
+    |       +-- growth_ratio
     |       +-- seeds: dict[str, SeedState]
     |               |
     |               +-- stage (counted for B/H/F display)
@@ -148,7 +147,6 @@ SanctumSnapshot
 | Event | Handler | Effect |
 |-------|---------|--------|
 | Row selected | `on_data_table_row_selected` | Posts `BestRunSelected` message with record |
-| Pin toggle (`p` key) | `request_pin_toggle` | Posts `BestRunPinToggled` message with record_id |
 
 ### State Preservation
 

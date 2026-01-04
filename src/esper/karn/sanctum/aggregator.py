@@ -370,41 +370,6 @@ class SanctumAggregator:
         with self._lock:
             return self._get_snapshot_unlocked()
 
-    def toggle_decision_pin(self, decision_id: str) -> bool:
-        """Toggle pin status for a decision by ID.
-
-        Args:
-            decision_id: The decision_id to toggle.
-
-        Returns:
-            New pin status (True if now pinned, False if unpinned).
-        """
-        with self._lock:
-            for decision in self._tamiyo.recent_decisions:
-                if decision.decision_id == decision_id:
-                    decision.pinned = not decision.pinned
-                    return decision.pinned
-        return False
-
-    def toggle_best_run_pin(self, record_id: str) -> bool:
-        """Toggle pin status for a best run record by ID.
-
-        Pinned records are never removed from the leaderboard, even when
-        newer records with higher accuracy are added.
-
-        Args:
-            record_id: The record_id to toggle.
-
-        Returns:
-            New pin status (True if now pinned, False if unpinned).
-        """
-        with self._lock:
-            for record in self._best_runs:
-                if record.record_id == record_id:
-                    record.pinned = not record.pinned
-                    return record.pinned
-        return False
-
     def _compute_instantaneous_throughput(self, now: float) -> float:
         """Compute episodes per second using sliding window.
 
@@ -468,18 +433,17 @@ class SanctumAggregator:
         self._tamiyo.cumulative_action_counts = dict(self._cumulative_action_counts)
         self._tamiyo.cumulative_total_actions = self._cumulative_total_actions
 
-        # Carousel rotation: expire ONE oldest unpinned decision per cycle if > 2min old
+        # Carousel rotation: expire ONE oldest decision per cycle if > 2min old
         # This runs every snapshot (250ms), creating natural stagger as each decision
         # expires based on its individual timestamp, not batch replacement.
         # Must match MAX_DISPLAY_AGE_S in ActionHeadsPanel (120 seconds).
         decisions = self._tamiyo.recent_decisions
         for i in range(len(decisions) - 1, -1, -1):  # Iterate oldest-first
             d = decisions[i]
-            if not d.pinned:
-                age = (now_dt - d.timestamp).total_seconds()
-                if age > 120.0:
-                    decisions.pop(i)
-                    break  # Only expire ONE per cycle for smooth rotation
+            age = (now_dt - d.timestamp).total_seconds()
+            if age > 120.0:
+                decisions.pop(i)
+                break  # Only expire ONE per cycle for smooth rotation
         self._tamiyo.recent_decisions = decisions[:MAX_DECISIONS]
 
         # Get most interesting reward components for the detail panel
@@ -1434,9 +1398,7 @@ class SanctumAggregator:
                     seeds={k: replace(v) for k, v in env.best_seeds.items()},
                     slot_ids=list(self._slot_ids),  # All slots for showing DORMANT in detail
                     growth_ratio=growth_ratio,
-                    # Interactive features
                     record_id=str(uuid.uuid4())[:8],
-                    pinned=False,
                     # Full env snapshot at peak (captured by EnvState.add_accuracy())
                     reward_components=env.best_reward_components,
                     counterfactual_matrix=env.best_counterfactual_matrix,
@@ -1458,10 +1420,8 @@ class SanctumAggregator:
 
         # Sort by peak accuracy descending
         self._best_runs.sort(key=lambda r: r.peak_accuracy, reverse=True)
-        # Keep pinned records + top 10 unpinned
-        pinned = [r for r in self._best_runs if r.pinned]
-        unpinned = [r for r in self._best_runs if not r.pinned][:10]
-        self._best_runs = sorted(pinned + unpinned, key=lambda r: r.peak_accuracy, reverse=True)
+        # Keep top 10 records
+        self._best_runs = self._best_runs[:10]
 
         # Accumulate batch action counts into cumulative totals BEFORE resetting
         for env in self._envs.values():

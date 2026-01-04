@@ -62,12 +62,11 @@ The `DecisionSnapshot` dataclass captures a complete snapshot of a single Tamiyo
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `decision_id` | `str` | Unique ID (8-char UUID prefix) for click-to-pin targeting |
+| `decision_id` | `str` | Unique ID (8-char UUID prefix) for click targeting |
 | `timestamp` | `datetime` | When the decision was made |
 | `env_id` | `int` | Environment that made this decision |
 | `epoch` | `int` | Training epoch when decision was made |
 | `batch` | `int` | Batch number within PPO update |
-| `pinned` | `bool` | Whether decision is pinned (prevents carousel removal) |
 
 #### Chosen Action Fields
 
@@ -138,7 +137,6 @@ Distribution spread for each action head (higher = more uncertain):
 > 1. Decisions are added as they occur (newest first)
 > 2. Maximum 8 decisions are retained (MAX_DECISIONS constant)
 > 3. Decisions older than 2 minutes are expired
-> 4. Pinned decisions are never auto-expired
 >
 > Each `DecisionSnapshot` captures the complete state at decision time, enabling reconstruction of the policy's reasoning process.
 
@@ -268,8 +266,7 @@ emitters[env_idx].on_last_action(
 3. Observe ActionHeadsPanel decision carousel (rows #1-#6)
 4. Verify decisions appear with per-head confidence heat bars
 5. Verify age pips transition green -> yellow -> brown -> red
-6. Right-click a decision card to pin it
-7. Verify pinned decisions persist while others rotate out
+6. Verify older decisions rotate out over time
 
 ---
 
@@ -325,7 +322,6 @@ emitters[env_idx].on_last_action(
 > - Maximum 8 decisions displayed (MAX_DECISIONS constant)
 > - Decisions expire after 2 minutes (MAX_DISPLAY_AGE_S = 120.0)
 > - Swap interval is 5 seconds in ActionHeadsPanel
-> - Pinned decisions are never auto-expired
 >
 > **TD Advantage Computation**
 > The `td_advantage` field is computed asynchronously when the NEXT decision

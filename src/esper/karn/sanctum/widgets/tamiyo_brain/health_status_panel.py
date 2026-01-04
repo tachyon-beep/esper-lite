@@ -22,7 +22,9 @@ from rich.text import Text
 from textual.widgets import Static
 
 from esper.karn.constants import TUIThresholds
-from .sparkline_utils import render_sparkline, detect_trend, trend_style
+
+from .sparkline_utils import render_sparkline
+from .trends import trend_arrow_for_history
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
@@ -131,8 +133,13 @@ class HealthStatusPanel(Static):
                 style=self._status_style(gn_status),
             )
             result.append(sparkline)
-            trend = detect_trend(list(tamiyo.grad_norm_history))
-            result.append(trend, style=trend_style(trend, "loss"))  # Rising is bad
+            arrow, arrow_style = trend_arrow_for_history(
+                tamiyo.grad_norm_history,
+                metric_name="grad_norm",
+                metric_type="loss",
+            )
+            if arrow:
+                result.append(arrow, style=arrow_style)
         else:
             result.append("─" * self.SPARKLINE_WIDTH, style="dim")
         result.append("\n")
@@ -164,8 +171,13 @@ class HealthStatusPanel(Static):
                     style=self._status_style(kl_status),
                 )
                 result.append(sparkline)
-                trend = detect_trend(list(tamiyo.kl_divergence_history))
-                result.append(trend, style=trend_style(trend, "loss"))  # Rising is bad
+                arrow, arrow_style = trend_arrow_for_history(
+                    tamiyo.kl_divergence_history,
+                    metric_name="kl_divergence",
+                    metric_type="loss",
+                )
+                if arrow:
+                    result.append(arrow, style=arrow_style)
             else:
                 result.append("─" * self.SPARKLINE_WIDTH, style="dim")
         result.append("\n")

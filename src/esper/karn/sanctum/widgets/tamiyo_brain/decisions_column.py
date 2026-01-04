@@ -18,32 +18,11 @@ from textual.containers import Container, Vertical
 from textual.message import Message
 from textual.widgets import Static
 
+from .action_display import ACTION_COLORS
 from esper.leyline import ALPHA_CURVE_GLYPHS
 
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import DecisionSnapshot, SanctumSnapshot
-
-
-# Action colors for decision cards
-ACTION_COLORS: dict[str, str] = {
-    "GERMINATE": "green",
-    "SET_ALPHA_TARGET": "cyan",
-    "FOSSILIZE": "blue",
-    "PRUNE": "red",
-    "WAIT": "dim",
-    "ADVANCE": "cyan",
-}
-
-
-class DecisionPinRequested(Message):
-    """Request to toggle pin status for a decision."""
-
-    bubble = True
-
-    def __init__(self, *, group_id: str, decision_id: str) -> None:
-        super().__init__()
-        self.group_id = group_id
-        self.decision_id = decision_id
 
 
 class DecisionDetailRequested(Message):
@@ -81,25 +60,15 @@ class DecisionCard(Static):
 
     def _update_classes(self) -> None:
         """Update CSS classes based on card position."""
-        self.remove_class("newest", "oldest", "pinned")
+        self.remove_class("newest", "oldest")
 
-        if self.decision.pinned:
-            self.add_class("pinned")
-        elif self.index == 0:
+        if self.index == 0:
             self.add_class("newest")
         elif self.index == self.total_cards - 1:
             self.add_class("oldest")
 
     def on_click(self, event: events.Click) -> None:
-        """Left click opens detail, right click toggles pin."""
-        if event.button == 3:
-            if not self.decision.decision_id:
-                raise ValueError("DecisionSnapshot.decision_id is required to toggle pin")
-            self.post_message(
-                DecisionPinRequested(group_id=self._group_id, decision_id=self.decision.decision_id)
-            )
-            return
-
+        """Open drill-down view for a decision."""
         self.post_message(DecisionDetailRequested(group_id=self._group_id, decision=self.decision))
 
     def render(self) -> Text:

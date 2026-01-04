@@ -17,7 +17,8 @@ from textual.containers import Container
 from textual.widgets import Static
 
 from esper.karn.constants import TUIThresholds
-from esper.karn.sanctum.schema import detect_trend
+
+from .trends import trend_arrow_for_history
 
 if TYPE_CHECKING:
     from collections import deque
@@ -278,16 +279,8 @@ class StatusBanner(Container):
         Returns:
             Tuple of (arrow_char, style).
         """
-        if not history or len(history) < 5:
-            return "", "dim"
-
-        trend = detect_trend(list(history), metric_name, metric_type)
-
-        # Map trend to compact arrow characters
-        arrows = {
-            "improving": ("↑", "green"),
-            "stable": ("→", "dim"),
-            "volatile": ("~", "yellow"),
-            "warning": ("↓", "red"),
-        }
-        return arrows.get(trend, ("→", "dim"))
+        return trend_arrow_for_history(
+            history,
+            metric_name=metric_name,
+            metric_type=metric_type,
+        )

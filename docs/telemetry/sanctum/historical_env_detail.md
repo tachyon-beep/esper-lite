@@ -22,7 +22,6 @@ The widget receives a `BestRunRecord` instance and consumes the following fields
 | `final_accuracy` | `float` | `record.final_accuracy` | Required | Displayed as "Final: {final_accuracy:.1f}%" in cyan; only shown if differs from peak_accuracy |
 | `growth_ratio` | `float` | `record.growth_ratio` | `1.0` | Displayed as "Growth: {growth_ratio:.2f}x"; color-coded based on threshold |
 | `reward_mode` | `str \| None` | `record.reward_mode` | `None` | A/B cohort indicator; displayed as "Cohort {reward_mode}" with color based on value |
-| `pinned` | `bool` | `record.pinned` | `False` | Displayed as "PINNED" in bold cyan if True |
 | `host_params` | `int` | `record.host_params` | `0` | Formatted via `format_params()` and displayed as "Host: {formatted}" |
 | `fossilized_count` | `int` | `record.fossilized_count` | `0` | Displayed as "Fossilized: {count}" in green |
 | `pruned_count` | `int` | `record.pruned_count` | `0` | Displayed as "Pruned: {count}" in red |
@@ -88,9 +87,7 @@ The widget receives a `BestRunRecord` instance and consumes the following fields
 
 ### 1.7 Footer Fields (`compose`)
 
-| Field | Type | Path | Default | Usage |
-|-------|------|------|---------|-------|
-| `pinned` | `bool` | `record.pinned` | `False` | Displayed as "Pinned" or "Not pinned (right-click to pin)" |
+No additional `BestRunRecord` fields consumed.
 
 ---
 
@@ -211,7 +208,7 @@ Receives:
 BestRunRecord (captured at peak accuracy)
     |
     +-- Header: episode, env_id, peak_accuracy, final_accuracy, growth_ratio,
-    |           reward_mode, pinned, host_params, fossilized_count, pruned_count
+    |           reward_mode, host_params, fossilized_count, pruned_count
     |
     +-- Seed Grid: slot_ids, seeds -> SeedCard widgets
     |
@@ -223,8 +220,6 @@ BestRunRecord (captured at peak accuracy)
     +-- Counterfactual: counterfactual_matrix, seeds -> CounterfactualPanel
     |
     +-- Shapley: shapley_snapshot, seeds -> ShapleyPanel
-    |
-    +-- Footer: pinned
 ```
 
 ---
@@ -245,7 +240,6 @@ class BestRunRecord:
     slot_ids: list[str] = field(default_factory=list)
     growth_ratio: float = 1.0
     record_id: str = ""
-    pinned: bool = False
     reward_components: RewardComponents | None = None
     counterfactual_matrix: CounterfactualSnapshot | None = None
     shapley_snapshot: ShapleySnapshot | None = None

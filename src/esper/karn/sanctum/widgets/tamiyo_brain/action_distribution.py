@@ -42,39 +42,15 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from rich.text import Text
 from textual.widgets import Static
 
+from .action_display import (
+    ACTION_ABBREVS_1 as ACTION_ABBREVS,
+    ACTION_ABBREVS_4 as ACTION_NAMES,
+    ACTION_COLORS,
+)
+
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import DecisionSnapshot, SanctumSnapshot
     from esper.karn.sanctum.widgets.reward_health import RewardHealthData
-
-
-# Action colors (must match decisions_column.py and action_heads_panel.py)
-ACTION_COLORS: dict[str, str] = {
-    "GERMINATE": "green",
-    "SET_ALPHA_TARGET": "cyan",
-    "FOSSILIZE": "blue",
-    "PRUNE": "red",
-    "WAIT": "dim",
-    "ADVANCE": "cyan",
-}
-
-ACTION_ABBREVS: dict[str, str] = {
-    "GERMINATE": "G",
-    "SET_ALPHA_TARGET": "A",
-    "FOSSILIZE": "F",
-    "PRUNE": "P",
-    "WAIT": "W",
-    "ADVANCE": "V",  # V for adVance (A is taken by SET_ALPHA_TARGET)
-}
-
-# Full names for Q-value display (sorted by preference)
-ACTION_NAMES: dict[str, str] = {
-    "GERMINATE": "GERM",
-    "SET_ALPHA_TARGET": "ALPH",
-    "FOSSILIZE": "FOSS",
-    "PRUNE": "PRUN",
-    "WAIT": "WAIT",
-    "ADVANCE": "ADVN",
-}
 
 
 def detect_action_patterns(

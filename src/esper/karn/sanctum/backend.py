@@ -134,40 +134,6 @@ class SanctumBackend:
             snapshot.total_events_received = self._event_count
         return snapshots
 
-    def toggle_decision_pin(self, group_id: str, decision_id: str) -> bool:
-        """Toggle pin status for a decision.
-
-        Args:
-            group_id: Policy group identifier (e.g., "A", "B", "default").
-            decision_id: ID of the decision to toggle.
-
-        Returns:
-            New pin status (True if pinned, False if unpinned).
-        """
-        self._raise_if_fatal()
-        if group_id not in self._registry.group_ids:
-            raise KeyError(f"Unknown policy group_id for decision pin: {group_id}")
-        aggregator = self._registry.get_or_create(group_id)
-        return aggregator.toggle_decision_pin(decision_id)
-
-    def toggle_best_run_pin(self, record_id: str) -> bool:
-        """Toggle pin status for a best run record.
-
-        Args:
-            record_id: ID of the record to toggle.
-
-        Returns:
-            New pin status (True if pinned, False if unpinned).
-        """
-        self._raise_if_fatal()
-        # Pin applies to first group
-        group_ids = self._registry.group_ids
-        if not group_ids:
-            return False
-        group_id = sorted(group_ids)[0]
-        aggregator = self._registry.get_or_create(group_id)
-        return aggregator.toggle_best_run_pin(record_id)
-
     def compute_reward_health(self) -> "RewardHealthData":
         """Compute reward health metrics for one policy group.
 

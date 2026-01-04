@@ -198,7 +198,7 @@ def add_accuracy(self, accuracy: float, epoch: int, episode: int = 0) -> None:
 
 > **Design Decision:** Peak accuracy is captured at the moment the new best is achieved (not at episode end). This ensures the snapshot of contributing seeds, reward components, and other volatile state accurately reflects the system state at the peak.
 >
-> **Leaderboard Behavior:** The Best Runs leaderboard maintains up to 10 unpinned records plus any pinned records. Records are sorted by peak_accuracy descending, so the highest-performing runs appear at the top.
+> **Leaderboard Behavior:** The Best Runs leaderboard maintains up to 10 records. Records are sorted by peak_accuracy descending, so the highest-performing runs appear at the top.
 >
 > **Interactive Features:** Clicking a row in the Scoreboard opens a historical detail modal showing the full EnvState snapshot at the time peak_accuracy was achieved.
 >

@@ -1178,11 +1178,6 @@ class DecisionSnapshot:
 
     Captures what Tamiyo saw, what she chose, and the outcome.
     Used for the "Last Decision" section of TamiyoBrain.
-
-    Stable carousel behavior:
-    - Each decision stays visible for at least 30 seconds
-    - Only the oldest unpinned decision can be replaced
-    - Pinned decisions never get replaced
     """
     timestamp: datetime
     slot_states: dict[str, str]  # slot_id -> "Training 12%" or "Empty"
@@ -1193,10 +1188,8 @@ class DecisionSnapshot:
     expected_value: float  # Value estimate before action
     actual_reward: float | None  # Actual reward received (None if pending)
     alternatives: list[tuple[str, float]]  # [(action_name, probability), ...]
-    # Unique ID for click-to-pin targeting
+    # Unique ID for click targeting
     decision_id: str = ""
-    # Pinned decisions never get replaced
-    pinned: bool = False
     # Environment ID that made this decision (for TD advantage tracking)
     env_id: int = 0
     # Training context when decision was made
@@ -1265,12 +1258,6 @@ class BestRunRecord:
 
     Captured at batch end when an env achieves a new personal best.
     Shows both the peak accuracy and where the run ended up.
-
-    INTERACTIVE FEATURES:
-    - Left-click: Opens historical detail modal showing full env state at peak
-    - Right-click: Pins the record (prevents removal from leaderboard)
-
-    Reference: tui.py lines 103-114 (BestRunRecord dataclass)
     """
     env_id: int
     episode: int  # Batch/episode number (0-indexed)
@@ -1281,9 +1268,7 @@ class BestRunRecord:
     slot_ids: list[str] = field(default_factory=list)  # All slot IDs (for showing DORMANT)
     growth_ratio: float = 1.0  # Model size ratio: (host + fossilized) / host
 
-    # === Interactive features (like DecisionSnapshot) ===
     record_id: str = ""  # Unique ID for click targeting
-    pinned: bool = False  # Pinned records never get removed from leaderboard
 
     # === Full env snapshot at peak (for historical detail view) ===
     # Reward breakdown at peak

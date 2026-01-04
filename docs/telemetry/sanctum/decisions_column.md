@@ -18,12 +18,11 @@ The widget receives decisions via `update_snapshot()` and accesses the `tamiyo.r
 
 | Field | Type | Default | Usage |
 |-------|------|---------|-------|
-| `decision_id` | `str` | `""` | Unique ID for card tracking, click-to-pin targeting, and preventing duplicate display. Required for pin toggle. |
+| `decision_id` | `str` | `""` | Unique ID for card tracking and preventing duplicate display. |
 | `timestamp` | `datetime` | Required | Used to select the newest candidate decision when refreshing cards. |
 | `chosen_action` | `str` | Required | Primary display: "GERMINATE", "ADVANCE", "SET_ALPHA_TARGET", "PRUNE", "FOSSILIZE", "WAIT". Determines card color and context note. |
 | `chosen_slot` | `str \| None` | `None` | Displayed as slot number (last character). Used in context notes for PRUNE/FOSSILIZE. |
 | `confidence` | `float` | Required | Displayed as percentage (e.g., "confidence:87%"). Used in `_infer_why()` logic. |
-| `pinned` | `bool` | `False` | Controls CSS class "pinned" and prevents card replacement. |
 | `epoch` | `int` | `0` | Displayed as "epoch:{value}" in training context line. |
 | `env_id` | `int` | `0` | Displayed as "env:{value}" in training context line. |
 | `batch` | `int` | `0` | Displayed as "batch:{value}" in training context line. |
@@ -58,7 +57,6 @@ SanctumSnapshot
         |     |-- chosen_action: str
         |     |-- chosen_slot: str | None
         |     |-- confidence: float
-        |     |-- pinned: bool
         |     |-- epoch: int
         |     |-- env_id: int
         |     |-- batch: int
@@ -220,9 +218,8 @@ Generates reasoning text based on decision context:
 
 | Class | Applied When |
 |-------|--------------|
-| `newest` | index == 0 and not pinned |
-| `oldest` | index == total_cards - 1 and not pinned |
-| `pinned` | decision.pinned == True |
+| `newest` | index == 0 |
+| `oldest` | index == total_cards - 1 |
 
 ---
 
@@ -241,7 +238,7 @@ Generates reasoning text based on decision context:
 - No backlog/queueing - always grab most recent decision
 - Displayed decision IDs tracked to prevent duplicates
 - Growing phase: add to front until MAX_CARDS reached
-- Steady state: swap oldest unpinned card with newest decision
+- Steady state: swap oldest card with newest decision
 
 ---
 
@@ -282,14 +279,12 @@ Generates reasoning text based on decision context:
 
 | Click Type | Action |
 |------------|--------|
-| Left click | Posts `DecisionDetailRequested` message with group_id and decision |
-| Right click | Posts `DecisionPinRequested` message with group_id and decision_id |
+| Click | Posts `DecisionDetailRequested` message with group_id and decision |
 
 ### 8.2 Messages Emitted
 
 | Message | Fields | Purpose |
 |---------|--------|---------|
-| `DecisionPinRequested` | group_id, decision_id | Toggle pin status for a decision |
 | `DecisionDetailRequested` | group_id, decision (DecisionSnapshot) | Open drill-down view |
 
 ---
