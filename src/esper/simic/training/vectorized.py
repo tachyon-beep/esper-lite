@@ -2611,10 +2611,10 @@ def train_ppo_vectorized(
                         normalizer_var=obs_normalizer.var,
                         initial_normalizer_mean=initial_obs_normalizer_mean,
                     )
-	    
+
                 # Get BATCHED actions from policy network with action masking (single forward pass!)
                 pre_step_hiddens: list[tuple[torch.Tensor, torch.Tensor]] = []
-    
+
                 if batched_lstm_hidden is not None:
                     h_batch, c_batch = batched_lstm_hidden
                     for env_idx in range(len(env_states)):

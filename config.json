@@ -21,7 +21,7 @@
     "r0c1"
   ],
   "max_seeds": 1,
-  "reward_mode": "shaped",
+  "reward_mode": "simplified",
   "reward_family": "contribution",
   "param_budget": 500000,
   "param_penalty_weight": 0.1,
