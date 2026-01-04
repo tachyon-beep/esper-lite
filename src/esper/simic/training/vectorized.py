@@ -133,6 +133,7 @@ from esper.simic.rewards import (
     SeedInfo,
 )
 from esper.leyline import (
+    DEFAULT_BATCH_SIZE_TRAINING,
     DEFAULT_MIN_FOSSILIZE_CONTRIBUTION,
     EpisodeOutcome,  # Cross-subsystem Pareto analysis
     HINDSIGHT_CREDIT_WEIGHT,
@@ -588,7 +589,6 @@ def train_ppo_vectorized(
     param_penalty_weight: float = 0.1,
     sparse_reward_scale: float = 1.0,
     reward_family: str = "contribution",
-    reward_mode_per_env: tuple[RewardMode, ...] | None = None,
     permissive_gates: bool = True,
     # Ablation flags for systematic reward function experiments
     disable_pbrs: bool = False,  # Disable PBRS stage advancement shaping
@@ -766,30 +766,8 @@ def train_ppo_vectorized(
     )
     loss_reward_config = task_spec.loss_reward_config
 
-    # Per-environment reward configs for A/B/n testing
-    if reward_mode_per_env is not None:
-        if len(reward_mode_per_env) != n_envs:
-            raise ValueError(
-                f"reward_mode_per_env length ({len(reward_mode_per_env)}) must match n_envs ({n_envs})"
-            )
-        env_reward_configs = []
-        for env_mode in reward_mode_per_env:
-            env_config = ContributionRewardConfig(
-                reward_mode=env_mode,
-                param_budget=param_budget,
-                param_penalty_weight=param_penalty_weight,
-                sparse_reward_scale=sparse_reward_scale,
-                disable_pbrs=disable_pbrs,
-                disable_terminal_reward=disable_terminal_reward,
-                disable_anti_gaming=disable_anti_gaming,
-            )
-            env_reward_configs.append(env_config)
-        mode_counts: dict[str, int] = {}
-        for mode in reward_mode_per_env:
-            mode_counts[mode.value] = mode_counts.get(mode.value, 0) + 1
-        _logger.info("A/B/n testing enabled: %s", mode_counts)
-    else:
-        env_reward_configs = [reward_config] * n_envs
+    # Per-environment reward configs (single reward mode per run).
+    env_reward_configs = [reward_config] * n_envs
 
     # Map environments to devices in round-robin (needed for SharedBatchIterator)
     env_device_map = [devices[i % len(devices)] for i in range(n_envs)]
@@ -800,9 +778,16 @@ def train_ppo_vectorized(
         _logger.debug(
             "batch_size not in task_spec.dataloader_defaults, using default 128"
         )
-    default_batch_size_per_env = task_spec.dataloader_defaults.get("batch_size", 128)
-    if task_spec.name.startswith("cifar_"):
-        default_batch_size_per_env = 512  # High-throughput setting for CIFAR tasks
+    default_batch_size_per_env = task_spec.dataloader_defaults.get(
+        "batch_size", DEFAULT_BATCH_SIZE_TRAINING
+    )
+    if (
+        task_spec.name.startswith("cifar_")
+        and batch_size_per_env is None
+        and default_batch_size_per_env == DEFAULT_BATCH_SIZE_TRAINING
+    ):
+        # High-throughput setting for CIFAR tasks (unless caller overrides batch size).
+        default_batch_size_per_env = 512
     effective_batch_size_per_env = (
         batch_size_per_env
         if batch_size_per_env is not None
@@ -815,8 +800,8 @@ def train_ppo_vectorized(
     effective_workers = num_workers if num_workers is not None else 4
 
     # State dimension: Obs V3 features from batch_obs_to_features().
-    # For 3 slots: 23 base + 3*30 slot features = 113 dims.
-    # NOTE: Telemetry features are now MERGED into slot features (30 per slot),
+    # For 3 slots: 23 base + 3*31 slot features = 116 dims.
+    # NOTE: Telemetry features are now MERGED into slot features (31 per slot),
     # so we no longer add separate SeedTelemetry.feature_dim() per slot.
     # Blueprint embeddings (4 × num_slots) are added inside the network.
     state_dim = get_feature_size(slot_config)
@@ -1850,7 +1835,7 @@ def train_ppo_vectorized(
         """Consolidated signals-to-features conversion for all environments.
 
         Returns:
-            obs: [batch, obs_dim] - observation features (Obs V3: 113 dims for 3 slots)
+            obs: [batch, obs_dim] - observation features (Obs V3: 116 dims for 3 slots)
             blueprint_indices: [batch, num_slots] - blueprint indices for embedding lookup (int64)
         """
         return batch_obs_to_features(
@@ -4298,33 +4283,6 @@ def train_ppo_vectorized(
             "n_envs": n_envs,
         }
         agent.save(save_path, metadata=checkpoint_metadata)
-
-    # A/B/n Test Summary
-    if reward_mode_per_env is not None:
-        print("\n" + "=" * 60)
-        print("A/B TEST RESULTS")
-        print("=" * 60)
-
-        # Group episodes by reward mode
-        from collections import defaultdict
-
-        ab_groups: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
-        for ep_data in episode_history:
-            env_idx = int(ep_data["env_id"])
-            mode_name = env_reward_configs[env_idx].reward_mode.value
-            ab_groups[mode_name].append(ep_data)
-
-        for mode_name, episodes in sorted(ab_groups.items()):
-            # Direct access - fail-fast if schema changes (CRIT-02 fix)
-            rewards = [ep["episode_reward"] for ep in episodes]
-            accuracies = [ep["final_accuracy"] for ep in episodes]
-            avg_reward = sum(rewards) / len(rewards) if rewards else 0
-            avg_acc = sum(accuracies) / len(accuracies) if accuracies else 0
-            print(f"\n{mode_name.upper()} ({len(episodes)} episodes):")
-            print(f"  Avg Episode Reward: {avg_reward:.2f}")
-            print(f"  Avg Final Accuracy: {avg_acc:.2f}%")
-            print(f"  Reward Range: [{min(rewards):.2f}, {max(rewards):.2f}]")
-        print("=" * 60)
 
     return agent, history
 
