@@ -62,6 +62,8 @@ def validate_device(device: str, *, require_explicit_index: bool = False) -> tor
         >>> validate_device("cuda", require_explicit_index=True)  # Raises ValueError
         >>> validate_device("cuda:999")  # Raises RuntimeError if only 2 GPUs
         >>> validate_device("mps")  # OK on Apple Silicon, error otherwise
+        >>> validate_device("mps:0")  # OK - explicit index 0 is valid
+        >>> validate_device("mps:1")  # Raises ValueError - MPS only has one device
         >>> validate_device("meta")  # Raises ValueError - unsupported device type
     """
     from esper.leyline import SUPPORTED_DEVICE_TYPES
@@ -78,11 +80,18 @@ def validate_device(device: str, *, require_explicit_index: bool = False) -> tor
         )
 
     # MPS validation (Apple Silicon)
+    # Unlike CUDA, MPS only supports a single device (the Apple Silicon GPU).
+    # PyTorch accepts "mps:1" syntactically but it's not a valid device.
     if dev.type == "mps":
         if not torch.backends.mps.is_available():
             raise RuntimeError(
                 f"MPS device '{device}' requested but MPS is not available. "
                 f"Use device='cpu' or check your Apple Silicon configuration."
+            )
+        if dev.index not in (None, 0):
+            raise ValueError(
+                f"Invalid MPS device index in '{device}'. "
+                f"MPS only supports a single device: use 'mps' or 'mps:0'."
             )
         return dev
 
@@ -136,7 +145,7 @@ def create_model(
     else:
         task_spec = task
 
-    validate_device(device, require_explicit_index=False)
+    validated_device = validate_device(device, require_explicit_index=False)
 
     if not slots:
         raise ValueError("slots cannot be empty")
@@ -145,4 +154,7 @@ def create_model(
         duplicates = [s for s in slots if slots.count(s) > 1]
         raise ValueError(f"slots contains duplicates: {sorted(set(duplicates))}")
 
-    return task_spec.create_model(device=device, slots=slots, permissive_gates=permissive_gates)
+    # Pass the validated device as a string for consistency with TaskSpec.create_model signature
+    return task_spec.create_model(
+        device=str(validated_device), slots=slots, permissive_gates=permissive_gates
+    )
