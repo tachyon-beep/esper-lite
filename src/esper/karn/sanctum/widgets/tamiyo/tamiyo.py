@@ -17,16 +17,16 @@ composable sub-widgets for better maintainability.
 Layout (CSS dimensions):
     ┌──────────────────────────────────────────────────────────────────────────────┐
     ├───────────────────────────────────────────────────────────────────┬──────────┤
-    │ VitalsColumn (w:3fr)                                              │ Narrative│
-    │ ┌─────────┬───────────────────────────────────┬───────────────┐   │(w:1fr,   │
-    │ │PPOLosses│ HealthStatus (1fr)                │ Slots (49ch)  │h13│ min:45)  │
-    │ │ (36ch)  │                                   │               │   │          │
+    │ VitalsColumn (w:4fr)                                              │ Decisions│
+    │ ┌─────────┬────────────┬──────────────────────┬───────────────┐   │ (1fr)   │
+    │ │Narrative│ PPOLosses  │ HealthStatus (1fr-3) │ Slots (49ch)  │h13│          │
+    │ │ (1fr+3) │ (36ch)     │                      │               │   │          │
     │ ├────────────────────────────────────────────┬────────────────┤   │          │
     │ │ ActionHeadsPanel (69%)                     │                │   │          │
-    │ │                                            │ ActionContext  │1fr│          │
-    │ ├──────────────────────┬─────────────────────┤ (31%)          │   │          │
-    │ │ EpisodeMetrics (1fr) │ ValueDiagnostics    │                │ h5│          │
-    │ └──────────────────────┴─────────────────────┴────────────────┘   │          │
+    │ │                                            │ ActionContext  │ Sidecar │
+    │ ├──────────────────────┬─────────────────────┼────────────────┤   │          │
+    │ │ EpisodeMetrics (1fr) │ ValueDiagnostics    │ (50ch)         │ h5│          │
+    │ └──────────────────────┴─────────────────────┴────────────────┘   │ EventLog │
     └───────────────────────────────────────────────────────────────────┴──────────┘
 """
 
@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any
 
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
+from textual.widgets import Static
 
 from esper.karn.sanctum.widgets.event_log import EventLog
 
@@ -78,21 +79,22 @@ class TamiyoBrain(Container):
     }
 
     #vitals-column {
-        width: 3fr;
+        width: 4fr;
         height: 100%;
         padding: 0 1;
     }
 
     #right-column {
         width: 1fr;
-        min-width: 45;
+        min-width: 36;
         height: 100%;
-        padding: 0 1;
+        padding: 0;
     }
 
     EventLog {
-        width: 1fr;
-        height: 100%;
+        width: 100%;
+        height: 12;
+        min-height: 12;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
         overflow-x: hidden;
@@ -102,7 +104,8 @@ class TamiyoBrain(Container):
     }
 
     #narrative-panel {
-        width: 100%;
+        width: 1fr;
+        min-width: 38;
         height: 1fr;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
@@ -136,6 +139,7 @@ class TamiyoBrain(Container):
 
     #health-panel {
         width: 1fr;  /* Takes remaining space */
+        min-width: 0;
         height: 1fr;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
@@ -200,6 +204,14 @@ class TamiyoBrain(Container):
         padding: 0 1;
     }
 
+    #action-context-sidecar {
+        width: 50;
+        height: 100%;
+        border: round $surface-lighten-2;
+        border-title-color: $text-muted;
+        padding: 0 1;
+    }
+
     .panel-header {
         height: 1;
     }
@@ -248,8 +260,9 @@ class TamiyoBrain(Container):
         # Main content: vitals left, narrative/events right
         with Horizontal(id="main-content"):
             with VerticalScroll(id="vitals-column"):
-                # Top row - three panels: PPO (narrow) | Health (wide) | Slots
+                # Top row - four panels: Narrative | PPO (narrow) | Health | Slots
                 with Horizontal(id="top-row"):
+                    yield NarrativePanel(id="narrative-panel")
                     yield PPOLossesPanel(id="ppo-losses-panel")
                     yield HealthStatusPanel(id="health-panel")
                     yield SlotsPanel(id="slots-panel")
@@ -262,11 +275,11 @@ class TamiyoBrain(Container):
                             yield EpisodeMetricsPanel(id="episode-metrics-panel")
                             yield ValueDiagnosticsPanel(id="value-diagnostics-panel")
                     yield ActionContext(id="action-context")
+                    yield Static(id="action-context-sidecar")
 
             with Vertical(id="right-column"):
-                yield NarrativePanel(id="narrative-panel")
                 yield DecisionsColumn(id="decisions-panel")
-            yield EventLog()
+                yield EventLog()
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Update all child widgets with new snapshot data.

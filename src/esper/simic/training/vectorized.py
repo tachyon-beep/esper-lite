@@ -49,7 +49,7 @@ if TYPE_CHECKING:
 
 # NOTE: get_task_spec imported lazily inside train_ppo_vectorized to avoid circular import:
 #   runtime -> simic.rewards -> simic -> simic.training -> vectorized -> runtime
-from esper.utils.data import SharedBatchIterator
+from esper.utils.data import SharedBatchIterator, augment_cifar10_batch
 from esper.leyline import (
     ALPHA_SPEED_TO_STEPS,
     ALPHA_TARGET_VALUES,
@@ -568,6 +568,8 @@ def train_ppo_vectorized(
     batch_size_per_env: int | None = None,
     gpu_preload: bool = False,
     experimental_gpu_preload_gather: bool = False,
+    gpu_preload_augment: bool = False,
+    gpu_preload_precompute_augment: bool = False,
     amp: bool = False,
     amp_dtype: str = "auto",  # "auto", "float16", "bfloat16", or "off"
     max_grad_norm: float | None = None,  # Gradient clipping max norm (None disables)
@@ -724,6 +726,22 @@ def train_ppo_vectorized(
         raise ValueError(
             f"n_envs={n_envs} must be >= len(devices)={len(devices)} so every requested device "
             "runs at least one environment."
+        )
+
+    if gpu_preload_augment and gpu_preload_precompute_augment:
+        raise ValueError(
+            "gpu_preload_augment and gpu_preload_precompute_augment are mutually exclusive"
+        )
+    if (gpu_preload_augment or gpu_preload_precompute_augment) and not gpu_preload:
+        raise ValueError(
+            "gpu_preload_augment/precompute requires gpu_preload=True"
+        )
+    if (
+        gpu_preload_augment
+        or gpu_preload_precompute_augment
+    ) and not task_spec.name.startswith("cifar_"):
+        raise ValueError(
+            "CIFAR GPU augmentations are supported only for CIFAR tasks"
         )
 
     # Create reward config based on mode
@@ -1049,6 +1067,7 @@ def train_ppo_vectorized(
                 data_root=task_spec.dataloader_defaults.get("data_root", "./data"),
                 is_train=True,
                 seed=seed,
+                cifar_precompute_aug=gpu_preload_precompute_augment,
             )
             shared_test_iter = SharedGPUGatherBatchIterator(
                 batch_size_per_env=effective_batch_size_per_env,
@@ -1058,6 +1077,7 @@ def train_ppo_vectorized(
                 data_root=task_spec.dataloader_defaults.get("data_root", "./data"),
                 is_train=False,
                 seed=seed,
+                cifar_precompute_aug=gpu_preload_precompute_augment,
             )
         else:
             from esper.utils.data import SharedGPUBatchIterator
@@ -1069,6 +1089,8 @@ def train_ppo_vectorized(
                 shuffle=True,
                 data_root=task_spec.dataloader_defaults.get("data_root", "./data"),
                 is_train=True,
+                cifar_precompute_aug=gpu_preload_precompute_augment,
+                seed=seed,
             )
             shared_test_iter = SharedGPUBatchIterator(
                 batch_size_per_env=effective_batch_size_per_env,
@@ -1077,6 +1099,8 @@ def train_ppo_vectorized(
                 shuffle=False,
                 data_root=task_spec.dataloader_defaults.get("data_root", "./data"),
                 is_train=False,
+                cifar_precompute_aug=gpu_preload_precompute_augment,
+                seed=seed,
             )
     else:
         shared_train_iter = SharedBatchIterator(
@@ -1098,6 +1122,20 @@ def train_ppo_vectorized(
 
     num_train_batches = len(shared_train_iter)
     num_test_batches = len(shared_test_iter)
+
+    if num_train_batches < 1:
+        message = (
+            "No training batches available (num_train_batches=0). "
+            "Reduce n_envs or batch_size_per_env, or increase available data."
+        )
+        _logger.warning(
+            "%s n_envs=%s batch_size_per_env=%s devices=%s",
+            message,
+            n_envs,
+            effective_batch_size_per_env,
+            devices,
+        )
+        raise ValueError(message)
 
     # Warm up DataLoaders to ensure workers are spawned.
     #
@@ -1246,6 +1284,11 @@ def train_ppo_vectorized(
             else None
         )
 
+        augment_generator = None
+        if gpu_preload_augment:
+            augment_generator = torch.Generator(device=env_device)
+            augment_generator.manual_seed(base_seed + env_idx * 1009)
+
         # Per-env AMP scaler to avoid stream race conditions (GradScaler state is not stream-safe)
         # Use new torch.amp.GradScaler API (torch.cuda.amp.GradScaler deprecated in PyTorch 2.4+)
         # Note: BF16 doesn't need GradScaler (same exponent range as FP32)
@@ -1315,6 +1358,7 @@ def train_ppo_vectorized(
             counterfactual_helper=counterfactual_helper,
             env_device=env_device,
             stream=stream,
+            augment_generator=augment_generator,
             scaler=env_scaler,
             seeds_created=0,
             episode_rewards=[],
@@ -1994,6 +2038,19 @@ def train_ppo_vectorized(
                             )
                             env_state.stream.wait_stream(loader_stream)
                         inputs, targets = env_batches[i]
+                        if gpu_preload_augment:
+                            assert env_state.augment_generator is not None
+                            if env_state.stream:
+                                with torch.cuda.stream(env_state.stream):
+                                    inputs = augment_cifar10_batch(
+                                        inputs,
+                                        generator=env_state.augment_generator,
+                                    )
+                            else:
+                                inputs = augment_cifar10_batch(
+                                    inputs,
+                                    generator=env_state.augment_generator,
+                                )
 
                         # BUG-031: Defensive validation for NLL loss assertion failures
                         # If targets contain values outside [0, n_classes), the NLL loss kernel

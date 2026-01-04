@@ -18,7 +18,7 @@ Obs V3 is produced by `batch_obs_to_features()` (`src/esper/tamiyo/policy/featur
 - `obs`: `float32[n_envs, 23 + 30*num_slots]` (default: 113)
 - `blueprint_indices`: `int64[n_envs, num_slots]` (`-1` for inactive slots)
 
-The network uses `BlueprintEmbedding` (`src/esper/tamiyo/networks/factored_lstm.py`) to convert `blueprint_indices` into learned vectors (`R^4` per slot) and concatenates them with `obs` before the feature net and LSTM.
+The network uses `BlueprintEmbedding` (`src/esper/tamiyo/networks/factored_lstm.py`) to convert `blueprint_indices` into learned vectors (`R^4` per slot) and concatenates them with `obs` before the feature net and LSTM. `BlueprintEmbedding` maps exactly `-1` to a dedicated trainable “null” embedding for inactive slots and (when validation is enabled) raises if it receives invalid indices outside `-1` or `[0, num_blueprints)`.
 
 ### Content (high-level)
 
@@ -33,11 +33,12 @@ Full index-by-index mapping is in `docs/scratch/obs_deep_dive/WORKING_NOTES.md`.
 
 In `src/esper/simic/training/vectorized.py`, each epoch step per environment:
 
-1. Tolaria computes train/validation metrics (plus counterfactual configs).
-2. Kasmina seed telemetry is synced (`seed_state.sync_telemetry(...)`) and counterfactual contribution is updated (solo ablation sets `SeedMetrics.counterfactual_contribution`).
-3. `SignalTracker.update()` builds `TrainingSignals` (Leyline contract) from the epoch metrics and short histories.
-4. Kasmina exports per-slot `SeedStateReport`s (`model.get_slot_reports()`).
-5. Simic builds action masks and then calls `batch_obs_to_features(...)` to produce Obs V3.
+1. Tolaria runs training and the fused validation pass (including solo/pair ablation configs when enabled).
+2. During validation result processing, solo ablation updates `SeedMetrics.counterfactual_contribution` and resets the Obs V3 staleness tracker (`epochs_since_counterfactual`).
+3. Kasmina syncs per-seed telemetry (`seed_state.sync_telemetry(...)`) so per-slot reports reflect the current epoch’s metrics (and gradient stats when available).
+4. `SignalTracker.update()` builds `TrainingSignals` (Leyline contract) from the epoch metrics and short histories.
+5. Kasmina exports per-slot `SeedStateReport`s (`model.get_slot_reports()`).
+6. Simic builds action masks and then calls `batch_obs_to_features(...)` to produce Obs V3.
 
 This means Obs V3 always reflects the latest validated epoch metrics and latest per-seed telemetry snapshot.
 
@@ -91,7 +92,7 @@ Recommended fix (once you’re ready to change behaviour): symmetric clamp to `[
 ### Secondary “interpretation” risks (telemetry/UI)
 
 - **Outlier percent can flag sparse one-hots:** a rare `1` in a mostly-zero feature produces high z-scores; treat outliers as anomaly telemetry, not a universal danger gauge.
-- **“Group stats” are placeholders:** current observation stats reuse overall mean/std for slot/host/context buckets; that can mislead UI readers.
+- **“Group stats” are coarse aggregates:** observation stats compute separate host/context/slot mean/std, but each is averaged over heterogeneous feature groups; use these as broad drift signals, not a substitute for per-feature inspection.
 
 ## Suggested next validations (no-code)
 
@@ -100,4 +101,3 @@ If you want to sanity-check Obs V3 without changing behaviour:
 - Confirm `interaction_sum` typical magnitudes (it should usually be small, single-digit percentage points).
 - Compare `obs_normalizer.mean/var` drift across runs with different `n_envs` to ensure the normalizer isn’t being dominated by inactive-slot zeros.
 - If “Obs Health” is being used as a status color, base it on non-finite counts + saturation/near-clip indicators rather than raw outlier counts alone.
-

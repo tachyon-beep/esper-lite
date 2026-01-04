@@ -17,6 +17,91 @@ from torch.utils.data import DataLoader, Dataset, TensorDataset
 import torchvision
 import torchvision.transforms as transforms
 
+# CIFAR-10 normalization constants (match CPU pipeline).
+_CIFAR10_MEAN = torch.tensor((0.4914, 0.4822, 0.4465), dtype=torch.float32)
+_CIFAR10_STD = torch.tensor((0.2470, 0.2435, 0.2616), dtype=torch.float32)
+_CIFAR10_PAD_VALUE = -_CIFAR10_MEAN / _CIFAR10_STD
+
+
+def _cifar10_pad_value(device: torch.device | str, dtype: torch.dtype) -> torch.Tensor:
+    """Return per-channel pad value for normalized CIFAR-10 tensors."""
+    return _CIFAR10_PAD_VALUE.to(device=device, dtype=dtype)
+
+
+def augment_cifar10_batch(
+    inputs: torch.Tensor,
+    *,
+    generator: torch.Generator,
+    padding: int = 4,
+    flip_prob: float = 0.5,
+) -> torch.Tensor:
+    """Apply CIFAR-10 RandomCrop + RandomHorizontalFlip on normalized tensors."""
+    if inputs.ndim != 4:
+        raise ValueError(f"Expected inputs with shape (B,C,H,W), got {inputs.shape}")
+    batch_size, channels, height, width = inputs.shape
+
+    if padding > 0:
+        pad_value = _cifar10_pad_value(inputs.device, inputs.dtype)
+        padded = torch.empty(
+            (batch_size, channels, height + 2 * padding, width + 2 * padding),
+            device=inputs.device,
+            dtype=inputs.dtype,
+        )
+        padded[:] = pad_value.view(1, channels, 1, 1)
+        padded[:, :, padding:padding + height, padding:padding + width] = inputs
+    else:
+        padded = inputs
+
+    if padding > 0:
+        max_offset = padding * 2
+        top = torch.randint(
+            0, max_offset + 1, (batch_size,), generator=generator, device=inputs.device
+        )
+        left = torch.randint(
+            0, max_offset + 1, (batch_size,), generator=generator, device=inputs.device
+        )
+        rows = top[:, None] + torch.arange(height, device=inputs.device)[None, :]
+        cols = left[:, None] + torch.arange(width, device=inputs.device)[None, :]
+        gathered = padded.gather(
+            2, rows[:, None, :, None].expand(-1, channels, -1, padded.size(3))
+        )
+        cropped = gathered.gather(
+            3, cols[:, None, None, :].expand(-1, channels, height, -1)
+        )
+    else:
+        cropped = padded
+
+    if flip_prob > 0.0:
+        flip_mask = torch.rand(
+            (batch_size,), generator=generator, device=inputs.device
+        ) < flip_prob
+        if flip_mask.any():
+            cropped[flip_mask] = torch.flip(cropped[flip_mask], dims=[3])
+
+    if inputs.is_contiguous(memory_format=torch.channels_last):
+        return cropped.contiguous(memory_format=torch.channels_last)
+
+    return cropped
+
+
+def precompute_cifar10_augment(
+    inputs: torch.Tensor,
+    *,
+    seed: int,
+    chunk_size: int = 4096,
+) -> torch.Tensor:
+    """Apply deterministic CIFAR-10 augmentations in-place over a cached dataset."""
+    generator = torch.Generator(device=inputs.device)
+    generator.manual_seed(seed)
+
+    total = inputs.size(0)
+    for start in range(0, total, chunk_size):
+        end = min(start + chunk_size, total)
+        batch = inputs[start:end]
+        inputs[start:end] = augment_cifar10_batch(batch, generator=generator)
+
+    return inputs
+
 
 # =============================================================================
 # Shared Batch Iterator (single DataLoader serving multiple environments)
@@ -137,8 +222,18 @@ def _normalize_data_root(data_root: str) -> str:
     return str(Path(data_root).expanduser().resolve())
 
 
-def _cifar10_cache_key(device: str, data_root: str) -> tuple[str, str, str, str]:
-    return ("cifar10", device, _normalize_data_root(data_root), _CIFAR10_GPU_CACHE_VERSION)
+def _cifar10_cache_key(
+    device: str,
+    data_root: str,
+    augment_mode: str = "base",
+    seed: int | None = None,
+) -> tuple[str, str, str, str]:
+    version = f"{_CIFAR10_GPU_CACHE_VERSION}-{augment_mode}"
+    if augment_mode == "precompute":
+        if seed is None:
+            raise ValueError("seed is required for CIFAR-10 precompute augmentation")
+        version = f"{version}-seed{seed}"
+    return ("cifar10", device, _normalize_data_root(data_root), version)
 
 
 def clear_gpu_dataset_cache(
@@ -170,10 +265,24 @@ def clear_gpu_dataset_cache(
         del _GPU_DATASET_CACHE[cache_key]
 
 
-def _ensure_cifar10_cached(device: str, data_root: str = "./data", *, refresh: bool = False) -> None:
+def _ensure_cifar10_cached(
+    device: str,
+    data_root: str = "./data",
+    *,
+    refresh: bool = False,
+    augment_mode: str = "base",
+    seed: int | None = None,
+) -> None:
     """Ensure CIFAR-10 is cached on the specified device."""
     global _GPU_DATASET_CACHE
-    cache_key = _cifar10_cache_key(device, data_root)
+    if augment_mode not in ("base", "precompute"):
+        raise ValueError(f"Unsupported CIFAR-10 augment_mode: {augment_mode}")
+    if augment_mode == "precompute" and seed is None:
+        raise ValueError("seed is required for CIFAR-10 precompute augmentation")
+
+    cache_key = _cifar10_cache_key(
+        device, data_root, augment_mode=augment_mode, seed=seed
+    )
 
     if refresh or cache_key not in _GPU_DATASET_CACHE:
         # Load raw data (no augmentation for GPU-resident - applied at batch time)
@@ -206,6 +315,9 @@ def _ensure_cifar10_cached(device: str, data_root: str = "./data", *, refresh: b
         train_y = train_y.to(device)
         test_x = test_x.to(device, memory_format=torch.channels_last)
         test_y = test_y.to(device)
+
+        if augment_mode == "precompute":
+            precompute_cifar10_augment(train_x, seed=seed)
 
         _GPU_DATASET_CACHE[cache_key] = (train_x, train_y, test_x, test_y)
 
@@ -244,6 +356,8 @@ class SharedGPUBatchIterator:
         generator: torch.Generator | None = None,
         data_root: str = "./data",
         is_train: bool = True,
+        cifar_precompute_aug: bool = False,
+        seed: int | None = None,
     ):
         self.n_envs = n_envs
         self.env_devices = env_devices
@@ -258,9 +372,15 @@ class SharedGPUBatchIterator:
                 self._device_to_env_indices[device] = []
             self._device_to_env_indices[device].append(env_idx)
 
+        if cifar_precompute_aug and seed is None:
+            raise ValueError("seed is required for CIFAR-10 precompute augmentation")
+        augment_mode = "precompute" if cifar_precompute_aug else "base"
+
         # Ensure data is cached on all devices
         for device in self._device_to_env_indices.keys():
-            _ensure_cifar10_cached(device, data_root)
+            _ensure_cifar10_cached(
+                device, data_root, augment_mode=augment_mode, seed=seed
+            )
 
         # CRITICAL: Synchronize all devices after cache initialization.
         # Although .to(device) is synchronous, ensuring all GPU memory transfers
@@ -279,7 +399,9 @@ class SharedGPUBatchIterator:
             n_envs_on_device = len(env_indices)
             total_batch = batch_size_per_env * n_envs_on_device
 
-            cache_key = _cifar10_cache_key(device, data_root)
+            cache_key = _cifar10_cache_key(
+                device, data_root, augment_mode=augment_mode, seed=seed
+            )
             train_x, train_y, test_x, test_y = _GPU_DATASET_CACHE[cache_key]
 
             dataset: Dataset[tuple[torch.Tensor, torch.Tensor]]
@@ -405,6 +527,7 @@ class SharedGPUGatherBatchIterator:
         data_root: str = "./data",
         is_train: bool = True,
         seed: int,
+        cifar_precompute_aug: bool = False,
     ):
         if batch_size_per_env < 1:
             raise ValueError(
@@ -430,8 +553,11 @@ class SharedGPUGatherBatchIterator:
                 self._device_to_env_indices[device] = []
             self._device_to_env_indices[device].append(env_idx)
 
+        augment_mode = "precompute" if cifar_precompute_aug else "base"
         for device in self._device_to_env_indices.keys():
-            _ensure_cifar10_cached(device, data_root)
+            _ensure_cifar10_cached(
+                device, data_root, augment_mode=augment_mode, seed=seed
+            )
 
         if torch.cuda.is_available():
             for device in self._device_to_env_indices.keys():
@@ -441,7 +567,9 @@ class SharedGPUGatherBatchIterator:
         self._device_states: dict[str, _GatherDeviceState] = {}
         per_device_lens: list[int] = []
         for device, env_indices in self._device_to_env_indices.items():
-            cache_key = _cifar10_cache_key(device, data_root)
+            cache_key = _cifar10_cache_key(
+                device, data_root, augment_mode=augment_mode, seed=seed
+            )
             train_x, train_y, test_x, test_y = _GPU_DATASET_CACHE[cache_key]
             if is_train:
                 dataset_x, dataset_y = train_x, train_y
@@ -549,6 +677,8 @@ def load_cifar10_gpu(
     device: str = "cuda:0",
     *,
     refresh: bool = False,
+    cifar_precompute_aug: bool = False,
+    seed: int | None = None,
 ) -> tuple[DataLoader[tuple[torch.Tensor, torch.Tensor]], DataLoader[tuple[torch.Tensor, torch.Tensor]]]:
     """Load CIFAR-10 with data pre-loaded to GPU for maximum throughput.
 
@@ -568,8 +698,15 @@ def load_cifar10_gpu(
     Returns:
         Tuple of (trainloader, testloader) with GPU-resident data.
     """
-    _ensure_cifar10_cached(device, data_root, refresh=refresh)
-    cache_key = _cifar10_cache_key(device, data_root)
+    if cifar_precompute_aug and seed is None:
+        raise ValueError("seed is required for CIFAR-10 precompute augmentation")
+    augment_mode = "precompute" if cifar_precompute_aug else "base"
+    _ensure_cifar10_cached(
+        device, data_root, refresh=refresh, augment_mode=augment_mode, seed=seed
+    )
+    cache_key = _cifar10_cache_key(
+        device, data_root, augment_mode=augment_mode, seed=seed
+    )
     train_x, train_y, test_x, test_y = _GPU_DATASET_CACHE[cache_key]
 
     # Create GPU-resident DataLoaders (no workers needed - data already on GPU)

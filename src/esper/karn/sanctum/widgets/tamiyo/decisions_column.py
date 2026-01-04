@@ -1,8 +1,8 @@
 """DecisionsColumn - Vertical stack of decision cards.
 
 Manages the throttled display of decision cards to provide visual stability.
-Cards pop in ONE at a time every 30 seconds (both growing and steady state).
-First card appears immediately, then one every 30s until MAX_CARDS reached.
+Cards pop in ONE at a time every 10 seconds (both growing and steady state).
+First card appears immediately, then one every 10s until MAX_CARDS reached.
 """
 
 from __future__ import annotations
@@ -330,8 +330,8 @@ class DecisionCard(Static):
 class DecisionsColumn(Container):
     """Vertical stack of decision cards with throttled updates."""
 
-    CARD_SWAP_INTERVAL: ClassVar[float] = 30.0
-    MAX_CARDS: ClassVar[int] = 4
+    CARD_SWAP_INTERVAL: ClassVar[float] = 10.0
+    MAX_CARDS: ClassVar[int] = 3
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)

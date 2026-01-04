@@ -44,6 +44,7 @@ class ParallelEnvState:
     seed_optimizers: dict[str, torch.optim.Optimizer] = field(default_factory=dict)
     env_device: str = "cpu"  # Device this env runs on
     stream: torch.cuda.Stream | None = None  # CUDA stream for async execution
+    augment_generator: torch.Generator | None = None  # RNG for GPU augmentations
     scaler: "GradScaler | None" = None  # Per-env AMP scaler for FP16 mixed precision
     seeds_created: int = 0
     seeds_fossilized: int = 0  # Total seeds fossilized this episode

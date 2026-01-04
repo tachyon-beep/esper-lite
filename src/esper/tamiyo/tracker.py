@@ -333,6 +333,20 @@ class SignalTracker:
             accuracy_history=list(self._accuracy_history)[-5:],
         )
 
+    def stable_val_accuracy(self, window: int) -> float:
+        """Return a stability-filtered validation accuracy.
+
+        Uses min(last_k) to approximate "sustained" performance: a spike only
+        counts once it survives the full window.
+        """
+        if window <= 0:
+            raise ValueError(f"stable_val_accuracy window must be positive, got {window}")
+        if not self._accuracy_history:
+            raise RuntimeError("stable_val_accuracy called before any accuracy history exists")
+        values = list(self._accuracy_history)
+        k = window if window <= len(values) else len(values)
+        return min(values[-k:])
+
     def reset(self) -> None:
         """Reset tracker state."""
         # Recreate deques with current history_window (not just clear)

@@ -324,6 +324,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="EXPERIMENTAL: Use a DataLoader-free gather iterator for --gpu-preload (CIFAR-10 only).",
     )
+    gpu_aug_group = ppo_parser.add_mutually_exclusive_group()
+    gpu_aug_group.add_argument(
+        "--gpu-preload-augment",
+        action="store_true",
+        help="Apply CIFAR-10 random crop/flip on GPU batches (requires --gpu-preload).",
+    )
+    gpu_aug_group.add_argument(
+        "--gpu-preload-precompute-augment",
+        action="store_true",
+        help="Precompute deterministic CIFAR-10 random crop/flip on GPU (requires --gpu-preload).",
+    )
     ppo_parser.add_argument(
         "--amp",
         action="store_true",
@@ -493,6 +504,10 @@ def main() -> None:
         parser.error("--sanctum and --overwatch are mutually exclusive")
     if args.algorithm == "ppo" and args.experimental_gpu_preload_gather and not args.gpu_preload:
         parser.error("--experimental-gpu-preload-gather requires --gpu-preload")
+    if args.algorithm == "ppo" and args.gpu_preload_augment and not args.gpu_preload:
+        parser.error("--gpu-preload-augment requires --gpu-preload")
+    if args.algorithm == "ppo" and args.gpu_preload_precompute_augment and not args.gpu_preload:
+        parser.error("--gpu-preload-precompute-augment requires --gpu-preload")
 
     # Create TelemetryConfig from CLI argument
     from esper.simic.telemetry import TelemetryConfig, TelemetryLevel
@@ -842,6 +857,8 @@ def main() -> None:
                         num_workers=args.num_workers,
                         gpu_preload=args.gpu_preload,
                         experimental_gpu_preload_gather=args.experimental_gpu_preload_gather,
+                        gpu_preload_augment=args.gpu_preload_augment,
+                        gpu_preload_precompute_augment=args.gpu_preload_precompute_augment,
                         telemetry_config=telemetry_config,
                         telemetry_lifecycle_only=args.telemetry_lifecycle_only,
                         quiet_analytics=use_sanctum,
