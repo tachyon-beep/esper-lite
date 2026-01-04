@@ -790,8 +790,16 @@ class PPOUpdatePayload:
     # === LSTM Hidden State Health (B7-DRL-04) ===
     # Tracks LSTM hidden state stability after PPO updates (BPTT can corrupt states)
     # h = hidden state, c = cell state
-    lstm_h_norm: float | None = None  # L2 norm of hidden state (None = no LSTM)
-    lstm_c_norm: float | None = None  # L2 norm of cell state
+    # NOTE: Total L2 norms scale with sqrt(numel) and are NOT batch-size invariant.
+    # Use *_rms and *_env_rms_* for scale-free health signals.
+    lstm_h_l2_total: float | None = None
+    lstm_c_l2_total: float | None = None
+    lstm_h_rms: float | None = None
+    lstm_c_rms: float | None = None
+    lstm_h_env_rms_mean: float | None = None
+    lstm_h_env_rms_max: float | None = None
+    lstm_c_env_rms_mean: float | None = None
+    lstm_c_env_rms_max: float | None = None
     lstm_h_max: float | None = None   # Max absolute value in h
     lstm_c_max: float | None = None   # Max absolute value in c
     lstm_has_nan: bool = False  # NaN detected in hidden state
@@ -902,8 +910,14 @@ class PPOUpdatePayload:
             cuda_memory_peak_gb=data.get("cuda_memory_peak_gb", 0.0),
             cuda_memory_fragmentation=data.get("cuda_memory_fragmentation", 0.0),
             # LSTM health metrics (B7-DRL-04)
-            lstm_h_norm=data.get("lstm_h_norm"),
-            lstm_c_norm=data.get("lstm_c_norm"),
+            lstm_h_l2_total=data.get("lstm_h_l2_total"),
+            lstm_c_l2_total=data.get("lstm_c_l2_total"),
+            lstm_h_rms=data.get("lstm_h_rms"),
+            lstm_c_rms=data.get("lstm_c_rms"),
+            lstm_h_env_rms_mean=data.get("lstm_h_env_rms_mean"),
+            lstm_h_env_rms_max=data.get("lstm_h_env_rms_max"),
+            lstm_c_env_rms_mean=data.get("lstm_c_env_rms_mean"),
+            lstm_c_env_rms_max=data.get("lstm_c_env_rms_max"),
             lstm_h_max=data.get("lstm_h_max"),
             lstm_c_max=data.get("lstm_c_max"),
             lstm_has_nan=data.get("lstm_has_nan", False),

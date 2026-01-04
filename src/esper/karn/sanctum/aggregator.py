@@ -1026,8 +1026,14 @@ class SanctumAggregator:
 
         # LSTM hidden state health (B7-DRL-04)
         # None values indicate no LSTM in the policy (non-recurrent architecture)
-        self._tamiyo.lstm_h_norm = payload.lstm_h_norm
-        self._tamiyo.lstm_c_norm = payload.lstm_c_norm
+        self._tamiyo.lstm_h_l2_total = payload.lstm_h_l2_total
+        self._tamiyo.lstm_c_l2_total = payload.lstm_c_l2_total
+        self._tamiyo.lstm_h_rms = payload.lstm_h_rms
+        self._tamiyo.lstm_c_rms = payload.lstm_c_rms
+        self._tamiyo.lstm_h_env_rms_mean = payload.lstm_h_env_rms_mean
+        self._tamiyo.lstm_h_env_rms_max = payload.lstm_h_env_rms_max
+        self._tamiyo.lstm_c_env_rms_mean = payload.lstm_c_env_rms_mean
+        self._tamiyo.lstm_c_env_rms_max = payload.lstm_c_env_rms_max
         self._tamiyo.lstm_h_max = payload.lstm_h_max
         self._tamiyo.lstm_c_max = payload.lstm_c_max
         self._tamiyo.lstm_has_nan = payload.lstm_has_nan

@@ -132,15 +132,19 @@ class TestTELE340LstmHealthWiring:
         metrics = ppo_agent.update()
 
         # LSTM health metrics should be present
-        assert "lstm_h_norm" in metrics, "lstm_h_norm should be in update metrics"
-        assert "lstm_c_norm" in metrics, "lstm_c_norm should be in update metrics"
-        assert metrics["lstm_h_norm"] is not None, "lstm_h_norm should not be None"
-        assert metrics["lstm_c_norm"] is not None, "lstm_c_norm should not be None"
-        assert isinstance(metrics["lstm_h_norm"], float), "lstm_h_norm should be a float"
-        assert isinstance(metrics["lstm_c_norm"], float), "lstm_c_norm should be a float"
-        # Norms should be positive
-        assert metrics["lstm_h_norm"] > 0, "lstm_h_norm should be positive"
-        assert metrics["lstm_c_norm"] > 0, "lstm_c_norm should be positive"
+        assert "lstm_h_rms" in metrics, "lstm_h_rms should be in update metrics"
+        assert "lstm_c_rms" in metrics, "lstm_c_rms should be in update metrics"
+        assert "lstm_h_env_rms_mean" in metrics, "lstm_h_env_rms_mean should be in update metrics"
+        assert "lstm_h_env_rms_max" in metrics, "lstm_h_env_rms_max should be in update metrics"
+        assert "lstm_c_env_rms_mean" in metrics, "lstm_c_env_rms_mean should be in update metrics"
+        assert "lstm_c_env_rms_max" in metrics, "lstm_c_env_rms_max should be in update metrics"
+        assert metrics["lstm_h_rms"] is not None, "lstm_h_rms should not be None"
+        assert metrics["lstm_c_rms"] is not None, "lstm_c_rms should not be None"
+        assert isinstance(metrics["lstm_h_rms"], float), "lstm_h_rms should be a float"
+        assert isinstance(metrics["lstm_c_rms"], float), "lstm_c_rms should be a float"
+        # RMS magnitudes should be non-negative
+        assert metrics["lstm_h_rms"] >= 0, "lstm_h_rms should be non-negative"
+        assert metrics["lstm_c_rms"] >= 0, "lstm_c_rms should be non-negative"
 
     def test_lstm_health_max_values(self, ppo_agent):
         """TELE-340: LSTM health should include max values for spike detection."""

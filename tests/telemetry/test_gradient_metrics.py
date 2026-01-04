@@ -917,8 +917,14 @@ class TestTELE340LstmHealth:
         hub, backend = capture_hub
 
         payload = make_ppo_payload(
-            lstm_h_norm=5.0,
-            lstm_c_norm=5.0,
+            lstm_h_l2_total=120.0,
+            lstm_c_l2_total=240.0,
+            lstm_h_rms=0.35,
+            lstm_c_rms=1.44,
+            lstm_h_env_rms_mean=0.34,
+            lstm_h_env_rms_max=0.50,
+            lstm_c_env_rms_mean=1.40,
+            lstm_c_env_rms_max=2.10,
             lstm_h_max=2.0,
             lstm_c_max=2.0,
             lstm_has_nan=False,
@@ -929,8 +935,14 @@ class TestTELE340LstmHealth:
         events = backend.find_events(TelemetryEventType.PPO_UPDATE_COMPLETED)
         assert len(events) == 1
         data = events[0].data
-        assert data.lstm_h_norm == pytest.approx(5.0)
-        assert data.lstm_c_norm == pytest.approx(5.0)
+        assert data.lstm_h_l2_total == pytest.approx(120.0)
+        assert data.lstm_c_l2_total == pytest.approx(240.0)
+        assert data.lstm_h_rms == pytest.approx(0.35)
+        assert data.lstm_c_rms == pytest.approx(1.44)
+        assert data.lstm_h_env_rms_mean == pytest.approx(0.34)
+        assert data.lstm_h_env_rms_max == pytest.approx(0.50)
+        assert data.lstm_c_env_rms_mean == pytest.approx(1.40)
+        assert data.lstm_c_env_rms_max == pytest.approx(2.10)
         assert data.lstm_h_max == pytest.approx(2.0)
         assert data.lstm_c_max == pytest.approx(2.0)
         assert data.lstm_has_nan is False
@@ -941,8 +953,8 @@ class TestTELE340LstmHealth:
         hub, backend = capture_hub
 
         payload = make_ppo_payload(
-            lstm_h_norm=float("nan"),
-            lstm_c_norm=5.0,
+            lstm_h_rms=float("nan"),
+            lstm_c_rms=1.0,
             lstm_h_max=float("nan"),
             lstm_c_max=2.0,
             lstm_has_nan=True,
@@ -961,8 +973,8 @@ class TestTELE340LstmHealth:
         hub, backend = capture_hub
 
         payload = make_ppo_payload(
-            lstm_h_norm=float("inf"),
-            lstm_c_norm=5.0,
+            lstm_h_rms=float("inf"),
+            lstm_c_rms=1.0,
             lstm_h_max=float("inf"),
             lstm_c_max=2.0,
             lstm_has_nan=False,
@@ -976,13 +988,13 @@ class TestTELE340LstmHealth:
         assert data.lstm_has_nan is False
         assert data.lstm_has_inf is True
 
-    def test_lstm_health_exploding_norms(self, capture_hub: CaptureHubResult):
-        """TELE-340: Exploding LSTM state norms indicate instability."""
+    def test_lstm_health_exploding_rms(self, capture_hub: CaptureHubResult):
+        """TELE-340: Exploding LSTM state RMS indicates instability."""
         hub, backend = capture_hub
 
         payload = make_ppo_payload(
-            lstm_h_norm=150.0,  # > 100.0 is unhealthy
-            lstm_c_norm=150.0,
+            lstm_h_rms=11.0,  # > 10.0 is unhealthy
+            lstm_c_rms=11.0,
             lstm_h_max=50.0,
             lstm_c_max=50.0,
             lstm_has_nan=False,
@@ -993,16 +1005,16 @@ class TestTELE340LstmHealth:
         events = backend.find_events(TelemetryEventType.PPO_UPDATE_COMPLETED)
         assert len(events) == 1
         data = events[0].data
-        assert data.lstm_h_norm > 100.0
-        assert data.lstm_c_norm > 100.0
+        assert data.lstm_h_rms > 10.0
+        assert data.lstm_c_rms > 10.0
 
-    def test_lstm_health_vanishing_norms(self, capture_hub: CaptureHubResult):
-        """TELE-340: Vanishing LSTM state norms indicate gradient starvation."""
+    def test_lstm_health_vanishing_rms(self, capture_hub: CaptureHubResult):
+        """TELE-340: Vanishing LSTM state RMS indicates gradient starvation."""
         hub, backend = capture_hub
 
         payload = make_ppo_payload(
-            lstm_h_norm=1e-8,  # < 1e-6 is unhealthy
-            lstm_c_norm=1e-8,
+            lstm_h_rms=1e-8,  # < 1e-6 is unhealthy
+            lstm_c_rms=1e-8,
             lstm_h_max=1e-9,
             lstm_c_max=1e-9,
             lstm_has_nan=False,
@@ -1013,8 +1025,8 @@ class TestTELE340LstmHealth:
         events = backend.find_events(TelemetryEventType.PPO_UPDATE_COMPLETED)
         assert len(events) == 1
         data = events[0].data
-        assert data.lstm_h_norm < 1e-6
-        assert data.lstm_c_norm < 1e-6
+        assert data.lstm_h_rms < 1e-6
+        assert data.lstm_c_rms < 1e-6
 
     def test_lstm_health_computed_from_actual_lstm(self):
         """TELE-340: lstm_health metrics flow from PPO update to telemetry.
@@ -1031,8 +1043,8 @@ class TestTELE340LstmHealth:
         metrics = compute_lstm_health((h, c))
 
         assert metrics is not None
-        assert metrics.h_norm > 0
-        assert metrics.c_norm > 0
+        assert metrics.h_l2_total > 0
+        assert metrics.c_l2_total > 0
 
         # The wiring is now complete: PPO.update() calls compute_lstm_health()
         # and adds results to the metrics dict, which flows to the emitter.

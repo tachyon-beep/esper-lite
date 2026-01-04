@@ -103,8 +103,14 @@ class PPOUpdateMetrics(TypedDict, total=False):
     head_nan_detected: dict[str, bool]
     head_inf_detected: dict[str, bool]
     # LSTM hidden state health (TELE-340)
-    lstm_h_norm: float | None
-    lstm_c_norm: float | None
+    lstm_h_l2_total: float | None
+    lstm_c_l2_total: float | None
+    lstm_h_rms: float | None
+    lstm_c_rms: float | None
+    lstm_h_env_rms_mean: float | None
+    lstm_h_env_rms_max: float | None
+    lstm_c_env_rms_mean: float | None
+    lstm_c_env_rms_max: float | None
     lstm_h_max: float | None
     lstm_c_max: float | None
     lstm_has_nan: bool | None

@@ -662,8 +662,12 @@ class PPOAgent:
             if result.hidden is not None:
                 lstm_health = compute_lstm_health(result.hidden)
                 if lstm_health is not None:
-                    lstm_health_history["lstm_h_norm"].append(lstm_health.h_norm)
-                    lstm_health_history["lstm_c_norm"].append(lstm_health.c_norm)
+                    lstm_health_history["lstm_h_rms"].append(lstm_health.h_rms)
+                    lstm_health_history["lstm_c_rms"].append(lstm_health.c_rms)
+                    lstm_health_history["lstm_h_env_rms_mean"].append(lstm_health.h_env_rms_mean)
+                    lstm_health_history["lstm_h_env_rms_max"].append(lstm_health.h_env_rms_max)
+                    lstm_health_history["lstm_c_env_rms_mean"].append(lstm_health.c_env_rms_mean)
+                    lstm_health_history["lstm_c_env_rms_max"].append(lstm_health.c_env_rms_max)
                     lstm_health_history["lstm_h_max"].append(lstm_health.h_max)
                     lstm_health_history["lstm_c_max"].append(lstm_health.c_max)
                     lstm_health_history["lstm_has_nan"].append(lstm_health.has_nan)
@@ -1143,11 +1147,20 @@ class PPOAgent:
         aggregated_result["head_inf_detected"] = head_inf_detected
 
         # Add LSTM health metrics (TELE-340)
-        if lstm_health_history["lstm_h_norm"]:
-            # Average norms across epochs
-            aggregated_result["lstm_h_norm"] = sum(lstm_health_history["lstm_h_norm"]) / len(lstm_health_history["lstm_h_norm"])
-            aggregated_result["lstm_c_norm"] = sum(lstm_health_history["lstm_c_norm"]) / len(lstm_health_history["lstm_c_norm"])
-            # Max values across epochs (worst-case for spike detection)
+        if lstm_health_history["lstm_h_rms"]:
+            # Average RMS magnitudes across epochs (scale-free)
+            aggregated_result["lstm_h_rms"] = sum(lstm_health_history["lstm_h_rms"]) / len(lstm_health_history["lstm_h_rms"])
+            aggregated_result["lstm_c_rms"] = sum(lstm_health_history["lstm_c_rms"]) / len(lstm_health_history["lstm_c_rms"])
+            aggregated_result["lstm_h_env_rms_mean"] = (
+                sum(lstm_health_history["lstm_h_env_rms_mean"]) / len(lstm_health_history["lstm_h_env_rms_mean"])
+            )
+            aggregated_result["lstm_c_env_rms_mean"] = (
+                sum(lstm_health_history["lstm_c_env_rms_mean"]) / len(lstm_health_history["lstm_c_env_rms_mean"])
+            )
+            # Worst-case per-env RMS across epochs (outlier detection)
+            aggregated_result["lstm_h_env_rms_max"] = max(lstm_health_history["lstm_h_env_rms_max"])
+            aggregated_result["lstm_c_env_rms_max"] = max(lstm_health_history["lstm_c_env_rms_max"])
+            # Max abs values across epochs (localized spike detection)
             aggregated_result["lstm_h_max"] = max(lstm_health_history["lstm_h_max"])
             aggregated_result["lstm_c_max"] = max(lstm_health_history["lstm_c_max"])
             # Boolean OR across epochs (once NaN/Inf detected, stays detected)
@@ -1155,8 +1168,12 @@ class PPOAgent:
             aggregated_result["lstm_has_inf"] = any(lstm_health_history["lstm_has_inf"])
         else:
             # No LSTM health data (non-recurrent policy or early stopped before first epoch)
-            aggregated_result["lstm_h_norm"] = None
-            aggregated_result["lstm_c_norm"] = None
+            aggregated_result["lstm_h_rms"] = None
+            aggregated_result["lstm_c_rms"] = None
+            aggregated_result["lstm_h_env_rms_mean"] = None
+            aggregated_result["lstm_h_env_rms_max"] = None
+            aggregated_result["lstm_c_env_rms_mean"] = None
+            aggregated_result["lstm_c_env_rms_max"] = None
             aggregated_result["lstm_h_max"] = None
             aggregated_result["lstm_c_max"] = None
             aggregated_result["lstm_has_nan"] = None

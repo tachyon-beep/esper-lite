@@ -295,29 +295,35 @@ class AnomalyDetector:
         return report
 
     # B7-DRL-04: LSTM hidden state health thresholds
-    lstm_max_norm: float = 100.0  # Upper bound for healthy norm (explosion threshold)
-    lstm_min_norm: float = 1e-6  # Lower bound for healthy norm (vanishing threshold)
+    # These are RMS thresholds (scale-free w.r.t. batch size / hidden dim).
+    # They intentionally do NOT use total L2 norms, which scale with sqrt(numel).
+    lstm_max_rms: float = 10.0  # Explosion/saturation threshold (per-element magnitude)
+    lstm_min_rms: float = 1e-6  # Vanishing threshold
 
     def check_lstm_health(
         self,
-        h_norm: float,
-        c_norm: float,
+        h_rms: float,
+        c_rms: float,
+        h_env_rms_max: float,
+        c_env_rms_max: float,
         has_nan: bool,
         has_inf: bool,
     ) -> AnomalyReport:
         """Check LSTM hidden state health (B7-DRL-04).
 
         LSTM hidden states can drift during training due to:
-        - Gradient explosion: h/c norms spike above threshold
-        - Gradient vanishing: h/c norms collapse below threshold
+        - Explosion/saturation: RMS magnitude spikes above threshold
+        - Vanishing: RMS magnitude collapses below threshold
         - Numerical instability: NaN/Inf propagates through hidden state
 
         This should be called after PPO updates, when gradient-induced
         corruption is most likely to occur (BPTT through LSTM layers).
 
         Args:
-            h_norm: L2 norm of hidden state tensor
-            c_norm: L2 norm of cell state tensor
+            h_rms: RMS magnitude of hidden state tensor (scale-free)
+            c_rms: RMS magnitude of cell state tensor (scale-free)
+            h_env_rms_max: Max per-env RMS across batch (outlier detection)
+            c_env_rms_max: Max per-env RMS across batch (outlier detection)
             has_nan: Whether NaN was detected in hidden state
             has_inf: Whether Inf was detected in hidden state
 
@@ -330,36 +336,36 @@ class AnomalyDetector:
         if has_nan:
             report.add_anomaly(
                 "lstm_nan",
-                f"NaN in LSTM hidden state (h_norm={h_norm:.3f}, c_norm={c_norm:.3f})",
+                f"NaN in LSTM hidden state (h_rms={h_rms:.3f}, c_rms={c_rms:.3f})",
             )
         if has_inf:
             report.add_anomaly(
                 "lstm_inf",
-                f"Inf in LSTM hidden state (h_norm={h_norm:.3f}, c_norm={c_norm:.3f})",
+                f"Inf in LSTM hidden state (h_rms={h_rms:.3f}, c_rms={c_rms:.3f})",
             )
 
-        # Warning: Hidden state explosion
-        if h_norm > self.lstm_max_norm:
+        # Critical: Hidden state explosion/saturation (use max per-env RMS to catch outliers)
+        if h_env_rms_max > self.lstm_max_rms:
             report.add_anomaly(
                 "lstm_h_explosion",
-                f"h_norm={h_norm:.3f} > {self.lstm_max_norm}",
+                f"h_env_rms_max={h_env_rms_max:.3f} > {self.lstm_max_rms} (h_rms={h_rms:.3f})",
             )
-        if c_norm > self.lstm_max_norm:
+        if c_env_rms_max > self.lstm_max_rms:
             report.add_anomaly(
                 "lstm_c_explosion",
-                f"c_norm={c_norm:.3f} > {self.lstm_max_norm}",
+                f"c_env_rms_max={c_env_rms_max:.3f} > {self.lstm_max_rms} (c_rms={c_rms:.3f})",
             )
 
-        # Warning: Hidden state vanishing
-        if h_norm < self.lstm_min_norm:
+        # Critical: Hidden state vanishing (global RMS)
+        if h_rms < self.lstm_min_rms:
             report.add_anomaly(
                 "lstm_h_vanishing",
-                f"h_norm={h_norm:.6f} < {self.lstm_min_norm}",
+                f"h_rms={h_rms:.6f} < {self.lstm_min_rms}",
             )
-        if c_norm < self.lstm_min_norm:
+        if c_rms < self.lstm_min_rms:
             report.add_anomaly(
                 "lstm_c_vanishing",
-                f"c_norm={c_norm:.6f} < {self.lstm_min_norm}",
+                f"c_rms={c_rms:.6f} < {self.lstm_min_rms}",
             )
 
         return report

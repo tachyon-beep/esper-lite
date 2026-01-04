@@ -3680,12 +3680,14 @@ def train_ppo_vectorized(
 
                 # B7-DRL-04: Check LSTM hidden state health after PPO update
                 # LSTM hidden states can become corrupted during BPTT - monitor for
-                # explosion (norm > 100), vanishing (norm < 1e-6), or NaN/Inf.
+                # explosion/saturation (RMS > threshold), vanishing (RMS < 1e-6), or NaN/Inf.
                 lstm_health = compute_lstm_health(batched_lstm_hidden)
                 if lstm_health is not None:
                     lstm_report = anomaly_detector.check_lstm_health(
-                        h_norm=lstm_health.h_norm,
-                        c_norm=lstm_health.c_norm,
+                        h_rms=lstm_health.h_rms,
+                        c_rms=lstm_health.c_rms,
+                        h_env_rms_max=lstm_health.h_env_rms_max,
+                        c_env_rms_max=lstm_health.c_env_rms_max,
                         has_nan=lstm_health.has_nan,
                         has_inf=lstm_health.has_inf,
                     )
@@ -3694,12 +3696,7 @@ def train_ppo_vectorized(
                         anomaly_report.anomaly_types.extend(lstm_report.anomaly_types)
                         anomaly_report.details.update(lstm_report.details)
                     # Add LSTM health to metrics for telemetry display in Sanctum
-                    metrics["lstm_h_norm"] = lstm_health.h_norm
-                    metrics["lstm_c_norm"] = lstm_health.c_norm
-                    metrics["lstm_h_max"] = lstm_health.h_max
-                    metrics["lstm_c_max"] = lstm_health.c_max
-                    metrics["lstm_has_nan"] = lstm_health.has_nan
-                    metrics["lstm_has_inf"] = lstm_health.has_inf
+                    metrics.update(lstm_health.to_dict())
 
                 _handle_telemetry_escalation(anomaly_report, telemetry_config)
                 _emit_anomaly_diagnostics(

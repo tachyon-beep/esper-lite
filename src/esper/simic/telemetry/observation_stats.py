@@ -35,7 +35,7 @@ class ObservationStatsTelemetry:
     context_features_std: float = 0.0
 
     # Outlier detection (observations outside 3-sigma)
-    outlier_pct: float = 0.0
+    outlier_pct: float = 0.0  # Fraction in [0, 1] (rendered as X.X%)
 
     # Numerical health
     nan_count: int = 0
@@ -141,7 +141,8 @@ def compute_observation_stats(
     z_scores = torch.abs((clean_obs - feature_mean) / feature_std)
     outlier_count = int((z_scores > 3.0).sum().item())
     total_elements = batch_size * obs_dim
-    outlier_pct = (outlier_count / total_elements) * 100.0 if total_elements > 0 else 0.0
+    # Fraction (not percent): UI renders with percent formatting (X.X%).
+    outlier_pct = (outlier_count / total_elements) if total_elements > 0 else 0.0
 
     # Normalization drift (how much the running mean has shifted)
     normalization_drift = 0.0

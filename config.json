@@ -17,7 +17,8 @@
   "lstm_hidden_dim": 512,
   "chunk_length": 150,
   "slots": [
-    "r0c0"
+    "r0c0",
+    "r0c1"
   ],
   "max_seeds": 1,
   "reward_mode": "shaped",

@@ -42,29 +42,32 @@
 | Property | Value |
 |----------|-------|
 | **Type** | `LSTMHealthMetrics` (dataclass with float/bool fields) |
-| **Fields** | `h_norm`, `c_norm`, `h_max`, `c_max`, `has_nan`, `has_inf` |
-| **Units** | L2 norm (unitless), max absolute value, boolean flags |
-| **Range** | norms: `[0, ∞)`, max: `[0, ∞)`, flags: `bool` |
+| **Fields** | `h_l2_total`, `c_l2_total`, `h_rms`, `c_rms`, `h_env_rms_mean`, `h_env_rms_max`, `c_env_rms_mean`, `c_env_rms_max`, `h_max`, `c_max`, `has_nan`, `has_inf` |
+| **Units** | L2/RMS magnitudes (unitless), max absolute value (unitless), boolean flags |
+| **Range** | magnitudes/max: `[0, ∞)`, flags: `bool` |
 | **Precision** | 3 decimal places for display |
 | **Default** | `None` (if no LSTM in use) |
 
 ### Semantic Meaning
 
 > LSTM hidden states (h, c) can drift during training:
-> - **h_norm**: L2 norm of hidden state tensor, computed as `||h||₂`
-> - **c_norm**: L2 norm of cell state tensor, computed as `||c||₂`
+> - **h_l2_total / c_l2_total**: Total L2 norm of the full tensor `||h||₂`, `||c||₂` (NOT batch-size invariant)
+> - **h_rms / c_rms**: RMS magnitude (batch-size invariant), computed as `||x||₂ / sqrt(numel(x))` = `sqrt(mean(x²))`
+> - **h_env_rms_* / c_env_rms_***: Per-environment RMS stats (RMS over `[layers * hidden_dim]` per env), logs mean + max for outlier detection
 > - **h_max/c_max**: Maximum absolute value (catches localized spikes)
 > - **has_nan/has_inf**: Numerical stability flags
 >
 > These metrics detect gradient-induced corruption during BPTT (Pascanu et al., 2013).
+>
+> **Why RMS?** Total L2 norms scale with `sqrt(numel)` so increasing `n_envs`, `hidden_dim`, or `layers` inflates the number even when per-element magnitudes are stable. RMS removes that deployment-scaling effect.
 
 ### Health Thresholds
 
 | Level | Condition | Meaning |
 |-------|-----------|---------|
-| **Healthy** | `1e-6 < norm < 100.0`, no NaN/Inf | Normal operating range |
-| **Warning** | `norm > 100.0` or `norm < 1e-6` | Explosion or vanishing |
-| **Critical** | `has_nan=True` or `has_inf=True` | Irrecoverable corruption |
+| **Healthy** | `1e-6 < rms < 5.0`, no NaN/Inf | Normal operating range (scale-free) |
+| **Warning** | `rms > 5.0` | Elevated per-element magnitude (Sanctum warning threshold) |
+| **Critical** | `rms > 10.0` or `env_rms_max > 10.0` or NaN/Inf | Likely saturation/instability (Sanctum critical + anomaly threshold) |
 
 ---
 
@@ -77,7 +80,7 @@
 | **Origin** | LSTM hidden state after policy forward pass |
 | **File** | `/home/john/esper-lite/src/esper/simic/telemetry/lstm_health.py` |
 | **Function/Method** | `compute_lstm_health()` |
-| **Line(s)** | 71-124 |
+| **Line(s)** | 93-204 |
 
 ```python
 def compute_lstm_health(
@@ -87,10 +90,20 @@ def compute_lstm_health(
         return None
     h, c = hidden
     with torch.inference_mode():
+        # Capacity/load (scales with sqrt(numel))
+        h_l2_total_t = torch.linalg.vector_norm(h)
+        c_l2_total_t = torch.linalg.vector_norm(c)
+
+        # Scale-free health (RMS)
+        inv_sqrt_numel = 1.0 / (float(h.numel()) ** 0.5)
+        h_rms_t = h_l2_total_t * inv_sqrt_numel
+        c_rms_t = c_l2_total_t * inv_sqrt_numel
+
+        # Per-env RMS stats (outlier detection across envs)
+        # h_env: [batch, layers*hidden_dim]
+        # h_env_rms = ||h_env||2 / sqrt(layers*hidden_dim)
+
         # Single GPU-CPU sync (M14 optimization)
-        h_norm_t = torch.linalg.vector_norm(h)
-        c_norm_t = torch.linalg.vector_norm(c)
-        # ... (batched computation)
         all_values = torch.stack([...])
         result = all_values.tolist()  # Single sync!
     return LSTMHealthMetrics(...)
@@ -100,11 +113,11 @@ def compute_lstm_health(
 
 | Stage | Mechanism | File |
 |-------|-----------|------|
-| **1. Emission** | Called after PPO updates | `vectorized.py:3603` |
-| **2. Collection** | Via `AnomalyDetector.check_lstm_health()` | `anomaly_detector.py:301` |
-| **3. Aggregation** | Merged into `AnomalyReport` | `vectorized.py:3611-3614` |
-| **4. Delivery** | Via `_handle_telemetry_escalation()` | `vectorized.py:3616` |
-| **5. TUI Display** | Added to metrics dict, flows to PPOUpdatePayload | `vectorized.py:3615-3621` |
+| **1. Emission** | Called after PPO updates | `vectorized.py:3684` |
+| **2. Collection** | Via `AnomalyDetector.check_lstm_health()` | `anomaly_detector.py:303` |
+| **3. Aggregation** | Merged into `AnomalyReport` | `vectorized.py:3694-3697` |
+| **4. Delivery** | Via `_handle_telemetry_escalation()` | `vectorized.py:3701` |
+| **5. TUI Display** | `metrics.update(lstm_health.to_dict())` flows to PPOUpdatePayload | `vectorized.py:3699` |
 
 ```
 [batched_lstm_hidden]
@@ -115,7 +128,7 @@ def compute_lstm_health(
   |      --> _handle_telemetry_escalation()
   |      --> _emit_anomaly_diagnostics()
   |
-  `--> metrics["lstm_*"] = lstm_health.*     (standard telemetry path)
+  `--> metrics.update(lstm_health.to_dict()) (standard telemetry path)
          --> emit_ppo_update_event()
          --> PPOUpdatePayload (leyline contract)
          --> TelemetryHub.emit(PPO_UPDATE_COMPLETED)
@@ -143,8 +156,8 @@ def compute_lstm_health(
 | AnomalyReport | Internal | Merged with other anomalies for escalation |
 | TelemetryHub | Event | Emitted via `_emit_anomaly_diagnostics()` |
 | Logger | Warning | Logged when anomaly detected |
-| **Sanctum TUI** | Visual | HealthStatusPanel shows LSTM h/c norms with status colors |
-| **TamiyoState** | Schema | `lstm_h_norm`, `lstm_c_norm`, `lstm_has_nan`, `lstm_has_inf` |
+| **Sanctum TUI** | Visual | HealthStatusPanel shows LSTM `h_rms`/`c_rms` with status colors |
+| **TamiyoState** | Schema | `lstm_*_rms`, `lstm_*_env_rms_*`, `lstm_*_l2_total`, `lstm_*_max`, `lstm_has_nan`, `lstm_has_inf` |
 
 ---
 
@@ -158,7 +171,7 @@ def compute_lstm_health(
 - [x] **Default is correct** — Returns None when no LSTM
 - [x] **Consumer reads it** — AnomalyReport aggregates findings
 - [x] **Display is correct** — Escalates to DEBUG level; Sanctum TUI shows in HEALTH panel
-- [x] **Thresholds applied** — 100.0 max, 1e-6 min
+- [x] **Thresholds applied** — Warning `>5.0 RMS`, Critical `>10.0 RMS`, Vanishing `<1e-6 RMS`
 
 ### Test Coverage
 
@@ -204,6 +217,7 @@ def compute_lstm_health(
 |------|--------|--------|
 | 2026-01-03 | Claude | Initial creation (B7-DRL-04 fix) |
 | 2026-01-03 | Claude | Added Sanctum TUI display via PPOUpdatePayload telemetry path |
+| 2026-01-04 | Codex | Switched health signal to RMS + per-env RMS stats (batch-invariant); preserved total L2 as capacity metric |
 
 ---
 

@@ -213,7 +213,7 @@ class ObservationStats:
     context_features_std: float = 0.0
 
     # Outlier detection
-    outlier_pct: float = 0.0  # % of observations outside 3σ
+    outlier_pct: float = 0.0  # Fraction of observations outside 3σ (rendered as X.X%)
 
     # Numerical health
     nan_count: int = 0  # NaN values detected in observations
@@ -909,8 +909,16 @@ class TamiyoState:
 
     # LSTM hidden state health (B7-DRL-04)
     # LSTM states can become corrupted during BPTT - tracked for early warning
-    lstm_h_norm: float | None = None  # L2 norm of hidden state (None = no LSTM)
-    lstm_c_norm: float | None = None  # L2 norm of cell state
+    # NOTE: Total L2 norms scale with sqrt(numel) and are NOT batch-size invariant.
+    # Use *_rms and *_env_rms_* for scale-free health signals.
+    lstm_h_l2_total: float | None = None
+    lstm_c_l2_total: float | None = None
+    lstm_h_rms: float | None = None
+    lstm_c_rms: float | None = None
+    lstm_h_env_rms_mean: float | None = None
+    lstm_h_env_rms_max: float | None = None
+    lstm_c_env_rms_mean: float | None = None
+    lstm_c_env_rms_max: float | None = None
     lstm_h_max: float | None = None   # Max absolute value in h
     lstm_c_max: float | None = None   # Max absolute value in c
     lstm_has_nan: bool = False  # NaN detected in LSTM hidden state
