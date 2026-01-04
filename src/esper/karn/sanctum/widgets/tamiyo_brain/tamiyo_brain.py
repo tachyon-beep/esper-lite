@@ -16,9 +16,8 @@ composable sub-widgets for better maintainability.
 
 Layout (CSS dimensions):
     ┌──────────────────────────────────────────────────────────────────────────────┐
-    │ StatusBanner (h:1)                                                           │
     ├───────────────────────────────────────────────────────────────────┬──────────┤
-    │ VitalsColumn (w:3fr)                                              │Decisions │
+    │ VitalsColumn (w:3fr)                                              │ Narrative│
     │ ┌─────────┬───────────────────────────────────┬───────────────┐   │(w:1fr,   │
     │ │PPOLosses│ HealthStatus (1fr)                │ Slots (49ch)  │h13│ min:45)  │
     │ │ (36ch)  │                                   │               │   │          │
@@ -38,7 +37,7 @@ from typing import TYPE_CHECKING, Any
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 
-from .status_banner import StatusBanner
+from .narrative_panel import NarrativePanel
 from .ppo_losses_panel import PPOLossesPanel
 from .health_status_panel import HealthStatusPanel
 from .action_heads_panel import ActionHeadsPanel
@@ -71,17 +70,6 @@ class TamiyoBrain(Container):
         border-title-style: bold;
     }
 
-    #status-banner {
-        height: 1;
-        width: 100%;
-        background: $surface-lighten-1;
-    }
-
-    #banner-content {
-        width: 100%;
-        padding: 0 1;
-    }
-
     #main-content {
         height: 1fr;
         width: 100%;
@@ -93,19 +81,34 @@ class TamiyoBrain(Container):
         padding: 0 1;
     }
 
-    #decisions-column {
+    #right-column {
         width: 1fr;
         min-width: 45;
         height: 100%;
+        padding: 0 1;
+    }
+
+    #narrative-panel {
+        width: 100%;
+        height: 1fr;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
         padding: 0 1;
-        align: left top;
+    }
+
+    #events-panel {
+        width: 100%;
+        height: 1fr;
+        border: round $surface-lighten-2;
+        border-title-color: $text-muted;
+        padding: 0 1;
+        overflow-x: hidden;
+        overflow-y: auto;
     }
 
     /* Row 1: PPO Losses (narrow) | Health (wide) | Slots */
     #top-row {
-        height: 12;
+        height: 14;
         width: 100%;
         margin: 0;
     }
@@ -214,7 +217,7 @@ class TamiyoBrain(Container):
     #cards-container {
         padding: 0;
         margin: 0;
-        height: auto;
+        height: 1fr;
         border: none;
     }
     """
@@ -229,10 +232,7 @@ class TamiyoBrain(Container):
 
     def compose(self) -> ComposeResult:
         """Compose the widget tree."""
-        # Status banner spans full width
-        yield StatusBanner(id="status-banner")
-
-        # Main content: vitals left, decisions right
+        # Main content: vitals left, narrative/events right
         with Horizontal(id="main-content"):
             with VerticalScroll(id="vitals-column"):
                 # Top row - three panels: PPO (narrow) | Health (wide) | Slots
@@ -250,7 +250,9 @@ class TamiyoBrain(Container):
                             yield ValueDiagnosticsPanel(id="value-diagnostics-panel")
                     yield ActionContext(id="action-context")
 
-            yield DecisionsColumn(id="decisions-column")
+            with Vertical(id="right-column"):
+                yield NarrativePanel(id="narrative-panel")
+                yield DecisionsColumn(id="events-panel")
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Update all child widgets with new snapshot data.
@@ -259,16 +261,24 @@ class TamiyoBrain(Container):
         """
         self._snapshot = snapshot
 
-        # Update border title for A/B testing visibility
+        # Narrative first (used to compute status class)
+        narrative = self.query_one("#narrative-panel", NarrativePanel)
+        narrative.update_snapshot(snapshot)
+
+        # Update A/B identity + health coloring (used by styles.tcss)
+        self.remove_class("group-a", "group-b", "group-c")
         if snapshot.tamiyo.group_id:
-            self.border_title = f"TAMIYO [{snapshot.tamiyo.group_id}]"
-        else:
-            self.border_title = "TAMIYO"
+            self.add_class(f"group-{snapshot.tamiyo.group_id.lower()}")
+
+        self.remove_class("status-ok", "status-warning", "status-critical", "status-warmup")
+        status, _, _ = narrative._get_overall_status()
+        self.add_class(f"status-{status}")
+
+        self.border_title = "TAMIYO"
 
         # Propagate snapshot to all child widgets
         # Note: If called before widgets are mounted, this will raise NoMatches.
         # That's a bug in calling code - fix the caller, not the symptom.
-        self.query_one("#status-banner", StatusBanner).update_snapshot(snapshot)
         self.query_one("#ppo-losses-panel", PPOLossesPanel).update_snapshot(snapshot)
         self.query_one("#health-panel", HealthStatusPanel).update_snapshot(snapshot)
         self.query_one("#action-heads-panel", ActionHeadsPanel).update_snapshot(
@@ -282,7 +292,7 @@ class TamiyoBrain(Container):
         self.query_one(
             "#value-diagnostics-panel", ValueDiagnosticsPanel
         ).update_snapshot(snapshot)
-        self.query_one("#decisions-column", DecisionsColumn).update_snapshot(snapshot)
+        self.query_one("#events-panel", DecisionsColumn).update_snapshot(snapshot)
 
     def update_reward_health(self, data: "RewardHealthData") -> None:
         """Update ActionContext with reward health data.

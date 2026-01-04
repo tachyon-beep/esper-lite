@@ -1,7 +1,9 @@
-"""StatusBanner - Always-visible training narrative strip.
+"""NarrativePanel - Tamiyo's "Now / Why / Next" guidance.
 
-Single-line, three-column layout:
-  NOW | WHY | NEXT
+This panel replaces the old StatusBanner and provides a single place to answer:
+- NOW: what the system is doing (status + key metrics)
+- WHY: top drivers behind the current state
+- NEXT: what to watch / expected recovery trigger
 """
 
 from __future__ import annotations
@@ -9,8 +11,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from rich.text import Text
-from textual.app import ComposeResult
-from textual.containers import Container
 from textual.widgets import Static
 
 from esper.karn.constants import TUIThresholds
@@ -23,15 +23,15 @@ if TYPE_CHECKING:
     from esper.karn.sanctum.schema import SanctumSnapshot, TamiyoState
 
 
-class StatusBanner(Container):
-    """One-line status + narrative banner."""
+class NarrativePanel(Static):
+    """Now/Why/Next narrative panel."""
 
     WARMUP_BATCHES: ClassVar[int] = 50
 
     # Braille spinner characters for warmup animation
     SPINNER_CHARS: ClassVar[str] = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
-    # A/B Group styling
+    # A/B Group styling (inline identity tag)
     GROUP_COLORS: ClassVar[dict[str, str]] = {
         "A": "bright_green",
         "B": "bright_cyan",
@@ -48,72 +48,61 @@ class StatusBanner(Container):
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
         self._spinner_frame: int = 0
-
-    def compose(self) -> ComposeResult:
-        """Compose the banner layout."""
-        yield Static(id="banner-content")
-
-    def on_mount(self) -> None:
-        """Set initial content when widget mounts."""
-        self.query_one("#banner-content", Static).update(
-            self._render_banner_text(available_width=self._content_width())
-        )
+        self.classes = "panel"
+        self.border_title = "NARRATIVE"
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
-        """Update with new snapshot and refresh display."""
         self._snapshot = snapshot
-        self._update_status_classes()
         self._spinner_frame = (self._spinner_frame + 1) % len(self.SPINNER_CHARS)
-        self.query_one("#banner-content", Static).update(
-            self._render_banner_text(available_width=self._content_width())
-        )
 
-    def _update_status_classes(self) -> None:
-        """Update CSS classes and border title based on current status."""
-        status, _, _ = self._get_overall_status()
+        title = "NARRATIVE"
+        if snapshot.tamiyo.group_id:
+            title += f" {snapshot.tamiyo.group_id}"
+        if snapshot.tamiyo.infrastructure.compile_enabled:
+            title += " [[compiled]]"
+        self.border_title = title
 
-        # Remove all status classes
-        self.remove_class("status-ok", "status-warning", "status-critical", "status-warmup")
-        self.add_class(f"status-{status}")
+        self.refresh()
 
-        # Update border title with compile status (per UX review)
-        # Note: [[ escapes to [ in Textual markup
-        if self._snapshot and self._snapshot.tamiyo.infrastructure.compile_enabled:
-            self.border_title = "TAMIYO [[compiled]]"
-        else:
-            self.border_title = "TAMIYO"
-
-        # Add group class if in A/B mode
-        if self._snapshot and self._snapshot.tamiyo.group_id:
-            self.remove_class("group-a", "group-b", "group-c")
-            group = self._snapshot.tamiyo.group_id.lower()
-            self.add_class(f"group-{group}")
-
-    def _content_width(self) -> int | None:
-        width = self.size.width
-        if width <= 0:
-            return None
-        # `#banner-content` has horizontal padding of 1 char on each side.
-        return max(0, width - 2)
-
-    def _fit_text(self, text: Text, width: int) -> Text:
-        if width <= 0:
-            return Text()
-
-        fitted = text.copy()
-        fitted.truncate(width, overflow="ellipsis")
-        if fitted.cell_len < width:
-            fitted.pad_right(width - fitted.cell_len)
-        return fitted
-
-    def _render_banner_text(self, *, available_width: int | None = None) -> Text:
-        """Render the banner content."""
+    def render(self) -> Text:
         if self._snapshot is None:
-            return Text("[?] NO DATA", style="cyan")
+            return Text("[no data]", style="dim")
 
-        status, label, style = self._get_overall_status()
+        status, label, status_style = self._get_overall_status()
         tamiyo = self._snapshot.tamiyo
 
+        result = Text()
+
+        result.append("NOW", style="bold")
+        result.append("  ", style="dim")
+        result.append_text(self._render_now_line(status, label, status_style, tamiyo))
+        result.append("\n")
+
+        result.append("WHY", style="bold")
+        drivers = self._top_drivers(max_items=2)
+        if not drivers:
+            result.append("  —", style="dim")
+            result.append("\n")
+        else:
+            result.append("\n")
+            for driver in drivers:
+                result.append("  - ", style="dim")
+                result.append(driver, style="dim")
+                result.append("\n")
+
+        result.append("NEXT", style="bold")
+        result.append("  ", style="dim")
+        result.append(self._next_hint(), style="dim")
+
+        return result
+
+    def _render_now_line(
+        self,
+        status: str,
+        label: str,
+        status_style: str,
+        tamiyo: "TamiyoState",
+    ) -> Text:
         now = Text()
 
         # NaN/Inf indicator FIRST - leftmost position for F-pattern visibility
@@ -133,8 +122,16 @@ class StatusBanner(Container):
 
         # Group label for A/B testing
         if tamiyo.group_id:
-            group_color = self.GROUP_COLORS.get(tamiyo.group_id, "white")
-            group_label = self.GROUP_LABELS.get(tamiyo.group_id, f"[{tamiyo.group_id}]")
+            group_color = (
+                self.GROUP_COLORS[tamiyo.group_id]
+                if tamiyo.group_id in self.GROUP_COLORS
+                else "white"
+            )
+            group_label = (
+                self.GROUP_LABELS[tamiyo.group_id]
+                if tamiyo.group_id in self.GROUP_LABELS
+                else tamiyo.group_id
+            )
             now.append(f" {group_label} ", style=group_color)
             now.append(" ┃ ", style="dim")
 
@@ -145,50 +142,22 @@ class StatusBanner(Container):
         else:
             icons = {"ok": "✓", "warning": "!", "critical": "✗"}
             icon = icons.get(status, "?")
-            now.append(f"[{icon}] ", style=style)
+            now.append(f"[{icon}] ", style=status_style)
 
-        now.append("NOW: ", style="dim")
-        now.append(f"{label}", style=style)
+        now.append(label, style=status_style)
         now.append("  ", style="dim")
 
         # Metrics (only after PPO data received)
         if tamiyo.ppo_data_received:
             self._append_metrics(now, tamiyo)
             now_tail = self._render_now_tail()
-            if now_tail:
-                now.append("  ", style="dim")
+            if now_tail.plain:
+                now.append("\n  ", style="dim")
                 now.append(now_tail)
         else:
             now.append("Waiting for PPO data...", style="cyan italic")
 
-        why = Text(self._render_why_line(), style="dim")
-        nxt = Text(self._render_next_line(), style="dim")
-
-        if available_width is None:
-            banner = Text()
-            banner.append_text(now)
-            banner.append(" │ ", style="dim")
-            banner.append_text(why)
-            banner.append(" │ ", style="dim")
-            banner.append_text(nxt)
-            return banner
-
-        sep_width = 3  # " │ "
-        usable = available_width - (sep_width * 2)
-        if usable <= 0:
-            return self._fit_text(now, available_width)
-
-        now_width = usable // 2
-        why_width = usable // 4
-        next_width = usable - now_width - why_width
-
-        banner = Text()
-        banner.append_text(self._fit_text(now, now_width))
-        banner.append(" │ ", style="dim")
-        banner.append_text(self._fit_text(why, why_width))
-        banner.append(" │ ", style="dim")
-        banner.append_text(self._fit_text(nxt, next_width))
-        return banner
+        return now
 
     def _render_now_tail(self) -> Text:
         if self._snapshot is None:
@@ -248,15 +217,6 @@ class StatusBanner(Container):
 
         return parts
 
-    def _render_why_line(self) -> str:
-        drivers = self._top_drivers(max_items=2)
-        if not drivers:
-            return "WHY: —"
-        return "WHY: " + "; ".join(drivers)
-
-    def _render_next_line(self) -> str:
-        return "NEXT: " + self._next_hint()
-
     def _top_drivers(self, *, max_items: int) -> list[str]:
         if self._snapshot is None:
             return []
@@ -283,7 +243,9 @@ class StatusBanner(Container):
             if empty == 0 and snapshot.active_slots > 0:
                 scored.append((0.95, "slots → full (no empty)"))
             elif empty / snapshot.total_slots < 0.1:
-                scored.append((0.7, f"slots → scarce empty ({empty}/{snapshot.total_slots})"))
+                scored.append(
+                    (0.7, f"slots → scarce empty ({empty}/{snapshot.total_slots})")
+                )
 
         # Op distribution (WAIT dominance)
         if tamiyo.total_actions > 0:
@@ -348,7 +310,10 @@ class StatusBanner(Container):
             return "warmup"
         if tamiyo.collapse_risk_score > 0.7:
             return "risk"
-        if tamiyo.kl_divergence > TUIThresholds.KL_WARNING or tamiyo.clip_fraction > TUIThresholds.CLIP_WARNING:
+        if (
+            tamiyo.kl_divergence > TUIThresholds.KL_WARNING
+            or tamiyo.clip_fraction > TUIThresholds.CLIP_WARNING
+        ):
             return "drift"
         return "stable"
 
@@ -359,7 +324,10 @@ class StatusBanner(Container):
         tamiyo = self._snapshot.tamiyo
         if tamiyo.collapse_risk_score > 0.7:
             return "red bold"
-        if tamiyo.kl_divergence > TUIThresholds.KL_WARNING or tamiyo.clip_fraction > TUIThresholds.CLIP_WARNING:
+        if (
+            tamiyo.kl_divergence > TUIThresholds.KL_WARNING
+            or tamiyo.clip_fraction > TUIThresholds.CLIP_WARNING
+        ):
             return "yellow"
         return "green"
 
@@ -385,27 +353,27 @@ class StatusBanner(Container):
             return "yellow"
         return "green"
 
-    def _append_metrics(self, banner: Text, tamiyo: "TamiyoState") -> None:
-        """Append metric values to the banner with trend arrows."""
+    def _append_metrics(self, now: Text, tamiyo: "TamiyoState") -> None:
+        """Append core metrics to the NOW line."""
         # KL Divergence (lower is better = "loss" type)
         kl_style = self._metric_style(self._get_kl_status(tamiyo.kl_divergence))
-        banner.append(f"KL:{tamiyo.kl_divergence:.3f}", style=kl_style)
+        now.append(f"KL:{tamiyo.kl_divergence:.3f}", style=kl_style)
         kl_arrow, kl_arrow_style = self._trend_arrow(
             tamiyo.kl_divergence_history, "kl_divergence", "loss"
         )
         if kl_arrow:
-            banner.append(kl_arrow, style=kl_arrow_style)
+            now.append(kl_arrow, style=kl_arrow_style)
         if tamiyo.kl_divergence > TUIThresholds.KL_WARNING:
-            banner.append("!", style=kl_style)
-        banner.append("  ")
+            now.append("!", style=kl_style)
+        now.append("  ", style="dim")
 
-        # Batch progress (snapshot is non-None when this method is called)
+        # Batch progress
         assert self._snapshot is not None
         batch = self._snapshot.current_batch
         max_batches = self._snapshot.max_batches
-        banner.append(f"Batch:{batch}/{max_batches}", style="dim")
+        now.append(f"Batch:{batch}/{max_batches}", style="dim")
 
-        # Memory as percentage (per UX review - more scannable than absolute)
+        # Memory as percentage (more scannable than absolute)
         mem_pct = self._snapshot.tamiyo.infrastructure.memory_usage_percent
         if mem_pct > 0:
             if mem_pct > 90:
@@ -414,7 +382,7 @@ class StatusBanner(Container):
                 mem_style = "yellow"
             else:
                 mem_style = "dim"
-            banner.append(f"  [Mem:{mem_pct:.0f}%]", style=mem_style)
+            now.append(f"  [Mem:{mem_pct:.0f}%]", style=mem_style)
 
     def _get_overall_status(self) -> tuple[str, str, str]:
         """Determine overall status using DRL decision tree.
@@ -431,8 +399,6 @@ class StatusBanner(Container):
             return "ok", "WAITING", "cyan"
 
         # NaN/Inf check (HIGHEST PRIORITY - before all other checks)
-        # These indicate numerical instability and should always be surfaced first
-        # These return immediately without counting - they are special cases
         if tamiyo.nan_grad_count > 0:
             return "critical", "NaN DETECTED", "red bold"
         if tamiyo.inf_grad_count > 0:
@@ -441,7 +407,11 @@ class StatusBanner(Container):
         # Warmup period
         current_batch = self._snapshot.current_batch
         if current_batch < self.WARMUP_BATCHES:
-            return "warmup", f"WARMING UP [{current_batch}/{self.WARMUP_BATCHES}]", "cyan"
+            return (
+                "warmup",
+                f"WARMING UP [{current_batch}/{self.WARMUP_BATCHES}]",
+                "cyan",
+            )
 
         # Collect all critical issues
         critical_issues: list[str] = []
@@ -515,16 +485,7 @@ class StatusBanner(Container):
         metric_name: str,
         metric_type: str,
     ) -> tuple[str, str]:
-        """Get trend arrow and style for a metric.
-
-        Args:
-            history: Recent metric values (oldest first).
-            metric_name: Name for threshold lookup (e.g., "expl_var").
-            metric_type: "loss" (lower=better) or "accuracy" (higher=better).
-
-        Returns:
-            Tuple of (arrow_char, style).
-        """
+        """Get trend arrow and style for a metric."""
         return trend_arrow_for_history(
             history,
             metric_name=metric_name,

@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
-from textual.containers import Container, Vertical
+from textual.containers import Container, VerticalScroll
 from textual.message import Message
 from textual.widgets import Static
 
@@ -342,11 +342,11 @@ class DecisionsColumn(Container):
         self._rendering: bool = False  # Guard against concurrent renders
         self._render_generation: int = 0  # Unique ID suffix for each render
         self._group_id: str = "default"
-        self.border_title = "DECISIONS"
+        self.border_title = "EVENTS"
 
     def compose(self) -> ComposeResult:
         """Compose the decisions column."""
-        yield Vertical(id="cards-container")
+        yield VerticalScroll(id="cards-container")
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Update with new snapshot data using throttled card replacement.
@@ -423,7 +423,7 @@ class DecisionsColumn(Container):
         gen = self._render_generation
 
         try:
-            container = self.query_one("#cards-container", Vertical)
+            container = self.query_one("#cards-container", VerticalScroll)
 
             # Remove ALL existing cards (use list() to avoid mutation during iteration)
             for card in list(container.query(DecisionCard)):
@@ -463,6 +463,6 @@ class DecisionsColumn(Container):
 
     def _refresh_cards(self) -> None:
         """Refresh card content without structural changes (updates ages)."""
-        container = self.query_one("#cards-container", Vertical)
+        container = self.query_one("#cards-container", VerticalScroll)
         for card in container.query(DecisionCard):
             card.refresh()
