@@ -20,9 +20,6 @@ from tests.strategies import (
     seed_stages,
 )
 
-# Mark all tests in this module as property tests for CI
-pytestmark = pytest.mark.property
-
 from esper.simic.rewards import (
     compute_contribution_reward,
     compute_potential,
@@ -30,6 +27,9 @@ from esper.simic.rewards import (
     compute_seed_potential,
     get_intervention_cost,
 )
+
+# Mark all tests in this module as property tests for CI
+pytestmark = pytest.mark.property
 
 
 class TestRewardBounds:

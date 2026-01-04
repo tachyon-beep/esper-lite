@@ -26,13 +26,13 @@ import math
 
 import pytest
 import torch
-
-# Mark all tests in this module as property tests for CI
-pytestmark = pytest.mark.property
 from hypothesis import given, settings, assume
 from hypothesis import strategies as st
 
-from esper.leyline import HEAD_NAMES, LifecycleOp
+from esper.leyline import HEAD_NAMES
+
+# Mark all tests in this module as property tests for CI
+pytestmark = pytest.mark.property
 
 
 # =============================================================================

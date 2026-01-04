@@ -139,6 +139,7 @@ class TestValueNormalizerStateDict:
 
         # Normalize returns for critic training
         norm_returns = vn.normalize(raw_returns)
+        assert norm_returns.shape == raw_returns.shape
 
         # Key invariant: std should be consistent
         scale = vn.get_scale()

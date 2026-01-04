@@ -421,12 +421,12 @@ class TrainingStartedPayload:
     # REQUIRED - training fails without these
     n_envs: int
     max_epochs: int
-    max_batches: int  # Total episodes/batches in run (from CLI n_episodes)
+    max_batches: int  # Total PPO update rounds in run (from CLI rounds)
     task: str
     host_params: int  # Must be post-materialization
     slot_ids: tuple[str, ...]
     seed: int
-    n_episodes: int
+    n_episodes: int  # Total env episodes in run (n_envs * rounds)
     lr: float
     clip_ratio: float
     entropy_coef: float

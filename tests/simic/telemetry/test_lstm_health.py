@@ -5,7 +5,6 @@ Tests the LSTMHealthMetrics dataclass and compute_lstm_health function.
 
 from __future__ import annotations
 
-import pytest
 import torch
 
 from esper.simic.telemetry.lstm_health import LSTMHealthMetrics, compute_lstm_health

@@ -1249,7 +1249,7 @@ class RunConfig:
     Stores hyperparameters and config for display in run header.
     """
     seed: int | None = None  # Random seed for reproducibility
-    n_episodes: int = 0  # Total episodes to train
+    n_episodes: int = 0  # Total env episodes to train
     lr: float = 0.0  # Initial learning rate
     clip_ratio: float = 0.2  # PPO clip ratio
     entropy_coef: float = 0.01  # Initial entropy coefficient
@@ -1346,7 +1346,7 @@ class SanctumSnapshot:
     # Run metadata
     current_episode: int = 0
     current_batch: int = 0
-    max_batches: int = 0  # Total episodes/batches in run (from CLI)
+    max_batches: int = 0  # Total PPO update rounds in run (from CLI)
     current_epoch: int = 0
     max_epochs: int = 0
     run_id: str = ""

@@ -20,7 +20,7 @@ Layout:
     │   min:-0.8 max:+2.1 μ:+0.5 σ:1.1 ↗              │
     │─────────────────────────────────────────────────│
     │ ▶ Chosen Actions ───────────────────────────────│
-    │   Batch: [▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░]       │
+    │   Round: [▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░]       │
     │          G:09 A:03 F:00 P:15 V:02 W:71          │
     │   Run:   [▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░]       │
     │          G:22 A:05 F:00 P:21 V:02 W:50          │
@@ -148,7 +148,7 @@ class ActionContext(Static):
         # Separator
         result.append("─" * self.SEPARATOR_WIDTH + "\n", style="dim")
 
-        # Section 4: Chosen Actions (batch + run bars)
+        # Section 4: Chosen Actions (round + run bars)
         result.append("▶ Chosen Actions\n", style="bold")
         result.append(self._render_action_bars())
 
@@ -468,7 +468,7 @@ class ActionContext(Static):
     # =========================================================================
 
     def _render_action_bars(self) -> Text:
-        """Render batch and run action distribution bars."""
+        """Render round and run action distribution bars."""
         if self._snapshot is None:
             return Text("  [no data]\n", style="dim")
 
@@ -485,11 +485,11 @@ class ActionContext(Static):
         ]
         bar_width = 28
 
-        # === THIS BATCH ===
+        # === THIS ROUND ===
         batch_counts = tamiyo.action_counts
         batch_total = tamiyo.total_actions
 
-        result.append("  Batch: [")
+        result.append("  Round: [")
         if batch_total > 0:
             widths = self._compute_bar_widths(batch_counts, actions, batch_total, bar_width)
             for action, width in zip(actions, widths):
@@ -499,7 +499,7 @@ class ActionContext(Static):
             result.append("░" * bar_width, style="dim")
         result.append("]\n")
 
-        # Batch percentages
+        # Round percentages
         result.append("         ")
         for i, action in enumerate(actions):
             count = batch_counts.get(action, 0)

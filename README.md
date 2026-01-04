@@ -80,11 +80,10 @@ Train the **Simic** agent using PPO to discover better growth strategies than th
 ```bash
 PYTHONPATH=src uv run python -m esper.scripts.train ppo \
     --task cifar10 \
-    --episodes 100 \
-    --n-envs 4 \
+    --rounds 100 \
+    --envs 4 \
+    --episode-length 150 \
     --device cuda:0 \
-    --max-epochs 150 \
-    --entropy-coef 0.05
 ```
 
 ---
@@ -188,13 +187,16 @@ These flags control Tamiyo's training directly. All are optional - presets provi
 | --------------------------- | ------- | -------------------------------------------------------- |
 | `--rounds N`                | 100     | Tamiyo PPO training iterations                           |
 | `--envs K`                  | 4       | Parallel CIFAR environments (sample diversity per round) |
-| `--episode-length L`        | 150     | Timesteps per environment per round                      |
+| `--episode-length L`        | 150     | Epochs per environment per round; also sets LSTM horizon |
 | `--ppo-epochs E`            | 1       | Gradient steps per round (passes over rollout data)      |
 | `--memory-size H`           | 512     | Tamiyo LSTM hidden dimension                             |
 | `--entropy-anneal-episodes N` | 0     | Env-episodes for entropy annealing (N/K batches with K envs) |
 
 Each round produces `K × L` transitions for Tamiyo's PPO update.
 Doubling `--rounds` = 2× training time. Doubling `--envs` = richer data per round, same training time.
+
+Episode length also defines Tamiyo's LSTM sequence length (`chunk_length == max_epochs`), so longer
+episodes increase the temporal memory burden.
 
 #### Config & Presets
 
@@ -347,6 +349,8 @@ Quality gates (G2, G3, G5) only check structural requirements, allowing Tamiyo t
 **Strict Gates Mode** (`permissive_gates: false`):
 
 Gates enforce hard-coded thresholds for gradient ratios, improvement metrics, stability, and contribution levels. Use this for production deployments where you want deterministic quality control.
+
+`n_episodes` counts PPO update rounds; total env episodes per run = `n_episodes * n_envs`.
 
 ```json
 {

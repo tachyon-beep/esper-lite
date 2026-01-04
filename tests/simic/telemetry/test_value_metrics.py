@@ -1,6 +1,5 @@
 """Tests for value function metrics computation."""
 
-import pytest
 import torch
 
 from esper.simic.telemetry.value_metrics import compute_value_function_metrics

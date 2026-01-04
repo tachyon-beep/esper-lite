@@ -232,12 +232,12 @@ class RunInfoScreen(ModalScreen[None]):
 [bold]Progress[/bold]
   Episode:    {s.current_episode}
   Epoch:      {s.current_epoch} / {s.max_epochs if s.max_epochs > 0 else '∞'}
-  Batch:      {s.current_batch} / {s.max_batches}
+  Round:      {s.current_batch} / {s.max_batches}
   Runtime:    {runtime_str}
 
 [bold]Throughput[/bold]
   Epochs/sec:   {s.vitals.epochs_per_second:.2f}
-  Batches/hr:   {s.vitals.batches_per_hour:.1f}
+  Rounds/hr:    {s.vitals.batches_per_hour:.1f}
 
 [bold]System[/bold]
   Connected:    {'Yes' if s.connected else 'No'}

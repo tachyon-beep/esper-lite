@@ -18,6 +18,7 @@ from esper.leyline import (
     FactoredAction,
     GERMINATE_PREFIX,
     LifecycleOp,
+    SeedStage,
     TelemetryEvent,
     TelemetryEventType,
     TrainingStartedPayload,
@@ -66,7 +67,7 @@ def compute_rent_and_shock_inputs(
     """Compute effective params and convex alpha-shock inputs for reward shaping.
 
     Phase 5 contract:
-    - BaseSlotRent applies only while a seed module is present (cooldown pays no rent).
+    - BaseSlotRent applies only from BLENDING onward (cooldown/training pays no rent).
     - Param counts are invariant to BLEND_OUT freeze (requires_grad toggles).
     - Gate network params (alpha_schedule) count toward overhead when present.
 
@@ -95,8 +96,10 @@ def compute_rent_and_shock_inputs(
             if slot.alpha_schedule is not None:
                 slot_param_count += sum(p.numel() for p in slot.alpha_schedule.parameters())
 
-            effective_seed_params += base_slot_rent_params
-            effective_seed_params += current_alpha * slot_param_count
+            stage = slot.state.stage
+            if stage in (SeedStage.BLENDING, SeedStage.HOLDING, SeedStage.FOSSILIZED):
+                effective_seed_params += base_slot_rent_params
+                effective_seed_params += current_alpha * slot_param_count
 
         prev_alpha = prev_slot_alphas.get(slot_id, 0.0)
         prev_params = prev_slot_params.get(slot_id, 0)

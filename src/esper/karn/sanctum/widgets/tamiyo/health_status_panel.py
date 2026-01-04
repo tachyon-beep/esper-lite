@@ -209,16 +209,16 @@ class HealthStatusPanel(Static):
             arrow = "[~]"
             arrow_style = "dim"
 
-        result.append(f"{velocity:+.3f}/b ", style=arrow_style)
+        result.append(f"{velocity:+.3f}/r ", style=arrow_style)
         result.append(arrow, style=arrow_style)
 
         # Countdown (only if declining toward critical)
         if velocity < -EPSILON and tamiyo.entropy > TUIThresholds.ENTROPY_CRITICAL:
             distance = tamiyo.entropy - TUIThresholds.ENTROPY_CRITICAL
-            batches_to_collapse = int(distance / abs(velocity))
+            rounds_to_collapse = int(distance / abs(velocity))
 
-            if batches_to_collapse < 100:
-                result.append(f" ~{batches_to_collapse}b", style="yellow")
+            if rounds_to_collapse < 100:
+                result.append(f" ~{rounds_to_collapse}r", style="yellow")
 
             if risk > 0.7:
                 result.append(" [ALERT]", style="red bold")

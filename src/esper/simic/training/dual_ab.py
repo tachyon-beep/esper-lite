@@ -89,9 +89,9 @@ def train_dual_policy_ab(
     - Dedicated environments (n_envs_per_group each)
     - Reward configuration (different reward mode per group)
 
-    Groups train in lockstep: each episode, all groups complete their episodes
-    before moving to the next. This ensures fair comparison - all groups see
-    the same number of episodes and training steps.
+    Groups train in lockstep: each PPO update round, all groups complete their
+    batches before moving to the next. This ensures fair comparison - all groups
+    see the same number of rounds and training steps.
 
     Args:
         n_envs_per_group: Number of parallel environments per policy group
@@ -99,7 +99,7 @@ def train_dual_policy_ab(
             [("A", RewardMode.SHAPED), ("B", RewardMode.SIMPLIFIED)]
         devices: List of device strings (e.g., ["cuda:0", "cuda:1"]).
             Must have one device per group. Defaults to first N available GPUs.
-        n_episodes: Total episodes to train (per group)
+        n_episodes: Total PPO update rounds to train (per group)
         max_epochs: Episode length (epochs per episode)
         task: Task name (e.g., "cifar_baseline")
         lr: Learning rate for PPO

@@ -85,7 +85,7 @@ class DecisionDetailScreen(ModalScreen[None]):
         t.append(f"  Age:        {age_str}\n", style="dim")
         t.append(f"  Env:        {d.env_id}\n", style="dim")
         t.append(f"  Epoch:      {d.epoch}\n", style="dim")
-        t.append(f"  Batch:      {d.batch}\n", style="dim")
+        t.append(f"  Round:      {d.batch}\n", style="dim")
         t.append("\n")
 
         t.append("Action\n", style="bold cyan")
@@ -135,4 +135,3 @@ class DecisionDetailScreen(ModalScreen[None]):
             t.append("  (none captured)\n", style="dim")
 
         return t
-

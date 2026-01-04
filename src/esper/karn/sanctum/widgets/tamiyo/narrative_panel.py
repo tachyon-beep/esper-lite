@@ -180,7 +180,7 @@ class NarrativePanel(Static):
                 st_style = "yellow"
             parts.append(f"stall:{stalled_rate:.0%}", style=st_style)
 
-        # Op mix (from per-batch action_counts)
+        # Op mix (from per-round action_counts)
         if tamiyo.total_actions > 0:
             wait_rate = tamiyo.action_counts["WAIT"] / tamiyo.total_actions
             prune_rate = tamiyo.action_counts["PRUNE"] / tamiyo.total_actions
@@ -196,7 +196,7 @@ class NarrativePanel(Static):
                 parts.append(" ", style="dim")
                 parts.append(f"PR:{prune_rate:.0%}", style="dim")
 
-        # Slot occupancy (batch-size aware: uses counts, not norms)
+        # Slot occupancy (round-size aware: uses counts, not norms)
         if snapshot.total_slots > 0:
             empty = snapshot.total_slots - snapshot.active_slots
             if parts.plain:
@@ -277,10 +277,10 @@ class NarrativePanel(Static):
         batch = snapshot.current_batch
 
         if not tamiyo.ppo_data_received:
-            return "wait for first PPO update (watch Batch tick + KL)"
+            return "wait for first PPO update (watch Round tick + KL)"
 
         if batch < self.WARMUP_BATCHES:
-            return f"warmup ends at {self.WARMUP_BATCHES}; watch EV + Lv/Lp stabilize"
+            return f"warmup ends at {self.WARMUP_BATCHES} rounds; watch EV + Lv/Lp stabilize"
 
         if snapshot.total_slots > 0:
             empty = snapshot.total_slots - snapshot.active_slots
@@ -367,11 +367,11 @@ class NarrativePanel(Static):
             now.append("!", style=kl_style)
         now.append("  ", style="dim")
 
-        # Batch progress
+        # Round progress
         assert self._snapshot is not None
         batch = self._snapshot.current_batch
         max_batches = self._snapshot.max_batches
-        now.append(f"Batch:{batch}/{max_batches}", style="dim")
+        now.append(f"Round:{batch}/{max_batches}", style="dim")
 
         # Memory as percentage (more scannable than absolute)
         mem_pct = self._snapshot.tamiyo.infrastructure.memory_usage_percent
@@ -409,7 +409,7 @@ class NarrativePanel(Static):
         if current_batch < self.WARMUP_BATCHES:
             return (
                 "warmup",
-                f"WARMING UP [{current_batch}/{self.WARMUP_BATCHES}]",
+                f"WARMING UP [round {current_batch}/{self.WARMUP_BATCHES}]",
                 "cyan",
             )
 

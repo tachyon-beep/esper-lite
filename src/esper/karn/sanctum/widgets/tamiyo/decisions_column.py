@@ -91,12 +91,12 @@ class DecisionCard(Static):
         result.append(age_str, style="dim")
         result.append("\n")
 
-        # Line 2: Training context (epoch, env, batch)
+        # Line 2: Training context (epoch, env, round)
         result.append(f"epoch:{decision.epoch}", style="dim")
         result.append("  ", style="dim")
         result.append(f"env:{decision.env_id}", style="cyan")
         result.append("  ", style="dim")
-        result.append(f"batch:{decision.batch}", style="dim")
+        result.append(f"round:{decision.batch}", style="dim")
         result.append("\n")
 
         # Line 3: Slot + Confidence

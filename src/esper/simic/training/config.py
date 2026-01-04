@@ -58,9 +58,9 @@ class TrainingConfig:
     """
 
     # === Training scale ===
-    n_episodes: int = 100
+    n_episodes: int = 100  # PPO update rounds (batches)
     n_envs: int = DEFAULT_N_ENVS
-    max_epochs: int = DEFAULT_EPISODE_LENGTH
+    max_epochs: int = DEFAULT_EPISODE_LENGTH  # Epochs per env per round (LSTM horizon)
     batch_size_per_env: int | None = None
 
     # === PPO core (from leyline defaults) ===
@@ -499,7 +499,8 @@ class TrainingConfig:
         lines = [
             "TrainingConfig:",
             f"  PPO: lr={self.lr}, gamma={self.gamma}, gae_lambda={self.gae_lambda}, clip={self.clip_ratio}",
-            f"  Episodes: {self.n_episodes}, envs={self.n_envs}, max_epochs={self.max_epochs}",
+            f"  Rounds: {self.n_episodes} (env episodes={self.n_episodes * self.n_envs}), "
+            f"envs={self.n_envs}, max_epochs={self.max_epochs}",
             f"  Entropy: {self.entropy_coef}" + (f" -> {self.entropy_coef_end}" if self.entropy_coef_end else ""),
             f"  Updates/batch: {self.ppo_updates_per_batch}, amp={'on' if self.amp else 'off'}, amp_dtype={self.amp_dtype}, compile={self.compile_mode}",
             f"  LSTM: hidden={self.lstm_hidden_dim}, chunk={self.chunk_length}",

@@ -164,6 +164,8 @@ def test_resume_restores_reward_normalizer_state(monkeypatch, tmp_path):
         {
             "metadata": {
                 "n_episodes": 0,
+                "batches_completed": 0,
+                "n_envs": 1,
                 "reward_normalizer_mean": 1.23,
                 "reward_normalizer_m2": 4.56,
                 "reward_normalizer_count": 7,

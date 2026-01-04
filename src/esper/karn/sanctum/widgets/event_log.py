@@ -449,7 +449,7 @@ class EventLog(Static):
         elif event_type == "BATCH_EPOCH_COMPLETED":
             batch = metadata.get("batch", "?")
             episodes = metadata.get("episodes", 0)
-            content.append("BATCH ", style=color)
+            content.append("ROUND ", style=color)
             content.append(f"#{batch}", style="cyan")
             if episodes:
                 content.append(f" +{episodes}eps", style="dim")

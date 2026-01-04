@@ -1578,7 +1578,7 @@ class TestRewardHackingDetection:
         # Low contribution even though system degrading - not ransomware
         emitted = _check_ransomware_signature(
             hub=hub,
-            seed_contribution=0.5,  # Low contribution
+            seed_contribution=0.05,  # Below default threshold (0.1)
             total_improvement=-0.5,  # System getting worse
             slot_id="r0c0",
             seed_id="seed_001",

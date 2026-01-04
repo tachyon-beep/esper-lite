@@ -9,9 +9,6 @@ import math
 import pytest
 from hypothesis import given, strategies as st, settings
 
-# Mark all tests in this module as property tests for CI
-pytestmark = pytest.mark.property
-
 from esper.leyline import LifecycleOp
 from esper.simic.rewards import (
     RewardMode,
@@ -19,6 +16,9 @@ from esper.simic.rewards import (
     compute_sparse_reward,
     compute_minimal_reward,
 )
+
+# Mark all tests in this module as property tests for CI
+pytestmark = pytest.mark.property
 
 
 # Strategy for valid sparse inputs
@@ -28,8 +28,8 @@ def sparse_inputs(draw):
     max_epochs = 25
     epoch = draw(st.integers(1, max_epochs))
     return {
-        "host_max_acc": draw(st.floats(0.0, 100.0, allow_nan=False)),
-        "total_params": draw(st.integers(0, 2_000_000)),
+        "committed_val_acc": draw(st.floats(0.0, 100.0, allow_nan=False)),
+        "fossilized_seed_params": draw(st.integers(0, 2_000_000)),
         "epoch": epoch,
         "max_epochs": max_epochs,
     }
@@ -40,8 +40,8 @@ def terminal_inputs(draw):
     """Generate inputs at terminal epoch."""
     max_epochs = 25
     return {
-        "host_max_acc": draw(st.floats(0.0, 100.0, allow_nan=False)),
-        "total_params": draw(st.integers(0, 2_000_000)),
+        "committed_val_acc": draw(st.floats(0.0, 100.0, allow_nan=False)),
+        "fossilized_seed_params": draw(st.integers(0, 2_000_000)),
         "epoch": max_epochs,
         "max_epochs": max_epochs,
     }
@@ -78,11 +78,11 @@ class TestSparseRewardProperties:
         config = ContributionRewardConfig(reward_mode=RewardMode.SPARSE)
 
         r1 = compute_sparse_reward(
-            host_max_acc=acc1, total_params=params,
+            committed_val_acc=acc1, fossilized_seed_params=params,
             epoch=25, max_epochs=25, config=config,
         )
         r2 = compute_sparse_reward(
-            host_max_acc=acc2, total_params=params,
+            committed_val_acc=acc2, fossilized_seed_params=params,
             epoch=25, max_epochs=25, config=config,
         )
 
@@ -98,11 +98,11 @@ class TestSparseRewardProperties:
         config = ContributionRewardConfig(reward_mode=RewardMode.SPARSE)
 
         r1 = compute_sparse_reward(
-            host_max_acc=acc, total_params=params1,
+            committed_val_acc=acc, fossilized_seed_params=params1,
             epoch=25, max_epochs=25, config=config,
         )
         r2 = compute_sparse_reward(
-            host_max_acc=acc, total_params=params2,
+            committed_val_acc=acc, fossilized_seed_params=params2,
             epoch=25, max_epochs=25, config=config,
         )
 
@@ -121,13 +121,13 @@ class TestSparseRewardProperties:
 
         # High accuracy, high params
         r_high_acc = compute_sparse_reward(
-            host_max_acc=80.0, total_params=500_000,
+            committed_val_acc=80.0, fossilized_seed_params=500_000,
             epoch=25, max_epochs=25, config=config,
         )
 
         # Low accuracy, low params
         r_low_acc = compute_sparse_reward(
-            host_max_acc=70.0, total_params=100_000,
+            committed_val_acc=70.0, fossilized_seed_params=100_000,
             epoch=25, max_epochs=25, config=config,
         )
 
@@ -144,11 +144,11 @@ class TestSparseRewardEdgeCases:
         config = ContributionRewardConfig(reward_mode=RewardMode.SPARSE)
 
         r1 = compute_sparse_reward(
-            host_max_acc=75.0, total_params=200_000,
+            committed_val_acc=75.0, fossilized_seed_params=200_000,
             epoch=25, max_epochs=25, config=config,
         )
         r2 = compute_sparse_reward(
-            host_max_acc=75.0, total_params=200_000,
+            committed_val_acc=75.0, fossilized_seed_params=200_000,
             epoch=25, max_epochs=25, config=config,
         )
 
@@ -159,7 +159,7 @@ class TestSparseRewardEdgeCases:
         config = ContributionRewardConfig(reward_mode=RewardMode.SPARSE)
 
         reward = compute_sparse_reward(
-            host_max_acc=75.0, total_params=0,
+            committed_val_acc=75.0, fossilized_seed_params=0,
             epoch=25, max_epochs=25, config=config,
         )
 
@@ -173,7 +173,7 @@ class TestSparseRewardEdgeCases:
         )
 
         reward = compute_sparse_reward(
-            host_max_acc=75.0, total_params=100_000_000,  # 100M params
+            committed_val_acc=75.0, fossilized_seed_params=100_000_000,  # 100M params
             epoch=25, max_epochs=25, config=config,
         )
 
@@ -188,7 +188,7 @@ class TestSparseRewardEdgeCases:
         )
 
         reward = compute_sparse_reward(
-            host_max_acc=100.0, total_params=0,  # Best case
+            committed_val_acc=100.0, fossilized_seed_params=0,  # Best case
             epoch=25, max_epochs=25, config=config,
         )
 
@@ -212,8 +212,8 @@ class TestMinimalRewardProperties:
         )
 
         base_inputs = {
-            "host_max_acc": 75.0,
-            "total_params": 100_000,
+            "committed_val_acc": 75.0,
+            "fossilized_seed_params": 100_000,
             "epoch": 10,  # Non-terminal
             "max_epochs": 25,
             "action": LifecycleOp.PRUNE,
@@ -237,8 +237,8 @@ class TestMinimalRewardProperties:
         )
 
         reward = compute_minimal_reward(
-            host_max_acc=75.0,
-            total_params=100_000,
+            committed_val_acc=75.0,
+            fossilized_seed_params=100_000,
             epoch=10,
             max_epochs=25,
             action=action,
@@ -259,8 +259,8 @@ class TestMinimalRewardProperties:
 
         # Sparse base reward (non-terminal = 0.0)
         sparse_reward = compute_sparse_reward(
-            host_max_acc=75.0,
-            total_params=100_000,
+            committed_val_acc=75.0,
+            fossilized_seed_params=100_000,
             epoch=10,
             max_epochs=25,
             config=config,
@@ -268,8 +268,8 @@ class TestMinimalRewardProperties:
 
         # Minimal with young prune
         minimal_reward = compute_minimal_reward(
-            host_max_acc=75.0,
-            total_params=100_000,
+            committed_val_acc=75.0,
+            fossilized_seed_params=100_000,
             epoch=10,
             max_epochs=25,
             action=LifecycleOp.PRUNE,

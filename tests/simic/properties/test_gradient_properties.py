@@ -14,11 +14,11 @@ import torch
 import torch.nn as nn
 from hypothesis import given, strategies as st
 
-# Mark all tests in this module as property tests for CI
-pytestmark = pytest.mark.property
-
 from esper.simic.telemetry import SeedGradientCollector
 from tests.strategies import bounded_floats
+
+# Mark all tests in this module as property tests for CI
+pytestmark = pytest.mark.property
 
 
 # =============================================================================

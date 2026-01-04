@@ -61,8 +61,13 @@ class ParallelEnvState:
     train_acc: float = 0.0
     val_loss: float = 0.0
     val_acc: float = 0.0
+    # "Committed" accuracy: evaluation with only fossilized seeds enabled.
+    committed_val_acc: float = 0.0
+    committed_acc_history: list[float] = field(default_factory=list)
     # Ransomware-resistant reward: track accuracy at germination for progress calculation
     acc_at_germination: dict[str, float] = field(default_factory=dict)
+    # Escrow attribution ledger (RewardMode.ESCROW): per-slot unrealised credit balance.
+    escrow_credit: dict[str, float] = field(default_factory=dict)
     # Maximum accuracy achieved during episode (for sparse reward)
     host_max_acc: float = 0.0
     # Pre-allocated accumulators to avoid per-epoch tensor allocation churn
@@ -199,6 +204,9 @@ class ParallelEnvState:
 
         self.seed_optimizers.clear()
         self.acc_at_germination.clear()
+        self.committed_val_acc = 0.0
+        self.committed_acc_history.clear()
+        self.escrow_credit = {slot_id: 0.0 for slot_id in slots}
         self.host_max_acc = 0.0
         self.pending_auto_prune_penalty = 0.0
         self.prev_slot_alphas = {slot_id: 0.0 for slot_id in slots}

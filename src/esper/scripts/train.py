@@ -395,8 +395,9 @@ def build_parser() -> argparse.ArgumentParser:
         type=_positive_int,
         default=None,
         metavar="L",
-        help="Timesteps per environment per round. Each round produces envs × episode_length "
-             "transitions for Tamiyo. (Maps to max_epochs. Default: 25)",
+        help="Epochs per environment per round (full train-loader passes). "
+             "Also sets the LSTM sequence length (chunk_length), so longer episodes "
+             "demand longer temporal memory. (Maps to max_epochs. Default: 25)",
     )
     ppo_parser.add_argument(
         "--ppo-epochs",
@@ -412,7 +413,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="H",
         help="Tamiyo's LSTM hidden dimension (temporal reasoning capacity). "
-             "Smaller = faster but less temporal memory. (Maps to lstm_hidden_dim. Default: 128)",
+             "Smaller = faster but less temporal memory (longer episodes may need more). "
+             "(Maps to lstm_hidden_dim. Default: 128)",
     )
     # Entropy annealing: uses type=int (not _positive_int) since 0 is valid (no annealing)
     # Semantics: total env-episodes over which to anneal. With K envs, produces ceil(N/K) PPO batches.
@@ -440,6 +442,9 @@ def build_parser() -> argparse.ArgumentParser:
           then performs one PPO update on Tamiyo using the collected experience.
 
           Total Tamiyo transitions per round: envs × episode_length
+
+          Episode length is the LSTM horizon (chunk_length == max_epochs). Longer
+          episodes require Tamiyo to carry memory over more steps.
 
           Example:
             --rounds 100 --envs 4 --episode-length 25

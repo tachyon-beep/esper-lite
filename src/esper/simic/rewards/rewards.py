@@ -51,11 +51,13 @@ class RewardMode(Enum):
     """Reward function variant for experimentation.
 
     SHAPED: Current dense shaping with PBRS, attribution, warnings (default)
+    ESCROW: Dense, reversible attribution (anti-peak / anti-thrash)
     SPARSE: Terminal-only ground truth (accuracy - param_cost)
     MINIMAL: Sparse + early-prune penalty only
     SIMPLIFIED: DRL Expert recommended - PBRS + intervention cost + terminal only
     """
     SHAPED = "shaped"
+    ESCROW = "escrow"
     SPARSE = "sparse"
     MINIMAL = "minimal"
     SIMPLIFIED = "simplified"
@@ -177,6 +179,13 @@ class ContributionRewardConfig:
     def proxy_contribution_weight(self) -> float:
         """Derived proxy weight: contribution_weight * proxy_confidence_factor."""
         return self.contribution_weight * self.proxy_confidence_factor
+
+    # === Escrow Attribution (RewardMode.ESCROW) ===
+    # Soft escrow: pay the CHANGE in an "unrealised credit target" so transient spikes are clawed back.
+    # Stable accuracy uses min(last_k) to require sustained improvement ("prove it held").
+    escrow_stable_window: int = 3
+    # Optional per-step cap on escrow delta (0 disables). Useful if reward spikes destabilize PPO.
+    escrow_delta_clip: float = 0.0
 
     # PBRS stage progression
     pbrs_weight: float = 0.3
@@ -399,6 +408,8 @@ def compute_contribution_reward(
     seed_id: str | None = None,
     effective_seed_params: float | None = None,
     alpha_delta_sq_sum: float = 0.0,
+    stable_val_acc: float | None = None,
+    escrow_credit_prev: float = 0.0,
 ) -> float | tuple[float, RewardComponentsTelemetry]:
     """Compute reward using bounded attribution (ransomware-resistant).
 
@@ -474,10 +485,19 @@ def compute_contribution_reward(
     # Uses counterfactual when available, falls back to acc_delta proxy for pre-blending
     bounded_attribution = 0.0
     progress = None
+    escrow_credit_target = 0.0
+    escrow_delta = 0.0
 
     # Skip attribution for FOSSILIZED seeds - no decision to be made, seed is permanent
     # Without this check, fossilized seeds continue generating high rewards indefinitely
     seed_is_fossilized = seed_info is not None and seed_info.stage == STAGE_FOSSILIZED
+
+    escrow_mode = config.reward_mode == RewardMode.ESCROW
+    if escrow_mode and stable_val_acc is None:
+        raise ValueError(
+            "RewardMode.ESCROW requires stable_val_acc (provide via SignalTracker history)."
+        )
+    progress_acc = stable_val_acc if escrow_mode and stable_val_acc is not None else val_acc
 
     # Pre-compute attribution_discount and ratio_penalty for ALL seeds (including fossilized)
     # These are needed for telemetry and property tests even if we skip attribution rewards
@@ -486,12 +506,13 @@ def compute_contribution_reward(
     if seed_contribution is not None and seed_info is not None:
         total_imp = seed_info.total_improvement
 
-        # Attribution discount applies to all seeds with negative total_improvement
-        # Sigmoid steepness controls how quickly discount kicks in for regressing seeds
-        if total_imp < 0:
-            # Clamp exponent to prevent overflow: exp(709) is the float64 limit
-            exp_arg = min(-config.attribution_sigmoid_steepness * total_imp, 700.0)
-            attribution_discount = 1.0 / (1.0 + math.exp(exp_arg))
+        if not escrow_mode:
+            # Attribution discount applies to all seeds with negative total_improvement
+            # Sigmoid steepness controls how quickly discount kicks in for regressing seeds
+            if total_imp < 0:
+                # Clamp exponent to prevent overflow: exp(709) is the float64 limit
+                exp_arg = min(-config.attribution_sigmoid_steepness * total_imp, 700.0)
+                attribution_discount = 1.0 / (1.0 + math.exp(exp_arg))
 
         # Ratio penalty only for high contribution (> 1.0) to avoid noise
         # Only calculate when attribution_discount >= 0.5 (avoid penalty stacking)
@@ -538,48 +559,90 @@ def compute_contribution_reward(
                 seed_id=seed_id,
             )
 
-    if seed_contribution is not None and not seed_is_fossilized:
-        # Counterfactual available (BLENDING+ stages)
-        if seed_contribution < 0:
-            # Toxic seed - counterfactual shows it actively hurts
-            # Pay the negative contribution as penalty
-            bounded_attribution = config.contribution_weight * seed_contribution
-        else:
-            # Positive contribution - asymmetric handling preserves causal signal
-            if acc_at_germination is not None:
-                progress = val_acc - acc_at_germination
-                if progress <= 0:
-                    # Anti-ransomware: no reward without actual progress
-                    attributed = 0.0
-                elif seed_contribution >= progress:
-                    # High causal, low progress: timing mismatch, seed is valuable
-                    # Geometric mean recovers signal: sqrt(5% * 47%) = 15.3% vs min = 5%
-                    attributed = math.sqrt(progress * seed_contribution)
-                else:
-                    # Low causal, high progress: host did the work
-                    # Cap at actual contribution to prevent free-riding
-                    attributed = seed_contribution
+    if acc_at_germination is not None:
+        progress = progress_acc - acc_at_germination
+
+    if escrow_mode:
+        if not return_components:
+            raise ValueError(
+                "RewardMode.ESCROW requires return_components=True so escrow state can be updated."
+            )
+        if action == LifecycleOp.PRUNE:
+            escrow_credit_target = 0.0
+            escrow_delta = escrow_credit_target - escrow_credit_prev
+            bounded_attribution = escrow_delta
+        elif seed_is_fossilized:
+            escrow_credit_target = escrow_credit_prev
+            escrow_delta = 0.0
+            bounded_attribution = 0.0
+        elif seed_contribution is not None:
+            if seed_contribution < 0:
+                # Immediate penalty for active harm, plus escrow clawback.
+                bounded_attribution = config.contribution_weight * seed_contribution
+                escrow_credit_target = 0.0
+                escrow_delta = escrow_credit_target - escrow_credit_prev
+                bounded_attribution += escrow_delta
             else:
-                # No baseline available - discount contribution
-                attributed = seed_contribution * 0.5
+                attributed = 0.0
+                if progress is None:
+                    attributed = seed_contribution * 0.5
+                elif progress > 0:
+                    if seed_contribution >= progress:
+                        attributed = math.sqrt(progress * seed_contribution)
+                    else:
+                        attributed = seed_contribution
 
-            # Apply attribution discount (pre-computed above)
-            # Prevents rewarding seeds that show good per-step counterfactual but
-            # have negative total_improvement (the ransomware buildup pattern).
-            attributed *= attribution_discount
+                # Apply ratio penalty as a reduction in the escrow target so it is clawed back.
+                escrow_credit_target = max(
+                    0.0,
+                    (config.contribution_weight * attributed) + ratio_penalty,
+                )
+                escrow_delta = escrow_credit_target - escrow_credit_prev
+                if config.escrow_delta_clip > 0:
+                    escrow_delta = max(
+                        -config.escrow_delta_clip,
+                        min(config.escrow_delta_clip, escrow_delta),
+                    )
+                bounded_attribution = escrow_delta
+        # else: Pre-blending: no proxy credit in escrow mode (PBRS handles early learning).
+    else:
+        if seed_contribution is not None and not seed_is_fossilized:
+            # Counterfactual available (BLENDING+ stages)
+            if seed_contribution < 0:
+                # Toxic seed - counterfactual shows it actively hurts
+                # Pay the negative contribution as penalty
+                bounded_attribution = config.contribution_weight * seed_contribution
+            else:
+                # Positive contribution - asymmetric handling preserves causal signal
+                if progress is not None:
+                    if progress <= 0:
+                        # Anti-ransomware: no reward without actual progress
+                        attributed = 0.0
+                    elif seed_contribution >= progress:
+                        # High causal, low progress: timing mismatch, seed is valuable
+                        # Geometric mean recovers signal: sqrt(5% * 47%) = 15.3% vs min = 5%
+                        attributed = math.sqrt(progress * seed_contribution)
+                    else:
+                        # Low causal, high progress: host did the work
+                        # Cap at actual contribution to prevent free-riding
+                        attributed = seed_contribution
+                else:
+                    # No baseline available - discount contribution
+                    attributed = seed_contribution * 0.5
 
-            # Apply ratio penalty (pre-computed above)
-            # High causal contribution with low improvement = structural entanglement
-            attributed += ratio_penalty / config.contribution_weight  # Apply before weight
+                # Apply attribution discount (pre-computed above)
+                # Prevents rewarding seeds that show good per-step counterfactual but
+                # have negative total_improvement (the ransomware buildup pattern).
+                attributed *= attribution_discount
 
-            bounded_attribution = config.contribution_weight * attributed
-    elif seed_info is not None and not seed_is_fossilized:
-        # Pre-blending: use accuracy delta as proxy signal (lower weight)
-        # This maintains reward continuity without imputing fake counterfactual.
-        # No penalty for negative delta - we don't have causal data yet.
-        # NOTE: Only applies when seed exists - seedless states get zero attribution
-        if acc_delta is not None and acc_delta > 0:
-            bounded_attribution = config.proxy_contribution_weight * acc_delta
+                bounded_attribution = (config.contribution_weight * attributed) + ratio_penalty
+        elif seed_info is not None and not seed_is_fossilized:
+            # Pre-blending: use accuracy delta as proxy signal (lower weight)
+            # This maintains reward continuity without imputing fake counterfactual.
+            # No penalty for negative delta - we don't have causal data yet.
+            # NOTE: Only applies when seed exists - seedless states get zero attribution
+            if acc_delta is not None and acc_delta > 0:
+                bounded_attribution = config.proxy_contribution_weight * acc_delta
     # else: No seed exists - zero attribution (host-only learning is not credited)
     # === FOSSILIZE-SPECIFIC ATTRIBUTION OVERRIDE ===
     # Zero attribution for fossilizing negative-improvement seeds.
@@ -594,7 +657,7 @@ def compute_contribution_reward(
     # - Pruning a GOOD seed (positive contribution) = BAD decision → negative reward
     # - Pruning a BAD seed (negative contribution) = GOOD decision → positive reward
     # Without this, the policy learns "PRUNE everything for +attribution rewards"
-    if action == LifecycleOp.PRUNE:
+    if action == LifecycleOp.PRUNE and not escrow_mode:
         bounded_attribution = -bounded_attribution
 
     reward += bounded_attribution
@@ -603,8 +666,13 @@ def compute_contribution_reward(
         components.seed_contribution = seed_contribution
         components.bounded_attribution = bounded_attribution
         components.progress_since_germination = progress
+        components.stable_val_acc = stable_val_acc if escrow_mode else None
         components.attribution_discount = attribution_discount
         components.ratio_penalty = ratio_penalty
+        components.escrow_credit_prev = escrow_credit_prev
+        components.escrow_credit_target = escrow_credit_target
+        components.escrow_delta = escrow_delta
+        components.escrow_credit_next = escrow_credit_prev + escrow_delta
 
     # === 1b. BLENDING WARNING: Escalating penalty for negative trajectory ===
     # Provides early signal to PRUNE seeds that are hurting performance
@@ -785,8 +853,8 @@ def compute_contribution_reward(
 
 
 def compute_sparse_reward(
-    host_max_acc: float,
-    total_params: int,
+    committed_val_acc: float,
+    fossilized_seed_params: int,
     epoch: int,
     max_epochs: int,
     config: ContributionRewardConfig,
@@ -805,8 +873,8 @@ def compute_sparse_reward(
     - Scale factor: DRL Expert recommends 2.0-3.0 if learning fails
 
     Args:
-        host_max_acc: Maximum accuracy achieved during episode (0-100)
-        total_params: Extra seed parameters (active + fossilized) at episode end
+        committed_val_acc: Validation accuracy of the committed model (host + fossilized seeds) (0-100)
+        fossilized_seed_params: Total seed parameters that were fossilized (permanent) at episode end
         epoch: Current epoch (1-indexed)
         max_epochs: Maximum epochs in episode
         config: Reward configuration with param_budget, param_penalty_weight, sparse_reward_scale
@@ -819,8 +887,10 @@ def compute_sparse_reward(
         return 0.0
 
     # Terminal reward: accuracy minus parameter cost
-    accuracy_reward = host_max_acc / 100.0
-    param_cost = config.param_penalty_weight * (total_params / config.param_budget)
+    if config.param_budget <= 0:
+        raise ValueError("param_budget must be positive")
+    accuracy_reward = committed_val_acc / 100.0
+    param_cost = config.param_penalty_weight * (fossilized_seed_params / config.param_budget)
 
     # H10 FIX: Clamp base reward to [-1, 1] BEFORE scaling, not after.
     # This ensures sparse_reward_scale actually affects magnitude.
@@ -835,8 +905,8 @@ def compute_sparse_reward(
 
 
 def compute_minimal_reward(
-    host_max_acc: float,
-    total_params: int,
+    committed_val_acc: float,
+    fossilized_seed_params: int,
     epoch: int,
     max_epochs: int,
     action: LifecycleOp,
@@ -855,8 +925,8 @@ def compute_minimal_reward(
     - No other shaping: Tests if minimal guidance is sufficient
 
     Args:
-        host_max_acc: Maximum accuracy achieved during episode
-        total_params: Extra seed parameters (active + fossilized) at episode end
+        committed_val_acc: Validation accuracy of the committed model (host + fossilized seeds)
+        fossilized_seed_params: Total seed parameters that were fossilized (permanent) at episode end
         epoch: Current epoch
         max_epochs: Maximum epochs in episode
         action: Action taken this timestep
@@ -868,8 +938,8 @@ def compute_minimal_reward(
     """
     # Start with sparse reward
     reward = compute_sparse_reward(
-        host_max_acc=host_max_acc,
-        total_params=total_params,
+        committed_val_acc=committed_val_acc,
+        fossilized_seed_params=fossilized_seed_params,
         epoch=epoch,
         max_epochs=max_epochs,
         config=config,
@@ -954,7 +1024,6 @@ def compute_reward(
     action: LifecycleOp,
     seed_contribution: float | None,
     val_acc: float,
-    host_max_acc: float,
     seed_info: SeedInfo | None,
     epoch: int,
     max_epochs: int,
@@ -962,17 +1031,24 @@ def compute_reward(
     host_params: int,
     acc_at_germination: float | None,
     acc_delta: float,
+    committed_val_acc: float | None = None,
+    fossilized_seed_params: int = 0,
     num_fossilized_seeds: int = 0,
     num_contributing_fossilized: int = 0,
     config: ContributionRewardConfig | None = None,
     return_components: bool = False,
     effective_seed_params: float | None = None,
     alpha_delta_sq_sum: float = 0.0,
+    stable_val_acc: float | None = None,
+    escrow_credit_prev: float = 0.0,
+    slot_id: str | None = None,
+    seed_id: str | None = None,
 ) -> float | tuple[float, "RewardComponentsTelemetry"]:
     """Unified reward computation dispatcher.
 
     Routes to the appropriate reward function based on config.reward_mode:
     - SHAPED: Dense shaping with PBRS, attribution, warnings (default)
+    - ESCROW: Dense, reversible attribution (anti-peak / anti-thrash)
     - SPARSE: Terminal-only ground truth reward
     - MINIMAL: Sparse + early-prune penalty
     - SIMPLIFIED: PBRS + intervention cost + terminal (DRL Expert recommended)
@@ -981,7 +1057,6 @@ def compute_reward(
         action: Action taken (LifecycleOp or similar IntEnum)
         seed_contribution: Counterfactual contribution (None if unavailable)
         val_acc: Current validation accuracy
-        host_max_acc: Maximum accuracy achieved during episode
         seed_info: Seed state info (None if no active seed)
         epoch: Current epoch
         max_epochs: Maximum epochs in episode
@@ -989,6 +1064,8 @@ def compute_reward(
         host_params: Host model parameters
         acc_at_germination: Accuracy when seed was planted
         acc_delta: Per-epoch accuracy change
+        committed_val_acc: Validation accuracy of the committed model (host + fossilized seeds)
+        fossilized_seed_params: Total seed parameters that were fossilized (permanent) at episode end
         num_fossilized_seeds: Count of fossilized seeds
         num_contributing_fossilized: Count of contributing fossilized seeds
         config: Reward configuration (uses default if None)
@@ -1003,7 +1080,7 @@ def compute_reward(
         config = ContributionRewardConfig()
 
     # Dispatch based on reward mode
-    if config.reward_mode == RewardMode.SHAPED:
+    if config.reward_mode in (RewardMode.SHAPED, RewardMode.ESCROW):
         return compute_contribution_reward(
             action=action,
             seed_contribution=seed_contribution,
@@ -1019,14 +1096,20 @@ def compute_reward(
             return_components=return_components,
             num_fossilized_seeds=num_fossilized_seeds,
             num_contributing_fossilized=num_contributing_fossilized,
+            slot_id=slot_id,
+            seed_id=seed_id,
             effective_seed_params=effective_seed_params,
             alpha_delta_sq_sum=alpha_delta_sq_sum,
+            stable_val_acc=stable_val_acc,
+            escrow_credit_prev=escrow_credit_prev,
         )
 
     elif config.reward_mode == RewardMode.SPARSE:
+        if committed_val_acc is None:
+            raise ValueError("committed_val_acc is required for RewardMode.SPARSE")
         reward = compute_sparse_reward(
-            host_max_acc=host_max_acc,
-            total_params=total_params,
+            committed_val_acc=committed_val_acc,
+            fossilized_seed_params=fossilized_seed_params,
             epoch=epoch,
             max_epochs=max_epochs,
             config=config,
@@ -1034,9 +1117,11 @@ def compute_reward(
 
     elif config.reward_mode == RewardMode.MINIMAL:
         seed_age = seed_info.seed_age_epochs if seed_info else None
+        if committed_val_acc is None:
+            raise ValueError("committed_val_acc is required for RewardMode.MINIMAL")
         reward = compute_minimal_reward(
-            host_max_acc=host_max_acc,
-            total_params=total_params,
+            committed_val_acc=committed_val_acc,
+            fossilized_seed_params=fossilized_seed_params,
             epoch=epoch,
             max_epochs=max_epochs,
             action=action,
@@ -1079,7 +1164,6 @@ def compute_reward_for_family(
     action: LifecycleOp,
     seed_contribution: float | None,
     val_acc: float,
-    host_max_acc: float,
     seed_info: SeedInfo | None,
     epoch: int,
     max_epochs: int,
@@ -1087,6 +1171,8 @@ def compute_reward_for_family(
     host_params: int,
     acc_at_germination: float | None,
     acc_delta: float,
+    committed_val_acc: float | None = None,
+    fossilized_seed_params: int = 0,
     num_fossilized_seeds: int = 0,
     num_contributing_fossilized: int = 0,
     contribution_config: ContributionRewardConfig | None = None,
@@ -1095,6 +1181,10 @@ def compute_reward_for_family(
     val_loss: float = 0.0,
     effective_seed_params: float | None = None,
     alpha_delta_sq_sum: float = 0.0,
+    stable_val_acc: float | None = None,
+    escrow_credit_prev: float = 0.0,
+    slot_id: str | None = None,
+    seed_id: str | None = None,
 ) -> float:
     """Dispatch reward based on family (contribution vs loss-primary)."""
     if contribution_config is None:
@@ -1109,7 +1199,6 @@ def compute_reward_for_family(
             action=action,
             seed_contribution=seed_contribution,
             val_acc=val_acc,
-            host_max_acc=host_max_acc,
             seed_info=seed_info,
             epoch=epoch,
             max_epochs=max_epochs,
@@ -1117,12 +1206,18 @@ def compute_reward_for_family(
             host_params=host_params,
             acc_at_germination=acc_at_germination,
             acc_delta=acc_delta,
+            committed_val_acc=committed_val_acc,
+            fossilized_seed_params=fossilized_seed_params,
             num_fossilized_seeds=num_fossilized_seeds,
             num_contributing_fossilized=num_contributing_fossilized,
             config=contribution_config,
             return_components=False,
             effective_seed_params=effective_seed_params,
             alpha_delta_sq_sum=alpha_delta_sq_sum,
+            stable_val_acc=stable_val_acc,
+            escrow_credit_prev=escrow_credit_prev,
+            slot_id=slot_id,
+            seed_id=seed_id,
         ))
     if reward_family == RewardFamily.LOSS:
         return compute_loss_reward(
@@ -1396,7 +1491,7 @@ def _check_ransomware_signature(
     *,
     seed_contribution: float,
     total_improvement: float,
-    contribution_threshold: float = 1.0,
+    contribution_threshold: float = 0.1,
     degradation_threshold: float = -0.2,
     slot_id: str,
     seed_id: str,
@@ -1408,7 +1503,11 @@ def _check_ransomware_signature(
     pattern: the seed has learned to maximize its counterfactual signal
     at the expense of actual performance.
 
-    Signature: seed_contribution > 1.0 AND total_improvement < -0.2
+    Signature: seed_contribution > contribution_threshold AND total_improvement < degradation_threshold
+
+    Severity:
+    - "warning" for small-but-real signatures (contribution < 1.0)
+    - "critical" for large signatures (contribution >= 1.0)
 
     Returns True if event was emitted.
     """
@@ -1420,9 +1519,10 @@ def _check_ransomware_signature(
     if total_improvement >= degradation_threshold:
         return False
 
+    severity = "critical" if seed_contribution >= 1.0 else "warning"
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.REWARD_HACKING_SUSPECTED,
-        severity="critical",
+        severity=severity,
         data={  # type: ignore[arg-type]
             "pattern": "ransomware_signature",
             "seed_contribution": seed_contribution,

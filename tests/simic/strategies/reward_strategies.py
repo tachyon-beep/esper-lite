@@ -20,6 +20,14 @@ ACTIVE_STAGES = [
     SeedStage.FOSSILIZED.value,
 ]
 
+# Full set of stage values that can legitimately appear inside SeedInfo.
+# NOTE: SeedStage value 5 is intentionally skipped and MUST NOT appear.
+VALID_STAGE_VALUES = sorted({
+    SeedStage.UNKNOWN.value,
+    SeedStage.DORMANT.value,
+    *ACTIVE_STAGES,
+})
+
 PRE_BLENDING_STAGES = [
     SeedStage.GERMINATED.value,
     SeedStage.TRAINING.value,
@@ -43,8 +51,10 @@ def seed_infos(draw, stage=None):
     if stage is None:
         stage = draw(sampled_from(ACTIVE_STAGES))
 
-    # Previous stage must be valid predecessor (or same for epochs_in_stage > 0)
-    previous_stage = draw(st.integers(0, stage))
+    # Previous stage must be a valid SeedStage value (SeedStage value 5 is invalid).
+    # Constrain it to be <= stage to preserve monotonic progression semantics in tests.
+    eligible_previous = [s for s in VALID_STAGE_VALUES if s <= stage]
+    previous_stage = draw(sampled_from(eligible_previous))
 
     # Epochs in stage: 0 means just transitioned
     epochs_in_stage = draw(st.integers(0, 25))
@@ -277,7 +287,11 @@ def prune_inputs(draw, valid: bool = True):
         total_improvement=draw(st.floats(-3.0, 5.0, allow_nan=False)),
         epochs_in_stage=draw(st.integers(0, 10)),
         seed_params=draw(st.integers(10_000, 200_000)),
-        previous_stage=max(0, stage - 1),
+        previous_stage=(
+            SeedStage.BLENDING.value
+            if stage == SeedStage.HOLDING.value
+            else max(0, stage - 1)
+        ),
         previous_epochs_in_stage=draw(st.integers(0, 5)),
         seed_age_epochs=seed_age,
     )

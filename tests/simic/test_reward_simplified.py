@@ -171,7 +171,6 @@ class TestComputeRewardDispatcher:
             action=LifecycleOp.WAIT,
             seed_contribution=5.0,  # Would give attribution in SHAPED
             val_acc=60.0,
-            host_max_acc=65.0,
             seed_info=seed_info,
             epoch=20,
             max_epochs=25,

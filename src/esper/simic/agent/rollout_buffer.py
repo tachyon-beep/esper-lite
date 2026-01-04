@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 from esper.leyline import (
     DEFAULT_GAMMA,
     DEFAULT_LSTM_HIDDEN_DIM,
+    AlphaTargetAction,
     GerminationStyle,
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
@@ -35,6 +36,7 @@ from esper.leyline import (
     NUM_OPS,
     NUM_STYLES,
     NUM_TEMPO,
+    TempoAction,
 )
 from esper.leyline.slot_config import SlotConfig
 
@@ -245,9 +247,11 @@ class TamiyoRolloutBuffer:
         default_style = int(GerminationStyle.SIGMOID_ADD)
         self.style_masks[:, :, default_style] = True
         self.tempo_masks = torch.zeros(n, m, self.num_tempo, dtype=torch.bool, device=device)
-        self.tempo_masks[:, :, 0] = True  # First tempo always valid
+        default_tempo = int(TempoAction.STANDARD)
+        self.tempo_masks[:, :, default_tempo] = True
         self.alpha_target_masks = torch.zeros(n, m, self.num_alpha_targets, dtype=torch.bool, device=device)
-        self.alpha_target_masks[:, :, 0] = True  # First alpha target always valid
+        default_alpha_target = int(AlphaTargetAction.FULL)
+        self.alpha_target_masks[:, :, default_alpha_target] = True
         self.alpha_speed_masks = torch.zeros(n, m, self.num_alpha_speeds, dtype=torch.bool, device=device)
         self.alpha_speed_masks[:, :, 0] = True  # First alpha speed always valid
         self.alpha_curve_masks = torch.zeros(n, m, self.num_alpha_curves, dtype=torch.bool, device=device)
@@ -257,6 +261,8 @@ class TamiyoRolloutBuffer:
 
         # Keep padded actions consistent with the default masks above.
         self.style_actions.fill_(default_style)
+        self.tempo_actions.fill_(default_tempo)
+        self.alpha_target_actions.fill_(default_alpha_target)
 
         # LSTM hidden states: [num_envs, max_steps, lstm_layers, hidden_dim]
         self.hidden_h = torch.zeros(n, m, self.lstm_layers, self.lstm_hidden_dim, device=device)
