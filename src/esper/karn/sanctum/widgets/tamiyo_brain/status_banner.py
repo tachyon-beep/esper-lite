@@ -1,10 +1,10 @@
-"""StatusBanner - One-line status summary with optional warmup spinner.
+"""StatusBanner - Always-visible training narrative strip.
 
-Displays:
-    [OK] LEARNING   KL:0.008 Batch:47/100 [Mem:45%]
-
-Or during warmup:
-    ⠋ WARMING UP [5/50]   KL:0.000 Batch:5/50 ...
+Top line is compact status + a few core metrics.
+Two additional lines provide a quick mental model:
+  NOW: what the system is doing
+  WHY: top two drivers behind the current state
+  NEXT: the expected recovery trigger / what to watch
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 
 class StatusBanner(Container):
-    """One-line status banner with key metrics."""
+    """Multi-line status + narrative banner."""
 
     WARMUP_BATCHES: ClassVar[int] = 50
 
@@ -129,15 +129,221 @@ class StatusBanner(Container):
             icon = icons.get(status, "?")
             banner.append(f"[{icon}] ", style=style)
 
-        banner.append(f"{label}   ", style=style)
+        banner.append("NOW: ", style="dim")
+        banner.append(f"{label}", style=style)
+        banner.append("  ", style="dim")
 
         # Metrics (only after PPO data received)
         if tamiyo.ppo_data_received:
             self._append_metrics(banner, tamiyo)
+            now_tail = self._render_now_tail()
+            if now_tail:
+                banner.append("  ", style="dim")
+                banner.append(now_tail)
         else:
             banner.append("Waiting for PPO data...", style="cyan italic")
 
+        banner.append("\n")
+        banner.append(self._render_why_line(), style="dim")
+        banner.append("\n")
+        banner.append(self._render_next_line(), style="dim")
+
         return banner
+
+    def _render_now_tail(self) -> Text:
+        if self._snapshot is None:
+            return Text()
+
+        snapshot = self._snapshot
+        tamiyo = snapshot.tamiyo
+
+        parts = Text()
+
+        # Env stall rate (derived from per-env status)
+        n_envs = len(snapshot.envs)
+        if n_envs > 0:
+            stalled = sum(1 for env in snapshot.envs.values() if env.status == "stalled")
+            stalled_rate = stalled / n_envs
+            st_style = "dim"
+            if stalled_rate > 0.9:
+                st_style = "red bold"
+            elif stalled_rate > 0.5:
+                st_style = "yellow"
+            parts.append(f"stall:{stalled_rate:.0%}", style=st_style)
+
+        # Op mix (from per-batch action_counts)
+        if tamiyo.total_actions > 0:
+            wait_rate = tamiyo.action_counts["WAIT"] / tamiyo.total_actions
+            prune_rate = tamiyo.action_counts["PRUNE"] / tamiyo.total_actions
+            if parts.plain:
+                parts.append("  ", style="dim")
+            wait_style = "dim"
+            if wait_rate > 0.95:
+                wait_style = "red bold"
+            elif wait_rate > 0.8:
+                wait_style = "yellow"
+            parts.append(f"WAIT:{wait_rate:.0%}", style=wait_style)
+            if prune_rate > 0:
+                parts.append(" ", style="dim")
+                parts.append(f"PR:{prune_rate:.0%}", style="dim")
+
+        # Slot occupancy (batch-size aware: uses counts, not norms)
+        if snapshot.total_slots > 0:
+            empty = snapshot.total_slots - snapshot.active_slots
+            if parts.plain:
+                parts.append("  ", style="dim")
+            empty_style = "dim"
+            if empty == 0 and snapshot.active_slots > 0:
+                empty_style = "yellow"
+            parts.append(f"empty:{empty}/{snapshot.total_slots}", style=empty_style)
+
+        # Policy vs critic summary (compact identity for the operator)
+        if parts.plain:
+            parts.append("  ", style="dim")
+        parts.append("pol:", style="dim")
+        parts.append(self._policy_state_label(), style=self._policy_state_style())
+        parts.append("  ", style="dim")
+        parts.append("V:", style="dim")
+        parts.append(self._critic_state_label(), style=self._critic_state_style())
+
+        return parts
+
+    def _render_why_line(self) -> str:
+        drivers = self._top_drivers(max_items=2)
+        if not drivers:
+            return "WHY: —"
+        return "WHY: " + "; ".join(drivers)
+
+    def _render_next_line(self) -> str:
+        return "NEXT: " + self._next_hint()
+
+    def _top_drivers(self, *, max_items: int) -> list[str]:
+        if self._snapshot is None:
+            return []
+
+        snapshot = self._snapshot
+        tamiyo = snapshot.tamiyo
+
+        scored: list[tuple[float, str]] = []
+
+        if not tamiyo.ppo_data_received:
+            scored.append((1.0, "telemetry → waiting PPO update"))
+
+        # Env stall dominance
+        n_envs = len(snapshot.envs)
+        if n_envs > 0:
+            stalled = sum(1 for env in snapshot.envs.values() if env.status == "stalled")
+            stalled_rate = stalled / n_envs
+            if stalled_rate > 0.5:
+                scored.append((stalled_rate, f"envs → stalled {stalled_rate:.0%}"))
+
+        # Slot occupancy bottleneck
+        if snapshot.total_slots > 0:
+            empty = snapshot.total_slots - snapshot.active_slots
+            if empty == 0 and snapshot.active_slots > 0:
+                scored.append((0.95, "slots → full (no empty)"))
+            elif empty / snapshot.total_slots < 0.1:
+                scored.append((0.7, f"slots → scarce empty ({empty}/{snapshot.total_slots})"))
+
+        # Op distribution (WAIT dominance)
+        if tamiyo.total_actions > 0:
+            wait_rate = tamiyo.action_counts["WAIT"] / tamiyo.total_actions
+            if wait_rate > 0.8:
+                scored.append((wait_rate, f"op mix → WAIT {wait_rate:.0%}"))
+
+        # Learning signal / critic health
+        if tamiyo.advantage_std < TUIThresholds.ADVANTAGE_STD_COLLAPSED:
+            scored.append((0.9, "signal → advantages collapsed"))
+        if tamiyo.explained_variance < TUIThresholds.EXPLAINED_VAR_WARNING:
+            scored.append((0.7, f"critic → EV {tamiyo.explained_variance:.2f}"))
+
+        # Policy instability
+        if tamiyo.collapse_risk_score > 0.7:
+            scored.append((0.85, "policy → collapse risk"))
+        elif tamiyo.kl_divergence > TUIThresholds.KL_WARNING:
+            scored.append((0.6, f"policy → KL {tamiyo.kl_divergence:.3f}"))
+
+        scored_sorted = sorted(scored, key=lambda x: x[0], reverse=True)
+        return [msg for _, msg in scored_sorted[:max_items]]
+
+    def _next_hint(self) -> str:
+        if self._snapshot is None:
+            return "—"
+
+        snapshot = self._snapshot
+        tamiyo = snapshot.tamiyo
+        batch = snapshot.current_batch
+
+        if not tamiyo.ppo_data_received:
+            return "wait for first PPO update (watch Batch tick + KL)"
+
+        if batch < self.WARMUP_BATCHES:
+            return f"warmup ends at {self.WARMUP_BATCHES}; watch EV + Lv/Lp stabilize"
+
+        if snapshot.total_slots > 0:
+            empty = snapshot.total_slots - snapshot.active_slots
+            if empty == 0 and snapshot.active_slots > 0:
+                return "free an empty slot (PRUNE/ADVANCE) → enables GERMINATE"
+
+        if tamiyo.total_actions > 0:
+            wait_rate = tamiyo.action_counts["WAIT"] / tamiyo.total_actions
+            if wait_rate > 0.8:
+                return "watch WAIT% drop; indicates masks opened / actions diversified"
+
+        if tamiyo.explained_variance < TUIThresholds.EXPLAINED_VAR_WARNING:
+            return "watch EV rise above warning; critic learning signal recovering"
+
+        if tamiyo.collapse_risk_score > 0.7:
+            return "watch Entropy D turn positive; collapse risk receding"
+
+        return "watch mean accuracy trend ↑ and stalled% ↓"
+
+    def _policy_state_label(self) -> str:
+        if self._snapshot is None:
+            return "—"
+
+        tamiyo = self._snapshot.tamiyo
+        batch = self._snapshot.current_batch
+        if batch < self.WARMUP_BATCHES:
+            return "warmup"
+        if tamiyo.collapse_risk_score > 0.7:
+            return "risk"
+        if tamiyo.kl_divergence > TUIThresholds.KL_WARNING or tamiyo.clip_fraction > TUIThresholds.CLIP_WARNING:
+            return "drift"
+        return "stable"
+
+    def _policy_state_style(self) -> str:
+        if self._snapshot is None:
+            return "dim"
+
+        tamiyo = self._snapshot.tamiyo
+        if tamiyo.collapse_risk_score > 0.7:
+            return "red bold"
+        if tamiyo.kl_divergence > TUIThresholds.KL_WARNING or tamiyo.clip_fraction > TUIThresholds.CLIP_WARNING:
+            return "yellow"
+        return "green"
+
+    def _critic_state_label(self) -> str:
+        if self._snapshot is None:
+            return "—"
+
+        ev = self._snapshot.tamiyo.explained_variance
+        if ev <= TUIThresholds.EXPLAINED_VAR_CRITICAL:
+            return "bad"
+        if ev < TUIThresholds.EXPLAINED_VAR_WARNING:
+            return "weak"
+        return "ok"
+
+    def _critic_state_style(self) -> str:
+        if self._snapshot is None:
+            return "dim"
+
+        ev = self._snapshot.tamiyo.explained_variance
+        if ev <= TUIThresholds.EXPLAINED_VAR_CRITICAL:
+            return "red bold"
+        if ev < TUIThresholds.EXPLAINED_VAR_WARNING:
+            return "yellow"
+        return "green"
 
     def _append_metrics(self, banner: Text, tamiyo: "TamiyoState") -> None:
         """Append metric values to the banner with trend arrows."""

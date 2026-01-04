@@ -50,6 +50,8 @@ class ObservationStatsTelemetry:
     # Numerical health
     nan_count: int = 0
     inf_count: int = 0
+    nan_pct: float = 0.0  # Fraction of NaNs in raw obs tensor
+    inf_pct: float = 0.0  # Fraction of Infs in raw obs tensor
 
     # Normalization drift (how much running mean/std has shifted since epoch 0)
     normalization_drift: float = 0.0
@@ -74,6 +76,8 @@ class ObservationStatsTelemetry:
             "clip_pct": self.clip_pct,
             "nan_count": self.nan_count,
             "inf_count": self.inf_count,
+            "nan_pct": self.nan_pct,
+            "inf_pct": self.inf_pct,
             "normalization_drift": self.normalization_drift,
             "batch_size": self.batch_size,
         }
@@ -97,6 +101,8 @@ class ObservationStatsTelemetry:
             clip_pct=float(data["clip_pct"]),
             nan_count=int(data["nan_count"]),
             inf_count=int(data["inf_count"]),
+            nan_pct=float(data["nan_pct"]),
+            inf_pct=float(data["inf_pct"]),
             normalization_drift=float(data["normalization_drift"]),
             batch_size=int(data["batch_size"]),
         )
@@ -162,6 +168,9 @@ def compute_observation_stats(
     inf_mask = torch.isinf(obs_tensor)
     nan_count = int(nan_mask.sum().item())
     inf_count = int(inf_mask.sum().item())
+    total_elements = batch_size * obs_dim
+    nan_pct = (nan_count / total_elements) if total_elements > 0 else 0.0
+    inf_pct = (inf_count / total_elements) if total_elements > 0 else 0.0
 
     # Replace NaN/Inf with 0 for stats computation
     # Only clone if bad values exist (PyTorch Expert: avoids ~0.02ms allocation in 99.9% case)
@@ -190,7 +199,6 @@ def compute_observation_stats(
     feature_std = clean_obs.std(dim=0, keepdim=True) + 1e-8  # Avoid div by zero
     z_scores = torch.abs((clean_obs - feature_mean) / feature_std)
     outlier_count = int((z_scores > 3.0).sum().item())
-    total_elements = batch_size * obs_dim
     # Fraction (not percent): UI renders with percent formatting (X.X%).
     outlier_pct = (outlier_count / total_elements) if total_elements > 0 else 0.0
 
@@ -221,6 +229,8 @@ def compute_observation_stats(
         clip_pct=clip_pct,
         nan_count=nan_count,
         inf_count=inf_count,
+        nan_pct=nan_pct,
+        inf_pct=inf_pct,
         normalization_drift=normalization_drift,
         batch_size=batch_size,
     )

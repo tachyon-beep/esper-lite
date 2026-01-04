@@ -907,6 +907,8 @@ class TestObservationStatsSchemaCompleteness:
         # NaN/Inf detection
         assert "nan_count" in field_names
         assert "inf_count" in field_names
+        assert "nan_pct" in field_names
+        assert "inf_pct" in field_names
 
         # Outlier detection
         assert "outlier_pct" in field_names
@@ -933,6 +935,8 @@ class TestObservationStatsSchemaCompleteness:
         assert obs_stats.clip_pct == 0.0
         assert obs_stats.nan_count == 0
         assert obs_stats.inf_count == 0
+        assert obs_stats.nan_pct == 0.0
+        assert obs_stats.inf_pct == 0.0
         assert obs_stats.normalization_drift == 0.0
 
 

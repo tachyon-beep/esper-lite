@@ -16,7 +16,7 @@ composable sub-widgets for better maintainability.
 
 Layout (CSS dimensions):
     ┌──────────────────────────────────────────────────────────────────────────────┐
-    │ StatusBanner (h:1)                                                           │
+    │ StatusBanner (h:3)                                                           │
     ├───────────────────────────────────────────────────────────────────┬──────────┤
     │ VitalsColumn (w:3fr)                                              │Decisions │
     │ ┌─────────┬───────────────────────────────────┬───────────────┐   │(w:1fr,   │
@@ -72,7 +72,7 @@ class TamiyoBrain(Container):
     }
 
     #status-banner {
-        height: 1;
+        height: 3;
         width: 100%;
         background: $surface-lighten-1;
     }
@@ -105,7 +105,7 @@ class TamiyoBrain(Container):
 
     /* Row 1: PPO Losses (narrow) | Health (wide) | Slots */
     #top-row {
-        height: 14;
+        height: 12;
         width: 100%;
         margin: 0;
     }

@@ -222,6 +222,8 @@ class ObservationStats:
     # Numerical health
     nan_count: int = 0  # NaN values detected in observations
     inf_count: int = 0  # Inf values detected in observations
+    nan_pct: float = 0.0  # Fraction of NaNs in raw obs tensor
+    inf_pct: float = 0.0  # Fraction of Infs in raw obs tensor
 
     # Normalization drift (running stats divergence)
     normalization_drift: float = 0.0  # How much running mean/std has shifted

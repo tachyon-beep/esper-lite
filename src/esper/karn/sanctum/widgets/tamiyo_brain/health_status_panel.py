@@ -301,7 +301,13 @@ class HealthStatusPanel(Static):
         # Check for NaN/Inf first (critical issue)
         if obs.nan_count > 0 or obs.inf_count > 0:
             result.append("Obs Health   ", style="dim")
-            result.append(f"NaN:{obs.nan_count} Inf:{obs.inf_count}", style="red bold")
+            result.append(
+                f"NaN:{obs.nan_pct:.2%} Inf:{obs.inf_pct:.2%}", style="red bold"
+            )
+            result.append(
+                f" (n={obs.nan_count} i={obs.inf_count})",
+                style="dim",
+            )
             return result
 
         # Check outlier percentage
@@ -390,6 +396,28 @@ class HealthStatusPanel(Static):
             f"c:{tamiyo.lstm_c_rms:.2f}",
             style=self._status_style(c_status),
         )
+
+        env_rms_max = None
+        if tamiyo.lstm_h_env_rms_max is not None and tamiyo.lstm_c_env_rms_max is not None:
+            env_rms_max = max(tamiyo.lstm_h_env_rms_max, tamiyo.lstm_c_env_rms_max)
+        elif tamiyo.lstm_h_env_rms_max is not None:
+            env_rms_max = tamiyo.lstm_h_env_rms_max
+        elif tamiyo.lstm_c_env_rms_max is not None:
+            env_rms_max = tamiyo.lstm_c_env_rms_max
+        if env_rms_max is not None:
+            result.append(" ", style="dim")
+            result.append(f"env\u2191:{env_rms_max:.2f}", style="dim")
+
+        peak_abs = None
+        if tamiyo.lstm_h_max is not None and tamiyo.lstm_c_max is not None:
+            peak_abs = max(tamiyo.lstm_h_max, tamiyo.lstm_c_max)
+        elif tamiyo.lstm_h_max is not None:
+            peak_abs = tamiyo.lstm_h_max
+        elif tamiyo.lstm_c_max is not None:
+            peak_abs = tamiyo.lstm_c_max
+        if peak_abs is not None:
+            result.append(" ", style="dim")
+            result.append(f"|x|max:{peak_abs:.1f}", style="dim")
 
         if worst_status != "ok":
             result.append(" !", style=self._status_style(worst_status))

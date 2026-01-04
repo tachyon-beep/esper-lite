@@ -1546,6 +1546,8 @@ class SanctumAggregator:
                 clip_pct=obs.clip_pct,
                 nan_count=obs.nan_count,
                 inf_count=obs.inf_count,
+                nan_pct=obs.nan_pct,
+                inf_pct=obs.inf_pct,
                 normalization_drift=obs.normalization_drift,
                 batch_size=obs.batch_size,
             )

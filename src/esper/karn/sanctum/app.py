@@ -96,6 +96,49 @@ HELP_TEXT = """\
 [dim]Press Esc, ?, Q, or click to close[/dim]
 """
 
+GLOSSARY_TEXT = """\
+[bold cyan]Glossary (Fields + Semantics)[/bold cyan]
+
+[bold]Tamiyo Status Banner[/bold]
+  [cyan]NOW/WHY/NEXT[/cyan]  Narrative strip: what’s happening, top drivers, and what to watch next.
+
+[bold]PPO Update Panel[/bold]
+  [cyan]Expl.Var[/cyan]      Explained variance of critic vs returns. Range ~(-∞, 1]. Higher is better.
+                  Color: green ok, yellow warning, red critical when ≤0 (critic not learning).
+  [cyan]KL Diver[/cyan]      Policy KL(old||new). Lower is better. Spikes = policy changing too fast.
+  [cyan]Clip Frac[/cyan]     Fraction of samples where PPO ratio was clipped. Higher = overly-large updates.
+                  (↑/↓) shows sign of clipped advantages (diagnostic, not a goal).
+  [cyan]RatioJnt[/cyan]      Joint π_new/π_old max (product across heads). Can explode even if per-head looks ok.
+  [cyan]P.Loss[/cyan]        PPO policy loss (lower is better; sign depends on advantage mix).
+  [cyan]V.Loss[/cyan]        PPO value loss (MSE on normalized returns).
+  [cyan]Lv/Lp[/cyan]         |V.Loss| / |P.Loss| balance. Extremes suggest one objective dominating.
+
+[bold]Health Panel[/bold]
+  [cyan]Advantage[/cyan]     Normalized advantages (mean±std). Healthy: mean≈0, std≈1.
+                  sk/kt = skewness/kurtosis (tail/outlier shape). + = fraction positive (healthy ~40–60%).
+  [cyan]Grad Norm[/cyan]     Total gradient norm (pre-clip). Rising trend can precede instability.
+  [cyan]Log Prob[/cyan]      [min,max] logπ(a|s). Very negative min (<-50) predicts numeric underflow → NaNs.
+  [cyan]Entropy[/cyan]       Exploration level (PPO entropy bonus). Higher = more random; too low = collapse risk.
+  [cyan]Entropy D[/cyan]     d(entropy)/d(batch). Negative = entropy collapsing; used for countdown.
+  [cyan]Policy[/cyan]        Heuristic state label from entropy/clip correlation (collapse-risk pattern detector).
+  [cyan]Value Range[/cyan]   [min,max] of critic predictions + std. Collapse (range≈0) or explosion are critical.
+
+[bold]Observation Health[/bold]
+  [cyan]Out[/cyan]           Fraction of raw obs values outside 3σ (batch z-score). Higher = distribution issues.
+  [cyan]Sat/Clip[/cyan]      Fractions on [italic]normalized+clipped[/italic] obs. Sat≈near bound, Clip==at bound.
+  [cyan]Drift[/cyan]         Mean absolute drift in normalizer mean since epoch 0 (higher = distribution shift).
+  [cyan]Obs σ H/C/S[/cyan]   Std-dev by group (Host/Context/Slots) on raw obs (scale check, not a goal).
+
+[bold]Slots + IDs[/bold]
+  [cyan]r0c0[/cyan]          Slot IDs are grid positions (“row 0, col 0”).
+  [cyan]ΔAcc[/cyan]          Accuracy delta signal used in reward components (task-dependent scaling).
+  [cyan]Rent[/cyan]          Compute rent penalty (parameter overhead; always negative).
+  [cyan]CF[/cyan]            Counterfactual signal (synergy/interference) shown in env overview.
+
+[bold]Transforms[/bold]
+  [cyan]symlog[/cyan]        Signed log transform on large-magnitude signals (compresses spikes, preserves order).
+"""
+
 
 @dataclass(frozen=True)
 class SanctumView:
@@ -122,19 +165,24 @@ class HelpScreen(ModalScreen[None]):
     }
 
     HelpScreen > #help-container {
-        width: 60;
-        height: auto;
+        width: 90;
+        height: 80%;
         max-height: 80%;
         background: $surface;
         border: thick $primary;
         padding: 1 2;
+    }
+
+    HelpScreen > #help-container > #help-scroll {
+        height: 100%;
     }
     """
 
     def compose(self) -> ComposeResult:
         """Compose the help screen."""
         with Container(id="help-container"):
-            yield Static(HELP_TEXT)
+            with VerticalScroll(id="help-scroll"):
+                yield Static(HELP_TEXT + "\n\n" + GLOSSARY_TEXT)
 
     def on_click(self) -> None:
         """Dismiss help screen on click."""
