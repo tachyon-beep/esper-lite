@@ -16,7 +16,7 @@ composable sub-widgets for better maintainability.
 
 Layout (CSS dimensions):
     ┌──────────────────────────────────────────────────────────────────────────────┐
-    │ StatusBanner (h:3)                                                           │
+    │ StatusBanner (h:1)                                                           │
     ├───────────────────────────────────────────────────────────────────┬──────────┤
     │ VitalsColumn (w:3fr)                                              │Decisions │
     │ ┌─────────┬───────────────────────────────────┬───────────────┐   │(w:1fr,   │
@@ -72,7 +72,7 @@ class TamiyoBrain(Container):
     }
 
     #status-banner {
-        height: 3;
+        height: 1;
         width: 100%;
         background: $surface-lighten-1;
     }

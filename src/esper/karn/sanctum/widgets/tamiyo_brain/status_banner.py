@@ -1,10 +1,7 @@
 """StatusBanner - Always-visible training narrative strip.
 
-Top line is compact status + a few core metrics.
-Two additional lines provide a quick mental model:
-  NOW: what the system is doing
-  WHY: top two drivers behind the current state
-  NEXT: the expected recovery trigger / what to watch
+Single-line, three-column layout:
+  NOW | WHY | NEXT
 """
 
 from __future__ import annotations
@@ -27,7 +24,7 @@ if TYPE_CHECKING:
 
 
 class StatusBanner(Container):
-    """Multi-line status + narrative banner."""
+    """One-line status + narrative banner."""
 
     WARMUP_BATCHES: ClassVar[int] = 50
 
@@ -58,14 +55,18 @@ class StatusBanner(Container):
 
     def on_mount(self) -> None:
         """Set initial content when widget mounts."""
-        self.query_one("#banner-content", Static).update(self._render_banner_text())
+        self.query_one("#banner-content", Static).update(
+            self._render_banner_text(available_width=self._content_width())
+        )
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Update with new snapshot and refresh display."""
         self._snapshot = snapshot
         self._update_status_classes()
         self._spinner_frame = (self._spinner_frame + 1) % len(self.SPINNER_CHARS)
-        self.query_one("#banner-content", Static).update(self._render_banner_text())
+        self.query_one("#banner-content", Static).update(
+            self._render_banner_text(available_width=self._content_width())
+        )
 
     def _update_status_classes(self) -> None:
         """Update CSS classes and border title based on current status."""
@@ -88,7 +89,24 @@ class StatusBanner(Container):
             group = self._snapshot.tamiyo.group_id.lower()
             self.add_class(f"group-{group}")
 
-    def _render_banner_text(self) -> Text:
+    def _content_width(self) -> int | None:
+        width = self.size.width
+        if width <= 0:
+            return None
+        # `#banner-content` has horizontal padding of 1 char on each side.
+        return max(0, width - 2)
+
+    def _fit_text(self, text: Text, width: int) -> Text:
+        if width <= 0:
+            return Text()
+
+        fitted = text.copy()
+        fitted.truncate(width, overflow="ellipsis")
+        if fitted.cell_len < width:
+            fitted.pad_right(width - fitted.cell_len)
+        return fitted
+
+    def _render_banner_text(self, *, available_width: int | None = None) -> Text:
         """Render the banner content."""
         if self._snapshot is None:
             return Text("[?] NO DATA", style="cyan")
@@ -96,7 +114,7 @@ class StatusBanner(Container):
         status, label, style = self._get_overall_status()
         tamiyo = self._snapshot.tamiyo
 
-        banner = Text()
+        now = Text()
 
         # NaN/Inf indicator FIRST - leftmost position for F-pattern visibility
         if tamiyo.nan_grad_count > 0 or tamiyo.inf_grad_count > 0:
@@ -107,47 +125,69 @@ class StatusBanner(Container):
                 nan_inf_style = "red bold"
 
             if tamiyo.nan_grad_count > 0:
-                banner.append(f"NaN:{tamiyo.nan_grad_count}", style=nan_inf_style)
-                banner.append(" ")
+                now.append(f"NaN:{tamiyo.nan_grad_count}", style=nan_inf_style)
+                now.append(" ")
             if tamiyo.inf_grad_count > 0:
-                banner.append(f"Inf:{tamiyo.inf_grad_count}", style=nan_inf_style)
-                banner.append(" ")
+                now.append(f"Inf:{tamiyo.inf_grad_count}", style=nan_inf_style)
+                now.append(" ")
 
         # Group label for A/B testing
         if tamiyo.group_id:
             group_color = self.GROUP_COLORS.get(tamiyo.group_id, "white")
             group_label = self.GROUP_LABELS.get(tamiyo.group_id, f"[{tamiyo.group_id}]")
-            banner.append(f" {group_label} ", style=group_color)
-            banner.append(" ┃ ", style="dim")
+            now.append(f" {group_label} ", style=group_color)
+            now.append(" ┃ ", style="dim")
 
         # Status icon (spinner during warmup, static otherwise)
         if status == "warmup":
             spinner = self.SPINNER_CHARS[self._spinner_frame]
-            banner.append(f"{spinner} ", style="cyan")
+            now.append(f"{spinner} ", style="cyan")
         else:
             icons = {"ok": "✓", "warning": "!", "critical": "✗"}
             icon = icons.get(status, "?")
-            banner.append(f"[{icon}] ", style=style)
+            now.append(f"[{icon}] ", style=style)
 
-        banner.append("NOW: ", style="dim")
-        banner.append(f"{label}", style=style)
-        banner.append("  ", style="dim")
+        now.append("NOW: ", style="dim")
+        now.append(f"{label}", style=style)
+        now.append("  ", style="dim")
 
         # Metrics (only after PPO data received)
         if tamiyo.ppo_data_received:
-            self._append_metrics(banner, tamiyo)
+            self._append_metrics(now, tamiyo)
             now_tail = self._render_now_tail()
             if now_tail:
-                banner.append("  ", style="dim")
-                banner.append(now_tail)
+                now.append("  ", style="dim")
+                now.append(now_tail)
         else:
-            banner.append("Waiting for PPO data...", style="cyan italic")
+            now.append("Waiting for PPO data...", style="cyan italic")
 
-        banner.append("\n")
-        banner.append(self._render_why_line(), style="dim")
-        banner.append("\n")
-        banner.append(self._render_next_line(), style="dim")
+        why = Text(self._render_why_line(), style="dim")
+        nxt = Text(self._render_next_line(), style="dim")
 
+        if available_width is None:
+            banner = Text()
+            banner.append_text(now)
+            banner.append(" │ ", style="dim")
+            banner.append_text(why)
+            banner.append(" │ ", style="dim")
+            banner.append_text(nxt)
+            return banner
+
+        sep_width = 3  # " │ "
+        usable = available_width - (sep_width * 2)
+        if usable <= 0:
+            return self._fit_text(now, available_width)
+
+        now_width = usable // 2
+        why_width = usable // 4
+        next_width = usable - now_width - why_width
+
+        banner = Text()
+        banner.append_text(self._fit_text(now, now_width))
+        banner.append(" │ ", style="dim")
+        banner.append_text(self._fit_text(why, why_width))
+        banner.append(" │ ", style="dim")
+        banner.append_text(self._fit_text(nxt, next_width))
         return banner
 
     def _render_now_tail(self) -> Text:
