@@ -1,5 +1,5 @@
 {
-  "task": "cifar_baseline",
+  "task": "cifar_scale",
   "n_episodes": 200,
   "n_envs": 128,
   "max_epochs": 150,
@@ -18,12 +18,14 @@
   "slots": [
     "r0c0",
     "r0c1",
-    "r0c2"
+    "r0c2",
+    "r0c3",
+    "r0c4"
   ],
   "auto_forward_g1": true,
   "auto_forward_g2": true,
   "auto_forward_g3": true,
-  "max_seeds": 2,
+  "max_seeds": 4,
   "reward_mode": "escrow",
   "reward_family": "contribution",
   "param_budget": 500000,
