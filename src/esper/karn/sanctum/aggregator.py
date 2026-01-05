@@ -819,12 +819,12 @@ class SanctumAggregator:
             env.rolled_back = False
             env.rollback_reason = ""
 
-        # Clear stale Shapley data at episode start
+        # Clear stale Shapley data at episode start.
         # Shapley is computed at episode END, so displaying previous episode's
         # data during a new episode is misleading. Clear it so the panel shows
         # "unavailable" until fresh data arrives.
         inner_epoch = payload.inner_epoch
-        if inner_epoch == 0:
+        if inner_epoch == 1:
             env.shapley_snapshot = ShapleySnapshot()
 
         # Update accuracy

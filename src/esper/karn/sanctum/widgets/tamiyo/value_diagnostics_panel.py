@@ -153,3 +153,30 @@ class ValueDiagnosticsPanel(Static):
             return "yellow"
         else:
             return "red bold"
+
+    def _get_correlation_style(self, correlation: float) -> tuple[str, str]:
+        """Get style + icon for V-Return correlation (TELE-220)."""
+        if correlation >= 0.8:
+            return ("green bold", "↗")
+        if correlation >= 0.5:
+            return ("green", "→")
+        if correlation >= 0.3:
+            return ("yellow", "→")
+        return ("red bold", "↘")
+
+    def _get_td_error_style(self, td_error_mean: float, _td_error_std: float) -> str:
+        """Get style for TD error mean (TELE-221)."""
+        abs_mean = abs(td_error_mean)
+        if abs_mean < 5.0:
+            return "green"
+        if abs_mean < 15.0:
+            return "yellow"
+        return "red bold"
+
+    def _get_bellman_style(self, bellman_error: float) -> str:
+        """Get style for Bellman error (TELE-223)."""
+        if bellman_error < 20.0:
+            return "green"
+        if bellman_error < 50.0:
+            return "yellow"
+        return "red bold"

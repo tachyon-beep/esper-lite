@@ -303,12 +303,35 @@ def test_irrelevant_heads_forced_to_defaults_when_wait():
     )
 
     assert (result.actions["op"] == LifecycleOp.WAIT).all()
+    assert (result.actions["slot"] == 0).all()
     assert (result.actions["style"] == int(GerminationStyle.SIGMOID_ADD)).all()
     assert (result.actions["blueprint"] == int(BlueprintAction.NOOP)).all()
     assert (result.actions["tempo"] == int(TempoAction.STANDARD)).all()
     assert (result.actions["alpha_target"] == int(AlphaTargetAction.FULL)).all()
     assert (result.actions["alpha_speed"] == int(AlphaSpeedAction.INSTANT)).all()
     assert (result.actions["alpha_curve"] == int(AlphaCurveAction.LINEAR)).all()
+
+
+def test_slot_forced_to_first_valid_choice_when_wait():
+    """WAIT should canonicalize slot to the first valid slot (1 action, log_prob=0)."""
+    net = FactoredRecurrentActorCritic(state_dim=20)
+    state = torch.randn(3, 20)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (3, 3))
+
+    op_mask = torch.zeros(3, NUM_OPS, dtype=torch.bool)
+    op_mask[:, LifecycleOp.WAIT] = True
+    slot_mask = torch.zeros(3, net.num_slots, dtype=torch.bool)
+    slot_mask[:, -1] = True
+
+    result = net.get_action(
+        state,
+        bp_idx,
+        op_mask=op_mask,
+        slot_mask=slot_mask,
+    )
+
+    assert (result.actions["op"] == LifecycleOp.WAIT).all()
+    assert (result.actions["slot"] == net.num_slots - 1).all()
 
 
 def test_masking_produces_valid_softmax():

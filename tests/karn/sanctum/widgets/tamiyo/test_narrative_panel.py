@@ -36,6 +36,8 @@ class TestNaNInfDisplay:
         return SanctumSnapshot(
             tamiyo=tamiyo,
             current_batch=100,  # Past warmup period (>50)
+            connected=True,
+            staleness_seconds=0.0,
         )
 
     def test_no_nan_shows_nothing(self, panel, healthy_snapshot):
@@ -195,6 +197,8 @@ class TestTriggeringCondition:
         return SanctumSnapshot(
             tamiyo=tamiyo,
             current_batch=100,  # Past warmup period (>50)
+            connected=True,
+            staleness_seconds=0.0,
         )
 
     def test_entropy_warning_shows_reason(self, panel, healthy_snapshot):

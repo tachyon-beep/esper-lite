@@ -1041,8 +1041,9 @@ class TestActionMaskEdgeCases:
 
     def test_all_stages_prune_conditions(self):
         """Test PRUNE masking for all seed stages (with sufficient age)."""
-        # PRUNE is only meaningful once a seed is actually training/contributing.
+        # PRUNE is valid from any stage that can transition to PRUNED.
         prunable_stages = {
+            SeedStage.GERMINATED,
             SeedStage.TRAINING,
             SeedStage.BLENDING,
             SeedStage.HOLDING,

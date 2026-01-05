@@ -5,7 +5,7 @@ Only masks actions that are invalid under lifecycle constraints:
 - GERMINATE: blocked if ALL enabled slots occupied OR at seed limit
 - ADVANCE: blocked if NO enabled slot is in GERMINATED/TRAINING/BLENDING
 - FOSSILIZE: blocked if NO enabled slot has a HOLDING seed
-- PRUNE: blocked if NO enabled slot has a prunable seed in TRAINING/BLENDING/HOLDING
+- PRUNE: blocked if NO enabled slot has a prunable seed in GERMINATED/TRAINING/BLENDING/HOLDING
          with age >= MIN_PRUNE_AGE and alpha_mode == HOLD (unless governor override)
 - WAIT: always valid
 - BLUEPRINT: NOOP always blocked (0 trainable parameters)
@@ -65,7 +65,6 @@ _PRUNABLE_STAGES = frozenset({
     stage.value
     for stage, transitions in VALID_TRANSITIONS.items()
     if SeedStage.PRUNED in transitions
-    and stage in (SeedStage.TRAINING, SeedStage.BLENDING, SeedStage.HOLDING)
 })
 
 # Stages from which ADVANCE is meaningful (explicit policy decision)

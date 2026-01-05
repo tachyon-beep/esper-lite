@@ -16,7 +16,7 @@ import dataclasses
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, Callable, Literal
+from typing import TYPE_CHECKING, Any, Callable, Literal, cast
 
 if TYPE_CHECKING:
     from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
@@ -134,6 +134,12 @@ class TelemetryEvent:
 
     # Severity
     severity: str = "info"  # debug, info, warning, error, critical
+
+    def __post_init__(self) -> None:
+        # Normalize JSON/deserialized events where event_type arrives as a string.
+        event_type_raw = cast(Any, self.event_type)
+        if type(event_type_raw) is str:
+            self.event_type = TelemetryEventType[event_type_raw]
 
 
 # TODO: [DEAD CODE] - PerformanceBudgets and DEFAULT_BUDGETS are defined but never used

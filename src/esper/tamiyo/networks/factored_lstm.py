@@ -841,7 +841,16 @@ class FactoredRecurrentActorCritic(nn.Module):
                 alpha_schedule_irrelevant, int(AlphaCurveAction.LINEAR)
             ] = True
 
-            _sample_head("slot")
+            slot_mask_override = masks["slot"]
+            if slot_mask_override is None:
+                slot_mask_override = torch.ones_like(head_logits["slot"], dtype=torch.bool)
+            slot_mask_override = slot_mask_override.clone()
+            slot_irrelevant = selected_op == LifecycleOp.WAIT
+            canonical_slot_idx = slot_mask_override.int().argmax(dim=-1)
+            slot_mask_override[slot_irrelevant] = False
+            slot_mask_override[slot_irrelevant, canonical_slot_idx[slot_irrelevant]] = True
+
+            _sample_head("slot", mask_override=slot_mask_override)
             _sample_head("blueprint", mask_override=blueprint_mask_override)
             _sample_head("tempo", mask_override=tempo_mask_override)
             _sample_head("alpha_target", mask_override=alpha_target_mask_override)
@@ -950,6 +959,7 @@ class FactoredRecurrentActorCritic(nn.Module):
         entropy: dict[str, torch.Tensor] = {}
 
         op_actions = actions["op"]
+        slot_irrelevant = op_actions == LifecycleOp.WAIT
         style_irrelevant = (op_actions != LifecycleOp.GERMINATE) & (
             op_actions != LifecycleOp.SET_ALPHA_TARGET
         )
@@ -996,47 +1006,63 @@ class FactoredRecurrentActorCritic(nn.Module):
             mask = masks[key]
             if mask is None:
                 mask = torch.ones_like(logits, dtype=torch.bool)
-            if key == "style":
-                # When op is not GERMINATE or SET_ALPHA_TARGET, style is irrelevant.
-                # Force selection of SIGMOID_ADD (the default/no-op style).
-                # For 3D mask [batch, seq_len, num_styles], use masked_fill pattern
-                # to avoid incorrect advanced indexing. Expand style_irrelevant to match.
-                expanded_irrelevant = style_irrelevant.unsqueeze(-1).expand_as(mask)
-                mask = mask.masked_fill(expanded_irrelevant, False)
-                # Set SIGMOID_ADD column to True for irrelevant rows
-                sigmoid_add_idx = int(GerminationStyle.SIGMOID_ADD)
-                mask[..., sigmoid_add_idx] = mask[..., sigmoid_add_idx] | style_irrelevant
-            elif key == "blueprint":
-                # Blueprint only matters for GERMINATE; use NOOP as canonical placeholder otherwise.
-                expanded_irrelevant = blueprint_irrelevant.unsqueeze(-1).expand_as(mask)
-                mask = mask.masked_fill(expanded_irrelevant, False)
-                noop_idx = int(BlueprintAction.NOOP)
-                mask[..., noop_idx] = mask[..., noop_idx] | blueprint_irrelevant
-            elif key == "tempo":
-                # Tempo only matters for GERMINATE; use STANDARD as canonical placeholder otherwise.
-                expanded_irrelevant = tempo_irrelevant.unsqueeze(-1).expand_as(mask)
-                mask = mask.masked_fill(expanded_irrelevant, False)
-                standard_idx = int(TempoAction.STANDARD)
-                mask[..., standard_idx] = mask[..., standard_idx] | tempo_irrelevant
-            elif key == "alpha_target":
-                # Alpha target only matters for GERMINATE/SET_ALPHA_TARGET.
-                expanded_irrelevant = alpha_target_irrelevant.unsqueeze(-1).expand_as(mask)
-                mask = mask.masked_fill(expanded_irrelevant, False)
-                full_idx = int(AlphaTargetAction.FULL)
-                mask[..., full_idx] = mask[..., full_idx] | alpha_target_irrelevant
-            elif key == "alpha_speed":
-                # Alpha schedule only matters for SET_ALPHA_TARGET/PRUNE.
-                expanded_irrelevant = alpha_schedule_irrelevant.unsqueeze(-1).expand_as(mask)
-                mask = mask.masked_fill(expanded_irrelevant, False)
-                instant_idx = int(AlphaSpeedAction.INSTANT)
-                mask[..., instant_idx] = mask[..., instant_idx] | alpha_schedule_irrelevant
-            elif key == "alpha_curve":
-                # Alpha schedule only matters for SET_ALPHA_TARGET/PRUNE.
-                expanded_irrelevant = alpha_schedule_irrelevant.unsqueeze(-1).expand_as(mask)
-                mask = mask.masked_fill(expanded_irrelevant, False)
-                linear_idx = int(AlphaCurveAction.LINEAR)
-                mask[..., linear_idx] = mask[..., linear_idx] | alpha_schedule_irrelevant
-            mask_flat = mask.reshape(-1, action_dim)
+            elif mask.dim() == 2:
+                mask = mask.unsqueeze(1)
+            if mask.shape != logits.shape:
+                mask = mask.expand_as(logits)
+            if key == "slot":
+                mask_flat = mask.reshape(-1, action_dim)
+                slot_irrelevant_flat = slot_irrelevant.reshape(-1)
+                canonical_slot_idx_flat = mask_flat.int().argmax(dim=-1)
+                mask_flat = mask_flat.clone()
+                mask_flat[slot_irrelevant_flat] = False
+                mask_flat[
+                    slot_irrelevant_flat,
+                    canonical_slot_idx_flat[slot_irrelevant_flat],
+                ] = True
+            else:
+                if key == "style":
+                    # When op is not GERMINATE or SET_ALPHA_TARGET, style is irrelevant.
+                    # Force selection of SIGMOID_ADD (the default/no-op style).
+                    # For 3D mask [batch, seq_len, num_styles], use masked_fill pattern
+                    # to avoid incorrect advanced indexing. Expand style_irrelevant to match.
+                    expanded_irrelevant = style_irrelevant.unsqueeze(-1).expand_as(mask)
+                    mask = mask.masked_fill(expanded_irrelevant, False)
+                    # Set SIGMOID_ADD column to True for irrelevant rows
+                    sigmoid_add_idx = int(GerminationStyle.SIGMOID_ADD)
+                    mask[..., sigmoid_add_idx] = mask[..., sigmoid_add_idx] | style_irrelevant
+                elif key == "blueprint":
+                    # Blueprint only matters for GERMINATE; use NOOP as canonical placeholder otherwise.
+                    expanded_irrelevant = blueprint_irrelevant.unsqueeze(-1).expand_as(mask)
+                    mask = mask.masked_fill(expanded_irrelevant, False)
+                    noop_idx = int(BlueprintAction.NOOP)
+                    mask[..., noop_idx] = mask[..., noop_idx] | blueprint_irrelevant
+                elif key == "tempo":
+                    # Tempo only matters for GERMINATE; use STANDARD as canonical placeholder otherwise.
+                    expanded_irrelevant = tempo_irrelevant.unsqueeze(-1).expand_as(mask)
+                    mask = mask.masked_fill(expanded_irrelevant, False)
+                    standard_idx = int(TempoAction.STANDARD)
+                    mask[..., standard_idx] = mask[..., standard_idx] | tempo_irrelevant
+                elif key == "alpha_target":
+                    # Alpha target only matters for GERMINATE/SET_ALPHA_TARGET.
+                    expanded_irrelevant = alpha_target_irrelevant.unsqueeze(-1).expand_as(mask)
+                    mask = mask.masked_fill(expanded_irrelevant, False)
+                    full_idx = int(AlphaTargetAction.FULL)
+                    mask[..., full_idx] = mask[..., full_idx] | alpha_target_irrelevant
+                elif key == "alpha_speed":
+                    # Alpha schedule only matters for SET_ALPHA_TARGET/PRUNE.
+                    expanded_irrelevant = alpha_schedule_irrelevant.unsqueeze(-1).expand_as(mask)
+                    mask = mask.masked_fill(expanded_irrelevant, False)
+                    instant_idx = int(AlphaSpeedAction.INSTANT)
+                    mask[..., instant_idx] = mask[..., instant_idx] | alpha_schedule_irrelevant
+                elif key == "alpha_curve":
+                    # Alpha schedule only matters for SET_ALPHA_TARGET/PRUNE.
+                    expanded_irrelevant = alpha_schedule_irrelevant.unsqueeze(-1).expand_as(mask)
+                    mask = mask.masked_fill(expanded_irrelevant, False)
+                    linear_idx = int(AlphaCurveAction.LINEAR)
+                    mask[..., linear_idx] = mask[..., linear_idx] | alpha_schedule_irrelevant
+
+                mask_flat = mask.reshape(-1, action_dim)
 
             dist = MaskedCategorical(logits=logits_flat, mask=mask_flat)
             log_probs[key] = dist.log_prob(action_flat).reshape(batch, seq)

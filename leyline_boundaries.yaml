@@ -146,6 +146,10 @@ allow_hits:
     owner: "john"
     reason: "Per-head gradient norms schema"
 
+  - key: "src/esper/simic/agent/types.py:typeddict:FinitenessGateFailure"
+    owner: "john"
+    reason: "Finiteness gate skip diagnostics schema"
+
   - key: "src/esper/simic/agent/types.py:typeddict:PPOUpdateMetrics"
     owner: "john"
     reason: "PPO update metrics schema"

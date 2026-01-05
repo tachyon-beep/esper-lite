@@ -80,11 +80,12 @@ class CounterfactualResult:
 
 @dataclass
 class CounterfactualMatrix:
-    """Full counterfactual matrix for an epoch.
+    """Full counterfactual matrix for a rollout boundary.
 
     Contains results for all evaluated configurations.
     """
 
+    # Telemetry tag supplied by caller (PPO batch index in vectorized training).
     epoch: int = 0
     configs: list[CounterfactualResult] = field(default_factory=list)
     strategy_used: str = ""

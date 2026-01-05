@@ -1463,6 +1463,7 @@ def train_ppo_vectorized(
             action_valid_for_reward = (
                 seed_state is not None
                 and seed_state.stage in (
+                    SeedStage.GERMINATED,
                     SeedStage.TRAINING,
                     SeedStage.BLENDING,
                     SeedStage.HOLDING,
@@ -2598,7 +2599,7 @@ def train_ppo_vectorized(
                             env_state.counterfactual_helper.compute_contributions_from_results(
                                 slot_ids=active_slots,
                                 results=shapley_results[i],
-                                epoch=epoch,
+                                epoch=batch_idx + 1,
                             )
                         except (KeyError, ZeroDivisionError, ValueError) as e:
                             # HIGH-01 fix: Narrow to expected failures in Shapley computation
@@ -3399,6 +3400,7 @@ def train_ppo_vectorized(
                                 and seed_state is not None
                                 and seed_state.stage
                                 in (
+                                    SeedStage.GERMINATED,
                                     SeedStage.TRAINING,
                                     SeedStage.BLENDING,
                                     SeedStage.HOLDING,
@@ -3902,7 +3904,7 @@ def train_ppo_vectorized(
                                     env_state.counterfactual_helper.compute_contributions(
                                         slot_ids=active_slot_ids,
                                         evaluate_fn=eval_fn,
-                                        epoch=epoch,
+                                        epoch=batch_idx + 1,
                                     )
                                 except (KeyError, ZeroDivisionError, ValueError) as e:
                                     # HIGH-01 fix: Narrow to expected failures in Shapley computation

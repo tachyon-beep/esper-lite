@@ -297,12 +297,12 @@ class ShapleyEstimate:
 class ShapleySnapshot:
     """Shapley value attribution for all slots in an environment.
 
-    Computed via permutation sampling at episode boundaries.
+    Computed via permutation sampling at PPO batch boundaries.
     More accurate than simple ablation but more expensive.
     """
     slot_ids: tuple[str, ...] = ()  # ("r0c0", "r0c1", "r0c2")
     values: dict[str, ShapleyEstimate] = field(default_factory=dict)
-    epoch: int = 0  # Epoch when computed
+    epoch: int = 0  # PPO batch index (1-based) when computed
     timestamp: datetime | None = None
 
     def get_mean(self, slot_id: str) -> float:

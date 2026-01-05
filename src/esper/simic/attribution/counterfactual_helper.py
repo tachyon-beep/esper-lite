@@ -96,7 +96,7 @@ class CounterfactualHelper:
 
         matrix = self.engine.compute_matrix_from_results(slot_ids, results)
         if epoch is not None:
-            matrix.epoch = epoch  # Propagate epoch for telemetry tagging
+            matrix.epoch = epoch  # Propagate PPO batch index for telemetry tagging
         return self._process_matrix(matrix, slot_ids)
 
     def compute_contributions(
@@ -110,7 +110,7 @@ class CounterfactualHelper:
         Args:
             slot_ids: List of slot IDs to evaluate
             evaluate_fn: Function(alpha_settings) -> (loss, accuracy)
-            epoch: Current epoch (for telemetry tagging)
+            epoch: PPO batch index (for telemetry tagging)
 
         Returns:
             Dict mapping slot_id to ContributionResult
@@ -121,7 +121,7 @@ class CounterfactualHelper:
         # Compute full matrix
         matrix = self.engine.compute_matrix(slot_ids, evaluate_fn)
         if epoch is not None:
-            matrix.epoch = epoch  # Propagate epoch for telemetry tagging
+            matrix.epoch = epoch  # Propagate PPO batch index for telemetry tagging
         return self._process_matrix(matrix, slot_ids)
 
     def _process_matrix(
