@@ -745,9 +745,11 @@ class MorphogeneticModel(nn.Module):
         return slot_obj.is_active
 
     def get_slot_reports(self) -> dict[str, SeedStateReport]:
-        """Return per-slot SeedStateReport for all slots (active or not).
+        """Return per-slot SeedStateReport for all slots where `slot.state is not None`.
 
-        Slots without an active state will not appear in the dict.
+        This includes cooldown/terminal-but-observable stages (e.g. PRUNED/EMBARGOED/RESETTING)
+        where the underlying seed module may already be freed. Slots with `state is None`
+        (truly empty/available) will not appear in the dict.
         """
         reports: dict[str, SeedStateReport] = {}
         for slot_id, slot_module in self.seed_slots.items():

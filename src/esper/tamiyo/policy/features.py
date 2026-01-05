@@ -677,7 +677,7 @@ def batch_obs_to_features(
             slot_offset = OBS_V3_BASE_FEATURE_SIZE + slot_idx * OBS_V3_SLOT_FEATURE_SIZE
 
             if report is None:
-                # Inactive slot - already zeros from initialization
+                # Empty slot (`state is None`) - already zeros from initialization
                 continue
 
             # Set blueprint index

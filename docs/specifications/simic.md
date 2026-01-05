@@ -239,7 +239,7 @@ hidden_h: [4, 150, 1, 512]         # [envs, steps, layers, hidden]
 - action feedback: last_action_success + last_action_op one-hot (7)
 
 # Per-slot features (31 dims each)
-- is_active (1)
+- is_active (1) — 1.0 if slot has a `SeedStateReport` (`SeedSlot.state is not None`, includes PRUNED/EMBARGOED/RESETTING); 0.0 if slot is empty (`state is None`)
 - stage one-hot (10)
 - current_alpha (1)
 - contribution_norm (1)

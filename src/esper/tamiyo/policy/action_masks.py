@@ -99,12 +99,14 @@ def build_slot_states(
     all enabled slots to be present as keys.
 
     Args:
-        slot_reports: Slot -> SeedStateReport for ACTIVE slots only.
-            Missing keys indicate empty slots (no seed), which is expected.
+        slot_reports: Slot -> SeedStateReport for slots where `SeedSlot.state is not None`.
+            This includes non-active lifecycle states (e.g. PRUNED/EMBARGOED/RESETTING) where
+            the underlying seed module may already be freed; missing keys indicate an empty
+            slot (`state is None`).
         slots: List of slot IDs to include in output (may include empty slots)
 
     Returns:
-        Dict mapping slot_id to MaskSeedInfo or None if slot is empty.
+        Dict mapping slot_id to MaskSeedInfo or None if slot is empty (`state is None`).
         Guaranteed to have an entry for every slot_id in slots.
     """
     slot_states: dict[str, MaskSeedInfo | None] = {}

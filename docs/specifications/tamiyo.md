@@ -204,6 +204,11 @@ Tamiyo has two input paths:
 | `masks` | `dict[str, torch.Tensor]` | Action masks per head (`slot`, `blueprint`, `style`, `tempo`, `alpha_target`, `alpha_speed`, `alpha_curve`, `op`) |
 | `hidden` | `tuple[Tensor, Tensor] | None` | Recurrent hidden state for LSTM bundles |
 
+**Slot report semantics (Obs V3):**
+- `features` are derived from `TrainingSignals` plus per-slot `SeedStateReport` snapshots (`MorphogeneticModel.get_slot_reports()`).
+- `get_slot_reports()` includes any slot where `SeedSlot.state is not None` (including PRUNED/EMBARGOED/RESETTING); it does not imply `SeedSlot.is_active`.
+- The per-slot Obs V3 `is_active` feature is 1.0 when a report is present (`state is not None`) and 0.0 only when the slot is truly empty (`state is None`).
+
 ## 3.2 Output Data
 
 **Heuristic outputs:**
