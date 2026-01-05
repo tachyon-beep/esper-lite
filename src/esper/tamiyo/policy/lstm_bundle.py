@@ -106,6 +106,7 @@ class LSTMPolicyBundle:
             blueprint_indices,
             hidden,
             slot_mask=masks["slot"],
+            slot_by_op_mask=masks["slot_by_op"],
             blueprint_mask=masks["blueprint"],
             style_mask=masks["style"],
             tempo_mask=masks["tempo"],

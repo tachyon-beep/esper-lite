@@ -798,8 +798,11 @@ class EnvOverview(Static):
             "SET_ALPHA_TARGET": "ALPH",
             "FOSSILIZE": "FOSS",
             "PRUNE": "PRUN",
+            "ADVANCE": "ADVA",
         }.get(last_action, last_action[:4] if last_action else "—")
 
+        if not env.last_action_success:
+            return f"[red]{action_short}[/red]"
         return action_short
 
     def _format_momentum_epochs(self, env: "EnvState") -> str:

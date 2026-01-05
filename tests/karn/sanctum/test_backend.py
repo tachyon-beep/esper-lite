@@ -241,6 +241,7 @@ class TestSanctumAggregator:
             action_name="WAIT",
             value_estimate=0.0,
             action_confidence=0.5,  # Must be non-None for handler to trigger
+            action_success=True,
         )
 
         reward1 = MagicMock()
@@ -255,6 +256,7 @@ class TestSanctumAggregator:
             action_name="WAIT",
             value_estimate=0.0,
             action_confidence=0.5,  # Must be non-None for handler to trigger
+            action_success=True,
         )
 
         for ev in [epoch0, epoch1, reward0, reward1]:
@@ -445,6 +447,7 @@ class TestSanctumAggregator:
             action_name="GERMINATE_CONV_LIGHT",
             value_estimate=0.0,
             action_confidence=0.8,  # Must be non-None for handler to trigger
+            action_success=True,
         )
 
         agg.process_event(event)
@@ -477,6 +480,7 @@ class TestSanctumAggregator:
             value_estimate=0.5,
             action_confidence=0.9,
             reward_components=rc,
+            action_success=True,
         )
 
         agg.process_event(event)
@@ -1227,6 +1231,7 @@ class TestSanctumAggregator:
                 action_confidence=0.73,
                 value_estimate=0.42,
                 slot_id="r0c1",
+                action_success=True,
             ),
         )
 
@@ -1325,6 +1330,7 @@ class TestSanctumBackend:
                 stage_bonus=1.0,
                 total_reward=2.0,
             ),
+            action_success=True,
         )
 
         event_b = MagicMock()
@@ -1343,6 +1349,7 @@ class TestSanctumBackend:
                 stage_bonus=0.2,
                 total_reward=2.0,
             ),
+            action_success=True,
         )
 
         backend.emit(event_a)

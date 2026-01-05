@@ -331,6 +331,7 @@ def test_snapshot_tracks_last_action_env_id():
             env_id=2,
             action_name="GERMINATE",
             action_confidence=0.85,
+            action_success=True,
             slot_id="slot_0",
             blueprint_id="conv_light",
         ),
@@ -356,6 +357,7 @@ def test_decision_snapshot_populates_head_choices():
             env_id=0,
             action_name="GERMINATE",
             action_confidence=0.92,
+            action_success=True,
             slot_id="slot_0",
             blueprint_id="conv_light",
             tempo_idx=1,  # STANDARD (index 1 in TEMPO_NAMES)
@@ -391,6 +393,7 @@ def test_decision_snapshot_handles_missing_head_choices():
             env_id=0,
             action_name="WAIT",
             action_confidence=0.85,
+            action_success=True,
             # No blueprint_id, tempo_idx, style, or alpha_curve
         ),
     )
@@ -436,6 +439,7 @@ def test_aggregator_reads_reward_components_dataclass():
         total_reward=0.42,
         action_name="WAIT",
         action_confidence=0.8,
+        action_success=True,
         reward_components=rc,
     )
 
@@ -500,6 +504,7 @@ def test_aggregator_wires_all_reward_component_fields():
         total_reward=0.58,
         action_name="FOSSILIZE",
         action_confidence=0.95,
+        action_success=True,
         reward_components=rc,
     )
 
@@ -651,6 +656,7 @@ def test_decision_snapshot_populates_from_head_telemetry():
             alpha_speed="MEDIUM",
             alpha_curve="COSINE",
             action_confidence=0.85,
+            action_success=True,
             head_telemetry=head_telem,
         ),
     ))

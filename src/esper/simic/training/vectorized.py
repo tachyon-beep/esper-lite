@@ -2784,6 +2784,9 @@ def train_ppo_vectorized(
                     key: torch.stack([m[key] for m in all_masks]).to(device)
                     for key in HEAD_NAMES
                 }
+                masks_batch["slot_by_op"] = torch.stack(
+                    [m["slot_by_op"] for m in all_masks]
+                ).to(device)
 
                 # Accumulate raw states for deferred normalizer update
                 raw_states_for_normalizer_update.append(states_batch.detach())
@@ -2918,6 +2921,7 @@ def train_ppo_vectorized(
                 op_log_probs_batch = head_log_probs["op"]
 
                 slot_masks_batch = masks_batch["slot"]
+                slot_by_op_masks_batch = masks_batch["slot_by_op"]
                 blueprint_masks_batch = masks_batch["blueprint"]
                 style_masks_batch = masks_batch["style"]
                 tempo_masks_batch = masks_batch["tempo"]
@@ -3686,7 +3690,7 @@ def train_ppo_vectorized(
                         value=value,
                         reward=normalized_reward,
                         done=done,
-                        slot_mask=slot_masks_batch[env_idx],
+                        slot_mask=slot_by_op_masks_batch[env_idx, op_action],
                         blueprint_mask=blueprint_masks_batch[env_idx],
                         style_mask=style_masks_batch[env_idx],
                         tempo_mask=tempo_masks_batch[env_idx],
@@ -3932,6 +3936,9 @@ def train_ppo_vectorized(
                         k: torch.stack([m[k] for m in all_post_action_masks]).to(device)
                         for k in HEAD_NAMES
                     }
+                    post_masks_batch["slot_by_op"] = torch.stack(
+                        [m["slot_by_op"] for m in all_post_action_masks]
+                    ).to(device)
 
                     with torch.inference_mode():
                         bootstrap_result = agent.policy.get_action(

@@ -19,6 +19,7 @@ def test_view_definitions_exist():
         "trends",
         "seed_lifecycle",
         "decisions",
+        "action_distribution",
         "rewards",
         "batch_stats",
         "anomalies",

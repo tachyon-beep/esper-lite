@@ -174,6 +174,14 @@ class Scoreboard(Static):
             f"[dim]Foss:[/dim] [green]{total_fossilized}[/green]  "
             f"[dim]Prune:[/dim] [red]{total_pruned}[/red]"
         )
+
+        tail = list(self._snapshot.mean_accuracy_history)[-10:]
+        if tail:
+            tail_mean = sum(tail) / len(tail)
+            stats_text += f"\n[dim]Tail10:[/dim] {tail_mean:.1f}%"
+        else:
+            stats_text += "\n[dim]Tail10:[/dim] --"
+
         stats_widget.update(stats_text)
 
         # Update panel title
@@ -194,7 +202,8 @@ class Scoreboard(Static):
 
         # Save cursor and scroll position
         saved_cursor = self.table.cursor_row
-        saved_scroll_y = self.table.scroll_y
+        saved_scroll_x = self.table.scroll_target_x
+        saved_scroll_y = self.table.scroll_target_y
 
         self.table.clear()
 
@@ -202,6 +211,7 @@ class Scoreboard(Static):
         if not best_runs:
             self._displayed_records = []
             self.table.add_row("[dim]No runs yet[/dim]", "", "", "", "", "", "")
+            self.table.refresh()
             return
 
         # Sort by peak accuracy, display top 5 best runs
@@ -225,11 +235,14 @@ class Scoreboard(Static):
         # Restore cursor position
         if self.table.row_count > 0 and saved_cursor is not None:
             target = min(saved_cursor, self.table.row_count - 1)
-            self.table.move_cursor(row=target)
+            if target != self.table.cursor_row:
+                self.table.move_cursor(row=target)
 
         # Restore scroll position
-        if saved_scroll_y > 0:
-            self.table.scroll_y = saved_scroll_y
+        if saved_scroll_x or saved_scroll_y:
+            self.table.scroll_to(x=saved_scroll_x, y=saved_scroll_y, animate=False)
+
+        self.table.refresh()
 
     def _setup_bottom_columns(self) -> None:
         """Setup bottom 5 table columns (same structure as best runs panel).
@@ -254,12 +267,17 @@ class Scoreboard(Static):
         if self._snapshot is None:
             return
 
+        saved_cursor = self.bottom_table.cursor_row
+        saved_scroll_x = self.bottom_table.scroll_target_x
+        saved_scroll_y = self.bottom_table.scroll_target_y
+
         self.bottom_table.clear()
 
         best_runs = list(self._snapshot.best_runs)
         if not best_runs:
             self._bottom_records = []
             self.bottom_table.add_row("[dim]No data[/dim]", "", "", "", "", "", "")
+            self.bottom_table.refresh()
             return
 
         # Sort by trajectory delta (final - peak), ascending = worst regression first
@@ -272,6 +290,7 @@ class Scoreboard(Static):
         if not runs_with_regression:
             self._bottom_records = []
             self.bottom_table.add_row("[dim]No regressions[/dim]", "", "", "", "", "", "")
+            self.bottom_table.refresh()
             return
 
         # Sort by worst trajectory (most negative delta first)
@@ -291,6 +310,16 @@ class Scoreboard(Static):
                 self._format_seeds(record.seeds),
                 key=row_key,
             )
+
+        if self.bottom_table.row_count > 0 and saved_cursor is not None:
+            target = min(saved_cursor, self.bottom_table.row_count - 1)
+            if target != self.bottom_table.cursor_row:
+                self.bottom_table.move_cursor(row=target)
+
+        if saved_scroll_x or saved_scroll_y:
+            self.bottom_table.scroll_to(x=saved_scroll_x, y=saved_scroll_y, animate=False)
+
+        self.bottom_table.refresh()
 
     def _format_epoch(self, record: "BestRunRecord") -> str:
         """Format epoch when peak was achieved.

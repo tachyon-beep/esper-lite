@@ -546,6 +546,8 @@ class EnvState:
         "ADVANCE": 0,
     })
     total_actions: int = 0
+    # Execution feedback for last action (invalid slot+op combos are rejected at runtime)
+    last_action_success: bool = True
 
     # Gaming rate tracking (for per-env reward health)
     # Resets each episode to show recent behavior

@@ -65,6 +65,7 @@ def test_lstm_bundle_get_action(lstm_bundle, slot_config):
     bp_idx = torch.randint(0, NUM_BLUEPRINTS, (1, slot_config.num_slots))
     masks = {
         "slot": torch.ones(1, slot_config.num_slots, dtype=torch.bool),
+        "slot_by_op": torch.ones(1, NUM_OPS, slot_config.num_slots, dtype=torch.bool),
         "blueprint": torch.ones(1, NUM_BLUEPRINTS, dtype=torch.bool),
         "style": torch.ones(1, NUM_STYLES, dtype=torch.bool),
         "tempo": torch.ones(1, NUM_TEMPO, dtype=torch.bool),

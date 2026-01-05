@@ -36,6 +36,8 @@ def make_analytics_snapshot_event(
     kind: str = "last_action",
     action_name: str = "WAIT",
     action_confidence: float = 0.85,
+    *,
+    action_success: bool = True,
 ) -> MagicMock:
     """Create a mock ANALYTICS_SNAPSHOT event for testing action targeting.
 
@@ -44,6 +46,7 @@ def make_analytics_snapshot_event(
         kind: The analytics snapshot kind (default: "last_action").
         action_name: The action taken (default: "WAIT").
         action_confidence: The action confidence score (required for last_action).
+        action_success: Whether the action executed successfully.
 
     Returns:
         MagicMock event with proper AnalyticsSnapshotPayload.
@@ -63,6 +66,7 @@ def make_analytics_snapshot_event(
         action_name=action_name,
         action_confidence=action_confidence,
         total_reward=0.0,  # Required for reward tracking
+        action_success=action_success,
     )
     return event
 

@@ -42,6 +42,7 @@ class TestFactoredActionMasksInVectorized:
         assert isinstance(masks, dict)
         assert set(masks.keys()) == {
             "slot",
+            "slot_by_op",
             "blueprint",
             "style",
             "tempo",
@@ -51,6 +52,7 @@ class TestFactoredActionMasksInVectorized:
             "op",
         }
         assert masks["slot"].shape == (slot_config.num_slots,)
+        assert masks["slot_by_op"].shape == (NUM_OPS, slot_config.num_slots)
         assert masks["blueprint"].shape == (NUM_BLUEPRINTS,)
         assert masks["style"].shape == (NUM_STYLES,)
         assert masks["tempo"].shape == (NUM_TEMPO,)
@@ -88,6 +90,7 @@ class TestFactoredActionMasksInVectorized:
         }
 
         assert batched_masks["slot"].shape == (n_envs, slot_config.num_slots)
+        assert batched_masks["slot_by_op"].shape == (n_envs, NUM_OPS, slot_config.num_slots)
         assert batched_masks["blueprint"].shape == (n_envs, NUM_BLUEPRINTS)
         assert batched_masks["style"].shape == (n_envs, NUM_STYLES)
         assert batched_masks["tempo"].shape == (n_envs, NUM_TEMPO)

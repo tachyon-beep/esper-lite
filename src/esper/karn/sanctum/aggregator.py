@@ -1640,7 +1640,10 @@ class SanctumAggregator:
 
             # Update action tracking (with normalization)
             action_name = normalize_action(payload.action_name or "UNKNOWN")
+            if payload.action_success is None:
+                raise ValueError("ANALYTICS_SNAPSHOT(kind=last_action) missing action_success")
             env.action_history.append(action_name)
+            env.last_action_success = payload.action_success
             env.action_counts[action_name] = env.action_counts.get(action_name, 0) + 1
             env.total_actions += 1
 

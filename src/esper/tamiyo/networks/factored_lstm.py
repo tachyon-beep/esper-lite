@@ -558,6 +558,7 @@ class FactoredRecurrentActorCritic(nn.Module):
         blueprint_indices: torch.Tensor,  # [batch, num_slots] or [batch, 1, num_slots]
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
         slot_mask: torch.Tensor | None = None,
+        slot_by_op_mask: torch.Tensor | None = None,
         blueprint_mask: torch.Tensor | None = None,
         style_mask: torch.Tensor | None = None,
         tempo_mask: torch.Tensor | None = None,
@@ -583,6 +584,8 @@ class FactoredRecurrentActorCritic(nn.Module):
                 [batch, 1, num_slots]. Values 0-12 for active blueprints, -1 for inactive.
             hidden: LSTM hidden state (h, c) or None for initial state
             slot_mask: Boolean mask for slot actions [batch, num_slots]
+            slot_by_op_mask: Optional op-conditioned slot mask [batch, NUM_OPS, num_slots].
+                When provided, slot selection is restricted to slots valid for the chosen op.
             blueprint_mask: Boolean mask for blueprint actions [batch, num_blueprints]
             style_mask: Boolean mask for germination style actions [batch, num_styles]
             tempo_mask: Boolean mask for tempo actions [batch, num_tempo]
@@ -618,6 +621,11 @@ class FactoredRecurrentActorCritic(nn.Module):
         # Reshape masks to [batch, 1, dim] if provided as [batch, dim]
         if slot_mask is not None and slot_mask.dim() == 2:
             slot_mask = slot_mask.unsqueeze(1)
+        # slot_by_op_mask is batch-only (no seq dimension); keep as [batch, NUM_OPS, num_slots]
+        if slot_by_op_mask is not None and slot_by_op_mask.dim() != 3:
+            raise ValueError(
+                f"slot_by_op_mask must have shape [batch, NUM_OPS, num_slots], got {tuple(slot_by_op_mask.shape)}"
+            )
         if blueprint_mask is not None and blueprint_mask.dim() == 2:
             blueprint_mask = blueprint_mask.unsqueeze(1)
         if style_mask is not None and style_mask.dim() == 2:
@@ -844,6 +852,23 @@ class FactoredRecurrentActorCritic(nn.Module):
             slot_mask_override = masks["slot"]
             if slot_mask_override is None:
                 slot_mask_override = torch.ones_like(head_logits["slot"], dtype=torch.bool)
+
+            if slot_by_op_mask is not None:
+                num_slots = head_logits["slot"].shape[-1]
+                if slot_by_op_mask.device != head_logits["slot"].device:
+                    raise ValueError(
+                        "slot_by_op_mask must be on the same device as slot_logits "
+                        f"(slot_by_op_mask={slot_by_op_mask.device}, slot_logits={head_logits['slot'].device})"
+                    )
+                if slot_by_op_mask.shape[1] != self.num_ops or slot_by_op_mask.shape[2] != num_slots:
+                    raise ValueError(
+                        "slot_by_op_mask must have shape [batch, NUM_OPS, num_slots], got "
+                        f"{tuple(slot_by_op_mask.shape)} with NUM_OPS={self.num_ops} and num_slots={num_slots}"
+                    )
+                op_idx = selected_op.to(dtype=torch.long, device=slot_by_op_mask.device)
+                gather_index = op_idx[:, None, None].expand(-1, 1, num_slots)
+                slot_mask_override = slot_by_op_mask.gather(dim=1, index=gather_index).squeeze(1)
+
             slot_mask_override = slot_mask_override.clone()
             slot_irrelevant = selected_op == LifecycleOp.WAIT
             canonical_slot_idx = slot_mask_override.int().argmax(dim=-1)

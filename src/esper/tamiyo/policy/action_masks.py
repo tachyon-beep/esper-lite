@@ -2,6 +2,7 @@
 
 Only masks actions that are invalid under lifecycle constraints:
 - SLOT: only enabled slots (from --slots arg) are selectable
+- SLOT_BY_OP: op-conditioned slot validity mask (hierarchical sampling support)
 - GERMINATE: blocked if ALL enabled slots occupied OR at seed limit
 - ADVANCE: blocked if NO enabled slot is in GERMINATED/TRAINING/BLENDING
 - FOSSILIZE: blocked if NO enabled slot has a HOLDING seed
@@ -149,6 +150,7 @@ def compute_action_masks(
     Returns:
         Dict of boolean tensors for each action head:
         - "slot": [num_slots] - which slots can be targeted (only enabled slots)
+        - "slot_by_op": [NUM_OPS, num_slots] - op-conditioned slot validity mask
         - "blueprint": [NUM_BLUEPRINTS] - which blueprints can be used
         - "style": [NUM_STYLES] - which germination styles can be used
         - "tempo": [NUM_TEMPO] - which tempo values can be used (all valid)
@@ -205,6 +207,12 @@ def compute_action_masks(
         idx = slot_config.index_for_slot_id(slot_id)
         slot_mask[idx] = True
 
+    # Op-conditioned slot mask (hierarchical validity)
+    # Shape: [NUM_OPS, num_slots]; each op selects from a restricted set of slots.
+    slot_by_op = torch.zeros((NUM_OPS, slot_config.num_slots), dtype=torch.bool, device=device)
+    # WAIT: slot is irrelevant; allow all enabled slots (network canonicalizes later)
+    slot_by_op[LifecycleOp.WAIT] = slot_mask
+
     # Blueprint mask: only allow blueprints valid for this topology
     blueprint_mask = torch.zeros(NUM_BLUEPRINTS, dtype=torch.bool, device=device)
     
@@ -251,6 +259,10 @@ def compute_action_masks(
     # GERMINATE: valid if ANY enabled slot is empty AND under seed limit
     if can_germinate:
         op_mask[LifecycleOp.GERMINATE] = True
+        for slot_id in ordered:
+            if slot_states[slot_id] is None:
+                idx = slot_config.index_for_slot_id(slot_id)
+                slot_by_op[LifecycleOp.GERMINATE, idx] = True
 
     # ADVANCE/FOSSILIZE/PRUNE: valid if ANY enabled slot has a valid state
     # (optimistic masking - network learns slot+op associations)
@@ -264,20 +276,28 @@ def compute_action_masks(
             # ADVANCE: only from explicit policy-controlled stages
             if stage in _ADVANCABLE_STAGES:
                 op_mask[LifecycleOp.ADVANCE] = True
+                idx = slot_config.index_for_slot_id(slot_id)
+                slot_by_op[LifecycleOp.ADVANCE, idx] = True
 
             # FOSSILIZE: only from HOLDING
             if stage in _FOSSILIZABLE_STAGES:
                 op_mask[LifecycleOp.FOSSILIZE] = True
+                idx = slot_config.index_for_slot_id(slot_id)
+                slot_by_op[LifecycleOp.FOSSILIZE, idx] = True
 
             # PRUNE: only from prunable stages, seed age >= MIN_PRUNE_AGE, and HOLD-only
             if stage in _PRUNABLE_STAGES and age >= MIN_PRUNE_AGE:
                 if allow_governor_override or seed_info.alpha_mode == AlphaMode.HOLD.value:
                     op_mask[LifecycleOp.PRUNE] = True
+                    idx = slot_config.index_for_slot_id(slot_id)
+                    slot_by_op[LifecycleOp.PRUNE, idx] = True
             # SET_ALPHA_TARGET: HOLD-only, only when a seed is in a retargetable stage.
             if stage in (SeedStage.BLENDING.value, SeedStage.HOLDING.value):
                 if seed_info.alpha_mode == AlphaMode.HOLD.value:
                     op_mask[LifecycleOp.SET_ALPHA_TARGET] = True
                     has_retargetable_hold_slot = True
+                    idx = slot_config.index_for_slot_id(slot_id)
+                    slot_by_op[LifecycleOp.SET_ALPHA_TARGET, idx] = True
 
     if can_germinate or has_retargetable_hold_slot:
         style_mask[:] = True
@@ -287,6 +307,7 @@ def compute_action_masks(
 
     return {
         "slot": slot_mask,
+        "slot_by_op": slot_by_op,
         "blueprint": blueprint_mask,
         "style": style_mask,
         "tempo": tempo_mask,
