@@ -3242,7 +3242,7 @@ def train_ppo_vectorized(
                                 )
                                 model.germinate_seed(
                                     blueprint_id,
-                                    f"env{env_idx}_seed_{env_state.seeds_created}",
+                                    f"ep{episodes_completed + env_idx}_env{env_idx}_seed_{env_state.seeds_created}",
                                     slot=target_slot,
                                     blend_algorithm_id=blend_algorithm_id,
                                     blend_tempo_epochs=TEMPO_TO_EPOCHS[

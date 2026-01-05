@@ -19,7 +19,7 @@
     "r0c0"
   ],
   "max_seeds": 1,
-  "reward_mode": "escrow",
+  "reward_mode": "basic",
   "reward_family": "contribution",
   "param_budget": 500000,
   "param_penalty_weight": 0.1,

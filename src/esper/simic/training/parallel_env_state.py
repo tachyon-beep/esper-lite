@@ -11,11 +11,11 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, DefaultDict
+from typing import TYPE_CHECKING, DefaultDict, cast
 
 import torch
 
-from esper.leyline import LifecycleOp
+from esper.leyline import LifecycleOp, SeedSlotProtocol
 
 if TYPE_CHECKING:
     from torch.amp.grad_scaler import GradScaler
@@ -190,6 +190,21 @@ class ParallelEnvState:
 
     def reset_episode_state(self, slots: list[str]) -> None:
         """Reset per-episode state when reusing env instances."""
+        # Episode boundary contract: reset_episode_state assumes the MorphogeneticModel
+        # is freshly created for this episode (all Kasmina slots DORMANT).
+        #
+        # If this trips, the environment is reusing a model across episodes without
+        # a full model reset, leaking Kasmina slot state (seed lifecycle) into the
+        # next episode.
+        for slot_id in slots:
+            slot = cast(SeedSlotProtocol, self.model.seed_slots[slot_id])
+            if slot.seed is not None or slot.state is not None:
+                stage = slot.state.stage.name if slot.state is not None else "UNKNOWN"
+                raise RuntimeError(
+                    "Episode reset expected DORMANT slots, but "
+                    f"slot_id={slot_id} has stage={stage}. "
+                    "Create a fresh MorphogeneticModel per episode (or implement a full model reset)."
+                )
         self.seeds_created = 0
         self.seeds_fossilized = 0
         self.contributing_fossilized = 0

@@ -69,7 +69,20 @@ from esper.karn.health import (
 )
 
 # Sanctum (developer diagnostic TUI backend)
-from esper.karn.sanctum.backend import SanctumBackend
+try:
+    from esper.karn.sanctum.backend import SanctumBackend
+except ModuleNotFoundError as exc:
+    # Optional dependency: Sanctum requires the `textual` extra.
+    # Only swallow the import error when the missing module is textual itself.
+    if exc.name != "textual":
+        raise
+
+    class SanctumBackend:  # type: ignore[no-redef]
+        def __init__(self, *_: object, **__: object) -> None:
+            raise ModuleNotFoundError(
+                "SanctumBackend requires the optional 'textual' dependency. "
+                "Install with `uv sync --extra tui` (or `pip install esper-lite[tui]`)."
+            ) from exc
 
 __all__ = [
     # WebSocket

@@ -16,7 +16,15 @@ from esper.simic.training.parallel_env_state import ParallelEnvState
 @pytest.fixture
 def mock_model() -> MagicMock:
     """Create a mock MorphogeneticModel."""
-    return MagicMock()
+    model = MagicMock()
+    slot_0 = MagicMock()
+    slot_0.seed = None
+    slot_0.state = None
+    slot_1 = MagicMock()
+    slot_1.seed = None
+    slot_1.state = None
+    model.seed_slots = {"slot_0": slot_0, "slot_1": slot_1}
+    return model
 
 
 @pytest.fixture
