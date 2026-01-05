@@ -19,7 +19,6 @@ from dataclasses import fields
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
-import pytest
 
 from esper.karn.sanctum.aggregator import SanctumAggregator
 from esper.karn.sanctum.schema import EnvState, SanctumSnapshot
@@ -310,7 +309,6 @@ class TestEnvOverviewFormatEnvId:
         # With None env_id, no indicator should show regardless of timestamp
         # This tests the condition: last_action_env_id is not None
         last_action_env_id = None
-        last_action_timestamp = datetime.now(timezone.utc)
 
         # The logic: if last_action_env_id is None, no indicator
         show_indicator = (

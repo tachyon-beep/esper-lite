@@ -33,7 +33,6 @@ from collections import deque
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
-import pytest
 
 from esper.karn.constants import DisplayThresholds
 from esper.karn.sanctum.aggregator import SanctumAggregator
@@ -41,8 +40,6 @@ from esper.karn.sanctum.schema import EnvState, make_sparkline
 from esper.leyline import (
     EpochCompletedPayload,
     GovernorRollbackPayload,
-    TelemetryEvent,
-    TelemetryEventType,
     TrainingStartedPayload,
 )
 

@@ -413,7 +413,7 @@ def main() -> int:
                 # Output mode: show all hits as potential whitelist entries
                 tier = "STRICT" if hit.pattern in STRICT_PATTERNS else "AUDIT"
                 print(f"  - key: \"{hit.key}\"")
-                print(f"    owner: \"\"")
+                print("    owner: \"\"")
                 print(f"    reason: \"\"  # [{tier}] {hit.code_snippet[:50]}")
                 print()
             elif not allowed:

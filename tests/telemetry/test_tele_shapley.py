@@ -11,7 +11,6 @@ These metrics are used by ShapleyPanel for displaying per-slot attribution
 with uncertainty bounds and significance indicators.
 """
 
-import pytest
 from datetime import datetime, timezone
 
 from esper.karn.sanctum.schema import ShapleyEstimate, ShapleySnapshot

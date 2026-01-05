@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-import pytest
 
 from esper.leyline import SeedStage
 from esper.karn.ingest import (

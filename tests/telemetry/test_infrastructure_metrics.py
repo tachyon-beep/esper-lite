@@ -27,7 +27,6 @@ marked xfail pending integration tests that verify the aggregator actually
 computes these values from telemetry events.
 """
 
-import pytest
 
 from esper.leyline import TelemetryEvent, TelemetryEventType
 from esper.leyline.telemetry import TrainingStartedPayload, PPOUpdatePayload

@@ -9,8 +9,6 @@ TELE IDs covered:
 - TELE-402: hypervolume (Pareto hypervolume indicator)
 """
 
-import pytest
-from datetime import datetime, timezone
 
 from esper.leyline import (
     TelemetryEvent,
@@ -24,7 +22,7 @@ from esper.karn.sanctum.schema import RewardComponents
 from esper.leyline import EpisodeOutcome
 from esper.karn.pareto import extract_pareto_frontier, compute_hypervolume_2d
 
-from tests.telemetry.conftest import CaptureBackend, CaptureHubResult
+from tests.telemetry.conftest import CaptureHubResult
 
 
 # =============================================================================

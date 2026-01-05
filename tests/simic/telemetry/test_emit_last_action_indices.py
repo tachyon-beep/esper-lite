@@ -1,8 +1,6 @@
 """Test emit_last_action with raw indices instead of FactoredAction."""
 
 from esper.leyline import (
-    ALPHA_CURVE_NAMES,
-    ALPHA_SPEED_NAMES,
     ALPHA_TARGET_VALUES,
     FactoredAction,
     NUM_OPS,

@@ -69,10 +69,6 @@ allow_hits:
     owner: "john"
     reason: "Textual framework - NoMatches for optional widget lookup"
 
-  - key: "src/esper/karn/sanctum/aggregator.py:_process_event_unlocked:hasattr"
-    owner: "john"
-    reason: "Telemetry event_type may be Enum or str depending on ingestion source"
-
   - key: "src/esper/karn/sanctum/app.py:action_cursor_down:silent_except"
     owner: "john"
     reason: "Textual framework - NoMatches for optional widget lookup"

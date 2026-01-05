@@ -23,7 +23,7 @@ import pytest
 from esper.leyline import HEAD_NAMES, TelemetryEvent, TelemetryEventType
 from esper.leyline.telemetry import PPOUpdatePayload
 
-from .conftest import CaptureBackend, CaptureHubResult
+from .conftest import CaptureHubResult
 
 
 # =============================================================================

@@ -9,13 +9,12 @@ These metrics are critical for detecting value function health issues:
 All metrics are emitted in PPO_UPDATE_COMPLETED events via PPOUpdatePayload.
 """
 
-import pytest
 
 from esper.leyline import TelemetryEvent, TelemetryEventType
 from esper.leyline.telemetry import PPOUpdatePayload
 from esper.nissa.output import NissaHub
 
-from tests.telemetry.conftest import CaptureBackend, CaptureHubResult
+from tests.telemetry.conftest import CaptureHubResult
 
 
 def _make_ppo_update_payload(**overrides) -> PPOUpdatePayload:

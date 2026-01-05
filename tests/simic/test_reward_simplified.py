@@ -1,6 +1,5 @@
 """Tests for SIMPLIFIED reward mode."""
 
-import pytest
 
 from esper.leyline import LifecycleOp
 from esper.simic.rewards import (

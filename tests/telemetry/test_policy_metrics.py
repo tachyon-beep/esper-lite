@@ -34,7 +34,7 @@ import pytest
 from esper.leyline import PPOUpdatePayload, TelemetryEvent, TelemetryEventType
 from esper.nissa.output import NissaHub
 
-from .conftest import CaptureBackend, CaptureHubResult
+from .conftest import CaptureHubResult
 
 
 def _make_base_ppo_payload(**overrides) -> PPOUpdatePayload:

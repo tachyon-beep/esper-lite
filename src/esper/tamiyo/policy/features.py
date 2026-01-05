@@ -17,7 +17,6 @@ import math
 import threading
 from typing import Any, TYPE_CHECKING
 
-import numpy as np
 import torch
 import torch.nn.functional as F
 

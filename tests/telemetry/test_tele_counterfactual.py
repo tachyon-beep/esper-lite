@@ -14,7 +14,6 @@ These test the CounterfactualSnapshot dataclass and CounterfactualPanel widget.
 """
 
 import pytest
-from rich.text import Text
 
 from esper.karn.sanctum.schema import CounterfactualConfig, CounterfactualSnapshot, SeedState
 from esper.karn.sanctum.widgets.counterfactual_panel import CounterfactualPanel

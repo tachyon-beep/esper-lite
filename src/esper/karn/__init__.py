@@ -77,12 +77,14 @@ except ModuleNotFoundError as exc:
     if exc.name != "textual":
         raise
 
+    _textual_import_error = exc
+
     class SanctumBackend:  # type: ignore[no-redef]
         def __init__(self, *_: object, **__: object) -> None:
             raise ModuleNotFoundError(
                 "SanctumBackend requires the optional 'textual' dependency. "
                 "Install with `uv sync --extra tui` (or `pip install esper-lite[tui]`)."
-            ) from exc
+            ) from _textual_import_error
 
 __all__ = [
     # WebSocket

@@ -9,7 +9,6 @@ These tests verify that:
 from __future__ import annotations
 
 import sys
-from unittest.mock import patch
 
 
 def test_registry_import_does_not_load_blueprints():

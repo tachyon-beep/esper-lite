@@ -2920,7 +2920,6 @@ def train_ppo_vectorized(
                 alpha_curve_log_probs_batch = head_log_probs["alpha_curve"]
                 op_log_probs_batch = head_log_probs["op"]
 
-                slot_masks_batch = masks_batch["slot"]
                 slot_by_op_masks_batch = masks_batch["slot_by_op"]
                 blueprint_masks_batch = masks_batch["blueprint"]
                 style_masks_batch = masks_batch["style"]

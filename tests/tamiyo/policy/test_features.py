@@ -601,7 +601,6 @@ def test_batch_obs_to_features_all_stages_encodable():
     """
     from esper.tamiyo.policy.features import batch_obs_to_features
     from esper.leyline.slot_config import SlotConfig
-    from esper.leyline.stages import SeedStage
     from esper.leyline.stage_schema import VALID_STAGES
     import torch
 
