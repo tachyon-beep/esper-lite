@@ -6,7 +6,7 @@ to emit telemetry events via callback injection.
 
 from esper.karn.health import HealthMonitor
 from esper.simic.attribution import CounterfactualHelper, ContributionResult
-from esper.leyline import TelemetryEventType
+from esper.leyline import MemoryWarningPayload, TelemetryEventType
 
 
 class TestHealthMonitorIntegration:
@@ -27,9 +27,10 @@ class TestHealthMonitorIntegration:
         assert emitted is True
         assert len(events) == 1
         assert events[0].event_type == TelemetryEventType.MEMORY_WARNING
-        assert events[0].data["gpu_utilization"] == 0.95
-        assert events[0].data["gpu_allocated_gb"] == 10.0
-        assert events[0].data["gpu_total_gb"] == 12.0
+        assert isinstance(events[0].data, MemoryWarningPayload)
+        assert events[0].data.gpu_utilization == 0.95
+        assert events[0].data.gpu_allocated_gb == 10.0
+        assert events[0].data.gpu_total_gb == 12.0
 
     def test_no_warning_below_threshold(self):
         """Verify no event emitted when GPU utilization is below threshold."""

@@ -308,15 +308,22 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract_string(data, '$.action_name') as action_name,
             json_extract(data, '$.action_success')::BOOLEAN as action_success,
             json_extract(data, '$.total_reward')::DOUBLE as total_reward,
-            -- All 28 fields from RewardComponentsTelemetry (nested under reward_components)
-            -- Base signal
+            -- RewardComponentsTelemetry fields (nested under reward_components)
+            -- Base signal (legacy shaped reward)
             json_extract(data, '$.reward_components.base_acc_delta')::DOUBLE as base_acc_delta,
             -- Contribution-primary signal
             json_extract(data, '$.reward_components.seed_contribution')::DOUBLE as seed_contribution,
             json_extract(data, '$.reward_components.bounded_attribution')::DOUBLE as bounded_attribution,
             json_extract(data, '$.reward_components.progress_since_germination')::DOUBLE as progress_since_germination,
+            json_extract(data, '$.reward_components.stable_val_acc')::DOUBLE as stable_val_acc,
             json_extract(data, '$.reward_components.attribution_discount')::DOUBLE as attribution_discount,
             json_extract(data, '$.reward_components.ratio_penalty')::DOUBLE as ratio_penalty,
+            -- Escrow attribution (RewardMode.ESCROW)
+            json_extract(data, '$.reward_components.escrow_credit_prev')::DOUBLE as escrow_credit_prev,
+            json_extract(data, '$.reward_components.escrow_credit_target')::DOUBLE as escrow_credit_target,
+            json_extract(data, '$.reward_components.escrow_delta')::DOUBLE as escrow_delta,
+            json_extract(data, '$.reward_components.escrow_credit_next')::DOUBLE as escrow_credit_next,
+            json_extract(data, '$.reward_components.escrow_forfeit')::DOUBLE as escrow_forfeit,
             -- Penalties
             json_extract(data, '$.reward_components.compute_rent')::DOUBLE as compute_rent,
             json_extract(data, '$.reward_components.alpha_shock')::DOUBLE as alpha_shock,

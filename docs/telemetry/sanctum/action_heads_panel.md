@@ -1,6 +1,6 @@
 # Telemetry Audit: ActionHeadsPanel
 
-**File:** `/home/john/esper-lite/src/esper/karn/sanctum/widgets/tamiyo_brain/action_heads_panel.py`
+**File:** `/home/john/esper-lite/src/esper/karn/sanctum/widgets/tamiyo/action_heads_panel.py`
 **Purpose:** Unified visualization of action head health (entropy, gradient norms, PPO ratios) with per-decision output heatmaps and gradient flow diagnostics.
 
 ---

@@ -199,7 +199,8 @@ class ActionContext(Static):
         # Get min/max for normalization
         q_min = min(q for _, q in sorted_qs)
         q_max = max(q for _, q in sorted_qs)
-        q_range = q_max - q_min if q_max != q_min else 1.0
+        is_flat = q_max == q_min
+        q_range = q_max - q_min
 
         # Render each Q-value row
         for i, (action, q_val) in enumerate(sorted_qs):
@@ -207,7 +208,7 @@ class ActionContext(Static):
             color = ACTION_COLORS.get(action, "white")
 
             # Normalize to 0-1 for bar fill
-            fill_pct = (q_val - q_min) / q_range
+            fill_pct = 0.5 if is_flat else (q_val - q_min) / q_range
 
             # Render: "  GERM ████████░░░░░░░░  +1.2"
             result.append(f"  {name:<4} ", style=color)
@@ -222,10 +223,11 @@ class ActionContext(Static):
             result.append(f"  {q_val:+.4f}", style=color)
 
             # Best/Worst markers
-            if i == 0:
-                result.append("  ← BEST", style="green dim")
-            elif i == len(sorted_qs) - 1:
-                result.append("  ← WORST", style="red dim")
+            if not is_flat:
+                if i == 0:
+                    result.append("  ← BEST", style="green dim")
+                elif i == len(sorted_qs) - 1:
+                    result.append("  ← WORST", style="red dim")
 
             result.append("\n")
 
@@ -239,6 +241,8 @@ class ActionContext(Static):
 
         if var_status == "critical":
             result.append("✗", style="red")
+        elif var_status == "warning":
+            result.append("!", style="yellow bold")
         elif var_status == "ok":
             result.append("✓", style="green")
 
@@ -592,12 +596,14 @@ class ActionContext(Static):
         is_alpha_osc = "ALPHA_OSC" in patterns
 
         result.append("  ")
-        if is_stuck:
-            result.append("⚠ STUCK ", style="yellow bold reverse")
-        if is_thrash:
-            result.append("⚡ THRASH ", style="red bold reverse")
-        if is_alpha_osc:
-            result.append("↔ ALPHA ", style="cyan bold reverse")
+        if is_stuck or is_thrash or is_alpha_osc:
+            if is_stuck:
+                result.append("⚠ STUCK ", style="yellow bold reverse")
+            if is_thrash:
+                result.append("⚡ THRASH ", style="red bold reverse")
+            if is_alpha_osc:
+                result.append("↔ ALPHA ", style="cyan bold reverse")
+            result.append("\n  ")
 
         # Recent actions (12 most recent, oldest first for L→R reading)
         recent_decisions = decisions[:12]
@@ -613,10 +619,12 @@ class ActionContext(Static):
 
         for i, (char, color, success) in enumerate(recent_actions):
             style = color
-            if is_stuck:
-                style = "yellow"
-            elif is_thrash:
+            if is_thrash:
                 style = "red"
+            elif is_stuck:
+                style = "yellow"
+            elif is_alpha_osc:
+                style = "cyan"
 
             result.append(char, style=style)
             if success is True:

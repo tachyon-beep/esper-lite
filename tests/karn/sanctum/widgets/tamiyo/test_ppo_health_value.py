@@ -16,7 +16,7 @@ class TestValueFunctionDisplay:
     """Test value function statistics display."""
 
     def test_healthy_values_show_ok(self) -> None:
-        """Normal value range should show ok status."""
+        """Normal value range should show OK status."""
         panel = HealthStatusPanel()
         snapshot = SanctumSnapshot(
             tamiyo=TamiyoState(
@@ -31,10 +31,10 @@ class TestValueFunctionDisplay:
         )
         panel._snapshot = snapshot
         status = panel._get_value_status(snapshot.tamiyo)
-        assert status == "ok"
+        assert status == "OK"
 
     def test_exploding_values_show_critical(self) -> None:
-        """Values 10x initial spread should show critical."""
+        """Values 10x initial spread should show Critical."""
         panel = HealthStatusPanel()
         snapshot = SanctumSnapshot(
             tamiyo=TamiyoState(
@@ -49,10 +49,10 @@ class TestValueFunctionDisplay:
         )
         panel._snapshot = snapshot
         status = panel._get_value_status(snapshot.tamiyo)
-        assert status == "critical"
+        assert status == "Critical"
 
     def test_collapsed_values_show_critical(self) -> None:
-        """Constant values should show critical (collapsed)."""
+        """Constant values should show Critical (collapsed)."""
         panel = HealthStatusPanel()
         snapshot = SanctumSnapshot(
             tamiyo=TamiyoState(
@@ -67,10 +67,10 @@ class TestValueFunctionDisplay:
         )
         panel._snapshot = snapshot
         status = panel._get_value_status(snapshot.tamiyo)
-        assert status == "critical"
+        assert status == "Critical"
 
     def test_high_cov_shows_warning(self) -> None:
-        """High coefficient of variation should show warning."""
+        """High coefficient of variation should show Warning."""
         panel = HealthStatusPanel()
         snapshot = SanctumSnapshot(
             tamiyo=TamiyoState(
@@ -85,10 +85,10 @@ class TestValueFunctionDisplay:
         )
         panel._snapshot = snapshot
         status = panel._get_value_status(snapshot.tamiyo)
-        assert status == "warning"
+        assert status == "Warning"
 
     def test_extreme_cov_shows_critical(self) -> None:
-        """Extreme coefficient of variation (>3.0) should show critical."""
+        """Extreme coefficient of variation (>3.0) should show Critical."""
         panel = HealthStatusPanel()
         snapshot = SanctumSnapshot(
             tamiyo=TamiyoState(
@@ -103,10 +103,10 @@ class TestValueFunctionDisplay:
         )
         panel._snapshot = snapshot
         status = panel._get_value_status(snapshot.tamiyo)
-        assert status == "critical"
+        assert status == "Critical"
 
     def test_warning_at_5x_spread(self) -> None:
-        """Values 5x initial spread should show warning."""
+        """Values 5x initial spread should show Warning."""
         panel = HealthStatusPanel()
         snapshot = SanctumSnapshot(
             tamiyo=TamiyoState(
@@ -121,7 +121,7 @@ class TestValueFunctionDisplay:
         )
         panel._snapshot = snapshot
         status = panel._get_value_status(snapshot.tamiyo)
-        assert status == "warning"
+        assert status == "Warning"
 
     def test_absolute_fallback_critical(self) -> None:
         """Absolute fallback: range >1000 or max >10000 is critical."""
@@ -139,7 +139,7 @@ class TestValueFunctionDisplay:
         )
         panel._snapshot = snapshot
         status = panel._get_value_status(snapshot.tamiyo)
-        assert status == "critical"
+        assert status == "Critical"
 
     def test_absolute_fallback_warning(self) -> None:
         """Absolute fallback: range >500 or max >5000 is warning."""
@@ -157,7 +157,7 @@ class TestValueFunctionDisplay:
         )
         panel._snapshot = snapshot
         status = panel._get_value_status(snapshot.tamiyo)
-        assert status == "warning"
+        assert status == "Warning"
 
     def test_zero_mean_avoids_cov_division(self) -> None:
         """When mean is near zero, CoV check should be skipped."""
@@ -176,7 +176,7 @@ class TestValueFunctionDisplay:
         panel._snapshot = snapshot
         status = panel._get_value_status(snapshot.tamiyo)
         # Should not trigger CoV check, falls through to absolute check
-        assert status == "ok"  # Range=10, max=5, both below thresholds
+        assert status == "OK"  # Range=10, max=5, both below thresholds
 
     def test_render_value_stats_shows_range_and_std(self) -> None:
         """_render_value_stats should show range and std deviation."""

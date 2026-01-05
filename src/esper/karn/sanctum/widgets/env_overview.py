@@ -684,6 +684,15 @@ class EnvOverview(Static):
         seed_contrib = env.reward_components.seed_contribution
         bounded_attr = env.reward_components.bounded_attribution
 
+        if env.reward_mode == "escrow":
+            if isinstance(bounded_attr, (int, float)) and bounded_attr != 0:
+                style = "green" if bounded_attr > 0 else "red"
+                return f"[{style}]{bounded_attr:+.2f}[/{style}]"
+            if isinstance(seed_contrib, (int, float)) and seed_contrib != 0:
+                style = "green" if seed_contrib > 0 else "red"
+                return f"[{style}]{seed_contrib:+.1f}%[/{style}]"
+            return "─"
+
         if isinstance(seed_contrib, (int, float)) and seed_contrib != 0:
             style = "green" if seed_contrib > 0 else "red"
             return f"[{style}]{seed_contrib:+.1f}%[/{style}]"

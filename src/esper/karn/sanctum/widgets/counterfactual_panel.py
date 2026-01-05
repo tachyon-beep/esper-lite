@@ -175,7 +175,10 @@ class CounterfactualPanel(Static):
         elif synergy < -0.5 and n_seeds >= 2:
             # INTERFERENCE: Seeds are hurting each other - make this LOUD
             lines.append(Text(""))
-            lines.append(Text("✗ INTERFERENCE DETECTED", style="bold red reverse"))
+            interference = Text()
+            interference.append("✗", style="bold red")
+            interference.append(" INTERFERENCE DETECTED", style="bold red reverse")
+            lines.append(interference)
             lines.append(Text(f"  Seeds are hurting each other by {synergy:.1f}%", style="red"))
         elif synergy > 0.5:
             # Synergy: Seeds working together

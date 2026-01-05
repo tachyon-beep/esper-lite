@@ -1500,7 +1500,7 @@ class TestRewardHackingDetection:
     def test_reward_hacking_suspected_emitted_on_anomalous_ratio(self):
         """Test that 6x ratio triggers with default 5x threshold."""
         from esper.simic.rewards import _check_reward_hacking
-        from esper.leyline import TelemetryEventType
+        from esper.leyline import RewardHackingSuspectedPayload, TelemetryEventType
         from unittest.mock import Mock
 
         hub = Mock()
@@ -1518,9 +1518,11 @@ class TestRewardHackingDetection:
         assert emitted is True
         event = hub.emit.call_args[0][0]
         assert event.event_type == TelemetryEventType.REWARD_HACKING_SUSPECTED
-        assert event.data["ratio"] == 6.0
-        assert event.data["slot_id"] == "r0c0"
-        assert event.data["threshold"] == 5.0
+        assert isinstance(event.data, RewardHackingSuspectedPayload)
+        assert event.data.pattern == "attribution_ratio"
+        assert event.data.ratio == 6.0
+        assert event.data.slot_id == "r0c0"
+        assert event.data.threshold == 5.0
 
     def test_no_hacking_event_for_normal_ratios(self):
         """Test that 4x ratio doesn't trigger with default 5x threshold."""
@@ -1545,7 +1547,7 @@ class TestRewardHackingDetection:
     def test_ransomware_signature_emitted(self):
         """Test ransomware detection: high contribution + negative total."""
         from esper.simic.rewards import _check_ransomware_signature
-        from esper.leyline import TelemetryEventType
+        from esper.leyline import RewardHackingSuspectedPayload, TelemetryEventType
         from unittest.mock import Mock
 
         hub = Mock()
@@ -1563,9 +1565,10 @@ class TestRewardHackingDetection:
         event = hub.emit.call_args[0][0]
         assert event.event_type == TelemetryEventType.REWARD_HACKING_SUSPECTED
         assert event.severity == "critical"
-        assert event.data["pattern"] == "ransomware_signature"
-        assert event.data["seed_contribution"] == 2.0
-        assert event.data["total_improvement"] == -0.5
+        assert isinstance(event.data, RewardHackingSuspectedPayload)
+        assert event.data.pattern == "ransomware_signature"
+        assert event.data.seed_contribution == 2.0
+        assert event.data.total_improvement == -0.5
 
     def test_no_ransomware_when_system_improving(self):
         """Test no ransomware alert when total improvement is positive."""

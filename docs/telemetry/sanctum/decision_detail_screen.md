@@ -1,6 +1,6 @@
 # Telemetry Audit: DecisionDetailScreen
 
-**File:** `/home/john/esper-lite/src/esper/karn/sanctum/widgets/tamiyo_brain/decision_detail_screen.py`
+**File:** `/home/john/esper-lite/src/esper/karn/sanctum/widgets/tamiyo/decision_detail_screen.py`
 **Purpose:** Modal screen showing full details for a single Tamiyo decision, including summary metadata, action details, value diagnostics, factored head choices, slot states, and action alternatives.
 
 ---

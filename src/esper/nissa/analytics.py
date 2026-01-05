@@ -23,6 +23,8 @@ from esper.leyline.telemetry import (
     TrendDetectedPayload,
     TamiyoInitiatedPayload,
     PerformanceDegradationPayload,
+    MemoryWarningPayload,
+    RewardHackingSuspectedPayload,
 )
 from esper.nissa.output import OutputBackend
 
@@ -324,7 +326,8 @@ class BlueprintAnalytics(OutputBackend):
 
         # === Health/Warning Events ===
         elif event.event_type == TelemetryEventType.MEMORY_WARNING:
-            _logger.warning("MEMORY_WARNING event not yet migrated to typed payload")
+            if not isinstance(event.data, MemoryWarningPayload):
+                _logger.error("MEMORY_WARNING event missing typed payload")
             return
 
         elif event.event_type == TelemetryEventType.PERFORMANCE_DEGRADATION:
@@ -343,7 +346,8 @@ class BlueprintAnalytics(OutputBackend):
             return
 
         elif event.event_type == TelemetryEventType.REWARD_HACKING_SUSPECTED:
-            _logger.warning("REWARD_HACKING_SUSPECTED event not yet migrated to typed payload")
+            if not isinstance(event.data, RewardHackingSuspectedPayload):
+                _logger.error("REWARD_HACKING_SUSPECTED event missing typed payload")
             return
 
         # === PPO Anomaly Events (use AnomalyDetectedPayload) ===

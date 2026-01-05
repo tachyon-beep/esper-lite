@@ -42,16 +42,16 @@
 
 | Widget | File | Purpose |
 |--------|------|---------|
-| **StatusBanner** | `tamiyo_brain/status_banner.py` | One-line health summary: NaN/Inf indicators, status, KL, memory |
-| **SlotsPanel** | `tamiyo_brain/slots_panel.py` | Slot stage distribution bars + lifecycle aggregate statistics |
-| **HealthStatusPanel** | `tamiyo_brain/health_status_panel.py` | Comprehensive health: advantage, gradients, KL, entropy, value range |
-| **PPOLossesPanel** | `tamiyo_brain/ppo_losses_panel.py` | PPO gauges (EV, entropy, clip) + loss sparklines with trends |
-| **ActionHeadsPanel** | `tamiyo_brain/action_heads_panel.py` | Per-head entropy/gradient/ratio grids + decision heatmap carousel |
-| **ActionContext** | `tamiyo_brain/action_context.py` | Recent action context and slot state visualization |
-| **EpisodeMetricsPanel** | `tamiyo_brain/episode_metrics_panel.py` | Episode health: warmup baseline or training outcomes/trends |
-| **ValueDiagnosticsPanel** | `tamiyo_brain/value_diagnostics_panel.py` | Value function diagnostics: GAE, TD errors, explained variance |
-| **DecisionsColumn** | `tamiyo_brain/decisions_column.py` | Vertical stack of decision cards with throttled updates (30s swap) |
-| **DecisionDetailScreen** | `tamiyo_brain/decision_detail_screen.py` | Modal: Full decision details with all head choices |
+| **NarrativePanel** | `tamiyo/narrative_panel.py` | Now/Why/Next guidance + one-line health summary (replaces StatusBanner) |
+| **SlotsPanel** | `tamiyo/slots_panel.py` | Slot stage distribution bars + lifecycle aggregate statistics |
+| **HealthStatusPanel** | `tamiyo/health_status_panel.py` | Comprehensive health: advantage, gradients, KL, entropy, value range |
+| **PPOLossesPanel** | `tamiyo/ppo_losses_panel.py` | PPO gauges (EV, entropy, clip) + loss sparklines with trends |
+| **ActionHeadsPanel** | `tamiyo/action_heads_panel.py` | Per-head entropy/gradient/ratio grids + decision heatmap carousel |
+| **ActionContext** | `tamiyo/action_distribution.py` | Consolidated decision context (critic, reward, returns, actions, sequence) |
+| **EpisodeMetricsPanel** | `tamiyo/episode_metrics_panel.py` | Episode health: warmup baseline or training outcomes/trends |
+| **ValueDiagnosticsPanel** | `tamiyo/value_diagnostics_panel.py` | Value function diagnostics: GAE, TD errors, explained variance |
+| **DecisionsColumn** | `tamiyo/decisions_column.py` | Vertical stack of decision cards with throttled updates (30s swap) |
+| **DecisionDetailScreen** | `tamiyo/decision_detail_screen.py` | Modal: Full decision details with all head choices |
 
 ### 1.4 Attribution Widgets
 
@@ -237,7 +237,7 @@ SeedState
 
 ### 3.1 SanctumSnapshot Root Fields
 
-| Field | RunHeader | AnomalyStrip | EsperStatus | EventLog | EnvOverview | Scoreboard | StatusBanner | SlotsPanel |
+| Field | RunHeader | AnomalyStrip | EsperStatus | EventLog | EnvOverview | Scoreboard | NarrativePanel | SlotsPanel |
 |-------|:---------:|:------------:|:-----------:|:--------:|:-----------:|:----------:|:------------:|:----------:|
 | `connected` | ✓ | | | | | | | |
 | `staleness_seconds` | ✓ | | | | | | | |
@@ -259,7 +259,7 @@ SeedState
 
 ### 3.2 TamiyoState Fields
 
-| Field | StatusBanner | PPOLossesPanel | HealthStatusPanel | ActionHeadsPanel | DecisionsColumn |
+| Field | NarrativePanel | PPOLossesPanel | HealthStatusPanel | ActionHeadsPanel | DecisionsColumn |
 |-------|:------------:|:--------------:|:-----------------:|:----------------:|:---------------:|
 | `ppo_data_received` | ✓ | | | | |
 | `group_id` | ✓ | | | | ✓ |
@@ -505,7 +505,7 @@ TelemetryEmitter ─────────────────────
                                       │                         │                         │
                            ┌──────────┴──────────┐    ┌─────────┴─────────┐               │
                            ▼                     ▼    ▼                   ▼               ▼
-                    EnvDetailScreen      AnomalyStrip    StatusBanner  ActionHeadsPanel  EventLogDetail
+                    EnvDetailScreen      AnomalyStrip    NarrativePanel  ActionHeadsPanel  EventLogDetail
                                                          PPOLossesPanel  DecisionsColumn
                                                          HealthStatusPanel  SlotsPanel
 ```
@@ -546,7 +546,7 @@ For detailed per-widget audits, see:
 | EnvDetailScreen | `env_detail_screen.md` |
 | HistoricalEnvDetail | `historical_env_detail.md` |
 | Scoreboard | `scoreboard.md` |
-| StatusBanner | `status_banner.md` |
+| NarrativePanel | `narrative_panel.md` |
 | SlotsPanel | `slots_panel.md` |
 | HealthStatusPanel | `health_status_panel.md` |
 | PPOLossesPanel | `ppo_losses_panel.md` |

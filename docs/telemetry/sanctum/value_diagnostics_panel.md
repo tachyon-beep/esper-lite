@@ -1,6 +1,6 @@
 # Telemetry Audit: ValueDiagnosticsPanel
 
-**File:** `/home/john/esper-lite/src/esper/karn/sanctum/widgets/tamiyo_brain/value_diagnostics_panel.py`
+**File:** `/home/john/esper-lite/src/esper/karn/sanctum/widgets/tamiyo/value_diagnostics_panel.py`
 
 **Purpose:** Display value function quality diagnostics for DRL training health. Per DRL expert review, value function quality is THE primary diagnostic for RL training failures - low V-Return correlation means advantage estimates are garbage regardless of how healthy policy metrics look.
 

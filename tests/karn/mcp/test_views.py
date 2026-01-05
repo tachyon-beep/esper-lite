@@ -107,10 +107,10 @@ def test_epochs_view_parses_jsonl():
 
 
 def test_rewards_view_extracts_all_fields(tmp_path):
-    """rewards view should extract all 28 fields from RewardComponentsTelemetry."""
+    """rewards view should extract all RewardComponentsTelemetry fields it exposes."""
     from datetime import datetime
 
-    # Create test telemetry with all fields from RewardComponentsTelemetry
+    # Create test telemetry with all RewardComponentsTelemetry fields exposed in the view.
     run_dir = tmp_path / "test_run"
     run_dir.mkdir()
     events_file = run_dir / "events.jsonl"
@@ -135,8 +135,15 @@ def test_rewards_view_extracts_all_fields(tmp_path):
                 "seed_contribution": 0.15,
                 "bounded_attribution": 0.3,
                 "progress_since_germination": 0.08,
+                "stable_val_acc": 0.74,
                 "attribution_discount": 0.95,
                 "ratio_penalty": 0.0,
+                # Escrow attribution (RewardMode.ESCROW)
+                "escrow_credit_prev": 0.10,
+                "escrow_credit_target": 0.25,
+                "escrow_delta": 0.15,
+                "escrow_credit_next": 0.25,
+                "escrow_forfeit": -0.07,
                 # Penalties
                 "compute_rent": -0.1,
                 "alpha_shock": -0.01,
@@ -176,8 +183,10 @@ def test_rewards_view_extracts_all_fields(tmp_path):
             -- Base signal
             base_acc_delta,
             -- Contribution-primary signal
-            seed_contribution, bounded_attribution, progress_since_germination,
+            seed_contribution, bounded_attribution, progress_since_germination, stable_val_acc,
             attribution_discount, ratio_penalty,
+            -- Escrow attribution
+            escrow_credit_prev, escrow_credit_target, escrow_delta, escrow_credit_next, escrow_forfeit,
             -- Penalties
             compute_rent, alpha_shock, blending_warning, holding_warning,
             -- Bonuses
@@ -208,35 +217,43 @@ def test_rewards_view_extracts_all_fields(tmp_path):
     assert result[7] == 0.15  # seed_contribution
     assert result[8] == 0.3  # bounded_attribution
     assert result[9] == 0.08  # progress_since_germination
-    assert result[10] == 0.95  # attribution_discount
-    assert result[11] == 0.0  # ratio_penalty
+    assert result[10] == 0.74  # stable_val_acc
+    assert result[11] == 0.95  # attribution_discount
+    assert result[12] == 0.0  # ratio_penalty
+
+    # Escrow attribution
+    assert result[13] == 0.10  # escrow_credit_prev
+    assert result[14] == 0.25  # escrow_credit_target
+    assert result[15] == 0.15  # escrow_delta
+    assert result[16] == 0.25  # escrow_credit_next
+    assert result[17] == -0.07  # escrow_forfeit
 
     # Penalties
-    assert result[12] == -0.1  # compute_rent
-    assert result[13] == -0.01  # alpha_shock
-    assert result[14] == -0.05  # blending_warning (key field per task)
-    assert result[15] == -0.02  # holding_warning
+    assert result[18] == -0.1  # compute_rent
+    assert result[19] == -0.01  # alpha_shock
+    assert result[20] == -0.05  # blending_warning (key field per task)
+    assert result[21] == -0.02  # holding_warning
 
     # Bonuses
-    assert result[16] == 0.1  # stage_bonus
-    assert result[17] == 0.03  # pbrs_bonus (key field per task)
-    assert result[18] == 0.02  # synergy_bonus
-    assert result[19] == 0.05  # action_shaping
-    assert result[20] == 0.0  # terminal_bonus
-    assert result[21] == 0.0  # fossilize_terminal_bonus
-    assert result[22] == 0.0  # hindsight_credit
-    assert result[23] == 1  # num_fossilized_seeds
-    assert result[24] == 1  # num_contributing_fossilized
+    assert result[22] == 0.1  # stage_bonus
+    assert result[23] == 0.03  # pbrs_bonus (key field per task)
+    assert result[24] == 0.02  # synergy_bonus
+    assert result[25] == 0.05  # action_shaping
+    assert result[26] == 0.0  # terminal_bonus
+    assert result[27] == 0.0  # fossilize_terminal_bonus
+    assert result[28] == 0.0  # hindsight_credit
+    assert result[29] == 1  # num_fossilized_seeds
+    assert result[30] == 1  # num_contributing_fossilized
 
     # Context fields
-    assert result[25] == 2  # seed_stage
-    assert result[26] == 0.75  # val_acc
-    assert result[27] == 0.60  # acc_at_germination
-    assert result[28] == 0.55  # host_baseline_acc
-    assert result[29] == 0.12  # growth_ratio
+    assert result[31] == 2  # seed_stage
+    assert result[32] == 0.75  # val_acc
+    assert result[33] == 0.60  # acc_at_germination
+    assert result[34] == 0.55  # host_baseline_acc
+    assert result[35] == 0.12  # growth_ratio
 
     # Computed diagnostic
-    assert result[30] == 0.25  # shaped_reward_ratio
+    assert result[36] == 0.25  # shaped_reward_ratio
 
 
 def test_ppo_updates_view_extracts_head_entropy_fields(tmp_path):

@@ -4,7 +4,7 @@
 def test_memory_warning_emitted_when_threshold_exceeded():
     """Test that MEMORY_WARNING is emitted when GPU utilization exceeds threshold."""
     from esper.karn.health import HealthMonitor
-    from esper.leyline import TelemetryEventType
+    from esper.leyline import MemoryWarningPayload, TelemetryEventType
 
     events = []
 
@@ -20,7 +20,8 @@ def test_memory_warning_emitted_when_threshold_exceeded():
 
     assert len(events) == 1
     assert events[0].event_type == TelemetryEventType.MEMORY_WARNING
-    assert events[0].data["gpu_utilization"] == 0.9
+    assert isinstance(events[0].data, MemoryWarningPayload)
+    assert events[0].data.gpu_utilization == 0.9
 
 
 def test_no_memory_warning_when_below_threshold():

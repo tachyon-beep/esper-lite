@@ -1645,6 +1645,12 @@ class SanctumAggregator:
                 # seed_contribution is None for non-contribution modes - leave at default
                 if rc.seed_contribution is not None:
                     env.reward_components.seed_contribution = rc.seed_contribution
+                env.reward_components.stable_val_acc = rc.stable_val_acc
+                env.reward_components.escrow_credit_prev = rc.escrow_credit_prev
+                env.reward_components.escrow_credit_target = rc.escrow_credit_target
+                env.reward_components.escrow_delta = rc.escrow_delta
+                env.reward_components.escrow_credit_next = rc.escrow_credit_next
+                env.reward_components.escrow_forfeit = rc.escrow_forfeit
                 env.reward_components.compute_rent = rc.compute_rent
                 env.reward_components.stage_bonus = rc.stage_bonus
                 env.reward_components.ratio_penalty = rc.ratio_penalty

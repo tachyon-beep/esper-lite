@@ -1,6 +1,6 @@
 # Telemetry Audit: EpisodeMetricsPanel
 
-**File:** `/home/john/esper-lite/src/esper/karn/sanctum/widgets/tamiyo_brain/episode_metrics_panel.py`
+**File:** `/home/john/esper-lite/src/esper/karn/sanctum/widgets/tamiyo/episode_metrics_panel.py`
 
 **Purpose:** Displays episode-level training metrics with two distinct rendering modes:
 - **Warmup Mode:** Before PPO updates begin, shows collection progress and random policy baseline

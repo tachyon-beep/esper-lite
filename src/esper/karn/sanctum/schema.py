@@ -1132,6 +1132,12 @@ class RewardComponents:
     - base_acc_delta: Legacy shaped signal based on accuracy improvement
     - bounded_attribution: Contribution-primary attribution signal (replaces seed_contribution)
     - seed_contribution: Seed contribution percentage (older format, may coexist)
+    - stable_val_acc: Stable accuracy used for escrow/progress gating (min over a short window)
+    - escrow_credit_prev: Prior escrow credit state (RewardMode.ESCROW)
+    - escrow_credit_target: Target credit computed from stable accuracy (RewardMode.ESCROW)
+    - escrow_delta: Per-step escrow reward payout (RewardMode.ESCROW)
+    - escrow_credit_next: Next escrow credit state after applying delta (RewardMode.ESCROW)
+    - escrow_forfeit: Terminal clawback for non-fossilized escrow credit (RewardMode.ESCROW)
     - compute_rent: Cost of active seeds (always negative)
     - alpha_shock: Convex penalty on alpha deltas (negative if triggered)
     - ratio_penalty: Penalty for extreme policy ratios (negative if triggered)
@@ -1154,6 +1160,13 @@ class RewardComponents:
     bounded_attribution: float = 0.0
     seed_contribution: float = 0.0
 
+    # Escrow attribution (RewardMode.ESCROW)
+    escrow_credit_prev: float = 0.0
+    escrow_credit_target: float = 0.0
+    escrow_delta: float = 0.0
+    escrow_credit_next: float = 0.0
+    escrow_forfeit: float = 0.0
+
     # Costs
     compute_rent: float = 0.0
     alpha_shock: float = 0.0
@@ -1175,6 +1188,7 @@ class RewardComponents:
     # Context
     env_id: int = 0
     val_acc: float = 0.0
+    stable_val_acc: float | None = None
     last_action: str = ""
 
 

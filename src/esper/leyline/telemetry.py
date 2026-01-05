@@ -1643,6 +1643,76 @@ class PerformanceDegradationPayload:
 
 
 @dataclass(slots=True, frozen=True)
+class MemoryWarningPayload:
+    """Payload for MEMORY_WARNING event.
+
+    Emitted when GPU memory utilization exceeds the configured threshold.
+    """
+
+    # REQUIRED
+    gpu_utilization: float  # 0.0 to 1.0
+    gpu_allocated_gb: float
+    gpu_total_gb: float
+    threshold: float
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "MemoryWarningPayload":
+        """Parse from dict. Raises KeyError on missing required fields."""
+        return cls(
+            gpu_utilization=data["gpu_utilization"],
+            gpu_allocated_gb=data["gpu_allocated_gb"],
+            gpu_total_gb=data["gpu_total_gb"],
+            threshold=data["threshold"],
+        )
+
+
+RewardHackingPattern = Literal[
+    "attribution_ratio",
+    "ransomware_signature",
+]
+
+
+@dataclass(slots=True, frozen=True)
+class RewardHackingSuspectedPayload:
+    """Payload for REWARD_HACKING_SUSPECTED event.
+
+    Two patterns share the same event type:
+    - attribution_ratio: seed claims an implausible share of improvement
+    - ransomware_signature: seed claims high contribution while system degrades
+    """
+
+    # REQUIRED
+    pattern: RewardHackingPattern
+    slot_id: str
+    seed_id: str
+    seed_contribution: float
+    total_improvement: float
+
+    # OPTIONAL - attribution_ratio fields
+    ratio: float | None = None
+    threshold: float | None = None
+
+    # OPTIONAL - ransomware_signature fields
+    contribution_threshold: float | None = None
+    degradation_threshold: float | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "RewardHackingSuspectedPayload":
+        """Parse from dict. Raises KeyError on missing required fields."""
+        return cls(
+            pattern=data["pattern"],
+            slot_id=data["slot_id"],
+            seed_id=data["seed_id"],
+            seed_contribution=data["seed_contribution"],
+            total_improvement=data["total_improvement"],
+            ratio=data.get("ratio"),
+            threshold=data.get("threshold"),
+            contribution_threshold=data.get("contribution_threshold"),
+            degradation_threshold=data.get("degradation_threshold"),
+        )
+
+
+@dataclass(slots=True, frozen=True)
 class EpisodeOutcomePayload:
     """Payload for EPISODE_OUTCOME event.
 
@@ -1760,6 +1830,8 @@ TelemetryPayload = (
     | BatchEpochCompletedPayload
     | TrendDetectedPayload
     | PPOUpdatePayload
+    | MemoryWarningPayload
+    | RewardHackingSuspectedPayload
     | TamiyoInitiatedPayload
     | SeedGerminatedPayload
     | SeedStageChangedPayload

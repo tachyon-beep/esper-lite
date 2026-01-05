@@ -63,7 +63,7 @@ class HealthStatusPanel(Static):
         adv_pos_status = self._get_adv_positive_status(tamiyo.advantage_positive_ratio)
         worst_status = max(
             [adv_status, skew_status, kurt_status, adv_pos_status],
-            key=lambda s: ["ok", "warning", "critical"].index(s),
+            key=lambda s: ["OK", "Warning", "Critical"].index(s),
         )
 
         result.append("Advantage   ", style="dim")
@@ -99,7 +99,7 @@ class HealthStatusPanel(Static):
                 f"{tamiyo.advantage_positive_ratio:.0%}",
                 style=self._status_style(adv_pos_status),
             )
-        if worst_status != "ok":
+        if worst_status != "OK":
             result.append(" !", style=self._status_style(worst_status))
         result.append("\n")
 
@@ -109,7 +109,7 @@ class HealthStatusPanel(Static):
         gn_status = self._get_grad_norm_status(tamiyo.grad_norm)
         result.append("Grad Norm  ", style="dim")  # 13 chars
         result.append(f"{tamiyo.grad_norm: 7.3f}", style=self._status_style(gn_status))
-        if gn_status != "ok":
+        if gn_status != "OK":
             result.append("!", style=self._status_style(gn_status))
         else:
             result.append(" ", style="dim")
@@ -151,9 +151,9 @@ class HealthStatusPanel(Static):
 
         # Entropy level
         ent_status = self._get_entropy_status(tamiyo.entropy)
-        result.append("Entropy      ", style="dim")
+        result.append("Entropy   ", style="dim")
         result.append(f"{tamiyo.entropy: 7.3f}", style=self._status_style(ent_status))
-        if ent_status != "ok":
+        if ent_status != "OK":
             result.append(" !", style=self._status_style(ent_status))
         result.append("\n")
 
@@ -296,7 +296,7 @@ class HealthStatusPanel(Static):
         result.append(" ", style="dim")
         result.append(f"s={v_std:.2f}", style="dim")
 
-        if status != "ok":
+        if status != "OK":
             result.append(" !", style=self._status_style(status))
 
         return result
@@ -497,7 +497,7 @@ class HealthStatusPanel(Static):
     def _get_lstm_rms_status(self, rms: float | None) -> str:
         """Check if LSTM hidden state RMS magnitude is healthy."""
         if rms is None:
-            return "ok"  # No LSTM - neutral status
+            return "OK"  # No LSTM - neutral status
         if rms > 10.0:  # Explosion/saturation threshold
             return "Critical"
         if rms > 5.0:  # Warning threshold
@@ -506,7 +506,7 @@ class HealthStatusPanel(Static):
             return "Critical"
         if rms < 1e-4:  # Low warning
             return "Warning"
-        return "ok"
+        return "OK"
 
     def _get_outlier_status(self, outlier_pct: float) -> str:
         """Check if outlier percentage is healthy."""

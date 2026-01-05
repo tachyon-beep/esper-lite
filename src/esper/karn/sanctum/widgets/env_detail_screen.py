@@ -608,8 +608,30 @@ class EnvDetailScreen(ModalScreen[None]):
 
         if rc.bounded_attribution != 0:
             style = "green" if rc.bounded_attribution > 0 else "red"
-            credits.append(f"Attr: {rc.bounded_attribution:+.3f}", style=style)
+            label = "EscΔ" if env.reward_mode == "escrow" else "Attr"
+            credits.append(f"{label}: {rc.bounded_attribution:+.3f}", style=style)
             has_credits = True
+        if env.reward_mode == "escrow":
+            if rc.stable_val_acc is not None:
+                if has_credits:
+                    credits.append("  ")
+                credits.append(f"StAcc: {rc.stable_val_acc:.1f}%", style="cyan")
+                has_credits = True
+
+            if has_credits:
+                credits.append("  ")
+            credits.append(
+                f"Esc: {rc.escrow_credit_prev:.2f}→{rc.escrow_credit_next:.2f} (tgt {rc.escrow_credit_target:.2f})",
+                style="cyan",
+            )
+            has_credits = True
+
+            if rc.escrow_forfeit != 0:
+                if has_credits:
+                    credits.append("  ")
+                style = "green" if rc.escrow_forfeit > 0 else "red"
+                credits.append(f"Forf: {rc.escrow_forfeit:+.3f}", style=style)
+                has_credits = True
         if rc.hindsight_credit != 0:
             hind_str = f"Hind: {rc.hindsight_credit:+.3f}"
             if rc.scaffold_count > 0:

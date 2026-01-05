@@ -1,6 +1,6 @@
 # Telemetry Audit: decisions_column.py
 
-**File:** `/home/john/esper-lite/src/esper/karn/sanctum/widgets/tamiyo_brain/decisions_column.py`
+**File:** `/home/john/esper-lite/src/esper/karn/sanctum/widgets/tamiyo/decisions_column.py`
 
 **Purpose:** Displays a vertical stack of decision cards showing Tamiyo's recent action decisions with throttled updates (one card every 30 seconds).
 

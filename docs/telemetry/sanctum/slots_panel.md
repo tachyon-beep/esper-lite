@@ -1,6 +1,6 @@
 # Telemetry Audit: SlotsPanel
 
-**File:** `/home/john/esper-lite/src/esper/karn/sanctum/widgets/tamiyo_brain/slots_panel.py`
+**File:** `/home/john/esper-lite/src/esper/karn/sanctum/widgets/tamiyo/slots_panel.py`
 **Purpose:** Displays slot stage distribution across all environments with proportional bars, plus seed lifecycle aggregate statistics (fossilization, pruning, germination rates and trends).
 
 ---

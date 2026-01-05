@@ -27,6 +27,7 @@ from esper.karn.constants import HealthThresholds, VitalSignsThresholds
 from esper.leyline import (
     TelemetryEvent,
     TelemetryEventType,
+    MemoryWarningPayload,
     SeedStage,
     is_active_stage,
     is_failure_stage,
@@ -194,18 +195,15 @@ class HealthMonitor:
 
         self._last_memory_warning = now
         if self._emit_callback is not None:
-            # Emit MEMORY_WARNING with dict payload (typed payload migration pending)
-            # This matches the pattern used in other telemetry emission sites
-            # Type ignore is needed until MemoryWarningPayload is defined
             self._emit_callback(TelemetryEvent(
                 event_type=TelemetryEventType.MEMORY_WARNING,
                 severity="warning",
-                data={  # type: ignore[arg-type]
-                    "gpu_utilization": gpu_utilization,
-                    "gpu_allocated_gb": gpu_allocated_gb,
-                    "gpu_total_gb": gpu_total_gb,
-                    "threshold": self.memory_warning_threshold,
-                },
+                data=MemoryWarningPayload(
+                    gpu_utilization=gpu_utilization,
+                    gpu_allocated_gb=gpu_allocated_gb,
+                    gpu_total_gb=gpu_total_gb,
+                    threshold=self.memory_warning_threshold,
+                ),
             ))
         return True
 

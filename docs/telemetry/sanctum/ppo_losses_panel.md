@@ -1,6 +1,6 @@
 # Telemetry Audit: PPOLossesPanel
 
-**File:** `/home/john/esper-lite/src/esper/karn/sanctum/widgets/tamiyo_brain/ppo_losses_panel.py`
+**File:** `/home/john/esper-lite/src/esper/karn/sanctum/widgets/tamiyo/ppo_losses_panel.py`
 **Purpose:** Displays PPO health metrics with visual gauges (Explained Variance, Entropy, Clip Fraction) in the top section and loss sparklines with trends (Policy Loss, Value Loss, Loss Ratio) in the bottom section.
 
 ---

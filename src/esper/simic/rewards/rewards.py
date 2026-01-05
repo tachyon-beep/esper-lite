@@ -1480,7 +1480,7 @@ def _check_reward_hacking(
 
     Returns True if event was emitted.
     """
-    from esper.leyline import TelemetryEvent, TelemetryEventType
+    from esper.leyline import RewardHackingSuspectedPayload, TelemetryEvent, TelemetryEventType
 
     if total_improvement <= 0 or seed_contribution <= 0:
         return False
@@ -1493,14 +1493,17 @@ def _check_reward_hacking(
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.REWARD_HACKING_SUSPECTED,
         severity="warning",
-        data={  # type: ignore[arg-type]
-            "ratio": ratio,
-            "seed_contribution": seed_contribution,
-            "total_improvement": total_improvement,
-            "threshold": hacking_ratio_threshold,
-            "slot_id": slot_id,
-            "seed_id": seed_id,
-        },
+        seed_id=seed_id,
+        slot_id=slot_id,
+        data=RewardHackingSuspectedPayload(
+            pattern="attribution_ratio",
+            ratio=ratio,
+            seed_contribution=seed_contribution,
+            total_improvement=total_improvement,
+            threshold=hacking_ratio_threshold,
+            slot_id=slot_id,
+            seed_id=seed_id,
+        ),
     ))
     return True
 
@@ -1530,7 +1533,7 @@ def _check_ransomware_signature(
 
     Returns True if event was emitted.
     """
-    from esper.leyline import TelemetryEvent, TelemetryEventType
+    from esper.leyline import RewardHackingSuspectedPayload, TelemetryEvent, TelemetryEventType
 
     if seed_contribution <= contribution_threshold:
         return False
@@ -1542,15 +1545,17 @@ def _check_ransomware_signature(
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.REWARD_HACKING_SUSPECTED,
         severity=severity,
-        data={  # type: ignore[arg-type]
-            "pattern": "ransomware_signature",
-            "seed_contribution": seed_contribution,
-            "total_improvement": total_improvement,
-            "contribution_threshold": contribution_threshold,
-            "degradation_threshold": degradation_threshold,
-            "slot_id": slot_id,
-            "seed_id": seed_id,
-        },
+        seed_id=seed_id,
+        slot_id=slot_id,
+        data=RewardHackingSuspectedPayload(
+            pattern="ransomware_signature",
+            seed_contribution=seed_contribution,
+            total_improvement=total_improvement,
+            contribution_threshold=contribution_threshold,
+            degradation_threshold=degradation_threshold,
+            slot_id=slot_id,
+            seed_id=seed_id,
+        ),
     ))
     return True
 

@@ -1,6 +1,6 @@
 # Telemetry Audit: ActionContext Widget
 
-**File:** `/home/john/esper-lite/src/esper/karn/sanctum/widgets/tamiyo_brain/action_distribution.py`
+**File:** `/home/john/esper-lite/src/esper/karn/sanctum/widgets/tamiyo/action_distribution.py`
 **Widget:** `ActionContext`
 **Purpose:** Consolidated decision context panel combining critic preferences, reward health, returns, action distribution, and sequence.
 
@@ -54,7 +54,7 @@ The `ActionContext` widget renders a unified view of Tamiyo decision-making cont
 | Condition | Status | Style |
 |-----------|--------|-------|
 | `q_variance < 0.01` | `critical` | red bold + X icon |
-| `q_variance < 0.1` | `warning` | yellow |
+| `q_variance < 0.1` | `warning` | yellow + `!` marker |
 | `q_variance >= 0.1` | `ok` | green + checkmark |
 | `isnan(q_variance)` | `ok` | green |
 

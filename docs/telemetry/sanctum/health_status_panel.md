@@ -1,6 +1,6 @@
 # Telemetry Audit: HealthStatusPanel
 
-**File:** `/home/john/esper-lite/src/esper/karn/sanctum/widgets/tamiyo_brain/health_status_panel.py`
+**File:** `/home/john/esper-lite/src/esper/karn/sanctum/widgets/tamiyo/health_status_panel.py`
 **Purpose:** Displays comprehensive training health indicators including advantage statistics, ratio bounds, gradient norms, KL divergence, entropy trends, policy state, value function range, and observation health.
 
 ---
