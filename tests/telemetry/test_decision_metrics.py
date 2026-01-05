@@ -766,7 +766,8 @@ class TestTELE800AlphaFields:
         emitter = VectorizedEmitter(env_id=0, device="cpu", hub=hub)
 
         action_indices = {
-            "op": 0,
+            # SET_ALPHA_TARGET is the op where alpha schedule fields are meaningful.
+            "op": 2,
             "slot": 0,
             "blueprint": 0,
             "style": 0,

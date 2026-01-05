@@ -13,6 +13,7 @@ def test_reward_mode_enum_exists():
     """RewardMode enum includes all supported modes."""
     assert RewardMode.SHAPED.value == "shaped"
     assert RewardMode.ESCROW.value == "escrow"
+    assert RewardMode.BASIC.value == "basic"
     assert RewardMode.SPARSE.value == "sparse"
     assert RewardMode.MINIMAL.value == "minimal"
     assert RewardMode.SIMPLIFIED.value == "simplified"
@@ -301,6 +302,37 @@ def test_compute_reward_minimal_mode():
 
     # Should get early-prune penalty
     assert reward == -0.1
+
+
+def test_compute_reward_basic_mode():
+    """compute_reward dispatches to BASIC reward when mode is BASIC."""
+    from esper.simic.rewards import compute_reward
+    config = ContributionRewardConfig(
+        reward_mode=RewardMode.BASIC,
+        basic_acc_delta_weight=5.0,
+        param_budget=500_000,
+        param_penalty_weight=0.1,
+    )
+
+    reward = compute_reward(
+        action=LifecycleOp.WAIT,
+        seed_contribution=None,
+        val_acc=70.0,
+        seed_info=None,
+        epoch=1,
+        max_epochs=25,
+        total_params=100_000,
+        host_params=100_000,
+        acc_at_germination=None,
+        acc_delta=1.0,  # +1 percentage point
+        committed_val_acc=70.0,
+        fossilized_seed_params=0,
+        effective_seed_params=50_000,  # 10% of param_budget
+        config=config,
+    )
+
+    # Expected: 5.0 * (1/100) - 0.1 * (50_000 / 500_000) = 0.05 - 0.01 = 0.04
+    assert abs(reward - 0.04) < 1e-8
 
 
 def test_parallel_env_state_has_host_max_acc():

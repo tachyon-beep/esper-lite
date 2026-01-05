@@ -840,41 +840,55 @@ class SanctumAggregator:
 
         # Update per-seed telemetry from EPOCH_COMPLETED event
         # Note: seeds telemetry is optional; inner dicts remain untyped.
-        seeds_data = payload.seeds or {}
-        for slot_id, seed_telemetry in seeds_data.items():
-            # Ensure seed exists
-            if slot_id not in env.seeds:
-                env.seeds[slot_id] = SeedState(slot_id=slot_id)
-            seed = env.seeds[slot_id]
+        seeds_data = payload.seeds
+        if seeds_data is not None:
+            for slot_id, seed_telemetry in seeds_data.items():
+                # Ensure seed exists
+                if slot_id not in env.seeds:
+                    env.seeds[slot_id] = SeedState(slot_id=slot_id)
+                seed = env.seeds[slot_id]
 
-            # HIGH-03 fix: Direct access for core fields - fail-fast if telemetry contract changes
-            # Core lifecycle fields (always emitted by simic)
-            seed.stage = seed_telemetry["stage"]
-            seed.blueprint_id = seed_telemetry["blueprint_id"]
-            seed.accuracy_delta = seed_telemetry["accuracy_delta"]
-            seed.epochs_in_stage = seed_telemetry["epochs_in_stage"]
-            seed.alpha = seed_telemetry["alpha"]
-            # Gradient health fields (always emitted)
-            seed.grad_ratio = seed_telemetry["grad_ratio"]
-            seed.has_vanishing = seed_telemetry["has_vanishing"]
-            seed.has_exploding = seed_telemetry["has_exploding"]
-            # Inter-slot interaction metrics (optional - only present when counterfactual engine active)
-            # These use .get() with None because absence is semantically meaningful ("not computed")
-            if "contribution_velocity" in seed_telemetry:
-                seed.contribution_velocity = seed_telemetry["contribution_velocity"]
-            if "interaction_sum" in seed_telemetry:
-                seed.interaction_sum = seed_telemetry["interaction_sum"]
-            if "boost_received" in seed_telemetry:
-                seed.boost_received = seed_telemetry["boost_received"]
-            if "upstream_alpha_sum" in seed_telemetry:
-                seed.upstream_alpha_sum = seed_telemetry["upstream_alpha_sum"]
-            if "downstream_alpha_sum" in seed_telemetry:
-                seed.downstream_alpha_sum = seed_telemetry["downstream_alpha_sum"]
+                # HIGH-03 fix: Direct access for core fields - fail-fast if telemetry contract changes
+                # Core lifecycle fields (always emitted by simic)
+                seed.stage = seed_telemetry["stage"]
+                seed.blueprint_id = seed_telemetry["blueprint_id"]
+                seed.accuracy_delta = seed_telemetry["accuracy_delta"]
+                seed.epochs_in_stage = seed_telemetry["epochs_in_stage"]
+                seed.alpha = seed_telemetry["alpha"]
+                # Gradient health fields (always emitted)
+                seed.grad_ratio = seed_telemetry["grad_ratio"]
+                seed.has_vanishing = seed_telemetry["has_vanishing"]
+                seed.has_exploding = seed_telemetry["has_exploding"]
+                # Inter-slot interaction metrics (optional - only present when counterfactual engine active)
+                # These are absent when counterfactual computation is disabled.
+                if "contribution_velocity" in seed_telemetry:
+                    seed.contribution_velocity = seed_telemetry["contribution_velocity"]
+                if "interaction_sum" in seed_telemetry:
+                    seed.interaction_sum = seed_telemetry["interaction_sum"]
+                if "boost_received" in seed_telemetry:
+                    seed.boost_received = seed_telemetry["boost_received"]
+                if "upstream_alpha_sum" in seed_telemetry:
+                    seed.upstream_alpha_sum = seed_telemetry["upstream_alpha_sum"]
+                if "downstream_alpha_sum" in seed_telemetry:
+                    seed.downstream_alpha_sum = seed_telemetry["downstream_alpha_sum"]
 
-            # Track slot_ids dynamically (only if not locked by TRAINING_STARTED)
-            if not self._slot_ids_locked and slot_id not in self._slot_ids and slot_id != "unknown":
-                self._slot_ids.append(slot_id)
-                self._slot_ids.sort()
+                # Track slot_ids dynamically (only if not locked by TRAINING_STARTED)
+                if not self._slot_ids_locked and slot_id not in self._slot_ids and slot_id != "unknown":
+                    self._slot_ids.append(slot_id)
+                    self._slot_ids.sort()
+
+            # Tombstone slots that disappeared from the snapshot.
+            #
+            # EPOCH_COMPLETED is a snapshot of Kasmina slot_reports. When a slot is
+            # cleared (state=None after RESETTING → DORMANT), it no longer appears
+            # in the payload.seeds dict. If we don't handle this, UI can display
+            # stale stage state if the final SEED_STAGE_CHANGED event was dropped.
+            if self._slot_ids_locked:
+                for slot_id in self._slot_ids:
+                    if slot_id in seeds_data:
+                        continue
+                    if slot_id in env.seeds:
+                        env.seeds[slot_id] = SeedState(slot_id=slot_id)
 
         # Update accuracy AFTER seeds are refreshed
         episode_id = self._current_episode + env_id

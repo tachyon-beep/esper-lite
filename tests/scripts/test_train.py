@@ -103,15 +103,18 @@ class TestDualABTestingCLI:
 
         parser = build_parser()
 
-        # Test all three valid choices
+        # Smoke test a representative set of valid choices
         args = parser.parse_args(["ppo", "--dual-ab", "shaped-vs-simplified"])
         assert args.dual_ab == "shaped-vs-simplified"
 
         args = parser.parse_args(["ppo", "--dual-ab", "shaped-vs-sparse"])
         assert args.dual_ab == "shaped-vs-sparse"
 
-        args = parser.parse_args(["ppo", "--dual-ab", "simplified-vs-sparse"])
-        assert args.dual_ab == "simplified-vs-sparse"
+        args = parser.parse_args(["ppo", "--dual-ab", "shaped-vs-escrow"])
+        assert args.dual_ab == "shaped-vs-escrow"
+
+        args = parser.parse_args(["ppo", "--dual-ab", "escrow-vs-basic"])
+        assert args.dual_ab == "escrow-vs-basic"
 
     def test_dual_ab_default_is_none(self):
         """--dual-ab should default to None when not specified."""

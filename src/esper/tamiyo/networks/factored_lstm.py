@@ -634,18 +634,20 @@ class FactoredRecurrentActorCritic(nn.Module):
             op_mask = op_mask.unsqueeze(1)
 
         with torch.inference_mode():
+            # IMPORTANT: Do NOT pass non-op head masks into forward().
+            #
+            # get_action() performs op-conditional canonicalization by overriding masks
+            # (e.g., forcing blueprint=NOOP when op!=GERMINATE). If forward() pre-masks
+            # logits using the base mask, we can accidentally mask out the canonical
+            # placeholder action (NOOP is disabled in the normal blueprint mask),
+            # collapsing the distribution and causing random/invalid samples.
+            #
+            # forward() only needs the op_mask for valid op sampling + value conditioning.
             output = self.forward(
-                state,
-                blueprint_indices,
-                hidden,
-                slot_mask,
-                blueprint_mask,
-                style_mask,
-                tempo_mask,
-                alpha_target_mask,
-                alpha_speed_mask,
-                alpha_curve_mask,
-                op_mask,
+                state=state,
+                blueprint_indices=blueprint_indices,
+                hidden=hidden,
+                op_mask=op_mask,
             )
 
             # Sample from each head using MaskedCategorical for safety
@@ -932,22 +934,13 @@ class FactoredRecurrentActorCritic(nn.Module):
         op_logits = self.op_head(lstm_out)
 
         # Apply masks
-        if slot_mask is not None:
-            slot_logits = slot_logits.masked_fill(~slot_mask, MASKED_LOGIT_VALUE)
-        if blueprint_mask is not None:
-            blueprint_logits = blueprint_logits.masked_fill(~blueprint_mask, MASKED_LOGIT_VALUE)
-        if style_mask is not None:
-            style_logits = style_logits.masked_fill(~style_mask, MASKED_LOGIT_VALUE)
-        if tempo_mask is not None:
-            tempo_logits = tempo_logits.masked_fill(~tempo_mask, MASKED_LOGIT_VALUE)
-        if alpha_target_mask is not None:
-            alpha_target_logits = alpha_target_logits.masked_fill(~alpha_target_mask, MASKED_LOGIT_VALUE)
-        if alpha_speed_mask is not None:
-            alpha_speed_logits = alpha_speed_logits.masked_fill(~alpha_speed_mask, MASKED_LOGIT_VALUE)
-        if alpha_curve_mask is not None:
-            alpha_curve_logits = alpha_curve_logits.masked_fill(~alpha_curve_mask, MASKED_LOGIT_VALUE)
-        if op_mask is not None:
-            op_logits = op_logits.masked_fill(~op_mask, MASKED_LOGIT_VALUE)
+        #
+        # IMPORTANT: Do NOT pre-mask logits here.
+        #
+        # We apply op-conditional mask overrides below (e.g., allow blueprint=NOOP when
+        # op!=GERMINATE). Pre-masking would permanently squash those placeholder logits
+        # to MASKED_LOGIT_VALUE, breaking the “single-valid-action => log_prob==0”
+        # invariant and corrupting PPO ratios/joint KL diagnostics.
 
         # Use STORED op for value conditioning (not freshly sampled)
         stored_op = actions["op"]

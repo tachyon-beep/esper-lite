@@ -245,16 +245,38 @@ class VectorizedEmitter:
         # the original unrolled logic in vectorized.py.
 
         action_name = OP_NAMES[action_indices["op"]]
-        blueprint_id = BLUEPRINT_IDS[action_indices["blueprint"]]
+        is_germinate = action_name == "GERMINATE"
+        is_set_alpha = action_name == "SET_ALPHA_TARGET"
+        is_prune = action_name == "PRUNE"
+        # Blueprint IDs are only semantically meaningful for GERMINATE.
+        # Emitting them for non-germinate ops is misleading in the UI (e.g., CIFAR
+        # runs showing transformer-only blueprints that were never executed).
+        blueprint_id: str | None = (
+            BLUEPRINT_IDS[action_indices["blueprint"]]
+            if is_germinate
+            else None
+        )
         style_idx = action_indices["style"]
-        style = STYLE_NAMES[style_idx]
-        blend_id = STYLE_BLEND_IDS[style_idx]
+        style: str | None = STYLE_NAMES[style_idx] if is_germinate or is_set_alpha else None
+        blend_id: str | None = STYLE_BLEND_IDS[style_idx] if style is not None else None
         selected_alpha_algorithm = STYLE_ALPHA_ALGORITHMS[style_idx].name
         alpha_algorithm = active_alpha_algorithm or selected_alpha_algorithm
-        tempo_idx = action_indices["tempo"]
-        alpha_target = ALPHA_TARGET_VALUES[action_indices["alpha_target"]]
-        alpha_speed = ALPHA_SPEED_NAMES[action_indices["alpha_speed"]]
-        alpha_curve = ALPHA_CURVE_NAMES[action_indices["alpha_curve"]]
+        tempo_idx: int | None = action_indices["tempo"] if is_germinate else None
+        alpha_target: float | None = (
+            ALPHA_TARGET_VALUES[action_indices["alpha_target"]]
+            if is_germinate or is_set_alpha
+            else None
+        )
+        alpha_speed: str | None = (
+            ALPHA_SPEED_NAMES[action_indices["alpha_speed"]]
+            if is_set_alpha or is_prune
+            else None
+        )
+        alpha_curve: str | None = (
+            ALPHA_CURVE_NAMES[action_indices["alpha_curve"]]
+            if is_set_alpha or is_prune
+            else None
+        )
         alpha_target_masked = bool(masked.get("alpha_target", False))
         alpha_speed_masked = bool(masked.get("alpha_speed", False))
         alpha_curve_masked = bool(masked.get("alpha_curve", False))
@@ -607,19 +629,23 @@ def emit_last_action(
     """
     hub = get_hub()
     selected_alpha_algorithm = STYLE_ALPHA_ALGORITHMS[style_idx].name
+    op_name = OP_NAMES[op_idx]
+    is_germinate = op_name == "GERMINATE"
+    is_set_alpha = op_name == "SET_ALPHA_TARGET"
+    is_prune = op_name == "PRUNE"
     payload = AnalyticsSnapshotPayload(
         kind="last_action",
         env_id=env_id,
         inner_epoch=epoch,
-        action_name=OP_NAMES[op_idx],
+        action_name=op_name,
         slot_id=slot_id,
-        blueprint_id=BLUEPRINT_IDS[blueprint_idx],
-        style=STYLE_NAMES[style_idx],
-        blend_id=STYLE_BLEND_IDS[style_idx],
-        tempo_idx=tempo_idx,
-        alpha_target=ALPHA_TARGET_VALUES[alpha_target_idx],
-        alpha_speed=ALPHA_SPEED_NAMES[alpha_speed_idx],
-        alpha_curve=ALPHA_CURVE_NAMES[alpha_curve_idx],
+        blueprint_id=BLUEPRINT_IDS[blueprint_idx] if is_germinate else None,
+        style=STYLE_NAMES[style_idx] if is_germinate or is_set_alpha else None,
+        blend_id=STYLE_BLEND_IDS[style_idx] if is_germinate or is_set_alpha else None,
+        tempo_idx=tempo_idx if is_germinate else None,
+        alpha_target=ALPHA_TARGET_VALUES[alpha_target_idx] if is_germinate or is_set_alpha else None,
+        alpha_speed=ALPHA_SPEED_NAMES[alpha_speed_idx] if is_set_alpha or is_prune else None,
+        alpha_curve=ALPHA_CURVE_NAMES[alpha_curve_idx] if is_set_alpha or is_prune else None,
         alpha_algorithm=active_alpha_algorithm or selected_alpha_algorithm,
         alpha_algorithm_selected=selected_alpha_algorithm,
         op_masked=bool(masked["op"]),
@@ -644,15 +670,15 @@ def emit_last_action(
         "kind": "last_action",
         "env_id": env_id,
         "inner_epoch": epoch,
-        "op": OP_NAMES[op_idx],
+        "op": op_name,
         "slot_id": slot_id,
-        "blueprint_id": BLUEPRINT_IDS[blueprint_idx],
-        "style": STYLE_NAMES[style_idx],
-        "blend_id": STYLE_BLEND_IDS[style_idx],
-        "tempo_idx": tempo_idx,
-        "alpha_target": ALPHA_TARGET_VALUES[alpha_target_idx],
-        "alpha_speed": ALPHA_SPEED_NAMES[alpha_speed_idx],
-        "alpha_curve": ALPHA_CURVE_NAMES[alpha_curve_idx],
+        "blueprint_id": BLUEPRINT_IDS[blueprint_idx] if is_germinate else None,
+        "style": STYLE_NAMES[style_idx] if is_germinate or is_set_alpha else None,
+        "blend_id": STYLE_BLEND_IDS[style_idx] if is_germinate or is_set_alpha else None,
+        "tempo_idx": tempo_idx if is_germinate else None,
+        "alpha_target": ALPHA_TARGET_VALUES[alpha_target_idx] if is_germinate or is_set_alpha else None,
+        "alpha_speed": ALPHA_SPEED_NAMES[alpha_speed_idx] if is_set_alpha or is_prune else None,
+        "alpha_curve": ALPHA_CURVE_NAMES[alpha_curve_idx] if is_set_alpha or is_prune else None,
         "alpha_algorithm": active_alpha_algorithm or selected_alpha_algorithm,
         "alpha_algorithm_selected": selected_alpha_algorithm,
         "op_masked": bool(masked["op"]),

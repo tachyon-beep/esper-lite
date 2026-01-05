@@ -36,6 +36,7 @@ from esper.simic.telemetry import (
     collect_seed_gradients_async,
     materialize_grad_stats,
     TelemetryConfig,
+    emit_with_env_context,
 )
 from esper.simic.telemetry.gradient_collector import GradientHealthStats
 from esper.leyline import SlottedHostProtocol
@@ -492,10 +493,9 @@ def run_heuristic_episode(
     ops_telemetry_enabled = telemetry_config is None or telemetry_config.should_collect("ops_normal")
 
     def telemetry_callback(event: TelemetryEvent) -> None:
-        # Note: Slot telemetry events already have properly typed payloads,
-        # we just emit them as-is. The env_id/device are set when creating
-        # EPOCH_COMPLETED and TRAINING_STARTED events.
-        hub.emit(event)
+        # Slot telemetry events are emitted from Kasmina with env_id=-1 sentinel
+        # (slots don't know their environment). Inject env_id=0 for heuristic runs.
+        emit_with_env_context(hub, 0, device, event)
 
     for slot_id in enabled_slots:
         slot = model.seed_slots[slot_id]

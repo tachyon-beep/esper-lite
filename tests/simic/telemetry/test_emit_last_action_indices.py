@@ -69,8 +69,9 @@ class TestEmitLastActionWithIndices:
         assert result["style"] == STYLE_NAMES[style_idx]
         assert result["blend_id"] == fa.blend_algorithm_id
         assert result["alpha_target"] == ALPHA_TARGET_VALUES[alpha_target_idx]
-        assert result["alpha_speed"] == ALPHA_SPEED_NAMES[alpha_speed_idx]
-        assert result["alpha_curve"] == ALPHA_CURVE_NAMES[alpha_curve_idx]
+        # Alpha schedule fields are only meaningful for SET_ALPHA_TARGET/PRUNE.
+        assert result["alpha_speed"] is None
+        assert result["alpha_curve"] is None
         assert result["alpha_algorithm"] == fa.alpha_algorithm_value.name
         assert result["alpha_algorithm_selected"] == fa.alpha_algorithm_value.name
 

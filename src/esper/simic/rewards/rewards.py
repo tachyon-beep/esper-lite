@@ -52,12 +52,14 @@ class RewardMode(Enum):
 
     SHAPED: Current dense shaping with PBRS, attribution, warnings (default)
     ESCROW: Dense, reversible attribution (anti-peak / anti-thrash)
+    BASIC: Accuracy improvement minus parameter rent (minimal, no lifecycle shaping)
     SPARSE: Terminal-only ground truth (accuracy - param_cost)
     MINIMAL: Sparse + early-prune penalty only
     SIMPLIFIED: DRL Expert recommended - PBRS + intervention cost + terminal only
     """
     SHAPED = "shaped"
     ESCROW = "escrow"
+    BASIC = "basic"
     SPARSE = "sparse"
     MINIMAL = "minimal"
     SIMPLIFIED = "simplified"
@@ -247,6 +249,12 @@ class ContributionRewardConfig:
 
     # Gamma for PBRS (uses module constant for consistency)
     gamma: float = DEFAULT_GAMMA
+
+    # === BASIC Mode Parameters ===
+    # BASIC mode uses only two signals:
+    # - Accuracy improvement (acc_delta) scaled into a stable range
+    # - Parameter rent scaled by param_budget
+    basic_acc_delta_weight: float = 5.0
 
     # === Experiment Mode ===
     reward_mode: RewardMode = RewardMode.SHAPED
@@ -966,6 +974,53 @@ def compute_minimal_reward(
     return reward
 
 
+def compute_basic_reward(
+    *,
+    acc_delta: float,
+    effective_seed_params: float | None,
+    total_params: int,
+    host_params: int,
+    config: ContributionRewardConfig,
+) -> tuple[float, float, float]:
+    """Compute BASIC reward: accuracy improvement minus parameter rent.
+
+    Design goals:
+    - Use only task-aligned signals: accuracy and cost.
+    - Permit "do nothing" as optimal when the host can improve without growth.
+    - Avoid lifecycle shaping (no PBRS, no action costs, no attribution logic).
+
+    Components:
+    - Accuracy improvement: scaled acc_delta (percentage points) → O(0.01-0.2)
+    - Rent: param_penalty_weight * (effective_overhead / param_budget)
+
+    Returns:
+        (reward, rent_penalty, growth_ratio) where:
+        - rent_penalty is a positive scalar that was SUBTRACTED from reward
+        - growth_ratio is effective_overhead / max(host_params, rent_host_params_floor)
+    """
+    if config.param_budget <= 0:
+        raise ValueError("param_budget must be positive")
+
+    # Scale accuracy delta from percentage-points to [0,1]-ish.
+    accuracy_improvement = config.basic_acc_delta_weight * (acc_delta / 100.0)
+
+    # Prefer alpha-weighted overhead from vectorized training; fall back to raw overhead.
+    effective_overhead = (
+        effective_seed_params
+        if effective_seed_params is not None
+        else max(total_params - host_params, 0)
+    )
+    rent_penalty = config.param_penalty_weight * (effective_overhead / config.param_budget)
+
+    growth_ratio = 0.0
+    if host_params > 0:
+        denom = max(host_params, config.rent_host_params_floor)
+        growth_ratio = effective_overhead / denom
+
+    reward = accuracy_improvement - rent_penalty
+    return reward, rent_penalty, growth_ratio
+
+
 def compute_simplified_reward(
     action: LifecycleOp,
     seed_info: SeedInfo | None,
@@ -1141,6 +1196,27 @@ def compute_reward(
             seed_age=seed_age,
             config=config,
         )
+
+    elif config.reward_mode == RewardMode.BASIC:
+        reward, rent_penalty, growth_ratio = compute_basic_reward(
+            acc_delta=acc_delta,
+            effective_seed_params=effective_seed_params,
+            total_params=total_params,
+            host_params=host_params,
+            config=config,
+        )
+        if return_components:
+            components = RewardComponentsTelemetry()
+            components.total_reward = reward
+            components.action_name = action.name
+            components.epoch = epoch
+            components.seed_stage = seed_info.stage if seed_info else None
+            components.val_acc = val_acc
+            # Sanctum ΔAcc display uses base_acc_delta (legacy field name).
+            components.base_acc_delta = acc_delta
+            components.compute_rent = -rent_penalty
+            components.growth_ratio = growth_ratio
+            return reward, components
 
     elif config.reward_mode == RewardMode.SIMPLIFIED:
         reward = compute_simplified_reward(

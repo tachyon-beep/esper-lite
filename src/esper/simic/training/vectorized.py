@@ -1462,6 +1462,11 @@ def train_ppo_vectorized(
         elif op_idx == OP_PRUNE:
             action_valid_for_reward = (
                 seed_state is not None
+                and seed_state.stage in (
+                    SeedStage.TRAINING,
+                    SeedStage.BLENDING,
+                    SeedStage.HOLDING,
+                )
                 and seed_state.alpha_controller.alpha_mode == AlphaMode.HOLD
                 and seed_state.can_transition_to(SeedStage.PRUNED)
                 # BUG-020 fix: enforce MIN_PRUNE_AGE to match masking invariant
@@ -3367,6 +3372,13 @@ def train_ppo_vectorized(
                             elif (
                                 op_action == OP_PRUNE
                                 and model.has_active_seed_in_slot(target_slot)
+                                and seed_state is not None
+                                and seed_state.stage
+                                in (
+                                    SeedStage.TRAINING,
+                                    SeedStage.BLENDING,
+                                    SeedStage.HOLDING,
+                                )
                                 # BUG-020 fix: enforce MIN_PRUNE_AGE at execution gate
                                 and seed_info is not None
                                 and seed_info.seed_age_epochs >= MIN_PRUNE_AGE
@@ -3440,6 +3452,9 @@ def train_ppo_vectorized(
                                     target_slot
                                 ):
                                     env_state.seed_optimizers.pop(target_slot, None)
+                            elif op_action == OP_WAIT:
+                                # WAIT is always a valid no-op for enabled slots.
+                                action_success = True
                         elif op_action == OP_WAIT:
                             action_success = True
 

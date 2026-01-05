@@ -371,7 +371,18 @@ def build_parser() -> argparse.ArgumentParser:
     ppo_parser.add_argument(
         "--dual-ab",
         type=str,
-        choices=["shaped-vs-simplified", "shaped-vs-sparse", "simplified-vs-sparse"],
+        choices=[
+            "shaped-vs-simplified",
+            "shaped-vs-sparse",
+            "shaped-vs-escrow",
+            "shaped-vs-basic",
+            "simplified-vs-sparse",
+            "simplified-vs-escrow",
+            "simplified-vs-basic",
+            "sparse-vs-escrow",
+            "sparse-vs-basic",
+            "escrow-vs-basic",
+        ],
         default=None,
         help="True A/B test: train separate policies on separate GPUs",
     )
@@ -776,6 +787,8 @@ def main() -> None:
                         "shaped": RewardMode.SHAPED,
                         "simplified": RewardMode.SIMPLIFIED,
                         "sparse": RewardMode.SPARSE,
+                        "escrow": RewardMode.ESCROW,
+                        "basic": RewardMode.BASIC,
                     }
                     parts = args.dual_ab.split("-vs-")
                     mode_a = mode_map[parts[0]]

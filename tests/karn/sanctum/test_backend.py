@@ -140,6 +140,75 @@ class TestSanctumAggregator:
         assert env.current_epoch == 10
         assert len(env.accuracy_history) == 1
 
+    def test_epoch_completed_tombstones_missing_slots_when_slot_ids_locked(self) -> None:
+        """Missing slots in EpochCompletedPayload.seeds should clear stale per-slot state."""
+        agg = SanctumAggregator(num_envs=1)
+
+        start = MagicMock()
+        start.event_type = MagicMock()
+        start.event_type.name = "TRAINING_STARTED"
+        start.timestamp = datetime.now(timezone.utc)
+        start.data = TrainingStartedPayload(
+            episode_id="test-run-001",
+            task="cifar_baseline",
+            max_epochs=2,
+            max_batches=1,
+            n_envs=1,
+            host_params=1000,
+            slot_ids=("r0c0",),
+            seed=0,
+            n_episodes=1,
+            lr=3e-4,
+            clip_ratio=0.2,
+            entropy_coef=0.01,
+            param_budget=0,
+            policy_device="cpu",
+            env_devices=("cpu",),
+            reward_mode="shaped",
+        )
+        agg.process_event(start)
+
+        epoch1 = MagicMock()
+        epoch1.event_type = MagicMock()
+        epoch1.event_type.name = "EPOCH_COMPLETED"
+        epoch1.timestamp = datetime.now(timezone.utc)
+        epoch1.data = EpochCompletedPayload(
+            env_id=0,
+            val_accuracy=10.0,
+            val_loss=2.3,
+            inner_epoch=1,
+            seeds={
+                "r0c0": {
+                    "stage": "RESETTING",
+                    "blueprint_id": "conv_light",
+                    "accuracy_delta": 0.0,
+                    "epochs_in_stage": 1,
+                    "alpha": 0.0,
+                    "grad_ratio": 0.0,
+                    "has_vanishing": False,
+                    "has_exploding": False,
+                }
+            },
+        )
+        agg.process_event(epoch1)
+
+        epoch2 = MagicMock()
+        epoch2.event_type = MagicMock()
+        epoch2.event_type.name = "EPOCH_COMPLETED"
+        epoch2.timestamp = datetime.now(timezone.utc)
+        epoch2.data = EpochCompletedPayload(
+            env_id=0,
+            val_accuracy=10.0,
+            val_loss=2.3,
+            inner_epoch=2,
+            seeds={},
+        )
+        agg.process_event(epoch2)
+
+        snapshot = agg.get_snapshot()
+        assert snapshot.envs[0].seeds["r0c0"].stage == "DORMANT"
+        assert snapshot.envs[0].seeds["r0c0"].blueprint_id is None
+
     def test_snapshot_computes_aggregate_mean_accuracy_and_reward(self) -> None:
         """SanctumSnapshot should include aggregate mean metrics for EnvOverview Σ row."""
         agg = SanctumAggregator(num_envs=2)
