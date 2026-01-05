@@ -2,6 +2,23 @@
 
 **Intent:** Make behavior regressions visible before we start moving code.
 
+## What already exists (guardrails we must preserve)
+
+These tests already lock down key vectorized-training contracts and are the primary safety rails for the refactor:
+
+- Import isolation (prevents accidental heavy imports / cycles):
+  - `tests/test_import_isolation.py`
+- Public surface contracts:
+  - `tests/meta/test_factored_action_contracts.py` (includes `train_ppo_vectorized` signature checks)
+  - `tests/scripts/test_train.py` (CLI → `train_ppo_vectorized` kwargs mapping)
+- Vectorized helper semantics:
+  - `tests/simic/test_vectorized.py` (covers `_run_ppo_updates`, `_resolve_target_slot`, telemetry emission helpers, anomaly logic)
+  - `tests/simic/training/test_entropy_annealing.py` (documents annealing semantics)
+  - `tests/simic/rewards/escrow/test_escrow_wiring.py` (covers `_resolve_target_slot` and escrow edge cases)
+  - `tests/simic/test_reward_normalizer_checkpoint.py` (resume metadata and monkeypatch seams)
+
+Phase 0 focuses on *baseline capture* and identifying *fragile seams* before we start moving code.
+
 ## Checklist
 
 ### Baselines (record before refactor)
@@ -17,16 +34,18 @@
   - lazy import sites for `get_task_spec`
   - any “import inside function to avoid circular import” notes
 
+Use `docs/plans/planning/simic2/phases/phase0_baseline_and_tests/baseline_capture.md` as the capture template.
+
 ### Add pure unit tests (no GPU required)
 
 Target: tests that lock down semantics of logic we plan to extract out of `vectorized.py`.
 
-- `entropy_anneal_steps` semantics:
-  - `_calculate_entropy_anneal_steps(entropy_anneal_episodes, n_envs, ppo_updates_per_batch)`
-  - confirm `ceil(entropy_anneal_episodes / n_envs) * max(1, ppo_updates_per_batch)`
-- Action validity rules (unit-level):
-  - Given `op`, slot enabled/disabled, and seed stage, ensure validity matches current rules.
-  - Keep this test at the “decision policy contract” level (don’t require a real model).
+Already covered:
+- `tests/simic/training/test_entropy_annealing.py` (anneal semantics)
+- `tests/simic/test_vectorized.py` (helper semantics)
+
+Potential additions (only if we hit gaps during Phase 1 extraction):
+- A minimal “action validity” contract test that does *not* require a real model, once the action decode logic becomes a module-level pure function.
 
 ### Validation commands (run per PR)
 
@@ -37,5 +56,4 @@ Target: tests that lock down semantics of logic we plan to extract out of `vecto
 ## Done means
 
 - Baseline artifacts are recorded in the PR description or phase notes.
-- We have at least 2–3 pure tests that will fail on accidental semantic drift during extraction.
-
+- We have a clear list of “fragile seams” (tests that monkeypatch `esper.simic.training.vectorized` internals) so Phase 1 doesn’t surprise-break unrelated tests.
