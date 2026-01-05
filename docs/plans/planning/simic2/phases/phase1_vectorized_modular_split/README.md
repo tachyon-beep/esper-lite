@@ -2,6 +2,16 @@
 
 **Intent:** Make the training loop readable and testable by moving coherent subsystems out of the giant module, while keeping runtime behavior and hot-path performance intact.
 
+## Pre-flight (risk reduction)
+
+- Confirm Phase 0 baselines are captured: `docs/plans/planning/simic2/phases/phase0_baseline_and_tests/baseline_capture.md`
+- Re-run the fast guardrail suite before starting (use workspace-local UV cache if needed):
+  - `UV_CACHE_DIR=.uv-cache uv run pytest -q tests/test_import_isolation.py tests/meta/test_factored_action_contracts.py tests/simic/test_vectorized.py tests/simic/training/test_entropy_annealing.py tests/simic/rewards/escrow/test_escrow_wiring.py tests/simic/test_reward_normalizer_checkpoint.py tests/simic/test_gpu_preload_batch_size.py tests/scripts/test_train.py`
+
+Supporting docs:
+- Extraction map: `docs/plans/planning/simic2/phases/phase1_vectorized_modular_split/extraction_map.md`
+- Risk register: `docs/plans/planning/simic2/phases/phase1_vectorized_modular_split/risk_register.md`
+
 ## Target shape
 
 - Keep `train_ppo_vectorized(...)` as the public entrypoint (for now).
@@ -41,6 +51,7 @@
 - Run a minimal training invocation (as small as practical):
   - `PYTHONPATH=src uv run python -m esper.scripts.train ppo --preset cifar_baseline --task cifar_baseline --rounds 1 --envs 1 --episode-length 5`
 - Compare telemetry event counts before/after for a short run (sanity, not statistical equivalence).
+  - For throughput, prefer the training-emitted throughput telemetry (CUDATimer-based) over `time.time()` sampling.
 
 ## Done means
 

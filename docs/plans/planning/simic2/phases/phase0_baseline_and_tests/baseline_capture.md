@@ -113,3 +113,28 @@ uv run pytest -q tests/cuda/test_vectorized_multi_gpu_smoke.py
   - `runtime -> simic.rewards -> simic -> simic.training -> vectorized -> runtime`
 - `src/esper/simic/training/helpers.py`: same pattern (lazy `get_task_spec` import).
 - `tests/test_import_isolation.py`: enforces that importing `esper.runtime` does **not** import `esper.simic.training.vectorized`.
+
+## 7) Static checks baseline
+
+Ran with workspace-local UV cache: `UV_CACHE_DIR=.uv-cache`:
+
+```bash
+uv run ruff check src/ tests/
+uv run mypy src/
+```
+
+Result:
+- ✅ `ruff`: All checks passed
+- ✅ `mypy`: Success: no issues found in 159 source files
+
+## 8) Full default test suite baseline
+
+Ran with workspace-local UV cache: `UV_CACHE_DIR=.uv-cache`:
+
+```bash
+uv run pytest -q
+```
+
+Result:
+- ✅ `4235 passed, 34 skipped, 69 deselected, 4 xfailed, 4 warnings in 107.42s`
+- Skips were CUDA/MPS availability dependent; xfails are known telemetry wiring gaps.
