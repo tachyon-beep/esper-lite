@@ -472,6 +472,7 @@ def create_views(conn: duckdb.DuckDBPyConnection, telemetry_dir: str) -> None:
         telemetry_dir: Path to telemetry directory containing run subdirectories
     """
     conn.execute("PRAGMA threads=4")
+    conn.execute("PRAGMA disable_progress_bar")
 
     has_files = telemetry_has_event_files(telemetry_dir)
 
