@@ -1194,6 +1194,7 @@ class DecisionSnapshot:
     expected_value: float  # Value estimate before action
     actual_reward: float | None  # Actual reward received (None if pending)
     alternatives: list[tuple[str, float]]  # [(action_name, probability), ...]
+    action_success: bool | None = None  # Whether action executed successfully (None if unknown)
     # Unique ID for click targeting
     decision_id: str = ""
     # Environment ID that made this decision (for TD advantage tracking)

@@ -282,7 +282,17 @@ class HealthStatusPanel(Static):
         status = self._get_value_status(tamiyo)
 
         result.append("Value Range  ", style="dim")
-        result.append(f"[{v_min:.1f},{v_max:.1f}]", style=self._status_style(status))
+        value_range = abs(v_max - v_min)
+        if value_range < 0.01:
+            range_precision = 3
+        elif value_range < 0.1:
+            range_precision = 2
+        else:
+            range_precision = 1
+        result.append(
+            f"[{v_min:.{range_precision}f},{v_max:.{range_precision}f}]",
+            style=self._status_style(status),
+        )
         result.append(" ", style="dim")
         result.append(f"s={v_std:.2f}", style="dim")
 

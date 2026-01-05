@@ -69,9 +69,9 @@ allow_hits:
     owner: "john"
     reason: "Textual framework - NoMatches for optional widget lookup"
 
-  - key: "src/esper/karn/sanctum/app.py:_apply_view:silent_except:5"
+  - key: "src/esper/karn/sanctum/aggregator.py:_process_event_unlocked:hasattr"
     owner: "john"
-    reason: "Textual framework - NoMatches for optional widget lookup"
+    reason: "Telemetry event_type may be Enum or str depending on ingestion source"
 
   - key: "src/esper/karn/sanctum/app.py:action_cursor_down:silent_except"
     owner: "john"
@@ -153,11 +153,7 @@ allow_hits:
 
   - key: "src/esper/karn/overwatch/backend.py:websocket_endpoint:silent_except"
     owner: "john"
-    reason: "Queue.get_nowait() raises Empty when no messages - expected pattern"
-
-  - key: "src/esper/karn/overwatch/backend.py:websocket_endpoint:silent_except:2"
-    owner: "john"
-    reason: "WebSocket send with timeout raises TimeoutError - expected pattern"
+    reason: "WebSocket receive with timeout raises TimeoutError - expected pattern"
 
   - key: "src/esper/karn/websocket_output.py:close:silent_except"
     owner: "john"
@@ -319,6 +315,10 @@ allow_hits:
     reason: "Python lazy import pattern - module __getattr__ for deferred loading"
 
   - key: "src/esper/tolaria/__init__.py:__getattr__:getattr"
+    owner: "john"
+    reason: "Python lazy import pattern - module __getattr__ for deferred loading"
+
+  - key: "src/esper/tamiyo/__init__.py:__getattr__:getattr"
     owner: "john"
     reason: "Python lazy import pattern - module __getattr__ for deferred loading"
 

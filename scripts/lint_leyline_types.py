@@ -23,6 +23,8 @@ from typing import NamedTuple
 
 import yaml
 
+KNOWN_TYPE_KINDS = {"enum", "dataclass", "protocol", "typeddict", "namedtuple"}
+
 
 class TypeDef(NamedTuple):
     """A type definition found in the codebase."""
@@ -38,14 +40,68 @@ class Whitelist:
 
     def __init__(self, config_path: Path) -> None:
         with open(config_path) as f:
-            data = yaml.safe_load(f)
+            data = yaml.safe_load(f) or {}
 
-        self.allow_paths: list[str] = [
-            p["path"] for p in data.get("allow_paths", [])
-        ]
-        self.allow_hits: dict[str, dict] = {
-            h["key"]: h for h in data.get("allow_hits", [])
-        }
+        if not isinstance(data, dict):
+            raise ValueError("leyline_boundaries.yaml must be a mapping at top level")
+
+        self.allow_paths: list[str] = []
+        allow_paths = data.get("allow_paths", [])
+        if not isinstance(allow_paths, list):
+            raise ValueError("allow_paths must be a list")
+        for entry in allow_paths:
+            if not isinstance(entry, dict):
+                raise ValueError("allow_paths entries must be mappings")
+            path = entry.get("path")
+            reason = entry.get("reason")
+            if not isinstance(path, str) or not path:
+                raise ValueError("allow_paths entries must have non-empty 'path'")
+            if not isinstance(reason, str) or not reason:
+                raise ValueError(f"allow_paths '{path}' must include non-empty 'reason'")
+            self.allow_paths.append(path)
+
+        self.allow_hits: dict[str, dict] = {}
+        allow_hits = data.get("allow_hits", [])
+        if not isinstance(allow_hits, list):
+            raise ValueError("allow_hits must be a list")
+        for entry in allow_hits:
+            if not isinstance(entry, dict):
+                raise ValueError("allow_hits entries must be mappings")
+            key = entry.get("key")
+            owner = entry.get("owner")
+            reason = entry.get("reason")
+            expires_raw = entry.get("expires")
+
+            if not isinstance(key, str) or not key:
+                raise ValueError("allow_hits entries must have non-empty 'key'")
+            if not isinstance(owner, str) or not owner:
+                raise ValueError(f"allow_hits '{key}' must include non-empty 'owner'")
+            if not isinstance(reason, str) or not reason:
+                raise ValueError(f"allow_hits '{key}' must include non-empty 'reason'")
+
+            parts = key.split(":")
+            if len(parts) != 3:
+                raise ValueError(
+                    f"Invalid allow_hits key format (expected path:type_kind:ClassName): {key}"
+                )
+            kind = parts[1]
+            if kind not in KNOWN_TYPE_KINDS:
+                raise ValueError(f"Unknown type_kind '{kind}' in allow_hits key: {key}")
+
+            if expires_raw is not None:
+                if not isinstance(expires_raw, str) or not expires_raw:
+                    raise ValueError(f"allow_hits '{key}' has invalid expires value")
+                try:
+                    date.fromisoformat(expires_raw)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"allow_hits '{key}' has invalid expires date: {expires_raw}"
+                    ) from exc
+
+            if key in self.allow_hits:
+                raise ValueError(f"Duplicate allow_hits key: {key}")
+            self.allow_hits[key] = entry
+
         self.today = date.today()
 
     def is_allowed(self, typedef: TypeDef) -> tuple[bool, str | None]:
@@ -143,11 +199,16 @@ def main() -> int:
         print(f"ERROR: {config_path} not found")
         return 1
 
-    whitelist = Whitelist(config_path)
+    try:
+        whitelist = Whitelist(config_path)
+    except ValueError as exc:
+        print(f"ERROR: Invalid whitelist config: {exc}")
+        return 1
     violations: list[str] = []
     warnings: list[str] = []
     checked_files = 0
     checked_types = 0
+    used_allow_hit_keys: set[str] = set()
 
     for path in sorted(Path("src/esper").rglob("*.py")):
         # Skip __pycache__ directories
@@ -169,6 +230,9 @@ def main() -> int:
 
         for typedef in typedefs:
             checked_types += 1
+            key = f"{typedef.path}:{typedef.kind}:{typedef.name}"
+            if key in whitelist.allow_hits:
+                used_allow_hit_keys.add(key)
             allowed, warning = whitelist.is_allowed(typedef)
 
             if warning:
@@ -185,9 +249,18 @@ def main() -> int:
 
     # Print summary
     print(f"\nChecked {checked_files} files, {checked_types} type definitions")
+    stale_allow_hits = sorted(set(whitelist.allow_hits.keys()) - used_allow_hit_keys)
+    print(f"Stale whitelist entries: {len(stale_allow_hits)}")
 
     for w in warnings:
         print(f"WARNING: {w}")
+
+    if stale_allow_hits:
+        print("\nSTALE WHITELIST ENTRIES FOUND:\n")
+        for key in stale_allow_hits:
+            print(f"  {key}")
+        print("\nTo fix: remove or update these keys in leyline_boundaries.yaml")
+        return 1
 
     if violations:
         print(f"\n{len(violations)} violation(s) found:\n")

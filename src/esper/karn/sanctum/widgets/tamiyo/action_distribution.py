@@ -605,12 +605,13 @@ class ActionContext(Static):
             (
                 ACTION_ABBREVS.get(d.chosen_action, "?"),
                 ACTION_COLORS.get(d.chosen_action, "white"),
+                d.action_success,
             )
             for d in recent_decisions
         ]
         recent_actions.reverse()
 
-        for i, (char, color) in enumerate(recent_actions):
+        for i, (char, color, success) in enumerate(recent_actions):
             style = color
             if is_stuck:
                 style = "yellow"
@@ -618,7 +619,16 @@ class ActionContext(Static):
                 style = "red"
 
             result.append(char, style=style)
-            result.append("✓", style="green")
+            if success is True:
+                marker = "✓"
+                marker_style = "green"
+            elif success is False:
+                marker = "✗"
+                marker_style = "red bold"
+            else:
+                marker = "?"
+                marker_style = "dim"
+            result.append(marker, style=marker_style)
 
             if i < len(recent_actions) - 1:
                 result.append("→", style="dim")

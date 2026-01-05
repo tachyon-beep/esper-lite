@@ -1,8 +1,9 @@
 {
-  "task": "cifar_impaired",
-  "n_episodes": 2000,
+  "task": "cifar_baseline",
+  "n_episodes": 200,
   "n_envs": 128,
   "max_epochs": 150,
+  "chunk_length": 150,
   "lr": 0.0003,
   "clip_ratio": 0.2,
   "gamma": 0.995,
@@ -15,13 +16,10 @@
   "use_telemetry": true,
   "amp": true,
   "lstm_hidden_dim": 512,
-  "chunk_length": 150,
   "slots": [
-    "r0c0",
-    "r0c1",
-    "r0c2"
+    "r0c0"
   ],
-  "max_seeds": 2,
+  "max_seeds": 1,
   "reward_mode": "escrow",
   "reward_family": "contribution",
   "param_budget": 500000,

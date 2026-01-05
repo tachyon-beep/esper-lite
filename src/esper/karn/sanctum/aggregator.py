@@ -1697,6 +1697,7 @@ class SanctumAggregator:
                 expected_value=value_s,
                 actual_reward=total_reward,
                 alternatives=payload.alternatives or [],
+                action_success=payload.action_success,
                 decision_id=str(uuid.uuid4())[:8],
                 decision_entropy=payload.decision_entropy or 0.0,
                 env_id=env_id,
@@ -1739,11 +1740,12 @@ class SanctumAggregator:
                 env_id=env_id,
             )
 
-            # Add decision if room available
+            # Add decision (newest first) and trim to rolling window
             decisions = self._tamiyo.recent_decisions
-            if len(decisions) < MAX_DECISIONS:
-                decisions.insert(0, decision)
-                self._tamiyo.recent_decisions = decisions
+            decisions.insert(0, decision)
+            if len(decisions) > MAX_DECISIONS:
+                decisions = decisions[:MAX_DECISIONS]
+            self._tamiyo.recent_decisions = decisions
 
             # Update last action tracking for Sequence section display
             self._tamiyo.last_action_op = action_name

@@ -38,6 +38,8 @@ STRICT_PATTERNS = {"getattr", "hasattr", "silent_except", "bare_except"}
 # Patterns only flagged in audit mode (legitimate uses are common)
 AUDIT_PATTERNS = {"isinstance", "get"}
 
+KNOWN_PATTERNS = STRICT_PATTERNS | AUDIT_PATTERNS
+
 
 @dataclass
 class PatternHit:
@@ -165,34 +167,117 @@ class Whitelist:
 
     def __init__(self, config_path: Path) -> None:
         with open(config_path) as f:
-            data = yaml.safe_load(f)
+            data = yaml.safe_load(f) or {}
 
-        self.version = data.get("version", 1)
-        self.always_prohibited: set[str] = {
-            p["pattern"] for p in data.get("always_prohibited", [])
-        }
-        self.allow_paths: list[str] = [
-            p["path"] for p in data.get("allow_paths", [])
-        ]
-        self.allow_hits: dict[str, dict] = {
-            h["key"]: h for h in data.get("allow_hits", [])
-        }
+        if not isinstance(data, dict):
+            raise ValueError("defensive_patterns.yaml must be a mapping at top level")
+
+        self.version = int(data.get("version", 1))
+
+        self.always_prohibited: set[str] = set()
+        always_prohibited = data.get("always_prohibited", [])
+        if not isinstance(always_prohibited, list):
+            raise ValueError("always_prohibited must be a list")
+        for entry in always_prohibited:
+            if not isinstance(entry, dict):
+                raise ValueError("always_prohibited entries must be mappings")
+            pattern = entry.get("pattern")
+            reason = entry.get("reason")
+            if not isinstance(pattern, str) or not pattern:
+                raise ValueError("always_prohibited entries must have non-empty 'pattern'")
+            if pattern not in KNOWN_PATTERNS:
+                raise ValueError(f"Unknown always_prohibited pattern: {pattern}")
+            if not isinstance(reason, str) or not reason:
+                raise ValueError(f"always_prohibited '{pattern}' must include non-empty 'reason'")
+            self.always_prohibited.add(pattern)
+
+        self.allow_paths: list[str] = []
+        allow_paths = data.get("allow_paths", [])
+        if not isinstance(allow_paths, list):
+            raise ValueError("allow_paths must be a list")
+        for entry in allow_paths:
+            if not isinstance(entry, dict):
+                raise ValueError("allow_paths entries must be mappings")
+            path = entry.get("path")
+            reason = entry.get("reason")
+            if not isinstance(path, str) or not path:
+                raise ValueError("allow_paths entries must have non-empty 'path'")
+            if not isinstance(reason, str) or not reason:
+                raise ValueError(f"allow_paths '{path}' must include non-empty 'reason'")
+            self.allow_paths.append(path)
+
+        self.allow_hits: dict[str, dict] = {}
+        allow_hits = data.get("allow_hits", [])
+        if not isinstance(allow_hits, list):
+            raise ValueError("allow_hits must be a list")
+        for entry in allow_hits:
+            if not isinstance(entry, dict):
+                raise ValueError("allow_hits entries must be mappings")
+            key = entry.get("key")
+            owner = entry.get("owner")
+            reason = entry.get("reason")
+            expires_raw = entry.get("expires")
+
+            if not isinstance(key, str) or not key:
+                raise ValueError("allow_hits entries must have non-empty 'key'")
+            if not isinstance(owner, str) or not owner:
+                raise ValueError(f"allow_hits '{key}' must include non-empty 'owner'")
+            if not isinstance(reason, str) or not reason:
+                raise ValueError(f"allow_hits '{key}' must include non-empty 'reason'")
+
+            parts = key.split(":")
+            if len(parts) not in (3, 4):
+                raise ValueError(
+                    f"Invalid allow_hits key format (expected path:function:pattern[:occurrence]): {key}"
+                )
+            pattern = parts[2]
+            if pattern not in KNOWN_PATTERNS:
+                raise ValueError(f"Unknown pattern '{pattern}' in allow_hits key: {key}")
+            if pattern in self.always_prohibited:
+                raise ValueError(
+                    f"Invalid allow_hits key (pattern is always_prohibited): {key}"
+                )
+            if len(parts) == 4:
+                try:
+                    int(parts[3])
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Invalid occurrence suffix in allow_hits key: {key}"
+                    ) from exc
+            if expires_raw is not None:
+                if not isinstance(expires_raw, str) or not expires_raw:
+                    raise ValueError(f"allow_hits '{key}' has invalid expires value")
+                try:
+                    date.fromisoformat(expires_raw)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"allow_hits '{key}' has invalid expires date: {expires_raw}"
+                    ) from exc
+
+            if key in self.allow_hits:
+                raise ValueError(f"Duplicate allow_hits key: {key}")
+            self.allow_hits[key] = entry
+
         self.today = date.today()
 
-    def is_allowed(self, hit: PatternHit) -> tuple[bool, str | None]:
-        """Check if pattern hit is allowed.
+    def match(self, hit: PatternHit) -> tuple[bool, str | None, str | None]:
+        """Match a hit against whitelist.
 
         Returns:
-            (allowed, warning_or_error_message)
+            (allowed, warning_or_error_message, matched_allow_hit_key_if_any)
         """
         # Always-prohibited patterns cannot be whitelisted
         if hit.pattern in self.always_prohibited:
-            return False, f"PROHIBITED: {hit.pattern} can never be whitelisted"
+            return (
+                False,
+                f"PROHIBITED: {hit.pattern} can never be whitelisted",
+                None,
+            )
 
         # Check broad path allowances (glob patterns)
         for pattern in self.allow_paths:
             if fnmatch(hit.path, pattern):
-                return True, None
+                return True, None, None
 
         # Check narrow allowances (exact key match)
         # Try with occurrence first, then without
@@ -208,10 +293,14 @@ class Whitelist:
                 if "expires" in entry:
                     expires = date.fromisoformat(entry["expires"])
                     if expires < self.today:
-                        return False, f"EXPIRED: {key} (was {entry['expires']})"
-                return True, None
+                        return (
+                            False,
+                            f"EXPIRED: {key} (was {entry['expires']})",
+                            key,
+                        )
+                return True, None, key
 
-        return False, None
+        return False, None, None
 
 
 def find_patterns(path: Path) -> list[PatternHit]:
@@ -275,12 +364,17 @@ def main() -> int:
         print(f"ERROR: {config_path} not found")
         return 1
 
-    whitelist = Whitelist(config_path)
+    try:
+        whitelist = Whitelist(config_path)
+    except ValueError as exc:
+        print(f"ERROR: Invalid whitelist config: {exc}")
+        return 1
     violations: list[tuple[PatternHit, str | None]] = []
     warnings: list[str] = []
     checked_files = 0
     total_hits = 0
     allowed_hits = 0
+    used_allow_hit_keys: set[str] = set()
 
     scan_path: Path = args.path
     for path in sorted(scan_path.rglob("*.py")):
@@ -294,6 +388,14 @@ def main() -> int:
         for hit in hits:
             total_hits += 1
 
+            # Track which allow_hits keys are still active (no stale whitelists).
+            if hit.key in whitelist.allow_hits:
+                used_allow_hit_keys.add(hit.key)
+            if hit.occurrence > 1:
+                base_key = f"{hit.path}:{hit.function}:{hit.pattern}"
+                if base_key in whitelist.allow_hits:
+                    used_allow_hit_keys.add(base_key)
+
             # Skip audit patterns unless --audit is specified
             if hit.pattern in AUDIT_PATTERNS and not args.audit:
                 continue
@@ -302,7 +404,7 @@ def main() -> int:
             if args.strict_only and hit.pattern not in STRICT_PATTERNS:
                 continue
 
-            allowed, message = whitelist.is_allowed(hit)
+            allowed, message, _matched_key = whitelist.match(hit)
 
             if message and "EXPIRED" in message:
                 warnings.append(message)
@@ -333,9 +435,18 @@ def main() -> int:
     print(f"  Patterns checked: {allowed_hits + len(violations)}")
     print(f"  Allowed: {allowed_hits}")
     print(f"  Violations: {len(violations)}")
+    stale_allow_hits = sorted(set(whitelist.allow_hits.keys()) - used_allow_hit_keys)
+    print(f"  Stale whitelist entries: {len(stale_allow_hits)}")
 
     for w in warnings:
         print(f"WARNING: {w}")
+
+    if stale_allow_hits:
+        print("\nSTALE WHITELIST ENTRIES FOUND:\n")
+        for key in stale_allow_hits:
+            print(f"  {key}")
+        print("\nTo fix: remove or update these keys in defensive_patterns.yaml")
+        return 1
 
     if violations:
         print(f"\n{len(violations)} VIOLATION(S) FOUND:\n")

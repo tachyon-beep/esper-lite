@@ -34,10 +34,6 @@ allow_hits:
     owner: "john"
     reason: "Reward computation config, simic-internal"
 
-  - key: "src/esper/simic/rewards/rewards.py:dataclass:LossRewardConfig"
-    owner: "john"
-    reason: "Reward computation config, simic-internal"
-
   - key: "src/esper/simic/rewards/rewards.py:namedtuple:SeedInfo"
     owner: "john"
     reason: "Fast-path NamedTuple for reward computation hot loop"
@@ -97,6 +93,15 @@ allow_hits:
   - key: "src/esper/simic/telemetry/lstm_health.py:dataclass:LSTMHealthMetrics"
     owner: "john"
     reason: "LSTM health monitoring, simic-internal"
+
+  - key: "src/esper/simic/telemetry/observation_stats.py:dataclass:ObservationStatsTelemetry"
+    owner: "john"
+    reason: "TODO: Telemetry payload used outside simic, consider moving to leyline"
+    expires: "2026-03-01"
+
+  - key: "src/esper/simic/telemetry/value_metrics.py:typeddict:ValueFunctionMetricsDict"
+    owner: "john"
+    reason: "Value function metrics schema, simic-internal"
 
   # ============================================================================
   # SIMIC: Training Infrastructure
@@ -236,6 +241,10 @@ allow_hits:
     owner: "john"
     reason: "TODO: Cross-domain state type, consider moving to leyline"
     expires: "2026-03-01"
+
+  - key: "src/esper/kasmina/blueprints/registry.py:protocol:BlueprintFactory"
+    owner: "john"
+    reason: "Internal protocol for blueprint factory call signature"
 
   - key: "src/esper/kasmina/blueprints/registry.py:dataclass:BlueprintSpec"
     owner: "john"

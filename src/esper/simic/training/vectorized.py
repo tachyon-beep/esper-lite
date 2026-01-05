@@ -4144,6 +4144,13 @@ def train_ppo_vectorized(
                     group_id=group_id,
                 )
 
+            # If the epoch loop exited early (e.g. graceful shutdown), ensure the batch
+            # summary reflects the partial episode outcomes instead of the default zeros.
+            if epoch < max_epochs:
+                for env_idx, env_state in enumerate(env_states):
+                    env_final_accs[env_idx] = env_state.val_acc
+                    env_total_rewards[env_idx] = sum(env_state.episode_rewards)
+
             # Track results and aggregate batch-level metrics
             avg_acc = sum(env_final_accs) / len(env_final_accs)
             avg_reward = sum(env_total_rewards) / len(env_total_rewards)
