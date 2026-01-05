@@ -303,6 +303,8 @@ class ValueNormalizer:
         self.momentum = momentum
         # Track if we've seen enough samples for reliable stats
         self._min_samples = 32  # Need this many samples before using running stats
+        # PERF: CPU-side warmup gate to avoid GPU→CPU sync (.item()) in hot paths.
+        self._count_int = 0
 
     @property
     def std(self) -> torch.Tensor:
@@ -312,7 +314,7 @@ class ValueNormalizer:
     @property
     def has_valid_stats(self) -> bool:
         """Whether we have enough samples for reliable normalization."""
-        return self.count.item() >= self._min_samples
+        return self._count_int >= self._min_samples
 
     @torch.inference_mode()
     def update(self, returns: torch.Tensor) -> None:
@@ -321,25 +323,20 @@ class ValueNormalizer:
         Args:
             returns: Tensor of return values [batch] or [batch, seq]
         """
-        # Flatten and filter non-finite values
+        # Flatten for stable moments regardless of input shape.
         flat = returns.flatten()
-        finite_mask = torch.isfinite(flat)
-        if not finite_mask.any():
-            return
-
-        valid = flat[finite_mask]
-        batch_count = valid.numel()
+        batch_count = flat.numel()
         if batch_count == 0:
             return
 
         # Move stats to input device if needed
-        if self.mean.device != valid.device:
-            self.to(valid.device)
+        if self.mean.device != flat.device:
+            self.to(flat.device)
 
-        batch_mean = valid.mean()
-        batch_var = valid.var(correction=0)  # Population variance
+        batch_mean = flat.mean()
+        batch_var = flat.var(correction=0)  # Population variance
 
-        if self.momentum is not None and self.count.item() >= self._min_samples:
+        if self.momentum is not None and self.has_valid_stats:
             # EMA update (after warmup)
             delta = batch_mean - self.mean
             self.mean = self.momentum * self.mean + (1 - self.momentum) * batch_mean
@@ -361,6 +358,7 @@ class ValueNormalizer:
             self.var = new_var
 
         self.count = self.count + batch_count
+        self._count_int += batch_count
 
     def normalize(self, returns: torch.Tensor) -> torch.Tensor:
         """Normalize returns for critic training.
@@ -433,6 +431,7 @@ class ValueNormalizer:
         self.mean = state["mean"].to(self._device)
         self.var = state["var"].to(self._device)
         self.count = state["count"].to(self._device)
+        self._count_int = int(self.count.item())
 
 
 __all__ = ["RunningMeanStd", "RewardNormalizer", "ValueNormalizer"]

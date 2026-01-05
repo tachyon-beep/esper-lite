@@ -1433,6 +1433,12 @@ def _contribution_prune_shaping(
     if seed_info.seed_age_epochs < MIN_PRUNE_AGE:
         return -0.3 * (MIN_PRUNE_AGE - seed_info.seed_age_epochs)
 
+    # Soft penalty: discourage GERMINATE→PRUNE churn before counterfactual is available.
+    # Without this, the policy can exploit the PBRS germination bonus and prune immediately
+    # for near-zero net reward, creating high-variance, low-learning trajectories.
+    if seed_contribution is None and seed_info.seed_age_epochs < config.early_prune_threshold:
+        return config.early_prune_penalty
+
     # Use seed_contribution if available (BLENDING+ stages)
     if seed_contribution is not None:
         if seed_contribution < config.prune_hurting_threshold:

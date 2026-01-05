@@ -193,6 +193,24 @@ class TestPruneContributionShaping:
         # Should get negative shaping (penalty for culling good seed)
         assert shaping < 0, f"Pruning good seed should be penalized: {shaping}"
 
+    def test_prune_young_seed_without_counterfactual_penalized(self):
+        """Pruning before counterfactual is available should be discouraged."""
+        config = ContributionRewardConfig()
+        seed_info = self._make_seed_info(STAGE_TRAINING, age=MIN_PRUNE_AGE)
+
+        shaping = _contribution_prune_shaping(seed_info, seed_contribution=None, config=config)
+
+        assert shaping == config.early_prune_penalty
+
+    def test_prune_mature_seed_without_counterfactual_neutral(self):
+        """Pruning after the early window should not be penalized without counterfactual."""
+        config = ContributionRewardConfig()
+        seed_info = self._make_seed_info(STAGE_TRAINING, age=config.early_prune_threshold)
+
+        shaping = _contribution_prune_shaping(seed_info, seed_contribution=None, config=config)
+
+        assert shaping == 0.0
+
     def test_prune_good_seed_inverts_attribution(self):
         """Pruning a good seed should invert attribution to negative total reward."""
         seed_info = self._make_seed_info(STAGE_BLENDING, age=MIN_PRUNE_AGE, improvement=3.0)

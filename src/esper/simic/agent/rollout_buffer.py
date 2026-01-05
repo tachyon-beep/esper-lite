@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, NamedTuple
 import torch
 
 if TYPE_CHECKING:
-    from esper.simic.control.normalization import ValueNormalizer
+    from esper.simic.control import ValueNormalizer
 
 from esper.leyline import (
     DEFAULT_GAMMA,

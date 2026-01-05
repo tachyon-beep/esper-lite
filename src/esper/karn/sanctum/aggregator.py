@@ -1262,6 +1262,10 @@ class SanctumAggregator:
                 env.seeds[slot_id] = SeedState(slot_id=slot_id)
             seed = env.seeds[slot_id]
 
+            # Capture pre-prune state for growth bookkeeping
+            was_fossilized = seed.stage == "FOSSILIZED"
+            fossilized_params = seed.seed_params
+
             # Update from payload
             seed.prune_reason = pruned_payload.reason
             seed.improvement = pruned_payload.improvement
@@ -1295,6 +1299,12 @@ class SanctumAggregator:
             env.pruned_count += 1
             self._cumulative_pruned += 1
             env.active_seed_count = max(0, env.active_seed_count - 1)
+
+            if was_fossilized and fossilized_params > 0:
+                env.fossilized_params -= fossilized_params
+
+            if env.active_seed_count == 0:
+                env.reward_components = RewardComponents()
         elif event_type == "SEED_GATE_EVALUATED" and isinstance(event.data, SeedGateEvaluatedPayload):
             gate_payload = event.data
             slot_id = event.slot_id or gate_payload.slot_id

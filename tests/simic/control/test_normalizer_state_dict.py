@@ -1,7 +1,7 @@
 """Tests for normalizer state_dict methods."""
 
 import torch
-from esper.simic.control.normalization import RunningMeanStd, RewardNormalizer, ValueNormalizer
+from esper.simic.control import RunningMeanStd, RewardNormalizer, ValueNormalizer
 
 
 class TestRunningMeanStdStateDict:

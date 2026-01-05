@@ -8,6 +8,7 @@ For vectorized environments, see simic.vectorized.
 from __future__ import annotations
 
 from collections import defaultdict
+import math
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -22,7 +23,7 @@ from .types import PPOUpdateMetrics
 from esper.simic.telemetry import RatioExplosionDiagnostic
 from esper.simic.telemetry.lstm_health import compute_lstm_health
 from esper.simic.telemetry.value_metrics import compute_value_function_metrics
-from esper.simic.control.normalization import ValueNormalizer
+from esper.simic.control import ValueNormalizer
 from esper.leyline import (
     PolicyBundle,
     DEFAULT_BATCH_SIZE,
@@ -466,8 +467,15 @@ class PPOAgent:
         metrics["explained_variance"] = [explained_variance]
 
         # Return statistics for diagnosing value loss scale
-        metrics["return_mean"] = [valid_returns.mean().item()]
-        metrics["return_std"] = [valid_returns.std().item()]
+        return_mean = valid_returns.mean().item()
+        return_std = valid_returns.std().item()
+        if not math.isfinite(return_mean) or not math.isfinite(return_std):
+            raise RuntimeError(
+                f"Non-finite returns detected: mean={return_mean}, std={return_std}. "
+                "This is a hard bug: investigate reward/value/GAE plumbing."
+            )
+        metrics["return_mean"] = [return_mean]
+        metrics["return_std"] = [return_std]
 
         # P1 BUG FIX: Use running value normalizer instead of batch std
         # 1. Update normalizer with current batch returns (tracks running distribution)

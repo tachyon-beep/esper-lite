@@ -66,7 +66,7 @@ class HealthStatusPanel(Static):
             key=lambda s: ["ok", "warning", "critical"].index(s),
         )
 
-        result.append("Advantage    ", style="dim")
+        result.append("Advantage   ", style="dim")
         # Use .3f for mean to distinguish small values from true zero (e.g., -0.005 vs 0.000)
         result.append(
             f"{tamiyo.advantage_mean:+.3f}±{tamiyo.advantage_std:.2f}",
@@ -107,7 +107,7 @@ class HealthStatusPanel(Static):
         # Fixed layout: Label(13) + Value(7) + Indicator(1) + Space(1) + Sparkline(10) + Trend(1)
         # Use space flag for sign alignment: "  0.123" vs " -0.123"
         gn_status = self._get_grad_norm_status(tamiyo.grad_norm)
-        result.append("Grad Norm    ", style="dim")  # 13 chars
+        result.append("Grad Norm  ", style="dim")  # 13 chars
         result.append(f"{tamiyo.grad_norm: 7.3f}", style=self._status_style(gn_status))
         if gn_status != "ok":
             result.append("!", style=self._status_style(gn_status))
@@ -143,9 +143,9 @@ class HealthStatusPanel(Static):
                 f"[{tamiyo.log_prob_min:.1f},{tamiyo.log_prob_max:.1f}]",
                 style=self._status_style(lp_status),
             )
-            if lp_status == "critical":
+            if lp_status == "Critical":
                 result.append(" NaN RISK", style="red bold")
-            elif lp_status == "warning":
+            elif lp_status == "Warning":
                 result.append(" !", style="yellow")
         result.append("\n")
 
@@ -397,7 +397,7 @@ class HealthStatusPanel(Static):
         c_status = self._get_lstm_rms_status(tamiyo.lstm_c_rms)
         worst_status = max(
             [h_status, c_status],
-            key=lambda s: ["ok", "warning", "critical"].index(s),
+            key=lambda s: ["OK", "Warning", "Critical"].index(s),
         )
 
         result.append("LSTM RMS     ", style="dim")
@@ -412,7 +412,10 @@ class HealthStatusPanel(Static):
         )
 
         env_rms_max = None
-        if tamiyo.lstm_h_env_rms_max is not None and tamiyo.lstm_c_env_rms_max is not None:
+        if (
+            tamiyo.lstm_h_env_rms_max is not None
+            and tamiyo.lstm_c_env_rms_max is not None
+        ):
             env_rms_max = max(tamiyo.lstm_h_env_rms_max, tamiyo.lstm_c_env_rms_max)
         elif tamiyo.lstm_h_env_rms_max is not None:
             env_rms_max = tamiyo.lstm_h_env_rms_max
@@ -433,7 +436,7 @@ class HealthStatusPanel(Static):
             result.append(" ", style="dim")
             result.append(f"|x|max:{peak_abs:.1f}", style="dim")
 
-        if worst_status != "ok":
+        if worst_status != "OK":
             result.append(" !", style=self._status_style(worst_status))
 
         return result
@@ -446,42 +449,42 @@ class HealthStatusPanel(Static):
         stats = self._snapshot.episode_stats
         result = Text()
 
-        result.append("Efficiency  ", style="dim")
+        result.append("Efficiency   ", style="dim")
         if stats.total_episodes <= 0:
-            result.append("waiting", style="dim")
+            result.append("Waiting", style="dim")
             return result
 
-        util_status = "ok"
+        util_status = "OK"
         if (
             stats.slot_utilization < TUIThresholds.SLOT_UTILIZATION_LOW
             or stats.slot_utilization > TUIThresholds.SLOT_UTILIZATION_HIGH
         ):
-            util_status = "warning"
-        result.append("util:", style="dim")
+            util_status = "Warning"
+        result.append("Util:", style="dim")
         result.append(
             f"{stats.slot_utilization:.0%}",
             style=self._status_style(util_status),
         )
 
-        yield_status = "ok"
+        yield_status = "OK"
         if (
             stats.yield_rate < TUIThresholds.YIELD_RATE_LOW
             or stats.yield_rate > TUIThresholds.YIELD_RATE_HIGH
         ):
-            yield_status = "warning"
+            yield_status = "Warning"
         result.append(" ", style="dim")
-        result.append("yield:", style="dim")
+        result.append("Yield:", style="dim")
         result.append(
             f"{stats.yield_rate:.0%}",
             style=self._status_style(yield_status),
         )
 
-        entropy_status = "ok"
+        entropy_status = "OK"
         if (
             stats.action_entropy < TUIThresholds.ACTION_ENTROPY_LOW
             or stats.action_entropy > TUIThresholds.ACTION_ENTROPY_HIGH
         ):
-            entropy_status = "warning"
+            entropy_status = "Warning"
         result.append(" ", style="dim")
         result.append("H:", style="dim")
         result.append(
@@ -496,46 +499,46 @@ class HealthStatusPanel(Static):
         if rms is None:
             return "ok"  # No LSTM - neutral status
         if rms > 10.0:  # Explosion/saturation threshold
-            return "critical"
+            return "Critical"
         if rms > 5.0:  # Warning threshold
-            return "warning"
+            return "Warning"
         if rms < 1e-6:  # Vanishing threshold
-            return "critical"
+            return "Critical"
         if rms < 1e-4:  # Low warning
-            return "warning"
+            return "Warning"
         return "ok"
 
     def _get_outlier_status(self, outlier_pct: float) -> str:
         """Check if outlier percentage is healthy."""
         if outlier_pct > TUIThresholds.OBS_OUTLIER_CRITICAL:
-            return "critical"
+            return "Critical"
         if outlier_pct > TUIThresholds.OBS_OUTLIER_WARNING:
-            return "warning"
-        return "ok"
+            return "Warning"
+        return "OK"
 
     def _get_obs_saturation_status(self, near_clip_pct: float) -> str:
         """Check if normalized observations are saturating near the clip bound."""
         if near_clip_pct > TUIThresholds.OBS_SAT_CRITICAL:
-            return "critical"
+            return "Critical"
         if near_clip_pct > TUIThresholds.OBS_SAT_WARNING:
-            return "warning"
-        return "ok"
+            return "Warning"
+        return "OK"
 
     def _get_obs_clip_status(self, clip_pct: float) -> str:
         """Check if normalized observations are being clamped."""
         if clip_pct > TUIThresholds.OBS_CLIP_CRITICAL:
-            return "critical"
+            return "Critical"
         if clip_pct > TUIThresholds.OBS_CLIP_WARNING:
-            return "warning"
-        return "ok"
+            return "Warning"
+        return "OK"
 
     def _get_drift_status(self, drift: float) -> str:
         """Check if normalization drift is healthy."""
         if drift > TUIThresholds.OBS_DRIFT_CRITICAL:
-            return "critical"
+            return "Critical"
         if drift > TUIThresholds.OBS_DRIFT_WARNING:
-            return "warning"
-        return "ok"
+            return "Warning"
+        return "OK"
 
     def _get_value_status(self, tamiyo: "TamiyoState") -> str:
         """Check if value function is healthy using relative thresholds."""
@@ -546,72 +549,72 @@ class HealthStatusPanel(Static):
 
         # Collapse detection: values stuck at constant
         if v_range < 0.1 and v_std < 0.01:
-            return "critical"
+            return "Critical"
 
         # Coefficient of variation check (relative instability)
         if abs(v_mean) > 0.1:
             cov = v_std / abs(v_mean)
             if cov > 3.0:
-                return "critical"
+                return "Critical"
             if cov > 2.0:
-                return "warning"
+                return "Warning"
 
         # Relative threshold (if initial spread known)
         if initial is not None and initial > 0.1:
             ratio = v_range / initial
             if ratio > 10:
-                return "critical"
+                return "Critical"
             if ratio > 5:
-                return "warning"
-            return "ok"
+                return "Warning"
+            return "OK"
 
         # Absolute fallback (during warmup or if initial unknown)
         if v_range > 1000 or abs(tamiyo.value_max) > 10000:
-            return "critical"
+            return "Critical"
         if v_range > 500 or abs(tamiyo.value_max) > 5000:
-            return "warning"
+            return "Warning"
 
-        return "ok"
+        return "OK"
 
     # Status helpers
     def _get_advantage_status(self, adv_std: float) -> str:
         if adv_std < TUIThresholds.ADVANTAGE_STD_COLLAPSED:
-            return "critical"
+            return "Critical"
         if adv_std > TUIThresholds.ADVANTAGE_STD_CRITICAL:
-            return "critical"
+            return "Critical"
         if adv_std > TUIThresholds.ADVANTAGE_STD_WARNING:
-            return "warning"
+            return "Warning"
         if adv_std < TUIThresholds.ADVANTAGE_STD_LOW_WARNING:
-            return "warning"
-        return "ok"
+            return "Warning"
+        return "OK"
 
     def _get_skewness_status(self, skewness: float) -> str:
         if math.isnan(skewness):
-            return "ok"  # No data yet - neutral status
+            return "OK"  # No data yet - neutral status
         if skewness < -1.0 or skewness > 2.0:
-            return "critical"
+            return "Critical"
         if skewness < -0.5 or skewness > 1.0:
-            return "warning"
-        return "ok"
+            return "Warning"
+        return "OK"
 
     def _get_kurtosis_status(self, kurtosis: float) -> str:
         if math.isnan(kurtosis):
-            return "ok"  # No data yet - neutral status
+            return "OK"  # No data yet - neutral status
         if kurtosis < -2.0 or kurtosis > 6.0:
-            return "critical"
+            return "Critical"
         if kurtosis < -1.0 or kurtosis > 3.0:
-            return "warning"
-        return "ok"
+            return "Warning"
+        return "OK"
 
     def _get_adv_positive_status(self, ratio: float) -> str:
         """Check if advantage positive ratio is healthy (40-60%)."""
         if math.isnan(ratio):
-            return "ok"  # No data yet - neutral status
+            return "OK"  # No data yet - neutral status
         if ratio < 0.2 or ratio > 0.8:
-            return "critical"  # Severely imbalanced
+            return "Critical"  # Severely imbalanced
         if ratio < 0.4 or ratio > 0.6:
-            return "warning"  # Moderately imbalanced
-        return "ok"
+            return "Warning"  # Moderately imbalanced
+        return "OK"
 
     def _get_log_prob_status(self, log_prob_min: float) -> str:
         """Check if log probs are in safe range (NaN predictor).
@@ -620,12 +623,12 @@ class HealthStatusPanel(Static):
         which leads to numerical underflow and eventually NaN gradients.
         """
         if math.isnan(log_prob_min):
-            return "ok"  # No data yet - neutral status
+            return "OK"  # No data yet - neutral status
         if log_prob_min < -100:
-            return "critical"  # Numerical underflow imminent
+            return "Critical"  # Numerical underflow imminent
         if log_prob_min < -50:
-            return "warning"  # Action nearly impossible
-        return "ok"
+            return "Warning"  # Action nearly impossible
+        return "OK"
 
     def _skewness_hint(self, skewness: float) -> str:
         if math.isnan(skewness):
@@ -646,28 +649,28 @@ class HealthStatusPanel(Static):
             ratio_max > TUIThresholds.RATIO_MAX_CRITICAL
             or ratio_min < TUIThresholds.RATIO_MIN_CRITICAL
         ):
-            return "critical"
+            return "Critical"
         if (
             ratio_max > TUIThresholds.RATIO_MAX_WARNING
             or ratio_min < TUIThresholds.RATIO_MIN_WARNING
         ):
-            return "warning"
-        return "ok"
+            return "Warning"
+        return "OK"
 
     def _get_grad_norm_status(self, grad_norm: float) -> str:
         if grad_norm > TUIThresholds.GRAD_NORM_CRITICAL:
-            return "critical"
+            return "Critical"
         if grad_norm > TUIThresholds.GRAD_NORM_WARNING:
-            return "warning"
-        return "ok"
+            return "Warning"
+        return "OK"
 
     def _get_entropy_status(self, entropy: float) -> str:
         if entropy < TUIThresholds.ENTROPY_CRITICAL:
-            return "critical"
+            return "Critical"
         if entropy < TUIThresholds.ENTROPY_WARNING:
-            return "warning"
-        return "ok"
+            return "Warning"
+        return "OK"
 
     def _status_style(self, status: str) -> str:
         # Use cyan for ok (visible but not loud), yellow/red for problems
-        return {"ok": "cyan", "warning": "yellow", "critical": "red bold"}[status]
+        return {"OK": "cyan", "Warning": "yellow", "Critical": "red bold"}[status]
