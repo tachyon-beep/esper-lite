@@ -119,8 +119,8 @@ def __getattr__(name: str) -> Any:
                 "compute_pbrs_stage_bonus", "compute_loss_reward", "compute_seed_potential",
                 "get_intervention_cost", "STAGE_TRAINING", "STAGE_BLENDING",
                 "STAGE_FOSSILIZED", "RewardComponentsTelemetry"):
+        from esper.leyline import LossRewardConfig
         from esper.simic.rewards import (
-            LossRewardConfig,
             ContributionRewardConfig,
             SeedInfo,
             compute_contribution_reward,

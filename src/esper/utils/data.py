@@ -317,6 +317,8 @@ def _ensure_cifar10_cached(
         test_y = test_y.to(device)
 
         if augment_mode == "precompute":
+            if seed is None:
+                raise ValueError("seed is required for CIFAR-10 precompute augmentation")
             precompute_cifar10_augment(train_x, seed=seed)
 
         _GPU_DATASET_CACHE[cache_key] = (train_x, train_y, test_x, test_y)

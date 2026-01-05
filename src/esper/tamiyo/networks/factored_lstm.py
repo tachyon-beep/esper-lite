@@ -148,7 +148,7 @@ class BlueprintEmbedding(nn.Module):
         if MaskedCategorical.validate:
             invalid_mask = (blueprint_indices < -1) | (blueprint_indices >= self.num_blueprints)
             if invalid_mask.any():
-                invalid_vals = blueprint_indices[invalid_mask].unique().tolist()
+                invalid_vals = torch.unique(blueprint_indices[invalid_mask]).tolist()
                 raise ValueError(
                     f"BlueprintEmbedding received invalid indices: {invalid_vals}. "
                     f"Valid range is -1 (inactive) or [0, {self.num_blueprints})."

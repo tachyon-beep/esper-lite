@@ -543,7 +543,7 @@ class DiagnosticTracker:
         if current_loss is not None:
             ref_loss = current_loss
             count = 1  # Start at 1 to include current epoch
-            search_history = self.history  # Compare against all history
+            search_history = list(self.history)  # Compare against all history
         elif self.history:
             ref_loss = self.history[-1].val_loss
             count = 1  # Start at 1 to include most recent
@@ -552,7 +552,7 @@ class DiagnosticTracker:
             return 0  # No reference point
 
         # Count consecutive epochs with similar loss going backwards
-        for snap in reversed(list(search_history)):
+        for snap in reversed(search_history):
             if abs(snap.val_loss - ref_loss) < threshold:
                 count += 1
             else:

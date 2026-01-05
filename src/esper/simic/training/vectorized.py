@@ -1873,7 +1873,7 @@ def train_ppo_vectorized(
     prof_steps = 0
 
     try:
-        history = []
+        history: list[dict[str, Any]] = []
         episode_history = []  # Per-episode tracking for A/B testing
         episode_outcomes: list[EpisodeOutcome] = []  # Pareto analysis outcomes
         best_avg_acc = 0.0
@@ -3066,13 +3066,13 @@ def train_ppo_vectorized(
                                 raise ValueError(
                                     f"escrow_stable_window must be positive, got {window}"
                                 )
-                            history = signals.accuracy_history
-                            if not history:
+                            acc_history = signals.accuracy_history
+                            if not acc_history:
                                 raise RuntimeError(
                                     "ESCROW stable accuracy requested before any accuracy history exists"
                                 )
-                            k = window if window <= len(history) else len(history)
-                            stable_val_acc = min(history[-k:])
+                            k = window if window <= len(acc_history) else len(acc_history)
+                            stable_val_acc = min(acc_history[-k:])
                         escrow_credit_prev = env_state.escrow_credit[target_slot]
                         fossilized_seed_params = 0
                         for slot_id in slots:
@@ -3091,33 +3091,12 @@ def train_ppo_vectorized(
                                         p.numel()
                                         for p in slot_obj.alpha_schedule.parameters()
                                     )
-                        reward_args = {
-                            "action": action_for_reward,
-                            "seed_contribution": seed_contribution,
-                            "val_acc": env_state.val_acc,
-                            "seed_info": seed_info,
-                            "epoch": epoch,
-                            "max_epochs": max_epochs,
-                            "total_params": model.total_params,
-                            "host_params": host_params,
-                            "acc_at_germination": env_state.acc_at_germination.get(
-                                target_slot
-                            ),
-                            "acc_delta": signals.metrics.accuracy_delta,
-                            "committed_val_acc": env_state.committed_val_acc,
-                            "fossilized_seed_params": fossilized_seed_params,
-                            "effective_seed_params": effective_seed_params,
-                            "alpha_delta_sq_sum": alpha_delta_sq_sum,
-                            "num_fossilized_seeds": env_state.seeds_fossilized,
-                            "num_contributing_fossilized": env_state.contributing_fossilized,
-                            "config": env_reward_configs[env_idx],
-                            "stable_val_acc": stable_val_acc,
-                            "escrow_credit_prev": escrow_credit_prev,
-                            "slot_id": target_slot,
-                            "seed_id": seed_state.seed_id
-                            if seed_state is not None
-                            else None,
-                        }
+                        acc_at_germination = (
+                            env_state.acc_at_germination[target_slot]
+                            if target_slot in env_state.acc_at_germination
+                            else None
+                        )
+                        seed_id = seed_state.seed_id if seed_state is not None else None
                         force_reward_components = (
                             env_reward_configs[env_idx].reward_mode == RewardMode.ESCROW
                         )
@@ -3126,13 +3105,33 @@ def train_ppo_vectorized(
                             or collect_reward_summary
                             or force_reward_components
                         ):
-                            # mypy can't verify **dict unpacking into typed function parameters
-                            result = compute_reward(
-                                **reward_args,
-                                return_components=True,  # type: ignore[arg-type]
+                            reward, reward_components = cast(
+                                tuple[float, Any],
+                                compute_reward(
+                                    action=action_for_reward,
+                                    seed_contribution=seed_contribution,
+                                    val_acc=env_state.val_acc,
+                                    seed_info=seed_info,
+                                    epoch=epoch,
+                                    max_epochs=max_epochs,
+                                    total_params=model.total_params,
+                                    host_params=host_params,
+                                    acc_at_germination=acc_at_germination,
+                                    acc_delta=signals.metrics.accuracy_delta,
+                                    committed_val_acc=env_state.committed_val_acc,
+                                    fossilized_seed_params=fossilized_seed_params,
+                                    num_fossilized_seeds=env_state.seeds_fossilized,
+                                    num_contributing_fossilized=env_state.contributing_fossilized,
+                                    config=env_reward_configs[env_idx],
+                                    return_components=True,
+                                    effective_seed_params=effective_seed_params,
+                                    alpha_delta_sq_sum=alpha_delta_sq_sum,
+                                    stable_val_acc=stable_val_acc,
+                                    escrow_credit_prev=escrow_credit_prev,
+                                    slot_id=target_slot,
+                                    seed_id=seed_id,
+                                ),
                             )
-                            # compute_reward returns tuple[float, RewardComponents] when return_components=True
-                            reward, reward_components = result  # type: ignore[misc]
                             if target_slot in baseline_accs[env_idx]:
                                 reward_components.host_baseline_acc = baseline_accs[
                                     env_idx
@@ -3145,7 +3144,32 @@ def train_ppo_vectorized(
                                     reward_components.escrow_credit_next
                                 )
                         else:
-                            reward = compute_reward(**reward_args)  # type: ignore[arg-type]
+                            reward = cast(
+                                float,
+                                compute_reward(
+                                    action=action_for_reward,
+                                    seed_contribution=seed_contribution,
+                                    val_acc=env_state.val_acc,
+                                    seed_info=seed_info,
+                                    epoch=epoch,
+                                    max_epochs=max_epochs,
+                                    total_params=model.total_params,
+                                    host_params=host_params,
+                                    acc_at_germination=acc_at_germination,
+                                    acc_delta=signals.metrics.accuracy_delta,
+                                    committed_val_acc=env_state.committed_val_acc,
+                                    fossilized_seed_params=fossilized_seed_params,
+                                    num_fossilized_seeds=env_state.seeds_fossilized,
+                                    num_contributing_fossilized=env_state.contributing_fossilized,
+                                    config=env_reward_configs[env_idx],
+                                    effective_seed_params=effective_seed_params,
+                                    alpha_delta_sq_sum=alpha_delta_sq_sum,
+                                    stable_val_acc=stable_val_acc,
+                                    escrow_credit_prev=escrow_credit_prev,
+                                    slot_id=target_slot,
+                                    seed_id=seed_id,
+                                ),
+                            )
                     else:
                         reward = compute_loss_reward(
                             action=action_for_reward,

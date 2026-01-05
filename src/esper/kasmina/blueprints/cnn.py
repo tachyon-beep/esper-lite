@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -17,8 +19,10 @@ TARGET_CHANNELS_PER_GROUP: int = 16
 
 
 @BlueprintRegistry.register("noop", "cnn", param_estimate=0, description="Identity seed - placeholder before bursting")
-def create_noop_seed(channels: int) -> nn.Module:
+def create_noop_seed(dim: int, **kwargs: Any) -> nn.Module:
     """Identity seed - no-op placeholder."""
+    if kwargs:
+        raise ValueError(f"Unexpected kwargs for cnn/noop: {sorted(kwargs)}")
 
     class NoopSeed(nn.Module):
         def __init__(self, channels: int):
@@ -28,7 +32,7 @@ def create_noop_seed(channels: int) -> nn.Module:
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             return x
 
-    return NoopSeed(channels)
+    return NoopSeed(dim)
 
 
 def get_num_groups(channels: int, target_group_size: int = TARGET_CHANNELS_PER_GROUP) -> int:
@@ -91,8 +95,10 @@ class SeedConvBlock(nn.Module):
 
 
 @BlueprintRegistry.register("norm", "cnn", param_estimate=130, description="GroupNorm enhancement")
-def create_norm_seed(channels: int) -> nn.Module:
+def create_norm_seed(dim: int, **kwargs: Any) -> nn.Module:
     """Normalization enhancement seed."""
+    if kwargs:
+        raise ValueError(f"Unexpected kwargs for cnn/norm: {sorted(kwargs)}")
 
     class NormSeed(nn.Module):
         def __init__(self, channels: int):
@@ -105,13 +111,13 @@ def create_norm_seed(channels: int) -> nn.Module:
             # Bound scale to [-1, 1] via tanh to prevent gradient explosion
             return x + torch.tanh(self.scale) * (self.norm(x) - x)  # type: ignore[no-any-return]
 
-    return NormSeed(channels)
+    return NormSeed(dim)
 
 
 @BlueprintRegistry.register(
     "attention", "cnn", param_estimate=2000, description="SE-style channel attention"
 )
-def create_attention_seed(channels: int, reduction: int = 4) -> nn.Module:
+def create_attention_seed(dim: int, reduction: int = 4, **kwargs: Any) -> nn.Module:
     """Channel attention seed using Squeeze-and-Excitation (SE) pattern.
 
     This implements the canonical SE block from Hu et al. 2018 ("Squeeze-and-Excitation
@@ -129,6 +135,8 @@ def create_attention_seed(channels: int, reduction: int = 4) -> nn.Module:
 
     Reference: https://arxiv.org/abs/1709.01507
     """
+    if kwargs:
+        raise ValueError(f"Unexpected kwargs for cnn/attention: {sorted(kwargs)}")
 
     class AttentionSeed(nn.Module):
         def __init__(self, channels: int, reduction: int):
@@ -160,12 +168,14 @@ def create_attention_seed(channels: int, reduction: int = 4) -> nn.Module:
             # Scale: multiplicative recalibration (canonical SE formulation)
             return x * y.expand_as(x)  # type: ignore[no-any-return]
 
-    return AttentionSeed(channels, reduction)
+    return AttentionSeed(dim, reduction)
 
 
 @BlueprintRegistry.register("depthwise", "cnn", param_estimate=4800, description="Depthwise-separable conv")
-def create_depthwise_seed(channels: int) -> nn.Module:
+def create_depthwise_seed(dim: int, **kwargs: Any) -> nn.Module:
     """Depthwise separable convolution seed."""
+    if kwargs:
+        raise ValueError(f"Unexpected kwargs for cnn/depthwise: {sorted(kwargs)}")
 
     class DepthwiseSeed(nn.Module):
         def __init__(self, channels: int):
@@ -183,14 +193,14 @@ def create_depthwise_seed(channels: int) -> nn.Module:
             x = self.gn(x)
             return residual + F.relu(x)
 
-    return DepthwiseSeed(channels)
+    return DepthwiseSeed(dim)
 
 
 @BlueprintRegistry.register(
     "bottleneck", "cnn", param_estimate=4500,
     description="Bottleneck conv (1x1→3x3→1x1) - same tier as conv_small"
 )
-def create_bottleneck_seed(channels: int, reduction: int = 4) -> nn.Module:
+def create_bottleneck_seed(dim: int, reduction: int = 4, **kwargs: Any) -> nn.Module:
     """Bottleneck convolution seed using 1x1 → 3x3 → 1x1 structure.
 
     The bottleneck structure reduces dimensionality before the expensive 3x3 conv,
@@ -203,6 +213,8 @@ def create_bottleneck_seed(channels: int, reduction: int = 4) -> nn.Module:
     - GroupNorm: ~128 params
     - Total: ~4,480 params (scales with channels²/reduction)
     """
+    if kwargs:
+        raise ValueError(f"Unexpected kwargs for cnn/bottleneck: {sorted(kwargs)}")
 
     class BottleneckSeed(nn.Module):
         def __init__(self, channels: int, reduction: int):
@@ -224,14 +236,14 @@ def create_bottleneck_seed(channels: int, reduction: int = 4) -> nn.Module:
             x = self.gn(self.up(x))
             return residual + x
 
-    return BottleneckSeed(channels, reduction)
+    return BottleneckSeed(dim, reduction)
 
 
 @BlueprintRegistry.register(
     "conv_small", "cnn", param_estimate=4200,
     description="Small 1x1 conv - same tier as bottleneck"
 )
-def create_conv_small_seed(channels: int) -> nn.Module:
+def create_conv_small_seed(dim: int, **kwargs: Any) -> nn.Module:
     """Small 1x1 convolution seed - lightweight channel mixing.
 
     Uses 1x1 convolution for channel mixing without spatial convolution,
@@ -242,6 +254,8 @@ def create_conv_small_seed(channels: int) -> nn.Module:
     - GroupNorm: ~128 params
     - Total: ~4,224 params (scales with channels²)
     """
+    if kwargs:
+        raise ValueError(f"Unexpected kwargs for cnn/conv_small: {sorted(kwargs)}")
 
     class ConvSmallSeed(nn.Module):
         def __init__(self, channels: int):
@@ -254,12 +268,14 @@ def create_conv_small_seed(channels: int) -> nn.Module:
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             return x + F.relu(self.gn(self.conv(x)))
 
-    return ConvSmallSeed(channels)
+    return ConvSmallSeed(dim)
 
 
 @BlueprintRegistry.register("conv_light", "cnn", param_estimate=37000, description="Light conv block")
-def create_conv_light_seed(channels: int) -> nn.Module:
+def create_conv_light_seed(dim: int, **kwargs: Any) -> nn.Module:
     """Single convolution enhancement seed - lighter alternative to conv_heavy."""
+    if kwargs:
+        raise ValueError(f"Unexpected kwargs for cnn/conv_light: {sorted(kwargs)}")
 
     class ConvLightSeed(nn.Module):
         def __init__(self, channels: int):
@@ -269,12 +285,14 @@ def create_conv_light_seed(channels: int) -> nn.Module:
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             return x + self.enhance(x)  # type: ignore[no-any-return]
 
-    return ConvLightSeed(channels)
+    return ConvLightSeed(dim)
 
 
 @BlueprintRegistry.register("conv_heavy", "cnn", param_estimate=74000, description="Heavy conv block")
-def create_conv_heavy_seed(channels: int) -> nn.Module:
+def create_conv_heavy_seed(dim: int, **kwargs: Any) -> nn.Module:
     """Double convolution enhancement seed - heavier but potentially more powerful."""
+    if kwargs:
+        raise ValueError(f"Unexpected kwargs for cnn/conv_heavy: {sorted(kwargs)}")
 
     class ConvHeavySeed(nn.Module):
         def __init__(self, channels: int):
@@ -287,7 +305,7 @@ def create_conv_heavy_seed(channels: int) -> nn.Module:
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             return x + self.enhance(x)  # type: ignore[no-any-return]
 
-    return ConvHeavySeed(channels)
+    return ConvHeavySeed(dim)
 
 
 __all__ = ["ConvBlock", "SeedConvBlock", "get_num_groups"]

@@ -22,7 +22,10 @@ from .advantages import compute_per_head_advantages
 from .types import PPOUpdateMetrics
 from esper.simic.telemetry import RatioExplosionDiagnostic
 from esper.simic.telemetry.lstm_health import compute_lstm_health
-from esper.simic.telemetry.value_metrics import compute_value_function_metrics
+from esper.simic.telemetry.value_metrics import (
+    ValueFunctionMetricsDict,
+    compute_value_function_metrics,
+)
 from esper.simic.control import ValueNormalizer
 from esper.leyline import (
     PolicyBundle,
@@ -358,7 +361,7 @@ class PPOAgent:
             "cuda_memory_fragmentation": fragmentation,
         }
 
-    def _compute_value_function_metrics(self) -> dict[str, float]:
+    def _compute_value_function_metrics(self) -> ValueFunctionMetricsDict:
         """Compute value function metrics from buffer data.
 
         Called after compute_advantages_and_returns() to extract
@@ -1060,8 +1063,8 @@ class PPOAgent:
 
         # FINITENESS GATE CONTRACT: Check if any epochs actually completed
         # ratio_max is only populated when an epoch successfully computes losses
-        finiteness_failures = metrics.get("finiteness_gate_failures", [])
-        epochs_completed = len(metrics.get("ratio_max", []))
+        finiteness_failures = metrics["finiteness_gate_failures"]
+        epochs_completed = len(metrics["ratio_max"])
 
         if epochs_completed == 0:
             # All epochs skipped - return explicit signal with NaN values
@@ -1080,7 +1083,7 @@ class PPOAgent:
             aggregated_result["pre_clip_grad_norm"] = float("nan")
             # Keep failure details for diagnostics
             if finiteness_failures:
-                aggregated_result["finiteness_gate_failures"] = finiteness_failures  # type: ignore[literal-required]
+                aggregated_result["finiteness_gate_failures"] = finiteness_failures
             return aggregated_result
 
         # At least one epoch completed successfully
@@ -1188,7 +1191,15 @@ class PPOAgent:
             aggregated_result["lstm_has_inf"] = None
 
         # Add value function metrics (TELE-220 to TELE-228)
-        aggregated_result.update(value_func_metrics)
+        aggregated_result["v_return_correlation"] = value_func_metrics["v_return_correlation"]
+        aggregated_result["td_error_mean"] = value_func_metrics["td_error_mean"]
+        aggregated_result["td_error_std"] = value_func_metrics["td_error_std"]
+        aggregated_result["bellman_error"] = value_func_metrics["bellman_error"]
+        aggregated_result["return_p10"] = value_func_metrics["return_p10"]
+        aggregated_result["return_p50"] = value_func_metrics["return_p50"]
+        aggregated_result["return_p90"] = value_func_metrics["return_p90"]
+        aggregated_result["return_variance"] = value_func_metrics["return_variance"]
+        aggregated_result["return_skewness"] = value_func_metrics["return_skewness"]
 
         # Add CUDA memory metrics (collected once per update, not averaged)
         if cuda_memory_metrics:

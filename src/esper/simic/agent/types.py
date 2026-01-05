@@ -36,6 +36,13 @@ class HeadGradientNorms(TypedDict):
     value: float
 
 
+class FinitenessGateFailure(TypedDict):
+    """Diagnostics for an epoch skipped by the finiteness gate."""
+
+    epoch: int
+    sources: list[str]
+
+
 class PPOUpdateMetrics(TypedDict, total=False):
     """Metrics from a single PPO update step.
 
@@ -56,6 +63,7 @@ class PPOUpdateMetrics(TypedDict, total=False):
     # Update status (finiteness gate contract)
     ppo_update_performed: bool  # True if at least one epoch completed
     finiteness_gate_skip_count: int  # Number of epochs skipped due to NaN/Inf
+    finiteness_gate_failures: list[FinitenessGateFailure]  # One entry per skipped epoch
 
     # Scalar metrics (aggregated across epochs)
     policy_loss: float
@@ -72,6 +80,16 @@ class PPOUpdateMetrics(TypedDict, total=False):
     ratio_std: float  # Standard deviation of importance sampling ratio
     early_stop_epoch: int | None  # None when early stopping didn't occur
     pre_clip_grad_norm: float  # Gradient norm before clipping (for telemetry)
+    # Value function metrics (TELE-220 to TELE-228)
+    v_return_correlation: float
+    td_error_mean: float
+    td_error_std: float
+    bellman_error: float
+    return_p10: float
+    return_p50: float
+    return_p90: float
+    return_variance: float
+    return_skewness: float
     # Log prob extremes (NaN predictor)
     log_prob_min: float
     log_prob_max: float
@@ -159,6 +177,7 @@ class ActionDict(TypedDict):
 __all__ = [
     "GradientStats",
     "HeadGradientNorms",
+    "FinitenessGateFailure",
     "PPOUpdateMetrics",
     "HeadLogProbs",
     "HeadEntropies",
