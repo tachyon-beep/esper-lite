@@ -67,14 +67,17 @@ class TestBlueprintEmbedding:
         assert embedding.embedding.weight.device.type == target_device.type
 
     def test_out_of_bounds_blueprint_index_fails(self):
-        """Verify out-of-bounds blueprint indices raise IndexError.
+        """Verify out-of-bounds blueprint indices are caught.
 
         Critical test from PyTorch specialist review: nn.Embedding does not
         bounds-check by default, which can cause silent memory corruption or
         crashes. This test ensures invalid indices are caught.
 
-        Valid range: -1 (inactive) or 0 to NUM_BLUEPRINTS-1
+        When validation is enabled: ValueError with clear message
+        When validation is disabled: IndexError from embedding layer
         """
+        from esper.tamiyo.policy.action_masks import MaskedCategorical
+
         embedding = BlueprintEmbedding()
 
         # Valid range: -1 (inactive) or 0 to NUM_BLUEPRINTS-1
@@ -82,37 +85,73 @@ class TestBlueprintEmbedding:
         result = embedding(valid_idx)  # Should succeed
         assert result.shape == (1, 3, 4)
 
-        # Out of bounds (positive) - index >= NUM_BLUEPRINTS + 1 (accounting for null)
-        # BlueprintEmbedding has NUM_BLUEPRINTS + 1 = 14 entries (0-12 + null at 13)
-        # Index 14+ is out of bounds
+        # Out of bounds (positive) - index >= NUM_BLUEPRINTS
         invalid_idx_high = torch.tensor([[NUM_BLUEPRINTS + 1]])  # Index 14
 
-        with pytest.raises(IndexError):
-            embedding(invalid_idx_high)
+        # With validation enabled: ValueError with helpful message
+        original = MaskedCategorical.validate
+        MaskedCategorical.validate = True
+        try:
+            with pytest.raises(ValueError, match="invalid indices"):
+                embedding(invalid_idx_high)
+        finally:
+            MaskedCategorical.validate = original
 
-    def test_out_of_bounds_negative_below_minus_one(self):
-        """Blueprint index -2 or lower should fail.
+        # With validation disabled: IndexError from embedding layer
+        MaskedCategorical.validate = False
+        try:
+            with pytest.raises(IndexError):
+                embedding(invalid_idx_high)
+        finally:
+            MaskedCategorical.validate = original
+
+    def test_out_of_bounds_negative_below_minus_one_when_validation_enabled(self):
+        """Blueprint index -2 or lower should fail when validation is enabled.
 
         Only -1 is valid for inactive slots. Other negative values are bugs.
+        FAIL-FAST: Validation catches upstream bugs that emit invalid sentinels.
         """
-        embedding = BlueprintEmbedding()
+        from esper.tamiyo.policy.action_masks import MaskedCategorical
 
-        # -2 is not a valid inactive marker
-        invalid_negative = torch.tensor([[-2]])
+        # Enable validation mode
+        original = MaskedCategorical.validate
+        MaskedCategorical.validate = True
+        try:
+            embedding = BlueprintEmbedding()
 
-        # After torch.where(idx < 0, null_idx, idx), -2 becomes 13 (valid)
-        # So this test verifies the current behavior - negative values < -1
-        # are treated the same as -1 (mapped to null embedding)
-        # This is acceptable behavior, but worth documenting
-        result = embedding(invalid_negative)
-        assert result.shape == (1, 1, 4)
+            # -2 is not a valid inactive marker - should raise
+            invalid_negative = torch.tensor([[-2]])
+            with pytest.raises(ValueError, match="invalid indices.*-2"):
+                embedding(invalid_negative)
 
-        # Verify it maps to the null embedding
-        null_check_idx = torch.tensor([[-1]])
-        null_result = embedding(null_check_idx)
-        assert torch.allclose(result, null_result), (
-            "Negative values < -1 should map to null embedding same as -1"
-        )
+            # -999 should also fail
+            invalid_extreme = torch.tensor([[-999]])
+            with pytest.raises(ValueError, match="invalid indices.*-999"):
+                embedding(invalid_extreme)
+        finally:
+            MaskedCategorical.validate = original
+
+    def test_out_of_bounds_negative_below_minus_one_fails_with_index_error_without_validation(self):
+        """Without validation, -2 causes IndexError (fail-fast behavior).
+
+        The sentinel is exactly -1 for inactive slots. Other negative values
+        are passed directly to the embedding, causing IndexError. This is the
+        desired fail-fast behavior even when explicit validation is disabled.
+        """
+        from esper.tamiyo.policy.action_masks import MaskedCategorical
+
+        # Disable validation mode
+        original = MaskedCategorical.validate
+        MaskedCategorical.validate = False
+        try:
+            embedding = BlueprintEmbedding()
+
+            # Without validation, -2 passes directly to embedding → IndexError
+            invalid_negative = torch.tensor([[-2]])
+            with pytest.raises(IndexError):
+                embedding(invalid_negative)
+        finally:
+            MaskedCategorical.validate = original
 
     def test_batch_and_sequence_dims(self):
         """Embedding should handle various batch and sequence dimensions."""
@@ -147,7 +186,7 @@ def test_blueprint_embedding_in_model_context():
     """Verify BlueprintEmbedding works correctly within full model."""
     from esper.tamiyo.networks.factored_lstm import FactoredRecurrentActorCritic
 
-    model = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM, num_slots=3)
+    model = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM)
 
     # Test with valid indices including inactive slots
     state = torch.randn(2, 1, OBS_V3_NON_BLUEPRINT_DIM)

@@ -18,6 +18,7 @@ from esper.leyline import (
     FactoredAction,
     GERMINATE_PREFIX,
     LifecycleOp,
+    SeedStage,
     TelemetryEvent,
     TelemetryEventType,
     TrainingStartedPayload,
@@ -35,9 +36,10 @@ from esper.simic.telemetry import (
     collect_seed_gradients_async,
     materialize_grad_stats,
     TelemetryConfig,
+    emit_with_env_context,
 )
 from esper.simic.telemetry.gradient_collector import GradientHealthStats
-from esper.simic.contracts import SlottedHostProtocol
+from esper.leyline import SlottedHostProtocol
 from esper.leyline.slot_config import SlotConfig
 from esper.leyline.slot_id import validate_slot_ids
 from esper.nissa import get_hub
@@ -59,6 +61,7 @@ def compute_rent_and_shock_inputs(
     model: SlottedHostProtocol,
     slot_ids: list[str],
     host_params: int,
+    host_params_floor: int = 1,
     base_slot_rent_ratio: float,
     prev_slot_alphas: dict[str, float],
     prev_slot_params: dict[str, int],
@@ -66,13 +69,16 @@ def compute_rent_and_shock_inputs(
     """Compute effective params and convex alpha-shock inputs for reward shaping.
 
     Phase 5 contract:
-    - BaseSlotRent applies only while a seed module is present (cooldown pays no rent).
+    - BaseSlotRent applies only from BLENDING onward (cooldown/training pays no rent).
     - Param counts are invariant to BLEND_OUT freeze (requires_grad toggles).
     - Gate network params (alpha_schedule) count toward overhead when present.
 
     Updates prev_slot_alphas/prev_slot_params in place.
     """
     base_slot_rent_params = base_slot_rent_ratio * host_params if host_params > 0 else 0.0
+    if host_params > 0 and host_params_floor < 1:
+        raise ValueError(f"host_params_floor must be >= 1 (got {host_params_floor})")
+    denom_host_params = max(host_params, host_params_floor) if host_params > 0 else 0
 
     effective_seed_params = 0.0
     alpha_delta_sq_sum = 0.0
@@ -95,14 +101,16 @@ def compute_rent_and_shock_inputs(
             if slot.alpha_schedule is not None:
                 slot_param_count += sum(p.numel() for p in slot.alpha_schedule.parameters())
 
-            effective_seed_params += base_slot_rent_params
-            effective_seed_params += current_alpha * slot_param_count
+            stage = slot.state.stage
+            if stage in (SeedStage.BLENDING, SeedStage.HOLDING, SeedStage.FOSSILIZED):
+                effective_seed_params += base_slot_rent_params
+                effective_seed_params += current_alpha * slot_param_count
 
-        prev_alpha = prev_slot_alphas.get(slot_id, 0.0)
-        prev_params = prev_slot_params.get(slot_id, 0)
+        prev_alpha = prev_slot_alphas[slot_id]
+        prev_params = prev_slot_params[slot_id]
         if host_params > 0 and prev_params > 0:
             delta = current_alpha - prev_alpha
-            alpha_delta_sq_sum += (delta * delta) * (prev_params / host_params)
+            alpha_delta_sq_sum += (delta * delta) * (prev_params / denom_host_params)
 
         prev_slot_alphas[slot_id] = current_alpha
         prev_slot_params[slot_id] = slot_param_count if has_active_seed else 0
@@ -303,9 +311,13 @@ def _train_one_epoch(
         # Collect gradient stats as tensors (async-safe, no .item() sync)
         # Overwrites each batch; final value materialized after loop
         if collect_gradients:
-            # cast() needed because nn.Module doesn't expose get_seed_parameters in stubs
-            host_model = cast(_HasSeedParameters, model)
-            grad_stats = collect_seed_gradients_async(host_model.get_seed_parameters())
+            # cast() needed because nn.Module doesn't expose get_seed_parameters/seed_slots in stubs
+            slotted_model = cast(SlottedHostProtocol, model)
+            grad_stats = collect_seed_gradients_async(slotted_model.get_seed_parameters())
+            # Keep Kasmina's per-seed G2 metric fresh in strict gate runs.
+            # This uses SeedSlot's async capture (no .item() sync in hot path).
+            for slot in slotted_model.seed_slots.values():
+                slot.capture_gradient_telemetry_async()
 
         host_optimizer.step()
         if seed_optimizer:
@@ -319,6 +331,12 @@ def _train_one_epoch(
     # Single sync at epoch end (forces all CUDA ops to complete)
     epoch_loss = running_loss.item()
     epoch_correct = running_correct.item()
+
+    # Finalize per-slot gradient stats AFTER the sync above (safe to call .item()).
+    if collect_gradients:
+        slotted_model = cast(SlottedHostProtocol, model)
+        for slot in slotted_model.seed_slots.values():
+            slot.finalize_gradient_telemetry()
 
     # Now safe to materialize gradient tensors (after implicit sync above)
     materialized_grad_stats: GradientHealthStats | None = None
@@ -466,8 +484,7 @@ def run_heuristic_episode(
     episode_id = f"heur_{base_seed}"
     model = cast(SlottedHostProtocol, create_model(task=task_spec, device=device, slots=slots))
 
-    if len(slots) != len(set(slots)):
-        raise ValueError(f"slots contains duplicates: {slots}")
+    # Note: create_model() already validates for duplicate slots, no need to check here
     enabled_slots = validate_slot_ids(list(slots))
 
     # Wire telemetry
@@ -476,10 +493,9 @@ def run_heuristic_episode(
     ops_telemetry_enabled = telemetry_config is None or telemetry_config.should_collect("ops_normal")
 
     def telemetry_callback(event: TelemetryEvent) -> None:
-        # Note: Slot telemetry events already have properly typed payloads,
-        # we just emit them as-is. The env_id/device are set when creating
-        # EPOCH_COMPLETED and TRAINING_STARTED events.
-        hub.emit(event)
+        # Slot telemetry events are emitted from Kasmina with env_id=-1 sentinel
+        # (slots don't know their environment). Inject env_id=0 for heuristic runs.
+        emit_with_env_context(hub, 0, device, event)
 
     for slot_id in enabled_slots:
         slot = model.seed_slots[slot_id]
@@ -581,6 +597,9 @@ def run_heuristic_episode(
             # Collect gradient stats (async-safe, overwrites each batch; final value materialized after loop)
             if collect_gradients:
                 grad_async = collect_seed_gradients_async(model.get_seed_parameters())
+                # Keep Kasmina's per-seed G2 metric fresh in strict gate runs.
+                for slot_id in enabled_slots:
+                    model.seed_slots[slot_id].capture_gradient_telemetry_async()
 
             host_optimizer.step()
             if seed_optimizer:
@@ -594,6 +613,11 @@ def run_heuristic_episode(
         # Single sync at end of training
         train_loss = running_loss.item() / max(1, batch_count)
         train_acc = 100.0 * running_correct.item() / total if total > 0 else 0.0
+
+        # Finalize per-slot gradient stats AFTER the sync above (safe to call .item()).
+        if collect_gradients:
+            for slot_id in enabled_slots:
+                model.seed_slots[slot_id].finalize_gradient_telemetry()
 
         # Materialize gradient stats after training sync (safe to access .item() now)
         epoch_grad_stats: GradientHealthStats | None = None
@@ -698,6 +722,7 @@ def run_heuristic_episode(
             model=model,
             slot_ids=enabled_slots,
             host_params=host_params,
+            host_params_floor=reward_config.rent_host_params_floor,
             base_slot_rent_ratio=reward_config.base_slot_rent_ratio,
             prev_slot_alphas=prev_slot_alphas,
             prev_slot_params=prev_slot_params,

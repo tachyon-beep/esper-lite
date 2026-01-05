@@ -40,6 +40,13 @@ class TestHyperparameterValidation:
         # Zero is valid (no entropy bonus)
         TrainingConfig(entropy_coef=0.0)  # Should not raise
 
+    def test_rent_host_params_floor_must_be_positive(self):
+        """rent_host_params_floor must be >= 1."""
+        with pytest.raises(ValueError, match="rent_host_params_floor"):
+            TrainingConfig(rent_host_params_floor=0)
+        with pytest.raises(ValueError, match="rent_host_params_floor"):
+            TrainingConfig(rent_host_params_floor=-1)
+
     def test_gae_lambda_must_be_in_range(self):
         """GAE lambda must be in (0, 1]."""
         with pytest.raises(ValueError, match="gae_lambda"):

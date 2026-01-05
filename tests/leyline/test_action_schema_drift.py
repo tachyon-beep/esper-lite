@@ -58,9 +58,10 @@ def test_lifecycle_op_tables_and_dependents_stay_in_sync() -> None:
         slot_config=slot_config,
         topology="cnn",
     )
-    assert set(masks.keys()) == set(HEAD_NAMES)
+    assert set(masks.keys()) == set(HEAD_NAMES) | {"slot_by_op"}
     assert masks["op"].shape == (NUM_OPS,)
     assert masks["op"][LifecycleOp.WAIT].item() is True
+    assert masks["slot_by_op"].shape == (NUM_OPS, slot_config.num_slots)
 
 
 def test_action_head_schema_contract() -> None:

@@ -163,6 +163,18 @@ class RunningMeanStd:
         self.var = state["var"].to(self._device)
         self.count = state["count"].to(self._device)
 
+    def reset(self) -> None:
+        """Reset running statistics to initial state.
+
+        Call this after changing input transforms (e.g., adding symlog) to avoid
+        stale statistics causing LSTM saturation or other normalization issues.
+
+        The normalizer will re-learn statistics from scratch on subsequent updates.
+        """
+        self.mean.zero_()
+        self.var.fill_(1.0)
+        self.count.fill_(self.epsilon)
+
 
 class RewardNormalizer:
     """Running reward normalization for critic stability.
@@ -241,4 +253,185 @@ class RewardNormalizer:
         self.count = int(state["count"])
 
 
-__all__ = ["RunningMeanStd", "RewardNormalizer"]
+class ValueNormalizer:
+    """Running normalization for value function targets (PopArt-lite).
+
+    Solves the scale mismatch bug in PPO where:
+    - Critic is trained on normalized returns (std~1)
+    - GAE uses raw critic outputs mixed with raw rewards
+
+    This normalizer tracks running statistics and provides:
+    - normalize(): Scale returns for critic training
+    - denormalize(): Unscale critic outputs for GAE computation
+
+    Key difference from full PopArt:
+    - Full PopArt rescales the value head's final layer weights when stats change
+    - This simplified version just tracks stats; the critic learns normalized outputs
+    - We denormalize outputs at GAE time rather than rescaling weights
+
+    This is sufficient when:
+    - Return scale is relatively stable within training
+    - Episodes are fixed-length (less distribution shift)
+
+    For environments with wildly varying reward scales, consider full PopArt.
+
+    GPU-native: All operations stay on the same device as input tensors.
+
+    Args:
+        epsilon: Small constant for numerical stability (default 1e-4)
+        device: Device to store stats on (default "cpu")
+        momentum: EMA momentum for stat updates (default 0.99).
+            Higher values = slower adaptation = more stability.
+            Use None for Welford's algorithm (full history weighting).
+    """
+
+    def __init__(
+        self,
+        epsilon: float = 1e-4,
+        device: str | torch.device = "cpu",
+        momentum: float = 0.99,
+    ):
+        device = torch.device(device) if isinstance(device, str) else device
+        # Track running mean and std of returns
+        # Mean is tracked for proper variance computation but NOT subtracted
+        # (same rationale as RewardNormalizer: preserve value semantics)
+        self.mean = torch.tensor(0.0, device=device)
+        self.var = torch.tensor(1.0, device=device)
+        self.count = torch.tensor(0.0, device=device)
+        self.epsilon = epsilon
+        self._device = device
+        self.momentum = momentum
+        # Track if we've seen enough samples for reliable stats
+        self._min_samples = 32  # Need this many samples before using running stats
+        # PERF: CPU-side warmup gate to avoid GPU→CPU sync (.item()) in hot paths.
+        self._count_int = 0
+
+    @property
+    def std(self) -> torch.Tensor:
+        """Current running std (clamped for stability)."""
+        return torch.sqrt(self.var + self.epsilon)
+
+    @property
+    def has_valid_stats(self) -> bool:
+        """Whether we have enough samples for reliable normalization."""
+        return self._count_int >= self._min_samples
+
+    @torch.inference_mode()
+    def update(self, returns: torch.Tensor) -> None:
+        """Update running stats with a batch of returns.
+
+        Args:
+            returns: Tensor of return values [batch] or [batch, seq]
+        """
+        # Flatten for stable moments regardless of input shape.
+        flat = returns.flatten()
+        batch_count = flat.numel()
+        if batch_count == 0:
+            return
+
+        # Move stats to input device if needed
+        if self.mean.device != flat.device:
+            self.to(flat.device)
+
+        batch_mean = flat.mean()
+        batch_var = flat.var(correction=0)  # Population variance
+
+        if self.momentum is not None and self.has_valid_stats:
+            # EMA update (after warmup)
+            delta = batch_mean - self.mean
+            self.mean = self.momentum * self.mean + (1 - self.momentum) * batch_mean
+            self.var = (
+                self.momentum * self.var
+                + (1 - self.momentum) * batch_var
+                + self.momentum * (1 - self.momentum) * delta ** 2
+            )
+        else:
+            # Welford's algorithm (during warmup or if momentum=None)
+            delta = batch_mean - self.mean
+            tot_count = self.count + batch_count
+            new_mean = self.mean + delta * batch_count / tot_count
+            m_a = self.var * self.count
+            m_b = batch_var * batch_count
+            m2 = m_a + m_b + delta ** 2 * self.count * batch_count / tot_count
+            new_var = m2 / tot_count.clamp(min=1)
+            self.mean = new_mean
+            self.var = new_var
+
+        self.count = self.count + batch_count
+        self._count_int += batch_count
+
+    def normalize(self, returns: torch.Tensor) -> torch.Tensor:
+        """Normalize returns for critic training.
+
+        Returns returns / std (no mean subtraction to preserve semantics).
+        During warmup, returns values unchanged.
+
+        Args:
+            returns: Return values to normalize
+
+        Returns:
+            Normalized returns (std~1) if stats valid, else unchanged
+        """
+        if not self.has_valid_stats:
+            return returns
+
+        if self.mean.device != returns.device:
+            self.to(returns.device)
+
+        return returns / self.std
+
+    def denormalize(self, values: torch.Tensor) -> torch.Tensor:
+        """Denormalize critic outputs for GAE computation.
+
+        Converts normalized-scale values back to raw reward scale.
+        During warmup, returns values unchanged.
+
+        Args:
+            values: Critic outputs (on normalized scale)
+
+        Returns:
+            Values on raw reward scale
+        """
+        if not self.has_valid_stats:
+            return values
+
+        if self.mean.device != values.device:
+            self.to(values.device)
+
+        return values * self.std
+
+    def get_scale(self) -> float:
+        """Get current normalization scale (for telemetry).
+
+        Returns 1.0 during warmup.
+        """
+        if not self.has_valid_stats:
+            return 1.0
+        return self.std.item()
+
+    def to(self, device: str | torch.device) -> "ValueNormalizer":
+        """Move stats to device."""
+        device = torch.device(device) if isinstance(device, str) else device
+        self.mean = self.mean.to(device)
+        self.var = self.var.to(device)
+        self.count = self.count.to(device)
+        self._device = device
+        return self
+
+    def state_dict(self) -> dict[str, torch.Tensor]:
+        """Return state dictionary for checkpointing."""
+        return {
+            "mean": self.mean.clone(),
+            "var": self.var.clone(),
+            "count": self.count.clone(),
+        }
+
+    def load_state_dict(self, state: dict[str, torch.Tensor]) -> None:
+        """Load state from dictionary."""
+        self.mean = state["mean"].to(self._device)
+        self.var = state["var"].to(self._device)
+        self.count = state["count"].to(self._device)
+        self._count_int = int(self.count.item())
+
+
+__all__ = ["RunningMeanStd", "RewardNormalizer", "ValueNormalizer"]

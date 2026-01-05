@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
     from esper.simic.training.parallel_env_state import ParallelEnvState
 
+    from .observation_stats import ObservationStatsTelemetry
     from .telemetry_config import TelemetryConfig
 
 _logger = logging.getLogger(__name__)
@@ -204,6 +205,7 @@ class VectorizedEmitter:
         decision_entropy: float | None = None,
         reward_components: "RewardComponentsTelemetry | None" = None,
         head_telemetry: HeadTelemetry | None = None,
+        observation_stats: "ObservationStatsTelemetry | None" = None,
     ) -> None:
         """Emit last-action telemetry from the training loop.
 
@@ -232,6 +234,7 @@ class VectorizedEmitter:
             decision_entropy: Entropy of the action distribution
             reward_components: Typed dataclass with full reward breakdown (may be None for LOSS family)
             head_telemetry: Typed dataclass with per-head confidence and entropy values
+            observation_stats: Observation space health metrics (only passed for env_idx==0 to avoid redundancy)
         """
         if not self._should_emit("ops_normal"):
             return
@@ -242,16 +245,38 @@ class VectorizedEmitter:
         # the original unrolled logic in vectorized.py.
 
         action_name = OP_NAMES[action_indices["op"]]
-        blueprint_id = BLUEPRINT_IDS[action_indices["blueprint"]]
+        is_germinate = action_name == "GERMINATE"
+        is_set_alpha = action_name == "SET_ALPHA_TARGET"
+        is_prune = action_name == "PRUNE"
+        # Blueprint IDs are only semantically meaningful for GERMINATE.
+        # Emitting them for non-germinate ops is misleading in the UI (e.g., CIFAR
+        # runs showing transformer-only blueprints that were never executed).
+        blueprint_id: str | None = (
+            BLUEPRINT_IDS[action_indices["blueprint"]]
+            if is_germinate
+            else None
+        )
         style_idx = action_indices["style"]
-        style = STYLE_NAMES[style_idx]
-        blend_id = STYLE_BLEND_IDS[style_idx]
+        style: str | None = STYLE_NAMES[style_idx] if is_germinate or is_set_alpha else None
+        blend_id: str | None = STYLE_BLEND_IDS[style_idx] if style is not None else None
         selected_alpha_algorithm = STYLE_ALPHA_ALGORITHMS[style_idx].name
         alpha_algorithm = active_alpha_algorithm or selected_alpha_algorithm
-        tempo_idx = action_indices["tempo"]
-        alpha_target = ALPHA_TARGET_VALUES[action_indices["alpha_target"]]
-        alpha_speed = ALPHA_SPEED_NAMES[action_indices["alpha_speed"]]
-        alpha_curve = ALPHA_CURVE_NAMES[action_indices["alpha_curve"]]
+        tempo_idx: int | None = action_indices["tempo"] if is_germinate else None
+        alpha_target: float | None = (
+            ALPHA_TARGET_VALUES[action_indices["alpha_target"]]
+            if is_germinate or is_set_alpha
+            else None
+        )
+        alpha_speed: str | None = (
+            ALPHA_SPEED_NAMES[action_indices["alpha_speed"]]
+            if is_set_alpha or is_prune
+            else None
+        )
+        alpha_curve: str | None = (
+            ALPHA_CURVE_NAMES[action_indices["alpha_curve"]]
+            if is_set_alpha or is_prune
+            else None
+        )
         alpha_target_masked = bool(masked.get("alpha_target", False))
         alpha_speed_masked = bool(masked.get("alpha_speed", False))
         alpha_curve_masked = bool(masked.get("alpha_curve", False))
@@ -301,6 +326,7 @@ class VectorizedEmitter:
                 alpha_target_masked=alpha_target_masked,
                 alpha_speed_masked=alpha_speed_masked,
                 alpha_curve_masked=alpha_curve_masked,
+                observation_stats=observation_stats,
             ),
         ))
 
@@ -330,7 +356,8 @@ class VectorizedEmitter:
                 layer_stats = collect_per_layer_gradients(agent.policy.network)
                 layer_health = aggregate_layer_gradient_health(layer_stats)
                 payload.update(layer_health)
-            except Exception as e:
+            except (RuntimeError, AttributeError) as e:
+                # HIGH-02 fix: Narrow to expected gradient collection failures
                 _logger.warning("Failed to collect per-layer gradient stats: %s", e)
 
         emit_ppo_update_event(
@@ -602,29 +629,33 @@ def emit_last_action(
     """
     hub = get_hub()
     selected_alpha_algorithm = STYLE_ALPHA_ALGORITHMS[style_idx].name
+    op_name = OP_NAMES[op_idx]
+    is_germinate = op_name == "GERMINATE"
+    is_set_alpha = op_name == "SET_ALPHA_TARGET"
+    is_prune = op_name == "PRUNE"
     payload = AnalyticsSnapshotPayload(
         kind="last_action",
         env_id=env_id,
         inner_epoch=epoch,
-        action_name=OP_NAMES[op_idx],
+        action_name=op_name,
         slot_id=slot_id,
-        blueprint_id=BLUEPRINT_IDS[blueprint_idx],
-        style=STYLE_NAMES[style_idx],
-        blend_id=STYLE_BLEND_IDS[style_idx],
-        tempo_idx=tempo_idx,
-        alpha_target=ALPHA_TARGET_VALUES[alpha_target_idx],
-        alpha_speed=ALPHA_SPEED_NAMES[alpha_speed_idx],
-        alpha_curve=ALPHA_CURVE_NAMES[alpha_curve_idx],
+        blueprint_id=BLUEPRINT_IDS[blueprint_idx] if is_germinate else None,
+        style=STYLE_NAMES[style_idx] if is_germinate or is_set_alpha else None,
+        blend_id=STYLE_BLEND_IDS[style_idx] if is_germinate or is_set_alpha else None,
+        tempo_idx=tempo_idx if is_germinate else None,
+        alpha_target=ALPHA_TARGET_VALUES[alpha_target_idx] if is_germinate or is_set_alpha else None,
+        alpha_speed=ALPHA_SPEED_NAMES[alpha_speed_idx] if is_set_alpha or is_prune else None,
+        alpha_curve=ALPHA_CURVE_NAMES[alpha_curve_idx] if is_set_alpha or is_prune else None,
         alpha_algorithm=active_alpha_algorithm or selected_alpha_algorithm,
         alpha_algorithm_selected=selected_alpha_algorithm,
-        op_masked=bool(masked.get("op", False)),
-        slot_masked=bool(masked.get("slot", False)),
-        blueprint_masked=bool(masked.get("blueprint", False)),
-        style_masked=bool(masked.get("style", False)),
-        tempo_masked=bool(masked.get("tempo", False)),
-        alpha_target_masked=bool(masked.get("alpha_target", False)),
-        alpha_speed_masked=bool(masked.get("alpha_speed", False)),
-        alpha_curve_masked=bool(masked.get("alpha_curve", False)),
+        op_masked=bool(masked["op"]),
+        slot_masked=bool(masked["slot"]),
+        blueprint_masked=bool(masked["blueprint"]),
+        style_masked=bool(masked["style"]),
+        tempo_masked=bool(masked["tempo"]),
+        alpha_target_masked=bool(masked["alpha_target"]),
+        alpha_speed_masked=bool(masked["alpha_speed"]),
+        alpha_curve_masked=bool(masked["alpha_curve"]),
         action_success=success,
     )
     hub.emit(TelemetryEvent(
@@ -634,30 +665,30 @@ def emit_last_action(
         message="Last action",
         data=payload,
     ))
-    # Return dict for backwards compatibility with tests
+    # Return dict for test assertions (see B7-CR-05: this is the primary test interface)
     return {
         "kind": "last_action",
         "env_id": env_id,
         "inner_epoch": epoch,
-        "op": OP_NAMES[op_idx],
+        "op": op_name,
         "slot_id": slot_id,
-        "blueprint_id": BLUEPRINT_IDS[blueprint_idx],
-        "style": STYLE_NAMES[style_idx],
-        "blend_id": STYLE_BLEND_IDS[style_idx],
-        "tempo_idx": tempo_idx,
-        "alpha_target": ALPHA_TARGET_VALUES[alpha_target_idx],
-        "alpha_speed": ALPHA_SPEED_NAMES[alpha_speed_idx],
-        "alpha_curve": ALPHA_CURVE_NAMES[alpha_curve_idx],
+        "blueprint_id": BLUEPRINT_IDS[blueprint_idx] if is_germinate else None,
+        "style": STYLE_NAMES[style_idx] if is_germinate or is_set_alpha else None,
+        "blend_id": STYLE_BLEND_IDS[style_idx] if is_germinate or is_set_alpha else None,
+        "tempo_idx": tempo_idx if is_germinate else None,
+        "alpha_target": ALPHA_TARGET_VALUES[alpha_target_idx] if is_germinate or is_set_alpha else None,
+        "alpha_speed": ALPHA_SPEED_NAMES[alpha_speed_idx] if is_set_alpha or is_prune else None,
+        "alpha_curve": ALPHA_CURVE_NAMES[alpha_curve_idx] if is_set_alpha or is_prune else None,
         "alpha_algorithm": active_alpha_algorithm or selected_alpha_algorithm,
         "alpha_algorithm_selected": selected_alpha_algorithm,
-        "op_masked": bool(masked.get("op", False)),
-        "slot_masked": bool(masked.get("slot", False)),
-        "blueprint_masked": bool(masked.get("blueprint", False)),
-        "style_masked": bool(masked.get("style", False)),
-        "tempo_masked": bool(masked.get("tempo", False)),
-        "alpha_target_masked": bool(masked.get("alpha_target", False)),
-        "alpha_speed_masked": bool(masked.get("alpha_speed", False)),
-        "alpha_curve_masked": bool(masked.get("alpha_curve", False)),
+        "op_masked": bool(masked["op"]),
+        "slot_masked": bool(masked["slot"]),
+        "blueprint_masked": bool(masked["blueprint"]),
+        "style_masked": bool(masked["style"]),
+        "tempo_masked": bool(masked["tempo"]),
+        "alpha_target_masked": bool(masked["alpha_target"]),
+        "alpha_speed_masked": bool(masked["alpha_speed"]),
+        "alpha_curve_masked": bool(masked["alpha_curve"]),
         "action_success": success,
     }
 
@@ -706,6 +737,7 @@ def aggregate_layer_gradient_health(
     dead = sum(1 for s in layer_stats if s.zero_fraction > 0.9)
     exploding = sum(1 for s in layer_stats if s.large_fraction > 0.1)
     nan_count = sum(s.nan_count for s in layer_stats)
+    inf_count = sum(s.inf_count for s in layer_stats)
 
     # Per-layer health scores: 1.0 = perfect, penalize based on stats
     # Score indicates: 1.0=healthy, 0.5=warning, 0.0=dead/exploding
@@ -733,6 +765,7 @@ def aggregate_layer_gradient_health(
         "dead_layers": dead,
         "exploding_layers": exploding,
         "nan_grad_count": nan_count,
+        "inf_grad_count": inf_count,
         "layer_gradient_health": per_layer_health,
     }
 
@@ -755,12 +788,9 @@ def emit_ppo_update_event(
     the metrics dict is missing required keys. This prevents bug-hiding
     patterns where defaults silently mask missing data.
     """
-    lr = None
-    if optimizer is not None:
-        try:
-            lr = optimizer.param_groups[0].get("lr")
-        except (AttributeError, IndexError, KeyError, TypeError):
-            lr = None
+    # PT-07 fix: Direct access - all torch.optim.Optimizer subclasses have param_groups[0]["lr"]
+    # If this fails, the optimizer is fundamentally broken and we should fail loudly
+    lr = optimizer.param_groups[0]["lr"] if optimizer is not None else None
 
     # Compute per-head entropy averages for logging (P3-1)
     # Key format: head_{name}_entropy to match aggregator field names
@@ -801,6 +831,14 @@ def emit_ppo_update_event(
             advantage_skewness=metrics["advantage_skewness"],
             advantage_kurtosis=metrics["advantage_kurtosis"],
             advantage_positive_ratio=metrics["advantage_positive_ratio"],
+            # Pre-normalization advantage stats for diagnosing advantage collapse
+            pre_norm_advantage_mean=metrics["pre_norm_advantage_mean"],
+            pre_norm_advantage_std=metrics["pre_norm_advantage_std"],
+            # Return statistics for diagnosing value loss scale
+            return_mean=metrics["return_mean"],
+            return_std=metrics["return_std"],
+            # Value target scale: std used to normalize returns before value loss
+            value_target_scale=metrics["value_target_scale"],
             # MANDATORY ratio statistics - computed in PPO update
             ratio_mean=metrics["ratio_mean"],
             ratio_min=metrics["ratio_min"],
@@ -815,17 +853,18 @@ def emit_ppo_update_event(
             value_min=metrics["value_min"],
             value_max=metrics["value_max"],
             # Q-values (Policy V2 op-conditioned critic)
-            q_germinate=metrics.get("q_germinate", 0.0),
-            q_advance=metrics.get("q_advance", 0.0),
-            q_fossilize=metrics.get("q_fossilize", 0.0),
-            q_prune=metrics.get("q_prune", 0.0),
-            q_wait=metrics.get("q_wait", 0.0),
-            q_set_alpha=metrics.get("q_set_alpha", 0.0),
-            q_variance=metrics.get("q_variance", 0.0),
-            q_spread=metrics.get("q_spread", 0.0),
+            # Use NaN default to distinguish "missing" from "zero" (CRIT-01 fix)
+            q_germinate=metrics.get("q_germinate", float("nan")),
+            q_advance=metrics.get("q_advance", float("nan")),
+            q_fossilize=metrics.get("q_fossilize", float("nan")),
+            q_prune=metrics.get("q_prune", float("nan")),
+            q_wait=metrics.get("q_wait", float("nan")),
+            q_set_alpha=metrics.get("q_set_alpha", float("nan")),
+            q_variance=metrics.get("q_variance", float("nan")),
+            q_spread=metrics.get("q_spread", float("nan")),
             lr=lr,
             entropy_coef=metrics.get("entropy_coef"),
-            inf_grad_count=0,
+            inf_grad_count=metrics.get("inf_grad_count", 0),
             dead_layers=metrics.get("dead_layers", 0),
             exploding_layers=metrics.get("exploding_layers", 0),
             layer_gradient_health=metrics.get("layer_gradient_health"),
@@ -858,6 +897,9 @@ def emit_ppo_update_event(
             head_alpha_curve_ratio_max=metrics.get("head_alpha_curve_ratio_max", 1.0),
             head_op_ratio_max=metrics.get("head_op_ratio_max", 1.0),
             joint_ratio_max=metrics.get("joint_ratio_max", 1.0),
+            # Per-head NaN/Inf flags (for indicator lights)
+            head_nan_detected=metrics.get("head_nan_detected"),
+            head_inf_detected=metrics.get("head_inf_detected"),
             # Gradient quality metrics (per DRL expert)
             clip_fraction_positive=metrics.get("clip_fraction_positive", 0.0),
             clip_fraction_negative=metrics.get("clip_fraction_negative", 0.0),
@@ -867,6 +909,29 @@ def emit_ppo_update_event(
             cuda_memory_reserved_gb=metrics.get("cuda_memory_reserved_gb", 0.0),
             cuda_memory_peak_gb=metrics.get("cuda_memory_peak_gb", 0.0),
             cuda_memory_fragmentation=metrics.get("cuda_memory_fragmentation", 0.0),
+            # LSTM health metrics (B7-DRL-04)
+            lstm_h_l2_total=metrics.get("lstm_h_l2_total"),
+            lstm_c_l2_total=metrics.get("lstm_c_l2_total"),
+            lstm_h_rms=metrics.get("lstm_h_rms"),
+            lstm_c_rms=metrics.get("lstm_c_rms"),
+            lstm_h_env_rms_mean=metrics.get("lstm_h_env_rms_mean"),
+            lstm_h_env_rms_max=metrics.get("lstm_h_env_rms_max"),
+            lstm_c_env_rms_mean=metrics.get("lstm_c_env_rms_mean"),
+            lstm_c_env_rms_max=metrics.get("lstm_c_env_rms_max"),
+            lstm_h_max=metrics.get("lstm_h_max"),
+            lstm_c_max=metrics.get("lstm_c_max"),
+            lstm_has_nan=metrics.get("lstm_has_nan", False),
+            lstm_has_inf=metrics.get("lstm_has_inf", False),
+            # Value function metrics (TELE-220 to TELE-228)
+            v_return_correlation=metrics.get("v_return_correlation", 0.0),
+            td_error_mean=metrics.get("td_error_mean", 0.0),
+            td_error_std=metrics.get("td_error_std", 0.0),
+            bellman_error=metrics.get("bellman_error", 0.0),
+            return_p10=metrics.get("return_p10", 0.0),
+            return_p50=metrics.get("return_p50", 0.0),
+            return_p90=metrics.get("return_p90", 0.0),
+            return_variance=metrics.get("return_variance", 0.0),
+            return_skewness=metrics.get("return_skewness", 0.0),
             inner_epoch=epoch,
             batch=batch_idx + 1,
             # BUG FIX: Track actual PPO update count (inner_epoch was misleading)

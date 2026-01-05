@@ -3,7 +3,8 @@
 
 def test_compute_loss_reward_basic():
     """Basic loss reward: lower loss = positive reward."""
-    from esper.simic.rewards import compute_loss_reward, LossRewardConfig
+    from esper.leyline import LossRewardConfig
+    from esper.simic.rewards import compute_loss_reward
 
     config = LossRewardConfig.default()
 
@@ -22,7 +23,8 @@ def test_compute_loss_reward_basic():
 
 def test_compute_loss_reward_regression_penalized():
     """Loss regression gives negative reward."""
-    from esper.simic.rewards import compute_loss_reward, LossRewardConfig
+    from esper.leyline import LossRewardConfig
+    from esper.simic.rewards import compute_loss_reward
 
     config = LossRewardConfig.default()
 
@@ -41,7 +43,8 @@ def test_compute_loss_reward_regression_penalized():
 
 def test_asymmetric_regression_penalty():
     """Regression penalty is scaled down (asymmetric)."""
-    from esper.simic.rewards import compute_loss_reward, LossRewardConfig
+    from esper.leyline import LossRewardConfig
+    from esper.simic.rewards import compute_loss_reward
 
     config = LossRewardConfig.default()
 
@@ -69,7 +72,8 @@ def test_asymmetric_regression_penalty():
 
 def test_compute_rent():
     """Compute rent penalizes excess parameters (seed overhead above host)."""
-    from esper.simic.rewards import compute_loss_reward, LossRewardConfig
+    from esper.leyline import LossRewardConfig
+    from esper.simic.rewards import compute_loss_reward
 
     config = LossRewardConfig.default()
 
@@ -104,9 +108,8 @@ def test_compute_rent():
 
 def test_pbrs_stage_bonus():
     """PBRS stage bonus rewards stage progression."""
-    from esper.simic.rewards import compute_pbrs_stage_bonus, LossRewardConfig
-    from esper.simic.rewards import SeedInfo
-    from esper.leyline import SeedStage
+    from esper.leyline import LossRewardConfig, SeedStage
+    from esper.simic.rewards import compute_pbrs_stage_bonus, SeedInfo
 
     config = LossRewardConfig.default()
 
@@ -132,9 +135,8 @@ def test_pbrs_stage_bonus_fossilized_small_increment():
 
     FOSSILIZED has highest absolute potential, but smallest incremental bonus.
     """
-    from esper.simic.rewards import compute_pbrs_stage_bonus, LossRewardConfig, STAGE_POTENTIALS
-    from esper.simic.rewards import SeedInfo
-    from esper.leyline import SeedStage
+    from esper.leyline import LossRewardConfig, SeedStage
+    from esper.simic.rewards import compute_pbrs_stage_bonus, SeedInfo, STAGE_POTENTIALS
 
     config = LossRewardConfig.default()
 

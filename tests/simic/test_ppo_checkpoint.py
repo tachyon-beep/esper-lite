@@ -91,7 +91,7 @@ class TestPPOCheckpointRoundTrip:
             clip_ratio=0.1,
             entropy_coef=0.02,
             value_coef=0.25,
-            n_epochs=5,
+            # n_epochs was removed (P2 FIX - was dead code)
             batch_size=32,
             max_grad_norm=1.0,
             target_kl=0.02,
@@ -105,7 +105,7 @@ class TestPPOCheckpointRoundTrip:
         assert loaded.clip_ratio == original.clip_ratio
         assert loaded.entropy_coef == original.entropy_coef
         assert loaded.value_coef == original.value_coef
-        assert loaded.n_epochs == original.n_epochs
+        # n_epochs was removed (P2 FIX - was dead code)
         assert loaded.batch_size == original.batch_size
         assert loaded.max_grad_norm == original.max_grad_norm
         assert loaded.target_kl == original.target_kl
@@ -296,8 +296,8 @@ class TestPPOCheckpointCompileMode:
         assert loaded.compile_mode == "default"
         assert loaded.policy.is_compiled  # Critical: resumed policy is also compiled
 
-    def test_compile_mode_defaults_to_off_for_old_checkpoints(self, tmp_path: Path):
-        """Old checkpoints without compile_mode default to 'off'."""
+    def test_old_checkpoint_without_compile_mode_raises_error(self, tmp_path: Path):
+        """Old checkpoints without compile_mode raise RuntimeError (no backwards compat)."""
         slot_config = SlotConfig.default()
         policy = create_policy(
             policy_type="lstm",
@@ -314,10 +314,9 @@ class TestPPOCheckpointCompileMode:
         del checkpoint['config']['compile_mode']
         torch.save(checkpoint, tmp_path / "old_checkpoint.pt")
 
-        # Should load without error, defaulting to "off"
-        loaded = PPOAgent.load(tmp_path / "old_checkpoint.pt", device="cpu")
-        assert loaded.compile_mode == "off"
-        assert not loaded.policy.is_compiled
+        # Should raise RuntimeError - no backwards compatibility
+        with pytest.raises(RuntimeError, match="config.compile_mode is required"):
+            PPOAgent.load(tmp_path / "old_checkpoint.pt", device="cpu")
 
     def test_loaded_policy_forward_pass_works(self, tmp_path: Path):
         """Loaded compiled policy produces valid outputs."""

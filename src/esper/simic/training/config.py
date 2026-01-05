@@ -31,8 +31,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import asdict, dataclass, field, fields
-from collections.abc import Sequence
-from typing import Any, Self
+from typing import Any
 
 from esper.leyline import (
     DEFAULT_GAMMA,
@@ -58,9 +57,9 @@ class TrainingConfig:
     """
 
     # === Training scale ===
-    n_episodes: int = 100
+    n_episodes: int = 100  # PPO update rounds (batches)
     n_envs: int = DEFAULT_N_ENVS
-    max_epochs: int = DEFAULT_EPISODE_LENGTH
+    max_epochs: int = DEFAULT_EPISODE_LENGTH  # Epochs per env per round (LSTM horizon)
     batch_size_per_env: int | None = None
 
     # === PPO core (from leyline defaults) ===
@@ -75,6 +74,10 @@ class TrainingConfig:
     entropy_coef_start: float | None = None
     entropy_coef_end: float | None = None
     entropy_coef_min: float = DEFAULT_ENTROPY_COEF_MIN
+    # Total env-episodes over which to anneal entropy from start to end.
+    # With n_envs=K, this produces ceil(entropy_anneal_episodes / K) PPO batches
+    # of annealing. Note: this is env-episode-based, not PPO-update-based.
+    # Changing n_envs changes the number of PPO updates but not the total env experience.
     entropy_anneal_episodes: int = 0
 
     # === Telemetry and runtime flags ===
@@ -101,12 +104,9 @@ class TrainingConfig:
     param_budget: int = 500_000
     param_penalty_weight: float = 0.1
     sparse_reward_scale: float = 1.0
-
-    # === Per-Environment Reward Mode ===
-    # Per-environment reward mode override for A/B/n testing.
-    # If None, all envs use reward_mode. If tuple, must match n_envs length.
-    # Use with_reward_split() factory for ergonomic configuration.
-    reward_mode_per_env: tuple[RewardMode, ...] | None = None
+    # Floor for host-param normalization in rent/shock calculations.
+    # Prevents tiny hosts (e.g., ~17 trainable params) being crushed by any seed growth.
+    rent_host_params_floor: int = 200
 
     # === Diagnostics thresholds ===
     plateau_threshold: float = 0.5
@@ -125,6 +125,11 @@ class TrainingConfig:
     # and let Tamiyo learn quality thresholds through reward signals. If False, gates enforce
     # hard-coded thresholds for gradient ratios, contribution levels, and stability metrics.
     permissive_gates: bool = True
+    # Auto-forward gates: when enabled, Kasmina will advance stages automatically
+    # when the corresponding gate passes (removes ADVANCE as a learned decision).
+    auto_forward_g1: bool = False  # GERMINATED → TRAINING
+    auto_forward_g2: bool = False  # TRAINING → BLENDING
+    auto_forward_g3: bool = False  # BLENDING → HOLDING
 
     # === Ablation Flags ===
     # Used for systematic reward function experiments.
@@ -171,10 +176,13 @@ class TrainingConfig:
 
     @staticmethod
     def for_cifar_baseline_stable() -> "TrainingConfig":
-        """Conservative configuration for CIFAR tasks (slower, more stable PPO)."""
+        """Conservative configuration for CIFAR tasks (slower, more stable PPO).
+
+        Note: lr=1e-4 was removed after max_grad_norm increased from 1.0 to 5.0.
+        The low LR was compensating for aggressive clipping; now uses default 3e-4.
+        """
         return TrainingConfig(
             n_episodes=200,
-            lr=1e-4,
             clip_ratio=0.1,
             entropy_coef=0.06,
             entropy_coef_start=0.06,
@@ -207,37 +215,6 @@ class TrainingConfig:
             plateau_threshold=0.3,
             improvement_threshold=1.5,
             sparse_reward_scale=0.5,
-        )
-
-    # ------------------------------------------------------------------
-    # Factory Methods
-    # ------------------------------------------------------------------
-    @classmethod
-    def with_reward_split(cls, num_envs: int, modes: Sequence[RewardMode]) -> Self:
-        """Create config with per-env reward mode assignment.
-
-        Cycles through the provided modes to assign each environment a reward mode.
-        This enables A/B/n testing with any number of reward mode groups.
-
-        Args:
-            num_envs: Total number of environments
-            modes: Sequence of modes to cycle through
-
-        Returns:
-            Config with reward_mode_per_env set
-
-        Example:
-            # 4 envs, 2 modes: [SHAPED, SIMPLIFIED, SHAPED, SIMPLIFIED]
-            cfg = TrainingConfig.with_reward_split(4, [RewardMode.SHAPED, RewardMode.SIMPLIFIED])
-
-            # 6 envs, 3 modes: [SHAPED, SIMPLIFIED, SPARSE, SHAPED, SIMPLIFIED, SPARSE]
-            cfg = TrainingConfig.with_reward_split(6, [RewardMode.SHAPED, RewardMode.SIMPLIFIED, RewardMode.SPARSE])
-        """
-        if not modes:
-            raise ValueError("modes cannot be empty")
-        return cls(
-            n_envs=num_envs,
-            reward_mode_per_env=tuple(modes[i % len(modes)] for i in range(num_envs)),
         )
 
     # ------------------------------------------------------------------
@@ -275,10 +252,6 @@ class TrainingConfig:
             parsed["reward_mode"] = RewardMode(parsed["reward_mode"])
         if "slots" in parsed and parsed["slots"] is not None:
             parsed["slots"] = list(parsed["slots"])
-        if "reward_mode_per_env" in parsed and parsed["reward_mode_per_env"] is not None:
-            parsed["reward_mode_per_env"] = tuple(
-                RewardMode(m) for m in parsed["reward_mode_per_env"]
-            )
         return cls(**parsed)
 
     @classmethod
@@ -295,8 +268,6 @@ class TrainingConfig:
         raw = asdict(self)
         raw["reward_family"] = self.reward_family.value
         raw["reward_mode"] = self.reward_mode.value
-        if self.reward_mode_per_env is not None:
-            raw["reward_mode_per_env"] = [m.value for m in self.reward_mode_per_env]
         return raw
 
     # ------------------------------------------------------------------
@@ -358,12 +329,15 @@ class TrainingConfig:
             "param_budget": self.param_budget,
             "param_penalty_weight": self.param_penalty_weight,
             "sparse_reward_scale": self.sparse_reward_scale,
+            "rent_host_params_floor": self.rent_host_params_floor,
             "plateau_threshold": self.plateau_threshold,
             "improvement_threshold": self.improvement_threshold,
             "gradient_telemetry_stride": self.gradient_telemetry_stride,
             "seed": self.seed,
-            "reward_mode_per_env": self.reward_mode_per_env,
             "permissive_gates": self.permissive_gates,
+            "auto_forward_g1": self.auto_forward_g1,
+            "auto_forward_g2": self.auto_forward_g2,
+            "auto_forward_g3": self.auto_forward_g3,
             "disable_pbrs": self.disable_pbrs,
             "disable_terminal_reward": self.disable_terminal_reward,
             "disable_anti_gaming": self.disable_anti_gaming,
@@ -435,6 +409,7 @@ class TrainingConfig:
 
         if self.param_budget <= 0:
             raise ValueError("param_budget must be positive")
+        self._validate_positive(self.rent_host_params_floor, "rent_host_params_floor")
 
         # Validate amp_dtype
         valid_amp_dtypes = {"auto", "float16", "bfloat16", "off"}
@@ -462,21 +437,6 @@ class TrainingConfig:
         ):
             raise ValueError("reward_mode applies only to contribution rewards")
 
-        # Per-env reward mode validation
-        if self.reward_mode_per_env is not None:
-            if len(self.reward_mode_per_env) != self.n_envs:
-                raise ValueError(
-                    f"reward_mode_per_env length ({len(self.reward_mode_per_env)}) "
-                    f"must match n_envs ({self.n_envs})"
-                )
-            # Type validation - each entry must be a RewardMode enum
-            for i, mode in enumerate(self.reward_mode_per_env):
-                if not isinstance(mode, RewardMode):
-                    raise TypeError(
-                        f"reward_mode_per_env[{i}] must be a RewardMode enum, "
-                        f"got {type(mode).__name__}"
-                    )
-
         # PPO hyperparameter ranges
         self._validate_range(self.gamma, "gamma", 0.0, 1.0, min_inclusive=False, max_inclusive=True)
         self._validate_range(self.gae_lambda, "gae_lambda", 0.0, 1.0, min_inclusive=False, max_inclusive=True)
@@ -489,15 +449,25 @@ class TrainingConfig:
     # ------------------------------------------------------------------
     def summary(self) -> str:
         """Human-readable summary of configuration."""
+        auto_forward = []
+        if self.auto_forward_g1:
+            auto_forward.append("G1")
+        if self.auto_forward_g2:
+            auto_forward.append("G2")
+        if self.auto_forward_g3:
+            auto_forward.append("G3")
+
         lines = [
             "TrainingConfig:",
             f"  PPO: lr={self.lr}, gamma={self.gamma}, gae_lambda={self.gae_lambda}, clip={self.clip_ratio}",
-            f"  Episodes: {self.n_episodes}, envs={self.n_envs}, max_epochs={self.max_epochs}",
+            f"  Rounds: {self.n_episodes} (env episodes={self.n_episodes * self.n_envs}), "
+            f"envs={self.n_envs}, max_epochs={self.max_epochs}",
             f"  Entropy: {self.entropy_coef}" + (f" -> {self.entropy_coef_end}" if self.entropy_coef_end else ""),
             f"  Updates/batch: {self.ppo_updates_per_batch}, amp={'on' if self.amp else 'off'}, amp_dtype={self.amp_dtype}, compile={self.compile_mode}",
             f"  LSTM: hidden={self.lstm_hidden_dim}, chunk={self.chunk_length}",
             f"  Slots: {','.join(self.slots)} | reward_family={self.reward_family.value} mode={self.reward_mode.value}",
             f"  Telemetry: {'enabled' if self.use_telemetry else 'disabled'}, gates={'permissive' if self.permissive_gates else 'strict'}",
+            f"  Auto-forward: {','.join(auto_forward) if auto_forward else 'off'}",
         ]
         return "\n".join(lines)
 

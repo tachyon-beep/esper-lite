@@ -166,7 +166,8 @@ class SeedMetrics:
     # Gradient-based seed activity metric (parameter-normalized)
     # Formula: (seed_norm / host_norm) * sqrt(host_params / seed_params)
     # This measures per-parameter gradient intensity, scale-invariant across architectures
-    seed_gradient_norm_ratio: float = 0.0
+    # NOTE: None = never measured (distinct from 0.0 which means measured but inactive)
+    seed_gradient_norm_ratio: float | None = None
 
     # Parameter counts for normalization (set once at germination)
     host_param_count: int = 0
@@ -270,6 +271,11 @@ class SeedMetrics:
 
     def to_leyline(self) -> LeylineSeedMetrics:
         """Convert to Leyline contract type."""
+        # NOTE: Leyline's SeedMetrics contract treats this as a float; internally we
+        # use None to represent "never measured" for fail-loud gate behavior.
+        seed_gradient_norm_ratio = (
+            0.0 if self.seed_gradient_norm_ratio is None else float(self.seed_gradient_norm_ratio)
+        )
         return LeylineSeedMetrics(
             epochs_total=self.epochs_total,
             epochs_in_current_stage=self.epochs_in_current_stage,
@@ -280,7 +286,7 @@ class SeedMetrics:
             total_improvement=self.total_improvement,
             improvement_since_stage_start=self.improvement_since_stage_start,
             counterfactual_contribution=self.counterfactual_contribution,
-            seed_gradient_norm_ratio=self.seed_gradient_norm_ratio,
+            seed_gradient_norm_ratio=seed_gradient_norm_ratio,
             seed_param_count=self.seed_param_count,
             host_param_count=self.host_param_count,
             gradient_norm_avg=self.gradient_norm_avg,
@@ -328,10 +334,12 @@ class SeedMetrics:
         """Reconstruct from primitive dict.
 
         Raises KeyError if required fields are missing (no silent defaults).
+        Optional fields (counterfactual_contribution, _prev_contribution,
+        contribution_velocity) may be absent in early-lifecycle checkpoints.
         """
-        # Check schema version - fail fast on mismatch
-        schema_version = data.get("_schema_version")
-        if schema_version is not None and schema_version != cls._SCHEMA_VERSION:
+        # Check schema version - fail fast on mismatch or missing
+        schema_version = data["_schema_version"]  # Required - KeyError if missing
+        if schema_version != cls._SCHEMA_VERSION:
             raise ValueError(
                 f"SeedMetrics schema version mismatch: "
                 f"expected {cls._SCHEMA_VERSION}, got {schema_version}"
@@ -691,7 +699,11 @@ class QualityGates:
                 return GateResult(gate=gate, passed=True, score=1.0)
 
     def _get_gate_level(self, target_stage: SeedStage) -> GateLevel:
-        """Map target stage to gate level."""
+        """Map target stage to gate level.
+
+        Raises:
+            ValueError: If target_stage has no gate mapping.
+        """
         mapping = {
             SeedStage.GERMINATED: GateLevel.G0,
             SeedStage.TRAINING: GateLevel.G1,
@@ -699,7 +711,12 @@ class QualityGates:
             SeedStage.HOLDING: GateLevel.G3,  # Was G4, now G3 (direct from BLENDING)
             SeedStage.FOSSILIZED: GateLevel.G5,
         }
-        return mapping.get(target_stage, GateLevel.G0)
+        if target_stage not in mapping:
+            raise ValueError(
+                f"No gate defined for target stage {target_stage.name}. "
+                f"Valid gated stages: {', '.join(s.name for s in mapping.keys())}"
+            )
+        return mapping[target_stage]
 
     def _seed_ready_for_blending(self, state: SeedState) -> bool:
         """Seed-specific readiness for BLENDING.
@@ -805,11 +822,16 @@ class QualityGates:
 
         # Gradient-based seed activity: detect if seed is actively learning
         # vs. riding host improvements. Ratio is parameter-normalized EMA.
-        if state.metrics.seed_gradient_norm_ratio >= self.min_seed_gradient_ratio:
-            checks_passed.append(f"seed_gradient_active_{state.metrics.seed_gradient_norm_ratio:.2f}")
+        # NOTE: None means gradient stats were never collected (training loop coupling issue)
+        ratio = state.metrics.seed_gradient_norm_ratio
+        if ratio is None:
+            checks_failed.append("gradient_stats_never_measured")
+            gradient_ok = False
+        elif ratio >= self.min_seed_gradient_ratio:
+            checks_passed.append(f"seed_gradient_active_{ratio:.2f}")
             gradient_ok = True
         else:
-            checks_failed.append(f"seed_gradient_low_{state.metrics.seed_gradient_norm_ratio:.2f}")
+            checks_failed.append(f"seed_gradient_low_{ratio:.2f}")
             gradient_ok = False
 
         passed = perf_ok and seed_ok and gradient_ok
@@ -997,6 +1019,9 @@ class SeedSlot(nn.Module):
             for high-throughput PPO rollouts. Default: False.
     """
 
+    # Schema version for extra_state serialization (checkpoint compatibility)
+    _EXTRA_STATE_VERSION: ClassVar[int] = 1
+
     def __init__(
         self,
         slot_id: str,
@@ -1017,6 +1042,9 @@ class SeedSlot(nn.Module):
         self.telemetry_lifecycle_only: bool = False
         self.telemetry_inner_epoch: int | None = None
         self.telemetry_global_epoch: int | None = None
+        # Auto-forward gates: stage transitions can be advanced automatically by step_epoch()
+        # when the corresponding gate passes (configured by Simic TrainingConfig).
+        self.auto_forward_gates: frozenset[GateLevel] = frozenset()
         self.task_config = task_config
         self._resolved_topology: str | None = None
 
@@ -1465,11 +1493,7 @@ class SeedSlot(nn.Module):
                         epochs_in_stage=epochs_in_stage,
                         alpha_curve=self.state.alpha_controller.alpha_curve.name,
                         # Optional gradient health fields
-                        grad_ratio=(
-                            self.state.metrics.seed_gradient_norm_ratio
-                            if self.state.telemetry and self.state.telemetry.epoch > 0
-                            else 0.0
-                        ),
+                        grad_ratio=self._telemetry_grad_ratio(),
                         has_vanishing=(
                             self.state.telemetry.has_vanishing
                             if self.state.telemetry and self.state.telemetry.epoch > 0
@@ -1549,6 +1573,40 @@ class SeedSlot(nn.Module):
             # Transition failed (shouldn't happen for non-FOSSILIZED)
             return False
 
+        # =========================================================================
+        # CAPTURE TELEMETRY DATA BEFORE FREEING MEMORY
+        # =========================================================================
+        # Capture all data needed for telemetry payloads upfront. This allows us
+        # to free memory (self.seed = None) before emitting telemetry, ensuring
+        # GPU memory is reclaimed even if telemetry has issues.
+        alpha_for_telemetry = self.state.alpha
+        alpha_curve_name = self.state.alpha_controller.alpha_curve.name
+        grad_ratio = self._telemetry_grad_ratio()
+        has_vanishing = (
+            self.state.telemetry.has_vanishing
+            if self.state.telemetry and self.state.telemetry.epoch > 0
+            else False
+        )
+        has_exploding = (
+            self.state.telemetry.has_exploding
+            if self.state.telemetry and self.state.telemetry.epoch > 0
+            else False
+        )
+
+        # =========================================================================
+        # FREE MEMORY FIRST (BEFORE TELEMETRY)
+        # =========================================================================
+        # Release the seed nn.Module before any fallible operations. This ensures
+        # GPU memory is reclaimed even if telemetry callbacks have issues.
+        # Defense-in-depth: _emit_telemetry is now fault-tolerant, but we still
+        # free memory first as a safety measure.
+        self.seed = None
+        self._shape_probe_cache.clear()
+        self._cached_alpha_tensor = None
+
+        # =========================================================================
+        # EMIT TELEMETRY (NOW FAULT-TOLERANT)
+        # =========================================================================
         self._emit_telemetry(
             TelemetryEventType.SEED_STAGE_CHANGED,
             data=SeedStageChangedPayload(
@@ -1556,26 +1614,14 @@ class SeedSlot(nn.Module):
                 env_id=-1,  # Sentinel - will be replaced by emit_with_env_context
                 from_stage=old_stage.name,
                 to_stage=SeedStage.PRUNED.name,
-                alpha=self.state.alpha,
+                alpha=alpha_for_telemetry,
                 accuracy_delta=improvement,
                 epochs_in_stage=epochs_in_stage,
-                alpha_curve=self.state.alpha_controller.alpha_curve.name,
+                alpha_curve=alpha_curve_name,
                 # Optional gradient health fields
-                grad_ratio=(
-                    self.state.metrics.seed_gradient_norm_ratio
-                    if self.state.telemetry and self.state.telemetry.epoch > 0
-                    else 0.0
-                ),
-                has_vanishing=(
-                    self.state.telemetry.has_vanishing
-                    if self.state.telemetry and self.state.telemetry.epoch > 0
-                    else False
-                ),
-                has_exploding=(
-                    self.state.telemetry.has_exploding
-                    if self.state.telemetry and self.state.telemetry.epoch > 0
-                    else False
-                ),
+                grad_ratio=grad_ratio,
+                has_vanishing=has_vanishing,
+                has_exploding=has_exploding,
             ),
         )
         self._emit_telemetry(
@@ -1592,7 +1638,10 @@ class SeedSlot(nn.Module):
                 initiator=initiator,
             )
         )
-        self.seed = None
+
+        # =========================================================================
+        # FINAL CLEANUP
+        # =========================================================================
         # Phase 4 contract: keep state after physical removal so PRUNED/EMBARGOED/
         # RESETTING are observable to masks + telemetry (anti-thrashing).
         #
@@ -1607,13 +1656,6 @@ class SeedSlot(nn.Module):
         self.isolate_gradients = False
         if self.isolation_monitor is not None:
             self.isolation_monitor.reset()
-        # Clear shape probe cache to prevent memory leak
-        # (DRL Expert review 2025-12-17: cache holds intermediate tensors from shape
-        # validation; in PPO rollouts with frequent prune/regerminate cycles, this can
-        # accumulate significant GPU memory)
-        self._shape_probe_cache.clear()
-        # Clear cached alpha tensor (invalidate on prune)
-        self._cached_alpha_tensor = None
         # Clear pending async gradient stats
         self._pending_gradient_stats = None
         # Clear any BLEND_OUT freeze tracking (avoid keeping param refs alive)
@@ -1668,11 +1710,7 @@ class SeedSlot(nn.Module):
                     epochs_in_stage=epochs_in_stage,
                     alpha_curve=self.state.alpha_controller.alpha_curve.name,
                     # Optional gradient health fields
-                    grad_ratio=(
-                        self.state.metrics.seed_gradient_norm_ratio
-                        if self.state.telemetry and self.state.telemetry.epoch > 0
-                        else 0.0
-                    ),
+                    grad_ratio=self._telemetry_grad_ratio(),
                     has_vanishing=(
                         self.state.telemetry.has_vanishing
                         if self.state.telemetry and self.state.telemetry.epoch > 0
@@ -1754,11 +1792,7 @@ class SeedSlot(nn.Module):
                     epochs_in_stage=epochs_in_stage,
                     alpha_curve=self.state.alpha_controller.alpha_curve.name,
                     # Optional gradient health fields
-                    grad_ratio=(
-                        self.state.metrics.seed_gradient_norm_ratio
-                        if self.state.telemetry and self.state.telemetry.epoch > 0
-                        else 0.0
-                    ),
+                    grad_ratio=self._telemetry_grad_ratio(),
                     has_vanishing=(
                         self.state.telemetry.has_vanishing
                         if self.state.telemetry and self.state.telemetry.epoch > 0
@@ -1811,7 +1845,8 @@ class SeedSlot(nn.Module):
         """Calculate gradient norms via the health monitor and update internal metrics.
 
         CRITICAL: Call this from Tolaria after loss.backward() to enable the G2 gate.
-        Without this, seed_gradient_norm_ratio remains 0.0 and G2 always fails.
+        Without this, seed_gradient_norm_ratio remains None and G2 fails with
+        checks_failed=["gradient_stats_never_measured"] in strict gate mode.
 
         Performance note: Calls compute_gradient_health() which internally performs
         .item() sync. The actual CUDA→CPU transfer happens in materialize_gradient_stats()
@@ -1831,8 +1866,9 @@ class SeedSlot(nn.Module):
         # Ask monitor to calculate gradient norms for G2 gate health assessment
         stats = self.isolation_monitor.compute_gradient_health()
 
-        host_norm = stats.get("host_grad_norm", 0.0)
-        seed_norm = stats.get("seed_grad_norm", 0.0)
+        # materialize_gradient_stats() guarantees these keys exist
+        host_norm = stats["host_grad_norm"]
+        seed_norm = stats["seed_grad_norm"]
 
         # Compute parameter-normalized seed gradient ratio
         # Formula: (seed_norm / host_norm) * sqrt(host_params / seed_params)
@@ -1928,8 +1964,9 @@ class SeedSlot(nn.Module):
         self._pending_gradient_stats = None
 
         # Same ratio computation logic as capture_gradient_telemetry()
-        host_norm = stats.get("host_grad_norm", 0.0)
-        seed_norm = stats.get("seed_grad_norm", 0.0)
+        # materialize_gradient_stats() guarantees these keys exist
+        host_norm = stats["host_grad_norm"]
+        seed_norm = stats["seed_grad_norm"]
 
         if host_norm < GRADIENT_EPSILON:
             raw_ratio = 0.0
@@ -2040,9 +2077,7 @@ class SeedSlot(nn.Module):
                 if self.alpha_schedule is None:
                     raise RuntimeError("alpha_schedule is required when alpha_algorithm=GATE.")
                 # Isolation contract: use the same input reference that the seed sees.
-                # Type: ignore because AlphaScheduleProtocol is a structural protocol,
-                # but all actual instances are BlendAlgorithm (nn.Module) which have this method
-                gate = self.alpha_schedule.get_alpha_for_blend(seed_input)  # type: ignore[attr-defined]
+                gate = self.alpha_schedule.get_alpha_for_blend(seed_input)
                 return blend_gate(host_features, seed_features, alpha_amplitude, gate)
             case algo:
                 raise ValueError(f"Unknown alpha_algorithm: {algo!r}")
@@ -2305,8 +2340,9 @@ class SeedSlot(nn.Module):
         - governor/rollback prunes (flag set outside `step_epoch()`)
         - scheduled prune completion (flag set inside `step_epoch()`)
 
-        Stage advancement is explicit via advance_stage(); step_epoch only
-        ticks alpha schedules and cooldown transitions.
+        By default, stage advancement is explicit via advance_stage(); step_epoch
+        only ticks alpha schedules and cooldown transitions. When auto_forward_gates
+        is configured, step_epoch will also advance through those gated transitions.
         """
         if not self.state:
             return
@@ -2317,6 +2353,20 @@ class SeedSlot(nn.Module):
         # learnable params that could "fight" decay, but keep the forward graph
         # intact so host gradients still flow ("ghost gradients").
         self._set_blend_out_freeze(self.state.alpha_controller.alpha_mode == AlphaMode.DOWN)
+
+        # Auto-forward: GERMINATED -> TRAINING (G1)
+        if stage == SeedStage.GERMINATED:
+            if GateLevel.G1 in self.auto_forward_gates:
+                self.advance_stage(SeedStage.TRAINING)
+            return
+
+        # Auto-forward: TRAINING -> BLENDING (G2)
+        if stage == SeedStage.TRAINING:
+            if GateLevel.G2 in self.auto_forward_gates:
+                min_epochs = 1 if self.gates.permissive else self.gates.min_blending_epochs
+                if self.state.metrics.epochs_in_current_stage >= min_epochs:
+                    self.advance_stage(SeedStage.BLENDING)
+            return
 
         # BLENDING: tick alpha controller and enforce scheduled prune completion
         if stage == SeedStage.BLENDING:
@@ -2339,6 +2389,13 @@ class SeedSlot(nn.Module):
                     initiator = self._pending_prune_initiator or "policy"
                     self.prune(reason=reason, initiator=initiator)
                     return
+
+                if GateLevel.G3 in self.auto_forward_gates:
+                    if self.gates.permissive or (
+                        self.state.metrics.epochs_in_current_stage
+                        >= self.gates.min_blending_epochs
+                    ):
+                        self.advance_stage(SeedStage.HOLDING)
             return
 
         # HOLDING: Decision point for Tamiyo
@@ -2375,11 +2432,7 @@ class SeedSlot(nn.Module):
                     epochs_in_stage=epochs_in_stage,
                     alpha_curve=self.state.alpha_controller.alpha_curve.name,
                     # Optional gradient health fields
-                    grad_ratio=(
-                        self.state.metrics.seed_gradient_norm_ratio
-                        if self.state.telemetry and self.state.telemetry.epoch > 0
-                        else 0.0
-                    ),
+                    grad_ratio=self._telemetry_grad_ratio(),
                     has_vanishing=(
                         self.state.telemetry.has_vanishing
                         if self.state.telemetry and self.state.telemetry.epoch > 0
@@ -2424,11 +2477,7 @@ class SeedSlot(nn.Module):
                     epochs_in_stage=epochs_in_stage,
                     alpha_curve=self.state.alpha_controller.alpha_curve.name,
                     # Optional gradient health fields
-                    grad_ratio=(
-                        self.state.metrics.seed_gradient_norm_ratio
-                        if self.state.telemetry and self.state.telemetry.epoch > 0
-                        else 0.0
-                    ),
+                    grad_ratio=self._telemetry_grad_ratio(),
                     has_vanishing=(
                         self.state.telemetry.has_vanishing
                         if self.state.telemetry and self.state.telemetry.epoch > 0
@@ -2469,11 +2518,7 @@ class SeedSlot(nn.Module):
                     epochs_in_stage=epochs_in_stage,
                     alpha_curve=self.state.alpha_controller.alpha_curve.name,
                     # Optional gradient health fields
-                    grad_ratio=(
-                        self.state.metrics.seed_gradient_norm_ratio
-                        if self.state.telemetry and self.state.telemetry.epoch > 0
-                        else 0.0
-                    ),
+                    grad_ratio=self._telemetry_grad_ratio(),
                     has_vanishing=(
                         self.state.telemetry.has_vanishing
                         if self.state.telemetry and self.state.telemetry.epoch > 0
@@ -2494,56 +2539,60 @@ class SeedSlot(nn.Module):
             return None
         return self.state.to_report()
 
+    def _telemetry_grad_ratio(self) -> float:
+        """Return a float grad_ratio for telemetry payloads.
+
+        Internal SeedMetrics uses None to mean "never measured". Telemetry payload
+        schemas use float defaults, so we coalesce None -> 0.0.
+        """
+        if self.state is None or self.state.telemetry is None or self.state.telemetry.epoch <= 0:
+            return 0.0
+        ratio = self.state.metrics.seed_gradient_norm_ratio
+        if ratio is None:
+            return 0.0
+        return float(ratio)
+
     def _emit_telemetry(
         self,
         event_type: TelemetryEventType,
-        data: dict[str, Any] | SeedGerminatedPayload | SeedStageChangedPayload | SeedGateEvaluatedPayload | SeedFossilizedPayload | SeedPrunedPayload | None = None,
+        data: SeedGerminatedPayload | SeedStageChangedPayload | SeedGateEvaluatedPayload | SeedFossilizedPayload | SeedPrunedPayload,
     ) -> None:
-        """Emit a telemetry event.
+        """Emit a telemetry event with a typed payload.
 
         Skipped entirely in fast_mode for zero overhead in PPO rollouts.
+        All payloads are typed dataclasses - dicts are not supported.
 
-        Accepts either a dict (for events without typed payloads) or a typed payload.
-        For typed payloads, no additional enrichment is done (all fields should be
-        passed in the payload constructor). For dicts, optional enrichment adds
-        alpha, epochs, and gradient health fields if available.
+        SAFETY INVARIANT: Telemetry is observability, not correctness.
+        If the callback raises (disk full, serialization error, etc.),
+        we log to stderr but do NOT abort the calling operation. This
+        ensures safety-critical paths (e.g., Governor rollback) complete
+        even when telemetry subsystems fail. See governor.py for the
+        same pattern applied to Governor's own telemetry emission.
         """
         if self.on_telemetry is None:
             return
         if self.fast_mode and not self.telemetry_lifecycle_only:
             return
 
-        # Type narrowing: determine payload type
-        payload_data: Any
-        if isinstance(data, dict) or data is None:
-            # Legacy dict payload - apply enrichment
-            payload_dict: dict[str, Any] = dict(data) if data else {}
-            if self.state is not None:
-                payload_dict.setdefault("alpha", self.state.alpha)
-            if self.telemetry_inner_epoch is not None:
-                payload_dict.setdefault("inner_epoch", self.telemetry_inner_epoch)
-            if (
-                self.state is not None
-                and self.state.telemetry is not None
-                and self.state.telemetry.epoch > 0
-            ):
-                payload_dict.setdefault("seed_gradient_norm_ratio", self.state.metrics.seed_gradient_norm_ratio)
-                payload_dict.setdefault("gradient_health", self.state.telemetry.gradient_health)
-                payload_dict.setdefault("has_vanishing", self.state.telemetry.has_vanishing)
-                payload_dict.setdefault("has_exploding", self.state.telemetry.has_exploding)
-            payload_data = payload_dict
-        else:
-            # Typed payload - use as-is (no enrichment)
-            payload_data = data
-
         event = TelemetryEvent(
             event_type=event_type,
             seed_id=self.state.seed_id if self.state else None,
             slot_id=self.slot_id,
             epoch=self.telemetry_global_epoch,
-            data=payload_data,
+            data=data,
         )
-        self.on_telemetry(event)
+        try:
+            self.on_telemetry(event)
+        except Exception as e:
+            # Telemetry callback failed - log but don't abort.
+            # This prevents observability failures from blocking
+            # safety-critical operations like Governor rollback.
+            import sys
+            print(
+                f"WARNING: Seed telemetry emission failed for {event_type.name} "
+                f"(slot={self.slot_id}): {e}",
+                file=sys.stderr,
+            )
 
     def get_extra_state(self) -> dict[str, Any]:
         """Persist SeedState for PyTorch 2.9+ weights_only=True compatibility.
@@ -2552,6 +2601,7 @@ class SeedSlot(nn.Module):
         The alpha_schedule nn.Module weights are saved via state_dict(), not here.
         """
         state_dict: dict[str, Any] = {
+            "_extra_state_version": self._EXTRA_STATE_VERSION,
             "isolate_gradients": self.isolate_gradients,
             "blend_algorithm_id": self._blend_algorithm_id,
             "blend_tempo_epochs": self._blend_tempo_epochs,
@@ -2559,8 +2609,9 @@ class SeedSlot(nn.Module):
             "resolved_topology": self._resolved_topology,
         }
 
-        if self.state is not None:
-            state_dict["seed_state"] = self.state.to_dict()
+        # Always include seed_state key for checkpoint symmetry.
+        # DORMANT slots have state=None, which is valid and must roundtrip correctly.
+        state_dict["seed_state"] = self.state.to_dict() if self.state is not None else None
 
         # Alpha schedule: save config only, not the nn.Module
         # The nn.Module weights are saved in state_dict() automatically
@@ -2578,59 +2629,82 @@ class SeedSlot(nn.Module):
         return state_dict
 
     def set_extra_state(self, state: dict[str, Any]) -> None:
-        """Restore SeedState from primitive dict."""
-        self.isolate_gradients = state.get("isolate_gradients", False)
-        # B3-CR-02: Use direct indexing after membership check (not redundant .get())
-        if "blend_algorithm_id" in state:
-            self._blend_algorithm_id = state["blend_algorithm_id"]
-        if "blend_tempo_epochs" in state:
-            self._blend_tempo_epochs = state["blend_tempo_epochs"]
-        if "blend_alpha_target" in state:
-            self._blend_alpha_target = state["blend_alpha_target"]
-        if "resolved_topology" in state:
-            self._resolved_topology = state["resolved_topology"]
+        """Restore SeedSlot extra state from checkpoint.
 
-        if state.get("seed_state"):
-            self.state = SeedState.from_dict(state["seed_state"])
+        All fields saved by get_extra_state() are required. Missing fields
+        indicate a corrupt or incompatible checkpoint and will raise KeyError.
+
+        Raises:
+            KeyError: If required field is missing (corrupt checkpoint).
+            ValueError: If schema version mismatch or invalid field values.
+        """
+        # Schema version validation (fail-fast on incompatible checkpoints)
+        version = state["_extra_state_version"]
+        if version != self._EXTRA_STATE_VERSION:
+            raise ValueError(
+                f"SeedSlot extra_state schema mismatch: expected v{self._EXTRA_STATE_VERSION}, "
+                f"got v{version}. Checkpoint may be from incompatible version."
+            )
+
+        # Required fields - KeyError if missing (corrupt checkpoint)
+        self.isolate_gradients = state["isolate_gradients"]
+        self._blend_algorithm_id = state["blend_algorithm_id"]
+        self._blend_tempo_epochs = state["blend_tempo_epochs"]
+        self._blend_alpha_target = state["blend_alpha_target"]
+        self._resolved_topology = state["resolved_topology"]
+
+        # seed_state is a required key; value may be None for DORMANT slots
+        seed_state = state["seed_state"]
+        if seed_state is not None:
+            self.state = SeedState.from_dict(seed_state)
 
         # Alpha schedule reconstruction
         # The nn.Module weights are restored via load_state_dict() automatically
         # because PyTorch 2.x includes dynamically assigned modules in state_dict.
         # We only need to restore config and ensure the correct algorithm type.
-        if state.get("alpha_schedule_config"):
-            config = state["alpha_schedule_config"]
-            if config.get("algorithm_id"):
-                if self.state is None:
-                    raise ValueError("Checkpoint contains alpha_schedule_config but seed_state is missing.")
-                if config["algorithm_id"] != "gated":
-                    raise ValueError(
-                        "Checkpoint contains legacy alpha_schedule_config for "
-                        f"algorithm_id={config['algorithm_id']!r}. "
-                        "Phase 2+ only supports alpha_schedule_config for 'gated'."
-                    )
-                if self.state.alpha_algorithm != AlphaAlgorithm.GATE:
-                    raise ValueError(
-                        "Checkpoint contains alpha_schedule_config for 'gated' but "
-                        f"alpha_algorithm={self.state.alpha_algorithm!r}."
-                    )
-                # CRITICAL: Restore algorithm_id BEFORE start_blending()
-                # Without this, start_blending() defaults to "sigmoid" and
-                # GatedBlend weights become orphaned "unexpected_keys".
-                # See: docs/plans/2025-12-16-tolaria-kasmina-remediation.md
-                self._blend_algorithm_id = config["algorithm_id"]
-                self.start_blending(total_steps=config.get("total_steps", 10))
-                # Restore step count (_current_step guaranteed to exist on all BlendAlgorithm instances)
-                if self.alpha_schedule is not None:
-                    self.alpha_schedule._current_step = config.get("current_step", 0)
-                # Re-restore alpha controller (start_blending resets it)
-                alpha_controller = state["seed_state"].get("alpha_controller")
-                if not isinstance(alpha_controller, dict):
-                    raise ValueError(
-                        "Checkpoint seed_state is missing required 'alpha_controller' (Phase 1+). "
-                        "Pre-Phase-1 checkpoints are not supported for resume."
-                    )
-                self.state.alpha_controller = AlphaController.from_dict(alpha_controller)
-                self.state.alpha_controller.alpha = self.state.alpha
+        alpha_config = state["alpha_schedule_config"]
+        if alpha_config is not None:
+            algorithm_id = alpha_config["algorithm_id"]
+            total_steps = alpha_config["total_steps"]
+            current_step = alpha_config["current_step"]
+
+            if self.state is None:
+                raise ValueError("Checkpoint contains alpha_schedule_config but seed_state is missing.")
+            if algorithm_id != "gated":
+                raise ValueError(
+                    "Checkpoint contains legacy alpha_schedule_config for "
+                    f"algorithm_id={algorithm_id!r}. "
+                    "Phase 2+ only supports alpha_schedule_config for 'gated'."
+                )
+            if self.state.alpha_algorithm != AlphaAlgorithm.GATE:
+                raise ValueError(
+                    "Checkpoint contains alpha_schedule_config for 'gated' but "
+                    f"alpha_algorithm={self.state.alpha_algorithm!r}."
+                )
+
+            # CRITICAL: Restore algorithm_id BEFORE start_blending()
+            # Without this, start_blending() defaults to "sigmoid" and
+            # GatedBlend weights become orphaned "unexpected_keys".
+            # See: docs/plans/2025-12-16-tolaria-kasmina-remediation.md
+            self._blend_algorithm_id = algorithm_id
+            self.start_blending(total_steps=total_steps)
+
+            if self.alpha_schedule is None:
+                raise RuntimeError(
+                    "start_blending() did not create alpha_schedule. Checkpoint may be corrupt."
+                )
+
+            self.alpha_schedule._current_step = current_step
+
+            # Re-restore alpha controller (start_blending resets it)
+            alpha_controller = state["seed_state"]["alpha_controller"]
+            if not isinstance(alpha_controller, dict):
+                raise ValueError(
+                    "Checkpoint seed_state is missing required 'alpha_controller' (Phase 1+). "
+                    "Pre-Phase-1 checkpoints are not supported for resume."
+                )
+            self.state.alpha_controller = AlphaController.from_dict(alpha_controller)
+            self.state.alpha_controller.alpha = self.state.alpha
 
         # Ensure BLEND_OUT freeze invariant holds immediately after checkpoint load.
         if self.state is not None:

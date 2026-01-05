@@ -123,8 +123,8 @@ class AnomalyDetector:
     def check_value_function(
         self,
         explained_variance: float,
-        current_episode: int = 0,
-        total_episodes: int = 0,
+        current_episode: int,
+        total_episodes: int,
     ) -> AnomalyReport:
         """Check for value function collapse with phase-dependent thresholds.
 
@@ -134,8 +134,8 @@ class AnomalyDetector:
 
         Args:
             explained_variance: Explained variance metric (1 - Var(returns-values)/Var(returns))
-            current_episode: Current episode number for phase detection (0 = use static threshold)
-            total_episodes: Total configured episodes (0 = use static threshold)
+            current_episode: Current episode number for phase detection (required, must be > 0)
+            total_episodes: Total configured episodes (required, must be > 0)
 
         Returns:
             AnomalyReport with any detected issues
@@ -294,15 +294,91 @@ class AnomalyDetector:
 
         return report
 
+    # B7-DRL-04: LSTM hidden state health thresholds
+    # These are RMS thresholds (scale-free w.r.t. batch size / hidden dim).
+    # They intentionally do NOT use total L2 norms, which scale with sqrt(numel).
+    lstm_max_rms: float = 10.0  # Explosion/saturation threshold (per-element magnitude)
+    lstm_min_rms: float = 1e-6  # Vanishing threshold
+
+    def check_lstm_health(
+        self,
+        h_rms: float,
+        c_rms: float,
+        h_env_rms_max: float,
+        c_env_rms_max: float,
+        has_nan: bool,
+        has_inf: bool,
+    ) -> AnomalyReport:
+        """Check LSTM hidden state health (B7-DRL-04).
+
+        LSTM hidden states can drift during training due to:
+        - Explosion/saturation: RMS magnitude spikes above threshold
+        - Vanishing: RMS magnitude collapses below threshold
+        - Numerical instability: NaN/Inf propagates through hidden state
+
+        This should be called after PPO updates, when gradient-induced
+        corruption is most likely to occur (BPTT through LSTM layers).
+
+        Args:
+            h_rms: RMS magnitude of hidden state tensor (scale-free)
+            c_rms: RMS magnitude of cell state tensor (scale-free)
+            h_env_rms_max: Max per-env RMS across batch (outlier detection)
+            c_env_rms_max: Max per-env RMS across batch (outlier detection)
+            has_nan: Whether NaN was detected in hidden state
+            has_inf: Whether Inf was detected in hidden state
+
+        Returns:
+            AnomalyReport with any detected LSTM health issues
+        """
+        report = AnomalyReport()
+
+        # Critical: NaN/Inf in hidden state is irrecoverable
+        if has_nan:
+            report.add_anomaly(
+                "lstm_nan",
+                f"NaN in LSTM hidden state (h_rms={h_rms:.3f}, c_rms={c_rms:.3f})",
+            )
+        if has_inf:
+            report.add_anomaly(
+                "lstm_inf",
+                f"Inf in LSTM hidden state (h_rms={h_rms:.3f}, c_rms={c_rms:.3f})",
+            )
+
+        # Critical: Hidden state explosion/saturation (use max per-env RMS to catch outliers)
+        if h_env_rms_max > self.lstm_max_rms:
+            report.add_anomaly(
+                "lstm_h_explosion",
+                f"h_env_rms_max={h_env_rms_max:.3f} > {self.lstm_max_rms} (h_rms={h_rms:.3f})",
+            )
+        if c_env_rms_max > self.lstm_max_rms:
+            report.add_anomaly(
+                "lstm_c_explosion",
+                f"c_env_rms_max={c_env_rms_max:.3f} > {self.lstm_max_rms} (c_rms={c_rms:.3f})",
+            )
+
+        # Critical: Hidden state vanishing (global RMS)
+        if h_rms < self.lstm_min_rms:
+            report.add_anomaly(
+                "lstm_h_vanishing",
+                f"h_rms={h_rms:.6f} < {self.lstm_min_rms}",
+            )
+        if c_rms < self.lstm_min_rms:
+            report.add_anomaly(
+                "lstm_c_vanishing",
+                f"c_rms={c_rms:.6f} < {self.lstm_min_rms}",
+            )
+
+        return report
+
     def check_all(
         self,
         ratio_max: float,
         ratio_min: float,
         explained_variance: float,
+        current_episode: int,
+        total_episodes: int,
         has_nan: bool = False,
         has_inf: bool = False,
-        current_episode: int = 0,
-        total_episodes: int = 0,
         entropy: float | None = None,
         kl: float | None = None,
     ) -> AnomalyReport:
@@ -312,10 +388,10 @@ class AnomalyDetector:
             ratio_max: Maximum ratio in batch
             ratio_min: Minimum ratio in batch
             explained_variance: Explained variance metric
+            current_episode: Current episode for phase-dependent value collapse threshold (required)
+            total_episodes: Total configured episodes for phase detection (required)
             has_nan: Whether NaN values were detected
             has_inf: Whether Inf values were detected
-            current_episode: Current episode for phase-dependent value collapse threshold
-            total_episodes: Total configured episodes for phase detection
             entropy: Policy entropy (0-1 normalized). If provided, checks for entropy collapse.
             kl: KL divergence between old and new policy. If provided, checks for KL spikes.
 

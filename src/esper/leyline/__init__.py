@@ -20,6 +20,8 @@ Example:
 
 # ruff: noqa: E402  # Imports intentionally follow constant definitions for clarity
 
+from typing import Any
+
 # Version
 LEYLINE_VERSION = "0.2.0"
 
@@ -137,13 +139,16 @@ DEFAULT_CLIP_RATIO = 0.2
 DEFAULT_GAE_LAMBDA = 0.98
 
 # Value function loss coefficient in combined PPO loss.
-# 0.5 is standard; higher = prioritize value accuracy over policy.
-DEFAULT_VALUE_COEF = 0.5
+# 1.0 gives critic equal weight with policy, important when value head
+# is underfitting (negative explained variance from batch 1).
+DEFAULT_VALUE_COEF = 1.0
 
 # Maximum gradient norm for clipping (prevents exploding gradients).
-# 1.0 allows critic learning with normalized returns; 0.5 was too aggressive
-# for 12-layer LSTM, causing 100% gradient saturation and negative EV.
-DEFAULT_MAX_GRAD_NORM = 1.0
+# History: 0.5 caused 100% saturation with 12-layer LSTM; 1.0 still caused
+# 14-27x clipping which killed learning signal (ratio=1.0, KL=0, q_var=1e-7).
+# 5.0 allows ~60-80% of gradient magnitude through when pre-clip is 14-27,
+# preserving direction while preventing true explosions (>100 norm).
+DEFAULT_MAX_GRAD_NORM = 5.0
 
 # Number of PPO epochs per batch of experience.
 # More epochs = more sample efficiency, but risks overfitting.
@@ -346,6 +351,23 @@ DEFAULT_MIN_PANICS_BEFORE_ROLLBACK = 3
 DEFAULT_GOVERNOR_LOSS_MULTIPLIER = 3.0
 
 # =============================================================================
+# Device Constants (Tolaria validation)
+# =============================================================================
+
+# Supported device types for Esper training.
+# cpu: Universal fallback, always available
+# cuda: NVIDIA GPU via CUDA
+# mps: Apple Silicon GPU via Metal Performance Shaders
+#
+# Device types NOT supported (and why):
+# - meta: Fake device with no storage - forward passes work but training silently fails
+# - xla: TPU backend - requires separate torch_xla package and different training patterns
+# - xpu: Intel GPUs - still maturing in PyTorch, needs explicit testing/support
+# - hpu: Habana Gaudi - requires Intel Gaudi SDK
+# - privateuseone: Custom backend - undefined behavior
+SUPPORTED_DEVICE_TYPES: frozenset[str] = frozenset({"cpu", "cuda", "mps"})
+
+# =============================================================================
 # Display Thresholds (Karn UI)
 # =============================================================================
 
@@ -466,11 +488,11 @@ BLUEPRINT_NULL_INDEX = NUM_BLUEPRINTS
 DEFAULT_BLUEPRINT_EMBED_DIM = 4
 
 # Obs V3 base observation dimension (before blueprint embeddings are concatenated).
-# For DEFAULT_NUM_SLOTS=3: 23 + (30 × 3) = 113 dims.
+# For DEFAULT_NUM_SLOTS=3: 23 + (31 × 3) = 116 dims.
 # The full Obs V3 input to the network is:
-#   OBS_V3_NON_BLUEPRINT_DIM + (DEFAULT_NUM_SLOTS × DEFAULT_BLUEPRINT_EMBED_DIM) = 125 dims.
+#   OBS_V3_NON_BLUEPRINT_DIM + (DEFAULT_NUM_SLOTS × DEFAULT_BLUEPRINT_EMBED_DIM) = 128 dims.
 OBS_V3_BASE_FEATURE_SIZE = 23
-OBS_V3_SLOT_FEATURE_SIZE = 30
+OBS_V3_SLOT_FEATURE_SIZE = 31
 OBS_V3_NON_BLUEPRINT_DIM = OBS_V3_BASE_FEATURE_SIZE + (OBS_V3_SLOT_FEATURE_SIZE * DEFAULT_NUM_SLOTS)
 
 # Number of independent action heads in Tamiyo's factored action space.
@@ -540,10 +562,9 @@ from esper.leyline.slot_id import (
 from esper.leyline.injection_spec import InjectionSpec
 from esper.leyline.slot_config import SlotConfig
 
-# Actions (build_action_enum used by HeuristicTamiyo for flat action mapping)
+# Action name parsing utilities (build_action_enum moved to tamiyo.action_enums)
 from esper.leyline.actions import (
     GERMINATE_PREFIX,
-    build_action_enum,
     get_blueprint_from_action_name,
     is_germinate_action_name,
 )
@@ -604,10 +625,13 @@ from esper.leyline.telemetry import (
     # Typed payloads (see docs/plans/2025-12-25-typed-telemetry-payloads-design.md)
     TelemetryPayload,
     TrainingStartedPayload,
+    CheckpointLoadedPayload,
     EpochCompletedPayload,
     BatchEpochCompletedPayload,
     TrendDetectedPayload,
     PPOUpdatePayload,
+    MemoryWarningPayload,
+    RewardHackingSuspectedPayload,
     TamiyoInitiatedPayload,
     SeedGerminatedPayload,
     SeedStageChangedPayload,
@@ -638,11 +662,41 @@ from esper.leyline.types import (
 )
 
 # Causal masks for credit assignment (used by PPO + Karn UI)
-from esper.leyline.causal_masks import (
-    compute_causal_masks,
-    HEAD_RELEVANCE_BY_OP,
-    is_head_relevant,
+# NOTE: Lazy-loaded to avoid torch import at module level.
+# Access via module attribute (e.g., leyline.compute_causal_masks) or explicit import.
+_CAUSAL_MASK_EXPORTS = ("compute_causal_masks", "HEAD_RELEVANCE_BY_OP", "is_head_relevant")
+
+# Host protocol (Train Anything principle - ROADMAP #5)
+from esper.leyline.host_protocol import HostProtocol
+
+# Policy protocol (swappable Tamiyo policies)
+# NOTE: Lazy-loaded to avoid torch import at module level.
+_POLICY_PROTOCOL_EXPORTS = ("ActionResult", "EvalResult", "ForwardResult", "PolicyBundle")
+
+# Seed protocols (decouple training from seed implementation)
+from esper.leyline.seed_protocols import (
+    SeedStateProtocol,
+    SeedSlotProtocol,
+    SlottedHostProtocol,
 )
+
+# Task configuration (cross-subsystem training config)
+from esper.leyline.task_config import TaskConfig
+
+# Reward configuration (cross-subsystem reward hyperparameters)
+from esper.leyline.reward_config import LossRewardConfig
+
+# Episode outcome (cross-subsystem Pareto analysis)
+from esper.leyline.episode_outcome import EpisodeOutcome
+
+# Output protocol (telemetry backend contract)
+from esper.leyline.output_protocol import OutputBackend
+
+# Governor protocol (fail-safe training watchdog)
+from esper.leyline.governor_protocol import GovernorProtocol, GovernorReport
+
+# Utility functions (cross-subsystem pure functions)
+from esper.leyline.utils import safe
 
 __all__ = [
     # Version
@@ -756,6 +810,9 @@ __all__ = [
     "DEFAULT_MIN_PANICS_BEFORE_ROLLBACK",
     "DEFAULT_GOVERNOR_LOSS_MULTIPLIER",
 
+    # Device Constants (Tolaria validation)
+    "SUPPORTED_DEVICE_TYPES",
+
     # Display Thresholds (Karn UI)
     "DEFAULT_GROWTH_RATIO_GREEN_MAX",
     "DEFAULT_GROWTH_RATIO_YELLOW_MAX",
@@ -817,9 +874,8 @@ __all__ = [
     "InjectionSpec",
     "SlotConfig",
 
-    # Actions (build_action_enum used by HeuristicTamiyo)
+    # Action name parsing (build_action_enum moved to tamiyo.action_enums)
     "GERMINATE_PREFIX",
-    "build_action_enum",
     "get_blueprint_from_action_name",
     "is_germinate_action_name",
 
@@ -868,10 +924,13 @@ __all__ = [
     # Typed payloads
     "TelemetryPayload",
     "TrainingStartedPayload",
+    "CheckpointLoadedPayload",
     "EpochCompletedPayload",
     "BatchEpochCompletedPayload",
     "TrendDetectedPayload",
     "PPOUpdatePayload",
+    "MemoryWarningPayload",
+    "RewardHackingSuspectedPayload",
     "TamiyoInitiatedPayload",
     "SeedGerminatedPayload",
     "SeedStageChangedPayload",
@@ -895,4 +954,72 @@ __all__ = [
     # Type contracts
     "SeedObservationFields",
     "SlotObservationFields",
+
+    # Host protocol
+    "HostProtocol",
+
+    # Policy protocol
+    "ActionResult",
+    "EvalResult",
+    "ForwardResult",
+    "PolicyBundle",
+
+    # Seed protocols
+    "SeedStateProtocol",
+    "SeedSlotProtocol",
+    "SlottedHostProtocol",
+
+    # Task configuration
+    "TaskConfig",
+
+    # Reward configuration
+    "LossRewardConfig",
+
+    # Episode outcome (Pareto analysis)
+    "EpisodeOutcome",
+
+    # Output protocol (telemetry backends)
+    "OutputBackend",
+
+    # Governor protocol (fail-safe watchdog)
+    "GovernorProtocol",
+    "GovernorReport",
+
+    # Utility functions
+    "safe",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    """Lazy import for heavy modules (torch-dependent).
+
+    This enables `from esper.leyline import compute_causal_masks` to work
+    while deferring torch import until actually needed.
+    """
+    if name in _CAUSAL_MASK_EXPORTS:
+        from esper.leyline.causal_masks import (
+            compute_causal_masks,
+            HEAD_RELEVANCE_BY_OP,
+            is_head_relevant,
+        )
+        # Cache in module globals for subsequent access
+        globals()["compute_causal_masks"] = compute_causal_masks
+        globals()["HEAD_RELEVANCE_BY_OP"] = HEAD_RELEVANCE_BY_OP
+        globals()["is_head_relevant"] = is_head_relevant
+        return globals()[name]
+
+    if name in _POLICY_PROTOCOL_EXPORTS:
+        from esper.leyline.policy_protocol import (
+            ActionResult,
+            EvalResult,
+            ForwardResult,
+            PolicyBundle,
+        )
+        # Cache in module globals for subsequent access
+        globals()["ActionResult"] = ActionResult
+        globals()["EvalResult"] = EvalResult
+        globals()["ForwardResult"] = ForwardResult
+        globals()["PolicyBundle"] = PolicyBundle
+        return globals()[name]
+
+    raise AttributeError(f"module 'esper.leyline' has no attribute {name!r}")

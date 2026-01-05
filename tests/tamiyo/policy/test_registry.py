@@ -9,7 +9,7 @@ from esper.tamiyo.policy.registry import (
     list_policies,
     clear_registry,
 )
-from esper.tamiyo.policy.types import ActionResult, EvalResult, ForwardResult
+from esper.leyline import ActionResult, EvalResult, ForwardResult
 
 
 class MockPolicyBundle:

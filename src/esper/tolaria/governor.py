@@ -9,7 +9,6 @@ from __future__ import annotations
 import copy
 import math
 from collections import deque
-from dataclasses import dataclass
 from typing import Any, cast
 
 import torch
@@ -19,6 +18,7 @@ from esper.leyline import (
     TelemetryEvent,
     TelemetryEventType,
     GovernorRollbackPayload,
+    GovernorReport,  # Protocol dataclass from leyline
     DEFAULT_GOVERNOR_SENSITIVITY,
     DEFAULT_GOVERNOR_ABSOLUTE_THRESHOLD,
     DEFAULT_GOVERNOR_DEATH_PENALTY,
@@ -31,24 +31,6 @@ from esper.leyline import (
 from esper.leyline.telemetry import GovernorPanicReason
 
 # NOTE: get_hub imported at function scope to defer telemetry hub initialization
-
-
-@dataclass
-class GovernorReport:
-    """Report from a rollback event.
-
-    Note: consecutive_panics reflects the post-rollback state (always 0 after
-    successful rollback). The pre-rollback count is captured in the
-    GOVERNOR_ROLLBACK telemetry event's GovernorRollbackPayload.
-
-    Note: loss_at_panic is NaN if rollback was triggered without a preceding
-    panic (e.g., manual rollback). Use math.isnan() to check.
-    """
-    reason: str
-    loss_at_panic: float
-    loss_threshold: float
-    consecutive_panics: int
-    rollback_occurred: bool
 
 
 class TolariaGovernor:
@@ -121,6 +103,25 @@ class TolariaGovernor:
         Current call site (vectorized.py) satisfies this by calling snapshot() after
         stream.synchronize() and outside the per-env stream context.
         """
+        # STREAM CONTRACT ENFORCEMENT: Fail fast if called within non-default stream.
+        # This catches incorrect call sites that could produce torn snapshots.
+        # Check is CUDA-only since CPU has no stream concept.
+        # Get device from model parameters (fallback to CPU if no params)
+        try:
+            device = next(self.model.parameters()).device
+        except StopIteration:
+            device = torch.device("cpu")
+
+        if device.type == "cuda":
+            current_stream = torch.cuda.current_stream(device)
+            default_stream = torch.cuda.default_stream(device)
+            if current_stream != default_stream:
+                raise RuntimeError(
+                    f"snapshot() called within non-default CUDA stream (stream={current_stream}). "
+                    f"This violates the stream contract and may produce a torn snapshot. "
+                    f"Call snapshot() outside stream context after synchronization."
+                )
+
         # C7 FIX: Explicitly free old snapshot to allow garbage collection
         # NOTE: We intentionally do NOT call torch.cuda.empty_cache() here.
         # The CUDA caching allocator is designed to hold freed memory for fast
@@ -148,9 +149,12 @@ class TolariaGovernor:
                     experimental_prefixes.append(f"seed_slots.{slot_id}.alpha_schedule.")
 
             # Filter state dict
+            # Use tuple prefix matching for O(1) C-level check per key instead of
+            # Python-level generator iteration over experimental_prefixes
+            prefix_tuple = tuple(experimental_prefixes)
             filtered_state = {
                 k: v for k, v in full_state.items()
-                if not any(k.startswith(prefix) for prefix in experimental_prefixes)
+                if not k.startswith(prefix_tuple)
             }
         else:
             filtered_state = full_state
@@ -178,11 +182,13 @@ class TolariaGovernor:
         This is a NUCLEAR OPTION - should almost never trigger during normal training.
         """
         # Immediate panic on NaN/Inf - these are always catastrophic
+        # NOTE: We do NOT mutate consecutive_panics here. The counter should reflect
+        # actual consecutive anomalies, not be used as a control knob. The panic_reason
+        # ("governor_nan") already distinguishes this path for telemetry analysis.
         if math.isnan(current_loss) or math.isinf(current_loss):
             self._pending_panic = False
             self._panic_loss = current_loss
             self._panic_reason = "governor_nan"
-            self.consecutive_panics = self.min_panics_before_rollback  # Skip to rollback
             return True
 
         # Lobotomy detection: loss jumped to exactly random guessing
@@ -195,12 +201,12 @@ class TolariaGovernor:
             lobotomy_tolerance = 0.065 * self.random_guess_loss
             # If we were doing well (loss < 60% of random guess) and suddenly
             # hit exactly the random guess loss (±tolerance), that's a lobotomy
+            # NOTE: We do NOT mutate consecutive_panics here (see NaN path comment).
             if (avg < self.random_guess_loss * 0.6 and
                 abs(current_loss - self.random_guess_loss) < lobotomy_tolerance):
                 self._pending_panic = False
                 self._panic_loss = current_loss
                 self._panic_reason = "governor_lobotomy"
-                self.consecutive_panics = self.min_panics_before_rollback
                 return True
 
         # Need sufficient history for stable estimates
@@ -257,8 +263,8 @@ class TolariaGovernor:
 
         Rollback semantics:
         - Restore host + fossilized seeds from snapshot
-        - Discard any live/experimental seeds (not fossilized)
-        - Reset seed slots to empty/DORMANT state
+        - Prune any live/experimental seeds (sets them to PRUNED with embargo)
+        - After embargo period expires, pruned slots become dormant again
 
         IMPORTANT: Caller must clear optimizer state after rollback.
         PyTorch's load_state_dict() copies weights IN-PLACE (same Parameter
@@ -282,38 +288,27 @@ class TolariaGovernor:
         std = math.sqrt(variance) if variance > 0 else 0.0
         threshold = avg + (self.sensitivity * std)
 
-        # Prepare telemetry data (emitted after rollback completes)
-        # Import hub at function scope to defer initialization
-        from esper.nissa import get_hub
-        hub = get_hub()
         # Cast is safe: _panic_reason is only set to valid GovernorPanicReason values
         panic_reason = cast(GovernorPanicReason, self._panic_reason or "governor_rollback")
 
         if self.last_good_state is None:
             raise RuntimeError("Governor panic before first snapshot!")
 
-        # Clear any live (non-fossilized) seeds FIRST
-        # This removes seed parameters so state_dict keys match snapshot
-        # Implements "revert to stable organism, dump all temporary grafts"
-        # hasattr AUTHORIZED by John on 2025-12-01 16:30:00 UTC
-        # Justification: Feature detection - MorphogeneticModel has seed_slots, base models may not
-        if hasattr(self.model, 'seed_slots'):
-            for slot in self.model.seed_slots.values():  # type: ignore[operator]
-                slot.prune(panic_reason, initiator="governor")
-
-        # Restore host + fossilized seeds from snapshot
-        # Use strict=False because:
+        # =========================================================================
+        # STEP 1: RESTORE HOST WEIGHTS FIRST (SAFETY-CRITICAL)
+        # =========================================================================
+        # Restore host + fossilized seeds from snapshot BEFORE pruning seeds.
+        # This ordering ensures rollback succeeds even if seed pruning fails
+        # (e.g., telemetry callback raises). Use strict=False because:
         # 1. Snapshot excludes experimental seeds (by design)
-        # 2. Current model may have different seed state than snapshot
-        # 3. execute_rollback prunes all seeds before restore, so missing keys are expected
-        # Move all tensors to model device in one batch before loading, avoiding
-        # individual CPU->GPU transfers for each parameter.
-        # Use non_blocking=True for async CPU->GPU transfer
-        state_on_device = {
-            k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
-            for k, v in self.last_good_state.items()
-        }
-
+        # 2. Current model may have orphaned seed parameters not in snapshot
+        # 3. Seed keys are validated separately after restore
+        #
+        # MEMORY OPTIMIZATION: Load CPU snapshot directly instead of pre-copying to GPU.
+        # PyTorch's load_state_dict handles CPU->GPU transfer per-parameter, avoiding
+        # a full GPU duplicate that would double memory usage during rollback.
+        # This is critical because rollback often occurs when memory is already tight.
+        #
         # CRITICAL: Synchronize ALL CUDA streams before load_state_dict
         # Using device-level sync (not just current_stream) for safety - ensures
         # no other operations are modifying model parameters during rollback.
@@ -321,26 +316,91 @@ class TolariaGovernor:
         if device.type == "cuda":
             torch.cuda.synchronize(device)
 
-        missing_keys, unexpected_keys = self.model.load_state_dict(state_on_device, strict=False)
+        missing_keys, unexpected_keys = self.model.load_state_dict(
+            self.last_good_state, strict=False
+        )
 
-        # Emit single rollback event with all context (B1-CR-02: no duplicate emissions)
-        hub.emit(TelemetryEvent(
-            event_type=TelemetryEventType.GOVERNOR_ROLLBACK,
-            severity="critical",
-            message="Critical instability detected - rollback complete",
-            data=GovernorRollbackPayload(
-                env_id=env_id,
-                device=str(device),
-                reason="Structural Collapse",
-                loss_at_panic=self._panic_loss,
-                loss_threshold=threshold,
-                consecutive_panics=self.consecutive_panics,
-                panic_reason=panic_reason,
-                # Include key mismatch info if present (diagnostic context)
-                missing_keys=list(missing_keys) if missing_keys else None,
-                unexpected_keys=list(unexpected_keys) if unexpected_keys else None,
-            ),
-        ))
+        # =========================================================================
+        # STEP 2: PRUNE LIVE SEEDS (NON-CRITICAL CLEANUP)
+        # =========================================================================
+        # Clear any live (non-fossilized) seeds AFTER restoring weights.
+        # Implements "revert to stable organism, dump all temporary grafts".
+        #
+        # SAFETY INVARIANT: Host weights are already restored at this point.
+        # Seed pruning is cleanup, not a prerequisite for recovery. If pruning
+        # fails (e.g., telemetry callback raises), training can still continue
+        # with orphaned seed parameters that will be ignored by the host.
+        #
+        # hasattr AUTHORIZED by John on 2025-12-01 16:30:00 UTC
+        # Justification: Feature detection - MorphogeneticModel has seed_slots, base models may not
+        if hasattr(self.model, 'seed_slots'):
+            for slot in self.model.seed_slots.values():  # type: ignore[operator]
+                try:
+                    slot.prune(panic_reason, initiator="governor")
+                except Exception as e:
+                    # Seed prune failed (likely telemetry callback raised).
+                    # Log but don't abort - host weights are already restored.
+                    import sys
+                    print(
+                        f"WARNING: Seed prune failed during rollback for slot {slot.slot_id}: {e}",
+                        file=sys.stderr,
+                    )
+
+        # INTEGRITY CHECK: Validate that mismatches are within expected namespaces.
+        # Seed-related mismatches are expected (seeds may be pruned/fossilized between
+        # snapshot and rollback), but non-seed mismatches indicate snapshot corruption
+        # or architecture drift—fail fast to prevent silent partial restoration.
+        allowed_prefixes = ("seed_slots.",)
+        bad_missing = [k for k in missing_keys if not k.startswith(allowed_prefixes)]
+        bad_unexpected = [k for k in unexpected_keys if not k.startswith(allowed_prefixes)]
+
+        if bad_missing or bad_unexpected:
+            raise RuntimeError(
+                f"Rollback state_dict mismatch in non-seed parameters. "
+                f"This indicates snapshot corruption or architecture drift. "
+                f"Missing host keys: {bad_missing[:5]}"
+                + (f"... ({len(bad_missing)} total)" if len(bad_missing) > 5 else "")
+                + f", Unexpected host keys: {bad_unexpected[:5]}"
+                + (f"... ({len(bad_unexpected)} total)" if len(bad_unexpected) > 5 else "")
+            )
+
+        # =========================================================================
+        # TELEMETRY EMISSION (best-effort, AFTER rollback succeeds)
+        # =========================================================================
+        # SAFETY INVARIANT: Rollback is the critical path. Telemetry is observability.
+        # If telemetry fails (hub not initialized, emit raises, etc.), the rollback
+        # has already succeeded. We log to stderr as fallback but DO NOT abort.
+        #
+        # This ordering ensures the safety mechanism never fails due to a telemetry
+        # subsystem issue. See Issue 2 in Tolaria audit (2026-01-04).
+        try:
+            from esper.nissa import get_hub
+            hub = get_hub()
+            hub.emit(TelemetryEvent(
+                event_type=TelemetryEventType.GOVERNOR_ROLLBACK,
+                severity="critical",
+                message="Critical instability detected - rollback complete",
+                data=GovernorRollbackPayload(
+                    env_id=env_id,
+                    device=str(device),
+                    reason="Structural Collapse",
+                    loss_at_panic=self._panic_loss,
+                    loss_threshold=threshold,
+                    consecutive_panics=self.consecutive_panics,
+                    panic_reason=panic_reason,
+                    # Include key mismatch info if present (diagnostic context)
+                    missing_keys=list(missing_keys) if missing_keys else None,
+                    unexpected_keys=list(unexpected_keys) if unexpected_keys else None,
+                ),
+            ))
+        except Exception as e:
+            # Rollback succeeded but telemetry failed - acceptable degradation.
+            # Log to stderr so the failure is visible but doesn't abort training.
+            import sys
+            print(
+                f"WARNING: Governor rollback succeeded but telemetry emission failed: {e}",
+                file=sys.stderr,
+            )
 
         # IMPORTANT: Optimizer state must be cleared by the CALLER after rollback.
         #

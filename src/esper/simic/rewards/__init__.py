@@ -8,8 +8,7 @@ This subpackage contains:
 from .reward_telemetry import RewardComponentsTelemetry
 
 from .rewards import (
-    # Config classes
-    LossRewardConfig,
+    # Config classes (LossRewardConfig moved to esper.leyline)
     ContributionRewardConfig,
     RewardMode,
     RewardFamily,
@@ -21,6 +20,7 @@ from .rewards import (
     compute_contribution_reward,
     compute_sparse_reward,
     compute_minimal_reward,
+    compute_basic_reward,
     compute_simplified_reward,
     compute_loss_reward,
     compute_scaffold_hindsight_credit,
@@ -51,8 +51,7 @@ from .rewards import (
 __all__ = [
     # Telemetry
     "RewardComponentsTelemetry",
-    # Config classes
-    "LossRewardConfig",
+    # Config classes (LossRewardConfig moved to esper.leyline)
     "ContributionRewardConfig",
     "RewardMode",
     "RewardFamily",
@@ -64,6 +63,7 @@ __all__ = [
     "compute_contribution_reward",
     "compute_sparse_reward",
     "compute_minimal_reward",
+    "compute_basic_reward",
     "compute_simplified_reward",
     "compute_loss_reward",
     "compute_scaffold_hindsight_credit",

@@ -153,7 +153,7 @@ def test_network_forward_accepts_tuple():
     config = SlotConfig.default()
     network = FactoredRecurrentActorCritic(
         state_dim=get_feature_size(config),
-        num_slots=config.num_slots,
+        slot_config=config,
     )
 
     obs = torch.randn(2, 10, get_feature_size(config))  # batch=2, seq=10
@@ -172,7 +172,7 @@ def test_network_evaluate_actions_accepts_tuple():
     config = SlotConfig.default()
     network = FactoredRecurrentActorCritic(
         state_dim=get_feature_size(config),
-        num_slots=config.num_slots,
+        slot_config=config,
     )
 
     obs = torch.randn(2, 10, get_feature_size(config))

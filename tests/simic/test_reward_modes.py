@@ -1,9 +1,8 @@
 """Tests for reward mode enum and sparse reward functions."""
 
-from esper.leyline import LifecycleOp
+from esper.leyline import LifecycleOp, LossRewardConfig
 from esper.simic.rewards import (
     ContributionRewardConfig,
-    LossRewardConfig,
     RewardFamily,
     RewardMode,
     compute_reward_for_family,
@@ -11,10 +10,13 @@ from esper.simic.rewards import (
 
 
 def test_reward_mode_enum_exists():
-    """RewardMode enum has three modes."""
+    """RewardMode enum includes all supported modes."""
     assert RewardMode.SHAPED.value == "shaped"
+    assert RewardMode.ESCROW.value == "escrow"
+    assert RewardMode.BASIC.value == "basic"
     assert RewardMode.SPARSE.value == "sparse"
     assert RewardMode.MINIMAL.value == "minimal"
+    assert RewardMode.SIMPLIFIED.value == "simplified"
 
 
 def test_reward_family_enum_exists():
@@ -53,8 +55,8 @@ def test_sparse_reward_zero_before_terminal():
 
     # Epoch 10 of 25 - not terminal
     reward = compute_sparse_reward(
-        host_max_acc=75.0,
-        total_params=100_000,
+        committed_val_acc=75.0,
+        fossilized_seed_params=100_000,
         epoch=10,
         max_epochs=25,
         config=config,
@@ -74,8 +76,8 @@ def test_sparse_reward_nonzero_at_terminal():
 
     # Epoch 25 of 25 - terminal
     reward = compute_sparse_reward(
-        host_max_acc=80.0,
-        total_params=100_000,
+        committed_val_acc=80.0,
+        fossilized_seed_params=100_000,
         epoch=25,
         max_epochs=25,
         config=config,
@@ -96,8 +98,8 @@ def test_sparse_reward_with_scale():
     )
 
     reward = compute_sparse_reward(
-        host_max_acc=80.0,
-        total_params=100_000,
+        committed_val_acc=80.0,
+        fossilized_seed_params=100_000,
         epoch=25,
         max_epochs=25,
         config=config,
@@ -120,8 +122,8 @@ def test_minimal_reward_no_penalty_for_old_prune():
 
     # Cull a seed that's old enough (age >= threshold)
     reward = compute_minimal_reward(
-        host_max_acc=75.0,
-        total_params=100_000,
+        committed_val_acc=75.0,
+        fossilized_seed_params=100_000,
         epoch=10,
         max_epochs=25,
         action=LifecycleOp.PRUNE,
@@ -144,8 +146,8 @@ def test_minimal_reward_penalty_for_young_prune():
 
     # Cull a seed that's too young
     reward = compute_minimal_reward(
-        host_max_acc=75.0,
-        total_params=100_000,
+        committed_val_acc=75.0,
+        fossilized_seed_params=100_000,
         epoch=10,
         max_epochs=25,
         action=LifecycleOp.PRUNE,
@@ -166,7 +168,6 @@ def test_compute_reward_for_family_dispatches_contribution():
         action=LifecycleOp.WAIT,
         seed_contribution=None,
         val_acc=70.0,
-        host_max_acc=70.0,
         seed_info=None,
         epoch=1,
         max_epochs=10,
@@ -174,6 +175,8 @@ def test_compute_reward_for_family_dispatches_contribution():
         host_params=100_000,
         acc_at_germination=None,
         acc_delta=0.0,
+        committed_val_acc=70.0,
+        fossilized_seed_params=0,
         contribution_config=contrib_cfg,
         loss_config=loss_cfg,
         loss_delta=0.1,
@@ -192,7 +195,6 @@ def test_compute_reward_for_family_dispatches_loss():
         action=LifecycleOp.WAIT,
         seed_contribution=None,
         val_acc=70.0,
-        host_max_acc=70.0,
         seed_info=None,
         epoch=1,
         max_epochs=10,
@@ -218,7 +220,6 @@ def test_compute_reward_shaped_mode():
         action=LifecycleOp.WAIT,
         seed_contribution=None,
         val_acc=70.0,
-        host_max_acc=70.0,
         seed_info=None,
         epoch=10,
         max_epochs=25,
@@ -226,6 +227,8 @@ def test_compute_reward_shaped_mode():
         host_params=100_000,
         acc_at_germination=None,
         acc_delta=0.0,
+        committed_val_acc=70.0,
+        fossilized_seed_params=0,
         config=config,
     )
 
@@ -243,7 +246,6 @@ def test_compute_reward_sparse_mode():
         action=LifecycleOp.WAIT,
         seed_contribution=None,
         val_acc=70.0,
-        host_max_acc=70.0,
         seed_info=None,
         epoch=10,
         max_epochs=25,
@@ -251,6 +253,8 @@ def test_compute_reward_sparse_mode():
         host_params=100_000,
         acc_at_germination=None,
         acc_delta=0.0,
+        committed_val_acc=70.0,
+        fossilized_seed_params=0,
         config=config,
     )
 
@@ -284,7 +288,6 @@ def test_compute_reward_minimal_mode():
         action=LifecycleOp.PRUNE,
         seed_contribution=None,
         val_acc=70.0,
-        host_max_acc=70.0,
         seed_info=seed_info,
         epoch=10,
         max_epochs=25,
@@ -292,11 +295,44 @@ def test_compute_reward_minimal_mode():
         host_params=100_000,
         acc_at_germination=65.0,
         acc_delta=0.5,
+        committed_val_acc=70.0,
+        fossilized_seed_params=0,
         config=config,
     )
 
     # Should get early-prune penalty
     assert reward == -0.1
+
+
+def test_compute_reward_basic_mode():
+    """compute_reward dispatches to BASIC reward when mode is BASIC."""
+    from esper.simic.rewards import compute_reward
+    config = ContributionRewardConfig(
+        reward_mode=RewardMode.BASIC,
+        basic_acc_delta_weight=5.0,
+        param_budget=500_000,
+        param_penalty_weight=0.1,
+    )
+
+    reward = compute_reward(
+        action=LifecycleOp.WAIT,
+        seed_contribution=None,
+        val_acc=70.0,
+        seed_info=None,
+        epoch=1,
+        max_epochs=25,
+        total_params=100_000,
+        host_params=100_000,
+        acc_at_germination=None,
+        acc_delta=1.0,  # +1 percentage point
+        committed_val_acc=70.0,
+        fossilized_seed_params=0,
+        effective_seed_params=50_000,  # 10% of param_budget
+        config=config,
+    )
+
+    # Expected: 5.0 * (1/100) - 0.1 * (50_000 / 500_000) = 0.05 - 0.01 = 0.04
+    assert abs(reward - 0.04) < 1e-8
 
 
 def test_parallel_env_state_has_host_max_acc():

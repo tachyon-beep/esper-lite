@@ -102,9 +102,45 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.clip_fraction')::DOUBLE as clip_fraction,
             json_extract(data, '$.explained_variance')::DOUBLE as explained_variance,
             json_extract(data, '$.grad_norm')::DOUBLE as grad_norm,
+            json_extract(data, '$.pre_clip_grad_norm')::DOUBLE as pre_clip_grad_norm,
             json_extract(data, '$.lr')::DOUBLE as lr,
             json_extract(data, '$.entropy_coef')::DOUBLE as entropy_coef,
             json_extract(data, '$.entropy_collapsed')::BOOLEAN as entropy_collapsed,
+            -- Value collapse diagnostics (2026-01-03 training failure analysis)
+            json_extract(data, '$.pre_norm_advantage_mean')::DOUBLE as pre_norm_advantage_mean,
+            json_extract(data, '$.pre_norm_advantage_std')::DOUBLE as pre_norm_advantage_std,
+            json_extract(data, '$.return_mean')::DOUBLE as return_mean,
+            json_extract(data, '$.return_std')::DOUBLE as return_std,
+            -- Advantage statistics
+            json_extract(data, '$.advantage_mean')::DOUBLE as advantage_mean,
+            json_extract(data, '$.advantage_std')::DOUBLE as advantage_std,
+            json_extract(data, '$.advantage_skewness')::DOUBLE as advantage_skewness,
+            json_extract(data, '$.advantage_kurtosis')::DOUBLE as advantage_kurtosis,
+            json_extract(data, '$.advantage_positive_ratio')::DOUBLE as advantage_positive_ratio,
+            -- Value function statistics
+            json_extract(data, '$.value_mean')::DOUBLE as value_mean,
+            json_extract(data, '$.value_std')::DOUBLE as value_std,
+            json_extract(data, '$.value_min')::DOUBLE as value_min,
+            json_extract(data, '$.value_max')::DOUBLE as value_max,
+            -- Ratio statistics
+            json_extract(data, '$.ratio_mean')::DOUBLE as ratio_mean,
+            json_extract(data, '$.ratio_std')::DOUBLE as ratio_std,
+            json_extract(data, '$.ratio_min')::DOUBLE as ratio_min,
+            json_extract(data, '$.ratio_max')::DOUBLE as ratio_max,
+            json_extract(data, '$.joint_ratio_max')::DOUBLE as joint_ratio_max,
+            -- Clip fractions
+            json_extract(data, '$.clip_fraction_positive')::DOUBLE as clip_fraction_positive,
+            json_extract(data, '$.clip_fraction_negative')::DOUBLE as clip_fraction_negative,
+            -- Q-values (op-conditioned value function)
+            json_extract(data, '$.q_germinate')::DOUBLE as q_germinate,
+            json_extract(data, '$.q_advance')::DOUBLE as q_advance,
+            json_extract(data, '$.q_fossilize')::DOUBLE as q_fossilize,
+            json_extract(data, '$.q_prune')::DOUBLE as q_prune,
+            json_extract(data, '$.q_wait')::DOUBLE as q_wait,
+            json_extract(data, '$.q_set_alpha')::DOUBLE as q_set_alpha,
+            json_extract(data, '$.q_variance')::DOUBLE as q_variance,
+            json_extract(data, '$.q_spread')::DOUBLE as q_spread,
+            -- Per-head entropy
             json_extract(data, '$.head_slot_entropy')::DOUBLE as head_slot_entropy,
             json_extract(data, '$.head_blueprint_entropy')::DOUBLE as head_blueprint_entropy,
             json_extract(data, '$.head_style_entropy')::DOUBLE as head_style_entropy,
@@ -113,6 +149,7 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.head_alpha_speed_entropy')::DOUBLE as head_alpha_speed_entropy,
             json_extract(data, '$.head_alpha_curve_entropy')::DOUBLE as head_alpha_curve_entropy,
             json_extract(data, '$.head_op_entropy')::DOUBLE as head_op_entropy,
+            -- Per-head gradient norms
             json_extract(data, '$.head_slot_grad_norm')::DOUBLE as head_slot_grad_norm,
             json_extract(data, '$.head_blueprint_grad_norm')::DOUBLE as head_blueprint_grad_norm,
             json_extract(data, '$.head_style_grad_norm')::DOUBLE as head_style_grad_norm,
@@ -259,6 +296,47 @@ VIEW_DEFINITIONS: dict[str, str] = {
             event_type = 'ANALYTICS_SNAPSHOT'
             AND json_extract_string(data, '$.kind') = 'last_action'
     """,
+    "action_distribution": """
+        CREATE OR REPLACE VIEW action_distribution AS
+        WITH snapshots AS (
+            SELECT
+                event_id,
+                timestamp,
+                run_dir,
+                group_id,
+                epoch::INTEGER as episodes_completed,
+                json_extract(data, '$.action_counts') as action_counts
+            FROM raw_events
+            WHERE
+                event_type = 'ANALYTICS_SNAPSHOT'
+                AND json_extract_string(data, '$.kind') = 'action_distribution'
+        ),
+        expanded AS (
+            SELECT
+                s.event_id,
+                s.timestamp,
+                s.run_dir,
+                s.group_id,
+                s.episodes_completed,
+                je.key as action_name,
+                je.value::INTEGER as count
+            FROM snapshots s
+            CROSS JOIN json_each(s.action_counts) AS je
+        )
+        SELECT
+            e.event_id,
+            e.timestamp,
+            e.run_dir,
+            e.group_id,
+            e.episodes_completed,
+            be.batch_idx,
+            e.action_name,
+            e.count,
+            e.count::DOUBLE / SUM(e.count::DOUBLE) OVER (PARTITION BY e.event_id) AS pct
+        FROM expanded e
+        LEFT JOIN batch_epochs be
+            ON be.run_dir = e.run_dir AND be.episodes_completed = e.episodes_completed
+    """,
     "rewards": """
         CREATE OR REPLACE VIEW rewards AS
         SELECT
@@ -271,15 +349,22 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract_string(data, '$.action_name') as action_name,
             json_extract(data, '$.action_success')::BOOLEAN as action_success,
             json_extract(data, '$.total_reward')::DOUBLE as total_reward,
-            -- All 28 fields from RewardComponentsTelemetry (nested under reward_components)
-            -- Base signal
+            -- RewardComponentsTelemetry fields (nested under reward_components)
+            -- Base signal (legacy shaped reward)
             json_extract(data, '$.reward_components.base_acc_delta')::DOUBLE as base_acc_delta,
             -- Contribution-primary signal
             json_extract(data, '$.reward_components.seed_contribution')::DOUBLE as seed_contribution,
             json_extract(data, '$.reward_components.bounded_attribution')::DOUBLE as bounded_attribution,
             json_extract(data, '$.reward_components.progress_since_germination')::DOUBLE as progress_since_germination,
+            json_extract(data, '$.reward_components.stable_val_acc')::DOUBLE as stable_val_acc,
             json_extract(data, '$.reward_components.attribution_discount')::DOUBLE as attribution_discount,
             json_extract(data, '$.reward_components.ratio_penalty')::DOUBLE as ratio_penalty,
+            -- Escrow attribution (RewardMode.ESCROW)
+            json_extract(data, '$.reward_components.escrow_credit_prev')::DOUBLE as escrow_credit_prev,
+            json_extract(data, '$.reward_components.escrow_credit_target')::DOUBLE as escrow_credit_target,
+            json_extract(data, '$.reward_components.escrow_delta')::DOUBLE as escrow_delta,
+            json_extract(data, '$.reward_components.escrow_credit_next')::DOUBLE as escrow_credit_next,
+            json_extract(data, '$.reward_components.escrow_forfeit')::DOUBLE as escrow_forfeit,
             -- Penalties
             json_extract(data, '$.reward_components.compute_rent')::DOUBLE as compute_rent,
             json_extract(data, '$.reward_components.alpha_shock')::DOUBLE as alpha_shock,
@@ -342,7 +427,7 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.batch')::INTEGER as batch,
             json_extract(data, '$.num_slots')::INTEGER as num_slots,
             -- Preserve full Shapley dict as JSON for flexible queries
-            -- Structure: {slot_id: {mean: float, std: float, n_samples: int}}
+            -- Structure: {{slot_id: {{mean: float, std: float, n_samples: int}}}}
             json_extract(data, '$.shapley_values') as shapley_values
         FROM raw_events
         WHERE
@@ -428,6 +513,7 @@ def create_views(conn: duckdb.DuckDBPyConnection, telemetry_dir: str) -> None:
         telemetry_dir: Path to telemetry directory containing run subdirectories
     """
     conn.execute("PRAGMA threads=4")
+    conn.execute("PRAGMA disable_progress_bar")
 
     has_files = telemetry_has_event_files(telemetry_dir)
 

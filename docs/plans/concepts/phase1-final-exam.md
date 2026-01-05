@@ -59,9 +59,9 @@ We are measuring **Return on Investment (ROI)**, not just profit.
 ## 4. Execution Plan
 
 1.  **Implement `SIMPLIFIED` Reward:** Execute `docs/plans/2025-12-18-reward-ab-testing.md`.
-2.  **Configure A/B Split:** Use the `--ab-test` flag to split environments.
-    *   Run 1: `shaped-vs-simplified` (4 vs 4).
-    *   Run 2: `simplified-vs-sparse` (4 vs 4).
+2.  **Run True A/B:** Use `--dual-ab` to train separate policies per reward mode.
+    *   Run 1: `shaped-vs-simplified`.
+    *   Run 2: `simplified-vs-sparse`.
 3.  **Analyze with Overwatch:** Use the new TUI to watch entropy collapse and decision quality in real-time.
 4.  **Verdict:** Select the winning reward mode as the default for **Phase 3 (TinyStories)**.
 

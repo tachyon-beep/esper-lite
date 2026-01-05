@@ -33,7 +33,7 @@ class TestBootstrapConsistency:
         result = policy.get_action(
             features=state,
             blueprint_indices=bp_idx,
-            masks={k: None for k in HEAD_NAMES},
+            masks={k: None for k in HEAD_NAMES} | {"slot_by_op": None},
             hidden=None,
             deterministic=True
         )
@@ -82,7 +82,7 @@ class TestBootstrapConsistency:
         result = policy.get_action(
             features=state,
             blueprint_indices=bp_idx,
-            masks={k: None for k in HEAD_NAMES},
+            masks={k: None for k in HEAD_NAMES} | {"slot_by_op": None},
             hidden=None,
             deterministic=True
         )
@@ -109,7 +109,7 @@ class TestBootstrapConsistency:
 
         state = torch.randn(3, OBS_V3_NON_BLUEPRINT_DIM)
         bp_idx = torch.randint(0, 13, (3, slot_config.num_slots))
-        masks = {k: None for k in HEAD_NAMES}
+        masks = {k: None for k in HEAD_NAMES} | {"slot_by_op": None}
 
         # Call bootstrap multiple times (should be deterministic)
         results = []

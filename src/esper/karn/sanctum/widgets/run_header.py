@@ -4,16 +4,17 @@ Single-line status bar showing essential training state at a glance.
 Designed with fixed-width segments to prevent text jumping.
 
 Layout:
-│ ● LIVE ✓ │ run_name │ Ep 47 ████████░░░░ 150/500 │ 1h 23m │ 0.8e/s 2.1b/m │
+│ ● LIVE ✓ │ run_name │ RWD:shaped │ Ep 47 ████████░░░░ 150/500 │ 1h 23m │ 0.8e/s 2.1r/m │
 
 Segments (all fixed-width):
 - Connection: ● LIVE / ◐ SLOW / ○ STALE (6 chars)
 - Thread: ✓ / ✗ (1 char, bold red if dead)
 - Run name: Task/experiment name (14 chars max, truncated)
+- Reward mode: RWD:shaped or RWD:shaped/sparse (18 chars max, truncated)
 - Episode: Current episode number
 - Progress: Visual bar + epoch fraction
 - Runtime: Elapsed time
-- Throughput: epochs/sec and batches/min
+- Throughput: epochs/sec and rounds/min
 
 System alarms shown in subtitle (right-aligned).
 """
@@ -36,7 +37,7 @@ class RunHeader(Static):
     """Single-line status bar for training state.
 
     Fixed-width layout (no text jumping):
-        ● LIVE ✓ │ my_experiment │ Ep 47 ████████░░░░ 150/500 │ 1h 23m │ 0.8e/s 2.1b/m
+        ● LIVE ✓ │ my_experiment │ Ep 47 ████████░░░░ 150/500 │ 1h 23m │ 0.8e/s 2.1r/m
 
     Design principles:
     - Fixed-width segments prevent jumping as values change
@@ -49,12 +50,18 @@ class RunHeader(Static):
         """Initialize RunHeader widget."""
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
+        self._snapshots_by_group: dict[str, SanctumSnapshot] = {}
         self._ui_tick_times: deque[float] = deque(maxlen=32)
         self._ui_hz: float = 0.0
 
-    def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
+    def update_snapshot(
+        self,
+        snapshot: "SanctumSnapshot",
+        snapshots_by_group: dict[str, "SanctumSnapshot"] | None = None,
+    ) -> None:
         """Update widget with new snapshot data."""
         self._snapshot = snapshot
+        self._snapshots_by_group = snapshots_by_group or {}
         now = time.monotonic()
         self._ui_tick_times.append(now)
         if len(self._ui_tick_times) >= 2:
@@ -153,23 +160,23 @@ class RunHeader(Static):
         return f"{bar} {current}/{max_epochs}"
 
     def _render_batch_progress(self, current: int, max_batches: int, width: int = 8) -> str:
-        """Render batch progress meter (Tamiyo's training epochs).
+        """Render round progress meter (PPO updates).
 
         Args:
-            current: Current batch number.
-            max_batches: Maximum batches per episode.
+            current: Current round number.
+            max_batches: Maximum rounds in run.
             width: Bar width in characters.
 
         Returns:
-            Compact progress string like "B:██░░ 25/100".
+            Compact progress string like "R:██░░ 25/100".
         """
         if max_batches <= 0:
-            return f"B:{current}"
+            return f"R:{current}"
 
         progress = min(current / max_batches, 1.0)
         filled = int(progress * width)
         bar = "█" * filled + "░" * (width - filled)
-        return f"B:{bar} {current}/{max_batches}"
+        return f"R:{bar} {current}/{max_batches}"
 
     def _format_run_name(self, name: str | None, max_width: int = 14) -> str:
         """Format run name with truncation to fixed width.
@@ -187,17 +194,42 @@ class RunHeader(Static):
             return name[: max_width - 1] + "…"
         return f"{name:<{max_width}}"
 
+    def _format_reward_mode(self, max_width: int = 18) -> tuple[str, str]:
+        """Format reward mode label with truncation to fixed width."""
+        if self._snapshot is None:
+            return (" " * max_width, "dim")
+
+        modes: list[str] = []
+        if self._snapshots_by_group:
+            for group_snapshot in self._snapshots_by_group.values():
+                mode = group_snapshot.reward_mode
+                if mode and mode not in modes:
+                    modes.append(mode)
+        else:
+            mode = self._snapshot.reward_mode
+            if mode:
+                modes.append(mode)
+
+        if not modes:
+            label = "RWD:—"
+            return (f"{label:<{max_width}}", "dim")
+
+        label = f"RWD:{'/'.join(modes)}"
+        if len(label) > max_width:
+            label = label[: max_width - 1] + "…"
+        return (f"{label:<{max_width}}", "magenta")
+
     def _format_throughput(self, eps: float, bpm: float) -> str:
         """Format throughput metrics to fixed width.
 
         Args:
             eps: Epochs per second.
-            bpm: Batches per minute.
+            bpm: Rounds per minute.
 
         Returns:
-            Fixed-width string like "0.8e/s 2.1b/m" (13 chars).
+            Fixed-width string like "0.8e/s 2.1r/m" (13 chars).
         """
-        return f"{eps:>3.1f}e/s {bpm:>4.1f}b/m"
+        return f"{eps:>3.1f}e/s {bpm:>4.1f}r/m"
 
     def render(self) -> Text:
         """Render the run header as a single-line status bar (no border).
@@ -247,8 +279,14 @@ class RunHeader(Static):
 
         row.append(" │ ", style="dim")
 
-        # === Segment 4: Episode (right-aligned in 6 chars) ===
-        row.append("Ep ", style="dim")
+        # === Segment 3b: Reward mode (18 chars fixed) ===
+        reward_label, reward_style = self._format_reward_mode()
+        row.append(reward_label, style=reward_style)
+
+        row.append(" │ ", style="dim")
+
+        # === Segment 4: Env episode (right-aligned in 6 chars) ===
+        row.append("EnvEp ", style="dim")
         row.append(f"{s.current_episode:>3}", style="bold cyan")
         row.append(" ", style="dim")
 
@@ -258,9 +296,9 @@ class RunHeader(Static):
 
         row.append(" ", style="dim")
 
-        # === Segment 5b: Batch progress (Tamiyo's epochs = system batches) ===
+        # === Segment 5b: Round progress (PPO updates) ===
         batch_progress = self._render_batch_progress(s.current_batch, s.max_batches)
-        row.append(batch_progress, style="magenta")
+        row.append(batch_progress, style="yellow")
 
         row.append(" │ ", style="dim")
 

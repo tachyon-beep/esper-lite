@@ -15,6 +15,7 @@ Key invariants tested:
 
 from __future__ import annotations
 
+import pytest
 import torch
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -37,6 +38,9 @@ from esper.leyline import (
     NUM_TEMPO,
 )
 from esper.simic.agent import TamiyoRolloutBuffer
+
+# Mark all tests in this module as property tests for CI
+pytestmark = pytest.mark.property
 
 
 # =============================================================================

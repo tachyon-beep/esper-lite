@@ -314,14 +314,14 @@ print(json.dumps({
     assert result["torch_loaded"] is True, "torch should load with policy (LSTM registration)"
 
 
-def test_simic_contracts_no_torch():
-    """Importing esper.simic.contracts should NOT load torch."""
+def test_leyline_seed_protocols_no_torch():
+    """Importing seed protocols from leyline should NOT load torch."""
     result = _run_isolated(
         """
 import json
 import sys
 
-from esper.simic.contracts import SeedSlotProtocol
+from esper.leyline import SeedSlotProtocol
 
 print(json.dumps({
     "torch_loaded": "torch" in sys.modules,
@@ -330,7 +330,7 @@ print(json.dumps({
 """.strip()
     )
 
-    assert result["torch_loaded"] is False, "contracts should not load torch (TYPE_CHECKING only)"
+    assert result["torch_loaded"] is False, "protocols should not load torch (TYPE_CHECKING only)"
     assert ("Protocol" in result["protocol_is_class"] or "ABCMeta" in result["protocol_is_class"]), \
         "SeedSlotProtocol should be a Protocol"
 
@@ -354,7 +354,7 @@ from esper.kasmina import HostProtocol
 print(json.dumps({
     "torch_loaded": "torch" in sys.modules,
     "protocol_cached": "HostProtocol" in vars(sys.modules["esper.kasmina"]),
-    "protocol_loaded": "esper.kasmina.protocol" in sys.modules,
+    "leyline_host_protocol_loaded": "esper.leyline.host_protocol" in sys.modules,
     "protocol_is_class": str(type(HostProtocol)),
 }))
 """.strip()
@@ -365,7 +365,7 @@ print(json.dumps({
         "Fix: move 'from torch import Tensor' to TYPE_CHECKING block in protocol.py"
     )
     assert result["protocol_cached"] is True, "lazy attribute should be cached on module"
-    assert result["protocol_loaded"] is True, "protocol module should load"
+    assert result["leyline_host_protocol_loaded"] is True, "host_protocol module should load from leyline"
     assert "Protocol" in result["protocol_is_class"], "HostProtocol should be a Protocol"
 
 

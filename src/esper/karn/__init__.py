@@ -20,11 +20,8 @@ Usage:
     hub.add_backend(OverwatchBackend(port=8080))
 """
 
-# WebSocket output (lazy import - fastapi may not be installed)
-try:
-    from esper.karn.websocket_output import WebSocketOutput
-except ImportError:
-    WebSocketOutput = None  # type: ignore[misc, assignment]
+# WebSocket output (websockets dependency is lazy-imported at runtime)
+from esper.karn.websocket_output import WebSocketOutput
 
 # Store (data models)
 from esper.karn.store import (
@@ -72,7 +69,22 @@ from esper.karn.health import (
 )
 
 # Sanctum (developer diagnostic TUI backend)
-from esper.karn.sanctum.backend import SanctumBackend
+try:
+    from esper.karn.sanctum.backend import SanctumBackend
+except ModuleNotFoundError as exc:
+    # Optional dependency: Sanctum requires the `textual` extra.
+    # Only swallow the import error when the missing module is textual itself.
+    if exc.name != "textual":
+        raise
+
+    _textual_import_error = exc
+
+    class SanctumBackend:  # type: ignore[no-redef]
+        def __init__(self, *_: object, **__: object) -> None:
+            raise ModuleNotFoundError(
+                "SanctumBackend requires the optional 'textual' dependency. "
+                "Install with `uv sync --extra tui` (or `pip install esper-lite[tui]`)."
+            ) from _textual_import_error
 
 __all__ = [
     # WebSocket

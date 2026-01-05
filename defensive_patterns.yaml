@@ -1,0 +1,380 @@
+# Defensive Programming Pattern Whitelist
+# ========================================
+#
+# This codebase prohibits "defensive programming" patterns that mask bugs:
+#   - isinstance(), get(), getattr(), hasattr() used to hide missing attributes
+#   - Silent exception handling that swallows errors
+#
+# Legitimate uses MUST be whitelisted here with justification.
+#
+# Key format: "path:function:pattern[:occurrence]"
+#   - path: relative path from project root
+#   - function: containing function/method name (or <module> for top-level)
+#   - pattern: isinstance | get | getattr | hasattr | silent_except
+#   - occurrence: optional 1-based index if multiple in same function
+#
+# Categories from CLAUDE.md that are legitimate:
+#   1. PyTorch tensor operations (tensor.item(), device moves)
+#   2. Device type normalization (str -> torch.device)
+#   3. Typed payload discrimination (distinguishing between typed dataclass payloads)
+#   4. Enum/bool/int validation (rejecting bool as int in coercion)
+#   5. Numeric field type guards (conditional rendering of optional numeric fields)
+#   6. NN module initialization (layer type detection for weight init)
+#   7. Serialization polymorphism (Enum, datetime, Path handling)
+
+version: 1
+
+# Patterns that are ALWAYS prohibited (no whitelist possible)
+always_prohibited:
+  - pattern: "bare_except"
+    reason: "Always catches too much including KeyboardInterrupt, SystemExit"
+
+# Broad allowances (directory/glob based)
+allow_paths:
+  - path: "tests/**"
+    reason: "Test code may use defensive patterns for test fixtures and assertions"
+
+  - path: "scripts/**"
+    reason: "Utility scripts may need flexibility"
+
+# Narrow allowances (specific function + pattern)
+allow_hits:
+  # ============================================================================
+  # TUI FRAMEWORK PATTERNS (Textual NoMatches exception)
+  # ============================================================================
+  # Textual's query_one/query system raises NoMatches when widgets aren't found.
+  # This is the expected pattern for dynamic widget lookup in TUI apps.
+
+  - key: "src/esper/karn/sanctum/app.py:_refresh_tamiyo_widgets:silent_except"
+    owner: "john"
+    reason: "Textual framework - NoMatches for optional widget lookup"
+
+  - key: "src/esper/karn/sanctum/app.py:_refresh_tamiyo_widgets:silent_except:2"
+    owner: "john"
+    reason: "Textual framework - NoMatches for optional widget lookup"
+
+  - key: "src/esper/karn/sanctum/app.py:_apply_view:silent_except"
+    owner: "john"
+    reason: "Textual framework - NoMatches for optional widget lookup"
+
+  - key: "src/esper/karn/sanctum/app.py:_apply_view:silent_except:2"
+    owner: "john"
+    reason: "Textual framework - NoMatches for optional widget lookup"
+
+  - key: "src/esper/karn/sanctum/app.py:_apply_view:silent_except:3"
+    owner: "john"
+    reason: "Textual framework - NoMatches for optional widget lookup"
+
+  - key: "src/esper/karn/sanctum/app.py:_apply_view:silent_except:4"
+    owner: "john"
+    reason: "Textual framework - NoMatches for optional widget lookup"
+
+  - key: "src/esper/karn/sanctum/app.py:action_cursor_down:silent_except"
+    owner: "john"
+    reason: "Textual framework - NoMatches for optional widget lookup"
+
+  - key: "src/esper/karn/sanctum/app.py:action_cursor_up:silent_except"
+    owner: "john"
+    reason: "Textual framework - NoMatches for optional widget lookup"
+
+  - key: "src/esper/karn/sanctum/app.py:action_cursor_top:silent_except"
+    owner: "john"
+    reason: "Textual framework - NoMatches for optional widget lookup"
+
+  - key: "src/esper/karn/sanctum/app.py:action_cursor_bottom:silent_except"
+    owner: "john"
+    reason: "Textual framework - NoMatches for optional widget lookup"
+
+  - key: "src/esper/karn/sanctum/app.py:action_start_filter:silent_except"
+    owner: "john"
+    reason: "Textual framework - NoMatches for optional widget lookup"
+
+  - key: "src/esper/karn/sanctum/app.py:action_clear_filter:silent_except"
+    owner: "john"
+    reason: "Textual framework - NoMatches for optional widget lookup"
+
+  - key: "src/esper/karn/sanctum/app.py:on_input_changed:silent_except"
+    owner: "john"
+    reason: "Textual framework - NoMatches for optional widget lookup"
+
+  - key: "src/esper/karn/sanctum/app.py:on_input_submitted:silent_except"
+    owner: "john"
+    reason: "Textual framework - NoMatches for optional widget lookup"
+
+  - key: "src/esper/karn/sanctum/app.py:action_focus_left_panel:silent_except"
+    owner: "john"
+    reason: "Textual framework - NoMatches for optional widget lookup"
+
+  - key: "src/esper/karn/sanctum/app.py:action_focus_right_panel:silent_except"
+    owner: "john"
+    reason: "Textual framework - NoMatches for optional widget lookup"
+
+  - key: "src/esper/karn/sanctum/widgets/env_detail_screen.py:update_env_state:silent_except"
+    owner: "john"
+    reason: "Textual framework - NoMatches for optional widget lookup"
+
+  - key: "src/esper/karn/sanctum/widgets/env_detail_screen.py:update_env_state:silent_except:2"
+    owner: "john"
+    reason: "Textual framework - NoMatches for optional widget lookup"
+
+  - key: "src/esper/karn/sanctum/widgets/env_detail_screen.py:update_env_state:silent_except:3"
+    owner: "john"
+    reason: "Textual framework - NoMatches for optional widget lookup"
+
+  - key: "src/esper/karn/sanctum/widgets/env_detail_screen.py:update_env_state:silent_except:4"
+    owner: "john"
+    reason: "Textual framework - NoMatches for optional widget lookup"
+
+  - key: "src/esper/karn/sanctum/widgets/env_detail_screen.py:update_env_state:silent_except:5"
+    owner: "john"
+    reason: "Textual framework - NoMatches for optional widget lookup"
+
+  - key: "src/esper/karn/sanctum/widgets/env_detail_screen.py:update_env_state:silent_except:6"
+    owner: "john"
+    reason: "Textual framework - NoMatches for optional widget lookup"
+
+  - key: "src/esper/karn/sanctum/widgets/scoreboard.py:_refresh_stats:silent_except"
+    owner: "john"
+    reason: "Textual framework - NoMatches for optional widget lookup"
+
+  # ============================================================================
+  # QUEUE/ASYNC PATTERNS
+  # ============================================================================
+  # Queue.get() with timeout raises Empty, asyncio operations raise TimeoutError.
+  # These are expected control flow for non-blocking operations.
+
+  - key: "src/esper/karn/overwatch/backend.py:_broadcast:silent_except"
+    owner: "john"
+    reason: "Queue.get_nowait() raises Empty when no messages - expected pattern"
+
+  - key: "src/esper/karn/overwatch/backend.py:websocket_endpoint:silent_except"
+    owner: "john"
+    reason: "WebSocket receive with timeout raises TimeoutError - expected pattern"
+
+  - key: "src/esper/karn/websocket_output.py:close:silent_except"
+    owner: "john"
+    reason: "RuntimeError when closing already-closed event loop - cleanup safety"
+
+  - key: "src/esper/karn/websocket_output.py:_serve:silent_except"
+    owner: "john"
+    reason: "asyncio.TimeoutError for queue poll - expected pattern"
+
+  - key: "src/esper/nissa/output.py:_worker_loop:silent_except"
+    owner: "john"
+    reason: "queue.Empty for non-blocking poll - expected pattern"
+
+  - key: "src/esper/nissa/output.py:_worker_loop:silent_except:2"
+    owner: "john"
+    reason: "queue.Empty for non-blocking poll - expected pattern"
+
+  - key: "src/esper/simic/training/vectorized.py:train_ppo_vectorized:silent_except"
+    owner: "john"
+    reason: "StopIteration for iterator exhaustion check - Pythonic pattern"
+
+  - key: "src/esper/simic/training/vectorized.py:train_ppo_vectorized:silent_except:2"
+    owner: "john"
+    reason: "StopIteration for iterator exhaustion check - Pythonic pattern"
+
+  # ============================================================================
+  # OPTIONAL DEPENDENCIES
+  # ============================================================================
+  # Some dependencies (psutil, etc.) are optional; ImportError is expected.
+
+  - key: "src/esper/karn/health.py:_check_memory:silent_except"
+    owner: "john"
+    reason: "psutil is optional dependency - ImportError expected"
+
+  - key: "src/esper/karn/health.py:_check_memory:silent_except:2"
+    owner: "john"
+    reason: "psutil is optional dependency - ImportError expected"
+
+  # ============================================================================
+  # SERIALIZATION PATTERNS
+  # ============================================================================
+  # Dataclass field iteration and polymorphic serialization methods.
+
+  - key: "src/esper/karn/serialization.py:_convert_value:hasattr"
+    owner: "john"
+    reason: "Checking for to_dict() serialization method - polymorphic serialization"
+
+  - key: "src/esper/karn/serialization.py:_convert_value:getattr"
+    owner: "john"
+    reason: "Iterating dataclass fields for serialization - known field names"
+
+  - key: "src/esper/karn/serialization.py:serialize_event:hasattr"
+    owner: "john"
+    reason: "Checking for isoformat() on datetime - type discrimination"
+
+  - key: "src/esper/leyline/telemetry.py:to_dict:getattr"
+    owner: "john"
+    reason: "Iterating dataclass fields for serialization - known field names"
+
+  - key: "src/esper/nissa/output.py:_payload_to_dict:hasattr"
+    owner: "john"
+    reason: "Checking for to_dict() serialization method - polymorphic serialization"
+
+  - key: "src/esper/nissa/output.py:_emit_summary:hasattr"
+    owner: "john"
+    reason: "Checking if event_type is an Enum (has .name) for logging"
+
+  # ============================================================================
+  # PYTORCH TORCH.COMPILE PATTERNS
+  # ============================================================================
+  # torch.compile wraps modules in a compiled wrapper. To access the original
+  # module (e.g., for checkpointing), we need to check for _orig_mod attribute.
+
+  - key: "src/esper/simic/agent/ppo.py:__init__:getattr"
+    owner: "john"
+    reason: "PyTorch torch.compile - accessing _orig_mod for base network"
+
+  - key: "src/esper/simic/agent/ppo.py:__init__:getattr:2"
+    owner: "john"
+    reason: "PyTorch torch.compile - accessing _orig_mod for base network"
+
+  - key: "src/esper/simic/agent/ppo.py:update:getattr"
+    owner: "john"
+    reason: "PyTorch torch.compile - accessing _orig_mod for gradient computation"
+
+  - key: "src/esper/simic/agent/ppo.py:save:getattr"
+    owner: "john"
+    reason: "PyTorch torch.compile - accessing _orig_mod for checkpointing"
+
+  - key: "src/esper/tamiyo/policy/lstm_bundle.py:state_dict:getattr"
+    owner: "john"
+    reason: "PyTorch torch.compile - accessing _orig_mod for state_dict"
+
+  - key: "src/esper/tamiyo/policy/lstm_bundle.py:load_state_dict:getattr"
+    owner: "john"
+    reason: "PyTorch torch.compile - accessing _orig_mod for load_state_dict"
+
+  - key: "src/esper/tamiyo/policy/lstm_bundle.py:is_compiled:hasattr"
+    owner: "john"
+    reason: "PyTorch torch.compile - detecting if network is compiled"
+
+  # ============================================================================
+  # NN MODULE INITIALIZATION
+  # ============================================================================
+  # Weight initialization may need to check for bias presence.
+
+  - key: "src/esper/kasmina/blueprints/initialization.py:zero_init_final_layer:getattr"
+    owner: "john"
+    reason: "NN initialization - checking if layer has optional bias parameter"
+
+  # ============================================================================
+  # DYNAMIC FIELD ACCESS FOR TUI RENDERING
+  # ============================================================================
+  # TUI widgets access dynamically-named fields for rendering multiple heads.
+
+  - key: "src/esper/karn/sanctum/widgets/tamiyo/action_heads_panel.py:_render_heads_section:getattr"
+    owner: "john"
+    reason: "TUI - accessing dynamically-named entropy fields for action heads"
+
+  - key: "src/esper/karn/sanctum/widgets/tamiyo/action_heads_panel.py:_render_heads_section:getattr:2"
+    owner: "john"
+    reason: "TUI - accessing dynamically-named entropy fields for action heads"
+
+  - key: "src/esper/karn/sanctum/widgets/tamiyo/action_heads_panel.py:_render_heads_section:getattr:3"
+    owner: "john"
+    reason: "TUI - accessing dynamically-named gradient fields for action heads"
+
+  - key: "src/esper/karn/sanctum/widgets/tamiyo/action_heads_panel.py:_render_heads_section:getattr:4"
+    owner: "john"
+    reason: "TUI - accessing dynamically-named gradient fields for action heads"
+
+  - key: "src/esper/karn/sanctum/widgets/tamiyo/action_heads_panel.py:_render_heads_section:getattr:5"
+    owner: "john"
+    reason: "TUI - accessing dynamically-named gradient fields for action heads"
+
+  - key: "src/esper/karn/sanctum/widgets/tamiyo/action_heads_panel.py:_render_heads_section:getattr:6"
+    owner: "john"
+    reason: "TUI - accessing dynamically-named ratio fields for action heads"
+
+  - key: "src/esper/karn/sanctum/widgets/tamiyo/action_heads_panel.py:_render_heads_section:getattr:7"
+    owner: "john"
+    reason: "TUI - accessing dynamically-named ratio fields for action heads"
+
+  - key: "src/esper/karn/sanctum/widgets/tamiyo/action_heads_panel.py:_render_heads_section:getattr:8"
+    owner: "john"
+    reason: "TUI - accessing dynamically-named entropy fields for action heads"
+
+  - key: "src/esper/karn/sanctum/widgets/tamiyo/action_heads_panel.py:_render_heads_section:getattr:9"
+    owner: "john"
+    reason: "TUI - accessing dynamically-named gradient fields for action heads"
+
+  # ============================================================================
+  # LAZY IMPORT PATTERNS
+  # ============================================================================
+  # Module-level __getattr__ for lazy loading is a Python optimization pattern.
+
+  - key: "src/esper/nissa/__init__.py:__getattr__:getattr"
+    owner: "john"
+    reason: "Python lazy import pattern - module __getattr__ for deferred loading"
+
+  - key: "src/esper/tolaria/__init__.py:__getattr__:getattr"
+    owner: "john"
+    reason: "Python lazy import pattern - module __getattr__ for deferred loading"
+
+  - key: "src/esper/tamiyo/__init__.py:__getattr__:getattr"
+    owner: "john"
+    reason: "Python lazy import pattern - module __getattr__ for deferred loading"
+
+  # ============================================================================
+  # DESTRUCTOR/CLEANUP GUARDS
+  # ============================================================================
+  # Destructors need to guard against partial initialization.
+
+  - key: "src/esper/nissa/output.py:close:hasattr"
+    owner: "john"
+    reason: "Destructor guard - file may not exist if __init__ failed"
+
+  - key: "src/esper/nissa/output.py:__del__:hasattr"
+    owner: "john"
+    reason: "Destructor guard - file may not exist if __init__ failed"
+
+  # ============================================================================
+  # EXTERNAL API INTEGRATION
+  # ============================================================================
+  # External libraries may have varying return types or optional attributes.
+
+  - key: "src/esper/nissa/wandb_backend.py:start:hasattr"
+    owner: "john"
+    reason: "W&B API - run.url may not exist in all W&B versions"
+
+  - key: "src/esper/nissa/wandb_backend.py:_handle_seed_fossilized:hasattr"
+    owner: "john"
+    reason: "W&B API - checking for summary attribute"
+
+  # ============================================================================
+  # PROTOCOL/INTERFACE CHECKING
+  # ============================================================================
+  # Policy registry validates that implementations have required methods.
+
+  - key: "src/esper/tamiyo/policy/registry.py:decorator:hasattr"
+    owner: "john"
+    reason: "Protocol validation - checking for required methods on policy class"
+
+  - key: "src/esper/tamiyo/policy/registry.py:decorator:hasattr:2"
+    owner: "john"
+    reason: "Protocol validation - checking for required properties on policy class"
+
+  # ============================================================================
+  # DYNAMIC ACTION GENERATION
+  # ============================================================================
+  # Heuristic policy generates action names dynamically.
+
+  - key: "src/esper/tamiyo/heuristic.py:_decide_germination:getattr"
+    owner: "john"
+    reason: "Dynamic action lookup - generating action name for slot position"
+
+  # ============================================================================
+  # OPTIONAL MODEL CAPABILITIES
+  # ============================================================================
+  # Some models have optional seed_slots attribute.
+
+  - key: "src/esper/tolaria/governor.py:snapshot:hasattr"
+    owner: "john"
+    reason: "Optional model capability - not all models have seed_slots"
+
+  - key: "src/esper/tolaria/governor.py:execute_rollback:hasattr"
+    owner: "john"
+    reason: "Optional model capability - not all models have seed_slots"

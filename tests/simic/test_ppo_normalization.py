@@ -90,6 +90,7 @@ def test_buffer_stores_normalized_observations():
     blueprint_indices = torch.zeros(batch_size, 2, dtype=torch.long, device=device)
     masks = {
         "slot": torch.ones(batch_size, 2, dtype=torch.bool, device=device),
+        "slot_by_op": torch.ones(batch_size, NUM_OPS, 2, dtype=torch.bool, device=device),
         "blueprint": torch.ones(batch_size, NUM_BLUEPRINTS, dtype=torch.bool, device=device),
         "style": torch.ones(batch_size, NUM_STYLES, dtype=torch.bool, device=device),
         "tempo": torch.ones(batch_size, NUM_TEMPO, dtype=torch.bool, device=device),
@@ -257,6 +258,7 @@ def test_raw_observations_would_fail():
     blueprint_indices = torch.zeros(batch_size, 2, dtype=torch.long, device=device)
     masks = {
         "slot": torch.ones(batch_size, 2, dtype=torch.bool, device=device),
+        "slot_by_op": torch.ones(batch_size, NUM_OPS, 2, dtype=torch.bool, device=device),
         "blueprint": torch.ones(batch_size, NUM_BLUEPRINTS, dtype=torch.bool, device=device),
         "style": torch.ones(batch_size, NUM_STYLES, dtype=torch.bool, device=device),
         "tempo": torch.ones(batch_size, NUM_TEMPO, dtype=torch.bool, device=device),

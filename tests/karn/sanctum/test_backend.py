@@ -140,6 +140,75 @@ class TestSanctumAggregator:
         assert env.current_epoch == 10
         assert len(env.accuracy_history) == 1
 
+    def test_epoch_completed_tombstones_missing_slots_when_slot_ids_locked(self) -> None:
+        """Missing slots in EpochCompletedPayload.seeds should clear stale per-slot state."""
+        agg = SanctumAggregator(num_envs=1)
+
+        start = MagicMock()
+        start.event_type = MagicMock()
+        start.event_type.name = "TRAINING_STARTED"
+        start.timestamp = datetime.now(timezone.utc)
+        start.data = TrainingStartedPayload(
+            episode_id="test-run-001",
+            task="cifar_baseline",
+            max_epochs=2,
+            max_batches=1,
+            n_envs=1,
+            host_params=1000,
+            slot_ids=("r0c0",),
+            seed=0,
+            n_episodes=1,
+            lr=3e-4,
+            clip_ratio=0.2,
+            entropy_coef=0.01,
+            param_budget=0,
+            policy_device="cpu",
+            env_devices=("cpu",),
+            reward_mode="shaped",
+        )
+        agg.process_event(start)
+
+        epoch1 = MagicMock()
+        epoch1.event_type = MagicMock()
+        epoch1.event_type.name = "EPOCH_COMPLETED"
+        epoch1.timestamp = datetime.now(timezone.utc)
+        epoch1.data = EpochCompletedPayload(
+            env_id=0,
+            val_accuracy=10.0,
+            val_loss=2.3,
+            inner_epoch=1,
+            seeds={
+                "r0c0": {
+                    "stage": "RESETTING",
+                    "blueprint_id": "conv_light",
+                    "accuracy_delta": 0.0,
+                    "epochs_in_stage": 1,
+                    "alpha": 0.0,
+                    "grad_ratio": 0.0,
+                    "has_vanishing": False,
+                    "has_exploding": False,
+                }
+            },
+        )
+        agg.process_event(epoch1)
+
+        epoch2 = MagicMock()
+        epoch2.event_type = MagicMock()
+        epoch2.event_type.name = "EPOCH_COMPLETED"
+        epoch2.timestamp = datetime.now(timezone.utc)
+        epoch2.data = EpochCompletedPayload(
+            env_id=0,
+            val_accuracy=10.0,
+            val_loss=2.3,
+            inner_epoch=2,
+            seeds={},
+        )
+        agg.process_event(epoch2)
+
+        snapshot = agg.get_snapshot()
+        assert snapshot.envs[0].seeds["r0c0"].stage == "DORMANT"
+        assert snapshot.envs[0].seeds["r0c0"].blueprint_id is None
+
     def test_snapshot_computes_aggregate_mean_accuracy_and_reward(self) -> None:
         """SanctumSnapshot should include aggregate mean metrics for EnvOverview Σ row."""
         agg = SanctumAggregator(num_envs=2)
@@ -172,6 +241,7 @@ class TestSanctumAggregator:
             action_name="WAIT",
             value_estimate=0.0,
             action_confidence=0.5,  # Must be non-None for handler to trigger
+            action_success=True,
         )
 
         reward1 = MagicMock()
@@ -186,6 +256,7 @@ class TestSanctumAggregator:
             action_name="WAIT",
             value_estimate=0.0,
             action_confidence=0.5,  # Must be non-None for handler to trigger
+            action_success=True,
         )
 
         for ev in [epoch0, epoch1, reward0, reward1]:
@@ -376,6 +447,7 @@ class TestSanctumAggregator:
             action_name="GERMINATE_CONV_LIGHT",
             value_estimate=0.0,
             action_confidence=0.8,  # Must be non-None for handler to trigger
+            action_success=True,
         )
 
         agg.process_event(event)
@@ -408,6 +480,7 @@ class TestSanctumAggregator:
             value_estimate=0.5,
             action_confidence=0.9,
             reward_components=rc,
+            action_success=True,
         )
 
         agg.process_event(event)
@@ -1158,6 +1231,7 @@ class TestSanctumAggregator:
                 action_confidence=0.73,
                 value_estimate=0.42,
                 slot_id="r0c1",
+                action_success=True,
             ),
         )
 
@@ -1185,6 +1259,7 @@ class TestSanctumBackend:
         assert hasattr(backend, "emit")
         assert hasattr(backend, "close")
         assert hasattr(backend, "get_snapshot")
+        assert hasattr(backend, "compute_reward_health_by_group")
 
     def test_emit_ignored_before_start(self):
         """emit() before start() should fail loud (misconfigured telemetry)."""
@@ -1231,6 +1306,64 @@ class TestSanctumBackend:
         snapshot = backend.get_snapshot()
 
         assert snapshot.run_id == "test-run"
+
+    def test_reward_health_is_group_scoped(self) -> None:
+        """compute_reward_health_by_group should compute metrics per group."""
+        from esper.karn.sanctum.widgets.reward_health import RewardHealthData
+
+        backend = SanctumBackend(num_envs=1)
+        backend.start()
+
+        event_a = MagicMock()
+        event_a.group_id = "A"
+        event_a.event_type = MagicMock()
+        event_a.event_type.name = "ANALYTICS_SNAPSHOT"
+        event_a.timestamp = datetime.now(timezone.utc)
+        event_a.epoch = 1
+        event_a.data = AnalyticsSnapshotPayload(
+            kind="last_action",
+            env_id=0,
+            total_reward=2.0,
+            action_name="WAIT",
+            action_confidence=0.5,
+            reward_components=RewardComponentsTelemetry(
+                stage_bonus=1.0,
+                total_reward=2.0,
+            ),
+            action_success=True,
+        )
+
+        event_b = MagicMock()
+        event_b.group_id = "B"
+        event_b.event_type = MagicMock()
+        event_b.event_type.name = "ANALYTICS_SNAPSHOT"
+        event_b.timestamp = datetime.now(timezone.utc)
+        event_b.epoch = 1
+        event_b.data = AnalyticsSnapshotPayload(
+            kind="last_action",
+            env_id=0,
+            total_reward=2.0,
+            action_name="WAIT",
+            action_confidence=0.5,
+            reward_components=RewardComponentsTelemetry(
+                stage_bonus=0.2,
+                total_reward=2.0,
+            ),
+            action_success=True,
+        )
+
+        backend.emit(event_a)
+        backend.emit(event_b)
+
+        by_group = backend.compute_reward_health_by_group()
+        assert set(by_group.keys()) == {"A", "B"}
+
+        health_a = by_group["A"]
+        health_b = by_group["B"]
+        assert isinstance(health_a, RewardHealthData)
+        assert isinstance(health_b, RewardHealthData)
+        assert health_a.pbrs_fraction == pytest.approx(0.5)
+        assert health_b.pbrs_fraction == pytest.approx(0.1)
 
     def test_fatal_telemetry_error_is_sticky(self):
         """A telemetry contract violation should permanently trip the backend."""

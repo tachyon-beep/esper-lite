@@ -16,10 +16,11 @@ import dataclasses
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, Callable, Literal
+from typing import TYPE_CHECKING, Any, Callable, Literal, cast
 
 if TYPE_CHECKING:
     from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
+    from esper.simic.telemetry.observation_stats import ObservationStatsTelemetry
 from uuid import uuid4
 
 from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
@@ -133,6 +134,12 @@ class TelemetryEvent:
 
     # Severity
     severity: str = "info"  # debug, info, warning, error, critical
+
+    def __post_init__(self) -> None:
+        # Normalize JSON/deserialized events where event_type arrives as a string.
+        event_type_raw = cast(Any, self.event_type)
+        if type(event_type_raw) is str:
+            self.event_type = TelemetryEventType[event_type_raw]
 
 
 # TODO: [DEAD CODE] - PerformanceBudgets and DEFAULT_BUDGETS are defined but never used
@@ -420,12 +427,12 @@ class TrainingStartedPayload:
     # REQUIRED - training fails without these
     n_envs: int
     max_epochs: int
-    max_batches: int  # Total episodes/batches in run (from CLI n_episodes)
+    max_batches: int  # Total PPO update rounds in run (from CLI rounds)
     task: str
     host_params: int  # Must be post-materialization
     slot_ids: tuple[str, ...]
     seed: int
-    n_episodes: int
+    n_episodes: int  # Total env episodes in run (n_envs * rounds)
     lr: float
     clip_ratio: float
     entropy_coef: float
@@ -490,6 +497,19 @@ class TrainingStartedPayload:
             compile_backend=data.get("compile_backend"),
             compile_mode=data.get("compile_mode"),
         )
+
+
+@dataclass(slots=True, frozen=True)
+class CheckpointLoadedPayload:
+    """Payload for CHECKPOINT_LOADED event. Emitted when training resumes from checkpoint."""
+
+    # REQUIRED
+    path: str  # Path to the checkpoint file
+    start_episode: int  # Episode number to resume from
+
+    # OPTIONAL
+    source: str | None = None  # Human-readable source description (e.g., "best checkpoint")
+    avg_accuracy: float | None = None  # Accuracy at checkpoint time (if available)
 
 
 @dataclass(slots=True, frozen=True)
@@ -637,6 +657,33 @@ class PPOUpdatePayload:
     advantage_skewness: float = 0.0  # Asymmetry: >0 right-skewed, <0 left-skewed
     advantage_kurtosis: float = 0.0  # Tail heaviness: >0 heavy tails (more outliers), <0 light tails
     advantage_positive_ratio: float = 0.5  # Fraction positive (healthy: 0.4-0.6)
+
+    # Pre-normalization advantage stats (critical for diagnosing value collapse)
+    # If pre_norm_std is tiny but pre_clip_grad_norm is huge → normalization amplifying noise
+    # If pre_norm_std is healthy but grad is huge → raw return scale or value mismatch
+    pre_norm_advantage_mean: float = 0.0
+    pre_norm_advantage_std: float = 0.0
+
+    # Return statistics (for diagnosing value loss scale)
+    return_mean: float = 0.0
+    return_std: float = 0.0
+
+    # Value function quality metrics (TELE-220 to TELE-228)
+    # These measure value network calibration and return distribution shape
+    v_return_correlation: float = 0.0
+    td_error_mean: float = 0.0
+    td_error_std: float = 0.0
+    bellman_error: float = 0.0
+    return_p10: float = 0.0
+    return_p50: float = 0.0
+    return_p90: float = 0.0
+    return_variance: float = 0.0
+    return_skewness: float = 0.0
+
+    # Value target scale: the std used to normalize returns before value loss
+    # Tracks raw return variance; normalized_returns = valid_returns / value_target_scale
+    value_target_scale: float = 1.0
+
     ratio_mean: float = 1.0
     ratio_min: float = 1.0
     ratio_max: float = 1.0
@@ -653,6 +700,11 @@ class PPOUpdatePayload:
     exploding_layers: int = 0
     layer_gradient_health: dict[str, float] | None = None
     entropy_collapsed: bool = False
+
+    # Per-head NaN/Inf detection (for indicator lights with latch behavior)
+    # Keys are HEAD_NAMES: op, slot, blueprint, style, tempo, alpha_target, alpha_speed, alpha_curve
+    head_nan_detected: dict[str, bool] | None = None
+    head_inf_detected: dict[str, bool] | None = None
 
     # AMP diagnostics (PyTorch expert recommendation)
     loss_scale: float | None = None
@@ -741,6 +793,24 @@ class PPOUpdatePayload:
     cuda_memory_peak_gb: float = 0.0       # torch.cuda.max_memory_allocated()
     cuda_memory_fragmentation: float = 0.0 # 1 - (allocated/reserved), >0.3 = pressure
 
+    # === LSTM Hidden State Health (B7-DRL-04) ===
+    # Tracks LSTM hidden state stability after PPO updates (BPTT can corrupt states)
+    # h = hidden state, c = cell state
+    # NOTE: Total L2 norms scale with sqrt(numel) and are NOT batch-size invariant.
+    # Use *_rms and *_env_rms_* for scale-free health signals.
+    lstm_h_l2_total: float | None = None
+    lstm_c_l2_total: float | None = None
+    lstm_h_rms: float | None = None
+    lstm_c_rms: float | None = None
+    lstm_h_env_rms_mean: float | None = None
+    lstm_h_env_rms_max: float | None = None
+    lstm_c_env_rms_mean: float | None = None
+    lstm_c_env_rms_max: float | None = None
+    lstm_h_max: float | None = None   # Max absolute value in h
+    lstm_c_max: float | None = None   # Max absolute value in c
+    lstm_has_nan: bool = False  # NaN detected in hidden state
+    lstm_has_inf: bool = False  # Inf detected in hidden state
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "PPOUpdatePayload":
         """Parse from dict. Raises KeyError on missing required fields."""
@@ -751,33 +821,44 @@ class PPOUpdatePayload:
             grad_norm=data["grad_norm"],
             kl_divergence=data["kl_divergence"],
             clip_fraction=data["clip_fraction"],
-            nan_grad_count=data.get("nan_grad_count", 0),
+            # DRL-03 fix: nan_grad_count is required (fail-fast on missing)
+            nan_grad_count=data["nan_grad_count"],
+            # Always emitted - fail loudly if missing
             pre_clip_grad_norm=data["pre_clip_grad_norm"],
-            # Optional fields
+            # Conditionally optional
             explained_variance=data.get("explained_variance"),
-            entropy_loss=data.get("entropy_loss", 0.0),
-            advantage_mean=data.get("advantage_mean", 0.0),
-            advantage_std=data.get("advantage_std", 0.0),
-            advantage_skewness=data.get("advantage_skewness", 0.0),
-            advantage_kurtosis=data.get("advantage_kurtosis", 0.0),
-            advantage_positive_ratio=data.get("advantage_positive_ratio", 0.5),
-            ratio_mean=data.get("ratio_mean", 1.0),
-            ratio_min=data.get("ratio_min", 1.0),
-            ratio_max=data.get("ratio_max", 1.0),
-            ratio_std=data.get("ratio_std", 0.0),
-            log_prob_min=data.get("log_prob_min", 0.0),
-            log_prob_max=data.get("log_prob_max", 0.0),
+            entropy_loss=data.get("entropy_loss", 0.0),  # Legacy: hardcoded to 0
+            # Advantage stats - always emitted
+            advantage_mean=data["advantage_mean"],
+            advantage_std=data["advantage_std"],
+            advantage_skewness=data["advantage_skewness"],
+            advantage_kurtosis=data["advantage_kurtosis"],
+            advantage_positive_ratio=data["advantage_positive_ratio"],
+            # Ratio stats - always emitted
+            ratio_mean=data["ratio_mean"],
+            ratio_min=data["ratio_min"],
+            ratio_max=data["ratio_max"],
+            ratio_std=data["ratio_std"],
+            # Log prob extremes - always emitted
+            log_prob_min=data["log_prob_min"],
+            log_prob_max=data["log_prob_max"],
             lr=data.get("lr"),
             entropy_coef=data.get("entropy_coef"),
             inf_grad_count=data.get("inf_grad_count", 0),
             dead_layers=data.get("dead_layers", 0),
             exploding_layers=data.get("exploding_layers", 0),
             layer_gradient_health=data.get("layer_gradient_health"),
-            entropy_collapsed=data.get("entropy_collapsed", False),
+            # Always emitted
+            entropy_collapsed=data["entropy_collapsed"],
+            # Per-head NaN/Inf detection (optional)
+            head_nan_detected=data.get("head_nan_detected"),
+            head_inf_detected=data.get("head_inf_detected"),
+            # Conditionally optional (AMP-related)
             loss_scale=data.get("loss_scale"),
             amp_overflow_detected=data.get("amp_overflow_detected", False),
             update_skipped=data.get("update_skipped", False),
-            update_time_ms=data.get("update_time_ms", 0.0),
+            # Always emitted
+            update_time_ms=data["update_time_ms"],
             early_stop_epoch=data.get("early_stop_epoch"),
             head_slot_entropy=data.get("head_slot_entropy"),
             head_blueprint_entropy=data.get("head_blueprint_entropy"),
@@ -805,15 +886,17 @@ class PPOUpdatePayload:
             head_alpha_curve_ratio_max=data.get("head_alpha_curve_ratio_max", 1.0),
             head_op_ratio_max=data.get("head_op_ratio_max", 1.0),
             joint_ratio_max=data.get("joint_ratio_max", 1.0),
-            inner_epoch=data.get("inner_epoch", 0),
-            batch=data.get("batch", 0),
+            # Always emitted
+            inner_epoch=data["inner_epoch"],
+            batch=data["batch"],
             ppo_updates_count=data["ppo_updates_count"],
+            # Conditionally optional (buffer rollback)
             skipped=data.get("skipped", False),
-            # Value function statistics
-            value_mean=data.get("value_mean", 0.0),
-            value_std=data.get("value_std", 0.0),
-            value_min=data.get("value_min", 0.0),
-            value_max=data.get("value_max", 0.0),
+            # Value function statistics - always emitted
+            value_mean=data["value_mean"],
+            value_std=data["value_std"],
+            value_min=data["value_min"],
+            value_max=data["value_max"],
             # Q-values
             q_germinate=data.get("q_germinate", 0.0),
             q_advance=data.get("q_advance", 0.0),
@@ -823,15 +906,36 @@ class PPOUpdatePayload:
             q_set_alpha=data.get("q_set_alpha", 0.0),
             q_variance=data.get("q_variance", 0.0),
             q_spread=data.get("q_spread", 0.0),
-            # Gradient quality metrics
-            clip_fraction_positive=data.get("clip_fraction_positive", 0.0),
-            clip_fraction_negative=data.get("clip_fraction_negative", 0.0),
-            gradient_cv=data.get("gradient_cv", 0.0),
+            # Gradient quality metrics - always emitted
+            clip_fraction_positive=data["clip_fraction_positive"],
+            clip_fraction_negative=data["clip_fraction_negative"],
+            gradient_cv=data["gradient_cv"],
             # Infrastructure metrics
             cuda_memory_allocated_gb=data.get("cuda_memory_allocated_gb", 0.0),
             cuda_memory_reserved_gb=data.get("cuda_memory_reserved_gb", 0.0),
             cuda_memory_peak_gb=data.get("cuda_memory_peak_gb", 0.0),
             cuda_memory_fragmentation=data.get("cuda_memory_fragmentation", 0.0),
+            # LSTM health metrics (B7-DRL-04)
+            lstm_h_l2_total=data.get("lstm_h_l2_total"),
+            lstm_c_l2_total=data.get("lstm_c_l2_total"),
+            lstm_h_rms=data.get("lstm_h_rms"),
+            lstm_c_rms=data.get("lstm_c_rms"),
+            lstm_h_env_rms_mean=data.get("lstm_h_env_rms_mean"),
+            lstm_h_env_rms_max=data.get("lstm_h_env_rms_max"),
+            lstm_c_env_rms_mean=data.get("lstm_c_env_rms_mean"),
+            lstm_c_env_rms_max=data.get("lstm_c_env_rms_max"),
+            lstm_h_max=data.get("lstm_h_max"),
+            lstm_c_max=data.get("lstm_c_max"),
+            lstm_has_nan=data.get("lstm_has_nan", False),
+            lstm_has_inf=data.get("lstm_has_inf", False),
+            # Pre-normalization advantage stats (for diagnosing value collapse)
+            # Always emitted - fail loudly if missing
+            pre_norm_advantage_mean=data["pre_norm_advantage_mean"],
+            pre_norm_advantage_std=data["pre_norm_advantage_std"],
+            # Return statistics (for diagnosing value loss scale)
+            # Always emitted - fail loudly if missing
+            return_mean=data["return_mean"],
+            return_std=data["return_std"],
         )
 
     @classmethod
@@ -1257,6 +1361,8 @@ class AnalyticsSnapshotPayload:
     alpha_shock: float | None = None  # Convex penalty on alpha deltas
     # Full reward components dataclass (replaces individual fields)
     reward_components: "RewardComponentsTelemetry | None" = None
+    # Observation space health (for early NaN detection)
+    observation_stats: "ObservationStatsTelemetry | None" = None
     # Decision context for TamiyoBrain Decision Cards
     slot_states: dict[str, str] | None = None  # slot_id -> "Training 12%" or "Empty"
     alternatives: list[tuple[str, float]] | None = None  # Top-2 alternative (action, prob)
@@ -1398,6 +1504,8 @@ class AnalyticsSnapshotPayload:
             num_slots=data.get("num_slots"),
             # Reward components (nested dataclass)
             reward_components=cls._parse_reward_components(data.get("reward_components")),
+            # Observation stats (nested dataclass)
+            observation_stats=cls._parse_observation_stats(data.get("observation_stats")),
             # Head telemetry (nested dataclass)
             head_telemetry=cls._parse_head_telemetry(data.get("head_telemetry")),
         )
@@ -1414,6 +1522,8 @@ class AnalyticsSnapshotPayload:
             if dc_field.name == "head_telemetry":
                 payload[dc_field.name] = value.to_dict() if value is not None else None
             elif dc_field.name == "reward_components":
+                payload[dc_field.name] = value.to_dict() if value is not None else None
+            elif dc_field.name == "observation_stats":
                 payload[dc_field.name] = value.to_dict() if value is not None else None
             else:
                 payload[dc_field.name] = value
@@ -1439,6 +1549,20 @@ class AnalyticsSnapshotPayload:
         if data is None:
             return None
         return HeadTelemetry.from_dict(data)
+
+    @staticmethod
+    def _parse_observation_stats(
+        data: dict[str, Any] | None,
+    ) -> "ObservationStatsTelemetry | None":
+        """Parse observation_stats from dict if present.
+
+        Uses late import to avoid circular dependency at module load time.
+        """
+        if data is None:
+            return None
+        from esper.simic.telemetry.observation_stats import ObservationStatsTelemetry
+
+        return ObservationStatsTelemetry.from_dict(data)
 
 
 @dataclass(slots=True, frozen=True)
@@ -1525,6 +1649,76 @@ class PerformanceDegradationPayload:
 
 
 @dataclass(slots=True, frozen=True)
+class MemoryWarningPayload:
+    """Payload for MEMORY_WARNING event.
+
+    Emitted when GPU memory utilization exceeds the configured threshold.
+    """
+
+    # REQUIRED
+    gpu_utilization: float  # 0.0 to 1.0
+    gpu_allocated_gb: float
+    gpu_total_gb: float
+    threshold: float
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "MemoryWarningPayload":
+        """Parse from dict. Raises KeyError on missing required fields."""
+        return cls(
+            gpu_utilization=data["gpu_utilization"],
+            gpu_allocated_gb=data["gpu_allocated_gb"],
+            gpu_total_gb=data["gpu_total_gb"],
+            threshold=data["threshold"],
+        )
+
+
+RewardHackingPattern = Literal[
+    "attribution_ratio",
+    "ransomware_signature",
+]
+
+
+@dataclass(slots=True, frozen=True)
+class RewardHackingSuspectedPayload:
+    """Payload for REWARD_HACKING_SUSPECTED event.
+
+    Two patterns share the same event type:
+    - attribution_ratio: seed claims an implausible share of improvement
+    - ransomware_signature: seed claims high contribution while system degrades
+    """
+
+    # REQUIRED
+    pattern: RewardHackingPattern
+    slot_id: str
+    seed_id: str
+    seed_contribution: float
+    total_improvement: float
+
+    # OPTIONAL - attribution_ratio fields
+    ratio: float | None = None
+    threshold: float | None = None
+
+    # OPTIONAL - ransomware_signature fields
+    contribution_threshold: float | None = None
+    degradation_threshold: float | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "RewardHackingSuspectedPayload":
+        """Parse from dict. Raises KeyError on missing required fields."""
+        return cls(
+            pattern=data["pattern"],
+            slot_id=data["slot_id"],
+            seed_id=data["seed_id"],
+            seed_contribution=data["seed_contribution"],
+            total_improvement=data["total_improvement"],
+            ratio=data.get("ratio"),
+            threshold=data.get("threshold"),
+            contribution_threshold=data.get("contribution_threshold"),
+            degradation_threshold=data.get("degradation_threshold"),
+        )
+
+
+@dataclass(slots=True, frozen=True)
 class EpisodeOutcomePayload:
     """Payload for EPISODE_OUTCOME event.
 
@@ -1549,6 +1743,13 @@ class EpisodeOutcomePayload:
     stability_score: float  # 1 - variance(recent_losses)
     reward_mode: str  # "shaped", "simplified", etc.
 
+    # Episode diagnostics (TELE-610)
+    episode_length: int = 0  # Steps in this episode (usually max_epochs)
+    outcome_type: str = "unknown"  # "success", "timeout", "early_termination"
+    germinate_count: int = 0  # GERMINATE actions this episode
+    prune_count: int = 0  # PRUNE actions this episode
+    fossilize_count: int = 0  # FOSSILIZE actions this episode
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "EpisodeOutcomePayload":
         """Parse from dict. Raises KeyError on missing required fields."""
@@ -1562,6 +1763,11 @@ class EpisodeOutcomePayload:
             episode_reward=data["episode_reward"],
             stability_score=data["stability_score"],
             reward_mode=data["reward_mode"],
+            episode_length=data.get("episode_length", 0),
+            outcome_type=data.get("outcome_type", "unknown"),
+            germinate_count=data.get("germinate_count", 0),
+            prune_count=data.get("prune_count", 0),
+            fossilize_count=data.get("fossilize_count", 0),
         )
 
 
@@ -1625,10 +1831,13 @@ class GovernorRollbackPayload:
 
 TelemetryPayload = (
     TrainingStartedPayload
+    | CheckpointLoadedPayload
     | EpochCompletedPayload
     | BatchEpochCompletedPayload
     | TrendDetectedPayload
     | PPOUpdatePayload
+    | MemoryWarningPayload
+    | RewardHackingSuspectedPayload
     | TamiyoInitiatedPayload
     | SeedGerminatedPayload
     | SeedStageChangedPayload

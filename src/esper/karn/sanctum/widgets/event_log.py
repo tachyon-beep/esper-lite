@@ -5,7 +5,7 @@ Architecture:
 - Tracks which events have been processed by ID
 - Queues individual events and drip-feeds them at observed events/sec
 - Shows rich inline metadata for actionable events (GERMINATED, FOSSILIZED, etc.)
-- Aggregates high-frequency events (EPOCH_COMPLETED, REWARD_COMPUTED)
+- Aggregates high-frequency events (EPOCH_COMPLETED, BATCH_EPOCH_COMPLETED)
 - Updates aggregated lines live as new events arrive
 - On render: formats timestamps based on visible line order for proper clock flow
 
@@ -38,8 +38,8 @@ _EVENT_COLORS: dict[str, str] = {
     # PPO events
     "PPO_UPDATE_COMPLETED": "bright_magenta",
     # High-frequency (aggregated)
-    "REWARD_COMPUTED": "dim",
     "TRAINING_STARTED": "bright_green",
+    "REWARD_COMPUTED": "dim",
     "EPOCH_COMPLETED": "bright_blue",
     "BATCH_EPOCH_COMPLETED": "bright_blue",
 }
@@ -98,7 +98,7 @@ class EventLog(Static):
     """Append-only scrolling event log with rich metadata display.
 
     - Shows individual entries for actionable events (seed lifecycle, PPO)
-    - Aggregates high-frequency events (EPOCH_COMPLETED, REWARD_COMPUTED)
+    - Aggregates high-frequency events (EPOCH_COMPLETED, BATCH_EPOCH_COMPLETED)
     - Displays key metadata inline (slot, blueprint, stage transition, etc.)
     - Timestamp abbreviation computed at render time for proper clock flow
     - Click anywhere to open raw event detail modal
@@ -131,7 +131,7 @@ class EventLog(Static):
         self._max_lines = max_lines
         self._buffer_seconds = buffer_seconds
         self._max_delay_seconds = max_delay_seconds
-        self.border_title = "EVENTS [click for detail]"
+        self.border_title = "EVENT LOG [click for detail]"
 
         # === APPEND-ONLY STATE ===
         # Line data: list of _LineData for render-time formatting
@@ -450,7 +450,7 @@ class EventLog(Static):
         elif event_type == "BATCH_EPOCH_COMPLETED":
             batch = metadata.get("batch", "?")
             episodes = metadata.get("episodes", 0)
-            content.append("BATCH ", style=color)
+            content.append("ROUND ", style=color)
             content.append(f"#{batch}", style="cyan")
             if episodes:
                 content.append(f" +{episodes}eps", style="dim")

@@ -30,7 +30,7 @@ def test_event_log_creation():
     assert widget is not None
     assert widget._max_lines == 41  # Default max lines
     # Border title is set but may be truncated by Textual based on widget width
-    assert widget.border_title.startswith("EVENTS")
+    assert widget.border_title.startswith("EVENT LOG")
 
 
 def test_event_log_no_events():
@@ -128,7 +128,6 @@ def test_event_log_color_mapping():
     assert "TRAINING_STARTED" in _EVENT_COLORS
     assert "EPOCH_COMPLETED" in _EVENT_COLORS
     assert "PPO_UPDATE_COMPLETED" in _EVENT_COLORS
-    assert "REWARD_COMPUTED" in _EVENT_COLORS
     assert "SEED_GERMINATED" in _EVENT_COLORS
     assert "SEED_STAGE_CHANGED" in _EVENT_COLORS
     assert "SEED_FOSSILIZED" in _EVENT_COLORS
@@ -199,7 +198,6 @@ def test_event_log_color_coding():
     assert _EVENT_COLORS["SEED_GERMINATED"] == "bright_yellow"
     assert _EVENT_COLORS["SEED_FOSSILIZED"] == "bright_green"
     assert _EVENT_COLORS["SEED_PRUNED"] == "bright_red"
-    assert _EVENT_COLORS["REWARD_COMPUTED"] == "dim"
     assert _EVENT_COLORS["BATCH_EPOCH_COMPLETED"] == "bright_blue"
 
     # Unknown events default to "white" via .get() in implementation

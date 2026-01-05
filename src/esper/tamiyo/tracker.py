@@ -22,7 +22,7 @@ from esper.leyline import (
 from esper.nissa import get_hub
 
 if TYPE_CHECKING:
-    from esper.simic.contracts import SeedStateProtocol
+    from esper.leyline import SeedStateProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,11 @@ class SignalTracker:
         self._loss_history = deque(self._loss_history, maxlen=self.history_window)
         self._accuracy_history = deque(self._accuracy_history, maxlen=self.history_window)
 
+        # True disable: stabilization_epochs=0 means "skip stabilization entirely"
+        # Without this, the latch would still require at least one stable epoch
+        if self.stabilization_epochs == 0:
+            self._is_stabilized = True
+
     def update(
         self,
         epoch: int,
@@ -147,9 +152,9 @@ class SignalTracker:
                     if self._stable_count >= self.stabilization_epochs:
                         self._is_stabilized = True
                         # Emit TAMIYO_INITIATED telemetry (console output via Nissa backend)
-                        hub = get_hub()
-                        # Only emit if env_id is set (telemetry requires env context)
+                        # Only access hub and emit if env_id is set (telemetry requires env context)
                         if self.env_id is not None:
+                            hub = get_hub()
                             hub.emit(TelemetryEvent(
                                 event_type=TelemetryEventType.TAMIYO_INITIATED,
                                 epoch=epoch,
@@ -328,6 +333,20 @@ class SignalTracker:
             accuracy_history=list(self._accuracy_history)[-5:],
         )
 
+    def stable_val_accuracy(self, window: int) -> float:
+        """Return a stability-filtered validation accuracy.
+
+        Uses min(last_k) to approximate "sustained" performance: a spike only
+        counts once it survives the full window.
+        """
+        if window <= 0:
+            raise ValueError(f"stable_val_accuracy window must be positive, got {window}")
+        if not self._accuracy_history:
+            raise RuntimeError("stable_val_accuracy called before any accuracy history exists")
+        values = list(self._accuracy_history)
+        k = window if window <= len(values) else len(values)
+        return min(values[-k:])
+
     def reset(self) -> None:
         """Reset tracker state."""
         # Recreate deques with current history_window (not just clear)
@@ -338,8 +357,8 @@ class SignalTracker:
         self._prev_accuracy = 0.0
         self._prev_loss = float('inf')
 
-        # Reset stabilization latch
-        self._is_stabilized = False
+        # Reset stabilization latch (respecting stabilization_epochs=0 = disabled)
+        self._is_stabilized = self.stabilization_epochs == 0
         self._stable_count = 0
 
     @property

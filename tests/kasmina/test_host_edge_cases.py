@@ -341,3 +341,136 @@ class TestHostOutputConsistency:
             partial_output = host.forward_from_segment(last_segment, partial)
 
             torch.testing.assert_close(partial_output, full_output)
+
+
+class TestForwardToSegmentBackwardsRouting:
+    """Test that backwards segment routing raises ValueError."""
+
+    def test_cnn_backwards_routing_raises(self):
+        """Attempting to route backwards (from later to earlier segment) should raise."""
+        host = CNNHost(n_blocks=3, memory_format=torch.contiguous_format)
+        x = torch.randn(2, 3, 32, 32)
+
+        # Forward to r0c2 first
+        h = host.forward_to_segment("r0c2", x)
+
+        # Attempt backwards routing should raise
+        with pytest.raises(ValueError, match="Cannot route backwards"):
+            host.forward_to_segment("r0c0", h, from_segment="r0c2")
+
+    def test_cnn_backwards_routing_same_segment_raises(self):
+        """Routing from a segment to itself should raise (range would be empty)."""
+        host = CNNHost(n_blocks=3, memory_format=torch.contiguous_format)
+        x = torch.randn(2, 3, 32, 32)
+
+        # Forward to r0c1 first
+        h = host.forward_to_segment("r0c1", x)
+
+        # Attempt same-segment routing should raise
+        with pytest.raises(ValueError, match="Cannot route backwards"):
+            host.forward_to_segment("r0c1", h, from_segment="r0c1")
+
+    def test_cnn_forward_routing_works(self):
+        """Forward routing (earlier to later segment) should work."""
+        host = CNNHost(n_blocks=3, memory_format=torch.contiguous_format)
+        x = torch.randn(2, 3, 32, 32)
+
+        # Forward to r0c0 first
+        h = host.forward_to_segment("r0c0", x)
+
+        # Forward routing to r0c2 should work
+        h2 = host.forward_to_segment("r0c2", h, from_segment="r0c0")
+        assert h2.shape[0] == 2  # Batch dimension preserved
+
+    def test_transformer_backwards_routing_raises(self):
+        """Attempting to route backwards (from later to earlier segment) should raise."""
+        host = TransformerHost(
+            n_layer=6,
+            num_segments=3,
+            n_embd=64,
+            n_head=2,
+        )
+        x = torch.randint(0, 50257, (2, 16))
+
+        # Forward to r0c2 first
+        h = host.forward_to_segment("r0c2", x)
+
+        # Attempt backwards routing should raise
+        with pytest.raises(ValueError, match="Cannot route backwards"):
+            host.forward_to_segment("r0c0", h, from_segment="r0c2")
+
+    def test_transformer_backwards_routing_same_segment_raises(self):
+        """Routing from a segment to itself should raise (range would be empty)."""
+        host = TransformerHost(
+            n_layer=6,
+            num_segments=3,
+            n_embd=64,
+            n_head=2,
+        )
+        x = torch.randint(0, 50257, (2, 16))
+
+        # Forward to r0c1 first
+        h = host.forward_to_segment("r0c1", x)
+
+        # Attempt same-segment routing should raise
+        with pytest.raises(ValueError, match="Cannot route backwards"):
+            host.forward_to_segment("r0c1", h, from_segment="r0c1")
+
+    def test_transformer_forward_routing_works(self):
+        """Forward routing (earlier to later segment) should work."""
+        host = TransformerHost(
+            n_layer=6,
+            num_segments=3,
+            n_embd=64,
+            n_head=2,
+        )
+        x = torch.randint(0, 50257, (2, 16))
+
+        # Forward to r0c0 first
+        h = host.forward_to_segment("r0c0", x)
+
+        # Forward routing to r0c2 should work
+        h2 = host.forward_to_segment("r0c2", h, from_segment="r0c0")
+        assert h2.shape == (2, 16, 64)  # (batch, seq_len, n_embd)
+
+
+class TestSeedMetricsSerialization:
+    """Test SeedMetrics serialization contract enforcement."""
+
+    def test_missing_schema_version_raises(self):
+        """SeedMetrics.from_dict should raise KeyError if _schema_version is missing."""
+        from esper.kasmina.slot import SeedMetrics
+
+        metrics = SeedMetrics()
+        data = metrics.to_dict()
+        del data["_schema_version"]
+
+        with pytest.raises(KeyError):
+            SeedMetrics.from_dict(data)
+
+    def test_wrong_schema_version_raises(self):
+        """SeedMetrics.from_dict should raise ValueError on version mismatch."""
+        from esper.kasmina.slot import SeedMetrics
+
+        metrics = SeedMetrics()
+        data = metrics.to_dict()
+        data["_schema_version"] = 9999  # Invalid version
+
+        with pytest.raises(ValueError, match="schema version mismatch"):
+            SeedMetrics.from_dict(data)
+
+    def test_round_trip_preserves_data(self):
+        """SeedMetrics should round-trip through to_dict/from_dict."""
+        from esper.kasmina.slot import SeedMetrics
+
+        original = SeedMetrics()
+        original.epochs_total = 42
+        original.current_val_accuracy = 0.85
+        original.gradient_norm_avg = 1.5
+
+        data = original.to_dict()
+        restored = SeedMetrics.from_dict(data)
+
+        assert restored.epochs_total == 42
+        assert restored.current_val_accuracy == 0.85
+        assert restored.gradient_norm_avg == 1.5

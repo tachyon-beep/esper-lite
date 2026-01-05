@@ -5,7 +5,7 @@ import torch
 
 from esper.tamiyo.policy import get_policy, list_policies
 from esper.tamiyo.policy.lstm_bundle import LSTMPolicyBundle
-from esper.tamiyo.policy.types import ActionResult, EvalResult, ForwardResult
+from esper.leyline import ActionResult, EvalResult, ForwardResult
 from esper.leyline import (
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
@@ -65,6 +65,7 @@ def test_lstm_bundle_get_action(lstm_bundle, slot_config):
     bp_idx = torch.randint(0, NUM_BLUEPRINTS, (1, slot_config.num_slots))
     masks = {
         "slot": torch.ones(1, slot_config.num_slots, dtype=torch.bool),
+        "slot_by_op": torch.ones(1, NUM_OPS, slot_config.num_slots, dtype=torch.bool),
         "blueprint": torch.ones(1, NUM_BLUEPRINTS, dtype=torch.bool),
         "style": torch.ones(1, NUM_STYLES, dtype=torch.bool),
         "tempo": torch.ones(1, NUM_TEMPO, dtype=torch.bool),
@@ -259,3 +260,42 @@ def test_lstm_bundle_evaluate_actions_missing_mask_key_raises(lstm_bundle, slot_
 
     with pytest.raises(KeyError, match="op"):
         lstm_bundle.evaluate_actions(features, bp_idx, actions, masks, hidden=None)
+
+
+def test_lstm_bundle_forward_3d_features_2d_masks(lstm_bundle, slot_config):
+    """forward() should expand 2D masks correctly when features is already 3D.
+
+    Regression test for mask expansion bug: Previously, mask expansion was
+    gated on whether features was expanded (need_expand), but if features
+    was already 3D [B, 1, F] and masks were 2D [B, A], masks weren't expanded,
+    causing PyTorch broadcasting to align [B, A] against [B, 1, A] incorrectly.
+
+    Fix: Check mask dimensionality directly, not features dimensionality.
+    """
+    batch = 2
+    seq_len = 1
+
+    # Features is already 3D (no expansion needed for features)
+    features = torch.randn(batch, seq_len, lstm_bundle.feature_dim)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (batch, seq_len, slot_config.num_slots))
+
+    # But masks are 2D (need expansion to match features)
+    masks = {
+        "slot": torch.ones(batch, slot_config.num_slots, dtype=torch.bool),
+        "blueprint": torch.ones(batch, NUM_BLUEPRINTS, dtype=torch.bool),
+        "style": torch.ones(batch, NUM_STYLES, dtype=torch.bool),
+        "tempo": torch.ones(batch, NUM_TEMPO, dtype=torch.bool),
+        "alpha_target": torch.ones(batch, NUM_ALPHA_TARGETS, dtype=torch.bool),
+        "alpha_speed": torch.ones(batch, NUM_ALPHA_SPEEDS, dtype=torch.bool),
+        "alpha_curve": torch.ones(batch, NUM_ALPHA_CURVES, dtype=torch.bool),
+        "op": torch.ones(batch, NUM_OPS, dtype=torch.bool),
+    }
+
+    # This should NOT raise - masks should be expanded from [B, A] to [B, 1, A]
+    result = lstm_bundle.forward(features, bp_idx, masks, hidden=None)
+
+    assert isinstance(result, ForwardResult)
+    # Verify output shapes match batch and seq_len
+    assert result.value.shape[0] == batch
+    assert result.logits["op"].shape[0] == batch
+    assert result.logits["op"].shape[1] == seq_len

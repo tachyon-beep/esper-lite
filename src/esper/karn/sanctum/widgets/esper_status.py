@@ -26,7 +26,7 @@ class EsperStatus(Static):
     Shows:
     1. Seed stage counts (aggregate across all envs) - Train, Blend, Prob, Foss, etc.
     2. Host params (format: M/K/raw)
-    3. Throughput (epochs/sec, batches/hr)
+    3. Throughput (epochs/sec, rounds/hr)
     4. Runtime (Xh Ym Zs)
     5. GPU stats (memory used/total, utilization) - multi-GPU support
     6. RAM usage
@@ -86,7 +86,7 @@ class EsperStatus(Static):
 
         # Throughput
         table.add_row("Epochs/sec:", f"{vitals.epochs_per_second:.2f}")
-        table.add_row("Batches/hr:", f"{vitals.batches_per_hour:.0f}")
+        table.add_row("Rounds/hr:", f"{vitals.batches_per_hour:.0f}")
 
         # Runtime
         if self._snapshot.runtime_seconds > 0:

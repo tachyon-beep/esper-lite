@@ -80,11 +80,12 @@ class CounterfactualResult:
 
 @dataclass
 class CounterfactualMatrix:
-    """Full counterfactual matrix for an epoch.
+    """Full counterfactual matrix for a rollout boundary.
 
     Contains results for all evaluated configurations.
     """
 
+    # Telemetry tag supplied by caller (PPO batch index in vectorized training).
     epoch: int = 0
     configs: list[CounterfactualResult] = field(default_factory=list)
     strategy_used: str = ""
@@ -124,7 +125,8 @@ class CounterfactualMatrix:
             self._compute_marginal_contributions()
         # Guaranteed non-None after _compute_marginal_contributions()
         assert self._marginal_contributions is not None
-        return self._marginal_contributions.get(slot_id, 0.0)
+        # Direct access: missing slot_id is a bug (invalid caller or failed computation)
+        return self._marginal_contributions[slot_id]
 
     def _compute_marginal_contributions(self) -> None:
         """Compute marginal contributions for all slots."""
@@ -155,12 +157,6 @@ class ShapleyEstimate:
     std: float = 0.0
     n_samples: int = 0
     algorithm: str = "permutation_antithetic"
-
-    def is_significant(self, confidence: float = 0.95) -> bool:
-        """True if contribution is significantly different from zero."""
-        # Using normal approximation: mean - 2*std > 0
-        z = 1.96 if confidence == 0.95 else 2.58  # 95% or 99%
-        return abs(self.mean) > z * self.std if self.std > 0 else self.mean != 0
 
 
 @dataclass
@@ -399,7 +395,14 @@ class CounterfactualEngine:
         # Sample permutations (FIX BUG-027: Avoid materializing all permutations)
         # We sample up to 100 random permutations (or use the config limit)
         n_samples = self.config.shapley_samples
-        n_perms = min(100, n_samples)
+        max_perms = 100  # Computational tractability limit
+        if n_samples > max_perms:
+            _logger.warning(
+                "Shapley permutations capped at %d (requested %d via shapley_samples)",
+                max_perms,
+                n_samples,
+            )
+        n_perms = min(max_perms, n_samples)
         
         # If n is very small (e.g. <= 4), we could theoretically use all perms,
         # but random sampling is still safe and avoids branching logic.
@@ -427,7 +430,7 @@ class CounterfactualEngine:
             if values:
                 mean = sum(values) / len(values)
                 variance = (
-                    sum((v - mean) ** 2 for v in values) / len(values)
+                    sum((v - mean) ** 2 for v in values) / (len(values) - 1)
                     if len(values) > 1
                     else 0.0
                 )
@@ -483,6 +486,10 @@ class CounterfactualEngine:
         n = len(slot_ids)
 
         if n > 3:
+            _logger.debug(
+                "Skipping interaction terms for %d seeds (complexity cap at n=3)",
+                n,
+            )
             return {}  # Too expensive for more than 3 seeds
 
         # Build lookup

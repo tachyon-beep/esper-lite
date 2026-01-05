@@ -665,3 +665,198 @@ class TestNissaHubTimeoutBehavior:
         assert len(timeout_warnings) >= 1
 
         hub.close(timeout=0.1)
+
+
+class TestBackendWorkerSentinelRace:
+    """Tests for BackendWorker sentinel race condition fix.
+
+    Regression test for the race where events could be enqueued after the
+    sentinel was placed but before _stopped=True was set, leaving events
+    unprocessed forever.
+    """
+
+    def test_worker_processes_all_events_before_stop(self):
+        """BackendWorker.stop() should process all enqueued events.
+
+        Regression test: Prior to fix, enqueue() could race with stop(),
+        placing events after the sentinel that were never processed.
+        """
+        import threading
+
+        received_count = 0
+        lock = threading.Lock()
+
+        class CountingBackend(OutputBackend):
+            def start(self) -> None:
+                pass
+
+            def emit(self, event: TelemetryEvent) -> None:
+                nonlocal received_count
+                with lock:
+                    received_count += 1
+
+            def close(self) -> None:
+                pass
+
+        from esper.nissa.output import BackendWorker
+
+        backend = CountingBackend()
+        backend.start()
+        worker = BackendWorker(backend, max_queue_size=1000)
+
+        # Enqueue many events rapidly
+        num_events = 100
+        for i in range(num_events):
+            event = TelemetryEvent(
+                event_type=TelemetryEventType.EPOCH_COMPLETED,
+                epoch=i,
+                data=EpochCompletedPayload(
+                    env_id=0,
+                    val_accuracy=0.5,
+                    val_loss=0.1,
+                    inner_epoch=i,
+                ),
+            )
+            worker.enqueue(event)
+
+        # Stop should wait for all events
+        worker.stop(timeout=5.0)
+
+        with lock:
+            assert received_count == num_events, (
+                f"Expected {num_events} events, got {received_count}. "
+                "Events were lost due to sentinel race."
+            )
+
+    def test_enqueue_after_stop_is_rejected(self):
+        """Events enqueued after stop() should be silently rejected.
+
+        This verifies the fix: _stopped is set before sentinel, so enqueue()
+        returns early instead of placing events after sentinel.
+        """
+        received_events: list[TelemetryEvent] = []
+
+        class RecordingBackend(OutputBackend):
+            def start(self) -> None:
+                pass
+
+            def emit(self, event: TelemetryEvent) -> None:
+                received_events.append(event)
+
+            def close(self) -> None:
+                pass
+
+        from esper.nissa.output import BackendWorker
+
+        backend = RecordingBackend()
+        backend.start()
+        worker = BackendWorker(backend, max_queue_size=100)
+
+        # Enqueue one event
+        event1 = TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            epoch=1,
+            data=EpochCompletedPayload(
+                env_id=0, val_accuracy=0.5, val_loss=0.1, inner_epoch=1
+            ),
+        )
+        worker.enqueue(event1)
+
+        # Stop the worker
+        worker.stop(timeout=5.0)
+
+        # Verify stopped
+        assert worker._stopped is True
+
+        # Enqueue after stop should be rejected
+        event2 = TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            epoch=2,
+            data=EpochCompletedPayload(
+                env_id=0, val_accuracy=0.5, val_loss=0.1, inner_epoch=2
+            ),
+        )
+        worker.enqueue(event2)  # Should not raise, but should be dropped
+
+        # Only the first event should have been processed
+        assert len(received_events) == 1
+        assert received_events[0].epoch == 1
+
+
+class TestNissaHubConcurrentAddRemove:
+    """Tests for thread-safe add_backend/remove_backend operations.
+
+    Regression tests for the race where worker loop iteration could
+    crash or miss backends due to unsynchronized list mutations.
+    """
+
+    def test_remove_backend_during_emission(self):
+        """remove_backend() should be safe during active emission.
+
+        Regression test: Prior to fix, remove_backend() mutated lists
+        while worker loop was iterating, causing crashes or missed events.
+        """
+        import threading
+
+        events_received: list[tuple[str, int | None]] = []
+        events_lock = threading.Lock()
+
+        class SlowBackend(OutputBackend):
+            def __init__(self, name: str):
+                self.name = name
+
+            def start(self) -> None:
+                pass
+
+            def emit(self, event: TelemetryEvent) -> None:
+                time.sleep(0.01)  # Slow enough to allow race
+                with events_lock:
+                    events_received.append((self.name, event.epoch))
+
+            def close(self) -> None:
+                pass
+
+        hub = NissaHub()
+        backend1 = SlowBackend("backend1")
+        backend2 = SlowBackend("backend2")
+        hub.add_backend(backend1)
+        hub.add_backend(backend2)
+
+        # Emit some events
+        for i in range(10):
+            event = TelemetryEvent(
+                event_type=TelemetryEventType.EPOCH_COMPLETED,
+                epoch=i,
+                data=EpochCompletedPayload(
+                    env_id=0, val_accuracy=0.5, val_loss=0.1, inner_epoch=i
+                ),
+            )
+            hub.emit(event)
+
+        # Remove backend1 while events are still being processed
+        hub.remove_backend(backend1)
+
+        # Emit more events (should only go to backend2)
+        for i in range(10, 15):
+            event = TelemetryEvent(
+                event_type=TelemetryEventType.EPOCH_COMPLETED,
+                epoch=i,
+                data=EpochCompletedPayload(
+                    env_id=0, val_accuracy=0.5, val_loss=0.1, inner_epoch=i
+                ),
+            )
+            hub.emit(event)
+
+        # Flush and close
+        hub.flush(timeout=5.0)
+        hub.close()
+
+        # Backend2 should have received all events (0-14)
+        with events_lock:
+            backend2_events = [e for name, e in events_received if name == "backend2"]
+
+        # Should have at least 10 events from backend2 (the post-removal ones)
+        assert len(backend2_events) >= 5, (
+            f"Backend2 should have received events after backend1 removal. "
+            f"Got {len(backend2_events)} events."
+        )

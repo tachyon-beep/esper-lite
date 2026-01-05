@@ -290,6 +290,79 @@ def build_run_overview(
         params,
     )
 
+    batch_history_limit = max(50, recent_limit)
+    reward_vs_accuracy_over_time = _many_records(
+        conn,
+        f"""
+        SELECT *
+        FROM (
+            SELECT
+                timestamp,
+                batch_idx,
+                episodes_completed,
+                avg_accuracy,
+                avg_reward,
+                rolling_accuracy,
+                total_episodes,
+                n_envs
+            FROM batch_epochs
+            WHERE {where_sql}
+            ORDER BY batch_idx DESC
+            LIMIT {batch_history_limit}
+        ) t
+        ORDER BY batch_idx ASC
+        """,
+        params,
+    )
+
+    top_episode_outcomes = _many_records(
+        conn,
+        f"""
+        SELECT
+            timestamp,
+            env_id,
+            episode_idx,
+            final_accuracy,
+            param_ratio,
+            num_fossilized,
+            num_contributing_fossilized,
+            episode_reward,
+            stability_score,
+            reward_mode
+        FROM episode_outcomes
+        WHERE {where_sql}
+        ORDER BY episode_reward DESC
+        LIMIT 10
+        """,
+        params,
+    )
+
+    action_mix_drift_per_batch = _many_records(
+        conn,
+        f"""
+        SELECT *
+        FROM (
+            SELECT
+                batch_idx,
+                episodes_completed,
+                SUM(count)::INTEGER as total_decisions,
+                MAX(CASE WHEN action_name = 'ADVANCE' THEN pct END)::DOUBLE AS pct_advance,
+                MAX(CASE WHEN action_name = 'WAIT' THEN pct END)::DOUBLE AS pct_wait,
+                MAX(CASE WHEN action_name = 'GERMINATE' THEN pct END)::DOUBLE AS pct_germinate,
+                MAX(CASE WHEN action_name = 'FOSSILIZE' THEN pct END)::DOUBLE AS pct_fossilize,
+                MAX(CASE WHEN action_name = 'PRUNE' THEN pct END)::DOUBLE AS pct_prune,
+                MAX(CASE WHEN action_name = 'SET_ALPHA_TARGET' THEN pct END)::DOUBLE AS pct_set_alpha_target
+            FROM action_distribution
+            WHERE {where_sql}
+            GROUP BY batch_idx, episodes_completed
+            ORDER BY batch_idx DESC
+            LIMIT {batch_history_limit}
+        ) t
+        ORDER BY batch_idx ASC
+        """,
+        params,
+    )
+
     return {
         "ok": True,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -310,4 +383,9 @@ def build_run_overview(
         "anomalies": recent_anomalies,
         "trends": recent_trends,
         "episode_outcomes": recent_episode_outcomes,
+        "query_pack": {
+            "reward_vs_accuracy_over_time": reward_vs_accuracy_over_time,
+            "top_episode_outcomes": top_episode_outcomes,
+            "action_mix_drift_per_batch": action_mix_drift_per_batch,
+        },
     }

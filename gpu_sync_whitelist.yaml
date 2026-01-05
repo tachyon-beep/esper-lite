@@ -1,0 +1,386 @@
+# GPU Synchronization Whitelist
+# =============================
+#
+# This codebase treats CPU↔GPU synchronization points as performance hazards,
+# especially in Simic/Tolaria hot paths. All potential sync points must be
+# explicitly allowed here (or via allow_paths) so new syncs cannot slip into CI.
+#
+# Key format: "path:scope:pattern[:occurrence]"
+#   - path: repo-relative path
+#   - scope: qualname-ish scope (<module>, func, Class.method, etc)
+#   - pattern: item | tolist | cpu | numpy | synchronize | to_cpu | cuda_synchronize
+#   - occurrence: optional 1-based index if multiple in the same scope
+#
+# Generate stubs with:
+#   python scripts/lint_gpu_sync.py --generate-keys
+#
+version: 1
+allow_paths:
+- path: tests/**
+  reason: Tests may synchronize for assertions
+- path: scripts/**
+  reason: Utility/profiling scripts may synchronize
+allow_hits:
+- key: src/esper/kasmina/isolation.py:GradientHealthMonitor.materialize_gradient_stats:item
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/kasmina/isolation.py:GradientHealthMonitor.materialize_gradient_stats:item:2
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/kasmina/slot.py:SeedMetrics.record_accuracy:item
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/nissa/tracker.py:DiagnosticTracker._compute_val_loss:item
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/nissa/tracker.py:DiagnosticTracker._compute_weight_norms:tolist
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/nissa/tracker.py:DiagnosticTracker._record_grad:tolist
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/nissa/tracker.py:DiagnosticTracker._record_grad:tolist:2
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/nissa/tracker.py:DiagnosticTracker._record_grad:tolist:3
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/ppo.py:PPOAgent.update:cpu
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/ppo.py:PPOAgent.update:cpu:2
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/ppo.py:PPOAgent.update:cpu:3
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/ppo.py:PPOAgent.update:cpu:4
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/ppo.py:PPOAgent.update:cpu:5
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/ppo.py:PPOAgent.update:cpu:6
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/ppo.py:PPOAgent.update:cpu:7
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/ppo.py:PPOAgent.update:cpu:8
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/ppo.py:PPOAgent.update:item
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/ppo.py:PPOAgent.update:item:10
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/ppo.py:PPOAgent.update:item:11
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/ppo.py:PPOAgent.update:item:12
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/ppo.py:PPOAgent.update:item:2
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/ppo.py:PPOAgent.update:item:3
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/ppo.py:PPOAgent.update:item:4
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/ppo.py:PPOAgent.update:item:5
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/ppo.py:PPOAgent.update:item:6
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/ppo.py:PPOAgent.update:item:7
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/ppo.py:PPOAgent.update:item:8
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/ppo.py:PPOAgent.update:item:9
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/ppo.py:PPOAgent.update:tolist
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/ppo.py:PPOAgent.update:tolist:2
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/ppo.py:PPOAgent.update:tolist:3
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/ppo.py:PPOAgent.update:tolist:4
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/ppo.py:PPOAgent.update:tolist:5
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/ppo.py:PPOAgent.update:tolist:6
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/ppo.py:PPOAgent.update:tolist:7
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/ppo.py:PPOAgent.update:tolist:8
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/rollout_buffer.py:TamiyoRolloutBuffer.normalize_advantages:item
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/agent/rollout_buffer.py:TamiyoRolloutBuffer.normalize_advantages:item:2
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/control/normalization.py:ValueNormalizer.get_scale:item
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/control/normalization.py:ValueNormalizer.load_state_dict:item
+  owner: John
+  reason: checkpoint restore is not a hot path
+- key: src/esper/simic/telemetry/debug_telemetry.py:RatioExplosionDiagnostic.from_batch:cpu
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/debug_telemetry.py:RatioExplosionDiagnostic.from_batch:cpu:2
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/debug_telemetry.py:RatioExplosionDiagnostic.from_batch:cpu:3
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/debug_telemetry.py:RatioExplosionDiagnostic.from_batch:cpu:4
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/debug_telemetry.py:RatioExplosionDiagnostic.from_batch:item
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/debug_telemetry.py:RatioExplosionDiagnostic.from_batch:item:2
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/debug_telemetry.py:RatioExplosionDiagnostic.from_batch:tolist
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/debug_telemetry.py:RatioExplosionDiagnostic.from_batch:tolist:2
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/debug_telemetry.py:RatioExplosionDiagnostic.from_batch:tolist:3
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/debug_telemetry.py:RatioExplosionDiagnostic.from_batch:tolist:4
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/debug_telemetry.py:check_numerical_stability:cpu
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/debug_telemetry.py:check_numerical_stability:item
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/debug_telemetry.py:check_numerical_stability:item:2
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/debug_telemetry.py:check_numerical_stability:item:3
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/debug_telemetry.py:collect_per_layer_gradients:tolist
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/emitters.py:compute_grad_norm_surrogate:item
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/gradient_collector.py:collect_seed_gradients:tolist
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/gradient_collector.py:materialize_dual_grad_stats:item
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/gradient_collector.py:materialize_dual_grad_stats:item:2
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/gradient_collector.py:materialize_grad_stats:item
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/gradient_collector.py:materialize_grad_stats:item:2
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/gradient_collector.py:materialize_grad_stats:item:3
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/lstm_health.py:compute_lstm_health:tolist
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:10
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:11
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:12
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:2
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:3
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:4
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:5
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:6
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:7
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:8
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:9
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/telemetry/value_metrics.py:compute_value_function_metrics:tolist
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/helpers.py:_train_one_epoch:item
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/helpers.py:_train_one_epoch:item:2
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/helpers.py:run_heuristic_episode:item
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/helpers.py:run_heuristic_episode:item:2
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/helpers.py:run_heuristic_episode:item:3
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/helpers.py:run_heuristic_episode:item:4
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/vectorized.py:CUDATimer.stop:synchronize
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/vectorized.py:train_ppo_vectorized:cpu
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/vectorized.py:train_ppo_vectorized:cpu:2
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/vectorized.py:train_ppo_vectorized:cpu:3
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/vectorized.py:train_ppo_vectorized:cpu:4
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/vectorized.py:train_ppo_vectorized:cpu:5
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/vectorized.py:train_ppo_vectorized:cpu:6
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/vectorized.py:train_ppo_vectorized:cpu:7
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/vectorized.py:train_ppo_vectorized:cpu:8
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/vectorized.py:train_ppo_vectorized:cuda_synchronize
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/vectorized.py:train_ppo_vectorized:item
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/vectorized.py:train_ppo_vectorized:item:2
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/vectorized.py:train_ppo_vectorized:item:3
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/vectorized.py:train_ppo_vectorized:item:4
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/vectorized.py:train_ppo_vectorized:item:5
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/vectorized.py:train_ppo_vectorized:item:6
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/vectorized.py:train_ppo_vectorized:numpy
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/vectorized.py:train_ppo_vectorized:numpy:2
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/vectorized.py:train_ppo_vectorized:numpy:3
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/vectorized.py:train_ppo_vectorized:numpy:4
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/vectorized.py:train_ppo_vectorized:synchronize
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/vectorized.py:train_ppo_vectorized:synchronize:2
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/vectorized.py:train_ppo_vectorized:tolist
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/vectorized.py:train_ppo_vectorized:tolist:2
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/vectorized.py:train_ppo_vectorized:tolist:3
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/vectorized.py:train_ppo_vectorized:tolist:4
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/simic/training/vectorized.py:train_ppo_vectorized:tolist:5
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/tamiyo/networks/factored_lstm.py:BlueprintEmbedding.forward:tolist
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/tamiyo/policy/action_masks.py:_validate_logits:item
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/tamiyo/policy/action_masks.py:_validate_logits:item:2
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/tamiyo/policy/action_masks.py:_validate_logits:item:3
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/tamiyo/policy/action_masks.py:_validate_logits:item:4
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/tamiyo/policy/features.py:_extract_base_features_v3:tolist
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/tamiyo/policy/lstm_bundle.py:LSTMPolicyBundle.cpu:cpu
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/tolaria/governor.py:TolariaGovernor.execute_rollback:cuda_synchronize
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/tolaria/governor.py:TolariaGovernor.snapshot:cpu
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/utils/data.py:SharedGPUBatchIterator.__init__:cuda_synchronize
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/utils/data.py:SharedGPUGatherBatchIterator.__init__:cuda_synchronize
+  owner: John
+  reason: grandfathered at initiation
+- key: src/esper/utils/data.py:TinyStoriesDataset.__init__:tolist
+  owner: John
+  reason: grandfathered at initiation

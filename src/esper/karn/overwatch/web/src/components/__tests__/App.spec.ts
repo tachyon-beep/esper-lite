@@ -213,23 +213,22 @@ function createEventLogEntry(overrides: Partial<EventLogEntry> = {}): EventLogEn
   }
 }
 
-function createBestRunRecord(overrides: Partial<BestRunRecord> = {}): BestRunRecord {
-  return {
-    env_id: 0,
-    episode: 5,
-    peak_accuracy: 0.92,
-    final_accuracy: 0.90,
-    epoch: 100,
-    seeds: {},
-    slot_ids: ['slot_0', 'slot_1'],
-    growth_ratio: 1.05,
-    record_id: 'record-001',
-    pinned: false,
-    reward_components: createRewardComponents(),
-    counterfactual_matrix: createCounterfactualSnapshot(),
-    action_history: ['OBSERVE', 'GERMINATE'],
-    reward_history: [0.1, 0.2],
-    accuracy_history: [0.85, 0.90],
+	function createBestRunRecord(overrides: Partial<BestRunRecord> = {}): BestRunRecord {
+	  return {
+	    env_id: 0,
+	    episode: 5,
+	    peak_accuracy: 0.92,
+	    final_accuracy: 0.90,
+	    epoch: 100,
+	    seeds: {},
+	    slot_ids: ['slot_0', 'slot_1'],
+	    growth_ratio: 1.05,
+	    record_id: 'record-001',
+	    reward_components: createRewardComponents(),
+	    counterfactual_matrix: createCounterfactualSnapshot(),
+	    action_history: ['OBSERVE', 'GERMINATE'],
+	    reward_history: [0.1, 0.2],
+	    accuracy_history: [0.85, 0.90],
     host_loss: 0.3,
     host_params: 1000000,
     fossilized_count: 2,

@@ -28,7 +28,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from esper.leyline import (
+    AlphaCurveAction,
+    AlphaSpeedAction,
+    AlphaTargetAction,
     BLUEPRINT_NULL_INDEX,
+    BlueprintAction,
     DEFAULT_BLUEPRINT_EMBED_DIM,
     DEFAULT_LSTM_HIDDEN_DIM,
     DEFAULT_FEATURE_DIM,
@@ -37,7 +41,7 @@ from esper.leyline import (
     LifecycleOp,
     MASKED_LOGIT_VALUE,
     NUM_BLUEPRINTS,
-    NUM_OPS,
+    TempoAction,
     get_action_head_sizes,
 )
 from esper.leyline.slot_config import SlotConfig
@@ -114,6 +118,7 @@ class BlueprintEmbedding(nn.Module):
         embed_dim: int = DEFAULT_BLUEPRINT_EMBED_DIM,
     ):
         super().__init__()
+        self.num_blueprints = num_blueprints  # Store for validation in forward()
         # Index 13 = null embedding for inactive slots (from leyline)
         self.embedding = nn.Embedding(num_blueprints + 1, embed_dim)
 
@@ -136,9 +141,23 @@ class BlueprintEmbedding(nn.Module):
         Returns:
             Float tensor [batch, num_slots, embed_dim]
         """
+        # Validate indices are in valid range: -1 (inactive) or [0, num_blueprints)
+        # FAIL-FAST: Catch upstream bugs that emit invalid sentinel values (e.g., -2, -999)
+        # rather than silently treating them as inactive. This prevents hard-to-debug
+        # training degradation from silently wrong embeddings.
+        if MaskedCategorical.validate:
+            invalid_mask = (blueprint_indices < -1) | (blueprint_indices >= self.num_blueprints)
+            if invalid_mask.any():
+                invalid_vals = torch.unique(blueprint_indices[invalid_mask]).tolist()
+                raise ValueError(
+                    f"BlueprintEmbedding received invalid indices: {invalid_vals}. "
+                    f"Valid range is -1 (inactive) or [0, {self.num_blueprints})."
+                )
+
         # _null_idx is already on correct device via module.to(device)
         null_idx = cast(torch.Tensor, self._null_idx)
-        safe_idx = torch.where(blueprint_indices < 0, null_idx, blueprint_indices)
+        # Map exactly -1 to null index (not all negatives, to catch bugs)
+        safe_idx = torch.where(blueprint_indices == -1, null_idx, blueprint_indices)
         return cast(torch.Tensor, self.embedding(safe_idx))
 
 
@@ -152,14 +171,6 @@ class FactoredRecurrentActorCritic(nn.Module):
     def __init__(
         self,
         state_dim: int,
-        num_slots: int | None = None,
-        num_blueprints: int | None = None,
-        num_styles: int | None = None,
-        num_tempo: int | None = None,
-        num_alpha_targets: int | None = None,
-        num_alpha_speeds: int | None = None,
-        num_alpha_curves: int | None = None,
-        num_ops: int | None = None,
         feature_dim: int = DEFAULT_FEATURE_DIM,
         lstm_hidden_dim: int = DEFAULT_LSTM_HIDDEN_DIM,
         lstm_layers: int = 1,
@@ -170,29 +181,24 @@ class FactoredRecurrentActorCritic(nn.Module):
         if slot_config is None:
             slot_config = SlotConfig.default()
 
+        # Action head sizes derived from leyline (the authority for all action dimensions)
         head_sizes = get_action_head_sizes(slot_config)
 
         self.state_dim = state_dim
-        self.num_slots = head_sizes["slot"] if num_slots is None else num_slots
-        self.num_blueprints = head_sizes["blueprint"] if num_blueprints is None else num_blueprints
-        self.num_styles = head_sizes["style"] if num_styles is None else num_styles
-        self.num_tempo = head_sizes["tempo"] if num_tempo is None else num_tempo
-        self.num_alpha_targets = (
-            head_sizes["alpha_target"] if num_alpha_targets is None else num_alpha_targets
-        )
-        self.num_alpha_speeds = (
-            head_sizes["alpha_speed"] if num_alpha_speeds is None else num_alpha_speeds
-        )
-        self.num_alpha_curves = (
-            head_sizes["alpha_curve"] if num_alpha_curves is None else num_alpha_curves
-        )
-        self.num_ops = head_sizes["op"] if num_ops is None else num_ops
+        self.num_slots = head_sizes["slot"]
+        self.num_blueprints = head_sizes["blueprint"]
+        self.num_styles = head_sizes["style"]
+        self.num_tempo = head_sizes["tempo"]
+        self.num_alpha_targets = head_sizes["alpha_target"]
+        self.num_alpha_speeds = head_sizes["alpha_speed"]
+        self.num_alpha_curves = head_sizes["alpha_curve"]
+        self.num_ops = head_sizes["op"]
         self.lstm_hidden_dim = lstm_hidden_dim
         self.lstm_layers = lstm_layers
 
         # Feature extraction before LSTM (reduces dimensionality)
         # M7: Pre-LSTM LayerNorm stabilizes input distribution to LSTM
-        # Input: state_dim (113 for default 3 slots) + blueprint embeddings (num_slots * embed_dim = 3 * 4 = 12) = 125 total
+        # Input: state_dim (116 for default 3 slots) + blueprint embeddings (num_slots * embed_dim = 3 * 4 = 12) = 128 total
         blueprint_embed_size = self.num_slots * DEFAULT_BLUEPRINT_EMBED_DIM
         self.feature_net = nn.Sequential(
             nn.Linear(state_dim + blueprint_embed_size, feature_dim),
@@ -263,7 +269,7 @@ class FactoredRecurrentActorCritic(nn.Module):
 
         # Blueprint embedding for Obs V3 (Phase 3)
         self.blueprint_embedding = BlueprintEmbedding(
-            num_blueprints=NUM_BLUEPRINTS,
+            num_blueprints=self.num_blueprints,
             embed_dim=DEFAULT_BLUEPRINT_EMBED_DIM,
         )
         # Total embedding contribution: num_slots * embed_dim
@@ -278,12 +284,33 @@ class FactoredRecurrentActorCritic(nn.Module):
             nn.Linear(head_hidden, self.num_blueprints),  # 256 -> 13
         )
 
-        # Op-conditioned value head (Phase 4): Q(s, op) instead of V(s)
-        # Input: lstm_out (lstm_hidden_dim) + op_one_hot (NUM_OPS)
+        # Op-conditioned value head (Phase 5 redesign): Q(s, op) instead of V(s)
+        # Input: lstm_out (lstm_hidden_dim) + op_one_hot (self.num_ops)
+        #
+        # Architecture redesign to fix value collapse (explained_variance never > 0.12):
+        # 1. Deeper network (4 layers) - shallow 2-layer couldn't learn return predictions
+        # 2. Dedicated value feature layer - don't rely solely on shared LSTM features
+        # 3. LayerNorm for activation stability (matches policy path)
+        # 4. Gradual compression: input -> 256 -> 128 -> 64 -> 1
+        # 5. Initialization: gain=0.01 for output (matches policy heads)
+        #
+        # The op-conditioning is preserved: each op can learn distinct value functions
+        # via the one-hot input, but now with enough capacity for feature extraction.
+        value_input_dim = lstm_hidden_dim + self.num_ops
         self.value_head = nn.Sequential(
-            nn.Linear(lstm_hidden_dim + NUM_OPS, head_hidden),
+            # Layer 1: Feature extraction from joint (state, op) representation
+            nn.Linear(value_input_dim, head_hidden),  # 518 -> 256
+            nn.LayerNorm(head_hidden),
             nn.ReLU(),
-            nn.Linear(head_hidden, 1),
+            # Layer 2: Deeper representation learning
+            nn.Linear(head_hidden, head_hidden // 2),  # 256 -> 128
+            nn.LayerNorm(head_hidden // 2),
+            nn.ReLU(),
+            # Layer 3: Final feature compression
+            nn.Linear(head_hidden // 2, head_hidden // 4),  # 128 -> 64
+            nn.ReLU(),
+            # Layer 4: Scalar value output
+            nn.Linear(head_hidden // 4, 1),  # 64 -> 1
         )
 
         self._init_weights()
@@ -310,10 +337,14 @@ class FactoredRecurrentActorCritic(nn.Module):
             last_layer = head[-1]
             if isinstance(last_layer, nn.Linear):
                 nn.init.orthogonal_(last_layer.weight.data, gain=0.01)
-        # value_head[-1] is also a Linear layer
+        # Value head output layer: use gain=0.01 (same as policy heads)
+        # This was previously gain=1.0 which caused value predictions to start
+        # far from zero, contributing to high initial value_loss and slow convergence.
+        # With gain=0.01, initial value predictions cluster near zero, allowing
+        # the critic to learn from actual returns rather than fighting large initial errors.
         last_value_layer = self.value_head[-1]
         if isinstance(last_value_layer, nn.Linear):
-            nn.init.orthogonal_(last_value_layer.weight.data, gain=1.0)
+            nn.init.orthogonal_(last_value_layer.weight.data, gain=0.01)
 
         # LSTM-specific initialization
         for name, param in self.lstm.named_parameters():
@@ -376,13 +407,16 @@ class FactoredRecurrentActorCritic(nn.Module):
         evaluate_actions() (with stored op from buffer).
 
         Args:
-            lstm_out: LSTM output [batch, seq_len, lstm_hidden_dim]
-            op: Operation indices [batch, seq_len]
+            lstm_out: LSTM output [batch, seq_len, lstm_hidden_dim], any dtype
+            op: Operation indices [batch, seq_len], int64
 
         Returns:
-            Value estimates [batch, seq_len]
+            Value estimates [batch, seq_len], same dtype as lstm_out
         """
-        op_one_hot = F.one_hot(op, num_classes=NUM_OPS).float()
+        # One-hot encode and match dtype/device to lstm_out.
+        # Using .to(lstm_out) ensures correct dtype under AMP/mixed-precision
+        # (e.g., bfloat16) without hardcoding .float().
+        op_one_hot = F.one_hot(op, num_classes=self.num_ops).to(lstm_out)
         value_input = torch.cat([lstm_out, op_one_hot], dim=-1)
         value = cast(torch.Tensor, self.value_head(value_input))
         return value.squeeze(-1)
@@ -431,6 +465,14 @@ class FactoredRecurrentActorCritic(nn.Module):
         # LSTM forward
         lstm_out, new_hidden = self.lstm(features, hidden)
         # lstm_out: [batch, seq_len, hidden_dim]
+
+        # Soft clamp cell state to prevent saturation (DRL Expert recommendation).
+        # Positive-biased inputs cause cell state accumulation. tanh(c/50)*50
+        # bounds |c| ≤ 50 while preserving gradients. LSTM output tanh(c) saturates
+        # around 20-30 anyway, so larger values are degenerate.
+        h, c = new_hidden
+        c = torch.tanh(c / 50.0) * 50.0
+        new_hidden = (h, c)
 
         # LayerNorm on LSTM output (prevents magnitude drift)
         lstm_out = self.lstm_ln(lstm_out)
@@ -516,6 +558,7 @@ class FactoredRecurrentActorCritic(nn.Module):
         blueprint_indices: torch.Tensor,  # [batch, num_slots] or [batch, 1, num_slots]
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
         slot_mask: torch.Tensor | None = None,
+        slot_by_op_mask: torch.Tensor | None = None,
         blueprint_mask: torch.Tensor | None = None,
         style_mask: torch.Tensor | None = None,
         tempo_mask: torch.Tensor | None = None,
@@ -541,6 +584,8 @@ class FactoredRecurrentActorCritic(nn.Module):
                 [batch, 1, num_slots]. Values 0-12 for active blueprints, -1 for inactive.
             hidden: LSTM hidden state (h, c) or None for initial state
             slot_mask: Boolean mask for slot actions [batch, num_slots]
+            slot_by_op_mask: Optional op-conditioned slot mask [batch, NUM_OPS, num_slots].
+                When provided, slot selection is restricted to slots valid for the chosen op.
             blueprint_mask: Boolean mask for blueprint actions [batch, num_blueprints]
             style_mask: Boolean mask for germination style actions [batch, num_styles]
             tempo_mask: Boolean mask for tempo actions [batch, num_tempo]
@@ -561,9 +606,26 @@ class FactoredRecurrentActorCritic(nn.Module):
         if blueprint_indices.dim() == 2:
             blueprint_indices = blueprint_indices.unsqueeze(1)
 
+        # CONTRACT ENFORCEMENT: get_action() is designed for single-step inference.
+        # It samples from timestep 0 but advances hidden through the full sequence,
+        # which would corrupt rollouts if seq_len > 1. Fail fast instead of silently
+        # producing actions/values for the wrong timestep.
+        seq_len = state.shape[1]
+        if seq_len != 1:
+            raise ValueError(
+                f"get_action() requires seq_len=1, got {seq_len}. "
+                "This method is for single-step rollout collection. "
+                "For multi-step sequence processing, use forward() directly."
+            )
+
         # Reshape masks to [batch, 1, dim] if provided as [batch, dim]
         if slot_mask is not None and slot_mask.dim() == 2:
             slot_mask = slot_mask.unsqueeze(1)
+        # slot_by_op_mask is batch-only (no seq dimension); keep as [batch, NUM_OPS, num_slots]
+        if slot_by_op_mask is not None and slot_by_op_mask.dim() != 3:
+            raise ValueError(
+                f"slot_by_op_mask must have shape [batch, NUM_OPS, num_slots], got {tuple(slot_by_op_mask.shape)}"
+            )
         if blueprint_mask is not None and blueprint_mask.dim() == 2:
             blueprint_mask = blueprint_mask.unsqueeze(1)
         if style_mask is not None and style_mask.dim() == 2:
@@ -580,18 +642,20 @@ class FactoredRecurrentActorCritic(nn.Module):
             op_mask = op_mask.unsqueeze(1)
 
         with torch.inference_mode():
+            # IMPORTANT: Do NOT pass non-op head masks into forward().
+            #
+            # get_action() performs op-conditional canonicalization by overriding masks
+            # (e.g., forcing blueprint=NOOP when op!=GERMINATE). If forward() pre-masks
+            # logits using the base mask, we can accidentally mask out the canonical
+            # placeholder action (NOOP is disabled in the normal blueprint mask),
+            # collapsing the distribution and causing random/invalid samples.
+            #
+            # forward() only needs the op_mask for valid op sampling + value conditioning.
             output = self.forward(
-                state,
-                blueprint_indices,
-                hidden,
-                slot_mask,
-                blueprint_mask,
-                style_mask,
-                tempo_mask,
-                alpha_target_mask,
-                alpha_speed_mask,
-                alpha_curve_mask,
-                op_mask,
+                state=state,
+                blueprint_indices=blueprint_indices,
+                hidden=hidden,
+                op_mask=op_mask,
             )
 
             # Sample from each head using MaskedCategorical for safety
@@ -722,16 +786,101 @@ class FactoredRecurrentActorCritic(nn.Module):
             style_mask_override[style_irrelevant, int(GerminationStyle.SIGMOID_ADD)] = True
             _sample_head("style", mask_override=style_mask_override)
 
-            # Sample remaining heads (unchanged)
-            for key in [
-                "slot",
-                "blueprint",
-                "tempo",
-                "alpha_target",
-                "alpha_speed",
-                "alpha_curve",
-            ]:
-                _sample_head(key)
+            # Canonicalize irrelevant heads based on selected_op.
+            # This keeps rollouts/telemetry well-defined and prevents irrelevant heads
+            # from polluting joint ratio/KL metrics during PPO.
+            blueprint_mask_override = masks["blueprint"]
+            if blueprint_mask_override is None:
+                blueprint_mask_override = torch.ones_like(
+                    head_logits["blueprint"], dtype=torch.bool
+                )
+            blueprint_mask_override = blueprint_mask_override.clone()
+            blueprint_irrelevant = selected_op != LifecycleOp.GERMINATE
+            blueprint_mask_override[blueprint_irrelevant] = False
+            blueprint_mask_override[blueprint_irrelevant, int(BlueprintAction.NOOP)] = True
+
+            tempo_mask_override = masks["tempo"]
+            if tempo_mask_override is None:
+                tempo_mask_override = torch.ones_like(
+                    head_logits["tempo"], dtype=torch.bool
+                )
+            tempo_mask_override = tempo_mask_override.clone()
+            tempo_irrelevant = selected_op != LifecycleOp.GERMINATE
+            tempo_mask_override[tempo_irrelevant] = False
+            tempo_mask_override[tempo_irrelevant, int(TempoAction.STANDARD)] = True
+
+            alpha_target_mask_override = masks["alpha_target"]
+            if alpha_target_mask_override is None:
+                alpha_target_mask_override = torch.ones_like(
+                    head_logits["alpha_target"], dtype=torch.bool
+                )
+            alpha_target_mask_override = alpha_target_mask_override.clone()
+            alpha_target_irrelevant = (selected_op != LifecycleOp.GERMINATE) & (
+                selected_op != LifecycleOp.SET_ALPHA_TARGET
+            )
+            alpha_target_mask_override[alpha_target_irrelevant] = False
+            alpha_target_mask_override[
+                alpha_target_irrelevant, int(AlphaTargetAction.FULL)
+            ] = True
+
+            alpha_schedule_irrelevant = (selected_op != LifecycleOp.SET_ALPHA_TARGET) & (
+                selected_op != LifecycleOp.PRUNE
+            )
+
+            alpha_speed_mask_override = masks["alpha_speed"]
+            if alpha_speed_mask_override is None:
+                alpha_speed_mask_override = torch.ones_like(
+                    head_logits["alpha_speed"], dtype=torch.bool
+                )
+            alpha_speed_mask_override = alpha_speed_mask_override.clone()
+            alpha_speed_mask_override[alpha_schedule_irrelevant] = False
+            alpha_speed_mask_override[
+                alpha_schedule_irrelevant, int(AlphaSpeedAction.INSTANT)
+            ] = True
+
+            alpha_curve_mask_override = masks["alpha_curve"]
+            if alpha_curve_mask_override is None:
+                alpha_curve_mask_override = torch.ones_like(
+                    head_logits["alpha_curve"], dtype=torch.bool
+                )
+            alpha_curve_mask_override = alpha_curve_mask_override.clone()
+            alpha_curve_mask_override[alpha_schedule_irrelevant] = False
+            alpha_curve_mask_override[
+                alpha_schedule_irrelevant, int(AlphaCurveAction.LINEAR)
+            ] = True
+
+            slot_mask_override = masks["slot"]
+            if slot_mask_override is None:
+                slot_mask_override = torch.ones_like(head_logits["slot"], dtype=torch.bool)
+
+            if slot_by_op_mask is not None:
+                num_slots = head_logits["slot"].shape[-1]
+                if slot_by_op_mask.device != head_logits["slot"].device:
+                    raise ValueError(
+                        "slot_by_op_mask must be on the same device as slot_logits "
+                        f"(slot_by_op_mask={slot_by_op_mask.device}, slot_logits={head_logits['slot'].device})"
+                    )
+                if slot_by_op_mask.shape[1] != self.num_ops or slot_by_op_mask.shape[2] != num_slots:
+                    raise ValueError(
+                        "slot_by_op_mask must have shape [batch, NUM_OPS, num_slots], got "
+                        f"{tuple(slot_by_op_mask.shape)} with NUM_OPS={self.num_ops} and num_slots={num_slots}"
+                    )
+                op_idx = selected_op.to(dtype=torch.long, device=slot_by_op_mask.device)
+                gather_index = op_idx[:, None, None].expand(-1, 1, num_slots)
+                slot_mask_override = slot_by_op_mask.gather(dim=1, index=gather_index).squeeze(1)
+
+            slot_mask_override = slot_mask_override.clone()
+            slot_irrelevant = selected_op == LifecycleOp.WAIT
+            canonical_slot_idx = slot_mask_override.int().argmax(dim=-1)
+            slot_mask_override[slot_irrelevant] = False
+            slot_mask_override[slot_irrelevant, canonical_slot_idx[slot_irrelevant]] = True
+
+            _sample_head("slot", mask_override=slot_mask_override)
+            _sample_head("blueprint", mask_override=blueprint_mask_override)
+            _sample_head("tempo", mask_override=tempo_mask_override)
+            _sample_head("alpha_target", mask_override=alpha_target_mask_override)
+            _sample_head("alpha_speed", mask_override=alpha_speed_mask_override)
+            _sample_head("alpha_curve", mask_override=alpha_curve_mask_override)
 
             # Value and sampled_op are already set above based on deterministic mode
             new_hidden = output["hidden"]
@@ -800,6 +949,12 @@ class FactoredRecurrentActorCritic(nn.Module):
         # Feature extraction and LSTM (same as forward)
         features = self.feature_net(state_with_bp)
         lstm_out, new_hidden = self.lstm(features, hidden)
+
+        # Soft clamp cell state (same as forward)
+        h, c = new_hidden
+        c = torch.tanh(c / 50.0) * 50.0
+        new_hidden = (h, c)
+
         lstm_out = self.lstm_ln(lstm_out)
 
         # Compute logits for each head
@@ -813,22 +968,13 @@ class FactoredRecurrentActorCritic(nn.Module):
         op_logits = self.op_head(lstm_out)
 
         # Apply masks
-        if slot_mask is not None:
-            slot_logits = slot_logits.masked_fill(~slot_mask, MASKED_LOGIT_VALUE)
-        if blueprint_mask is not None:
-            blueprint_logits = blueprint_logits.masked_fill(~blueprint_mask, MASKED_LOGIT_VALUE)
-        if style_mask is not None:
-            style_logits = style_logits.masked_fill(~style_mask, MASKED_LOGIT_VALUE)
-        if tempo_mask is not None:
-            tempo_logits = tempo_logits.masked_fill(~tempo_mask, MASKED_LOGIT_VALUE)
-        if alpha_target_mask is not None:
-            alpha_target_logits = alpha_target_logits.masked_fill(~alpha_target_mask, MASKED_LOGIT_VALUE)
-        if alpha_speed_mask is not None:
-            alpha_speed_logits = alpha_speed_logits.masked_fill(~alpha_speed_mask, MASKED_LOGIT_VALUE)
-        if alpha_curve_mask is not None:
-            alpha_curve_logits = alpha_curve_logits.masked_fill(~alpha_curve_mask, MASKED_LOGIT_VALUE)
-        if op_mask is not None:
-            op_logits = op_logits.masked_fill(~op_mask, MASKED_LOGIT_VALUE)
+        #
+        # IMPORTANT: Do NOT pre-mask logits here.
+        #
+        # We apply op-conditional mask overrides below (e.g., allow blueprint=NOOP when
+        # op!=GERMINATE). Pre-masking would permanently squash those placeholder logits
+        # to MASKED_LOGIT_VALUE, breaking the “single-valid-action => log_prob==0”
+        # invariant and corrupting PPO ratios/joint KL diagnostics.
 
         # Use STORED op for value conditioning (not freshly sampled)
         stored_op = actions["op"]
@@ -838,6 +984,18 @@ class FactoredRecurrentActorCritic(nn.Module):
         entropy: dict[str, torch.Tensor] = {}
 
         op_actions = actions["op"]
+        slot_irrelevant = op_actions == LifecycleOp.WAIT
+        style_irrelevant = (op_actions != LifecycleOp.GERMINATE) & (
+            op_actions != LifecycleOp.SET_ALPHA_TARGET
+        )
+        blueprint_irrelevant = op_actions != LifecycleOp.GERMINATE
+        tempo_irrelevant = op_actions != LifecycleOp.GERMINATE
+        alpha_target_irrelevant = (op_actions != LifecycleOp.GERMINATE) & (
+            op_actions != LifecycleOp.SET_ALPHA_TARGET
+        )
+        alpha_schedule_irrelevant = (op_actions != LifecycleOp.SET_ALPHA_TARGET) & (
+            op_actions != LifecycleOp.PRUNE
+        )
 
         masks = {
             "slot": slot_mask,
@@ -873,20 +1031,63 @@ class FactoredRecurrentActorCritic(nn.Module):
             mask = masks[key]
             if mask is None:
                 mask = torch.ones_like(logits, dtype=torch.bool)
-            if key == "style":
-                # When op is not GERMINATE or SET_ALPHA_TARGET, style is irrelevant.
-                # Force selection of SIGMOID_ADD (the default/no-op style).
-                style_irrelevant = (op_actions != LifecycleOp.GERMINATE) & (
-                    op_actions != LifecycleOp.SET_ALPHA_TARGET
-                )
-                # For 3D mask [batch, seq_len, num_styles], use masked_fill pattern
-                # to avoid incorrect advanced indexing. Expand style_irrelevant to match.
-                expanded_irrelevant = style_irrelevant.unsqueeze(-1).expand_as(mask)
-                mask = mask.masked_fill(expanded_irrelevant, False)
-                # Set SIGMOID_ADD column to True for irrelevant rows
-                sigmoid_add_idx = int(GerminationStyle.SIGMOID_ADD)
-                mask[..., sigmoid_add_idx] = mask[..., sigmoid_add_idx] | style_irrelevant
-            mask_flat = mask.reshape(-1, action_dim)
+            elif mask.dim() == 2:
+                mask = mask.unsqueeze(1)
+            if mask.shape != logits.shape:
+                mask = mask.expand_as(logits)
+            if key == "slot":
+                mask_flat = mask.reshape(-1, action_dim)
+                slot_irrelevant_flat = slot_irrelevant.reshape(-1)
+                canonical_slot_idx_flat = mask_flat.int().argmax(dim=-1)
+                mask_flat = mask_flat.clone()
+                mask_flat[slot_irrelevant_flat] = False
+                mask_flat[
+                    slot_irrelevant_flat,
+                    canonical_slot_idx_flat[slot_irrelevant_flat],
+                ] = True
+            else:
+                if key == "style":
+                    # When op is not GERMINATE or SET_ALPHA_TARGET, style is irrelevant.
+                    # Force selection of SIGMOID_ADD (the default/no-op style).
+                    # For 3D mask [batch, seq_len, num_styles], use masked_fill pattern
+                    # to avoid incorrect advanced indexing. Expand style_irrelevant to match.
+                    expanded_irrelevant = style_irrelevant.unsqueeze(-1).expand_as(mask)
+                    mask = mask.masked_fill(expanded_irrelevant, False)
+                    # Set SIGMOID_ADD column to True for irrelevant rows
+                    sigmoid_add_idx = int(GerminationStyle.SIGMOID_ADD)
+                    mask[..., sigmoid_add_idx] = mask[..., sigmoid_add_idx] | style_irrelevant
+                elif key == "blueprint":
+                    # Blueprint only matters for GERMINATE; use NOOP as canonical placeholder otherwise.
+                    expanded_irrelevant = blueprint_irrelevant.unsqueeze(-1).expand_as(mask)
+                    mask = mask.masked_fill(expanded_irrelevant, False)
+                    noop_idx = int(BlueprintAction.NOOP)
+                    mask[..., noop_idx] = mask[..., noop_idx] | blueprint_irrelevant
+                elif key == "tempo":
+                    # Tempo only matters for GERMINATE; use STANDARD as canonical placeholder otherwise.
+                    expanded_irrelevant = tempo_irrelevant.unsqueeze(-1).expand_as(mask)
+                    mask = mask.masked_fill(expanded_irrelevant, False)
+                    standard_idx = int(TempoAction.STANDARD)
+                    mask[..., standard_idx] = mask[..., standard_idx] | tempo_irrelevant
+                elif key == "alpha_target":
+                    # Alpha target only matters for GERMINATE/SET_ALPHA_TARGET.
+                    expanded_irrelevant = alpha_target_irrelevant.unsqueeze(-1).expand_as(mask)
+                    mask = mask.masked_fill(expanded_irrelevant, False)
+                    full_idx = int(AlphaTargetAction.FULL)
+                    mask[..., full_idx] = mask[..., full_idx] | alpha_target_irrelevant
+                elif key == "alpha_speed":
+                    # Alpha schedule only matters for SET_ALPHA_TARGET/PRUNE.
+                    expanded_irrelevant = alpha_schedule_irrelevant.unsqueeze(-1).expand_as(mask)
+                    mask = mask.masked_fill(expanded_irrelevant, False)
+                    instant_idx = int(AlphaSpeedAction.INSTANT)
+                    mask[..., instant_idx] = mask[..., instant_idx] | alpha_schedule_irrelevant
+                elif key == "alpha_curve":
+                    # Alpha schedule only matters for SET_ALPHA_TARGET/PRUNE.
+                    expanded_irrelevant = alpha_schedule_irrelevant.unsqueeze(-1).expand_as(mask)
+                    mask = mask.masked_fill(expanded_irrelevant, False)
+                    linear_idx = int(AlphaCurveAction.LINEAR)
+                    mask[..., linear_idx] = mask[..., linear_idx] | alpha_schedule_irrelevant
+
+                mask_flat = mask.reshape(-1, action_dim)
 
             dist = MaskedCategorical(logits=logits_flat, mask=mask_flat)
             log_probs[key] = dist.log_prob(action_flat).reshape(batch, seq)

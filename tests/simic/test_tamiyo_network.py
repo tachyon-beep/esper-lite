@@ -4,6 +4,10 @@ import pytest
 import torch
 
 from esper.leyline import (
+    AlphaCurveAction,
+    AlphaSpeedAction,
+    AlphaTargetAction,
+    BlueprintAction,
     GerminationStyle,
     LifecycleOp,
     NUM_ALPHA_CURVES,
@@ -14,7 +18,9 @@ from esper.leyline import (
     NUM_STYLES,
     NUM_TEMPO,
     OBS_V3_NON_BLUEPRINT_DIM,
+    TempoAction,
 )
+from esper.leyline.slot_config import SlotConfig
 from esper.tamiyo.policy.action_masks import InvalidStateMachineError
 from esper.tamiyo.networks import FactoredRecurrentActorCritic
 
@@ -270,6 +276,64 @@ def test_style_not_forced_for_set_alpha_target():
     assert (result.actions["style"] == int(GerminationStyle.GATED_GATE)).all()
 
 
+def test_irrelevant_heads_forced_to_defaults_when_wait():
+    """Irrelevant heads should be canonicalized to stable defaults when op=WAIT."""
+    net = FactoredRecurrentActorCritic(state_dim=20)
+    state = torch.randn(3, 20)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (3, 3))
+
+    # Force op = WAIT and provide all-True head masks to ensure the override is active.
+    op_mask = torch.zeros(3, NUM_OPS, dtype=torch.bool)
+    op_mask[:, LifecycleOp.WAIT] = True
+    blueprint_mask = torch.ones(3, NUM_BLUEPRINTS, dtype=torch.bool)
+    tempo_mask = torch.ones(3, NUM_TEMPO, dtype=torch.bool)
+    alpha_target_mask = torch.ones(3, NUM_ALPHA_TARGETS, dtype=torch.bool)
+    alpha_speed_mask = torch.ones(3, NUM_ALPHA_SPEEDS, dtype=torch.bool)
+    alpha_curve_mask = torch.ones(3, NUM_ALPHA_CURVES, dtype=torch.bool)
+
+    result = net.get_action(
+        state,
+        bp_idx,
+        op_mask=op_mask,
+        blueprint_mask=blueprint_mask,
+        tempo_mask=tempo_mask,
+        alpha_target_mask=alpha_target_mask,
+        alpha_speed_mask=alpha_speed_mask,
+        alpha_curve_mask=alpha_curve_mask,
+    )
+
+    assert (result.actions["op"] == LifecycleOp.WAIT).all()
+    assert (result.actions["slot"] == 0).all()
+    assert (result.actions["style"] == int(GerminationStyle.SIGMOID_ADD)).all()
+    assert (result.actions["blueprint"] == int(BlueprintAction.NOOP)).all()
+    assert (result.actions["tempo"] == int(TempoAction.STANDARD)).all()
+    assert (result.actions["alpha_target"] == int(AlphaTargetAction.FULL)).all()
+    assert (result.actions["alpha_speed"] == int(AlphaSpeedAction.INSTANT)).all()
+    assert (result.actions["alpha_curve"] == int(AlphaCurveAction.LINEAR)).all()
+
+
+def test_slot_forced_to_first_valid_choice_when_wait():
+    """WAIT should canonicalize slot to the first valid slot (1 action, log_prob=0)."""
+    net = FactoredRecurrentActorCritic(state_dim=20)
+    state = torch.randn(3, 20)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (3, 3))
+
+    op_mask = torch.zeros(3, NUM_OPS, dtype=torch.bool)
+    op_mask[:, LifecycleOp.WAIT] = True
+    slot_mask = torch.zeros(3, net.num_slots, dtype=torch.bool)
+    slot_mask[:, -1] = True
+
+    result = net.get_action(
+        state,
+        bp_idx,
+        op_mask=op_mask,
+        slot_mask=slot_mask,
+    )
+
+    assert (result.actions["op"] == LifecycleOp.WAIT).all()
+    assert (result.actions["slot"] == net.num_slots - 1).all()
+
+
 def test_masking_produces_valid_softmax():
     """Verify masking produces valid probabilities after softmax.
 
@@ -339,20 +403,12 @@ def test_logits_no_inf_after_masking():
 def test_entropy_normalization_with_single_action():
     """Verify entropy normalization handles single-action case gracefully."""
     # Edge case: num_slots=1 means log(1)=0, could cause division issues
-    net = FactoredRecurrentActorCritic(
-        state_dim=35,
-        num_slots=1,  # log(1) = 0!
-        num_blueprints=5,
-        num_styles=NUM_STYLES,
-        num_tempo=NUM_TEMPO,
-        num_alpha_targets=NUM_ALPHA_TARGETS,
-        num_alpha_speeds=NUM_ALPHA_SPEEDS,
-        num_alpha_curves=NUM_ALPHA_CURVES,
-        num_ops=NUM_OPS,
-    )
+    # 1-slot config for testing entropy edge case
+    single_slot_config = SlotConfig(slot_ids=("slot_0",))
+    net = FactoredRecurrentActorCritic(state_dim=35, slot_config=single_slot_config)
 
     state = torch.randn(2, 3, 35)
-    bp_idx = torch.randint(0, 5, (2, 3, 1))  # num_slots=1
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (2, 3, 1))  # num_slots=1
     actions = {
         "slot": torch.zeros(2, 3, dtype=torch.long),  # Only one option
         "blueprint": torch.randint(0, 5, (2, 3)),
@@ -375,7 +431,9 @@ def test_entropy_normalization_with_single_action():
 
 def test_entropy_normalization_in_loss():
     """Verify entropy normalization doesn't blow up loss values."""
-    net = FactoredRecurrentActorCritic(state_dim=35, num_slots=1)
+    # 1-slot config for testing entropy edge case
+    single_slot_config = SlotConfig(slot_ids=("slot_0",))
+    net = FactoredRecurrentActorCritic(state_dim=35, slot_config=single_slot_config)
 
     state = torch.randn(2, 3, 35)
     bp_idx = torch.randint(0, NUM_BLUEPRINTS, (2, 3, 1))  # num_slots=1
@@ -449,7 +507,7 @@ def test_device_migration_complete():
     """
     from esper.tamiyo.networks.factored_lstm import FactoredRecurrentActorCritic
 
-    model = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM, num_slots=3)
+    model = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM)
     target_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(target_device)
 
@@ -486,7 +544,7 @@ def test_no_gradient_memory_leak_over_episodes():
     """
     from esper.tamiyo.networks.factored_lstm import FactoredRecurrentActorCritic
 
-    model = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM, num_slots=3).cuda()
+    model = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM).cuda()
     model.train()
 
     torch.cuda.empty_cache()
@@ -553,7 +611,7 @@ def test_op_conditioned_value_forward():
     2. Value is conditioned on that sampled op
     3. Output contains the sampled_op for storage in rollout buffer
     """
-    net = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM, num_slots=3)
+    net = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM)
     state = torch.randn(2, 5, OBS_V3_NON_BLUEPRINT_DIM)  # [batch, seq, state_dim]
     bp_idx = torch.randint(0, NUM_BLUEPRINTS, (2, 5, 3))
 
@@ -582,7 +640,7 @@ def test_stored_op_value_consistency():
     If evaluate_actions resampled the op, values would differ and gradients
     would be biased.
     """
-    net = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM, num_slots=3)
+    net = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM)
     state = torch.randn(2, 5, OBS_V3_NON_BLUEPRINT_DIM)
     bp_idx = torch.randint(0, NUM_BLUEPRINTS, (2, 5, 3))
 
@@ -625,7 +683,7 @@ def test_blueprint_embedding_shapes():
     2. Inactive slots (index -1) map to learned null embedding
     3. Different blueprint patterns produce different network outputs
     """
-    net = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM, num_slots=3)
+    net = FactoredRecurrentActorCritic(state_dim=OBS_V3_NON_BLUEPRINT_DIM)
 
     # Test with various blueprint index patterns
     # Shape must be [batch, seq, num_slots]

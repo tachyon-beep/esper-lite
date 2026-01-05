@@ -67,3 +67,105 @@ def test_blend_registry():
 
     blend = BlendCatalog.create("gated", channels=64, total_steps=10)
     assert hasattr(blend, "algorithm_id")
+
+
+def test_alpha_schedule_protocol_includes_get_alpha_for_blend():
+    """AlphaScheduleProtocol must include get_alpha_for_blend method.
+
+    Regression test: Protocol previously only defined attributes, forcing
+    slot.py to use type: ignore[attr-defined] when calling the method.
+    The Protocol should be "behavior-complete" - if runtime code calls it,
+    it belongs in the Protocol.
+    """
+    from esper.kasmina.blending import AlphaScheduleProtocol, GatedBlend
+
+    # Verify Protocol defines the method
+    assert hasattr(AlphaScheduleProtocol, "get_alpha_for_blend"), (
+        "AlphaScheduleProtocol must define get_alpha_for_blend method. "
+        "Without this, callers need type: ignore to call the method."
+    )
+
+    # Verify GatedBlend satisfies the full protocol including the method
+    blend = GatedBlend(channels=64, total_steps=10)
+    assert hasattr(blend, "get_alpha_for_blend"), (
+        "GatedBlend must implement get_alpha_for_blend"
+    )
+    assert callable(blend.get_alpha_for_blend), (
+        "get_alpha_for_blend must be callable"
+    )
+
+
+def test_gated_blend_rejects_invalid_total_steps():
+    """GatedBlend should fail fast on invalid total_steps.
+
+    Regression test: total_steps was previously silently coerced via
+    max(1, total_steps), masking configuration bugs. Invalid lifecycle
+    parameters should raise immediately, not produce "instant completion"
+    semantics that are painful to debug in long RL runs.
+    """
+    import pytest
+    from esper.kasmina.blending import GatedBlend
+
+    # Zero should raise
+    with pytest.raises(ValueError, match="total_steps > 0"):
+        GatedBlend(channels=64, total_steps=0)
+
+    # Negative should raise
+    with pytest.raises(ValueError, match="total_steps > 0"):
+        GatedBlend(channels=64, total_steps=-1)
+
+    # Valid value should work
+    blend = GatedBlend(channels=64, total_steps=1)
+    assert blend.total_steps == 1
+
+    blend = GatedBlend(channels=64, total_steps=100)
+    assert blend.total_steps == 100
+
+
+def test_gated_blend_cnn_topology_rejects_transformer_input():
+    """CNN topology should reject 3D transformer input."""
+    import pytest
+    from esper.kasmina.blending import GatedBlend
+
+    gate = GatedBlend(channels=64, topology="cnn", total_steps=10)
+    x_transformer = torch.randn(2, 16, 64)  # (B, T, C) - wrong for CNN
+
+    with pytest.raises(AssertionError, match="CNN topology expects 4D input"):
+        gate.get_alpha_for_blend(x_transformer)
+
+
+def test_gated_blend_transformer_topology_rejects_cnn_input():
+    """Transformer topology should reject 4D CNN input."""
+    import pytest
+    from esper.kasmina.blending import GatedBlend
+
+    gate = GatedBlend(channels=64, topology="transformer", total_steps=10)
+    x_cnn = torch.randn(2, 64, 8, 8)  # (B, C, H, W) - wrong for transformer
+
+    with pytest.raises(AssertionError, match="Transformer topology expects 3D input"):
+        gate.get_alpha_for_blend(x_cnn)
+
+
+def test_gated_blend_small_channels_non_degenerate():
+    """B2-PT-05: GatedBlend should have sufficient capacity for small channel counts.
+
+    Previously, channels=3 produced hidden_dim=1 (degenerate bottleneck).
+    Now uses max(8, channels // 4) to ensure non-degenerate learning capacity.
+    """
+    from esper.kasmina.blending import GatedBlend
+
+    # Small channel counts that previously would have hidden_dim=1
+    for channels in [1, 2, 3, 4, 8]:
+        gate = GatedBlend(channels=channels, topology="cnn", total_steps=10)
+
+        # Check hidden_dim is at least 8 (non-degenerate)
+        # The gate is: Linear(channels, hidden_dim) -> ReLU -> Linear(hidden_dim, 1) -> Sigmoid
+        first_linear = gate.gate[0]
+        hidden_dim = first_linear.out_features
+        assert hidden_dim >= 8, f"channels={channels} should have hidden_dim >= 8, got {hidden_dim}"
+
+        # Verify forward pass works with small inputs
+        x = torch.randn(2, channels, 4, 4)  # Small spatial dims
+        alpha = gate.get_alpha_for_blend(x)
+        assert alpha.shape == (2, 1, 1, 1), f"Expected (2, 1, 1, 1), got {alpha.shape}"
+        assert (alpha >= 0).all() and (alpha <= 1).all(), "Alpha should be in [0, 1]"

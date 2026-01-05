@@ -131,6 +131,7 @@ class EnvOverview(Static):
         # Fixed columns - ordered: Identity → Performance → Trends → Reward breakdown
         self.table.add_column("Env", key="env")
         self.table.add_column("Acc", key="acc")
+        self.table.add_column("Ep∑R", key="cum_rwd")  # Episode return so far (Σ raw step rewards)
         self.table.add_column("Loss", key="loss")  # Host loss (for overfitting detection)
         self.table.add_column("CF", key="cf")  # Counterfactual: synergy/interference
         self.table.add_column("Growth", key="growth")  # growth_ratio: (host+foss)/host
@@ -163,7 +164,8 @@ class EnvOverview(Static):
 
         # Save cursor and scroll position before clearing
         saved_cursor_row = self.table.cursor_row
-        saved_scroll_y = self.table.scroll_y
+        saved_scroll_x = self.table.scroll_target_x
+        saved_scroll_y = self.table.scroll_target_y
 
         # Clear existing rows
         self.table.clear()
@@ -198,15 +200,12 @@ class EnvOverview(Static):
         # Restore cursor position (clamped to valid range)
         if self.table.row_count > 0 and saved_cursor_row is not None:
             target_row = min(saved_cursor_row, self.table.row_count - 1)
-            self.table.move_cursor(row=target_row)
+            if target_row != self.table.cursor_row:
+                self.table.move_cursor(row=target_row)
 
-        # Restore scroll position after layout is computed
-        # Direct assignment to scroll_y doesn't work before layout pass completes
-        if saved_scroll_y > 0:
-            # Capture value in default arg to avoid closure issues
-            self.table.call_after_refresh(
-                lambda y=saved_scroll_y: setattr(self.table, "scroll_y", y)
-            )
+        # Restore scroll position (must restore scroll_target_* too; use scroll_to API)
+        if saved_scroll_x or saved_scroll_y:
+            self.table.scroll_to(x=saved_scroll_x, y=saved_scroll_y, animate=False)
 
     def _compute_top5_accuracy_ids(self, envs: list["EnvState"]) -> set[int]:
         """Compute env IDs of top 5 by current accuracy.
@@ -291,6 +290,9 @@ class EnvOverview(Static):
         # Accuracy with color coding
         acc_cell = self._format_accuracy(env)
 
+        # Cumulative reward
+        cum_rwd_cell = self._format_cumulative_reward(env)
+
         # Host loss (for overfitting detection)
         loss_cell = self._format_host_loss(env)
 
@@ -334,6 +336,7 @@ class EnvOverview(Static):
         row = [
             env_id_cell,
             acc_cell,
+            cum_rwd_cell,
             loss_cell,
             cf_cell,
             growth_cell,
@@ -434,10 +437,14 @@ class EnvOverview(Static):
         growth_ratios = [e.growth_ratio for e in self._snapshot.envs.values()]
         mean_growth = sum(growth_ratios) / len(growth_ratios) if growth_ratios else 1.0
 
+        # Calculate total cumulative reward across all envs
+        total_cum_rwd = sum(e.cumulative_reward for e in self._snapshot.envs.values())
+
         # Build aggregate row - order must match column definition
         agg_row = [
             "[bold]Σ[/bold]",
             f"[bold]{self._snapshot.aggregate_mean_accuracy:.1f}%[/bold]",
+            f"[bold]{total_cum_rwd:+.1f}[/bold]",  # Total cumulative reward
             f"[dim]{mean_loss:.3f}[/dim]" if mean_loss > 0 else "─",  # Mean loss
             "",  # CF - not aggregated
             f"[dim]{mean_growth:.2f}x[/dim]",  # Growth ratio mean
@@ -576,6 +583,22 @@ class EnvOverview(Static):
 
         return f"{trend_arrow}{acc_str}"
 
+    def _format_cumulative_reward(self, env: "EnvState") -> str:
+        """Format cumulative reward with color coding.
+
+        Color based on value:
+        - Green: > 0 (positive overall)
+        - Red: < -5 (significantly negative)
+        - White: near zero
+        """
+        cum_rwd = env.cumulative_reward
+        if cum_rwd > 0:
+            return f"[green]{cum_rwd:+.1f}[/green]"
+        elif cum_rwd < -5:
+            return f"[red]{cum_rwd:+.1f}[/red]"
+        else:
+            return f"{cum_rwd:+.1f}"
+
     def _compute_trend_arrow(self, history: list[float], window: int = 5) -> str:
         """Compute trend arrow from history.
 
@@ -660,6 +683,15 @@ class EnvOverview(Static):
         # env.reward_components is now a RewardComponents dataclass
         seed_contrib = env.reward_components.seed_contribution
         bounded_attr = env.reward_components.bounded_attribution
+
+        if env.reward_mode == "escrow":
+            if isinstance(bounded_attr, (int, float)) and bounded_attr != 0:
+                style = "green" if bounded_attr > 0 else "red"
+                return f"[{style}]{bounded_attr:+.2f}[/{style}]"
+            if isinstance(seed_contrib, (int, float)) and seed_contrib != 0:
+                style = "green" if seed_contrib > 0 else "red"
+                return f"[{style}]{seed_contrib:+.1f}%[/{style}]"
+            return "─"
 
         if isinstance(seed_contrib, (int, float)) and seed_contrib != 0:
             style = "green" if seed_contrib > 0 else "red"
@@ -766,8 +798,11 @@ class EnvOverview(Static):
             "SET_ALPHA_TARGET": "ALPH",
             "FOSSILIZE": "FOSS",
             "PRUNE": "PRUN",
+            "ADVANCE": "ADVA",
         }.get(last_action, last_action[:4] if last_action else "—")
 
+        if not env.last_action_success:
+            return f"[red]{action_short}[/red]"
         return action_short
 
     def _format_momentum_epochs(self, env: "EnvState") -> str:
@@ -808,18 +843,21 @@ class EnvOverview(Static):
             return f"[red]x{epochs}[/red]"
 
     def _format_row_staleness(self, env: "EnvState") -> str:
-        """Format staleness as time since last env update."""
+        """Format staleness as time since last env update.
+
+        Icons: ● = fresh, ◐ = stale, ○ = bad
+        """
         from datetime import datetime, timezone
 
         if env.last_update is None:
-            return "[red]●BAD[/red]"
+            return "[red]○BAD[/red]"
 
         age_s = (datetime.now(timezone.utc) - env.last_update).total_seconds()
         if age_s < 2.0:
             return "[green]●OK[/green]"
         if age_s <= 5.0:
-            return "[yellow]●WARN[/yellow]"
-        return "[red]●BAD[/red]"
+            return "[yellow]◐WARN[/yellow]"
+        return "[red]○BAD[/red]"
 
     def _format_status(self, env: "EnvState") -> str:
         """Format status with color coding."""
@@ -832,12 +870,13 @@ class EnvOverview(Static):
         }
 
         # Icons provide color-independent status indication (accessibility)
+        # Hierarchy: ★ (excellent) > ● (ok) > ◐ (stall/init) > ○ (degraded)
         status_short = {
             "excellent": "★EXCL",
             "healthy": "●OK",
-            "initializing": "○INIT",
-            "stalled": "◐STAL",
-            "degraded": "▼DEGR",
+            "initializing": "◐INIT",
+            "stalled": "◐STALL",
+            "degraded": "○DEGR",
         }.get(env.status, env.status[:4].upper())
 
         status_style = status_styles.get(env.status, "white")

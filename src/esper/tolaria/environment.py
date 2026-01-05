@@ -43,7 +43,7 @@ def validate_device(device: str, *, require_explicit_index: bool = False) -> tor
     implementing device checks inline.
 
     Args:
-        device: Device string like "cpu", "cuda", "cuda:0".
+        device: Device string like "cpu", "cuda", "cuda:0", "mps".
         require_explicit_index: If True, require explicit CUDA index (e.g., "cuda:0"
             instead of bare "cuda"). Use for multi-GPU training where device
             assignment must be unambiguous.
@@ -52,16 +52,53 @@ def validate_device(device: str, *, require_explicit_index: bool = False) -> tor
         Parsed torch.device object.
 
     Raises:
-        ValueError: If device string is malformed or violates require_explicit_index.
-        RuntimeError: If CUDA is requested but unavailable, or if CUDA index is
+        ValueError: If device string is malformed, unsupported device type,
+            or violates require_explicit_index.
+        RuntimeError: If CUDA/MPS is requested but unavailable, or if CUDA index is
             out of range.
 
     Example:
         >>> validate_device("cuda:0")  # OK
         >>> validate_device("cuda", require_explicit_index=True)  # Raises ValueError
         >>> validate_device("cuda:999")  # Raises RuntimeError if only 2 GPUs
+        >>> validate_device("mps")  # OK on Apple Silicon, error otherwise
+        >>> validate_device("mps:0")  # OK - explicit index 0 is valid
+        >>> validate_device("mps:1")  # Raises ValueError - MPS only has one device
+        >>> validate_device("meta")  # Raises ValueError - unsupported device type
     """
+    from esper.leyline import SUPPORTED_DEVICE_TYPES
+
     dev = parse_device(device)
+    explicit_index: int | None = None
+    if ":" in device:
+        _, maybe_index = device.split(":", 1)
+        if maybe_index.isdigit():
+            explicit_index = int(maybe_index)
+
+    # Fail-fast on unsupported device types (meta, xla, xpu, hpu, etc.)
+    # These are valid PyTorch devices but not supported for Esper training.
+    if dev.type not in SUPPORTED_DEVICE_TYPES:
+        raise ValueError(
+            f"Unsupported device type '{dev.type}' (from '{device}'). "
+            f"Esper supports: {', '.join(sorted(SUPPORTED_DEVICE_TYPES))}. "
+            f"Device types like 'meta', 'xla', 'xpu' are not supported for training."
+        )
+
+    # MPS validation (Apple Silicon)
+    # Unlike CUDA, MPS only supports a single device (the Apple Silicon GPU).
+    # PyTorch accepts "mps:1" syntactically but it's not a valid device.
+    if dev.type == "mps":
+        if not torch.backends.mps.is_available():
+            raise RuntimeError(
+                f"MPS device '{device}' requested but MPS is not available. "
+                f"Use device='cpu' or check your Apple Silicon configuration."
+            )
+        if explicit_index not in (None, 0):
+            raise ValueError(
+                f"Invalid MPS device index in '{device}'. "
+                f"MPS only supports a single device: use 'mps' or 'mps:0'."
+            )
+        return dev
 
     if dev.type != "cuda":
         return dev
@@ -72,31 +109,32 @@ def validate_device(device: str, *, require_explicit_index: bool = False) -> tor
             f"Use device='cpu' or check your CUDA installation."
         )
 
-    if require_explicit_index and dev.index is None:
+    if require_explicit_index and explicit_index is None:
         raise ValueError(
             f"CUDA device '{device}' must include an explicit index like 'cuda:0'. "
             "Bare 'cuda' is ambiguous in multi-GPU contexts."
         )
 
-    if dev.index is None:
+    if explicit_index is None:
         return dev  # Bare "cuda" uses the current default device
 
     available = torch.cuda.device_count()
-    if dev.index >= available:
+    if explicit_index >= available:
         raise RuntimeError(
             f"CUDA device '{device}' requested but only {available} device(s) are available. "
             f"Valid indices: cuda:0 through cuda:{available - 1}."
         )
 
+    # PyTorch device indices are stored in an int8 with -1 sentinel (no index).
+    # Large indices like "cuda:999" overflow and appear negative (or None),
+    # which can silently bypass range checks if we only trust dev.index.
+    if dev.index != explicit_index:
+        raise ValueError(
+            f"Invalid CUDA device '{device}': parsed as {dev!s}. "
+            "This indicates index overflow in torch.device parsing."
+        )
+
     return dev
-
-
-def _validate_device(device: str) -> None:
-    """Validate requested device (backward-compatible wrapper).
-
-    Deprecated: Use validate_device() directly for new code.
-    """
-    validate_device(device, require_explicit_index=False)
 
 
 def create_model(
@@ -121,9 +159,16 @@ def create_model(
     else:
         task_spec = task
 
-    _validate_device(device)
+    validated_device = validate_device(device, require_explicit_index=False)
 
     if not slots:
         raise ValueError("slots cannot be empty")
 
-    return task_spec.create_model(device=device, slots=slots, permissive_gates=permissive_gates)
+    if len(slots) != len(set(slots)):
+        duplicates = [s for s in slots if slots.count(s) > 1]
+        raise ValueError(f"slots contains duplicates: {sorted(set(duplicates))}")
+
+    # Pass the validated device as a string for consistency with TaskSpec.create_model signature
+    return task_spec.create_model(
+        device=str(validated_device), slots=slots, permissive_gates=permissive_gates
+    )

@@ -193,6 +193,24 @@ class TestPruneContributionShaping:
         # Should get negative shaping (penalty for culling good seed)
         assert shaping < 0, f"Pruning good seed should be penalized: {shaping}"
 
+    def test_prune_young_seed_without_counterfactual_penalized(self):
+        """Pruning before counterfactual is available should be discouraged."""
+        config = ContributionRewardConfig()
+        seed_info = self._make_seed_info(STAGE_TRAINING, age=MIN_PRUNE_AGE)
+
+        shaping = _contribution_prune_shaping(seed_info, seed_contribution=None, config=config)
+
+        assert shaping == config.early_prune_penalty
+
+    def test_prune_mature_seed_without_counterfactual_neutral(self):
+        """Pruning after the early window should not be penalized without counterfactual."""
+        config = ContributionRewardConfig()
+        seed_info = self._make_seed_info(STAGE_TRAINING, age=config.early_prune_threshold)
+
+        shaping = _contribution_prune_shaping(seed_info, seed_contribution=None, config=config)
+
+        assert shaping == 0.0
+
     def test_prune_good_seed_inverts_attribution(self):
         """Pruning a good seed should invert attribution to negative total reward."""
         seed_info = self._make_seed_info(STAGE_BLENDING, age=MIN_PRUNE_AGE, improvement=3.0)
@@ -408,13 +426,17 @@ class TestContributionRewardComponents:
         )
 
         # Components should sum to total (within floating point tolerance)
+        # B6-CR-01: Include ALL components for accurate accounting
         component_sum = (
             (components.bounded_attribution or 0.0)
+            + components.blending_warning
+            + components.holding_warning
             + components.compute_rent
             + components.alpha_shock
             + components.pbrs_bonus
             + components.action_shaping
             + components.terminal_bonus
+            + components.synergy_bonus
         )
         assert abs(reward - component_sum) < 0.001, f"Sum {component_sum} != total {reward}"
         assert components.total_reward == reward
@@ -1478,7 +1500,7 @@ class TestRewardHackingDetection:
     def test_reward_hacking_suspected_emitted_on_anomalous_ratio(self):
         """Test that 6x ratio triggers with default 5x threshold."""
         from esper.simic.rewards import _check_reward_hacking
-        from esper.leyline import TelemetryEventType
+        from esper.leyline import RewardHackingSuspectedPayload, TelemetryEventType
         from unittest.mock import Mock
 
         hub = Mock()
@@ -1496,9 +1518,11 @@ class TestRewardHackingDetection:
         assert emitted is True
         event = hub.emit.call_args[0][0]
         assert event.event_type == TelemetryEventType.REWARD_HACKING_SUSPECTED
-        assert event.data["ratio"] == 6.0
-        assert event.data["slot_id"] == "r0c0"
-        assert event.data["threshold"] == 5.0
+        assert isinstance(event.data, RewardHackingSuspectedPayload)
+        assert event.data.pattern == "attribution_ratio"
+        assert event.data.ratio == 6.0
+        assert event.data.slot_id == "r0c0"
+        assert event.data.threshold == 5.0
 
     def test_no_hacking_event_for_normal_ratios(self):
         """Test that 4x ratio doesn't trigger with default 5x threshold."""
@@ -1523,7 +1547,7 @@ class TestRewardHackingDetection:
     def test_ransomware_signature_emitted(self):
         """Test ransomware detection: high contribution + negative total."""
         from esper.simic.rewards import _check_ransomware_signature
-        from esper.leyline import TelemetryEventType
+        from esper.leyline import RewardHackingSuspectedPayload, TelemetryEventType
         from unittest.mock import Mock
 
         hub = Mock()
@@ -1541,9 +1565,10 @@ class TestRewardHackingDetection:
         event = hub.emit.call_args[0][0]
         assert event.event_type == TelemetryEventType.REWARD_HACKING_SUSPECTED
         assert event.severity == "critical"
-        assert event.data["pattern"] == "ransomware_signature"
-        assert event.data["seed_contribution"] == 2.0
-        assert event.data["total_improvement"] == -0.5
+        assert isinstance(event.data, RewardHackingSuspectedPayload)
+        assert event.data.pattern == "ransomware_signature"
+        assert event.data.seed_contribution == 2.0
+        assert event.data.total_improvement == -0.5
 
     def test_no_ransomware_when_system_improving(self):
         """Test no ransomware alert when total improvement is positive."""
@@ -1574,7 +1599,7 @@ class TestRewardHackingDetection:
         # Low contribution even though system degrading - not ransomware
         emitted = _check_ransomware_signature(
             hub=hub,
-            seed_contribution=0.5,  # Low contribution
+            seed_contribution=0.05,  # Below default threshold (0.1)
             total_improvement=-0.5,  # System getting worse
             slot_id="r0c0",
             seed_id="seed_001",

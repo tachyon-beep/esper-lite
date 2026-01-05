@@ -9,9 +9,9 @@ Esper is a framework for **Morphogenetic AI**—neural networks that dynamically
 As of **Tamiyo Next**, the RL-controlled policy stack has been upgraded to support long-horizon, multi-seed scaffolding:
 
 - **Obs V3:** reduced observation redundancy and moved blueprint identity to **learned embeddings**
-  - Non-blueprint obs: **113 dims** (23 base + 30 per-slot × 3 slots)
+  - Non-blueprint obs: **116 dims** (23 base + 31 per-slot × 3 slots)
   - Blueprint embedding: **4 × slots** (e.g., 12 dims for 3 slots)
-  - Total policy input: **125 dims**
+  - Total policy input: **128 dims**
 - **Policy V2:** **512-dim feature net + 512 hidden LSTM**, designed for ~150-epoch decision horizons
 - **Critic:** action-conditioned **Q(s, op)** baseline (removes value aliasing)
 - **Q-values telemetry:** Op-conditioned Q(s,op) values now visible in Sanctum UI with variance diagnostic
@@ -80,11 +80,10 @@ Train the **Simic** agent using PPO to discover better growth strategies than th
 ```bash
 PYTHONPATH=src uv run python -m esper.scripts.train ppo \
     --task cifar10 \
-    --episodes 100 \
-    --n-envs 4 \
+    --rounds 100 \
+    --envs 4 \
+    --episode-length 150 \
     --device cuda:0 \
-    --max-epochs 150 \
-    --entropy-coef 0.05
 ```
 
 ---
@@ -188,13 +187,16 @@ These flags control Tamiyo's training directly. All are optional - presets provi
 | --------------------------- | ------- | -------------------------------------------------------- |
 | `--rounds N`                | 100     | Tamiyo PPO training iterations                           |
 | `--envs K`                  | 4       | Parallel CIFAR environments (sample diversity per round) |
-| `--episode-length L`        | 150     | Timesteps per environment per round                      |
+| `--episode-length L`        | 150     | Epochs per environment per round; also sets LSTM horizon |
 | `--ppo-epochs E`            | 1       | Gradient steps per round (passes over rollout data)      |
 | `--memory-size H`           | 512     | Tamiyo LSTM hidden dimension                             |
-| `--entropy-anneal-rounds R` | 0       | Rounds over which to anneal entropy (0 = no annealing)   |
+| `--entropy-anneal-episodes N` | 0     | Env-episodes for entropy annealing (N/K batches with K envs) |
 
 Each round produces `K × L` transitions for Tamiyo's PPO update.
 Doubling `--rounds` = 2× training time. Doubling `--envs` = richer data per round, same training time.
+
+Episode length also defines Tamiyo's LSTM sequence length (`chunk_length == max_epochs`), so longer
+episodes increase the temporal memory burden.
 
 #### Config & Presets
 
@@ -214,6 +216,10 @@ Doubling `--rounds` = 2× training time. Doubling `--envs` = richer data per rou
 | `--num-workers` | (task default) | DataLoader workers per environment                   |
 | `--gpu-preload` | off            | Preload dataset to GPU (CIFAR-10 only, ~0.75GB VRAM) |
 | `--experimental-gpu-preload-gather` | off | EXPERIMENTAL: DataLoader-free gather iterator for `--gpu-preload` (CIFAR-10 only) |
+| `--compile-mode` | `default`     | torch.compile mode: `default`, `max-autotune`, `reduce-overhead`, or `off` |
+| `--force-compile` | off          | Force torch.compile even in TUI mode (normally disabled for debuggability) |
+
+> **Note:** When using Sanctum TUI (`--sanctum`) or Overwatch (`--overwatch`), torch.compile is disabled by default to avoid TorchInductor errors in interactive sessions. Use `--force-compile` to override this when testing compilation performance.
 
 #### Checkpointing
 
@@ -331,6 +337,9 @@ All PPO hyperparameters are managed through `TrainingConfig`. Key parameters bey
 | Parameter          | Default | Description                                                         |
 | ------------------ | ------- | ------------------------------------------------------------------- |
 | `permissive_gates` | `true`  | Controls how strictly seeds are evaluated for lifecycle transitions |
+| `auto_forward_g1`  | `false` | Auto-forward `GERMINATED → TRAINING` when G1 passes                 |
+| `auto_forward_g2`  | `false` | Auto-forward `TRAINING → BLENDING` when G2 passes                   |
+| `auto_forward_g3`  | `false` | Auto-forward `BLENDING → HOLDING` when G3 passes                    |
 
 **Permissive Gates Mode** (`permissive_gates: true`):
 
@@ -343,6 +352,12 @@ Quality gates (G2, G3, G5) only check structural requirements, allowing Tamiyo t
 **Strict Gates Mode** (`permissive_gates: false`):
 
 Gates enforce hard-coded thresholds for gradient ratios, improvement metrics, stability, and contribution levels. Use this for production deployments where you want deterministic quality control.
+
+**Auto-Forward Gates** (`auto_forward_g1/g2/g3: true`):
+
+When enabled, Kasmina will automatically advance through the configured gated transitions at the end of each epoch (via `SeedSlot.step_epoch()`), removing `ADVANCE` as a learned decision for those stages. Fossilization remains an explicit `FOSSILIZE` decision (no auto-fossilize).
+
+`n_episodes` counts PPO update rounds; total env episodes per run = `n_episodes * n_envs`.
 
 ```json
 {
@@ -360,29 +375,8 @@ Gates enforce hard-coded thresholds for gradient ratios, improvement metrics, st
 | `reward_family`        | `"contribution"` | `"contribution"` (counterfactual) or `"loss"` (direct loss delta)             |
 | `param_budget`         | `500000`         | Parameter budget for seeds (penalty if exceeded)                              |
 | `param_penalty_weight` | `0.1`            | Weight of parameter budget penalty in reward                                  |
+| `rent_host_params_floor` | `200`          | Host-size normalization floor for rent/alpha-shock (prevents tiny hosts being crushed) |
 
-#### A/B/n Testing
+#### A/B Testing (True)
 
-| Parameter             | Default | Description                                                           |
-| --------------------- | ------- | --------------------------------------------------------------------- |
-| `reward_mode_per_env` | `null`  | Per-environment reward mode override (tuple matching `n_envs` length) |
-
-```json
-{
-  "n_envs": 8,
-  "reward_mode_per_env": ["shaped", "shaped", "shaped", "shaped", "simplified", "simplified", "simplified", "simplified"]
-}
-```
-
-For programmatic configuration, use the `with_reward_split()` factory:
-
-```python
-from esper.simic.training import TrainingConfig
-from esper.simic.rewards import RewardMode
-
-# A/B test: 4 envs each with SHAPED and SIMPLIFIED
-cfg = TrainingConfig.with_reward_split(8, [RewardMode.SHAPED, RewardMode.SIMPLIFIED])
-
-# A/B/C test: 3-way split across 6 envs
-cfg = TrainingConfig.with_reward_split(6, [RewardMode.SHAPED, RewardMode.SIMPLIFIED, RewardMode.SPARSE])
-```
+Use `--dual-ab` to train separate policies on separate GPUs (e.g. `shaped-vs-simplified`).

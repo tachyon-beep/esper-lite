@@ -91,10 +91,14 @@ class TestAnomalyDetector:
         assert small_run_warmup.has_anomaly == large_run_warmup.has_anomaly
 
     def test_requires_episode_info_for_value_collapse_thresholds(self):
-        """Value collapse thresholds require explicit episode context (no shims)."""
+        """Value collapse thresholds require explicit episode context (no shims).
+
+        B7-CR-01 fix: Arguments are now required (no trap defaults).
+        Missing arguments raise TypeError at call time, not ValueError.
+        """
         detector = AnomalyDetector()
-        with pytest.raises(ValueError):
-            detector.check_value_function(explained_variance=0.05)
+        with pytest.raises(TypeError):
+            detector.check_value_function(explained_variance=0.05)  # type: ignore[call-arg]
 
     def test_detect_numerical_instability(self):
         """Detects NaN/Inf in metrics."""

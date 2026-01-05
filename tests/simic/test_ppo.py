@@ -415,6 +415,129 @@ def test_head_grad_norms_includes_tempo_head() -> None:
     assert len(head_grad_norms["tempo"]) == len(head_grad_norms["slot"])
 
 
+def test_head_grad_norms_are_finite_on_first_update() -> None:
+    """Per-head gradient norms must be finite (not NaN) after first PPO update.
+
+    BUG: On first episode, all head_*_grad_norm values were NaN in Sanctum UX.
+    This test verifies that gradients flow correctly to all heads and produce
+    finite values after backward(), not NaN.
+
+    The fix is successful when this test passes: all heads have finite gradient norms.
+    """
+    import math
+
+    slot_config = SlotConfig.default()
+    policy = create_policy(
+        policy_type="lstm",
+        slot_config=slot_config,
+        device="cpu",
+        compile_mode="off",
+    )
+    agent = PPOAgent(
+        policy=policy,
+        slot_config=slot_config,
+        num_envs=1,
+        max_steps_per_env=3,
+        target_kl=None,  # Ensure we reach backward() (no early stopping)
+        device="cpu",
+    )
+
+    device = torch.device(agent.device)
+    state_dim = get_feature_size(slot_config)
+    hidden = agent.policy.network.get_initial_hidden(1, device)
+
+    agent.buffer.start_episode(env_id=0)
+    for step in range(3):
+        state = torch.randn(1, state_dim, device=device)
+        masks = {
+            "slot": torch.ones(1, 3, dtype=torch.bool, device=device),
+            "blueprint": torch.ones(1, NUM_BLUEPRINTS, dtype=torch.bool, device=device),
+            "style": torch.ones(1, NUM_STYLES, dtype=torch.bool, device=device),
+            "tempo": torch.ones(1, NUM_TEMPO, dtype=torch.bool, device=device),
+            "alpha_target": torch.ones(1, NUM_ALPHA_TARGETS, dtype=torch.bool, device=device),
+            "alpha_speed": torch.ones(1, NUM_ALPHA_SPEEDS, dtype=torch.bool, device=device),
+            "alpha_curve": torch.ones(1, NUM_ALPHA_CURVES, dtype=torch.bool, device=device),
+            # Force GERMINATE so all heads are causally relevant.
+            "op": torch.zeros(1, NUM_OPS, dtype=torch.bool, device=device),
+        }
+        masks["op"][:, LifecycleOp.GERMINATE] = True
+
+        pre_hidden = hidden
+        bp_indices = torch.zeros(1, slot_config.num_slots, dtype=torch.long, device=device)
+        result = agent.policy.network.get_action(
+            state,
+            bp_indices,
+            hidden,
+            slot_mask=masks["slot"],
+            blueprint_mask=masks["blueprint"],
+            style_mask=masks["style"],
+            tempo_mask=masks["tempo"],
+            alpha_target_mask=masks["alpha_target"],
+            alpha_speed_mask=masks["alpha_speed"],
+            alpha_curve_mask=masks["alpha_curve"],
+            op_mask=masks["op"],
+        )
+        hidden = result.hidden
+
+        agent.buffer.add(
+            env_id=0,
+            state=state.squeeze(0),
+            slot_action=result.actions["slot"].item(),
+            blueprint_action=result.actions["blueprint"].item(),
+            style_action=result.actions["style"].item(),
+            tempo_action=result.actions["tempo"].item(),
+            alpha_target_action=result.actions["alpha_target"].item(),
+            alpha_speed_action=result.actions["alpha_speed"].item(),
+            alpha_curve_action=result.actions["alpha_curve"].item(),
+            op_action=result.actions["op"].item(),
+            effective_op_action=result.actions["op"].item(),
+            slot_log_prob=result.log_probs["slot"].item(),
+            blueprint_log_prob=result.log_probs["blueprint"].item(),
+            style_log_prob=result.log_probs["style"].item(),
+            tempo_log_prob=result.log_probs["tempo"].item(),
+            alpha_target_log_prob=result.log_probs["alpha_target"].item(),
+            alpha_speed_log_prob=result.log_probs["alpha_speed"].item(),
+            alpha_curve_log_prob=result.log_probs["alpha_curve"].item(),
+            op_log_prob=result.log_probs["op"].item(),
+            value=result.values.item(),
+            reward=1.0,
+            done=step == 2,
+            truncated=False,
+            slot_mask=masks["slot"].squeeze(0),
+            blueprint_mask=masks["blueprint"].squeeze(0),
+            style_mask=masks["style"].squeeze(0),
+            tempo_mask=masks["tempo"].squeeze(0),
+            alpha_target_mask=masks["alpha_target"].squeeze(0),
+            alpha_speed_mask=masks["alpha_speed"].squeeze(0),
+            alpha_curve_mask=masks["alpha_curve"].squeeze(0),
+            op_mask=masks["op"].squeeze(0),
+            hidden_h=pre_hidden[0],
+            hidden_c=pre_hidden[1],
+            bootstrap_value=0.0,
+            blueprint_indices=bp_indices.squeeze(0),
+        )
+    agent.buffer.end_episode(env_id=0)
+
+    metrics = agent.update(clear_buffer=True)
+    head_grad_norms = metrics["head_grad_norms"]
+
+    # All heads must have finite gradient norms (not NaN, not Inf)
+    expected_heads = ["slot", "blueprint", "style", "tempo",
+                      "alpha_target", "alpha_speed", "alpha_curve", "op", "value"]
+
+    for head_name in expected_heads:
+        assert head_name in head_grad_norms, f"Missing head: {head_name}"
+        norms = head_grad_norms[head_name]
+        assert len(norms) > 0, f"Empty gradient norm list for {head_name}"
+
+        for i, norm in enumerate(norms):
+            assert math.isfinite(norm), (
+                f"head_grad_norms[{head_name}][{i}] = {norm} is not finite. "
+                f"BUG: Gradients not flowing to {head_name} head after backward(). "
+                f"Full list: {norms}"
+            )
+
+
 def test_signals_to_features_with_multislot_params():
     """Test batch_obs_to_features V3 API with 3-slot config."""
     from esper.leyline import LifecycleOp
@@ -459,10 +582,10 @@ def test_signals_to_features_with_multislot_params():
         max_epochs=100,
     )
 
-    # Obs V3: 23 base + 30*3 slots = 113 dims (excluding blueprint embeddings)
+    # Obs V3: 23 base + 31*3 slots = 116 dims (excluding blueprint embeddings)
     expected_dim = get_feature_size(slot_config)
     assert obs.shape == (1, expected_dim)
-    assert obs.shape[1] == 113
+    assert obs.shape[1] == 116
 
 
 def test_signals_to_features_telemetry_slot_alignment() -> None:
@@ -550,15 +673,15 @@ def test_signals_to_features_telemetry_slot_alignment() -> None:
 
     # V3: Telemetry is embedded in slot features (4 dims: gradient_norm, gradient_health, has_vanishing, has_exploding)
     # Base features: 23 dims
-    # Slot 0 (r0c0): 30 dims - all zeros (inactive)
-    # Slot 1 (r0c1): 30 dims - active with telemetry
-    # Slot 2 (r0c2): 30 dims - all zeros (inactive)
+    # Slot 0 (r0c0): 31 dims - all zeros (inactive)
+    # Slot 1 (r0c1): 31 dims - active with telemetry
+    # Slot 2 (r0c2): 31 dims - all zeros (inactive)
 
-    # Extract slot 1 features (r0c1) - starts at index 23 + 30 = 53
-    slot1_start = 23 + 30  # Skip base + slot0
-    slot1_features = obs[0, slot1_start:slot1_start + 30].tolist()
+    # Extract slot 1 features (r0c1) - starts at index 23 + 31 = 54
+    slot1_start = 23 + 31  # Skip base + slot0
+    slot1_features = obs[0, slot1_start:slot1_start + 31].tolist()
 
-    # Slot features layout (30 dims):
+    # Slot features layout (31 dims):
     # [0] is_active = 1.0
     # [1-10] stage one-hot
     # [11] current_alpha
@@ -570,21 +693,23 @@ def test_signals_to_features_telemetry_slot_alignment() -> None:
     # [27] gradient_health_prev
     # [28] epochs_in_stage_norm
     # [29] counterfactual_fresh
+    # [30] seed_age_norm
 
     # Check telemetry fields are present (indices 23-26 in slot features)
     assert slot1_features[23] > 0.0  # gradient_norm (normalized, should be > 0)
     assert 0.0 <= slot1_features[24] <= 1.0  # gradient_health
     assert slot1_features[25] == 1.0  # has_vanishing = True
     assert slot1_features[26] == 0.0  # has_exploding = False
+    assert abs(slot1_features[30] - 0.07) < 1e-6  # seed_age_norm (epochs_total=7, max_epochs=100)
 
     # Check slot 0 and slot 2 are all zeros (inactive)
     slot0_start = 23
-    slot0_features = obs[0, slot0_start:slot0_start + 30].tolist()
-    assert slot0_features == [0.0] * 30  # r0c0 (disabled)
+    slot0_features = obs[0, slot0_start:slot0_start + 31].tolist()
+    assert slot0_features == [0.0] * 31  # r0c0 (disabled)
 
-    slot2_start = 23 + 60  # Skip base + slot0 + slot1
-    slot2_features = obs[0, slot2_start:slot2_start + 30].tolist()
-    assert slot2_features == [0.0] * 30  # r0c2 (disabled)
+    slot2_start = 23 + 62  # Skip base + slot0 + slot1
+    slot2_features = obs[0, slot2_start:slot2_start + 31].tolist()
+    assert slot2_features == [0.0] * 31  # r0c2 (disabled)
 
 
 def test_ppo_agent_accepts_slot_config():

@@ -17,13 +17,17 @@ Design rationale:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 import torch
+
+if TYPE_CHECKING:
+    from esper.simic.control import ValueNormalizer
 
 from esper.leyline import (
     DEFAULT_GAMMA,
     DEFAULT_LSTM_HIDDEN_DIM,
+    AlphaTargetAction,
     GerminationStyle,
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
@@ -32,6 +36,7 @@ from esper.leyline import (
     NUM_OPS,
     NUM_STYLES,
     NUM_TEMPO,
+    TempoAction,
 )
 from esper.leyline.slot_config import SlotConfig
 
@@ -163,12 +168,22 @@ class TamiyoRolloutBuffer:
     hidden_c: torch.Tensor = field(init=False)
     advantages: torch.Tensor = field(init=False)
     returns: torch.Tensor = field(init=False)
+    td_errors: torch.Tensor = field(init=False)
 
     # Episode boundary tracking
     _current_episode_start: dict[int, int] = field(default_factory=dict, init=False)
     episode_boundaries: dict[int, list[tuple[int, int]]] = field(
         default_factory=dict, init=False
     )
+
+    # P2 FIX: Track advantage normalization state to prevent re-normalization corruption.
+    # When ppo_updates_per_batch > 1, agent.update() is called multiple times on the
+    # same buffer. Without this flag, advantages get re-normalized each time:
+    # First: (adv - mean) / std -> μ=0, σ=1
+    # Second: (0 - 0) / 1 -> no change (harmless but wasteful)
+    # However, if GAE is recomputed between updates, advantages change and this
+    # flag ensures we normalize the NEW advantages, not skip them.
+    _advantages_normalized: bool = field(default=False, init=False)
 
     @property
     def num_slots(self) -> int:
@@ -232,9 +247,11 @@ class TamiyoRolloutBuffer:
         default_style = int(GerminationStyle.SIGMOID_ADD)
         self.style_masks[:, :, default_style] = True
         self.tempo_masks = torch.zeros(n, m, self.num_tempo, dtype=torch.bool, device=device)
-        self.tempo_masks[:, :, 0] = True  # First tempo always valid
+        default_tempo = int(TempoAction.STANDARD)
+        self.tempo_masks[:, :, default_tempo] = True
         self.alpha_target_masks = torch.zeros(n, m, self.num_alpha_targets, dtype=torch.bool, device=device)
-        self.alpha_target_masks[:, :, 0] = True  # First alpha target always valid
+        default_alpha_target = int(AlphaTargetAction.FULL)
+        self.alpha_target_masks[:, :, default_alpha_target] = True
         self.alpha_speed_masks = torch.zeros(n, m, self.num_alpha_speeds, dtype=torch.bool, device=device)
         self.alpha_speed_masks[:, :, 0] = True  # First alpha speed always valid
         self.alpha_curve_masks = torch.zeros(n, m, self.num_alpha_curves, dtype=torch.bool, device=device)
@@ -244,6 +261,8 @@ class TamiyoRolloutBuffer:
 
         # Keep padded actions consistent with the default masks above.
         self.style_actions.fill_(default_style)
+        self.tempo_actions.fill_(default_tempo)
+        self.alpha_target_actions.fill_(default_alpha_target)
 
         # LSTM hidden states: [num_envs, max_steps, lstm_layers, hidden_dim]
         self.hidden_h = torch.zeros(n, m, self.lstm_layers, self.lstm_hidden_dim, device=device)
@@ -252,6 +271,7 @@ class TamiyoRolloutBuffer:
         # Computed during finalization
         self.advantages = torch.zeros(n, m, device=device)
         self.returns = torch.zeros(n, m, device=device)
+        self.td_errors = torch.zeros(n, m, device=device)
 
     def start_episode(self, env_id: int) -> None:
         """Mark start of a new episode for an environment."""
@@ -375,11 +395,24 @@ class TamiyoRolloutBuffer:
         self,
         gamma: float = DEFAULT_GAMMA,
         gae_lambda: float = 0.95,
+        value_normalizer: "ValueNormalizer | None" = None,
     ) -> None:
         """Compute GAE advantages per-environment (no cross-contamination).
 
         This is the P0 bug fix: each environment's GAE is computed
         independently using only that environment's values and rewards.
+
+        P1 BUG FIX: When value_normalizer is provided, denormalizes critic
+        outputs before GAE computation. This fixes the scale mismatch where:
+        - Critic learns normalized values (std~1)
+        - GAE mixes raw rewards with normalized values (corrupted delta)
+
+        Args:
+            gamma: Discount factor
+            gae_lambda: GAE lambda for bias-variance tradeoff
+            value_normalizer: If provided, denormalizes values for GAE.
+                The critic outputs normalized-scale values; this converts
+                them to raw reward scale for correct TD error computation.
 
         PERF NOTE: The backward loop has inherent data dependencies (last_gae
         depends on previous last_gae), making full vectorization complex.
@@ -404,13 +437,23 @@ class TamiyoRolloutBuffer:
                 continue
 
             # Work with valid slice only
+            # P1 FIX: Denormalize values for GAE if normalizer provided
+            # The critic outputs are on normalized scale (std~1); we need
+            # raw reward scale for correct delta = r + γV' - V computation.
             values = self.values[env_id, :num_steps]
+            if value_normalizer is not None:
+                values = value_normalizer.denormalize(values)
+
             rewards = self.rewards[env_id, :num_steps]
             dones = self.dones[env_id, :num_steps]
             truncated = self.truncated[env_id, :num_steps]
             bootstrap_values = self.bootstrap_values[env_id, :num_steps]
+            # P1 FIX: Bootstrap values are also critic outputs - denormalize them too
+            if value_normalizer is not None:
+                bootstrap_values = value_normalizer.denormalize(bootstrap_values)
 
             advantages = torch.zeros(num_steps, device=self.device)
+            td_errors = torch.zeros(num_steps, device=self.device)
             last_gae = zero_tensor.clone()  # Clone to avoid in-place modification
 
             for t in reversed(range(num_steps)):
@@ -437,12 +480,37 @@ class TamiyoRolloutBuffer:
                 delta = rewards[t] + gamma_t * next_value * next_non_terminal - values[t]
                 last_gae = delta + gamma_lambda_t * next_non_terminal * last_gae
                 advantages[t] = last_gae
+                # Store TD error for telemetry (TELE-221/222/223)
+                td_errors[t] = delta
 
             self.advantages[env_id, :num_steps] = advantages
+            # P1 FIX: Returns = advantages + denormalized values (raw scale)
+            # These are the TRUE returns on reward scale, used for:
+            # 1. Updating the value normalizer with accurate return distribution
+            # 2. Normalizing for critic training (value_normalizer.normalize())
             self.returns[env_id, :num_steps] = advantages + values
+            self.td_errors[env_id, :num_steps] = td_errors
 
-    def normalize_advantages(self) -> None:
-        """Normalize advantages globally across all environments."""
+        # P2 FIX: New advantages computed - they need normalization
+        self._advantages_normalized = False
+
+    def normalize_advantages(self) -> tuple[float, float]:
+        """Normalize advantages globally across all environments.
+
+        P2 FIX: Idempotent normalization - skips if already normalized.
+        This prevents corruption when agent.update() is called multiple times
+        on the same buffer (ppo_updates_per_batch > 1). Re-normalizing already-
+        normalized data (μ=0, σ=1) is mathematically harmless but wasteful.
+        More importantly, this flag ensures we properly handle the case where
+        GAE is recomputed between updates - new advantages WILL be normalized.
+
+        Returns:
+            Tuple of (pre_norm_mean, pre_norm_std) for telemetry diagnostics.
+            Returns (NaN, NaN) if already normalized or no advantages.
+        """
+        if self._advantages_normalized:
+            return (float("nan"), float("nan"))  # Already normalized
+
         # Collect all valid advantages
         all_advantages = []
         for env_id in range(self.num_envs):
@@ -451,7 +519,7 @@ class TamiyoRolloutBuffer:
                 all_advantages.append(self.advantages[env_id, :num_steps])
 
         if not all_advantages:
-            return
+            return (float("nan"), float("nan"))
 
         # Compute global stats
         all_adv = torch.cat(all_advantages)
@@ -460,6 +528,10 @@ class TamiyoRolloutBuffer:
         # (Bessel correction is undefined for n=1.)
         std = all_adv.std(correction=0)
 
+        # Capture pre-normalization stats for telemetry
+        pre_norm_mean = mean.item()
+        pre_norm_std = std.item()
+
         # Normalize in-place
         for env_id in range(self.num_envs):
             num_steps = self.step_counts[env_id]
@@ -467,6 +539,11 @@ class TamiyoRolloutBuffer:
                 self.advantages[env_id, :num_steps] = (
                     self.advantages[env_id, :num_steps] - mean
                 ) / (std + 1e-8)
+
+        # P2 FIX: Mark as normalized to prevent redundant re-normalization
+        self._advantages_normalized = True
+
+        return (pre_norm_mean, pre_norm_std)
 
     def get_batched_sequences(
         self,
@@ -513,6 +590,7 @@ class TamiyoRolloutBuffer:
             "rewards": self.rewards.to(device, non_blocking=nb),
             "advantages": self.advantages.to(device, non_blocking=nb),
             "returns": self.returns.to(device, non_blocking=nb),
+            "td_errors": self.td_errors.to(device, non_blocking=nb),
             "slot_masks": self.slot_masks.to(device, non_blocking=nb),
             "blueprint_masks": self.blueprint_masks.to(device, non_blocking=nb),
             "style_masks": self.style_masks.to(device, non_blocking=nb),
@@ -536,6 +614,7 @@ class TamiyoRolloutBuffer:
         self.step_counts = [0] * self.num_envs
         self._current_episode_start = {}
         self.episode_boundaries = {}
+        self._advantages_normalized = False  # P2 FIX: Reset normalization state
         # Tensors don't need zeroing - step_counts controls valid range
 
     def clear_env(self, env_id: int) -> None:

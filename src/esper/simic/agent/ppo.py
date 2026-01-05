@@ -8,10 +8,12 @@ For vectorized environments, see simic.vectorized.
 from __future__ import annotations
 
 from collections import defaultdict
+import math
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import torch
+import torch.amp as torch_amp
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -19,8 +21,14 @@ from .rollout_buffer import TamiyoRolloutBuffer
 from .advantages import compute_per_head_advantages
 from .types import PPOUpdateMetrics
 from esper.simic.telemetry import RatioExplosionDiagnostic
-from esper.tamiyo.policy.protocol import PolicyBundle
+from esper.simic.telemetry.lstm_health import compute_lstm_health
+from esper.simic.telemetry.value_metrics import (
+    ValueFunctionMetricsDict,
+    compute_value_function_metrics,
+)
+from esper.simic.control import ValueNormalizer
 from esper.leyline import (
+    PolicyBundle,
     DEFAULT_BATCH_SIZE,
     DEFAULT_CLIP_RATIO,
     DEFAULT_ENTROPY_COEF,
@@ -31,7 +39,6 @@ from esper.leyline import (
     DEFAULT_LEARNING_RATE,
     DEFAULT_MAX_GRAD_NORM,
     DEFAULT_N_ENVS,
-    DEFAULT_N_PPO_EPOCHS,
     DEFAULT_RATIO_COLLAPSE_THRESHOLD,
     DEFAULT_RATIO_EXPLOSION_THRESHOLD,
     DEFAULT_VALUE_CLIP,
@@ -50,7 +57,8 @@ logger = logging.getLogger(__name__)
 
 # Checkpoint format version for forward compatibility
 # Increment when checkpoint structure changes in backwards-incompatible ways
-CHECKPOINT_VERSION = 1
+# Version 2: value_normalizer_state_dict and compile_mode are now required fields
+CHECKPOINT_VERSION = 2
 
 # Sparse heads need higher entropy coefficients to maintain exploration
 # when they receive fewer training signals due to causal masking
@@ -114,13 +122,17 @@ class PPOAgent:
         # are only active during GERMINATE actions (less frequent than slot/op).
         entropy_coef_per_head: dict[str, float] | None = None,
         value_coef: float = DEFAULT_VALUE_COEF,
-        clip_value: bool = True,
+        clip_value: bool = False,  # Disabled: return normalization provides stability
         # Separate clip range for value function (larger than policy clip_ratio)
-        # Note: Some research (Engstrom et al., 2020) suggests value clipping often
-        # hurts performance. Consider clip_value=False if value learning is slow.
+        # Note: Research (Engstrom et al., 2020) suggests value clipping often hurts.
+        # With return normalization (std-only), clipping conflicts with normalized scale.
         value_clip: float = DEFAULT_VALUE_CLIP,
         max_grad_norm: float = DEFAULT_MAX_GRAD_NORM,
-        n_epochs: int = DEFAULT_N_PPO_EPOCHS,
+        # P2 FIX: n_epochs parameter REMOVED - it was dead code (never used in update loop).
+        # The actual epoch count is controlled by:
+        #   - recurrent_n_epochs: INTERNAL epochs within a single update() call (default 1 for LSTM safety)
+        #   - ppo_updates_per_batch: EXTERNAL updates in vectorized.py training loop
+        # Standard PPO "epochs" are configured via ppo_updates_per_batch in train_ppo_vectorized().
         recurrent_n_epochs: int | None = None,  # Default 1 for recurrent (hidden state safety)
         batch_size: int = DEFAULT_BATCH_SIZE,
         target_kl: float | None = 0.015,
@@ -174,13 +186,14 @@ class PPOAgent:
         self.entropy_coef_min = entropy_coef_min
         self.entropy_anneal_steps = entropy_anneal_steps
         # Per-head entropy multipliers (differential coefficients for sparse heads)
-        self.entropy_coef_per_head = entropy_coef_per_head or ENTROPY_COEF_PER_HEAD
+        # MED-01 fix: Use is not None - empty dict {} is falsy but valid
+        self.entropy_coef_per_head = entropy_coef_per_head if entropy_coef_per_head is not None else ENTROPY_COEF_PER_HEAD
         self.value_coef = value_coef
         self.clip_value = clip_value
         self.value_clip = value_clip
         self.max_grad_norm = max_grad_norm
         self.lstm_hidden_dim = policy.hidden_dim
-        self.n_epochs = n_epochs
+        # P2 FIX: self.n_epochs removed - was dead code (see __init__ comment)
         self.batch_size = batch_size
         self.target_kl = target_kl
         self.weight_decay = weight_decay
@@ -238,6 +251,12 @@ class PPOAgent:
         # M21: Ratio anomaly thresholds from leyline (single source of truth)
         self.ratio_explosion_threshold = DEFAULT_RATIO_EXPLOSION_THRESHOLD
         self.ratio_collapse_threshold = DEFAULT_RATIO_COLLAPSE_THRESHOLD
+
+        # P1 BUG FIX: Value normalization for GAE consistency
+        # The critic is trained on normalized returns (std~1), but GAE needs
+        # denormalized values to compute δ = r + γV(s') - V(s) correctly.
+        # ValueNormalizer tracks running stats and provides denormalize() for GAE.
+        self.value_normalizer = ValueNormalizer(device=device)
 
         # [PyTorch 2.9] Use fused=True for CUDA, foreach=True for CPU
         use_cuda = device.startswith("cuda")
@@ -342,6 +361,43 @@ class PPOAgent:
             "cuda_memory_fragmentation": fragmentation,
         }
 
+    def _compute_value_function_metrics(self) -> ValueFunctionMetricsDict:
+        """Compute value function metrics from buffer data.
+
+        Called after compute_advantages_and_returns() to extract
+        TELE-220 to TELE-228 metrics.
+        """
+        # Collect valid data from all environments
+        all_td_errors = []
+        all_values = []
+        all_returns = []
+
+        for env_id in range(self.buffer.num_envs):
+            num_steps = self.buffer.step_counts[env_id]
+            if num_steps > 0:
+                all_td_errors.append(self.buffer.td_errors[env_id, :num_steps])
+                all_values.append(self.buffer.values[env_id, :num_steps])
+                all_returns.append(self.buffer.returns[env_id, :num_steps])
+
+        if not all_td_errors:
+            return {
+                "v_return_correlation": 0.0,
+                "td_error_mean": 0.0,
+                "td_error_std": 0.0,
+                "bellman_error": 0.0,
+                "return_p10": 0.0,
+                "return_p50": 0.0,
+                "return_p90": 0.0,
+                "return_variance": 0.0,
+                "return_skewness": 0.0,
+            }
+
+        td_errors = torch.cat(all_td_errors)
+        values = torch.cat(all_values)
+        returns = torch.cat(all_returns)
+
+        return compute_value_function_metrics(td_errors, values, returns)
+
     def update(
         self,
         clear_buffer: bool = True,
@@ -359,11 +415,19 @@ class PPOAgent:
         if len(self.buffer) == 0:
             return {}
 
-        # Compute GAE per-environment (fixes P0 bug)
+        # P1 BUG FIX: Pass value_normalizer to GAE so it can denormalize critic outputs
+        # The critic learns normalized values (std~1), but GAE needs raw scale values
+        # to compute delta = r + γV' - V correctly. Without this, scale mismatch
+        # corrupts advantages and breaks training.
         self.buffer.compute_advantages_and_returns(
-            gamma=self.gamma, gae_lambda=self.gae_lambda
+            gamma=self.gamma,
+            gae_lambda=self.gae_lambda,
+            value_normalizer=self.value_normalizer,
         )
-        self.buffer.normalize_advantages()
+        pre_norm_adv_mean, pre_norm_adv_std = self.buffer.normalize_advantages()
+
+        # Compute value function metrics (TELE-220 to TELE-228)
+        value_func_metrics = self._compute_value_function_metrics()
 
         # C3: INTENTIONAL SINGLE-BATCH PROCESSING FOR RECURRENT POLICIES
         # We process the entire rollout as a single batch WITHOUT minibatch shuffling.
@@ -388,18 +452,53 @@ class PPOAgent:
         # This measures how well the value function from rollout collection predicts returns.
         # Post-update EV would measure the updated value function against stale returns,
         # which is less meaningful. High pre-update EV (>0.8) indicates good value estimates.
+        #
+        # SCALE FIX: Values from buffer are on normalized scale (critic trained on normalized
+        # returns), but returns are on raw scale. Denormalize values to match returns scale.
         valid_values = data["values"][valid_mask]
         valid_returns = data["returns"][valid_mask]
+        raw_values = self.value_normalizer.denormalize(valid_values)
         var_returns = valid_returns.var()
         explained_variance: float
         if var_returns > 1e-8:
-            ev_tensor = 1.0 - (valid_returns - valid_values).var() / var_returns
+            ev_tensor = 1.0 - (valid_returns - raw_values).var() / var_returns
             explained_variance = ev_tensor.item()
         else:
             explained_variance = 0.0
 
         metrics: dict[str, Any] = defaultdict(list)
         metrics["explained_variance"] = [explained_variance]
+
+        # Return statistics for diagnosing value loss scale
+        return_mean = valid_returns.mean().item()
+        return_std = valid_returns.std().item()
+        if not math.isfinite(return_mean) or not math.isfinite(return_std):
+            raise RuntimeError(
+                f"Non-finite returns detected: mean={return_mean}, std={return_std}. "
+                "This is a hard bug: investigate reward/value/GAE plumbing."
+            )
+        metrics["return_mean"] = [return_mean]
+        metrics["return_std"] = [return_std]
+
+        # P1 BUG FIX: Use running value normalizer instead of batch std
+        # 1. Update normalizer with current batch returns (tracks running distribution)
+        # 2. Normalize returns using running std (consistent scale across batches)
+        # This ensures GAE denormalization and critic training use the SAME scale.
+        #
+        # Old (broken): batch_std varies each update, GAE uses stale scale
+        # New (fixed): running_std is consistent, GAE denormalizes with same scale
+        self.value_normalizer.update(valid_returns)
+        normalized_returns = self.value_normalizer.normalize(valid_returns).detach()
+        value_target_scale = self.value_normalizer.get_scale()
+        metrics["value_target_scale"] = [value_target_scale]
+
+        # Pre-normalization advantage stats for diagnosing advantage collapse
+        # If pre_norm_adv_std is tiny but pre_clip_grad_norm is huge, it indicates
+        # normalization is amplifying noise. If std is healthy but grad is huge,
+        # it's more likely raw return scale or value mismatch.
+        metrics["pre_norm_advantage_mean"] = [pre_norm_adv_mean]
+        metrics["pre_norm_advantage_std"] = [pre_norm_adv_std]
+
         early_stopped = False
 
         # Collect CUDA memory metrics once per update (amortize sync overhead)
@@ -466,7 +565,7 @@ class PPOAgent:
                 q_value_map: dict[LifecycleOp, float] = {}
                 for op_idx in range(NUM_OPS):
                     op_tensor = torch.tensor([[op_idx]], dtype=torch.long, device=self.device)
-                    q_val = self.policy.network._compute_value(lstm_out, op_tensor)  # type: ignore[operator]
+                    q_val = self.policy.network._compute_value(lstm_out, op_tensor)
                     q_value_map[LifecycleOp(op_idx)] = q_val.item()
 
                 # Assign to metrics with correct names using actual LifecycleOp enum
@@ -493,6 +592,9 @@ class PPOAgent:
 
         # Initialize per-head entropy tracking (P3-1)
         head_entropy_history: dict[str, list[float]] = {head: [] for head in HEAD_NAMES}
+
+        # LSTM health tracking (TELE-340)
+        lstm_health_history: dict[str, list[float | bool]] = defaultdict(list)
         # Initialize per-head gradient norm tracking (P4-6)
         head_grad_norm_history: dict[str, list[float]] = {head: [] for head in HEAD_NAMES + ("value",)}
         # Initialize log prob extremes tracking (NaN predictor)
@@ -505,6 +607,11 @@ class PPOAgent:
         # Track max ratio per head across all epochs for telemetry
         head_ratio_max_across_epochs: dict[str, float] = {head: float("-inf") for head in HEAD_NAMES}
         joint_ratio_max_across_epochs: float = float("-inf")
+
+        # Per-head NaN/Inf tracking (for indicator lights)
+        # OR across all epochs - once detected, stays detected for this update
+        head_nan_detected: dict[str, bool] = {head: False for head in HEAD_NAMES}
+        head_inf_detected: dict[str, bool] = {head: False for head in HEAD_NAMES}
 
         for epoch_i in range(self.recurrent_n_epochs):
             if early_stopped:
@@ -532,16 +639,50 @@ class PPOAgent:
                 "alpha_curve": data["alpha_curve_masks"],
                 "op": data["op_masks"],
             }
-            result = self.policy.evaluate_actions(
-                data["states"],
-                data["blueprint_indices"],
-                actions,
-                masks,
-                hidden=(data["initial_hidden_h"], data["initial_hidden_c"]),
-            )
+            # B11-PT-01 FIX: Run evaluate_actions outside autocast context.
+            # When PPO update runs under AMP autocast, the network forward pass
+            # produces float16 logits and LSTM states. Even though MaskedCategorical
+            # upcasts logits to float32 for the distribution math, this is not
+            # sufficient - the full forward pass must run in float32 for stable
+            # gradient computation. This is standard practice in RL with AMP:
+            # run the policy evaluation in float32, keep backbone/feature extraction in AMP.
+            # Device can be str ("cpu", "cuda:0") or torch.device - normalize to type string
+            device_type = str(self.device).split(":")[0]
+            with torch_amp.autocast(device_type=device_type, enabled=False):  # type: ignore[attr-defined]
+                # Cast inputs to float32 to ensure entire forward pass is float32
+                # NOTE: initial_hidden_h/c are detached tensors from rollout collection.
+                # This is CORRECT for recurrent PPO:
+                # 1. We use them as starting points for LSTM reconstruction
+                # 2. The LSTM forward pass produces new, gradient-enabled hidden states
+                # 3. BPTT happens within the reconstructed sequence, not through initial_hidden
+                # See rollout_buffer.py lines 377-378 for detach() calls.
+                hidden_h = data["initial_hidden_h"].float()
+                hidden_c = data["initial_hidden_c"].float()
+                result = self.policy.evaluate_actions(
+                    data["states"].float(),
+                    data["blueprint_indices"],
+                    actions,
+                    masks,
+                    hidden=(hidden_h, hidden_c),
+                )
             log_probs = result.log_prob
             values = result.value
             entropy = result.entropy
+
+            # Track LSTM hidden state health (TELE-340)
+            if result.hidden is not None:
+                lstm_health = compute_lstm_health(result.hidden)
+                if lstm_health is not None:
+                    lstm_health_history["lstm_h_rms"].append(lstm_health.h_rms)
+                    lstm_health_history["lstm_c_rms"].append(lstm_health.c_rms)
+                    lstm_health_history["lstm_h_env_rms_mean"].append(lstm_health.h_env_rms_mean)
+                    lstm_health_history["lstm_h_env_rms_max"].append(lstm_health.h_env_rms_max)
+                    lstm_health_history["lstm_c_env_rms_mean"].append(lstm_health.c_env_rms_mean)
+                    lstm_health_history["lstm_c_env_rms_max"].append(lstm_health.c_env_rms_max)
+                    lstm_health_history["lstm_h_max"].append(lstm_health.h_max)
+                    lstm_health_history["lstm_c_max"].append(lstm_health.c_max)
+                    lstm_health_history["lstm_has_nan"].append(lstm_health.has_nan)
+                    lstm_health_history["lstm_has_inf"].append(lstm_health.has_inf)
 
             # Extract valid timesteps
             for key in log_probs:
@@ -549,6 +690,54 @@ class PPOAgent:
             values = values[valid_mask]
             for key in entropy:
                 entropy[key] = entropy[key][valid_mask]
+
+            # FINITENESS GATE: Detect NaN/Inf early to identify source of numerical instability
+            # This is NOT bug-hiding - it's fail-fast on corrupted probabilities.
+            # Common causes: mask mismatch between rollout and update, degenerate distributions
+            nonfinite_found = False
+            nonfinite_sources: list[str] = []
+
+            # Check new log_probs - separate NaN from Inf per head
+            # Fast path: only drill down when isfinite fails (preserves 0 syncs in happy path)
+            for key in HEAD_NAMES:
+                lp = log_probs[key]
+                if not torch.isfinite(lp).all():
+                    # Slow path: distinguish NaN from Inf
+                    if torch.isnan(lp).any():
+                        head_nan_detected[key] = True
+                        nonfinite_sources.append(f"log_probs[{key}]: NaN detected")
+                    if torch.isinf(lp).any():
+                        head_inf_detected[key] = True
+                        nonfinite_sources.append(f"log_probs[{key}]: Inf detected")
+                    nonfinite_found = True
+
+            # Check old log_probs (stored as "{key}_log_probs" in data dict)
+            for key in HEAD_NAMES:
+                old_key = f"{key}_log_probs"
+                old_lp = data[old_key][valid_mask]
+                if not torch.isfinite(old_lp).all():
+                    nonfinite_count = (~torch.isfinite(old_lp)).sum().item()
+                    nonfinite_sources.append(f"old_log_probs[{key}]: {nonfinite_count} non-finite")
+                    nonfinite_found = True
+
+            # Check values
+            if not torch.isfinite(values).all():
+                nonfinite_count = (~torch.isfinite(values)).sum().item()
+                nonfinite_sources.append(f"values: {nonfinite_count} non-finite")
+                nonfinite_found = True
+
+            if nonfinite_found:
+                logger.warning(
+                    f"FINITENESS GATE FAILED at epoch {epoch_i}: {', '.join(nonfinite_sources)}. "
+                    "Skipping optimizer step to prevent NaN propagation. "
+                    "Likely cause: mask mismatch between rollout and update time."
+                )
+                # RD-01 fix: metrics is defaultdict(list), no need for setdefault
+                metrics["finiteness_gate_failures"].append({
+                    "epoch": epoch_i,
+                    "sources": nonfinite_sources,
+                })
+                continue  # Skip this epoch's update, try next epoch
 
             # Track log prob extremes across all heads (NaN predictor)
             # Use HEAD_NAMES for consistent ordering
@@ -596,8 +785,8 @@ class PPOAgent:
             log_ratios_for_joint: dict[str, torch.Tensor] = {}  # Store for joint ratio computation
             for key in HEAD_NAMES:
                 # Clamp log-ratio to prevent inf/NaN from exp() when probabilities diverge
-                # significantly. log(exp(20)) ≈ 4.85e8 is already extreme; log(exp(88)) overflows.
-                # This provides early protection before ratio explosion detection (lines 809-821).
+                # significantly. exp(20) ≈ 4.85e8 is already extreme; exp(88) overflows float32.
+                # This provides early protection before ratio explosion detection.
                 log_ratio = log_probs[key] - old_log_probs[key]
                 log_ratio_clamped = torch.clamp(log_ratio, min=-20.0, max=20.0)
                 log_ratios_for_joint[key] = log_ratio_clamped
@@ -641,8 +830,13 @@ class PPOAgent:
                 total_weight = torch.tensor(0.0, device=self.device)
                 for key in HEAD_NAMES:
                     mask = head_masks[key]
-                    log_ratio = log_probs[key] - old_log_probs[key]
-                    kl_per_step = (torch.exp(log_ratio) - 1) - log_ratio
+                    # BUGFIX: Reuse CLAMPED log_ratio from line 602 to prevent overflow/NaN
+                    # Previously this recomputed log_ratio without clamping, causing:
+                    # - exp(large_value) → inf → NaN in KL
+                    # - exp(-inf) → 0, but (0-1) - (-inf) → NaN
+                    # The clamped version is already available in log_ratios_for_joint
+                    log_ratio_clamped = log_ratios_for_joint[key]
+                    kl_per_step = (torch.exp(log_ratio_clamped) - 1) - log_ratio_clamped
                     n_valid = mask.sum().float().clamp(min=1)
                     # Masked mean KL for this head
                     head_kl = (kl_per_step * mask).sum() / n_valid
@@ -656,7 +850,9 @@ class PPOAgent:
 
                 # Clip fraction: how often clipping was active
                 # PERF: Batch all 3 clip metrics into single GPU→CPU transfer
-                joint_ratio = per_head_ratios["op"]
+                # BUG FIX: Use TRUE joint_ratio (product of all heads) computed at line 619
+                # Previously this was overwritten with just per_head_ratios["op"], hiding
+                # divergence in other heads (slot, blueprint, style, etc.)
                 clip_fraction_t = ((joint_ratio - 1.0).abs() > self.clip_ratio).float().mean()
                 # Directional clip fractions (per DRL expert recommendation)
                 # Tracks WHERE clipping occurs: asymmetry indicates directional policy drift
@@ -701,19 +897,21 @@ class PPOAgent:
                 head_loss = -(clipped_surr * mask).sum() / n_valid
                 policy_loss = policy_loss + head_loss
 
-            # Value loss
+            # Value loss (uses normalized_returns for stable learning)
+            # normalized_returns has same mean as valid_returns but std~1
             valid_old_values = data["values"][valid_mask]
             if self.clip_value:
                 # Use separate value_clip (not policy clip_ratio) since value scale differs
-                # Value predictions can range from -10 to +50, so clip_ratio=0.2 is too tight
+                # Note: With return normalization, value clipping is less critical and
+                # may conflict (old values on old scale). Consider clip_value=False.
                 values_clipped = valid_old_values + torch.clamp(
                     values - valid_old_values, -self.value_clip, self.value_clip
                 )
-                value_loss_unclipped = (values - valid_returns) ** 2
-                value_loss_clipped = (values_clipped - valid_returns) ** 2
+                value_loss_unclipped = (values - normalized_returns) ** 2
+                value_loss_clipped = (values_clipped - normalized_returns) ** 2
                 value_loss = 0.5 * torch.max(value_loss_unclipped, value_loss_clipped).mean()
             else:
-                value_loss = F.mse_loss(values, valid_returns)
+                value_loss = F.mse_loss(values, normalized_returns)
 
             # Entropy loss with per-head weighting and causal masking.
             # H3 FIX: Use masked mean for sparse heads (blueprint, style).
@@ -743,18 +941,20 @@ class PPOAgent:
             # Measures raw gradients to diagnose head dominance
             # PERF: Batch all norm computations, then single .tolist() at end
             with torch.inference_mode():
-                # BUG FIX: torch.compile creates NEW parameter tensors - gradients live on
-                # the compiled module's params, NOT on _orig_mod's params. We must access
-                # head modules from the SAME module the optimizer uses (the compiled one).
-                # DO NOT unwrap to _orig_mod here - that's why grads were always 0.0!
-                network = self.policy.network  # Keep compiled wrapper if present
+                # Use the BASE network to access head modules. torch.compile shares
+                # parameters with the original module, so gradients are on the same
+                # Parameter objects. Using base_network ensures consistency with how
+                # the optimizer was created (which also uses base_network params when
+                # weight_decay > 0).
+                network = self.policy.network
+                base_network = getattr(network, '_orig_mod', network)
 
                 head_names = ["slot", "blueprint", "style", "tempo", "alpha_target",
                               "alpha_speed", "alpha_curve", "op", "value"]
                 head_modules = [
-                    network.slot_head, network.blueprint_head, network.style_head,
-                    network.tempo_head, network.alpha_target_head, network.alpha_speed_head,
-                    network.alpha_curve_head, network.op_head, network.value_head,
+                    base_network.slot_head, base_network.blueprint_head, base_network.style_head,
+                    base_network.tempo_head, base_network.alpha_target_head, base_network.alpha_speed_head,
+                    base_network.alpha_curve_head, base_network.op_head, base_network.value_head,
                 ]
 
                 # Collect all head norms as tensors (no .item() yet)
@@ -766,7 +966,10 @@ class PPOAgent:
                             torch.stack([torch.linalg.vector_norm(p.grad) for p in params_with_grad])
                         )
                     else:
-                        norm_t = torch.tensor(0.0, device=self.device)
+                        # BUG FIX: Use NaN to signal "no gradient data" instead of 0.0
+                        # 0.0 would hide the bug (No Bug-Hiding Patterns rule)
+                        # NaN signals missing data and will surface in telemetry
+                        norm_t = torch.tensor(float("nan"), device=self.device)
                     head_norm_tensors.append(norm_t)
 
                 # Single GPU→CPU sync: stack all norms, then .tolist()
@@ -798,7 +1001,8 @@ class PPOAgent:
 
             # Track metrics
             # PERF: Batch all 10 logging metrics into single GPU→CPU transfer
-            joint_ratio = per_head_ratios["op"]  # Use op ratio as representative
+            # BUG FIX: Use TRUE joint_ratio (product of all heads) computed at line 619
+            # Previously this used per_head_ratios["op"] which hid divergence in other heads
             logging_tensors = torch.stack([
                 policy_loss,
                 value_loss,
@@ -842,9 +1046,12 @@ class PPOAgent:
                     max_threshold=self.ratio_explosion_threshold,
                     min_threshold=self.ratio_collapse_threshold,
                 )
-                metrics.setdefault("ratio_diagnostic", []).append(diag.to_dict())
+                # RD-01 fix: metrics is defaultdict(list), no need for setdefault
+                metrics["ratio_diagnostic"].append(diag.to_dict())
 
-        self.train_steps += 1
+        # NOTE: train_steps increment is deferred until after finiteness gate check.
+        # If all epochs fail finiteness checks, we should NOT advance train_steps
+        # because entropy annealing and other schedules depend on actual updates.
 
         if clear_buffer:
             self.buffer.reset()
@@ -853,15 +1060,67 @@ class PPOAgent:
         # TypedDict doesn't support dynamic key assignment, so we use type: ignore
         # The aggregation converts list[float] to float for most metrics
         aggregated_result: PPOUpdateMetrics = {}
+
+        # FINITENESS GATE CONTRACT: Check if any epochs actually completed
+        # ratio_max is only populated when an epoch successfully computes losses
+        finiteness_failures = metrics["finiteness_gate_failures"]
+        epochs_completed = len(metrics["ratio_max"])
+
+        if epochs_completed == 0:
+            # All epochs skipped - return explicit signal with NaN values
+            # This prevents downstream code from treating 0.0 as a valid measurement
+            aggregated_result["ppo_update_performed"] = False
+            aggregated_result["finiteness_gate_skip_count"] = len(finiteness_failures)
+            # Use NaN for metrics that weren't computed (not 0.0 which looks "normal")
+            aggregated_result["ratio_max"] = float("nan")
+            aggregated_result["ratio_min"] = float("nan")
+            aggregated_result["policy_loss"] = float("nan")
+            aggregated_result["value_loss"] = float("nan")
+            aggregated_result["entropy"] = float("nan")
+            aggregated_result["approx_kl"] = float("nan")
+            aggregated_result["clip_fraction"] = float("nan")
+            aggregated_result["explained_variance"] = float("nan")
+            aggregated_result["pre_clip_grad_norm"] = float("nan")
+            # Keep failure details for diagnostics
+            if finiteness_failures:
+                aggregated_result["finiteness_gate_failures"] = finiteness_failures
+            return aggregated_result
+
+        # At least one epoch completed successfully
+        aggregated_result["ppo_update_performed"] = True
+        aggregated_result["finiteness_gate_skip_count"] = len(finiteness_failures)
+
+        # Only increment train_steps when an actual update occurred.
+        # This ensures entropy annealing and other schedules track real updates,
+        # not skipped finiteness-gate failures.
+        self.train_steps += 1
+
         for k, v in metrics.items():
             if not v:
                 aggregated_result[k] = 0.0  # type: ignore[literal-required]
                 continue
 
             first = v[0]
-            if isinstance(first, dict):
-                # Diagnostic payloads (ratio_diagnostic) are not aggregated
+            # Metrics that should NOT be averaged across epochs
+            # Note: head_nan_detected/head_inf_detected are ORed in the epoch loop
+            # and added directly to aggregated_result at lines 1091-1092, not here.
+            if k == "finiteness_gate_failures":
+                # Keep ALL failure dicts (one per epoch that failed)
+                aggregated_result[k] = v  # type: ignore[literal-required]
+            elif k == "early_stop_epoch":
+                # int|None, not float - take the value (there's only ever one)
                 aggregated_result[k] = first  # type: ignore[literal-required]
+            elif k == "ratio_diagnostic":
+                # Complex diagnostic dict - take first (only one per explosion event)
+                aggregated_result[k] = first  # type: ignore[literal-required]
+            elif k in ("ratio_max", "value_max", "pre_clip_grad_norm"):
+                # Threshold-based anomaly detection needs WORST CASE, not average.
+                # Averaging dilutes single-epoch explosions below detection thresholds.
+                # Used by: health_status_panel.py:534, anomaly_detector.py:109
+                aggregated_result[k] = max(v)  # type: ignore[literal-required]
+            elif k in ("ratio_min", "value_min"):
+                # Threshold-based anomaly detection needs WORST CASE, not average.
+                aggregated_result[k] = min(v)  # type: ignore[literal-required]
             else:
                 # Average across epochs (converts list[float] to float)
                 aggregated_result[k] = sum(v) / len(v)  # type: ignore[literal-required]
@@ -881,8 +1140,11 @@ class PPOAgent:
         aggregated_result["log_prob_max"] = log_prob_max_across_epochs
 
         # Add per-head ratio max tracking (Policy V2 - multi-head ratio explosion detection)
-        # Guard against no valid data (-inf values indicate no updates occurred)
-        # Use 1.0 (neutral ratio) as default for missing data
+        # MED-02: -inf indicates no updates occurred in this epoch.
+        # We use 1.0 (neutral ratio) as default because:
+        # - NaN would propagate and break downstream calculations
+        # - 1.0 is semantically "no clipping occurred" which is correct for zero updates
+        # - Consumers can distinguish "healthy 1.0" from "no data 1.0" via ppo_updates_count
         for key in HEAD_NAMES:
             ratio_key = f"head_{key}_ratio_max"
             max_val = head_ratio_max_across_epochs[key]
@@ -890,6 +1152,54 @@ class PPOAgent:
         aggregated_result["joint_ratio_max"] = (
             joint_ratio_max_across_epochs if joint_ratio_max_across_epochs != float("-inf") else 1.0
         )
+
+        # Add per-head NaN/Inf flags (for indicator lights)
+        aggregated_result["head_nan_detected"] = head_nan_detected
+        aggregated_result["head_inf_detected"] = head_inf_detected
+
+        # Add LSTM health metrics (TELE-340)
+        if lstm_health_history["lstm_h_rms"]:
+            # Average RMS magnitudes across epochs (scale-free)
+            aggregated_result["lstm_h_rms"] = sum(lstm_health_history["lstm_h_rms"]) / len(lstm_health_history["lstm_h_rms"])
+            aggregated_result["lstm_c_rms"] = sum(lstm_health_history["lstm_c_rms"]) / len(lstm_health_history["lstm_c_rms"])
+            aggregated_result["lstm_h_env_rms_mean"] = (
+                sum(lstm_health_history["lstm_h_env_rms_mean"]) / len(lstm_health_history["lstm_h_env_rms_mean"])
+            )
+            aggregated_result["lstm_c_env_rms_mean"] = (
+                sum(lstm_health_history["lstm_c_env_rms_mean"]) / len(lstm_health_history["lstm_c_env_rms_mean"])
+            )
+            # Worst-case per-env RMS across epochs (outlier detection)
+            aggregated_result["lstm_h_env_rms_max"] = max(lstm_health_history["lstm_h_env_rms_max"])
+            aggregated_result["lstm_c_env_rms_max"] = max(lstm_health_history["lstm_c_env_rms_max"])
+            # Max abs values across epochs (localized spike detection)
+            aggregated_result["lstm_h_max"] = max(lstm_health_history["lstm_h_max"])
+            aggregated_result["lstm_c_max"] = max(lstm_health_history["lstm_c_max"])
+            # Boolean OR across epochs (once NaN/Inf detected, stays detected)
+            aggregated_result["lstm_has_nan"] = any(lstm_health_history["lstm_has_nan"])
+            aggregated_result["lstm_has_inf"] = any(lstm_health_history["lstm_has_inf"])
+        else:
+            # No LSTM health data (non-recurrent policy or early stopped before first epoch)
+            aggregated_result["lstm_h_rms"] = None
+            aggregated_result["lstm_c_rms"] = None
+            aggregated_result["lstm_h_env_rms_mean"] = None
+            aggregated_result["lstm_h_env_rms_max"] = None
+            aggregated_result["lstm_c_env_rms_mean"] = None
+            aggregated_result["lstm_c_env_rms_max"] = None
+            aggregated_result["lstm_h_max"] = None
+            aggregated_result["lstm_c_max"] = None
+            aggregated_result["lstm_has_nan"] = None
+            aggregated_result["lstm_has_inf"] = None
+
+        # Add value function metrics (TELE-220 to TELE-228)
+        aggregated_result["v_return_correlation"] = value_func_metrics["v_return_correlation"]
+        aggregated_result["td_error_mean"] = value_func_metrics["td_error_mean"]
+        aggregated_result["td_error_std"] = value_func_metrics["td_error_std"]
+        aggregated_result["bellman_error"] = value_func_metrics["bellman_error"]
+        aggregated_result["return_p10"] = value_func_metrics["return_p10"]
+        aggregated_result["return_p50"] = value_func_metrics["return_p50"]
+        aggregated_result["return_p90"] = value_func_metrics["return_p90"]
+        aggregated_result["return_variance"] = value_func_metrics["return_variance"]
+        aggregated_result["return_skewness"] = value_func_metrics["return_skewness"]
 
         # Add CUDA memory metrics (collected once per update, not averaged)
         if cuda_memory_metrics:
@@ -917,6 +1227,7 @@ class PPOAgent:
             'checkpoint_version': CHECKPOINT_VERSION,
             'network_state_dict': self.policy.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
+            'value_normalizer_state_dict': self.value_normalizer.state_dict(),
             'train_steps': self.train_steps,
             'config': {
                 'gamma': self.gamma,
@@ -939,7 +1250,7 @@ class PPOAgent:
                 'num_envs': self.num_envs,
                 'max_steps_per_env': self.max_steps_per_env,
                 # Training hyperparameters
-                'n_epochs': self.n_epochs,
+                # P2 FIX: n_epochs removed from checkpoint - was dead code
                 'batch_size': self.batch_size,
                 'max_grad_norm': self.max_grad_norm,
                 'weight_decay': self.weight_decay,
@@ -960,12 +1271,22 @@ class PPOAgent:
         torch.save(save_dict, path)
 
     @classmethod
-    def load(cls, path: str | Path, device: str = "cuda:0") -> "PPOAgent":
+    def load(
+        cls,
+        path: str | Path,
+        device: str = "cuda:0",
+        compile_mode: str | None = None,  # P3 FIX: Runtime override for debugging
+    ) -> "PPOAgent":
         """Load agent from checkpoint file.
 
         Args:
             path: Path to checkpoint file
             device: Device to load model onto
+            compile_mode: Override checkpoint's torch.compile mode. Use "off" for debugging
+                         or to run on incompatible hardware. If None, uses checkpoint's
+                         saved mode. This is the recommended pattern for torch.compile
+                         portability - compiled graphs are hardware-specific and may
+                         not transfer across GPU architectures.
 
         Returns:
             PPOAgent with restored weights and configuration
@@ -987,6 +1308,16 @@ class PPOAgent:
             raise RuntimeError(
                 f"Incompatible checkpoint format: missing required field {e}. "
                 f"This checkpoint was saved with an older version that is no longer supported. "
+                f"Please retrain the model to create a compatible checkpoint."
+            ) from e
+
+        # Extract value_normalizer state (required since CHECKPOINT_VERSION 2)
+        try:
+            value_normalizer_state = checkpoint['value_normalizer_state_dict']
+        except KeyError as e:
+            raise RuntimeError(
+                f"Incompatible checkpoint format: missing required field {e}. "
+                f"This checkpoint was saved with an older version (before v2). "
                 f"Please retrain the model to create a compatible checkpoint."
             ) from e
 
@@ -1031,8 +1362,16 @@ class PPOAgent:
             )
         state_dim = int(architecture['state_dim'])
 
-        # === Extract compile_mode (default "off" for old checkpoints) ===
-        compile_mode = config.get('compile_mode', 'off')
+        # === Extract compile_mode (required since CHECKPOINT_VERSION 2) ===
+        # P3 FIX: Allow runtime override of compile_mode for debugging/portability
+        # torch.compile graphs are hardware-specific - compiled on A100 may fail on H100
+        if 'compile_mode' not in config:
+            raise RuntimeError(
+                "Incompatible checkpoint: config.compile_mode is required. "
+                "Please retrain the model to create a compatible checkpoint."
+            )
+        checkpoint_compile_mode = config['compile_mode']
+        effective_compile_mode = compile_mode if compile_mode is not None else checkpoint_compile_mode
 
         # === Create PolicyBundle (uncompiled - compile AFTER loading weights) ===
         from esper.tamiyo.policy.factory import create_policy
@@ -1046,9 +1385,10 @@ class PPOAgent:
         )
 
         # === Create agent with restored config ===
-        # Remove config params that are now part of PolicyBundle
+        # Remove config params that are now part of PolicyBundle or removed
+        # P2 FIX: Also filter 'n_epochs' - removed dead parameter (old checkpoints may have it)
         agent_config = {k: v for k, v in config.items()
-                       if k not in ('lstm_hidden_dim',)}
+                       if k not in ('lstm_hidden_dim', 'n_epochs')}
         agent = cls(
             policy=policy,
             slot_config=slot_config,
@@ -1061,11 +1401,20 @@ class PPOAgent:
         agent.optimizer.load_state_dict(optimizer_state_dict)
         agent.train_steps = train_steps
 
+        # P1 FIX: Restore value_normalizer state if present
+        # This ensures consistent normalization scale across training resumption
+        if value_normalizer_state is not None:
+            agent.value_normalizer.load_state_dict(value_normalizer_state)
+
         # === Apply torch.compile AFTER loading weights ===
         # Critical: Compile must happen after state_dict to ensure graph traces
         # the actual loaded weights, not random initialization.
-        if compile_mode != "off":
-            agent.policy.compile(mode=compile_mode, dynamic=True)
+        # P3 FIX: Use effective_compile_mode (may be overridden by parameter)
+        if effective_compile_mode != "off":
+            agent.policy.compile(mode=effective_compile_mode, dynamic=True)
+
+        # Update agent's stored compile_mode to reflect what we actually used
+        agent.compile_mode = effective_compile_mode
 
         return agent
 

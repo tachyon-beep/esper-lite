@@ -26,18 +26,12 @@ class ScoreboardMessageApp(App):
     def __init__(self) -> None:
         super().__init__()
         self.selected_record: BestRunRecord | None = None
-        self.pin_toggled_record_id: str | None = None
 
     def compose(self):
         yield Scoreboard(id="scoreboard")
 
     def on_scoreboard_best_run_selected(self, event: Scoreboard.BestRunSelected) -> None:
         self.selected_record = event.record
-
-    def on_scoreboard_best_run_pin_toggled(
-        self, event: Scoreboard.BestRunPinToggled
-    ) -> None:
-        self.pin_toggled_record_id = event.record_id
 
 
 @pytest.fixture
@@ -178,43 +172,6 @@ async def test_best_run_selected_message_emitted():
 
         assert app.selected_record is not None
         assert app.selected_record.record_id == "run-001"
-
-
-@pytest.mark.asyncio
-async def test_best_run_pin_toggled_message_emitted():
-    """request_pin_toggle should emit BestRunPinToggled for a selected row."""
-    app = ScoreboardMessageApp()
-    async with app.run_test() as pilot:
-        widget = app.query_one("#scoreboard", Scoreboard)
-
-        snapshot = SanctumSnapshot(
-            best_runs=[
-                BestRunRecord(
-                    record_id="run-001",
-                    env_id=0,
-                    episode=5,
-                    peak_accuracy=85.0,
-                    final_accuracy=82.0,
-                    epoch=10,
-                    growth_ratio=1.1,
-                    host_params=1000000,
-                    fossilized_count=1,
-                    pruned_count=0,
-                    seeds={},
-                    slot_ids=["r0c0"],
-                ),
-            ],
-        )
-        widget.update_snapshot(snapshot)
-
-        widget.table.focus()
-        widget.table.move_cursor(row=0)
-        await pilot.pause()
-
-        widget.request_pin_toggle()
-        await pilot.pause()
-
-        assert app.pin_toggled_record_id == "run-001"
 
 
 @pytest.mark.asyncio

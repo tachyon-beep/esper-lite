@@ -95,14 +95,14 @@ class TestPPOFeatureCompatibility:
             max_epochs=MAX_EPOCHS,
         )
 
-        # Obs V3: 23 base + 30 per slot × 3 slots = 113 dims
-        assert obs.shape == (1, 113), f"Expected (1, 113), got {obs.shape}"
+        # Obs V3: 23 base + 31 per slot × 3 slots = 116 dims
+        assert obs.shape == (1, 116), f"Expected (1, 116), got {obs.shape}"
         assert blueprint_indices.shape == (1, 3), f"Expected (1, 3), got {blueprint_indices.shape}"
 
         # Create PPO agent with matching dimensions
         policy = create_policy(
             policy_type="lstm",
-            state_dim=113,
+            state_dim=116,
             slot_config=slot_config,
             device="cpu",
             compile_mode="off",
@@ -110,7 +110,7 @@ class TestPPOFeatureCompatibility:
         agent = PPOAgent(policy=policy, device="cpu")
 
         # Convert to 2D tensor (add sequence dim)
-        state_tensor = obs.unsqueeze(1)  # [1, 1, 113]
+        state_tensor = obs.unsqueeze(1)  # [1, 1, 116]
         bp_indices = blueprint_indices.unsqueeze(1)  # [1, 1, 3]
         masks = create_all_valid_masks()
 
@@ -147,7 +147,7 @@ class TestPPOEndToEnd:
         # Create PPO agent
         policy = create_policy(
             policy_type="lstm",
-            state_dim=113,
+            state_dim=116,
             slot_config=slot_config,
             device="cpu",
             compile_mode="off",
@@ -198,7 +198,7 @@ class TestPPOEndToEnd:
 
         policy = create_policy(
             policy_type="lstm",
-            state_dim=113,
+            state_dim=116,
             slot_config=slot_config,
             device="cpu",
             compile_mode="off",

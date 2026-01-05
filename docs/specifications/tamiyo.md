@@ -110,7 +110,7 @@ class TamiyoPolicy(Protocol):
 > Immutable decision structure with action, target, reason, and confidence.
 
 ```python
-@dataclass
+@dataclass(frozen=True, slots=True)
 class TamiyoDecision:
     action: IntEnum           # From build_action_enum(topology)
     target_seed_id: str | None = None
@@ -118,12 +118,13 @@ class TamiyoDecision:
     confidence: float = 1.0
 ```
 
-**Key Methods:**
-- `to_command() -> AdaptationCommand` - Convert to Leyline's canonical command format
-
 **Computed Properties:**
 - `blueprint_id: str | None` - Extracted from GERMINATE_* action names
 - `action` includes `WAIT`, `GERMINATE_<BLUEPRINT>`, `FOSSILIZE`, `PRUNE`, `ADVANCE`
+
+**Note on action identity:**
+IntEnum values from different topologies can collide (e.g., `CnnAction.WAIT == TransformerAction.WAIT`).
+Always use `action.name` for grouping/counting, not the enum member or its value.
 
 ## 2.2 Configuration Schema
 
@@ -202,6 +203,11 @@ Tamiyo has two input paths:
 | `blueprint_indices` | `torch.Tensor` | Per-slot indices `[batch, seq_len, num_slots]` |
 | `masks` | `dict[str, torch.Tensor]` | Action masks per head (`slot`, `blueprint`, `style`, `tempo`, `alpha_target`, `alpha_speed`, `alpha_curve`, `op`) |
 | `hidden` | `tuple[Tensor, Tensor] | None` | Recurrent hidden state for LSTM bundles |
+
+**Slot report semantics (Obs V3):**
+- `features` are derived from `TrainingSignals` plus per-slot `SeedStateReport` snapshots (`MorphogeneticModel.get_slot_reports()`).
+- `get_slot_reports()` includes any slot where `SeedSlot.state is not None` (including PRUNED/EMBARGOED/RESETTING); it does not imply `SeedSlot.is_active`.
+- The per-slot Obs V3 `is_active` feature is 1.0 when a report is present (`state is not None`) and 0.0 only when the slot is truly empty (`state is None`).
 
 ## 3.2 Output Data
 

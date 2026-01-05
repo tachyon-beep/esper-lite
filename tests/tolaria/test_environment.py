@@ -39,6 +39,20 @@ class TestEnvironment:
         assert hasattr(model, "get_host_parameters")
         assert hasattr(model, "host")
 
+    def test_create_model_rejects_duplicate_slots(self):
+        """Duplicate slot IDs should raise ValueError with helpful message.
+
+        This prevents silent overwrites in MorphogeneticModel's ModuleDict
+        which would cause action/mask dimension mismatches in training.
+        """
+        with pytest.raises(ValueError, match="slots contains duplicates.*r0c1"):
+            create_model(device="cpu", slots=["r0c1", "r0c2", "r0c1"])
+
+    def test_create_model_rejects_multiple_duplicates(self):
+        """Multiple different duplicates should all be reported."""
+        with pytest.raises(ValueError, match="slots contains duplicates"):
+            create_model(device="cpu", slots=["r0c1", "r0c1", "r0c2", "r0c2"])
+
 
 class TestParseDevice:
     """Tests for parse_device function."""
@@ -129,6 +143,104 @@ class TestValidateDevice:
         """Malformed device strings should raise ValueError."""
         with pytest.raises(ValueError, match="Invalid device"):
             validate_device("cuda0")  # Missing colon
+
+    def test_validate_meta_device_raises(self):
+        """Meta device is valid PyTorch but unsupported by Esper.
+
+        Meta device creates tensors with shape/dtype but no actual storage.
+        Forward passes work but backward passes produce empty gradients,
+        causing silent training failures where the model appears to train
+        but never actually updates.
+        """
+        with pytest.raises(ValueError, match="Unsupported device.*meta"):
+            validate_device("meta")
+
+    def test_validate_xpu_device_raises(self):
+        """XPU (Intel GPU) is valid PyTorch but unsupported by Esper."""
+        with pytest.raises(ValueError, match="Unsupported device.*xpu"):
+            validate_device("xpu")
+
+    def test_validate_xla_device_raises(self):
+        """XLA (TPU) is valid PyTorch but unsupported by Esper."""
+        with pytest.raises(ValueError, match="Unsupported device.*xla"):
+            validate_device("xla")
+
+    def test_validate_hpu_device_raises(self):
+        """HPU (Habana Gaudi) is valid PyTorch but unsupported by Esper."""
+        with pytest.raises(ValueError, match="Unsupported device.*hpu"):
+            validate_device("hpu")
+
+    def test_validate_privateuseone_device_raises(self):
+        """Custom backend devices are unsupported by Esper."""
+        with pytest.raises(ValueError, match="Unsupported device.*privateuseone"):
+            validate_device("privateuseone")
+
+
+class TestValidateDeviceMPS:
+    """Tests for MPS device validation.
+
+    MPS (Metal Performance Shaders) is Apple Silicon's GPU backend.
+    Unlike CUDA, MPS only supports a single device (index 0).
+    """
+
+    def test_validate_mps_unavailable_raises(self):
+        """MPS validation should fail when MPS is unavailable."""
+        if torch.backends.mps.is_available():
+            pytest.skip("MPS is available, cannot test error case")
+
+        with pytest.raises(RuntimeError, match="MPS.*not available"):
+            validate_device("mps")
+
+    @pytest.mark.skipif(
+        not torch.backends.mps.is_available(), reason="MPS not available"
+    )
+    def test_validate_mps_bare_succeeds(self):
+        """Bare 'mps' should succeed on MPS-capable machines."""
+        dev = validate_device("mps")
+        assert dev.type == "mps"
+
+    @pytest.mark.skipif(
+        not torch.backends.mps.is_available(), reason="MPS not available"
+    )
+    def test_validate_mps_explicit_zero_succeeds(self):
+        """'mps:0' should succeed on MPS-capable machines."""
+        dev = validate_device("mps:0")
+        assert dev.type == "mps"
+        assert dev.index == 0
+
+    def test_validate_mps_invalid_index_raises(self, monkeypatch):
+        """MPS with index > 0 should raise ValueError.
+
+        Unlike CUDA, MPS only has one device. PyTorch accepts 'mps:1'
+        syntactically but it's not a valid device.
+
+        We monkeypatch MPS availability to test the validation logic
+        independently of hardware.
+        """
+        # Force MPS to appear available so we reach the index check
+        monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+
+        with pytest.raises(ValueError, match="MPS only supports a single device"):
+            validate_device("mps:1")
+
+    def test_validate_mps_high_index_raises(self, monkeypatch):
+        """High MPS indices like 'mps:99' should raise ValueError."""
+        monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+
+        with pytest.raises(ValueError, match="MPS only supports a single device"):
+            validate_device("mps:99")
+
+    def test_validate_mps_require_explicit_index_ignored(self, monkeypatch):
+        """require_explicit_index is intentionally ignored for MPS.
+
+        MPS only has one device, so there's no ambiguity with bare 'mps'.
+        This differs from CUDA where bare 'cuda' depends on the default device.
+        """
+        monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+
+        # Should succeed - no ambiguity with MPS
+        dev = validate_device("mps", require_explicit_index=True)
+        assert dev.type == "mps"
 
 
 class TestTolariaPublicAPI:

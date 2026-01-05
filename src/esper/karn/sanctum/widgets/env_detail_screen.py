@@ -302,6 +302,8 @@ class EnvDetailScreen(ModalScreen[None]):
         self,
         env_state: "EnvState",
         slot_ids: list[str],
+        *,
+        group_id: str | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the detail screen.
@@ -309,16 +311,23 @@ class EnvDetailScreen(ModalScreen[None]):
         Args:
             env_state: The environment state to display.
             slot_ids: List of slot IDs for the seed grid.
+            group_id: Policy group identifier for multi-policy runs.
         """
         super().__init__(**kwargs)
         self._env = env_state
         self._slot_ids = slot_ids
         self._env_id = env_state.env_id  # Track env_id for updates
+        self._group_id = group_id
 
     @property
     def env_id(self) -> int:
         """Return the environment ID this screen is showing."""
         return self._env_id
+
+    @property
+    def group_id(self) -> str | None:
+        """Return the policy group ID this screen is pinned to (if any)."""
+        return self._group_id
 
     def compose(self) -> Iterable[Widget]:
         """Compose the modal layout."""
@@ -608,8 +617,30 @@ class EnvDetailScreen(ModalScreen[None]):
 
         if rc.bounded_attribution != 0:
             style = "green" if rc.bounded_attribution > 0 else "red"
-            credits.append(f"Attr: {rc.bounded_attribution:+.3f}", style=style)
+            label = "EscΔ" if env.reward_mode == "escrow" else "Attr"
+            credits.append(f"{label}: {rc.bounded_attribution:+.3f}", style=style)
             has_credits = True
+        if env.reward_mode == "escrow":
+            if rc.stable_val_acc is not None:
+                if has_credits:
+                    credits.append("  ")
+                credits.append(f"StAcc: {rc.stable_val_acc:.1f}%", style="cyan")
+                has_credits = True
+
+            if has_credits:
+                credits.append("  ")
+            credits.append(
+                f"Esc: {rc.escrow_credit_prev:.2f}→{rc.escrow_credit_next:.2f} (tgt {rc.escrow_credit_target:.2f})",
+                style="cyan",
+            )
+            has_credits = True
+
+            if rc.escrow_forfeit != 0:
+                if has_credits:
+                    credits.append("  ")
+                style = "green" if rc.escrow_forfeit > 0 else "red"
+                credits.append(f"Forf: {rc.escrow_forfeit:+.3f}", style=style)
+                has_credits = True
         if rc.hindsight_credit != 0:
             hind_str = f"Hind: {rc.hindsight_credit:+.3f}"
             if rc.scaffold_count > 0:

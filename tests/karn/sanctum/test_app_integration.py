@@ -13,21 +13,28 @@ class TestSanctumAppIntegration:
 
     @pytest.mark.asyncio
     async def test_app_creates_all_widgets(self):
-        """All required widgets should be created on compose."""
+        """All required scaffold widgets should be created on compose."""
         from esper.karn.sanctum.app import SanctumApp
+        from esper.karn.sanctum.widgets.event_log import EventLog
+        from esper.karn.sanctum.widgets.tamiyo import TamiyoBrain
 
         mock_backend = MagicMock()
         mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
-        mock_backend.compute_reward_health.return_value = RewardHealthData()
+        mock_backend.compute_reward_health_by_group.return_value = {"default": RewardHealthData()}
 
         app = SanctumApp(backend=mock_backend, num_envs=4)
 
-        async with app.run_test():
+        async with app.run_test() as pilot:
             # Verify all widgets exist
             assert app.query_one("#env-overview") is not None
             assert app.query_one("#scoreboard") is not None
             assert app.query_one("#tamiyo-container") is not None  # Container for dynamic widgets
-            assert app.query_one("#event-log") is not None
+
+            # Tamiyo widgets mount dynamically; force a refresh for deterministic tests.
+            app._poll_and_refresh()
+            await pilot.pause()
+            tamiyo = app.query_one(TamiyoBrain)
+            assert tamiyo.query_one(EventLog) is not None
 
     @pytest.mark.asyncio
     async def test_snapshot_propagates_to_all_widgets(self):
@@ -40,7 +47,7 @@ class TestSanctumAppIntegration:
             envs={0: EnvState(env_id=0, host_accuracy=75.5)},
         )
         mock_backend.get_all_snapshots.return_value = {"default": snapshot}
-        mock_backend.compute_reward_health.return_value = RewardHealthData()
+        mock_backend.compute_reward_health_by_group.return_value = {"default": RewardHealthData()}
 
         # Use a fast refresh rate so timer fires quickly
         app = SanctumApp(backend=mock_backend, num_envs=4, refresh_rate=10.0)
@@ -61,7 +68,7 @@ class TestSanctumAppIntegration:
 
         mock_backend = MagicMock()
         mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
-        mock_backend.compute_reward_health.return_value = RewardHealthData()
+        mock_backend.compute_reward_health_by_group.return_value = {"default": RewardHealthData()}
 
         app = SanctumApp(backend=mock_backend, num_envs=16)
 
@@ -87,7 +94,7 @@ class TestSanctumAppIntegration:
 
         mock_backend = MagicMock()
         mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
-        mock_backend.compute_reward_health.return_value = RewardHealthData()
+        mock_backend.compute_reward_health_by_group.return_value = {"default": RewardHealthData()}
 
         app = SanctumApp(backend=mock_backend, num_envs=4)
 
@@ -104,18 +111,25 @@ async def test_new_layout_structure():
     """Test that new layout has correct panel structure."""
     from esper.karn.sanctum.app import SanctumApp
     from esper.karn.sanctum.backend import SanctumBackend
+    from esper.karn.sanctum.widgets.event_log import EventLog
+    from esper.karn.sanctum.widgets.tamiyo import TamiyoBrain
 
     backend = SanctumBackend()
     app = SanctumApp(backend=backend, num_envs=4)
 
-    async with app.run_test():
+    async with app.run_test() as pilot:
         # Should have EnvOverview and Scoreboard in top section
         assert app.query_one("#env-overview") is not None
         assert app.query_one("#scoreboard") is not None
 
-        # Should have EventLog and TamiyoBrain container in bottom section
-        assert app.query_one("#event-log") is not None
+        # Tamiyo container exists; Tamiyo widgets mount dynamically.
         assert app.query_one("#tamiyo-container") is not None  # Container for dynamic widgets
+
+        app._poll_and_refresh()
+        await pilot.pause()
+
+        tamiyo = app.query_one(TamiyoBrain)
+        assert tamiyo.query_one(EventLog) is not None
 
         # Should NOT have SystemResources or TrainingHealth
         from textual.css.query import NoMatches
@@ -127,10 +141,10 @@ async def test_new_layout_structure():
 
 @pytest.mark.asyncio
 async def test_sanctum_app_shows_multiple_tamiyo_widgets():
-    """A/B mode should show two TamiyoBrain widgets side-by-side."""
+    """A/B mode should collect two policies and show one at a time."""
     from esper.karn.sanctum.app import SanctumApp
     from esper.karn.sanctum.backend import SanctumBackend
-    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.widgets.tamiyo import TamiyoBrain
     from esper.leyline import TelemetryEvent, TelemetryEventType
 
     backend = SanctumBackend(num_envs=4)
@@ -162,11 +176,24 @@ async def test_sanctum_app_shows_multiple_tamiyo_widgets():
         widgets = app.query(TamiyoBrain)
         assert len(widgets) == 2
 
-        # Each should have correct group class
-        has_group_a = any("group-a" in " ".join(w.classes) for w in widgets)
-        has_group_b = any("group-b" in " ".join(w.classes) for w in widgets)
-        assert has_group_a, "Missing group-a widget"
-        assert has_group_b, "Missing group-b widget"
+        tamiyo_a = app.query_one("#tamiyo-a", TamiyoBrain)
+        tamiyo_b = app.query_one("#tamiyo-b", TamiyoBrain)
+
+        # Only one policy is shown at a time (default: first in order).
+        assert "hidden" not in tamiyo_a.classes
+        assert "hidden" in tamiyo_b.classes
+
+        # Toggle should flip active policy group and primary snapshot.
+        assert app._snapshot is not None
+        assert app._snapshot.tamiyo.group_id == "A"
+
+        app.action_toggle_policy_group()
+        await pilot.pause()
+
+        assert app._snapshot is not None
+        assert app._snapshot.tamiyo.group_id == "B"
+        assert "hidden" in tamiyo_a.classes
+        assert "hidden" not in tamiyo_b.classes
 
 
 @pytest.mark.asyncio
@@ -174,7 +201,7 @@ async def test_keyboard_switches_between_policies():
     """Tab key should cycle focus between policy widgets."""
     from esper.karn.sanctum.app import SanctumApp
     from esper.karn.sanctum.backend import SanctumBackend
-    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.widgets.tamiyo import TamiyoBrain
     from esper.leyline import TelemetryEvent, TelemetryEventType
 
     backend = SanctumBackend(num_envs=4)
@@ -300,7 +327,7 @@ async def test_backend_emits_create_multiple_tamiyo_widgets():
     """Backend emitting A/B events should create two TamiyoBrain widgets via production path."""
     from esper.karn.sanctum.app import SanctumApp
     from esper.karn.sanctum.backend import SanctumBackend
-    from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
+    from esper.karn.sanctum.widgets.tamiyo import TamiyoBrain
     from esper.leyline import TelemetryEvent, TelemetryEventType
 
     backend = SanctumBackend(num_envs=4)
@@ -424,95 +451,3 @@ async def test_filter_esc_does_nothing_when_no_filter():
         # State unchanged
         assert filter_input.value == ""
         assert app._filter_active is False
-
-
-# =============================================================================
-# Best Runs Pin Workflow Tests
-# =============================================================================
-
-
-@pytest.mark.asyncio
-async def test_pin_toggle_calls_backend():
-    """Pressing 'p' on scoreboard should toggle pin via backend.
-
-    Tests the keyboard shortcut workflow for pinning best runs.
-    """
-    from esper.karn.sanctum.app import SanctumApp
-    from esper.karn.sanctum.schema import BestRunRecord, SanctumSnapshot
-    from esper.karn.sanctum.widgets.scoreboard import Scoreboard
-
-    mock_backend = MagicMock()
-    snapshot = SanctumSnapshot(
-        best_runs=[
-            BestRunRecord(
-                record_id="run-001",
-                env_id=0,
-                episode=5,
-                peak_accuracy=85.0,
-                final_accuracy=82.0,
-                epoch=10,  # Epoch within episode when best was achieved
-                growth_ratio=1.1,
-                host_params=1000000,
-                fossilized_count=1,
-                pruned_count=0,
-                seeds={},
-                slot_ids=["r0c0"],
-                blueprint_spawns={},
-                blueprint_fossilized={},
-                blueprint_prunes={},
-                accuracy_history=[80.0, 85.0, 82.0],
-                reward_history=[0.1, 0.2],
-                action_history=["WAIT", "GERMINATE"],
-                pinned=False,
-            ),
-        ],
-    )
-    mock_backend.get_all_snapshots.return_value = {"default": snapshot}
-    mock_backend.compute_reward_health.return_value = RewardHealthData()
-    mock_backend.toggle_best_run_pin.return_value = True  # Returns new pin status
-
-    app = SanctumApp(backend=mock_backend, num_envs=4)
-
-    async with app.run_test() as pilot:
-        # Trigger initial refresh to populate scoreboard
-        app._poll_and_refresh()
-        await pilot.pause()
-
-        # Focus the scoreboard and ensure cursor is on first row
-        scoreboard = app.query_one("#scoreboard", Scoreboard)
-        scoreboard.table.focus()
-        scoreboard.table.move_cursor(row=0)
-        await pilot.pause()
-
-        # Call action directly (p key triggers this)
-        app.action_toggle_best_run_pin()
-        await pilot.pause()
-
-        # Backend should have been called with record_id
-        mock_backend.toggle_best_run_pin.assert_called_once_with("run-001")
-
-
-@pytest.mark.asyncio
-async def test_pin_toggle_no_op_without_selection():
-    """Pressing 'p' with no valid selection should do nothing."""
-    from esper.karn.sanctum.app import SanctumApp
-    from esper.karn.sanctum.schema import SanctumSnapshot
-
-    mock_backend = MagicMock()
-    # Empty best_runs - no rows to pin
-    snapshot = SanctumSnapshot(best_runs=[])
-    mock_backend.get_all_snapshots.return_value = {"default": snapshot}
-    mock_backend.compute_reward_health.return_value = RewardHealthData()
-
-    app = SanctumApp(backend=mock_backend, num_envs=4)
-
-    async with app.run_test() as pilot:
-        app._poll_and_refresh()
-        await pilot.pause()
-
-        # Press 'p' with no valid selection
-        await pilot.press("p")
-        await pilot.pause()
-
-        # Backend toggle should NOT have been called
-        mock_backend.toggle_best_run_pin.assert_not_called()

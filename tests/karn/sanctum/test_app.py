@@ -13,7 +13,7 @@ async def test_app_launches():
 
     mock_backend = MagicMock()
     mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
-    mock_backend.compute_reward_health.return_value = RewardHealthData()
+    mock_backend.compute_reward_health_by_group.return_value = {"default": RewardHealthData()}
 
     app = SanctumApp(backend=mock_backend)
     async with app.run_test():
@@ -24,18 +24,26 @@ async def test_app_launches():
 async def test_app_has_main_panels():
     """App should have all required panels."""
     from esper.karn.sanctum.widgets.reward_health import RewardHealthData
+    from esper.karn.sanctum.widgets.event_log import EventLog
+    from esper.karn.sanctum.widgets.tamiyo import TamiyoBrain
 
     mock_backend = MagicMock()
     mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
-    mock_backend.compute_reward_health.return_value = RewardHealthData()
+    mock_backend.compute_reward_health_by_group.return_value = {"default": RewardHealthData()}
 
     app = SanctumApp(backend=mock_backend)
-    async with app.run_test():
+    async with app.run_test() as pilot:
         # Main panels from existing TUI layout
         assert app.query_one("#env-overview") is not None
         assert app.query_one("#scoreboard") is not None
         assert app.query_one("#tamiyo-container") is not None  # Container for dynamic widgets
-        assert app.query_one("#event-log") is not None
+
+        # Tamiyo widgets mount dynamically; force a refresh for deterministic tests.
+        app._poll_and_refresh()
+        await pilot.pause()
+
+        tamiyo = app.query_one(TamiyoBrain)
+        assert tamiyo.query_one(EventLog) is not None
 
 
 @pytest.mark.asyncio
@@ -45,7 +53,7 @@ async def test_app_quit_binding():
 
     mock_backend = MagicMock()
     mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
-    mock_backend.compute_reward_health.return_value = RewardHealthData()
+    mock_backend.compute_reward_health_by_group.return_value = {"default": RewardHealthData()}
 
     app = SanctumApp(backend=mock_backend)
     quit_called = False
@@ -75,7 +83,7 @@ async def test_app_focus_navigation():
 
     mock_backend = MagicMock()
     mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
-    mock_backend.compute_reward_health.return_value = RewardHealthData()
+    mock_backend.compute_reward_health_by_group.return_value = {"default": RewardHealthData()}
 
     app = SanctumApp(backend=mock_backend)
     async with app.run_test() as pilot:
@@ -92,7 +100,7 @@ async def test_app_has_anomaly_strip():
 
     mock_backend = MagicMock()
     mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
-    mock_backend.compute_reward_health.return_value = RewardHealthData()
+    mock_backend.compute_reward_health_by_group.return_value = {"default": RewardHealthData()}
 
     app = SanctumApp(backend=mock_backend, num_envs=4)
     async with app.run_test():
@@ -109,7 +117,7 @@ async def test_app_shows_thread_death_modal():
 
     mock_backend = MagicMock()
     mock_backend.get_all_snapshots.return_value = {"default": SanctumSnapshot()}
-    mock_backend.compute_reward_health.return_value = RewardHealthData()
+    mock_backend.compute_reward_health_by_group.return_value = {"default": RewardHealthData()}
 
     # Create a thread that immediately stops
     dead_thread = threading.Thread(target=lambda: None)
@@ -125,4 +133,3 @@ async def test_app_shows_thread_death_modal():
 
         # Check that modal was shown
         assert app._thread_death_shown is True
-

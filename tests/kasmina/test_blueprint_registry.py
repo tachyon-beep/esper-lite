@@ -115,3 +115,43 @@ def test_legacy_catalog_still_works():
     """Legacy BlueprintCatalog API is removed (registry only)."""
     with pytest.raises(ImportError):
         from esper.kasmina.blueprints import BlueprintCatalog  # noqa: F401
+
+
+def test_action_enum_reflects_registry_changes():
+    """Action enum is independent of runtime registry mutations.
+
+    build_action_enum is constructed from Leyline's static BlueprintAction sets.
+    It must not depend on BlueprintRegistry state (which would pull in Kasmina
+    as a dependency and make the action space mutable at runtime).
+    """
+    from esper.kasmina.blueprints import BlueprintRegistry
+    from esper.tamiyo.action_enums import build_action_enum, clear_action_enum_cache
+
+    # Build initial enum
+    clear_action_enum_cache()
+    enum_before = build_action_enum("cnn")
+    initial_members = set(enum_before.__members__.keys())
+
+    # Register a test blueprint
+    @BlueprintRegistry.register("test_registry_change", "cnn", param_estimate=99999)
+    def create_test(dim: int) -> nn.Module:
+        return nn.Linear(dim, dim)
+
+    try:
+        # Rebuild enum - MUST NOT include the new blueprint (registry is not the source of truth)
+        clear_action_enum_cache()
+        enum_after = build_action_enum("cnn")
+        new_members = set(enum_after.__members__.keys())
+
+        assert "GERMINATE_TEST_REGISTRY_CHANGE" not in new_members
+
+    finally:
+        # Clean up
+        BlueprintRegistry.unregister("cnn", "test_registry_change")
+
+    # Final rebuild should NOT have the test blueprint
+    clear_action_enum_cache()
+    enum_final = build_action_enum("cnn")
+    final_members = set(enum_final.__members__.keys())
+    assert "GERMINATE_TEST_REGISTRY_CHANGE" not in final_members
+    assert final_members == initial_members, "Should return to original state"

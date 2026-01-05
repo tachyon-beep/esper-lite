@@ -15,8 +15,10 @@ from .registry import BlueprintRegistry
 
 
 @BlueprintRegistry.register("norm", "transformer", param_estimate=800, description="LayerNorm only")
-def create_transformer_norm_seed(dim: int) -> nn.Module:
+def create_transformer_norm_seed(dim: int, **kwargs: Any) -> nn.Module:
     """LayerNorm enhancement seed for transformers."""
+    if kwargs:
+        raise ValueError(f"Unexpected kwargs for transformer/norm: {sorted(kwargs)}")
 
     class TransformerNormSeed(nn.Module):
         def __init__(self, dim: int):
@@ -32,8 +34,10 @@ def create_transformer_norm_seed(dim: int) -> nn.Module:
 
 
 @BlueprintRegistry.register("lora", "transformer", param_estimate=6000, description="Low-rank adapter (rank=8)")
-def create_lora_seed(dim: int, rank: int = 8) -> nn.Module:
+def create_lora_seed(dim: int, rank: int = 8, **kwargs: Any) -> nn.Module:
     """Low-rank adapter seed (LoRA-style)."""
+    if kwargs:
+        raise ValueError(f"Unexpected kwargs for transformer/lora: {sorted(kwargs)}")
 
     class LoRASeed(nn.Module):
         def __init__(self, dim: int, rank: int):
@@ -52,7 +56,7 @@ def create_lora_seed(dim: int, rank: int = 8) -> nn.Module:
     "lora_large", "transformer", param_estimate=25000,
     description="Large low-rank adapter (rank=32) - more expressive than standard LoRA"
 )
-def create_lora_large_seed(dim: int, rank: int = 32) -> nn.Module:
+def create_lora_large_seed(dim: int, rank: int = 32, **kwargs: Any) -> nn.Module:
     """Large low-rank adapter seed - more expressive than standard LoRA.
 
     Uses rank=32 instead of rank=8, providing 4× more capacity for
@@ -63,6 +67,8 @@ def create_lora_large_seed(dim: int, rank: int = 32) -> nn.Module:
     - Up: 32 * 384 = 12,288 params
     - Total: 24,576 params
     """
+    if kwargs:
+        raise ValueError(f"Unexpected kwargs for transformer/lora_large: {sorted(kwargs)}")
 
     class LoRALargeSeed(nn.Module):
         def __init__(self, dim: int, rank: int):
@@ -81,7 +87,9 @@ def create_lora_large_seed(dim: int, rank: int = 32) -> nn.Module:
     "attention", "transformer", param_estimate=591000,
     description="Additional self-attention head (~591k params for dim=384)"
 )
-def create_transformer_attention_seed(dim: int, n_head: int = 4) -> nn.Module:
+def create_transformer_attention_seed(
+    dim: int, n_head: int = 4, **kwargs: Any
+) -> nn.Module:
     """Additional self-attention head seed.
 
     For dim=384 with n_head=4:
@@ -89,6 +97,8 @@ def create_transformer_attention_seed(dim: int, n_head: int = 4) -> nn.Module:
     - Output projection: 384 * 384 + 384 = 147,840 params
     - Total: 591,360 params
     """
+    if kwargs:
+        raise ValueError(f"Unexpected kwargs for transformer/attention: {sorted(kwargs)}")
     if dim % n_head != 0:
         raise ValueError(f"Transformer attention seed requires dim % n_head == 0, got dim={dim}, n_head={n_head}")
 
@@ -124,7 +134,9 @@ def create_transformer_attention_seed(dim: int, n_head: int = 4) -> nn.Module:
     "mlp_small", "transformer", param_estimate=591000,
     description="Small MLP (2x expansion) - same tier as attention (~591k params)"
 )
-def create_transformer_mlp_small_seed(dim: int, expansion: int = 2, checkpoint: bool = False) -> nn.Module:
+def create_transformer_mlp_small_seed(
+    dim: int, expansion: int = 2, checkpoint: bool = False, **kwargs: Any
+) -> nn.Module:
     """Small MLP seed with 2× expansion - half the params of full 4× MLP.
 
     Uses 2× expansion instead of 4×, halving parameters while still
@@ -135,6 +147,8 @@ def create_transformer_mlp_small_seed(dim: int, expansion: int = 2, checkpoint: 
     - fc2: 768 * 384 + 384 = 295,296 params
     - Total: 590,976 params (vs 1.18M for 4× expansion)
     """
+    if kwargs:
+        raise ValueError(f"Unexpected kwargs for transformer/mlp_small: {sorted(kwargs)}")
 
     class TransformerMLPSmallSeed(nn.Module):
         def __init__(self, dim: int, expansion: int, use_checkpoint: bool):
@@ -159,8 +173,12 @@ def create_transformer_mlp_small_seed(dim: int, expansion: int = 2, checkpoint: 
 @BlueprintRegistry.register(
     "mlp", "transformer", param_estimate=1200000, description="Additional MLP (4x expansion)"
 )
-def create_transformer_mlp_seed(dim: int, expansion: int = 4, checkpoint: bool = False) -> nn.Module:
+def create_transformer_mlp_seed(
+    dim: int, expansion: int = 4, checkpoint: bool = False, **kwargs: Any
+) -> nn.Module:
     """Additional MLP seed with optional activation checkpointing."""
+    if kwargs:
+        raise ValueError(f"Unexpected kwargs for transformer/mlp: {sorted(kwargs)}")
 
     class TransformerMLPSeed(nn.Module):
         def __init__(self, dim: int, expansion: int, use_checkpoint: bool):
@@ -186,7 +204,7 @@ def create_transformer_mlp_seed(dim: int, expansion: int = 4, checkpoint: bool =
     "flex_attention", "transformer", param_estimate=591000,
     description="FlexAttention with causal mask (~591k params for dim=384)"
 )
-def create_flex_attention_seed(dim: int, n_head: int = 4) -> nn.Module:
+def create_flex_attention_seed(dim: int, n_head: int = 4, **kwargs: Any) -> nn.Module:
     """FlexAttention seed with customizable attention patterns.
 
     Uses PyTorch's FlexAttention API for block-sparse attention patterns.
@@ -197,6 +215,8 @@ def create_flex_attention_seed(dim: int, n_head: int = 4) -> nn.Module:
     - Output projection: 384 * 384 + 384 = 147,840 params
     - Total: 591,360 params
     """
+    if kwargs:
+        raise ValueError(f"Unexpected kwargs for transformer/flex_attention: {sorted(kwargs)}")
     if dim % n_head != 0:
         raise ValueError(
             f"FlexAttention seed requires dim % n_head == 0, got dim={dim}, n_head={n_head}"
@@ -295,11 +315,13 @@ def create_flex_attention_seed(dim: int, n_head: int = 4) -> nn.Module:
 
 
 @BlueprintRegistry.register("noop", "transformer", param_estimate=0, description="Identity seed")
-def create_transformer_noop_seed(dim: int) -> nn.Module:
+def create_transformer_noop_seed(dim: int, **kwargs: Any) -> nn.Module:
     """No-op blueprint for transformer (identity function).
 
     Used when the agent selects NOOP blueprint for a transformer host.
     """
+    if kwargs:
+        raise ValueError(f"Unexpected kwargs for transformer/noop: {sorted(kwargs)}")
     return nn.Identity()
 
 

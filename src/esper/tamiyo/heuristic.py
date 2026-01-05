@@ -34,7 +34,7 @@ from esper.leyline import (
     DEFAULT_BLUEPRINT_PENALTY_THRESHOLD,
     DEFAULT_MIN_IMPROVEMENT_TO_FOSSILIZE,
 )
-from esper.leyline.actions import build_action_enum
+from esper.tamiyo.action_enums import build_action_enum
 from esper.tamiyo.decisions import TamiyoDecision
 
 if TYPE_CHECKING:
@@ -120,6 +120,13 @@ class HeuristicTamiyo:
             raise ValueError(
                 f"blueprint_rotation contains blueprints not available for "
                 f"topology '{topology}': {sorted(str(b) for b in invalid_blueprints)}. "
+                f"Available: {sorted(str(b) for b in available_blueprints)}"
+            )
+
+        if not self.config.blueprint_rotation:
+            raise ValueError(
+                f"blueprint_rotation cannot be empty for topology '{topology}'. "
+                f"At least one blueprint is required. "
                 f"Available: {sorted(str(b) for b in available_blueprints)}"
             )
 

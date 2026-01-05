@@ -1,7 +1,7 @@
 """ShapleyPanel - Visualization of Shapley value attribution.
 
 Shows per-slot Shapley values with uncertainty bounds and significance indicators.
-Shapley values are computed via permutation sampling at episode boundaries.
+Shapley values are computed via permutation sampling at PPO batch boundaries.
 """
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ class ShapleyPanel(Static):
         lines = []
         lines.append(Text("Shapley values unavailable", style="dim"))
         lines.append(Text(""))
-        lines.append(Text("Computed at episode boundaries", style="dim"))
+        lines.append(Text("Computed at PPO batch boundaries", style="dim"))
         lines.append(Text("when 2+ seeds are active.", style="dim"))
 
         content = Group(*lines)
@@ -61,9 +61,9 @@ class ShapleyPanel(Static):
         """Render the Shapley value visualization."""
         lines = []
 
-        # Header with epoch info
-        epoch_str = f"Epoch {self._snapshot.epoch}" if self._snapshot.epoch > 0 else "Latest"
-        lines.append(Text(f"[{epoch_str}]", style="dim"))
+        # Header with batch info (Shapley is computed at PPO batch boundaries)
+        batch_str = f"Batch {self._snapshot.epoch}" if self._snapshot.epoch > 0 else "Latest"
+        lines.append(Text(f"[{batch_str}]", style="dim"))
         lines.append(Text(""))
 
         # Get ranked slots

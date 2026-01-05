@@ -147,12 +147,34 @@ class DiagnosticTracker:
         self._grad_stats: dict[str, GradientStats] = {}
         self._hooks: list[torch.utils.hooks.RemovableHandle] = []
 
+        # Percentile quantile cache (lazily populated per device/dtype)
+        # Avoids recreating q_tensor on every backward pass
+        self._percentile_q_cache: dict[tuple[torch.device, torch.dtype], torch.Tensor] = {}
+        self._percentile_q_values: list[float] = (
+            [p / 100.0 for p in config.gradients.percentiles]
+            if config.gradients.enabled and config.gradients.percentiles
+            else []
+        )
+
         # Register gradient hooks if enabled
         if config.gradients.enabled:
             self._register_gradient_hooks()
 
         # Loss history for noise estimation
         self._batch_losses: list[float] = []
+
+    def _get_percentile_q(self, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+        """Get cached quantile tensor for the given device and dtype.
+
+        Caches per (device, dtype) pair to handle multi-device models and
+        mixed precision training without redundant tensor allocations.
+        """
+        key = (device, dtype)
+        if key not in self._percentile_q_cache:
+            self._percentile_q_cache[key] = torch.tensor(
+                self._percentile_q_values, device=device, dtype=dtype
+            )
+        return self._percentile_q_cache[key]
 
     def _should_track_layer(self, name: str) -> bool:
         """Check if we should track gradients for this layer."""
@@ -170,56 +192,107 @@ class DiagnosticTracker:
                 )
                 self._hooks.append(hook)
 
+    # Subsampling threshold for percentile computation on large gradient tensors.
+    # 10k samples give 99%+ accuracy on percentile estimates while reducing
+    # O(n log n) quantile sort cost significantly for large layers.
+    _PERCENTILE_SUBSAMPLE_SIZE: int = 10000
+
     def _record_grad(self, name: str, grad: torch.Tensor) -> None:
         """Record gradient statistics for a layer.
 
         Uses batched tensor ops with single .tolist() sync to avoid
         per-metric GPU synchronization in this hot path (called every backward).
+
+        Performance optimizations:
+        - Cached quantile tensor per (device, dtype) to avoid allocation churn
+        - Subsampling for large gradient tensors (>10k elements) before quantile
+        - Single GPU sync via batched tolist()
+
+        Respects config flags:
+        - track_norm: If False, skip norm computation (stats.norm stays 0.0)
+        - track_std: If False, skip std computation (stats.std stays 0.0)
         """
         if grad is None:
             return
 
         cfg = self.config.gradients
-        # Detach once at entry for consistency (no-op if already detached in hook context)
-        grad = grad.detach()
-        grad_flat = grad.abs().flatten()
+        grad_flat = grad.flatten()
 
         # Batch all scalar computations into a single tensor for one sync
-        stats_tensors = [
-            grad.norm(),
-            grad.std(),
-            grad.mean(),
-        ]
+        # Track which metrics we're computing for correct unpacking
+        stats_tensors: list[torch.Tensor] = []
+        metric_keys: list[str] = []
 
-        if cfg.detect_vanishing:
-            stats_tensors.append((grad_flat < cfg.vanishing_threshold).float().mean())
-        if cfg.detect_exploding:
-            stats_tensors.append((grad_flat > cfg.exploding_threshold).float().mean())
+        if cfg.track_norm:
+            stats_tensors.append(grad.norm())
+            metric_keys.append("norm")
+        if cfg.track_std:
+            stats_tensors.append(grad.std())
+            metric_keys.append("std")
 
-        # Percentiles (expensive, only if configured)
-        percentile_keys = []
+        # Mean is always tracked (no config flag for it)
+        stats_tensors.append(grad.mean())
+        metric_keys.append("mean")
+
+        # Vanishing/exploding detection uses abs - compute only if needed
+        if cfg.detect_vanishing or cfg.detect_exploding:
+            grad_abs = grad_flat.abs()
+            if cfg.detect_vanishing:
+                stats_tensors.append((grad_abs < cfg.vanishing_threshold).float().mean())
+                metric_keys.append("vanishing_pct")
+            if cfg.detect_exploding:
+                stats_tensors.append((grad_abs > cfg.exploding_threshold).float().mean())
+                metric_keys.append("exploding_pct")
+
+        # Percentiles with subsampling for large tensors and cached q_tensor
+        # torch.quantile with a tensor of q values does ONE sort instead of N sorts
+        percentile_keys: list[int] = list(cfg.percentiles) if cfg.percentiles else []
+        percentile_results: torch.Tensor | None = None
         if cfg.percentiles:
-            grad_float = grad_flat.float()
-            for p in cfg.percentiles:
-                stats_tensors.append(torch.quantile(grad_float, p / 100))
-                percentile_keys.append(p)
+            # Subsample large tensors for efficiency (10k samples gives valid estimates)
+            if grad_flat.numel() > self._PERCENTILE_SUBSAMPLE_SIZE:
+                indices = torch.randperm(
+                    grad_flat.numel(), device=grad.device
+                )[: self._PERCENTILE_SUBSAMPLE_SIZE]
+                sample = grad_flat[indices]
+            else:
+                sample = grad_flat
 
-        # Single GPU sync for all stats
-        all_values = torch.stack(stats_tensors).tolist()
+            # Use native dtype if float, else cast to float32
+            if sample.dtype in (torch.float32, torch.float16, torch.bfloat16):
+                sample_for_quantile = sample
+            else:
+                sample_for_quantile = sample.float()
 
-        # Unpack values
+            q_tensor = self._get_percentile_q(grad.device, sample_for_quantile.dtype)
+            percentile_results = torch.quantile(sample_for_quantile, q_tensor)
+
+        # Single GPU sync for all stats - concatenate scalars with percentile vector
+        if stats_tensors and percentile_results is not None:
+            all_values = torch.cat([torch.stack(stats_tensors), percentile_results]).tolist()
+        elif stats_tensors:
+            all_values = torch.stack(stats_tensors).tolist()
+        elif percentile_results is not None:
+            all_values = percentile_results.tolist()
+        else:
+            all_values = []
+
+        # Unpack values using tracked metric keys
         stats = GradientStats(layer_name=name)
-        stats.norm = all_values[0]
-        stats.std = all_values[1]
-        stats.mean = all_values[2]
+        idx = 0
+        for key in metric_keys:
+            if key == "norm":
+                stats.norm = all_values[idx]
+            elif key == "std":
+                stats.std = all_values[idx]
+            elif key == "mean":
+                stats.mean = all_values[idx]
+            elif key == "vanishing_pct":
+                stats.vanishing_pct = all_values[idx]
+            elif key == "exploding_pct":
+                stats.exploding_pct = all_values[idx]
+            idx += 1
 
-        idx = 3
-        if cfg.detect_vanishing:
-            stats.vanishing_pct = all_values[idx]
-            idx += 1
-        if cfg.detect_exploding:
-            stats.exploding_pct = all_values[idx]
-            idx += 1
         for p in percentile_keys:
             stats.percentiles[p] = all_values[idx]
             idx += 1
@@ -273,35 +346,48 @@ class DiagnosticTracker:
         """Estimate loss landscape sharpness via perturbation.
 
         Higher sharpness = sharper minimum = less generalizable.
+
+        Note: This method temporarily sets model.eval() for inference but
+        restores the original training mode on exit. Telemetry collection
+        should be side-effect free with respect to training state.
+
+        Respects config flags:
+        - enabled: If False, skip all loss landscape analysis
+        - estimate_sharpness: If False, skip sharpness estimation specifically
         """
-        if not self.config.loss_landscape.enabled:
+        cfg = self.config.loss_landscape
+        if not cfg.enabled or not cfg.estimate_sharpness:
             return None
 
-        cfg = self.config.loss_landscape
+        # Preserve and restore training mode to avoid leaking state into training loop
+        was_training = self.model.training
         self.model.eval()
 
-        # Get baseline loss
-        baseline_loss = self._compute_val_loss(val_loader, criterion)
+        try:
+            # Get baseline loss
+            baseline_loss = self._compute_val_loss(val_loader, criterion)
 
-        # Perturb weights and measure loss changes
-        perturbations = []
-        original_state = {k: v.clone() for k, v in self.model.state_dict().items()}
+            # Perturb weights and measure loss changes
+            perturbations = []
+            original_state = {k: v.clone() for k, v in self.model.state_dict().items()}
 
-        for _ in range(cfg.perturbation_samples):
-            # Add random perturbation to weights
-            with torch.no_grad():
-                for param in self.model.parameters():
-                    noise = torch.randn_like(param) * cfg.perturbation_scale
-                    param.add_(noise)
+            for _ in range(cfg.perturbation_samples):
+                # Add random perturbation to weights
+                with torch.no_grad():
+                    for param in self.model.parameters():
+                        noise = torch.randn_like(param) * cfg.perturbation_scale
+                        param.add_(noise)
 
-            # Measure perturbed loss
-            perturbed_loss = self._compute_val_loss(val_loader, criterion)
-            perturbations.append(abs(perturbed_loss - baseline_loss))
+                # Measure perturbed loss
+                perturbed_loss = self._compute_val_loss(val_loader, criterion)
+                perturbations.append(abs(perturbed_loss - baseline_loss))
 
-            # Restore original weights
-            self.model.load_state_dict(original_state)
+                # Restore original weights
+                self.model.load_state_dict(original_state)
 
-        return float(np.mean(perturbations)) / cfg.perturbation_scale
+            return float(np.mean(perturbations)) / cfg.perturbation_scale
+        finally:
+            self.model.train(was_training)
 
     def _compute_val_loss(self, val_loader: Any, criterion: Any) -> float:
         """Compute validation loss."""
@@ -400,8 +486,9 @@ class DiagnosticTracker:
         """Generate human/LLM-readable summary of current state."""
         parts = []
 
-        # Loss trajectory
-        if len(self.history) >= 2:
+        # Loss trajectory (compare current snapshot to most recent in history)
+        # Note: snapshot is NOT in history yet when this is called from end_epoch()
+        if self.history:
             prev = self.history[-1]
             loss_delta = prev.val_loss - snapshot.val_loss
             if loss_delta > 0.01:
@@ -409,7 +496,7 @@ class DiagnosticTracker:
             elif loss_delta < -0.01:
                 parts.append(f"Loss degrading ({prev.val_loss:.3f} -> {snapshot.val_loss:.3f})")
             else:
-                plateau_len = self._plateau_length()
+                plateau_len = self._plateau_length(snapshot.val_loss)
                 if plateau_len >= 3:
                     parts.append(f"Loss plateaued for {plateau_len} epochs at ~{snapshot.val_loss:.3f}")
 
@@ -439,17 +526,34 @@ class DiagnosticTracker:
 
         return " | ".join(parts) if parts else "Training normally"
 
-    def _plateau_length(self) -> int:
-        """Count epochs in current plateau."""
-        if len(self.history) < 2:
-            return 0
+    def _plateau_length(self, current_loss: float | None = None) -> int:
+        """Count epochs in current plateau (including current epoch).
 
+        Args:
+            current_loss: The current epoch's validation loss. If provided,
+                counts from current backward. If None, uses history[-1].
+
+        Returns:
+            Number of consecutive epochs with similar loss values.
+            Returns 0 if no history and no current_loss provided.
+        """
         threshold = 0.005
-        count = 0
-        recent_loss = self.history[-1].val_loss
 
-        for snap in reversed(list(self.history)[:-1]):
-            if abs(snap.val_loss - recent_loss) < threshold:
+        # Determine reference loss: current_loss if given, else history[-1]
+        if current_loss is not None:
+            ref_loss = current_loss
+            count = 1  # Start at 1 to include current epoch
+            search_history = list(self.history)  # Compare against all history
+        elif self.history:
+            ref_loss = self.history[-1].val_loss
+            count = 1  # Start at 1 to include most recent
+            search_history = list(self.history)[:-1]  # Compare against all but last
+        else:
+            return 0  # No reference point
+
+        # Count consecutive epochs with similar loss going backwards
+        for snap in reversed(search_history):
+            if abs(snap.val_loss - ref_loss) < threshold:
                 count += 1
             else:
                 break
@@ -465,7 +569,7 @@ class DiagnosticTracker:
         """Detect issues that might need attention."""
         flags = []
 
-        if self._plateau_length() >= 3:
+        if self._plateau_length(snapshot.val_loss) >= 3:
             flags.append("sustained_plateau")
 
         if snapshot.gradient_health:

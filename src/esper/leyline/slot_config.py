@@ -53,6 +53,8 @@ class SlotConfig:
         Raises:
             IndexError: If index is out of range.
         """
+        if idx < 0 or idx >= len(self.slot_ids):
+            raise IndexError(idx)
         return self.slot_ids[idx]
 
     def index_for_slot_id(self, slot_id: str) -> int:

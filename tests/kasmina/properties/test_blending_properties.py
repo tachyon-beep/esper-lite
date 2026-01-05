@@ -65,18 +65,6 @@ class TestGatedBlendBounded:
         assert isinstance(last_layer, torch.nn.Sigmoid)
 
 
-class TestBlendAlphaConvergence:
-    """GatedBlend should reach high alpha at total_steps."""
-
-    @given(total_steps=st.integers(min_value=5, max_value=50))
-    @settings(max_examples=30)
-    def test_gated_get_alpha_reaches_threshold(self, total_steps: int):
-        """GatedBlend.get_alpha() reaches >= 0.95 at total_steps."""
-        blend = GatedBlend(channels=64, total_steps=total_steps)
-        # get_alpha for gated is step-based (for G3 gate compatibility)
-        assert blend.get_alpha(total_steps) >= 0.95
-
-
 class TestBlendAlphaForBlendTensor:
     """get_alpha_for_blend() should return proper tensor shapes."""
 

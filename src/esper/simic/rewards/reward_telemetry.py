@@ -24,8 +24,16 @@ class RewardComponentsTelemetry:
     seed_contribution: float | None = None
     bounded_attribution: float | None = None
     progress_since_germination: float | None = None
+    stable_val_acc: float | None = None  # Stable accuracy used for escrow/progress gating
     attribution_discount: float = 1.0  # Sigmoid discount for negative total_improvement
     ratio_penalty: float = 0.0  # Penalty for high contribution with low/negative improvement (ransomware)
+
+    # Escrow attribution (RewardMode.ESCROW)
+    escrow_credit_prev: float = 0.0
+    escrow_credit_target: float = 0.0
+    escrow_delta: float = 0.0
+    escrow_credit_next: float = 0.0
+    escrow_forfeit: float = 0.0  # Terminal clawback for non-fossilized escrow credit
 
     # Penalties
     compute_rent: float = 0.0
@@ -96,6 +104,7 @@ class RewardComponentsTelemetry:
             + self.blending_warning
             + self.holding_warning
             + self.ratio_penalty
+            + self.escrow_forfeit
         )
         return abs(shaped) / abs(self.total_reward)
 
@@ -110,8 +119,14 @@ class RewardComponentsTelemetry:
             "seed_contribution": self.seed_contribution,
             "bounded_attribution": self.bounded_attribution,
             "progress_since_germination": self.progress_since_germination,
+            "stable_val_acc": self.stable_val_acc,
             "attribution_discount": self.attribution_discount,
             "ratio_penalty": self.ratio_penalty,
+            "escrow_credit_prev": self.escrow_credit_prev,
+            "escrow_credit_target": self.escrow_credit_target,
+            "escrow_delta": self.escrow_delta,
+            "escrow_credit_next": self.escrow_credit_next,
+            "escrow_forfeit": self.escrow_forfeit,
             "compute_rent": self.compute_rent,
             "alpha_shock": self.alpha_shock,
             "blending_warning": self.blending_warning,
@@ -156,8 +171,14 @@ class RewardComponentsTelemetry:
             seed_contribution=float(data["seed_contribution"]) if data["seed_contribution"] is not None else None,
             bounded_attribution=float(data["bounded_attribution"]) if data["bounded_attribution"] is not None else None,
             progress_since_germination=float(data["progress_since_germination"]) if data["progress_since_germination"] is not None else None,
+            stable_val_acc=float(data["stable_val_acc"]) if data["stable_val_acc"] is not None else None,
             attribution_discount=float(data["attribution_discount"]),  # type: ignore[arg-type]
             ratio_penalty=float(data["ratio_penalty"]),  # type: ignore[arg-type]
+            escrow_credit_prev=float(data["escrow_credit_prev"]),  # type: ignore[arg-type]
+            escrow_credit_target=float(data["escrow_credit_target"]),  # type: ignore[arg-type]
+            escrow_delta=float(data["escrow_delta"]),  # type: ignore[arg-type]
+            escrow_credit_next=float(data["escrow_credit_next"]),  # type: ignore[arg-type]
+            escrow_forfeit=float(data["escrow_forfeit"]),  # type: ignore[arg-type]
             compute_rent=float(data["compute_rent"]),  # type: ignore[arg-type]
             alpha_shock=float(data["alpha_shock"]),  # type: ignore[arg-type]
             blending_warning=float(data["blending_warning"]),  # type: ignore[arg-type]

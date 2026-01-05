@@ -61,7 +61,7 @@ class HistoricalEnvDetail(ModalScreen[None]):
         height: 4;
         padding: 0 1;
         background: $surface-lighten-1;
-        margin-bottom: 1;
+        margin-bottom: 0;
     }
 
     HistoricalEnvDetail .seed-grid {
@@ -95,18 +95,19 @@ class HistoricalEnvDetail(ModalScreen[None]):
         border-left: solid $secondary-lighten-2;
     }
 
-    HistoricalEnvDetail .counterfactual-section {
+    HistoricalEnvDetail .attribution-section {
         height: auto;
         margin-top: 1;
         border-top: solid $secondary-lighten-2;
         padding-top: 1;
     }
 
-    HistoricalEnvDetail .shapley-section {
-        height: auto;
-        margin-top: 1;
-        border-top: solid $secondary-lighten-2;
-        padding-top: 1;
+    HistoricalEnvDetail .attribution-section CounterfactualPanel {
+        width: 2fr;
+    }
+
+    HistoricalEnvDetail .attribution-section ShapleyPanel {
+        width: 1fr;
     }
 
     HistoricalEnvDetail .footer-hint {
@@ -147,21 +148,18 @@ class HistoricalEnvDetail(ModalScreen[None]):
                 with Vertical(classes="graveyard-section"):
                     yield Static(self._render_graveyard(), id="seed-graveyard")
 
-            # Counterfactual analysis section (always visible for stable layout)
+            # Attribution section: Counterfactual + Shapley side by side
             from esper.karn.sanctum.schema import CounterfactualSnapshot, ShapleySnapshot
             matrix = self._record.counterfactual_matrix or CounterfactualSnapshot(
                 strategy="unavailable"
             )
-            with Vertical(classes="counterfactual-section"):
+            shapley = self._record.shapley_snapshot or ShapleySnapshot()
+            with Horizontal(classes="attribution-section"):
                 yield CounterfactualPanel(
                     matrix,
                     seeds=self._record.seeds,
                     id="counterfactual-panel",
                 )
-
-            # Shapley attribution section (always visible for stable layout)
-            shapley = self._record.shapley_snapshot or ShapleySnapshot()
-            with Vertical(classes="shapley-section"):
                 yield ShapleyPanel(
                     shapley,
                     seeds=self._record.seeds,
@@ -169,9 +167,8 @@ class HistoricalEnvDetail(ModalScreen[None]):
                 )
 
             # Footer hint
-            pin_status = "📌 Pinned" if self._record.pinned else "Not pinned (right-click to pin)"
             yield Static(
-                f"[dim]Press ESC, Q, or click to close  │  {pin_status}[/dim]",
+                "[dim]Press ESC, Q, or click to close[/dim]",
                 classes="footer-hint",
             )
 
@@ -221,11 +218,6 @@ class HistoricalEnvDetail(ModalScreen[None]):
             header.append("  │  ")
             cohort_color = "cyan" if record.reward_mode == "A" else "magenta"
             header.append(f"Cohort {record.reward_mode}", style=cohort_color)
-
-        # Pin status
-        if record.pinned:
-            header.append("  │  ")
-            header.append("📌 PINNED", style="bold cyan")
 
         # Second line: parameter info
         header.append("\n")
@@ -345,8 +337,30 @@ class HistoricalEnvDetail(ModalScreen[None]):
         if rc is not None:
             if rc.bounded_attribution != 0:
                 style = "green" if rc.bounded_attribution > 0 else "red"
-                credits.append(f"Attr: {rc.bounded_attribution:+.3f}", style=style)
+                label = "EscΔ" if record.reward_mode == "escrow" else "Attr"
+                credits.append(f"{label}: {rc.bounded_attribution:+.3f}", style=style)
                 has_credits = True
+            if record.reward_mode == "escrow":
+                if rc.stable_val_acc is not None:
+                    if has_credits:
+                        credits.append("  ")
+                    credits.append(f"StAcc: {rc.stable_val_acc:.1f}%", style="cyan")
+                    has_credits = True
+
+                if has_credits:
+                    credits.append("  ")
+                credits.append(
+                    f"Esc: {rc.escrow_credit_prev:.2f}→{rc.escrow_credit_next:.2f} (tgt {rc.escrow_credit_target:.2f})",
+                    style="cyan",
+                )
+                has_credits = True
+
+                if rc.escrow_forfeit != 0:
+                    if has_credits:
+                        credits.append("  ")
+                    style = "green" if rc.escrow_forfeit > 0 else "red"
+                    credits.append(f"Forf: {rc.escrow_forfeit:+.3f}", style=style)
+                    has_credits = True
             if rc.hindsight_credit != 0:
                 hind_str = f"Hind: {rc.hindsight_credit:+.3f}"
                 if rc.scaffold_count > 0:

@@ -50,11 +50,15 @@ class TestTrainingConfigDefaults:
 class TestTrainingConfigPresets:
     """Tests for TrainingConfig preset helpers."""
 
-    def test_cifar10_stable_preset_is_conservative(self):
-        """Stable preset should slow policy updates and anneal exploration."""
-        config = TrainingConfig.for_cifar10_stable()
+    def test_cifar_baseline_stable_preset_is_conservative(self):
+        """Stable preset should slow policy updates and anneal exploration.
+
+        Note: lr uses default (3e-4) after max_grad_norm increased from 1.0 to 5.0.
+        The low LR (1e-4) was compensating for aggressive gradient clipping.
+        """
+        config = TrainingConfig.for_cifar_baseline_stable()
         assert config.n_episodes == 200
-        assert config.lr == 1e-4
+        assert config.lr == 3e-4  # Default LR, not reduced (see docstring)
         assert config.clip_ratio == 0.1
         assert config.entropy_coef == 0.06
         assert config.entropy_coef_start == 0.06

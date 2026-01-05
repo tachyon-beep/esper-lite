@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Type, TypeVar
 
-from esper.tamiyo.policy.protocol import PolicyBundle
+from esper.leyline import PolicyBundle
 
 T = TypeVar("T", bound=PolicyBundle)
 

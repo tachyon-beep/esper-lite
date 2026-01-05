@@ -5,8 +5,8 @@ The mask system only blocks PHYSICALLY IMPOSSIBLE actions:
 - SLOT: only enabled slots (from --slots arg) are selectable
 - GERMINATE: blocked if ALL enabled slots occupied OR at seed limit
 - FOSSILIZE: blocked if NO enabled slot has a HOLDING seed
-- PRUNE: blocked if NO enabled slot has a prunable seed with age >= MIN_PRUNE_AGE
-         while alpha_mode is HOLD (governor override can bypass)
+- PRUNE: blocked if NO enabled slot has a prunable seed in TRAINING/BLENDING/HOLDING
+         with age >= MIN_PRUNE_AGE while alpha_mode is HOLD (governor override can bypass)
 - WAIT: always valid
 - BLUEPRINT: NOOP always blocked (0 trainable parameters)
 """
@@ -280,20 +280,20 @@ def test_compute_action_masks_blueprint_style_masks():
 
 def test_compute_action_masks_min_prune_age():
     """PRUNE should be blocked if seed_age < MIN_PRUNE_AGE."""
-    # Seed age 0 (just germinated)
+    # Seed age 0 (below MIN_PRUNE_AGE)
     slot_states_age0 = {
         "r0c1": MaskSeedInfo(
-            stage=SeedStage.GERMINATED.value,
+            stage=SeedStage.TRAINING.value,
             seed_age_epochs=0,
         ),
     }
     masks_age0 = compute_action_masks(slot_states_age0, enabled_slots=["r0c1"])
     assert not masks_age0["op"][LifecycleOp.PRUNE]
 
-    # Seed age 1 (minimum for cull)
+    # Seed age 1 (minimum)
     slot_states_age1 = {
         "r0c1": MaskSeedInfo(
-            stage=SeedStage.GERMINATED.value,
+            stage=SeedStage.TRAINING.value,
             seed_age_epochs=1,
         ),
     }
@@ -920,7 +920,7 @@ class TestActionMaskEdgeCases:
         """Seed age exactly at MIN_PRUNE_AGE boundary should allow PRUNE."""
         slot_states = {
             "r0c1": MaskSeedInfo(
-                stage=SeedStage.GERMINATED.value,
+                stage=SeedStage.TRAINING.value,
                 seed_age_epochs=MIN_PRUNE_AGE,  # Exactly at boundary
             ),
         }
@@ -933,7 +933,7 @@ class TestActionMaskEdgeCases:
         """Seed age one below MIN_PRUNE_AGE should block PRUNE."""
         slot_states = {
             "r0c1": MaskSeedInfo(
-                stage=SeedStage.GERMINATED.value,
+                stage=SeedStage.TRAINING.value,
                 seed_age_epochs=MIN_PRUNE_AGE - 1,  # Just below boundary
             ),
         }
@@ -1041,7 +1041,7 @@ class TestActionMaskEdgeCases:
 
     def test_all_stages_prune_conditions(self):
         """Test PRUNE masking for all seed stages (with sufficient age)."""
-        # Stages that can transition to PRUNED
+        # PRUNE is valid from any stage that can transition to PRUNED.
         prunable_stages = {
             SeedStage.GERMINATED,
             SeedStage.TRAINING,

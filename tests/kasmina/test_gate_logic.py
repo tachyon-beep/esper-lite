@@ -511,3 +511,23 @@ class TestGateLevelMapping:
         result = gates.check_gate(state, SeedStage.FOSSILIZED)
 
         assert result.gate == GateLevel.G5
+
+    def test_unmapped_stage_raises_valueerror(self):
+        """Unmapped stages must raise ValueError, not silently default to G0."""
+        gates = QualityGates()
+        state = SeedState(seed_id="test", blueprint_id="noop", stage=SeedStage.DORMANT)
+
+        # UNKNOWN is not in the gate mapping and should raise
+        import pytest
+        with pytest.raises(ValueError, match="No gate defined"):
+            gates.check_gate(state, SeedStage.UNKNOWN)
+
+    def test_failure_stage_raises_valueerror(self):
+        """Failure stages (PRUNED, EMBARGOED, RESETTING) have no gate mappings."""
+        gates = QualityGates()
+        state = SeedState(seed_id="test", blueprint_id="noop", stage=SeedStage.TRAINING)
+
+        import pytest
+        for failure_stage in [SeedStage.PRUNED, SeedStage.EMBARGOED, SeedStage.RESETTING]:
+            with pytest.raises(ValueError, match="No gate defined"):
+                gates.check_gate(state, failure_stage)

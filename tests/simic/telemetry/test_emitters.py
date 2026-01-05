@@ -47,6 +47,14 @@ def _make_mandatory_metrics(**overrides) -> dict:
         "value_std": 1.0,
         "value_min": -2.0,
         "value_max": 2.0,
+        # Pre-normalization advantage statistics (mandatory)
+        "pre_norm_advantage_mean": 0.5,
+        "pre_norm_advantage_std": 1.2,
+        # Return statistics (mandatory)
+        "return_mean": 0.3,
+        "return_std": 0.8,
+        # Value target scale (mandatory) - std used to normalize returns
+        "value_target_scale": 0.8,
     }
     base.update(overrides)
     return base
@@ -108,6 +116,90 @@ def test_emit_ppo_update_event_includes_value_stats():
     assert payload.value_std == 1.2
     assert payload.value_min == 2.1
     assert payload.value_max == 9.8
+
+
+def test_emit_ppo_update_event_includes_lstm_health():
+    """emit_ppo_update_event should include LSTM health metrics in PPOUpdatePayload (B7-DRL-04)."""
+    hub = MagicMock()
+
+    emit_ppo_update_event(
+        hub=hub,
+        metrics=_make_mandatory_metrics(
+            # LSTM health metrics (from compute_lstm_health)
+            lstm_h_l2_total=120.0,
+            lstm_c_l2_total=240.0,
+            lstm_h_rms=0.35,
+            lstm_c_rms=1.44,
+            lstm_h_env_rms_mean=0.34,
+            lstm_h_env_rms_max=0.50,
+            lstm_c_env_rms_mean=1.40,
+            lstm_c_env_rms_max=2.10,
+            lstm_h_max=2.1,
+            lstm_c_max=1.9,
+            lstm_has_nan=False,
+            lstm_has_inf=False,
+        ),
+        episodes_completed=10,
+        batch_idx=5,
+        epoch=100,
+        optimizer=None,
+        grad_norm=1.0,
+        update_time_ms=50.0,
+    )
+
+    hub.emit.assert_called_once()
+    event = hub.emit.call_args[0][0]
+    payload = event.data
+
+    # Verify LSTM health metrics were populated
+    assert payload.lstm_h_l2_total == 120.0
+    assert payload.lstm_c_l2_total == 240.0
+    assert payload.lstm_h_rms == 0.35
+    assert payload.lstm_c_rms == 1.44
+    assert payload.lstm_h_env_rms_mean == 0.34
+    assert payload.lstm_h_env_rms_max == 0.50
+    assert payload.lstm_c_env_rms_mean == 1.40
+    assert payload.lstm_c_env_rms_max == 2.10
+    assert payload.lstm_h_max == 2.1
+    assert payload.lstm_c_max == 1.9
+    assert payload.lstm_has_nan is False
+    assert payload.lstm_has_inf is False
+
+
+def test_emit_ppo_update_event_lstm_health_defaults_to_none():
+    """emit_ppo_update_event should use None for LSTM health when not provided (non-LSTM policy)."""
+    hub = MagicMock()
+
+    # No LSTM health metrics in the metrics dict (non-recurrent policy)
+    emit_ppo_update_event(
+        hub=hub,
+        metrics=_make_mandatory_metrics(),
+        episodes_completed=10,
+        batch_idx=5,
+        epoch=100,
+        optimizer=None,
+        grad_norm=1.0,
+        update_time_ms=50.0,
+    )
+
+    hub.emit.assert_called_once()
+    event = hub.emit.call_args[0][0]
+    payload = event.data
+
+    # Verify LSTM health defaults to None (no LSTM)
+    assert payload.lstm_h_l2_total is None
+    assert payload.lstm_c_l2_total is None
+    assert payload.lstm_h_rms is None
+    assert payload.lstm_c_rms is None
+    assert payload.lstm_h_env_rms_mean is None
+    assert payload.lstm_h_env_rms_max is None
+    assert payload.lstm_c_env_rms_mean is None
+    assert payload.lstm_c_env_rms_max is None
+    assert payload.lstm_h_max is None
+    assert payload.lstm_c_max is None
+    # Boolean flags default to False
+    assert payload.lstm_has_nan is False
+    assert payload.lstm_has_inf is False
 
 
 class TestComputeGradNormSurrogate:

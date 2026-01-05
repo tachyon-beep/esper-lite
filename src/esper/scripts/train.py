@@ -324,6 +324,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="EXPERIMENTAL: Use a DataLoader-free gather iterator for --gpu-preload (CIFAR-10 only).",
     )
+    gpu_aug_group = ppo_parser.add_mutually_exclusive_group()
+    gpu_aug_group.add_argument(
+        "--gpu-preload-augment",
+        action="store_true",
+        help="Apply CIFAR-10 random crop/flip on GPU batches (requires --gpu-preload).",
+    )
+    gpu_aug_group.add_argument(
+        "--gpu-preload-precompute-augment",
+        action="store_true",
+        help="Precompute deterministic CIFAR-10 random crop/flip on GPU (requires --gpu-preload).",
+    )
     ppo_parser.add_argument(
         "--amp",
         action="store_true",
@@ -346,22 +357,32 @@ def build_parser() -> argparse.ArgumentParser:
              "reduce-overhead (minimal overhead), or off. (default: default)",
     )
     ppo_parser.add_argument(
+        "--force-compile",
+        action="store_true",
+        help="Force torch.compile even in TUI mode (normally disabled for debuggability). "
+             "Use when testing compilation performance with Sanctum/Overwatch.",
+    )
+    ppo_parser.add_argument(
         "--seed",
         type=int,
         default=None,
         help="Override seed (otherwise use config value)",
     )
     ppo_parser.add_argument(
-        "--ab-test",
-        type=str,
-        choices=["shaped-vs-simplified", "shaped-vs-sparse"],
-        default=None,
-        help="Run A/B test: split envs between two reward modes (requires even n_envs)",
-    )
-    ppo_parser.add_argument(
         "--dual-ab",
         type=str,
-        choices=["shaped-vs-simplified", "shaped-vs-sparse", "simplified-vs-sparse"],
+        choices=[
+            "shaped-vs-simplified",
+            "shaped-vs-sparse",
+            "shaped-vs-escrow",
+            "shaped-vs-basic",
+            "simplified-vs-sparse",
+            "simplified-vs-escrow",
+            "simplified-vs-basic",
+            "sparse-vs-escrow",
+            "sparse-vs-basic",
+            "escrow-vs-basic",
+        ],
         default=None,
         help="True A/B test: train separate policies on separate GPUs",
     )
@@ -389,8 +410,9 @@ def build_parser() -> argparse.ArgumentParser:
         type=_positive_int,
         default=None,
         metavar="L",
-        help="Timesteps per environment per round. Each round produces envs × episode_length "
-             "transitions for Tamiyo. (Maps to max_epochs. Default: 25)",
+        help="Epochs per environment per round (full train-loader passes). "
+             "Also sets the LSTM sequence length (chunk_length), so longer episodes "
+             "demand longer temporal memory. (Maps to max_epochs. Default: 25)",
     )
     ppo_parser.add_argument(
         "--ppo-epochs",
@@ -406,16 +428,22 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="H",
         help="Tamiyo's LSTM hidden dimension (temporal reasoning capacity). "
-             "Smaller = faster but less temporal memory. (Maps to lstm_hidden_dim. Default: 128)",
+             "Smaller = faster but less temporal memory (longer episodes may need more). "
+             "(Maps to lstm_hidden_dim. Default: 128)",
     )
-    # Note: Uses type=int (not _positive_int) since 0 is valid (no annealing)
+    # Entropy annealing: uses type=int (not _positive_int) since 0 is valid (no annealing)
+    # Semantics: total env-episodes over which to anneal. With K envs, produces ceil(N/K) PPO batches.
+    # This keeps total training experience constant across different --envs values.
     ppo_parser.add_argument(
-        "--entropy-anneal-rounds",
+        "--entropy-anneal-episodes",
         type=int,
         default=None,
-        metavar="R",
-        help="Rounds over which to anneal entropy coefficient. 0 = no annealing. "
-             "(Maps to entropy_anneal_episodes. Default: 0)",
+        metavar="N",
+        help="Total env-EPISODES (complete training runs) over which to anneal entropy "
+             "coefficient from start to end. With K envs running in parallel, the policy "
+             "sees K episodes per batch, so annealing completes in ceil(N/K) PPO batches. "
+             "This keeps total training experience constant across different --envs values. "
+             "0 = no annealing. (Default: 0)",
     )
 
     ppo_parser.epilog = dedent("""
@@ -429,6 +457,9 @@ def build_parser() -> argparse.ArgumentParser:
           then performs one PPO update on Tamiyo using the collected experience.
 
           Total Tamiyo transitions per round: envs × episode_length
+
+          Episode length is the LSTM horizon (chunk_length == max_epochs). Longer
+          episodes require Tamiyo to carry memory over more steps.
 
           Example:
             --rounds 100 --envs 4 --episode-length 25
@@ -477,6 +508,10 @@ def main() -> None:
         parser.error("--sanctum and --overwatch are mutually exclusive")
     if args.algorithm == "ppo" and args.experimental_gpu_preload_gather and not args.gpu_preload:
         parser.error("--experimental-gpu-preload-gather requires --gpu-preload")
+    if args.algorithm == "ppo" and args.gpu_preload_augment and not args.gpu_preload:
+        parser.error("--gpu-preload-augment requires --gpu-preload")
+    if args.algorithm == "ppo" and args.gpu_preload_precompute_augment and not args.gpu_preload:
+        parser.error("--gpu-preload-precompute-augment requires --gpu-preload")
 
     # Create TelemetryConfig from CLI argument
     from esper.simic.telemetry import TelemetryConfig, TelemetryLevel
@@ -735,24 +770,8 @@ def main() -> None:
                     config.ppo_updates_per_batch = args.ppo_epochs
                 if args.memory_size is not None:
                     config.lstm_hidden_dim = args.memory_size
-                if args.entropy_anneal_rounds is not None:
-                    config.entropy_anneal_episodes = args.entropy_anneal_rounds
-
-                # Handle A/B testing - set on config for validation
-                if args.ab_test:
-                    from esper.simic.rewards import RewardMode
-                    if config.n_envs % 2 != 0:
-                        raise ValueError("--ab-test requires even number of envs")
-                    half = config.n_envs // 2
-                    if args.ab_test == "shaped-vs-simplified":
-                        config.reward_mode_per_env = (
-                            (RewardMode.SHAPED,) * half + (RewardMode.SIMPLIFIED,) * half
-                        )
-                    elif args.ab_test == "shaped-vs-sparse":
-                        config.reward_mode_per_env = (
-                            (RewardMode.SHAPED,) * half + (RewardMode.SPARSE,) * half
-                        )
-                    print(f"[A/B Test] {half} envs SHAPED vs {half} envs {args.ab_test.split('-vs-')[1].upper()}")
+                if args.entropy_anneal_episodes is not None:
+                    config.entropy_anneal_episodes = args.entropy_anneal_episodes
 
                 # Handle dual-policy A/B testing
                 if args.dual_ab:
@@ -768,6 +787,8 @@ def main() -> None:
                         "shaped": RewardMode.SHAPED,
                         "simplified": RewardMode.SIMPLIFIED,
                         "sparse": RewardMode.SPARSE,
+                        "escrow": RewardMode.ESCROW,
+                        "basic": RewardMode.BASIC,
                     }
                     parts = args.dual_ab.split("-vs-")
                     mode_a = mode_map[parts[0]]
@@ -826,9 +847,12 @@ def main() -> None:
                         num_workers=args.num_workers,
                         gpu_preload=args.gpu_preload,
                         experimental_gpu_preload_gather=args.experimental_gpu_preload_gather,
+                        gpu_preload_augment=args.gpu_preload_augment,
+                        gpu_preload_precompute_augment=args.gpu_preload_precompute_augment,
                         telemetry_config=telemetry_config,
                         telemetry_lifecycle_only=args.telemetry_lifecycle_only,
                         quiet_analytics=use_sanctum,
+                        force_compile=args.force_compile,
                         ready_event=dataloader_ready_event,
                         shutdown_event=shutdown_event,
                         torch_profiler=args.torch_profiler,

@@ -4,7 +4,7 @@ Developer diagnostic TUI for debugging PPO training runs.
 Layout matches existing Rich TUI (tui.py _render() method).
 
 LAYOUT FIX: TamiyoBrain spans full width as dedicated row (size=11),
-NOT embedded in right column. Event Log included at bottom-left.
+NOT embedded in right column. EventLog is rendered inside Tamiyo.
 
 UNICODE GLYPH REQUIREMENTS:
     Sanctum requires a terminal with Unicode support and a font that includes:
@@ -14,7 +14,7 @@ UNICODE GLYPH REQUIREMENTS:
     Sparklines:       ▁ ▂ ▃ ▄ ▅ ▆ ▇ █
     Arrows:           ↑ ↓ → ↗ ↘ ▶ ▸
     Alpha curves:     ⌒ ⌢ ⌣ −
-    Medals:           🥇 🥈 🥉 📌
+    Medals:           🥇 🥈 🥉
     Severity:         💀 🔥 ⚠️
     Separators:       │ ─
 
@@ -49,7 +49,6 @@ from esper.karn.sanctum.widgets import (
     EventLogDetail,
     HistoricalEnvDetail,
     RewardHealthData,
-    RewardHealthPanel,
     RunHeader,
     Scoreboard,
     TamiyoBrain,
@@ -60,7 +59,6 @@ if TYPE_CHECKING:
     from esper.karn.sanctum.backend import SanctumBackend
     from esper.karn.sanctum.schema import SanctumSnapshot
     from textual.timer import Timer
-    from esper.karn.sanctum.widgets.reward_health import RewardHealthData
 
 
 HELP_TEXT = """\
@@ -77,15 +75,11 @@ HELP_TEXT = """\
 
 [bold]Actions[/bold]
   [cyan]/[/cyan]         Filter envs (by ID or status)
+  [cyan]t[/cyan]         Toggle policy group (A/B)
   [cyan]Esc[/cyan]       Clear filter
   [cyan]i[/cyan]         Show full run info (untruncated)
   [cyan]r[/cyan]         Manual refresh
   [cyan]q[/cyan]         Quit Sanctum
-
-[bold]Pinning (in Best Runs / Decisions)[/bold]
-  [cyan]p[/cyan]         Toggle pin on selected Best Runs item
-  [cyan]Click[/cyan]     Click decision card to toggle pin (📌)
-  [dim]Pinned items are never removed from the display[/dim]
 
 [bold]Click Actions[/bold]
   [cyan]Click[/cyan]     Event Log → raw event detail view
@@ -103,14 +97,61 @@ HELP_TEXT = """\
 [dim]Press Esc, ?, Q, or click to close[/dim]
 """
 
+GLOSSARY_TEXT = """\
+[bold cyan]Glossary (Fields + Semantics)[/bold cyan]
+
+[bold]Tamiyo Status Banner[/bold]
+  [cyan]NOW/WHY/NEXT[/cyan]  Narrative strip: what’s happening, top drivers, and what to watch next.
+
+[bold]PPO Update Panel[/bold]
+  [cyan]Expl.Var[/cyan]      Explained variance of critic vs returns. Range ~(-∞, 1]. Higher is better.
+                  Color: green ok, yellow warning, red critical when ≤0 (critic not learning).
+  [cyan]KL Diver[/cyan]      Policy KL(old||new). Lower is better. Spikes = policy changing too fast.
+  [cyan]Clip Frac[/cyan]     Fraction of samples where PPO ratio was clipped. Higher = overly-large updates.
+                  (↑/↓) shows sign of clipped advantages (diagnostic, not a goal).
+  [cyan]RatioJnt[/cyan]      Joint π_new/π_old max (product across heads). Can explode even if per-head looks ok.
+  [cyan]P.Loss[/cyan]        PPO policy loss (lower is better; sign depends on advantage mix).
+  [cyan]V.Loss[/cyan]        PPO value loss (MSE on normalized returns).
+  [cyan]Lv/Lp[/cyan]         |V.Loss| / |P.Loss| balance. Extremes suggest one objective dominating.
+
+[bold]Health Panel[/bold]
+  [cyan]Advantage[/cyan]     Normalized advantages (mean±std). Healthy: mean≈0, std≈1.
+                  sk/kt = skewness/kurtosis (tail/outlier shape). + = fraction positive (healthy ~40–60%).
+  [cyan]Grad Norm[/cyan]     Total gradient norm (pre-clip). Rising trend can precede instability.
+  [cyan]Log Prob[/cyan]      [min,max] logπ(a|s). Very negative min (<-50) predicts numeric underflow → NaNs.
+  [cyan]Entropy[/cyan]       Exploration level (PPO entropy bonus). Higher = more random; too low = collapse risk.
+  [cyan]Entropy D[/cyan]     d(entropy)/d(batch). Negative = entropy collapsing; used for countdown.
+  [cyan]Policy[/cyan]        Heuristic state label from entropy/clip correlation (collapse-risk pattern detector).
+  [cyan]Value Range[/cyan]   [min,max] of critic predictions + std. Collapse (range≈0) or explosion are critical.
+
+[bold]Observation Health[/bold]
+  [cyan]Out[/cyan]           Fraction of raw obs values outside 3σ (batch z-score). Higher = distribution issues.
+  [cyan]Sat/Clip[/cyan]      Fractions on [italic]normalized+clipped[/italic] obs. Sat≈near bound, Clip==at bound.
+  [cyan]Drift[/cyan]         Mean absolute drift in normalizer mean since epoch 0 (higher = distribution shift).
+  [cyan]Obs σ H/C/S[/cyan]   Std-dev by group (Host/Context/Slots) on raw obs (scale check, not a goal).
+
+[bold]Slots + IDs[/bold]
+  [cyan]r0c0[/cyan]          Slot IDs are grid positions (“row 0, col 0”).
+  [cyan]ΔAcc[/cyan]          Accuracy delta signal used in reward components (task-dependent scaling).
+  [cyan]Rent[/cyan]          Compute rent penalty (parameter overhead; always negative).
+  [cyan]CF[/cyan]            Counterfactual signal (synergy/interference) shown in env overview.
+
+[bold]Env Overview[/bold]
+  [cyan]Ep∑R[/cyan]          Per-env episode return so far (Σ raw step rewards; resets each round).
+
+[bold]Transforms[/bold]
+  [cyan]symlog[/cyan]        Signed log transform on large-magnitude signals (compresses spikes, preserves order).
+"""
+
 
 @dataclass(frozen=True)
 class SanctumView:
     """All data needed to render one UI refresh tick."""
 
+    primary_group_id: str | None
     primary: "SanctumSnapshot"
     snapshots_by_group: dict[str, "SanctumSnapshot"]
-    reward_health: "RewardHealthData"
+    reward_health_by_group: dict[str, "RewardHealthData"]
 
 
 class HelpScreen(ModalScreen[None]):
@@ -129,19 +170,24 @@ class HelpScreen(ModalScreen[None]):
     }
 
     HelpScreen > #help-container {
-        width: 60;
-        height: auto;
+        width: 90;
+        height: 80%;
         max-height: 80%;
         background: $surface;
         border: thick $primary;
         padding: 1 2;
+    }
+
+    HelpScreen > #help-container > #help-scroll {
+        height: 100%;
     }
     """
 
     def compose(self) -> ComposeResult:
         """Compose the help screen."""
         with Container(id="help-container"):
-            yield Static(HELP_TEXT)
+            with VerticalScroll(id="help-scroll"):
+                yield Static(HELP_TEXT + "\n\n" + GLOSSARY_TEXT)
 
     def on_click(self) -> None:
         """Dismiss help screen on click."""
@@ -191,12 +237,12 @@ class RunInfoScreen(ModalScreen[None]):
 [bold]Progress[/bold]
   Episode:    {s.current_episode}
   Epoch:      {s.current_epoch} / {s.max_epochs if s.max_epochs > 0 else '∞'}
-  Batch:      {s.current_batch} / {s.max_batches}
+  Round:      {s.current_batch} / {s.max_batches}
   Runtime:    {runtime_str}
 
 [bold]Throughput[/bold]
   Epochs/sec:   {s.vitals.epochs_per_second:.2f}
-  Batches/hr:   {s.vitals.batches_per_hour:.1f}
+  Rounds/hr:    {s.vitals.batches_per_hour:.1f}
 
 [bold]System[/bold]
   Connected:    {'Yes' if s.connected else 'No'}
@@ -298,6 +344,7 @@ class SanctumApp(App[None]):
     BINDINGS = [
         Binding("q", "quit", "Quit", show=True),
         Binding("d", "show_env_detail", "Detail", show=True),
+        Binding("t", "toggle_policy_group", "Policy", show=True),
         Binding("tab", "focus_next", "Next Panel", show=False),
         Binding("shift+tab", "focus_previous", "Prev Panel", show=False),
         # Vim-style navigation
@@ -327,8 +374,6 @@ class SanctumApp(App[None]):
         Binding("l", "focus_right_panel", "Right Panel", show=False),
         Binding("left", "focus_left_panel", "Left Panel", show=False),
         Binding("right", "focus_right_panel", "Right Panel", show=False),
-        # Pinning
-        Binding("p", "toggle_best_run_pin", "Pin", show=False),
     ]
 
     def __init__(
@@ -366,7 +411,9 @@ class SanctumApp(App[None]):
         self._apply_view_scheduled = False
         self._last_heavy_widget_update_ts: float = 0.0
         self._last_reward_health_update_ts: float = 0.0
-        self._cached_reward_health: RewardHealthData = RewardHealthData()
+        self._cached_reward_health_by_group: dict[str, RewardHealthData] = {}
+        self._active_group_id: str | None = None
+        self._last_primary_group_id: str | None = None
 
     def compose(self) -> ComposeResult:
         """Build the Sanctum layout.
@@ -394,15 +441,12 @@ class SanctumApp(App[None]):
                 yield EnvOverview(num_envs=self._num_envs, id="env-overview")
                 with Vertical(id="metrics-column"):
                     yield Scoreboard(id="scoreboard")
-                    yield RewardHealthPanel(id="metrics-reward-health")
 
-            # Bottom section: TamiyoBrain (left) | Event Log (right)
+            # Bottom section: Tamiyo (full width)
             with Horizontal(id="bottom-section"):
-                # Left side: TamiyoBrain container (70%) - widgets created dynamically
+                # TamiyoBrain container - widgets created dynamically
                 with Horizontal(id="tamiyo-container"):
                     pass  # TamiyoBrain widgets mounted dynamically
-                # Right side: Event Log (30%)
-                yield EventLog(id="event-log")
 
         yield Footer()
 
@@ -435,7 +479,11 @@ class SanctumApp(App[None]):
                 self.log.warning(f"Cannot mount TamiyoBrain for {group_id}: container not found")
                 raise
 
-    def _refresh_tamiyo_widgets(self, snapshots: dict[str, "SanctumSnapshot"]) -> None:
+    def _refresh_tamiyo_widgets(
+        self,
+        snapshots: dict[str, "SanctumSnapshot"],
+        reward_health_by_group: dict[str, RewardHealthData],
+    ) -> None:
         """Refresh TamiyoBrain widgets from multi-group snapshots."""
 
         # Handle empty case (no events yet) - create default widget
@@ -444,6 +492,7 @@ class SanctumApp(App[None]):
                 widget = self._get_or_create_tamiyo_widget("default")
                 from esper.karn.sanctum.schema import SanctumSnapshot as SnapshotClass
                 widget.update_snapshot(SnapshotClass())
+                widget.update_reward_health(RewardHealthData())
             except NoMatches:
                 pass
             return
@@ -453,8 +502,65 @@ class SanctumApp(App[None]):
             try:
                 widget = self._get_or_create_tamiyo_widget(group_id)
                 widget.update_snapshot(group_snapshot)
+                if group_id in reward_health_by_group:
+                    widget.update_reward_health(reward_health_by_group[group_id])
+                else:
+                    widget.update_reward_health(RewardHealthData())
             except NoMatches:
                 pass  # Container hasn't mounted yet
+
+    def _sync_tamiyo_visibility(
+        self,
+        active_group_id: str | None,
+        snapshots: dict[str, "SanctumSnapshot"],
+    ) -> None:
+        """Show only the active TamiyoBrain when multiple policies exist."""
+        if active_group_id is None or len(snapshots) < 2:
+            for group_id in snapshots.keys():
+                widget_id = f"tamiyo-{group_id.lower()}"
+                try:
+                    self.query_one(f"#{widget_id}", TamiyoBrain).remove_class("hidden")
+                except NoMatches:
+                    pass
+            return
+
+        for group_id in snapshots.keys():
+            widget_id = f"tamiyo-{group_id.lower()}"
+            try:
+                widget = self.query_one(f"#{widget_id}", TamiyoBrain)
+            except NoMatches:
+                continue
+
+            if group_id == active_group_id:
+                widget.remove_class("hidden")
+            else:
+                widget.add_class("hidden")
+
+    def _ordered_group_ids(self, group_ids: list[str]) -> list[str]:
+        """Return group IDs in a stable, user-friendly order."""
+        if not group_ids:
+            return []
+        ordered = sorted(set(group_ids))
+        if "default" in ordered:
+            ordered.remove("default")
+            ordered.insert(0, "default")
+        return ordered
+
+    def _select_primary_group_id(
+        self, snapshots_by_group: dict[str, "SanctumSnapshot"]
+    ) -> str | None:
+        """Select which policy group drives the non-group widgets."""
+        if not snapshots_by_group:
+            return None
+
+        if (
+            self._active_group_id is not None
+            and self._active_group_id in snapshots_by_group
+        ):
+            return self._active_group_id
+
+        ordered = self._ordered_group_ids(list(snapshots_by_group.keys()))
+        return ordered[0] if ordered else None
 
     def _show_telemetry_fatal(self, error: SanctumTelemetryFatalError) -> None:
         """Stop refreshing and surface telemetry failures loudly."""
@@ -481,11 +587,11 @@ class SanctumApp(App[None]):
 
         try:
             snapshots_by_group = self._backend.get_all_snapshots()
-            reward_health = self._cached_reward_health
+            reward_health_by_group = self._cached_reward_health_by_group
             now = time.monotonic()
             if (now - self._last_reward_health_update_ts) >= 0.5:
-                reward_health = self._backend.compute_reward_health()
-                self._cached_reward_health = reward_health
+                reward_health_by_group = self._backend.compute_reward_health_by_group()
+                self._cached_reward_health_by_group = reward_health_by_group
                 self._last_reward_health_update_ts = now
         except SanctumTelemetryFatalError as e:
             self._show_telemetry_fatal(e)
@@ -499,15 +605,14 @@ class SanctumApp(App[None]):
             )
             return
 
-        # Choose primary snapshot (used by non-policy-group widgets).
-        if "default" in snapshots_by_group:
-            primary = snapshots_by_group["default"]
-        elif snapshots_by_group:
-            primary = snapshots_by_group[sorted(snapshots_by_group.keys())[0]]
-        else:
+        primary_group_id = self._select_primary_group_id(snapshots_by_group)
+        if primary_group_id is None:
             from esper.karn.sanctum.schema import SanctumSnapshot
 
             primary = SanctumSnapshot()
+        else:
+            primary = snapshots_by_group[primary_group_id]
+            self._active_group_id = primary_group_id
 
         # Debug: Add poll count to snapshots for display
         primary.poll_count = self._poll_count
@@ -537,9 +642,10 @@ class SanctumApp(App[None]):
 
         try:
             self.view = SanctumView(
+                primary_group_id=primary_group_id,
                 primary=primary,
                 snapshots_by_group=snapshots_by_group,
-                reward_health=reward_health,
+                reward_health_by_group=reward_health_by_group,
             )
         except SanctumTelemetryFatalError as e:
             self._show_telemetry_fatal(e)
@@ -576,11 +682,14 @@ class SanctumApp(App[None]):
         """
         snapshot = view.primary
         now = time.monotonic()
-        heavy_due = (now - self._last_heavy_widget_update_ts) >= 0.5
+        primary_changed = view.primary_group_id != self._last_primary_group_id
+        heavy_due = primary_changed or (now - self._last_heavy_widget_update_ts) >= 0.5
 
         # Update run header first (most important context)
         try:
-            self.query_one("#run-header", RunHeader).update_snapshot(snapshot)
+            self.query_one("#run-header", RunHeader).update_snapshot(
+                snapshot, view.snapshots_by_group
+            )
         except NoMatches:
             pass  # Widget hasn't mounted yet
 
@@ -602,31 +711,34 @@ class SanctumApp(App[None]):
             except NoMatches:
                 pass  # Widget hasn't mounted yet
 
-            # Update reward health panel (metrics column)
-            try:
-                self.query_one("#metrics-reward-health", RewardHealthPanel).update_data(view.reward_health)
-            except NoMatches:
-                pass  # Widget hasn't mounted yet
-
             self._last_heavy_widget_update_ts = now
 
-        # Update TamiyoBrain widgets using multi-group snapshots
-        self._refresh_tamiyo_widgets(view.snapshots_by_group)
-
-        try:
-            self.query_one("#event-log", EventLog).update_snapshot(snapshot)
-        except NoMatches:
-            pass  # Widget hasn't mounted yet
+        # Update TamiyoBrain widgets using multi-group snapshots.
+        # Pass per-group reward health (displayed in ActionContext).
+        self._refresh_tamiyo_widgets(view.snapshots_by_group, view.reward_health_by_group)
+        self._sync_tamiyo_visibility(view.primary_group_id, view.snapshots_by_group)
+        self._last_primary_group_id = view.primary_group_id
 
         # Update EnvDetailScreen modal if displayed
         # Check if we have a modal screen on the stack
         if len(self.screen_stack) > 1:
             current_screen = self.screen_stack[-1]
             if isinstance(current_screen, EnvDetailScreen):
-                # Get updated env state from snapshot
-                env = snapshot.envs.get(current_screen.env_id)
-                if env is not None:
-                    current_screen.update_env_state(env)
+                modal_snapshot: SanctumSnapshot | None = snapshot
+                modal_group_id = current_screen.group_id
+                if modal_group_id is not None:
+                    if modal_group_id in view.snapshots_by_group:
+                        modal_snapshot = view.snapshots_by_group[modal_group_id]
+                    else:
+                        modal_snapshot = None
+
+                if (
+                    modal_snapshot is not None
+                    and current_screen.env_id in modal_snapshot.envs
+                ):
+                    current_screen.update_env_state(
+                        modal_snapshot.envs[current_screen.env_id]
+                    )
 
     def action_focus_env(self, env_id: int) -> None:
         """Focus on specific environment for detail panels.
@@ -646,6 +758,36 @@ class SanctumApp(App[None]):
     def action_toggle_help(self) -> None:
         """Toggle help display."""
         self.push_screen(HelpScreen())
+
+    def action_toggle_policy_group(self) -> None:
+        """Toggle which policy group is shown as primary (A/B testing)."""
+        view = self.view
+        if view is None:
+            return
+
+        ordered = self._ordered_group_ids(list(view.snapshots_by_group.keys()))
+        if len(ordered) < 2:
+            return
+
+        current = view.primary_group_id
+        if current is None or current not in view.snapshots_by_group:
+            current = ordered[0]
+
+        try:
+            idx = ordered.index(current)
+        except ValueError:
+            idx = 0
+
+        next_group_id = ordered[(idx + 1) % len(ordered)]
+        self._active_group_id = next_group_id
+        self.notify(f"Policy group: {next_group_id}", severity="information")
+
+        self.view = SanctumView(
+            primary_group_id=next_group_id,
+            primary=view.snapshots_by_group[next_group_id],
+            snapshots_by_group=view.snapshots_by_group,
+            reward_health_by_group=view.reward_health_by_group,
+        )
 
     def action_show_run_info(self) -> None:
         """Show full run information modal (untruncated task name, etc.)."""
@@ -783,6 +925,7 @@ class SanctumApp(App[None]):
             EnvDetailScreen(
                 env_state=env,
                 slot_ids=self._snapshot.slot_ids,
+                group_id=self._active_group_id,
             )
         )
 
@@ -865,6 +1008,7 @@ class SanctumApp(App[None]):
             EnvDetailScreen(
                 env_state=env,
                 slot_ids=self._snapshot.slot_ids,
+                group_id=self._active_group_id,
             )
         )
 
@@ -889,28 +1033,6 @@ class SanctumApp(App[None]):
 
         self.push_screen(HistoricalEnvDetail(record=record))
 
-    def on_tamiyo_brain_decision_pin_toggled(
-        self, event: TamiyoBrain.DecisionPinToggled
-    ) -> None:
-        """Handle click on decision panel to toggle pin status.
-
-        Args:
-            event: The pin toggle event with decision_id.
-        """
-        if self._backend is None:
-            return
-
-        # Toggle pin in aggregator
-        try:
-            new_status = self._backend.toggle_decision_pin(event.group_id, event.decision_id)
-        except SanctumTelemetryFatalError as e:
-            self._show_telemetry_fatal(e)
-            return
-        self.log.info(f"Decision {event.decision_id} pin toggled: {new_status}")
-
-        # Refresh to show updated pin status
-        self._poll_and_refresh()
-
     def on_scoreboard_best_run_selected(
         self, event: Scoreboard.BestRunSelected
     ) -> None:
@@ -927,49 +1049,6 @@ class SanctumApp(App[None]):
             f"Opened historical detail for Ep {event.record.episode + 1} "
             f"(peak: {event.record.peak_accuracy:.1f}%)"
         )
-
-    def on_scoreboard_best_run_pin_toggled(
-        self, event: Scoreboard.BestRunPinToggled
-    ) -> None:
-        """Handle right-click on Best Runs row to toggle pin status.
-
-        Pinned records are never removed from the leaderboard.
-
-        Args:
-            event: The pin toggle event with record_id.
-        """
-        if self._backend is None:
-            return
-
-        # Toggle pin in aggregator
-        try:
-            new_status = self._backend.toggle_best_run_pin(event.record_id)
-        except SanctumTelemetryFatalError as e:
-            self._show_telemetry_fatal(e)
-            return
-        self.log.info(f"Best run {event.record_id} pin toggled: {new_status}")
-
-        # Refresh to show updated pin status
-        self._poll_and_refresh()
-
-    def action_toggle_best_run_pin(self) -> None:
-        """Toggle pin status for the currently selected Best Run row.
-
-        Keyboard shortcut: p
-
-        Only works when a row in the Scoreboard best runs table is selected.
-        Pinned records are never removed from the leaderboard.
-        """
-        if self._backend is None:
-            return
-
-        try:
-            scoreboard = self.query_one("#scoreboard", Scoreboard)
-        except NoMatches:
-            return
-
-        # Delegate to Scoreboard to emit BestRunPinToggled; app handles backend call.
-        scoreboard.request_pin_toggle()
 
     def on_event_log_detail_requested(
         self, event: EventLog.DetailRequested

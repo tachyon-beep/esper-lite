@@ -2,7 +2,11 @@
 
 import math
 
-from esper.kasmina.alpha_controller import AlphaController, _curve_progress
+import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
+from esper.kasmina.alpha_controller import AlphaController, _curve_progress, _sigmoid
 from esper.leyline.alpha import AlphaCurve
 
 
@@ -94,8 +98,8 @@ class TestAlphaControllerSteepnessSerialization:
         restored = AlphaController.from_dict(data)
         assert restored.alpha_steepness == 24.0
 
-    def test_from_dict_defaults_steepness_for_old_checkpoints(self):
-        """from_dict() should default steepness=12 for old checkpoints."""
+    def test_from_dict_rejects_old_checkpoints_without_steepness(self):
+        """from_dict() should reject checkpoints missing alpha_steepness (no legacy support)."""
         old_data = {
             "alpha": 0.5,
             "alpha_start": 0.0,
@@ -106,5 +110,73 @@ class TestAlphaControllerSteepnessSerialization:
             "alpha_steps_done": 2,
             # No alpha_steepness - old checkpoint
         }
-        restored = AlphaController.from_dict(old_data)
-        assert restored.alpha_steepness == 12.0  # Default
+        # Per no-legacy-code policy: old checkpoints must fail-fast
+        with pytest.raises(KeyError, match="alpha_steepness"):
+            AlphaController.from_dict(old_data)
+
+
+class TestSigmoidNumericalStability:
+    """Regression tests for SIGMOID overflow bug.
+
+    Bug: _curve_progress(0.0, AlphaCurve.SIGMOID, steepness=2000.0) raised
+    OverflowError because math.exp(1000.0) overflows. Fixed by using a
+    numerically stable sigmoid that avoids computing exp(large_positive).
+    """
+
+    def test_extreme_steepness_no_overflow(self):
+        """Large steepness values must not raise OverflowError."""
+        # This was the exact reproduction case for the bug
+        result = _curve_progress(0.0, AlphaCurve.SIGMOID, steepness=2000.0)
+        assert result == pytest.approx(0.0, abs=1e-9)
+
+        result = _curve_progress(1.0, AlphaCurve.SIGMOID, steepness=2000.0)
+        assert result == pytest.approx(1.0, abs=1e-9)
+
+    def test_extreme_steepness_boundaries(self):
+        """Extreme steepness should still map 0→0 and 1→1."""
+        for steepness in [1000.0, 2000.0, 5000.0, 10000.0]:
+            at_0 = _curve_progress(0.0, AlphaCurve.SIGMOID, steepness=steepness)
+            at_1 = _curve_progress(1.0, AlphaCurve.SIGMOID, steepness=steepness)
+            assert at_0 == pytest.approx(0.0, abs=1e-9), f"steepness={steepness}"
+            assert at_1 == pytest.approx(1.0, abs=1e-9), f"steepness={steepness}"
+
+    def test_extreme_steepness_midpoint(self):
+        """Midpoint should be 0.5 regardless of steepness."""
+        for steepness in [12.0, 100.0, 1000.0, 5000.0]:
+            at_mid = _curve_progress(0.5, AlphaCurve.SIGMOID, steepness=steepness)
+            assert at_mid == pytest.approx(0.5, abs=1e-9), f"steepness={steepness}"
+
+    def test_sigmoid_helper_equivalence(self):
+        """_sigmoid helper must be equivalent to 1/(1+exp(-x)) for normal values."""
+        for x in [-5.0, -1.0, 0.0, 1.0, 5.0]:
+            expected = 1.0 / (1.0 + math.exp(-x))
+            actual = _sigmoid(x)
+            assert actual == pytest.approx(expected, rel=1e-12)
+
+    def test_sigmoid_helper_extreme_values(self):
+        """_sigmoid must handle extreme values without overflow."""
+        # Large positive → 1.0
+        assert _sigmoid(1000.0) == pytest.approx(1.0, abs=1e-300)
+        # Large negative → 0.0
+        assert _sigmoid(-1000.0) == pytest.approx(0.0, abs=1e-300)
+
+    @given(
+        t=st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
+        steepness=st.floats(min_value=0.1, max_value=10000.0, allow_nan=False, allow_infinity=False),
+    )
+    @settings(max_examples=200)
+    def test_curve_progress_always_bounded(self, t: float, steepness: float):
+        """Property: _curve_progress with SIGMOID never raises and stays in [0, 1]."""
+        result = _curve_progress(t, AlphaCurve.SIGMOID, steepness=steepness)
+        assert 0.0 <= result <= 1.0, f"t={t}, steepness={steepness}, result={result}"
+
+    @given(steepness=st.floats(min_value=0.1, max_value=10000.0, allow_nan=False, allow_infinity=False))
+    @settings(max_examples=100)
+    def test_curve_progress_monotonic(self, steepness: float):
+        """Property: _curve_progress is monotonically increasing in t."""
+        prev = -1.0
+        for i in range(11):
+            t = i / 10.0
+            result = _curve_progress(t, AlphaCurve.SIGMOID, steepness=steepness)
+            assert result >= prev, f"Not monotonic at t={t}, steepness={steepness}"
+            prev = result

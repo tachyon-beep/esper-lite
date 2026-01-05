@@ -115,7 +115,7 @@ function handleRowClick(recordId: string) {
         <tr
           v-for="(run, index) in sortedRuns"
           :key="run.record_id"
-          :class="{ pinned: run.pinned, 'keyboard-selected': index === selectedRowIndex }"
+          :class="{ 'keyboard-selected': index === selectedRowIndex }"
           :data-testid="`leaderboard-row-${run.record_id}`"
           @click="handleRowClick(run.record_id)"
         >
@@ -198,16 +198,6 @@ tbody tr:nth-child(even) {
 
 tbody tr:hover {
   background: var(--bg-elevated);
-}
-
-tbody tr.pinned {
-  box-shadow: inset 0 0 8px var(--glow-cyan-dim), 0 0 4px var(--glow-cyan-dim);
-  background: rgba(0, 229, 255, 0.05);
-}
-
-tbody tr.pinned:nth-child(odd),
-tbody tr.pinned:nth-child(even) {
-  background: rgba(0, 229, 255, 0.05);
 }
 
 tbody tr.keyboard-selected {

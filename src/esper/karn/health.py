@@ -27,6 +27,7 @@ from esper.karn.constants import HealthThresholds, VitalSignsThresholds
 from esper.leyline import (
     TelemetryEvent,
     TelemetryEventType,
+    MemoryWarningPayload,
     SeedStage,
     is_active_stage,
     is_failure_stage,
@@ -194,18 +195,15 @@ class HealthMonitor:
 
         self._last_memory_warning = now
         if self._emit_callback is not None:
-            # Emit MEMORY_WARNING with dict payload (typed payload migration pending)
-            # This matches the pattern used in other telemetry emission sites
-            # Type ignore is needed until MemoryWarningPayload is defined
             self._emit_callback(TelemetryEvent(
                 event_type=TelemetryEventType.MEMORY_WARNING,
                 severity="warning",
-                data={  # type: ignore[arg-type]
-                    "gpu_utilization": gpu_utilization,
-                    "gpu_allocated_gb": gpu_allocated_gb,
-                    "gpu_total_gb": gpu_total_gb,
-                    "threshold": self.memory_warning_threshold,
-                },
+                data=MemoryWarningPayload(
+                    gpu_utilization=gpu_utilization,
+                    gpu_allocated_gb=gpu_allocated_gb,
+                    gpu_total_gb=gpu_total_gb,
+                    threshold=self.memory_warning_threshold,
+                ),
             ))
         return True
 
@@ -276,9 +274,12 @@ class HealthMonitor:
         if not self.store or not self.store.epoch_snapshots:
             return grad_health
 
-        # Get recent gradient norms
+        # Get recent gradient norms (filter out None = not computed)
         recent = list(self.store.epoch_snapshots)[-10:]
-        norms = [s.host.host_grad_norm for s in recent if s.host.host_grad_norm > 0]
+        norms = [
+            s.host.host_grad_norm for s in recent
+            if s.host.host_grad_norm is not None and s.host.host_grad_norm > 0
+        ]
 
         if not norms:
             return grad_health

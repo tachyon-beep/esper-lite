@@ -331,6 +331,7 @@ def test_snapshot_tracks_last_action_env_id():
             env_id=2,
             action_name="GERMINATE",
             action_confidence=0.85,
+            action_success=True,
             slot_id="slot_0",
             blueprint_id="conv_light",
         ),
@@ -356,6 +357,7 @@ def test_decision_snapshot_populates_head_choices():
             env_id=0,
             action_name="GERMINATE",
             action_confidence=0.92,
+            action_success=True,
             slot_id="slot_0",
             blueprint_id="conv_light",
             tempo_idx=1,  # STANDARD (index 1 in TEMPO_NAMES)
@@ -391,6 +393,7 @@ def test_decision_snapshot_handles_missing_head_choices():
             env_id=0,
             action_name="WAIT",
             action_confidence=0.85,
+            action_success=True,
             # No blueprint_id, tempo_idx, style, or alpha_curve
         ),
     )
@@ -436,6 +439,7 @@ def test_aggregator_reads_reward_components_dataclass():
         total_reward=0.42,
         action_name="WAIT",
         action_confidence=0.8,
+        action_success=True,
         reward_components=rc,
     )
 
@@ -453,6 +457,89 @@ def test_aggregator_reads_reward_components_dataclass():
     assert env.reward_components.compute_rent == -0.05
     assert env.reward_components.stage_bonus == 0.1
     assert env.reward_components.hindsight_credit == 0.05
+
+
+def test_aggregator_wires_all_reward_component_fields():
+    """Aggregator should wire ALL RewardComponentsTelemetry fields to schema.
+
+    Regression test for wiring gap where fossilize_terminal_bonus, blending_warning,
+    holding_warning, and seed_contribution were defined in schema but never populated
+    from telemetry.
+
+    TELE-662: fossilize_terminal_bonus
+    TELE-663: blending_warning
+    TELE-664: holding_warning
+    """
+    from datetime import datetime, timezone
+    from esper.karn.sanctum.aggregator import SanctumAggregator
+    from esper.leyline.telemetry import AnalyticsSnapshotPayload, TelemetryEvent, TelemetryEventType
+    from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
+
+    agg = SanctumAggregator(num_envs=1)
+    agg._connected = True
+    agg._ensure_env(0)
+
+    # Create telemetry with ALL reward component fields populated
+    rc = RewardComponentsTelemetry(
+        # Core signals
+        base_acc_delta=0.02,
+        bounded_attribution=0.3,
+        seed_contribution=0.15,  # Now wired
+        # Penalties
+        compute_rent=-0.05,
+        alpha_shock=-0.01,
+        ratio_penalty=-0.02,
+        blending_warning=-0.08,  # Now wired (TELE-663)
+        holding_warning=-0.03,   # Now wired (TELE-664)
+        # Bonuses
+        stage_bonus=0.1,
+        hindsight_credit=0.05,
+        fossilize_terminal_bonus=0.25,  # Now wired (TELE-662)
+        total_reward=0.58,
+    )
+
+    payload = AnalyticsSnapshotPayload(
+        kind="last_action",
+        env_id=0,
+        total_reward=0.58,
+        action_name="FOSSILIZE",
+        action_confidence=0.95,
+        action_success=True,
+        reward_components=rc,
+    )
+
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+        timestamp=datetime.now(timezone.utc),
+        data=payload,
+        epoch=50,
+    )
+
+    agg.process_event(event)
+
+    env = agg._envs[0]
+
+    # Verify ALL fields are wired (not just the original subset)
+    assert env.reward_components.base_acc_delta == 0.02
+    assert env.reward_components.bounded_attribution == 0.3
+    assert env.reward_components.seed_contribution == 0.15, (
+        "seed_contribution should be wired from telemetry"
+    )
+    assert env.reward_components.compute_rent == -0.05
+    assert env.reward_components.alpha_shock == -0.01
+    assert env.reward_components.ratio_penalty == -0.02
+    assert env.reward_components.blending_warning == -0.08, (
+        "TELE-663: blending_warning should be wired from telemetry"
+    )
+    assert env.reward_components.holding_warning == -0.03, (
+        "TELE-664: holding_warning should be wired from telemetry"
+    )
+    assert env.reward_components.stage_bonus == 0.1
+    assert env.reward_components.hindsight_credit == 0.05
+    assert env.reward_components.fossilize_terminal_bonus == 0.25, (
+        "TELE-662: fossilize_terminal_bonus should be wired from telemetry"
+    )
+    assert env.reward_components.total == 0.58
 
 
 def test_aggregator_populates_nested_metrics():
@@ -569,6 +656,7 @@ def test_decision_snapshot_populates_from_head_telemetry():
             alpha_speed="MEDIUM",
             alpha_curve="COSINE",
             action_confidence=0.85,
+            action_success=True,
             head_telemetry=head_telem,
         ),
     ))
@@ -758,3 +846,69 @@ def test_aggregator_tracks_previous_gradient_norms():
     assert snapshot2.tamiyo.head_alpha_speed_grad_norm_prev == 0.13
     assert snapshot2.tamiyo.head_alpha_curve_grad_norm == 0.21
     assert snapshot2.tamiyo.head_alpha_curve_grad_norm_prev == 0.11
+
+
+def test_aggregator_latches_per_head_nan_inf():
+    """Aggregator should OR-latch per-head NaN/Inf flags (once set, stays set)."""
+    from esper.karn.sanctum.aggregator import SanctumAggregator
+    from esper.leyline.telemetry import PPOUpdatePayload, TelemetryEvent, TelemetryEventType
+
+    agg = SanctumAggregator()
+
+    # First update: NaN in op head
+    event1 = TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        data=PPOUpdatePayload(
+            policy_loss=0.1, value_loss=0.2, entropy=1.0, grad_norm=0.5,
+            kl_divergence=0.01, clip_fraction=0.1, nan_grad_count=1,
+            pre_clip_grad_norm=0.5,
+            head_nan_detected={"op": True, "slot": False},
+            head_inf_detected={},
+        ),
+    )
+    agg.process_event(event1)
+
+    snapshot = agg.get_snapshot()
+    assert snapshot.tamiyo.head_nan_latch["op"] is True
+    assert snapshot.tamiyo.head_nan_latch["slot"] is False
+
+    # Second update: No NaN, but latch should persist
+    event2 = TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        data=PPOUpdatePayload(
+            policy_loss=0.1, value_loss=0.2, entropy=1.0, grad_norm=0.5,
+            kl_divergence=0.01, clip_fraction=0.1, nan_grad_count=0,
+            pre_clip_grad_norm=0.5,
+            head_nan_detected={"op": False, "slot": False},
+            head_inf_detected={},
+        ),
+    )
+    agg.process_event(event2)
+
+    snapshot = agg.get_snapshot()
+    # op should STILL be latched (OR-latch behavior)
+    assert snapshot.tamiyo.head_nan_latch["op"] is True
+
+
+def test_aggregator_latches_both_nan_and_inf_same_head():
+    """A head can have both NaN and Inf detected - both latches should set."""
+    from esper.karn.sanctum.aggregator import SanctumAggregator
+    from esper.leyline.telemetry import PPOUpdatePayload, TelemetryEvent, TelemetryEventType
+
+    agg = SanctumAggregator()
+
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        data=PPOUpdatePayload(
+            policy_loss=0.1, value_loss=0.2, entropy=1.0, grad_norm=0.5,
+            kl_divergence=0.01, clip_fraction=0.1, nan_grad_count=1,
+            pre_clip_grad_norm=0.5,
+            head_nan_detected={"op": True},
+            head_inf_detected={"op": True},  # Same head has both!
+        ),
+    )
+    agg.process_event(event)
+
+    snapshot = agg.get_snapshot()
+    assert snapshot.tamiyo.head_nan_latch["op"] is True
+    assert snapshot.tamiyo.head_inf_latch["op"] is True

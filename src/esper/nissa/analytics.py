@@ -23,6 +23,8 @@ from esper.leyline.telemetry import (
     TrendDetectedPayload,
     TamiyoInitiatedPayload,
     PerformanceDegradationPayload,
+    MemoryWarningPayload,
+    RewardHackingSuspectedPayload,
 )
 from esper.nissa.output import OutputBackend
 
@@ -34,23 +36,32 @@ _logger = logging.getLogger(__name__)
 # =============================================================================
 
 BLUEPRINT_COMPUTE_MULTIPLIERS: dict[str, float] = {
-    # CNN blueprints
-    "noop": 1.0,            # Identity seed - no compute impact
-    "norm": 1.02,           # Minimal - normalization only
-    "depthwise": 1.08,      # Cheap - depthwise separable
-    "conv_light": 1.15,     # Moderate - single conv block
-    "conv_heavy": 1.25,     # Heavier - double conv block
-    # Transformer blueprints
-    "lora": 1.05,           # Low-rank adapter - lightweight
-    "attention": 1.35,      # Additional self-attention head (O(n²))
+    # CNN blueprints (sorted by param count)
+    "noop": 1.0,            # Identity seed - no compute impact (0 params)
+    "norm": 1.02,           # Minimal - normalization only (~130-800 params)
+    "conv_small": 1.05,     # Small 1x1 conv (~4.2K params)
+    "bottleneck": 1.05,     # Bottleneck conv 1x1->3x3->1x1 (~4.5K params)
+    "depthwise": 1.08,      # Depthwise-separable conv (~4.8K params)
+    "conv_light": 1.15,     # Moderate - single conv block (~37K params)
+    "conv_heavy": 1.25,     # Heavier - double conv block (~74K params)
+    # Transformer blueprints (sorted by param count)
+    "lora": 1.05,           # Low-rank adapter rank=8 (~6K params)
+    "lora_large": 1.08,     # Low-rank adapter rank=32 (~25K params)
+    "mlp_small": 1.15,      # Small MLP 2x expansion (~591K params)
+    "mlp": 1.20,            # Full MLP 4x expansion (~1.2M params)
+    "attention": 1.35,      # Self-attention head O(n²) (~591K params)
     "flex_attention": 1.35, # FlexAttention variant - similar cost envelope
-    "mlp": 1.20,            # Extra MLP block
 }
 
 
 def compute_cost_for_blueprint(blueprint_id: str) -> float:
-    """Return compute multiplier for a blueprint type."""
-    return BLUEPRINT_COMPUTE_MULTIPLIERS.get(blueprint_id, 1.1)
+    """Return compute multiplier for a blueprint type.
+
+    Raises:
+        KeyError: If blueprint_id is not registered in BLUEPRINT_COMPUTE_MULTIPLIERS.
+            New blueprints must be explicitly registered with their compute cost.
+    """
+    return BLUEPRINT_COMPUTE_MULTIPLIERS[blueprint_id]
 
 
 # =============================================================================
@@ -178,7 +189,9 @@ class BlueprintAnalytics(OutputBackend):
             if isinstance(event.data, SeedGerminatedPayload):
                 bp_id = event.data.blueprint_id
                 env_id = event.data.env_id
-                seed_id = event.seed_id or "unknown"
+                if event.seed_id is None:
+                    raise ValueError("seed_id required for SEED_GERMINATED event")
+                seed_id = event.seed_id
                 params = event.data.params
             else:
                 _logger.warning(f"Unexpected SEED_GERMINATED payload type: {type(event.data)}")
@@ -196,7 +209,9 @@ class BlueprintAnalytics(OutputBackend):
             if isinstance(event.data, SeedFossilizedPayload):
                 bp_id = event.data.blueprint_id
                 env_id = event.data.env_id
-                seed_id = event.seed_id or "unknown"
+                if event.seed_id is None:
+                    raise ValueError("seed_id required for SEED_FOSSILIZED event")
+                seed_id = event.seed_id
                 improvement = event.data.improvement
                 blending_delta = event.data.blending_delta if event.data.blending_delta is not None else 0.0
                 counterfactual = event.data.counterfactual
@@ -228,9 +243,13 @@ class BlueprintAnalytics(OutputBackend):
 
         elif event.event_type == TelemetryEventType.SEED_PRUNED:
             if isinstance(event.data, SeedPrunedPayload):
-                bp_id = event.data.blueprint_id or "unknown"
+                if event.data.blueprint_id is None:
+                    raise ValueError("blueprint_id required for SEED_PRUNED event")
+                bp_id = event.data.blueprint_id
                 env_id = event.data.env_id
-                seed_id = event.seed_id or "unknown"
+                if event.seed_id is None:
+                    raise ValueError("seed_id required for SEED_PRUNED event")
+                seed_id = event.seed_id
                 improvement = event.data.improvement
                 blending_delta = event.data.blending_delta if event.data.blending_delta is not None else 0.0
                 counterfactual = event.data.counterfactual
@@ -307,7 +326,8 @@ class BlueprintAnalytics(OutputBackend):
 
         # === Health/Warning Events ===
         elif event.event_type == TelemetryEventType.MEMORY_WARNING:
-            _logger.warning("MEMORY_WARNING event not yet migrated to typed payload")
+            if not isinstance(event.data, MemoryWarningPayload):
+                _logger.error("MEMORY_WARNING event missing typed payload")
             return
 
         elif event.event_type == TelemetryEventType.PERFORMANCE_DEGRADATION:
@@ -326,7 +346,8 @@ class BlueprintAnalytics(OutputBackend):
             return
 
         elif event.event_type == TelemetryEventType.REWARD_HACKING_SUSPECTED:
-            _logger.warning("REWARD_HACKING_SUSPECTED event not yet migrated to typed payload")
+            if not isinstance(event.data, RewardHackingSuspectedPayload):
+                _logger.error("REWARD_HACKING_SUSPECTED event missing typed payload")
             return
 
         # === PPO Anomaly Events (use AnomalyDetectedPayload) ===

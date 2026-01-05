@@ -165,6 +165,13 @@ class TestScaffoldLedger:
 
         # Create minimal mocks for required fields
         mock_model = Mock()
+        slot_0 = Mock()
+        slot_0.seed = None
+        slot_0.state = None
+        slot_1 = Mock()
+        slot_1.seed = None
+        slot_1.state = None
+        mock_model.seed_slots = {"slot_0": slot_0, "slot_1": slot_1}
         mock_optimizer = Mock()
         mock_signal_tracker = Mock()
         mock_signal_tracker.reset = Mock()
@@ -428,6 +435,13 @@ class TestScaffoldHindsightFlowE2E:
         from unittest.mock import Mock
 
         mock_model = Mock()
+        seed_slots = {}
+        for slot_id in slots:
+            slot = Mock()
+            slot.seed = None
+            slot.state = None
+            seed_slots[slot_id] = slot
+        mock_model.seed_slots = seed_slots
         mock_optimizer = Mock()
         mock_signal_tracker = Mock()
         mock_signal_tracker.reset = Mock()

@@ -2,7 +2,9 @@
 
 import logging
 
-from esper.nissa.analytics import BlueprintStats, SeedScoreboard
+import pytest
+
+from esper.nissa.analytics import BlueprintStats, SeedScoreboard, compute_cost_for_blueprint
 from esper.leyline import TelemetryEvent, TelemetryEventType
 from esper.leyline.telemetry import (
     SeedGerminatedPayload,
@@ -219,3 +221,31 @@ class TestBlueprintAnalytics:
         assert "stats" in snapshot
         assert "scoreboards" in snapshot
         assert snapshot["stats"]["depthwise"]["germinated"] == 5
+
+
+class TestComputeCostForBlueprint:
+    """Tests for compute_cost_for_blueprint function."""
+
+    def test_known_blueprint_returns_multiplier(self):
+        """Known blueprint IDs return their configured multiplier."""
+        assert compute_cost_for_blueprint("noop") == 1.0
+        assert compute_cost_for_blueprint("depthwise") == 1.08
+        assert compute_cost_for_blueprint("attention") == 1.35
+
+    def test_unknown_blueprint_raises_keyerror(self):
+        """Unknown blueprint ID raises KeyError.
+
+        Regression test for: silent .get() default masking missing blueprint
+        registrations. New blueprints must be explicitly registered.
+        """
+        with pytest.raises(KeyError, match="nonexistent_blueprint"):
+            compute_cost_for_blueprint("nonexistent_blueprint")
+
+    def test_typo_blueprint_raises_keyerror(self):
+        """Typo in blueprint ID raises KeyError (not silent default)."""
+        # Common typos should fail loudly, not return 1.1
+        with pytest.raises(KeyError):
+            compute_cost_for_blueprint("depthwsie")  # typo: 'depthwsie' vs 'depthwise'
+
+        with pytest.raises(KeyError):
+            compute_cost_for_blueprint("atention")  # typo: 'atention' vs 'attention'

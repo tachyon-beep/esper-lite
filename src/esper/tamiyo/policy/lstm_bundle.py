@@ -10,9 +10,8 @@ from typing import Any
 import torch
 from torch import nn
 
-from esper.tamiyo.policy.protocol import PolicyBundle
+from esper.leyline import PolicyBundle, ActionResult, EvalResult, ForwardResult
 from esper.tamiyo.policy.registry import register_policy
-from esper.tamiyo.policy.types import ActionResult, EvalResult, ForwardResult
 from esper.leyline.slot_config import SlotConfig
 from esper.leyline import DEFAULT_LSTM_HIDDEN_DIM
 
@@ -69,7 +68,7 @@ class LSTMPolicyBundle:
         # Note: The network's first parameter is "state_dim" which is our feature_dim
         self._network = FactoredRecurrentActorCritic(
             state_dim=feature_dim,
-            num_slots=self.slot_config.num_slots,
+            slot_config=self.slot_config,
             lstm_hidden_dim=hidden_dim,
             lstm_layers=num_lstm_layers,
         )
@@ -107,6 +106,7 @@ class LSTMPolicyBundle:
             blueprint_indices,
             hidden,
             slot_mask=masks["slot"],
+            slot_by_op_mask=masks["slot_by_op"],
             blueprint_mask=masks["blueprint"],
             style_mask=masks["style"],
             tempo_mask=masks["tempo"],
@@ -161,12 +161,15 @@ class LSTMPolicyBundle:
         if blueprint_indices.dim() == 2:
             blueprint_indices = blueprint_indices.unsqueeze(1)
 
-        # Normalize masks to match feature shape (network expects 3D masks)
+        # Normalize masks to 3D based on mask rank, not features rank
+        # FIX: Previously gated on `need_expand` (features was 2D), but if features
+        # is already 3D [B, 1, F] and masks are 2D [B, A], the mask wasn't expanded,
+        # causing PyTorch broadcasting to align [B, A] against [B, 1, A] incorrectly.
         def expand_mask(mask: torch.Tensor | None) -> torch.Tensor | None:
             if mask is None:
                 return None
-            if need_expand and mask.dim() == 2:
-                return mask.unsqueeze(1)  # [batch, action_dim] -> [batch, 1, action_dim]
+            if mask.dim() == 2:
+                return mask.unsqueeze(1)  # [B, A] -> [B, 1, A]
             return mask
 
         output = self._network.forward(

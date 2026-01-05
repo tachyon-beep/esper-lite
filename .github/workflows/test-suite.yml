@@ -14,6 +14,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PyYAML
+        run: pip install pyyaml
+
+      - name: Enforce leyline type boundaries
+        run: python scripts/lint_leyline_types.py
+
+      - name: Enforce defensive patterns whitelist
+        run: python scripts/lint_defensive_patterns.py
+
+      - name: Enforce GPU sync whitelist
+        run: python scripts/lint_gpu_sync.py
+
       # Use pre-built ruff action - no installation needed
       - name: Lint with ruff
         uses: astral-sh/ruff-action@v3
@@ -37,7 +54,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --extra dev --extra tui
+        run: uv sync --extra tui --group dev
 
       - name: Type check with mypy
         run: MYPYPATH=src uv run mypy -p esper
@@ -60,14 +77,15 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --group dev
 
       - name: Run property tests
         env:
           HYPOTHESIS_PROFILE: ci
+          PYTHONPATH: src
         run: |
-          uv run pytest tests/properties/ \
-            -v \
+          uv run pytest -m property \
+            -v -x \
             --hypothesis-show-statistics \
             --tb=short
 
@@ -89,24 +107,31 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --group dev
 
       - name: Run unit tests
+        env:
+          PYTHONPATH: src
         run: |
-          uv run pytest tests/unit/ -v --cov=src --cov-report=json
+          uv run pytest -m "not integration and not stress and not property" -x --cov=src --cov-report=json
 
       - name: Check coverage threshold
         run: |
-          COVERAGE=$(python -c "import json; print(json.load(open('coverage.json'))['totals']['percent_covered'])")
-          echo "Coverage: $COVERAGE%"
-          if (( $(echo "$COVERAGE < 80" | bc -l) )); then
-            echo "Coverage $COVERAGE% below 80% threshold"
-            exit 1
-          fi
+          python3 -c "
+          import json, sys
+          data = json.load(open('coverage.json'))
+          coverage = data['totals']['percent_covered']
+          print(f'Coverage: {coverage:.1f}%')
+          if coverage < 80:
+              print(f'Coverage {coverage:.1f}% below 80% threshold')
+              sys.exit(1)
+          "
 
       - name: Run integration tests
+        env:
+          PYTHONPATH: src
         run: |
-          uv run pytest tests/integration/ -v
+          uv run pytest -m integration -v -x
 
   e2e-smoke-tests:
     runs-on: ubuntu-latest
@@ -115,22 +140,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check for E2E tests
+        id: check-e2e
+        run: |
+          if [ -d "tests/e2e" ] && [ -n "$(ls -A tests/e2e/*.py 2>/dev/null)" ]; then
+            echo "has_tests=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_tests=false" >> $GITHUB_OUTPUT
+            echo "No E2E tests found, skipping"
+          fi
+
       - name: Set up Python
+        if: steps.check-e2e.outputs.has_tests == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install uv
+        if: steps.check-e2e.outputs.has_tests == 'true'
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        if: steps.check-e2e.outputs.has_tests == 'true'
+        run: uv sync --group dev
 
       - name: Run E2E smoke tests
+        if: steps.check-e2e.outputs.has_tests == 'true'
+        env:
+          PYTHONPATH: src
         run: |
-          uv run pytest tests/e2e/ -v -m "not slow"
+          uv run pytest tests/e2e/ -v -x -m "not slow"
 
   nightly-full-suite:
     if: github.event_name == 'schedule'
@@ -150,18 +191,31 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --group dev
 
       - name: Run full property tests (thorough)
         env:
           HYPOTHESIS_PROFILE: thorough
+          PYTHONPATH: src
         run: |
-          uv run pytest tests/properties/ -v --hypothesis-show-statistics
+          uv run pytest -m property -v --hypothesis-show-statistics
 
       - name: Run all E2E tests
+        env:
+          PYTHONPATH: src
         run: |
-          uv run pytest tests/e2e/ -v  # All tests, including slow ones
+          if [ -d "tests/e2e" ] && [ -n "$(ls -A tests/e2e/*.py 2>/dev/null)" ]; then
+            uv run pytest tests/e2e/ -v  # All tests, including slow ones
+          else
+            echo "No E2E tests found, skipping"
+          fi
 
       - name: Run performance benchmarks
+        env:
+          PYTHONPATH: src
         run: |
-          uv run pytest tests/benchmarks/ -v
+          if [ -d "tests/benchmarks" ] && [ -n "$(ls -A tests/benchmarks/*.py 2>/dev/null)" ]; then
+            uv run pytest tests/benchmarks/ -v
+          else
+            echo "No benchmark tests found, skipping"
+          fi

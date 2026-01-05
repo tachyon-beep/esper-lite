@@ -9,12 +9,16 @@ a wide range of parameter configurations and gradient values.
 
 from __future__ import annotations
 
+import pytest
 import torch
 import torch.nn as nn
 from hypothesis import given, strategies as st
 
 from esper.simic.telemetry import SeedGradientCollector
 from tests.strategies import bounded_floats
+
+# Mark all tests in this module as property tests for CI
+pytestmark = pytest.mark.property
 
 
 # =============================================================================

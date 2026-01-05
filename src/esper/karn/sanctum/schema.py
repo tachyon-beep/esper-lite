@@ -18,6 +18,8 @@ from datetime import datetime
 
 import numpy as np
 
+from esper.leyline import HEAD_NAMES
+
 
 def compute_entropy_velocity(entropy_history: deque[float] | list[float]) -> float:
     """Compute rate of entropy change (d(entropy)/d(batch)).
@@ -165,6 +167,122 @@ def compute_collapse_risk(
 
 
 @dataclass
+class SeedLifecycleStats:
+    """Seed lifecycle aggregate metrics for TamiyoBrain display.
+
+    Tracks germination, pruning, and fossilization rates over the training run.
+    Used by SlotsPanel to show lifecycle health beyond current slot states.
+    """
+    # Cumulative counts (entire run)
+    germination_count: int = 0
+    prune_count: int = 0
+    fossilize_count: int = 0
+
+    # Current active count
+    active_count: int = 0
+    total_slots: int = 0
+
+    # Rates (per episode) - computed from counts / current_episode
+    germination_rate: float = 0.0  # Germinations per episode
+    prune_rate: float = 0.0  # Prunes per episode
+    fossilize_rate: float = 0.0  # Fossilizations per episode
+
+    # Quality metrics
+    blend_success_rate: float = 0.0  # fossilized / (fossilized + pruned)
+    avg_lifespan_epochs: float = 0.0  # Mean epochs a seed lives before terminal state
+
+    # Trend indicators (computed from rate history)
+    germination_trend: str = "stable"  # "rising", "stable", "falling"
+    prune_trend: str = "stable"
+    fossilize_trend: str = "stable"
+
+
+@dataclass
+class ObservationStats:
+    """Observation space health metrics.
+
+    Tracks feature statistics to catch input distribution issues
+    before they propagate to NaN gradients.
+    """
+    # Per-feature-group statistics (mean/std across batch)
+    slot_features_mean: float = 0.0
+    slot_features_std: float = 0.0
+    host_features_mean: float = 0.0
+    host_features_std: float = 0.0
+    context_features_mean: float = 0.0  # Epoch progress, action history, etc.
+    context_features_std: float = 0.0
+
+    # Outlier detection
+    outlier_pct: float = 0.0  # Fraction of observations outside 3σ (rendered as X.X%)
+
+    # Saturation / clipping indicators (computed on NORMALIZED obs)
+    near_clip_pct: float = 0.0  # Fraction with |x_norm| >= 0.9*clip
+    clip_pct: float = 0.0  # Fraction clamped at |x_norm| == clip
+
+    # Numerical health
+    nan_count: int = 0  # NaN values detected in observations
+    inf_count: int = 0  # Inf values detected in observations
+    nan_pct: float = 0.0  # Fraction of NaNs in raw obs tensor
+    inf_pct: float = 0.0  # Fraction of Infs in raw obs tensor
+
+    # Normalization drift (running stats divergence)
+    normalization_drift: float = 0.0  # How much running mean/std has shifted
+
+    # Batch context
+    batch_size: int = 0  # Number of environments in the batch
+
+
+@dataclass
+class EpisodeStats:
+    """Episode-level aggregate metrics.
+
+    Provides insight into episode structure beyond just returns.
+    Helps diagnose timeout issues, early termination, and success rates.
+    """
+    # Episode length statistics
+    length_mean: float = 0.0
+    length_std: float = 0.0
+    length_min: int = 0
+    length_max: int = 0
+
+    # Outcome tracking (over recent N episodes)
+    total_episodes: int = 0
+    episodes_per_second: float = 0.0  # Throughput: inner episodes completed per second
+    timeout_count: int = 0  # Episodes that hit max steps
+    success_count: int = 0  # Episodes that achieved goal
+    early_termination_count: int = 0  # Episodes terminated early (failure/reset)
+
+    # Derived rates
+    timeout_rate: float = 0.0  # timeout_count / total_episodes
+    success_rate: float = 0.0  # success_count / total_episodes
+    early_termination_rate: float = 0.0  # early_termination_count / total_episodes
+
+    # Steps per action type (insight into action efficiency)
+    steps_per_germinate: float = 0.0  # Avg steps between GERMINATE actions
+    steps_per_prune: float = 0.0  # Avg steps between PRUNE actions
+    steps_per_fossilize: float = 0.0  # Avg steps between FOSSILIZE actions
+
+    # === DRL Diagnostic Metrics (per DRL expert review) ===
+    # These replace the useless Length/Outcomes metrics for fixed-length episodes
+
+    # Action entropy: Policy sharpness indicator (0=deterministic, 1=uniform random)
+    # Normalized Shannon entropy: H = -sum(p(a)*log(p(a))) / log(|A|)
+    # Good: 0.3-0.5 (converging), Bad high: >0.8 (random), Bad low: <0.1 (collapsed)
+    action_entropy: float = 0.0
+
+    # Yield rate: Seed efficiency (fossilizations / germinations)
+    # Good: 0.4-0.7 (healthy churn), Bad low: <0.2 (thrashing), Bad high: >0.9 (too conservative)
+    yield_rate: float = 0.0
+
+    # Slot utilization: Capacity usage (active_slots / max_slots)
+    # Good: 0.4-0.8, Bad low: <0.2 (WAIT spam), Bad high: 1.0 constant (germinate spam)
+    slot_utilization: float = 0.0
+
+    # Completion trend
+    completion_trend: str = "stable"  # "improving", "stable", "declining"
+
+
+@dataclass
 class ShapleyEstimate:
     """Shapley value estimate for a single slot.
 
@@ -179,12 +297,12 @@ class ShapleyEstimate:
 class ShapleySnapshot:
     """Shapley value attribution for all slots in an environment.
 
-    Computed via permutation sampling at episode boundaries.
+    Computed via permutation sampling at PPO batch boundaries.
     More accurate than simple ablation but more expensive.
     """
     slot_ids: tuple[str, ...] = ()  # ("r0c0", "r0c1", "r0c2")
     values: dict[str, ShapleyEstimate] = field(default_factory=dict)
-    epoch: int = 0  # Epoch when computed
+    epoch: int = 0  # PPO batch index (1-based) when computed
     timestamp: datetime | None = None
 
     def get_mean(self, slot_id: str) -> float:
@@ -392,6 +510,9 @@ class EnvState:
     reward_history: deque[float] = field(default_factory=lambda: deque(maxlen=50))
     accuracy_history: deque[float] = field(default_factory=lambda: deque(maxlen=50))
 
+    # Reward tracking
+    cumulative_reward: float = 0.0  # Sum of all rewards received (for entire episode)
+
     # Best tracking
     best_reward: float = float('-inf')
     best_reward_epoch: int = 0
@@ -425,6 +546,8 @@ class EnvState:
         "ADVANCE": 0,
     })
     total_actions: int = 0
+    # Execution feedback for last action (invalid slot+op combos are rejected at runtime)
+    last_action_success: bool = True
 
     # Gaming rate tracking (for per-env reward health)
     # Resets each episode to show recent behavior
@@ -483,8 +606,9 @@ class EnvState:
         return (self.host_params + self.fossilized_params) / self.host_params
 
     def add_reward(self, reward: float, epoch: int) -> None:
-        """Add reward and update best tracking."""
+        """Add reward and update best/cumulative tracking."""
         self.reward_history.append(reward)
+        self.cumulative_reward += reward
         if reward > self.best_reward:
             self.best_reward = reward
             self.best_reward_epoch = epoch
@@ -622,6 +746,51 @@ class EnvState:
 
 
 @dataclass
+class ValueFunctionMetrics:
+    """Value function quality diagnostics for DRL training health.
+
+    Per DRL expert review: Value function quality is THE primary diagnostic
+    for RL training failures. Low V-Return correlation means advantage
+    estimates are garbage, regardless of how healthy policy metrics look.
+
+    Grouped separately to prevent TamiyoState bloat.
+    """
+
+    # V-Return Correlation (PRIMARY VALUE METRIC)
+    # Pearson correlation between V(s) predictions and actual returns
+    # Low (<0.5) = value network isn't learning, advantages are noise
+    # High (>0.8) = value network is well-calibrated
+    v_return_correlation: float = 0.0
+
+    # TD Error Statistics
+    # TD error = r + γV(s') - V(s) (true TD(0) error)
+    # High mean = biased value estimates (target network staleness)
+    # High std = noisy gradient targets (normal in early training)
+    td_error_mean: float = 0.0
+    td_error_std: float = 0.0
+
+    # Bellman Error (|V(s) - (r + γV(s'))|²)
+    # Spikes often PRECEDE NaN losses - early warning signal
+    bellman_error: float = 0.0
+
+    # Return Distribution Percentiles (per DRL expert - catches bimodal policies)
+    # If p90 - p10 is huge, policy is inconsistent (some episodes succeed, others fail)
+    return_p10: float = 0.0
+    return_p50: float = 0.0  # Median (more robust than mean)
+    return_p90: float = 0.0
+
+    # Return distribution shape (for quick diagnosis)
+    return_skewness: float = 0.0  # >0 = right-skewed (few big wins)
+    return_variance: float = 0.0  # High = inconsistent policy
+
+    # Historical tracking for correlation computation
+    # These are populated by aggregator from DecisionSnapshot td_advantage values
+    value_predictions: deque[float] = field(default_factory=lambda: deque(maxlen=100))
+    actual_returns: deque[float] = field(default_factory=lambda: deque(maxlen=100))
+    td_errors: deque[float] = field(default_factory=lambda: deque(maxlen=100))
+
+
+@dataclass
 class GradientQualityMetrics:
     """Gradient quality diagnostics for DRL training health.
 
@@ -683,7 +852,7 @@ class InfrastructureMetrics:
 class TamiyoState:
     """Tamiyo policy agent state - ALL metrics from existing TUI.
 
-    Reference: tui.py TUIState policy metrics + _render_tamiyo_brain()
+    Reference: tui.py TUIState policy metrics + Tamiyo panel renderer
 
     FIX: Added total_actions field (required for action percentage calculation)
     FIX: Added advantage stats, entropy_coef, gradient health fields from aggregator
@@ -734,8 +903,34 @@ class TamiyoState:
     exploding_layers: int = 0
     nan_grad_count: int = 0  # NaN gradient count
     inf_grad_count: int = 0  # Inf gradient count
+    # Per-head NaN/Inf latch (indicator lights - once True, stays True for entire run)
+    # Pre-populated with all HEAD_NAMES keys to enable direct access without .get()
+    # Keys: slot, blueprint, style, tempo, alpha_target, alpha_speed, alpha_curve, op
+    head_nan_latch: dict[str, bool] = field(
+        default_factory=lambda: {head: False for head in HEAD_NAMES}
+    )
+    head_inf_latch: dict[str, bool] = field(
+        default_factory=lambda: {head: False for head in HEAD_NAMES}
+    )
     layer_gradient_health: dict[str, float] | None = None  # Per-layer gradient health metrics
     entropy_collapsed: bool = False  # Entropy collapse detected
+
+    # LSTM hidden state health (B7-DRL-04)
+    # LSTM states can become corrupted during BPTT - tracked for early warning
+    # NOTE: Total L2 norms scale with sqrt(numel) and are NOT batch-size invariant.
+    # Use *_rms and *_env_rms_* for scale-free health signals.
+    lstm_h_l2_total: float | None = None
+    lstm_c_l2_total: float | None = None
+    lstm_h_rms: float | None = None
+    lstm_c_rms: float | None = None
+    lstm_h_env_rms_mean: float | None = None
+    lstm_h_env_rms_max: float | None = None
+    lstm_c_env_rms_mean: float | None = None
+    lstm_c_env_rms_max: float | None = None
+    lstm_h_max: float | None = None   # Max absolute value in h
+    lstm_c_max: float | None = None   # Max absolute value in c
+    lstm_has_nan: bool = False  # NaN detected in LSTM hidden state
+    lstm_has_inf: bool = False  # Inf detected in LSTM hidden state
 
     # Performance timing (for throughput monitoring)
     update_time_ms: float = 0.0  # PPO update duration in milliseconds
@@ -814,7 +1009,7 @@ class TamiyoState:
     # PPO data received flag
     ppo_data_received: bool = False
 
-    # Recent decisions list (up to 3, each visible for at least 10 seconds)
+    # Recent decisions list (up to MAX_DECISIONS=8, expires at 2 minutes)
     recent_decisions: list["DecisionSnapshot"] = field(default_factory=list)
 
     # A/B testing identification (None when not in A/B mode)
@@ -855,6 +1050,7 @@ class TamiyoState:
     # === Nested Metric Groups (per code review - prevents schema bloat) ===
     infrastructure: InfrastructureMetrics = field(default_factory=InfrastructureMetrics)
     gradient_quality: GradientQualityMetrics = field(default_factory=GradientQualityMetrics)
+    value_function: ValueFunctionMetrics = field(default_factory=ValueFunctionMetrics)
 
 
 @dataclass
@@ -938,6 +1134,12 @@ class RewardComponents:
     - base_acc_delta: Legacy shaped signal based on accuracy improvement
     - bounded_attribution: Contribution-primary attribution signal (replaces seed_contribution)
     - seed_contribution: Seed contribution percentage (older format, may coexist)
+    - stable_val_acc: Stable accuracy used for escrow/progress gating (min over a short window)
+    - escrow_credit_prev: Prior escrow credit state (RewardMode.ESCROW)
+    - escrow_credit_target: Target credit computed from stable accuracy (RewardMode.ESCROW)
+    - escrow_delta: Per-step escrow reward payout (RewardMode.ESCROW)
+    - escrow_credit_next: Next escrow credit state after applying delta (RewardMode.ESCROW)
+    - escrow_forfeit: Terminal clawback for non-fossilized escrow credit (RewardMode.ESCROW)
     - compute_rent: Cost of active seeds (always negative)
     - alpha_shock: Convex penalty on alpha deltas (negative if triggered)
     - ratio_penalty: Penalty for extreme policy ratios (negative if triggered)
@@ -960,6 +1162,13 @@ class RewardComponents:
     bounded_attribution: float = 0.0
     seed_contribution: float = 0.0
 
+    # Escrow attribution (RewardMode.ESCROW)
+    escrow_credit_prev: float = 0.0
+    escrow_credit_target: float = 0.0
+    escrow_delta: float = 0.0
+    escrow_credit_next: float = 0.0
+    escrow_forfeit: float = 0.0
+
     # Costs
     compute_rent: float = 0.0
     alpha_shock: float = 0.0
@@ -981,6 +1190,7 @@ class RewardComponents:
     # Context
     env_id: int = 0
     val_acc: float = 0.0
+    stable_val_acc: float | None = None
     last_action: str = ""
 
 
@@ -990,11 +1200,6 @@ class DecisionSnapshot:
 
     Captures what Tamiyo saw, what she chose, and the outcome.
     Used for the "Last Decision" section of TamiyoBrain.
-
-    Stable carousel behavior:
-    - Each decision stays visible for at least 30 seconds
-    - Only the oldest unpinned decision can be replaced
-    - Pinned decisions never get replaced
     """
     timestamp: datetime
     slot_states: dict[str, str]  # slot_id -> "Training 12%" or "Empty"
@@ -1005,10 +1210,9 @@ class DecisionSnapshot:
     expected_value: float  # Value estimate before action
     actual_reward: float | None  # Actual reward received (None if pending)
     alternatives: list[tuple[str, float]]  # [(action_name, probability), ...]
-    # Unique ID for click-to-pin targeting
+    action_success: bool | None = None  # Whether action executed successfully (None if unknown)
+    # Unique ID for click targeting
     decision_id: str = ""
-    # Pinned decisions never get replaced
-    pinned: bool = False
     # Environment ID that made this decision (for TD advantage tracking)
     env_id: int = 0
     # Training context when decision was made
@@ -1062,7 +1266,7 @@ class RunConfig:
     Stores hyperparameters and config for display in run header.
     """
     seed: int | None = None  # Random seed for reproducibility
-    n_episodes: int = 0  # Total episodes to train
+    n_episodes: int = 0  # Total env episodes to train
     lr: float = 0.0  # Initial learning rate
     clip_ratio: float = 0.2  # PPO clip ratio
     entropy_coef: float = 0.01  # Initial entropy coefficient
@@ -1077,12 +1281,6 @@ class BestRunRecord:
 
     Captured at batch end when an env achieves a new personal best.
     Shows both the peak accuracy and where the run ended up.
-
-    INTERACTIVE FEATURES:
-    - Left-click: Opens historical detail modal showing full env state at peak
-    - Right-click: Pins the record (prevents removal from leaderboard)
-
-    Reference: tui.py lines 103-114 (BestRunRecord dataclass)
     """
     env_id: int
     episode: int  # Batch/episode number (0-indexed)
@@ -1093,9 +1291,7 @@ class BestRunRecord:
     slot_ids: list[str] = field(default_factory=list)  # All slot IDs (for showing DORMANT)
     growth_ratio: float = 1.0  # Model size ratio: (host + fossilized) / host
 
-    # === Interactive features (like DecisionSnapshot) ===
     record_id: str = ""  # Unique ID for click targeting
-    pinned: bool = False  # Pinned records never get removed from leaderboard
 
     # === Full env snapshot at peak (for historical detail view) ===
     # Reward breakdown at peak
@@ -1167,11 +1363,12 @@ class SanctumSnapshot:
     # Run metadata
     current_episode: int = 0
     current_batch: int = 0
-    max_batches: int = 0  # Total episodes/batches in run (from CLI)
+    max_batches: int = 0  # Total PPO update rounds in run (from CLI)
     current_epoch: int = 0
     max_epochs: int = 0
     run_id: str = ""
     task_name: str = ""
+    reward_mode: str | None = None  # Primary reward mode for this policy group
     run_config: RunConfig = field(default_factory=RunConfig)
     start_time: datetime | None = None
 
@@ -1202,6 +1399,7 @@ class SanctumSnapshot:
     best_runs: list[BestRunRecord] = field(default_factory=list)
 
     # Cumulative counts (never reset, tracks entire training run)
+    cumulative_germinated: int = 0  # Total germinations across run
     cumulative_fossilized: int = 0
     cumulative_pruned: int = 0
     # Cumulative graveyard (per-blueprint lifecycle stats across entire run)
@@ -1219,6 +1417,16 @@ class SanctumSnapshot:
     # Timestamps for staleness detection
     last_ppo_update: datetime | None = None
     last_reward_update: datetime | None = None
+
+    # === New Diagnostic Metrics (Panel Expansion) ===
+    # Seed lifecycle aggregate stats (for SlotsPanel expansion)
+    seed_lifecycle: SeedLifecycleStats = field(default_factory=SeedLifecycleStats)
+
+    # Observation health stats (for HealthStatusPanel expansion)
+    observation_stats: ObservationStats = field(default_factory=ObservationStats)
+
+    # Episode-level metrics (for new EpisodeMetricsPanel)
+    episode_stats: EpisodeStats = field(default_factory=EpisodeStats)
 
     # Focused env for detail panel
     focused_env_id: int = 0

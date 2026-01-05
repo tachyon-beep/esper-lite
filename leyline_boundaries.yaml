@@ -1,0 +1,296 @@
+# Leyline Boundary Enforcement Whitelist
+# All enums, dataclasses, protocols, typeddicts, and namedtuples
+# must be in leyline/ unless allowed here.
+#
+# Key format: "path:type_kind:ClassName"
+# type_kind: enum | dataclass | protocol | typeddict | namedtuple
+
+version: 1
+
+# Broad allowances (directory/glob based)
+allow_paths:
+  - path: "src/esper/karn/**"
+    reason: "UI-local dataclasses/enums are fine here (display-only types)"
+
+  - path: "tests/**"
+    reason: "Test fixtures and mocks"
+
+# Narrow allowances (exact hits)
+allow_hits:
+  # ============================================================================
+  # SIMIC: Reward System
+  # ============================================================================
+  - key: "src/esper/simic/rewards/rewards.py:enum:RewardMode"
+    owner: "john"
+    reason: "TODO: Cross-domain enum, migrate to leyline"
+    expires: "2026-03-01"
+
+  - key: "src/esper/simic/rewards/rewards.py:enum:RewardFamily"
+    owner: "john"
+    reason: "TODO: Cross-domain enum, migrate to leyline"
+    expires: "2026-03-01"
+
+  - key: "src/esper/simic/rewards/rewards.py:dataclass:ContributionRewardConfig"
+    owner: "john"
+    reason: "Reward computation config, simic-internal"
+
+  - key: "src/esper/simic/rewards/rewards.py:namedtuple:SeedInfo"
+    owner: "john"
+    reason: "Fast-path NamedTuple for reward computation hot loop"
+
+  - key: "src/esper/simic/rewards/reward_telemetry.py:dataclass:RewardComponentsTelemetry"
+    owner: "john"
+    reason: "Reward debugging telemetry, simic-internal"
+
+  # ============================================================================
+  # SIMIC: Telemetry Implementation
+  # ============================================================================
+  - key: "src/esper/simic/telemetry/telemetry_config.py:enum:TelemetryLevel"
+    owner: "john"
+    reason: "TODO: Verbosity enum, consider moving to leyline"
+    expires: "2026-03-01"
+
+  - key: "src/esper/simic/telemetry/telemetry_config.py:dataclass:TelemetryConfig"
+    owner: "john"
+    reason: "Telemetry collection config, simic-internal"
+
+  - key: "src/esper/simic/telemetry/anomaly_detector.py:dataclass:AnomalyReport"
+    owner: "john"
+    reason: "Internal anomaly detection result"
+
+  - key: "src/esper/simic/telemetry/anomaly_detector.py:dataclass:AnomalyDetector"
+    owner: "john"
+    reason: "Implementation class for anomaly detection"
+
+  - key: "src/esper/simic/telemetry/debug_telemetry.py:dataclass:LayerGradientStats"
+    owner: "john"
+    reason: "Per-layer gradient debugging, simic-internal"
+
+  - key: "src/esper/simic/telemetry/debug_telemetry.py:dataclass:NumericalStabilityReport"
+    owner: "john"
+    reason: "Numerical stability diagnostics, simic-internal"
+
+  - key: "src/esper/simic/telemetry/debug_telemetry.py:dataclass:RatioExplosionDiagnostic"
+    owner: "john"
+    reason: "Ratio explosion diagnostics, simic-internal"
+
+  - key: "src/esper/simic/telemetry/gradient_collector.py:dataclass:GradientHealthMetrics"
+    owner: "john"
+    reason: "Gradient health monitoring, simic-internal"
+
+  - key: "src/esper/simic/telemetry/gradient_collector.py:typeddict:GradientHealthStats"
+    owner: "john"
+    reason: "Materialized gradient stats for telemetry sync"
+
+  - key: "src/esper/simic/telemetry/gradient_collector.py:dataclass:DualGradientStats"
+    owner: "john"
+    reason: "Dual gradient tracking for host vs seed, simic-internal"
+
+  - key: "src/esper/simic/telemetry/gradient_ema.py:dataclass:GradientEMATracker"
+    owner: "john"
+    reason: "EMA tracking implementation, simic-internal"
+
+  - key: "src/esper/simic/telemetry/lstm_health.py:dataclass:LSTMHealthMetrics"
+    owner: "john"
+    reason: "LSTM health monitoring, simic-internal"
+
+  - key: "src/esper/simic/telemetry/observation_stats.py:dataclass:ObservationStatsTelemetry"
+    owner: "john"
+    reason: "TODO: Telemetry payload used outside simic, consider moving to leyline"
+    expires: "2026-03-01"
+
+  - key: "src/esper/simic/telemetry/value_metrics.py:typeddict:ValueFunctionMetricsDict"
+    owner: "john"
+    reason: "Value function metrics schema, simic-internal"
+
+  # ============================================================================
+  # SIMIC: Training Infrastructure
+  # ============================================================================
+  - key: "src/esper/simic/training/config.py:dataclass:TrainingConfig"
+    owner: "john"
+    reason: "TODO: Cross-domain config, migrate to leyline"
+    expires: "2026-03-01"
+
+  - key: "src/esper/simic/training/policy_group.py:dataclass:PolicyGroup"
+    owner: "john"
+    reason: "A/B testing container, simic-internal"
+
+  - key: "src/esper/simic/training/policy_group.py:typeddict:EpisodeRecord"
+    owner: "john"
+    reason: "A/B tracking schema, simic-internal"
+
+  - key: "src/esper/simic/training/parallel_env_state.py:dataclass:ParallelEnvState"
+    owner: "john"
+    reason: "CUDA stream state, simic-internal implementation"
+
+  - key: "src/esper/simic/training/helpers.py:protocol:_HasSeedParameters"
+    owner: "john"
+    reason: "Internal protocol for parameter counting helpers"
+
+  # ============================================================================
+  # SIMIC: Agent Internals
+  # ============================================================================
+  - key: "src/esper/simic/agent/rollout_buffer.py:namedtuple:TamiyoRolloutStep"
+    owner: "john"
+    reason: "NamedTuple for torch.compile safety in rollout buffer"
+
+  - key: "src/esper/simic/agent/rollout_buffer.py:dataclass:TamiyoRolloutBuffer"
+    owner: "john"
+    reason: "Rollout buffer implementation, simic-internal"
+
+  - key: "src/esper/simic/agent/types.py:typeddict:GradientStats"
+    owner: "john"
+    reason: "PPO update gradient stats schema"
+
+  - key: "src/esper/simic/agent/types.py:typeddict:HeadGradientNorms"
+    owner: "john"
+    reason: "Per-head gradient norms schema"
+
+  - key: "src/esper/simic/agent/types.py:typeddict:FinitenessGateFailure"
+    owner: "john"
+    reason: "Finiteness gate skip diagnostics schema"
+
+  - key: "src/esper/simic/agent/types.py:typeddict:PPOUpdateMetrics"
+    owner: "john"
+    reason: "PPO update metrics schema"
+
+  - key: "src/esper/simic/agent/types.py:typeddict:HeadLogProbs"
+    owner: "john"
+    reason: "Per-head log probabilities schema"
+
+  - key: "src/esper/simic/agent/types.py:typeddict:HeadEntropies"
+    owner: "john"
+    reason: "Per-head entropies schema"
+
+  - key: "src/esper/simic/agent/types.py:typeddict:ActionDict"
+    owner: "john"
+    reason: "Factored action dictionary schema"
+
+  # ============================================================================
+  # SIMIC: Attribution
+  # ============================================================================
+  - key: "src/esper/simic/attribution/counterfactual.py:dataclass:CounterfactualConfig"
+    owner: "john"
+    reason: "Counterfactual strategy config, simic-internal"
+
+  - key: "src/esper/simic/attribution/counterfactual.py:dataclass:CounterfactualResult"
+    owner: "john"
+    reason: "Single seed evaluation result, simic-internal"
+
+  - key: "src/esper/simic/attribution/counterfactual.py:dataclass:CounterfactualMatrix"
+    owner: "john"
+    reason: "Full counterfactual matrix, simic-internal"
+
+  - key: "src/esper/simic/attribution/counterfactual.py:dataclass:ShapleyEstimate"
+    owner: "john"
+    reason: "Shapley value estimation result, simic-internal"
+
+  - key: "src/esper/simic/attribution/counterfactual.py:dataclass:InteractionTerm"
+    owner: "john"
+    reason: "Seed interaction measurement, simic-internal"
+
+  - key: "src/esper/simic/attribution/counterfactual_helper.py:dataclass:ContributionResult"
+    owner: "john"
+    reason: "Contribution computation result, simic-internal"
+
+  # ============================================================================
+  # TAMIYO: Policy Internals
+  # ============================================================================
+  - key: "src/esper/tamiyo/decisions.py:dataclass:TamiyoDecision"
+    owner: "john"
+    reason: "TODO: Cross-domain decision type, migrate to leyline"
+    expires: "2026-03-01"
+
+  - key: "src/esper/tamiyo/heuristic.py:dataclass:HeuristicPolicyConfig"
+    owner: "john"
+    reason: "Heuristic-specific configuration"
+
+  - key: "src/esper/tamiyo/heuristic.py:protocol:TamiyoPolicy"
+    owner: "john"
+    reason: "Protocol for Tamiyo policy implementations"
+
+  - key: "src/esper/tamiyo/networks/factored_lstm.py:dataclass:GetActionResult"
+    owner: "john"
+    reason: "Network output type, internal to factored LSTM"
+
+  - key: "src/esper/tamiyo/networks/factored_lstm.py:typeddict:_ForwardOutput"
+    owner: "john"
+    reason: "Internal TypedDict for forward() return"
+
+  - key: "src/esper/tamiyo/tracker.py:dataclass:SignalTracker"
+    owner: "john"
+    reason: "Training signal tracker, tamiyo-internal"
+
+  - key: "src/esper/tamiyo/policy/action_masks.py:dataclass:MaskSeedInfo"
+    owner: "john"
+    reason: "Minimal seed info for action masking only"
+
+  # ============================================================================
+  # KASMINA: Seed Management
+  # ============================================================================
+  - key: "src/esper/kasmina/alpha_controller.py:dataclass:AlphaController"
+    owner: "john"
+    reason: "Alpha scheduling implementation class"
+
+  - key: "src/esper/kasmina/blending.py:protocol:AlphaScheduleProtocol"
+    owner: "john"
+    reason: "Internal protocol for alpha scheduling strategies"
+
+  - key: "src/esper/kasmina/slot.py:dataclass:SeedMetrics"
+    owner: "john"
+    reason: "TODO: Cross-domain metrics type, consider moving to leyline"
+    expires: "2026-03-01"
+
+  - key: "src/esper/kasmina/slot.py:dataclass:SeedState"
+    owner: "john"
+    reason: "TODO: Cross-domain state type, consider moving to leyline"
+    expires: "2026-03-01"
+
+  - key: "src/esper/kasmina/blueprints/registry.py:protocol:BlueprintFactory"
+    owner: "john"
+    reason: "Internal protocol for blueprint factory call signature"
+
+  - key: "src/esper/kasmina/blueprints/registry.py:dataclass:BlueprintSpec"
+    owner: "john"
+    reason: "Blueprint metadata for registry"
+
+  - key: "src/esper/kasmina/blueprints/initialization.py:dataclass:FinalLayerRef"
+    owner: "john"
+    reason: "Init helper for finding final affine layer"
+
+  # ============================================================================
+  # NISSA: Observability
+  # ============================================================================
+  - key: "src/esper/nissa/analytics.py:dataclass:BlueprintStats"
+    owner: "john"
+    reason: "Blueprint performance aggregation, nissa-internal"
+
+  - key: "src/esper/nissa/analytics.py:dataclass:SeedScoreboard"
+    owner: "john"
+    reason: "Seed ranking analytics, nissa-internal"
+
+  - key: "src/esper/nissa/tracker.py:dataclass:GradientStats"
+    owner: "john"
+    reason: "Per-layer gradient stats, tracker-internal"
+
+  - key: "src/esper/nissa/tracker.py:dataclass:GradientHealth"
+    owner: "john"
+    reason: "Aggregate gradient health, tracker-internal"
+
+  - key: "src/esper/nissa/tracker.py:dataclass:EpochSnapshot"
+    owner: "john"
+    reason: "Training state snapshot, tracker-internal"
+
+  # ============================================================================
+  # RUNTIME: Task Wiring
+  # ============================================================================
+  - key: "src/esper/runtime/tasks.py:dataclass:TaskSpec"
+    owner: "john"
+    reason: "Task registry entry, runtime-internal"
+
+  # ============================================================================
+  # UTILS: Data Loading
+  # ============================================================================
+  - key: "src/esper/utils/data.py:dataclass:_GatherDeviceState"
+    owner: "john"
+    reason: "Internal GPU preload gather state"

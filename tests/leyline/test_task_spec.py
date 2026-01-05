@@ -10,7 +10,10 @@ def test_cifar_baseline_spec_builds_model_and_loaders():
 
     model = spec.create_model(device="cpu", slots=["r0c1"])
     assert isinstance(model.host, CNNHost)
-    assert len(spec.action_enum) == len(BlueprintRegistry.list_for_topology("cnn")) + 4
+    assert len(spec.action_enum) == (
+        len([s for s in BlueprintRegistry.list_for_topology("cnn") if s.name != "noop"])
+        + 4
+    )
 
     trainloader, testloader = spec.create_dataloaders(batch_size=8, mock=True, num_workers=0)
     batch_x, batch_y = next(iter(trainloader))
@@ -24,7 +27,16 @@ def test_tinystories_spec_builds_model_and_loaders():
 
     model = spec.create_model(device="cpu", slots=["r0c1"])
     assert isinstance(model.host, TransformerHost)
-    assert len(spec.action_enum) == len(BlueprintRegistry.list_for_topology("transformer")) + 4
+    assert len(spec.action_enum) == (
+        len(
+            [
+                s
+                for s in BlueprintRegistry.list_for_topology("transformer")
+                if s.name != "noop"
+            ]
+        )
+        + 4
+    )
 
     trainloader, valloader = spec.create_dataloaders(
         mock=True,

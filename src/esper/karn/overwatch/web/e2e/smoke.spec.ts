@@ -241,7 +241,6 @@ function createMockSnapshot(): SanctumSnapshot {
         slot_ids: ['slot_0'],
         growth_ratio: 0.05,
         record_id: 'best-001',
-        pinned: false,
         reward_components: null,
         counterfactual_matrix: null,
         action_history: ['SPAWN', 'WAIT'],

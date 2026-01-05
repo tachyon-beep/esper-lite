@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Iterator
 
 from textual.containers import Vertical
+from textual.css.query import NoMatches
 from textual.message import Message
 from textual.widgets import DataTable, Static
 
@@ -42,27 +43,20 @@ class Scoreboard(Static):
             super().__init__()
             self.record = record
 
-    class BestRunPinToggled(Message):
-        """Posted when a best run's pin status is toggled."""
-
-        def __init__(self, record_id: str) -> None:
-            super().__init__()
-            self.record_id = record_id
-
     DEFAULT_CSS = """
     Scoreboard {
         layout: vertical;
     }
 
     #best-runs-panel {
-        height: 1fr;  /* Equal split with worst-runs-panel */
+        height: 6fr;  /* Larger - has stats header + 4 data rows */
         border: round $surface-lighten-2;
         border-title-color: cyan;
         padding: 0 1;
     }
 
     #worst-runs-panel {
-        height: 1fr;  /* Equal split with best-runs-panel - shows 5 runs */
+        height: 5fr;  /* Smaller - just 4 data rows, gives 1 row to bottom */
         border: round $surface-lighten-2;
         border-title-color: red;
         padding: 0 1;
@@ -138,17 +132,6 @@ class Scoreboard(Static):
             return
         self.post_message(self.BestRunSelected(record))
 
-    def request_pin_toggle(self) -> None:
-        """Request pin toggle for the currently selected best run.
-
-        Posts BestRunPinToggled when a valid record is selected.
-        Intended to be triggered by SanctumApp's 'p' binding.
-        """
-        record = self._get_focused_record_for_pin()
-        if record is None or not record.record_id:
-            return
-        self.post_message(self.BestRunPinToggled(record.record_id))
-
     def _get_record_for_cursor(
         self, table: DataTable[Any], cursor_row: int
     ) -> "BestRunRecord | None":
@@ -160,11 +143,6 @@ class Scoreboard(Static):
             return None
         return records[cursor_row]
 
-    def _get_focused_record_for_pin(self) -> "BestRunRecord | None":
-        """Return the record to pin based on which table has focus."""
-        table = self.bottom_table if self.bottom_table.has_focus else self.table
-        return self._get_record_for_cursor(table, table.cursor_row)
-
     def _refresh_stats(self) -> None:
         """Refresh the stats header."""
         if self._snapshot is None:
@@ -172,7 +150,8 @@ class Scoreboard(Static):
 
         try:
             stats_widget = self.query_one("#scoreboard-stats", Static)
-        except Exception:
+        except NoMatches:
+            # UI-01 fix: Narrow to NoMatches - only expected exception from query_one
             return
 
         best_runs = list(self._snapshot.best_runs)
@@ -188,24 +167,22 @@ class Scoreboard(Static):
             mean_best = sum(best_accs) / len(best_accs) if best_accs else 0.0
             global_best = max(best_accs) if best_accs else 0.0
 
-        # Compact two-line stats
+        # Compact stats
         stats_text = (
             f"[dim]Best:[/dim] [bold green]{global_best:.1f}%[/bold green]  "
             f"[dim]Mean:[/dim] {mean_best:.1f}%  "
             f"[dim]Foss:[/dim] [green]{total_fossilized}[/green]  "
             f"[dim]Prune:[/dim] [red]{total_pruned}[/red]"
         )
+
         stats_widget.update(stats_text)
 
         # Update panel title
         try:
             panel = self.query_one("#best-runs-panel", Vertical)
-            pinned_count = sum(1 for r in best_runs if r.pinned)
-            if pinned_count > 0:
-                panel.border_title = f"BEST RUNS ({pinned_count} 📌)"
-            else:
-                panel.border_title = "BEST RUNS"
-        except Exception:
+            panel.border_title = "BEST RUNS"
+        except NoMatches:
+            # UI-02 fix: Narrow to NoMatches - only expected exception from query_one
             pass
 
     def _refresh_table(self) -> None:
@@ -218,7 +195,8 @@ class Scoreboard(Static):
 
         # Save cursor and scroll position
         saved_cursor = self.table.cursor_row
-        saved_scroll_y = self.table.scroll_y
+        saved_scroll_x = self.table.scroll_target_x
+        saved_scroll_y = self.table.scroll_target_y
 
         self.table.clear()
 
@@ -226,6 +204,7 @@ class Scoreboard(Static):
         if not best_runs:
             self._displayed_records = []
             self.table.add_row("[dim]No runs yet[/dim]", "", "", "", "", "", "")
+            self.table.refresh()
             return
 
         # Sort by peak accuracy, display top 5 best runs
@@ -249,11 +228,14 @@ class Scoreboard(Static):
         # Restore cursor position
         if self.table.row_count > 0 and saved_cursor is not None:
             target = min(saved_cursor, self.table.row_count - 1)
-            self.table.move_cursor(row=target)
+            if target != self.table.cursor_row:
+                self.table.move_cursor(row=target)
 
         # Restore scroll position
-        if saved_scroll_y > 0:
-            self.table.scroll_y = saved_scroll_y
+        if saved_scroll_x or saved_scroll_y:
+            self.table.scroll_to(x=saved_scroll_x, y=saved_scroll_y, animate=False)
+
+        self.table.refresh()
 
     def _setup_bottom_columns(self) -> None:
         """Setup bottom 5 table columns (same structure as best runs panel).
@@ -278,12 +260,17 @@ class Scoreboard(Static):
         if self._snapshot is None:
             return
 
+        saved_cursor = self.bottom_table.cursor_row
+        saved_scroll_x = self.bottom_table.scroll_target_x
+        saved_scroll_y = self.bottom_table.scroll_target_y
+
         self.bottom_table.clear()
 
         best_runs = list(self._snapshot.best_runs)
         if not best_runs:
             self._bottom_records = []
             self.bottom_table.add_row("[dim]No data[/dim]", "", "", "", "", "", "")
+            self.bottom_table.refresh()
             return
 
         # Sort by trajectory delta (final - peak), ascending = worst regression first
@@ -296,6 +283,7 @@ class Scoreboard(Static):
         if not runs_with_regression:
             self._bottom_records = []
             self.bottom_table.add_row("[dim]No regressions[/dim]", "", "", "", "", "", "")
+            self.bottom_table.refresh()
             return
 
         # Sort by worst trajectory (most negative delta first)
@@ -315,6 +303,16 @@ class Scoreboard(Static):
                 self._format_seeds(record.seeds),
                 key=row_key,
             )
+
+        if self.bottom_table.row_count > 0 and saved_cursor is not None:
+            target = min(saved_cursor, self.bottom_table.row_count - 1)
+            if target != self.bottom_table.cursor_row:
+                self.bottom_table.move_cursor(row=target)
+
+        if saved_scroll_x or saved_scroll_y:
+            self.bottom_table.scroll_to(x=saved_scroll_x, y=saved_scroll_y, animate=False)
+
+        self.bottom_table.refresh()
 
     def _format_epoch(self, record: "BestRunRecord") -> str:
         """Format epoch when peak was achieved.

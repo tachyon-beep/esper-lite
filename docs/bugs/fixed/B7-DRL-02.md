@@ -14,42 +14,7 @@
 | **Domain** | `simic/telemetry` |
 | **Assignee** | |
 | **Created** | 2024-12-27 |
-| **Updated** | 2025-12-29 |
-
----
-
-## Resolution
-
-**Status:** FIXED
-
-**Root Cause:** The `check_performance_degradation()` function was fully implemented but never called. An explicit `TODO: [UNWIRED TELEMETRY]` comment marked where it should be wired.
-
-**Fix Applied:**
-1. Added import of `check_performance_degradation` to vectorized.py
-2. Wired up call in the batch completion block (after `on_batch_completed`)
-3. Removed the TODO comment from emitters.py
-
-**Call Site (vectorized.py ~line 3385):**
-```python
-# B7-DRL-02: Check for performance degradation (was previously unwired)
-# Detects catastrophic forgetting, reward hacking, and training decay
-training_progress = (episodes_completed + envs_this_batch) / total_episodes
-check_performance_degradation(
-    hub,
-    current_acc=avg_acc,
-    rolling_avg_acc=rolling_avg_acc,
-    env_id=0,  # Aggregate metric across all envs
-    training_progress=training_progress,
-)
-```
-
-**Verification:**
-- All 40 vectorized/emitter tests pass
-- Existing unit tests for the function confirm correct behavior:
-  - `test_performance_degradation_emitted_on_accuracy_drop`
-  - `test_no_degradation_event_when_stable`
-  - `test_no_degradation_event_during_warmup`
-  - `test_degradation_event_emitted_after_warmup`
+| **Updated** | 2024-12-27 |
 
 ---
 
@@ -108,6 +73,53 @@ Per CLAUDE.md: "If you are being asked to deliver a telemetry component, do not 
 
 ---
 
+## Recommended Fix
+
+Wire it up in the training loop:
+
+```python
+# At end of each epoch in vectorized.py:
+if telemetry_enabled:
+    degradation_result = check_performance_degradation(
+        current_accuracy=current_acc,
+        rolling_accuracy=rolling_acc,
+        episodes_completed=episode_count,
+    )
+    if degradation_result.is_degraded:
+        _logger.warning("Performance degradation detected: %s", degradation_result)
+```
+
+---
+
+## Verification
+
+### How to Verify the Fix
+
+- [ ] `grep -r "check_performance_degradation(" src/esper/simic/ | grep -v "def check_performance_degradation"` shows callers
+- [ ] Run training with telemetry enabled
+- [ ] Verify degradation detection works by artificially degrading performance
+
+---
+
+## Related Findings
+
+- B7-DRL-01: GradientEMATracker also never used
+- B7-DRL-04: check_gradient_drift() also never called
+
+---
+
+## Appendix
+
+### Original Report Reference
+
+**Report file:** `docs/temp/2712reports/batch7-drl.md`
+**Section:** "check_performance_degradation() is explicitly marked as UNWIRED"
+
+**Report file:** `docs/temp/2712reports/batch7-codereview.md`
+**Section:** "TODO: UNWIRED TELEMETRY never called"
+
+---
+
 ## Cross-Review (DRL Specialist)
 
 | Field | Value |
@@ -138,3 +150,44 @@ Per CLAUDE.md: "If you are being asked to deliver a telemetry component, do not 
 | **Reviewer** | Code Review Specialist |
 
 **Evaluation:** Verified: explicit `TODO: [UNWIRED TELEMETRY]` comment. Function is fully implemented, well-designed, and ready to use. This is the exact anti-pattern CLAUDE.md warns against. The fix is trivial: add call site. Wire immediately, not as TODO.
+
+---
+
+## Resolution
+
+### Status: ALREADY FIXED
+
+**Fixed in commit `88cd0a51` (2025-12-29) before this triage session.**
+
+#### Evidence
+
+1. **Commit message** references this bug explicitly:
+   ```
+   fix(simic): B7-DRL-02 wire up check_performance_degradation()
+   ```
+
+2. **Function is now called** at `vectorized.py:3666-3672`:
+   ```python
+   # B7-DRL-02: Check for performance degradation (was previously unwired)
+   # Detects catastrophic forgetting, reward hacking, and training decay
+   training_progress = (episodes_completed + envs_this_batch) / total_episodes
+   check_performance_degradation(
+       hub,
+       current_acc=avg_acc,
+       rolling_avg_acc=rolling_avg_acc,
+       env_id=0,  # Aggregate metric across all envs
+       training_progress=training_progress,
+   )
+   ```
+
+3. **TODO comment removed** - no "UNWIRED TELEMETRY" exists in codebase
+
+#### Verification
+
+```bash
+# Function has callers:
+grep -rn "check_performance_degradation" src/esper/simic/training/vectorized.py
+# Output: vectorized.py:3666:                check_performance_degradation(
+```
+
+The ticket was valid at time of filing but has since been resolved.
