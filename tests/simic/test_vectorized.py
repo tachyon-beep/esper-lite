@@ -380,6 +380,16 @@ def test_resolve_target_slot_out_of_range_is_invalid():
     assert slot_id == "r0c0"
     assert enabled_flag is False
 
+    slot_id, enabled_flag = _resolve_target_slot(-1, enabled_slots=["r0c0"], slot_config=slot_config)
+    assert slot_id == "r0c0"
+    assert enabled_flag is False
+
+    slot_id, enabled_flag = _resolve_target_slot(
+        -1, enabled_slots=["r0c0", "r0c1", "r0c2"], slot_config=slot_config
+    )
+    assert slot_id == "r0c0"
+    assert enabled_flag is False
+
 
 # =============================================================================
 # Seed Advancement Tests

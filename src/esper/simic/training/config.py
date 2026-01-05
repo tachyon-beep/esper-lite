@@ -104,6 +104,9 @@ class TrainingConfig:
     param_budget: int = 500_000
     param_penalty_weight: float = 0.1
     sparse_reward_scale: float = 1.0
+    # Floor for host-param normalization in rent/shock calculations.
+    # Prevents tiny hosts (e.g., ~17 trainable params) being crushed by any seed growth.
+    rent_host_params_floor: int = 200
 
     # === Diagnostics thresholds ===
     plateau_threshold: float = 0.5
@@ -321,6 +324,7 @@ class TrainingConfig:
             "param_budget": self.param_budget,
             "param_penalty_weight": self.param_penalty_weight,
             "sparse_reward_scale": self.sparse_reward_scale,
+            "rent_host_params_floor": self.rent_host_params_floor,
             "plateau_threshold": self.plateau_threshold,
             "improvement_threshold": self.improvement_threshold,
             "gradient_telemetry_stride": self.gradient_telemetry_stride,
@@ -397,6 +401,7 @@ class TrainingConfig:
 
         if self.param_budget <= 0:
             raise ValueError("param_budget must be positive")
+        self._validate_positive(self.rent_host_params_floor, "rent_host_params_floor")
 
         # Validate amp_dtype
         valid_amp_dtypes = {"auto", "float16", "bfloat16", "off"}

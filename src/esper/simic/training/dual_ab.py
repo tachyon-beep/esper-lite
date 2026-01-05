@@ -82,16 +82,17 @@ def train_dual_policy_ab(
     slots: list[str] | None = None,
     **kwargs: Any,
 ) -> dict[str, tuple[PPOAgent, list[dict[str, Any]]]]:
-    """Train multiple policies in parallel, one per GPU, for true A/B testing.
+    """Train multiple policies sequentially (Phase 1), one per GPU/device, for A/B testing.
 
     This function creates one PolicyGroup per device, each with its own:
     - PPOAgent (independent policy network)
     - Dedicated environments (n_envs_per_group each)
     - Reward configuration (different reward mode per group)
 
-    Groups train in lockstep: each PPO update round, all groups complete their
-    batches before moving to the next. This ensures fair comparison - all groups
-    see the same number of rounds and training steps.
+    Phase 1 behavior: groups are trained sequentially (not in lockstep parallel).
+    This means later groups may benefit from GPU warm-up and cached compilation,
+    so wall-clock parity is not guaranteed even though training hyperparameters
+    and episode counts are matched.
 
     Args:
         n_envs_per_group: Number of parallel environments per policy group

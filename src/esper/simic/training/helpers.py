@@ -60,6 +60,7 @@ def compute_rent_and_shock_inputs(
     model: SlottedHostProtocol,
     slot_ids: list[str],
     host_params: int,
+    host_params_floor: int = 1,
     base_slot_rent_ratio: float,
     prev_slot_alphas: dict[str, float],
     prev_slot_params: dict[str, int],
@@ -74,6 +75,9 @@ def compute_rent_and_shock_inputs(
     Updates prev_slot_alphas/prev_slot_params in place.
     """
     base_slot_rent_params = base_slot_rent_ratio * host_params if host_params > 0 else 0.0
+    if host_params > 0 and host_params_floor < 1:
+        raise ValueError(f"host_params_floor must be >= 1 (got {host_params_floor})")
+    denom_host_params = max(host_params, host_params_floor) if host_params > 0 else 0
 
     effective_seed_params = 0.0
     alpha_delta_sq_sum = 0.0
@@ -101,11 +105,11 @@ def compute_rent_and_shock_inputs(
                 effective_seed_params += base_slot_rent_params
                 effective_seed_params += current_alpha * slot_param_count
 
-        prev_alpha = prev_slot_alphas.get(slot_id, 0.0)
-        prev_params = prev_slot_params.get(slot_id, 0)
+        prev_alpha = prev_slot_alphas[slot_id]
+        prev_params = prev_slot_params[slot_id]
         if host_params > 0 and prev_params > 0:
             delta = current_alpha - prev_alpha
-            alpha_delta_sq_sum += (delta * delta) * (prev_params / host_params)
+            alpha_delta_sq_sum += (delta * delta) * (prev_params / denom_host_params)
 
         prev_slot_alphas[slot_id] = current_alpha
         prev_slot_params[slot_id] = slot_param_count if has_active_seed else 0
@@ -718,6 +722,7 @@ def run_heuristic_episode(
             model=model,
             slot_ids=enabled_slots,
             host_params=host_params,
+            host_params_floor=reward_config.rent_host_params_floor,
             base_slot_rent_ratio=reward_config.base_slot_rent_ratio,
             prev_slot_alphas=prev_slot_alphas,
             prev_slot_params=prev_slot_params,

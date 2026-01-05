@@ -237,15 +237,14 @@ class TestSlotConfigEdgeCases:
             config.slot_id_for_index(100)
 
     def test_index_out_of_bounds_negative(self):
-        """Negative indices work (Python tuple behavior)."""
+        """Negative indices are invalid (action indices are 0-based)."""
         config = SlotConfig.default()  # 3 slots: r0c0, r0c1, r0c2
-        # Python allows negative indexing
-        assert config.slot_id_for_index(-1) == "r0c2"
-        assert config.slot_id_for_index(-2) == "r0c1"
-        assert config.slot_id_for_index(-3) == "r0c0"
-        # But out of range negatives should fail
         with pytest.raises(IndexError):
-            config.slot_id_for_index(-4)
+            config.slot_id_for_index(-1)
+        with pytest.raises(IndexError):
+            config.slot_id_for_index(-2)
+        with pytest.raises(IndexError):
+            config.slot_id_for_index(-3)
 
     # --- Equality and Hashing ---
 

@@ -26,7 +26,7 @@ def test_ppo_losses_shows_gauges():
 
     content_str = str(content)
     # Should show update health labels
-    assert "Expl.Var" in content_str
+    assert "EV (PPO)" in content_str
     assert "KL Diver" in content_str
     assert "Clip Frac" in content_str
     assert "RatioJnt" in content_str

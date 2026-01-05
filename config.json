@@ -18,9 +18,10 @@
   "chunk_length": 150,
   "slots": [
     "r0c0",
-    "r0c1"
+    "r0c1",
+    "r0c2"
   ],
-  "max_seeds": 1,
+  "max_seeds": 2,
   "reward_mode": "escrow",
   "reward_family": "contribution",
   "param_budget": 500000,

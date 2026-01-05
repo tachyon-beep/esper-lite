@@ -588,6 +588,7 @@ def train_ppo_vectorized(
     param_budget: int = 500_000,
     param_penalty_weight: float = 0.1,
     sparse_reward_scale: float = 1.0,
+    rent_host_params_floor: int = 200,
     reward_family: str = "contribution",
     permissive_gates: bool = True,
     # Ablation flags for systematic reward function experiments
@@ -754,12 +755,17 @@ def train_ppo_vectorized(
         raise ValueError(
             "reward_mode applies only to contribution rewards. Use default when reward_family=loss."
         )
+    if rent_host_params_floor < 1:
+        raise ValueError(
+            f"rent_host_params_floor must be >= 1 (got {rent_host_params_floor})"
+        )
 
     reward_config = ContributionRewardConfig(
         reward_mode=reward_mode_enum,
         param_budget=param_budget,
         param_penalty_weight=param_penalty_weight,
         sparse_reward_scale=sparse_reward_scale,
+        rent_host_params_floor=rent_host_params_floor,
         disable_pbrs=disable_pbrs,
         disable_terminal_reward=disable_terminal_reward,
         disable_anti_gaming=disable_anti_gaming,
@@ -3005,6 +3011,9 @@ def train_ppo_vectorized(
                             model=model,
                             slot_ids=slots,
                             host_params=host_params,
+                            host_params_floor=env_reward_configs[
+                                env_idx
+                            ].rent_host_params_floor,
                             base_slot_rent_ratio=env_reward_configs[
                                 env_idx
                             ].base_slot_rent_ratio,

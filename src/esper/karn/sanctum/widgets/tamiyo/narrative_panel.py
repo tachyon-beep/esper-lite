@@ -89,12 +89,6 @@ class NarrativePanel(Static):
                 result.append("  ", style="dim")
                 result.append_text(context)
                 result.append("\n")
-            efficiency = self._render_efficiency_line()
-            if efficiency.plain:
-                result.append("  ", style="dim")
-                result.append_text(efficiency)
-                result.append("\n")
-
         result.append("WHY", style="bold")
         drivers = self._top_drivers(max_items=3)
         if not drivers:
@@ -266,46 +260,6 @@ class NarrativePanel(Static):
             parts.append("  ", style="dim")
             parts.append("upd:", style="dim")
             parts.append(f"{tamiyo.update_time_ms:.0f}ms", style="dim")
-
-        return parts
-
-    def _render_efficiency_line(self) -> Text:
-        if self._snapshot is None:
-            return Text()
-
-        stats = self._snapshot.episode_stats
-        if stats.total_episodes <= 0:
-            return Text()
-
-        parts = Text()
-
-        util_style = "dim"
-        if (
-            stats.slot_utilization < TUIThresholds.SLOT_UTILIZATION_LOW
-            or stats.slot_utilization > TUIThresholds.SLOT_UTILIZATION_HIGH
-        ):
-            util_style = "yellow"
-        parts.append("util:", style="dim")
-        parts.append(f"{stats.slot_utilization:.0%}", style=util_style)
-
-        yield_style = "dim"
-        if stats.yield_rate < TUIThresholds.YIELD_RATE_LOW:
-            yield_style = "yellow"
-        elif stats.yield_rate > TUIThresholds.YIELD_RATE_HIGH:
-            yield_style = "yellow"
-        parts.append("  ", style="dim")
-        parts.append("yield:", style="dim")
-        parts.append(f"{stats.yield_rate:.0%}", style=yield_style)
-
-        entropy_style = "dim"
-        if (
-            stats.action_entropy < TUIThresholds.ACTION_ENTROPY_LOW
-            or stats.action_entropy > TUIThresholds.ACTION_ENTROPY_HIGH
-        ):
-            entropy_style = "yellow"
-        parts.append("  ", style="dim")
-        parts.append("H:", style="dim")
-        parts.append(f"{stats.action_entropy:.2f}", style=entropy_style)
 
         return parts
 

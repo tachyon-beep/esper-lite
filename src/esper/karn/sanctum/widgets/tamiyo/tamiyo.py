@@ -43,6 +43,7 @@ from .ppo_losses_panel import PPOLossesPanel
 from .health_status_panel import HealthStatusPanel
 from .action_heads_panel import ActionHeadsPanel
 from .action_distribution import ActionContext
+from .critic_calibration_panel import CriticCalibrationPanel
 from .slots_panel import SlotsPanel
 from .episode_metrics_panel import EpisodeMetricsPanel
 from .value_diagnostics_panel import ValueDiagnosticsPanel
@@ -135,10 +136,15 @@ class TamiyoBrain(Container):
         padding: 0 1;
     }
 
-    #health-panel {
-        width: 54;  /* Match PPO width */
-        min-width: 0;
+    #health-column {
+        width: 54;  /* Fixed width for Health + Critic Calibration */
         height: 100%;
+    }
+
+    #health-panel {
+        width: 100%;
+        min-width: 0;
+        height: 1fr;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
         padding: 0 1;
@@ -189,6 +195,14 @@ class TamiyoBrain(Container):
     #value-diagnostics-panel {
         width: 1fr;
         height: 1fr;
+        border: round $surface-lighten-2;
+        border-title-color: $text-muted;
+        padding: 0 1;
+    }
+
+    #critic-calibration-panel {
+        width: 100%;
+        height: 9;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
         padding: 0 1;
@@ -263,7 +277,9 @@ class TamiyoBrain(Container):
                         with Horizontal(id="bottom-metrics-row"):
                             yield EpisodeMetricsPanel(id="episode-metrics-panel")
                             yield ValueDiagnosticsPanel(id="value-diagnostics-panel")
-                    yield HealthStatusPanel(id="health-panel")
+                    with Vertical(id="health-column"):
+                        yield HealthStatusPanel(id="health-panel")
+                        yield CriticCalibrationPanel(id="critic-calibration-panel")
                     yield ActionContext(id="action-context")
 
             with Vertical(id="right-column"):
@@ -307,6 +323,9 @@ class TamiyoBrain(Container):
         )
         self.query_one(
             "#value-diagnostics-panel", ValueDiagnosticsPanel
+        ).update_snapshot(snapshot)
+        self.query_one(
+            "#critic-calibration-panel", CriticCalibrationPanel
         ).update_snapshot(snapshot)
         self.query_one("#decisions-panel", DecisionsColumn).update_snapshot(snapshot)
         self.query_one(EventLog).update_snapshot(snapshot)

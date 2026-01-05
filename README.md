@@ -368,6 +368,7 @@ Gates enforce hard-coded thresholds for gradient ratios, improvement metrics, st
 | `reward_family`        | `"contribution"` | `"contribution"` (counterfactual) or `"loss"` (direct loss delta)             |
 | `param_budget`         | `500000`         | Parameter budget for seeds (penalty if exceeded)                              |
 | `param_penalty_weight` | `0.1`            | Weight of parameter budget penalty in reward                                  |
+| `rent_host_params_floor` | `200`          | Host-size normalization floor for rent/alpha-shock (prevents tiny hosts being crushed) |
 
 #### A/B Testing (True)
 

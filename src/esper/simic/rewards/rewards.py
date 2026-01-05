@@ -195,6 +195,9 @@ class ContributionRewardConfig:
     # Compute rent (logarithmic scaling)
     rent_weight: float = 0.5
     max_rent: float = 8.0
+    # Floor for host_params normalization in rent/shock calculations.
+    # Tiny hosts (e.g., 17 trainable params) would otherwise be crushed by any non-trivial seed.
+    rent_host_params_floor: int = 200
     # Alpha-weighted rent floor (BaseSlotRent): ratio of host params per occupied slot.
     # Calibrated from telemetry_2025-12-20_044944: ~0.0039.
     base_slot_rent_ratio: float = 0.0039
@@ -757,6 +760,10 @@ def compute_contribution_reward(
     rent_penalty = 0.0
     growth_ratio = 0.0
     if host_params > 0:
+        if config.rent_host_params_floor < 1:
+            raise ValueError(
+                f"rent_host_params_floor must be >= 1 (got {config.rent_host_params_floor})"
+            )
         effective_overhead = (
             effective_seed_params
             if effective_seed_params is not None
@@ -765,9 +772,15 @@ def compute_contribution_reward(
         if effective_overhead > 0:
             # Measure EXCESS params from seeds, not total ratio
             # growth_ratio = 0 when no seeds, so no rent penalty
-            growth_ratio = effective_overhead / host_params
+            denom = max(host_params, config.rent_host_params_floor)
+            growth_ratio = effective_overhead / denom
             scaled_cost = math.log(1.0 + growth_ratio)
-            rent_penalty = min(config.rent_weight * scaled_cost, config.max_rent)
+            # Scale rent to an EPISODE magnitude to prevent long-horizon rent from
+            # dominating positive attribution. The per-step rent is distributed
+            # uniformly across the configured horizon.
+            rent_per_episode = min(config.rent_weight * scaled_cost, config.max_rent)
+            rent_normalizer = max_epochs if max_epochs > 0 else 1
+            rent_penalty = rent_per_episode / rent_normalizer
             reward -= rent_penalty
     if components:
         components.compute_rent = -rent_penalty  # Negative because it's a penalty

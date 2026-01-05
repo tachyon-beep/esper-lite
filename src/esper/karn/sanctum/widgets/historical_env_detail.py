@@ -61,7 +61,7 @@ class HistoricalEnvDetail(ModalScreen[None]):
         height: 4;
         padding: 0 1;
         background: $surface-lighten-1;
-        margin-bottom: 1;
+        margin-bottom: 0;
     }
 
     HistoricalEnvDetail .seed-grid {
@@ -95,18 +95,19 @@ class HistoricalEnvDetail(ModalScreen[None]):
         border-left: solid $secondary-lighten-2;
     }
 
-    HistoricalEnvDetail .counterfactual-section {
+    HistoricalEnvDetail .attribution-section {
         height: auto;
         margin-top: 1;
         border-top: solid $secondary-lighten-2;
         padding-top: 1;
     }
 
-    HistoricalEnvDetail .shapley-section {
-        height: auto;
-        margin-top: 1;
-        border-top: solid $secondary-lighten-2;
-        padding-top: 1;
+    HistoricalEnvDetail .attribution-section CounterfactualPanel {
+        width: 2fr;
+    }
+
+    HistoricalEnvDetail .attribution-section ShapleyPanel {
+        width: 1fr;
     }
 
     HistoricalEnvDetail .footer-hint {
@@ -147,21 +148,18 @@ class HistoricalEnvDetail(ModalScreen[None]):
                 with Vertical(classes="graveyard-section"):
                     yield Static(self._render_graveyard(), id="seed-graveyard")
 
-            # Counterfactual analysis section (always visible for stable layout)
+            # Attribution section: Counterfactual + Shapley side by side
             from esper.karn.sanctum.schema import CounterfactualSnapshot, ShapleySnapshot
             matrix = self._record.counterfactual_matrix or CounterfactualSnapshot(
                 strategy="unavailable"
             )
-            with Vertical(classes="counterfactual-section"):
+            shapley = self._record.shapley_snapshot or ShapleySnapshot()
+            with Horizontal(classes="attribution-section"):
                 yield CounterfactualPanel(
                     matrix,
                     seeds=self._record.seeds,
                     id="counterfactual-panel",
                 )
-
-            # Shapley attribution section (always visible for stable layout)
-            shapley = self._record.shapley_snapshot or ShapleySnapshot()
-            with Vertical(classes="shapley-section"):
                 yield ShapleyPanel(
                     shapley,
                     seeds=self._record.seeds,

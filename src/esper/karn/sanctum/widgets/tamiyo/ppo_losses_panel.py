@@ -106,7 +106,7 @@ class PPOLossesPanel(Static):
         # Row 1: Explained Variance
         result.append(
             self._render_gauge_row(
-                label="Expl.Var ",
+                label="EV (PPO)",
                 value=tamiyo.explained_variance,
                 min_val=-1.0,
                 max_val=1.0,

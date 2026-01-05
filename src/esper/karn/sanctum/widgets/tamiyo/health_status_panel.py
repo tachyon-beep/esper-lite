@@ -173,6 +173,10 @@ class HealthStatusPanel(Static):
         result.append(self._render_observation_stats())
         result.append("\n")
 
+        # Behavioral efficiency (slots/yield/entropy)
+        result.append(self._render_efficiency_stats())
+        result.append("\n")
+
         # LSTM hidden state health (B7-DRL-04)
         result.append(self._render_lstm_health())
 
@@ -421,6 +425,59 @@ class HealthStatusPanel(Static):
 
         if worst_status != "ok":
             result.append(" !", style=self._status_style(worst_status))
+
+        return result
+
+    def _render_efficiency_stats(self) -> Text:
+        """Render slot utilization, yield, and action entropy at a glance."""
+        if self._snapshot is None:
+            return Text()
+
+        stats = self._snapshot.episode_stats
+        result = Text()
+
+        result.append("Efficiency  ", style="dim")
+        if stats.total_episodes <= 0:
+            result.append("waiting", style="dim")
+            return result
+
+        util_status = "ok"
+        if (
+            stats.slot_utilization < TUIThresholds.SLOT_UTILIZATION_LOW
+            or stats.slot_utilization > TUIThresholds.SLOT_UTILIZATION_HIGH
+        ):
+            util_status = "warning"
+        result.append("util:", style="dim")
+        result.append(
+            f"{stats.slot_utilization:.0%}",
+            style=self._status_style(util_status),
+        )
+
+        yield_status = "ok"
+        if (
+            stats.yield_rate < TUIThresholds.YIELD_RATE_LOW
+            or stats.yield_rate > TUIThresholds.YIELD_RATE_HIGH
+        ):
+            yield_status = "warning"
+        result.append(" ", style="dim")
+        result.append("yield:", style="dim")
+        result.append(
+            f"{stats.yield_rate:.0%}",
+            style=self._status_style(yield_status),
+        )
+
+        entropy_status = "ok"
+        if (
+            stats.action_entropy < TUIThresholds.ACTION_ENTROPY_LOW
+            or stats.action_entropy > TUIThresholds.ACTION_ENTROPY_HIGH
+        ):
+            entropy_status = "warning"
+        result.append(" ", style="dim")
+        result.append("H:", style="dim")
+        result.append(
+            f"{stats.action_entropy:.2f}",
+            style=self._status_style(entropy_status),
+        )
 
         return result
 

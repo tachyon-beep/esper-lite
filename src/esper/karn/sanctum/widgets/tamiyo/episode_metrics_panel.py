@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING, Any
 from rich.text import Text
 from textual.widgets import Static
 
+from esper.karn.constants import TUIThresholds
+
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import EpisodeStats, SanctumSnapshot
 
@@ -36,14 +38,6 @@ class EpisodeMetricsPanel(Static):
 
     # Column width for label alignment
     COL1 = 13
-
-    # Thresholds for metric interpretation
-    ENTROPY_HIGH = 0.8  # Random policy
-    ENTROPY_LOW = 0.15  # Collapsed policy
-    YIELD_LOW = 0.2  # Thrashing
-    YIELD_HIGH = 0.9  # Too conservative
-    SLOTS_LOW = 0.2  # WAIT spam
-    SLOTS_HIGH = 0.95  # Germinate spam
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -199,9 +193,9 @@ class EpisodeMetricsPanel(Static):
 
     def _entropy_style(self, entropy: float) -> str:
         """Style for entropy: 0.3-0.5 is healthy (green)."""
-        if entropy > self.ENTROPY_HIGH:
+        if entropy > TUIThresholds.ACTION_ENTROPY_HIGH:
             return "red"  # Random policy
-        if entropy < self.ENTROPY_LOW:
+        if entropy < TUIThresholds.ACTION_ENTROPY_LOW:
             return "red bold"  # Collapsed
         if entropy < 0.3:
             return "yellow"  # Getting sharp (watch for collapse)
@@ -209,17 +203,17 @@ class EpisodeMetricsPanel(Static):
 
     def _yield_style(self, yield_rate: float) -> str:
         """Style for yield rate: 0.4-0.7 is healthy."""
-        if yield_rate < self.YIELD_LOW:
+        if yield_rate < TUIThresholds.YIELD_RATE_LOW:
             return "red"  # Thrashing
-        if yield_rate > self.YIELD_HIGH:
+        if yield_rate > TUIThresholds.YIELD_RATE_HIGH:
             return "yellow"  # Too conservative
         return "green"
 
     def _slot_util_style(self, slot_util: float) -> str:
         """Style for slot utilization: 0.4-0.8 is healthy."""
-        if slot_util < self.SLOTS_LOW:
+        if slot_util < TUIThresholds.SLOT_UTILIZATION_LOW:
             return "red"  # WAIT spam
-        if slot_util > self.SLOTS_HIGH:
+        if slot_util > TUIThresholds.SLOT_UTILIZATION_HIGH:
             return "yellow"  # Germinate spam
         return "green"
 
@@ -233,20 +227,26 @@ class EpisodeMetricsPanel(Static):
         slot_util = stats.slot_utilization
 
         # Priority 1: Detect degenerate policies
-        if entropy < self.ENTROPY_LOW and slot_util < self.SLOTS_LOW:
+        if (
+            entropy < TUIThresholds.ACTION_ENTROPY_LOW
+            and slot_util < TUIThresholds.SLOT_UTILIZATION_LOW
+        ):
             return "WAIT spam - policy collapsed", "red bold"
 
-        if entropy < self.ENTROPY_LOW and slot_util > self.SLOTS_HIGH:
+        if (
+            entropy < TUIThresholds.ACTION_ENTROPY_LOW
+            and slot_util > TUIThresholds.SLOT_UTILIZATION_HIGH
+        ):
             return "Germinate spam - degenerate", "red bold"
 
-        if entropy > self.ENTROPY_HIGH:
+        if entropy > TUIThresholds.ACTION_ENTROPY_HIGH:
             return "Random policy - not learning", "yellow"
 
         # Priority 2: Efficiency issues
-        if yield_rate < self.YIELD_LOW and slot_util > 0.3:
+        if yield_rate < TUIThresholds.YIELD_RATE_LOW and slot_util > 0.3:
             return "Thrashing - seeds pruned before contributing", "red"
 
-        if slot_util < self.SLOTS_LOW:
+        if slot_util < TUIThresholds.SLOT_UTILIZATION_LOW:
             return "Under-utilizing slots - too passive", "yellow"
 
         # Priority 3: Healthy patterns
