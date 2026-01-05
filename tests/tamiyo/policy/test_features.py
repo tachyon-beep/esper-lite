@@ -721,6 +721,7 @@ def test_batch_obs_to_features_inactive_slots_are_zeros():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires CUDA")
+@pytest.mark.stress
 def test_feature_extraction_performance_cuda_synchronized():
     """Verify V3 feature extraction is <1ms/batch with proper CUDA sync.
 
@@ -787,6 +788,7 @@ def test_feature_extraction_performance_cuda_synchronized():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires CUDA")
+@pytest.mark.stress
 @pytest.mark.parametrize("n_envs", [64, 128, 256])
 def test_feature_extraction_scales_with_high_n_envs(n_envs: int):
     """Verify feature extraction scales reasonably with high environment counts.
@@ -979,3 +981,196 @@ class TestSafeFunction:
 
         with pytest.raises(TypeError, match="expected numeric"):
             safe({"value": 1})
+
+
+# =============================================================================
+# Internal Helper + Cache Invariants
+# =============================================================================
+
+
+def test_symlog_is_odd_and_handles_negative_values():
+    """symlog should be sign-preserving and monotonic for negative inputs."""
+    from esper.tamiyo.policy.features import symlog
+
+    assert symlog(0.0) == 0.0
+    assert symlog(-1.0) == pytest.approx(-symlog(1.0))
+    assert symlog(-10.0) == pytest.approx(-symlog(10.0))
+
+
+def test_symlog_tensor_matches_scalar_symlog():
+    """symlog_tensor should match scalar symlog elementwise (contract for training stability)."""
+    from esper.tamiyo.policy.features import symlog, symlog_tensor
+
+    values = torch.tensor([-10.0, -1.0, 0.0, 1.0, 10.0])
+    expected = torch.tensor([symlog(float(v)) for v in values])
+    assert torch.allclose(symlog_tensor(values), expected, atol=1e-6)
+
+
+def test_extract_base_features_v3_includes_action_feedback_and_normalization():
+    """_extract_base_features_v3 is the reference implementation for Obs V3 base features."""
+    from esper.leyline.slot_config import SlotConfig
+    from esper.tamiyo.policy.features import _extract_base_features_v3
+
+    slot_config = SlotConfig.default()
+    signal = _make_mock_training_signals(epoch=50, val_loss=1.5, val_accuracy=73.0)
+    env_state = _make_mock_parallel_env_state(last_action_success=False, last_action_op=4)
+
+    base = _extract_base_features_v3(
+        signal=signal,
+        env_state=env_state,
+        num_training=1,
+        num_blending=1,
+        num_holding=1,
+        slot_config=slot_config,
+        max_epochs=MAX_EPOCHS,
+    )
+
+    assert base.shape == (23,)
+    assert base.dtype == torch.float32
+
+    # epoch_norm
+    assert base[0].item() == pytest.approx(0.5)
+    # val_accuracy_norm
+    assert base[2].item() == pytest.approx(0.73)
+    # last_action_success + last_action_op one-hot (indices 16-22)
+    assert base[16].item() == 0.0
+    expected_one_hot = [0.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+    assert base[17:23].tolist() == expected_one_hot
+
+
+def test_extract_slot_features_v3_defaults_when_telemetry_absent():
+    """Missing per-seed telemetry must not introduce NaNs or garbage defaults."""
+    from esper.tamiyo.policy.features import _extract_slot_features_v3
+
+    report = _make_mock_seed_state_report("r0c0", gradient_health=0.25, epochs_total=7)
+    report.telemetry = None
+
+    env_state = _make_mock_parallel_env_state(
+        gradient_health_prev={"r0c0": 0.8},
+        epochs_since_counterfactual={"r0c0": 5},
+    )
+
+    slot_features = _extract_slot_features_v3(
+        slot_report=report,
+        env_state=env_state,
+        slot_id="r0c0",
+        max_epochs=MAX_EPOCHS,
+    )
+
+    assert slot_features.shape == (31,)
+    assert torch.isfinite(slot_features).all()
+    # Telemetry merged (indices 23-26): gradient_norm, gradient_health, has_vanishing, has_exploding
+    assert slot_features[23].item() == 0.0  # gradient_norm default
+    assert slot_features[24].item() == 1.0  # gradient_health default
+    assert slot_features[25].item() == 0.0
+    assert slot_features[26].item() == 0.0
+
+
+def test_batch_obs_to_features_uses_safe_defaults_when_seed_telemetry_missing():
+    """batch_obs_to_features should produce stable obs even when seed telemetry is absent."""
+    from esper.leyline.slot_config import SlotConfig
+    from esper.tamiyo.policy.features import batch_obs_to_features
+
+    slot_config = SlotConfig.default()
+    device = torch.device("cpu")
+    batch_signals = [_make_mock_training_signals()]
+
+    report = _make_mock_seed_state_report("r0c0")
+    report.telemetry = None
+
+    obs, _ = batch_obs_to_features(
+        batch_signals=batch_signals,
+        batch_slot_reports=[{"r0c0": report}],
+        batch_env_states=[_make_mock_parallel_env_state()],
+        slot_config=slot_config,
+        device=device,
+        max_epochs=MAX_EPOCHS,
+    )
+
+    slot_offset = 23  # 23 base dims
+    assert obs.shape[0] == 1
+    assert torch.isfinite(obs).all()
+    assert obs[0, slot_offset + 23].item() == 0.0  # gradient_norm
+    assert obs[0, slot_offset + 24].item() == 1.0  # gradient_health
+
+
+def test_batch_obs_to_features_zeroes_non_finite_gradient_norm():
+    """Non-finite gradient_norm values must be zeroed (prevents NaN propagation)."""
+    from esper.leyline.slot_config import SlotConfig
+    from esper.tamiyo.policy.features import batch_obs_to_features
+
+    slot_config = SlotConfig.default()
+    device = torch.device("cpu")
+    batch_signals = [_make_mock_training_signals()]
+
+    report = _make_mock_seed_state_report("r0c0")
+    assert report.telemetry is not None
+    report.telemetry.gradient_norm = None
+
+    obs, _ = batch_obs_to_features(
+        batch_signals=batch_signals,
+        batch_slot_reports=[{"r0c0": report}],
+        batch_env_states=[_make_mock_parallel_env_state()],
+        slot_config=slot_config,
+        device=device,
+        max_epochs=MAX_EPOCHS,
+    )
+
+    slot_offset = 23
+    assert obs[0, slot_offset + 23].item() == 0.0
+
+
+def test_batch_obs_to_features_rejects_non_finite_gradient_health_prev():
+    """Non-finite gradient_health_prev is a contract violation and should fail fast."""
+    from esper.leyline.slot_config import SlotConfig
+    from esper.tamiyo.policy.features import batch_obs_to_features
+
+    slot_config = SlotConfig.default()
+    device = torch.device("cpu")
+
+    env_state = _make_mock_parallel_env_state(gradient_health_prev={"r0c0": float("nan")})
+    with pytest.raises(ValueError, match="NaN/inf in gradient_health_prev"):
+        batch_obs_to_features(
+            batch_signals=[_make_mock_training_signals()],
+            batch_slot_reports=[{"r0c0": _make_mock_seed_state_report("r0c0")}],
+            batch_env_states=[env_state],
+            slot_config=slot_config,
+            device=device,
+            max_epochs=MAX_EPOCHS,
+        )
+
+
+def test_device_cached_one_hot_tables_are_stable_on_cpu():
+    """Stage/op one-hot lookup tables should cache per device and stay on device."""
+    from esper.tamiyo.policy.features import _get_cached_op_table, _get_cached_stage_table
+
+    device = torch.device("cpu")
+    stage_table_1 = _get_cached_stage_table(device)
+    stage_table_2 = _get_cached_stage_table(device)
+    op_table_1 = _get_cached_op_table(device)
+    op_table_2 = _get_cached_op_table(device)
+
+    assert stage_table_1.device.type == "cpu"
+    assert op_table_1.device.type == "cpu"
+    assert stage_table_1 is stage_table_2
+    assert op_table_1 is op_table_2
+
+
+def test_vectorized_one_hot_encoders_handle_inactive_slots():
+    """Vectorized one-hot should zero inactive (-1) indices."""
+    from esper.leyline import NUM_OPS, NUM_STAGES
+    from esper.tamiyo.policy.features import _vectorized_op_one_hot, _vectorized_stage_one_hot
+
+    device = torch.device("cpu")
+
+    stage_indices = torch.tensor([[0, -1, 2]])
+    stage_one_hot = _vectorized_stage_one_hot(stage_indices, device)
+    assert stage_one_hot.shape == (1, 3, NUM_STAGES)
+    assert stage_one_hot[0, 1].sum().item() == 0.0  # inactive slot all zeros
+    assert stage_one_hot[0, 0, 0].item() == 1.0
+
+    op_indices = torch.tensor([0, NUM_OPS - 1], dtype=torch.long)
+    op_one_hot = _vectorized_op_one_hot(op_indices, device)
+    assert op_one_hot.shape == (2, NUM_OPS)
+    assert op_one_hot[0, 0].item() == 1.0
+    assert op_one_hot[1, -1].item() == 1.0

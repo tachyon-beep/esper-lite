@@ -757,6 +757,69 @@ def test_aggregate_ppo_metrics_handles_dict():
     assert metrics["ratio_diagnostic"] == {"worst": [1, 2]}
 
 
+def test_aggregate_ppo_metrics_skips_empty_and_none_values():
+    """Empty metrics and all-None fields should not create misleading aggregates."""
+    from esper.simic.training.vectorized import _aggregate_ppo_metrics
+
+    assert _aggregate_ppo_metrics([]) == {}
+
+    metrics = _aggregate_ppo_metrics([{"approx_kl": None}, {"approx_kl": None}])
+    assert metrics == {}
+
+
+def test_aggregate_ppo_metrics_special_reductions_and_head_merging():
+    """Aggregation semantics are part of the monitoring contract."""
+    from esper.simic.training.vectorized import _aggregate_ppo_metrics
+
+    metrics = _aggregate_ppo_metrics([
+        {
+            "ratio_max": 1.2,
+            "ratio_min": 0.8,
+            "head_policy_ratio_max": 1.10,
+            "value_min": -1.0,
+            "value_max": 2.0,
+            "value_mean": 1.0,
+            "value_std": 0.5,
+            "early_stop_epoch": 5,
+            "head_entropies": {"policy": [0.1, 0.2], "value": [0.3]},
+            "head_grad_norms": {"policy": [1.0], "value": [0.5, 0.7]},
+        },
+        {
+            "ratio_max": 1.5,
+            "ratio_min": 0.7,
+            "head_policy_ratio_max": 1.05,
+            "value_min": -2.0,
+            "value_max": 3.0,
+            "value_mean": 2.0,
+            "value_std": 0.2,
+            "early_stop_epoch": 3,
+            "head_entropies": {"policy": [0.05], "other": [0.9]},
+            "head_grad_norms": {"policy": [2.0], "other": [3.0]},
+        },
+    ])
+
+    assert metrics["ratio_max"] == 1.5
+    assert metrics["ratio_min"] == 0.7
+    assert metrics["head_policy_ratio_max"] == 1.10
+
+    assert metrics["value_min"] == -2.0
+    assert metrics["value_max"] == 3.0
+    assert metrics["value_mean"] == pytest.approx(1.5)
+    assert metrics["value_std"] == 0.5
+    assert metrics["early_stop_epoch"] == 3
+
+    assert metrics["head_entropies"] == {
+        "policy": [0.2],
+        "value": [0.3],
+        "other": [0.9],
+    }
+    assert metrics["head_grad_norms"] == {
+        "policy": [2.0],
+        "value": [0.7],
+        "other": [3.0],
+    }
+
+
 def test_run_ppo_updates_honors_target_kl_early_stop_and_clears_buffer():
     """Updates should stop when KL exceeds threshold and still clear the buffer."""
 
@@ -815,6 +878,77 @@ def test_run_ppo_updates_honors_target_kl_early_stop_and_clears_buffer():
     assert len(normalizer.calls) == 1
     assert metrics["approx_kl"] == pytest.approx((0.005 + 0.02) / 2.0)
 
+
+def test_run_ppo_updates_rejects_multiple_updates_for_recurrent_policies():
+    """External PPO update loops are incompatible with LSTM policies (staleness guard)."""
+    from esper.simic.training.vectorized import _run_ppo_updates
+
+    class _StubBuffer:
+        def reset(self) -> None:
+            raise AssertionError("buffer.reset should not be reached in staleness guard path")
+
+    class _StubAgent:
+        def __init__(self):
+            self.buffer = _StubBuffer()
+            self.target_kl = None
+            self.lstm_hidden_dim = 16
+
+    class _StubNormalizer:
+        def update(self, tensor: torch.Tensor) -> None:
+            raise AssertionError("normalizer.update should not be reached in staleness guard path")
+
+    with pytest.raises(ValueError, match="incompatible with recurrent"):
+        _run_ppo_updates(
+            agent=_StubAgent(),
+            ppo_updates_per_batch=2,
+            raw_states_for_normalizer_update=[],
+            obs_normalizer=_StubNormalizer(),
+            use_amp=False,
+            amp_dtype=None,  # Explicit: no AMP
+        )
+
+
+def test_run_ppo_updates_uses_amp_context_when_enabled(monkeypatch):
+    """AMP path should call agent.update under autocast when enabled."""
+    from contextlib import contextmanager
+    from esper.simic.training.vectorized import _run_ppo_updates
+
+    @contextmanager
+    def _fake_autocast(*_args, **_kwargs):
+        yield
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr("esper.simic.training.vectorized.torch_amp.autocast", _fake_autocast)
+
+    class _StubBuffer:
+        def reset(self) -> None:
+            pass
+
+    class _StubAgent:
+        def __init__(self):
+            self.buffer = _StubBuffer()
+            self.calls: list[bool] = []
+            self.target_kl = None
+            self.lstm_hidden_dim = 0
+
+        def update(self, *, clear_buffer: bool = True) -> dict[str, float]:
+            self.calls.append(clear_buffer)
+            return {"ratio_max": 1.0, "ratio_min": 1.0}
+
+    class _StubNormalizer:
+        def update(self, tensor: torch.Tensor) -> None:
+            raise AssertionError("normalizer.update not used for this test")
+
+    agent = _StubAgent()
+    _run_ppo_updates(
+        agent=agent,
+        ppo_updates_per_batch=1,
+        raw_states_for_normalizer_update=[],
+        obs_normalizer=_StubNormalizer(),
+        use_amp=True,
+        amp_dtype=torch.float16,
+    )
+    assert agent.calls == [True]
 
 # =============================================================================
 # Telemetry Escalation Tests
@@ -1288,6 +1422,25 @@ def test_lm_correct_tensor_shape_handles_sequence_dimension():
     assert total == fused_batch_size * seq_len, (
         f"Total should be {fused_batch_size * seq_len} tokens, got {total}"
     )
+
+
+def test_lm_correct_tensor_is_scalar_when_elementwise_disabled():
+    """LM path should return a scalar correct count when elementwise=False."""
+    import torch.nn as nn
+    from esper.simic.training.vectorized import loss_and_correct
+
+    batch_size = 4
+    seq_len = 16
+    vocab_size = 50
+
+    outputs = torch.randn(batch_size, seq_len, vocab_size)
+    targets = torch.randint(0, vocab_size, (batch_size, seq_len))
+    criterion = nn.CrossEntropyLoss()  # reduction='mean'
+
+    loss, correct, total = loss_and_correct(outputs, targets, criterion, "lm", elementwise=False)
+    assert loss.ndim == 0
+    assert correct.ndim == 0
+    assert total == batch_size * seq_len
 
 
 def test_classification_correct_tensor_shape_still_works():

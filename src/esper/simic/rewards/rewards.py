@@ -814,10 +814,16 @@ def compute_contribution_reward(
             # PBRS bonus for successful germination (no existing seed)
             # Balances the PBRS penalty applied when pruning seeds
             # Skip if disable_pbrs is True (ablation experiment)
-            phi_germinated = STAGE_POTENTIALS[SeedStage.GERMINATED]
-            phi_no_seed = 0.0
-            pbrs_germinate = config.gamma * phi_germinated - phi_no_seed
-            action_shaping += config.pbrs_weight * pbrs_germinate
+            #
+            # Germination bonus is a *deposit*: it is only meaningful if the seed
+            # survives long enough to scaffold (reach BLENDING). On the terminal
+            # step, there is no future timestep for the seed to mature, so the
+            # bonus is suppressed to prevent last-step germination farming.
+            if epoch < max_epochs:
+                phi_germinated = STAGE_POTENTIALS[SeedStage.GERMINATED]
+                phi_no_seed = 0.0
+                pbrs_germinate = config.gamma * phi_germinated - phi_no_seed
+                action_shaping += config.pbrs_weight * pbrs_germinate
         action_shaping += config.germinate_cost
 
     elif action == LifecycleOp.FOSSILIZE:

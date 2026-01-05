@@ -125,6 +125,11 @@ class TrainingConfig:
     # and let Tamiyo learn quality thresholds through reward signals. If False, gates enforce
     # hard-coded thresholds for gradient ratios, contribution levels, and stability metrics.
     permissive_gates: bool = True
+    # Auto-forward gates: when enabled, Kasmina will advance stages automatically
+    # when the corresponding gate passes (removes ADVANCE as a learned decision).
+    auto_forward_g1: bool = False  # GERMINATED → TRAINING
+    auto_forward_g2: bool = False  # TRAINING → BLENDING
+    auto_forward_g3: bool = False  # BLENDING → HOLDING
 
     # === Ablation Flags ===
     # Used for systematic reward function experiments.
@@ -330,6 +335,9 @@ class TrainingConfig:
             "gradient_telemetry_stride": self.gradient_telemetry_stride,
             "seed": self.seed,
             "permissive_gates": self.permissive_gates,
+            "auto_forward_g1": self.auto_forward_g1,
+            "auto_forward_g2": self.auto_forward_g2,
+            "auto_forward_g3": self.auto_forward_g3,
             "disable_pbrs": self.disable_pbrs,
             "disable_terminal_reward": self.disable_terminal_reward,
             "disable_anti_gaming": self.disable_anti_gaming,
@@ -441,6 +449,14 @@ class TrainingConfig:
     # ------------------------------------------------------------------
     def summary(self) -> str:
         """Human-readable summary of configuration."""
+        auto_forward = []
+        if self.auto_forward_g1:
+            auto_forward.append("G1")
+        if self.auto_forward_g2:
+            auto_forward.append("G2")
+        if self.auto_forward_g3:
+            auto_forward.append("G3")
+
         lines = [
             "TrainingConfig:",
             f"  PPO: lr={self.lr}, gamma={self.gamma}, gae_lambda={self.gae_lambda}, clip={self.clip_ratio}",
@@ -451,6 +467,7 @@ class TrainingConfig:
             f"  LSTM: hidden={self.lstm_hidden_dim}, chunk={self.chunk_length}",
             f"  Slots: {','.join(self.slots)} | reward_family={self.reward_family.value} mode={self.reward_mode.value}",
             f"  Telemetry: {'enabled' if self.use_telemetry else 'disabled'}, gates={'permissive' if self.permissive_gates else 'strict'}",
+            f"  Auto-forward: {','.join(auto_forward) if auto_forward else 'off'}",
         ]
         return "\n".join(lines)
 

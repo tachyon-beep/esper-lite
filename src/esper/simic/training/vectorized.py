@@ -54,6 +54,7 @@ from esper.leyline import (
     ALPHA_SPEED_TO_STEPS,
     ALPHA_TARGET_VALUES,
     AlphaAlgorithm,
+    GateLevel,
     SeedSlotProtocol,
     SeedStateProtocol,
     SlottedHostProtocol,
@@ -131,6 +132,7 @@ from esper.simic.rewards import (
     RewardFamily,
     ContributionRewardConfig,
     SeedInfo,
+    STAGE_POTENTIALS,
 )
 from esper.leyline import (
     DEFAULT_BATCH_SIZE_TRAINING,
@@ -591,6 +593,9 @@ def train_ppo_vectorized(
     rent_host_params_floor: int = 200,
     reward_family: str = "contribution",
     permissive_gates: bool = True,
+    auto_forward_g1: bool = False,
+    auto_forward_g2: bool = False,
+    auto_forward_g3: bool = False,
     # Ablation flags for systematic reward function experiments
     disable_pbrs: bool = False,  # Disable PBRS stage advancement shaping
     disable_terminal_reward: bool = False,  # Disable terminal accuracy bonus
@@ -672,6 +677,16 @@ def train_ppo_vectorized(
 
     if not slots:
         raise ValueError("slots parameter is required and cannot be empty")
+
+    auto_forward_gates: frozenset[GateLevel] = frozenset(
+        gate
+        for gate, enabled in (
+            (GateLevel.G1, auto_forward_g1),
+            (GateLevel.G2, auto_forward_g2),
+            (GateLevel.G3, auto_forward_g3),
+        )
+        if enabled
+    )
 
     # Get task spec early (needed for model creation to derive slot_config)
     # Lazy import to avoid circular dependency
@@ -1248,6 +1263,7 @@ def train_ppo_vectorized(
             slot.on_telemetry = telemetry_cb
             # fast_mode toggled per epoch via apply_slot_telemetry (telemetry-enabled by default)
             slot.fast_mode = False
+            slot.auto_forward_gates = auto_forward_gates
             # Incubator mode gradient isolation: detach host input into the seed path so
             # host gradients remain identical to the host-only model while the seed
             # trickle-learns via STE in TRAINING. The host optimizer still steps
@@ -3207,6 +3223,45 @@ def train_ppo_vectorized(
                         if escrow_forfeit != 0.0:
                             reward -= escrow_forfeit
                             reward_components.escrow_forfeit = -escrow_forfeit
+
+                    # Germination deposit clawback: seeds that never reached BLENDING must
+                    # repay the one-time PBRS germination bonus. This encourages completing
+                    # the scaffolding loop (GERMINATE → BLEND) instead of farming last-minute
+                    # germinations that never contribute.
+                    if (
+                        reward_family_enum == RewardFamily.CONTRIBUTION
+                        and epoch == max_epochs
+                        and env_reward_configs[env_idx].reward_mode
+                        in (RewardMode.SHAPED, RewardMode.ESCROW)
+                        and not env_reward_configs[env_idx].disable_pbrs
+                    ):
+                        phi_germinated = STAGE_POTENTIALS[SeedStage.GERMINATED]
+                        germination_bonus = (
+                            env_reward_configs[env_idx].pbrs_weight
+                            * (env_reward_configs[env_idx].gamma * phi_germinated)
+                        )
+                        germination_forfeit = 0.0
+                        for slot_id in slots:
+                            slot_obj = cast(SeedSlotProtocol, model.seed_slots[slot_id])
+                            slot_seed_state = slot_obj.state
+                            if slot_seed_state is None:
+                                continue
+                            if slot_seed_state.stage not in (SeedStage.GERMINATED, SeedStage.TRAINING):
+                                continue
+                            seed_age_epochs = slot_seed_state.metrics.epochs_total
+                            discount = env_reward_configs[env_idx].gamma**seed_age_epochs
+                            if discount <= 0.0:
+                                raise ValueError(
+                                    "Invalid gamma discount for germination clawback: "
+                                    f"gamma={env_reward_configs[env_idx].gamma} seed_age_epochs={seed_age_epochs}"
+                                )
+                            # Discount-corrected refund: ensures the terminal clawback cancels
+                            # the earlier germination bonus in discounted return space.
+                            germination_forfeit += germination_bonus / discount
+                        if germination_forfeit != 0.0:
+                            reward -= germination_forfeit
+                            if reward_components is not None:
+                                reward_components.action_shaping -= germination_forfeit
 
                     reward += env_state.pending_auto_prune_penalty
                     env_state.pending_auto_prune_penalty = 0.0

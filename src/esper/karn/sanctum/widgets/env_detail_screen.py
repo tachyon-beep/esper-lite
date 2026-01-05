@@ -302,6 +302,8 @@ class EnvDetailScreen(ModalScreen[None]):
         self,
         env_state: "EnvState",
         slot_ids: list[str],
+        *,
+        group_id: str | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the detail screen.
@@ -309,16 +311,23 @@ class EnvDetailScreen(ModalScreen[None]):
         Args:
             env_state: The environment state to display.
             slot_ids: List of slot IDs for the seed grid.
+            group_id: Policy group identifier for multi-policy runs.
         """
         super().__init__(**kwargs)
         self._env = env_state
         self._slot_ids = slot_ids
         self._env_id = env_state.env_id  # Track env_id for updates
+        self._group_id = group_id
 
     @property
     def env_id(self) -> int:
         """Return the environment ID this screen is showing."""
         return self._env_id
+
+    @property
+    def group_id(self) -> str | None:
+        """Return the policy group ID this screen is pinned to (if any)."""
+        return self._group_id
 
     def compose(self) -> Iterable[Widget]:
         """Compose the modal layout."""

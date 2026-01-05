@@ -337,6 +337,9 @@ All PPO hyperparameters are managed through `TrainingConfig`. Key parameters bey
 | Parameter          | Default | Description                                                         |
 | ------------------ | ------- | ------------------------------------------------------------------- |
 | `permissive_gates` | `true`  | Controls how strictly seeds are evaluated for lifecycle transitions |
+| `auto_forward_g1`  | `false` | Auto-forward `GERMINATED → TRAINING` when G1 passes                 |
+| `auto_forward_g2`  | `false` | Auto-forward `TRAINING → BLENDING` when G2 passes                   |
+| `auto_forward_g3`  | `false` | Auto-forward `BLENDING → HOLDING` when G3 passes                    |
 
 **Permissive Gates Mode** (`permissive_gates: true`):
 
@@ -349,6 +352,10 @@ Quality gates (G2, G3, G5) only check structural requirements, allowing Tamiyo t
 **Strict Gates Mode** (`permissive_gates: false`):
 
 Gates enforce hard-coded thresholds for gradient ratios, improvement metrics, stability, and contribution levels. Use this for production deployments where you want deterministic quality control.
+
+**Auto-Forward Gates** (`auto_forward_g1/g2/g3: true`):
+
+When enabled, Kasmina will automatically advance through the configured gated transitions at the end of each epoch (via `SeedSlot.step_epoch()`), removing `ADVANCE` as a learned decision for those stages. Fossilization remains an explicit `FOSSILIZE` decision (no auto-fossilize).
 
 `n_episodes` counts PPO update rounds; total env episodes per run = `n_episodes * n_envs`.
 

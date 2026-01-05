@@ -141,7 +141,7 @@ async def test_new_layout_structure():
 
 @pytest.mark.asyncio
 async def test_sanctum_app_shows_multiple_tamiyo_widgets():
-    """A/B mode should show two TamiyoBrain widgets side-by-side."""
+    """A/B mode should collect two policies and show one at a time."""
     from esper.karn.sanctum.app import SanctumApp
     from esper.karn.sanctum.backend import SanctumBackend
     from esper.karn.sanctum.widgets.tamiyo import TamiyoBrain
@@ -176,11 +176,24 @@ async def test_sanctum_app_shows_multiple_tamiyo_widgets():
         widgets = app.query(TamiyoBrain)
         assert len(widgets) == 2
 
-        # Each should have correct group class
-        has_group_a = any("group-a" in " ".join(w.classes) for w in widgets)
-        has_group_b = any("group-b" in " ".join(w.classes) for w in widgets)
-        assert has_group_a, "Missing group-a widget"
-        assert has_group_b, "Missing group-b widget"
+        tamiyo_a = app.query_one("#tamiyo-a", TamiyoBrain)
+        tamiyo_b = app.query_one("#tamiyo-b", TamiyoBrain)
+
+        # Only one policy is shown at a time (default: first in order).
+        assert "hidden" not in tamiyo_a.classes
+        assert "hidden" in tamiyo_b.classes
+
+        # Toggle should flip active policy group and primary snapshot.
+        assert app._snapshot is not None
+        assert app._snapshot.tamiyo.group_id == "A"
+
+        app.action_toggle_policy_group()
+        await pilot.pause()
+
+        assert app._snapshot is not None
+        assert app._snapshot.tamiyo.group_id == "B"
+        assert "hidden" in tamiyo_a.classes
+        assert "hidden" not in tamiyo_b.classes
 
 
 @pytest.mark.asyncio

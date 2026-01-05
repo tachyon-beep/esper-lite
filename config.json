@@ -20,6 +20,9 @@
     "r0c1",
     "r0c2"
   ],
+  "auto_forward_g1": true,
+  "auto_forward_g2": true,
+  "auto_forward_g3": true,
   "max_seeds": 2,
   "reward_mode": "escrow",
   "reward_family": "contribution",

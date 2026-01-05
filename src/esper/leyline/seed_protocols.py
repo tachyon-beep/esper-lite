@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     import torch.nn as nn
 
     from esper.leyline.schemas import GateResult
+    from esper.leyline.schemas import GateLevel
     from esper.leyline.stages import SeedStage
 
 
@@ -103,6 +104,7 @@ class SeedSlotProtocol(Protocol):
     isolate_gradients: bool
     telemetry_inner_epoch: int
     telemetry_global_epoch: int
+    auto_forward_gates: frozenset["GateLevel"]
 
     @property
     def state(self) -> SeedStateProtocol | None:
@@ -145,6 +147,9 @@ class SeedSlotProtocol(Protocol):
         Callers should check (and clear) this flag immediately AFTER
         calling `step_epoch()` to catch both governor prunes and scheduled
         prune completion.
+
+        Implementations may also auto-forward configured gated transitions
+        as part of the per-epoch lifecycle tick.
         """
         ...
 

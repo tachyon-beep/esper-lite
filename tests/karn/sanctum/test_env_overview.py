@@ -176,10 +176,10 @@ async def test_correct_columns(empty_snapshot):
         widget = app.query_one(EnvOverview)
         widget.update_snapshot(empty_snapshot)
 
-        # Expected columns: Env, Acc, ∑Rwd, Loss, CF, Growth, Reward, Acc▁▃▅, Rwd▁▃▅, ΔAcc, Seed Δ, Rent,
+        # Expected columns: Env, Acc, Ep∑R, Loss, CF, Growth, Reward, Acc▁▃▅, Rwd▁▃▅, ΔAcc, Seed Δ, Rent,
         # [slots...], Last, Momentum, Status, Stale
         # Fixed: 12 + 3 slots + 4 (Last, Momentum, Status, Stale) = 19 total
-        # Env, Acc, ∑Rwd, Loss, CF, Growth, Reward, Acc▁▃▅, Rwd▁▃▅, ΔAcc, Seed Δ, Rent (12) + R0C0, R0C1, R1C0 (3)
+        # Env, Acc, Ep∑R, Loss, CF, Growth, Reward, Acc▁▃▅, Rwd▁▃▅, ΔAcc, Seed Δ, Rent (12) + R0C0, R0C1, R1C0 (3)
         # + Last, Momentum, Status, Stale (4) = 19
         assert widget.table is not None
         assert len(widget.table.columns) == 19

@@ -131,7 +131,7 @@ class EnvOverview(Static):
         # Fixed columns - ordered: Identity → Performance → Trends → Reward breakdown
         self.table.add_column("Env", key="env")
         self.table.add_column("Acc", key="acc")
-        self.table.add_column("∑Rwd", key="cum_rwd")  # Cumulative reward for episode
+        self.table.add_column("Ep∑R", key="cum_rwd")  # Episode return so far (Σ raw step rewards)
         self.table.add_column("Loss", key="loss")  # Host loss (for overfitting detection)
         self.table.add_column("CF", key="cf")  # Counterfactual: synergy/interference
         self.table.add_column("Growth", key="growth")  # growth_ratio: (host+foss)/host

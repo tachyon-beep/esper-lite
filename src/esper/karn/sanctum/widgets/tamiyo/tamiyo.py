@@ -308,7 +308,11 @@ class TamiyoBrain(Container):
         status, _, _ = narrative._get_overall_status()
         self.add_class(f"status-{status}")
 
-        self.border_title = "TAMIYO"
+        self.border_title = (
+            f"TAMIYO ─ {snapshot.tamiyo.group_id}"
+            if snapshot.tamiyo.group_id
+            else "TAMIYO"
+        )
 
         # Propagate snapshot to all child widgets
         # Note: If called before widgets are mounted, this will raise NoMatches.

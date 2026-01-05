@@ -167,20 +167,13 @@ class Scoreboard(Static):
             mean_best = sum(best_accs) / len(best_accs) if best_accs else 0.0
             global_best = max(best_accs) if best_accs else 0.0
 
-        # Compact two-line stats
+        # Compact stats
         stats_text = (
             f"[dim]Best:[/dim] [bold green]{global_best:.1f}%[/bold green]  "
             f"[dim]Mean:[/dim] {mean_best:.1f}%  "
             f"[dim]Foss:[/dim] [green]{total_fossilized}[/green]  "
             f"[dim]Prune:[/dim] [red]{total_pruned}[/red]"
         )
-
-        tail = list(self._snapshot.mean_accuracy_history)[-10:]
-        if tail:
-            tail_mean = sum(tail) / len(tail)
-            stats_text += f"\n[dim]Tail10:[/dim] {tail_mean:.1f}%"
-        else:
-            stats_text += "\n[dim]Tail10:[/dim] --"
 
         stats_widget.update(stats_text)
 

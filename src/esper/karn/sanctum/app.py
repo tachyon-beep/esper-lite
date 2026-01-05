@@ -75,6 +75,7 @@ HELP_TEXT = """\
 
 [bold]Actions[/bold]
   [cyan]/[/cyan]         Filter envs (by ID or status)
+  [cyan]t[/cyan]         Toggle policy group (A/B)
   [cyan]Esc[/cyan]       Clear filter
   [cyan]i[/cyan]         Show full run info (untruncated)
   [cyan]r[/cyan]         Manual refresh
@@ -135,6 +136,9 @@ GLOSSARY_TEXT = """\
   [cyan]Rent[/cyan]          Compute rent penalty (parameter overhead; always negative).
   [cyan]CF[/cyan]            Counterfactual signal (synergy/interference) shown in env overview.
 
+[bold]Env Overview[/bold]
+  [cyan]Ep∑R[/cyan]          Per-env episode return so far (Σ raw step rewards; resets each round).
+
 [bold]Transforms[/bold]
   [cyan]symlog[/cyan]        Signed log transform on large-magnitude signals (compresses spikes, preserves order).
 """
@@ -144,6 +148,7 @@ GLOSSARY_TEXT = """\
 class SanctumView:
     """All data needed to render one UI refresh tick."""
 
+    primary_group_id: str | None
     primary: "SanctumSnapshot"
     snapshots_by_group: dict[str, "SanctumSnapshot"]
     reward_health_by_group: dict[str, "RewardHealthData"]
@@ -339,6 +344,7 @@ class SanctumApp(App[None]):
     BINDINGS = [
         Binding("q", "quit", "Quit", show=True),
         Binding("d", "show_env_detail", "Detail", show=True),
+        Binding("t", "toggle_policy_group", "Policy", show=True),
         Binding("tab", "focus_next", "Next Panel", show=False),
         Binding("shift+tab", "focus_previous", "Prev Panel", show=False),
         # Vim-style navigation
@@ -406,6 +412,8 @@ class SanctumApp(App[None]):
         self._last_heavy_widget_update_ts: float = 0.0
         self._last_reward_health_update_ts: float = 0.0
         self._cached_reward_health_by_group: dict[str, RewardHealthData] = {}
+        self._active_group_id: str | None = None
+        self._last_primary_group_id: str | None = None
 
     def compose(self) -> ComposeResult:
         """Build the Sanctum layout.
@@ -501,6 +509,59 @@ class SanctumApp(App[None]):
             except NoMatches:
                 pass  # Container hasn't mounted yet
 
+    def _sync_tamiyo_visibility(
+        self,
+        active_group_id: str | None,
+        snapshots: dict[str, "SanctumSnapshot"],
+    ) -> None:
+        """Show only the active TamiyoBrain when multiple policies exist."""
+        if active_group_id is None or len(snapshots) < 2:
+            for group_id in snapshots.keys():
+                widget_id = f"tamiyo-{group_id.lower()}"
+                try:
+                    self.query_one(f"#{widget_id}", TamiyoBrain).remove_class("hidden")
+                except NoMatches:
+                    pass
+            return
+
+        for group_id in snapshots.keys():
+            widget_id = f"tamiyo-{group_id.lower()}"
+            try:
+                widget = self.query_one(f"#{widget_id}", TamiyoBrain)
+            except NoMatches:
+                continue
+
+            if group_id == active_group_id:
+                widget.remove_class("hidden")
+            else:
+                widget.add_class("hidden")
+
+    def _ordered_group_ids(self, group_ids: list[str]) -> list[str]:
+        """Return group IDs in a stable, user-friendly order."""
+        if not group_ids:
+            return []
+        ordered = sorted(set(group_ids))
+        if "default" in ordered:
+            ordered.remove("default")
+            ordered.insert(0, "default")
+        return ordered
+
+    def _select_primary_group_id(
+        self, snapshots_by_group: dict[str, "SanctumSnapshot"]
+    ) -> str | None:
+        """Select which policy group drives the non-group widgets."""
+        if not snapshots_by_group:
+            return None
+
+        if (
+            self._active_group_id is not None
+            and self._active_group_id in snapshots_by_group
+        ):
+            return self._active_group_id
+
+        ordered = self._ordered_group_ids(list(snapshots_by_group.keys()))
+        return ordered[0] if ordered else None
+
     def _show_telemetry_fatal(self, error: SanctumTelemetryFatalError) -> None:
         """Stop refreshing and surface telemetry failures loudly."""
         if self._telemetry_fatal_shown:
@@ -544,15 +605,14 @@ class SanctumApp(App[None]):
             )
             return
 
-        # Choose primary snapshot (used by non-policy-group widgets).
-        if "default" in snapshots_by_group:
-            primary = snapshots_by_group["default"]
-        elif snapshots_by_group:
-            primary = snapshots_by_group[sorted(snapshots_by_group.keys())[0]]
-        else:
+        primary_group_id = self._select_primary_group_id(snapshots_by_group)
+        if primary_group_id is None:
             from esper.karn.sanctum.schema import SanctumSnapshot
 
             primary = SanctumSnapshot()
+        else:
+            primary = snapshots_by_group[primary_group_id]
+            self._active_group_id = primary_group_id
 
         # Debug: Add poll count to snapshots for display
         primary.poll_count = self._poll_count
@@ -582,6 +642,7 @@ class SanctumApp(App[None]):
 
         try:
             self.view = SanctumView(
+                primary_group_id=primary_group_id,
                 primary=primary,
                 snapshots_by_group=snapshots_by_group,
                 reward_health_by_group=reward_health_by_group,
@@ -621,7 +682,8 @@ class SanctumApp(App[None]):
         """
         snapshot = view.primary
         now = time.monotonic()
-        heavy_due = (now - self._last_heavy_widget_update_ts) >= 0.5
+        primary_changed = view.primary_group_id != self._last_primary_group_id
+        heavy_due = primary_changed or (now - self._last_heavy_widget_update_ts) >= 0.5
 
         # Update run header first (most important context)
         try:
@@ -654,16 +716,29 @@ class SanctumApp(App[None]):
         # Update TamiyoBrain widgets using multi-group snapshots.
         # Pass per-group reward health (displayed in ActionContext).
         self._refresh_tamiyo_widgets(view.snapshots_by_group, view.reward_health_by_group)
+        self._sync_tamiyo_visibility(view.primary_group_id, view.snapshots_by_group)
+        self._last_primary_group_id = view.primary_group_id
 
         # Update EnvDetailScreen modal if displayed
         # Check if we have a modal screen on the stack
         if len(self.screen_stack) > 1:
             current_screen = self.screen_stack[-1]
             if isinstance(current_screen, EnvDetailScreen):
-                # Get updated env state from snapshot
-                env = snapshot.envs.get(current_screen.env_id)
-                if env is not None:
-                    current_screen.update_env_state(env)
+                modal_snapshot: SanctumSnapshot | None = snapshot
+                modal_group_id = current_screen.group_id
+                if modal_group_id is not None:
+                    if modal_group_id in view.snapshots_by_group:
+                        modal_snapshot = view.snapshots_by_group[modal_group_id]
+                    else:
+                        modal_snapshot = None
+
+                if (
+                    modal_snapshot is not None
+                    and current_screen.env_id in modal_snapshot.envs
+                ):
+                    current_screen.update_env_state(
+                        modal_snapshot.envs[current_screen.env_id]
+                    )
 
     def action_focus_env(self, env_id: int) -> None:
         """Focus on specific environment for detail panels.
@@ -683,6 +758,36 @@ class SanctumApp(App[None]):
     def action_toggle_help(self) -> None:
         """Toggle help display."""
         self.push_screen(HelpScreen())
+
+    def action_toggle_policy_group(self) -> None:
+        """Toggle which policy group is shown as primary (A/B testing)."""
+        view = self.view
+        if view is None:
+            return
+
+        ordered = self._ordered_group_ids(list(view.snapshots_by_group.keys()))
+        if len(ordered) < 2:
+            return
+
+        current = view.primary_group_id
+        if current is None or current not in view.snapshots_by_group:
+            current = ordered[0]
+
+        try:
+            idx = ordered.index(current)
+        except ValueError:
+            idx = 0
+
+        next_group_id = ordered[(idx + 1) % len(ordered)]
+        self._active_group_id = next_group_id
+        self.notify(f"Policy group: {next_group_id}", severity="information")
+
+        self.view = SanctumView(
+            primary_group_id=next_group_id,
+            primary=view.snapshots_by_group[next_group_id],
+            snapshots_by_group=view.snapshots_by_group,
+            reward_health_by_group=view.reward_health_by_group,
+        )
 
     def action_show_run_info(self) -> None:
         """Show full run information modal (untruncated task name, etc.)."""
@@ -820,6 +925,7 @@ class SanctumApp(App[None]):
             EnvDetailScreen(
                 env_state=env,
                 slot_ids=self._snapshot.slot_ids,
+                group_id=self._active_group_id,
             )
         )
 
@@ -902,6 +1008,7 @@ class SanctumApp(App[None]):
             EnvDetailScreen(
                 env_state=env,
                 slot_ids=self._snapshot.slot_ids,
+                group_id=self._active_group_id,
             )
         )
 

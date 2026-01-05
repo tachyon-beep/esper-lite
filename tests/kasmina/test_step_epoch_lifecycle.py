@@ -1,7 +1,8 @@
 """Test step_epoch() lifecycle mechanics.
 
-step_epoch() no longer advances stages; it only ticks alpha schedules and
-handles cooldown transitions after pruning.
+By default, step_epoch() does not advance stages; it only ticks alpha schedules and
+handles cooldown transitions after pruning. Auto-forward transitions are opt-in via
+SeedSlot.auto_forward_gates.
 """
 
 import torch.nn as nn
@@ -336,3 +337,55 @@ class TestStepEpochNoState:
         slot.step_epoch()
 
         assert slot.state is None
+
+
+class TestStepEpochAutoForward:
+    """Test optional auto-forward transitions driven by step_epoch()."""
+
+    def test_auto_forward_g1_advances_germinated_to_training(self):
+        """When G1 is enabled, GERMINATED should auto-forward to TRAINING."""
+        slot = create_test_slot(QualityGates(permissive=True))
+        setup_state_at_stage(slot, SeedStage.GERMINATED)
+        slot.auto_forward_gates = frozenset({GateLevel.G1})
+
+        slot.step_epoch()
+
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.TRAINING
+        assert slot.isolate_gradients is True
+
+    def test_auto_forward_g2_advances_training_to_blending_after_min_epochs(self):
+        """When G2 is enabled, TRAINING should auto-forward to BLENDING after gate age."""
+        slot = create_test_slot(QualityGates(permissive=True))
+        setup_state_at_stage(slot, SeedStage.TRAINING)
+        slot.state.metrics.epochs_in_current_stage = 1
+        slot.auto_forward_gates = frozenset({GateLevel.G2})
+
+        slot.step_epoch()
+
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.BLENDING
+
+    def test_auto_forward_g3_advances_blending_to_holding_on_alpha_completion(self):
+        """When G3 is enabled, BLENDING should auto-forward to HOLDING on alpha completion."""
+        slot = create_test_slot(QualityGates(permissive=True))
+        setup_state_at_stage(slot, SeedStage.BLENDING)
+        slot.state.alpha_controller.retarget(alpha_target=1.0, alpha_steps_total=1)
+        slot.auto_forward_gates = frozenset({GateLevel.G3})
+
+        slot.step_epoch()
+
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.HOLDING
+
+    def test_auto_forward_g3_does_not_advance_on_partial_alpha_target(self):
+        """Even with G3 enabled, partial alpha targets must remain in BLENDING."""
+        slot = create_test_slot(QualityGates(permissive=True))
+        setup_state_at_stage(slot, SeedStage.BLENDING)
+        slot.state.alpha_controller.retarget(alpha_target=0.7, alpha_steps_total=1)
+        slot.auto_forward_gates = frozenset({GateLevel.G3})
+
+        slot.step_epoch()
+
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.BLENDING

@@ -1042,6 +1042,9 @@ class SeedSlot(nn.Module):
         self.telemetry_lifecycle_only: bool = False
         self.telemetry_inner_epoch: int | None = None
         self.telemetry_global_epoch: int | None = None
+        # Auto-forward gates: stage transitions can be advanced automatically by step_epoch()
+        # when the corresponding gate passes (configured by Simic TrainingConfig).
+        self.auto_forward_gates: frozenset[GateLevel] = frozenset()
         self.task_config = task_config
         self._resolved_topology: str | None = None
 
@@ -2337,8 +2340,9 @@ class SeedSlot(nn.Module):
         - governor/rollback prunes (flag set outside `step_epoch()`)
         - scheduled prune completion (flag set inside `step_epoch()`)
 
-        Stage advancement is explicit via advance_stage(); step_epoch only
-        ticks alpha schedules and cooldown transitions.
+        By default, stage advancement is explicit via advance_stage(); step_epoch
+        only ticks alpha schedules and cooldown transitions. When auto_forward_gates
+        is configured, step_epoch will also advance through those gated transitions.
         """
         if not self.state:
             return
@@ -2349,6 +2353,20 @@ class SeedSlot(nn.Module):
         # learnable params that could "fight" decay, but keep the forward graph
         # intact so host gradients still flow ("ghost gradients").
         self._set_blend_out_freeze(self.state.alpha_controller.alpha_mode == AlphaMode.DOWN)
+
+        # Auto-forward: GERMINATED -> TRAINING (G1)
+        if stage == SeedStage.GERMINATED:
+            if GateLevel.G1 in self.auto_forward_gates:
+                self.advance_stage(SeedStage.TRAINING)
+            return
+
+        # Auto-forward: TRAINING -> BLENDING (G2)
+        if stage == SeedStage.TRAINING:
+            if GateLevel.G2 in self.auto_forward_gates:
+                min_epochs = 1 if self.gates.permissive else self.gates.min_blending_epochs
+                if self.state.metrics.epochs_in_current_stage >= min_epochs:
+                    self.advance_stage(SeedStage.BLENDING)
+            return
 
         # BLENDING: tick alpha controller and enforce scheduled prune completion
         if stage == SeedStage.BLENDING:
@@ -2371,6 +2389,13 @@ class SeedSlot(nn.Module):
                     initiator = self._pending_prune_initiator or "policy"
                     self.prune(reason=reason, initiator=initiator)
                     return
+
+                if GateLevel.G3 in self.auto_forward_gates:
+                    if self.gates.permissive or (
+                        self.state.metrics.epochs_in_current_stage
+                        >= self.gates.min_blending_epochs
+                    ):
+                        self.advance_stage(SeedStage.HOLDING)
             return
 
         # HOLDING: Decision point for Tamiyo
