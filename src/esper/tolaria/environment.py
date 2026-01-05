@@ -69,6 +69,11 @@ def validate_device(device: str, *, require_explicit_index: bool = False) -> tor
     from esper.leyline import SUPPORTED_DEVICE_TYPES
 
     dev = parse_device(device)
+    explicit_index: int | None = None
+    if ":" in device:
+        _, maybe_index = device.split(":", 1)
+        if maybe_index.isdigit():
+            explicit_index = int(maybe_index)
 
     # Fail-fast on unsupported device types (meta, xla, xpu, hpu, etc.)
     # These are valid PyTorch devices but not supported for Esper training.
@@ -88,7 +93,7 @@ def validate_device(device: str, *, require_explicit_index: bool = False) -> tor
                 f"MPS device '{device}' requested but MPS is not available. "
                 f"Use device='cpu' or check your Apple Silicon configuration."
             )
-        if dev.index not in (None, 0):
+        if explicit_index not in (None, 0):
             raise ValueError(
                 f"Invalid MPS device index in '{device}'. "
                 f"MPS only supports a single device: use 'mps' or 'mps:0'."
@@ -104,20 +109,29 @@ def validate_device(device: str, *, require_explicit_index: bool = False) -> tor
             f"Use device='cpu' or check your CUDA installation."
         )
 
-    if require_explicit_index and dev.index is None:
+    if require_explicit_index and explicit_index is None:
         raise ValueError(
             f"CUDA device '{device}' must include an explicit index like 'cuda:0'. "
             "Bare 'cuda' is ambiguous in multi-GPU contexts."
         )
 
-    if dev.index is None:
+    if explicit_index is None:
         return dev  # Bare "cuda" uses the current default device
 
     available = torch.cuda.device_count()
-    if dev.index >= available:
+    if explicit_index >= available:
         raise RuntimeError(
             f"CUDA device '{device}' requested but only {available} device(s) are available. "
             f"Valid indices: cuda:0 through cuda:{available - 1}."
+        )
+
+    # PyTorch device indices are stored in an int8 with -1 sentinel (no index).
+    # Large indices like "cuda:999" overflow and appear negative (or None),
+    # which can silently bypass range checks if we only trust dev.index.
+    if dev.index != explicit_index:
+        raise ValueError(
+            f"Invalid CUDA device '{device}': parsed as {dev!s}. "
+            "This indicates index overflow in torch.device parsing."
         )
 
     return dev
