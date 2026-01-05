@@ -16,9 +16,11 @@
   "amp": true,
   "lstm_hidden_dim": 512,
   "slots": [
-    "r0c0"
+    "r0c0",
+    "r0c1",
+    "r0c2"
   ],
-  "max_seeds": 1,
+  "max_seeds": 2,
   "reward_mode": "basic",
   "reward_family": "contribution",
   "param_budget": 500000,

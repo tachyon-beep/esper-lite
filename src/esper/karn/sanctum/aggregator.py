@@ -334,9 +334,8 @@ class SanctumAggregator:
         else:
             self._last_event_ts = time.time()
 
-        # Get event type name - handle both Enum (with .name) and string
-        event_type_raw = event.event_type
-        event_type = event_type_raw.name if hasattr(event_type_raw, "name") else event_type_raw
+        # TelemetryEvent.event_type is a TelemetryEventType contract; use the Enum name.
+        event_type = event.event_type.name
 
         # Log event
         self._add_event_log(event, event_type)

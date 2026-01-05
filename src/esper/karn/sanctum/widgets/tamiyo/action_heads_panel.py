@@ -205,8 +205,8 @@ class ActionHeadsPanel(Static):
 
     # Decision carousel (5-row with 5s staggering, 30s age-out)
     MAX_ROWS: ClassVar[int] = 5
-    SWAP_INTERVAL_S: ClassVar[float] = 5.0
-    MAX_DISPLAY_AGE_S: ClassVar[float] = 30.0
+    SWAP_INTERVAL_S: ClassVar[float] = 3.0
+    MAX_DISPLAY_AGE_S: ClassVar[float] = 15.0
     AGE_PIP_CHAR: ClassVar[str] = "●"
     AGE_PIP_EMPTY: ClassVar[str] = "○"
 
@@ -465,9 +465,13 @@ class ActionHeadsPanel(Static):
             return
 
         # Get displayed IDs to exclude from candidates
-        displayed_ids = {d.decision_id for d in self._displayed_decisions if d.decision_id}
+        displayed_ids = {
+            d.decision_id for d in self._displayed_decisions if d.decision_id
+        }
 
-        candidates = [d for d in incoming if d.decision_id and d.decision_id not in displayed_ids]
+        candidates = [
+            d for d in incoming if d.decision_id and d.decision_id not in displayed_ids
+        ]
         if not candidates:
             return
 
@@ -480,7 +484,9 @@ class ActionHeadsPanel(Static):
             remaining = [d for d in candidates if d.decision_id != newest.decision_id]
             if remaining:
                 second = max(remaining, key=lambda d: d.timestamp)
-                self._add_decision(second, now - self.SWAP_INTERVAL_S)  # Stagger timestamp
+                self._add_decision(
+                    second, now - self.SWAP_INTERVAL_S
+                )  # Stagger timestamp
 
         self._last_swap_ts = now
 
@@ -578,13 +584,19 @@ class ActionHeadsPanel(Static):
         self, result: Text, index: int, decision: "DecisionSnapshot", *, now_mono: float
     ) -> None:
         """Render a single decision row with head choices."""
-        self._render_dec_cell(result, row_index=index, decision=decision, now_mono=now_mono)
+        self._render_dec_cell(
+            result, row_index=index, decision=decision, now_mono=now_mono
+        )
 
         # Op (action) with confidence heat
         action = decision.chosen_action
         action_abbrev = ACTION_ABBREVS.get(action, action[:4])
         action_color = ACTION_COLORS.get(action, "white")
-        op_conf = decision.op_confidence if decision.op_confidence > 0 else decision.confidence
+        op_conf = (
+            decision.op_confidence
+            if decision.op_confidence > 0
+            else decision.confidence
+        )
         heat = self._confidence_heat(op_conf)
         op_content = f"{action_abbrev}{heat}"
         self._rjust_cell(result, op_content, self.COL_OP, action_color)
@@ -592,7 +604,11 @@ class ActionHeadsPanel(Static):
         # Slot
         if decision.chosen_slot:
             slot_abbrev = decision.chosen_slot[:4]
-            slot_conf = decision.slot_confidence if decision.slot_confidence > 0 else decision.confidence
+            slot_conf = (
+                decision.slot_confidence
+                if decision.slot_confidence > 0
+                else decision.confidence
+            )
             slot_heat = self._confidence_heat(slot_conf)
             slot_content = f"{slot_abbrev}{slot_heat}"
             self._rjust_cell(result, slot_content, self.COL_SLOT, "cyan")
@@ -633,7 +649,9 @@ class ActionHeadsPanel(Static):
             )
             alpha_tgt_heat = self._confidence_heat(decision.alpha_target_confidence)
             alpha_tgt_content = f"{alpha_tgt}{alpha_tgt_heat}"
-            self._rjust_cell(result, alpha_tgt_content, self.COL_ALPHA_TGT, "bright_cyan")
+            self._rjust_cell(
+                result, alpha_tgt_content, self.COL_ALPHA_TGT, "bright_cyan"
+            )
         else:
             self._rjust_cell(result, "-", self.COL_ALPHA_TGT, "dim")
 
@@ -644,7 +662,9 @@ class ActionHeadsPanel(Static):
             )
             alpha_spd_heat = self._confidence_heat(decision.alpha_speed_confidence)
             alpha_spd_content = f"{alpha_spd}{alpha_spd_heat}"
-            self._rjust_cell(result, alpha_spd_content, self.COL_ALPHA_SPD, "bright_yellow")
+            self._rjust_cell(
+                result, alpha_spd_content, self.COL_ALPHA_SPD, "bright_yellow"
+            )
         else:
             self._rjust_cell(result, "-", self.COL_ALPHA_SPD, "dim")
 

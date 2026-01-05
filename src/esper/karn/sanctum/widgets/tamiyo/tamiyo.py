@@ -129,7 +129,7 @@ class TamiyoBrain(Container):
     }
 
     #ppo-losses-panel {
-        width: 54;  /* Wider for PPO diagnostics */
+        width: 56;  /* Wider for PPO diagnostics */
         height: 1fr;
         border: round $surface-lighten-2;
         border-title-color: $text-muted;
@@ -137,7 +137,7 @@ class TamiyoBrain(Container):
     }
 
     #health-column {
-        width: 54;  /* Fixed width for Health + Critic Calibration */
+        width: 56;  /* Fixed width for Health + Critic Calibration */
         height: 100%;
     }
 
@@ -302,7 +302,9 @@ class TamiyoBrain(Container):
         if snapshot.tamiyo.group_id:
             self.add_class(f"group-{snapshot.tamiyo.group_id.lower()}")
 
-        self.remove_class("status-ok", "status-warning", "status-critical", "status-warmup")
+        self.remove_class(
+            "status-ok", "status-warning", "status-critical", "status-warmup"
+        )
         status, _, _ = narrative._get_overall_status()
         self.add_class(f"status-{status}")
 

@@ -138,12 +138,9 @@ allow_hits:
 - key: src/esper/simic/control/normalization.py:ValueNormalizer.get_scale:item
   owner: John
   reason: grandfathered at initiation
-- key: src/esper/simic/control/normalization.py:ValueNormalizer.has_valid_stats:item
+- key: src/esper/simic/control/normalization.py:ValueNormalizer.load_state_dict:item
   owner: John
-  reason: grandfathered at initiation
-- key: src/esper/simic/control/normalization.py:ValueNormalizer.update:item
-  owner: John
-  reason: grandfathered at initiation
+  reason: checkpoint restore is not a hot path
 - key: src/esper/simic/telemetry/debug_telemetry.py:RatioExplosionDiagnostic.from_batch:cpu
   owner: John
   reason: grandfathered at initiation

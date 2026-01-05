@@ -151,7 +151,7 @@ class HealthStatusPanel(Static):
 
         # Entropy level
         ent_status = self._get_entropy_status(tamiyo.entropy)
-        result.append("Entropy   ", style="dim")
+        result.append("Entropy    ", style="dim")
         result.append(f"{tamiyo.entropy: 7.3f}", style=self._status_style(ent_status))
         if ent_status != "OK":
             result.append(" !", style=self._status_style(ent_status))
