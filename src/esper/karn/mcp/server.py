@@ -23,6 +23,7 @@ VIEW_CATALOG: list[dict[str, str]] = [
     {"name": "batch_stats", "description": "Batch-level PPO/accuracy summary snapshots."},
     {"name": "seed_lifecycle", "description": "Seed lifecycle events (germinate, stage change, fossilize, prune)."},
     {"name": "decisions", "description": "Decision snapshots (last_action context + head telemetry)."},
+    {"name": "action_distribution", "description": "Per-batch action distribution snapshots (counts + pct)."},
     {"name": "rewards", "description": "Decision snapshots (reward components breakdown)."},
     {"name": "trends", "description": "Detected trends (plateau/degradation/improvement)."},
     {"name": "anomalies", "description": "Training pathologies (collapses, rollbacks, numerical issues)."},
@@ -34,6 +35,7 @@ VIEW_EXAMPLES: list[str] = [
     "SELECT * FROM runs ORDER BY started_at DESC LIMIT 5;",
     "SELECT run_dir, env_id, MAX(val_accuracy) AS peak FROM epochs GROUP BY run_dir, env_id;",
     "SELECT blueprint_id, COUNT(*) FROM seed_lifecycle WHERE event_type = 'SEED_FOSSILIZED' GROUP BY blueprint_id;",
+    "SELECT batch_idx, action_name, pct FROM action_distribution WHERE run_dir = '<run_dir>' ORDER BY batch_idx, action_name;",
     "SELECT * FROM anomalies WHERE run_dir = '<run_dir>' ORDER BY timestamp DESC LIMIT 20;",
 ]
 

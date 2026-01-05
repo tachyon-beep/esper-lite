@@ -296,6 +296,47 @@ VIEW_DEFINITIONS: dict[str, str] = {
             event_type = 'ANALYTICS_SNAPSHOT'
             AND json_extract_string(data, '$.kind') = 'last_action'
     """,
+    "action_distribution": """
+        CREATE OR REPLACE VIEW action_distribution AS
+        WITH snapshots AS (
+            SELECT
+                event_id,
+                timestamp,
+                run_dir,
+                group_id,
+                epoch::INTEGER as episodes_completed,
+                json_extract(data, '$.action_counts') as action_counts
+            FROM raw_events
+            WHERE
+                event_type = 'ANALYTICS_SNAPSHOT'
+                AND json_extract_string(data, '$.kind') = 'action_distribution'
+        ),
+        expanded AS (
+            SELECT
+                s.event_id,
+                s.timestamp,
+                s.run_dir,
+                s.group_id,
+                s.episodes_completed,
+                je.key as action_name,
+                je.value::INTEGER as count
+            FROM snapshots s
+            CROSS JOIN json_each(s.action_counts) AS je
+        )
+        SELECT
+            e.event_id,
+            e.timestamp,
+            e.run_dir,
+            e.group_id,
+            e.episodes_completed,
+            be.batch_idx,
+            e.action_name,
+            e.count,
+            e.count::DOUBLE / SUM(e.count::DOUBLE) OVER (PARTITION BY e.event_id) AS pct
+        FROM expanded e
+        LEFT JOIN batch_epochs be
+            ON be.run_dir = e.run_dir AND be.episodes_completed = e.episodes_completed
+    """,
     "rewards": """
         CREATE OR REPLACE VIEW rewards AS
         SELECT

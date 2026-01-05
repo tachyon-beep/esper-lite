@@ -1,7 +1,7 @@
 {
   "task": "cifar_baseline",
   "n_episodes": 200,
-  "n_envs": 128,
+  "n_envs": 96,
   "max_epochs": 150,
   "chunk_length": 150,
   "lr": 0.001,
@@ -20,8 +20,8 @@
     "r0c1",
     "r0c2"
   ],
-  "max_seeds": 3,
-  "reward_mode": "shaped",
+  "max_seeds": 2,
+  "reward_mode": "escrow",
   "reward_family": "contribution",
   "param_budget": 500000,
   "param_penalty_weight": 0.1,
