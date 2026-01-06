@@ -306,6 +306,8 @@ class DecisionCard(Static):
 
         # Apply labels
         if entropy < 0.3:
+            if self._is_forced_choice(decision):
+                return "[forced]", "cyan"
             if legitimate_low_entropy:
                 return "✓", "green"  # Deterministic valid decision
             return "[collapsing]", "red"  # Actual policy collapse
@@ -314,6 +316,13 @@ class DecisionCard(Static):
         elif entropy < 1.2:
             return "[balanced]", "green"
         return "[exploring]", "cyan"
+
+    def _is_forced_choice(self, decision: "DecisionSnapshot") -> bool:
+        """Return True when the op head is effectively forced by masks."""
+        if decision.confidence < 0.999 or not decision.alternatives:
+            return False
+        alt_max = max(prob for _, prob in decision.alternatives)
+        return alt_max <= 1e-6
 
     def _outcome_badge(self, expect: float, reward: float | None) -> tuple[str, str]:
         """Return (badge, style) for prediction accuracy."""

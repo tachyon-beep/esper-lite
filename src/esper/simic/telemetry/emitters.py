@@ -805,7 +805,12 @@ def emit_ppo_update_event(
 
     step_time_ms_sum = metrics["throughput_step_time_ms_sum"]
     dataloader_wait_ms_sum = metrics["throughput_dataloader_wait_ms_sum"]
-    dataloader_wait_ratio = dataloader_wait_ms_sum / step_time_ms_sum
+    # When updates are skipped (empty buffer / finiteness gate), step time can be 0.
+    dataloader_wait_ratio = (
+        dataloader_wait_ms_sum / step_time_ms_sum
+        if step_time_ms_sum != 0.0
+        else 0.0
+    )
 
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,

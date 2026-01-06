@@ -15,6 +15,14 @@ Capture UX improvements for Sanctum Tamiyo panels after the op-conditioned criti
 - Keep panel boundaries stable: avoid moving key metrics between refreshes.
 - Avoid color-only encoding: always include text or symbols for state.
 
+## Implemented Updates (Jan 2026 pass)
+- Decision cards swap every 5s, rotate across envs when possible, and label forced-choice heads as `[forced]` instead of `[collapsing]`.
+- Torch Stability panel split out and populated with compile state, CUDA mem/reserved/peak, fragmentation, NaN/Inf grad counts, dataloader wait ratio, and PPO update time.
+- Value Diagnostics panel now focuses on return distribution; compile status removed and panel placement swapped with Torch Stability.
+- Dataloader wait ratio wired end-to-end (metrics → telemetry payload → snapshot → UI).
+- `--dual-ab` now forwards TUI/telemetry wiring (ready/shutdown events, quiet_analytics, telemetry_config, profiler flags) so Sanctum behaves like standard PPO.
+- PPO update skip path already populates `op_q_values`/`op_valid_mask` (no KeyError under finiteness-gate skips).
+
 ## Proposed Changes (by panel)
 
 ### Action Context (Critic Preference)
@@ -56,10 +64,10 @@ Sources:
 Sources:
 - `src/esper/karn/sanctum/widgets/tamiyo/ppo_losses_panel.py`
 - `src/esper/karn/sanctum/widgets/tamiyo/value_diagnostics_panel.py`
-- `src/esper/karn/sanctum/widgets/esper_status.py`
+- `src/esper/karn/sanctum/widgets/tamiyo/torch_stability_panel.py`
 - Add AMP/GradScaler status (loss_scale and overflow flag) near PPO Update.
-- Add CUDA memory fragmentation indicator (allocated/reserved + fragmentation ratio).
-- Add dataloader wait vs step time ratio (CPU-bound vs GPU-bound hint).
+- (Done) CUDA memory fragmentation indicator (allocated/reserved + fragmentation ratio).
+- (Done) dataloader wait vs step time ratio (CPU-bound vs GPU-bound hint).
 
 ## Data Contract and Wiring Notes
 - Critic Preference requires: `op_q_values`, `op_valid_mask`, `q_variance`, `q_spread`.
@@ -67,6 +75,7 @@ Sources:
 - Finiteness gate badge requires last failure sources from PPO update payload.
 - AMP/GradScaler status requires telemetry fields for loss_scale and overflow detection.
 - Dataloader wait vs step time requires existing throughput fields to be exposed in snapshot.
+- Dual-ab TUI parity requires passing `telemetry_config`, `quiet_analytics`, and `ready_event` to vectorized training.
 
 ## Priority
 - P0: Critic Preference validity clarity (valid ops line, masked block, chosen op highlight).
@@ -83,13 +92,14 @@ Sources:
 - Finiteness gate badge: `src/esper/karn/sanctum/widgets/tamiyo/ppo_losses_panel.py`
 - Returns de-duplication: `src/esper/karn/sanctum/widgets/tamiyo/action_distribution.py`, `src/esper/karn/sanctum/widgets/tamiyo/value_diagnostics_panel.py`
 - AMP/GradScaler status: `src/esper/karn/sanctum/widgets/tamiyo/ppo_losses_panel.py`
-- CUDA fragmentation: `src/esper/karn/sanctum/widgets/tamiyo/value_diagnostics_panel.py`
-- Dataloader wait vs step time: `src/esper/karn/sanctum/widgets/esper_status.py`
+- CUDA fragmentation: `src/esper/karn/sanctum/widgets/tamiyo/torch_stability_panel.py`
+- Dataloader wait vs step time: `src/esper/karn/sanctum/widgets/tamiyo/torch_stability_panel.py`
 
 ## Validation
 - Update unit tests for Action Context to validate new lines and chosen-op marker.
 - Add snapshot-based tests to verify new fields are rendered only when present.
 - Manual TUI check: ensure no layout overflow in standard terminal widths.
+- Sanity run: `--dual-ab --sanctum` should initialize Sanctum after DataLoader warmup and stop cleanly.
 
 ## Open Questions
 - Should masked ops show reasons (e.g., lifecycle constraints) or just count and dim?

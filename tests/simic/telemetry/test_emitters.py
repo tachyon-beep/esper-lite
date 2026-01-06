@@ -219,6 +219,28 @@ def test_emit_ppo_update_event_sets_dataloader_wait_ratio() -> None:
     assert math.isclose(payload.dataloader_wait_ratio, 0.25)
 
 
+def test_emit_ppo_update_event_zero_step_time_sets_wait_ratio_zero() -> None:
+    """emit_ppo_update_event should avoid division by zero for empty step time."""
+    hub = MagicMock()
+
+    emit_ppo_update_event(
+        hub=hub,
+        metrics=_make_mandatory_metrics(
+            throughput_step_time_ms_sum=0.0,
+            throughput_dataloader_wait_ms_sum=12.0,
+        ),
+        episodes_completed=4,
+        batch_idx=2,
+        epoch=50,
+        optimizer=None,
+        grad_norm=1.0,
+        update_time_ms=40.0,
+    )
+
+    payload = hub.emit.call_args[0][0].data
+    assert payload.dataloader_wait_ratio == 0.0
+
+
 def test_batch_tail_event_order_is_stable() -> None:
     hub = _RecordingHub()
     telemetry_config = TelemetryConfig(level=TelemetryLevel.NORMAL)

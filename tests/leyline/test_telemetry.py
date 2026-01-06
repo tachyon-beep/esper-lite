@@ -72,8 +72,8 @@ def test_telemetry_event_serializes_nested_reward_components():
     assert "shaped_reward_ratio" in parsed["data"]["reward_components"]
 
 
-def test_epoch_completed_payload_accepts_missing_observation_stats() -> None:
-    """EpochCompletedPayload.from_dict should allow observation_stats to be absent."""
+def test_epoch_completed_payload_accepts_null_observation_stats() -> None:
+    """EpochCompletedPayload.from_dict should accept observation_stats=None."""
     from esper.leyline.telemetry import EpochCompletedPayload
 
     payload = EpochCompletedPayload.from_dict(
@@ -82,6 +82,7 @@ def test_epoch_completed_payload_accepts_missing_observation_stats() -> None:
             "val_accuracy": 0.75,
             "val_loss": 0.42,
             "inner_epoch": 3,
+            "observation_stats": None,
         }
     )
 

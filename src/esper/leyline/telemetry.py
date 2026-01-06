@@ -537,7 +537,7 @@ class EpochCompletedPayload:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "EpochCompletedPayload":
         """Parse from dict. Raises KeyError on missing required fields."""
-        observation_stats_data = data["observation_stats"] if "observation_stats" in data else None
+        observation_stats_data = data["observation_stats"]
         observation_stats: ObservationStatsTelemetry | None
         if observation_stats_data is None:
             observation_stats = None
