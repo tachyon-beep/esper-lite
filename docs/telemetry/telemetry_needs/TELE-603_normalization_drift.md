@@ -145,9 +145,9 @@ def _render_observation_stats(self) -> Text:
 
 def _get_drift_status(self, drift: float) -> str:
     """Check if normalization drift is healthy."""
-    if drift > 2.0:  # >2σ drift is critical
+    if drift > 2.0:
         return "critical"
-    if drift > 1.0:  # >1σ is warning
+    if drift > 1.0:
         return "warning"
     return "ok"
 ```

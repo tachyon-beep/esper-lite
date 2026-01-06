@@ -785,6 +785,7 @@ class SanctumAggregator:
 
         # Reset Tamiyo state
         self._tamiyo = TamiyoState()
+        self._observation_stats = ObservationStats()
 
         # Compile status (static configuration from training start)
         self._tamiyo.infrastructure.compile_enabled = payload.compile_enabled

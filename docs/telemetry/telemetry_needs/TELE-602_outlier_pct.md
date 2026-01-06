@@ -153,7 +153,7 @@ f"Out:{obs.outlier_pct:.1%}"  # Formatted as X.X%
 - [x] **Emitter exists** — `compute_observation_stats()` in `simic/telemetry/observation_stats.py`
 - [x] **Transport works** — `EpochCompletedPayload.observation_stats` carries the stats
 - [x] **Schema field exists** — Field defined in dataclass — `ObservationStats.outlier_pct`
-- [x] **Default is correct** — Field has appropriate default — `0.0` (stub value)
+- [x] **Default is correct** — Field has appropriate default — `0.0`
 - [x] **Consumer reads it** — Widget accesses the field — `HealthStatusPanel._render_observation_stats()`
 - [x] **Display is correct** — Value renders as expected — Formatted as "Out:X.X%" with threshold coloring
 - [x] **Thresholds applied** — Color coding matches spec — `_get_outlier_status()` implements 5%/10% thresholds
