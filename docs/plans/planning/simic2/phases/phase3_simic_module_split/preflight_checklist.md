@@ -62,7 +62,7 @@ mega-module re-growth.
 - [x] Scan for any new back-edges before coding (rg/graph audit).
 
 ### D) Design spikes (timeboxed)
-- [ ] PBRS extraction spike: move stage potentials to a single module and update imports.
+- [x] PBRS extraction spike: move stage potentials to a single module and update imports.
 - [ ] PPO metrics spike: create dataclasses + conversion logic, ensure call sites unchanged.
 - [ ] PPO update spike: move loss/ratio math into `ppo_update.py`, return typed result.
 - [ ] After each spike, run a short PPO baseline + telemetry ordering test.
@@ -129,6 +129,10 @@ mega-module re-growth.
   - Episodes/sec: 0.025460
   - Per-epoch deltas: [7.500104s, 7.575927s, 7.99248s, 7.513749s], avg 7.645565s
   - Phase 2 baseline for comparison: 44.754748s total, 0.022344 episodes/sec
+- PBRS spike validation run:
+  - Command: `PYTHONPATH=src UV_CACHE_DIR=.uv-cache uv run python -m esper.scripts.train ppo --preset cifar_baseline --task cifar_baseline --rounds 1 --envs 1 --episode-length 5 --telemetry-dir telemetry --device cpu --devices cpu --num-workers 0`
+  - Run dir: `telemetry/telemetry_2026-01-06_212121`
+- Telemetry ordering test: `UV_CACHE_DIR=.uv-cache uv run pytest tests/simic/telemetry/test_emitters.py::test_batch_tail_event_order_is_stable`
 
 ## Planning artifacts
 ### Per-file change list (planned)
