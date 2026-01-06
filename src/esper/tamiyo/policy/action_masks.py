@@ -524,7 +524,7 @@ class MaskedCategorical:
         # Upcast logits to float32 for numerical stability.
         # Under AMP, logits may arrive as float16/bfloat16. The log_softmax in
         # Categorical can produce numerically unstable results in reduced precision.
-        # This is defensive - the main fix is in ppo.py which runs evaluate_actions
+        # This is defensive - the main fix is in ppo_agent.py which runs evaluate_actions
         # outside autocast. But this upcast provides belt-and-suspenders safety.
         logits_f32 = logits.float()
         self.masked_logits = logits_f32.masked_fill(~mask, MASKED_LOGIT_VALUE)

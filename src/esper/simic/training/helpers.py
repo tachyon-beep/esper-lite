@@ -1,6 +1,6 @@
 """Training loops for PPO.
 
-This module contains the main training functions extracted from ppo.py.
+This module contains the main training functions extracted from ppo_agent.py.
 """
 
 from __future__ import annotations

@@ -90,6 +90,11 @@ class PPOUpdateMetrics(TypedDict, total=False):
     return_p90: float
     return_variance: float
     return_skewness: float
+    # CUDA memory metrics (infrastructure monitoring)
+    cuda_memory_allocated_gb: float
+    cuda_memory_reserved_gb: float
+    cuda_memory_peak_gb: float
+    cuda_memory_fragmentation: float
     # Log prob extremes (NaN predictor)
     log_prob_min: float
     log_prob_max: float

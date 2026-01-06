@@ -14,7 +14,7 @@ Fix: Store normalized observations in the buffer (src/esper/simic/training/vecto
 
 import torch
 
-from esper.simic.agent.ppo import PPOAgent
+from esper.simic.agent import PPOAgent
 from esper.simic.control import RunningMeanStd
 from esper.leyline.slot_config import SlotConfig
 from esper.tamiyo.policy import create_policy

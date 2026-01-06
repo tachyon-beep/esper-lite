@@ -14,14 +14,14 @@ class RatioMetrics:
 
     per_head_ratios: dict[str, torch.Tensor]
     joint_ratio: torch.Tensor
-    approx_kl: float
-    clip_fraction: float
-    clip_fraction_positive: float
-    clip_fraction_negative: float
-    ratio_stats: tuple[float, float, float, float] | None
-    early_stop: bool
-    per_head_ratio_max: dict[str, float]
-    joint_ratio_max: float
+    approx_kl: torch.Tensor
+    clip_fraction: torch.Tensor
+    clip_fraction_positive: torch.Tensor
+    clip_fraction_negative: torch.Tensor
+    ratio_stats: torch.Tensor
+    early_stop: torch.Tensor
+    per_head_ratio_max: dict[str, torch.Tensor]
+    joint_ratio_max: torch.Tensor
 
 
 @dataclass(slots=True)
@@ -32,6 +32,14 @@ class LossMetrics:
     value_loss: torch.Tensor
     entropy_loss: torch.Tensor
     total_loss: torch.Tensor
+
+
+@dataclass(slots=True)
+class PPOUpdateResult:
+    """Combined update math results for a PPO epoch."""
+
+    ratio_metrics: RatioMetrics
+    loss_metrics: LossMetrics | None
 
 
 def compute_ratio_metrics(
@@ -54,15 +62,13 @@ def compute_ratio_metrics(
         per_head_ratios[key] = torch.exp(log_ratio_clamped)
 
     with torch.inference_mode():
-        per_head_ratio_max_tensors = [per_head_ratios[k].max() for k in head_names]
-        per_head_ratio_max_values = torch.stack(per_head_ratio_max_tensors).cpu().tolist()
-        per_head_ratio_max = dict(zip(head_names, per_head_ratio_max_values))
+        per_head_ratio_max = {key: per_head_ratios[key].max() for key in head_names}
 
         stacked_log_ratios = torch.stack([log_ratios_for_joint[k] for k in head_names])
         joint_log_ratio = stacked_log_ratios.sum(dim=0)
         joint_log_ratio_clamped = torch.clamp(joint_log_ratio, min=-30.0, max=30.0)
         joint_ratio = torch.exp(joint_log_ratio_clamped)
-        joint_ratio_max = joint_ratio.max().item()
+        joint_ratio_max = joint_ratio.max()
 
         weighted_kl_sum = torch.tensor(0.0, device=joint_ratio.device)
         total_weight = torch.tensor(0.0, device=joint_ratio.device)
@@ -75,27 +81,31 @@ def compute_ratio_metrics(
             causal_weight = n_valid / total_timesteps
             weighted_kl_sum = weighted_kl_sum + causal_weight * head_kl
             total_weight = total_weight + causal_weight
-        approx_kl = (weighted_kl_sum / total_weight.clamp(min=1e-8)).item()
+        approx_kl = weighted_kl_sum / total_weight.clamp(min=1e-8)
 
         clip_fraction_t = ((joint_ratio - 1.0).abs() > clip_ratio).float().mean()
         clip_pos = (joint_ratio > 1.0 + clip_ratio).float().mean()
         clip_neg = (joint_ratio < 1.0 - clip_ratio).float().mean()
-        clip_metrics = torch.stack([clip_fraction_t, clip_pos, clip_neg]).cpu().tolist()
 
-        early_stop = target_kl is not None and approx_kl > 1.5 * target_kl
-        ratio_stats: tuple[float, float, float, float] | None = None
-        if early_stop:
-            ratio_stats = tuple(torch.stack([
-                joint_ratio.mean(), joint_ratio.max(), joint_ratio.min(), joint_ratio.std()
-            ]).cpu().tolist())
+        if target_kl is None:
+            early_stop = torch.tensor(False, device=approx_kl.device)
+        else:
+            early_stop = approx_kl > (1.5 * target_kl)
+
+        ratio_stats = torch.stack([
+            joint_ratio.mean(),
+            joint_ratio.max(),
+            joint_ratio.min(),
+            joint_ratio.std(),
+        ])
 
     return RatioMetrics(
         per_head_ratios=per_head_ratios,
         joint_ratio=joint_ratio,
         approx_kl=approx_kl,
-        clip_fraction=clip_metrics[0],
-        clip_fraction_positive=clip_metrics[1],
-        clip_fraction_negative=clip_metrics[2],
+        clip_fraction=clip_fraction_t,
+        clip_fraction_positive=clip_pos,
+        clip_fraction_negative=clip_neg,
         ratio_stats=ratio_stats,
         early_stop=early_stop,
         per_head_ratio_max=per_head_ratio_max,
@@ -164,6 +174,7 @@ def compute_losses(
 __all__ = [
     "RatioMetrics",
     "LossMetrics",
+    "PPOUpdateResult",
     "compute_ratio_metrics",
     "compute_losses",
 ]

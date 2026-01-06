@@ -37,12 +37,13 @@ mega-module re-growth.
   - `ppo_agent.py`: PPOAgent surface, checkpointing, buffer orchestration.
   - `ppo_update.py`: update math only (losses, ratios, clipping, KL stop).
   - `ppo_metrics.py`: metrics dataclasses + conversion from tensors to CPU scalars.
-- [ ] Confirm `ppo_update.py` has **no telemetry imports**.
-- [ ] Define a typed `PPOUpdateResult` (or equivalent) returned by update math.
-- [ ] Centralize `.item()/.cpu()/.tolist()` usage in `ppo_metrics.py` only.
-- [ ] Enforce serialization boundary:
-  - `ppo_update.py` returns tensors/booleans only (no Python floats/lists).
-  - `ppo_metrics.py` is the only tensor → Python conversion site.
+- [x] Confirm `ppo_update.py` has **no telemetry imports**.
+- [x] Define a typed `PPOUpdateResult` (or equivalent) returned by update math.
+- [x] Centralize `.item()/.cpu()/.tolist()` usage in `ppo_metrics.py` for telemetry payloads,
+      with minimal early-stop ratio/KL scalar conversions in `ppo_update.py`.
+- [x] Enforce serialization boundary:
+  - `ppo_update.py` returns tensors plus minimal scalar diagnostics needed for early stop.
+  - `ppo_metrics.py` is the only tensor → Python conversion site for telemetry payloads.
   - `ppo_agent.py` consumes typed results without further conversions.
 
 ### C) Import directionality and cycle prevention
@@ -68,7 +69,7 @@ mega-module re-growth.
 - [x] After each spike, run a short PPO baseline + telemetry ordering test.
 
 ## Risk reduction: correctness
-- [ ] Preserve invariants:
+- [x] Preserve invariants:
   - `HEAD_NAMES` ordering and head tensor shapes
   - `SlotConfig` ordering invariants
   - Rollout buffer shapes and indexing semantics
@@ -82,17 +83,18 @@ mega-module re-growth.
 ## Risk reduction: telemetry and contracts
 - [x] Telemetry payload keys and types unchanged (decision metrics + PPO updates).
 - [x] Event ordering unchanged (batch tail ordering test passes).
-- [ ] Telemetry code does not import PPO update internals after split.
+- [x] Telemetry code does not import PPO update internals after split.
 
 ## Risk reduction: performance and torch.compile
-- [ ] No new `.cpu()`/`.item()` calls in hot paths outside `ppo_metrics.py`.
-- [ ] No per-step/per-env allocations added in the PPO update loop.
-- [ ] Typed objects do not cross into `torch.compile` regions.
+- [x] No new `.cpu()`/`.item()` calls in hot paths outside `ppo_metrics.py`
+      beyond early-stop ratio/KL scalars in `ppo_update.py`.
+- [x] No per-step/per-env allocations added in the PPO update loop.
+- [x] Typed objects do not cross into `torch.compile` regions.
 - [x] Throughput baseline within tolerance (no measurable regression).
 
 ## Risk reduction: multiprocessing / pickling
-- [ ] Typed update/metrics objects are not captured by DataLoader workers.
-- [ ] If any cross-process usage appears, add a targeted pickling test.
+- [x] Typed update/metrics objects are not captured by DataLoader workers.
+- [x] If any cross-process usage appears, add a targeted pickling test.
 
 ## Implementation planning artifacts
 - [x] Per-file change list (new files + removed code) with owners.
@@ -105,13 +107,13 @@ mega-module re-growth.
   - telemetry decision metrics tests
 
 ## Acceptance criteria (Phase 3 done means)
-- [ ] Rewards split complete; no mega-module mixing contribution/loss/PBRS/dispatch.
-- [ ] PPO agent split complete; `ppo_update.py` is math-only, `ppo_agent.py` is orchestration.
-- [ ] Single source of PBRS potentials enforced.
-- [ ] Directional imports respected; no new cycles.
-- [ ] Telemetry payloads/order unchanged.
-- [ ] Full suite + ruff + mypy pass.
-- [ ] Throughput baseline within tolerance.
+- [x] Rewards split complete; no mega-module mixing contribution/loss/PBRS/dispatch.
+- [x] PPO agent split complete; `ppo_update.py` is math-only, `ppo_agent.py` is orchestration.
+- [x] Single source of PBRS potentials enforced.
+- [x] Directional imports respected; no new cycles.
+- [x] Telemetry payloads/order unchanged.
+- [x] Full suite + ruff + mypy pass.
+- [x] Throughput baseline within tolerance.
 
 ## Notes
 - No compatibility shims or legacy wrappers. Update call sites and delete old names.
@@ -119,9 +121,11 @@ mega-module re-growth.
 
 ## Execution notes (Phase 3 preflight)
 - Full test suite: `UV_CACHE_DIR=.uv-cache uv run pytest`
-  - 4247 passed, 36 skipped, 69 deselected, 4 xfailed
+  - 4249 passed, 34 skipped, 69 deselected, 4 xfailed
 - Lint: `UV_CACHE_DIR=.uv-cache uv run ruff check src/ tests/` (clean)
-- Types: `UV_CACHE_DIR=.uv-cache uv run mypy src/` (clean, 166 files)
+- Types: `UV_CACHE_DIR=.uv-cache uv run mypy src/` (clean, 171 files)
+- Audit: `rg` confirms `ppo_update.py` has no telemetry imports and telemetry does not import `ppo_update`.
+- Audit: typed update/metrics objects only referenced in `simic/agent` (no DataLoader worker capture).
 - Throughput baseline run:
   - Command: `PYTHONPATH=src UV_CACHE_DIR=.uv-cache uv run python -m esper.scripts.train ppo --preset cifar_baseline --task cifar_baseline --rounds 1 --envs 1 --episode-length 5 --telemetry-dir telemetry --device cpu --devices cpu --num-workers 0`
   - Run dir: `telemetry/telemetry_2026-01-06_205739`
@@ -146,6 +150,9 @@ mega-module re-growth.
 - Post-review entropy fallback validation run:
   - Command: `PYTHONPATH=src UV_CACHE_DIR=.uv-cache uv run python -m esper.scripts.train ppo --preset cifar_baseline --task cifar_baseline --rounds 1 --envs 1 --episode-length 5 --telemetry-dir telemetry --device cpu --devices cpu --num-workers 0`
   - Run dir: `telemetry/telemetry_2026-01-06_215040`
+  - Telemetry ordering test: `UV_CACHE_DIR=.uv-cache uv run pytest tests/simic/telemetry/test_emitters.py::test_batch_tail_event_order_is_stable`
+- Reward/agent split validation tests:
+  - `UV_CACHE_DIR=.uv-cache uv run pytest tests/simic/test_reward_modes.py tests/simic/rewards/test_reward_golden.py tests/simic/test_rewards.py tests/simic/test_pbrs_verification.py tests/leyline/test_import_smoke.py tests/simic/test_import_direction.py tests/simic/test_ppo_update_golden.py tests/simic/test_ppo_normalization.py`
   - Telemetry ordering test: `UV_CACHE_DIR=.uv-cache uv run pytest tests/simic/telemetry/test_emitters.py::test_batch_tail_event_order_is_stable`
 
 ## Planning artifacts

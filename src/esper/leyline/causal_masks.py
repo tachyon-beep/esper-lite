@@ -4,7 +4,7 @@ This module defines the SINGLE SOURCE OF TRUTH for which action heads are
 causally relevant for each LifecycleOp. These masks are used by:
 
 1. advantages.py - Mask GAE advantages per head (credit assignment)
-2. ppo.py - Mask KL divergence, policy loss, and entropy bonus
+2. ppo_update.py - Mask KL divergence, policy loss, and entropy bonus
 
 CRITICAL: If you add a new LifecycleOp or action head, update this module
 and both call sites will automatically use the correct masks.

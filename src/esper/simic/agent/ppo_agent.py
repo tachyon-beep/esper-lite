@@ -1,4 +1,4 @@
-"""Simic PPO Module - PPO Agent for Seed Lifecycle Control
+"""Simic PPO agent for seed lifecycle control.
 
 This module contains the PPOAgent class for online policy gradient training.
 For training functions, see simic.training.
@@ -8,7 +8,6 @@ For vectorized environments, see simic.vectorized.
 from __future__ import annotations
 
 from collections import defaultdict
-import math
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -19,7 +18,7 @@ import torch.nn as nn
 from .rollout_buffer import TamiyoRolloutBuffer
 from .advantages import compute_per_head_advantages
 from .ppo_metrics import PPOUpdateMetricsBuilder
-from .ppo_update import compute_losses, compute_ratio_metrics
+from .ppo_update import PPOUpdateResult, compute_losses, compute_ratio_metrics
 from .types import PPOUpdateMetrics
 from esper.simic.telemetry import RatioExplosionDiagnostic
 from esper.simic.telemetry.lstm_health import compute_lstm_health
@@ -80,9 +79,9 @@ ENTROPY_COEF_PER_HEAD: dict[str, float] = {
 # Helper Functions
 # =============================================================================
 
-def _init_q_metrics_nan() -> dict[str, list[float]]:
+def _init_q_metrics_nan(device: torch.device | str) -> dict[str, list[torch.Tensor]]:
     """Initialize Q-value metrics with NaN when no valid states available."""
-    nan = float("nan")
+    nan = torch.tensor(float("nan"), device=device)
     return {
         "q_germinate": [nan],
         "q_advance": [nan],
@@ -462,20 +461,20 @@ class PPOAgent:
         valid_returns = data["returns"][valid_mask]
         raw_values = self.value_normalizer.denormalize(valid_values)
         var_returns = valid_returns.var()
-        explained_variance: float
+        explained_variance: torch.Tensor
         if var_returns > 1e-8:
             ev_tensor = 1.0 - (valid_returns - raw_values).var() / var_returns
-            explained_variance = ev_tensor.item()
+            explained_variance = ev_tensor
         else:
-            explained_variance = 0.0
+            explained_variance = torch.tensor(0.0, device=valid_returns.device)
 
         metrics: dict[str, Any] = defaultdict(list)
         metrics["explained_variance"] = [explained_variance]
 
         # Return statistics for diagnosing value loss scale
-        return_mean = valid_returns.mean().item()
-        return_std = valid_returns.std().item()
-        if not math.isfinite(return_mean) or not math.isfinite(return_std):
+        return_mean = valid_returns.mean()
+        return_std = valid_returns.std()
+        if not torch.isfinite(torch.stack([return_mean, return_std])).all():
             raise RuntimeError(
                 f"Non-finite returns detected: mean={return_mean}, std={return_std}. "
                 "This is a hard bug: investigate reward/value/GAE plumbing."
@@ -492,15 +491,19 @@ class PPOAgent:
         # New (fixed): running_std is consistent, GAE denormalizes with same scale
         self.value_normalizer.update(valid_returns)
         normalized_returns = self.value_normalizer.normalize(valid_returns).detach()
-        value_target_scale = self.value_normalizer.get_scale()
+        value_target_scale = torch.tensor(self.value_normalizer.get_scale(), device=valid_returns.device)
         metrics["value_target_scale"] = [value_target_scale]
 
         # Pre-normalization advantage stats for diagnosing advantage collapse
         # If pre_norm_adv_std is tiny but pre_clip_grad_norm is huge, it indicates
         # normalization is amplifying noise. If std is healthy but grad is huge,
         # it's more likely raw return scale or value mismatch.
-        metrics["pre_norm_advantage_mean"] = [pre_norm_adv_mean]
-        metrics["pre_norm_advantage_std"] = [pre_norm_adv_std]
+        metrics["pre_norm_advantage_mean"] = [
+            torch.tensor(pre_norm_adv_mean, device=valid_returns.device)
+        ]
+        metrics["pre_norm_advantage_std"] = [
+            torch.tensor(pre_norm_adv_std, device=valid_returns.device)
+        ]
 
         early_stopped = False
 
@@ -526,22 +529,22 @@ class PPOAgent:
                 # NaN signals "undefined" - std too low for meaningful higher moments
                 adv_skewness = torch.tensor(float("nan"), device=adv_mean.device, dtype=adv_mean.dtype)
                 adv_kurtosis = torch.tensor(float("nan"), device=adv_mean.device, dtype=adv_mean.dtype)
-            adv_stats = torch.stack([adv_mean, adv_std, adv_skewness, adv_kurtosis]).cpu().tolist()
-            metrics["advantage_mean"] = [adv_stats[0]]
-            metrics["advantage_std"] = [adv_stats[1]]
-            metrics["advantage_skewness"] = [adv_stats[2]]
-            metrics["advantage_kurtosis"] = [adv_stats[3]]
+            metrics["advantage_mean"] = [adv_mean]
+            metrics["advantage_std"] = [adv_std]
+            metrics["advantage_skewness"] = [adv_skewness]
+            metrics["advantage_kurtosis"] = [adv_kurtosis]
             # Fraction of positive advantages (healthy: 40-60%)
             # Imbalanced ratios suggest reward design issues or easy/hard regions
-            adv_positive_ratio = (valid_advantages_for_stats > 0).float().mean().item()
+            adv_positive_ratio = (valid_advantages_for_stats > 0).float().mean()
             metrics["advantage_positive_ratio"] = [adv_positive_ratio]
         else:
             # No valid advantages - use NaN to signal "no data" (not "balanced" or "zero")
-            metrics["advantage_mean"] = [float("nan")]
-            metrics["advantage_std"] = [float("nan")]
-            metrics["advantage_skewness"] = [float("nan")]
-            metrics["advantage_kurtosis"] = [float("nan")]
-            metrics["advantage_positive_ratio"] = [float("nan")]
+            nan_metric = torch.tensor(float("nan"), device=valid_mask.device)
+            metrics["advantage_mean"] = [nan_metric]
+            metrics["advantage_std"] = [nan_metric]
+            metrics["advantage_skewness"] = [nan_metric]
+            metrics["advantage_kurtosis"] = [nan_metric]
+            metrics["advantage_positive_ratio"] = [nan_metric]
 
         # === Collect Op-Conditioned Q-Values (Policy V2) ===
         # Compute Q(s, op) for all ops using a representative state
@@ -550,9 +553,10 @@ class PPOAgent:
             # Get first valid state
             first_valid_idx = valid_mask.nonzero(as_tuple=True)
             if len(first_valid_idx[0]) > 0:
-                sample_state_idx = (int(first_valid_idx[0][0].item()), int(first_valid_idx[1][0].item()))
-                sample_obs = data["states"][sample_state_idx[0], sample_state_idx[1]].unsqueeze(0).unsqueeze(0)  # [1, 1, state_dim]
-                sample_blueprints = data["blueprint_indices"][sample_state_idx[0], sample_state_idx[1]].unsqueeze(0).unsqueeze(0)  # [1, 1, num_slots]
+                sample_row = first_valid_idx[0][0]
+                sample_col = first_valid_idx[1][0]
+                sample_obs = data["states"][sample_row, sample_col].unsqueeze(0).unsqueeze(0)  # [1, 1, state_dim]
+                sample_blueprints = data["blueprint_indices"][sample_row, sample_col].unsqueeze(0).unsqueeze(0)  # [1, 1, num_slots]
 
                 # Forward pass to get LSTM output
                 with torch.no_grad():
@@ -565,11 +569,11 @@ class PPOAgent:
 
                 # Compute Q(s, op) for each op
                 # Build mapping from LifecycleOp to Q-values
-                q_value_map: dict[LifecycleOp, float] = {}
+                q_value_map: dict[LifecycleOp, torch.Tensor] = {}
                 for op_idx in range(NUM_OPS):
                     op_tensor = torch.tensor([[op_idx]], dtype=torch.long, device=self.device)
                     q_val = self.policy.network._compute_value(lstm_out, op_tensor)
-                    q_value_map[LifecycleOp(op_idx)] = q_val.item()
+                    q_value_map[LifecycleOp(op_idx)] = q_val.squeeze()
 
                 # Assign to metrics with correct names using actual LifecycleOp enum
                 # LifecycleOp: WAIT=0, GERMINATE=1, SET_ALPHA_TARGET=2, PRUNE=3, FOSSILIZE=4, ADVANCE=5
@@ -581,35 +585,39 @@ class PPOAgent:
                 metrics["q_set_alpha"] = [q_value_map[LifecycleOp.SET_ALPHA_TARGET]]
 
                 # Compute Q-variance and Q-spread
-                q_values = list(q_value_map.values())
-                q_variance = float(torch.tensor(q_values).var().item())
-                q_spread = max(q_values) - min(q_values)
+                q_values = torch.stack(list(q_value_map.values()))
+                q_variance = q_values.var()
+                q_spread = q_values.max() - q_values.min()
                 metrics["q_variance"] = [q_variance]
                 metrics["q_spread"] = [q_spread]
             else:
                 # No valid states - use NaN
-                metrics.update(_init_q_metrics_nan())
+                metrics.update(_init_q_metrics_nan(self.device))
         else:
             # No valid data - use NaN
-            metrics.update(_init_q_metrics_nan())
+            metrics.update(_init_q_metrics_nan(self.device))
 
         # Initialize per-head entropy tracking (P3-1)
-        head_entropy_history: dict[str, list[float]] = {head: [] for head in HEAD_NAMES}
+        head_entropy_history: dict[str, list[torch.Tensor]] = {head: [] for head in HEAD_NAMES}
 
         # LSTM health tracking (TELE-340)
         lstm_health_history: dict[str, list[float | bool]] = defaultdict(list)
         # Initialize per-head gradient norm tracking (P4-6)
-        head_grad_norm_history: dict[str, list[float]] = {head: [] for head in HEAD_NAMES + ("value",)}
+        head_grad_norm_history: dict[str, list[torch.Tensor]] = {
+            head: [] for head in HEAD_NAMES + ("value",)
+        }
         # Initialize log prob extremes tracking (NaN predictor)
         # Very negative log probs (<-50 warning, <-100 critical) predict numerical underflow
         # Use inf/-inf for proper min/max tracking (log probs are always <= 0)
-        log_prob_min_across_epochs: float = float("inf")
-        log_prob_max_across_epochs: float = float("-inf")
+        log_prob_min_across_epochs = torch.tensor(float("inf"), device=self.device)
+        log_prob_max_across_epochs = torch.tensor(float("-inf"), device=self.device)
 
         # Initialize per-head ratio max tracking (Policy V2 - multi-head ratio explosion detection)
         # Track max ratio per head across all epochs for telemetry
-        head_ratio_max_across_epochs: dict[str, float] = {head: float("-inf") for head in HEAD_NAMES}
-        joint_ratio_max_across_epochs: float = float("-inf")
+        head_ratio_max_across_epochs: dict[str, torch.Tensor] = {
+            head: torch.tensor(float("-inf"), device=self.device) for head in HEAD_NAMES
+        }
+        joint_ratio_max_across_epochs = torch.tensor(float("-inf"), device=self.device)
 
         # Per-head NaN/Inf tracking (for indicator lights)
         # OR across all epochs - once detected, stays detected for this update
@@ -719,13 +727,13 @@ class PPOAgent:
                 old_key = f"{key}_log_probs"
                 old_lp = data[old_key][valid_mask]
                 if not torch.isfinite(old_lp).all():
-                    nonfinite_count = (~torch.isfinite(old_lp)).sum().item()
+                    nonfinite_count = (~torch.isfinite(old_lp)).sum()
                     nonfinite_sources.append(f"old_log_probs[{key}]: {nonfinite_count} non-finite")
                     nonfinite_found = True
 
             # Check values
             if not torch.isfinite(values).all():
-                nonfinite_count = (~torch.isfinite(values)).sum().item()
+                nonfinite_count = (~torch.isfinite(values)).sum()
                 nonfinite_sources.append(f"values: {nonfinite_count} non-finite")
                 nonfinite_found = True
 
@@ -746,18 +754,20 @@ class PPOAgent:
             # Use HEAD_NAMES for consistent ordering
             all_log_probs = torch.cat([log_probs[k] for k in HEAD_NAMES])
             if all_log_probs.numel() > 0:
-                # Batch min/max into single GPU->CPU transfer
-                epoch_extremes = torch.stack([all_log_probs.min(), all_log_probs.max()]).cpu().tolist()
-                epoch_log_prob_min, epoch_log_prob_max = epoch_extremes
-                log_prob_min_across_epochs = min(log_prob_min_across_epochs, epoch_log_prob_min)
-                log_prob_max_across_epochs = max(log_prob_max_across_epochs, epoch_log_prob_max)
+                epoch_log_prob_min = all_log_probs.min()
+                epoch_log_prob_max = all_log_probs.max()
+                log_prob_min_across_epochs = torch.minimum(
+                    log_prob_min_across_epochs, epoch_log_prob_min
+                )
+                log_prob_max_across_epochs = torch.maximum(
+                    log_prob_max_across_epochs, epoch_log_prob_max
+                )
 
             # Track per-head entropy (P3-1)
             # PERF: Batch all 8 head entropies into single GPU→CPU transfer
-            head_entropy_tensors = [entropy[key].mean() for key in HEAD_NAMES]
-            head_entropy_values = torch.stack(head_entropy_tensors).cpu().tolist()
-            for key, val in zip(HEAD_NAMES, head_entropy_values):
-                head_entropy_history[key].append(val)
+            head_entropy_values = torch.stack([entropy[key].mean() for key in HEAD_NAMES])
+            for idx, key in enumerate(HEAD_NAMES):
+                head_entropy_history[key].append(head_entropy_values[idx])
 
             valid_advantages = data["advantages"][valid_mask]
             valid_returns = data["returns"][valid_mask]
@@ -793,22 +803,25 @@ class PPOAgent:
                 head_names=HEAD_NAMES,
                 total_timesteps=total_timesteps,
             )
-            for key, max_val in ratio_metrics.per_head_ratio_max.items():
-                head_ratio_max_across_epochs[key] = max(head_ratio_max_across_epochs[key], max_val)
-            joint_ratio_max_across_epochs = max(
-                joint_ratio_max_across_epochs, ratio_metrics.joint_ratio_max
+            update_result = PPOUpdateResult(ratio_metrics=ratio_metrics, loss_metrics=None)
+            for key, max_val in update_result.ratio_metrics.per_head_ratio_max.items():
+                head_ratio_max_across_epochs[key] = torch.maximum(
+                    head_ratio_max_across_epochs[key], max_val
+                )
+            joint_ratio_max_across_epochs = torch.maximum(
+                joint_ratio_max_across_epochs, update_result.ratio_metrics.joint_ratio_max
             )
 
-            joint_ratio = ratio_metrics.joint_ratio
-            metrics["approx_kl"].append(ratio_metrics.approx_kl)
-            metrics["clip_fraction"].append(ratio_metrics.clip_fraction)
-            metrics["clip_fraction_positive"].append(ratio_metrics.clip_fraction_positive)
-            metrics["clip_fraction_negative"].append(ratio_metrics.clip_fraction_negative)
+            joint_ratio = update_result.ratio_metrics.joint_ratio
+            metrics["approx_kl"].append(update_result.ratio_metrics.approx_kl)
+            metrics["clip_fraction"].append(update_result.ratio_metrics.clip_fraction)
+            metrics["clip_fraction_positive"].append(update_result.ratio_metrics.clip_fraction_positive)
+            metrics["clip_fraction_negative"].append(update_result.ratio_metrics.clip_fraction_negative)
 
-            if ratio_metrics.early_stop:
+            if update_result.ratio_metrics.early_stop:
                 early_stopped = True
-                metrics["early_stop_epoch"] = [epoch_i]
-                ratio_stats = ratio_metrics.ratio_stats
+                metrics["early_stop_epoch"] = [torch.tensor(epoch_i, device=self.device)]
+                ratio_stats = update_result.ratio_metrics.ratio_stats
                 metrics["ratio_mean"].append(ratio_stats[0])
                 metrics["ratio_max"].append(ratio_stats[1])
                 metrics["ratio_min"].append(ratio_stats[2])
@@ -835,7 +848,10 @@ class PPOAgent:
                 value_coef=self.value_coef,
                 head_names=HEAD_NAMES,
             )
-            loss = losses.total_loss
+            update_result = PPOUpdateResult(ratio_metrics=ratio_metrics, loss_metrics=losses)
+            loss_metrics = update_result.loss_metrics
+            assert loss_metrics is not None
+            loss = loss_metrics.total_loss
 
             self.optimizer.zero_grad(set_to_none=True)
             loss.backward()  # type: ignore[no-untyped-call]
@@ -875,22 +891,20 @@ class PPOAgent:
                         norm_t = torch.tensor(float("nan"), device=self.device)
                     head_norm_tensors.append(norm_t)
 
-                # Single GPU→CPU sync: stack all norms, then .tolist()
-                all_norms = torch.stack(head_norm_tensors).cpu().tolist()
+                all_norms = torch.stack(head_norm_tensors)
                 for head_name, grad_norm in zip(head_names, all_norms):
                     head_grad_norm_history[head_name].append(grad_norm)
 
                 # Gradient CV: coefficient of variation = std/|mean| (per DRL expert)
                 # Low CV (<0.5) = high signal quality, High CV (>2.0) = noisy gradients
-                # PERF: Compute on CPU using already-transferred all_norms (avoids extra sync)
-                n = len(all_norms)
-                if n > 1 and any(v > 0 for v in all_norms):
-                    grad_mean = sum(all_norms) / n
-                    grad_var = sum((x - grad_mean) ** 2 for x in all_norms) / (n - 1)
-                    grad_std = grad_var ** 0.5
-                    grad_cv = grad_std / max(abs(grad_mean), 1e-8)
+                n = all_norms.numel()
+                if n > 1 and torch.any(all_norms > 0):
+                    grad_mean = all_norms.mean()
+                    grad_var = ((all_norms - grad_mean) ** 2).sum() / (n - 1)
+                    grad_std = torch.sqrt(grad_var)
+                    grad_cv = grad_std / torch.clamp(grad_mean.abs(), min=1e-8)
                 else:
-                    grad_cv = 0.0
+                    grad_cv = torch.tensor(0.0, device=all_norms.device)
                 metrics["gradient_cv"].append(grad_cv)
 
             # Capture pre-clip gradient norm (BUG FIX: was discarding this value)
@@ -899,7 +913,7 @@ class PPOAgent:
             pre_clip_norm = nn.utils.clip_grad_norm_(
                 self.policy.network.parameters(), self.max_grad_norm
             )
-            metrics["pre_clip_grad_norm"].append(float(pre_clip_norm))
+            metrics["pre_clip_grad_norm"].append(pre_clip_norm)
             self.optimizer.step()
 
             # Track metrics
@@ -919,9 +933,7 @@ class PPOAgent:
                 values.std(),
                 values.min(),
                 values.max(),
-            ]).cpu().tolist()
-            # NOTE: logging_tensors is now a Python list[float]. Indexed access below
-            # avoids 10 separate GPU→CPU syncs (one per .item() call).
+            ])
             metrics["policy_loss"].append(logging_tensors[0])
             metrics["value_loss"].append(logging_tensors[1])
             metrics["entropy"].append(logging_tensors[2])
@@ -937,10 +949,11 @@ class PPOAgent:
             # re-computing on GPU which would trigger 2 redundant syncs
             ratio_max_val = logging_tensors[4]
             ratio_min_val = logging_tensors[5]
-            if (
-                ratio_max_val > self.ratio_explosion_threshold
-                or ratio_min_val < self.ratio_collapse_threshold
-            ):
+            ratio_exploded = (
+                (ratio_max_val > self.ratio_explosion_threshold)
+                | (ratio_min_val < self.ratio_collapse_threshold)
+            )
+            if ratio_exploded:
                 diag = RatioExplosionDiagnostic.from_batch(
                     ratio=joint_ratio.flatten(),
                     old_log_probs=old_log_probs["op"].flatten(),

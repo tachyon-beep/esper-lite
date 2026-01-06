@@ -1,7 +1,10 @@
 """Reward computation and telemetry for Tamiyo seed lifecycle training.
 
 This subpackage contains:
-- rewards.py: Dense reward computation with PBRS, contribution signals, penalties
+- rewards.py: Reward dispatch + public exports
+- contribution.py: Contribution-primary reward computation
+- loss_primary.py: Loss-primary reward computation
+- shaping.py: PBRS utilities and stage potentials
 - reward_telemetry.py: Per-component reward breakdown for debugging
 """
 

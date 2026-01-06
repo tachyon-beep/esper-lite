@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+import torch
+
 from esper.simic.telemetry.value_metrics import ValueFunctionMetricsDict
 
 from .types import FinitenessGateFailure, PPOUpdateMetrics
@@ -25,15 +27,15 @@ class PPOUpdateMetricsBuilder:
     metrics: dict[str, list[Any]]
     finiteness_failures: list[FinitenessGateFailure]
     epochs_completed: int
-    head_entropies: dict[str, list[float]]
-    head_grad_norms: dict[str, list[float]]
+    head_entropies: dict[str, list[torch.Tensor]]
+    head_grad_norms: dict[str, list[torch.Tensor]]
     head_nan_detected: dict[str, bool]
     head_inf_detected: dict[str, bool]
     lstm_health_history: dict[str, list[float | bool]]
-    log_prob_min_across_epochs: float
-    log_prob_max_across_epochs: float
-    head_ratio_max_across_epochs: dict[str, float]
-    joint_ratio_max_across_epochs: float
+    log_prob_min_across_epochs: torch.Tensor
+    log_prob_max_across_epochs: torch.Tensor
+    head_ratio_max_across_epochs: dict[str, torch.Tensor]
+    joint_ratio_max_across_epochs: torch.Tensor
     value_func_metrics: ValueFunctionMetricsDict
     cuda_memory_metrics: dict[str, float]
     head_names: tuple[str, ...]
@@ -65,39 +67,55 @@ class PPOUpdateMetricsBuilder:
                 aggregated_result[k] = 0.0  # type: ignore[literal-required]
                 continue
 
-            first = v[0]
             if k == "finiteness_gate_failures":
                 aggregated_result[k] = v  # type: ignore[literal-required]
-            elif k == "early_stop_epoch":
-                aggregated_result[k] = first  # type: ignore[literal-required]
-            elif k == "ratio_diagnostic":
-                aggregated_result[k] = first  # type: ignore[literal-required]
-            elif k in ("ratio_max", "value_max", "pre_clip_grad_norm"):
-                aggregated_result[k] = max(v)  # type: ignore[literal-required]
-            elif k in ("ratio_min", "value_min"):
-                aggregated_result[k] = min(v)  # type: ignore[literal-required]
-            else:
-                aggregated_result[k] = sum(v) / len(v)  # type: ignore[literal-required]
+                continue
+            if k == "early_stop_epoch":
+                aggregated_result[k] = int(v[0].item())  # type: ignore[literal-required]
+                continue
+            if k == "ratio_diagnostic":
+                aggregated_result[k] = v[0]  # type: ignore[literal-required]
+                continue
 
-        aggregated_result["head_entropies"] = self.head_entropies
-        aggregated_result["head_grad_norms"] = self.head_grad_norms
+            stacked = torch.stack(v)
+            if k in ("ratio_max", "value_max", "pre_clip_grad_norm"):
+                aggregated_result[k] = stacked.max().item()  # type: ignore[literal-required]
+            elif k in ("ratio_min", "value_min"):
+                aggregated_result[k] = stacked.min().item()  # type: ignore[literal-required]
+            else:
+                aggregated_result[k] = stacked.mean().item()  # type: ignore[literal-required]
+
+        aggregated_result["head_entropies"] = {
+            key: [val.item() for val in values] for key, values in self.head_entropies.items()
+        }
+        aggregated_result["head_grad_norms"] = {
+            key: [val.item() for val in values] for key, values in self.head_grad_norms.items()
+        }
 
         log_prob_min = self.log_prob_min_across_epochs
         log_prob_max = self.log_prob_max_across_epochs
-        if log_prob_min == float("inf"):
-            log_prob_min = float("nan")
-        if log_prob_max == float("-inf"):
-            log_prob_max = float("nan")
-        aggregated_result["log_prob_min"] = log_prob_min
-        aggregated_result["log_prob_max"] = log_prob_max
+        if torch.isinf(log_prob_min).item():
+            log_prob_min_value = float("nan")
+        else:
+            log_prob_min_value = log_prob_min.item()
+        if torch.isinf(log_prob_max).item():
+            log_prob_max_value = float("nan")
+        else:
+            log_prob_max_value = log_prob_max.item()
+        aggregated_result["log_prob_min"] = log_prob_min_value
+        aggregated_result["log_prob_max"] = log_prob_max_value
 
         for key in self.head_names:
             ratio_key = f"head_{key}_ratio_max"
             max_val = self.head_ratio_max_across_epochs[key]
-            aggregated_result[ratio_key] = max_val if max_val != float("-inf") else 1.0  # type: ignore[literal-required]
-        aggregated_result["joint_ratio_max"] = (
-            self.joint_ratio_max_across_epochs if self.joint_ratio_max_across_epochs != float("-inf") else 1.0
-        )
+            if torch.isinf(max_val).item() and (max_val < 0).item():
+                aggregated_result[ratio_key] = 1.0  # type: ignore[literal-required]
+            else:
+                aggregated_result[ratio_key] = max_val.item()  # type: ignore[literal-required]
+        if torch.isinf(self.joint_ratio_max_across_epochs).item() and (self.joint_ratio_max_across_epochs < 0).item():
+            aggregated_result["joint_ratio_max"] = 1.0
+        else:
+            aggregated_result["joint_ratio_max"] = self.joint_ratio_max_across_epochs.item()
 
         aggregated_result["head_nan_detected"] = self.head_nan_detected
         aggregated_result["head_inf_detected"] = self.head_inf_detected
@@ -146,8 +164,10 @@ class PPOUpdateMetricsBuilder:
         aggregated_result["return_skewness"] = self.value_func_metrics["return_skewness"]
 
         if self.cuda_memory_metrics:
-            for k, v in self.cuda_memory_metrics.items():
-                aggregated_result[k] = v  # type: ignore[literal-required]
+            aggregated_result["cuda_memory_allocated_gb"] = self.cuda_memory_metrics["cuda_memory_allocated_gb"]
+            aggregated_result["cuda_memory_reserved_gb"] = self.cuda_memory_metrics["cuda_memory_reserved_gb"]
+            aggregated_result["cuda_memory_peak_gb"] = self.cuda_memory_metrics["cuda_memory_peak_gb"]
+            aggregated_result["cuda_memory_fragmentation"] = self.cuda_memory_metrics["cuda_memory_fragmentation"]
 
         return PPOUpdateMetricsResult(metrics=aggregated_result, update_performed=True)
 

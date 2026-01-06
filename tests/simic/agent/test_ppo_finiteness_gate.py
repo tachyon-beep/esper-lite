@@ -24,7 +24,7 @@ class TestFinitenessGateAggregation:
             "sources": ["log_probs[op]: NaN detected"],
         })
 
-        # Simulate the aggregation logic from ppo.py
+        # Simulate the aggregation logic from ppo_metrics.py
         finiteness_failures = metrics.get("finiteness_gate_failures", [])
         epochs_completed = len(metrics.get("ratio_max", []))
 
@@ -198,7 +198,7 @@ class TestTrainStepsIncrementContract:
         # This test verifies the contract at the logic level.
         # The actual PPO agent test requires a full agent setup.
 
-        # Simulate the FIXED control flow from ppo.py update():
+        # Simulate the FIXED control flow from ppo_agent.py update():
         train_steps_before = 10
         train_steps = train_steps_before
 
