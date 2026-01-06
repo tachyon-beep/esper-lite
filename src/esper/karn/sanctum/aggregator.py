@@ -814,6 +814,26 @@ class SanctumAggregator:
         self._ensure_env(env_id)
         env = self._envs[env_id]
 
+        if payload.observation_stats is not None:
+            obs = payload.observation_stats
+            self._observation_stats = ObservationStats(
+                slot_features_mean=obs.slot_features_mean,
+                slot_features_std=obs.slot_features_std,
+                host_features_mean=obs.host_features_mean,
+                host_features_std=obs.host_features_std,
+                context_features_mean=obs.context_features_mean,
+                context_features_std=obs.context_features_std,
+                outlier_pct=obs.outlier_pct,
+                near_clip_pct=obs.near_clip_pct,
+                clip_pct=obs.clip_pct,
+                nan_count=obs.nan_count,
+                inf_count=obs.inf_count,
+                nan_pct=obs.nan_pct,
+                inf_pct=obs.inf_pct,
+                normalization_drift=obs.normalization_drift,
+                batch_size=obs.batch_size,
+            )
+
         # Clear rollback state - training has resumed for this env
         if env.rolled_back:
             env.rolled_back = False
@@ -1139,6 +1159,7 @@ class SanctumAggregator:
         self._tamiyo.infrastructure.cuda_memory_reserved_gb = payload.cuda_memory_reserved_gb
         self._tamiyo.infrastructure.cuda_memory_peak_gb = payload.cuda_memory_peak_gb
         self._tamiyo.infrastructure.cuda_memory_fragmentation = payload.cuda_memory_fragmentation
+        self._tamiyo.infrastructure.dataloader_wait_ratio = payload.dataloader_wait_ratio
 
     def _handle_seed_event(self, event: "TelemetryEvent", event_type: str) -> None:
         """Handle seed lifecycle events with per-env tracking."""

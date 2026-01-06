@@ -832,6 +832,7 @@ class InfrastructureMetrics:
     cuda_memory_reserved_gb: float = 0.0    # torch.cuda.memory_reserved()
     cuda_memory_peak_gb: float = 0.0        # torch.cuda.max_memory_allocated()
     cuda_memory_fragmentation: float = 0.0  # 1 - (allocated/reserved), >0.3 = pressure
+    dataloader_wait_ratio: float = 0.0      # Fraction of step time spent waiting on data
 
     # torch.compile Status (captured at training start - static session metadata)
     # Note: graph_break_count/compile_healthy removed - not accessible via PyTorch API

@@ -1,8 +1,8 @@
 """DecisionsColumn - Vertical stack of decision cards.
 
 Manages the throttled display of decision cards to provide visual stability.
-Cards pop in ONE at a time every 10 seconds (both growing and steady state).
-First card appears immediately, then one every 10s until MAX_CARDS reached.
+Cards pop in ONE at a time every 5 seconds (both growing and steady state).
+First card appears immediately, then one every 5s until MAX_CARDS reached.
 """
 
 from __future__ import annotations
@@ -330,7 +330,7 @@ class DecisionCard(Static):
 class DecisionsColumn(Container):
     """Vertical stack of decision cards with throttled updates."""
 
-    CARD_SWAP_INTERVAL: ClassVar[float] = 10.0
+    CARD_SWAP_INTERVAL: ClassVar[float] = 5.0
     MAX_CARDS: ClassVar[int] = 3
 
     def __init__(self, **kwargs: Any) -> None:
@@ -339,6 +339,7 @@ class DecisionsColumn(Container):
         self._displayed_decisions: list["DecisionSnapshot"] = []
         self._display_timestamps: dict[str, datetime] = {}  # decision_id -> when added to display
         self._last_card_swap_time: float = 0.0
+        self._last_env_id: int | None = None
         self._rendering: bool = False  # Guard against concurrent renders
         self._render_generation: int = 0  # Unique ID suffix for each render
         self._group_id: str = "default"
@@ -375,7 +376,15 @@ class DecisionsColumn(Container):
         # Exclude ALL currently displayed decisions to prevent duplicates
         displayed_ids = {d.decision_id for d in self._displayed_decisions if d.decision_id}
         candidates = [d for d in incoming if d.decision_id and d.decision_id not in displayed_ids]
-        newest = max(candidates, key=lambda d: d.timestamp) if candidates else None
+        newest = None
+        if candidates:
+            if self._last_env_id is None:
+                newest = max(candidates, key=lambda d: d.timestamp)
+            else:
+                rotated = [d for d in candidates if d.env_id != self._last_env_id]
+                newest = max(rotated, key=lambda d: d.timestamp) if rotated else max(
+                    candidates, key=lambda d: d.timestamp
+                )
 
         if not newest:
             # No new decision available, refresh existing cards
@@ -410,6 +419,7 @@ class DecisionsColumn(Container):
         if newest.decision_id:
             self._display_timestamps[newest.decision_id] = display_now
 
+        self._last_env_id = newest.env_id
         self._last_card_swap_time = now
         self._render_cards()
 

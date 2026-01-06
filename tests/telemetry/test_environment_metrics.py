@@ -3,16 +3,12 @@
 Verifies environment telemetry flows from source through to nissa/sanctum.
 
 These tests cover:
-- TELE-600: obs_nan_count (WIRING GAP - xfail)
-- TELE-601: obs_inf_count (WIRING GAP - xfail)
-- TELE-602: outlier_pct (WIRING GAP - xfail)
-- TELE-603: normalization_drift (WIRING GAP - xfail)
+- TELE-600: obs_nan_count (wired via EpochCompletedPayload.observation_stats)
+- TELE-601: obs_inf_count (wired via EpochCompletedPayload.observation_stats)
+- TELE-602: outlier_pct (wired via EpochCompletedPayload.observation_stats)
+- TELE-603: normalization_drift (wired via EpochCompletedPayload.observation_stats)
 - TELE-610: episode_stats (FULLY WIRED)
 - TELE-650: env_status (FULLY WIRED)
-
-Note: TELE-600 to TELE-603 are documented wiring gaps.
-The schema fields exist, consumers read them, but no emitters populate the data.
-Tests are marked xfail to document expected behavior when wiring is complete.
 """
 
 from dataclasses import fields
@@ -31,8 +27,8 @@ from esper.leyline import (
     BatchEpochCompletedPayload,
     EpochCompletedPayload,
     EpisodeOutcomePayload,
-    TelemetryEventType,
 )
+from esper.simic.telemetry.observation_stats import ObservationStatsTelemetry
 
 
 # =============================================================================
@@ -45,6 +41,7 @@ def make_epoch_event(
     val_accuracy: float,
     val_loss: float = 0.5,
     inner_epoch: int = 0,
+    observation_stats: ObservationStatsTelemetry | None = None,
 ) -> MagicMock:
     """Create a mock EPOCH_COMPLETED event for testing."""
     event = MagicMock()
@@ -56,6 +53,7 @@ def make_epoch_event(
         val_accuracy=val_accuracy,
         val_loss=val_loss,
         inner_epoch=inner_epoch,
+        observation_stats=observation_stats,
     )
     return event
 
@@ -120,104 +118,73 @@ def make_episode_outcome_event(
 
 
 # =============================================================================
-# TELE-600: Observation NaN Count (WIRING GAP)
+# TELE-600: Observation NaN Count (FULLY WIRED)
 # =============================================================================
 
 
 class TestTELE600ObsNanCount:
-    """TELE-600: Observation NaN count should be emitted but emitter is missing.
-
-    Wiring Status:
-    - Schema field exists: ObservationStats.nan_count
-    - Consumer reads it: HealthStatusPanel._render_observation_stats()
-    - Emitter: NOT IMPLEMENTED
-    - Aggregator: STUB (returns default ObservationStats)
-
-    When wiring is complete, these tests should pass.
-    """
+    """TELE-600: Observation NaN count emitted via EPOCH_COMPLETED observation_stats."""
 
     def test_obs_stats_schema_field_exists(self) -> None:
         """TELE-600: Verify ObservationStats.nan_count field exists in schema."""
-        obs_stats = ObservationStats()
-        assert hasattr(obs_stats, "nan_count")
-        assert obs_stats.nan_count == 0  # Default value
+        field_names = {field.name for field in fields(ObservationStats)}
+        assert "nan_count" in field_names
+        assert ObservationStats().nan_count == 0  # Default value
 
     def test_snapshot_includes_observation_stats(self) -> None:
         """TELE-600: Verify SanctumSnapshot includes observation_stats field."""
         agg = SanctumAggregator(num_envs=1)
         snapshot = agg.get_snapshot()
 
-        assert hasattr(snapshot, "observation_stats")
-        assert isinstance(snapshot.observation_stats, ObservationStats)
-        # Currently stubbed - always returns defaults
+        # Default snapshot values are zero until telemetry arrives.
         assert snapshot.observation_stats.nan_count == 0
 
-    @pytest.mark.xfail(
-        reason="TELE-600 wiring gap: obs_nan_count emitter not implemented"
-    )
     def test_nan_count_populated_from_epoch_completed(self) -> None:
         """TELE-600: obs_nan_count should be populated when NaNs detected.
 
-        Expected behavior when wiring is complete:
+        Expected behavior:
         1. Observation tensor is checked for NaN values during training
-        2. Count is emitted via EPOCH_COMPLETED or new OBSERVATION_STATS event
+        2. ObservationStatsTelemetry is attached to EPOCH_COMPLETED
         3. Aggregator populates ObservationStats.nan_count
         4. HealthStatusPanel displays "NaN:X" in red when > 0
-
-        This test documents the WIRING GAP: EpochCompletedPayload does not
-        include observation health fields, so this test verifies that the
-        aggregator cannot populate observation stats from epoch events.
         """
         agg = SanctumAggregator(num_envs=1)
 
-        # Simulate epoch - but EpochCompletedPayload has no obs_nan_count field
-        event = make_epoch_event(env_id=0, val_accuracy=75.0)
+        obs_stats = ObservationStatsTelemetry(
+            nan_count=12,
+            nan_pct=0.08,
+            batch_size=4,
+        )
+        event = make_epoch_event(
+            env_id=0,
+            val_accuracy=75.0,
+            observation_stats=obs_stats,
+        )
         agg.process_event(event)
 
-        # WIRING GAP: We cannot set nan_count > 0 because:
-        # 1. EpochCompletedPayload doesn't have obs_nan_count field
-        # 2. There's no OBSERVATION_STATS event type
-        # 3. Aggregator stubs observation_stats with defaults
-        #
-        # When wired, we should be able to inject NaN observations and verify
-        # the count is emitted. For now, assert that the stub behavior exists.
-        #
-        # This xfail documents that the field EXISTS but cannot be POPULATED.
-        # The test passes when assertion is `>= 0` but should fail when we
-        # assert that wiring WORKS (i.e., we can inject and verify specific values).
-        assert hasattr(EpochCompletedPayload, "obs_nan_count"), (
-            "EpochCompletedPayload should include obs_nan_count field when wiring is complete"
-        )
+        snapshot = agg.get_snapshot()
+        assert snapshot.observation_stats.nan_count == 12
+        assert snapshot.observation_stats.nan_pct == pytest.approx(0.08)
 
 
 # =============================================================================
-# TELE-601: Observation Inf Count (WIRING GAP)
+# TELE-601: Observation Inf Count (FULLY WIRED)
 # =============================================================================
 
 
 class TestTELE601ObsInfCount:
-    """TELE-601: Observation Inf count should be emitted but emitter is missing.
-
-    Wiring Status:
-    - Schema field exists: ObservationStats.inf_count
-    - Consumer reads it: HealthStatusPanel._render_observation_stats()
-    - Emitter: NOT IMPLEMENTED
-    - Aggregator: STUB (returns default ObservationStats)
-    """
+    """TELE-601: Observation Inf count emitted via EPOCH_COMPLETED observation_stats."""
 
     def test_obs_stats_inf_field_exists(self) -> None:
         """TELE-601: Verify ObservationStats.inf_count field exists in schema."""
-        obs_stats = ObservationStats()
-        assert hasattr(obs_stats, "inf_count")
-        assert obs_stats.inf_count == 0  # Default value
+        field_names = {field.name for field in fields(ObservationStats)}
+        assert "inf_count" in field_names
+        assert ObservationStats().inf_count == 0  # Default value
 
-    @pytest.mark.xfail(
-        reason="TELE-601 wiring gap: obs_inf_count emitter not implemented"
-    )
     def test_inf_count_populated_when_inf_detected(self) -> None:
         """TELE-601: obs_inf_count should be populated when Inf values detected.
 
-        Expected behavior when wiring is complete:
+        Expected behavior:
         1. Observation tensor is checked for Inf values: torch.isinf(observations).sum()
         2. Count is emitted via telemetry event
         3. Aggregator populates ObservationStats.inf_count
@@ -226,48 +193,40 @@ class TestTELE601ObsInfCount:
         Note: Any Inf in observations is critical - indicates overflow in
         feature computation that will corrupt network forward pass.
 
-        This test documents the WIRING GAP: there is no telemetry event
-        that carries observation health information.
         """
-        # WIRING GAP: No event type carries obs_inf_count.
-        # When wired, there should be an OBSERVATION_STATS event or
-        # EpochCompletedPayload should include these fields.
-
-        # Verify the event type doesn't exist yet
-        event_types = [e.name for e in TelemetryEventType]
-        assert "OBSERVATION_STATS" in event_types or hasattr(
-            EpochCompletedPayload, "obs_inf_count"
-        ), (
-            "Wiring requires either OBSERVATION_STATS event type or "
-            "obs_inf_count field in EpochCompletedPayload"
+        agg = SanctumAggregator(num_envs=1)
+        obs_stats = ObservationStatsTelemetry(
+            inf_count=3,
+            inf_pct=0.02,
+            batch_size=4,
         )
+        event = make_epoch_event(
+            env_id=0,
+            val_accuracy=75.0,
+            observation_stats=obs_stats,
+        )
+        agg.process_event(event)
+
+        snapshot = agg.get_snapshot()
+        assert hasattr(EpochCompletedPayload, "observation_stats")
+        assert snapshot.observation_stats.inf_count == 3
+        assert snapshot.observation_stats.inf_pct == pytest.approx(0.02)
 
 
 # =============================================================================
-# TELE-602: Outlier Percentage (WIRING GAP)
+# TELE-602: Outlier Percentage (FULLY WIRED)
 # =============================================================================
 
 
 class TestTELE602OutlierPct:
-    """TELE-602: Outlier percentage should track observations outside 3-sigma.
-
-    Wiring Status:
-    - Schema field exists: ObservationStats.outlier_pct
-    - Consumer reads it: HealthStatusPanel displays "Out:X.X%"
-    - Thresholds defined: <=5% healthy, 5-10% warning, >10% critical
-    - Emitter: NOT IMPLEMENTED
-    - Aggregator: STUB
-    """
+    """TELE-602: Outlier percentage emitted via EPOCH_COMPLETED observation_stats."""
 
     def test_outlier_pct_field_exists(self) -> None:
         """TELE-602: Verify ObservationStats.outlier_pct field exists."""
-        obs_stats = ObservationStats()
-        assert hasattr(obs_stats, "outlier_pct")
-        assert obs_stats.outlier_pct == 0.0  # Default value
+        field_names = {field.name for field in fields(ObservationStats)}
+        assert "outlier_pct" in field_names
+        assert ObservationStats().outlier_pct == 0.0  # Default value
 
-    @pytest.mark.xfail(
-        reason="TELE-602 wiring gap: outlier_pct emitter not implemented"
-    )
     def test_outlier_pct_computed_from_batch_observations(self) -> None:
         """TELE-602: outlier_pct should track percentage of observations outside 3-sigma.
 
@@ -283,57 +242,37 @@ class TestTELE602OutlierPct:
         - Critical: outlier_pct > 0.10 (>10%)
 
         High outlier rates indicate observation distribution shift.
-
-        This test documents the WIRING GAP: outlier_pct is never computed
-        or emitted, so the field always returns the default value of 0.0.
         """
         agg = SanctumAggregator(num_envs=1)
-
-        # Simulate many epochs - even after training, outlier_pct stays at 0.0
-        for epoch in range(20):
-            event = make_epoch_event(env_id=0, val_accuracy=75.0, inner_epoch=epoch)
-            agg.process_event(event)
+        obs_stats = ObservationStatsTelemetry(
+            outlier_pct=0.12,
+            batch_size=4,
+        )
+        event = make_epoch_event(
+            env_id=0,
+            val_accuracy=75.0,
+            observation_stats=obs_stats,
+        )
+        agg.process_event(event)
 
         snapshot = agg.get_snapshot()
-
-        # WIRING GAP: outlier_pct is never computed.
-        # After 20 epochs, we'd expect some non-zero outlier detection
-        # if the wiring was complete. Currently it's always 0.0.
-        #
-        # This assertion will fail when wiring is incomplete (always 0.0)
-        # and pass when wiring is complete (may be any valid percentage).
-        assert snapshot.observation_stats.outlier_pct > 0.0, (
-            "outlier_pct should be computed from observations after training epochs. "
-            "Currently stubbed at 0.0 due to wiring gap."
-        )
+        assert snapshot.observation_stats.outlier_pct == pytest.approx(0.12)
 
 
 # =============================================================================
-# TELE-603: Normalization Drift (WIRING GAP)
+# TELE-603: Normalization Drift (FULLY WIRED)
 # =============================================================================
 
 
 class TestTELE603NormalizationDrift:
-    """TELE-603: Normalization drift tracks running mean/std shift.
-
-    Wiring Status:
-    - Schema field exists: ObservationStats.normalization_drift
-    - Consumer reads it: HealthStatusPanel displays "Drift:X.XX"
-    - Thresholds defined: <=1.0 healthy, 1-2 warning, >2 critical
-    - Source exists: RunningMeanStd in simic/control/normalization.py
-    - Emitter: NOT IMPLEMENTED (drift computation missing)
-    - Aggregator: STUB
-    """
+    """TELE-603: Normalization drift emitted via EPOCH_COMPLETED observation_stats."""
 
     def test_normalization_drift_field_exists(self) -> None:
         """TELE-603: Verify ObservationStats.normalization_drift field exists."""
-        obs_stats = ObservationStats()
-        assert hasattr(obs_stats, "normalization_drift")
-        assert obs_stats.normalization_drift == 0.0  # Default value
+        field_names = {field.name for field in fields(ObservationStats)}
+        assert "normalization_drift" in field_names
+        assert ObservationStats().normalization_drift == 0.0  # Default value
 
-    @pytest.mark.xfail(
-        reason="TELE-603 wiring gap: normalization_drift emitter not implemented"
-    )
     def test_normalization_drift_tracks_mean_std_shift(self) -> None:
         """TELE-603: normalization_drift should measure running stats divergence.
 
@@ -350,35 +289,21 @@ class TestTELE603NormalizationDrift:
 
         Large drift indicates environment distribution has changed
         significantly from training start.
-
-        This test documents the WIRING GAP: normalization_drift is never
-        computed or emitted, despite RunningMeanStd tracking the statistics.
         """
         agg = SanctumAggregator(num_envs=1)
-
-        # Simulate multiple epochs with varying accuracy to simulate distribution shift
-        for epoch in range(30):
-            # Accuracy varies significantly to simulate distribution shift
-            acc = 60.0 + epoch * 1.5 if epoch < 15 else 90.0 - (epoch - 15) * 2.0
-            event = make_epoch_event(env_id=0, val_accuracy=acc, inner_epoch=epoch)
-            agg.process_event(event)
+        obs_stats = ObservationStatsTelemetry(
+            normalization_drift=1.75,
+            batch_size=4,
+        )
+        event = make_epoch_event(
+            env_id=0,
+            val_accuracy=75.0,
+            observation_stats=obs_stats,
+        )
+        agg.process_event(event)
 
         snapshot = agg.get_snapshot()
-
-        # WIRING GAP: normalization_drift is never computed.
-        # Even with 30 epochs of varying data, drift stays at 0.0.
-        #
-        # When wiring is complete:
-        # 1. RunningMeanStd should track initial mean/std
-        # 2. Drift should be computed and emitted via telemetry
-        # 3. Aggregator should populate observation_stats.normalization_drift
-        #
-        # This assertion documents that the field is NOT populated.
-        assert snapshot.observation_stats.normalization_drift > 0.0, (
-            "normalization_drift should track observation distribution shift. "
-            "Currently stubbed at 0.0 due to wiring gap - RunningMeanStd exists "
-            "but drift computation is not emitted via telemetry."
-        )
+        assert snapshot.observation_stats.normalization_drift == pytest.approx(1.75)
 
 
 # =============================================================================

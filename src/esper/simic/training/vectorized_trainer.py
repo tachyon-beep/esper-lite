@@ -225,13 +225,17 @@ class VectorizedPPOTrainer:
 
         try:
             history: list[dict[str, Any]] = []
-            episode_history: list[EpisodeRecord] = []  # Per-episode tracking for A/B testing
+            episode_history: list[
+                EpisodeRecord
+            ] = []  # Per-episode tracking for A/B testing
             episode_outcomes: list[Any] = []  # Pareto analysis outcomes
             best_avg_acc = 0.0
             best_state = None
             recent_accuracies = []
             recent_rewards = []
-            consecutive_finiteness_failures = 0  # Track PPO updates with all epochs skipped
+            consecutive_finiteness_failures = (
+                0  # Track PPO updates with all epochs skipped
+            )
             prev_rolling_avg_acc: float | None = None
 
             episodes_completed = start_episode
@@ -331,6 +335,7 @@ class VectorizedPPOTrainer:
                 for epoch in range(1, max_epochs + 1):
                     epoch_start = time.perf_counter()
                     dataloader_wait_ms_epoch = 0.0
+                    last_obs_stats = None
                     if telemetry_config is not None:
                         telemetry_config.tick_escalation()
                     for env_state in env_states:
@@ -371,8 +376,10 @@ class VectorizedPPOTrainer:
                     for i, env_state in enumerate(env_states):
                         if env_state.stream:
                             # Accumulators guaranteed non-None after init_accumulators()
-                            env_state.train_loss_accum.record_stream(env_state.stream)  # type: ignore[union-attr]
-                            env_state.train_correct_accum.record_stream(env_state.stream)  # type: ignore[union-attr]
+                            assert env_state.train_loss_accum is not None
+                            assert env_state.train_correct_accum is not None
+                            env_state.train_loss_accum.record_stream(env_state.stream)
+                            env_state.train_correct_accum.record_stream(env_state.stream)
                             env_state.stream.wait_stream(
                                 torch.cuda.default_stream(
                                     torch.device(env_state.env_device)
@@ -434,7 +441,10 @@ class VectorizedPPOTrainer:
                                     torch.cuda.synchronize(targets.device)
                                 target_min = targets.min().item()
                                 target_max = targets.max().item()
-                                if target_min < 0 or target_max >= task_spec.num_classes:
+                                if (
+                                    target_min < 0
+                                    or target_max >= task_spec.num_classes
+                                ):
                                     raise RuntimeError(
                                         f"BUG-031: Invalid target values detected before loss computation. "
                                         f"targets.min()={target_min}, targets.max()={target_max}, "
@@ -538,8 +548,7 @@ class VectorizedPPOTrainer:
                             for sid in slots
                             if model.has_active_seed_in_slot(sid)
                             and cast(SeedSlotProtocol, model.seed_slots[sid]).state
-                            and cast(SeedSlotProtocol, model.seed_slots[sid]).alpha
-                            > 0
+                            and cast(SeedSlotProtocol, model.seed_slots[sid]).alpha > 0
                         ]
 
                         # Config 0: Main (current alphas)
@@ -707,7 +716,8 @@ class VectorizedPPOTrainer:
                                 if not needs_override:
                                     continue
                                 slot = cast(
-                                    SeedSlotProtocol, env_state.model.seed_slots[slot_id]
+                                    SeedSlotProtocol,
+                                    env_state.model.seed_slots[slot_id],
                                 )
                                 # Access concrete SeedSlot for alpha_schedule assignment
                                 from esper.kasmina.slot import SeedSlot
@@ -728,7 +738,8 @@ class VectorizedPPOTrainer:
                                 # This can happen if a seed is in HOLD mode and its schedule was cleared.
                                 if (
                                     slot.state
-                                    and slot.state.alpha_algorithm == AlphaAlgorithm.GATE
+                                    and slot.state.alpha_algorithm
+                                    == AlphaAlgorithm.GATE
                                     and slot_concrete.alpha_schedule is None
                                 ):
                                     from esper.kasmina.blending import BlendCatalog
@@ -810,7 +821,10 @@ class VectorizedPPOTrainer:
                     # Sync val_loss to env_state (for Sanctum TUI display)
                     # NOTE: Loss is sum of batch means, so divide by batch count (not sample count).
                     for i, env_state in enumerate(env_states):
-                        if env_state.val_loss_accum is not None and val_batch_counts[i] > 0:
+                        if (
+                            env_state.val_loss_accum is not None
+                            and val_batch_counts[i] > 0
+                        ):
                             env_state.val_loss = (
                                 env_state.val_loss_accum.item() / val_batch_counts[i]
                             )
@@ -861,9 +875,7 @@ class VectorizedPPOTrainer:
                                         seed_state.metrics._prev_contribution = (
                                             new_contribution
                                         )
-                                        seed_state.metrics.counterfactual_contribution = (
-                                            new_contribution
-                                        )
+                                        seed_state.metrics.counterfactual_contribution = new_contribution
                                         # Obs V3: Reset counterfactual staleness tracker on fresh measurement
                                         env_state.epochs_since_counterfactual[
                                             slot_id
@@ -925,9 +937,7 @@ class VectorizedPPOTrainer:
                                 solo_a = baseline_accs[i][slot_a]
                                 solo_b = baseline_accs[i][slot_b]
                                 # I_ij = f({i,j}) - f({i}) - f({j}) + f(empty)
-                                interaction = (
-                                    pair_acc - solo_a - solo_b + all_off_acc
-                                )
+                                interaction = pair_acc - solo_a - solo_b + all_off_acc
 
                                 # Track positive synergy in scaffold boost ledger for hindsight credit
                                 if interaction > 0:
@@ -1061,7 +1071,9 @@ class VectorizedPPOTrainer:
                         active_seeds = []
                         for slot_id in slots:
                             if model.has_active_seed_in_slot(slot_id):
-                                slot_obj = cast(SeedSlotProtocol, model.seed_slots[slot_id])
+                                slot_obj = cast(
+                                    SeedSlotProtocol, model.seed_slots[slot_id]
+                                )
                                 seed_state = slot_obj.state
                                 if seed_state is not None:
                                     active_seeds.append(seed_state)
@@ -1139,7 +1151,12 @@ class VectorizedPPOTrainer:
                         slot_reports = model.get_slot_reports()
 
                         # Consolidate environment-level telemetry emission
-                        emitters[env_idx].on_epoch_completed(epoch, env_state, slot_reports)
+                        emitters[env_idx].on_epoch_completed(
+                            epoch,
+                            env_state,
+                            slot_reports,
+                            observation_stats=last_obs_stats if env_idx == 0 else None,
+                        )
 
                         # Update signal tracker
                         # Phase 4: embargo/cooldown stages keep state while seed is removed.
@@ -1220,6 +1237,7 @@ class VectorizedPPOTrainer:
                             normalizer_var=obs_normalizer.var,
                             initial_normalizer_mean=initial_obs_normalizer_mean,
                         )
+                        last_obs_stats = step_obs_stats
 
                     # Get BATCHED actions from policy network with action masking (single forward pass!)
                     pre_step_hiddens: list[tuple[torch.Tensor, torch.Tensor]] = []
@@ -1231,7 +1249,9 @@ class VectorizedPPOTrainer:
                             env_c = c_batch[:, env_idx : env_idx + 1, :].clone()
                             pre_step_hiddens.append((env_h, env_c))
                     else:
-                        batched_lstm_hidden = agent.policy.initial_hidden(len(env_states))
+                        batched_lstm_hidden = agent.policy.initial_hidden(
+                            len(env_states)
+                        )
                         if batched_lstm_hidden is not None:
                             init_h, init_c = batched_lstm_hidden
                             for env_idx in range(len(env_states)):
@@ -1262,7 +1282,9 @@ class VectorizedPPOTrainer:
                         [actions_dict[name] for name in HEAD_NAMES]
                     )
                     actions_np = actions_stacked.cpu().numpy()  # [num_heads, num_envs]
-                    values = values_tensor.cpu().tolist()  # .tolist() on CPU tensor is free
+                    values = (
+                        values_tensor.cpu().tolist()
+                    )  # .tolist() on CPU tensor is free
 
                     # Batch compute mask stats for telemetry
                     masked_np: np.ndarray | None = None  # [num_heads, num_envs]
@@ -1383,7 +1405,9 @@ class VectorizedPPOTrainer:
                             post_action_features_batch
                         )
                         post_masks_batch = {
-                            k: torch.stack([m[k] for m in all_post_action_masks]).to(device)
+                            k: torch.stack([m[k] for m in all_post_action_masks]).to(
+                                device
+                            )
                             for k in HEAD_NAMES
                         }
                         post_masks_batch["slot_by_op"] = torch.stack(
@@ -1409,7 +1433,9 @@ class VectorizedPPOTrainer:
                         for (env_id, step_idx), bootstrap_val in zip(
                             truncated_bootstrap_targets, bootstrap_values, strict=True
                         ):
-                            agent.buffer.bootstrap_values[env_id, step_idx] = bootstrap_val
+                            agent.buffer.bootstrap_values[env_id, step_idx] = (
+                                bootstrap_val
+                            )
 
                     throughput_step_time_ms_sum += (
                         time.perf_counter() - epoch_start
@@ -1441,7 +1467,9 @@ class VectorizedPPOTrainer:
                         # Use normalize_only to avoid polluting running stats with rare outliers.
                         penalty = env_states[env_idx].governor.get_punishment_reward()
                         normalized_penalty = reward_normalizer.normalize_only(penalty)
-                        agent.buffer.mark_terminal_with_penalty(env_idx, normalized_penalty)
+                        agent.buffer.mark_terminal_with_penalty(
+                            env_idx, normalized_penalty
+                        )
                         # B11-CR-03 fix: OVERWRITE last reward with RAW penalty (for telemetry interpretability).
                         # Buffer gets normalized_penalty (for PPO training stability).
                         # Telemetry gets raw penalty (for cross-run comparability).
@@ -1537,7 +1565,9 @@ class VectorizedPPOTrainer:
                             grad_health = 0.3  # Exploding gradients
                         else:
                             grad_health = 1.0  # Healthy range
-                        drift_metrics = grad_ema_tracker.update(ppo_grad_norm, grad_health)
+                        drift_metrics = grad_ema_tracker.update(
+                            ppo_grad_norm, grad_health
+                        )
 
                     # FINITENESS GATE CONTRACT: Check if PPO update actually occurred
                     if not metrics["ppo_update_performed"]:
@@ -1586,7 +1616,9 @@ class VectorizedPPOTrainer:
                         )
                         if drift_report.has_anomaly:
                             anomaly_report.has_anomaly = True
-                            anomaly_report.anomaly_types.extend(drift_report.anomaly_types)
+                            anomaly_report.anomaly_types.extend(
+                                drift_report.anomaly_types
+                            )
                             anomaly_report.details.update(drift_report.details)
 
                     # B7-DRL-04: Check LSTM hidden state health after PPO update
@@ -1604,7 +1636,9 @@ class VectorizedPPOTrainer:
                         )
                         if lstm_report.has_anomaly:
                             anomaly_report.has_anomaly = True
-                            anomaly_report.anomaly_types.extend(lstm_report.anomaly_types)
+                            anomaly_report.anomaly_types.extend(
+                                lstm_report.anomaly_types
+                            )
                             anomaly_report.details.update(lstm_report.details)
                         # Add LSTM health to metrics for telemetry display in Sanctum
                         metrics.update(lstm_health.to_dict())
@@ -1644,7 +1678,9 @@ class VectorizedPPOTrainer:
                 if hub:
                     if not update_skipped:
                         # Assert non-None: values assigned in same `if not update_skipped` block above
-                        assert ppo_grad_norm is not None and ppo_update_time_ms is not None
+                        assert (
+                            ppo_grad_norm is not None and ppo_update_time_ms is not None
+                        )
                         batch_emitter.on_ppo_update(
                             metrics=metrics,
                             episodes_completed=batch_epoch_id,
@@ -1737,7 +1773,9 @@ class VectorizedPPOTrainer:
             profiler_cm.__exit__(None, None, None)
             if torch_profiler_summary and prof is not None:
                 print("\n=== torch.profiler: CUDA time (top 30) ===")
-                print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=30))
+                print(
+                    prof.key_averages().table(sort_by="cuda_time_total", row_limit=30)
+                )
                 print("\n=== torch.profiler: CPU time (top 30) ===")
                 print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=30))
             if torch_profiler:

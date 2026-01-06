@@ -193,11 +193,12 @@ def test_ppo_update_payload_from_dict_parses_new_fields():
         "op_valid_mask": [True, True, True, True, True, True],
         "q_variance": 0.0,
         "q_spread": 0.0,
-        # Infrastructure metrics (optional with defaults)
+        # Infrastructure metrics
         "cuda_memory_allocated_gb": 5.0,
         "cuda_memory_reserved_gb": 10.0,
         "cuda_memory_peak_gb": 7.5,
         "cuda_memory_fragmentation": 0.30,
+        "dataloader_wait_ratio": 0.2,
         # Pre-normalization advantage stats (always emitted)
         "pre_norm_advantage_mean": 0.8,
         "pre_norm_advantage_std": 2.5,
@@ -217,6 +218,7 @@ def test_ppo_update_payload_from_dict_parses_new_fields():
     assert payload.cuda_memory_reserved_gb == 10.0
     assert payload.cuda_memory_peak_gb == 7.5
     assert payload.cuda_memory_fragmentation == 0.30
+    assert payload.dataloader_wait_ratio == 0.2
 
 
 # =============================================================================
@@ -507,6 +509,8 @@ def test_ppo_update_payload_from_dict_with_per_head_nan_inf_flags():
         # Return statistics (always emitted)
         "return_mean": 0.0,
         "return_std": 1.0,
+        # Infrastructure metrics (always emitted)
+        "dataloader_wait_ratio": 0.15,
         # Per-head NaN/Inf detection - what this test focuses on
         "head_nan_detected": {"op": True, "slot": False, "blueprint": False},
         "head_inf_detected": {"op": False, "slot": True, "blueprint": False},
@@ -572,6 +576,8 @@ def test_ppo_update_payload_from_dict_with_q_values():
         # Return statistics (always emitted)
         "return_mean": 8.5,
         "return_std": 2.5,
+        # Infrastructure metrics (always emitted)
+        "dataloader_wait_ratio": 0.12,
     }
 
     payload = PPOUpdatePayload.from_dict(data)

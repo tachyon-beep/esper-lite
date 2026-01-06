@@ -1,6 +1,6 @@
 # Telemetry Record: [TELE-601] Observation Inf Count
 
-> **Status:** `[ ] Planned` `[ ] In Progress` `[x] Wired` `[ ] Tested` `[ ] Verified`
+> **Status:** `[x] Planned` `[x] In Progress` `[x] Wired` `[x] Tested` `[ ] Verified`
 
 ---
 
@@ -84,38 +84,31 @@ if obs.nan_count > 0 or obs.inf_count > 0:
 
 | Property | Value |
 |----------|-------|
-| **Origin** | Observation collection during environment step |
-| **File** | `[NOT YET IMPLEMENTED]` — likely `src/esper/tolaria/environment.py` or vec env wrapper |
-| **Function/Method** | `[NOT YET IMPLEMENTED]` — likely in step() or observation preprocessing |
-| **Line(s)** | `[NOT YET FOUND]` |
+| **Origin** | Observation tensor health check during vectorized PPO training |
+| **File** | `/home/john/esper-lite/src/esper/simic/training/vectorized_trainer.py` |
+| **Function/Method** | `compute_observation_stats()` (invoked after `obs_normalizer.normalize`) |
+| **Line(s)** | Near the per-step observation normalization block |
 
-**STATUS:** Observation inf/nan counting code does NOT YET EXIST in the codebase. The health panel expects it, but no emitter code has been wired.
-
-```python
-# TODO: Implement observation stat collection
-# torch.isinf(observations).sum()
-```
+**Emission Path:** `compute_observation_stats()` (in
+`/home/john/esper-lite/src/esper/simic/telemetry/observation_stats.py`)
+produces `ObservationStatsTelemetry`, which is attached to
+`EpochCompletedPayload` in `/home/john/esper-lite/src/esper/simic/telemetry/emitters.py`.
 
 ### Transport
 
 | Stage | Mechanism | File |
 |-------|-----------|------|
-| **1. Emission** | `[NOT IMPLEMENTED]` — Needs event payload | `simic/telemetry/emitters.py` (estimate) |
-| **2. Collection** | `[NOT IMPLEMENTED]` — Observation stats event | `leyline/telemetry.py` |
-| **3. Aggregation** | `[STUB]` — Currently hardcoded empty stats | `karn/sanctum/aggregator.py:538` |
-| **4. Delivery** | `[STUB]` — Writes empty ObservationStats | `karn/sanctum/schema.py:1380` |
+| **1. Emission** | `EpochCompletedPayload.observation_stats` attached per env | `simic/telemetry/emitters.py` |
+| **2. Collection** | `EpochCompletedPayload` carries `observation_stats` | `leyline/telemetry.py` |
+| **3. Aggregation** | `_handle_epoch_completed` updates `ObservationStats` | `karn/sanctum/aggregator.py` |
+| **4. Delivery** | Populated to `snapshot.observation_stats.inf_count` | `karn/sanctum/schema.py` |
 
 ```
-[Observation Collection] --> [VectorizedEmitter] --> [event] --> [SanctumAggregator] --> [SanctumSnapshot.observation_stats]
+[compute_observation_stats] --> [EpochCompletedPayload.observation_stats] --> [SanctumAggregator] --> [SanctumSnapshot.observation_stats]
 ```
 
-**KEY FINDING:** Line 537-538 in aggregator.py shows explicit stub comment:
-```python
-# Stub observation and episode stats (telemetry not yet wired)
-observation_stats = ObservationStats()
-```
-
-This confirms the entire data flow is NOT YET WIRED.
+**KEY FINDING:** Observation stats are now populated from `EpochCompletedPayload`
+in `SanctumAggregator._handle_epoch_completed`.
 
 ### Schema Location
 
@@ -186,24 +179,24 @@ def _render_observation_stats(self) -> Text:
 
 ### Checklist
 
-- [ ] **Emitter exists** — Code does NOT YET compute and emit this value
-- [ ] **Transport works** — Event payload does NOT YET include inf_count
+- [x] **Emitter exists** — `compute_observation_stats()` in `simic/telemetry/observation_stats.py`
+- [x] **Transport works** — `EpochCompletedPayload.observation_stats` carries the stats
 - [x] **Schema field exists** — Field defined in ObservationStats (line 220)
 - [x] **Default is correct** — Field has appropriate default (0)
 - [x] **Consumer reads it** — HealthStatusPanel accesses the field (line 319)
 - [x] **Display is correct** — Value renders as "Inf:X" in red bold
 - [x] **Thresholds applied** — Any value > 0 triggers critical display
 
-**SUMMARY:** 4/7 wiring stages complete. Missing: emitter implementation.
+**SUMMARY:** All wiring stages complete. Emission, transport, and aggregation are in place.
 
 ### Test Coverage
 
 | Test Type | File | Test Name | Status |
 |-----------|------|-----------|--------|
-| Unit (emitter) | `tests/tolaria/test_observation_stats.py` | `test_inf_count_collected` | `[ ]` NOT IMPLEMENTED |
-| Unit (aggregator) | `tests/karn/sanctum/test_aggregator.py` | `test_observation_stats_aggregated` | `[ ]` STUB ONLY |
-| Integration (end-to-end) | `tests/integration/test_telemetry_flow.py` | `test_inf_count_reaches_tui` | `[ ]` NOT IMPLEMENTED |
-| Visual (TUI snapshot) | — | Manual verification | `[ ]` BLOCKED BY EMITTER |
+| Unit (emitter) | — | — | `[ ]` |
+| Unit (aggregator) | — | — | `[ ]` |
+| Integration (end-to-end) | `tests/telemetry/test_environment_metrics.py` | `TestTELE601ObsInfCount::test_inf_count_populated_when_inf_detected` | `[x]` |
+| Visual (TUI snapshot) | — | Manual verification | `[ ]` |
 
 **NOTE:** HealthStatusPanel tests likely exist but would not catch inf_count since it's always 0.
 
@@ -215,7 +208,7 @@ def _render_observation_stats(self) -> Text:
 4. Verify "Inf:X" appears in red bold when X > 0
 5. Clear Inf issue and verify display returns to normal
 
-**BLOCKER:** Cannot currently test end-to-end without implementing emitter first.
+**Note:** End-to-end wiring is covered by the telemetry test; TUI verification remains manual.
 
 ---
 
@@ -244,30 +237,21 @@ def _render_observation_stats(self) -> Text:
 | Date | Author | Change |
 |------|--------|--------|
 | 2025-01-03 | Telemetry Audit | Created record; identified as NOT YET WIRED (stub only) |
-| | | Aggregator explicitly stubs observation_stats (line 537) |
-| | | Widget expects field, emitter does not yet provide it |
+| 2026-01-07 | Claude Code | Wired via EpochCompletedPayload observation_stats and added integration test |
 
 ---
 
 ## 8. Notes
 
-> **WIRING GAP IDENTIFIED:** This metric is a classic case of schema-first design without backend implementation. The widget (HealthStatusPanel) expects observation_stats, the schema (ObservationStats) is defined, but the emitter code that populates it does not exist.
+> **WIRING STATUS:** Observation Inf counts are emitted via
+> `EpochCompletedPayload.observation_stats`, aggregated in
+> `SanctumAggregator._handle_epoch_completed`, and surfaced in the
+> HealthStatusPanel.
 >
-> **IMPLEMENTATION PLAN:**
-> 1. Add observation stat collection in environment step (likely tolaria/environment.py)
-> 2. Compute inf_count = torch.isinf(observations).sum().item()
-> 3. Emit ObservationStatsPayload or add field to EPOCH_COMPLETED payload
-> 4. Handle event in SanctumAggregator.process_event() (remove stub)
-> 5. Add tests for collection and aggregation
+> **TIMING:** Observation stats are collected during rollout steps and attached
+> to the per-epoch telemetry event. Computation is gated by ops telemetry to
+> avoid unnecessary overhead.
 >
-> **TIMING:** Observation stats should be collected every epoch, same cadence as EPOCH_COMPLETED (not every step, would be too expensive).
->
-> **PERFORMANCE NOTE:** torch.isinf() is cheap (single pass over tensor), but should be conditional on debug mode or telemetry config to avoid hot-path overhead.
->
-> **RELATED TELEMETRY:** Compare with TELE-301 (inf_grad_count) which has similar pattern. That metric IS wired and working, so can use it as reference implementation.
->
-> **DIFFERENCE FROM TELE-301:**
-> - TELE-301: Checks gradients during backward pass (debug_telemetry.py)
-> - TELE-601: Should check observation tensor right after env.step() returns
-> - TELE-301 has explicit gradient collection code
-> - TELE-601 is currently a stub awaiting implementation
+> **RELATED TELEMETRY:** Compare with TELE-301 (inf_grad_count) which tracks
+> gradient infinities during backward pass; TELE-601 tracks observation
+> infinities during input collection.

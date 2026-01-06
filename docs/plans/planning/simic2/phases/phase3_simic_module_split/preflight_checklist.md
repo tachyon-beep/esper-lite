@@ -136,35 +136,35 @@ mega-module re-growth.
 ## Execution notes (Phase 3 preflight)
 
 - Full test suite: `UV_CACHE_DIR=.uv-cache uv run pytest`
-  - 4249 passed, 34 skipped, 69 deselected, 4 xfailed
+  - 4251 passed, 34 skipped, 69 deselected, 4 xfailed
 - Lint: `UV_CACHE_DIR=.uv-cache uv run ruff check src/ tests/` (clean)
 - Types: `UV_CACHE_DIR=.uv-cache uv run mypy src/` (clean, 171 files)
 - Audit: `rg` confirms `ppo_update.py` has no telemetry imports and telemetry does not import `ppo_update`.
 - Audit: typed update/metrics objects only referenced in `simic/agent` (no DataLoader worker capture).
 - Throughput baseline run:
   - Command: `PYTHONPATH=src UV_CACHE_DIR=.uv-cache uv run python -m esper.scripts.train ppo --preset cifar_baseline --task cifar_baseline --rounds 1 --envs 1 --episode-length 5 --telemetry-dir telemetry --device cpu --devices cpu --num-workers 0`
-  - Run dir: `telemetry/telemetry_2026-01-06_205739`
-  - Total episode time (TRAINING_STARTED → last EPOCH_COMPLETED): 39.277398s
-  - Episodes/sec: 0.025460
-  - Per-epoch deltas: [7.500104s, 7.575927s, 7.99248s, 7.513749s], avg 7.645565s
+  - Run dir: `telemetry/telemetry_2026-01-06_232958`
+  - Total episode time (TRAINING_STARTED → last EPOCH_COMPLETED): 39.602667s
+  - Episodes/sec: 0.025251
+  - Per-epoch deltas: [7.775089s, 7.655476s, 7.804897s, 7.668159s], avg 7.725905s
   - Phase 2 baseline for comparison: 44.754748s total, 0.022344 episodes/sec
 - PBRS spike validation run:
   - Command: `PYTHONPATH=src UV_CACHE_DIR=.uv-cache uv run python -m esper.scripts.train ppo --preset cifar_baseline --task cifar_baseline --rounds 1 --envs 1 --episode-length 5 --telemetry-dir telemetry --device cpu --devices cpu --num-workers 0`
-  - Run dir: `telemetry/telemetry_2026-01-06_212121`
+  - Run dir: `telemetry/telemetry_2026-01-06_233109`
 - Telemetry ordering test: `UV_CACHE_DIR=.uv-cache uv run pytest tests/simic/telemetry/test_emitters.py::test_batch_tail_event_order_is_stable`
 - PPO metrics spike validation run:
   - Command: `PYTHONPATH=src UV_CACHE_DIR=.uv-cache uv run python -m esper.scripts.train ppo --preset cifar_baseline --task cifar_baseline --rounds 1 --envs 1 --episode-length 5 --telemetry-dir telemetry --device cpu --devices cpu --num-workers 0`
-  - Run dir: `telemetry/telemetry_2026-01-06_213352`
+  - Run dir: `telemetry/telemetry_2026-01-06_233207`
   - Tests: `UV_CACHE_DIR=.uv-cache uv run pytest tests/simic/test_ppo_update_golden.py`
   - Telemetry ordering test: `UV_CACHE_DIR=.uv-cache uv run pytest tests/simic/telemetry/test_emitters.py::test_batch_tail_event_order_is_stable`
 - PPO update spike validation run:
   - Command: `PYTHONPATH=src UV_CACHE_DIR=.uv-cache uv run python -m esper.scripts.train ppo --preset cifar_baseline --task cifar_baseline --rounds 1 --envs 1 --episode-length 5 --telemetry-dir telemetry --device cpu --devices cpu --num-workers 0`
-  - Run dir: `telemetry/telemetry_2026-01-06_214513`
+  - Run dir: `telemetry/telemetry_2026-01-06_233311`
   - Tests: `UV_CACHE_DIR=.uv-cache uv run pytest tests/simic/test_ppo_update_golden.py`
   - Telemetry ordering test: `UV_CACHE_DIR=.uv-cache uv run pytest tests/simic/telemetry/test_emitters.py::test_batch_tail_event_order_is_stable`
 - Post-review entropy fallback validation run:
   - Command: `PYTHONPATH=src UV_CACHE_DIR=.uv-cache uv run python -m esper.scripts.train ppo --preset cifar_baseline --task cifar_baseline --rounds 1 --envs 1 --episode-length 5 --telemetry-dir telemetry --device cpu --devices cpu --num-workers 0`
-  - Run dir: `telemetry/telemetry_2026-01-06_215040`
+  - Run dir: `telemetry/telemetry_2026-01-06_233415`
   - Telemetry ordering test: `UV_CACHE_DIR=.uv-cache uv run pytest tests/simic/telemetry/test_emitters.py::test_batch_tail_event_order_is_stable`
 - Reward/agent split validation tests:
   - `UV_CACHE_DIR=.uv-cache uv run pytest tests/simic/test_reward_modes.py tests/simic/rewards/test_reward_golden.py tests/simic/test_rewards.py tests/simic/test_pbrs_verification.py tests/leyline/test_import_smoke.py tests/simic/test_import_direction.py tests/simic/test_ppo_update_golden.py tests/simic/test_ppo_normalization.py`

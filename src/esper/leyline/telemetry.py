@@ -531,9 +531,20 @@ class EpochCompletedPayload:
     # OPTIONAL - per-seed telemetry snapshots
     seeds: dict[str, dict[str, Any]] | None = None
 
+    # OPTIONAL - observation space health metrics
+    observation_stats: "ObservationStatsTelemetry | None" = None
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "EpochCompletedPayload":
         """Parse from dict. Raises KeyError on missing required fields."""
+        observation_stats_data = data["observation_stats"]
+        observation_stats: ObservationStatsTelemetry | None
+        if observation_stats_data is None:
+            observation_stats = None
+        else:
+            from esper.simic.telemetry.observation_stats import ObservationStatsTelemetry
+            observation_stats = ObservationStatsTelemetry.from_dict(observation_stats_data)
+
         return cls(
             env_id=data["env_id"],
             val_accuracy=data["val_accuracy"],
@@ -543,6 +554,7 @@ class EpochCompletedPayload:
             train_accuracy=data.get("train_accuracy"),
             host_grad_norm=data.get("host_grad_norm"),
             seeds=data.get("seeds"),
+            observation_stats=observation_stats,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -550,6 +562,11 @@ class EpochCompletedPayload:
 
         PERF: Avoids dataclasses.asdict() deep-copying nested dict payloads (e.g., per-seed telemetry).
         """
+        observation_stats = (
+            self.observation_stats.to_dict()
+            if self.observation_stats is not None
+            else None
+        )
         return {
             "env_id": self.env_id,
             "val_accuracy": self.val_accuracy,
@@ -559,6 +576,7 @@ class EpochCompletedPayload:
             "train_accuracy": self.train_accuracy,
             "host_grad_norm": self.host_grad_norm,
             "seeds": self.seeds,
+            "observation_stats": observation_stats,
         }
 
 
@@ -792,6 +810,7 @@ class PPOUpdatePayload:
     cuda_memory_reserved_gb: float = 0.0   # torch.cuda.memory_reserved()
     cuda_memory_peak_gb: float = 0.0       # torch.cuda.max_memory_allocated()
     cuda_memory_fragmentation: float = 0.0 # 1 - (allocated/reserved), >0.3 = pressure
+    dataloader_wait_ratio: float = 0.0    # Fraction of step time spent waiting on data
 
     # === LSTM Hidden State Health (B7-DRL-04) ===
     # Tracks LSTM hidden state stability after PPO updates (BPTT can corrupt states)
@@ -921,6 +940,7 @@ class PPOUpdatePayload:
             cuda_memory_reserved_gb=data.get("cuda_memory_reserved_gb", 0.0),
             cuda_memory_peak_gb=data.get("cuda_memory_peak_gb", 0.0),
             cuda_memory_fragmentation=data.get("cuda_memory_fragmentation", 0.0),
+            dataloader_wait_ratio=data["dataloader_wait_ratio"],
             # LSTM health metrics (B7-DRL-04)
             lstm_h_l2_total=data.get("lstm_h_l2_total"),
             lstm_c_l2_total=data.get("lstm_c_l2_total"),

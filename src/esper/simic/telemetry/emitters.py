@@ -88,6 +88,8 @@ class VectorizedEmitter:
         epoch: int,
         env_state: "ParallelEnvState",
         slot_reports: dict[str, Any],
+        *,
+        observation_stats: "ObservationStatsTelemetry | None" = None,
     ) -> None:
         """Emit per-environment epoch metrics and seed telemetry."""
         if not self._should_emit("ops_normal"):
@@ -124,6 +126,7 @@ class VectorizedEmitter:
                 val_loss=env_state.val_loss,
                 inner_epoch=epoch,
                 seeds=seeds_telemetry,
+                observation_stats=observation_stats,
             ),
         ))
 
@@ -800,6 +803,10 @@ def emit_ppo_update_event(
             avg_grad_norm = sum(values) / len(values)  # Fail on empty list
             head_grad_norms_avg[f"head_{head}_grad_norm"] = avg_grad_norm
 
+    step_time_ms_sum = metrics["throughput_step_time_ms_sum"]
+    dataloader_wait_ms_sum = metrics["throughput_dataloader_wait_ms_sum"]
+    dataloader_wait_ratio = dataloader_wait_ms_sum / step_time_ms_sum
+
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
         epoch=episodes_completed,  # Monotonic per-batch epoch id (NOT inner epoch!)
@@ -896,6 +903,7 @@ def emit_ppo_update_event(
             cuda_memory_reserved_gb=metrics.get("cuda_memory_reserved_gb", 0.0),
             cuda_memory_peak_gb=metrics.get("cuda_memory_peak_gb", 0.0),
             cuda_memory_fragmentation=metrics.get("cuda_memory_fragmentation", 0.0),
+            dataloader_wait_ratio=dataloader_wait_ratio,
             # LSTM health metrics (B7-DRL-04)
             lstm_h_l2_total=metrics.get("lstm_h_l2_total"),
             lstm_c_l2_total=metrics.get("lstm_c_l2_total"),

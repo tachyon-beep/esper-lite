@@ -12,10 +12,9 @@ This document tracks all xfailing telemetry tests that document known wiring gap
 
 | Range | Category | Xfails | Root Cause |
 |-------|----------|--------|------------|
-| TELE-600 to TELE-603 | Environment Metrics | 4 | Emitters not implemented |
 | TELE-701 to TELE-730 | Infrastructure Metrics | 9 | Schema-only tests, need integration tests |
 
-**Total: 13 xfailing tests**
+**Total: 9 xfailing tests**
 
 ---
 
@@ -70,18 +69,14 @@ All wiring gaps in this category have been resolved:
 
 ---
 
-## TELE-600 to TELE-603: Observation Statistics
+## TELE-600 to TELE-603: Observation Statistics - FIXED ✓
 
 **File:** `tests/telemetry/test_environment_metrics.py`
 
-Observation statistics have schema but no emitters.
-
-| TELE | Metric | Gap | Fix Required |
-|------|--------|-----|--------------|
-| TELE-600 | `obs_nan_count` | No emitter | Add to `EpochCompletedPayload` or new `OBSERVATION_STATS` event |
-| TELE-601 | `obs_inf_count` | No emitter | Same as TELE-600 |
-| TELE-602 | `outlier_pct` | Stubbed to 0.0 | Compute outlier percentage in observation tensor |
-| TELE-603 | `normalization_drift` | Stubbed to 0.0 | Track running mean/std drift over time |
+Observation statistics are now emitted and wired end-to-end:
+- `compute_observation_stats()` in `simic/training/vectorized_trainer.py` produces stats per step
+- `VectorizedEmitter.on_epoch_completed()` attaches `observation_stats` to `EpochCompletedPayload`
+- `SanctumAggregator._handle_epoch_completed()` updates `ObservationStats` in snapshots
 
 ---
 
@@ -163,7 +158,7 @@ These are aggregator-computed metrics. Tests verify schema exists but don't test
 | `test_gradient_metrics.py` | TELE-300 to TELE-340 | ✓ All valid |
 | `test_reward_metrics.py` | TELE-400 to TELE-402 | ✓ All valid |
 | `test_seed_lifecycle.py` | TELE-500 to TELE-515 | ✓ All valid |
-| `test_environment_metrics.py` | TELE-600 to TELE-650 | 4 xfails (no emitters), TELE-610 fixed |
+| `test_environment_metrics.py` | TELE-600 to TELE-650 | ✓ All valid |
 | `test_infrastructure_metrics.py` | TELE-700 to TELE-770 | 9 xfails (schema-only) |
 | `test_decision_metrics.py` | TELE-800+ | ✓ All valid |
 | `test_tele_action_targeting.py` | TELE-801, TELE-802 | ✓ All valid |

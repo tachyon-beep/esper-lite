@@ -95,6 +95,8 @@ class PPOUpdateMetrics(TypedDict, total=False):
     cuda_memory_reserved_gb: float
     cuda_memory_peak_gb: float
     cuda_memory_fragmentation: float
+    throughput_step_time_ms_sum: float
+    throughput_dataloader_wait_ms_sum: float
     # Log prob extremes (NaN predictor)
     log_prob_min: float
     log_prob_max: float

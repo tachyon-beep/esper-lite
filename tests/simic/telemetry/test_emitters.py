@@ -108,6 +108,9 @@ def _make_mandatory_metrics(**overrides) -> dict:
         "return_std": 0.8,
         # Value target scale (mandatory) - std used to normalize returns
         "value_target_scale": 0.8,
+        # Throughput metrics (mandatory for dataloader wait ratio)
+        "throughput_step_time_ms_sum": 100.0,
+        "throughput_dataloader_wait_ms_sum": 20.0,
     }
     base.update(overrides)
     return base
@@ -192,6 +195,28 @@ def test_emit_ppo_update_event_includes_value_stats():
     assert payload.value_std == 1.2
     assert payload.value_min == 2.1
     assert payload.value_max == 9.8
+
+
+def test_emit_ppo_update_event_sets_dataloader_wait_ratio() -> None:
+    """emit_ppo_update_event should compute dataloader wait ratio from throughput sums."""
+    hub = MagicMock()
+
+    emit_ppo_update_event(
+        hub=hub,
+        metrics=_make_mandatory_metrics(
+            throughput_step_time_ms_sum=200.0,
+            throughput_dataloader_wait_ms_sum=50.0,
+        ),
+        episodes_completed=4,
+        batch_idx=2,
+        epoch=50,
+        optimizer=None,
+        grad_norm=1.0,
+        update_time_ms=40.0,
+    )
+
+    payload = hub.emit.call_args[0][0].data
+    assert math.isclose(payload.dataloader_wait_ratio, 0.25)
 
 
 def test_batch_tail_event_order_is_stable() -> None:

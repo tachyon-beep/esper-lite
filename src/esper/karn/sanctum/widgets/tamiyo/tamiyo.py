@@ -22,9 +22,9 @@ Layout (CSS dimensions):
     │ │Narrative│ PPOLosses  │ Slots (52ch)  │ h13                     │          │
     │ ├──────────────────────┬──────────┬──────────────┐              │          │
     │ │ ActionHeadsPanel     │ Health   │ ActionContext │             │          │
-    │ │ ┌────────┬─────────┐ │ (54ch)   │ (52ch)        │              │          │
-    │ │ │Episode │ Value   │ │          │               │              │          │
-    │ │ └────────┴─────────┘ │          │               │              │          │
+    │ │ ┌────────┬─────────┐ │ Value    │ (52ch)        │              │          │
+    │ │ │Episode │ Torch   │ │ Calib    │               │              │          │
+    │ │ └────────┴─────────┘ │ (54ch)   │               │              │          │
     │ └──────────────────────┴──────────┴──────────────┘              │ EventLog │
     └───────────────────────────────────────────────────────────────────┴──────────┘
 """
@@ -41,6 +41,7 @@ from esper.karn.sanctum.widgets.event_log import EventLog
 from .narrative_panel import NarrativePanel
 from .ppo_losses_panel import PPOLossesPanel
 from .health_status_panel import HealthStatusPanel
+from .torch_stability_panel import TorchStabilityPanel
 from .action_heads_panel import ActionHeadsPanel
 from .action_distribution import ActionContext
 from .critic_calibration_panel import CriticCalibrationPanel
@@ -137,11 +138,20 @@ class TamiyoBrain(Container):
     }
 
     #health-column {
-        width: 56;  /* Fixed width for Health + Critic Calibration */
+        width: 56;  /* Fixed width for Health + Value Diagnostics + Critic Calibration */
         height: 100%;
     }
 
     #health-panel {
+        width: 100%;
+        min-width: 0;
+        height: 2fr;
+        border: round $surface-lighten-2;
+        border-title-color: $text-muted;
+        padding: 0 1;
+    }
+
+    #value-diagnostics-panel {
         width: 100%;
         min-width: 0;
         height: 1fr;
@@ -178,7 +188,7 @@ class TamiyoBrain(Container):
         padding: 0 1;
     }
 
-    /* Bottom metrics row: Episode Health (left) | Value Diagnostics (right) */
+    /* Bottom metrics row: Episode Health (left) | Torch Stability (right) */
     #bottom-metrics-row {
         width: 100%;
         height: 9;
@@ -192,7 +202,7 @@ class TamiyoBrain(Container):
         padding: 0 1;
     }
 
-    #value-diagnostics-panel {
+    #torch-stability-panel {
         width: 1fr;
         height: 1fr;
         border: round $surface-lighten-2;
@@ -276,9 +286,10 @@ class TamiyoBrain(Container):
                         # Bottom metrics: Episode Health | Value Diagnostics
                         with Horizontal(id="bottom-metrics-row"):
                             yield EpisodeMetricsPanel(id="episode-metrics-panel")
-                            yield ValueDiagnosticsPanel(id="value-diagnostics-panel")
+                            yield TorchStabilityPanel(id="torch-stability-panel")
                     with Vertical(id="health-column"):
                         yield HealthStatusPanel(id="health-panel")
+                        yield ValueDiagnosticsPanel(id="value-diagnostics-panel")
                         yield CriticCalibrationPanel(id="critic-calibration-panel")
                     yield ActionContext(id="action-context")
 
@@ -319,6 +330,9 @@ class TamiyoBrain(Container):
         # That's a bug in calling code - fix the caller, not the symptom.
         self.query_one("#ppo-losses-panel", PPOLossesPanel).update_snapshot(snapshot)
         self.query_one("#health-panel", HealthStatusPanel).update_snapshot(snapshot)
+        self.query_one(
+            "#torch-stability-panel", TorchStabilityPanel
+        ).update_snapshot(snapshot)
         self.query_one("#action-heads-panel", ActionHeadsPanel).update_snapshot(
             snapshot
         )

@@ -1,6 +1,6 @@
 # Telemetry Record: [TELE-602] Outlier Percentage
 
-> **Status:** `[ ] Planned` `[x] In Progress` `[ ] Wired` `[ ] Tested` `[ ] Verified`
+> **Status:** `[x] Planned` `[x] In Progress` `[x] Wired` `[x] Tested` `[ ] Verified`
 
 ---
 
@@ -79,35 +79,31 @@
 
 | Property | Value |
 |----------|-------|
-| **Origin** | Observation batch processing during training (simic or governor) |
-| **File** | `[NOT FOUND]` — Observation statistics computation not yet implemented |
-| **Function/Method** | `[NOT FOUND]` — Expected in simic batch processing or Governor |
-| **Line(s)** | `[UNKNOWN]` |
+| **Origin** | Observation batch processing during training (ops telemetry path) |
+| **File** | `/home/john/esper-lite/src/esper/simic/training/vectorized_trainer.py` |
+| **Function/Method** | `compute_observation_stats()` (invoked after `obs_normalizer.normalize`) |
+| **Line(s)** | Near the per-step observation normalization block |
 
-```python
-# EXPECTED LOGIC (not yet implemented):
-# For each observation batch [N, obs_dim]:
-# 1. Compute mean and std across batch
-# 2. Count values where |obs - mean| > 3 * std
-# 3. Divide count by total observations to get outlier_pct
-outlier_count = ((obs - obs.mean()).abs() > 3 * obs.std()).sum()
-outlier_pct = float(outlier_count) / len(obs)
-```
+**Emission Path:** `compute_observation_stats()` (in
+`/home/john/esper-lite/src/esper/simic/telemetry/observation_stats.py`)
+produces `ObservationStatsTelemetry`, which is attached to
+`EpochCompletedPayload` in `/home/john/esper-lite/src/esper/simic/telemetry/emitters.py`.
 
 ### Transport
 
 | Stage | Mechanism | File |
 |-------|-----------|------|
-| **1. Emission** | `[NOT FOUND]` — No emitter exists yet | simic/telemetry/emitters.py |
-| **2. Collection** | `[NOT FOUND]` — No event payload defined | leyline/telemetry.py |
-| **3. Aggregation** | Stub: returns default ObservationStats | `karn/sanctum/aggregator.py` (line 538) |
+| **1. Emission** | `EpochCompletedPayload.observation_stats` attached per env | `simic/telemetry/emitters.py` |
+| **2. Collection** | `EpochCompletedPayload` carries `observation_stats` | `leyline/telemetry.py` |
+| **3. Aggregation** | `_handle_epoch_completed` updates `ObservationStats` | `karn/sanctum/aggregator.py` |
 | **4. Delivery** | Written to `snapshot.observation_stats.outlier_pct` | `karn/sanctum/schema.py` |
 
 ```
-[Observation Batch] --> [NOT IMPLEMENTED] --> [Aggregator Stub] --> [SanctumSnapshot.observation_stats.outlier_pct]
+[compute_observation_stats] --> [EpochCompletedPayload.observation_stats] --> [SanctumAggregator] --> [SanctumSnapshot.observation_stats.outlier_pct]
 ```
 
-**Current Implementation Gap:** The aggregator creates an empty `ObservationStats()` with all fields at default values. No computation or event emission is wired.
+**Current Implementation:** Outlier percentage is computed per-step and carried
+through epoch telemetry into the Sanctum snapshot.
 
 ### Schema Location
 
@@ -154,8 +150,8 @@ f"Out:{obs.outlier_pct:.1%}"  # Formatted as X.X%
 
 ### Checklist
 
-- [ ] **Emitter exists** — Code computes and emits this value — `NOT FOUND`
-- [ ] **Transport works** — Value reaches aggregator — `NOT IMPLEMENTED`
+- [x] **Emitter exists** — `compute_observation_stats()` in `simic/telemetry/observation_stats.py`
+- [x] **Transport works** — `EpochCompletedPayload.observation_stats` carries the stats
 - [x] **Schema field exists** — Field defined in dataclass — `ObservationStats.outlier_pct`
 - [x] **Default is correct** — Field has appropriate default — `0.0` (stub value)
 - [x] **Consumer reads it** — Widget accesses the field — `HealthStatusPanel._render_observation_stats()`
@@ -166,14 +162,14 @@ f"Out:{obs.outlier_pct:.1%}"  # Formatted as X.X%
 
 | Test Type | File | Test Name | Status |
 |-----------|------|-----------|--------|
-| Unit (emitter) | `[NOT FOUND]` | `test_outlier_pct_computed` | `[ ]` |
-| Unit (aggregator) | `[NOT FOUND]` | `test_observation_stats_populated` | `[ ]` |
-| Integration (end-to-end) | `[NOT FOUND]` | `test_outlier_pct_reaches_tui` | `[ ]` |
+| Unit (emitter) | — | — | `[ ]` |
+| Unit (aggregator) | — | — | `[ ]` |
+| Integration (end-to-end) | `tests/telemetry/test_environment_metrics.py` | `TestTELE602OutlierPct::test_outlier_pct_computed_from_batch_observations` | `[x]` |
 | Visual (TUI snapshot) | — | Manual verification | `[ ]` |
 
 ### Manual Verification Steps
 
-1. **When emitter is implemented:** `uv run esper ppo --episodes 100`
+1. `uv run esper ppo --episodes 100`
 2. Open Sanctum TUI (should open automatically or via `uv run sanctum`)
 3. Navigate to HealthStatusPanel
 4. Verify "Out:X.X%" displays in Obs Health row
@@ -208,26 +204,21 @@ f"Out:{obs.outlier_pct:.1%}"  # Formatted as X.X%
 | Date | Author | Change |
 |------|--------|--------|
 | 2025-01-03 | Audit | Initial telemetry record creation; identified wiring gap |
+| 2026-01-07 | Claude Code | Wired via EpochCompletedPayload observation_stats and added integration test |
 
 ---
 
 ## 8. Notes
 
-> **WIRING GAP IDENTIFIED:** This metric is defined in the schema and has a consumer widget, but **no emitter or aggregation path exists**. The value always defaults to `0.0` because `ObservationStats()` is instantiated with default values in the aggregator (line 538 of aggregator.py).
->
-> **Next Steps to Wire:**
-> 1. **Add observation stats computation** in simic batch processing (likely in `simic/telemetry/` or `tolaria/governor.py`)
-> 2. **Define telemetry event** in `leyline/telemetry.py` (e.g., `OBSERVATION_STATS_COMPUTED`)
-> 3. **Add emitter** to compute and emit observation stats after each batch
-> 4. **Add aggregator handler** to receive event and populate `ObservationStats` fields
-> 5. **Add unit/integration tests** to verify end-to-end flow
-> 6. **Manual testing** with synthetic outlier injection to verify thresholds
+> **WIRING STATUS:** Outlier percentage is computed in
+> `compute_observation_stats()` and propagated via
+> `EpochCompletedPayload.observation_stats` into the Sanctum snapshot.
 >
 > **Feature Definition Notes:**
-> - **3-sigma rule:** By definition, ~99.73% of values in a normal distribution fall within 3σ, so 0.27% is baseline expected outlier rate for truly normal data
-> - **Observation grouping:** The schema includes separate tracking for `slot_features`, `host_features`, and `context_features` statistics, suggesting outlier detection may need to be computed per-feature-group rather than globally
-> - **Running normalization:** Related field `normalization_drift` is also stubbed and may indicate whether observation normalization is drifting from training distribution
-> - **NaN/Inf handling:** Critical issues (NaN or Inf) bypass outlier checks in the widget display, suggesting they're higher priority diagnostics
+> - **3-sigma rule:** ~99.73% of values in a normal distribution fall within 3σ, so 0.27% is baseline expected outlier rate for truly normal data
+> - **Observation grouping:** Stats are computed over per-feature means/stds; slot/host/context feature groups are tracked separately for context
+> - **Running normalization:** Related field `normalization_drift` indicates whether normalization stats are drifting
+> - **NaN/Inf handling:** Critical issues (NaN or Inf) bypass outlier checks in the widget display
 >
 > **Design Rationale:**
 > High outlier percentages typically indicate:

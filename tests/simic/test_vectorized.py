@@ -149,6 +149,9 @@ def _make_mandatory_metrics(**overrides) -> dict:
         "return_std": 0.3,
         # Value target scale (std used to normalize returns)
         "value_target_scale": 0.3,
+        # Throughput metrics (mandatory for dataloader wait ratio)
+        "throughput_step_time_ms_sum": 100.0,
+        "throughput_dataloader_wait_ms_sum": 20.0,
         "ratio_mean": 1.0,
         "ratio_min": 0.8,
         "ratio_max": 1.2,
