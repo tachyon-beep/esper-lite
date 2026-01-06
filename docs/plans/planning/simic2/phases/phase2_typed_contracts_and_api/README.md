@@ -42,3 +42,13 @@ Write the decision into the promoted ready plan for this phase.
 - Reward calls go through a single typed container (no 20+ argument call sites).
 - Action decode/execute uses typed objects and has unit tests for the rules.
 - The training loop’s “data types” are obvious at the call sites.
+
+## Completion notes
+
+- Execution completed on env-refactor with typed containers in rewards and vectorized training.
+- Validation:
+  - `UV_CACHE_DIR=.uv-cache uv run pytest` (full suite)
+  - `UV_CACHE_DIR=.uv-cache uv run ruff check src/ tests/`
+  - `UV_CACHE_DIR=.uv-cache uv run mypy src/`
+- Telemetry xfails (TELE-600–603) are tracked separately from the Phase 2 closure.
+- Throughput baseline rerun is optional; see preflight checklist notes if needed.

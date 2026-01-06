@@ -10,7 +10,7 @@
 
 ```bash
 PYTHONPATH=src uv run python - <<'PY'
-from esper.simic.training import train_heuristic
+from esper.simic.training.helpers import train_heuristic
 train_heuristic(n_episodes=1, max_epochs=1, max_batches=1, device="cpu")
 PY
 ```
@@ -34,7 +34,7 @@ This mirrors the heuristic CLI defaults (`--slots r0c0 r0c1 r0c2` in `src/esper/
 
 ```bash
 PYTHONPATH=src uv run python - <<'PY'
-from esper.simic.training import train_heuristic
+from esper.simic.training.helpers import train_heuristic
 train_heuristic(n_episodes=1, max_epochs=1, max_batches=1, device="cpu")
 print("OK")
 PY

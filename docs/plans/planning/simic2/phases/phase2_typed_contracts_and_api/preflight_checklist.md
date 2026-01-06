@@ -74,12 +74,11 @@ typed-contract refactor can ship without behavior, telemetry, or performance dri
   - ADVANCE vs FOSSILIZE: `tests/leyline/test_lifecycle_fix.py`, `tests/simic/test_vectorized.py`
   - Mask invariants: `tests/tamiyo/policy/test_action_masks.py`, `tests/tamiyo/properties/test_mask_properties.py`
   - MIN_PRUNE_AGE enforcement: `tests/simic/training/test_min_prune_age_enforcement.py`
-- [ ] Reward inputs are defined once, with a single construction site and tests.
-      (Phase 2 implementation gate.)
-- [ ] BatchSummary fields are explicit, serialized only at history boundary.
-      (Phase 2 implementation gate.)
-- [ ] All new dataclasses use `slots=True` to avoid accidental attribute drift.
-      (Phase 2 implementation gate.)
+- [x] Reward inputs are defined once, with a single construction site and tests.
+      (ContributionRewardInputs/LossRewardInputs used end-to-end + tests updated.)
+- [x] BatchSummary fields are explicit, serialized only at history boundary.
+      (BatchSummary.to_dict used only when appending history.)
+- [x] All new dataclasses use `slots=True` to avoid accidental attribute drift.
 - [x] Invariants documented and tested:
       - HEAD_NAMES ordering and head tensor shapes:
         `tests/simic/properties/test_factored_action_properties.py`,
@@ -164,8 +163,8 @@ typed-contract refactor can ship without behavior, telemetry, or performance dri
     RewardSummaryAccumulator, BatchSummary).
   - New: `src/esper/simic/rewards/types.py` (ContributionRewardInputs, LossRewardInputs).
   - Update: `src/esper/simic/training/action_execution.py` (ActionSpec/Outcome + RewardInputs).
-  - Update: `src/esper/simic/training/vectorized_trainer.py` (BatchSummary + history serialization).
-  - Update: `src/esper/simic/training/vectorized.py` (wire typed containers).
+  - Update: `src/esper/simic/training/vectorized_trainer.py`
+    (typed container preallocation + BatchSummary/history serialization).
   - Update: `src/esper/simic/rewards/rewards.py` (accept RewardInputs, dispatch).
   - Update: `src/esper/simic/rewards/__init__.py` (export RewardInputs).
   - Tests: new coverage for RewardInputs, ActionSpec/Outcome, BatchSummary.
@@ -186,12 +185,20 @@ typed-contract refactor can ship without behavior, telemetry, or performance dri
   - Revert entire change set; re-run fast guardrail suite + telemetry baseline.
 
 ### Acceptance criteria (Phase 2 done means)
-- [ ] No dict-based optional-key contracts remain at the Phase 2 seams.
-- [ ] Reward plumbing uses a single typed container.
-- [ ] Action execution uses typed ActionSpec/ActionOutcome with unit tests.
-- [ ] Batch summaries are typed and serialized at the history boundary only.
-- [ ] Telemetry baselines match (event counts and payload keys).
+- [x] No dict-based optional-key contracts remain at the Phase 2 seams.
+- [x] Reward plumbing uses a single typed container.
+- [x] Action execution uses typed ActionSpec/ActionOutcome with unit tests.
+- [x] Batch summaries are typed and serialized at the history boundary only.
+- [x] Telemetry baselines match (event counts and payload keys).
 - [ ] Throughput within baseline tolerance (no measurable regression).
+
+## Execution notes (Phase 2 completion)
+- Full test suite: `UV_CACHE_DIR=.uv-cache uv run pytest`
+  - 4240 passed, 34 skipped, 69 deselected, 4 xfailed
+  - Warnings: CUDA init on this host, flex_attention compile warning, PPO recurrent_n_epochs notice
+- Lint: `UV_CACHE_DIR=.uv-cache uv run ruff check src/ tests/` (clean)
+- Types: `UV_CACHE_DIR=.uv-cache uv run mypy src/` (clean, 166 files)
+- Telemetry xfails (TELE-600–603) are tracked as separate work and do not gate Phase 2
 
 ## Notes
 - No compatibility shims. If a contract changes, update all call sites in the same PR.
@@ -203,6 +210,7 @@ typed-contract refactor can ship without behavior, telemetry, or performance dri
 - Ordering constraints: per-epoch EPOCH_COMPLETED precedes ANALYTICS_SNAPSHOT:last_action; batch tail sequence VALUE_COLLAPSE_DETECTED → PPO_UPDATE_COMPLETED → ANALYTICS_SNAPSHOT:batch_stats → BATCH_EPOCH_COMPLETED → ANALYTICS_SNAPSHOT:action_distribution
 - Performance baseline: total episode time 44.754748s, episodes/sec 0.022344, per-epoch deltas [7.395514s, 7.369687s, 7.77129s, 7.367458s], avg 7.475987s
 - Throughput fields (fps/step_time_ms/dataloader_wait_ms) were null in snapshots; baseline derived from timestamps.
+- Throughput baseline not rerun during this pass; rerun short PPO baseline before final sign-off if required.
 - Type-check gate: CI runs `uv run mypy -p esper` (see `.github/workflows/test-suite.yml`).
 - Episode outcome threshold: `EPISODE_SUCCESS_THRESHOLD=80.0` (percent scale),
   validated in `tests/simic/test_episode_outcome_emission.py`.
