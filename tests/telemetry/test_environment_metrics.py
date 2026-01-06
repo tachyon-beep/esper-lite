@@ -607,7 +607,7 @@ class TestTELE610EpisodeStats:
         agg = SanctumAggregator(num_envs=1)
 
         # Simulate a rollback episode: low final accuracy due to penalty
-        # Rollback episodes typically have final_accuracy < SUCCESS_THRESHOLD (0.8)
+        # Rollback episodes typically have final_accuracy < EPISODE_SUCCESS_THRESHOLD (80.0)
         rollback_event = make_episode_outcome_event(
             env_id=0,
             episode_idx=0,

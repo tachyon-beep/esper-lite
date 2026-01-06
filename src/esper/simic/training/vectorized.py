@@ -30,6 +30,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import math
+import threading
 from typing import Any, cast
 
 import torch
@@ -478,8 +479,8 @@ def train_ppo_vectorized(
     quiet_analytics: bool = False,
     force_compile: bool = False,
     telemetry_dir: str | None = None,
-    ready_event: "threading.Event | None" = None,
-    shutdown_event: "threading.Event | None" = None,
+    ready_event: threading.Event | None = None,
+    shutdown_event: threading.Event | None = None,
     group_id: str = "default",  # A/B testing group identifier
     torch_profiler: bool = False,
     torch_profiler_dir: str = "./profiler_traces",
@@ -1186,4 +1187,4 @@ def train_ppo_vectorized(
     return agent, history
 
 
-__all__ = [ParallelEnvState.__name__, "train_ppo_vectorized"]
+__all__ = [ParallelEnvState.__name__, "train_ppo_vectorized", "OP_NAMES", "OP_PRUNE"]

@@ -29,7 +29,7 @@ from .parallel_env_state import ParallelEnvState
 
 if TYPE_CHECKING:
     from esper.tamiyo.tracker import SignalTracker
-    from esper.runtime.task_spec import TaskSpec
+    from esper.runtime.tasks import TaskSpec
 
 
 def make_telemetry_callback(

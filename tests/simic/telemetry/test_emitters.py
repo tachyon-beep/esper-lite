@@ -9,6 +9,7 @@ from torch import nn
 
 from esper.karn.sanctum.schema import CounterfactualConfig, CounterfactualSnapshot
 from esper.leyline import TelemetryEventType
+from esper.simic.telemetry import TelemetryConfig, TelemetryLevel
 from esper.simic.telemetry.emitters import (
     VectorizedEmitter,
     compute_grad_norm_surrogate,
@@ -59,6 +60,29 @@ def _make_mandatory_metrics(**overrides) -> dict:
     }
     base.update(overrides)
     return base
+
+
+class _RecordingHub:
+    def __init__(self) -> None:
+        self.events = []
+
+    def emit(self, event) -> None:
+        self.events.append(event)
+
+
+class _StubAgent:
+    optimizer = None
+
+    def get_entropy_coef(self) -> float:
+        return 0.05
+
+
+class _StubEnvState:
+    def __init__(self) -> None:
+        self.seeds_created = 0
+        self.seeds_fossilized = 0
+        self.action_counts = {"WAIT": 1}
+        self.successful_action_counts = {"WAIT": 1}
 
 
 def test_emit_ppo_update_event_propagates_group_id():
@@ -117,6 +141,69 @@ def test_emit_ppo_update_event_includes_value_stats():
     assert payload.value_std == 1.2
     assert payload.value_min == 2.1
     assert payload.value_max == 9.8
+
+
+def test_batch_tail_event_order_is_stable() -> None:
+    hub = _RecordingHub()
+    telemetry_config = TelemetryConfig(level=TelemetryLevel.NORMAL)
+    emitter = VectorizedEmitter(
+        env_id=0,
+        device="cpu",
+        hub=hub,
+        telemetry_config=telemetry_config,
+    )
+    agent = _StubAgent()
+
+    emitter.on_ppo_update(
+        metrics=_make_mandatory_metrics(),
+        episodes_completed=5,
+        batch_idx=0,
+        epoch=5,
+        agent=agent,
+        ppo_grad_norm=1.0,
+        ppo_update_time_ms=10.0,
+        avg_acc=80.0,
+        avg_reward=1.0,
+        rolling_avg_acc=80.0,
+    )
+
+    emitter.on_batch_completed(
+        batch_idx=0,
+        episodes_completed=5,
+        rolling_avg_acc=80.0,
+        avg_acc=80.0,
+        metrics={"entropy": 0.0, "approx_kl": 0.0, "explained_variance": 0.0},
+        env_states=[_StubEnvState()],
+        update_skipped=False,
+        plateau_threshold=0.5,
+        improvement_threshold=0.5,
+        prev_rolling_avg_acc=None,
+        total_episodes=5,
+        start_episode=0,
+        n_episodes=5,
+        env_final_accs=[80.0],
+        avg_reward=1.0,
+        train_losses=[0.0],
+        train_corrects=[1],
+        train_totals=[1],
+        val_losses=[0.0],
+        val_corrects=[1],
+        val_totals=[1],
+        num_train_batches=1,
+        num_test_batches=1,
+        analytics=None,
+        epoch=5,
+    )
+
+    event_types = [event.event_type for event in hub.events]
+    assert event_types == [
+        TelemetryEventType.PPO_UPDATE_COMPLETED,
+        TelemetryEventType.ANALYTICS_SNAPSHOT,
+        TelemetryEventType.BATCH_EPOCH_COMPLETED,
+        TelemetryEventType.ANALYTICS_SNAPSHOT,
+    ]
+    assert hub.events[1].data.kind == "batch_stats"
+    assert hub.events[3].data.kind == "action_distribution"
 
 
 def test_emit_ppo_update_event_includes_lstm_health():

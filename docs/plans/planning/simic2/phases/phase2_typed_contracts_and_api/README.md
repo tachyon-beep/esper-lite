@@ -33,9 +33,12 @@ Pick one:
 
 Write the decision into the promoted ready plan for this phase.
 
+## Decision
+
+- Keep `train_ppo_vectorized(...)` signature stable; typed changes are internal only (no dual path).
+
 ## Done means
 
 - Reward calls go through a single typed container (no 20+ argument call sites).
 - Action decode/execute uses typed objects and has unit tests for the rules.
 - The training loop’s “data types” are obvious at the call sites.
-

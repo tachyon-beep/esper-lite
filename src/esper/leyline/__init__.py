@@ -42,6 +42,9 @@ MIN_HOLDING_EPOCHS = 5
 # Seed limits (None = unlimited)
 DEFAULT_MAX_SEEDS = None           # Global limit across all slots
 
+# Episode outcome classification threshold (percent accuracy).
+EPISODE_SUCCESS_THRESHOLD = 80.0
+
 # =============================================================================
 # PPO/PBRS Constants (shared between ppo.py, rewards.py, buffer, vectorized)
 # =============================================================================
@@ -707,6 +710,7 @@ __all__ = [
     "FULL_EVALUATION_AGE",
     "MIN_HOLDING_EPOCHS",
     "DEFAULT_MAX_SEEDS",
+    "EPISODE_SUCCESS_THRESHOLD",
     "DEFAULT_GAMMA",
 
     # Episode & Architecture constants

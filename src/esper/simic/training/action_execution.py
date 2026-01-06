@@ -4,7 +4,7 @@ import logging
 import math
 from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, cast
+from typing import TYPE_CHECKING, Any, Callable, Protocol, cast
 
 import numpy as np
 import torch
@@ -18,6 +18,7 @@ from esper.leyline import (
     BLUEPRINT_IDS,
     DEFAULT_GAMMA,
     DEFAULT_MIN_FOSSILIZE_CONTRIBUTION,
+    EPISODE_SUCCESS_THRESHOLD,
     EpisodeOutcome,
     EpisodeOutcomePayload,
     HEAD_NAMES,
@@ -67,7 +68,7 @@ if TYPE_CHECKING:
     from esper.simic.control import RewardNormalizer
     from esper.simic.agent import PPOAgent
     from esper.leyline.signals import TrainingSignals
-    from esper.runtime.task_spec import TaskSpec
+    from esper.runtime.tasks import TaskSpec
     from esper.nissa import BlueprintAnalytics
 
 
@@ -84,6 +85,16 @@ _HEAD_OP_IDX = _HEAD_NAME_TO_IDX["op"]
 _logger = logging.getLogger(__name__)
 
 
+class ResolveTargetSlot(Protocol):
+    def __call__(
+        self,
+        slot_idx: int,
+        *,
+        enabled_slots: list[str],
+        slot_config: SlotConfig,
+    ) -> tuple[str, bool]: ...
+
+
 def _parse_sampled_action(
     env_idx: int,
     op_idx: int,
@@ -93,7 +104,7 @@ def _parse_sampled_action(
     slots: list[str],
     slot_config: SlotConfig,
     model: SlottedHostProtocol,
-    resolve_target_slot: Callable[[int, list[str], SlotConfig], tuple[str, bool]],
+    resolve_target_slot: ResolveTargetSlot,
 ) -> tuple[str, bool, Any, Any, bool, LifecycleOp, str, Any, float]:
     """Consolidate action derived values and validation logic (Deduplication)."""
     # Use the SAMPLED slot as target (multi-slot support)
@@ -168,6 +179,13 @@ def _parse_sampled_action(
     )
 
 
+def classify_episode_outcome(val_acc: float) -> str:
+    """Classify episode outcome using percent-scale accuracy."""
+    if val_acc >= EPISODE_SUCCESS_THRESHOLD:
+        return "success"
+    return "timeout"
+
+
 @dataclass(frozen=True)
 class ActionExecutionContext:
     slots: list[str]
@@ -190,7 +208,7 @@ class ActionExecutionContext:
     emitters: list[VectorizedEmitter]
     agent: PPOAgent
     fossilize_active_seed: Callable[[Any, str], bool]
-    resolve_target_slot: Callable[[int, list[str], SlotConfig], tuple[str, bool]]
+    resolve_target_slot: ResolveTargetSlot
     host_params_baseline: int
 
 
@@ -1091,13 +1109,8 @@ def execute_actions(
             # Emit EPISODE_OUTCOME telemetry for Pareto analysis
             # B11-CR-04 fix: Skip emission for rollback episodes (will emit corrected outcome later)
             if env_state.telemetry_cb and not env_rollback_occurred[env_idx]:
-                # TELE-610: Classify episode outcome
-                # SUCCESS_THRESHOLD uses percent-scale accuracy (0-100).
-                SUCCESS_THRESHOLD = 80.0
-                if env_state.val_acc >= SUCCESS_THRESHOLD:
-                    outcome_type = "success"
-                else:
-                    outcome_type = "timeout"  # Fixed-length episodes that don't hit goal
+                # TELE-610: Classify episode outcome (percent-scale accuracy).
+                outcome_type = classify_episode_outcome(env_state.val_acc)
 
                 env_state.telemetry_cb(
                     TelemetryEvent(

@@ -37,7 +37,7 @@ lock in incorrect behavior or misleading telemetry.
 
 6) ADVANCE is dynamic (auto-forward vs manual)
 - Status: Implemented
-- Fix: enable OP_ADVANCE only when no auto-forward gates are enabled. When enabled,
+- Fix: disable OP_ADVANCE only when all auto-forward gates are enabled. When enabled,
   OP_ADVANCE must progress GERMINATED -> TRAINING -> BLENDING -> HOLDING via `advance_stage()`;
   otherwise it is masked out.
 - Files: `src/esper/simic/training/vectorized.py`, `src/esper/simic/training/action_execution.py`

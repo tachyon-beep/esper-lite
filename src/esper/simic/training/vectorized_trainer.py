@@ -29,7 +29,7 @@ from esper.tamiyo.policy.action_masks import build_slot_states, compute_action_m
 from esper.tamiyo.policy.features import batch_obs_to_features
 from esper.utils.data import augment_cifar10_batch
 
-from .action_execution import ActionExecutionContext, execute_actions
+from .action_execution import ActionExecutionContext, ResolveTargetSlot, execute_actions
 from .batch_ops import batch_signals_to_features, process_train_batch
 from .counterfactual_eval import process_fused_val_batch
 from .env_factory import EnvFactoryContext, configure_slot_telemetry, create_env_state
@@ -97,7 +97,7 @@ class VectorizedPPOTrainer:
     handle_telemetry_escalation: Callable[..., None]
     emit_anomaly_diagnostics: Callable[..., None]
     fossilize_active_seed: Callable[[Any, str], bool]
-    resolve_target_slot: Callable[[int, list[str], Any], tuple[str, bool]]
+    resolve_target_slot: ResolveTargetSlot
     host_params_baseline: int
     disable_advance: bool
     effective_max_seeds: int
@@ -145,15 +145,12 @@ class VectorizedPPOTrainer:
         start_batch = self.start_batch
         save_path = self.save_path
         seed = self.seed
-        env_device_map = self.env_device_map
         shared_train_iter = self.shared_train_iter
         shared_test_iter = self.shared_test_iter
         num_train_batches = self.num_train_batches
         num_test_batches = self.num_test_batches
         env_reward_configs = self.env_reward_configs
         reward_family_enum = self.reward_family_enum
-        reward_config = self.reward_config
-        loss_reward_config = self.loss_reward_config
         reward_normalizer = self.reward_normalizer
         obs_normalizer = self.obs_normalizer
         initial_obs_normalizer_mean = self.initial_obs_normalizer_mean
@@ -212,7 +209,7 @@ class VectorizedPPOTrainer:
 
         try:
             history: list[dict[str, Any]] = []
-            episode_history = []  # Per-episode tracking for A/B testing
+            episode_history: list[dict[str, Any]] = []  # Per-episode tracking for A/B testing
             episode_outcomes: list[Any] = []  # Pareto analysis outcomes
             best_avg_acc = 0.0
             best_state = None
