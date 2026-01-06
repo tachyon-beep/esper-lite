@@ -45,7 +45,11 @@ class HostProtocol(Protocol):
     """
 
     def injection_specs(self) -> list["InjectionSpec"]:
-        """Return injection boundaries as InjectionSpec objects in network order."""
+        """Return injection boundaries as InjectionSpec objects in row-major order.
+
+        Specs are sorted by the `order` field (row-major) for stable action indices.
+        For forward pass execution order, use execution_order() method.
+        """
         ...
 
     @property
@@ -75,6 +79,19 @@ class HostProtocol(Protocol):
 
     def forward_from_segment(self, segment: str, x: "Tensor") -> "Tensor":
         """Forward from segment boundary to output."""
+        ...
+
+    def execution_order(self) -> list[str]:
+        """Return slot IDs in forward execution order.
+
+        This order is used for routing activations through the network.
+        For single-surface hosts (TransformerHost), this equals spec order.
+        For multi-surface hosts (CNNHost with PRE/POST_POOL), this interleaves
+        surfaces by block: r0c0 -> r1c0 -> r0c1 -> r1c1 -> ...
+
+        Returns:
+            List of slot IDs in the order they are encountered during forward pass.
+        """
         ...
 
 

@@ -562,7 +562,7 @@ from esper.leyline.slot_id import (
 )
 
 # Slot configuration
-from esper.leyline.injection_spec import InjectionSpec
+from esper.leyline.injection_spec import InjectionSpec, SurfaceType
 from esper.leyline.slot_config import SlotConfig
 
 # Action name parsing utilities (build_action_enum moved to tamiyo.action_enums)
@@ -876,6 +876,7 @@ __all__ = [
 
     # Slot configuration
     "InjectionSpec",
+    "SurfaceType",
     "SlotConfig",
 
     # Action name parsing (build_action_enum moved to tamiyo.action_enums)

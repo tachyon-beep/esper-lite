@@ -285,7 +285,9 @@ class TestHostChannelDoubling:
     )
     @settings(max_examples=20)
     def test_cnn_channel_doubling(self, n_blocks: int, base_channels: int):
-        """CNNHost doubles channels with each block."""
+        """CNNHost doubles channels with each block (check PRE_POOL specs)."""
+        from esper.leyline import SurfaceType
+
         host = CNNHost(
             n_blocks=n_blocks,
             base_channels=base_channels,
@@ -294,10 +296,22 @@ class TestHostChannelDoubling:
 
         specs = host.injection_specs()
 
-        for i, spec in enumerate(specs):
+        # Check channel doubling for PRE_POOL specs (row 0)
+        # POST_POOL specs have same channels as their corresponding PRE_POOL
+        pre_pool_specs = [s for s in specs if s.surface == SurfaceType.PRE_POOL]
+        for i, spec in enumerate(pre_pool_specs):
             expected_channels = base_channels * (2 ** i)
             assert spec.channels == expected_channels, \
-                f"Block {i}: expected {expected_channels} channels, got {spec.channels}"
+                f"PRE_POOL block {i}: expected {expected_channels} channels, got {spec.channels}"
+
+        # POST_POOL specs should match their corresponding block channels
+        post_pool_specs = [s for s in specs if s.surface == SurfaceType.POST_POOL]
+        for spec in post_pool_specs:
+            col = spec.col
+            assert col is not None
+            expected_channels = base_channels * (2 ** col)
+            assert spec.channels == expected_channels, \
+                f"POST_POOL block {col}: expected {expected_channels} channels, got {spec.channels}"
 
 
 class TestLayerDivisibility:

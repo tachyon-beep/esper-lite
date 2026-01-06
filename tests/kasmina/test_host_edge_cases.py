@@ -139,7 +139,8 @@ class TestCNNBlockVariations:
         output = host(x)
 
         assert output.shape == (2, 10)
-        assert len(host.injection_specs()) == 2
+        # 2 blocks with full pooling = 2 PRE_POOL + 2 POST_POOL = 4 specs
+        assert len(host.injection_specs()) == 4
 
     def test_cnn_many_blocks_limited_pool(self):
         """CNNHost with many blocks but limited pooling (deep network on small images)."""
@@ -154,7 +155,8 @@ class TestCNNBlockVariations:
         output = host(x)
 
         assert output.shape == (2, 10)
-        assert len(host.injection_specs()) == 6
+        # 6 blocks with pool_layers=3 = 6 PRE_POOL + 3 POST_POOL = 9 specs
+        assert len(host.injection_specs()) == 9
 
 
 class TestTransformerSequenceLength:

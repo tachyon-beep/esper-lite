@@ -102,16 +102,29 @@ class SlotConfig:
             specs: List of InjectionSpec from host.
 
         Returns:
-            SlotConfig with slots sorted by position.
+            SlotConfig with slots sorted by order (execution order).
 
         Raises:
-            ValueError: If specs is empty.
+            ValueError: If specs is empty or has duplicate orders.
+
+        Note:
+            Sorting uses `order` field (integer, strictly increasing) rather than
+            `position` (float). This ensures deterministic action indices for the
+            RL policy network - see slot_sort_key() stability note.
         """
         if not specs:
             raise ValueError("SlotConfig.from_specs requires at least one InjectionSpec")
 
-        # Sort by position (early -> late in network)
-        sorted_specs = sorted(specs, key=lambda s: s.position)
+        # Sort by order (integer execution order, not float position)
+        sorted_specs = sorted(specs, key=lambda s: s.order)
+
+        # Validate no duplicate orders (would cause ambiguous action indices)
+        orders = [s.order for s in sorted_specs]
+        if len(orders) != len(set(orders)):
+            duplicates = [o for o in orders if orders.count(o) > 1]
+            raise ValueError(
+                f"InjectionSpec.order values must be unique, found duplicates: {set(duplicates)}"
+            )
 
         slot_ids = tuple(s.slot_id for s in sorted_specs)
         channel_map = tuple((s.slot_id, s.channels) for s in sorted_specs)
