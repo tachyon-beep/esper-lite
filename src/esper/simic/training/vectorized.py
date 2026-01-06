@@ -687,6 +687,7 @@ def train_ppo_vectorized(
         )
         if enabled
     )
+    disable_advance: bool = auto_forward_g1 and auto_forward_g2 and auto_forward_g3
 
     # Get task spec early (needed for model creation to derive slot_config)
     # Lazy import to avoid circular dependency
@@ -2779,6 +2780,7 @@ def train_ppo_vectorized(
                         slot_config=slot_config,
                         device=torch.device(device),
                         topology=task_spec.topology,
+                        disable_advance=disable_advance,
                     )
                     all_masks.append(mask)
 
@@ -3835,6 +3837,7 @@ def train_ppo_vectorized(
                                 slot_config=slot_config,
                                 device=torch.device(device),
                                 topology=task_spec.topology,
+                                disable_advance=disable_advance,
                             )
                         )
 

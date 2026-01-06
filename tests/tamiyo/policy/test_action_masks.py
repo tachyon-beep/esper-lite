@@ -378,6 +378,27 @@ def test_compute_batch_masks():
     assert masks["op"][1, LifecycleOp.ADVANCE]
 
 
+def test_compute_action_masks_disable_advance_masks_out_advance() -> None:
+    """disable_advance should mask ADVANCE even when seeds are in advancable stages."""
+    slot_states = {
+        "r0c1": MaskSeedInfo(
+            stage=SeedStage.TRAINING.value,
+            seed_age_epochs=MIN_PRUNE_AGE,
+        ),
+    }
+
+    masks = compute_action_masks(
+        slot_states,
+        enabled_slots=["r0c1"],
+        disable_advance=True,
+    )
+
+    assert masks["op"][LifecycleOp.WAIT]
+    assert not masks["op"][LifecycleOp.ADVANCE]
+    assert masks["slot_by_op"][LifecycleOp.ADVANCE].sum().item() == 0
+    assert masks["op"][LifecycleOp.PRUNE]
+
+
 def test_compute_action_masks_at_seed_limit():
     """GERMINATE should be masked when at hard seed limit."""
     slot_states = {
