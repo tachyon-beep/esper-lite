@@ -1,4 +1,4 @@
-"""Simic PPO Module - PPO Agent for Seed Lifecycle Control
+"""Simic PPO agent for seed lifecycle control.
 
 This module contains the PPOAgent class for online policy gradient training.
 For training functions, see simic.training.
@@ -8,25 +8,25 @@ For vectorized environments, see simic.vectorized.
 from __future__ import annotations
 
 from collections import defaultdict
-import math
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.amp as torch_amp
 import torch.nn as nn
-import torch.nn.functional as F
 
 from .rollout_buffer import TamiyoRolloutBuffer
 from .advantages import compute_per_head_advantages
+from .ppo_metrics import PPOUpdateMetricsBuilder
+from .ppo_update import PPOUpdateResult, compute_losses, compute_ratio_metrics
 from .types import PPOUpdateMetrics
 from esper.simic.telemetry import RatioExplosionDiagnostic
 from esper.simic.telemetry.lstm_health import compute_lstm_health
-from esper.simic.telemetry.value_metrics import (
+from esper.simic.control import ValueNormalizer
+from esper.leyline.value_metrics import (
     ValueFunctionMetricsDict,
     compute_value_function_metrics,
 )
-from esper.simic.control import ValueNormalizer
 from esper.leyline import (
     PolicyBundle,
     DEFAULT_BATCH_SIZE,
@@ -44,7 +44,6 @@ from esper.leyline import (
     DEFAULT_VALUE_CLIP,
     DEFAULT_VALUE_COEF,
     HEAD_NAMES,
-    LifecycleOp,
     NUM_OPS,
 )
 from esper.leyline.slot_config import SlotConfig
@@ -79,16 +78,14 @@ ENTROPY_COEF_PER_HEAD: dict[str, float] = {
 # Helper Functions
 # =============================================================================
 
-def _init_q_metrics_nan() -> dict[str, list[float]]:
+def _init_q_metrics_nan(device: torch.device | str) -> dict[str, list[torch.Tensor]]:
     """Initialize Q-value metrics with NaN when no valid states available."""
-    nan = float("nan")
+    nan = torch.tensor(float("nan"), device=device)
+    op_q_values = torch.full((NUM_OPS,), float("nan"), device=device)
+    op_valid_mask = torch.zeros(NUM_OPS, dtype=torch.bool, device=device)
     return {
-        "q_germinate": [nan],
-        "q_advance": [nan],
-        "q_fossilize": [nan],
-        "q_prune": [nan],
-        "q_wait": [nan],
-        "q_set_alpha": [nan],
+        "op_q_values": [op_q_values],
+        "op_valid_mask": [op_valid_mask],
         "q_variance": [nan],
         "q_spread": [nan],
     }
@@ -187,7 +184,9 @@ class PPOAgent:
         self.entropy_anneal_steps = entropy_anneal_steps
         # Per-head entropy multipliers (differential coefficients for sparse heads)
         # MED-01 fix: Use is not None - empty dict {} is falsy but valid
-        self.entropy_coef_per_head = entropy_coef_per_head if entropy_coef_per_head is not None else ENTROPY_COEF_PER_HEAD
+        self.entropy_coef_per_head = dict(ENTROPY_COEF_PER_HEAD)
+        if entropy_coef_per_head is not None:
+            self.entropy_coef_per_head.update(entropy_coef_per_head)
         self.value_coef = value_coef
         self.clip_value = clip_value
         self.value_clip = value_clip
@@ -459,20 +458,20 @@ class PPOAgent:
         valid_returns = data["returns"][valid_mask]
         raw_values = self.value_normalizer.denormalize(valid_values)
         var_returns = valid_returns.var()
-        explained_variance: float
+        explained_variance: torch.Tensor
         if var_returns > 1e-8:
             ev_tensor = 1.0 - (valid_returns - raw_values).var() / var_returns
-            explained_variance = ev_tensor.item()
+            explained_variance = ev_tensor
         else:
-            explained_variance = 0.0
+            explained_variance = torch.tensor(0.0, device=valid_returns.device)
 
         metrics: dict[str, Any] = defaultdict(list)
         metrics["explained_variance"] = [explained_variance]
 
         # Return statistics for diagnosing value loss scale
-        return_mean = valid_returns.mean().item()
-        return_std = valid_returns.std().item()
-        if not math.isfinite(return_mean) or not math.isfinite(return_std):
+        return_mean = valid_returns.mean()
+        return_std = valid_returns.std()
+        if not torch.isfinite(torch.stack([return_mean, return_std])).all():
             raise RuntimeError(
                 f"Non-finite returns detected: mean={return_mean}, std={return_std}. "
                 "This is a hard bug: investigate reward/value/GAE plumbing."
@@ -489,15 +488,19 @@ class PPOAgent:
         # New (fixed): running_std is consistent, GAE denormalizes with same scale
         self.value_normalizer.update(valid_returns)
         normalized_returns = self.value_normalizer.normalize(valid_returns).detach()
-        value_target_scale = self.value_normalizer.get_scale()
+        value_target_scale = torch.tensor(self.value_normalizer.get_scale(), device=valid_returns.device)
         metrics["value_target_scale"] = [value_target_scale]
 
         # Pre-normalization advantage stats for diagnosing advantage collapse
         # If pre_norm_adv_std is tiny but pre_clip_grad_norm is huge, it indicates
         # normalization is amplifying noise. If std is healthy but grad is huge,
         # it's more likely raw return scale or value mismatch.
-        metrics["pre_norm_advantage_mean"] = [pre_norm_adv_mean]
-        metrics["pre_norm_advantage_std"] = [pre_norm_adv_std]
+        metrics["pre_norm_advantage_mean"] = [
+            torch.tensor(pre_norm_adv_mean, device=valid_returns.device)
+        ]
+        metrics["pre_norm_advantage_std"] = [
+            torch.tensor(pre_norm_adv_std, device=valid_returns.device)
+        ]
 
         early_stopped = False
 
@@ -523,33 +526,41 @@ class PPOAgent:
                 # NaN signals "undefined" - std too low for meaningful higher moments
                 adv_skewness = torch.tensor(float("nan"), device=adv_mean.device, dtype=adv_mean.dtype)
                 adv_kurtosis = torch.tensor(float("nan"), device=adv_mean.device, dtype=adv_mean.dtype)
-            adv_stats = torch.stack([adv_mean, adv_std, adv_skewness, adv_kurtosis]).cpu().tolist()
-            metrics["advantage_mean"] = [adv_stats[0]]
-            metrics["advantage_std"] = [adv_stats[1]]
-            metrics["advantage_skewness"] = [adv_stats[2]]
-            metrics["advantage_kurtosis"] = [adv_stats[3]]
+            metrics["advantage_mean"] = [adv_mean]
+            metrics["advantage_std"] = [adv_std]
+            metrics["advantage_skewness"] = [adv_skewness]
+            metrics["advantage_kurtosis"] = [adv_kurtosis]
             # Fraction of positive advantages (healthy: 40-60%)
             # Imbalanced ratios suggest reward design issues or easy/hard regions
-            adv_positive_ratio = (valid_advantages_for_stats > 0).float().mean().item()
+            adv_positive_ratio = (valid_advantages_for_stats > 0).float().mean()
             metrics["advantage_positive_ratio"] = [adv_positive_ratio]
         else:
             # No valid advantages - use NaN to signal "no data" (not "balanced" or "zero")
-            metrics["advantage_mean"] = [float("nan")]
-            metrics["advantage_std"] = [float("nan")]
-            metrics["advantage_skewness"] = [float("nan")]
-            metrics["advantage_kurtosis"] = [float("nan")]
-            metrics["advantage_positive_ratio"] = [float("nan")]
+            nan_metric = torch.tensor(float("nan"), device=valid_mask.device)
+            metrics["advantage_mean"] = [nan_metric]
+            metrics["advantage_std"] = [nan_metric]
+            metrics["advantage_skewness"] = [nan_metric]
+            metrics["advantage_kurtosis"] = [nan_metric]
+            metrics["advantage_positive_ratio"] = [nan_metric]
 
         # === Collect Op-Conditioned Q-Values (Policy V2) ===
-        # Compute Q(s, op) for all ops using a representative state
-        # Use first valid state from batch to avoid bias from terminal states
+        # Compute Q(s, op) vector using a representative state.
+        # Use first valid state from batch to avoid bias from terminal states.
         if valid_mask.any():
             # Get first valid state
             first_valid_idx = valid_mask.nonzero(as_tuple=True)
             if len(first_valid_idx[0]) > 0:
-                sample_state_idx = (int(first_valid_idx[0][0].item()), int(first_valid_idx[1][0].item()))
-                sample_obs = data["states"][sample_state_idx[0], sample_state_idx[1]].unsqueeze(0).unsqueeze(0)  # [1, 1, state_dim]
-                sample_blueprints = data["blueprint_indices"][sample_state_idx[0], sample_state_idx[1]].unsqueeze(0).unsqueeze(0)  # [1, 1, num_slots]
+                sample_row = first_valid_idx[0][0]
+                sample_col = first_valid_idx[1][0]
+                sample_obs = data["states"][sample_row, sample_col].unsqueeze(0).unsqueeze(0)  # [1, 1, state_dim]
+                sample_blueprints = data["blueprint_indices"][sample_row, sample_col].unsqueeze(0).unsqueeze(0)  # [1, 1, num_slots]
+                op_mask = data["op_masks"][sample_row, sample_col].to(dtype=torch.bool)  # [num_ops]
+                if op_mask.numel() != NUM_OPS:
+                    raise ValueError(
+                        f"Expected op mask length {NUM_OPS}, got {op_mask.numel()}."
+                    )
+                if not op_mask.any():
+                    raise ValueError("Op mask has no valid ops - state machine bug.")
 
                 # Forward pass to get LSTM output
                 with torch.no_grad():
@@ -560,53 +571,58 @@ class PPOAgent:
                     )
                     lstm_out = forward_result["lstm_out"]  # [1, 1, hidden_dim]
 
-                # Compute Q(s, op) for each op
-                # Build mapping from LifecycleOp to Q-values
-                q_value_map: dict[LifecycleOp, float] = {}
+                # Compute Q(s, op) vector in LifecycleOp order (NUM_OPS indices).
+                op_q_values = torch.empty(NUM_OPS, device=self.device)
                 for op_idx in range(NUM_OPS):
                     op_tensor = torch.tensor([[op_idx]], dtype=torch.long, device=self.device)
                     q_val = self.policy.network._compute_value(lstm_out, op_tensor)
-                    q_value_map[LifecycleOp(op_idx)] = q_val.item()
+                    op_q_values[op_idx] = q_val.squeeze()
 
-                # Assign to metrics with correct names using actual LifecycleOp enum
-                # LifecycleOp: WAIT=0, GERMINATE=1, SET_ALPHA_TARGET=2, PRUNE=3, FOSSILIZE=4, ADVANCE=5
-                metrics["q_germinate"] = [q_value_map[LifecycleOp.GERMINATE]]
-                metrics["q_advance"] = [q_value_map[LifecycleOp.ADVANCE]]
-                metrics["q_fossilize"] = [q_value_map[LifecycleOp.FOSSILIZE]]
-                metrics["q_prune"] = [q_value_map[LifecycleOp.PRUNE]]
-                metrics["q_wait"] = [q_value_map[LifecycleOp.WAIT]]
-                metrics["q_set_alpha"] = [q_value_map[LifecycleOp.SET_ALPHA_TARGET]]
+                # Mask invalid ops for display; analytics use valid ops only.
+                masked_q_values = op_q_values.clone()
+                masked_q_values[~op_mask] = float("nan")
 
-                # Compute Q-variance and Q-spread
-                q_values = list(q_value_map.values())
-                q_variance = float(torch.tensor(q_values).var().item())
-                q_spread = max(q_values) - min(q_values)
+                # Compute Q-variance and Q-spread over valid ops only.
+                valid_q_values = op_q_values[op_mask]
+                if valid_q_values.numel() >= 2:
+                    q_variance = valid_q_values.var()
+                    q_spread = valid_q_values.max() - valid_q_values.min()
+                else:
+                    q_variance = torch.tensor(float("nan"), device=self.device)
+                    q_spread = torch.tensor(float("nan"), device=self.device)
+
+                metrics["op_q_values"] = [masked_q_values]
+                metrics["op_valid_mask"] = [op_mask]
                 metrics["q_variance"] = [q_variance]
                 metrics["q_spread"] = [q_spread]
             else:
                 # No valid states - use NaN
-                metrics.update(_init_q_metrics_nan())
+                metrics.update(_init_q_metrics_nan(self.device))
         else:
             # No valid data - use NaN
-            metrics.update(_init_q_metrics_nan())
+            metrics.update(_init_q_metrics_nan(self.device))
 
         # Initialize per-head entropy tracking (P3-1)
-        head_entropy_history: dict[str, list[float]] = {head: [] for head in HEAD_NAMES}
+        head_entropy_history: dict[str, list[torch.Tensor]] = {head: [] for head in HEAD_NAMES}
 
         # LSTM health tracking (TELE-340)
         lstm_health_history: dict[str, list[float | bool]] = defaultdict(list)
         # Initialize per-head gradient norm tracking (P4-6)
-        head_grad_norm_history: dict[str, list[float]] = {head: [] for head in HEAD_NAMES + ("value",)}
+        head_grad_norm_history: dict[str, list[torch.Tensor]] = {
+            head: [] for head in HEAD_NAMES + ("value",)
+        }
         # Initialize log prob extremes tracking (NaN predictor)
         # Very negative log probs (<-50 warning, <-100 critical) predict numerical underflow
         # Use inf/-inf for proper min/max tracking (log probs are always <= 0)
-        log_prob_min_across_epochs: float = float("inf")
-        log_prob_max_across_epochs: float = float("-inf")
+        log_prob_min_across_epochs = torch.tensor(float("inf"), device=self.device)
+        log_prob_max_across_epochs = torch.tensor(float("-inf"), device=self.device)
 
         # Initialize per-head ratio max tracking (Policy V2 - multi-head ratio explosion detection)
         # Track max ratio per head across all epochs for telemetry
-        head_ratio_max_across_epochs: dict[str, float] = {head: float("-inf") for head in HEAD_NAMES}
-        joint_ratio_max_across_epochs: float = float("-inf")
+        head_ratio_max_across_epochs: dict[str, torch.Tensor] = {
+            head: torch.tensor(float("-inf"), device=self.device) for head in HEAD_NAMES
+        }
+        joint_ratio_max_across_epochs = torch.tensor(float("-inf"), device=self.device)
 
         # Per-head NaN/Inf tracking (for indicator lights)
         # OR across all epochs - once detected, stays detected for this update
@@ -716,13 +732,13 @@ class PPOAgent:
                 old_key = f"{key}_log_probs"
                 old_lp = data[old_key][valid_mask]
                 if not torch.isfinite(old_lp).all():
-                    nonfinite_count = (~torch.isfinite(old_lp)).sum().item()
+                    nonfinite_count = (~torch.isfinite(old_lp)).sum()
                     nonfinite_sources.append(f"old_log_probs[{key}]: {nonfinite_count} non-finite")
                     nonfinite_found = True
 
             # Check values
             if not torch.isfinite(values).all():
-                nonfinite_count = (~torch.isfinite(values)).sum().item()
+                nonfinite_count = (~torch.isfinite(values)).sum()
                 nonfinite_sources.append(f"values: {nonfinite_count} non-finite")
                 nonfinite_found = True
 
@@ -743,18 +759,20 @@ class PPOAgent:
             # Use HEAD_NAMES for consistent ordering
             all_log_probs = torch.cat([log_probs[k] for k in HEAD_NAMES])
             if all_log_probs.numel() > 0:
-                # Batch min/max into single GPU->CPU transfer
-                epoch_extremes = torch.stack([all_log_probs.min(), all_log_probs.max()]).cpu().tolist()
-                epoch_log_prob_min, epoch_log_prob_max = epoch_extremes
-                log_prob_min_across_epochs = min(log_prob_min_across_epochs, epoch_log_prob_min)
-                log_prob_max_across_epochs = max(log_prob_max_across_epochs, epoch_log_prob_max)
+                epoch_log_prob_min = all_log_probs.min()
+                epoch_log_prob_max = all_log_probs.max()
+                log_prob_min_across_epochs = torch.minimum(
+                    log_prob_min_across_epochs, epoch_log_prob_min
+                )
+                log_prob_max_across_epochs = torch.maximum(
+                    log_prob_max_across_epochs, epoch_log_prob_max
+                )
 
             # Track per-head entropy (P3-1)
             # PERF: Batch all 8 head entropies into single GPU→CPU transfer
-            head_entropy_tensors = [entropy[key].mean() for key in HEAD_NAMES]
-            head_entropy_values = torch.stack(head_entropy_tensors).cpu().tolist()
-            for key, val in zip(HEAD_NAMES, head_entropy_values):
-                head_entropy_history[key].append(val)
+            head_entropy_values = torch.stack([entropy[key].mean() for key in HEAD_NAMES])
+            for idx, key in enumerate(HEAD_NAMES):
+                head_entropy_history[key].append(head_entropy_values[idx])
 
             valid_advantages = data["advantages"][valid_mask]
             valid_returns = data["returns"][valid_mask]
@@ -780,159 +798,65 @@ class PPOAgent:
                 "alpha_curve": data["alpha_curve_log_probs"][valid_mask],
                 "op": data["op_log_probs"][valid_mask],
             }
+            total_timesteps = valid_mask.sum().float().clamp(min=1)
+            ratio_metrics = compute_ratio_metrics(
+                log_probs=log_probs,
+                old_log_probs=old_log_probs,
+                head_masks=head_masks,
+                clip_ratio=self.clip_ratio,
+                target_kl=self.target_kl,
+                head_names=HEAD_NAMES,
+                total_timesteps=total_timesteps,
+            )
+            update_result = PPOUpdateResult(ratio_metrics=ratio_metrics, loss_metrics=None)
+            for key, max_val in update_result.ratio_metrics.per_head_ratio_max.items():
+                head_ratio_max_across_epochs[key] = torch.maximum(
+                    head_ratio_max_across_epochs[key], max_val
+                )
+            joint_ratio_max_across_epochs = torch.maximum(
+                joint_ratio_max_across_epochs, update_result.ratio_metrics.joint_ratio_max
+            )
 
-            per_head_ratios = {}
-            log_ratios_for_joint: dict[str, torch.Tensor] = {}  # Store for joint ratio computation
-            for key in HEAD_NAMES:
-                # Clamp log-ratio to prevent inf/NaN from exp() when probabilities diverge
-                # significantly. exp(20) ≈ 4.85e8 is already extreme; exp(88) overflows float32.
-                # This provides early protection before ratio explosion detection.
-                log_ratio = log_probs[key] - old_log_probs[key]
-                log_ratio_clamped = torch.clamp(log_ratio, min=-20.0, max=20.0)
-                log_ratios_for_joint[key] = log_ratio_clamped
-                per_head_ratios[key] = torch.exp(log_ratio_clamped)
+            joint_ratio = update_result.ratio_metrics.joint_ratio
+            metrics["approx_kl"].append(update_result.ratio_metrics.approx_kl)
+            metrics["clip_fraction"].append(update_result.ratio_metrics.clip_fraction)
+            metrics["clip_fraction_positive"].append(update_result.ratio_metrics.clip_fraction_positive)
+            metrics["clip_fraction_negative"].append(update_result.ratio_metrics.clip_fraction_negative)
 
-            # Track per-head ratio max across epochs (Policy V2 telemetry)
-            # PERF: Batch all 8 head ratio max values into single GPU→CPU transfer
-            with torch.inference_mode():
-                per_head_ratio_max_tensors = [per_head_ratios[k].max() for k in HEAD_NAMES]
-                per_head_ratio_max_values = torch.stack(per_head_ratio_max_tensors).cpu().tolist()
-                for key, max_val in zip(HEAD_NAMES, per_head_ratio_max_values):
-                    head_ratio_max_across_epochs[key] = max(head_ratio_max_across_epochs[key], max_val)
-
-                # Compute joint ratio using log-space summation (numerically stable)
-                # joint_ratio = exp(sum(log_ratio_i)) = product(ratio_i)
-                stacked_log_ratios = torch.stack([log_ratios_for_joint[k] for k in HEAD_NAMES])
-                joint_log_ratio = stacked_log_ratios.sum(dim=0)  # Sum across heads per timestep
-                joint_log_ratio_clamped = torch.clamp(joint_log_ratio, min=-30.0, max=30.0)
-                joint_ratio = torch.exp(joint_log_ratio_clamped)
-                epoch_joint_ratio_max = joint_ratio.max().item()
-                joint_ratio_max_across_epochs = max(joint_ratio_max_across_epochs, epoch_joint_ratio_max)
-
-            # Compute KL divergence EARLY (before optimizer step) for effective early stopping
-            # BUG-003 FIX: With recurrent_n_epochs=1, the old check at loop end was useless
-            # because there's no "next epoch" to skip. By checking here, we can skip the
-            # optimizer.step() entirely if KL is already too high.
-            #
-            # KL(old||new) ≈ E[(ratio - 1) - log(ratio)] (KL3 estimator from Schulman)
-            #
-            # H6 FIX: Weight per-head KL by causal relevance.
-            # Sparse heads (blueprint, style) are only active during GERMINATE (~5-15%).
-            # Without weighting, they contribute full KL to the sum despite being rarely
-            # causally relevant, inflating joint KL and triggering premature early stopping.
-            #
-            # PyTorch Expert Review 2025-12-26: Normalize weights to sum to 1.0 for proper
-            # weighted average. Without normalization, joint KL was biased toward high-activity
-            # heads since overlapping masks (slot ~90%, blueprint ~10%) don't sum to 1.0.
-            with torch.inference_mode():
-                total_timesteps = valid_mask.sum().float().clamp(min=1)
-                weighted_kl_sum = torch.tensor(0.0, device=self.device)
-                total_weight = torch.tensor(0.0, device=self.device)
-                for key in HEAD_NAMES:
-                    mask = head_masks[key]
-                    # BUGFIX: Reuse CLAMPED log_ratio from line 602 to prevent overflow/NaN
-                    # Previously this recomputed log_ratio without clamping, causing:
-                    # - exp(large_value) → inf → NaN in KL
-                    # - exp(-inf) → 0, but (0-1) - (-inf) → NaN
-                    # The clamped version is already available in log_ratios_for_joint
-                    log_ratio_clamped = log_ratios_for_joint[key]
-                    kl_per_step = (torch.exp(log_ratio_clamped) - 1) - log_ratio_clamped
-                    n_valid = mask.sum().float().clamp(min=1)
-                    # Masked mean KL for this head
-                    head_kl = (kl_per_step * mask).sum() / n_valid
-                    # Weight by fraction of timesteps where head is causally relevant
-                    causal_weight = n_valid / total_timesteps
-                    weighted_kl_sum = weighted_kl_sum + causal_weight * head_kl
-                    total_weight = total_weight + causal_weight
-                # Normalize to proper weighted average (weights sum to 1)
-                approx_kl = (weighted_kl_sum / total_weight.clamp(min=1e-8)).item()
-                metrics["approx_kl"].append(approx_kl)
-
-                # Clip fraction: how often clipping was active
-                # PERF: Batch all 3 clip metrics into single GPU→CPU transfer
-                # BUG FIX: Use TRUE joint_ratio (product of all heads) computed at line 619
-                # Previously this was overwritten with just per_head_ratios["op"], hiding
-                # divergence in other heads (slot, blueprint, style, etc.)
-                clip_fraction_t = ((joint_ratio - 1.0).abs() > self.clip_ratio).float().mean()
-                # Directional clip fractions (per DRL expert recommendation)
-                # Tracks WHERE clipping occurs: asymmetry indicates directional policy drift
-                clip_pos = (joint_ratio > 1.0 + self.clip_ratio).float().mean()
-                clip_neg = (joint_ratio < 1.0 - self.clip_ratio).float().mean()
-                # Single GPU→CPU sync for all 3 clip metrics
-                clip_metrics = torch.stack([clip_fraction_t, clip_pos, clip_neg]).cpu().tolist()
-                metrics["clip_fraction"].append(clip_metrics[0])
-                metrics["clip_fraction_positive"].append(clip_metrics[1])
-                metrics["clip_fraction_negative"].append(clip_metrics[2])
-
-                # Early stopping: if KL exceeds threshold, skip this update entirely
-                # 1.5x multiplier is standard (OpenAI baselines, Stable-Baselines3)
-                if self.target_kl is not None and approx_kl > 1.5 * self.target_kl:
-                    early_stopped = True
-                    metrics["early_stop_epoch"] = [epoch_i]
-                    # PERF: Batch ratio metrics into single GPU→CPU transfer
-                    ratio_stats = torch.stack([
-                        joint_ratio.mean(), joint_ratio.max(), joint_ratio.min(), joint_ratio.std()
-                    ]).cpu().tolist()
-                    metrics["ratio_mean"].append(ratio_stats[0])
-                    metrics["ratio_max"].append(ratio_stats[1])
-                    metrics["ratio_min"].append(ratio_stats[2])
-                    metrics["ratio_std"].append(ratio_stats[3])
-                    break  # Skip loss computation, backward, and optimizer step
+            if update_result.ratio_metrics.early_stop:
+                early_stopped = True
+                metrics["early_stop_epoch"] = [torch.tensor(epoch_i, device=self.device)]
+                ratio_stats = update_result.ratio_metrics.ratio_stats
+                metrics["ratio_mean"].append(ratio_stats[0])
+                metrics["ratio_max"].append(ratio_stats[1])
+                metrics["ratio_min"].append(ratio_stats[2])
+                metrics["ratio_std"].append(ratio_stats[3])
+                break  # Skip loss computation, backward, and optimizer step
 
             # Compute policy loss per head and sum
             # Use masked mean to avoid bias from averaging zeros with real values
-            policy_loss: torch.Tensor = torch.tensor(0.0, device=self.device)
-            for key in HEAD_NAMES:
-                ratio = per_head_ratios[key]
-                adv = per_head_advantages[key]
-                mask = head_masks[key]
-
-                surr1 = ratio * adv
-                surr2 = torch.clamp(ratio, 1 - self.clip_ratio, 1 + self.clip_ratio) * adv
-                clipped_surr = torch.min(surr1, surr2)
-
-                # Masked mean: only average over causally-relevant positions
-                # This prevents zeros from masked positions from biasing the loss
-                n_valid = mask.sum().clamp(min=1)  # Avoid div-by-zero
-                head_loss = -(clipped_surr * mask).sum() / n_valid
-                policy_loss = policy_loss + head_loss
-
-            # Value loss (uses normalized_returns for stable learning)
-            # normalized_returns has same mean as valid_returns but std~1
             valid_old_values = data["values"][valid_mask]
-            if self.clip_value:
-                # Use separate value_clip (not policy clip_ratio) since value scale differs
-                # Note: With return normalization, value clipping is less critical and
-                # may conflict (old values on old scale). Consider clip_value=False.
-                values_clipped = valid_old_values + torch.clamp(
-                    values - valid_old_values, -self.value_clip, self.value_clip
-                )
-                value_loss_unclipped = (values - normalized_returns) ** 2
-                value_loss_clipped = (values_clipped - normalized_returns) ** 2
-                value_loss = 0.5 * torch.max(value_loss_unclipped, value_loss_clipped).mean()
-            else:
-                value_loss = F.mse_loss(values, normalized_returns)
-
-            # Entropy loss with per-head weighting and causal masking.
-            # H3 FIX: Use masked mean for sparse heads (blueprint, style).
-            # These heads are only active during GERMINATE (~5-15% of timesteps).
-            # Without masking, entropy gradient is diluted by averaging over zeros,
-            # starving exploration signal for rare-but-important action heads.
-            #
-            # NOTE: Entropy floors were removed because torch.clamp to a constant
-            # provides zero gradient (d(constant)/d(params) = 0). When a head has
-            # only one valid action, entropy is correctly 0 with no gradient signal.
-            entropy_loss: torch.Tensor = torch.tensor(0.0, device=self.device)
-            for key, ent in entropy.items():
-                head_coef = self.entropy_coef_per_head.get(key, 1.0)
-                mask = head_masks[key]
-                n_valid = mask.sum().clamp(min=1)
-                masked_ent = (ent * mask).sum() / n_valid
-                entropy_loss = entropy_loss - head_coef * masked_ent
-
             entropy_coef = self.get_entropy_coef()
-
-            loss = policy_loss + self.value_coef * value_loss + entropy_coef * entropy_loss
+            losses = compute_losses(
+                per_head_ratios=ratio_metrics.per_head_ratios,
+                per_head_advantages=per_head_advantages,
+                head_masks=head_masks,
+                values=values,
+                normalized_returns=normalized_returns,
+                old_values=valid_old_values,
+                entropy=entropy,
+                entropy_coef_per_head=self.entropy_coef_per_head,
+                entropy_coef=entropy_coef,
+                clip_ratio=self.clip_ratio,
+                clip_value=self.clip_value,
+                value_clip=self.value_clip,
+                value_coef=self.value_coef,
+                head_names=HEAD_NAMES,
+            )
+            update_result = PPOUpdateResult(ratio_metrics=ratio_metrics, loss_metrics=losses)
+            loss_metrics = update_result.loss_metrics
+            assert loss_metrics is not None
+            loss = loss_metrics.total_loss
 
             self.optimizer.zero_grad(set_to_none=True)
             loss.backward()  # type: ignore[no-untyped-call]
@@ -972,22 +896,20 @@ class PPOAgent:
                         norm_t = torch.tensor(float("nan"), device=self.device)
                     head_norm_tensors.append(norm_t)
 
-                # Single GPU→CPU sync: stack all norms, then .tolist()
-                all_norms = torch.stack(head_norm_tensors).cpu().tolist()
+                all_norms = torch.stack(head_norm_tensors)
                 for head_name, grad_norm in zip(head_names, all_norms):
                     head_grad_norm_history[head_name].append(grad_norm)
 
                 # Gradient CV: coefficient of variation = std/|mean| (per DRL expert)
                 # Low CV (<0.5) = high signal quality, High CV (>2.0) = noisy gradients
-                # PERF: Compute on CPU using already-transferred all_norms (avoids extra sync)
-                n = len(all_norms)
-                if n > 1 and any(v > 0 for v in all_norms):
-                    grad_mean = sum(all_norms) / n
-                    grad_var = sum((x - grad_mean) ** 2 for x in all_norms) / (n - 1)
-                    grad_std = grad_var ** 0.5
-                    grad_cv = grad_std / max(abs(grad_mean), 1e-8)
+                n = all_norms.numel()
+                if n > 1 and torch.any(all_norms > 0):
+                    grad_mean = all_norms.mean()
+                    grad_var = ((all_norms - grad_mean) ** 2).sum() / (n - 1)
+                    grad_std = torch.sqrt(grad_var)
+                    grad_cv = grad_std / torch.clamp(grad_mean.abs(), min=1e-8)
                 else:
-                    grad_cv = 0.0
+                    grad_cv = torch.tensor(0.0, device=all_norms.device)
                 metrics["gradient_cv"].append(grad_cv)
 
             # Capture pre-clip gradient norm (BUG FIX: was discarding this value)
@@ -996,7 +918,7 @@ class PPOAgent:
             pre_clip_norm = nn.utils.clip_grad_norm_(
                 self.policy.network.parameters(), self.max_grad_norm
             )
-            metrics["pre_clip_grad_norm"].append(float(pre_clip_norm))
+            metrics["pre_clip_grad_norm"].append(pre_clip_norm)
             self.optimizer.step()
 
             # Track metrics
@@ -1004,9 +926,9 @@ class PPOAgent:
             # BUG FIX: Use TRUE joint_ratio (product of all heads) computed at line 619
             # Previously this used per_head_ratios["op"] which hid divergence in other heads
             logging_tensors = torch.stack([
-                policy_loss,
-                value_loss,
-                -entropy_loss,  # negate here to match original semantics
+                losses.policy_loss,
+                losses.value_loss,
+                -losses.entropy_loss,  # negate here to match original semantics
                 joint_ratio.mean(),
                 joint_ratio.max(),
                 joint_ratio.min(),
@@ -1016,9 +938,7 @@ class PPOAgent:
                 values.std(),
                 values.min(),
                 values.max(),
-            ]).cpu().tolist()
-            # NOTE: logging_tensors is now a Python list[float]. Indexed access below
-            # avoids 10 separate GPU→CPU syncs (one per .item() call).
+            ])
             metrics["policy_loss"].append(logging_tensors[0])
             metrics["value_loss"].append(logging_tensors[1])
             metrics["entropy"].append(logging_tensors[2])
@@ -1034,10 +954,11 @@ class PPOAgent:
             # re-computing on GPU which would trigger 2 redundant syncs
             ratio_max_val = logging_tensors[4]
             ratio_min_val = logging_tensors[5]
-            if (
-                ratio_max_val > self.ratio_explosion_threshold
-                or ratio_min_val < self.ratio_collapse_threshold
-            ):
+            ratio_exploded = (
+                (ratio_max_val > self.ratio_explosion_threshold)
+                | (ratio_min_val < self.ratio_collapse_threshold)
+            )
+            if ratio_exploded:
                 diag = RatioExplosionDiagnostic.from_batch(
                     ratio=joint_ratio.flatten(),
                     old_log_probs=old_log_probs["op"].flatten(),
@@ -1056,157 +977,36 @@ class PPOAgent:
         if clear_buffer:
             self.buffer.reset()
 
-        # Aggregate into typed result dict
-        # TypedDict doesn't support dynamic key assignment, so we use type: ignore
-        # The aggregation converts list[float] to float for most metrics
-        aggregated_result: PPOUpdateMetrics = {}
-
-        # FINITENESS GATE CONTRACT: Check if any epochs actually completed
-        # ratio_max is only populated when an epoch successfully computes losses
+        # Aggregate into typed result dict (metrics aggregation owns list->scalar logic)
         finiteness_failures = metrics["finiteness_gate_failures"]
         epochs_completed = len(metrics["ratio_max"])
 
-        if epochs_completed == 0:
-            # All epochs skipped - return explicit signal with NaN values
-            # This prevents downstream code from treating 0.0 as a valid measurement
-            aggregated_result["ppo_update_performed"] = False
-            aggregated_result["finiteness_gate_skip_count"] = len(finiteness_failures)
-            # Use NaN for metrics that weren't computed (not 0.0 which looks "normal")
-            aggregated_result["ratio_max"] = float("nan")
-            aggregated_result["ratio_min"] = float("nan")
-            aggregated_result["policy_loss"] = float("nan")
-            aggregated_result["value_loss"] = float("nan")
-            aggregated_result["entropy"] = float("nan")
-            aggregated_result["approx_kl"] = float("nan")
-            aggregated_result["clip_fraction"] = float("nan")
-            aggregated_result["explained_variance"] = float("nan")
-            aggregated_result["pre_clip_grad_norm"] = float("nan")
-            # Keep failure details for diagnostics
-            if finiteness_failures:
-                aggregated_result["finiteness_gate_failures"] = finiteness_failures
-            return aggregated_result
-
-        # At least one epoch completed successfully
-        aggregated_result["ppo_update_performed"] = True
-        aggregated_result["finiteness_gate_skip_count"] = len(finiteness_failures)
-
-        # Only increment train_steps when an actual update occurred.
-        # This ensures entropy annealing and other schedules track real updates,
-        # not skipped finiteness-gate failures.
-        self.train_steps += 1
-
-        for k, v in metrics.items():
-            if not v:
-                aggregated_result[k] = 0.0  # type: ignore[literal-required]
-                continue
-
-            first = v[0]
-            # Metrics that should NOT be averaged across epochs
-            # Note: head_nan_detected/head_inf_detected are ORed in the epoch loop
-            # and added directly to aggregated_result at lines 1091-1092, not here.
-            if k == "finiteness_gate_failures":
-                # Keep ALL failure dicts (one per epoch that failed)
-                aggregated_result[k] = v  # type: ignore[literal-required]
-            elif k == "early_stop_epoch":
-                # int|None, not float - take the value (there's only ever one)
-                aggregated_result[k] = first  # type: ignore[literal-required]
-            elif k == "ratio_diagnostic":
-                # Complex diagnostic dict - take first (only one per explosion event)
-                aggregated_result[k] = first  # type: ignore[literal-required]
-            elif k in ("ratio_max", "value_max", "pre_clip_grad_norm"):
-                # Threshold-based anomaly detection needs WORST CASE, not average.
-                # Averaging dilutes single-epoch explosions below detection thresholds.
-                # Used by: health_status_panel.py:534, anomaly_detector.py:109
-                aggregated_result[k] = max(v)  # type: ignore[literal-required]
-            elif k in ("ratio_min", "value_min"):
-                # Threshold-based anomaly detection needs WORST CASE, not average.
-                aggregated_result[k] = min(v)  # type: ignore[literal-required]
-            else:
-                # Average across epochs (converts list[float] to float)
-                aggregated_result[k] = sum(v) / len(v)  # type: ignore[literal-required]
-
-        # Add per-head entropy tracking (P3-1)
-        aggregated_result["head_entropies"] = head_entropy_history
-        # Add per-head gradient norm tracking (P4-6)
-        aggregated_result["head_grad_norms"] = head_grad_norm_history
-        # Add log prob extremes (NaN predictor)
-        # Guard against no valid data (inf values indicate no updates occurred)
-        # Use NaN (not 0.0) to signal "no data" - 0.0 means "probability=1" which is misleading
-        if log_prob_min_across_epochs == float("inf"):
-            log_prob_min_across_epochs = float("nan")
-        if log_prob_max_across_epochs == float("-inf"):
-            log_prob_max_across_epochs = float("nan")
-        aggregated_result["log_prob_min"] = log_prob_min_across_epochs
-        aggregated_result["log_prob_max"] = log_prob_max_across_epochs
-
-        # Add per-head ratio max tracking (Policy V2 - multi-head ratio explosion detection)
-        # MED-02: -inf indicates no updates occurred in this epoch.
-        # We use 1.0 (neutral ratio) as default because:
-        # - NaN would propagate and break downstream calculations
-        # - 1.0 is semantically "no clipping occurred" which is correct for zero updates
-        # - Consumers can distinguish "healthy 1.0" from "no data 1.0" via ppo_updates_count
-        for key in HEAD_NAMES:
-            ratio_key = f"head_{key}_ratio_max"
-            max_val = head_ratio_max_across_epochs[key]
-            aggregated_result[ratio_key] = max_val if max_val != float("-inf") else 1.0  # type: ignore[literal-required]
-        aggregated_result["joint_ratio_max"] = (
-            joint_ratio_max_across_epochs if joint_ratio_max_across_epochs != float("-inf") else 1.0
+        builder = PPOUpdateMetricsBuilder(
+            metrics=metrics,
+            finiteness_failures=finiteness_failures,
+            epochs_completed=epochs_completed,
+            head_entropies=head_entropy_history,
+            head_grad_norms=head_grad_norm_history,
+            head_nan_detected=head_nan_detected,
+            head_inf_detected=head_inf_detected,
+            lstm_health_history=lstm_health_history,
+            log_prob_min_across_epochs=log_prob_min_across_epochs,
+            log_prob_max_across_epochs=log_prob_max_across_epochs,
+            head_ratio_max_across_epochs=head_ratio_max_across_epochs,
+            joint_ratio_max_across_epochs=joint_ratio_max_across_epochs,
+            value_func_metrics=value_func_metrics,
+            cuda_memory_metrics=cuda_memory_metrics,
+            head_names=HEAD_NAMES,
         )
+        result = builder.finalize()
 
-        # Add per-head NaN/Inf flags (for indicator lights)
-        aggregated_result["head_nan_detected"] = head_nan_detected
-        aggregated_result["head_inf_detected"] = head_inf_detected
+        if result.update_performed:
+            # Only increment train_steps when an actual update occurred.
+            # This ensures entropy annealing and other schedules track real updates,
+            # not skipped finiteness-gate failures.
+            self.train_steps += 1
 
-        # Add LSTM health metrics (TELE-340)
-        if lstm_health_history["lstm_h_rms"]:
-            # Average RMS magnitudes across epochs (scale-free)
-            aggregated_result["lstm_h_rms"] = sum(lstm_health_history["lstm_h_rms"]) / len(lstm_health_history["lstm_h_rms"])
-            aggregated_result["lstm_c_rms"] = sum(lstm_health_history["lstm_c_rms"]) / len(lstm_health_history["lstm_c_rms"])
-            aggregated_result["lstm_h_env_rms_mean"] = (
-                sum(lstm_health_history["lstm_h_env_rms_mean"]) / len(lstm_health_history["lstm_h_env_rms_mean"])
-            )
-            aggregated_result["lstm_c_env_rms_mean"] = (
-                sum(lstm_health_history["lstm_c_env_rms_mean"]) / len(lstm_health_history["lstm_c_env_rms_mean"])
-            )
-            # Worst-case per-env RMS across epochs (outlier detection)
-            aggregated_result["lstm_h_env_rms_max"] = max(lstm_health_history["lstm_h_env_rms_max"])
-            aggregated_result["lstm_c_env_rms_max"] = max(lstm_health_history["lstm_c_env_rms_max"])
-            # Max abs values across epochs (localized spike detection)
-            aggregated_result["lstm_h_max"] = max(lstm_health_history["lstm_h_max"])
-            aggregated_result["lstm_c_max"] = max(lstm_health_history["lstm_c_max"])
-            # Boolean OR across epochs (once NaN/Inf detected, stays detected)
-            aggregated_result["lstm_has_nan"] = any(lstm_health_history["lstm_has_nan"])
-            aggregated_result["lstm_has_inf"] = any(lstm_health_history["lstm_has_inf"])
-        else:
-            # No LSTM health data (non-recurrent policy or early stopped before first epoch)
-            aggregated_result["lstm_h_rms"] = None
-            aggregated_result["lstm_c_rms"] = None
-            aggregated_result["lstm_h_env_rms_mean"] = None
-            aggregated_result["lstm_h_env_rms_max"] = None
-            aggregated_result["lstm_c_env_rms_mean"] = None
-            aggregated_result["lstm_c_env_rms_max"] = None
-            aggregated_result["lstm_h_max"] = None
-            aggregated_result["lstm_c_max"] = None
-            aggregated_result["lstm_has_nan"] = None
-            aggregated_result["lstm_has_inf"] = None
-
-        # Add value function metrics (TELE-220 to TELE-228)
-        aggregated_result["v_return_correlation"] = value_func_metrics["v_return_correlation"]
-        aggregated_result["td_error_mean"] = value_func_metrics["td_error_mean"]
-        aggregated_result["td_error_std"] = value_func_metrics["td_error_std"]
-        aggregated_result["bellman_error"] = value_func_metrics["bellman_error"]
-        aggregated_result["return_p10"] = value_func_metrics["return_p10"]
-        aggregated_result["return_p50"] = value_func_metrics["return_p50"]
-        aggregated_result["return_p90"] = value_func_metrics["return_p90"]
-        aggregated_result["return_variance"] = value_func_metrics["return_variance"]
-        aggregated_result["return_skewness"] = value_func_metrics["return_skewness"]
-
-        # Add CUDA memory metrics (collected once per update, not averaged)
-        if cuda_memory_metrics:
-            for k, v in cuda_memory_metrics.items():
-                aggregated_result[k] = v  # type: ignore[literal-required]
-
-        return aggregated_result
+        return result.metrics
 
     def save(self, path: str | Path, metadata: dict[str, Any] | None = None) -> None:
         """Save agent to file."""

@@ -4,7 +4,7 @@ Only masks actions that are invalid under lifecycle constraints:
 - SLOT: only enabled slots (from --slots arg) are selectable
 - SLOT_BY_OP: op-conditioned slot validity mask (hierarchical sampling support)
 - GERMINATE: blocked if ALL enabled slots occupied OR at seed limit
-- ADVANCE: blocked if NO enabled slot is in GERMINATED/TRAINING/BLENDING
+- ADVANCE: blocked if NO enabled slot is in GERMINATED/TRAINING/BLENDING, or if disabled by config
 - FOSSILIZE: blocked if NO enabled slot has a HOLDING seed
 - PRUNE: blocked if NO enabled slot has a prunable seed in GERMINATED/TRAINING/BLENDING/HOLDING
          with age >= MIN_PRUNE_AGE and alpha_mode == HOLD (unless governor override)
@@ -132,6 +132,7 @@ def compute_action_masks(
     device: torch.device | None = None,
     topology: Topology = "cnn",
     allow_governor_override: bool = False,
+    disable_advance: bool = False,
 ) -> dict[str, torch.Tensor]:
     """Compute action masks based on slot states.
 
@@ -146,6 +147,7 @@ def compute_action_masks(
         device: Torch device for tensors
         topology: Task topology ("cnn" or "transformer") for blueprint masking
         allow_governor_override: Allow PRUNE even if alpha_mode != HOLD
+        disable_advance: If True, mask out ADVANCE regardless of seed stages.
 
     Returns:
         Dict of boolean tensors for each action head:
@@ -274,7 +276,7 @@ def compute_action_masks(
             age = seed_info.seed_age_epochs
 
             # ADVANCE: only from explicit policy-controlled stages
-            if stage in _ADVANCABLE_STAGES:
+            if not disable_advance and stage in _ADVANCABLE_STAGES:
                 op_mask[LifecycleOp.ADVANCE] = True
                 idx = slot_config.index_for_slot_id(slot_id)
                 slot_by_op[LifecycleOp.ADVANCE, idx] = True
@@ -327,6 +329,7 @@ def compute_batch_masks(
     device: torch.device | None = None,
     topology: Topology = "cnn",
     allow_governor_override: bool = False,
+    disable_advance: bool = False,
 ) -> dict[str, torch.Tensor]:
     """Compute action masks for a batch of observations.
 
@@ -342,6 +345,7 @@ def compute_batch_masks(
         device: Torch device for tensors
         topology: Task topology ("cnn" or "transformer") for blueprint masking
         allow_governor_override: Allow PRUNE even if alpha_mode != HOLD
+        disable_advance: If True, mask out ADVANCE regardless of seed stages.
 
     Returns:
         Dict of boolean tensors (batch_size, num_actions) for each head
@@ -376,6 +380,7 @@ def compute_batch_masks(
             device=device,
             topology=topology,
             allow_governor_override=allow_governor_override,
+            disable_advance=disable_advance,
         )
         for i, slot_states in enumerate(batch_slot_states)
     ]
@@ -519,7 +524,7 @@ class MaskedCategorical:
         # Upcast logits to float32 for numerical stability.
         # Under AMP, logits may arrive as float16/bfloat16. The log_softmax in
         # Categorical can produce numerically unstable results in reduced precision.
-        # This is defensive - the main fix is in ppo.py which runs evaluate_actions
+        # This is defensive - the main fix is in ppo_agent.py which runs evaluate_actions
         # outside autocast. But this upcast provides belt-and-suspenders safety.
         logits_f32 = logits.float()
         self.masked_logits = logits_f32.masked_fill(~mask, MASKED_LOGIT_VALUE)

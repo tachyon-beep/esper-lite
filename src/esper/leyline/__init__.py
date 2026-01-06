@@ -42,8 +42,11 @@ MIN_HOLDING_EPOCHS = 5
 # Seed limits (None = unlimited)
 DEFAULT_MAX_SEEDS = None           # Global limit across all slots
 
+# Episode outcome classification threshold (percent accuracy).
+EPISODE_SUCCESS_THRESHOLD = 80.0
+
 # =============================================================================
-# PPO/PBRS Constants (shared between ppo.py, rewards.py, buffer, vectorized)
+# PPO/PBRS Constants (shared between ppo_agent.py, rewards.py, buffer, vectorized)
 # =============================================================================
 
 # Discount factor for PPO and PBRS reward shaping.
@@ -80,7 +83,7 @@ DEFAULT_GAMMA = 0.995
 # sequential planting - that germinating Seed C after Seed B stabilizes
 # produces better synergies than parallel germination.
 #
-# Used by: config.py, vectorized.py, ppo.py (chunk_length, max_steps_per_env)
+# Used by: config.py, vectorized.py, ppo_agent.py (chunk_length, max_steps_per_env)
 DEFAULT_EPISODE_LENGTH = 150
 
 # Maximum epochs a seed can spend in a single stage for normalization purposes.
@@ -101,7 +104,7 @@ MAX_EPOCHS_IN_STAGE = DEFAULT_EPISODE_LENGTH
 # 256 dims risk "Catastrophic Overwrite" - Seed C's gradient flood may
 # evict earlier seeds' learned representations.
 #
-# Used by: config.py, vectorized.py, ppo.py, rollout_buffer.py, network.py
+# Used by: config.py, vectorized.py, ppo_agent.py, rollout_buffer.py, network.py
 DEFAULT_LSTM_HIDDEN_DIM = 512
 
 # Number of LSTM layers in the host model.
@@ -112,7 +115,7 @@ DEFAULT_HOST_LSTM_LAYERS = 12
 # This controls sample DIVERSITY per Tamiyo update, not training quantity.
 # More envs = richer/more varied experience per PPO batch, but same number
 # of Tamiyo gradient updates. Affects GPU memory usage.
-# Used by: config.py, vectorized.py, ppo.py, train.py CLI
+# Used by: config.py, vectorized.py, ppo_agent.py, train.py CLI
 DEFAULT_N_ENVS = 4
 
 # Default number of injection slots (Kasmina capacity points).
@@ -559,7 +562,7 @@ from esper.leyline.slot_id import (
 )
 
 # Slot configuration
-from esper.leyline.injection_spec import InjectionSpec
+from esper.leyline.injection_spec import InjectionSpec, SurfaceType
 from esper.leyline.slot_config import SlotConfig
 
 # Action name parsing utilities (build_action_enum moved to tamiyo.action_enums)
@@ -707,6 +710,7 @@ __all__ = [
     "FULL_EVALUATION_AGE",
     "MIN_HOLDING_EPOCHS",
     "DEFAULT_MAX_SEEDS",
+    "EPISODE_SUCCESS_THRESHOLD",
     "DEFAULT_GAMMA",
 
     # Episode & Architecture constants
@@ -872,6 +876,7 @@ __all__ = [
 
     # Slot configuration
     "InjectionSpec",
+    "SurfaceType",
     "SlotConfig",
 
     # Action name parsing (build_action_enum moved to tamiyo.action_enums)

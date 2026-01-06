@@ -29,7 +29,7 @@ from esper.leyline import (
     get_action_head_sizes,
 )
 from esper.leyline.slot_config import SlotConfig
-from esper.simic.rewards.rewards import INTERVENTION_COSTS
+from esper.simic.rewards import INTERVENTION_COSTS
 from esper.simic.training import vectorized as vec
 from esper.tamiyo.policy.action_masks import compute_action_masks
 

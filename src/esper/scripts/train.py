@@ -10,6 +10,7 @@ import torch
 
 from esper.nissa import ConsoleOutput, DirectoryOutput, FileOutput, get_hub
 from esper.runtime.tasks import VALID_TASKS
+from esper.leyline import DEFAULT_LSTM_HIDDEN_DIM
 from esper.simic.training import TrainingConfig
 
 _logger = logging.getLogger(__name__)
@@ -425,11 +426,11 @@ def build_parser() -> argparse.ArgumentParser:
     ppo_parser.add_argument(
         "--memory-size",
         type=_positive_int,
-        default=None,
+        default=DEFAULT_LSTM_HIDDEN_DIM,
         metavar="H",
         help="Tamiyo's LSTM hidden dimension (temporal reasoning capacity). "
              "Smaller = faster but less temporal memory (longer episodes may need more). "
-             "(Maps to lstm_hidden_dim. Default: 128)",
+             f"(Maps to lstm_hidden_dim. Default: {DEFAULT_LSTM_HIDDEN_DIM})",
     )
     # Entropy annealing: uses type=int (not _positive_int) since 0 is valid (no annealing)
     # Semantics: total env-episodes over which to anneal. With K envs, produces ceil(N/K) PPO batches.
@@ -502,6 +503,10 @@ def validate_slots(slot_ids: list[str]) -> list[str]:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    memory_size_override = any(
+        arg == "--memory-size" or arg.startswith("--memory-size=")
+        for arg in sys.argv
+    )
 
     # Mutual exclusion check for UI modes
     if args.sanctum and args.overwatch:
@@ -696,7 +701,7 @@ def main() -> None:
                 # Validate slot IDs use canonical format
                 validated_slots = validate_slots(args.slots)
 
-                from esper.simic.training import train_heuristic
+                from esper.simic.training.helpers import train_heuristic
                 train_heuristic(
                     n_episodes=args.episodes,
                     max_epochs=args.max_epochs,
@@ -768,7 +773,7 @@ def main() -> None:
                     config.chunk_length = args.episode_length
                 if args.ppo_epochs is not None:
                     config.ppo_updates_per_batch = args.ppo_epochs
-                if args.memory_size is not None:
+                if memory_size_override:
                     config.lstm_hidden_dim = args.memory_size
                 if args.entropy_anneal_episodes is not None:
                     config.entropy_anneal_episodes = args.entropy_anneal_episodes
@@ -807,6 +812,55 @@ def main() -> None:
                     effective_task = config.task if config.task else args.task
 
                     from esper.simic.training.dual_ab import train_dual_policy_ab
+                    train_kwargs = config.to_train_kwargs()
+
+                    excluded_keys = {
+                        "n_episodes",
+                        "n_envs",
+                        "max_epochs",
+                        "task",
+                        "lr",
+                        "clip_ratio",
+                        "entropy_coef",
+                        "entropy_coef_min",
+                        "gamma",
+                        "gae_lambda",
+                        "lstm_hidden_dim",
+                        "seed",
+                        "use_telemetry",
+                        "reward_mode",
+                        "slots",
+                    }
+                    dual_ab_kwargs = {
+                        key: value
+                        for key, value in train_kwargs.items()
+                        if key not in excluded_keys
+                    }
+                    dual_ab_kwargs.update(
+                        {
+                            "num_workers": args.num_workers,
+                            "gpu_preload": args.gpu_preload,
+                            "experimental_gpu_preload_gather": args.experimental_gpu_preload_gather,
+                            "gpu_preload_augment": args.gpu_preload_augment,
+                            "gpu_preload_precompute_augment": args.gpu_preload_precompute_augment,
+                            "telemetry_config": telemetry_config,
+                            "telemetry_lifecycle_only": args.telemetry_lifecycle_only,
+                            "quiet_analytics": use_sanctum,
+                            "force_compile": args.force_compile,
+                            "ready_event": dataloader_ready_event,
+                            "shutdown_event": shutdown_event,
+                            "torch_profiler": args.torch_profiler,
+                            "torch_profiler_dir": args.torch_profiler_dir,
+                            "torch_profiler_wait": args.torch_profiler_wait,
+                            "torch_profiler_warmup": args.torch_profiler_warmup,
+                            "torch_profiler_active": args.torch_profiler_active,
+                            "torch_profiler_repeat": args.torch_profiler_repeat,
+                            "torch_profiler_record_shapes": args.torch_profiler_record_shapes,
+                            "torch_profiler_profile_memory": args.torch_profiler_profile_memory,
+                            "torch_profiler_with_stack": args.torch_profiler_with_stack,
+                            "torch_profiler_summary": args.torch_profiler_summary,
+                        }
+                    )
                     train_dual_policy_ab(
                         n_envs_per_group=config.n_envs,
                         group_configs=group_configs,
@@ -824,6 +878,7 @@ def main() -> None:
                         seed=config.seed,
                         use_telemetry=config.use_telemetry,
                         slots=config.slots,
+                        **dual_ab_kwargs,
                     )
                 else:
                     print(config.summary())

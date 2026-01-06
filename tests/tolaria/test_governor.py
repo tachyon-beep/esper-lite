@@ -530,6 +530,58 @@ class TestTolariaGovernor:
             model.seed_slots["r0c1"].step_epoch()
         assert model.seed_slots["r0c1"].state is None
 
+    def test_execute_rollback_does_not_orphan_seeds_on_stale_extra_state(self):
+        """Regression: rollback must not restore stale slot _extra_state.
+
+        If a snapshot captures a slot in a failure stage (e.g. RESETTING) and we later
+        germinate a new seed, rollback must not re-apply that old lifecycle state
+        while leaving the new seed module attached. That creates an orphaned seed
+        (state cleared to None, seed still present) and breaks future germination.
+        """
+        from esper.tolaria import TolariaGovernor
+        from esper.kasmina import MorphogeneticModel, CNNHost
+        from esper.leyline import DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE, SeedStage
+
+        host = CNNHost()
+        model = MorphogeneticModel(host, device="cpu", slots=["r0c0"])
+        gov = TolariaGovernor(model)
+
+        slot = model.seed_slots["r0c0"]
+
+        # Seed 0: prune into cooldown, advance to RESETTING (state exists, seed removed).
+        slot.germinate("conv_heavy", "seed0")
+        assert slot.prune(reason="test_prune") is True
+        assert slot.state is not None and slot.state.stage == SeedStage.PRUNED
+
+        slot.step_epoch()  # PRUNED -> EMBARGOED
+        for _ in range(DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE - 1):
+            slot.step_epoch()
+        slot.step_epoch()  # EMBARGOED -> RESETTING
+        assert slot.state is not None and slot.state.stage == SeedStage.RESETTING
+        assert slot.seed is None
+
+        # Snapshot while slot is in RESETTING.
+        gov.snapshot()
+
+        # Complete cooldown: RESETTING -> DORMANT (state cleared).
+        slot.step_epoch()
+        assert slot.state is None
+
+        # Seed 1: germinate AFTER snapshot.
+        slot.germinate("conv_heavy", "seed1")
+        assert slot.is_active
+
+        # Minimal history for rollback report.
+        for _ in range(5):
+            gov.loss_history.append(1.0)
+
+        gov.execute_rollback()
+
+        # Rollback must clear the live seed, not strand it behind a stale RESETTING state.
+        assert slot.seed is None
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.PRUNED
+
     def test_execute_rollback_resets_consecutive_panics(self):
         """Test that rollback resets consecutive_panics to allow fresh start."""
         from esper.tolaria import TolariaGovernor

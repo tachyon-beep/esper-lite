@@ -42,6 +42,8 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from rich.text import Text
 from textual.widgets import Static
 
+from esper.leyline import OP_NAMES
+
 from .action_display import (
     ACTION_ABBREVS_1 as ACTION_ABBREVS,
     ACTION_ABBREVS_4 as ACTION_NAMES,
@@ -177,76 +179,89 @@ class ActionContext(Static):
         tamiyo = self._snapshot.tamiyo
         result = Text()
 
-        # Collect Q-values with action info
-        q_values = [
-            ("GERMINATE", tamiyo.q_germinate),
-            ("ADVANCE", tamiyo.q_advance),
-            ("SET_ALPHA_TARGET", tamiyo.q_set_alpha),
-            ("FOSSILIZE", tamiyo.q_fossilize),
-            ("PRUNE", tamiyo.q_prune),
-            ("WAIT", tamiyo.q_wait),
-        ]
-
-        # Handle NaN values
-        valid_qs = [(a, q) for a, q in q_values if not math.isnan(q)]
-        if not valid_qs:
-            result.append("  [waiting for data]\n", style="dim")
+        op_q_values = tamiyo.op_q_values
+        op_valid_mask = tamiyo.op_valid_mask
+        if len(op_q_values) != len(OP_NAMES) or len(op_valid_mask) != len(OP_NAMES):
+            result.append("  [critic preference unavailable]\n", style="red dim")
             return result
 
-        # Sort by Q-value (highest first)
-        sorted_qs = sorted(valid_qs, key=lambda x: x[1], reverse=True)
+        rows: list[tuple[str, float, bool]] = []
+        for op_name, q_val, is_valid in zip(OP_NAMES, op_q_values, op_valid_mask):
+            rows.append((op_name, q_val, is_valid))
 
-        # Get min/max for normalization
-        q_min = min(q for _, q in sorted_qs)
-        q_max = max(q for _, q in sorted_qs)
+        valid_rows = [(action, q_val, True) for action, q_val, is_valid in rows if is_valid and not math.isnan(q_val)]
+        if not valid_rows:
+            result.append("  [critic preference unavailable]\n", style="red dim")
+            return result
+
+        # Sort valid ops by Q-value (highest first)
+        sorted_valid = sorted(valid_rows, key=lambda x: x[1], reverse=True)
+        masked_rows = [(action, q_val, False) for action, q_val, is_valid in rows if not is_valid]
+        nan_rows = [(action, q_val, False) for action, q_val, is_valid in rows if is_valid and math.isnan(q_val)]
+
+        # Get min/max for normalization (valid ops only)
+        q_min = min(q for _, q, _ in sorted_valid)
+        q_max = max(q for _, q, _ in sorted_valid)
         is_flat = q_max == q_min
         q_range = q_max - q_min
 
-        # Render each Q-value row
-        for i, (action, q_val) in enumerate(sorted_qs):
+        display_rows = sorted_valid + masked_rows + nan_rows
+        for i, (action, q_val, is_valid) in enumerate(display_rows):
             name = ACTION_NAMES.get(action, action[:4])
             color = ACTION_COLORS.get(action, "white")
+            row_style = color if is_valid else f"{color} dim"
 
-            # Normalize to 0-1 for bar fill
-            fill_pct = 0.5 if is_flat else (q_val - q_min) / q_range
+            if math.isnan(q_val) or not is_valid:
+                fill_pct = 0.0
+            else:
+                fill_pct = 0.5 if is_flat else (q_val - q_min) / q_range
+                fill_pct = max(0.0, min(1.0, fill_pct))
 
-            # Render: "  GERM ████████░░░░░░░░  +1.2"
-            result.append(f"  {name:<4} ", style=color)
+            result.append(f"  {name:<4} ", style=row_style)
 
-            # Bar
             filled = int(fill_pct * self.Q_BAR_WIDTH)
             empty = self.Q_BAR_WIDTH - filled
-            result.append("█" * filled, style=color)
+            result.append("█" * filled, style=row_style)
             result.append("░" * empty, style="dim")
 
-            # Value (4 decimal places for small Q differences)
-            result.append(f"  {q_val:+.4f}", style=color)
+            if math.isnan(q_val) or not is_valid:
+                value_text = "  --"
+            else:
+                value_text = f"  {q_val:+.4f}"
+            result.append(value_text, style=row_style)
 
-            # Best/Worst markers
-            if not is_flat:
+            if is_valid and not is_flat:
                 if i == 0:
                     result.append("  ← BEST", style="green dim")
-                elif i == len(sorted_qs) - 1:
+                elif i == len(sorted_valid) - 1:
                     result.append("  ← WORST", style="red dim")
+            elif not is_valid:
+                result.append("  [M]", style="dim")
 
             result.append("\n")
 
         # Q-variance and spread on one line
         q_var = tamiyo.q_variance
-        var_status = self._get_q_variance_status(q_var)
-        var_style = {"ok": "green", "warning": "yellow", "critical": "red bold"}[var_status]
-
         result.append("  Var:", style="dim")
-        result.append(f"{q_var:.4f}", style=var_style)
+        if math.isnan(q_var):
+            result.append("--", style="dim")
+        else:
+            var_status = self._get_q_variance_status(q_var)
+            var_style = {"ok": "green", "warning": "yellow", "critical": "red bold"}[var_status]
+            result.append(f"{q_var:.4f}", style=var_style)
 
-        if var_status == "critical":
-            result.append("✗", style="red")
-        elif var_status == "warning":
-            result.append("!", style="yellow bold")
-        elif var_status == "ok":
-            result.append("✓", style="green")
+            if var_status == "critical":
+                result.append("✗", style="red")
+            elif var_status == "warning":
+                result.append("!", style="yellow bold")
+            elif var_status == "ok":
+                result.append("✓", style="green")
 
-        result.append(f"  Spread:{tamiyo.q_spread:.3f}\n", style="dim")
+        result.append("  Spread:", style="dim")
+        if math.isnan(tamiyo.q_spread):
+            result.append("--\n", style="dim")
+        else:
+            result.append(f"{tamiyo.q_spread:.3f}\n", style="dim")
 
         return result
 

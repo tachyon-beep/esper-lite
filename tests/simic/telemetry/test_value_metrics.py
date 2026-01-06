@@ -2,7 +2,7 @@
 
 import torch
 
-from esper.simic.telemetry.value_metrics import compute_value_function_metrics
+from esper.leyline.value_metrics import compute_value_function_metrics
 
 
 class TestComputeValueFunctionMetrics:

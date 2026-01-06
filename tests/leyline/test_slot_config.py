@@ -96,24 +96,24 @@ class TestSlotConfigFromSpecs:
         from esper.leyline import InjectionSpec
 
         specs = [
-            InjectionSpec(slot_id="r0c0", channels=64, position=0.33, layer_range=(0, 2)),
-            InjectionSpec(slot_id="r0c1", channels=128, position=0.66, layer_range=(2, 4)),
+            InjectionSpec(slot_id="r0c0", channels=64, position=0.33, layer_range=(0, 2), order=0),
+            InjectionSpec(slot_id="r0c1", channels=128, position=0.66, layer_range=(2, 4), order=1),
         ]
         config = SlotConfig.from_specs(specs)
         assert config.slot_ids == ("r0c0", "r0c1")
         assert config.num_slots == 2
 
-    def test_from_specs_sorts_by_position(self):
-        """from_specs should sort specs by position."""
+    def test_from_specs_sorts_by_order(self):
+        """from_specs should sort specs by order field (not position)."""
         from esper.leyline import InjectionSpec
 
-        # Out of order input
+        # Out of order input - order field determines final ordering
         specs = [
-            InjectionSpec(slot_id="r0c1", channels=128, position=0.66, layer_range=(2, 4)),
-            InjectionSpec(slot_id="r0c0", channels=64, position=0.33, layer_range=(0, 2)),
+            InjectionSpec(slot_id="r0c1", channels=128, position=0.66, layer_range=(2, 4), order=1),
+            InjectionSpec(slot_id="r0c0", channels=64, position=0.33, layer_range=(0, 2), order=0),
         ]
         config = SlotConfig.from_specs(specs)
-        # Should be sorted by position
+        # Should be sorted by order field
         assert config.slot_ids == ("r0c0", "r0c1")
 
     def test_from_specs_preserves_channel_info(self):
@@ -121,8 +121,8 @@ class TestSlotConfigFromSpecs:
         from esper.leyline import InjectionSpec
 
         specs = [
-            InjectionSpec(slot_id="r0c0", channels=64, position=0.33, layer_range=(0, 2)),
-            InjectionSpec(slot_id="r0c1", channels=128, position=0.66, layer_range=(2, 4)),
+            InjectionSpec(slot_id="r0c0", channels=64, position=0.33, layer_range=(0, 2), order=0),
+            InjectionSpec(slot_id="r0c1", channels=128, position=0.66, layer_range=(2, 4), order=1),
         ]
         config = SlotConfig.from_specs(specs)
         assert config.channels_for_slot("r0c0") == 64
@@ -138,11 +138,22 @@ class TestSlotConfigFromSpecs:
         from esper.leyline import InjectionSpec
 
         specs = [
-            InjectionSpec(slot_id="r0c0", channels=64, position=0.33, layer_range=(0, 2)),
+            InjectionSpec(slot_id="r0c0", channels=64, position=0.33, layer_range=(0, 2), order=0),
         ]
         config = SlotConfig.from_specs(specs)
         assert config.channels_for_slot("r0c0") == 64
         assert config.channels_for_slot("r9c9") == 0
+
+    def test_from_specs_duplicate_order_raises(self):
+        """from_specs should raise ValueError if order values are duplicated."""
+        from esper.leyline import InjectionSpec
+
+        specs = [
+            InjectionSpec(slot_id="r0c0", channels=64, position=0.33, layer_range=(0, 2), order=0),
+            InjectionSpec(slot_id="r0c1", channels=128, position=0.66, layer_range=(2, 4), order=0),  # Duplicate!
+        ]
+        with pytest.raises(ValueError, match="order values must be unique"):
+            SlotConfig.from_specs(specs)
 
 
 class TestSlotConfigEdgeCases:

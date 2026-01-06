@@ -22,8 +22,67 @@ from esper.leyline import (
 from esper.leyline.telemetry import HeadTelemetry
 from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
 from esper.simic.telemetry.emitters import VectorizedEmitter
+from esper.simic.vectorized_types import (
+    ActionMaskFlags,
+    ActionOutcome,
+    ActionSpec,
+)
 
 from .conftest import CaptureHubResult
+
+
+def build_action_spec(action_indices: dict[str, int], slot_id: str) -> ActionSpec:
+    return ActionSpec(
+        slot_idx=action_indices["slot"],
+        blueprint_idx=action_indices["blueprint"],
+        style_idx=action_indices["style"],
+        tempo_idx=action_indices["tempo"],
+        alpha_target_idx=action_indices["alpha_target"],
+        alpha_speed_idx=action_indices["alpha_speed"],
+        alpha_curve_idx=action_indices["alpha_curve"],
+        op_idx=action_indices["op"],
+        target_slot=slot_id,
+        slot_is_enabled=True,
+    )
+
+
+def build_mask_flags(masked: dict[str, bool] | None = None) -> ActionMaskFlags:
+    flags = {
+        "op": False,
+        "slot": False,
+        "blueprint": False,
+        "style": False,
+        "tempo": False,
+        "alpha_target": False,
+        "alpha_speed": False,
+        "alpha_curve": False,
+    }
+    if masked is not None:
+        for key, value in masked.items():
+            flags[key] = value
+    return ActionMaskFlags(
+        op_masked=flags["op"],
+        slot_masked=flags["slot"],
+        blueprint_masked=flags["blueprint"],
+        style_masked=flags["style"],
+        tempo_masked=flags["tempo"],
+        alpha_target_masked=flags["alpha_target"],
+        alpha_speed_masked=flags["alpha_speed"],
+        alpha_curve_masked=flags["alpha_curve"],
+    )
+
+
+def build_action_outcome(
+    success: bool,
+    *,
+    total_reward: float = 0.0,
+    reward_components: RewardComponentsTelemetry | None = None,
+) -> ActionOutcome:
+    return ActionOutcome(
+        action_success=success,
+        reward_raw=total_reward,
+        reward_components=reward_components,
+    )
 
 
 class TestTELE800RecentDecisions:
@@ -47,14 +106,11 @@ class TestTELE800RecentDecisions:
             "alpha_speed": 0,
             "alpha_curve": 0,
         }
-        masked = {}
-
         emitter.on_last_action(
             epoch=5,
-            action_indices=action_indices,
-            slot_id="r0c0",
-            masked=masked,
-            success=True,
+            action_spec=build_action_spec(action_indices, slot_id="r0c0"),
+            masked=build_mask_flags(),
+            outcome=build_action_outcome(success=True),
         )
 
         # Flush to ensure event is processed
@@ -92,10 +148,9 @@ class TestTELE800RecentDecisions:
 
         emitter.on_last_action(
             epoch=10,
-            action_indices=action_indices,
-            slot_id="r0c0",
-            masked={},
-            success=True,
+            action_spec=build_action_spec(action_indices, slot_id="r0c0"),
+            masked=build_mask_flags(),
+            outcome=build_action_outcome(success=True),
         )
 
         hub.flush(timeout=5.0)
@@ -127,10 +182,9 @@ class TestTELE800RecentDecisions:
 
         emitter.on_last_action(
             epoch=10,
-            action_indices=action_indices,
-            slot_id="r0c0",
-            masked={},
-            success=True,
+            action_spec=build_action_spec(action_indices, slot_id="r0c0"),
+            masked=build_mask_flags(),
+            outcome=build_action_outcome(success=True),
             action_confidence=0.85,
         )
 
@@ -163,10 +217,9 @@ class TestTELE800RecentDecisions:
 
         emitter.on_last_action(
             epoch=10,
-            action_indices=action_indices,
-            slot_id="r0c0",
-            masked={},
-            success=True,
+            action_spec=build_action_spec(action_indices, slot_id="r0c0"),
+            masked=build_mask_flags(),
+            outcome=build_action_outcome(success=True),
             value_estimate=2.5,
         )
 
@@ -199,11 +252,9 @@ class TestTELE800RecentDecisions:
 
         emitter.on_last_action(
             epoch=10,
-            action_indices=action_indices,
-            slot_id="r0c0",
-            masked={},
-            success=True,
-            total_reward=1.234,
+            action_spec=build_action_spec(action_indices, slot_id="r0c0"),
+            masked=build_mask_flags(),
+            outcome=build_action_outcome(success=True, total_reward=1.234),
         )
 
         hub.flush(timeout=5.0)
@@ -250,10 +301,9 @@ class TestTELE800HeadTelemetry:
 
         emitter.on_last_action(
             epoch=10,
-            action_indices=action_indices,
-            slot_id="r0c0",
-            masked={},
-            success=True,
+            action_spec=build_action_spec(action_indices, slot_id="r0c0"),
+            masked=build_mask_flags(),
+            outcome=build_action_outcome(success=True),
             head_telemetry=head_telemetry,
         )
 
@@ -307,10 +357,9 @@ class TestTELE800HeadTelemetry:
 
         emitter.on_last_action(
             epoch=10,
-            action_indices=action_indices,
-            slot_id="r0c0",
-            masked={},
-            success=True,
+            action_spec=build_action_spec(action_indices, slot_id="r0c0"),
+            masked=build_mask_flags(),
+            outcome=build_action_outcome(success=True),
             head_telemetry=head_telemetry,
         )
 
@@ -363,10 +412,9 @@ class TestTELE800DecisionContext:
 
         emitter.on_last_action(
             epoch=10,
-            action_indices=action_indices,
-            slot_id="r0c0",
-            masked={},
-            success=True,
+            action_spec=build_action_spec(action_indices, slot_id="r0c0"),
+            masked=build_mask_flags(),
+            outcome=build_action_outcome(success=True),
             slot_states=slot_states,
         )
 
@@ -407,10 +455,9 @@ class TestTELE800DecisionContext:
 
         emitter.on_last_action(
             epoch=10,
-            action_indices=action_indices,
-            slot_id="r0c0",
-            masked={},
-            success=True,
+            action_spec=build_action_spec(action_indices, slot_id="r0c0"),
+            masked=build_mask_flags(),
+            outcome=build_action_outcome(success=True),
             alternatives=alternatives,
         )
 
@@ -448,10 +495,9 @@ class TestTELE800DecisionContext:
 
         emitter.on_last_action(
             epoch=10,
-            action_indices=action_indices,
-            slot_id="r0c0",
-            masked={},
-            success=True,
+            action_spec=build_action_spec(action_indices, slot_id="r0c0"),
+            masked=build_mask_flags(),
+            outcome=build_action_outcome(success=True),
             decision_entropy=1.789,
         )
 
@@ -498,11 +544,12 @@ class TestTELE800RewardComponents:
 
         emitter.on_last_action(
             epoch=10,
-            action_indices=action_indices,
-            slot_id="r0c0",
-            masked={},
-            success=True,
-            reward_components=reward_components,
+            action_spec=build_action_spec(action_indices, slot_id="r0c0"),
+            masked=build_mask_flags(),
+            outcome=build_action_outcome(
+                success=True,
+                reward_components=reward_components,
+            ),
         )
 
         hub.flush(timeout=5.0)
@@ -574,11 +621,12 @@ class TestTELE800RewardComponents:
 
         emitter.on_last_action(
             epoch=10,
-            action_indices=action_indices,
-            slot_id="r0c0",
-            masked={},
-            success=True,
-            reward_components=reward_components,
+            action_spec=build_action_spec(action_indices, slot_id="r0c0"),
+            masked=build_mask_flags(),
+            outcome=build_action_outcome(
+                success=True,
+                reward_components=reward_components,
+            ),
         )
 
         hub.flush(timeout=5.0)
@@ -644,10 +692,9 @@ class TestTELE800HeadChoices:
 
         emitter.on_last_action(
             epoch=10,
-            action_indices=action_indices,
-            slot_id="r0c2",
-            masked={},
-            success=True,
+            action_spec=build_action_spec(action_indices, slot_id="r0c2"),
+            masked=build_mask_flags(),
+            outcome=build_action_outcome(success=True),
         )
 
         hub.flush(timeout=5.0)
@@ -694,10 +741,9 @@ class TestTELE800HeadChoices:
 
         emitter.on_last_action(
             epoch=10,
-            action_indices=action_indices,
-            slot_id="r0c0",
-            masked=masked,
-            success=True,
+            action_spec=build_action_spec(action_indices, slot_id="r0c0"),
+            masked=build_mask_flags(masked),
+            outcome=build_action_outcome(success=True),
         )
 
         hub.flush(timeout=5.0)
@@ -739,10 +785,9 @@ class TestTELE800HeadChoices:
         # Test success=False (e.g., germination failed due to slot already occupied)
         emitter.on_last_action(
             epoch=10,
-            action_indices=action_indices,
-            slot_id="r0c0",
-            masked={},
-            success=False,
+            action_spec=build_action_spec(action_indices, slot_id="r0c0"),
+            masked=build_mask_flags(),
+            outcome=build_action_outcome(success=False),
         )
 
         hub.flush(timeout=5.0)
@@ -779,10 +824,9 @@ class TestTELE800AlphaFields:
 
         emitter.on_last_action(
             epoch=10,
-            action_indices=action_indices,
-            slot_id="r0c0",
-            masked={},
-            success=True,
+            action_spec=build_action_spec(action_indices, slot_id="r0c0"),
+            masked=build_mask_flags(),
+            outcome=build_action_outcome(success=True),
             active_alpha_algorithm="GATED_GATE",
         )
 
@@ -828,10 +872,9 @@ class TestTELE800EnvContext:
 
             emitter.on_last_action(
                 epoch=5,
-                action_indices=action_indices,
-                slot_id="r0c0",
-                masked={},
-                success=True,
+                action_spec=build_action_spec(action_indices, slot_id="r0c0"),
+                masked=build_mask_flags(),
+                outcome=build_action_outcome(success=True),
             )
 
             hub.flush(timeout=5.0)
@@ -863,10 +906,9 @@ class TestTELE800EnvContext:
 
         emitter.on_last_action(
             epoch=42,
-            action_indices=action_indices,
-            slot_id="r0c0",
-            masked={},
-            success=True,
+            action_spec=build_action_spec(action_indices, slot_id="r0c0"),
+            masked=build_mask_flags(),
+            outcome=build_action_outcome(success=True),
         )
 
         hub.flush(timeout=5.0)
@@ -941,18 +983,19 @@ class TestTELE800FullSnapshot:
 
         emitter.on_last_action(
             epoch=25,
-            action_indices=action_indices,
-            slot_id="r0c0",
-            masked={"op": False, "blueprint": True},
-            success=True,
-            total_reward=0.57,
+            action_spec=build_action_spec(action_indices, slot_id="r0c0"),
+            masked=build_mask_flags({"op": False, "blueprint": True}),
+            outcome=build_action_outcome(
+                success=True,
+                total_reward=0.57,
+                reward_components=reward_components,
+            ),
             value_estimate=1.8,
             host_accuracy=71.5,
             slot_states=slot_states,
             action_confidence=0.80,
             alternatives=alternatives,
             decision_entropy=1.45,
-            reward_components=reward_components,
             head_telemetry=head_telemetry,
         )
 

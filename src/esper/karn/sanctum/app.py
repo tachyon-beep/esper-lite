@@ -410,6 +410,7 @@ class SanctumApp(App[None]):
         self._pending_view: SanctumView | None = None
         self._apply_view_scheduled = False
         self._last_heavy_widget_update_ts: float = 0.0
+        self._last_detail_update_ts: float = 0.0
         self._last_reward_health_update_ts: float = 0.0
         self._cached_reward_health_by_group: dict[str, RewardHealthData] = {}
         self._active_group_id: str | None = None
@@ -719,9 +720,11 @@ class SanctumApp(App[None]):
         self._sync_tamiyo_visibility(view.primary_group_id, view.snapshots_by_group)
         self._last_primary_group_id = view.primary_group_id
 
+        detail_due = primary_changed or (now - self._last_detail_update_ts) >= 0.5
+
         # Update EnvDetailScreen modal if displayed
         # Check if we have a modal screen on the stack
-        if len(self.screen_stack) > 1:
+        if len(self.screen_stack) > 1 and detail_due:
             current_screen = self.screen_stack[-1]
             if isinstance(current_screen, EnvDetailScreen):
                 modal_snapshot: SanctumSnapshot | None = snapshot
@@ -739,6 +742,7 @@ class SanctumApp(App[None]):
                     current_screen.update_env_state(
                         modal_snapshot.envs[current_screen.env_id]
                     )
+                    self._last_detail_update_ts = now
 
     def action_focus_env(self, env_id: int) -> None:
         """Focus on specific environment for detail panels.

@@ -6,6 +6,7 @@ from esper.simic.rewards import (
     STAGE_HOLDING,
     STAGE_TRAINING,
     ContributionRewardConfig,
+    ContributionRewardInputs,
     RewardMode,
     SeedInfo,
     compute_reward,
@@ -164,19 +165,21 @@ class TestComputeRewardDispatcher:
 
         # Call through dispatcher
         reward = compute_reward(
-            action=LifecycleOp.WAIT,
-            seed_contribution=5.0,  # Would give attribution in SHAPED
-            val_acc=60.0,
-            seed_info=seed_info,
-            epoch=20,
-            max_epochs=25,
-            total_params=100000,
-            host_params=90000,
-            acc_at_germination=55.0,
-            acc_delta=0.5,
-            num_fossilized_seeds=1,
-            num_contributing_fossilized=1,
-            config=config,
+            ContributionRewardInputs(
+                action=LifecycleOp.WAIT,
+                seed_contribution=5.0,  # Would give attribution in SHAPED
+                val_acc=60.0,
+                seed_info=seed_info,
+                epoch=20,
+                max_epochs=25,
+                total_params=100000,
+                host_params=90000,
+                acc_at_germination=55.0,
+                acc_delta=0.5,
+                num_fossilized_seeds=1,
+                num_contributing_fossilized=1,
+                config=config,
+            )
         )
 
         # Should NOT have holding_warning (-9.0) or attribution (+5.0)

@@ -132,12 +132,8 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.clip_fraction_positive')::DOUBLE as clip_fraction_positive,
             json_extract(data, '$.clip_fraction_negative')::DOUBLE as clip_fraction_negative,
             -- Q-values (op-conditioned value function)
-            json_extract(data, '$.q_germinate')::DOUBLE as q_germinate,
-            json_extract(data, '$.q_advance')::DOUBLE as q_advance,
-            json_extract(data, '$.q_fossilize')::DOUBLE as q_fossilize,
-            json_extract(data, '$.q_prune')::DOUBLE as q_prune,
-            json_extract(data, '$.q_wait')::DOUBLE as q_wait,
-            json_extract(data, '$.q_set_alpha')::DOUBLE as q_set_alpha,
+            json_extract(data, '$.op_q_values') as op_q_values,
+            json_extract(data, '$.op_valid_mask') as op_valid_mask,
             json_extract(data, '$.q_variance')::DOUBLE as q_variance,
             json_extract(data, '$.q_spread')::DOUBLE as q_spread,
             -- Per-head entropy

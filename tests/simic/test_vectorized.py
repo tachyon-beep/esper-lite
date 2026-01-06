@@ -2,7 +2,7 @@
 
 This module tests:
 - Telemetry emission functions (_emit_*)
-- Seed advancement logic (_advance_active_seed)
+- Seed fossilization logic (_fossilize_active_seed)
 - PPO update helpers (_run_ppo_updates, _calculate_entropy_anneal_steps)
 - Anomaly handling (_handle_telemetry_escalation, _emit_anomaly_diagnostics)
 """
@@ -11,12 +11,12 @@ import pytest
 import torch
 from unittest.mock import Mock, MagicMock, patch
 
-from esper.leyline import SeedStage, TelemetryEvent, TelemetryEventType
+from esper.leyline import NUM_OPS, SeedStage, TelemetryEvent, TelemetryEventType
 from esper.leyline.slot_config import SlotConfig
 from esper.leyline.telemetry import SeedGerminatedPayload
 from esper.simic.telemetry import AnomalyReport
 from esper.simic.training.vectorized import (
-    _advance_active_seed,
+    _fossilize_active_seed,
     _calculate_entropy_anneal_steps,
     _emit_anomaly_diagnostics,
     _handle_telemetry_escalation,
@@ -149,6 +149,9 @@ def _make_mandatory_metrics(**overrides) -> dict:
         "return_std": 0.3,
         # Value target scale (std used to normalize returns)
         "value_target_scale": 0.3,
+        # Throughput metrics (mandatory for dataloader wait ratio)
+        "throughput_step_time_ms_sum": 100.0,
+        "throughput_dataloader_wait_ms_sum": 20.0,
         "ratio_mean": 1.0,
         "ratio_min": 0.8,
         "ratio_max": 1.2,
@@ -159,6 +162,11 @@ def _make_mandatory_metrics(**overrides) -> dict:
         "value_std": 1.0,
         "value_min": -2.0,
         "value_max": 2.0,
+        # Q-value diagnostics (mandatory)
+        "op_q_values": tuple(0.0 for _ in range(NUM_OPS)),
+        "op_valid_mask": tuple(True for _ in range(NUM_OPS)),
+        "q_variance": 0.0,
+        "q_spread": 0.0,
         # Per-head stats (optional but expected by emitter loop)
         "head_entropies": {},
         "head_grad_norms": {},
@@ -445,12 +453,12 @@ class _StubModel:
         return slot in self.seed_slots and self.seed_slots[slot].state is not None
 
 
-def test_advance_active_seed_fossilizes_via_seed_slot():
+def test_fossilize_active_seed_fossilizes_via_seed_slot():
     """HOLDING seeds should fossilize through SeedSlot.advance_stage (emits telemetry)."""
     model = _StubModel(SeedStage.HOLDING)
     slot_id = "r0c1"
 
-    _advance_active_seed(model, slot_id)
+    _fossilize_active_seed(model, slot_id)
 
     assert model.seed_slots["r0c1"].advance_calls == [SeedStage.FOSSILIZED]
     assert model.seed_slots["r0c1"].set_alpha_calls == [1.0]
@@ -459,26 +467,26 @@ def test_advance_active_seed_fossilizes_via_seed_slot():
     assert model.seed_slots["r0c1"].state.transition_calls == []
 
 
-def test_advance_active_seed_noop_on_failed_fossilization_gate():
+def test_fossilize_active_seed_noop_on_failed_fossilization_gate():
     """Failed fossilization gate should be a no-op (Tamiyo learns from failed attempts)."""
     gate_result = _StubGateResult(passed=False, checks_failed=["no_improvement"])
     model = _StubModel(SeedStage.HOLDING, gate_result=gate_result)
     slot_id = "r0c1"
 
     # Should not raise - failed gate is normal RL outcome
-    _advance_active_seed(model, slot_id)
+    _fossilize_active_seed(model, slot_id)
 
     # Gate was checked but transition didn't happen
     assert model.seed_slots["r0c1"].advance_calls == [SeedStage.FOSSILIZED]
     assert model.seed_slots["r0c1"].set_alpha_calls == []  # No alpha change on failed gate
 
 
-def test_advance_active_seed_noop_from_training_stage():
+def test_fossilize_active_seed_noop_from_training_stage():
     """TRAINING seeds are handled mechanically; fossilize action should do nothing."""
     model = _StubModel(SeedStage.TRAINING)
     slot_id = "r0c1"
 
-    _advance_active_seed(model, slot_id)
+    _fossilize_active_seed(model, slot_id)
 
     assert model.seed_slots["r0c1"].state.transition_calls == []
     assert model.seed_slots["r0c1"].start_blending_calls == []

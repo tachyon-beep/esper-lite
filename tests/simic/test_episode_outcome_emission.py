@@ -1,7 +1,8 @@
 """Tests that EpisodeOutcome is emitted at episode end."""
 
 import numpy as np
-from esper.leyline import EpisodeOutcome
+from esper.leyline import EPISODE_SUCCESS_THRESHOLD, EpisodeOutcome
+from esper.simic.training.action_execution import classify_episode_outcome
 
 
 def test_episode_outcome_created_at_episode_end():
@@ -27,6 +28,13 @@ def test_episode_outcome_created_at_episode_end():
     ]
     for field in required_fields:
         assert field in d, f"Missing required field: {field}"
+
+
+def test_episode_outcome_uses_percent_scale_threshold() -> None:
+    """Episode outcome classification uses percent-scale accuracy."""
+    assert classify_episode_outcome(EPISODE_SUCCESS_THRESHOLD) == "success"
+    assert classify_episode_outcome(EPISODE_SUCCESS_THRESHOLD - 0.1) == "timeout"
+    assert classify_episode_outcome(0.8) == "timeout"
 
 
 def test_stability_score_from_reward_variance():

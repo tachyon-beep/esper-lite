@@ -1,6 +1,6 @@
 # Telemetry Record: [TELE-600] Observation NaN Count
 
-> **Status:** `[ ] Planned` `[ ] In Progress` `[x] Wired` `[ ] Tested` `[ ] Verified`
+> **Status:** `[x] Planned` `[x] In Progress` `[x] Wired` `[x] Tested` `[ ] Verified`
 
 ---
 
@@ -74,29 +74,27 @@
 
 | Property | Value |
 |----------|-------|
-| **Origin** | Observation tensor health check during vectorized training |
-| **File** | [NOT IMPLEMENTED] `/home/john/esper-lite/src/esper/simic/training/vectorized.py` |
-| **Function/Method** | [NOT IMPLEMENTED] Likely `on_batch_completed()` or similar |
-| **Line(s)** | [NOT IMPLEMENTED] ~2500-2700 (observation normalization region) |
+| **Origin** | Observation tensor health check during vectorized PPO training |
+| **File** | `/home/john/esper-lite/src/esper/simic/training/vectorized_trainer.py` |
+| **Function/Method** | `compute_observation_stats()` (invoked after `obs_normalizer.normalize`) |
+| **Line(s)** | Near the per-step observation normalization block |
 
-```python
-# Expected emitter pattern (pseudo-code):
-# After obs_normalizer.normalize(states_batch)
-# obs_nan_count = torch.isnan(states_batch_normalized).sum().item()
-# emit_observation_stats(nan_count=obs_nan_count, ...)
-```
+**Emission Path:** `compute_observation_stats()` (in
+`/home/john/esper-lite/src/esper/simic/telemetry/observation_stats.py`)
+produces `ObservationStatsTelemetry`, which is attached to
+`EpochCompletedPayload` in `/home/john/esper-lite/src/esper/simic/telemetry/emitters.py`.
 
 ### Transport
 
 | Stage | Mechanism | File |
 |-------|-----------|------|
-| **1. Emission** | [MISSING] Telemetry event with observation stats | `simic/training/vectorized.py` or similar |
-| **2. Collection** | [MISSING] Event payload with `nan_count` field | `leyline/telemetry.py` |
-| **3. Aggregation** | [MISSING] Aggregator handler for observation stats event | `karn/sanctum/aggregator.py` |
+| **1. Emission** | `EpochCompletedPayload.observation_stats` attached per env | `simic/telemetry/emitters.py` |
+| **2. Collection** | `EpochCompletedPayload` carries `observation_stats` | `leyline/telemetry.py` |
+| **3. Aggregation** | `_handle_epoch_completed` updates `ObservationStats` | `karn/sanctum/aggregator.py` |
 | **4. Delivery** | Populated to `snapshot.observation_stats.nan_count` | `karn/sanctum/schema.py` |
 
 ```
-[VectorizedEnv] --[MISSING]--> [Emitter] --[MISSING]--> [Aggregator] --> [ObservationStats.nan_count]
+[compute_observation_stats] --> [EpochCompletedPayload.observation_stats] --> [SanctumAggregator] --> [ObservationStats.nan_count]
 ```
 
 ### Schema Location
@@ -122,8 +120,8 @@
 
 ### Checklist
 
-- [x] **Emitter exists** — Needs implementation; no telemetry event for obs stats currently emitted
-- [ ] **Transport works** — NOT WIRED - no event type or payload for observation stats
+- [x] **Emitter exists** — `compute_observation_stats()` in `simic/telemetry/observation_stats.py`
+- [x] **Transport works** — `EpochCompletedPayload.observation_stats` carries the stats
 - [x] **Schema field exists** — `ObservationStats.nan_count: int = 0` defined in schema
 - [x] **Default is correct** — Default 0 is correct; NaN is exceptional
 - [x] **Consumer reads it** — `HealthStatusPanel._render_obs_health()` reads and displays it
@@ -134,19 +132,19 @@
 
 | Test Type | File | Test Name | Status |
 |-----------|------|-----------|--------|
-| Unit (emitter) | [NOT FOUND] | [NOT FOUND] | `[ ]` |
-| Unit (aggregator) | [NOT FOUND] | [NOT FOUND] | `[ ]` |
-| Integration (end-to-end) | [NOT FOUND] | [NOT FOUND] | `[ ]` |
+| Unit (emitter) | — | — | `[ ]` |
+| Unit (aggregator) | — | — | `[ ]` |
+| Integration (end-to-end) | `tests/telemetry/test_environment_metrics.py` | `TestTELE600ObsNanCount::test_nan_count_populated_from_epoch_completed` | `[x]` |
 | Visual (TUI snapshot) | — | Manual verification | `[ ]` |
 
 ### Manual Verification Steps
 
-1. [NOT YET POSSIBLE] Start training with: `uv run esper ppo --episodes 10`
-2. [EXPECTED BEHAVIOR] Open Sanctum TUI
-3. [EXPECTED] Observe HealthStatusPanel "Obs Health" row
-4. [EXPECTED] In healthy run, row should show no NaN/Inf values (or very brief spikes)
-5. [EXPECTED] If NaN appears, row should display red "NaN:X Inf:Y" and status "critical"
-6. [EXPECTED] Trigger observation corruption (if possible) to verify color coding
+1. Start training with: `uv run esper ppo --episodes 10`
+2. Open Sanctum TUI
+3. Observe HealthStatusPanel "Obs Health" row
+4. In a healthy run, row should show no NaN/Inf values (or very brief spikes)
+5. If NaN appears, row should display red "NaN:X Inf:Y" and status "critical"
+6. Trigger observation corruption (if possible) to verify color coding
 
 ---
 
@@ -175,23 +173,17 @@
 | Date | Author | Change |
 |------|--------|--------|
 | 2025-01-03 | Claude Code | Initial creation; identified wiring gap |
+| 2026-01-07 | Claude Code | Wired via EpochCompletedPayload observation_stats and added integration test |
 | | | |
 
 ---
 
 ## 8. Notes
 
-> **WIRING GAP IDENTIFIED:** The schema field exists and the consumer (HealthStatusPanel) is wired to display it, BUT the emitter is not implemented. No telemetry event emits observation stats during training. The field is currently initialized as `ObservationStats()` (all defaults) in the aggregator (line 538).
->
-> **ROOT CAUSE:** Comment on line 537-538 of aggregator.py states: "Stub observation and episode stats (telemetry not yet wired)". This was left as a placeholder during schema design.
->
-> **WHAT'S NEEDED:**
-> 1. Add `OBSERVATION_STATS_COMPUTED` telemetry event type to `leyline/telemetry.py`
-> 2. Add `ObservationStatsPayload` dataclass with fields for nan_count, inf_count, mean, std
-> 3. Implement emission in `simic/training/vectorized.py` after observation normalization (~line 2586)
-> 4. Implement aggregator handler in `karn/sanctum/aggregator.py` to receive and populate the field
-> 5. Add unit tests for emitter and aggregator
-> 6. Verify TUI displays values correctly with threshold coloring
+> **WIRING STATUS:** Observation NaN counts are emitted via
+> `EpochCompletedPayload.observation_stats`, aggregated in
+> `SanctumAggregator._handle_epoch_completed`, and surfaced in the
+> HealthStatusPanel.
 >
 > **RELATED TELEMETRY:** This is the environment-side counterpart to TELE-300 (nan_grad_count in gradients). Unlike gradient NaN which can be transient, observation NaN indicates a systematic environment/normalization failure that requires immediate investigation.
 >

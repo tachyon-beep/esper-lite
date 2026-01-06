@@ -85,24 +85,83 @@ class CNNHost(nn.Module):
         """Return segment boundaries as InjectionSpec objects.
 
         Returns:
-            List of InjectionSpec, one per block, sorted by network position.
+            List of InjectionSpec with PRE_POOL (row 0) and POST_POOL (row 1) surfaces,
+            sorted by row-major order for stable action indices.
+
+        Grid layout:
+            Row 0 (PRE_POOL): r0c0, r0c1, r0c2, ... (after block, before pool)
+            Row 1 (POST_POOL): r1c0, r1c1, ... (after pool, only where pooling exists)
+
+        Order assignment (row-major for action index stability):
+            Row 0 slots get indices 0..n_blocks-1, row 1 gets indices n_blocks..n_blocks+pool_layers-1.
+            This ensures action indices remain stable as surfaces are added/removed.
+            For execution order (interleaved by block), use execution_order() method.
         """
-        from esper.leyline import InjectionSpec
+        from esper.leyline import InjectionSpec, SurfaceType
         from esper.leyline.slot_id import format_slot_id
 
-        specs = []
+        specs: list[InjectionSpec] = []
+
+        # Build specs in row-major order for stable action indices
+        # Row 0 (PRE_POOL): indices 0 to n_blocks-1
         for i in range(self.n_blocks):
             block = self.blocks[i]
             assert isinstance(block, ConvBlock)  # Guaranteed by __init__
+
             specs.append(
                 InjectionSpec(
                     slot_id=format_slot_id(0, i),
                     channels=block.conv.out_channels,
-                    position=(i + 1) / self.n_blocks,
+                    position=(2 * i + 1) / (2 * self.n_blocks),  # Visualization only
                     layer_range=(i, i + 1),
+                    surface=SurfaceType.PRE_POOL,
+                    order=i,  # Row-major: row 0 gets 0..n_blocks-1
+                    row=0,
+                    col=i,
                 )
             )
+
+        # Row 1 (POST_POOL): indices n_blocks to n_blocks+actual_pool_layers-1
+        # Cap at n_blocks to avoid IndexError if pool_layers > n_blocks
+        actual_pool_layers = min(self._pool_layers, self.n_blocks)
+        for i in range(actual_pool_layers):
+            block = self.blocks[i]
+            assert isinstance(block, ConvBlock)
+
+            specs.append(
+                InjectionSpec(
+                    slot_id=format_slot_id(1, i),
+                    channels=block.conv.out_channels,  # Pool doesn't change channels
+                    position=(2 * i + 2) / (2 * self.n_blocks),  # Visualization only
+                    layer_range=(i, i + 1),
+                    surface=SurfaceType.POST_POOL,
+                    order=self.n_blocks + i,  # Row-major: row 1 starts at n_blocks
+                    row=1,
+                    col=i,
+                )
+            )
+
         return specs
+
+    # Operation type constants (integers for torch.compile-friendly comparison)
+    _OP_BLOCK = 0
+    _OP_POOL = 1
+
+    @functools.cached_property
+    def _execution_order_cached(self) -> list[str]:
+        """Cached execution order for forward pass routing."""
+        _, boundary_index = self._boundary_timeline
+        return sorted(boundary_index.keys(), key=lambda s: boundary_index[s])
+
+    def execution_order(self) -> list[str]:
+        """Return slot IDs in forward execution order.
+
+        For CNNHost with PRE/POST_POOL surfaces, this interleaves by block:
+        r0c0 -> r1c0 -> r0c1 -> r1c1 -> r0c2 -> r1c2 -> ...
+
+        This order matches the actual forward pass through the network.
+        """
+        return list(self._execution_order_cached)  # Return copy to prevent mutation
 
     @functools.cached_property
     def segment_channels(self) -> dict[str, int]:
@@ -110,9 +169,95 @@ class CNNHost(nn.Module):
         return {spec.slot_id: spec.channels for spec in self.injection_specs()}
 
     @functools.cached_property
-    def _segment_to_block(self) -> dict[str, int]:
-        """Slot ID to block index mapping (cached; architecture-derived)."""
-        return {spec.slot_id: spec.layer_range[0] for spec in self.injection_specs()}
+    def _boundary_timeline(self) -> tuple[list[tuple[str, int]], dict[str, int]]:
+        """Precompute linear timeline of operations and boundary indices.
+
+        Returns:
+            Tuple of (timeline, boundary_index) where:
+            - timeline: List of (op, block_idx) tuples in execution order.
+                op in {"block", "pool"}
+            - boundary_index: Dict mapping slot_id -> timeline index where
+                that boundary is reached (after the operation completes).
+
+        Timeline structure (for 3 blocks with pooling on all):
+            [("block", 0), ("pool", 0), ("block", 1), ("pool", 1), ("block", 2), ("pool", 2)]
+
+        Boundary positions:
+            r0c0 (PRE_POOL block 0) -> after ("block", 0) -> index 0
+            r1c0 (POST_POOL block 0) -> after ("pool", 0) -> index 1
+            r0c1 (PRE_POOL block 1) -> after ("block", 1) -> index 2
+            ... and so on
+        """
+        from esper.leyline.slot_id import format_slot_id
+
+        timeline: list[tuple[str, int]] = []
+        boundary_index: dict[str, int] = {}
+
+        for i in range(self.n_blocks):
+            # Block operation
+            timeline.append(("block", i))
+            # PRE_POOL boundary (r0c{i}) is reached after block
+            boundary_index[format_slot_id(0, i)] = len(timeline) - 1
+
+            # Pool operation (only if pooling applies to this block)
+            if i < self._pool_layers:
+                timeline.append(("pool", i))
+                # POST_POOL boundary (r1c{i}) is reached after pool
+                boundary_index[format_slot_id(1, i)] = len(timeline) - 1
+
+        return timeline, boundary_index
+
+    @functools.cached_property
+    def _execution_plans(self) -> dict[tuple[str | None, str], tuple[tuple[int, int], ...]]:
+        """Pre-compute execution plans for all valid (from_segment, to_segment) pairs.
+
+        Returns:
+            Dict mapping (from_seg, to_seg) -> tuple of (op_type, block_idx)
+            where op_type: 0=block, 1=pool
+
+        Using tuple instead of list for immutability and torch.compile benefits.
+        Pre-computing eliminates string operations from the hot path.
+        """
+        timeline, boundary_index = self._boundary_timeline
+
+        # Convert string ops to integers once
+        int_timeline = tuple(
+            (self._OP_BLOCK if op == "block" else self._OP_POOL, idx)
+            for op, idx in timeline
+        )
+
+        plans: dict[tuple[str | None, str], tuple[tuple[int, int], ...]] = {}
+
+        # Pre-compute for from_segment=None (network input)
+        for to_seg, end_idx in boundary_index.items():
+            ops = tuple(int_timeline[k] for k in range(0, end_idx + 1))
+            plans[(None, to_seg)] = ops
+
+        # Pre-compute for all valid (from, to) pairs
+        for from_seg, start_idx in boundary_index.items():
+            for to_seg, end_idx in boundary_index.items():
+                if start_idx < end_idx:
+                    ops = tuple(int_timeline[k] for k in range(start_idx + 1, end_idx + 1))
+                    plans[(from_seg, to_seg)] = ops
+
+        return plans
+
+    @functools.cached_property
+    def _from_segment_plans(self) -> dict[str, tuple[tuple[int, int], ...]]:
+        """Pre-compute execution plans from each segment to network output."""
+        timeline, boundary_index = self._boundary_timeline
+
+        int_timeline = tuple(
+            (self._OP_BLOCK if op == "block" else self._OP_POOL, idx)
+            for op, idx in timeline
+        )
+
+        plans: dict[str, tuple[tuple[int, int], ...]] = {}
+        for seg, start_idx in boundary_index.items():
+            ops = tuple(int_timeline[k] for k in range(start_idx + 1, len(int_timeline)))
+            plans[seg] = ops
+
+        return plans
 
     @property
     def injection_points(self) -> dict[str, int]:
@@ -139,65 +284,69 @@ class CNNHost(nn.Module):
     ) -> torch.Tensor:
         """Forward from one segment boundary to another.
 
+        Uses pre-computed execution plans for torch.compile compatibility.
+        Integer op codes eliminate string comparison in the hot path.
+
         Args:
-            segment: Target segment (e.g., "r0c0", "r0c1", "r0c2")
+            segment: Target segment (e.g., "r0c0", "r1c0", "r0c1")
             x: Raw input if from_segment is None, else features at from_segment boundary
             from_segment: Starting point (None = network input)
 
         Returns:
             Features at segment boundary
         """
-        if segment not in self.segment_channels:
-            raise ValueError(f"Unknown segment: {segment}. Available: {list(self.segment_channels.keys())}")
-        if from_segment is not None and from_segment not in self.segment_channels:
-            raise ValueError(f"Unknown from_segment: {from_segment}. Available: {list(self.segment_channels.keys())}")
+        # Single dict lookup with tuple key (computed once per call)
+        plan = self._execution_plans.get((from_segment, segment))
+        if plan is None:
+            # Error path - not in hot loop, can use strings for clear error messages
+            _, boundary_index = self._boundary_timeline
+            if segment not in boundary_index:
+                raise ValueError(f"Unknown segment: {segment}. Available: {list(boundary_index.keys())}")
+            if from_segment is not None and from_segment not in boundary_index:
+                raise ValueError(f"Unknown from_segment: {from_segment}. Available: {list(boundary_index.keys())}")
+            # If both exist but no plan, it's a backwards routing attempt
+            raise ValueError(
+                f"Cannot route backwards or to same boundary: {from_segment} -> {segment}"
+            )
 
-        # Only convert at entry point (avoid redundant conversion in chained calls)
+        # Memory format conversion at entry point only
         if from_segment is None and self._memory_format == torch.channels_last:
             x = x.to(memory_format=torch.channels_last)
 
-        # Use cached mapping (avoid per-call dict rebuilding)
-        target_block = self._segment_to_block[segment]
-        start_block = 0 if from_segment is None else self._segment_to_block[from_segment] + 1
-
-        # Detect backwards/same-segment routing: if start_block > target_block, the range
-        # range(start_block, target_block + 1) would be empty and the function would silently
-        # return input unchanged - this is always a bug
-        if from_segment is not None and start_block > target_block:
-            raise ValueError(
-                f"Cannot route backwards: segment '{segment}' (block {target_block}) "
-                f"is before or same as from_segment '{from_segment}' (block {start_block - 1})"
-            )
-
-        # Forward through blocks in range [start_block, target_block]
-        for idx in range(start_block, target_block + 1):
-            x = self.blocks[idx](x)
-            if idx < self._pool_layers:
+        # Execute with integer comparisons (torch.compile-friendly)
+        # Loop over pre-computed tuple - bounds are static per (from, to) pair
+        for op_type, block_idx in plan:
+            if op_type == 0:  # _OP_BLOCK - integer comparison
+                x = self.blocks[block_idx](x)
+            else:  # _OP_POOL
                 x = self.pool(x)
 
         return x
 
     def forward_from_segment(self, segment: str, x: torch.Tensor) -> torch.Tensor:
-        """Forward from a segment to output.
+        """Forward from a segment boundary to output logits.
+
+        Uses pre-computed execution plans for torch.compile compatibility.
+        Integer op codes eliminate string comparison in the hot path.
 
         Args:
-            segment: Starting segment ID ("r0c0", "r0c1", or "r0c2")
+            segment: Starting segment ID (e.g., "r0c0", "r1c0", "r0c2")
             x: Feature map at segment boundary (already in correct memory format)
 
         Returns:
             Classification logits
         """
-        if segment not in self.segment_channels:
-            raise ValueError(f"Unknown segment: {segment}. Available: {list(self.segment_channels.keys())}")
+        plan = self._from_segment_plans.get(segment)
+        if plan is None:
+            # Error path - not in hot loop
+            _, boundary_index = self._boundary_timeline
+            raise ValueError(f"Unknown segment: {segment}. Available: {list(boundary_index.keys())}")
 
-        # No memory format conversion needed - tensor already converted by forward_to_segment
-        # Use cached mapping
-        start_block = self._segment_to_block[segment]
-
-        # Forward through remaining blocks
-        for idx in range(start_block + 1, self.n_blocks):
-            x = self.blocks[idx](x)
-            if idx < self._pool_layers:
+        # Execute remaining operations with integer comparisons
+        for op_type, block_idx in plan:
+            if op_type == 0:  # _OP_BLOCK
+                x = self.blocks[block_idx](x)
+            else:  # _OP_POOL
                 x = self.pool(x)
 
         # Global average pooling and classification
@@ -366,6 +515,7 @@ class TransformerHost(nn.Module):
 
         Returns:
             List of InjectionSpec, one per segment, sorted by network position.
+            Order values are unique per segment (0, 1, 2, ...) for action index stability.
         """
         from esper.leyline import InjectionSpec
         from esper.leyline.slot_id import format_slot_id
@@ -381,6 +531,9 @@ class TransformerHost(nn.Module):
                     channels=self.n_embd,
                     position=(i + 1) / self.num_segments,
                     layer_range=(start_layer, end_layer),
+                    order=i,  # Unique order per segment for action index stability
+                    row=0,
+                    col=i,
                 )
             )
         return specs
@@ -399,6 +552,13 @@ class TransformerHost(nn.Module):
     def topology(self) -> str:
         """Return 'transformer' for this transformer backbone."""
         return "transformer"
+
+    def execution_order(self) -> list[str]:
+        """Return slot IDs in forward execution order.
+
+        For TransformerHost (single-row), execution order equals spec order.
+        """
+        return [spec.slot_id for spec in self.injection_specs()]
 
     # NOTE: forward_to_segment() is intentionally duplicated between CNNHost
     # and TransformerHost. While the structure is similar, the details differ:
@@ -548,9 +708,16 @@ class MorphogeneticModel(nn.Module):
             )
         self.seed_slots: nn.ModuleDict = nn.ModuleDict(slots_dict)
 
-        # Track slot order for forward pass (derived from host's injection_specs)
+        # Track slot order for action indices (row-major from host's injection_specs)
         self._slot_order = [spec.slot_id for spec in host.injection_specs()]
         self._active_slots = [s for s in self._slot_order if s in self.seed_slots]
+
+        # Build timeline order for routing (execution order through network)
+        # This may differ from row-major order when multichannel surfaces exist
+        # Timeline order: r0c0 → r1c0 → r0c1 → r1c1 → ... (interleaved by block)
+        # Row-major order: r0c0 → r0c1 → r0c2 → r1c0 → r1c1 → ... (for action indices)
+        self._timeline_order = self._build_timeline_order(host)
+        self._active_slots_timeline = [s for s in self._timeline_order if s in self.seed_slots]
 
         # Move host to device
         # Host must be an nn.Module (all HostProtocol implementers are nn.Module)
@@ -574,26 +741,47 @@ class MorphogeneticModel(nn.Module):
 
         return result
 
+    @staticmethod
+    def _build_timeline_order(host: "HostProtocol") -> list[str]:
+        """Build slot ordering for forward pass routing.
+
+        For multichannel hosts (CNNHost with PRE/POST_POOL), the timeline order
+        is interleaved by block: r0c0 → r1c0 → r0c1 → r1c1 → ...
+
+        For single-row hosts (TransformerHost), timeline == spec order.
+
+        Args:
+            host: The host network implementing HostProtocol.
+
+        Returns:
+            List of slot IDs in timeline (execution) order.
+        """
+        return host.execution_order()
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through host with all active slots.
 
-        Processes sequentially through network segments, applying slot
-        transformations at each segment boundary.
+        Processes sequentially through network segments in timeline order,
+        applying slot transformations at each segment boundary.
+
+        Note: Uses _active_slots_timeline (execution order) for routing, not
+        _active_slots (row-major order). This is critical for multichannel hosts
+        where PRE_POOL and POST_POOL surfaces interleave.
         """
         # If no active slots, use host's forward directly
-        if not self._active_slots:
+        if not self._active_slots_timeline:
             return self.host.forward(x)
 
-        # Process through active slots
+        # Process through active slots in timeline order
         prev_segment = None
-        for slot_id in self._active_slots:
+        for slot_id in self._active_slots_timeline:
             x = self.host.forward_to_segment(slot_id, x, from_segment=prev_segment)
             # Use __call__ to preserve hooks/wrappers (e.g., torch.compile, profilers).
             slot_obj: SeedSlot = self.seed_slots[slot_id]  # type: ignore[assignment]
             x = slot_obj(x)
             prev_segment = slot_id
         assert prev_segment is not None, (
-            "prev_segment unexpectedly None after processing _active_slots. "
+            "prev_segment unexpectedly None after processing _active_slots_timeline. "
             "This indicates a control flow bug - the early return should handle empty slots."
         )
         return self.host.forward_from_segment(prev_segment, x)
@@ -628,8 +816,11 @@ class MorphogeneticModel(nn.Module):
         Raises:
             ValueError: If alpha_overrides contains keys not in seed_slots.
             ValueError: If alpha_override shape doesn't match expected topology shape.
+
+        Note: Uses _active_slots_timeline (execution order) for routing, not
+        _active_slots (row-major order). See forward() for details.
         """
-        if not self._active_slots:
+        if not self._active_slots_timeline:
             return self.host.forward(x)
 
         # Validate all alpha_overrides keys exist in seed_slots (fail-fast on typos)
@@ -652,7 +843,7 @@ class MorphogeneticModel(nn.Module):
                 )
 
         prev_segment = None
-        for slot_id in self._active_slots:
+        for slot_id in self._active_slots_timeline:
             x = self.host.forward_to_segment(slot_id, x, from_segment=prev_segment)
             # Call slot with alpha_override tensor
             override = alpha_overrides.get(slot_id)
@@ -660,7 +851,7 @@ class MorphogeneticModel(nn.Module):
             x = slot_obj(x, alpha_override=override)
             prev_segment = slot_id
         assert prev_segment is not None, (
-            "prev_segment unexpectedly None after processing _active_slots. "
+            "prev_segment unexpectedly None after processing _active_slots_timeline. "
             "This indicates a control flow bug - the early return should handle empty slots."
         )
         return self.host.forward_from_segment(prev_segment, x)

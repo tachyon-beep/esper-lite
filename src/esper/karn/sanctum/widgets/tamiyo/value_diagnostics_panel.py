@@ -3,14 +3,11 @@
 Per DRL expert review: Return distribution reveals whether the policy is
 consistent (or bimodal) even when point metrics look stable.
 
-Per PyTorch expert: Compile status should be visible (fallback to eager = 3-5x slower).
-
 Layout:
     ┌─ VALUE DIAGNOSTICS ────────────────────────┐
     │ Returns   p10:-12  p50:+34  p90:+78        │
     │ Ret σ     14.2     Skew     +0.3           │
     │ R Mean    +12.4    Trend     ↗             │
-    │ Compile: inductor:reduce-overhead ✓        │
     └────────────────────────────────────────────┘
 """
 
@@ -50,11 +47,10 @@ class ValueDiagnosticsPanel(Static):
     def render(self) -> Text:
         """Render value function diagnostics.
 
-        Layout (4 lines, two sub-columns + compile):
+        Layout (3 lines, two sub-columns):
             Returns    p10:-12   p50:+34   p90:+78 ⚠
             Ret σ      14.2      Skew        +0.3
             R Mean     +12.4     Trend       ↗
-            Compile    inductor:reduce-overhead ✓
         """
         if self._snapshot is None:
             return Text("[no data]", style="dim")
@@ -110,20 +106,6 @@ class ValueDiagnosticsPanel(Static):
             self._render_value(result, arrow, arrow_style, last=True)
         else:
             self._render_value(result, "—", "dim", last=True)
-        result.append("\n")
-
-        # Line 4: Compile status (full width)
-        self._render_label(result, "Compile")
-        infra = self._snapshot.tamiyo.infrastructure
-
-        if infra.compile_enabled:
-            backend = infra.compile_backend or "inductor"
-            mode = infra.compile_mode or "default"
-            result.append(f"{backend}:{mode}", style="green")
-            result.append(" ✓", style="green bold")
-        else:
-            result.append("EAGER", style="red bold reverse")
-            result.append(" (3-5x slower)", style="dim")
 
         return result
 

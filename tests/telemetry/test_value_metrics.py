@@ -52,6 +52,11 @@ def _make_ppo_update_payload(**overrides) -> PPOUpdatePayload:
         "value_std": 1.0,
         "value_min": -2.0,
         "value_max": 2.0,
+        # Required Q-value diagnostics
+        "op_q_values": (0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+        "op_valid_mask": (True, True, True, True, True, True),
+        "q_variance": 0.0,
+        "q_spread": 0.0,
         # Required diagnostics
         "entropy_collapsed": False,
         "update_time_ms": 50.0,

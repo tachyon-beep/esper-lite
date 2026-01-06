@@ -230,12 +230,16 @@ class TestMorphogeneticModelDynamicSlots:
         host = CNNHost(num_classes=10, n_blocks=4)
         model = MorphogeneticModel(host, device="cpu", slots=["r0c1", "r0c3"])
 
-        # Verify slot order matches host specs
+        # Verify slot order matches host specs (row-major for action index stability)
         expected_order = [spec.slot_id for spec in host.injection_specs()]
         assert model._slot_order == expected_order
-        assert expected_order == ["r0c0", "r0c1", "r0c2", "r0c3"]
+        # 4 blocks × 2 surfaces each = 8 slots, row-major order
+        assert expected_order == [
+            "r0c0", "r0c1", "r0c2", "r0c3",  # row 0 (PRE_POOL)
+            "r1c0", "r1c1", "r1c2", "r1c3",  # row 1 (POST_POOL)
+        ]
 
-        # Verify active slots are filtered correctly
+        # Verify active slots are filtered correctly (only requested slots from row 0)
         assert model._active_slots == ["r0c1", "r0c3"]
 
 

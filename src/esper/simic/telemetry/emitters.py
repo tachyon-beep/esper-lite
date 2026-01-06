@@ -38,9 +38,9 @@ from esper.leyline.telemetry import HeadTelemetry
 from esper.nissa import get_hub
 
 from .debug_telemetry import LayerGradientStats, collect_per_layer_gradients
+from esper.simic.vectorized_types import ActionMaskFlags, ActionOutcome, ActionSpec
 
 if TYPE_CHECKING:
-    from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
     from esper.simic.training.parallel_env_state import ParallelEnvState
 
     from .observation_stats import ObservationStatsTelemetry
@@ -88,6 +88,8 @@ class VectorizedEmitter:
         epoch: int,
         env_state: "ParallelEnvState",
         slot_reports: dict[str, Any],
+        *,
+        observation_stats: "ObservationStatsTelemetry | None" = None,
     ) -> None:
         """Emit per-environment epoch metrics and seed telemetry."""
         if not self._should_emit("ops_normal"):
@@ -124,6 +126,7 @@ class VectorizedEmitter:
                 val_loss=env_state.val_loss,
                 inner_epoch=epoch,
                 seeds=seeds_telemetry,
+                observation_stats=observation_stats,
             ),
         ))
 
@@ -134,6 +137,7 @@ class VectorizedEmitter:
         val_acc: float,
         all_disabled_acc: float | None = None,
         pair_accs: dict[tuple[int, int], float] | None = None,
+        solo_accs: dict[str, float] | None = None,
     ) -> None:
         """Emit live counterfactual matrix for dashboard visualization."""
         if not self._should_emit("ops_normal") or not active_slots:
@@ -141,6 +145,7 @@ class VectorizedEmitter:
 
         configs = []
         n = len(active_slots)
+        solo_accs = solo_accs if solo_accs is not None else {}
 
         # All disabled
         strategy = "full_factorial" if all_disabled_acc is not None else "ablation_only"
@@ -151,14 +156,18 @@ class VectorizedEmitter:
             "accuracy": final_all_disabled,
         })
 
-        # Per-slot solo estimates (derived from ablation)
+        # Per-slot solo accuracies (prefer measured solo-on, fallback to ablation estimate)
         for i, slot_id in enumerate(active_slots):
-            contribution = val_acc - baseline_accs[slot_id]
-            solo_estimate = final_all_disabled + contribution
+            if slot_id in solo_accs:
+                solo_acc = solo_accs[slot_id]
+            else:
+                # Fallback to ablation-based estimate when solo-on accuracy isn't available
+                contribution = val_acc - baseline_accs[slot_id]
+                solo_acc = final_all_disabled + contribution
             mask = [j == i for j in range(n)]
             configs.append({
                 "seed_mask": mask,
-                "accuracy": solo_estimate,
+                "accuracy": solo_acc,
             })
 
         # Pair configs (measured)
@@ -190,27 +199,24 @@ class VectorizedEmitter:
     def on_last_action(
         self,
         epoch: int,
-        action_indices: dict[str, int],
-        slot_id: str,
-        masked: dict[str, bool],
-        success: bool,
+        action_spec: ActionSpec,
+        masked: ActionMaskFlags,
+        outcome: ActionOutcome,
         active_alpha_algorithm: str | None = None,
         *,
-        total_reward: float | None = None,
         value_estimate: float | None = None,
         host_accuracy: float | None = None,
         slot_states: dict[str, str] | None = None,
         action_confidence: float | None = None,
         alternatives: list[tuple[str, float]] | None = None,
         decision_entropy: float | None = None,
-        reward_components: "RewardComponentsTelemetry | None" = None,
         head_telemetry: HeadTelemetry | None = None,
         observation_stats: "ObservationStatsTelemetry | None" = None,
     ) -> None:
         """Emit last-action telemetry from the training loop.
 
         This is the PRODUCTION path called by vectorized.py during training.
-        It accepts action indices as a dict and includes rich context (rewards,
+        It accepts a decoded ActionSpec and includes rich context (rewards,
         confidence, alternatives) for the Sanctum TUI decision cards.
 
         Note: There is also a standalone `emit_last_action()` function at module
@@ -220,19 +226,16 @@ class VectorizedEmitter:
 
         Args:
             epoch: Current training epoch
-            action_indices: Dict mapping head names to action indices
-            slot_id: Target slot for the action
-            masked: Dict mapping head names to mask flags
-            success: Whether the action executed successfully
+            action_spec: Decoded action indices and derived fields
+            masked: Mask flags for each action head
+            outcome: Action execution result and reward context
             active_alpha_algorithm: Current alpha algorithm for the slot
-            total_reward: Total reward for this step
             value_estimate: Value function estimate
             host_accuracy: Current host model validation accuracy
             slot_states: Dict mapping slot IDs to state descriptions
             action_confidence: Confidence (probability) of the chosen action
             alternatives: Top-2 alternative actions with probabilities
             decision_entropy: Entropy of the action distribution
-            reward_components: Typed dataclass with full reward breakdown (may be None for LOSS family)
             head_telemetry: Typed dataclass with per-head confidence and entropy values
             observation_stats: Observation space health metrics (only passed for env_idx==0 to avoid redundancy)
         """
@@ -244,7 +247,7 @@ class VectorizedEmitter:
         # for now just creating the event object here is much faster than
         # the original unrolled logic in vectorized.py.
 
-        action_name = OP_NAMES[action_indices["op"]]
+        action_name = OP_NAMES[action_spec.op_idx]
         is_germinate = action_name == "GERMINATE"
         is_set_alpha = action_name == "SET_ALPHA_TARGET"
         is_prune = action_name == "PRUNE"
@@ -252,39 +255,31 @@ class VectorizedEmitter:
         # Emitting them for non-germinate ops is misleading in the UI (e.g., CIFAR
         # runs showing transformer-only blueprints that were never executed).
         blueprint_id: str | None = (
-            BLUEPRINT_IDS[action_indices["blueprint"]]
+            BLUEPRINT_IDS[action_spec.blueprint_idx]
             if is_germinate
             else None
         )
-        style_idx = action_indices["style"]
+        style_idx = action_spec.style_idx
         style: str | None = STYLE_NAMES[style_idx] if is_germinate or is_set_alpha else None
         blend_id: str | None = STYLE_BLEND_IDS[style_idx] if style is not None else None
         selected_alpha_algorithm = STYLE_ALPHA_ALGORITHMS[style_idx].name
         alpha_algorithm = active_alpha_algorithm or selected_alpha_algorithm
-        tempo_idx: int | None = action_indices["tempo"] if is_germinate else None
+        tempo_idx: int | None = action_spec.tempo_idx if is_germinate else None
         alpha_target: float | None = (
-            ALPHA_TARGET_VALUES[action_indices["alpha_target"]]
+            ALPHA_TARGET_VALUES[action_spec.alpha_target_idx]
             if is_germinate or is_set_alpha
             else None
         )
         alpha_speed: str | None = (
-            ALPHA_SPEED_NAMES[action_indices["alpha_speed"]]
+            ALPHA_SPEED_NAMES[action_spec.alpha_speed_idx]
             if is_set_alpha or is_prune
             else None
         )
         alpha_curve: str | None = (
-            ALPHA_CURVE_NAMES[action_indices["alpha_curve"]]
+            ALPHA_CURVE_NAMES[action_spec.alpha_curve_idx]
             if is_set_alpha or is_prune
             else None
         )
-        alpha_target_masked = bool(masked.get("alpha_target", False))
-        alpha_speed_masked = bool(masked.get("alpha_speed", False))
-        alpha_curve_masked = bool(masked.get("alpha_curve", False))
-        op_masked = bool(masked.get("op", False))
-        slot_masked = bool(masked.get("slot", False))
-        blueprint_masked = bool(masked.get("blueprint", False))
-        style_masked = bool(masked.get("style", False))
-        tempo_masked = bool(masked.get("tempo", False))
 
         self._emit(TelemetryEvent(
             event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
@@ -295,19 +290,19 @@ class VectorizedEmitter:
                 kind="last_action",
                 env_id=self.env_id,
                 inner_epoch=epoch,
-                total_reward=total_reward,
+                total_reward=outcome.reward_raw,
                 action_name=action_name,
                 action_confidence=action_confidence,
                 value_estimate=value_estimate,
                 # Pass typed dataclasses directly - replaces individual component fields
-                reward_components=reward_components,
+                reward_components=outcome.reward_components,
                 head_telemetry=head_telemetry,
                 # Decision context for TamiyoBrain Decision Cards
                 slot_states=slot_states,
                 alternatives=alternatives,
                 decision_entropy=decision_entropy,
                 # Head choice fields (for decision card sub-decision display)
-                slot_id=slot_id,
+                slot_id=action_spec.target_slot,
                 blueprint_id=blueprint_id,
                 tempo_idx=tempo_idx,
                 style=style,
@@ -317,15 +312,15 @@ class VectorizedEmitter:
                 alpha_curve=alpha_curve,
                 alpha_algorithm=alpha_algorithm,
                 alpha_algorithm_selected=selected_alpha_algorithm,
-                action_success=success,
-                op_masked=op_masked,
-                slot_masked=slot_masked,
-                blueprint_masked=blueprint_masked,
-                style_masked=style_masked,
-                tempo_masked=tempo_masked,
-                alpha_target_masked=alpha_target_masked,
-                alpha_speed_masked=alpha_speed_masked,
-                alpha_curve_masked=alpha_curve_masked,
+                action_success=outcome.action_success,
+                op_masked=masked.op_masked,
+                slot_masked=masked.slot_masked,
+                blueprint_masked=masked.blueprint_masked,
+                style_masked=masked.style_masked,
+                tempo_masked=masked.tempo_masked,
+                alpha_target_masked=masked.alpha_target_masked,
+                alpha_speed_masked=masked.alpha_speed_masked,
+                alpha_curve_masked=masked.alpha_curve_masked,
                 observation_stats=observation_stats,
             ),
         ))
@@ -808,6 +803,15 @@ def emit_ppo_update_event(
             avg_grad_norm = sum(values) / len(values)  # Fail on empty list
             head_grad_norms_avg[f"head_{head}_grad_norm"] = avg_grad_norm
 
+    step_time_ms_sum = metrics["throughput_step_time_ms_sum"]
+    dataloader_wait_ms_sum = metrics["throughput_dataloader_wait_ms_sum"]
+    # When updates are skipped (empty buffer / finiteness gate), step time can be 0.
+    dataloader_wait_ratio = (
+        dataloader_wait_ms_sum / step_time_ms_sum
+        if step_time_ms_sum != 0.0
+        else 0.0
+    )
+
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
         epoch=episodes_completed,  # Monotonic per-batch epoch id (NOT inner epoch!)
@@ -853,15 +857,10 @@ def emit_ppo_update_event(
             value_min=metrics["value_min"],
             value_max=metrics["value_max"],
             # Q-values (Policy V2 op-conditioned critic)
-            # Use NaN default to distinguish "missing" from "zero" (CRIT-01 fix)
-            q_germinate=metrics.get("q_germinate", float("nan")),
-            q_advance=metrics.get("q_advance", float("nan")),
-            q_fossilize=metrics.get("q_fossilize", float("nan")),
-            q_prune=metrics.get("q_prune", float("nan")),
-            q_wait=metrics.get("q_wait", float("nan")),
-            q_set_alpha=metrics.get("q_set_alpha", float("nan")),
-            q_variance=metrics.get("q_variance", float("nan")),
-            q_spread=metrics.get("q_spread", float("nan")),
+            op_q_values=metrics["op_q_values"],
+            op_valid_mask=metrics["op_valid_mask"],
+            q_variance=metrics["q_variance"],
+            q_spread=metrics["q_spread"],
             lr=lr,
             entropy_coef=metrics.get("entropy_coef"),
             inf_grad_count=metrics.get("inf_grad_count", 0),
@@ -909,6 +908,7 @@ def emit_ppo_update_event(
             cuda_memory_reserved_gb=metrics.get("cuda_memory_reserved_gb", 0.0),
             cuda_memory_peak_gb=metrics.get("cuda_memory_peak_gb", 0.0),
             cuda_memory_fragmentation=metrics.get("cuda_memory_fragmentation", 0.0),
+            dataloader_wait_ratio=dataloader_wait_ratio,
             # LSTM health metrics (B7-DRL-04)
             lstm_h_l2_total=metrics.get("lstm_h_l2_total"),
             lstm_c_l2_total=metrics.get("lstm_c_l2_total"),

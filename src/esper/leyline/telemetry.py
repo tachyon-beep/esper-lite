@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 from uuid import uuid4
 
 from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
+from esper.leyline.factored_actions import NUM_OPS
 from esper.leyline.stages import SeedStage
 
 # =============================================================================
@@ -530,9 +531,20 @@ class EpochCompletedPayload:
     # OPTIONAL - per-seed telemetry snapshots
     seeds: dict[str, dict[str, Any]] | None = None
 
+    # OPTIONAL - observation space health metrics
+    observation_stats: "ObservationStatsTelemetry | None" = None
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "EpochCompletedPayload":
         """Parse from dict. Raises KeyError on missing required fields."""
+        observation_stats_data = data["observation_stats"]
+        observation_stats: ObservationStatsTelemetry | None
+        if observation_stats_data is None:
+            observation_stats = None
+        else:
+            from esper.simic.telemetry.observation_stats import ObservationStatsTelemetry
+            observation_stats = ObservationStatsTelemetry.from_dict(observation_stats_data)
+
         return cls(
             env_id=data["env_id"],
             val_accuracy=data["val_accuracy"],
@@ -542,6 +554,7 @@ class EpochCompletedPayload:
             train_accuracy=data.get("train_accuracy"),
             host_grad_norm=data.get("host_grad_norm"),
             seeds=data.get("seeds"),
+            observation_stats=observation_stats,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -549,6 +562,11 @@ class EpochCompletedPayload:
 
         PERF: Avoids dataclasses.asdict() deep-copying nested dict payloads (e.g., per-seed telemetry).
         """
+        observation_stats = (
+            self.observation_stats.to_dict()
+            if self.observation_stats is not None
+            else None
+        )
         return {
             "env_id": self.env_id,
             "val_accuracy": self.val_accuracy,
@@ -558,6 +576,7 @@ class EpochCompletedPayload:
             "train_accuracy": self.train_accuracy,
             "host_grad_norm": self.host_grad_norm,
             "seeds": self.seeds,
+            "observation_stats": observation_stats,
         }
 
 
@@ -765,14 +784,13 @@ class PPOUpdatePayload:
     value_max: float = 0.0
 
     # === Op-Conditioned Q-Values (Policy V2) ===
-    # Q(s, op) for each operation - value estimates conditioned on the operation
-    # These show how the critic values different operations in the current state
-    q_germinate: float = 0.0  # Q(s, GERMINATE)
-    q_advance: float = 0.0    # Q(s, ADVANCE)
-    q_fossilize: float = 0.0  # Q(s, FOSSILIZE)
-    q_prune: float = 0.0      # Q(s, PRUNE)
-    q_wait: float = 0.0       # Q(s, WAIT)
-    q_set_alpha: float = 0.0  # Q(s, SET_ALPHA_TARGET)
+    # Q(s, op) vector aligned to LifecycleOp/NUM_OPS ordering.
+    op_q_values: tuple[float, ...] = field(
+        default_factory=lambda: tuple(float("nan") for _ in range(NUM_OPS))
+    )
+    op_valid_mask: tuple[bool, ...] = field(
+        default_factory=lambda: tuple(False for _ in range(NUM_OPS))
+    )
 
     # Q-value analysis metrics
     q_variance: float = 0.0  # Variance across ops (low = critic ignoring op conditioning)
@@ -792,6 +810,7 @@ class PPOUpdatePayload:
     cuda_memory_reserved_gb: float = 0.0   # torch.cuda.memory_reserved()
     cuda_memory_peak_gb: float = 0.0       # torch.cuda.max_memory_allocated()
     cuda_memory_fragmentation: float = 0.0 # 1 - (allocated/reserved), >0.3 = pressure
+    dataloader_wait_ratio: float = 0.0    # Fraction of step time spent waiting on data
 
     # === LSTM Hidden State Health (B7-DRL-04) ===
     # Tracks LSTM hidden state stability after PPO updates (BPTT can corrupt states)
@@ -810,6 +829,16 @@ class PPOUpdatePayload:
     lstm_c_max: float | None = None   # Max absolute value in c
     lstm_has_nan: bool = False  # NaN detected in hidden state
     lstm_has_inf: bool = False  # Inf detected in hidden state
+
+    def __post_init__(self) -> None:
+        if len(self.op_q_values) != NUM_OPS:
+            raise ValueError(
+                f"Expected op_q_values length {NUM_OPS}, got {len(self.op_q_values)}."
+            )
+        if len(self.op_valid_mask) != NUM_OPS:
+            raise ValueError(
+                f"Expected op_valid_mask length {NUM_OPS}, got {len(self.op_valid_mask)}."
+            )
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "PPOUpdatePayload":
@@ -898,14 +927,10 @@ class PPOUpdatePayload:
             value_min=data["value_min"],
             value_max=data["value_max"],
             # Q-values
-            q_germinate=data.get("q_germinate", 0.0),
-            q_advance=data.get("q_advance", 0.0),
-            q_fossilize=data.get("q_fossilize", 0.0),
-            q_prune=data.get("q_prune", 0.0),
-            q_wait=data.get("q_wait", 0.0),
-            q_set_alpha=data.get("q_set_alpha", 0.0),
-            q_variance=data.get("q_variance", 0.0),
-            q_spread=data.get("q_spread", 0.0),
+            op_q_values=_ensure_tuple(data["op_q_values"]),
+            op_valid_mask=_ensure_tuple(data["op_valid_mask"]),
+            q_variance=data["q_variance"],
+            q_spread=data["q_spread"],
             # Gradient quality metrics - always emitted
             clip_fraction_positive=data["clip_fraction_positive"],
             clip_fraction_negative=data["clip_fraction_negative"],
@@ -915,6 +940,7 @@ class PPOUpdatePayload:
             cuda_memory_reserved_gb=data.get("cuda_memory_reserved_gb", 0.0),
             cuda_memory_peak_gb=data.get("cuda_memory_peak_gb", 0.0),
             cuda_memory_fragmentation=data.get("cuda_memory_fragmentation", 0.0),
+            dataloader_wait_ratio=data["dataloader_wait_ratio"],
             # LSTM health metrics (B7-DRL-04)
             lstm_h_l2_total=data.get("lstm_h_l2_total"),
             lstm_c_l2_total=data.get("lstm_c_l2_total"),
@@ -941,6 +967,7 @@ class PPOUpdatePayload:
     @classmethod
     def skipped_update(cls) -> "PPOUpdatePayload":
         """Factory for skipped PPO updates (buffer rollback)."""
+        nan = float("nan")
         return cls(
             policy_loss=0.0,
             value_loss=0.0,
@@ -949,6 +976,10 @@ class PPOUpdatePayload:
             kl_divergence=0.0,
             clip_fraction=0.0,
             nan_grad_count=0,
+            op_q_values=tuple(nan for _ in range(NUM_OPS)),
+            op_valid_mask=tuple(False for _ in range(NUM_OPS)),
+            q_variance=nan,
+            q_spread=nan,
             skipped=True,
         )
 

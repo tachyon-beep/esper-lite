@@ -11,7 +11,7 @@ def test_heuristic_episode_germinates_and_prunes_across_slots(monkeypatch) -> No
     from esper.kasmina.host import MorphogeneticModel
     from esper.tamiyo.action_enums import build_action_enum
     from esper.runtime import get_task_spec
-    from esper.simic.training import run_heuristic_episode
+    from esper.simic.training.helpers import run_heuristic_episode
     from esper.tamiyo.decisions import TamiyoDecision
 
     task_spec = get_task_spec("cifar_baseline")

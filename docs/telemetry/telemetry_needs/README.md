@@ -27,22 +27,14 @@ Each record traces a metric's journey:
 
 ## Wiring Status Summary
 
-### Fully Wired (84 metrics)
+### Fully Wired (88 metrics)
 
 The vast majority of metrics have complete data pipelines from emitter through aggregator to widget display. These are marked with all checkboxes checked in their Wiring Verification section.
 
-### Wiring Gaps (4 metrics)
+### Wiring Gaps (0 metrics)
 
-These metrics have schema definitions and widget consumers, but the emitter code is stubbed or missing:
-
-| ID | Metric | Schema Location | Issue |
-|----|--------|-----------------|-------|
-| TELE-600 | `obs_nan_count` | `EnvState.obs_nan_count` | Emitter not implemented |
-| TELE-601 | `obs_inf_count` | `EnvState.obs_inf_count` | Emitter not implemented |
-| TELE-602 | `outlier_pct` | `EnvState.outlier_pct` | Emitter not implemented |
-| TELE-603 | `normalization_drift` | `EnvState.normalization_drift` | Emitter not implemented |
-
-**Root Cause:** The observation statistics were planned but never wired from the training loop. The schema and widget code exist, but no code in `simic/` emits these values.
+All observation statistics (TELE-600 to TELE-603) are now emitted via
+`EpochCompletedPayload.observation_stats` and aggregated into Sanctum snapshots.
 
 ### Partially Wired (1 metric)
 
@@ -109,9 +101,8 @@ Records were created by:
 
 To fix the identified gaps:
 
-1. **TELE-600 through TELE-603:** Implement observation stats emission in `simic/training/vectorized.py` during rollout collection
-2. **TELE-610:** Wire remaining `EpisodeStats` fields from episode completion events
-3. **TELE-301:** Fix inf_grad_count increment logic in gradient collection
+1. **TELE-610:** Wire remaining `EpisodeStats` fields from episode completion events
+2. **TELE-301:** Fix inf_grad_count increment logic in gradient collection
 
 ---
 

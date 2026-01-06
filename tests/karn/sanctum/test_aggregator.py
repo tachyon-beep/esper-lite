@@ -747,12 +747,8 @@ def test_aggregator_wires_q_values():
             kl_divergence=0.01,
             clip_fraction=0.15,
             nan_grad_count=0,
-            q_germinate=5.2,
-            q_advance=3.1,
-            q_fossilize=2.8,
-            q_prune=-1.5,
-            q_wait=0.5,
-            q_set_alpha=4.0,
+            op_q_values=(0.5, 5.2, 4.0, -1.5, 2.8, 3.1),
+            op_valid_mask=(True, True, True, True, True, True),
             q_variance=2.3,
             q_spread=6.7,
         ),
@@ -762,12 +758,8 @@ def test_aggregator_wires_q_values():
     snapshot = aggregator.get_snapshot()
 
     # Verify Q-values are wired to TamiyoState
-    assert snapshot.tamiyo.q_germinate == 5.2
-    assert snapshot.tamiyo.q_advance == 3.1
-    assert snapshot.tamiyo.q_fossilize == 2.8
-    assert snapshot.tamiyo.q_prune == -1.5
-    assert snapshot.tamiyo.q_wait == 0.5
-    assert snapshot.tamiyo.q_set_alpha == 4.0
+    assert snapshot.tamiyo.op_q_values == (0.5, 5.2, 4.0, -1.5, 2.8, 3.1)
+    assert snapshot.tamiyo.op_valid_mask == (True, True, True, True, True, True)
     assert snapshot.tamiyo.q_variance == 2.3
     assert snapshot.tamiyo.q_spread == 6.7
 

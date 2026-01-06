@@ -23,7 +23,7 @@ Before writing tests, invoke these skills:
 │  ─────────────────────            ─────────              ────       │
 │                                                                      │
 │  PPOAgent._update()          →   VectorizedEmitter   →   NissaHub   │
-│  (simic/agent/ppo.py)            (simic/telemetry/       (nissa/    │
+│  (simic/agent/ppo_agent.py)      (simic/telemetry/       (nissa/    │
 │                                   emitters.py)            output.py) │
 │                                                                      │
 │  VectorizedTrainer           →   emit_ppo_update()   →   backends   │
@@ -109,7 +109,7 @@ class TestTELE_XXX_MetricName:
 
 ### Emitters (simic)
 - `src/esper/simic/telemetry/emitters.py` - `VectorizedEmitter` class
-- `src/esper/simic/agent/ppo.py` - PPO metrics computation
+- `src/esper/simic/agent/ppo_agent.py` - PPO metrics computation
 
 ### Nissa Hub
 - `src/esper/nissa/output.py` - `NissaHub`, `OutputBackend` protocol
@@ -160,9 +160,9 @@ When `kind="reward_summary"`:
 | Range | Category | Event Type | Source File |
 |-------|----------|------------|-------------|
 | 001-099 | Training | TRAINING_STARTED, BATCH_EPOCH_COMPLETED | vectorized.py |
-| 100-199 | Policy | PPO_UPDATE_COMPLETED | ppo.py, emitters.py |
-| 200-299 | Value | PPO_UPDATE_COMPLETED | ppo.py |
-| 300-399 | Gradient | PPO_UPDATE_COMPLETED | ppo.py, gradient_collector.py |
+| 100-199 | Policy | PPO_UPDATE_COMPLETED | ppo_agent.py, emitters.py |
+| 200-299 | Value | PPO_UPDATE_COMPLETED | ppo_agent.py |
+| 300-399 | Gradient | PPO_UPDATE_COMPLETED | ppo_agent.py, gradient_collector.py |
 | 400-499 | Reward | ANALYTICS_SNAPSHOT | reward_telemetry.py |
 | 500-599 | Seed | SEED_* events | slot.py, emitters.py |
 | 600-699 | Environment | EPOCH_COMPLETED | vectorized.py |
@@ -192,7 +192,7 @@ tests/telemetry/
 ### For PPO Metrics (TELE-100 to TELE-399)
 
 ```python
-from esper.simic.agent.ppo import PPOAgent
+from esper.simic.agent import PPOAgent
 from esper.tamiyo.policy import FactoredPolicy
 
 # Create minimal policy and agent

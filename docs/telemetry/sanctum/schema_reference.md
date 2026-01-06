@@ -249,12 +249,8 @@ This schema defines the telemetry data structures used by Sanctum (TUI/web dashb
 | `value_min` | `float` | `0.0` | Value function min |
 | `value_max` | `float` | `0.0` | Value function max |
 | `initial_value_spread` | `float \| None` | `None` | Set after warmup for relative thresholds |
-| `q_germinate` | `float` | `0.0` | Q(s, GERMINATE) |
-| `q_advance` | `float` | `0.0` | Q(s, ADVANCE) |
-| `q_fossilize` | `float` | `0.0` | Q(s, FOSSILIZE) |
-| `q_prune` | `float` | `0.0` | Q(s, PRUNE) |
-| `q_wait` | `float` | `0.0` | Q(s, WAIT) |
-| `q_set_alpha` | `float` | `0.0` | Q(s, SET_ALPHA) |
+| `op_q_values` | `tuple[float, ...]` | `NaN × NUM_OPS` | Q(s, op) vector aligned to `LifecycleOp` ordering |
+| `op_valid_mask` | `tuple[bool, ...]` | `False × NUM_OPS` | Valid op mask for the sampled state |
 | `q_variance` | `float` | `0.0` | Variance across op Q-values |
 | `q_spread` | `float` | `0.0` | max(Q) - min(Q) across ops |
 | `last_action_success` | `bool` | `True` | Whether previous action succeeded |

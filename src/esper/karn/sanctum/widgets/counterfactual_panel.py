@@ -91,12 +91,40 @@ class CounterfactualPanel(Static):
         """Render the waterfall visualization."""
         lines = []
 
-        baseline = self._matrix.baseline_accuracy
-        combined = self._matrix.combined_accuracy
-        individuals = self._matrix.individual_contributions()
-        pairs = self._matrix.pair_contributions()
-        synergy = self._matrix.total_synergy()
-        n_seeds = len(self._matrix.slot_ids)
+        slot_ids = self._matrix.slot_ids
+        n_seeds = len(slot_ids)
+        accuracy_by_mask = {
+            cfg.seed_mask: cfg.accuracy for cfg in self._matrix.configs
+        }
+
+        baseline_mask = tuple(False for _ in range(n_seeds))
+        if baseline_mask in accuracy_by_mask:
+            baseline = accuracy_by_mask[baseline_mask]
+        else:
+            baseline = 0.0
+
+        combined_mask = tuple(True for _ in range(n_seeds))
+        if combined_mask in accuracy_by_mask:
+            combined = accuracy_by_mask[combined_mask]
+        else:
+            combined = 0.0
+
+        individuals: dict[str, float] = {}
+        for i, slot_id in enumerate(slot_ids):
+            mask = tuple(j == i for j in range(n_seeds))
+            if mask in accuracy_by_mask:
+                individuals[slot_id] = accuracy_by_mask[mask] - baseline
+
+        pairs: dict[tuple[str, str], float] = {}
+        for i in range(n_seeds):
+            for j in range(i + 1, n_seeds):
+                mask = tuple(k == i or k == j for k in range(n_seeds))
+                if mask in accuracy_by_mask:
+                    pairs[(slot_ids[i], slot_ids[j])] = accuracy_by_mask[mask] - baseline
+
+        expected = sum(individuals.values())
+        improvement = combined - baseline
+        synergy = combined - baseline - expected
         is_ablation = self._matrix.strategy == "ablation_only"
 
         # Show strategy indicator for ablation-based estimates
@@ -126,15 +154,32 @@ class CounterfactualPanel(Static):
                 acc = baseline + contrib
                 label = f"  {s1} + {s2}"
                 # Calculate pair synergy
-                ind1 = individuals.get(s1, 0)
-                ind2 = individuals.get(s2, 0)
+                if s1 in individuals:
+                    ind1 = individuals[s1]
+                else:
+                    ind1 = 0.0
+                if s2 in individuals:
+                    ind2 = individuals[s2]
+                else:
+                    ind2 = 0.0
                 pair_synergy = contrib - ind1 - ind2
-                style = "green" if pair_synergy > 0.5 else None
-                lines.append(self._make_bar_line(label, acc, baseline, combined, contrib, highlight=style))
+                if pair_synergy > 0.5:
+                    style = "green"
+                elif pair_synergy < -0.5:
+                    style = "red"
+                else:
+                    style = None
+                line = self._make_bar_line(label, acc, baseline, combined, contrib, highlight=style)
+                self._append_interaction(line, pair_synergy)
+                lines.append(line)
         elif pairs and n_seeds > 3:
-            # Show top 5 by synergy
+            # Show top 5 by synergy (or worst 5 by interference)
             lines.append(Text(""))
-            lines.append(Text("Top Combinations (by synergy):", style="bold"))
+            show_interference = synergy < -0.5
+            if show_interference:
+                lines.append(Text("Top Interference Pairs (most negative):", style="bold red"))
+            else:
+                lines.append(Text("Top Combinations (by synergy):", style="bold"))
 
             # Calculate synergy for each pair
             pair_synergies = []
@@ -144,23 +189,28 @@ class CounterfactualPanel(Static):
                 pair_synergy = contrib - ind1 - ind2
                 pair_synergies.append(((s1, s2), contrib, pair_synergy))
 
-            # Sort by synergy descending, take top 5
-            pair_synergies.sort(key=lambda x: x[2], reverse=True)
+            # Sort by interaction direction and take top 5
+            pair_synergies.sort(key=lambda x: x[2], reverse=not show_interference)
             for (s1, s2), contrib, pair_syn in pair_synergies[:5]:
                 acc = baseline + contrib
                 label = f"  {s1} + {s2}"
-                style = "green" if pair_syn > 0.5 else None
-                lines.append(self._make_bar_line(label, acc, baseline, combined, contrib, highlight=style))
+                if pair_syn > 0.5:
+                    style = "green"
+                elif pair_syn < -0.5:
+                    style = "red"
+                else:
+                    style = None
+                line = self._make_bar_line(label, acc, baseline, combined, contrib, highlight=style)
+                self._append_interaction(line, pair_syn)
+                lines.append(line)
 
         # Combined
         lines.append(Text(""))
         lines.append(Text("Combined:", style="bold"))
-        improvement = combined - baseline
         lines.append(self._make_bar_line("  All seeds", combined, baseline, combined, improvement))
 
         # Synergy summary
         lines.append(Text(""))
-        expected = sum(individuals.values())
         lines.append(Text(f"Expected (sum of solo): +{expected:.1f}%", style="dim"))
         lines.append(Text(f"Actual improvement:     +{improvement:.1f}%", style="dim"))
 
@@ -224,6 +274,16 @@ class CounterfactualPanel(Static):
             line.append(f"  ({delta:+.1f})", style=delta_style)
 
         return line
+
+    def _append_interaction(self, line: Text, interaction: float) -> None:
+        """Append pair interaction term to a bar line."""
+        if interaction > 0.5:
+            style = "green"
+        elif interaction < -0.5:
+            style = "red"
+        else:
+            style = "dim"
+        line.append(f"  I {interaction:+.1f}", style=style)
 
     def _render_interaction_metrics(self) -> list[Text]:
         """Render aggregate interaction metrics from seeds.

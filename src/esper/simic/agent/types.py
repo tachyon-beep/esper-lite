@@ -90,6 +90,13 @@ class PPOUpdateMetrics(TypedDict, total=False):
     return_p90: float
     return_variance: float
     return_skewness: float
+    # CUDA memory metrics (infrastructure monitoring)
+    cuda_memory_allocated_gb: float
+    cuda_memory_reserved_gb: float
+    cuda_memory_peak_gb: float
+    cuda_memory_fragmentation: float
+    throughput_step_time_ms_sum: float
+    throughput_dataloader_wait_ms_sum: float
     # Log prob extremes (NaN predictor)
     log_prob_min: float
     log_prob_max: float
@@ -109,12 +116,8 @@ class PPOUpdateMetrics(TypedDict, total=False):
     head_grad_norms: dict[str, list[float]]  # Per-head, per-epoch
     ratio_diagnostic: dict[str, Any]
     # Q-values (Policy V2 op-conditioned critic)
-    q_germinate: float
-    q_advance: float
-    q_fossilize: float
-    q_prune: float
-    q_wait: float
-    q_set_alpha: float
+    op_q_values: tuple[float, ...]
+    op_valid_mask: tuple[bool, ...]
     q_variance: float
     q_spread: float
     # Per-head NaN/Inf detection (for indicator lights)

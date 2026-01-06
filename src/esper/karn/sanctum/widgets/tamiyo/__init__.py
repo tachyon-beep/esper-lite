@@ -16,6 +16,7 @@ from .action_heads_panel import ActionHeadsPanel
 from .episode_metrics_panel import EpisodeMetricsPanel
 from .critic_calibration_panel import CriticCalibrationPanel
 from .value_diagnostics_panel import ValueDiagnosticsPanel
+from .torch_stability_panel import TorchStabilityPanel
 
 __all__ = [
     "TamiyoBrain",
@@ -24,4 +25,5 @@ __all__ = [
     "EpisodeMetricsPanel",
     "CriticCalibrationPanel",
     "ValueDiagnosticsPanel",
+    "TorchStabilityPanel",
 ]

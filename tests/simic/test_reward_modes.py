@@ -3,6 +3,8 @@
 from esper.leyline import LifecycleOp, LossRewardConfig
 from esper.simic.rewards import (
     ContributionRewardConfig,
+    ContributionRewardInputs,
+    LossRewardInputs,
     RewardFamily,
     RewardMode,
     compute_reward_for_family,
@@ -162,9 +164,7 @@ def test_minimal_reward_penalty_for_young_prune():
 def test_compute_reward_for_family_dispatches_contribution():
     """Reward family selects contribution reward path."""
     contrib_cfg = ContributionRewardConfig(reward_mode=RewardMode.SHAPED)
-    loss_cfg = LossRewardConfig.default()
-    reward = compute_reward_for_family(
-        RewardFamily.CONTRIBUTION,
+    inputs = ContributionRewardInputs(
         action=LifecycleOp.WAIT,
         seed_contribution=None,
         val_acc=70.0,
@@ -177,36 +177,28 @@ def test_compute_reward_for_family_dispatches_contribution():
         acc_delta=0.0,
         committed_val_acc=70.0,
         fossilized_seed_params=0,
-        contribution_config=contrib_cfg,
-        loss_config=loss_cfg,
-        loss_delta=0.1,
-        val_loss=1.0,
+        config=contrib_cfg,
     )
+    reward = compute_reward_for_family(RewardFamily.CONTRIBUTION, inputs)
     assert isinstance(reward, float)
 
 
 def test_compute_reward_for_family_dispatches_loss():
     """Reward family selects loss reward path."""
-    contrib_cfg = ContributionRewardConfig(reward_mode=RewardMode.SHAPED)
     loss_cfg = LossRewardConfig.default()
 
-    reward = compute_reward_for_family(
-        RewardFamily.LOSS,
+    inputs = LossRewardInputs(
         action=LifecycleOp.WAIT,
-        seed_contribution=None,
-        val_acc=70.0,
+        loss_delta=-0.5,
+        val_loss=1.0,
         seed_info=None,
         epoch=1,
         max_epochs=10,
         total_params=100_000,
         host_params=100_000,
-        acc_at_germination=None,
-        acc_delta=0.0,
-        contribution_config=contrib_cfg,
-        loss_config=loss_cfg,
-        loss_delta=-0.5,
-        val_loss=1.0,
+        config=loss_cfg,
     )
+    reward = compute_reward_for_family(RewardFamily.LOSS, inputs)
     # Loss reward should reward improvement (negative delta -> positive reward)
     assert reward > 0
 
@@ -217,19 +209,21 @@ def test_compute_reward_shaped_mode():
     config = ContributionRewardConfig(reward_mode=RewardMode.SHAPED)
 
     reward = compute_reward(
-        action=LifecycleOp.WAIT,
-        seed_contribution=None,
-        val_acc=70.0,
-        seed_info=None,
-        epoch=10,
-        max_epochs=25,
-        total_params=100_000,
-        host_params=100_000,
-        acc_at_germination=None,
-        acc_delta=0.0,
-        committed_val_acc=70.0,
-        fossilized_seed_params=0,
-        config=config,
+        ContributionRewardInputs(
+            action=LifecycleOp.WAIT,
+            seed_contribution=None,
+            val_acc=70.0,
+            seed_info=None,
+            epoch=10,
+            max_epochs=25,
+            total_params=100_000,
+            host_params=100_000,
+            acc_at_germination=None,
+            acc_delta=0.0,
+            committed_val_acc=70.0,
+            fossilized_seed_params=0,
+            config=config,
+        )
     )
 
     # Shaped reward with no seed should be non-zero (rent, etc.)
@@ -243,19 +237,21 @@ def test_compute_reward_sparse_mode():
 
     # Non-terminal epoch
     reward = compute_reward(
-        action=LifecycleOp.WAIT,
-        seed_contribution=None,
-        val_acc=70.0,
-        seed_info=None,
-        epoch=10,
-        max_epochs=25,
-        total_params=100_000,
-        host_params=100_000,
-        acc_at_germination=None,
-        acc_delta=0.0,
-        committed_val_acc=70.0,
-        fossilized_seed_params=0,
-        config=config,
+        ContributionRewardInputs(
+            action=LifecycleOp.WAIT,
+            seed_contribution=None,
+            val_acc=70.0,
+            seed_info=None,
+            epoch=10,
+            max_epochs=25,
+            total_params=100_000,
+            host_params=100_000,
+            acc_at_germination=None,
+            acc_delta=0.0,
+            committed_val_acc=70.0,
+            fossilized_seed_params=0,
+            config=config,
+        )
     )
 
     # Sparse reward at non-terminal = 0.0
@@ -285,19 +281,21 @@ def test_compute_reward_minimal_mode():
 
     # Prune action on young seed
     reward = compute_reward(
-        action=LifecycleOp.PRUNE,
-        seed_contribution=None,
-        val_acc=70.0,
-        seed_info=seed_info,
-        epoch=10,
-        max_epochs=25,
-        total_params=110_000,
-        host_params=100_000,
-        acc_at_germination=65.0,
-        acc_delta=0.5,
-        committed_val_acc=70.0,
-        fossilized_seed_params=0,
-        config=config,
+        ContributionRewardInputs(
+            action=LifecycleOp.PRUNE,
+            seed_contribution=None,
+            val_acc=70.0,
+            seed_info=seed_info,
+            epoch=10,
+            max_epochs=25,
+            total_params=110_000,
+            host_params=100_000,
+            acc_at_germination=65.0,
+            acc_delta=0.5,
+            committed_val_acc=70.0,
+            fossilized_seed_params=0,
+            config=config,
+        )
     )
 
     # Should get early-prune penalty
@@ -315,20 +313,22 @@ def test_compute_reward_basic_mode():
     )
 
     reward = compute_reward(
-        action=LifecycleOp.WAIT,
-        seed_contribution=None,
-        val_acc=70.0,
-        seed_info=None,
-        epoch=1,
-        max_epochs=25,
-        total_params=100_000,
-        host_params=100_000,
-        acc_at_germination=None,
-        acc_delta=1.0,  # +1 percentage point
-        committed_val_acc=70.0,
-        fossilized_seed_params=0,
-        effective_seed_params=50_000,  # 10% of param_budget
-        config=config,
+        ContributionRewardInputs(
+            action=LifecycleOp.WAIT,
+            seed_contribution=None,
+            val_acc=70.0,
+            seed_info=None,
+            epoch=1,
+            max_epochs=25,
+            total_params=100_000,
+            host_params=100_000,
+            acc_at_germination=None,
+            acc_delta=1.0,  # +1 percentage point
+            committed_val_acc=70.0,
+            fossilized_seed_params=0,
+            effective_seed_params=50_000,  # 10% of param_budget
+            config=config,
+        )
     )
 
     # Expected: 5.0 * (1/100) - 0.1 * (50_000 / 500_000) = 0.05 - 0.01 = 0.04

@@ -18,7 +18,7 @@ from datetime import datetime
 
 import numpy as np
 
-from esper.leyline import HEAD_NAMES
+from esper.leyline import HEAD_NAMES, NUM_OPS
 
 
 def compute_entropy_velocity(entropy_history: deque[float] | list[float]) -> float:
@@ -570,7 +570,7 @@ class EnvState:
     reward_mode: str | None = None
 
     # Governor rollback state (catastrophic failure indicator)
-    # When True, env row shows red alert overlay instead of normal content
+    # UI flashes the env row for a few seconds after rollback_timestamp is set.
     rolled_back: bool = False
     rollback_reason: str = ""  # "nan", "lobotomy", "divergence"
     rollback_timestamp: datetime | None = None
@@ -832,6 +832,7 @@ class InfrastructureMetrics:
     cuda_memory_reserved_gb: float = 0.0    # torch.cuda.memory_reserved()
     cuda_memory_peak_gb: float = 0.0        # torch.cuda.max_memory_allocated()
     cuda_memory_fragmentation: float = 0.0  # 1 - (allocated/reserved), >0.3 = pressure
+    dataloader_wait_ratio: float = 0.0      # Fraction of step time spent waiting on data
 
     # torch.compile Status (captured at training start - static session metadata)
     # Note: graph_break_count/compile_healthy removed - not accessible via PyTorch API
@@ -1032,13 +1033,13 @@ class TamiyoState:
     initial_value_spread: float | None = None  # Set after warmup for relative thresholds
 
     # Op-conditioned Q-values (Policy V2 - Q(s,op) architecture)
-    # Each op gets a different value estimate for the same state
-    q_germinate: float = 0.0
-    q_advance: float = 0.0
-    q_fossilize: float = 0.0
-    q_prune: float = 0.0
-    q_wait: float = 0.0
-    q_set_alpha: float = 0.0
+    # Vector aligns to LifecycleOp/NUM_OPS ordering.
+    op_q_values: tuple[float, ...] = field(
+        default_factory=lambda: tuple(float("nan") for _ in range(NUM_OPS))
+    )
+    op_valid_mask: tuple[bool, ...] = field(
+        default_factory=lambda: tuple(False for _ in range(NUM_OPS))
+    )
     # Q-value analysis metrics
     q_variance: float = 0.0  # Variance across ops (low = critic ignoring op conditioning)
     q_spread: float = 0.0  # max(Q) - min(Q) across ops

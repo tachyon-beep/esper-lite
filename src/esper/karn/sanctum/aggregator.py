@@ -785,6 +785,7 @@ class SanctumAggregator:
 
         # Reset Tamiyo state
         self._tamiyo = TamiyoState()
+        self._observation_stats = ObservationStats()
 
         # Compile status (static configuration from training start)
         self._tamiyo.infrastructure.compile_enabled = payload.compile_enabled
@@ -813,6 +814,26 @@ class SanctumAggregator:
         env_id = payload.env_id
         self._ensure_env(env_id)
         env = self._envs[env_id]
+
+        if payload.observation_stats is not None:
+            obs = payload.observation_stats
+            self._observation_stats = ObservationStats(
+                slot_features_mean=obs.slot_features_mean,
+                slot_features_std=obs.slot_features_std,
+                host_features_mean=obs.host_features_mean,
+                host_features_std=obs.host_features_std,
+                context_features_mean=obs.context_features_mean,
+                context_features_std=obs.context_features_std,
+                outlier_pct=obs.outlier_pct,
+                near_clip_pct=obs.near_clip_pct,
+                clip_pct=obs.clip_pct,
+                nan_count=obs.nan_count,
+                inf_count=obs.inf_count,
+                nan_pct=obs.nan_pct,
+                inf_pct=obs.inf_pct,
+                normalization_drift=obs.normalization_drift,
+                batch_size=obs.batch_size,
+            )
 
         # Clear rollback state - training has resumed for this env
         if env.rolled_back:
@@ -1098,12 +1119,8 @@ class SanctumAggregator:
         vf.return_skewness = payload.return_skewness
 
         # Op-conditioned Q-values (Policy V2)
-        self._tamiyo.q_germinate = payload.q_germinate
-        self._tamiyo.q_advance = payload.q_advance
-        self._tamiyo.q_fossilize = payload.q_fossilize
-        self._tamiyo.q_prune = payload.q_prune
-        self._tamiyo.q_wait = payload.q_wait
-        self._tamiyo.q_set_alpha = payload.q_set_alpha
+        self._tamiyo.op_q_values = payload.op_q_values
+        self._tamiyo.op_valid_mask = payload.op_valid_mask
         self._tamiyo.q_variance = payload.q_variance
         self._tamiyo.q_spread = payload.q_spread
 
@@ -1143,6 +1160,7 @@ class SanctumAggregator:
         self._tamiyo.infrastructure.cuda_memory_reserved_gb = payload.cuda_memory_reserved_gb
         self._tamiyo.infrastructure.cuda_memory_peak_gb = payload.cuda_memory_peak_gb
         self._tamiyo.infrastructure.cuda_memory_fragmentation = payload.cuda_memory_fragmentation
+        self._tamiyo.infrastructure.dataloader_wait_ratio = payload.dataloader_wait_ratio
 
     def _handle_seed_event(self, event: "TelemetryEvent", event_type: str) -> None:
         """Handle seed lifecycle events with per-env tracking."""
@@ -1833,9 +1851,9 @@ class SanctumAggregator:
     def _handle_governor_rollback(self, event: "TelemetryEvent") -> None:
         """Handle GOVERNOR_ROLLBACK event - catastrophic failure indicator.
 
-        Sets rollback state on the affected env, which triggers a red alert
-        overlay in the env row widget. The flag is cleared when the next
-        EPOCH_COMPLETED event arrives for that env (training resumed).
+        Sets rollback state on the affected env, which triggers a brief flash
+        in the env row widget. The flag is cleared when the next EPOCH_COMPLETED
+        event arrives for that env (training resumed).
         """
         if not isinstance(event.data, GovernorRollbackPayload):
             raise TypeError(
@@ -1848,7 +1866,7 @@ class SanctumAggregator:
         self._ensure_env(env_id)
         env = self._envs[env_id]
 
-        # Set rollback state - will show red alert until training resumes
+        # Set rollback state - env row flashes briefly after rollback_timestamp
         env.rolled_back = True
         env.rollback_reason = payload.reason
         env.rollback_timestamp = event.timestamp or datetime.now(timezone.utc)

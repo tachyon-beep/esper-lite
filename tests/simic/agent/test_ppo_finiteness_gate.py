@@ -8,12 +8,60 @@ Verifies that when all epochs skip due to non-finite values:
 
 import math
 from collections import defaultdict
+from typing import Any
 
 import pytest
+import torch
+
+from esper.leyline import NUM_OPS
+from esper.simic.agent.ppo_metrics import PPOUpdateMetricsBuilder
 
 
 class TestFinitenessGateAggregation:
     """Test the aggregation logic when all epochs skip."""
+
+    def test_zero_epoch_populates_op_q_fields(self):
+        """Zero-epoch aggregation should still emit op-conditioned Q fields."""
+        metrics: dict[str, list[Any]] = defaultdict(list)
+        finiteness_failures = [{
+            "epoch": 0,
+            "sources": ["log_probs[op]: NaN detected"],
+        }]
+        builder = PPOUpdateMetricsBuilder(
+            metrics=metrics,
+            finiteness_failures=finiteness_failures,
+            epochs_completed=0,
+            head_entropies={},
+            head_grad_norms={},
+            head_nan_detected={},
+            head_inf_detected={},
+            lstm_health_history=defaultdict(list),
+            log_prob_min_across_epochs=torch.tensor(float("inf")),
+            log_prob_max_across_epochs=torch.tensor(float("-inf")),
+            head_ratio_max_across_epochs={},
+            joint_ratio_max_across_epochs=torch.tensor(float("-inf")),
+            value_func_metrics={
+                "v_return_correlation": float("nan"),
+                "td_error_mean": float("nan"),
+                "td_error_std": float("nan"),
+                "bellman_error": float("nan"),
+                "return_p10": float("nan"),
+                "return_p50": float("nan"),
+                "return_p90": float("nan"),
+                "return_variance": float("nan"),
+                "return_skewness": float("nan"),
+            },
+            cuda_memory_metrics={},
+            head_names=(),
+        )
+        result = builder.finalize().metrics
+
+        assert len(result["op_q_values"]) == NUM_OPS
+        assert len(result["op_valid_mask"]) == NUM_OPS
+        assert all(math.isnan(v) for v in result["op_q_values"])
+        assert not any(result["op_valid_mask"])
+        assert math.isnan(result["q_variance"])
+        assert math.isnan(result["q_spread"])
 
     def test_all_epochs_skipped_returns_explicit_signal(self):
         """When all epochs hit finiteness gate, ppo_update_performed=False."""
@@ -24,7 +72,7 @@ class TestFinitenessGateAggregation:
             "sources": ["log_probs[op]: NaN detected"],
         })
 
-        # Simulate the aggregation logic from ppo.py
+        # Simulate the aggregation logic from ppo_metrics.py
         finiteness_failures = metrics.get("finiteness_gate_failures", [])
         epochs_completed = len(metrics.get("ratio_max", []))
 
@@ -198,7 +246,7 @@ class TestTrainStepsIncrementContract:
         # This test verifies the contract at the logic level.
         # The actual PPO agent test requires a full agent setup.
 
-        # Simulate the FIXED control flow from ppo.py update():
+        # Simulate the FIXED control flow from ppo_agent.py update():
         train_steps_before = 10
         train_steps = train_steps_before
 

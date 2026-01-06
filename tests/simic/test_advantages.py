@@ -244,7 +244,7 @@ class TestComputeCausalMasks:
         """Both compute_per_head_advantages and compute_causal_masks use HEAD_NAMES.
 
         This is the critical invariant that B4-DRL-01 establishes: both
-        advantages.py and ppo.py must use identical mask definitions.
+        advantages.py and ppo_update.py must use identical mask definitions.
         """
         op_actions = torch.tensor([LifecycleOp.GERMINATE, LifecycleOp.PRUNE])
         base_advantages = torch.tensor([1.0, 2.0])

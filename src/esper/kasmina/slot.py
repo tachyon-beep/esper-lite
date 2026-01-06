@@ -2531,6 +2531,20 @@ class SeedSlot(nn.Module):
                     ),
                 ),
             )
+
+            # Invariant: when a slot returns to DORMANT (state cleared), it must be
+            # physically empty (seed removed). Normal prune() clears the seed at
+            # PRUNED entry, but rollbacks can restore lifecycle state without
+            # removing an experimental seed module (BUG-ROLLBACK-ORPHAN).
+            self.seed = None
+            self.alpha_schedule = None
+            self._shape_probe_cache.clear()
+            self._cached_alpha_tensor = None
+            if self.isolation_monitor is not None:
+                self.isolation_monitor.reset()
+            self._pending_gradient_stats = None
+            self._blend_out_freeze_active = False
+            self._blend_out_frozen_params.clear()
             self.state = None
 
     def get_state_report(self) -> SeedStateReport | None:

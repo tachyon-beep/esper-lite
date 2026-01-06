@@ -1311,7 +1311,7 @@ if args.overwatch:
         try:
             if args.algorithm == "heuristic":
                 validated_slots = validate_slots(args.slots)
-                from esper.simic.training import train_heuristic
+                from esper.simic.training.helpers import train_heuristic
                 train_heuristic(
                     n_episodes=args.episodes,
                     max_epochs=args.max_epochs,
@@ -1390,7 +1390,7 @@ def main():
         """Execute the training algorithm."""
         if args.algorithm == "heuristic":
             validated_slots = validate_slots(args.slots)
-            from esper.simic.training import train_heuristic
+            from esper.simic.training.helpers import train_heuristic
             train_heuristic(
                 n_episodes=args.episodes,
                 max_epochs=args.max_epochs,
