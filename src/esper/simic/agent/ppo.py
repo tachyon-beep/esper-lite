@@ -19,6 +19,7 @@ import torch.nn.functional as F
 
 from .rollout_buffer import TamiyoRolloutBuffer
 from .advantages import compute_per_head_advantages
+from .ppo_metrics import PPOUpdateMetricsBuilder
 from .types import PPOUpdateMetrics
 from esper.simic.telemetry import RatioExplosionDiagnostic
 from esper.simic.telemetry.lstm_health import compute_lstm_health
@@ -1056,157 +1057,36 @@ class PPOAgent:
         if clear_buffer:
             self.buffer.reset()
 
-        # Aggregate into typed result dict
-        # TypedDict doesn't support dynamic key assignment, so we use type: ignore
-        # The aggregation converts list[float] to float for most metrics
-        aggregated_result: PPOUpdateMetrics = {}
-
-        # FINITENESS GATE CONTRACT: Check if any epochs actually completed
-        # ratio_max is only populated when an epoch successfully computes losses
+        # Aggregate into typed result dict (metrics aggregation owns list->scalar logic)
         finiteness_failures = metrics["finiteness_gate_failures"]
         epochs_completed = len(metrics["ratio_max"])
 
-        if epochs_completed == 0:
-            # All epochs skipped - return explicit signal with NaN values
-            # This prevents downstream code from treating 0.0 as a valid measurement
-            aggregated_result["ppo_update_performed"] = False
-            aggregated_result["finiteness_gate_skip_count"] = len(finiteness_failures)
-            # Use NaN for metrics that weren't computed (not 0.0 which looks "normal")
-            aggregated_result["ratio_max"] = float("nan")
-            aggregated_result["ratio_min"] = float("nan")
-            aggregated_result["policy_loss"] = float("nan")
-            aggregated_result["value_loss"] = float("nan")
-            aggregated_result["entropy"] = float("nan")
-            aggregated_result["approx_kl"] = float("nan")
-            aggregated_result["clip_fraction"] = float("nan")
-            aggregated_result["explained_variance"] = float("nan")
-            aggregated_result["pre_clip_grad_norm"] = float("nan")
-            # Keep failure details for diagnostics
-            if finiteness_failures:
-                aggregated_result["finiteness_gate_failures"] = finiteness_failures
-            return aggregated_result
-
-        # At least one epoch completed successfully
-        aggregated_result["ppo_update_performed"] = True
-        aggregated_result["finiteness_gate_skip_count"] = len(finiteness_failures)
-
-        # Only increment train_steps when an actual update occurred.
-        # This ensures entropy annealing and other schedules track real updates,
-        # not skipped finiteness-gate failures.
-        self.train_steps += 1
-
-        for k, v in metrics.items():
-            if not v:
-                aggregated_result[k] = 0.0  # type: ignore[literal-required]
-                continue
-
-            first = v[0]
-            # Metrics that should NOT be averaged across epochs
-            # Note: head_nan_detected/head_inf_detected are ORed in the epoch loop
-            # and added directly to aggregated_result at lines 1091-1092, not here.
-            if k == "finiteness_gate_failures":
-                # Keep ALL failure dicts (one per epoch that failed)
-                aggregated_result[k] = v  # type: ignore[literal-required]
-            elif k == "early_stop_epoch":
-                # int|None, not float - take the value (there's only ever one)
-                aggregated_result[k] = first  # type: ignore[literal-required]
-            elif k == "ratio_diagnostic":
-                # Complex diagnostic dict - take first (only one per explosion event)
-                aggregated_result[k] = first  # type: ignore[literal-required]
-            elif k in ("ratio_max", "value_max", "pre_clip_grad_norm"):
-                # Threshold-based anomaly detection needs WORST CASE, not average.
-                # Averaging dilutes single-epoch explosions below detection thresholds.
-                # Used by: health_status_panel.py:534, anomaly_detector.py:109
-                aggregated_result[k] = max(v)  # type: ignore[literal-required]
-            elif k in ("ratio_min", "value_min"):
-                # Threshold-based anomaly detection needs WORST CASE, not average.
-                aggregated_result[k] = min(v)  # type: ignore[literal-required]
-            else:
-                # Average across epochs (converts list[float] to float)
-                aggregated_result[k] = sum(v) / len(v)  # type: ignore[literal-required]
-
-        # Add per-head entropy tracking (P3-1)
-        aggregated_result["head_entropies"] = head_entropy_history
-        # Add per-head gradient norm tracking (P4-6)
-        aggregated_result["head_grad_norms"] = head_grad_norm_history
-        # Add log prob extremes (NaN predictor)
-        # Guard against no valid data (inf values indicate no updates occurred)
-        # Use NaN (not 0.0) to signal "no data" - 0.0 means "probability=1" which is misleading
-        if log_prob_min_across_epochs == float("inf"):
-            log_prob_min_across_epochs = float("nan")
-        if log_prob_max_across_epochs == float("-inf"):
-            log_prob_max_across_epochs = float("nan")
-        aggregated_result["log_prob_min"] = log_prob_min_across_epochs
-        aggregated_result["log_prob_max"] = log_prob_max_across_epochs
-
-        # Add per-head ratio max tracking (Policy V2 - multi-head ratio explosion detection)
-        # MED-02: -inf indicates no updates occurred in this epoch.
-        # We use 1.0 (neutral ratio) as default because:
-        # - NaN would propagate and break downstream calculations
-        # - 1.0 is semantically "no clipping occurred" which is correct for zero updates
-        # - Consumers can distinguish "healthy 1.0" from "no data 1.0" via ppo_updates_count
-        for key in HEAD_NAMES:
-            ratio_key = f"head_{key}_ratio_max"
-            max_val = head_ratio_max_across_epochs[key]
-            aggregated_result[ratio_key] = max_val if max_val != float("-inf") else 1.0  # type: ignore[literal-required]
-        aggregated_result["joint_ratio_max"] = (
-            joint_ratio_max_across_epochs if joint_ratio_max_across_epochs != float("-inf") else 1.0
+        builder = PPOUpdateMetricsBuilder(
+            metrics=metrics,
+            finiteness_failures=finiteness_failures,
+            epochs_completed=epochs_completed,
+            head_entropies=head_entropy_history,
+            head_grad_norms=head_grad_norm_history,
+            head_nan_detected=head_nan_detected,
+            head_inf_detected=head_inf_detected,
+            lstm_health_history=lstm_health_history,
+            log_prob_min_across_epochs=log_prob_min_across_epochs,
+            log_prob_max_across_epochs=log_prob_max_across_epochs,
+            head_ratio_max_across_epochs=head_ratio_max_across_epochs,
+            joint_ratio_max_across_epochs=joint_ratio_max_across_epochs,
+            value_func_metrics=value_func_metrics,
+            cuda_memory_metrics=cuda_memory_metrics,
+            head_names=HEAD_NAMES,
         )
+        result = builder.finalize()
 
-        # Add per-head NaN/Inf flags (for indicator lights)
-        aggregated_result["head_nan_detected"] = head_nan_detected
-        aggregated_result["head_inf_detected"] = head_inf_detected
+        if result.update_performed:
+            # Only increment train_steps when an actual update occurred.
+            # This ensures entropy annealing and other schedules track real updates,
+            # not skipped finiteness-gate failures.
+            self.train_steps += 1
 
-        # Add LSTM health metrics (TELE-340)
-        if lstm_health_history["lstm_h_rms"]:
-            # Average RMS magnitudes across epochs (scale-free)
-            aggregated_result["lstm_h_rms"] = sum(lstm_health_history["lstm_h_rms"]) / len(lstm_health_history["lstm_h_rms"])
-            aggregated_result["lstm_c_rms"] = sum(lstm_health_history["lstm_c_rms"]) / len(lstm_health_history["lstm_c_rms"])
-            aggregated_result["lstm_h_env_rms_mean"] = (
-                sum(lstm_health_history["lstm_h_env_rms_mean"]) / len(lstm_health_history["lstm_h_env_rms_mean"])
-            )
-            aggregated_result["lstm_c_env_rms_mean"] = (
-                sum(lstm_health_history["lstm_c_env_rms_mean"]) / len(lstm_health_history["lstm_c_env_rms_mean"])
-            )
-            # Worst-case per-env RMS across epochs (outlier detection)
-            aggregated_result["lstm_h_env_rms_max"] = max(lstm_health_history["lstm_h_env_rms_max"])
-            aggregated_result["lstm_c_env_rms_max"] = max(lstm_health_history["lstm_c_env_rms_max"])
-            # Max abs values across epochs (localized spike detection)
-            aggregated_result["lstm_h_max"] = max(lstm_health_history["lstm_h_max"])
-            aggregated_result["lstm_c_max"] = max(lstm_health_history["lstm_c_max"])
-            # Boolean OR across epochs (once NaN/Inf detected, stays detected)
-            aggregated_result["lstm_has_nan"] = any(lstm_health_history["lstm_has_nan"])
-            aggregated_result["lstm_has_inf"] = any(lstm_health_history["lstm_has_inf"])
-        else:
-            # No LSTM health data (non-recurrent policy or early stopped before first epoch)
-            aggregated_result["lstm_h_rms"] = None
-            aggregated_result["lstm_c_rms"] = None
-            aggregated_result["lstm_h_env_rms_mean"] = None
-            aggregated_result["lstm_h_env_rms_max"] = None
-            aggregated_result["lstm_c_env_rms_mean"] = None
-            aggregated_result["lstm_c_env_rms_max"] = None
-            aggregated_result["lstm_h_max"] = None
-            aggregated_result["lstm_c_max"] = None
-            aggregated_result["lstm_has_nan"] = None
-            aggregated_result["lstm_has_inf"] = None
-
-        # Add value function metrics (TELE-220 to TELE-228)
-        aggregated_result["v_return_correlation"] = value_func_metrics["v_return_correlation"]
-        aggregated_result["td_error_mean"] = value_func_metrics["td_error_mean"]
-        aggregated_result["td_error_std"] = value_func_metrics["td_error_std"]
-        aggregated_result["bellman_error"] = value_func_metrics["bellman_error"]
-        aggregated_result["return_p10"] = value_func_metrics["return_p10"]
-        aggregated_result["return_p50"] = value_func_metrics["return_p50"]
-        aggregated_result["return_p90"] = value_func_metrics["return_p90"]
-        aggregated_result["return_variance"] = value_func_metrics["return_variance"]
-        aggregated_result["return_skewness"] = value_func_metrics["return_skewness"]
-
-        # Add CUDA memory metrics (collected once per update, not averaged)
-        if cuda_memory_metrics:
-            for k, v in cuda_memory_metrics.items():
-                aggregated_result[k] = v  # type: ignore[literal-required]
-
-        return aggregated_result
+        return result.metrics
 
     def save(self, path: str | Path, metadata: dict[str, Any] | None = None) -> None:
         """Save agent to file."""
