@@ -1833,9 +1833,9 @@ class SanctumAggregator:
     def _handle_governor_rollback(self, event: "TelemetryEvent") -> None:
         """Handle GOVERNOR_ROLLBACK event - catastrophic failure indicator.
 
-        Sets rollback state on the affected env, which triggers a red alert
-        overlay in the env row widget. The flag is cleared when the next
-        EPOCH_COMPLETED event arrives for that env (training resumed).
+        Sets rollback state on the affected env, which triggers a brief flash
+        in the env row widget. The flag is cleared when the next EPOCH_COMPLETED
+        event arrives for that env (training resumed).
         """
         if not isinstance(event.data, GovernorRollbackPayload):
             raise TypeError(
@@ -1848,7 +1848,7 @@ class SanctumAggregator:
         self._ensure_env(env_id)
         env = self._envs[env_id]
 
-        # Set rollback state - will show red alert until training resumes
+        # Set rollback state - env row flashes briefly after rollback_timestamp
         env.rolled_back = True
         env.rollback_reason = payload.reason
         env.rollback_timestamp = event.timestamp or datetime.now(timezone.utc)

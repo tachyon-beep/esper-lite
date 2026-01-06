@@ -187,16 +187,18 @@ def compute_observation_stats(
     slots = clean_obs[:, OBS_V3_BASE_FEATURE_SIZE:]
 
     host_mean = float(host.mean().item())
-    host_std = float(host.std().item())
+    host_std = float(host.std(unbiased=False).item())
     context_mean = float(context.mean().item())
-    context_std = float(context.std().item())
+    context_std = float(context.std(unbiased=False).item())
     slot_mean = float(slots.mean().item())
-    slot_std = float(slots.std().item())
+    slot_std = float(slots.std(unbiased=False).item())
 
     # Outlier detection: count values outside 3-sigma
     # Use per-feature mean/std for outlier detection
     feature_mean = clean_obs.mean(dim=0, keepdim=True)
-    feature_std = clean_obs.std(dim=0, keepdim=True) + 1e-8  # Avoid div by zero
+    feature_std = (
+        clean_obs.std(dim=0, keepdim=True, unbiased=False) + 1e-8
+    )  # Avoid div by zero
     z_scores = torch.abs((clean_obs - feature_mean) / feature_std)
     outlier_count = int((z_scores > 3.0).sum().item())
     # Fraction (not percent): UI renders with percent formatting (X.X%).

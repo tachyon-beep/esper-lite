@@ -267,9 +267,6 @@ allow_hits:
 - key: src/esper/simic/training/helpers.py:run_heuristic_episode:item:4
   owner: John
   reason: grandfathered at initiation
-- key: src/esper/simic/training/vectorized.py:CUDATimer.stop:synchronize
-  owner: John
-  reason: grandfathered at initiation
 - key: src/esper/simic/training/vectorized.py:train_ppo_vectorized:cpu
   owner: John
   reason: grandfathered at initiation

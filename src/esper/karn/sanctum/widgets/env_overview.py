@@ -31,6 +31,8 @@ _AB_STYLES: dict[str, tuple[str, str]] = {
     "simplified": ("●", "bright_yellow"), # Yellow pip for simplified
     "sparse": ("●", "bright_white"),      # White pip for sparse (cyan reserved for info)
 }
+_ROLLBACK_FLASH_SECONDS = 5.0
+_ROLLBACK_FLASH_STYLE = "on bright_magenta"
 
 
 class EnvOverview(Static):
@@ -185,11 +187,13 @@ class EnvOverview(Static):
         # Compute top 5 accuracy env IDs for visual quieting
         all_envs = list(self._snapshot.envs.values())
         top5_env_ids = self._compute_top5_accuracy_ids(all_envs)
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
 
         # Add row for each environment
         for env in filtered_envs:
             should_dim = self._should_dim_row(env, top5_env_ids)
-            self._add_env_row(env, dim=should_dim)
+            self._add_env_row(env, dim=should_dim, now=now)
 
         # Add aggregate row if multiple filtered envs and no filter
         # (aggregate doesn't make sense for filtered subset)
@@ -266,17 +270,22 @@ class EnvOverview(Static):
 
         return True
 
-    def _add_env_row(self, env: "EnvState", dim: bool = False) -> None:
+    def _should_flash_rollback(self, env: "EnvState", now: "datetime") -> bool:
+        """Determine if row should flash for a recent rollback."""
+        if env.rollback_timestamp is None:
+            return False
+        return (now - env.rollback_timestamp).total_seconds() <= _ROLLBACK_FLASH_SECONDS
+
+    def _add_env_row(self, env: "EnvState", dim: bool = False, *, now: "datetime") -> None:
         """Add a single environment row.
 
         Args:
             env: Environment state to display.
             dim: If True, apply dim styling for visual quieting.
+            now: Current timestamp for rollback flash timing.
         """
-        # Check for rollback state - show red alert instead of normal row
-        if env.rolled_back:
-            self._add_rollback_alert_row(env)
-            return
+        # Flash row briefly when a rollback occurs (no layout-breaking alert row)
+        flash_rollback = self._should_flash_rollback(env, now)
 
         # Env ID with A/B test cohort pip and action target indicator
         last_action_env_id = self._snapshot.last_action_env_id if self._snapshot else None
@@ -353,46 +362,13 @@ class EnvOverview(Static):
             staleness_cell,
         ]
 
-        # Apply visual quieting (dim) if needed
-        if dim:
+        # Apply rollback flash or visual quieting (dim)
+        if flash_rollback:
+            row = [self._apply_flash(cell) for cell in row]
+        elif dim:
             row = [self._apply_dim(cell) for cell in row]
 
         # Add row with key=env_id for row selection event handling
-        self.table.add_row(*row, key=str(env.env_id))
-
-    def _add_rollback_alert_row(self, env: "EnvState") -> None:
-        """Add a red alert row for an env that has rolled back.
-
-        Shows a prominent CATASTROPHIC FAILURE message instead of normal metrics.
-        This row persists until training resumes for this env.
-
-        Args:
-            env: Environment state with rolled_back=True.
-        """
-        # Format reason for display
-        reason_display = {
-            "governor_nan": "NaN DETECTED",
-            "governor_lobotomy": "LOBOTOMY",
-            "governor_divergence": "DIVERGENCE",
-        }.get(env.rollback_reason, env.rollback_reason.upper() if env.rollback_reason else "UNKNOWN")
-
-        # Build the alert row
-        # First cell: env ID
-        env_id_cell = f"[bold red]{env.env_id}[/bold red]"
-
-        # Calculate how many columns we need to fill
-        num_cols = len(self.table.columns)
-
-        # Alert message spans most columns
-        alert_msg = f"[bold white on red] ⚠ CATASTROPHIC FAILURE - ROLLED BACK ({reason_display}) [/bold white on red]"
-
-        # Build row: env_id, then alert message, then empty cells
-        row = [env_id_cell, alert_msg]
-
-        # Fill remaining columns with empty cells styled red
-        for _ in range(num_cols - 2):
-            row.append("[on red] [/on red]")
-
         self.table.add_row(*row, key=str(env.env_id))
 
     def _add_separator_row(self) -> None:
@@ -902,3 +878,8 @@ class EnvOverview(Static):
         if not text or text == "─":
             return text
         return f"[dim]{text}[/dim]"
+
+    def _apply_flash(self, text: str) -> str:
+        """Apply rollback flash styling to a cell."""
+        cell_text = text if text else " "
+        return f"[{_ROLLBACK_FLASH_STYLE}]{cell_text}[/{_ROLLBACK_FLASH_STYLE}]"

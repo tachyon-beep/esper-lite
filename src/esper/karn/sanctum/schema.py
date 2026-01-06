@@ -570,7 +570,7 @@ class EnvState:
     reward_mode: str | None = None
 
     # Governor rollback state (catastrophic failure indicator)
-    # When True, env row shows red alert overlay instead of normal content
+    # UI flashes the env row for a few seconds after rollback_timestamp is set.
     rolled_back: bool = False
     rollback_reason: str = ""  # "nan", "lobotomy", "divergence"
     rollback_timestamp: datetime | None = None

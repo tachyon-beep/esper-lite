@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Iterator, Protocol, runtime_checkable
 if TYPE_CHECKING:
     import torch.nn as nn
 
+    from esper.leyline.alpha import AlphaAlgorithm, AlphaCurve
     from esper.leyline.schemas import GateResult
     from esper.leyline.schemas import GateLevel
     from esper.leyline.stages import SeedStage
@@ -155,6 +156,31 @@ class SeedSlotProtocol(Protocol):
 
     def set_alpha(self, value: float) -> None:
         """Set the alpha value directly."""
+        ...
+
+    def schedule_prune(
+        self,
+        *,
+        steps: int,
+        curve: "AlphaCurve | None" = None,
+        steepness: float = 12.0,
+        reason: str = "",
+        initiator: str = "policy",
+    ) -> bool:
+        """Schedule a prune by ramping alpha down to 0."""
+        ...
+
+    def set_alpha_target(
+        self,
+        *,
+        alpha_target: float,
+        steps: int,
+        curve: "AlphaCurve | None" = None,
+        steepness: float = 12.0,
+        alpha_algorithm: "AlphaAlgorithm | None" = None,
+        initiator: str = "policy",
+    ) -> bool:
+        """Retarget alpha to a non-zero target from HOLD mode."""
         ...
 
     @contextmanager

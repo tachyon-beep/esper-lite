@@ -12,6 +12,7 @@ Supporting docs:
 - Extraction map: `docs/plans/planning/simic2/phases/phase1_vectorized_modular_split/extraction_map.md`
 - Risk register: `docs/plans/planning/simic2/phases/phase1_vectorized_modular_split/risk_register.md`
 - Preflight audits: `docs/plans/planning/simic2/phases/phase1_vectorized_modular_split/preflight_audit.md`
+- Review fix list: `docs/plans/planning/simic2/phases/phase1_vectorized_modular_split/phase1_review_fixes.md`
 
 ## Target shape
 

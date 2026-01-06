@@ -131,7 +131,16 @@ PY
 Paste outputs here:
 
 - `events.jsonl` counts:
-  - (fill in)
+  - ANALYTICS_SNAPSHOT: 7
+  - EPOCH_COMPLETED: 5
+  - SEED_GATE_EVALUATED: 2
+  - SEED_STAGE_CHANGED: 2
+  - TRAINING_STARTED: 1
+  - SEED_GERMINATED: 1
+  - EPISODE_OUTCOME: 1
+  - VALUE_COLLAPSE_DETECTED: 1
+  - PPO_UPDATE_COMPLETED: 1
+  - BATCH_EPOCH_COMPLETED: 1
 
 ## 6) Optional: one integration sanity after Phase 1
 
