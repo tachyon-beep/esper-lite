@@ -13,7 +13,13 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from esper.leyline import AlphaAlgorithm, HEAD_NAMES, SeedSlotProtocol, SeedStage
+from esper.leyline import (
+    AlphaAlgorithm,
+    HEAD_NAMES,
+    LifecycleOp,
+    SeedSlotProtocol,
+    SeedStage,
+)
 from esper.leyline.slot_id import validate_slot_ids
 from esper.simic.telemetry import (
     AnomalyDetector,
@@ -25,6 +31,7 @@ from esper.simic.telemetry import (
     training_profiler,
 )
 from esper.simic.telemetry.emitters import check_performance_degradation
+from esper.simic.rewards.types import ContributionRewardInputs, LossRewardInputs
 from esper.tamiyo.policy.action_masks import build_slot_states, compute_action_masks
 from esper.tamiyo.policy.features import batch_obs_to_features
 from esper.utils.data import augment_cifar10_batch
@@ -33,6 +40,14 @@ from .action_execution import ActionExecutionContext, ResolveTargetSlot, execute
 from .batch_ops import batch_signals_to_features, process_train_batch
 from .counterfactual_eval import process_fused_val_batch
 from .env_factory import EnvFactoryContext, configure_slot_telemetry, create_env_state
+from .vectorized_types import (
+    ActionMaskFlags,
+    ActionOutcome,
+    ActionSpec,
+    BatchSummary,
+    EpisodeRecord,
+    RewardSummaryAccumulator,
+)
 
 
 @dataclass
@@ -150,6 +165,7 @@ class VectorizedPPOTrainer:
         num_train_batches = self.num_train_batches
         num_test_batches = self.num_test_batches
         env_reward_configs = self.env_reward_configs
+        loss_reward_config = self.loss_reward_config
         reward_family_enum = self.reward_family_enum
         reward_normalizer = self.reward_normalizer
         obs_normalizer = self.obs_normalizer
@@ -209,7 +225,7 @@ class VectorizedPPOTrainer:
 
         try:
             history: list[dict[str, Any]] = []
-            episode_history: list[dict[str, Any]] = []  # Per-episode tracking for A/B testing
+            episode_history: list[EpisodeRecord] = []  # Per-episode tracking for A/B testing
             episode_outcomes: list[Any] = []  # Pareto analysis outcomes
             best_avg_acc = 0.0
             best_state = None
@@ -261,17 +277,40 @@ class VectorizedPPOTrainer:
                 last_train_corrects = [0] * envs_this_batch
                 last_train_totals = [0] * envs_this_batch
                 reward_summary_accum = [
-                    {
-                        "bounded_attribution": 0.0,
-                        "compute_rent": 0.0,
-                        "alpha_shock": 0.0,
-                        "hindsight_credit": 0.0,
-                        "total_reward": 0.0,
-                        "count": 0,
-                        # Scaffold hindsight credit debugging fields (Phase 3.2)
-                        "scaffold_count": 0,
-                        "scaffold_delay_total": 0.0,
-                    }
+                    RewardSummaryAccumulator() for _ in range(envs_this_batch)
+                ]
+
+                action_specs = [ActionSpec() for _ in range(envs_this_batch)]
+                action_outcomes = [ActionOutcome() for _ in range(envs_this_batch)]
+                action_mask_flags = [ActionMaskFlags() for _ in range(envs_this_batch)]
+                contribution_reward_inputs = [
+                    ContributionRewardInputs(
+                        action=LifecycleOp.WAIT,
+                        seed_contribution=None,
+                        val_acc=0.0,
+                        seed_info=None,
+                        epoch=0,
+                        max_epochs=max_epochs,
+                        total_params=0,
+                        host_params=1,
+                        acc_at_germination=None,
+                        acc_delta=0.0,
+                        config=env_reward_configs[env_idx],
+                    )
+                    for env_idx in range(envs_this_batch)
+                ]
+                loss_reward_inputs = [
+                    LossRewardInputs(
+                        action=LifecycleOp.WAIT,
+                        loss_delta=0.0,
+                        val_loss=0.0,
+                        seed_info=None,
+                        epoch=0,
+                        max_epochs=max_epochs,
+                        total_params=0,
+                        host_params=1,
+                        config=loss_reward_config,
+                    )
                     for _ in range(envs_this_batch)
                 ]
 
@@ -1294,6 +1333,11 @@ class VectorizedPPOTrainer:
                         pre_step_hiddens=pre_step_hiddens,
                         head_log_probs=head_log_probs,
                         masks_batch=masks_batch,
+                        action_specs=action_specs,
+                        action_outcomes=action_outcomes,
+                        mask_flags=action_mask_flags,
+                        contribution_reward_inputs=contribution_reward_inputs,
+                        loss_reward_inputs=loss_reward_inputs,
                         head_confidences_cpu=head_confidences_cpu,
                         head_entropies_cpu=head_entropies_cpu,
                         op_probs_cpu=op_probs_cpu,
@@ -1417,8 +1461,8 @@ class VectorizedPPOTrainer:
 
                             # 2. Update episode_history entry for this env
                             for entry in reversed(episode_history):
-                                if entry["env_id"] == env_idx:
-                                    entry["episode_reward"] = env_total_rewards[env_idx]
+                                if entry.env_id == env_idx:
+                                    entry.episode_reward = env_total_rewards[env_idx]
                                     break
 
                             # 3. Recompute stability from post-penalty variance
@@ -1462,7 +1506,6 @@ class VectorizedPPOTrainer:
                     if metrics:
                         metrics["ppo_update_time_ms"] = ppo_update_time_ms
                         metrics["ppo_grad_norm"] = metrics["pre_clip_grad_norm"]
-                        metrics["reward_summary"] = reward_summary_accum
                         metrics["rollout_length"] = max_epochs
                         metrics["rollout_episodes"] = envs_this_batch
                         metrics["rollout_total_steps"] = len(agent.buffer)
@@ -1664,15 +1707,16 @@ class VectorizedPPOTrainer:
                         training_progress=training_progress,
                     )
 
-                history.append(
-                    {
-                        "batch": batch_idx + 1,
-                        "episodes": batch_epoch_id,
-                        "avg_accuracy": avg_acc,
-                        "rolling_avg_accuracy": rolling_avg_acc,
-                        **metrics,
-                    }
+                batch_summary = BatchSummary(
+                    batch=batch_idx + 1,
+                    episodes=batch_epoch_id,
+                    avg_accuracy=avg_acc,
+                    rolling_avg_accuracy=rolling_avg_acc,
+                    metrics=metrics,
+                    reward_summary=reward_summary_accum,
+                    episode_history=episode_history,
                 )
+                history.append(batch_summary.to_dict())
 
                 if rolling_avg_acc > best_avg_acc:
                     best_avg_acc = rolling_avg_acc

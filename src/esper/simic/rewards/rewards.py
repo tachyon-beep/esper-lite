@@ -43,6 +43,7 @@ from esper.leyline import (
 )
 from esper.nissa import get_hub
 from .reward_telemetry import RewardComponentsTelemetry
+from .types import ContributionRewardInputs, LossRewardInputs
 
 _logger = logging.getLogger(__name__)
 
@@ -1095,143 +1096,100 @@ def compute_simplified_reward(
 
 
 def compute_reward(
-    action: LifecycleOp,
-    seed_contribution: float | None,
-    val_acc: float,
-    seed_info: SeedInfo | None,
-    epoch: int,
-    max_epochs: int,
-    total_params: int,
-    host_params: int,
-    acc_at_germination: float | None,
-    acc_delta: float,
-    committed_val_acc: float | None = None,
-    fossilized_seed_params: int = 0,
-    num_fossilized_seeds: int = 0,
-    num_contributing_fossilized: int = 0,
-    config: ContributionRewardConfig | None = None,
-    return_components: bool = False,
-    effective_seed_params: float | None = None,
-    alpha_delta_sq_sum: float = 0.0,
-    stable_val_acc: float | None = None,
-    escrow_credit_prev: float = 0.0,
-    slot_id: str | None = None,
-    seed_id: str | None = None,
+    inputs: ContributionRewardInputs,
 ) -> float | tuple[float, "RewardComponentsTelemetry"]:
     """Unified reward computation dispatcher.
 
-    Routes to the appropriate reward function based on config.reward_mode:
+    Routes to the appropriate reward function based on inputs.config.reward_mode:
     - SHAPED: Dense shaping with PBRS, attribution, warnings (default)
     - ESCROW: Dense, reversible attribution (anti-peak / anti-thrash)
     - SPARSE: Terminal-only ground truth reward
     - MINIMAL: Sparse + early-prune penalty
     - SIMPLIFIED: PBRS + intervention cost + terminal (DRL Expert recommended)
-
-    Args:
-        action: Action taken (LifecycleOp or similar IntEnum)
-        seed_contribution: Counterfactual contribution (None if unavailable)
-        val_acc: Current validation accuracy
-        seed_info: Seed state info (None if no active seed)
-        epoch: Current epoch
-        max_epochs: Maximum epochs in episode
-        total_params: Extra seed parameters (active + fossilized)
-        host_params: Host model parameters
-        acc_at_germination: Accuracy when seed was planted
-        acc_delta: Per-epoch accuracy change
-        committed_val_acc: Validation accuracy of the committed model (host + fossilized seeds)
-        fossilized_seed_params: Total seed parameters that were fossilized (permanent) at episode end
-        num_fossilized_seeds: Count of fossilized seeds
-        num_contributing_fossilized: Count of contributing fossilized seeds
-        config: Reward configuration (uses default if None)
-        return_components: If True, return (reward, components) tuple
-        effective_seed_params: Optional alpha-weighted + BaseSlotRent param count.
-        alpha_delta_sq_sum: Sum of per-slot (Δalpha^2 * scale) for convex shock penalty.
-
-    Returns:
-        Reward value, or (reward, components) if return_components=True
     """
+    config = inputs.config
     if config is None:
         config = ContributionRewardConfig()
 
     # Dispatch based on reward mode
     if config.reward_mode in (RewardMode.SHAPED, RewardMode.ESCROW):
         return compute_contribution_reward(
-            action=action,
-            seed_contribution=seed_contribution,
-            val_acc=val_acc,
-            seed_info=seed_info,
-            epoch=epoch,
-            max_epochs=max_epochs,
-            total_params=total_params,
-            host_params=host_params,
+            action=inputs.action,
+            seed_contribution=inputs.seed_contribution,
+            val_acc=inputs.val_acc,
+            seed_info=inputs.seed_info,
+            epoch=inputs.epoch,
+            max_epochs=inputs.max_epochs,
+            total_params=inputs.total_params,
+            host_params=inputs.host_params,
             config=config,
-            acc_at_germination=acc_at_germination,
-            acc_delta=acc_delta,
-            return_components=return_components,
-            num_fossilized_seeds=num_fossilized_seeds,
-            num_contributing_fossilized=num_contributing_fossilized,
-            slot_id=slot_id,
-            seed_id=seed_id,
-            effective_seed_params=effective_seed_params,
-            alpha_delta_sq_sum=alpha_delta_sq_sum,
-            stable_val_acc=stable_val_acc,
-            escrow_credit_prev=escrow_credit_prev,
+            acc_at_germination=inputs.acc_at_germination,
+            acc_delta=inputs.acc_delta,
+            return_components=inputs.return_components,
+            num_fossilized_seeds=inputs.num_fossilized_seeds,
+            num_contributing_fossilized=inputs.num_contributing_fossilized,
+            slot_id=inputs.slot_id,
+            seed_id=inputs.seed_id,
+            effective_seed_params=inputs.effective_seed_params,
+            alpha_delta_sq_sum=inputs.alpha_delta_sq_sum,
+            stable_val_acc=inputs.stable_val_acc,
+            escrow_credit_prev=inputs.escrow_credit_prev,
         )
 
     elif config.reward_mode == RewardMode.SPARSE:
-        if committed_val_acc is None:
+        if inputs.committed_val_acc is None:
             raise ValueError("committed_val_acc is required for RewardMode.SPARSE")
         reward = compute_sparse_reward(
-            committed_val_acc=committed_val_acc,
-            fossilized_seed_params=fossilized_seed_params,
-            epoch=epoch,
-            max_epochs=max_epochs,
+            committed_val_acc=inputs.committed_val_acc,
+            fossilized_seed_params=inputs.fossilized_seed_params,
+            epoch=inputs.epoch,
+            max_epochs=inputs.max_epochs,
             config=config,
         )
 
     elif config.reward_mode == RewardMode.MINIMAL:
-        seed_age = seed_info.seed_age_epochs if seed_info else None
-        if committed_val_acc is None:
+        seed_age = inputs.seed_info.seed_age_epochs if inputs.seed_info else None
+        if inputs.committed_val_acc is None:
             raise ValueError("committed_val_acc is required for RewardMode.MINIMAL")
         reward = compute_minimal_reward(
-            committed_val_acc=committed_val_acc,
-            fossilized_seed_params=fossilized_seed_params,
-            epoch=epoch,
-            max_epochs=max_epochs,
-            action=action,
+            committed_val_acc=inputs.committed_val_acc,
+            fossilized_seed_params=inputs.fossilized_seed_params,
+            epoch=inputs.epoch,
+            max_epochs=inputs.max_epochs,
+            action=inputs.action,
             seed_age=seed_age,
             config=config,
         )
 
     elif config.reward_mode == RewardMode.BASIC:
         reward, rent_penalty, growth_ratio = compute_basic_reward(
-            acc_delta=acc_delta,
-            effective_seed_params=effective_seed_params,
-            total_params=total_params,
-            host_params=host_params,
+            acc_delta=inputs.acc_delta,
+            effective_seed_params=inputs.effective_seed_params,
+            total_params=inputs.total_params,
+            host_params=inputs.host_params,
             config=config,
         )
-        if return_components:
+        if inputs.return_components:
             components = RewardComponentsTelemetry()
             components.total_reward = reward
-            components.action_name = action.name
-            components.epoch = epoch
-            components.seed_stage = seed_info.stage if seed_info else None
-            components.val_acc = val_acc
+            components.action_name = inputs.action.name
+            components.epoch = inputs.epoch
+            components.seed_stage = inputs.seed_info.stage if inputs.seed_info else None
+            components.val_acc = inputs.val_acc
             # Sanctum ΔAcc display uses base_acc_delta (legacy field name).
-            components.base_acc_delta = acc_delta
+            components.base_acc_delta = inputs.acc_delta
             components.compute_rent = -rent_penalty
             components.growth_ratio = growth_ratio
             return reward, components
 
     elif config.reward_mode == RewardMode.SIMPLIFIED:
         reward = compute_simplified_reward(
-            action=action,
-            seed_info=seed_info,
-            epoch=epoch,
-            max_epochs=max_epochs,
-            val_acc=val_acc,
-            num_contributing_fossilized=num_contributing_fossilized,
+            action=inputs.action,
+            seed_info=inputs.seed_info,
+            epoch=inputs.epoch,
+            max_epochs=inputs.max_epochs,
+            val_acc=inputs.val_acc,
+            num_contributing_fossilized=inputs.num_contributing_fossilized,
             config=config,
         )
 
@@ -1239,15 +1197,15 @@ def compute_reward(
         raise ValueError(f"Unknown reward mode: {config.reward_mode}")
 
     # Handle return_components for sparse/minimal/simplified modes
-    if return_components:
+    if inputs.return_components:
         components = RewardComponentsTelemetry()
         components.total_reward = reward
-        components.action_name = action.name
-        components.epoch = epoch
-        components.seed_stage = seed_info.stage if seed_info else None
-        components.val_acc = val_acc
+        components.action_name = inputs.action.name
+        components.epoch = inputs.epoch
+        components.seed_stage = inputs.seed_info.stage if inputs.seed_info else None
+        components.val_acc = inputs.val_acc
         # Wire base_acc_delta for Sanctum ΔAcc display (was never populated - bug fix)
-        components.base_acc_delta = acc_delta
+        components.base_acc_delta = inputs.acc_delta
         return reward, components
 
     return reward
@@ -1255,77 +1213,19 @@ def compute_reward(
 
 def compute_reward_for_family(
     reward_family: RewardFamily,
-    *,
-    action: LifecycleOp,
-    seed_contribution: float | None,
-    val_acc: float,
-    seed_info: SeedInfo | None,
-    epoch: int,
-    max_epochs: int,
-    total_params: int,
-    host_params: int,
-    acc_at_germination: float | None,
-    acc_delta: float,
-    committed_val_acc: float | None = None,
-    fossilized_seed_params: int = 0,
-    num_fossilized_seeds: int = 0,
-    num_contributing_fossilized: int = 0,
-    contribution_config: ContributionRewardConfig | None = None,
-    loss_config: LossRewardConfig | None = None,
-    loss_delta: float = 0.0,
-    val_loss: float = 0.0,
-    effective_seed_params: float | None = None,
-    alpha_delta_sq_sum: float = 0.0,
-    stable_val_acc: float | None = None,
-    escrow_credit_prev: float = 0.0,
-    slot_id: str | None = None,
-    seed_id: str | None = None,
+    inputs: ContributionRewardInputs | LossRewardInputs,
 ) -> float:
     """Dispatch reward based on family (contribution vs loss-primary)."""
-    if contribution_config is None:
-        contribution_config = ContributionRewardConfig()
-    if loss_config is None:
-        loss_config = LossRewardConfig.default()
-
     if reward_family == RewardFamily.CONTRIBUTION:
-        # cast() needed because compute_reward's return type depends on return_components
-        # When return_components=False, it returns float (not tuple)
-        return cast(float, compute_reward(
-            action=action,
-            seed_contribution=seed_contribution,
-            val_acc=val_acc,
-            seed_info=seed_info,
-            epoch=epoch,
-            max_epochs=max_epochs,
-            total_params=total_params,
-            host_params=host_params,
-            acc_at_germination=acc_at_germination,
-            acc_delta=acc_delta,
-            committed_val_acc=committed_val_acc,
-            fossilized_seed_params=fossilized_seed_params,
-            num_fossilized_seeds=num_fossilized_seeds,
-            num_contributing_fossilized=num_contributing_fossilized,
-            config=contribution_config,
-            return_components=False,
-            effective_seed_params=effective_seed_params,
-            alpha_delta_sq_sum=alpha_delta_sq_sum,
-            stable_val_acc=stable_val_acc,
-            escrow_credit_prev=escrow_credit_prev,
-            slot_id=slot_id,
-            seed_id=seed_id,
-        ))
+        contribution_inputs = cast(ContributionRewardInputs, inputs)
+        if contribution_inputs.return_components:
+            raise ValueError(
+                "compute_reward_for_family expects return_components=False"
+            )
+        return cast(float, compute_reward(contribution_inputs))
     if reward_family == RewardFamily.LOSS:
-        return compute_loss_reward(
-            action=action,
-            loss_delta=loss_delta,
-            val_loss=val_loss,
-            seed_info=seed_info,
-            epoch=epoch,
-            max_epochs=max_epochs,
-            total_params=total_params,
-            host_params=host_params,
-            config=loss_config,
-        )
+        loss_inputs = cast(LossRewardInputs, inputs)
+        return compute_loss_reward(loss_inputs)
     raise ValueError(f"Unknown reward family: {reward_family}")
 
 
@@ -1753,50 +1653,45 @@ def compute_pbrs_stage_bonus(
 
 
 def compute_loss_reward(
-    action: int,
-    loss_delta: float,
-    val_loss: float,
-    seed_info: SeedInfo | None,
-    epoch: int,
-    max_epochs: int,
-    total_params: int = 0,
-    host_params: int = 1,
-    config: LossRewardConfig | None = None,
+    inputs: LossRewardInputs,
 ) -> float:
     """Compute loss-primary reward for seed lifecycle control."""
+    config = inputs.config
     if config is None:
         config = LossRewardConfig.default()
 
     reward = 0.0
 
     # Primary: loss improvement (negative delta = improvement)
-    normalized_delta = loss_delta / config.typical_loss_delta_std
+    normalized_delta = inputs.loss_delta / config.typical_loss_delta_std
     clipped = max(-config.max_loss_delta, min(normalized_delta, config.max_loss_delta))
     if clipped > 0:
         clipped *= config.regression_penalty_scale
     reward += (-clipped) * config.loss_delta_weight
 
     # Compute rent with grace period (logarithmic scaling on seed overhead)
-    if host_params > 0 and total_params > host_params:
+    if inputs.host_params > 0 and inputs.total_params > inputs.host_params:
         in_grace = False
-        if seed_info is not None:
-            in_grace = seed_info.seed_age_epochs < config.grace_epochs
+        if inputs.seed_info is not None:
+            in_grace = inputs.seed_info.seed_age_epochs < config.grace_epochs
         if not in_grace:
             # Measure EXCESS params from seeds, not total ratio
             # growth_ratio = 0 when no seeds, so no rent penalty
-            growth_ratio = (total_params - host_params) / host_params
+            growth_ratio = (
+                inputs.total_params - inputs.host_params
+            ) / inputs.host_params
             scaled_cost = math.log(1.0 + growth_ratio)
             rent_penalty = config.compute_rent_weight * scaled_cost
             rent_penalty = min(rent_penalty, config.max_rent_penalty)
             reward -= rent_penalty
 
     # Stage bonuses (PBRS)
-    if seed_info is not None:
-        reward += compute_pbrs_stage_bonus(seed_info, config)
+    if inputs.seed_info is not None:
+        reward += compute_pbrs_stage_bonus(inputs.seed_info, config)
 
     # Terminal bonus based on normalized improvement
-    if epoch == max_epochs:
-        improvement = config.baseline_loss - val_loss
+    if inputs.epoch == inputs.max_epochs:
+        improvement = config.baseline_loss - inputs.val_loss
         achievable_range = config.achievable_range or 1.0
         normalized = max(0.0, min(improvement / achievable_range, 1.0))
         reward += normalized * config.terminal_loss_weight

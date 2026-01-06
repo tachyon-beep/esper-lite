@@ -105,16 +105,16 @@ class TestPolicyGroupMetricsTracking:
         )
 
         # Simulate recording three episodes using EpisodeRecord schema
-        record1: EpisodeRecord = {"env_id": 0, "final_accuracy": 45.0, "episode_reward": 10.5}
-        record2: EpisodeRecord = {"env_id": 1, "final_accuracy": 52.3, "episode_reward": 12.1}
-        record3: EpisodeRecord = {"env_id": 2, "final_accuracy": 58.9, "episode_reward": 15.7}
+        record1 = EpisodeRecord(env_id=0, final_accuracy=45.0, episode_reward=10.5)
+        record2 = EpisodeRecord(env_id=1, final_accuracy=52.3, episode_reward=12.1)
+        record3 = EpisodeRecord(env_id=2, final_accuracy=58.9, episode_reward=15.7)
         group.episode_history.append(record1)
         group.episode_history.append(record2)
         group.episode_history.append(record3)
 
         assert len(group.episode_history) == 3
-        assert group.episode_history[0]["final_accuracy"] == 45.0
-        assert group.episode_history[-1]["env_id"] == 2
+        assert group.episode_history[0].final_accuracy == 45.0
+        assert group.episode_history[-1].env_id == 2
 
     def test_metrics_can_be_updated(self, mock_agent):
         """Metrics like total_episodes and best_accuracy should be mutable."""
@@ -164,7 +164,7 @@ class TestPolicyGroupIndependence:
         )
 
         # Add to group A only using EpisodeRecord schema
-        record: EpisodeRecord = {"env_id": 0, "final_accuracy": 50.0, "episode_reward": 10.0}
+        record = EpisodeRecord(env_id=0, final_accuracy=50.0, episode_reward=10.0)
         group_a.episode_history.append(record)
 
         # Group B should remain empty

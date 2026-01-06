@@ -696,7 +696,7 @@ def main() -> None:
                 # Validate slot IDs use canonical format
                 validated_slots = validate_slots(args.slots)
 
-                from esper.simic.training import train_heuristic
+                from esper.simic.training.helpers import train_heuristic
                 train_heuristic(
                     n_episodes=args.episodes,
                     max_epochs=args.max_epochs,

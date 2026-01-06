@@ -370,9 +370,13 @@ class TestTrainMainWiring:
         def fake_train_heuristic(**kwargs: object) -> None:
             train_calls.update(kwargs)
 
-        import esper.simic.training as simic_training
+        import esper.simic.training.helpers as simic_training_helpers
 
-        monkeypatch.setattr(simic_training, "train_heuristic", fake_train_heuristic)
+        monkeypatch.setattr(
+            simic_training_helpers,
+            "train_heuristic",
+            fake_train_heuristic,
+        )
 
         import esper.karn as karn
 

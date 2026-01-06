@@ -23,26 +23,13 @@ Example:
 """
 
 from dataclasses import dataclass, field
-from typing import TypedDict
 
 import torch
 
 from esper.simic.agent import PPOAgent
 from esper.simic.rewards import ContributionRewardConfig, RewardMode
 from esper.simic.training.parallel_env_state import ParallelEnvState
-
-
-class EpisodeRecord(TypedDict):
-    """Typed schema for per-episode tracking in A/B testing.
-
-    This is the minimal contract for episode_history entries. The fields
-    match what vectorized.py produces when tracking episode completions.
-    """
-
-    env_id: int
-    episode_reward: float
-    final_accuracy: float
-
+from esper.simic.training.vectorized_types import EpisodeRecord
 
 @dataclass
 class PolicyGroup:

@@ -1,5 +1,8 @@
 """Tests for loss-primary reward computation."""
 
+from esper.leyline import LifecycleOp
+from esper.simic.rewards import LossRewardInputs
+
 
 def test_compute_loss_reward_basic():
     """Basic loss reward: lower loss = positive reward."""
@@ -9,13 +12,15 @@ def test_compute_loss_reward_basic():
     config = LossRewardConfig.default()
 
     reward = compute_loss_reward(
-        action=0,
-        loss_delta=-0.1,
-        val_loss=2.0,
-        seed_info=None,
-        epoch=10,
-        max_epochs=25,
-        config=config,
+        LossRewardInputs(
+            action=LifecycleOp.WAIT,
+            loss_delta=-0.1,
+            val_loss=2.0,
+            seed_info=None,
+            epoch=10,
+            max_epochs=25,
+            config=config,
+        )
     )
 
     assert reward > 0
@@ -29,13 +34,15 @@ def test_compute_loss_reward_regression_penalized():
     config = LossRewardConfig.default()
 
     reward = compute_loss_reward(
-        action=0,
-        loss_delta=0.1,
-        val_loss=2.5,
-        seed_info=None,
-        epoch=10,
-        max_epochs=25,
-        config=config,
+        LossRewardInputs(
+            action=LifecycleOp.WAIT,
+            loss_delta=0.1,
+            val_loss=2.5,
+            seed_info=None,
+            epoch=10,
+            max_epochs=25,
+            config=config,
+        )
     )
 
     assert reward < 0
@@ -49,22 +56,26 @@ def test_asymmetric_regression_penalty():
     config = LossRewardConfig.default()
 
     improvement_reward = compute_loss_reward(
-        action=0,
-        loss_delta=-0.1,
-        val_loss=2.0,
-        seed_info=None,
-        epoch=10,
-        max_epochs=25,
-        config=config,
+        LossRewardInputs(
+            action=LifecycleOp.WAIT,
+            loss_delta=-0.1,
+            val_loss=2.0,
+            seed_info=None,
+            epoch=10,
+            max_epochs=25,
+            config=config,
+        )
     )
     regression_reward = compute_loss_reward(
-        action=0,
-        loss_delta=0.1,
-        val_loss=2.0,
-        seed_info=None,
-        epoch=10,
-        max_epochs=25,
-        config=config,
+        LossRewardInputs(
+            action=LifecycleOp.WAIT,
+            loss_delta=0.1,
+            val_loss=2.0,
+            seed_info=None,
+            epoch=10,
+            max_epochs=25,
+            config=config,
+        )
     )
 
     assert abs(regression_reward) < abs(improvement_reward)
@@ -79,27 +90,31 @@ def test_compute_rent():
 
     # No overhead: total_params = host_params, so no rent
     no_overhead_reward = compute_loss_reward(
-        action=0,
-        loss_delta=-0.1,
-        val_loss=2.0,
-        seed_info=None,
-        epoch=10,
-        max_epochs=25,
-        total_params=100000,  # Equal to host = no overhead
-        host_params=100000,
-        config=config,
+        LossRewardInputs(
+            action=LifecycleOp.WAIT,
+            loss_delta=-0.1,
+            val_loss=2.0,
+            seed_info=None,
+            epoch=10,
+            max_epochs=25,
+            total_params=100000,  # Equal to host = no overhead
+            host_params=100000,
+            config=config,
+        )
     )
     # With overhead: total_params > host_params, so rent applies
     with_overhead_reward = compute_loss_reward(
-        action=0,
-        loss_delta=-0.1,
-        val_loss=2.0,
-        seed_info=None,
-        epoch=10,
-        max_epochs=25,
-        total_params=150000,  # 50K overhead from seeds
-        host_params=100000,
-        config=config,
+        LossRewardInputs(
+            action=LifecycleOp.WAIT,
+            loss_delta=-0.1,
+            val_loss=2.0,
+            seed_info=None,
+            epoch=10,
+            max_epochs=25,
+            total_params=150000,  # 50K overhead from seeds
+            host_params=100000,
+            config=config,
+        )
     )
 
     # Overhead should reduce reward (rent penalty)

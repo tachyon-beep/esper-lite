@@ -15,6 +15,52 @@ from esper.simic.telemetry.emitters import (
     compute_grad_norm_surrogate,
     emit_ppo_update_event,
 )
+from esper.simic.training.vectorized_types import (
+    ActionMaskFlags,
+    ActionOutcome,
+    ActionSpec,
+)
+
+
+def _build_action_spec(slot_id: str, indices: dict[str, int]) -> ActionSpec:
+    return ActionSpec(
+        slot_idx=indices["slot"],
+        blueprint_idx=indices["blueprint"],
+        style_idx=indices["style"],
+        tempo_idx=indices["tempo"],
+        alpha_target_idx=indices["alpha_target"],
+        alpha_speed_idx=indices["alpha_speed"],
+        alpha_curve_idx=indices["alpha_curve"],
+        op_idx=indices["op"],
+        target_slot=slot_id,
+        slot_is_enabled=True,
+    )
+
+
+def _build_mask_flags(masked: dict[str, bool] | None = None) -> ActionMaskFlags:
+    flags = {
+        "op": False,
+        "slot": False,
+        "blueprint": False,
+        "style": False,
+        "tempo": False,
+        "alpha_target": False,
+        "alpha_speed": False,
+        "alpha_curve": False,
+    }
+    if masked is not None:
+        for key, value in masked.items():
+            flags[key] = value
+    return ActionMaskFlags(
+        op_masked=flags["op"],
+        slot_masked=flags["slot"],
+        blueprint_masked=flags["blueprint"],
+        style_masked=flags["style"],
+        tempo_masked=flags["tempo"],
+        alpha_target_masked=flags["alpha_target"],
+        alpha_speed_masked=flags["alpha_speed"],
+        alpha_curve_masked=flags["alpha_curve"],
+    )
 
 
 def _make_mandatory_metrics(**overrides) -> dict:
@@ -384,17 +430,31 @@ class TestVectorizedEmitterRewardComponents:
         )
 
         # Should not raise
+        action_spec = _build_action_spec(
+            "G0",
+            {
+                "op": 0,
+                "slot": 0,
+                "blueprint": 0,
+                "style": 0,
+                "tempo": 0,
+                "alpha_target": 0,
+                "alpha_speed": 0,
+                "alpha_curve": 0,
+            },
+        )
         emitter.on_last_action(
             epoch=10,
-            action_indices={"op": 0, "slot": 0, "blueprint": 0, "style": 0, "tempo": 0, "alpha_target": 0, "alpha_speed": 0, "alpha_curve": 0},
-            slot_id="G0",
-            masked={},
-            success=True,
+            action_spec=action_spec,
+            masked=_build_mask_flags(),
+            outcome=ActionOutcome(
+                action_success=True,
+                reward_raw=0.35,
+                reward_components=rc,
+            ),
             active_alpha_algorithm="curiosity",
-            total_reward=0.35,
             value_estimate=0.3,
             host_accuracy=0.75,
-            reward_components=rc,
         )
 
         # Verify event was emitted with typed dataclass
@@ -409,17 +469,31 @@ class TestVectorizedEmitterRewardComponents:
         emitter = VectorizedEmitter(env_id=0, device="cpu", hub=mock_hub)
 
         # Should not raise when reward_components is None
+        action_spec = _build_action_spec(
+            "G0",
+            {
+                "op": 0,
+                "slot": 0,
+                "blueprint": 0,
+                "style": 0,
+                "tempo": 0,
+                "alpha_target": 0,
+                "alpha_speed": 0,
+                "alpha_curve": 0,
+            },
+        )
         emitter.on_last_action(
             epoch=10,
-            action_indices={"op": 0, "slot": 0, "blueprint": 0, "style": 0, "tempo": 0, "alpha_target": 0, "alpha_speed": 0, "alpha_curve": 0},
-            slot_id="G0",
-            masked={},
-            success=True,
+            action_spec=action_spec,
+            masked=_build_mask_flags(),
+            outcome=ActionOutcome(
+                action_success=True,
+                reward_raw=0.0,
+                reward_components=None,
+            ),
             active_alpha_algorithm=None,
-            total_reward=0.0,
             value_estimate=0.0,
             host_accuracy=0.5,
-            reward_components=None,
         )
 
         # Verify event was emitted
@@ -453,13 +527,24 @@ class TestVectorizedEmitterRewardComponents:
             curve_entropy=0.35,
         )
 
+        action_spec = _build_action_spec(
+            "r0c0",
+            {
+                "op": 0,
+                "slot": 0,
+                "blueprint": 0,
+                "style": 0,
+                "tempo": 0,
+                "alpha_target": 0,
+                "alpha_speed": 0,
+                "alpha_curve": 0,
+            },
+        )
         emitter.on_last_action(
             epoch=1,
-            action_indices={"op": 0, "slot": 0, "blueprint": 0, "style": 0, "tempo": 0,
-                           "alpha_target": 0, "alpha_speed": 0, "alpha_curve": 0},
-            slot_id="r0c0",
-            masked={},
-            success=True,
+            action_spec=action_spec,
+            masked=_build_mask_flags(),
+            outcome=ActionOutcome(action_success=True),
             active_alpha_algorithm=None,
             head_telemetry=head_telem,
         )

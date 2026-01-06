@@ -6,6 +6,7 @@ This subpackage contains:
 """
 
 from .reward_telemetry import RewardComponentsTelemetry
+from .types import ContributionRewardInputs, LossRewardInputs
 
 from .rewards import (
     # Config classes (LossRewardConfig moved to esper.leyline)
@@ -57,6 +58,9 @@ __all__ = [
     "RewardFamily",
     # Seed info
     "SeedInfo",
+    # Typed inputs
+    "ContributionRewardInputs",
+    "LossRewardInputs",
     # Reward functions
     "compute_reward",
     "compute_reward_for_family",

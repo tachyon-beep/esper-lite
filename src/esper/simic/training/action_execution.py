@@ -56,10 +56,18 @@ from esper.simic.rewards import (
     SeedInfo,
     STAGE_POTENTIALS,
 )
+from esper.simic.rewards.types import ContributionRewardInputs, LossRewardInputs
 from esper.tamiyo.policy.action_masks import build_slot_states, compute_action_masks
 
 from .helpers import compute_rent_and_shock_inputs
 from .parallel_env_state import ParallelEnvState
+from .vectorized_types import (
+    ActionMaskFlags,
+    ActionOutcome,
+    ActionSpec,
+    EpisodeRecord,
+    RewardSummaryAccumulator,
+)
 
 if TYPE_CHECKING:
     from esper.leyline.reports import SeedStateReport
@@ -105,7 +113,8 @@ def _parse_sampled_action(
     slot_config: SlotConfig,
     model: SlottedHostProtocol,
     resolve_target_slot: ResolveTargetSlot,
-) -> tuple[str, bool, Any, Any, bool, LifecycleOp, str, Any, float]:
+    action_spec: ActionSpec,
+) -> tuple[Any, Any]:
     """Consolidate action derived values and validation logic (Deduplication)."""
     # Use the SAMPLED slot as target (multi-slot support)
     target_slot, slot_is_enabled = resolve_target_slot(
@@ -166,17 +175,19 @@ def _parse_sampled_action(
         LifecycleOp(op_idx) if action_valid_for_reward else LifecycleOp.WAIT
     )
 
-    return (
-        target_slot,
-        slot_is_enabled,
-        slot_state,
-        seed_state,
-        action_valid_for_reward,
-        action_for_reward,
-        blend_algorithm_id,
-        alpha_algorithm,
-        alpha_target,
-    )
+    action_spec.slot_idx = slot_idx
+    action_spec.style_idx = style_idx
+    action_spec.alpha_target_idx = alpha_target_idx
+    action_spec.op_idx = op_idx
+    action_spec.target_slot = target_slot
+    action_spec.slot_is_enabled = slot_is_enabled
+    action_spec.action_valid_for_reward = action_valid_for_reward
+    action_spec.action_for_reward = action_for_reward
+    action_spec.blend_algorithm_id = blend_algorithm_id
+    action_spec.alpha_algorithm = alpha_algorithm
+    action_spec.alpha_target = alpha_target
+
+    return slot_state, seed_state
 
 
 def classify_episode_outcome(val_acc: float) -> str:
@@ -233,6 +244,11 @@ def execute_actions(
     pre_step_hiddens: list[tuple[torch.Tensor, torch.Tensor]],
     head_log_probs: dict[str, torch.Tensor],
     masks_batch: dict[str, torch.Tensor],
+    action_specs: list[ActionSpec],
+    action_outcomes: list[ActionOutcome],
+    mask_flags: list[ActionMaskFlags],
+    contribution_reward_inputs: list[ContributionRewardInputs],
+    loss_reward_inputs: list[LossRewardInputs],
     head_confidences_cpu: np.ndarray | None,
     head_entropies_cpu: np.ndarray | None,
     op_probs_cpu: np.ndarray | None,
@@ -240,10 +256,10 @@ def execute_actions(
     baseline_accs: list[dict[str, Any]],
     governor_panic_envs: list[int],
     env_rollback_occurred: list[bool],
-    reward_summary_accum: list[dict[str, float]],
+    reward_summary_accum: list[RewardSummaryAccumulator],
     env_final_accs: list[float],
     env_total_rewards: list[float],
-    episode_history: list[dict[str, Any]],
+    episode_history: list[EpisodeRecord],
     episode_outcomes: list[EpisodeOutcome],
     step_obs_stats: Any | None,
     epoch: int,
@@ -309,29 +325,24 @@ def execute_actions(
         alpha_curve_action = int(actions_np[_HEAD_ALPHA_CURVE_IDX, env_idx])
         op_action = int(actions_np[_HEAD_OP_IDX, env_idx])
 
-        action_dict: dict[str, int] | None = None
-        if ops_telemetry_enabled:
-            action_dict = {
-                "slot": slot_action,
-                "blueprint": blueprint_action,
-                "style": style_action,
-                "tempo": tempo_action,
-                "alpha_target": alpha_target_action,
-                "alpha_speed": alpha_speed_action,
-                "alpha_curve": alpha_curve_action,
-                "op": op_action,
-            }
-        (
-            target_slot,
-            slot_is_enabled,
-            slot_state,
-            seed_state,
-            action_valid_for_reward,
-            action_for_reward,
-            blend_algorithm_id,
-            alpha_algorithm,
-            alpha_target,
-        ) = _parse_sampled_action(
+        action_spec = action_specs[env_idx]
+        action_spec.slot_idx = slot_action
+        action_spec.blueprint_idx = blueprint_action
+        action_spec.style_idx = style_action
+        action_spec.tempo_idx = tempo_action
+        action_spec.alpha_target_idx = alpha_target_action
+        action_spec.alpha_speed_idx = alpha_speed_action
+        action_spec.alpha_curve_idx = alpha_curve_action
+        action_spec.op_idx = op_action
+
+        action_outcome = action_outcomes[env_idx]
+        action_outcome.reward_components = None
+        action_outcome.episode_reward = None
+        action_outcome.final_accuracy = None
+        action_outcome.episode_outcome = None
+        action_outcome.action_name = OP_NAMES[op_action]
+
+        slot_state, seed_state = _parse_sampled_action(
             env_idx,
             op_action,
             slot_action,
@@ -341,11 +352,18 @@ def execute_actions(
             slot_config,
             model,
             context.resolve_target_slot,
+            action_spec,
         )
+        target_slot = action_spec.target_slot
+        slot_is_enabled = action_spec.slot_is_enabled
+        action_for_reward = action_spec.action_for_reward
+        blend_algorithm_id = action_spec.blend_algorithm_id
+        alpha_algorithm = action_spec.alpha_algorithm
+        alpha_target = action_spec.alpha_target
 
         # Use op name for action counting
-        env_state.action_counts[action_for_reward.name] = (
-            env_state.action_counts.get(action_for_reward.name, 0) + 1
+        env_state.action_counts[action_spec.action_for_reward.name] = (
+            env_state.action_counts.get(action_spec.action_for_reward.name, 0) + 1
         )
 
         action_success = False
@@ -374,6 +392,8 @@ def execute_actions(
             env_state.host_optimizer.state.clear()
             for seed_opt in env_state.seed_optimizers.values():
                 seed_opt.state.clear()
+
+        action_outcome.rollback_occurred = env_rollback_occurred[env_idx]
 
         # Compute reward
         scoreboard = analytics._get_scoreboard(env_idx)
@@ -454,37 +474,42 @@ def execute_actions(
             force_reward_components = (
                 env_reward_configs[env_idx].reward_mode == RewardMode.ESCROW
             )
-            if (
+            return_components = (
                 emit_reward_components_event
                 or collect_reward_summary
                 or force_reward_components
-            ):
+            )
+            reward_inputs = contribution_reward_inputs[env_idx]
+            reward_inputs.action = action_for_reward
+            reward_inputs.seed_contribution = seed_contribution
+            reward_inputs.val_acc = env_state.val_acc
+            reward_inputs.seed_info = seed_info
+            reward_inputs.epoch = epoch
+            reward_inputs.max_epochs = max_epochs
+            reward_inputs.total_params = model.total_params
+            reward_inputs.host_params = host_params
+            reward_inputs.acc_at_germination = acc_at_germination
+            reward_inputs.acc_delta = signals.metrics.accuracy_delta
+            reward_inputs.committed_val_acc = env_state.committed_val_acc
+            reward_inputs.fossilized_seed_params = fossilized_seed_params
+            reward_inputs.num_fossilized_seeds = env_state.seeds_fossilized
+            reward_inputs.num_contributing_fossilized = (
+                env_state.contributing_fossilized
+            )
+            reward_inputs.config = env_reward_configs[env_idx]
+            reward_inputs.return_components = return_components
+            reward_inputs.effective_seed_params = effective_seed_params
+            reward_inputs.alpha_delta_sq_sum = alpha_delta_sq_sum
+            reward_inputs.stable_val_acc = stable_val_acc
+            reward_inputs.escrow_credit_prev = escrow_credit_prev
+            reward_inputs.slot_id = target_slot
+            reward_inputs.seed_id = seed_id
+
+            reward_result = compute_reward(reward_inputs)
+            if return_components:
                 reward, reward_components = cast(
                     tuple[float, Any],
-                    compute_reward(
-                        action=action_for_reward,
-                        seed_contribution=seed_contribution,
-                        val_acc=env_state.val_acc,
-                        seed_info=seed_info,
-                        epoch=epoch,
-                        max_epochs=max_epochs,
-                        total_params=model.total_params,
-                        host_params=host_params,
-                        acc_at_germination=acc_at_germination,
-                        acc_delta=signals.metrics.accuracy_delta,
-                        committed_val_acc=env_state.committed_val_acc,
-                        fossilized_seed_params=fossilized_seed_params,
-                        num_fossilized_seeds=env_state.seeds_fossilized,
-                        num_contributing_fossilized=env_state.contributing_fossilized,
-                        config=env_reward_configs[env_idx],
-                        return_components=True,
-                        effective_seed_params=effective_seed_params,
-                        alpha_delta_sq_sum=alpha_delta_sq_sum,
-                        stable_val_acc=stable_val_acc,
-                        escrow_credit_prev=escrow_credit_prev,
-                        slot_id=target_slot,
-                        seed_id=seed_id,
-                    ),
+                    reward_result,
                 )
                 if target_slot in baseline_accs[env_idx]:
                     reward_components.host_baseline_acc = baseline_accs[env_idx][
@@ -495,44 +520,19 @@ def execute_actions(
                         reward_components.escrow_credit_next
                     )
             else:
-                reward = cast(
-                    float,
-                    compute_reward(
-                        action=action_for_reward,
-                        seed_contribution=seed_contribution,
-                        val_acc=env_state.val_acc,
-                        seed_info=seed_info,
-                        epoch=epoch,
-                        max_epochs=max_epochs,
-                        total_params=model.total_params,
-                        host_params=host_params,
-                        acc_at_germination=acc_at_germination,
-                        acc_delta=signals.metrics.accuracy_delta,
-                        committed_val_acc=env_state.committed_val_acc,
-                        fossilized_seed_params=fossilized_seed_params,
-                        num_fossilized_seeds=env_state.seeds_fossilized,
-                        num_contributing_fossilized=env_state.contributing_fossilized,
-                        config=env_reward_configs[env_idx],
-                        effective_seed_params=effective_seed_params,
-                        alpha_delta_sq_sum=alpha_delta_sq_sum,
-                        stable_val_acc=stable_val_acc,
-                        escrow_credit_prev=escrow_credit_prev,
-                        slot_id=target_slot,
-                        seed_id=seed_id,
-                    ),
-                )
+                reward = cast(float, reward_result)
         else:
-            reward = compute_loss_reward(
-                action=action_for_reward,
-                loss_delta=signals.metrics.loss_delta,
-                val_loss=env_state.val_loss,
-                seed_info=seed_info,
-                epoch=epoch,
-                max_epochs=max_epochs,
-                total_params=model.total_params,
-                host_params=host_params,
-                config=loss_reward_config,
-            )
+            loss_inputs = loss_reward_inputs[env_idx]
+            loss_inputs.action = action_for_reward
+            loss_inputs.loss_delta = signals.metrics.loss_delta
+            loss_inputs.val_loss = env_state.val_loss
+            loss_inputs.seed_info = seed_info
+            loss_inputs.epoch = epoch
+            loss_inputs.max_epochs = max_epochs
+            loss_inputs.total_params = model.total_params
+            loss_inputs.host_params = host_params
+            loss_inputs.config = loss_reward_config
+            reward = compute_loss_reward(loss_inputs)
 
         if env_reward_configs[env_idx].reward_mode == RewardMode.ESCROW and epoch == max_epochs:
             assert reward_components is not None, (
@@ -608,9 +608,12 @@ def execute_actions(
 
         if reward_components is not None:
             reward_components.total_reward = reward
+        action_outcome.reward_raw = reward
+        action_outcome.reward_components = reward_components
 
         # Normalize reward for PPO stability (P1-6 fix)
         normalized_reward = reward_normalizer.update_and_normalize(reward)
+        action_outcome.reward_normalized = normalized_reward
         # B11-CR-03 fix: Store RAW rewards for telemetry interpretability
         # PPO buffer uses normalized_reward (for training stability)
         # Telemetry uses raw reward (for cross-run comparability)
@@ -618,13 +621,13 @@ def execute_actions(
 
         if collect_reward_summary and reward_components is not None:
             summary = reward_summary_accum[env_idx]
-            summary["total_reward"] += reward
+            summary.total_reward += reward
             if reward_components.bounded_attribution is not None:
-                summary["bounded_attribution"] += reward_components.bounded_attribution
-            summary["compute_rent"] += reward_components.compute_rent
-            summary["alpha_shock"] += reward_components.alpha_shock
-            summary["hindsight_credit"] += hindsight_credit_applied
-            summary["count"] += 1
+                summary.bounded_attribution += reward_components.bounded_attribution
+            summary.compute_rent += reward_components.compute_rent
+            summary.alpha_shock += reward_components.alpha_shock
+            summary.hindsight_credit += hindsight_credit_applied
+            summary.count += 1
 
         # Execute action
         # Stream safety: lifecycle ops can create/move CUDA tensors (germination
@@ -715,8 +718,8 @@ def execute_actions(
                             # Track scaffold metrics for telemetry (per-environment)
                             if collect_reward_summary:
                                 summary = reward_summary_accum[env_idx]
-                                summary["scaffold_count"] += scaffold_count
-                                summary["scaffold_delay_total"] += total_delay
+                                summary.scaffold_count += scaffold_count
+                                summary.scaffold_delay_total += total_delay
 
                             # Clear this beneficiary from all ledgers (it's now fossilized)
                             for scaffold_slot in list(
@@ -805,6 +808,7 @@ def execute_actions(
             env_state.successful_action_counts[action_for_reward.name] = (
                 env_state.successful_action_counts.get(action_for_reward.name, 0) + 1
             )
+        action_outcome.action_success = action_success
 
         # Obs V3: Update action feedback state for next timestep's feature extraction
         env_state.last_action_success = action_success
@@ -837,11 +841,23 @@ def execute_actions(
 
         # Consolidate telemetry via emitter
         if ops_telemetry_enabled and masked_np is not None:
-            assert action_dict is not None
-            masked_flags = {
-                head: bool(masked_np[head_idx, env_idx])
-                for head_idx, head in enumerate(HEAD_NAMES)
-            }
+            masked_flags = mask_flags[env_idx]
+            masked_flags.op_masked = bool(masked_np[_HEAD_OP_IDX, env_idx])
+            masked_flags.slot_masked = bool(masked_np[_HEAD_SLOT_IDX, env_idx])
+            masked_flags.blueprint_masked = bool(
+                masked_np[_HEAD_BLUEPRINT_IDX, env_idx]
+            )
+            masked_flags.style_masked = bool(masked_np[_HEAD_STYLE_IDX, env_idx])
+            masked_flags.tempo_masked = bool(masked_np[_HEAD_TEMPO_IDX, env_idx])
+            masked_flags.alpha_target_masked = bool(
+                masked_np[_HEAD_ALPHA_TARGET_IDX, env_idx]
+            )
+            masked_flags.alpha_speed_masked = bool(
+                masked_np[_HEAD_ALPHA_SPEED_IDX, env_idx]
+            )
+            masked_flags.alpha_curve_masked = bool(
+                masked_np[_HEAD_ALPHA_CURVE_IDX, env_idx]
+            )
 
             post_slot_obj = cast(SeedSlotProtocol, model.seed_slots[target_slot])
             post_slot_state = post_slot_obj.state
@@ -931,20 +947,17 @@ def execute_actions(
                 )
 
             emitters[env_idx].on_last_action(
-                epoch,
-                action_dict,
-                target_slot,
-                masked_flags,
-                action_success,
-                active_algo,
-                total_reward=reward,
+                epoch=epoch,
+                action_spec=action_spec,
+                masked=masked_flags,
+                outcome=action_outcome,
+                active_alpha_algorithm=active_algo,
                 value_estimate=value,
                 host_accuracy=env_state.val_acc,
                 slot_states=decision_slot_states,
                 action_confidence=action_confidence,
                 alternatives=alternatives,
                 decision_entropy=decision_entropy,
-                reward_components=reward_components,  # Pass directly (may be None for LOSS family)
                 head_telemetry=head_telem,
                 # TELE-OBS: Only pass for env 0 to avoid redundant data (batch-level stat)
                 observation_stats=step_obs_stats if env_idx == 0 else None,
@@ -953,6 +966,7 @@ def execute_actions(
         # Store transition directly into rollout buffer.
         done = epoch == max_epochs
         truncated = done
+        action_outcome.truncated = truncated
         effective_op_action = int(action_for_reward)
 
         step_idx = agent.buffer.step_counts[env_idx]
@@ -1072,12 +1086,14 @@ def execute_actions(
 
             # Track episode completion for A/B testing
             episode_history.append(
-                {
-                    "env_id": env_idx,
-                    "episode_reward": env_total_rewards[env_idx],
-                    "final_accuracy": env_final_accs[env_idx],
-                }
+                EpisodeRecord(
+                    env_id=env_idx,
+                    episode_reward=env_total_rewards[env_idx],
+                    final_accuracy=env_final_accs[env_idx],
+                )
             )
+            action_outcome.episode_reward = env_total_rewards[env_idx]
+            action_outcome.final_accuracy = env_final_accs[env_idx]
 
             # Compute stability score from reward variance
             recent_ep_rewards = (
@@ -1105,6 +1121,7 @@ def execute_actions(
                 reward_mode=env_reward_configs[env_idx].reward_mode.value,
             )
             episode_outcomes.append(episode_outcome)
+            action_outcome.episode_outcome = episode_outcome
 
             # Emit EPISODE_OUTCOME telemetry for Pareto analysis
             # B11-CR-04 fix: Skip emission for rollback episodes (will emit corrected outcome later)
