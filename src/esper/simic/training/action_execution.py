@@ -61,7 +61,7 @@ from esper.tamiyo.policy.action_masks import build_slot_states, compute_action_m
 
 from .helpers import compute_rent_and_shock_inputs
 from .parallel_env_state import ParallelEnvState
-from .vectorized_types import (
+from esper.simic.vectorized_types import (
     ActionMaskFlags,
     ActionOutcome,
     ActionSpec,

@@ -15,7 +15,7 @@ from esper.simic.telemetry.emitters import (
     compute_grad_norm_surrogate,
     emit_ppo_update_event,
 )
-from esper.simic.training.vectorized_types import (
+from esper.simic.vectorized_types import (
     ActionMaskFlags,
     ActionOutcome,
     ActionSpec,

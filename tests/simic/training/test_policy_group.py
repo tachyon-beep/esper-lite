@@ -5,7 +5,8 @@ import torch
 
 from esper.simic.agent import PPOAgent
 from esper.simic.rewards import ContributionRewardConfig, RewardMode
-from esper.simic.training import EpisodeRecord, PolicyGroup
+from esper.simic.training import EpisodeRecord
+from esper.simic.training.policy_group import PolicyGroup
 from esper.tamiyo.policy.factory import create_policy
 from esper.leyline.slot_config import SlotConfig
 

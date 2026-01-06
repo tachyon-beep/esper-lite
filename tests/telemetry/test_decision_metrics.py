@@ -22,7 +22,7 @@ from esper.leyline import (
 from esper.leyline.telemetry import HeadTelemetry
 from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
 from esper.simic.telemetry.emitters import VectorizedEmitter
-from esper.simic.training.vectorized_types import (
+from esper.simic.vectorized_types import (
     ActionMaskFlags,
     ActionOutcome,
     ActionSpec,

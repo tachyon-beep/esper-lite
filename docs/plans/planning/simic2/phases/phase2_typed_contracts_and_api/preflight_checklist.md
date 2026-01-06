@@ -190,7 +190,7 @@ typed-contract refactor can ship without behavior, telemetry, or performance dri
 - [x] Action execution uses typed ActionSpec/ActionOutcome with unit tests.
 - [x] Batch summaries are typed and serialized at the history boundary only.
 - [x] Telemetry baselines match (event counts and payload keys).
-- [ ] Throughput within baseline tolerance (no measurable regression).
+- [x] Throughput within baseline tolerance (no measurable regression).
 
 ## Execution notes (Phase 2 completion)
 - Full test suite: `UV_CACHE_DIR=.uv-cache uv run pytest`
@@ -210,7 +210,7 @@ typed-contract refactor can ship without behavior, telemetry, or performance dri
 - Ordering constraints: per-epoch EPOCH_COMPLETED precedes ANALYTICS_SNAPSHOT:last_action; batch tail sequence VALUE_COLLAPSE_DETECTED → PPO_UPDATE_COMPLETED → ANALYTICS_SNAPSHOT:batch_stats → BATCH_EPOCH_COMPLETED → ANALYTICS_SNAPSHOT:action_distribution
 - Performance baseline: total episode time 44.754748s, episodes/sec 0.022344, per-epoch deltas [7.395514s, 7.369687s, 7.77129s, 7.367458s], avg 7.475987s
 - Throughput fields (fps/step_time_ms/dataloader_wait_ms) were null in snapshots; baseline derived from timestamps.
-- Throughput baseline not rerun during this pass; rerun short PPO baseline before final sign-off if required.
+- Phase 3 preflight rerun: `telemetry/telemetry_2026-01-06_205739` total 39.277398s, 0.025460 episodes/sec, per-epoch deltas [7.500104s, 7.575927s, 7.99248s, 7.513749s].
 - Type-check gate: CI runs `uv run mypy -p esper` (see `.github/workflows/test-suite.yml`).
 - Episode outcome threshold: `EPISODE_SUCCESS_THRESHOLD=80.0` (percent scale),
   validated in `tests/simic/test_episode_outcome_emission.py`.

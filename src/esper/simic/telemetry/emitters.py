@@ -38,7 +38,7 @@ from esper.leyline.telemetry import HeadTelemetry
 from esper.nissa import get_hub
 
 from .debug_telemetry import LayerGradientStats, collect_per_layer_gradients
-from esper.simic.training.vectorized_types import ActionMaskFlags, ActionOutcome, ActionSpec
+from esper.simic.vectorized_types import ActionMaskFlags, ActionOutcome, ActionSpec
 
 if TYPE_CHECKING:
     from esper.simic.training.parallel_env_state import ParallelEnvState

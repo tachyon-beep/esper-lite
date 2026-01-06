@@ -40,7 +40,7 @@ from .action_execution import ActionExecutionContext, ResolveTargetSlot, execute
 from .batch_ops import batch_signals_to_features, process_train_batch
 from .counterfactual_eval import process_fused_val_batch
 from .env_factory import EnvFactoryContext, configure_slot_telemetry, create_env_state
-from .vectorized_types import (
+from esper.simic.vectorized_types import (
     ActionMaskFlags,
     ActionOutcome,
     ActionSpec,

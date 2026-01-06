@@ -29,7 +29,7 @@ import torch
 from esper.simic.agent import PPOAgent
 from esper.simic.rewards import ContributionRewardConfig, RewardMode
 from esper.simic.training.parallel_env_state import ParallelEnvState
-from esper.simic.training.vectorized_types import EpisodeRecord
+from esper.simic.vectorized_types import EpisodeRecord
 
 @dataclass
 class PolicyGroup:

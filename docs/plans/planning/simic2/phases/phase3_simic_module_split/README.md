@@ -31,3 +31,6 @@ Constraints:
 - Imports are directional (training depends on agent/rewards/telemetry; not vice versa).
 - The codebase has fewer “mega-modules” with unrelated concerns.
 
+## Preflight
+
+- `preflight_checklist.md`
