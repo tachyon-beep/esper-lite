@@ -72,7 +72,7 @@ from .emitters import (
 )
 
 # Value function metrics (TELE-220 to TELE-228)
-from .value_metrics import (
+from esper.leyline.value_metrics import (
     compute_value_function_metrics,
     ValueFunctionMetricsDict,
 )

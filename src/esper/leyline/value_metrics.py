@@ -1,4 +1,4 @@
-"""Value function metrics computation for telemetry.
+"""Value function metrics computation for telemetry contracts.
 
 Computes TELE-220 to TELE-228 metrics from rollout buffer data.
 """
@@ -122,3 +122,9 @@ def compute_value_function_metrics(
         return_variance=results[7],
         return_skewness=results[8],
     )
+
+
+__all__ = [
+    "ValueFunctionMetricsDict",
+    "compute_value_function_metrics",
+]

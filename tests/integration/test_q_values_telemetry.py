@@ -5,6 +5,7 @@ import torch
 
 from tests.helpers import create_all_valid_masks
 from esper.karn.sanctum.aggregator import SanctumAggregator
+from esper.leyline import NUM_OPS
 from esper.leyline.slot_config import SlotConfig
 from esper.leyline.telemetry import TelemetryEvent, TelemetryEventType, PPOUpdatePayload
 from esper.simic.agent import PPOAgent
@@ -118,15 +119,13 @@ def test_q_values_end_to_end_flow():
     metrics = agent.update(clear_buffer=True)
 
     # Verify metrics contain Q-values
-    assert "q_germinate" in metrics, "Q-value for GERMINATE missing"
-    assert "q_advance" in metrics, "Q-value for ADVANCE missing"
-    assert "q_fossilize" in metrics, "Q-value for FOSSILIZE missing"
-    assert "q_prune" in metrics, "Q-value for PRUNE missing"
-    assert "q_wait" in metrics, "Q-value for WAIT missing"
-    assert "q_set_alpha" in metrics, "Q-value for SET_ALPHA missing"
+    assert "op_q_values" in metrics, "Op-conditioned Q-value vector missing"
+    assert "op_valid_mask" in metrics, "Op mask missing"
     assert "q_variance" in metrics, "Q-variance missing"
     assert "q_spread" in metrics, "Q-spread missing"
 
+    assert len(metrics["op_q_values"]) == NUM_OPS, "Expected NUM_OPS entries"
+    assert len(metrics["op_valid_mask"]) == NUM_OPS, "Expected NUM_OPS mask entries"
     assert metrics["q_variance"] >= 0.0, "Q-variance should be non-negative"
     assert metrics["q_spread"] >= 0.0, "Q-spread should be non-negative"
 
@@ -143,12 +142,8 @@ def test_q_values_end_to_end_flow():
             clip_fraction=metrics["clip_fraction"],
             nan_grad_count=metrics.get("nan_grad_count", 0),  # Keep .get() - not asserted
             # Q-values (already asserted to exist)
-            q_germinate=metrics["q_germinate"],
-            q_advance=metrics["q_advance"],
-            q_fossilize=metrics["q_fossilize"],
-            q_prune=metrics["q_prune"],
-            q_wait=metrics["q_wait"],
-            q_set_alpha=metrics["q_set_alpha"],
+            op_q_values=metrics["op_q_values"],
+            op_valid_mask=metrics["op_valid_mask"],
             q_variance=metrics["q_variance"],
             q_spread=metrics["q_spread"],
         ),
@@ -161,12 +156,7 @@ def test_q_values_end_to_end_flow():
     snapshot = aggregator.get_snapshot()
 
     # Q-values should be finite (not NaN/inf)
-    assert math.isfinite(snapshot.tamiyo.q_germinate), "q_germinate should be finite"
-    assert math.isfinite(snapshot.tamiyo.q_advance), "q_advance should be finite"
-    assert math.isfinite(snapshot.tamiyo.q_fossilize), "q_fossilize should be finite"
-    assert math.isfinite(snapshot.tamiyo.q_prune), "q_prune should be finite"
-    assert math.isfinite(snapshot.tamiyo.q_wait), "q_wait should be finite"
-    assert math.isfinite(snapshot.tamiyo.q_set_alpha), "q_set_alpha should be finite"
+    assert all(math.isfinite(q) for q in snapshot.tamiyo.op_q_values), "q-values should be finite"
     assert snapshot.tamiyo.q_variance >= 0.0, "q_variance should be non-negative"
     assert snapshot.tamiyo.q_spread >= 0.0, "q_spread should be non-negative"
 
@@ -175,12 +165,8 @@ def test_q_values_end_to_end_flow():
     print(f"Q-variance: {snapshot.tamiyo.q_variance:.4f}")
     print(f"Q-spread: {snapshot.tamiyo.q_spread:.4f}")
     print("Q-values:")
-    print(f"  GERMINATE:  {snapshot.tamiyo.q_germinate:.2f}")
-    print(f"  ADVANCE:    {snapshot.tamiyo.q_advance:.2f}")
-    print(f"  FOSSILIZE:  {snapshot.tamiyo.q_fossilize:.2f}")
-    print(f"  PRUNE:      {snapshot.tamiyo.q_prune:.2f}")
-    print(f"  WAIT:       {snapshot.tamiyo.q_wait:.2f}")
-    print(f"  SET_ALPHA:  {snapshot.tamiyo.q_set_alpha:.2f}")
+    for idx, value in enumerate(snapshot.tamiyo.op_q_values):
+        print(f"  {idx}: {value:.2f}")
 
     # If variance > 0, Q-values are differentiated (op-conditioning works)
     # If variance ≈ 0, all Q-values are same (critic ignoring ops - BAD)

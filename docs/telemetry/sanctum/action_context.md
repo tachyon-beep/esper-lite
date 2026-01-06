@@ -35,20 +35,17 @@ The `ActionContext` widget renders a unified view of Tamiyo decision-making cont
 
 | Field Path | Type | Default | Usage |
 |------------|------|---------|-------|
-| `tamiyo.q_germinate` | `float` | `0.0` | Q-value for GERMINATE operation |
-| `tamiyo.q_advance` | `float` | `0.0` | Q-value for ADVANCE operation |
-| `tamiyo.q_set_alpha` | `float` | `0.0` | Q-value for SET_ALPHA_TARGET operation |
-| `tamiyo.q_fossilize` | `float` | `0.0` | Q-value for FOSSILIZE operation |
-| `tamiyo.q_prune` | `float` | `0.0` | Q-value for PRUNE operation |
-| `tamiyo.q_wait` | `float` | `0.0` | Q-value for WAIT operation |
+| `tamiyo.op_q_values` | `tuple[float, ...]` | `NaN × NUM_OPS` | Q(s, op) vector aligned to `LifecycleOp` ordering |
+| `tamiyo.op_valid_mask` | `tuple[bool, ...]` | `False × NUM_OPS` | Mask of valid ops for the sampled state |
 | `tamiyo.q_variance` | `float` | `0.0` | Variance across Q-values (op conditioning quality) |
 | `tamiyo.q_spread` | `float` | `0.0` | max(Q) - min(Q) across operations |
 
 **Rendering Logic:**
-- Q-values sorted by value (highest first) with normalized bar visualization
-- Bar fill computed via min-max normalization: `(q - q_min) / (q_max - q_min)`
-- First/last items marked as "BEST"/"WORST"
-- NaN values filtered out; if all NaN, shows "[waiting for data]"
+- Valid ops sorted by value (highest first) with normalized bar visualization
+- Bar fill computed via min-max normalization on valid ops only
+- Masked ops rendered dim with `[M]` marker and no numeric value
+- First/last valid items marked as "BEST"/"WORST"
+- If no valid ops, shows "[critic preference unavailable]"
 
 **Color Coding (Q-variance status):**
 | Condition | Status | Style |
@@ -56,7 +53,7 @@ The `ActionContext` widget renders a unified view of Tamiyo decision-making cont
 | `q_variance < 0.01` | `critical` | red bold + X icon |
 | `q_variance < 0.1` | `warning` | yellow + `!` marker |
 | `q_variance >= 0.1` | `ok` | green + checkmark |
-| `isnan(q_variance)` | `ok` | green |
+| `isnan(q_variance)` | `ok` | dim |
 
 ---
 

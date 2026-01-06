@@ -114,12 +114,8 @@ class PPOUpdateMetrics(TypedDict, total=False):
     head_grad_norms: dict[str, list[float]]  # Per-head, per-epoch
     ratio_diagnostic: dict[str, Any]
     # Q-values (Policy V2 op-conditioned critic)
-    q_germinate: float
-    q_advance: float
-    q_fossilize: float
-    q_prune: float
-    q_wait: float
-    q_set_alpha: float
+    op_q_values: tuple[float, ...]
+    op_valid_mask: tuple[bool, ...]
     q_variance: float
     q_spread: float
     # Per-head NaN/Inf detection (for indicator lights)

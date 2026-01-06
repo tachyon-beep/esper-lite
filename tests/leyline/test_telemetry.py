@@ -188,6 +188,11 @@ def test_ppo_update_payload_from_dict_parses_new_fields():
         "clip_fraction_positive": 0.12,
         "clip_fraction_negative": 0.08,
         "gradient_cv": 0.45,
+        # Q-values (required)
+        "op_q_values": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "op_valid_mask": [True, True, True, True, True, True],
+        "q_variance": 0.0,
+        "q_spread": 0.0,
         # Infrastructure metrics (optional with defaults)
         "cuda_memory_allocated_gb": 5.0,
         "cuda_memory_reserved_gb": 10.0,
@@ -391,23 +396,15 @@ def test_ppo_update_payload_with_q_values():
         kl_divergence=0.01,
         clip_fraction=0.15,
         nan_grad_count=0,
-        # Q-values per operation
-        q_germinate=5.2,
-        q_advance=3.1,
-        q_fossilize=2.8,
-        q_prune=-1.5,
-        q_wait=0.5,
-        q_set_alpha=4.0,
+        # Q-values per operation (LifecycleOp order)
+        op_q_values=(0.5, 5.2, 4.0, -1.5, 2.8, 3.1),
+        op_valid_mask=(True, True, True, True, True, True),
         q_variance=2.3,
         q_spread=6.7,
     )
 
-    assert payload.q_germinate == 5.2
-    assert payload.q_advance == 3.1
-    assert payload.q_fossilize == 2.8
-    assert payload.q_prune == -1.5
-    assert payload.q_wait == 0.5
-    assert payload.q_set_alpha == 4.0
+    assert payload.op_q_values == (0.5, 5.2, 4.0, -1.5, 2.8, 3.1)
+    assert payload.op_valid_mask == (True, True, True, True, True, True)
     assert payload.q_variance == 2.3
     assert payload.q_spread == 6.7
 
@@ -499,6 +496,11 @@ def test_ppo_update_payload_from_dict_with_per_head_nan_inf_flags():
         "clip_fraction_positive": 0.0,
         "clip_fraction_negative": 0.0,
         "gradient_cv": 0.0,
+        # Q-values (required)
+        "op_q_values": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "op_valid_mask": [True, True, True, True, True, True],
+        "q_variance": 0.0,
+        "q_spread": 0.0,
         # Pre-normalization advantage stats (always emitted)
         "pre_norm_advantage_mean": 0.0,
         "pre_norm_advantage_std": 1.0,
@@ -560,12 +562,8 @@ def test_ppo_update_payload_from_dict_with_q_values():
         "clip_fraction_negative": 0.05,
         "gradient_cv": 0.35,
         # Q-values (optional but what this test focuses on)
-        "q_germinate": 5.2,
-        "q_advance": 3.1,
-        "q_fossilize": 2.8,
-        "q_prune": -1.5,
-        "q_wait": 0.5,
-        "q_set_alpha": 4.0,
+        "op_q_values": [0.5, 5.2, 4.0, -1.5, 2.8, 3.1],
+        "op_valid_mask": [True, True, True, True, True, True],
         "q_variance": 2.3,
         "q_spread": 6.7,
         # Pre-normalization advantage stats (always emitted)
@@ -580,5 +578,5 @@ def test_ppo_update_payload_from_dict_with_q_values():
 
     assert payload.pre_clip_grad_norm == 8.5
     assert payload.ppo_updates_count == 2
-    assert payload.q_germinate == 5.2
+    assert payload.op_q_values == (0.5, 5.2, 4.0, -1.5, 2.8, 3.1)
     assert payload.q_variance == 2.3

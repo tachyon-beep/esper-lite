@@ -266,12 +266,8 @@ export interface TamiyoState {
   value_min: number;
   value_max: number;
   initial_value_spread: number | null;
-  q_germinate: number;
-  q_advance: number;
-  q_fossilize: number;
-  q_prune: number;
-  q_wait: number;
-  q_set_alpha: number;
+  op_q_values: number[];
+  op_valid_mask: boolean[];
   q_variance: number;
   q_spread: number;
   last_action_success: boolean;
@@ -389,4 +385,3 @@ export interface SanctumSnapshot {
   last_action_env_id: number | null;
   last_action_timestamp: string | null;
 }
-

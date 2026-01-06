@@ -7,7 +7,8 @@ from typing import Any
 
 import torch
 
-from esper.simic.telemetry.value_metrics import ValueFunctionMetricsDict
+from esper.leyline import NUM_OPS
+from esper.leyline.value_metrics import ValueFunctionMetricsDict
 
 from .types import FinitenessGateFailure, PPOUpdateMetrics
 
@@ -44,17 +45,22 @@ class PPOUpdateMetricsBuilder:
         aggregated_result: PPOUpdateMetrics = {}
 
         if self.epochs_completed == 0:
+            nan = float("nan")
             aggregated_result["ppo_update_performed"] = False
             aggregated_result["finiteness_gate_skip_count"] = len(self.finiteness_failures)
-            aggregated_result["ratio_max"] = float("nan")
-            aggregated_result["ratio_min"] = float("nan")
-            aggregated_result["policy_loss"] = float("nan")
-            aggregated_result["value_loss"] = float("nan")
-            aggregated_result["entropy"] = float("nan")
-            aggregated_result["approx_kl"] = float("nan")
-            aggregated_result["clip_fraction"] = float("nan")
-            aggregated_result["explained_variance"] = float("nan")
-            aggregated_result["pre_clip_grad_norm"] = float("nan")
+            aggregated_result["ratio_max"] = nan
+            aggregated_result["ratio_min"] = nan
+            aggregated_result["policy_loss"] = nan
+            aggregated_result["value_loss"] = nan
+            aggregated_result["entropy"] = nan
+            aggregated_result["approx_kl"] = nan
+            aggregated_result["clip_fraction"] = nan
+            aggregated_result["explained_variance"] = nan
+            aggregated_result["pre_clip_grad_norm"] = nan
+            aggregated_result["op_q_values"] = tuple(nan for _ in range(NUM_OPS))
+            aggregated_result["op_valid_mask"] = tuple(False for _ in range(NUM_OPS))
+            aggregated_result["q_variance"] = nan
+            aggregated_result["q_spread"] = nan
             if self.finiteness_failures:
                 aggregated_result["finiteness_gate_failures"] = self.finiteness_failures
             return PPOUpdateMetricsResult(metrics=aggregated_result, update_performed=False)
@@ -64,9 +70,19 @@ class PPOUpdateMetricsBuilder:
 
         for k, v in self.metrics.items():
             if not v:
+                if k in ("op_q_values", "op_valid_mask"):
+                    raise ValueError(f"Missing required PPO metric '{k}'.")
                 aggregated_result[k] = 0.0  # type: ignore[literal-required]
                 continue
 
+            if k == "op_q_values":
+                op_values = v[0]
+                aggregated_result[k] = tuple(op_values.tolist())  # type: ignore[literal-required]
+                continue
+            if k == "op_valid_mask":
+                op_mask = v[0]
+                aggregated_result[k] = tuple(bool(x) for x in op_mask.tolist())  # type: ignore[literal-required]
+                continue
             if k == "finiteness_gate_failures":
                 aggregated_result[k] = v  # type: ignore[literal-required]
                 continue

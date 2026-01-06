@@ -1,16 +1,19 @@
 # Phase 3 Preflight Checklist (Simic Module Split)
 
 ## Objective
+
 Prepare Phase 3 execution by locking scope, guardrails, and validation so the
 Simic rewards and PPO agent splits land without behavior drift, new cycles, or
 mega-module re-growth.
 
 ## Scope summary (Phase 3)
+
 - Rewards split: break up `src/esper/simic/rewards/rewards.py`.
 - PPO agent split: break up `src/esper/simic/agent/ppo.py`.
 - Enforce directional imports and remove dead compatibility surfaces.
 
 ## Pre-Phase Activities (entry gates)
+
 - [x] Phase 2 acceptance criteria marked complete (typed boundaries + telemetry parity).
 - [x] Full test suite passes on the refactor branch.
 - [x] Lint and types are clean (`uv run ruff check src/ tests/`, `uv run mypy src/`).
@@ -21,6 +24,7 @@ mega-module re-growth.
 ## Planning and risk-reduction activities
 
 ### A) Rewards split plan (single source of truth)
+
 - [x] Decide module names and locations:
   - `shaping.py` owns stage potentials and PBRS utilities.
   - `contribution.py` owns contribution-primary reward computation (pure).
@@ -33,6 +37,7 @@ mega-module re-growth.
 - [x] List the functions to delete after extraction (no legacy wrappers retained).
 
 ### B) PPO agent split plan (orchestration vs math)
+
 - [x] Decide module names and locations:
   - `ppo_agent.py`: PPOAgent surface, checkpointing, buffer orchestration.
   - `ppo_update.py`: update math only (losses, ratios, clipping, KL stop).
@@ -47,6 +52,7 @@ mega-module re-growth.
   - `ppo_agent.py` consumes typed results without further conversions.
 
 ### C) Import directionality and cycle prevention
+
 - [x] Document allowed import directions:
   - training → agent/rewards/telemetry
   - agent → buffer/policy
@@ -63,12 +69,14 @@ mega-module re-growth.
 - [x] Scan for any new back-edges before coding (rg/graph audit).
 
 ### D) Design spikes (timeboxed)
+
 - [x] PBRS extraction spike: move stage potentials to a single module and update imports.
 - [x] PPO metrics spike: create dataclasses + conversion logic, ensure call sites unchanged.
 - [x] PPO update spike: move loss/ratio math into `ppo_update.py`, return typed result.
 - [x] After each spike, run a short PPO baseline + telemetry ordering test.
 
 ## Risk reduction: correctness
+
 - [x] Preserve invariants:
   - `HEAD_NAMES` ordering and head tensor shapes
   - `SlotConfig` ordering invariants
@@ -81,11 +89,13 @@ mega-module re-growth.
 - [x] Add one meta-test to assert a single `STAGE_POTENTIALS` definition site.
 
 ## Risk reduction: telemetry and contracts
+
 - [x] Telemetry payload keys and types unchanged (decision metrics + PPO updates).
 - [x] Event ordering unchanged (batch tail ordering test passes).
 - [x] Telemetry code does not import PPO update internals after split.
 
 ## Risk reduction: performance and torch.compile
+
 - [x] No new `.cpu()`/`.item()` calls in hot paths outside `ppo_metrics.py`
       beyond early-stop ratio/KL scalars in `ppo_update.py`.
 - [x] No per-step/per-env allocations added in the PPO update loop.
@@ -93,10 +103,12 @@ mega-module re-growth.
 - [x] Throughput baseline within tolerance (no measurable regression).
 
 ## Risk reduction: multiprocessing / pickling
+
 - [x] Typed update/metrics objects are not captured by DataLoader workers.
 - [x] If any cross-process usage appears, add a targeted pickling test.
 
 ## Implementation planning artifacts
+
 - [x] Per-file change list (new files + removed code) with owners.
 - [x] Call-site update list (agent imports, reward imports, test updates).
 - [x] Deletion list for old symbols once new modules land.
@@ -107,6 +119,7 @@ mega-module re-growth.
   - telemetry decision metrics tests
 
 ## Acceptance criteria (Phase 3 done means)
+
 - [x] Rewards split complete; no mega-module mixing contribution/loss/PBRS/dispatch.
 - [x] PPO agent split complete; `ppo_update.py` is math-only, `ppo_agent.py` is orchestration.
 - [x] Single source of PBRS potentials enforced.
@@ -116,10 +129,12 @@ mega-module re-growth.
 - [x] Throughput baseline within tolerance.
 
 ## Notes
+
 - No compatibility shims or legacy wrappers. Update call sites and delete old names.
 - Telemetry xfails remain a separate body of work until Simic refactor closure.
 
 ## Execution notes (Phase 3 preflight)
+
 - Full test suite: `UV_CACHE_DIR=.uv-cache uv run pytest`
   - 4249 passed, 34 skipped, 69 deselected, 4 xfailed
 - Lint: `UV_CACHE_DIR=.uv-cache uv run ruff check src/ tests/` (clean)
@@ -156,7 +171,9 @@ mega-module re-growth.
   - Telemetry ordering test: `UV_CACHE_DIR=.uv-cache uv run pytest tests/simic/telemetry/test_emitters.py::test_batch_tail_event_order_is_stable`
 
 ## Planning artifacts
+
 ### Per-file change list (planned)
+
 - `src/esper/simic/rewards/shaping.py` (owner: simic-rewards) - PBRS potentials + shaping utilities
 - `src/esper/simic/rewards/contribution.py` (owner: simic-rewards) - contribution reward math
 - `src/esper/simic/rewards/loss_primary.py` (owner: simic-rewards) - loss-primary reward math
@@ -167,16 +184,19 @@ mega-module re-growth.
 - `src/esper/simic/agent/ppo.py` (owner: simic-agent) - removed or reduced to dispatcher (no shims)
 
 ### Call-site update list (planned)
+
 - Update agent imports to `simic/agent/ppo_agent.py` if `ppo.py` is removed.
 - Update reward imports to `simic/rewards/__init__.py` or dispatcher (no direct imports of internal modules).
 - Update tests referencing `simic.rewards.rewards` to the canonical import path.
 
 ### Deletion list (planned)
+
 - Remove `rewards.py` implementations moved into `contribution.py`, `loss_primary.py`, `shaping.py`.
 - Remove any dead wrappers that only forward to the new modules.
 - Remove `ppo.py` legacy helpers once `ppo_agent.py`/`ppo_update.py` are canonical.
 
 ### Test plan (planned)
+
 - Rewards golden tests (added) + reward mode/unit tests
 - PPO update golden test (added) + PPO regression suite
 - Import-direction guardrail test (added)

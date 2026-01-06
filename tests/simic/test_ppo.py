@@ -1,4 +1,5 @@
 """Tests for PPO module."""
+import math
 import torch
 
 from esper.leyline import (
@@ -911,6 +912,7 @@ def test_ppo_update_collects_q_values():
 
     # Add some transitions to buffer
     agent.buffer.start_episode(env_id=0)
+    op_mask = torch.tensor([True, True, False, False, True, False], dtype=torch.bool)
     for i in range(5):
         agent.buffer.add(
             env_id=0,
@@ -943,7 +945,7 @@ def test_ppo_update_collects_q_values():
             alpha_target_mask=torch.ones(NUM_ALPHA_TARGETS, dtype=torch.bool),
             alpha_speed_mask=torch.ones(NUM_ALPHA_SPEEDS, dtype=torch.bool),
             alpha_curve_mask=torch.ones(NUM_ALPHA_CURVES, dtype=torch.bool),
-            op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
+            op_mask=op_mask,
             hidden_h=torch.zeros(1, 1, agent.policy.hidden_dim),
             hidden_c=torch.zeros(1, 1, agent.policy.hidden_dim),
             bootstrap_value=0.0,
@@ -955,20 +957,21 @@ def test_ppo_update_collects_q_values():
     metrics = agent.update()
 
     # Verify Q-values were collected
-    assert "q_germinate" in metrics
-    assert "q_advance" in metrics
-    assert "q_fossilize" in metrics
-    assert "q_prune" in metrics
-    assert "q_wait" in metrics
-    assert "q_set_alpha" in metrics
+    assert "op_q_values" in metrics
+    assert "op_valid_mask" in metrics
     assert "q_variance" in metrics
     assert "q_spread" in metrics
 
-    # Q-values should be floats
-    assert isinstance(metrics["q_germinate"], float)
+    assert metrics["op_valid_mask"] == tuple(op_mask.tolist())
+    assert len(metrics["op_q_values"]) == NUM_OPS
 
-    # Q-variance should be >= 0
-    assert metrics["q_variance"] >= 0.0
+    valid_qs = [
+        q for q, is_valid in zip(metrics["op_q_values"], metrics["op_valid_mask"]) if is_valid
+    ]
+    assert len(valid_qs) >= 2
 
-    # Q-spread should be >= 0
-    assert metrics["q_spread"] >= 0.0
+    valid_q_tensor = torch.tensor(valid_qs)
+    expected_variance = valid_q_tensor.var().item()
+    expected_spread = (valid_q_tensor.max() - valid_q_tensor.min()).item()
+    assert math.isclose(metrics["q_variance"], expected_variance, rel_tol=1e-6, abs_tol=1e-6)
+    assert math.isclose(metrics["q_spread"], expected_spread, rel_tol=1e-6, abs_tol=1e-6)

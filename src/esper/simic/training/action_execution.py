@@ -56,7 +56,7 @@ from esper.simic.rewards import (
     SeedInfo,
     STAGE_POTENTIALS,
 )
-from esper.simic.rewards.types import ContributionRewardInputs, LossRewardInputs
+from esper.simic.rewards import ContributionRewardInputs, LossRewardInputs
 from esper.tamiyo.policy.action_masks import build_slot_states, compute_action_masks
 
 from .helpers import compute_rent_and_shock_inputs

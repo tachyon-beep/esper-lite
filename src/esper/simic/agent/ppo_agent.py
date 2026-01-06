@@ -22,11 +22,11 @@ from .ppo_update import PPOUpdateResult, compute_losses, compute_ratio_metrics
 from .types import PPOUpdateMetrics
 from esper.simic.telemetry import RatioExplosionDiagnostic
 from esper.simic.telemetry.lstm_health import compute_lstm_health
-from esper.simic.telemetry.value_metrics import (
+from esper.simic.control import ValueNormalizer
+from esper.leyline.value_metrics import (
     ValueFunctionMetricsDict,
     compute_value_function_metrics,
 )
-from esper.simic.control import ValueNormalizer
 from esper.leyline import (
     PolicyBundle,
     DEFAULT_BATCH_SIZE,
@@ -44,7 +44,6 @@ from esper.leyline import (
     DEFAULT_VALUE_CLIP,
     DEFAULT_VALUE_COEF,
     HEAD_NAMES,
-    LifecycleOp,
     NUM_OPS,
 )
 from esper.leyline.slot_config import SlotConfig
@@ -82,13 +81,11 @@ ENTROPY_COEF_PER_HEAD: dict[str, float] = {
 def _init_q_metrics_nan(device: torch.device | str) -> dict[str, list[torch.Tensor]]:
     """Initialize Q-value metrics with NaN when no valid states available."""
     nan = torch.tensor(float("nan"), device=device)
+    op_q_values = torch.full((NUM_OPS,), float("nan"), device=device)
+    op_valid_mask = torch.zeros(NUM_OPS, dtype=torch.bool, device=device)
     return {
-        "q_germinate": [nan],
-        "q_advance": [nan],
-        "q_fossilize": [nan],
-        "q_prune": [nan],
-        "q_wait": [nan],
-        "q_set_alpha": [nan],
+        "op_q_values": [op_q_values],
+        "op_valid_mask": [op_valid_mask],
         "q_variance": [nan],
         "q_spread": [nan],
     }
@@ -547,8 +544,8 @@ class PPOAgent:
             metrics["advantage_positive_ratio"] = [nan_metric]
 
         # === Collect Op-Conditioned Q-Values (Policy V2) ===
-        # Compute Q(s, op) for all ops using a representative state
-        # Use first valid state from batch to avoid bias from terminal states
+        # Compute Q(s, op) vector using a representative state.
+        # Use first valid state from batch to avoid bias from terminal states.
         if valid_mask.any():
             # Get first valid state
             first_valid_idx = valid_mask.nonzero(as_tuple=True)
@@ -557,6 +554,13 @@ class PPOAgent:
                 sample_col = first_valid_idx[1][0]
                 sample_obs = data["states"][sample_row, sample_col].unsqueeze(0).unsqueeze(0)  # [1, 1, state_dim]
                 sample_blueprints = data["blueprint_indices"][sample_row, sample_col].unsqueeze(0).unsqueeze(0)  # [1, 1, num_slots]
+                op_mask = data["op_masks"][sample_row, sample_col].to(dtype=torch.bool)  # [num_ops]
+                if op_mask.numel() != NUM_OPS:
+                    raise ValueError(
+                        f"Expected op mask length {NUM_OPS}, got {op_mask.numel()}."
+                    )
+                if not op_mask.any():
+                    raise ValueError("Op mask has no valid ops - state machine bug.")
 
                 # Forward pass to get LSTM output
                 with torch.no_grad():
@@ -567,27 +571,28 @@ class PPOAgent:
                     )
                     lstm_out = forward_result["lstm_out"]  # [1, 1, hidden_dim]
 
-                # Compute Q(s, op) for each op
-                # Build mapping from LifecycleOp to Q-values
-                q_value_map: dict[LifecycleOp, torch.Tensor] = {}
+                # Compute Q(s, op) vector in LifecycleOp order (NUM_OPS indices).
+                op_q_values = torch.empty(NUM_OPS, device=self.device)
                 for op_idx in range(NUM_OPS):
                     op_tensor = torch.tensor([[op_idx]], dtype=torch.long, device=self.device)
                     q_val = self.policy.network._compute_value(lstm_out, op_tensor)
-                    q_value_map[LifecycleOp(op_idx)] = q_val.squeeze()
+                    op_q_values[op_idx] = q_val.squeeze()
 
-                # Assign to metrics with correct names using actual LifecycleOp enum
-                # LifecycleOp: WAIT=0, GERMINATE=1, SET_ALPHA_TARGET=2, PRUNE=3, FOSSILIZE=4, ADVANCE=5
-                metrics["q_germinate"] = [q_value_map[LifecycleOp.GERMINATE]]
-                metrics["q_advance"] = [q_value_map[LifecycleOp.ADVANCE]]
-                metrics["q_fossilize"] = [q_value_map[LifecycleOp.FOSSILIZE]]
-                metrics["q_prune"] = [q_value_map[LifecycleOp.PRUNE]]
-                metrics["q_wait"] = [q_value_map[LifecycleOp.WAIT]]
-                metrics["q_set_alpha"] = [q_value_map[LifecycleOp.SET_ALPHA_TARGET]]
+                # Mask invalid ops for display; analytics use valid ops only.
+                masked_q_values = op_q_values.clone()
+                masked_q_values[~op_mask] = float("nan")
 
-                # Compute Q-variance and Q-spread
-                q_values = torch.stack(list(q_value_map.values()))
-                q_variance = q_values.var()
-                q_spread = q_values.max() - q_values.min()
+                # Compute Q-variance and Q-spread over valid ops only.
+                valid_q_values = op_q_values[op_mask]
+                if valid_q_values.numel() >= 2:
+                    q_variance = valid_q_values.var()
+                    q_spread = valid_q_values.max() - valid_q_values.min()
+                else:
+                    q_variance = torch.tensor(float("nan"), device=self.device)
+                    q_spread = torch.tensor(float("nan"), device=self.device)
+
+                metrics["op_q_values"] = [masked_q_values]
+                metrics["op_valid_mask"] = [op_mask]
                 metrics["q_variance"] = [q_variance]
                 metrics["q_spread"] = [q_spread]
             else:

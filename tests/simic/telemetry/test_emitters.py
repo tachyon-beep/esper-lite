@@ -8,7 +8,7 @@ import torch
 from torch import nn
 
 from esper.karn.sanctum.schema import CounterfactualConfig, CounterfactualSnapshot
-from esper.leyline import TelemetryEventType
+from esper.leyline import NUM_OPS, TelemetryEventType
 from esper.simic.telemetry import TelemetryConfig, TelemetryLevel
 from esper.simic.telemetry.emitters import (
     VectorizedEmitter,
@@ -95,6 +95,11 @@ def _make_mandatory_metrics(**overrides) -> dict:
         "value_std": 1.0,
         "value_min": -2.0,
         "value_max": 2.0,
+        # Q-value diagnostics (mandatory)
+        "op_q_values": tuple(0.0 for _ in range(NUM_OPS)),
+        "op_valid_mask": tuple(True for _ in range(NUM_OPS)),
+        "q_variance": 0.0,
+        "q_spread": 0.0,
         # Pre-normalization advantage statistics (mandatory)
         "pre_norm_advantage_mean": 0.5,
         "pre_norm_advantage_std": 1.2,

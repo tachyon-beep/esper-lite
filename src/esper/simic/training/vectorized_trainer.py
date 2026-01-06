@@ -31,7 +31,7 @@ from esper.simic.telemetry import (
     training_profiler,
 )
 from esper.simic.telemetry.emitters import check_performance_degradation
-from esper.simic.rewards.types import ContributionRewardInputs, LossRewardInputs
+from esper.simic.rewards import ContributionRewardInputs, LossRewardInputs
 from esper.tamiyo.policy.action_masks import build_slot_states, compute_action_masks
 from esper.tamiyo.policy.features import batch_obs_to_features
 from esper.utils.data import augment_cifar10_batch

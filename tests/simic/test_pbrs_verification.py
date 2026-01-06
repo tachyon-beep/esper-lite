@@ -7,7 +7,7 @@ when shaping reward F(s,s') = gamma * Phi(s') - Phi(s).
 These tests verify our implementation maintains this property.
 """
 
-from esper.simic.rewards.rewards import (
+from esper.simic.rewards import (
     RewardMode,
     ContributionRewardConfig,
     STAGE_POTENTIALS,

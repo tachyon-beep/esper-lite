@@ -1098,12 +1098,8 @@ class SanctumAggregator:
         vf.return_skewness = payload.return_skewness
 
         # Op-conditioned Q-values (Policy V2)
-        self._tamiyo.q_germinate = payload.q_germinate
-        self._tamiyo.q_advance = payload.q_advance
-        self._tamiyo.q_fossilize = payload.q_fossilize
-        self._tamiyo.q_prune = payload.q_prune
-        self._tamiyo.q_wait = payload.q_wait
-        self._tamiyo.q_set_alpha = payload.q_set_alpha
+        self._tamiyo.op_q_values = payload.op_q_values
+        self._tamiyo.op_valid_mask = payload.op_valid_mask
         self._tamiyo.q_variance = payload.q_variance
         self._tamiyo.q_spread = payload.q_spread
 

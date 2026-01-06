@@ -99,10 +99,6 @@ allow_hits:
     reason: "TODO: Telemetry payload used outside simic, consider moving to leyline"
     expires: "2026-03-01"
 
-  - key: "src/esper/simic/telemetry/value_metrics.py:typeddict:ValueFunctionMetricsDict"
-    owner: "john"
-    reason: "Value function metrics schema, simic-internal"
-
   # ============================================================================
   # SIMIC: Training Infrastructure
   # ============================================================================

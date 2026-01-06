@@ -53,6 +53,14 @@ allow_hits:
     owner: "john"
     reason: "Textual framework - NoMatches for optional widget lookup"
 
+  - key: "src/esper/karn/sanctum/app.py:_sync_tamiyo_visibility:silent_except"
+    owner: "john"
+    reason: "Textual framework - NoMatches for optional widget lookup"
+
+  - key: "src/esper/karn/sanctum/app.py:_sync_tamiyo_visibility:silent_except:2"
+    owner: "john"
+    reason: "Textual framework - NoMatches for optional widget lookup"
+
   - key: "src/esper/karn/sanctum/app.py:_apply_view:silent_except"
     owner: "john"
     reason: "Textual framework - NoMatches for optional widget lookup"
@@ -223,19 +231,19 @@ allow_hits:
   # torch.compile wraps modules in a compiled wrapper. To access the original
   # module (e.g., for checkpointing), we need to check for _orig_mod attribute.
 
-  - key: "src/esper/simic/agent/ppo.py:__init__:getattr"
+  - key: "src/esper/simic/agent/ppo_agent.py:__init__:getattr"
     owner: "john"
     reason: "PyTorch torch.compile - accessing _orig_mod for base network"
 
-  - key: "src/esper/simic/agent/ppo.py:__init__:getattr:2"
+  - key: "src/esper/simic/agent/ppo_agent.py:__init__:getattr:2"
     owner: "john"
     reason: "PyTorch torch.compile - accessing _orig_mod for base network"
 
-  - key: "src/esper/simic/agent/ppo.py:update:getattr"
+  - key: "src/esper/simic/agent/ppo_agent.py:update:getattr"
     owner: "john"
     reason: "PyTorch torch.compile - accessing _orig_mod for gradient computation"
 
-  - key: "src/esper/simic/agent/ppo.py:save:getattr"
+  - key: "src/esper/simic/agent/ppo_agent.py:save:getattr"
     owner: "john"
     reason: "PyTorch torch.compile - accessing _orig_mod for checkpointing"
 

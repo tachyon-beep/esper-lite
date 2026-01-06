@@ -19,7 +19,7 @@ import pytest
         "esper.leyline.factored_actions",
         "esper.leyline.telemetry",
         "esper.kasmina.slot",
-        "esper.simic.rewards.rewards",
+        "esper.simic.rewards",
         "esper.tamiyo.policy.action_masks",
     ],
 )

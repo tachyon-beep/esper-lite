@@ -11,7 +11,7 @@ import pytest
 import torch
 from unittest.mock import Mock, MagicMock, patch
 
-from esper.leyline import SeedStage, TelemetryEvent, TelemetryEventType
+from esper.leyline import NUM_OPS, SeedStage, TelemetryEvent, TelemetryEventType
 from esper.leyline.slot_config import SlotConfig
 from esper.leyline.telemetry import SeedGerminatedPayload
 from esper.simic.telemetry import AnomalyReport
@@ -159,6 +159,11 @@ def _make_mandatory_metrics(**overrides) -> dict:
         "value_std": 1.0,
         "value_min": -2.0,
         "value_max": 2.0,
+        # Q-value diagnostics (mandatory)
+        "op_q_values": tuple(0.0 for _ in range(NUM_OPS)),
+        "op_valid_mask": tuple(True for _ in range(NUM_OPS)),
+        "q_variance": 0.0,
+        "q_spread": 0.0,
         # Per-head stats (optional but expected by emitter loop)
         "head_entropies": {},
         "head_grad_norms": {},
