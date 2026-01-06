@@ -15,11 +15,11 @@ from typing import TYPE_CHECKING, Any
 import torch
 import torch.amp as torch_amp
 import torch.nn as nn
-import torch.nn.functional as F
 
 from .rollout_buffer import TamiyoRolloutBuffer
 from .advantages import compute_per_head_advantages
 from .ppo_metrics import PPOUpdateMetricsBuilder
+from .ppo_update import compute_losses, compute_ratio_metrics
 from .types import PPOUpdateMetrics
 from esper.simic.telemetry import RatioExplosionDiagnostic
 from esper.simic.telemetry.lstm_health import compute_lstm_health
@@ -188,7 +188,9 @@ class PPOAgent:
         self.entropy_anneal_steps = entropy_anneal_steps
         # Per-head entropy multipliers (differential coefficients for sparse heads)
         # MED-01 fix: Use is not None - empty dict {} is falsy but valid
-        self.entropy_coef_per_head = entropy_coef_per_head if entropy_coef_per_head is not None else ENTROPY_COEF_PER_HEAD
+        self.entropy_coef_per_head = dict(ENTROPY_COEF_PER_HEAD)
+        if entropy_coef_per_head is not None:
+            self.entropy_coef_per_head.update(entropy_coef_per_head)
         self.value_coef = value_coef
         self.clip_value = clip_value
         self.value_clip = value_clip
@@ -781,159 +783,59 @@ class PPOAgent:
                 "alpha_curve": data["alpha_curve_log_probs"][valid_mask],
                 "op": data["op_log_probs"][valid_mask],
             }
+            total_timesteps = valid_mask.sum().float().clamp(min=1)
+            ratio_metrics = compute_ratio_metrics(
+                log_probs=log_probs,
+                old_log_probs=old_log_probs,
+                head_masks=head_masks,
+                clip_ratio=self.clip_ratio,
+                target_kl=self.target_kl,
+                head_names=HEAD_NAMES,
+                total_timesteps=total_timesteps,
+            )
+            for key, max_val in ratio_metrics.per_head_ratio_max.items():
+                head_ratio_max_across_epochs[key] = max(head_ratio_max_across_epochs[key], max_val)
+            joint_ratio_max_across_epochs = max(
+                joint_ratio_max_across_epochs, ratio_metrics.joint_ratio_max
+            )
 
-            per_head_ratios = {}
-            log_ratios_for_joint: dict[str, torch.Tensor] = {}  # Store for joint ratio computation
-            for key in HEAD_NAMES:
-                # Clamp log-ratio to prevent inf/NaN from exp() when probabilities diverge
-                # significantly. exp(20) ≈ 4.85e8 is already extreme; exp(88) overflows float32.
-                # This provides early protection before ratio explosion detection.
-                log_ratio = log_probs[key] - old_log_probs[key]
-                log_ratio_clamped = torch.clamp(log_ratio, min=-20.0, max=20.0)
-                log_ratios_for_joint[key] = log_ratio_clamped
-                per_head_ratios[key] = torch.exp(log_ratio_clamped)
+            joint_ratio = ratio_metrics.joint_ratio
+            metrics["approx_kl"].append(ratio_metrics.approx_kl)
+            metrics["clip_fraction"].append(ratio_metrics.clip_fraction)
+            metrics["clip_fraction_positive"].append(ratio_metrics.clip_fraction_positive)
+            metrics["clip_fraction_negative"].append(ratio_metrics.clip_fraction_negative)
 
-            # Track per-head ratio max across epochs (Policy V2 telemetry)
-            # PERF: Batch all 8 head ratio max values into single GPU→CPU transfer
-            with torch.inference_mode():
-                per_head_ratio_max_tensors = [per_head_ratios[k].max() for k in HEAD_NAMES]
-                per_head_ratio_max_values = torch.stack(per_head_ratio_max_tensors).cpu().tolist()
-                for key, max_val in zip(HEAD_NAMES, per_head_ratio_max_values):
-                    head_ratio_max_across_epochs[key] = max(head_ratio_max_across_epochs[key], max_val)
-
-                # Compute joint ratio using log-space summation (numerically stable)
-                # joint_ratio = exp(sum(log_ratio_i)) = product(ratio_i)
-                stacked_log_ratios = torch.stack([log_ratios_for_joint[k] for k in HEAD_NAMES])
-                joint_log_ratio = stacked_log_ratios.sum(dim=0)  # Sum across heads per timestep
-                joint_log_ratio_clamped = torch.clamp(joint_log_ratio, min=-30.0, max=30.0)
-                joint_ratio = torch.exp(joint_log_ratio_clamped)
-                epoch_joint_ratio_max = joint_ratio.max().item()
-                joint_ratio_max_across_epochs = max(joint_ratio_max_across_epochs, epoch_joint_ratio_max)
-
-            # Compute KL divergence EARLY (before optimizer step) for effective early stopping
-            # BUG-003 FIX: With recurrent_n_epochs=1, the old check at loop end was useless
-            # because there's no "next epoch" to skip. By checking here, we can skip the
-            # optimizer.step() entirely if KL is already too high.
-            #
-            # KL(old||new) ≈ E[(ratio - 1) - log(ratio)] (KL3 estimator from Schulman)
-            #
-            # H6 FIX: Weight per-head KL by causal relevance.
-            # Sparse heads (blueprint, style) are only active during GERMINATE (~5-15%).
-            # Without weighting, they contribute full KL to the sum despite being rarely
-            # causally relevant, inflating joint KL and triggering premature early stopping.
-            #
-            # PyTorch Expert Review 2025-12-26: Normalize weights to sum to 1.0 for proper
-            # weighted average. Without normalization, joint KL was biased toward high-activity
-            # heads since overlapping masks (slot ~90%, blueprint ~10%) don't sum to 1.0.
-            with torch.inference_mode():
-                total_timesteps = valid_mask.sum().float().clamp(min=1)
-                weighted_kl_sum = torch.tensor(0.0, device=self.device)
-                total_weight = torch.tensor(0.0, device=self.device)
-                for key in HEAD_NAMES:
-                    mask = head_masks[key]
-                    # BUGFIX: Reuse CLAMPED log_ratio from line 602 to prevent overflow/NaN
-                    # Previously this recomputed log_ratio without clamping, causing:
-                    # - exp(large_value) → inf → NaN in KL
-                    # - exp(-inf) → 0, but (0-1) - (-inf) → NaN
-                    # The clamped version is already available in log_ratios_for_joint
-                    log_ratio_clamped = log_ratios_for_joint[key]
-                    kl_per_step = (torch.exp(log_ratio_clamped) - 1) - log_ratio_clamped
-                    n_valid = mask.sum().float().clamp(min=1)
-                    # Masked mean KL for this head
-                    head_kl = (kl_per_step * mask).sum() / n_valid
-                    # Weight by fraction of timesteps where head is causally relevant
-                    causal_weight = n_valid / total_timesteps
-                    weighted_kl_sum = weighted_kl_sum + causal_weight * head_kl
-                    total_weight = total_weight + causal_weight
-                # Normalize to proper weighted average (weights sum to 1)
-                approx_kl = (weighted_kl_sum / total_weight.clamp(min=1e-8)).item()
-                metrics["approx_kl"].append(approx_kl)
-
-                # Clip fraction: how often clipping was active
-                # PERF: Batch all 3 clip metrics into single GPU→CPU transfer
-                # BUG FIX: Use TRUE joint_ratio (product of all heads) computed at line 619
-                # Previously this was overwritten with just per_head_ratios["op"], hiding
-                # divergence in other heads (slot, blueprint, style, etc.)
-                clip_fraction_t = ((joint_ratio - 1.0).abs() > self.clip_ratio).float().mean()
-                # Directional clip fractions (per DRL expert recommendation)
-                # Tracks WHERE clipping occurs: asymmetry indicates directional policy drift
-                clip_pos = (joint_ratio > 1.0 + self.clip_ratio).float().mean()
-                clip_neg = (joint_ratio < 1.0 - self.clip_ratio).float().mean()
-                # Single GPU→CPU sync for all 3 clip metrics
-                clip_metrics = torch.stack([clip_fraction_t, clip_pos, clip_neg]).cpu().tolist()
-                metrics["clip_fraction"].append(clip_metrics[0])
-                metrics["clip_fraction_positive"].append(clip_metrics[1])
-                metrics["clip_fraction_negative"].append(clip_metrics[2])
-
-                # Early stopping: if KL exceeds threshold, skip this update entirely
-                # 1.5x multiplier is standard (OpenAI baselines, Stable-Baselines3)
-                if self.target_kl is not None and approx_kl > 1.5 * self.target_kl:
-                    early_stopped = True
-                    metrics["early_stop_epoch"] = [epoch_i]
-                    # PERF: Batch ratio metrics into single GPU→CPU transfer
-                    ratio_stats = torch.stack([
-                        joint_ratio.mean(), joint_ratio.max(), joint_ratio.min(), joint_ratio.std()
-                    ]).cpu().tolist()
-                    metrics["ratio_mean"].append(ratio_stats[0])
-                    metrics["ratio_max"].append(ratio_stats[1])
-                    metrics["ratio_min"].append(ratio_stats[2])
-                    metrics["ratio_std"].append(ratio_stats[3])
-                    break  # Skip loss computation, backward, and optimizer step
+            if ratio_metrics.early_stop:
+                early_stopped = True
+                metrics["early_stop_epoch"] = [epoch_i]
+                ratio_stats = ratio_metrics.ratio_stats
+                metrics["ratio_mean"].append(ratio_stats[0])
+                metrics["ratio_max"].append(ratio_stats[1])
+                metrics["ratio_min"].append(ratio_stats[2])
+                metrics["ratio_std"].append(ratio_stats[3])
+                break  # Skip loss computation, backward, and optimizer step
 
             # Compute policy loss per head and sum
             # Use masked mean to avoid bias from averaging zeros with real values
-            policy_loss: torch.Tensor = torch.tensor(0.0, device=self.device)
-            for key in HEAD_NAMES:
-                ratio = per_head_ratios[key]
-                adv = per_head_advantages[key]
-                mask = head_masks[key]
-
-                surr1 = ratio * adv
-                surr2 = torch.clamp(ratio, 1 - self.clip_ratio, 1 + self.clip_ratio) * adv
-                clipped_surr = torch.min(surr1, surr2)
-
-                # Masked mean: only average over causally-relevant positions
-                # This prevents zeros from masked positions from biasing the loss
-                n_valid = mask.sum().clamp(min=1)  # Avoid div-by-zero
-                head_loss = -(clipped_surr * mask).sum() / n_valid
-                policy_loss = policy_loss + head_loss
-
-            # Value loss (uses normalized_returns for stable learning)
-            # normalized_returns has same mean as valid_returns but std~1
             valid_old_values = data["values"][valid_mask]
-            if self.clip_value:
-                # Use separate value_clip (not policy clip_ratio) since value scale differs
-                # Note: With return normalization, value clipping is less critical and
-                # may conflict (old values on old scale). Consider clip_value=False.
-                values_clipped = valid_old_values + torch.clamp(
-                    values - valid_old_values, -self.value_clip, self.value_clip
-                )
-                value_loss_unclipped = (values - normalized_returns) ** 2
-                value_loss_clipped = (values_clipped - normalized_returns) ** 2
-                value_loss = 0.5 * torch.max(value_loss_unclipped, value_loss_clipped).mean()
-            else:
-                value_loss = F.mse_loss(values, normalized_returns)
-
-            # Entropy loss with per-head weighting and causal masking.
-            # H3 FIX: Use masked mean for sparse heads (blueprint, style).
-            # These heads are only active during GERMINATE (~5-15% of timesteps).
-            # Without masking, entropy gradient is diluted by averaging over zeros,
-            # starving exploration signal for rare-but-important action heads.
-            #
-            # NOTE: Entropy floors were removed because torch.clamp to a constant
-            # provides zero gradient (d(constant)/d(params) = 0). When a head has
-            # only one valid action, entropy is correctly 0 with no gradient signal.
-            entropy_loss: torch.Tensor = torch.tensor(0.0, device=self.device)
-            for key, ent in entropy.items():
-                head_coef = self.entropy_coef_per_head.get(key, 1.0)
-                mask = head_masks[key]
-                n_valid = mask.sum().clamp(min=1)
-                masked_ent = (ent * mask).sum() / n_valid
-                entropy_loss = entropy_loss - head_coef * masked_ent
-
             entropy_coef = self.get_entropy_coef()
-
-            loss = policy_loss + self.value_coef * value_loss + entropy_coef * entropy_loss
+            losses = compute_losses(
+                per_head_ratios=ratio_metrics.per_head_ratios,
+                per_head_advantages=per_head_advantages,
+                head_masks=head_masks,
+                values=values,
+                normalized_returns=normalized_returns,
+                old_values=valid_old_values,
+                entropy=entropy,
+                entropy_coef_per_head=self.entropy_coef_per_head,
+                entropy_coef=entropy_coef,
+                clip_ratio=self.clip_ratio,
+                clip_value=self.clip_value,
+                value_clip=self.value_clip,
+                value_coef=self.value_coef,
+                head_names=HEAD_NAMES,
+            )
+            loss = losses.total_loss
 
             self.optimizer.zero_grad(set_to_none=True)
             loss.backward()  # type: ignore[no-untyped-call]
@@ -1005,9 +907,9 @@ class PPOAgent:
             # BUG FIX: Use TRUE joint_ratio (product of all heads) computed at line 619
             # Previously this used per_head_ratios["op"] which hid divergence in other heads
             logging_tensors = torch.stack([
-                policy_loss,
-                value_loss,
-                -entropy_loss,  # negate here to match original semantics
+                losses.policy_loss,
+                losses.value_loss,
+                -losses.entropy_loss,  # negate here to match original semantics
                 joint_ratio.mean(),
                 joint_ratio.max(),
                 joint_ratio.min(),

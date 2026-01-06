@@ -64,8 +64,8 @@ mega-module re-growth.
 ### D) Design spikes (timeboxed)
 - [x] PBRS extraction spike: move stage potentials to a single module and update imports.
 - [x] PPO metrics spike: create dataclasses + conversion logic, ensure call sites unchanged.
-- [ ] PPO update spike: move loss/ratio math into `ppo_update.py`, return typed result.
-- [ ] After each spike, run a short PPO baseline + telemetry ordering test.
+- [x] PPO update spike: move loss/ratio math into `ppo_update.py`, return typed result.
+- [x] After each spike, run a short PPO baseline + telemetry ordering test.
 
 ## Risk reduction: correctness
 - [ ] Preserve invariants:
@@ -137,6 +137,15 @@ mega-module re-growth.
   - Command: `PYTHONPATH=src UV_CACHE_DIR=.uv-cache uv run python -m esper.scripts.train ppo --preset cifar_baseline --task cifar_baseline --rounds 1 --envs 1 --episode-length 5 --telemetry-dir telemetry --device cpu --devices cpu --num-workers 0`
   - Run dir: `telemetry/telemetry_2026-01-06_213352`
   - Tests: `UV_CACHE_DIR=.uv-cache uv run pytest tests/simic/test_ppo_update_golden.py`
+  - Telemetry ordering test: `UV_CACHE_DIR=.uv-cache uv run pytest tests/simic/telemetry/test_emitters.py::test_batch_tail_event_order_is_stable`
+- PPO update spike validation run:
+  - Command: `PYTHONPATH=src UV_CACHE_DIR=.uv-cache uv run python -m esper.scripts.train ppo --preset cifar_baseline --task cifar_baseline --rounds 1 --envs 1 --episode-length 5 --telemetry-dir telemetry --device cpu --devices cpu --num-workers 0`
+  - Run dir: `telemetry/telemetry_2026-01-06_214513`
+  - Tests: `UV_CACHE_DIR=.uv-cache uv run pytest tests/simic/test_ppo_update_golden.py`
+  - Telemetry ordering test: `UV_CACHE_DIR=.uv-cache uv run pytest tests/simic/telemetry/test_emitters.py::test_batch_tail_event_order_is_stable`
+- Post-review entropy fallback validation run:
+  - Command: `PYTHONPATH=src UV_CACHE_DIR=.uv-cache uv run python -m esper.scripts.train ppo --preset cifar_baseline --task cifar_baseline --rounds 1 --envs 1 --episode-length 5 --telemetry-dir telemetry --device cpu --devices cpu --num-workers 0`
+  - Run dir: `telemetry/telemetry_2026-01-06_215040`
   - Telemetry ordering test: `UV_CACHE_DIR=.uv-cache uv run pytest tests/simic/telemetry/test_emitters.py::test_batch_tail_event_order_is_stable`
 
 ## Planning artifacts
