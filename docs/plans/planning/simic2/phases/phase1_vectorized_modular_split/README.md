@@ -11,18 +11,24 @@
 Supporting docs:
 - Extraction map: `docs/plans/planning/simic2/phases/phase1_vectorized_modular_split/extraction_map.md`
 - Risk register: `docs/plans/planning/simic2/phases/phase1_vectorized_modular_split/risk_register.md`
+- Preflight audits: `docs/plans/planning/simic2/phases/phase1_vectorized_modular_split/preflight_audit.md`
 
 ## Target shape
 
 - Keep `train_ppo_vectorized(...)` as the public entrypoint (for now).
-- Move the main loop into `VectorizedPPOTrainer.run()`.
+- Move the main loop into `VectorizedPPOTrainer.run()` in `vectorized_trainer.py`.
 - Replace nested closures with module-level functions or dedicated modules.
 
 ## Extraction order (low-risk first)
 
 1) **Move nested helpers to module scope** (still in `vectorized.py`)
+- `make_telemetry_callback`
+- `configure_slot_telemetry`
 - `create_env_state`
+- `_collect_gradient_telemetry_for_batch`
+- `_parse_sampled_action`
 - `process_train_batch`
+- `process_val_batch`
 - `process_fused_val_batch`
 - `batch_signals_to_features`
 
@@ -32,7 +38,7 @@ Supporting docs:
 - `counterfactual_eval.py`: fused validation and attribution matrix computation
 - `action_execution.py`: decode/validate/execute actions; return structured outcomes
 
-3) **Introduce `VectorizedPPOTrainer`**
+3) **Introduce `VectorizedPPOTrainer` (in `vectorized_trainer.py`)**
 - `vectorized.py` becomes “construct context → run trainer → return results”.
 
 ## Hot-path guardrails (do not regress)
@@ -52,6 +58,7 @@ Supporting docs:
   - `PYTHONPATH=src uv run python -m esper.scripts.train ppo --preset cifar_baseline --task cifar_baseline --rounds 1 --envs 1 --episode-length 5`
 - Compare telemetry event counts before/after for a short run (sanity, not statistical equivalence).
   - For throughput, prefer the training-emitted throughput telemetry (CUDATimer-based) over `time.time()` sampling.
+  - Use the telemetry event-count procedure in Phase 0 baseline capture.
 
 ## Done means
 

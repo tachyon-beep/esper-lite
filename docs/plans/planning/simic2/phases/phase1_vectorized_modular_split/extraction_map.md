@@ -10,6 +10,7 @@ This document is a “move list” to reduce surprises when we split `src/esper/
 - **Monkeypatch seams:** these tests patch names inside the `vectorized` module:
   - `tests/simic/test_gpu_preload_batch_size.py` (`get_hub`)
   - `tests/simic/test_reward_normalizer_checkpoint.py` (`get_hub`, `RewardNormalizer`, `SharedBatchIterator`, `PPOAgent.load`)
+  - `tests/simic/test_vectorized.py` (`torch_amp.autocast`, `collect_per_layer_gradients`, `check_numerical_stability`)
 
 **Phase 1 mitigation:** keep those names referenced from `src/esper/simic/training/vectorized.py` even if the implementation moves into a trainer object; pass dependencies into the trainer rather than importing inside the new modules.
 
@@ -28,6 +29,25 @@ These `def`s are nested under `train_ppo_vectorized` today and capture a large i
 - `batch_signals_to_features` (`src/esper/simic/training/vectorized.py:1856`)
 
 **Phase 1 step 1:** move these to module scope *without changing logic*, replacing implicit closure capture with an explicit “context object” parameter (dataclass or an explicit arg list).
+
+### 1b) Target module mapping (Phase 1)
+
+- `env_factory.py`
+  - `make_telemetry_callback`
+  - `configure_slot_telemetry`
+  - `create_env_state`
+- `batch_ops.py`
+  - `_collect_gradient_telemetry_for_batch` (retain `@torch.compiler.disable`)
+  - `process_train_batch`
+  - `process_val_batch`
+  - `batch_signals_to_features`
+- `counterfactual_eval.py`
+  - `process_fused_val_batch` (and fused attribution helpers)
+- `action_execution.py`
+  - `_parse_sampled_action`
+  - per-env action execution + rollout buffer writes
+- `vectorized_trainer.py`
+  - `VectorizedPPOTrainer.run()` (batch/epoch orchestration)
 
 ## 2) Module-level helpers (tests import these today)
 
@@ -52,6 +72,14 @@ These areas have explicit “don’t do N syncs” comments and are easy to acci
 
 **Phase 1 mitigation:** treat these blocks as “fenced regions” in review; extracted functions must preserve the same device/stream sync structure.
 
+Line anchors (current):
+- Training default-stream waits: `src/esper/simic/training/vectorized.py:2009`
+- Epoch-end stream synchronize: `src/esper/simic/training/vectorized.py:2117`
+- Validation default-stream waits: `src/esper/simic/training/vectorized.py:2310`
+- Validation end sync + batched CPU transfer: `src/esper/simic/training/vectorized.py:2431`
+- Batched action D2H transfer: `src/esper/simic/training/vectorized.py:2880`
+- Batched op_probs/head confidences D2H transfer: `src/esper/simic/training/vectorized.py:2904`
+
 ## 4) Proposed extracted modules (Phase 1 target)
 
 The goal is “coherent subsystems per file”, not premature abstraction.
@@ -67,3 +95,18 @@ The goal is “coherent subsystems per file”, not premature abstraction.
 - `vectorized_trainer.py`
   - `VectorizedPPOTrainer.run()` — the main loop moved out of `train_ppo_vectorized`
 
+## 5) Import-direction rules (Phase 1)
+
+- Keep `get_task_spec` lazy import inside `train_ppo_vectorized` to avoid the runtime cycle.
+- Do not add new imports in `src/esper/simic/training/__init__.py`.
+- Extracted modules must not import `esper.simic.training.vectorized`; pass dependencies in.
+- Preserve monkeypatch seams by keeping symbol references in `vectorized.py`.
+
+## 6) Action execution contract (Phase 1)
+
+Define a single return structure for the per-env action step (no ad-hoc dicts).
+Recommended fields:
+- truncated_bootstrap_targets
+- post_action_signals
+- post_action_slot_reports
+- post_action_masks

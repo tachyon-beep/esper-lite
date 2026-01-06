@@ -92,7 +92,48 @@ Result (ran with workspace-local UV cache: `UV_CACHE_DIR=.uv-cache`):
 - ✅ `117 passed, 1 warning in 11.24s`
 - Warning was a CUDA init warning on a non-CUDA environment; tests still passed.
 
-## 5) Optional: one integration sanity after Phase 1
+## 5) Telemetry event count baseline (short run)
+
+Run a minimal training invocation with telemetry enabled:
+
+```bash
+PYTHONPATH=src UV_CACHE_DIR=.uv-cache uv run python -m esper.scripts.train ppo \
+  --preset cifar_baseline \
+  --task cifar_baseline \
+  --rounds 1 \
+  --envs 1 \
+  --episode-length 5 \
+  --telemetry-dir telemetry
+```
+
+Count event types from the most recent run:
+
+```bash
+RUN_DIR=$(ls -td telemetry/* | head -1)
+python - <<'PY'
+from collections import Counter
+import json
+import os
+from pathlib import Path
+
+run_dir = Path(os.environ["RUN_DIR"])
+events_file = run_dir / "events.jsonl"
+counts = Counter()
+with events_file.open() as handle:
+    for line in handle:
+        event = json.loads(line)
+        counts[event["event_type"]] += 1
+for name, count in counts.most_common():
+    print(f"{name}: {count}")
+PY
+```
+
+Paste outputs here:
+
+- `events.jsonl` counts:
+  - (fill in)
+
+## 6) Optional: one integration sanity after Phase 1
 
 Pick one (depending on available hardware):
 
@@ -107,14 +148,14 @@ or (CUDA):
 uv run pytest -q tests/cuda/test_vectorized_multi_gpu_smoke.py
 ```
 
-## 6) Import-cycle pressure points (notes)
+## 7) Import-cycle pressure points (notes)
 
 - `src/esper/simic/training/vectorized.py`: lazy import of `esper.runtime.get_task_spec` to avoid cycle:
   - `runtime -> simic.rewards -> simic -> simic.training -> vectorized -> runtime`
 - `src/esper/simic/training/helpers.py`: same pattern (lazy `get_task_spec` import).
 - `tests/test_import_isolation.py`: enforces that importing `esper.runtime` does **not** import `esper.simic.training.vectorized`.
 
-## 7) Static checks baseline
+## 8) Static checks baseline
 
 Ran with workspace-local UV cache: `UV_CACHE_DIR=.uv-cache`:
 
@@ -127,7 +168,7 @@ Result:
 - ✅ `ruff`: All checks passed
 - ✅ `mypy`: Success: no issues found in 159 source files
 
-## 8) Full default test suite baseline
+## 9) Full default test suite baseline
 
 Ran with workspace-local UV cache: `UV_CACHE_DIR=.uv-cache`:
 
