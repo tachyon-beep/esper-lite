@@ -83,6 +83,7 @@ class TaskSpec:
         cifar_tasks = (
             "cifar_baseline", "cifar_scale", "cifar_impaired", "cifar_minimal",
             "cifar_multichannel", "cifar_postpool", "cifar_highres", "cifar_deep_multichannel",
+            "cifar_deep_impaired",
         )
         if self.name in cifar_tasks:
             data_root = self.dataloader_defaults.get("data_root", "./data")
@@ -578,6 +579,68 @@ def _cifar_deep_multichannel_spec() -> TaskSpec:
     )
 
 
+def _cifar_deep_impaired_spec() -> TaskSpec:
+    """CIFAR-10 deep impaired: 10-slot network with severe constraints requiring seed rescue.
+
+    Testing objective: Can seeds RESCUE a deep network with information bottleneck?
+
+    Architecture:
+    - Deep 5-block CNN with 1×1 kernels (no spatial receptive field)
+    - Ultra-narrow channels: 2→4→8→16→32 progression
+    - 10 injection points in 2×5 grid:
+        Row 0 (PRE_POOL):  r0c0, r0c1, r0c2, r0c3, r0c4
+        Row 1 (POST_POOL): r1c0, r1c1, r1c2, r1c3, r1c4
+    - Full pooling on all blocks (32→16→8→4→2→1)
+    - ~500 parameters total (extremely constrained)
+
+    Expected behavior:
+    - Host alone: ~20-30% accuracy (severe information bottleneck)
+    - The 3→2 input bottleneck crushes RGB immediately
+    - 1×1 kernels provide no spatial feature extraction
+    - Seeds must provide spatial awareness AND channel capacity
+    - Good for testing rescue at scale with 10 injection points
+    """
+    cifar_config = TaskConfig.for_cifar10()
+    loss_cfg = LossRewardConfig.for_cifar10()
+
+    def _make_model(
+        device: str, slots: list[str] | None = None, permissive_gates: bool = True
+    ) -> MorphogeneticModel:
+        if not slots:
+            raise ValueError("slots parameter is required and cannot be empty")
+        # Severely impaired: 1×1 kernels, ultra-narrow channels
+        # Channel progression: 3→2→4→8→16→32 (~500 parameters)
+        host = CNNHost(
+            num_classes=10,
+            base_channels=2,   # Ultra-narrow: 2→4→8→16→32
+            n_blocks=5,        # 5 blocks for 10 injection points
+            kernel_size=1,     # No spatial features (1×1 convolutions)
+            pool_layers=5,     # Full pooling to get all POST_POOL surfaces
+        )
+        return MorphogeneticModel(
+            host, device=device, slots=slots, task_config=cifar_config,
+            permissive_gates=permissive_gates,
+        )
+
+    return TaskSpec(
+        name="cifar_deep_impaired",
+        topology="cnn",
+        task_type="classification",
+        model_factory=_make_model,
+        dataloader_factory=load_cifar10,
+        dataloader_defaults={
+            "batch_size": DEFAULT_BATCH_SIZE_TRAINING,
+            "data_root": "./data",
+            "num_workers": 4,
+            "mock": False,
+            "generator": None,
+        },
+        task_config=cifar_config,
+        loss_reward_config=loss_cfg,
+        num_classes=10,
+    )
+
+
 # Registry of valid task names (single source of truth)
 #
 # Naming schema (test-objective focused):
@@ -589,6 +652,7 @@ def _cifar_deep_multichannel_spec() -> TaskSpec:
 #   cifar_postpool        - Are POST_POOL surfaces better for SEMANTIC augmentation?
 #   cifar_highres         - Do PRE_POOL surfaces enable better SPATIAL augmentation?
 #   cifar_deep_multichannel - Does multichannel SCALE to deeper networks?
+#   cifar_deep_impaired     - Can seeds RESCUE a deep network with severe constraints?
 #
 VALID_TASKS: frozenset[str] = frozenset({
     "cifar_baseline",
@@ -599,6 +663,7 @@ VALID_TASKS: frozenset[str] = frozenset({
     "cifar_postpool",
     "cifar_highres",
     "cifar_deep_multichannel",
+    "cifar_deep_impaired",
     "tinystories",
 })
 
@@ -622,6 +687,8 @@ def get_task_spec(name: str) -> TaskSpec:
         return _cifar_highres_spec()
     if key == "cifar_deep_multichannel":
         return _cifar_deep_multichannel_spec()
+    if key == "cifar_deep_impaired":
+        return _cifar_deep_impaired_spec()
     if key == "tinystories":
         return _tinystories_spec()
     raise ValueError(

@@ -143,6 +143,16 @@ class CNNHost(nn.Module):
 
         return specs
 
+    # Operation type constants (integers for torch.compile-friendly comparison)
+    _OP_BLOCK = 0
+    _OP_POOL = 1
+
+    @functools.cached_property
+    def _execution_order_cached(self) -> list[str]:
+        """Cached execution order for forward pass routing."""
+        _, boundary_index = self._boundary_timeline
+        return sorted(boundary_index.keys(), key=lambda s: boundary_index[s])
+
     def execution_order(self) -> list[str]:
         """Return slot IDs in forward execution order.
 
@@ -151,8 +161,7 @@ class CNNHost(nn.Module):
 
         This order matches the actual forward pass through the network.
         """
-        _, boundary_index = self._boundary_timeline
-        return sorted(boundary_index.keys(), key=lambda s: boundary_index[s])
+        return list(self._execution_order_cached)  # Return copy to prevent mutation
 
     @functools.cached_property
     def segment_channels(self) -> dict[str, int]:
@@ -198,6 +207,58 @@ class CNNHost(nn.Module):
 
         return timeline, boundary_index
 
+    @functools.cached_property
+    def _execution_plans(self) -> dict[tuple[str | None, str], tuple[tuple[int, int], ...]]:
+        """Pre-compute execution plans for all valid (from_segment, to_segment) pairs.
+
+        Returns:
+            Dict mapping (from_seg, to_seg) -> tuple of (op_type, block_idx)
+            where op_type: 0=block, 1=pool
+
+        Using tuple instead of list for immutability and torch.compile benefits.
+        Pre-computing eliminates string operations from the hot path.
+        """
+        timeline, boundary_index = self._boundary_timeline
+
+        # Convert string ops to integers once
+        int_timeline = tuple(
+            (self._OP_BLOCK if op == "block" else self._OP_POOL, idx)
+            for op, idx in timeline
+        )
+
+        plans: dict[tuple[str | None, str], tuple[tuple[int, int], ...]] = {}
+
+        # Pre-compute for from_segment=None (network input)
+        for to_seg, end_idx in boundary_index.items():
+            ops = tuple(int_timeline[k] for k in range(0, end_idx + 1))
+            plans[(None, to_seg)] = ops
+
+        # Pre-compute for all valid (from, to) pairs
+        for from_seg, start_idx in boundary_index.items():
+            for to_seg, end_idx in boundary_index.items():
+                if start_idx < end_idx:
+                    ops = tuple(int_timeline[k] for k in range(start_idx + 1, end_idx + 1))
+                    plans[(from_seg, to_seg)] = ops
+
+        return plans
+
+    @functools.cached_property
+    def _from_segment_plans(self) -> dict[str, tuple[tuple[int, int], ...]]:
+        """Pre-compute execution plans from each segment to network output."""
+        timeline, boundary_index = self._boundary_timeline
+
+        int_timeline = tuple(
+            (self._OP_BLOCK if op == "block" else self._OP_POOL, idx)
+            for op, idx in timeline
+        )
+
+        plans: dict[str, tuple[tuple[int, int], ...]] = {}
+        for seg, start_idx in boundary_index.items():
+            ops = tuple(int_timeline[k] for k in range(start_idx + 1, len(int_timeline)))
+            plans[seg] = ops
+
+        return plans
+
     @property
     def injection_points(self) -> dict[str, int]:
         """Map of slot_id -> channel dimension. Alias for segment_channels."""
@@ -223,8 +284,8 @@ class CNNHost(nn.Module):
     ) -> torch.Tensor:
         """Forward from one segment boundary to another.
 
-        Uses timeline-based routing to support PRE_POOL (r0cX) and POST_POOL (r1cX)
-        surfaces. Executes operations from start boundary to target boundary.
+        Uses pre-computed execution plans for torch.compile compatibility.
+        Integer op codes eliminate string comparison in the hot path.
 
         Args:
             segment: Target segment (e.g., "r0c0", "r1c0", "r0c1")
@@ -234,35 +295,30 @@ class CNNHost(nn.Module):
         Returns:
             Features at segment boundary
         """
-        timeline, boundary_index = self._boundary_timeline
+        # Single dict lookup with tuple key (computed once per call)
+        plan = self._execution_plans.get((from_segment, segment))
+        if plan is None:
+            # Error path - not in hot loop, can use strings for clear error messages
+            _, boundary_index = self._boundary_timeline
+            if segment not in boundary_index:
+                raise ValueError(f"Unknown segment: {segment}. Available: {list(boundary_index.keys())}")
+            if from_segment is not None and from_segment not in boundary_index:
+                raise ValueError(f"Unknown from_segment: {from_segment}. Available: {list(boundary_index.keys())}")
+            # If both exist but no plan, it's a backwards routing attempt
+            raise ValueError(
+                f"Cannot route backwards or to same boundary: {from_segment} -> {segment}"
+            )
 
-        if segment not in boundary_index:
-            raise ValueError(f"Unknown segment: {segment}. Available: {list(boundary_index.keys())}")
-        if from_segment is not None and from_segment not in boundary_index:
-            raise ValueError(f"Unknown from_segment: {from_segment}. Available: {list(boundary_index.keys())}")
-
-        # Only convert at entry point (avoid redundant conversion in chained calls)
+        # Memory format conversion at entry point only
         if from_segment is None and self._memory_format == torch.channels_last:
             x = x.to(memory_format=torch.channels_last)
 
-        # Determine timeline range to execute
-        start_idx = -1 if from_segment is None else boundary_index[from_segment]
-        end_idx = boundary_index[segment]
-
-        # Detect backwards/same-segment routing
-        if from_segment is not None and start_idx >= end_idx:
-            raise ValueError(
-                f"Cannot route backwards or to same boundary: "
-                f"segment '{segment}' (timeline idx {end_idx}) "
-                f"is at or before from_segment '{from_segment}' (timeline idx {start_idx})"
-            )
-
-        # Execute operations from (start_idx + 1) to end_idx inclusive
-        for k in range(start_idx + 1, end_idx + 1):
-            op, block_idx = timeline[k]
-            if op == "block":
+        # Execute with integer comparisons (torch.compile-friendly)
+        # Loop over pre-computed tuple - bounds are static per (from, to) pair
+        for op_type, block_idx in plan:
+            if op_type == 0:  # _OP_BLOCK - integer comparison
                 x = self.blocks[block_idx](x)
-            else:  # op == "pool"
+            else:  # _OP_POOL
                 x = self.pool(x)
 
         return x
@@ -270,8 +326,8 @@ class CNNHost(nn.Module):
     def forward_from_segment(self, segment: str, x: torch.Tensor) -> torch.Tensor:
         """Forward from a segment boundary to output logits.
 
-        Continues from the given boundary through all remaining operations
-        to produce classification output.
+        Uses pre-computed execution plans for torch.compile compatibility.
+        Integer op codes eliminate string comparison in the hot path.
 
         Args:
             segment: Starting segment ID (e.g., "r0c0", "r1c0", "r0c2")
@@ -280,20 +336,17 @@ class CNNHost(nn.Module):
         Returns:
             Classification logits
         """
-        timeline, boundary_index = self._boundary_timeline
-
-        if segment not in boundary_index:
+        plan = self._from_segment_plans.get(segment)
+        if plan is None:
+            # Error path - not in hot loop
+            _, boundary_index = self._boundary_timeline
             raise ValueError(f"Unknown segment: {segment}. Available: {list(boundary_index.keys())}")
 
-        # Start from the position after this segment's boundary
-        start_idx = boundary_index[segment]
-
-        # Execute remaining operations
-        for k in range(start_idx + 1, len(timeline)):
-            op, block_idx = timeline[k]
-            if op == "block":
+        # Execute remaining operations with integer comparisons
+        for op_type, block_idx in plan:
+            if op_type == 0:  # _OP_BLOCK
                 x = self.blocks[block_idx](x)
-            else:  # op == "pool"
+            else:  # _OP_POOL
                 x = self.pool(x)
 
         # Global average pooling and classification
