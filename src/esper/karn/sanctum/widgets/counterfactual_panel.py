@@ -129,12 +129,23 @@ class CounterfactualPanel(Static):
                 ind1 = individuals.get(s1, 0)
                 ind2 = individuals.get(s2, 0)
                 pair_synergy = contrib - ind1 - ind2
-                style = "green" if pair_synergy > 0.5 else None
-                lines.append(self._make_bar_line(label, acc, baseline, combined, contrib, highlight=style))
+                if pair_synergy > 0.5:
+                    style = "green"
+                elif pair_synergy < -0.5:
+                    style = "red"
+                else:
+                    style = None
+                line = self._make_bar_line(label, acc, baseline, combined, contrib, highlight=style)
+                self._append_interaction(line, pair_synergy)
+                lines.append(line)
         elif pairs and n_seeds > 3:
-            # Show top 5 by synergy
+            # Show top 5 by synergy (or worst 5 by interference)
             lines.append(Text(""))
-            lines.append(Text("Top Combinations (by synergy):", style="bold"))
+            show_interference = synergy < -0.5
+            if show_interference:
+                lines.append(Text("Top Interference Pairs (most negative):", style="bold red"))
+            else:
+                lines.append(Text("Top Combinations (by synergy):", style="bold"))
 
             # Calculate synergy for each pair
             pair_synergies = []
@@ -144,13 +155,20 @@ class CounterfactualPanel(Static):
                 pair_synergy = contrib - ind1 - ind2
                 pair_synergies.append(((s1, s2), contrib, pair_synergy))
 
-            # Sort by synergy descending, take top 5
-            pair_synergies.sort(key=lambda x: x[2], reverse=True)
+            # Sort by interaction direction and take top 5
+            pair_synergies.sort(key=lambda x: x[2], reverse=not show_interference)
             for (s1, s2), contrib, pair_syn in pair_synergies[:5]:
                 acc = baseline + contrib
                 label = f"  {s1} + {s2}"
-                style = "green" if pair_syn > 0.5 else None
-                lines.append(self._make_bar_line(label, acc, baseline, combined, contrib, highlight=style))
+                if pair_syn > 0.5:
+                    style = "green"
+                elif pair_syn < -0.5:
+                    style = "red"
+                else:
+                    style = None
+                line = self._make_bar_line(label, acc, baseline, combined, contrib, highlight=style)
+                self._append_interaction(line, pair_syn)
+                lines.append(line)
 
         # Combined
         lines.append(Text(""))
@@ -224,6 +242,16 @@ class CounterfactualPanel(Static):
             line.append(f"  ({delta:+.1f})", style=delta_style)
 
         return line
+
+    def _append_interaction(self, line: Text, interaction: float) -> None:
+        """Append pair interaction term to a bar line."""
+        if interaction > 0.5:
+            style = "green"
+        elif interaction < -0.5:
+            style = "red"
+        else:
+            style = "dim"
+        line.append(f"  I {interaction:+.1f}", style=style)
 
     def _render_interaction_metrics(self) -> list[Text]:
         """Render aggregate interaction metrics from seeds.

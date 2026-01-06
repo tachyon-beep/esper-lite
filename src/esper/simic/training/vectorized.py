@@ -2190,6 +2190,17 @@ def train_ppo_vectorized(
                             }
                             configs.append(solo_config)
 
+                        # Solo-on configs: only this slot active (others forced off)
+                        for slot_id in active_slot_list:
+                            solo_on_config: dict[str, Any] = {
+                                sid: 0.0
+                                for sid in active_slot_list
+                                if sid != slot_id
+                            }
+                            solo_on_config["_kind"] = "solo_on"
+                            solo_on_config["_slot"] = slot_id
+                            configs.append(solo_on_config)
+
                         n_active = len(active_slot_list)
                         # Config N+1: All disabled (for 2-4 seeds)
                         if 2 <= n_active <= 4:
@@ -2256,6 +2267,10 @@ def train_ppo_vectorized(
 
                 # baseline_accs[env_idx][slot_id] = accuracy with that slot's seed disabled
                 baseline_accs: list[dict[str, Any]] = [
+                    {} for _ in range(envs_this_batch)
+                ]
+                # solo_on_accs[env_idx][slot_id] = accuracy with ONLY that slot enabled
+                solo_on_accs: list[dict[str, float]] = [
                     {} for _ in range(envs_this_batch)
                 ]
                 all_disabled_accs: dict[int, float] = {}
@@ -2484,6 +2499,9 @@ def train_ppo_vectorized(
                                     )
                                     # Obs V3: Reset counterfactual staleness tracker on fresh measurement
                                     env_state.epochs_since_counterfactual[slot_id] = 0
+                        elif kind == "solo_on":
+                            slot_id = cfg["_slot"]
+                            solo_on_accs[i][slot_id] = acc
                         elif kind == "all_off":
                             all_disabled_accs[i] = acc
                         elif kind == "pair":
@@ -2518,6 +2536,7 @@ def train_ppo_vectorized(
                                 i
                             ),  # None triggers emitter fallback
                             pair_accs=pair_accs.get(i, {}),
+                            solo_accs=solo_on_accs[i],
                         )
 
                     # Compute interaction terms and populate scaffolding metrics

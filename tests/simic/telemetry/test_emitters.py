@@ -7,6 +7,7 @@ import pytest
 import torch
 from torch import nn
 
+from esper.karn.sanctum.schema import CounterfactualConfig, CounterfactualSnapshot
 from esper.leyline import TelemetryEventType
 from esper.simic.telemetry.emitters import (
     VectorizedEmitter,
@@ -385,3 +386,57 @@ class TestVectorizedEmitterRewardComponents:
         assert payload.head_telemetry.op_confidence == 0.85
         assert payload.head_telemetry.op_entropy == 0.3
         assert payload.head_telemetry.curve_confidence == 0.82
+
+
+class TestCounterfactualMatrixEmission:
+    """Tests for VectorizedEmitter.on_counterfactual_matrix."""
+
+    def test_prefers_solo_on_accuracies(self):
+        """Solo-on accuracies should drive individual contributions (no false interference)."""
+        hub = MagicMock()
+        hub.events = []
+        hub.emit.side_effect = hub.events.append
+
+        emitter = VectorizedEmitter(env_id=0, device="cpu", hub=hub)
+
+        active_slots = ["r0c0", "r0c1", "r0c2"]
+        # Accuracy when the target slot is disabled (two seeds remain active)
+        baseline_accs = {"r0c0": 55.0, "r0c1": 35.0, "r0c2": 47.0}
+        # Measured accuracy when only this slot is active
+        solo_accs = {"r0c0": 33.0, "r0c1": 45.0, "r0c2": 42.0}
+        pair_accs = {(0, 1): 47.0, (0, 2): 35.0, (1, 2): 55.0}
+
+        emitter.on_counterfactual_matrix(
+            active_slots=active_slots,
+            baseline_accs=baseline_accs,
+            val_acc=60.0,
+            all_disabled_acc=30.0,
+            pair_accs=pair_accs,
+            solo_accs=solo_accs,
+        )
+
+        event = hub.events[-1]
+        assert event.event_type == TelemetryEventType.COUNTERFACTUAL_MATRIX_COMPUTED
+        payload = event.data
+
+        snapshot = CounterfactualSnapshot(
+            slot_ids=payload.slot_ids,
+            configs=[
+                CounterfactualConfig(
+                    seed_mask=tuple(cfg["seed_mask"]),
+                    accuracy=cfg["accuracy"],
+                )
+                for cfg in payload.configs
+            ],
+            strategy=payload.strategy,
+            compute_time_ms=payload.compute_time_ms,
+        )
+
+        # Individual contributions should use measured solo-on accuracies
+        assert snapshot.baseline_accuracy == pytest.approx(30.0)
+        individuals = snapshot.individual_contributions()
+        assert individuals["r0c0"] == pytest.approx(solo_accs["r0c0"] - 30.0)
+        assert individuals["r0c1"] == pytest.approx(solo_accs["r0c1"] - 30.0)
+        assert individuals["r0c2"] == pytest.approx(solo_accs["r0c2"] - 30.0)
+        # Total synergy should reflect solo-on data (no spurious interference)
+        assert snapshot.total_synergy() == pytest.approx(0.0)

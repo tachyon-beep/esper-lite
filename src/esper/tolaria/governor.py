@@ -143,10 +143,22 @@ class TolariaGovernor:
         if hasattr(self.model, 'seed_slots'):
             experimental_prefixes = []
             for slot_id, slot in self.model.seed_slots.items():  # type: ignore[union-attr, operator]
-                if slot.state is not None and slot.state.stage != SeedStage.FOSSILIZED:
-                    # This seed is experimental - exclude its keys from snapshot
-                    experimental_prefixes.append(f"seed_slots.{slot_id}.seed.")
-                    experimental_prefixes.append(f"seed_slots.{slot_id}.alpha_schedule.")
+                is_fossilized = slot.state is not None and slot.state.stage == SeedStage.FOSSILIZED
+                if is_fossilized:
+                    continue
+
+                # This slot is NOT fossilized. Exclude ALL slot-local state so rollback cannot
+                # restore a stale lifecycle state (e.g. RESETTING) while leaving a live seed
+                # module attached (causes orphaned seeds + germination crashes).
+                #
+                # Note: seed slots use get_extra_state()/set_extra_state(), so the lifecycle
+                # state lives under the `_extra_state` key in the model state_dict.
+                if slot.seed is None and slot.state is None and slot.alpha_schedule is None:
+                    continue
+
+                experimental_prefixes.append(f"seed_slots.{slot_id}.seed.")
+                experimental_prefixes.append(f"seed_slots.{slot_id}.alpha_schedule.")
+                experimental_prefixes.append(f"seed_slots.{slot_id}._extra_state")
 
             # Filter state dict
             # Use tuple prefix matching for O(1) C-level check per key instead of

@@ -134,6 +134,7 @@ class VectorizedEmitter:
         val_acc: float,
         all_disabled_acc: float | None = None,
         pair_accs: dict[tuple[int, int], float] | None = None,
+        solo_accs: dict[str, float] | None = None,
     ) -> None:
         """Emit live counterfactual matrix for dashboard visualization."""
         if not self._should_emit("ops_normal") or not active_slots:
@@ -141,6 +142,7 @@ class VectorizedEmitter:
 
         configs = []
         n = len(active_slots)
+        solo_accs = solo_accs if solo_accs is not None else {}
 
         # All disabled
         strategy = "full_factorial" if all_disabled_acc is not None else "ablation_only"
@@ -151,14 +153,18 @@ class VectorizedEmitter:
             "accuracy": final_all_disabled,
         })
 
-        # Per-slot solo estimates (derived from ablation)
+        # Per-slot solo accuracies (prefer measured solo-on, fallback to ablation estimate)
         for i, slot_id in enumerate(active_slots):
-            contribution = val_acc - baseline_accs[slot_id]
-            solo_estimate = final_all_disabled + contribution
+            if slot_id in solo_accs:
+                solo_acc = solo_accs[slot_id]
+            else:
+                # Fallback to ablation-based estimate when solo-on accuracy isn't available
+                contribution = val_acc - baseline_accs[slot_id]
+                solo_acc = final_all_disabled + contribution
             mask = [j == i for j in range(n)]
             configs.append({
                 "seed_mask": mask,
-                "accuracy": solo_estimate,
+                "accuracy": solo_acc,
             })
 
         # Pair configs (measured)
