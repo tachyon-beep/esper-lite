@@ -13,13 +13,12 @@ from __future__ import annotations
 
 import pytest
 
-from esper.leyline import LifecycleOp, SeedStage
+from esper.leyline import LifecycleOp
 from esper.simic.rewards import (
     compute_contribution_reward,
     compute_reward,
     ContributionRewardConfig,
     RewardMode,
-    SeedInfo,
 )
 from esper.simic.rewards.types import ContributionRewardInputs
 
