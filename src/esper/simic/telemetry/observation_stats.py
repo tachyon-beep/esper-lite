@@ -209,12 +209,11 @@ def compute_observation_stats(
     clip_pct_t = (abs_norm >= (clip - 1e-6)).float().mean()
 
     # Normalization drift (how much the running mean has shifted)
-    has_drift = (
+    if (
         normalizer_mean is not None
         and initial_normalizer_mean is not None
         and normalizer_mean.shape == initial_normalizer_mean.shape
-    )
-    if has_drift:
+    ):
         drift_t = (normalizer_mean - initial_normalizer_mean).abs().mean()
     else:
         drift_t = torch.tensor(0.0, device=obs_tensor.device)
