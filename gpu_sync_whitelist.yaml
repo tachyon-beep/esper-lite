@@ -23,34 +23,34 @@ allow_paths:
 allow_hits:
 - key: src/esper/kasmina/isolation.py:GradientHealthMonitor.materialize_gradient_stats:item
   owner: John
-  reason: grandfathered at initiation
+  reason: Telemetry - extract host gradient norm for logging and G2 gate control flow; called after explicit stream sync
 - key: src/esper/kasmina/isolation.py:GradientHealthMonitor.materialize_gradient_stats:item:2
   owner: John
-  reason: grandfathered at initiation
+  reason: Telemetry - extract seed gradient norm for logging and G2 gate control flow; part of materialize phase post-sync
 - key: src/esper/kasmina/slot.py:SeedMetrics.record_accuracy:item
   owner: John
-  reason: grandfathered at initiation
+  reason: Metrics - convert detached tensor scalar to Python float for accuracy tracking and checkpoint serialization
 - key: src/esper/nissa/tracker.py:DiagnosticTracker._compute_val_loss:item
   owner: John
-  reason: grandfathered at initiation
+  reason: Validation - end-of-epoch callback for loss monitoring; once per epoch, not in hot path
 - key: src/esper/nissa/tracker.py:DiagnosticTracker._compute_weight_norms:tolist
   owner: John
-  reason: grandfathered at initiation
+  reason: Diagnostics - weight norm extraction once per epoch for snapshot recording; gated by track_weight_norms flag
 - key: src/esper/nissa/tracker.py:DiagnosticTracker._record_grad:tolist
   owner: John
-  reason: grandfathered at initiation
+  reason: Batched telemetry - single sync for all gradient stats instead of per-metric syncs; optimized pattern
 - key: src/esper/nissa/tracker.py:DiagnosticTracker._record_grad:tolist:2
   owner: John
-  reason: grandfathered at initiation
+  reason: Batched telemetry - fallback path when percentiles disabled; same single-sync pattern
 - key: src/esper/nissa/tracker.py:DiagnosticTracker._record_grad:tolist:3
   owner: John
-  reason: grandfathered at initiation
+  reason: Batched telemetry - percentile-only path; single sync for minimal data transfer
 - key: src/esper/simic/agent/rollout_buffer.py:TamiyoRolloutBuffer.normalize_advantages:item
   owner: John
-  reason: grandfathered at initiation
+  reason: PPO update - pre-normalization mean for telemetry; once per update, not per timestep
 - key: src/esper/simic/agent/rollout_buffer.py:TamiyoRolloutBuffer.normalize_advantages:item:2
   owner: John
-  reason: grandfathered at initiation
+  reason: PPO update - pre-normalization std for diagnostics and D4 floor detection; once per update
 - key: src/esper/simic/agent/ppo_metrics.py:PPOUpdateMetricsBuilder.finalize:item
   owner: John
   reason: PPO metrics aggregation (telemetry payload)
@@ -99,138 +99,150 @@ allow_hits:
 - key: src/esper/simic/agent/ppo_metrics.py:PPOUpdateMetricsBuilder.finalize:item:16
   owner: John
   reason: PPO metrics aggregation (telemetry payload)
+- key: src/esper/simic/agent/ppo_metrics.py:PPOUpdateMetricsBuilder.finalize:tolist
+  owner: John
+  reason: PPO metrics - convert per-op Q-values tensor to tuple for telemetry payload
+- key: src/esper/simic/agent/ppo_metrics.py:PPOUpdateMetricsBuilder.finalize:tolist:2
+  owner: John
+  reason: PPO metrics - convert op mask tensor to tuple of bools for telemetry payload
+- key: src/esper/simic/agent/ppo_agent.py:PPOAgent.update:item
+  owner: John
+  reason: D5 metrics - count forced actions per episode for slot saturation diagnostics; once per update
+- key: src/esper/simic/training/action_execution.py:execute_actions:tolist
+  owner: John
+  reason: Forced action tracking - single GPU-to-CPU sync for forced step flags; batched per-batch not per-step
 - key: src/esper/simic/control/normalization.py:ValueNormalizer.get_scale:item
   owner: John
-  reason: grandfathered at initiation
+  reason: Telemetry - extract normalizer scale once per PPO update; not in hot path, defaults to CPU device
 - key: src/esper/simic/control/normalization.py:ValueNormalizer.load_state_dict:item
   owner: John
   reason: checkpoint restore is not a hot path
 - key: src/esper/simic/telemetry/debug_telemetry.py:RatioExplosionDiagnostic.from_batch:cpu
   owner: John
-  reason: grandfathered at initiation
+  reason: Debug - transfer bad indices to CPU for diagnostic payload; capped to 100 exemplars
 - key: src/esper/simic/telemetry/debug_telemetry.py:RatioExplosionDiagnostic.from_batch:cpu:2
   owner: John
-  reason: grandfathered at initiation
+  reason: Debug - transfer mean/max log-prob divergence stats to CPU; 2-element tensor
 - key: src/esper/simic/telemetry/debug_telemetry.py:RatioExplosionDiagnostic.from_batch:cpu:3
   owner: John
-  reason: grandfathered at initiation
+  reason: Debug - transfer selected ratio values to CPU for anomaly analysis; max 100 values
 - key: src/esper/simic/telemetry/debug_telemetry.py:RatioExplosionDiagnostic.from_batch:cpu:4
   owner: John
-  reason: grandfathered at initiation
+  reason: Debug - transfer selected action values to CPU for anomaly analysis; max 100 values
 - key: src/esper/simic/telemetry/debug_telemetry.py:RatioExplosionDiagnostic.from_batch:item
   owner: John
-  reason: grandfathered at initiation
+  reason: Debug - extract scalar count of non-finite ratios for diagnostic summary
 - key: src/esper/simic/telemetry/debug_telemetry.py:RatioExplosionDiagnostic.from_batch:item:2
   owner: John
-  reason: grandfathered at initiation
+  reason: Debug - extract scalar count of problematic ratios for diagnostic summary
 - key: src/esper/simic/telemetry/debug_telemetry.py:RatioExplosionDiagnostic.from_batch:tolist
   owner: John
-  reason: grandfathered at initiation
+  reason: Debug - convert indices tensor to Python list for JSON serialization
 - key: src/esper/simic/telemetry/debug_telemetry.py:RatioExplosionDiagnostic.from_batch:tolist:2
   owner: John
-  reason: grandfathered at initiation
+  reason: Debug - unpack divergence stats to Python floats for diagnostic report
 - key: src/esper/simic/telemetry/debug_telemetry.py:RatioExplosionDiagnostic.from_batch:tolist:3
   owner: John
-  reason: grandfathered at initiation
+  reason: Debug - convert ratio values to Python list for diagnostic payload
 - key: src/esper/simic/telemetry/debug_telemetry.py:RatioExplosionDiagnostic.from_batch:tolist:4
   owner: John
-  reason: grandfathered at initiation
+  reason: Debug - convert action indices to Python list for diagnostic payload
 - key: src/esper/simic/telemetry/debug_telemetry.py:check_numerical_stability:cpu
   owner: John
-  reason: grandfathered at initiation
+  reason: Stability check - batched transfer of NaN/Inf checks; O(4n) to O(1) optimization via stacking
 - key: src/esper/simic/telemetry/debug_telemetry.py:check_numerical_stability:item
   owner: John
-  reason: grandfathered at initiation
+  reason: Stability check - extract scalar loss value for NaN/Inf validation before backward
 - key: src/esper/simic/telemetry/debug_telemetry.py:check_numerical_stability:item:2
   owner: John
-  reason: grandfathered at initiation
+  reason: Stability check - extract max weight magnitude across all parameters
 - key: src/esper/simic/telemetry/debug_telemetry.py:check_numerical_stability:item:3
   owner: John
-  reason: grandfathered at initiation
+  reason: Stability check - extract max gradient magnitude across all parameters
 - key: src/esper/simic/telemetry/debug_telemetry.py:collect_per_layer_gradients:tolist
   owner: John
-  reason: grandfathered at initiation
+  reason: Debug - single batched sync for all per-layer gradient stats; [num_layers, 10] tensor
 - key: src/esper/simic/telemetry/emitters.py:compute_grad_norm_surrogate:item
   owner: John
-  reason: grandfathered at initiation
+  reason: Telemetry - convert tensor to scalar for gradient norm emission; required for Python float return
 - key: src/esper/simic/telemetry/gradient_collector.py:collect_seed_gradients:tolist
   owner: John
-  reason: grandfathered at initiation
+  reason: Batched telemetry - single sync for 8 scalar gradient stats; optimal stack-then-sync pattern
 - key: src/esper/simic/telemetry/gradient_collector.py:materialize_dual_grad_stats:item
   owner: John
-  reason: grandfathered at initiation
+  reason: Telemetry - extract host gradient norm squared; conditional sync after stream.synchronize
 - key: src/esper/simic/telemetry/gradient_collector.py:materialize_dual_grad_stats:item:2
   owner: John
-  reason: grandfathered at initiation
+  reason: Telemetry - extract seed gradient norm squared; conditional sync after stream.synchronize
 - key: src/esper/simic/telemetry/gradient_collector.py:materialize_grad_stats:item
   owner: John
-  reason: grandfathered at initiation
+  reason: Telemetry - extract total squared gradient norm; called after stream.synchronize per contract
 - key: src/esper/simic/telemetry/gradient_collector.py:materialize_grad_stats:item:2
   owner: John
-  reason: grandfathered at initiation
+  reason: Telemetry - extract vanishing gradient count; called after stream.synchronize per contract
 - key: src/esper/simic/telemetry/gradient_collector.py:materialize_grad_stats:item:3
   owner: John
-  reason: grandfathered at initiation
+  reason: Telemetry - extract exploding gradient count; called after stream.synchronize per contract
 - key: src/esper/simic/telemetry/lstm_health.py:compute_lstm_health:tolist
   owner: John
-  reason: grandfathered at initiation
+  reason: Batched telemetry - single sync for 14 LSTM health metrics; optimized stack-then-sync pattern
 - key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item
   owner: John
-  reason: grandfathered at initiation
+  reason: Telemetry - observation stats extraction; NaN count for error detection
 - key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:10
   owner: John
-  reason: grandfathered at initiation
+  reason: Telemetry - observation stats extraction; near-clip saturation percentage
 - key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:11
   owner: John
-  reason: grandfathered at initiation
+  reason: Telemetry - observation stats extraction; clip saturation percentage
 - key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:12
   owner: John
-  reason: grandfathered at initiation
+  reason: Telemetry - observation stats extraction; normalization drift
 - key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:2
   owner: John
-  reason: grandfathered at initiation
+  reason: Telemetry - observation stats extraction; Inf count for error detection
 - key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:3
   owner: John
-  reason: grandfathered at initiation
+  reason: Telemetry - observation stats extraction; host features mean
 - key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:4
   owner: John
-  reason: grandfathered at initiation
+  reason: Telemetry - observation stats extraction; host features std
 - key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:5
   owner: John
-  reason: grandfathered at initiation
+  reason: Telemetry - observation stats extraction; context features mean
 - key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:6
   owner: John
-  reason: grandfathered at initiation
+  reason: Telemetry - observation stats extraction; context features std
 - key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:7
   owner: John
-  reason: grandfathered at initiation
+  reason: Telemetry - observation stats extraction; slot features mean
 - key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:8
   owner: John
-  reason: grandfathered at initiation
+  reason: Telemetry - observation stats extraction; slot features std
 - key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:9
   owner: John
-  reason: grandfathered at initiation
+  reason: Telemetry - observation stats extraction; 3-sigma outlier count
 - key: src/esper/leyline/value_metrics.py:compute_value_function_metrics:tolist
   owner: John
-  reason: grandfathered at initiation
+  reason: Batched telemetry - single sync for 9 value function metrics; stack-then-sync pattern
 - key: src/esper/simic/training/helpers.py:_train_one_epoch:item
   owner: John
-  reason: grandfathered at initiation
+  reason: Per-epoch sync - extract accumulated training loss; deferred sync pattern, not per-batch
 - key: src/esper/simic/training/helpers.py:_train_one_epoch:item:2
   owner: John
-  reason: grandfathered at initiation
+  reason: Per-epoch sync - extract accumulated correct count; deferred sync pattern, not per-batch
 - key: src/esper/simic/training/helpers.py:run_heuristic_episode:item
   owner: John
-  reason: grandfathered at initiation
+  reason: Per-epoch sync - extract training loss after accumulation; not in batch loop
 - key: src/esper/simic/training/helpers.py:run_heuristic_episode:item:2
   owner: John
-  reason: grandfathered at initiation
+  reason: Per-epoch sync - extract training accuracy after accumulation; not in batch loop
 - key: src/esper/simic/training/helpers.py:run_heuristic_episode:item:3
   owner: John
-  reason: grandfathered at initiation
+  reason: Per-epoch sync - extract validation loss after accumulation; validation phase
 - key: src/esper/simic/training/helpers.py:run_heuristic_episode:item:4
   owner: John
-  reason: grandfathered at initiation
+  reason: Per-epoch sync - extract validation accuracy after accumulation; validation phase
 - key: src/esper/simic/training/vectorized_trainer.py:VectorizedPPOTrainer.run:cuda_synchronize
   owner: John
   reason: vectorized trainer sync point
@@ -311,37 +323,37 @@ allow_hits:
   reason: vectorized trainer sync point
 - key: src/esper/tamiyo/networks/factored_lstm.py:BlueprintEmbedding.forward:tolist
   owner: John
-  reason: grandfathered at initiation
+  reason: Validation error path - fail-fast detection of invalid blueprint indices; only executes on validation failure
 - key: src/esper/tamiyo/policy/action_masks.py:_validate_logits:item
   owner: John
-  reason: grandfathered at initiation
+  reason: Error path validation - extract logits min for diagnostic error message; gated by MaskedCategorical.validate
 - key: src/esper/tamiyo/policy/action_masks.py:_validate_logits:item:2
   owner: John
-  reason: grandfathered at initiation
+  reason: Error path validation - extract logits max for diagnostic error message; gated by MaskedCategorical.validate
 - key: src/esper/tamiyo/policy/action_masks.py:_validate_logits:item:3
   owner: John
-  reason: grandfathered at initiation
+  reason: Error path validation - extract NaN count for diagnostic error message; gated by MaskedCategorical.validate
 - key: src/esper/tamiyo/policy/action_masks.py:_validate_logits:item:4
   owner: John
-  reason: grandfathered at initiation
+  reason: Error path validation - extract Inf count for diagnostic error message; gated by MaskedCategorical.validate
 - key: src/esper/tamiyo/policy/features.py:_extract_base_features_v3:tolist
   owner: John
-  reason: grandfathered at initiation
+  reason: Feature extraction - convert one-hot tensor to list for feature concatenation; per-env not per-step
 - key: src/esper/tamiyo/policy/lstm_bundle.py:LSTMPolicyBundle.cpu:cpu
   owner: John
-  reason: grandfathered at initiation
+  reason: Device placement method - explicit model transfer to CPU; not a sync point, async device transfer
 - key: src/esper/tolaria/governor.py:TolariaGovernor.execute_rollback:cuda_synchronize
   owner: John
-  reason: grandfathered at initiation
+  reason: Safety-critical - ensure all CUDA streams complete before load_state_dict; prevents race conditions
 - key: src/esper/tolaria/governor.py:TolariaGovernor.snapshot:cpu
   owner: John
-  reason: grandfathered at initiation
+  reason: Memory optimization - move snapshot tensors to CPU to save GPU memory; rare operation, not hot path
 - key: src/esper/utils/data.py:SharedGPUBatchIterator.__init__:cuda_synchronize
   owner: John
-  reason: grandfathered at initiation
+  reason: Initialization barrier - ensure GPU memory transfers complete before DataLoader creation
 - key: src/esper/utils/data.py:SharedGPUGatherBatchIterator.__init__:cuda_synchronize
   owner: John
-  reason: grandfathered at initiation
+  reason: Initialization barrier - ensure GPU memory transfers complete before gather operations begin
 - key: src/esper/utils/data.py:TinyStoriesDataset.__init__:tolist
   owner: John
-  reason: grandfathered at initiation
+  reason: Mock mode only - convert synthetic tokens to list during init; small data, one-time cost
