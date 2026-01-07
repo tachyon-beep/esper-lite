@@ -1,382 +1,222 @@
 # Esper: Morphogenetic Neural Networks
 
-**Grow capabilities, don't just train weights.**
+**Grow capabilities, don’t just train weights.**
 
-Esper is a framework for **Morphogenetic AI**—neural networks that dynamically grow, prune, and adapt their own topology during training. Instead of a static architecture, Esper uses a lifecycle-driven approach where "seed" modules are germinated in isolation, trained on residuals, and carefully grafted into a stable host model only when they prove their worth.
-
-## ✅ Current Architecture Baseline (Tamiyo Next: Obs V3 + Policy V2)
-
-As of **Tamiyo Next**, the RL-controlled policy stack has been upgraded to support long-horizon, multi-seed scaffolding:
-
-- **Obs V3:** reduced observation redundancy and moved blueprint identity to **learned embeddings**
-  - Non-blueprint obs: **116 dims** (23 base + 31 per-slot × 3 slots)
-  - Blueprint embedding: **4 × slots** (e.g., 12 dims for 3 slots)
-  - Total policy input: **128 dims**
-- **Policy V2:** **512-dim feature net + 512 hidden LSTM**, designed for ~150-epoch decision horizons
-- **Critic:** action-conditioned **Q(s, op)** baseline (removes value aliasing)
-- **Q-values telemetry:** Op-conditioned Q(s,op) values now visible in Sanctum UI with variance diagnostic
-- **Episode length:** default **150** epochs/steps per rollout horizon
+Esper is a framework for **morphogenetic AI**: neural networks that can **grow, prune, and adapt their own topology during training**. Instead of committing to a static architecture up front, Esper uses a lifecycle-driven approach where “seed” modules are germinated, trained safely, and only blended into the host when they earn their keep.
 
 ---
 
-## 🚀 Key Features
+## What exists today
 
-- **🛡️ Gradient Isolation:** Seeds train in an "incubator" state, learning from the host's errors without destabilising its existing knowledge (catastrophic forgetting prevention).
-- **🧠 Dual-Mode Control:**
-  - **Tamiyo (Heuristic):** A rule-based baseline controller for stable, predictable growth.
-  - **Simic (RL):** A PPO reinforcement learning agent that learns optimal growth strategies by observing training dynamics.
-- **⚡ Vectorised Training:** High-performance, multi-GPU RL environment using CUDA streams and inverted control flow for massive parallel throughput.
-- **🔍 Rich Telemetry:** The **Nissa** subsystem provides profile-based diagnostics (gradient health, loss landscape sharpness) for deep debugging. **Karn** telemetry now includes op-conditioned Q-values visible in Sanctum UI.
-- **🧬 Obs V3 + Blueprint Embeddings:** Compact observation space with learned blueprint embeddings (no one-hot blueprint explosion).
-- **🎯 Q(s,op) Critic:** Op-conditioned value head aligns rollout values, bootstrap values, and PPO update values.
+Esper is built as a set of decoupled subsystems. The ones you will see in the codebase and tooling right now are:
 
----
+* **Kasmina** (host + slots): the morphogenetic model and the mechanics for inserting, training, blending, and fossilising seeds.
+* **Tamiyo** (decision-maker): chooses lifecycle actions (germinate, blend, prune, fossilise, etc.) using either heuristics or a learned policy.
+* **Simic** (selection pressure): reward, accounting, PPO training loop, and the “economy” (rent, churn, contribution signals).
+* **Tolaria** (execution engine): high-throughput, deterministic training/evaluation substrate; governs safety rollback.
+* **Nissa** (telemetry backends): emits structured diagnostics and run artefacts for analysis.
+* **Karn** (operator UI + analytics): Sanctum TUI, Overwatch dashboard, logs, aggregation, and “flight recorder” style visibility.
 
-## 🏗️ Architecture
+Planned subsystems (designed but not yet fully shipped as first-class controllers):
 
-The system is organised into seven decoupled domains:
-
-| Domain | Biological Role | Description |
-| :--- | :--- | :--- |
-| **Kasmina** | Stem Cells | Pluripotent slots that differentiate into neural modules. Manages grafting mechanics. |
-| **Leyline** | DNA/Genome | Shared data contracts, enums (`SeedStage`), tensor schemas — the genetic code. |
-| **Tamiyo** | Brain/Cortex | Strategic decision-making logic (heuristic or neural policy). |
-| **Tolaria** | Metabolism | Execution engine that converts data into trained weights (energy conversion). |
-| **Simic** | Evolution | RL infrastructure (PPO) enabling adaptation through selection pressure. |
-| **Nissa** | Sensory Organs | Observability hub — perceives training dynamics and routes telemetry. |
-| **Karn** | Memory | Research telemetry system with analytics, health monitoring, TUI, and web dashboard. |
-
-> **📝 Metaphor Note:** Esper uses *body/organism* terminology for system architecture (domains as organs) and *botanical* terminology for seed lifecycle (germinate, graft, prune). Think of it as: "The organism's stem cells undergo a botanical development process."
+* **Emrakul** (maintenance/decay policy): evidence-led probe/sedate/lyse of committed structure; long-horizon efficiency.
+* **Narset** (allocator): slow-timescale budget allocator coordinating multiple Tamiyo/Emrakul pairs.
+* **Esika** (host superstructure): container/ruleset that deconflicts Kasmina “cells” and hosts Narset at scale.
 
 ---
 
-## ⚡ Quick Start
+## Current architecture baseline
 
-### 1. Installation
+As of the current “Tamiyo Next” baseline, the RL-controlled stack supports long-horizon, multi-seed behaviour:
+
+* **Obs V3**: reduced redundancy; blueprint identity moved to learned embeddings
+
+  * Non-blueprint obs: **116 dims** (23 base + 31 per-slot × 3 slots)
+  * Blueprint embedding: **4 × slots** (e.g. 12 dims for 3 slots)
+  * Total policy input: **128 dims**
+* **Policy V2**: **512-dim feature net + 512 hidden LSTM**, designed for ~150-step horizons
+* **Critic**: action-conditioned baseline (**Q(s, op)** style), reducing value aliasing
+* **Default episode length**: **150** steps (epochs) per rollout horizon
+
+---
+
+## Key ideas
+
+### Seed lifecycle (Kasmina)
+
+Seeds are introduced and evaluated under a controlled state machine:
+
+* **Germinated**: module exists, influence is isolated
+* **Training**: learns “behind the host” (safe, no destabilising contribution)
+* **Blending**: alpha ramps in under controlled schedules
+* **Holding**: stabilisation window before committing
+* **Fossilised**: accepted as part of the model’s committed structure
+
+### Gradient isolation
+
+Seeds can learn from task gradients without immediately altering the host’s forward behaviour, reducing destabilisation during early growth.
+
+### Vectorised training (Tolaria + Simic)
+
+Esper’s training loop is designed for high throughput:
+
+* parallel environments
+* GPU-first execution
+* deterministic replay principles
+* “inverted control flow” (batches drive environments, not the other way around)
+
+### Telemetry as an API (Nissa + Karn)
+
+Telemetry is treated like a contract:
+
+* typed payloads
+* schema validation
+* explicit provenance
+* UI panels reflect real signals (no silent fallback)
+
+---
+
+## Quick start
+
+### Installation
 
 Requires Python 3.11+ and PyTorch.
 
 ```bash
-# Clone and setup
 git clone https://github.com/yourusername/esper.git
 cd esper
-
-# Recommended: use uv
 uv sync
-````
-
-### 2. Run a Heuristic Baseline
-
-Train a CIFAR-10 model where `Tamiyo` (the rule-based system) manages the growth.
-
-```bash
-PYTHONPATH=src uv run python -m esper.scripts.train heuristic --task cifar10 --episodes 1
 ```
 
-### 3. Train the Brain (Reinforcement Learning)
+### Heuristic baseline (Tamiyo heuristic)
 
-Train the **Simic** agent using PPO to discover better growth strategies than the heuristic.
+```bash
+PYTHONPATH=src uv run python -m esper.scripts.train heuristic \
+  --task cifar_baseline --episodes 1
+```
+
+### PPO training (Simic RL)
 
 ```bash
 PYTHONPATH=src uv run python -m esper.scripts.train ppo \
-    --task cifar10 \
-    --rounds 100 \
-    --envs 4 \
-    --episode-length 150 \
-    --device cuda:0 \
+  --task cifar_baseline \
+  --rounds 100 \
+  --envs 4 \
+  --episode-length 150 \
+  --device cuda:0
 ```
 
 ---
 
-## 🌱 The Seed Lifecycle
+## System map
 
-Esper treats neural modules like living organisms. They must earn their place in the network.
+| Domain      | Role                                      | Exists today | Notes                                                     |
+| ----------- | ----------------------------------------- | ------------ | --------------------------------------------------------- |
+| **Kasmina** | Host + SeedSlots + lifecycle mechanics    | ✅            | “Where topology changes happen” under strict contracts    |
+| **Leyline** | Shared enums/contracts/schemas            | ✅            | Source of truth for types and ordering invariants         |
+| **Tamiyo**  | Growth policy (heuristic or learned)      | ✅            | Manages seeds pre-commit                                  |
+| **Simic**   | Reward + PPO + accounting                 | ✅            | Selection pressure, credit signals, and training loop     |
+| **Tolaria** | Execution engine + determinism + rollback | ✅            | High-throughput substrate and safety governor             |
+| **Nissa**   | Telemetry backends                        | ✅            | Structured emission and artefact routing                  |
+| **Karn**    | Operator UI + analytics                   | ✅            | Sanctum/Overwatch and aggregation                         |
+| **Emrakul** | Decay/maintenance policy                  | 🧭 Planned   | Probe/sedate/lyse for efficiency and consolidation        |
+| **Narset**  | Budget allocator over regions             | 🧭 Planned   | Slow coordinator based on coarse health signals           |
+| **Esika**   | Host superstructure                       | 🧭 Planned   | Deconfliction + safe-boundary scheduling + Narset hosting |
+
+---
+
+## CLI overview
+
+### PPO training (`esper.scripts.train ppo`)
+
+Core scaling knobs:
+
+| Flag                 | Default | Meaning                                     |
+| -------------------- | ------- | ------------------------------------------- |
+| `--rounds N`         | 100     | PPO update rounds                           |
+| `--envs K`           | 4       | Parallel environments per round             |
+| `--episode-length L` | 150     | Steps per env per round (also LSTM horizon) |
+| `--ppo-epochs E`     | 1       | PPO update passes over rollout data         |
+| `--memory-size H`    | 512     | LSTM hidden size                            |
+
+Config/presets:
+
+| Flag                 | Default          | Meaning                                |
+| -------------------- | ---------------- | -------------------------------------- |
+| `--task`             | `cifar_baseline` | Host + dataloaders + topology preset   |
+| `--preset`           | `cifar_baseline` | Hyperparameter preset                  |
+| `--config-json PATH` | (none)           | Strict config file (unknown keys fail) |
+| `--seed N`           | (config)         | Run seed override                      |
+
+Hardware/perf:
+
+| Flag              | Default   | Meaning                                     |
+| ----------------- | --------- | ------------------------------------------- |
+| `--device`        | `cuda:0`  | Policy device                               |
+| `--devices`       | (none)    | Multi-GPU env devices (`cuda:0 cuda:1 ...`) |
+| `--num-workers`   | (task)    | DataLoader workers                          |
+| `--gpu-preload`   | off       | CIFAR GPU preload (VRAM trade)              |
+| `--compile-mode`  | `default` | torch.compile mode                          |
+| `--force-compile` | off       | Compile even in TUI mode                    |
+
+Telemetry/monitoring:
+
+| Flag                   | Meaning                                  |
+| ---------------------- | ---------------------------------------- |
+| `--sanctum`            | Textual TUI for debugging                |
+| `--overwatch`          | Web dashboard                            |
+| `--telemetry-dir PATH` | Write telemetry artefacts                |
+| `--wandb`              | Enable Weights & Biases (optional extra) |
+
+---
+
+## Seed lifecycle diagram
 
 ```mermaid
 stateDiagram-v2
     [*] --> DORMANT
-    DORMANT --> GERMINATED: Germinate Action
+    DORMANT --> GERMINATED: Germinate
     GERMINATED --> TRAINING: Advance (G1)
     TRAINING --> BLENDING: Advance (G2)
-    TRAINING --> PRUNED: Prune (Performance Drop)
     BLENDING --> HOLDING: Advance (G3)
-    BLENDING --> PRUNED: Prune (Regression)
-    HOLDING --> FOSSILIZED: Fossilise (Stability Check)
-    FOSSILISED --> [*]: Terminal Success
+    HOLDING --> FOSSILIZED: Fossilise
+    TRAINING --> PRUNED: Prune
+    BLENDING --> PRUNED: Prune
     PRUNED --> EMBARGOED: Cleanup
-    EMBARGOED --> RESETTING: Cooldown Complete
-    RESETTING --> DORMANT: Slot Recycled
+    EMBARGOED --> RESETTING: Cooldown
+    RESETTING --> DORMANT: Recycle
 ```
-
-1. **Germinated:** Module created. Input connected, output detached.
-2. **Training:** Module trains on host errors. Host weights frozen relative to this path.
-3. **Blending:** Module output is alpha-blended into host stream.
-4. **Holding:** Full-amplitude hold (alpha≈1.0). Stable decision point for fossilisation.
-5. **Fossilised:** Weights permanently integrated. Module becomes part of the "Host" for future seeds.
 
 ---
 
-## 📊 Results (POC)
+## Results notes
 
-Preliminary results on CIFAR-10 (ResNet-style Host):
+Esper’s performance is best evaluated as a **frontier**: quality vs cost vs stability. Peak accuracy matters, but reliability and growth ratio matter more. The system is designed to support:
 
-| Approach              | Final Accuracy | Notes                                                                 |
-| :-------------------- | :------------- | :-------------------------------------------------------------------- |
-| **Static Baseline**   | 69.31%         | Standard training, no growth.                                         |
-| **From-Scratch**      | 65.97%         | Re-initialising larger model (poor convergence).                      |
-| **Esper (Heuristic)** | **82.16%**     | Staged growth managed by Tamiyo.                                      |
-| **Esper (PPO)**       | *Training...*  | Learning to optimise fossilisation timing and multi-seed scaffolding. |
+* “capable host augmentation” (baseline CIFAR)
+* “rescue a broken host” (impaired/minimal CIFAR)
+* scaling pressure tests (deep/multi-slot hosts)
 
 ---
 
-## 🛠️ Development
+## Development
 
-**Project Structure:**
-
-```text
-src/esper/
-├── kasmina/      # Model & Slot mechanics
-├── leyline/      # Shared types & contracts
-├── tamiyo/       # Decision logic
-├── tolaria/      # PyTorch training loops
-├── simic/        # RL Algorithms (PPO)
-├── nissa/        # Telemetry & Logging
-├── karn/         # Research telemetry (TUI, dashboard, analytics)
-└── scripts/      # CLI Entry points
-```
-
-**Run Tests:**
+Run tests:
 
 ```bash
 uv run pytest -q
 ```
 
-**Overwatch Dashboard Development:**
+Project structure:
 
-```bash
-# Navigate to Overwatch web directory
-cd src/esper/karn/overwatch/web
-
-# Install dependencies
-npm install
-
-# Run dev server with hot reload (default: http://localhost:5173)
-npm run dev
-
-# Run tests
-npm test
+```text
+src/esper/
+├── kasmina/      # Host + slots + seed mechanics
+├── leyline/      # Shared contracts and schemas
+├── tamiyo/       # Policies and action masks
+├── tolaria/      # Execution engine + safety governor
+├── simic/        # PPO + reward/accounting
+├── nissa/        # Telemetry backends and outputs
+├── karn/         # UI, dashboards, analytics
+└── scripts/      # CLI entry points
 ```
-
----
-
-## 📖 CLI Reference
-
-### PPO Training (`esper.scripts.train ppo`)
-
-Train a PPO agent to learn optimal seed lifecycle management.
-
-```bash
-PYTHONPATH=src python -m esper.scripts.train ppo [OPTIONS]
-```
-
-#### Training Scale (Tamiyo-Centric)
-
-These flags control Tamiyo's training directly. All are optional - presets provide sensible defaults.
-
-| Flag                        | Default | Description                                              |
-| --------------------------- | ------- | -------------------------------------------------------- |
-| `--rounds N`                | 100     | Tamiyo PPO training iterations                           |
-| `--envs K`                  | 4       | Parallel CIFAR environments (sample diversity per round) |
-| `--episode-length L`        | 150     | Epochs per environment per round; also sets LSTM horizon |
-| `--ppo-epochs E`            | 1       | Gradient steps per round (passes over rollout data)      |
-| `--memory-size H`           | 512     | Tamiyo LSTM hidden dimension                             |
-| `--entropy-anneal-episodes N` | 0     | Env-episodes for entropy annealing (N/K batches with K envs) |
-
-Each round produces `K × L` transitions for Tamiyo's PPO update.
-Doubling `--rounds` = 2× training time. Doubling `--envs` = richer data per round, same training time.
-
-Episode length also defines Tamiyo's LSTM sequence length (`chunk_length == max_epochs`), so longer
-episodes increase the temporal memory burden.
-
-#### Config & Presets
-
-| Flag            | Default          | Description                                                                                        |
-| --------------- | ---------------- | -------------------------------------------------------------------------------------------------- |
-| `--preset`      | `cifar10`        | Hyperparameter preset: `cifar10`, `cifar10_stable`, `cifar10_deep`, `cifar10_blind`, `tinystories` |
-| `--config-json` | (none)           | Path to JSON config (strict: unknown keys fail)                                                    |
-| `--task`        | `cifar10`        | Task preset for dataloaders/topology                                                               |
-| `--seed`        | (config default) | Override run seed                                                                                  |
-
-#### Hardware & Performance
-
-| Flag            | Default        | Description                                          |
-| --------------- | -------------- | ---------------------------------------------------- |
-| `--device`      | `cuda:0`       | Primary compute device                               |
-| `--devices`     | (none)         | Multi-GPU devices (e.g., `cuda:0 cuda:1`)            |
-| `--num-workers` | (task default) | DataLoader workers per environment                   |
-| `--gpu-preload` | off            | Preload dataset to GPU (CIFAR-10 only, ~0.75GB VRAM) |
-| `--experimental-gpu-preload-gather` | off | EXPERIMENTAL: DataLoader-free gather iterator for `--gpu-preload` (CIFAR-10 only) |
-| `--compile-mode` | `default`     | torch.compile mode: `default`, `max-autotune`, `reduce-overhead`, or `off` |
-| `--force-compile` | off          | Force torch.compile even in TUI mode (normally disabled for debuggability) |
-
-> **Note:** When using Sanctum TUI (`--sanctum`) or Overwatch (`--overwatch`), torch.compile is disabled by default to avoid TorchInductor errors in interactive sessions. Use `--force-compile` to override this when testing compilation performance.
-
-#### Checkpointing
-
-| Flag       | Default | Description                       |
-| ---------- | ------- | --------------------------------- |
-| `--save`   | (none)  | Path to save model checkpoint     |
-| `--resume` | (none)  | Path to checkpoint to resume from |
-
-#### Telemetry & Monitoring
-
-| Flag                         | Default    | Description                                                                         |
-| ---------------------------- | ---------- | ----------------------------------------------------------------------------------- |
-| `--telemetry-file`           | (none)     | Save telemetry to JSONL file                                                        |
-| `--telemetry-dir`            | (none)     | Save telemetry to timestamped folder                                                |
-| `--telemetry-level`          | `normal`   | Verbosity: `off`, `minimal`, `normal`, `debug`                                      |
-| `--telemetry-lifecycle-only` | off        | Keep lightweight seed lifecycle telemetry even when ops telemetry is disabled       |
-| `--no-tui`                   | off        | Disable Rich terminal UI (uses console output instead)                              |
-| `--sanctum`                  | off        | Launch Sanctum TUI for developer debugging (replaces Rich TUI)                      |
-| `--overwatch`                | off        | Launch Overwatch web dashboard (mutually exclusive with --sanctum)                  |
-| `--overwatch-port`           | 8080       | Overwatch dashboard port                                                            |
-| `--dashboard`                | off        | Enable real-time WebSocket dashboard (requires `pip install esper-lite[dashboard]`) |
-| `--dashboard-port`           | 8000       | Dashboard server port                                                               |
-| `--wandb`                    | off        | Enable Weights & Biases logging (requires `uv sync --extra wandb`)                  |
-| `--wandb-project`            | `esper`    | Wandb project name                                                                  |
-| `--wandb-entity`             | (none)     | Wandb team/user name                                                                |
-| `--wandb-tags`               | (none)     | Space-separated tags for this run                                                   |
-| `--wandb-group`              | (none)     | Group name for related runs (e.g., ablation study)                                  |
-| `--wandb-name`               | (none)     | Custom run name (auto-generated if not specified)                                   |
-| `--wandb-mode`               | `online`   | Wandb mode: `online`, `offline`, or `disabled`                                      |
-| `--wandb-no-code`            | off        | Disable git commit and code diff logging                                            |
-| `--wandb-no-system`          | off        | Disable system metrics (GPU, CPU, memory)                                           |
-
-**Monitoring Interfaces:**
-
-- **Rich TUI (default)**: Full-screen terminal dashboard showing rewards, policy health (entropy, clip fraction, explained variance, KL divergence), seed states, action distribution, reward components, and losses. Disable with `--no-tui`.
-- **`--sanctum`**: Textual TUI for developer debugging.
-- **`--overwatch`**: Vue 3 web dashboard for training monitoring. Access at `http://localhost:8080` (or custom port). Features environment grid, seed swimlanes, health gauges, contribution waterfall, and policy diagnostics. Keyboard shortcuts: `1-9` (select env), `j/k` (navigate leaderboard), `h/l` (switch panels), `?` (help).
-- **`--dashboard`**: Web-based dashboard accessible at `http://localhost:8000`. Listens on all network interfaces for remote access (e.g., `http://192.168.1.x:8000` on LAN). Displays clickable links for all available interfaces on startup.
-- **`--wandb`**: Weights & Biases integration for experiment tracking and remote monitoring. Logs training metrics (loss, accuracy), PPO health (policy loss, entropy, KL divergence, clip fraction), seed lifecycle events (germination, fossilization, pruning), anomaly alerts, and system metrics (GPU/CPU/memory). Requires installation: `uv sync --extra wandb`. See [wandb.ai](https://wandb.ai) for web dashboard features.
-
-### Heuristic Training (`esper.scripts.train heuristic`)
-
-Run the rule-based Tamiyo controller as a baseline.
-
-```bash
-PYTHONPATH=src python -m esper.scripts.train heuristic [OPTIONS]
-```
-
-| Flag                          | Default          | Description                                           |
-| ----------------------------- | ---------------- | ----------------------------------------------------- |
-| `--episodes`                  | 1                | Number of episodes                                    |
-| `--max-epochs`                | 75               | Maximum epochs per episode                            |
-| `--max-batches`               | 50               | Batches per epoch (0=all)                             |
-| `--task`                      | `cifar10`        | Task preset                                           |
-| `--device`                    | `cuda:0`         | Compute device                                        |
-| `--seed`                      | 42               | Random seed                                           |
-| `--slots`                     | `r0c0 r0c1 r0c2` | Canonical slot IDs to enable (e.g., `r0c0 r0c1 r0c2`) |
-| `--max-seeds`                 | unlimited        | Maximum total seeds                                   |
-| `--min-fossilize-improvement` | (task default)   | Min improvement (%) required to fossilise a seed      |
-
-Telemetry flags (`--telemetry-file`, `--telemetry-dir`, `--telemetry-level`) are also available.
-
-### Example Commands
-
-```bash
-# CIFAR-10 preset (default hyperparameters)
-PYTHONPATH=src python -m esper.scripts.train ppo --preset cifar10 --task cifar10
-
-# CIFAR-10 stable preset (slower, more reliable PPO updates)
-PYTHONPATH=src python -m esper.scripts.train ppo --preset cifar10_stable --task cifar10
-
-# Tinystories preset with AMP
-PYTHONPATH=src python -m esper.scripts.train ppo \
-    --preset tinystories \
-    --task tinystories \
-    --amp
-
-# Multi-GPU training (deep CIFAR)
-PYTHONPATH=src python -m esper.scripts.train ppo \
-    --preset cifar10_deep \
-    --task cifar10_deep \
-    --devices cuda:0 cuda:1
-
-# Load a strict JSON config
-PYTHONPATH=src python -m esper.scripts.train ppo \
-    --config-json configs/ppo_config.json \
-    --task cifar10
-
-# Training with web dashboard (accessible from browser/remote)
-PYTHONPATH=src python -m esper.scripts.train ppo \
-    --preset cifar10 \
-    --dashboard \
-    --dashboard-port 8080
-
-# Training with Overwatch monitoring dashboard
-PYTHONPATH=src python -m esper.scripts.train ppo \
-    --preset cifar10 \
-    --overwatch
-
-# Training with Weights & Biases experiment tracking
-uv sync --extra wandb  # Install wandb first
-PYTHONPATH=src python -m esper.scripts.train ppo \
-    --preset cifar10 \
-    --wandb \
-    --wandb-project esper-morphogenesis \
-    --wandb-tags ppo cifar10 baseline
-```
-
-### TrainingConfig Reference
-
-All PPO hyperparameters are managed through `TrainingConfig`. Key parameters beyond the CLI flags:
-
-#### Quality Gates
-
-| Parameter          | Default | Description                                                         |
-| ------------------ | ------- | ------------------------------------------------------------------- |
-| `permissive_gates` | `true`  | Controls how strictly seeds are evaluated for lifecycle transitions |
-| `auto_forward_g1`  | `false` | Auto-forward `GERMINATED → TRAINING` when G1 passes                 |
-| `auto_forward_g2`  | `false` | Auto-forward `TRAINING → BLENDING` when G2 passes                   |
-| `auto_forward_g3`  | `false` | Auto-forward `BLENDING → HOLDING` when G3 passes                    |
-
-**Permissive Gates Mode** (`permissive_gates: true`):
-
-Quality gates (G2, G3, G5) only check structural requirements, allowing Tamiyo to learn quality thresholds through reward signals:
-
-- **G2 (TRAINING → BLENDING)**: Passes after 1 training epoch
-- **G3 (BLENDING → HOLDING)**: Passes when alpha blending completes
-- **G5 (HOLDING → FOSSILISED)**: Passes if seed is healthy (no contribution threshold)
-
-**Strict Gates Mode** (`permissive_gates: false`):
-
-Gates enforce hard-coded thresholds for gradient ratios, improvement metrics, stability, and contribution levels. Use this for production deployments where you want deterministic quality control.
-
-**Auto-Forward Gates** (`auto_forward_g1/g2/g3: true`):
-
-When enabled, Kasmina will automatically advance through the configured gated transitions at the end of each epoch (via `SeedSlot.step_epoch()`), removing `ADVANCE` as a learned decision for those stages. Fossilization remains an explicit `FOSSILIZE` decision (no auto-fossilize).
-
-`n_episodes` counts PPO update rounds; total env episodes per run = `n_episodes * n_envs`.
-
-```json
-{
-  "permissive_gates": true,
-  "n_episodes": 100,
-  "n_envs": 4
-}
-```
-
-#### Reward Configuration
-
-| Parameter              | Default          | Description                                                                   |
-| ---------------------- | ---------------- | ----------------------------------------------------------------------------- |
-| `reward_mode`          | `"shaped"`       | `"shaped"` (dense signals), `"simplified"` (cleaner gradients), or `"sparse"` |
-| `reward_family`        | `"contribution"` | `"contribution"` (counterfactual) or `"loss"` (direct loss delta)             |
-| `param_budget`         | `500000`         | Parameter budget for seeds (penalty if exceeded)                              |
-| `param_penalty_weight` | `0.1`            | Weight of parameter budget penalty in reward                                  |
-| `rent_host_params_floor` | `200`          | Host-size normalization floor for rent/alpha-shock (prevents tiny hosts being crushed) |
-
-#### A/B Testing (True)
-
-Use `--dual-ab` to train separate policies on separate GPUs (e.g. `shaped-vs-simplified`).
