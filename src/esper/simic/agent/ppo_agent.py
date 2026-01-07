@@ -832,7 +832,7 @@ class PPOAgent:
                 "alpha_curve": data["alpha_curve_log_probs"][valid_mask],
                 "op": data["op_log_probs"][valid_mask],
             }
-            total_timesteps = valid_mask.sum().float().clamp(min=1)
+            batch_timesteps = valid_mask.sum().float().clamp(min=1)
             ratio_metrics = compute_ratio_metrics(
                 log_probs=log_probs,
                 old_log_probs=old_log_probs,
@@ -840,7 +840,7 @@ class PPOAgent:
                 clip_ratio=self.clip_ratio,
                 target_kl=self.target_kl,
                 head_names=HEAD_NAMES,
-                total_timesteps=total_timesteps,
+                total_timesteps=batch_timesteps,
             )
             update_result = PPOUpdateResult(ratio_metrics=ratio_metrics, loss_metrics=None)
             for key, max_val in update_result.ratio_metrics.per_head_ratio_max.items():
