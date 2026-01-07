@@ -1,5 +1,5 @@
 {
-  "task": "cifar_baseline",
+  "task": "cifar_impaired",
   "n_episodes": 200,
   "n_envs": 128,
   "max_epochs": 150,
@@ -23,8 +23,8 @@
   "auto_forward_g1": true,
   "auto_forward_g2": true,
   "auto_forward_g3": true,
-  "max_seeds": 2,
-  "reward_mode": "simplified",
+  "max_seeds": 3,
+  "reward_mode": "escrow",
   "reward_family": "contribution",
   "param_budget": 500000,
   "param_penalty_weight": 0.1,
