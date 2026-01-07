@@ -5,6 +5,7 @@ Detects training anomalies that should trigger escalation to DEBUG telemetry.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 from esper.leyline import (
@@ -105,6 +106,21 @@ class AnomalyDetector:
             AnomalyReport with any detected issues
         """
         report = AnomalyReport()
+
+        # C3 FIX: Check for NaN/Inf BEFORE comparison.
+        # IEEE 754 NaN comparisons always return False, so NaN values would
+        # silently pass through threshold checks without this guard.
+        if not math.isfinite(ratio_max) or not math.isfinite(ratio_min):
+            issues = []
+            if not math.isfinite(ratio_max):
+                issues.append(f"ratio_max={ratio_max}")
+            if not math.isfinite(ratio_min):
+                issues.append(f"ratio_min={ratio_min}")
+            report.add_anomaly(
+                "ratio_nan_inf",
+                f"Non-finite ratio values: {', '.join(issues)}",
+            )
+            return report  # Skip threshold checks for non-finite values
 
         if ratio_max > self.max_ratio_threshold:
             report.add_anomaly(

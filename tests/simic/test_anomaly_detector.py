@@ -39,6 +39,40 @@ class TestAnomalyDetector:
         assert report.has_anomaly is False
         assert len(report.anomaly_types) == 0
 
+    def test_detect_ratio_nan_inf(self):
+        """Detects NaN/Inf ratio values (C3 fix: IEEE 754 comparison trap).
+
+        NaN comparisons always return False in IEEE 754, so NaN > threshold
+        would silently pass without explicit check. This test verifies the
+        math.isfinite() guard catches non-finite values.
+        """
+        detector = AnomalyDetector()
+
+        # NaN ratio_max
+        report = detector.check_ratios(ratio_max=float("nan"), ratio_min=0.5)
+        assert report.has_anomaly is True
+        assert "ratio_nan_inf" in report.anomaly_types
+        assert "ratio_max=nan" in report.details["ratio_nan_inf"]
+
+        # +Inf ratio_max (common from exp() overflow in PPO ratio computation)
+        report = detector.check_ratios(ratio_max=float("inf"), ratio_min=0.5)
+        assert report.has_anomaly is True
+        assert "ratio_nan_inf" in report.anomaly_types
+        assert "ratio_max=inf" in report.details["ratio_nan_inf"]
+
+        # -Inf ratio_min
+        report = detector.check_ratios(ratio_max=2.0, ratio_min=float("-inf"))
+        assert report.has_anomaly is True
+        assert "ratio_nan_inf" in report.anomaly_types
+        assert "ratio_min=-inf" in report.details["ratio_nan_inf"]
+
+        # Both NaN
+        report = detector.check_ratios(ratio_max=float("nan"), ratio_min=float("nan"))
+        assert report.has_anomaly is True
+        assert "ratio_nan_inf" in report.anomaly_types
+        assert "ratio_max=nan" in report.details["ratio_nan_inf"]
+        assert "ratio_min=nan" in report.details["ratio_nan_inf"]
+
     def test_detect_value_collapse_late_training(self):
         """Detects value function collapse in late training phase."""
         detector = AnomalyDetector()
