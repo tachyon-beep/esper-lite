@@ -84,6 +84,9 @@ def compute_reward(
             alpha_delta_sq_sum=inputs.alpha_delta_sq_sum,
             stable_val_acc=inputs.stable_val_acc,
             escrow_credit_prev=inputs.escrow_credit_prev,
+            # D2: Capacity Economics (slot saturation prevention)
+            n_active_seeds=inputs.n_active_seeds,
+            seeds_germinated_this_episode=inputs.seeds_germinated_this_episode,
         )
 
     if config.reward_mode == RewardMode.SPARSE:

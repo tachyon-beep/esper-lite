@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import torch
-import torch.nn.functional as F
 
 
 @dataclass(slots=True)
@@ -150,7 +149,8 @@ def compute_losses(
         # Actor: 0 for forced, 1 for free choice
         actor_weight = (~forced_mask).float()
         # Value: 0.2 for forced (still learn state values, but with less confidence)
-        value_weight = torch.where(forced_mask, torch.tensor(0.2, device=values.device), torch.tensor(1.0, device=values.device))
+        # Use Python scalars directly - PyTorch broadcasts efficiently without tensor allocation
+        value_weight = torch.where(forced_mask, 0.2, 1.0)
     else:
         actor_weight = None
         value_weight = None

@@ -461,6 +461,9 @@ def execute_actions(
                 stable_val_acc = min(acc_history[-k:])
             escrow_credit_prev = env_state.escrow_credit[target_slot]
             fossilized_seed_params = 0
+            # D2: Count active seeds (non-fossilized seeds with state)
+            # Active seeds are in GERMINATED, TRAINING, BLENDING, or HOLDING stages
+            n_active_seeds = 0
             for slot_id in slots:
                 slot_obj = cast(SeedSlotProtocol, model.seed_slots[slot_id])
                 slot_seed_state = slot_obj.state
@@ -474,6 +477,9 @@ def execute_actions(
                         fossilized_seed_params += sum(
                             p.numel() for p in slot_obj.alpha_schedule.parameters()
                         )
+                else:
+                    # Non-fossilized seed with state = active seed
+                    n_active_seeds += 1
             acc_at_germination = (
                 env_state.acc_at_germination[target_slot]
                 if target_slot in env_state.acc_at_germination
@@ -513,6 +519,9 @@ def execute_actions(
             reward_inputs.escrow_credit_prev = escrow_credit_prev
             reward_inputs.slot_id = target_slot
             reward_inputs.seed_id = seed_id
+            # D2: Capacity Economics (slot saturation prevention)
+            reward_inputs.n_active_seeds = n_active_seeds
+            reward_inputs.seeds_germinated_this_episode = env_state.germinate_count
 
             reward_result = compute_reward(reward_inputs)
             if return_components:
