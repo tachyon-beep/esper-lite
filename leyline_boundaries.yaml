@@ -20,7 +20,7 @@ allow_hits:
   # ============================================================================
   # SIMIC: Reward System
   # ============================================================================
-  - key: "src/esper/simic/rewards/rewards.py:enum:RewardMode"
+  - key: "src/esper/simic/rewards/contribution.py:enum:RewardMode"
     owner: "john"
     reason: "TODO: Cross-domain enum, migrate to leyline"
     expires: "2026-03-01"
@@ -30,13 +30,21 @@ allow_hits:
     reason: "TODO: Cross-domain enum, migrate to leyline"
     expires: "2026-03-01"
 
-  - key: "src/esper/simic/rewards/rewards.py:dataclass:ContributionRewardConfig"
+  - key: "src/esper/simic/rewards/contribution.py:dataclass:ContributionRewardConfig"
     owner: "john"
     reason: "Reward computation config, simic-internal"
 
-  - key: "src/esper/simic/rewards/rewards.py:namedtuple:SeedInfo"
+  - key: "src/esper/simic/rewards/types.py:namedtuple:SeedInfo"
     owner: "john"
     reason: "Fast-path NamedTuple for reward computation hot loop"
+
+  - key: "src/esper/simic/rewards/types.py:dataclass:ContributionRewardInputs"
+    owner: "john"
+    reason: "Typed inputs for contribution reward computation, simic-internal"
+
+  - key: "src/esper/simic/rewards/types.py:dataclass:LossRewardInputs"
+    owner: "john"
+    reason: "Typed inputs for loss-primary reward computation, simic-internal"
 
   - key: "src/esper/simic/rewards/reward_telemetry.py:dataclass:RewardComponentsTelemetry"
     owner: "john"
@@ -111,9 +119,49 @@ allow_hits:
     owner: "john"
     reason: "A/B testing container, simic-internal"
 
-  - key: "src/esper/simic/training/policy_group.py:typeddict:EpisodeRecord"
+  - key: "src/esper/simic/vectorized_types.py:dataclass:EpisodeRecord"
     owner: "john"
     reason: "A/B tracking schema, simic-internal"
+
+  - key: "src/esper/simic/vectorized_types.py:dataclass:ActionSpec"
+    owner: "john"
+    reason: "Typed action specification, simic-internal"
+
+  - key: "src/esper/simic/vectorized_types.py:dataclass:ActionMaskFlags"
+    owner: "john"
+    reason: "Action mask enable flags, simic-internal"
+
+  - key: "src/esper/simic/vectorized_types.py:dataclass:ActionOutcome"
+    owner: "john"
+    reason: "Action execution outcome, simic-internal"
+
+  - key: "src/esper/simic/vectorized_types.py:dataclass:RewardSummaryAccumulator"
+    owner: "john"
+    reason: "Reward accumulation for batch processing, simic-internal"
+
+  - key: "src/esper/simic/vectorized_types.py:dataclass:BatchSummary"
+    owner: "john"
+    reason: "Batch training summary, simic-internal"
+
+  - key: "src/esper/simic/training/action_execution.py:protocol:ResolveTargetSlot"
+    owner: "john"
+    reason: "Protocol for slot resolution callback, simic-internal"
+
+  - key: "src/esper/simic/training/action_execution.py:dataclass:ActionExecutionContext"
+    owner: "john"
+    reason: "Context for action execution, simic-internal"
+
+  - key: "src/esper/simic/training/action_execution.py:dataclass:ActionExecutionResult"
+    owner: "john"
+    reason: "Action execution result, simic-internal"
+
+  - key: "src/esper/simic/training/env_factory.py:dataclass:EnvFactoryContext"
+    owner: "john"
+    reason: "Environment factory context, simic-internal"
+
+  - key: "src/esper/simic/training/vectorized_trainer.py:dataclass:VectorizedPPOTrainer"
+    owner: "john"
+    reason: "Vectorized training orchestrator, simic-internal"
 
   - key: "src/esper/simic/training/parallel_env_state.py:dataclass:ParallelEnvState"
     owner: "john"
@@ -126,6 +174,26 @@ allow_hits:
   # ============================================================================
   # SIMIC: Agent Internals
   # ============================================================================
+  - key: "src/esper/simic/agent/ppo_metrics.py:dataclass:PPOUpdateMetricsResult"
+    owner: "john"
+    reason: "PPO metrics aggregation result, simic-internal"
+
+  - key: "src/esper/simic/agent/ppo_metrics.py:dataclass:PPOUpdateMetricsBuilder"
+    owner: "john"
+    reason: "Builder pattern for PPO metrics, simic-internal"
+
+  - key: "src/esper/simic/agent/ppo_update.py:dataclass:RatioMetrics"
+    owner: "john"
+    reason: "PPO ratio computation result, simic-internal"
+
+  - key: "src/esper/simic/agent/ppo_update.py:dataclass:LossMetrics"
+    owner: "john"
+    reason: "PPO loss computation result, simic-internal"
+
+  - key: "src/esper/simic/agent/ppo_update.py:dataclass:PPOUpdateResult"
+    owner: "john"
+    reason: "PPO update step result, simic-internal"
+
   - key: "src/esper/simic/agent/rollout_buffer.py:namedtuple:TamiyoRolloutStep"
     owner: "john"
     reason: "NamedTuple for torch.compile safety in rollout buffer"
