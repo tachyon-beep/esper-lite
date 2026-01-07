@@ -404,10 +404,11 @@ class TestNormalizeAdvantages:
         self._fill_buffer_with_advantages(buffer, [[1, 2, 3]])
         buffer.normalize_advantages()
 
-        mean, std = buffer.normalize_advantages()
+        mean, std, std_floored = buffer.normalize_advantages()
 
         assert mean != mean  # NaN check
         assert std != std
+        # std_floored should be False when returning NaN (already normalized)
 
 
 class TestGetBatchedSequences:

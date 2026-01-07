@@ -423,7 +423,23 @@ class PPOAgent:
             gae_lambda=self.gae_lambda,
             value_normalizer=self.value_normalizer,
         )
-        pre_norm_adv_mean, pre_norm_adv_std = self.buffer.normalize_advantages()
+        pre_norm_adv_mean, pre_norm_adv_std, std_floored = self.buffer.normalize_advantages()
+
+        # D5: Compute forced step ratio from buffer data
+        # Forced steps are timesteps where agent had no choice (only WAIT valid)
+        forced_actions = self.buffer.forced_actions
+        total_timesteps = sum(self.buffer.step_counts)
+        if total_timesteps > 0:
+            forced_count = 0
+            for env_id in range(self.buffer.num_envs):
+                num_steps = self.buffer.step_counts[env_id]
+                if num_steps > 0:
+                    forced_count += int(forced_actions[env_id, :num_steps].sum().item())
+            forced_step_ratio = forced_count / total_timesteps
+            usable_actor_timesteps = total_timesteps - forced_count
+        else:
+            forced_step_ratio = 0.0
+            usable_actor_timesteps = 0
 
         # Compute value function metrics (TELE-220 to TELE-228)
         value_func_metrics = self._compute_value_function_metrics()
@@ -499,6 +515,20 @@ class PPOAgent:
             torch.tensor(pre_norm_adv_mean, device=valid_returns.device)
         ]
         metrics["pre_norm_advantage_std"] = [
+            torch.tensor(pre_norm_adv_std, device=valid_returns.device)
+        ]
+
+        # D4/D5: Slot saturation diagnostics
+        metrics["forced_step_ratio"] = [
+            torch.tensor(forced_step_ratio, device=valid_returns.device)
+        ]
+        metrics["usable_actor_timesteps"] = [
+            torch.tensor(usable_actor_timesteps, device=valid_returns.device, dtype=torch.long)
+        ]
+        metrics["advantage_std_floored"] = [
+            torch.tensor(std_floored, device=valid_returns.device, dtype=torch.bool)
+        ]
+        metrics["d5_pre_norm_advantage_std"] = [
             torch.tensor(pre_norm_adv_std, device=valid_returns.device)
         ]
 
@@ -777,6 +807,10 @@ class PPOAgent:
             valid_advantages = data["advantages"][valid_mask]
             valid_returns = data["returns"][valid_mask]
 
+            # D1: Extract forced mask for loss weighting
+            # Forced steps have no agency (only WAIT valid) - exclude from actor loss
+            forced_mask = data["forced_actions"][valid_mask]
+
             # Compute per-head advantages with causal masking
             # Returns both advantages AND masks to avoid redundant computation
             valid_op_actions = data["op_actions"][valid_mask]
@@ -841,6 +875,7 @@ class PPOAgent:
                 per_head_ratios=ratio_metrics.per_head_ratios,
                 per_head_advantages=per_head_advantages,
                 head_masks=head_masks,
+                forced_mask=forced_mask,  # D1: Exclude forced steps from actor loss
                 values=values,
                 normalized_returns=normalized_returns,
                 old_values=valid_old_values,

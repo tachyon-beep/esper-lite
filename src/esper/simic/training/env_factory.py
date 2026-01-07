@@ -36,13 +36,14 @@ def make_telemetry_callback(
     env_idx: int,
     device: str,
     hub: Any,
+    group_id: str,
 ) -> Callable[[TelemetryEvent], None]:
-    """Create a telemetry callback that injects env_id and device."""
+    """Create a telemetry callback that injects env_id, device, and group_id."""
     if not hub:
         return lambda _: None
 
     def callback(event: TelemetryEvent) -> None:
-        emit_with_env_context(hub, env_idx, device, event)
+        emit_with_env_context(hub, env_idx, device, event, group_id)
 
     return callback
 
@@ -84,6 +85,7 @@ class EnvFactoryContext:
     telemetry_lifecycle_only: bool
     hub: Any
     signal_tracker_cls: type[SignalTracker]
+    group_id: str
 
 
 def create_env_state(
@@ -114,7 +116,7 @@ def create_env_state(
     # avoiding runtime layout permutations in conv layers.
     model = model.to(memory_format=torch.channels_last)
 
-    telemetry_cb = make_telemetry_callback(env_idx, env_device, context.hub)
+    telemetry_cb = make_telemetry_callback(env_idx, env_device, context.hub, context.group_id)
     for slot_module in model.seed_slots.values():
         slot = cast(SeedSlotProtocol, slot_module)
         slot.on_telemetry = telemetry_cb

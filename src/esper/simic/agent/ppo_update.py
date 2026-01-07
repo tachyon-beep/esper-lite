@@ -118,6 +118,7 @@ def compute_losses(
     per_head_ratios: dict[str, torch.Tensor],
     per_head_advantages: dict[str, torch.Tensor],
     head_masks: dict[str, torch.Tensor],
+    forced_mask: torch.Tensor | None = None,
     values: torch.Tensor,
     normalized_returns: torch.Tensor,
     old_values: torch.Tensor,
@@ -130,7 +131,30 @@ def compute_losses(
     value_coef: float,
     head_names: tuple[str, ...],
 ) -> LossMetrics:
-    """Compute PPO policy/value/entropy losses for a single epoch."""
+    """Compute PPO policy/value/entropy losses for a single epoch.
+
+    D1: Forced-Action Masking
+    -------------------------
+    When forced_mask is provided, timesteps where the agent had no choice (e.g.,
+    all slots occupied, only WAIT valid) receive modified loss weights:
+    - Actor loss: weight=0 (no policy gradient for no-choice timesteps)
+    - Value loss: weight=0.2 (still learn state values, but with less confidence)
+    - Entropy loss: unchanged (entropy on forced steps is meaningless anyway)
+
+    This prevents the policy from receiving noisy gradients from forced WAIT
+    corridors where its output didn't matter, while still training the value
+    function to predict returns in those states.
+    """
+    # D1: Compute loss weights from forced mask
+    if forced_mask is not None:
+        # Actor: 0 for forced, 1 for free choice
+        actor_weight = (~forced_mask).float()
+        # Value: 0.2 for forced (still learn state values, but with less confidence)
+        value_weight = torch.where(forced_mask, torch.tensor(0.2, device=values.device), torch.tensor(1.0, device=values.device))
+    else:
+        actor_weight = None
+        value_weight = None
+
     policy_loss: torch.Tensor = torch.tensor(0.0, device=values.device)
     for key in head_names:
         ratio = per_head_ratios[key]
@@ -141,24 +165,48 @@ def compute_losses(
         surr2 = torch.clamp(ratio, 1 - clip_ratio, 1 + clip_ratio) * adv
         clipped_surr = torch.min(surr1, surr2)
 
-        n_valid = mask.sum().clamp(min=1)
-        head_loss = -(clipped_surr * mask).sum() / n_valid
+        # D1: Combine causal mask with forced-action mask
+        if actor_weight is not None:
+            effective_mask = mask * actor_weight  # Both must be active
+        else:
+            effective_mask = mask
+
+        n_valid = effective_mask.sum().clamp(min=1)
+        head_loss = -(clipped_surr * effective_mask).sum() / n_valid
         policy_loss = policy_loss + head_loss
 
+    # Value loss with per-timestep weighting
     if clip_value:
         values_clipped = old_values + torch.clamp(values - old_values, -value_clip, value_clip)
         value_loss_unclipped = (values - normalized_returns) ** 2
         value_loss_clipped = (values_clipped - normalized_returns) ** 2
-        value_loss = 0.5 * torch.max(value_loss_unclipped, value_loss_clipped).mean()
+        per_step_value_loss = torch.max(value_loss_unclipped, value_loss_clipped)
     else:
-        value_loss = F.mse_loss(values, normalized_returns)
+        per_step_value_loss = (values - normalized_returns) ** 2
 
+    # D1: Weighted mean for value loss (0.2 weight for forced steps)
+    if value_weight is not None:
+        value_loss = 0.5 * (per_step_value_loss * value_weight).sum() / value_weight.sum().clamp(min=1)
+    else:
+        value_loss = 0.5 * per_step_value_loss.mean()
+
+    # D1: Entropy loss - also exclude forced steps (entropy is meaningless when no choice)
+    # ChatGPT Pro review 2025-01-08: Entropy over a single-valid-action distribution is
+    # either 0 (if masked properly) or noise (if computed over full logits). Either way,
+    # including forced steps dilutes the entropy signal from real decision points.
     entropy_loss: torch.Tensor = torch.tensor(0.0, device=values.device)
     for key in entropy:
         head_coef = entropy_coef_per_head[key]
         mask = head_masks[key]
-        n_valid = mask.sum().clamp(min=1)
-        masked_ent = (entropy[key] * mask).sum() / n_valid
+
+        # D1: Combine causal mask with forced-action mask for entropy
+        if actor_weight is not None:
+            effective_mask = mask * actor_weight
+        else:
+            effective_mask = mask
+
+        n_valid = effective_mask.sum().clamp(min=1)
+        masked_ent = (entropy[key] * effective_mask).sum() / n_valid
         entropy_loss = entropy_loss - head_coef * masked_ent
 
     total_loss = policy_loss + value_coef * value_loss + entropy_coef * entropy_loss

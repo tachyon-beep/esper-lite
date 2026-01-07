@@ -1741,6 +1741,7 @@ class VectorizedPPOTrainer:
                         rolling_avg_acc=rolling_avg_acc,
                         env_id=0,  # Aggregate metric across all envs
                         training_progress=training_progress,
+                        group_id=group_id,
                     )
 
                 batch_summary = BatchSummary(

@@ -59,6 +59,7 @@ class TestEmitLastActionWithIndices:
             slot_id="r0c0",
             masked=masked,
             success=True,
+            group_id="test",
         )
 
         # Verify data matches what FactoredAction would produce
@@ -101,6 +102,7 @@ class TestEmitLastActionWithIndices:
             },
             success=True,
             active_alpha_algorithm=active.name,
+            group_id="test",
         )
 
         assert result["alpha_algorithm"] == active.name
@@ -132,5 +134,6 @@ class TestEmitLastActionWithIndices:
                     "op": False,
                 },
                 success=True,
+                group_id="test",
             )
             assert result["op"] == OP_NAMES[op_idx]

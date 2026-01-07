@@ -310,6 +310,15 @@ def execute_actions(
     alpha_curve_masks_batch = masks_batch["alpha_curve"]
     op_masks_batch = masks_batch["op"]
 
+    # D5: Vectorized forced step detection (single GPU sync for all envs)
+    # A step is "forced" if only 1 valid op AND that op is WAIT.
+    # ChatGPT Pro review 2025-01-08: Move detection OUTSIDE env loop to avoid
+    # N separate GPU→CPU syncs from .item() calls in hot path.
+    num_valid_ops_batch = op_masks_batch.sum(dim=1)  # [num_envs]
+    wait_valid_batch = op_masks_batch[:, OP_WAIT]  # [num_envs]
+    forced_batch = (num_valid_ops_batch == 1) & wait_valid_batch  # [num_envs]
+    forced_batch_cpu = forced_batch.tolist()  # Single GPU→CPU sync
+
     for env_idx, env_state in enumerate(env_states):
         model = env_state.model
         signals = all_signals[env_idx]
@@ -969,6 +978,12 @@ def execute_actions(
         action_outcome.truncated = truncated
         effective_op_action = int(action_for_reward)
 
+        # D5: Detect forced step from pre-computed array (no GPU sync in loop)
+        # When all slots are occupied and no operations are valid, the action space
+        # collapses to WAIT-only. These timesteps should be excluded from actor loss
+        # (no agency, no gradient) but still included in GAE/LSTM unrolling.
+        forced_step = forced_batch_cpu[env_idx]
+
         step_idx = agent.buffer.step_counts[env_idx]
         agent.buffer.add(
             env_id=env_idx,
@@ -1006,6 +1021,7 @@ def execute_actions(
             hidden_c=pre_step_hiddens[env_idx][1].detach(),
             truncated=truncated,
             bootstrap_value=0.0,
+            forced_step=forced_step,
         )
         if truncated:
             truncated_bootstrap_targets.append((env_idx, step_idx))

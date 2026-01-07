@@ -74,7 +74,7 @@ def test_emit_with_env_context_includes_device():
         alpha=0.0,
     )
     event = TelemetryEvent(event_type=TelemetryEventType.SEED_GERMINATED, data=payload)
-    emit_with_env_context(hub, env_idx=2, device="cpu", event=event)
+    emit_with_env_context(hub, env_idx=2, device="cpu", event=event, group_id="test-group")
 
     emitted = hub.emit.call_args[0][0]
     assert emitted.data.env_id == 2
@@ -83,12 +83,12 @@ def test_emit_with_env_context_includes_device():
     hub.reset_mock()
     dict_event = TelemetryEvent(event_type=TelemetryEventType.SEED_GERMINATED, data={})
     with pytest.raises(TypeError, match="requires typed payload, got dict"):
-        emit_with_env_context(hub, env_idx=2, device="cpu", event=dict_event)
+        emit_with_env_context(hub, env_idx=2, device="cpu", event=dict_event, group_id="test-group")
 
     # None payloads should also raise TypeError
     none_event = TelemetryEvent(event_type=TelemetryEventType.SEED_GERMINATED, data=None)
     with pytest.raises(TypeError, match="requires typed payload, got None"):
-        emit_with_env_context(hub, env_idx=2, device="cpu", event=none_event)
+        emit_with_env_context(hub, env_idx=2, device="cpu", event=none_event, group_id="test-group")
 
 
 def test_last_action_event_emitted():
@@ -119,6 +119,7 @@ def test_last_action_event_emitted():
                 "alpha_curve": False,
             },
             success=True,
+            group_id="test-group",
         )
 
         emitted = hub.emit.call_args[0][0]
@@ -203,6 +204,7 @@ def test_action_distribution_snapshot():
         episodes_completed=4,
         action_counts={"WAIT": 3, "GERMINATE": 1},
         success_counts={"WAIT": 3, "GERMINATE": 1},
+        group_id="test-group",
     )
     payload = hub.emit.call_args[0][0].data
     # Typed payload access (AnalyticsSnapshotPayload)
@@ -218,6 +220,7 @@ def test_throughput_metrics_emitted():
         episodes_completed=4,
         step_time_ms=5.0,
         dataloader_wait_ms=2.0,
+        group_id="test-group",
     )
     data = hub.emit.call_args[0][0].data
     assert data.step_time_ms == 5.0
@@ -233,6 +236,7 @@ def test_throughput_metrics_include_fps():
         episodes_completed=4,
         step_time_ms=20.0,
         dataloader_wait_ms=2.0,
+        group_id="test-group",
     )
     data = hub.emit.call_args[0][0].data
     assert data.fps == 50.0
@@ -245,6 +249,7 @@ def test_reward_summary_emitted():
         env_id=0,
         batch_idx=1,
         summary={"bounded_attribution": 0.4, "compute_rent": -0.1, "total_reward": 0.3},
+        group_id="test-group",
     )
     data = hub.emit.call_args[0][0].data
     assert data.summary is not None
@@ -259,6 +264,7 @@ def test_mask_hit_rates_emitted():
         episodes_completed=4,
         mask_hits={"op": 10},
         mask_total={"op": 12},
+        group_id="test-group",
     )
     data = hub.emit.call_args[0][0].data
     assert data.mask_hits is not None
@@ -283,6 +289,7 @@ def test_performance_degradation_emitted_on_accuracy_drop():
         degradation_threshold=0.1,  # 10% drop triggers
         env_id=0,
         training_progress=0.5,  # Past warmup (50% through training)
+        group_id="test-group",
     )
 
     assert emitted is True
@@ -307,6 +314,7 @@ def test_no_degradation_event_when_stable():
         degradation_threshold=0.1,
         env_id=0,
         training_progress=0.5,
+        group_id="test-group",
     )
 
     assert emitted is False
@@ -329,6 +337,7 @@ def test_no_degradation_event_during_warmup():
         degradation_threshold=0.1,  # Would normally trigger
         env_id=0,
         training_progress=0.05,  # Only 5% through training (warmup)
+        group_id="test-group",
     )
 
     assert emitted is False
@@ -347,6 +356,7 @@ def test_degradation_event_emitted_after_warmup():
         degradation_threshold=0.1,
         env_id=0,
         training_progress=0.11,  # Just past warmup
+        group_id="test-group",
     )
 
     assert emitted is True
@@ -1185,12 +1195,12 @@ def test_emit_with_env_context_requires_typed_payloads():
     # None payload should raise TypeError
     event_none = TelemetryEvent(event_type=TelemetryEventType.SEED_GERMINATED, data=None)
     with pytest.raises(TypeError, match="requires typed payload, got None"):
-        emit_with_env_context(hub, 1, "cpu", event_none)
+        emit_with_env_context(hub, 1, "cpu", event_none, group_id="test-group")
 
     # Dict payload should raise TypeError
     event_dict = TelemetryEvent(event_type=TelemetryEventType.SEED_GERMINATED, data={"foo": "bar"})
     with pytest.raises(TypeError, match="requires typed payload, got dict"):
-        emit_with_env_context(hub, 2, "cpu", event_dict)
+        emit_with_env_context(hub, 2, "cpu", event_dict, group_id="test-group")
 
     # Typed payload should work and replace sentinel env_id
     payload = SeedGerminatedPayload(
@@ -1200,7 +1210,7 @@ def test_emit_with_env_context_requires_typed_payloads():
         params=100,
     )
     event_typed = TelemetryEvent(event_type=TelemetryEventType.SEED_GERMINATED, data=payload)
-    emit_with_env_context(hub, 3, "cpu", event_typed)
+    emit_with_env_context(hub, 3, "cpu", event_typed, group_id="test-group")
 
     # Original payload untouched (immutable dataclass)
     assert payload.env_id == -1
@@ -1225,6 +1235,7 @@ def test_emit_batch_completed_is_resume_aware_and_clamped():
         avg_reward=1.0,
         start_episode=10,
         requested_episodes=10,
+        group_id="test-group",
     )
 
     assert len(hub.events) == 1

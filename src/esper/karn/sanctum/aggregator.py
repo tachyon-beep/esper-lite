@@ -989,6 +989,13 @@ class SanctumAggregator:
         self._tamiyo.log_prob_min = payload.log_prob_min
         self._tamiyo.log_prob_max = payload.log_prob_max
 
+        # D5: Slot Saturation Diagnostics - have defaults
+        self._tamiyo.decision_density = payload.decision_density
+        self._tamiyo.forced_step_ratio = payload.forced_step_ratio
+        self._tamiyo.advantage_std_floored = payload.advantage_std_floored
+        self._tamiyo.pre_norm_advantage_std = payload.d5_pre_norm_advantage_std
+        self._tamiyo.decision_density_history.append(payload.decision_density)
+
         # Ratio statistics (PPO importance sampling ratios) - have defaults
         self._tamiyo.ratio_mean = payload.ratio_mean
         self._tamiyo.ratio_min = payload.ratio_min

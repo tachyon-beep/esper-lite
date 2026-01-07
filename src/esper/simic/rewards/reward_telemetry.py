@@ -52,6 +52,12 @@ class RewardComponentsTelemetry:
     num_fossilized_seeds: int = 0  # Total fossilized seeds for debugging
     num_contributing_fossilized: int = 0  # Seeds with total_improvement >= MIN_FOSSILIZE_CONTRIBUTION
 
+    # D2: Capacity Economics (slot saturation prevention)
+    occupancy_rent: float = 0.0  # Per-epoch cost for seeds above free_slots threshold
+    fossilized_rent: float = 0.0  # Per-epoch maintenance cost for fossilized seeds
+    first_germinate_bonus: float = 0.0  # One-time bonus for first germination (breaks "do nothing" symmetry)
+    n_active_seeds: int = 0  # Count of active seeds (for diagnostics)
+
     # Context (for debugging) - DRL Expert recommended fields
     action_name: str = ""
     action_success: bool = True
@@ -105,6 +111,10 @@ class RewardComponentsTelemetry:
             + self.holding_warning
             + self.ratio_penalty
             + self.escrow_forfeit
+            # D2: Capacity economics (shaping terms)
+            - self.occupancy_rent  # Already negative in reward, store as positive
+            - self.fossilized_rent  # Already negative in reward, store as positive
+            + self.first_germinate_bonus
         )
         return abs(shaped) / abs(self.total_reward)
 
@@ -150,6 +160,11 @@ class RewardComponentsTelemetry:
             "growth_ratio": self.growth_ratio,
             "total_reward": self.total_reward,
             "shaped_reward_ratio": self.shaped_reward_ratio,
+            # D2: Capacity economics
+            "occupancy_rent": self.occupancy_rent,
+            "fossilized_rent": self.fossilized_rent,
+            "first_germinate_bonus": self.first_germinate_bonus,
+            "n_active_seeds": self.n_active_seeds,
         }
 
     @classmethod
@@ -201,6 +216,11 @@ class RewardComponentsTelemetry:
             host_baseline_acc=float(data["host_baseline_acc"]) if data["host_baseline_acc"] is not None else None,
             growth_ratio=float(data["growth_ratio"]),  # type: ignore[arg-type]
             total_reward=float(data["total_reward"]),  # type: ignore[arg-type]
+            # D2: Capacity economics
+            occupancy_rent=float(data.get("occupancy_rent", 0.0)),  # type: ignore[arg-type]
+            fossilized_rent=float(data.get("fossilized_rent", 0.0)),  # type: ignore[arg-type]
+            first_germinate_bonus=float(data.get("first_germinate_bonus", 0.0)),  # type: ignore[arg-type]
+            n_active_seeds=int(data.get("n_active_seeds", 0)),  # type: ignore[arg-type]
         )
 
 

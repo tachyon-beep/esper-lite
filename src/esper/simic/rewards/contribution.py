@@ -101,6 +101,10 @@ class ContributionRewardConfig:
     # Convex alpha shock coefficient (penalizes fast alpha changes).
     # Calibrated from telemetry_2025-12-20_044944: ~0.1958.
     alpha_shock_coef: float = 0.1958
+    # Maximum alpha shock penalty (prevents reward variance explosion).
+    # Without this cap, rapid alpha oscillations can produce unbounded negative rewards
+    # (e.g., 10 oscillations of Δ=1.0 → -1.958, 100 → -19.58), destabilizing PPO.
+    alpha_shock_cap: float = 1.0
 
     # Enforcement penalties (state machine compliance)
     invalid_fossilize_penalty: float = -1.0
@@ -108,7 +112,7 @@ class ContributionRewardConfig:
     germinate_with_seed_penalty: float = -0.3
 
     # Intervention costs (action friction)
-    germinate_cost: float = -0.02
+    germinate_cost: float = -0.05  # Increased from -0.02 (C3 fix: anti-farming rebalance)
     fossilize_cost: float = -0.01
     prune_cost: float = -0.005
     set_alpha_target_cost: float = -0.005
@@ -119,10 +123,14 @@ class ContributionRewardConfig:
     fossilize_noncontributing_penalty: float = -0.2
 
     # Prune shaping
-    prune_hurting_bonus: float = 0.3
+    prune_hurting_bonus: float = 0.15  # Reduced from 0.3 (C3 fix: anti-farming rebalance)
     prune_acceptable_bonus: float = 0.1
     prune_good_seed_penalty: float = -0.3
     prune_hurting_threshold: float = -0.5
+    # Minimum age (epochs) before a seed can receive prune_hurting_bonus.
+    # Prevents germinate→hurt→prune farming where agent creates harmful seeds
+    # just to get the bonus for removing them. (C3 fix: age gate)
+    min_prune_bonus_age: int = 3
 
     # Anti-gaming: attribution discount and ratio penalty thresholds
     # Prevents seeds from gaming counterfactual by creating dependencies
@@ -186,6 +194,21 @@ class ContributionRewardConfig:
     # environment cleanup rather than learning proactive lifecycle management)
     auto_prune_penalty: float = -0.2
 
+    # === D2: Capacity Economics (slot saturation prevention) ===
+    # Threshold-based rent discourages early slot saturation and encourages
+    # efficient use of capacity. First N slots are "free" (no occupancy rent),
+    # excess slots incur per-epoch cost.
+    #
+    # DRL Expert Review 2025-01-08:
+    # - seed_occupancy_cost: Per-epoch cost per seed above free_slots threshold
+    # - free_slots: First N slots incur no occupancy rent (encourages some activity)
+    # - fossilized_maintenance_cost: Per-epoch cost per fossilized seed (they still consume capacity)
+    # - first_germinate_bonus: One-time bonus for first germination (breaks "do nothing" symmetry)
+    seed_occupancy_cost: float = 0.01
+    free_slots: int = 1
+    fossilized_maintenance_cost: float = 0.002
+    first_germinate_bonus: float = 0.2
+
     @staticmethod
     def default() -> "ContributionRewardConfig":
         """Return default configuration."""
@@ -237,6 +260,9 @@ def compute_contribution_reward(
     alpha_delta_sq_sum: float = 0.0,
     stable_val_acc: float | None = None,
     escrow_credit_prev: float = 0.0,
+    # D2: Capacity economics parameters
+    n_active_seeds: int = 0,
+    seeds_germinated_this_episode: int = 0,
 ) -> float | tuple[float, RewardComponentsTelemetry]:
     """Compute reward using bounded attribution (ransomware-resistant)."""
     if config is None:
@@ -470,10 +496,49 @@ def compute_contribution_reward(
 
     alpha_shock = 0.0
     if alpha_delta_sq_sum > 0 and config.alpha_shock_coef != 0.0 and not config.disable_anti_gaming:
-        alpha_shock = -config.alpha_shock_coef * alpha_delta_sq_sum
+        raw_shock = -config.alpha_shock_coef * alpha_delta_sq_sum
+        # Cap to prevent reward variance explosion (C2 fix: unbounded alpha_shock)
+        alpha_shock = max(raw_shock, -config.alpha_shock_cap)
         reward += alpha_shock
     if components:
         components.alpha_shock = alpha_shock
+
+    # === D2: Capacity Economics (slot saturation prevention) ===
+    # Threshold-based occupancy rent: first N slots are free, excess incurs per-epoch cost.
+    # This discourages early slot saturation and encourages efficient capacity use.
+    #
+    # IMPORTANT: Use n_occupied (active + fossilized) for threshold calculation.
+    # ChatGPT Pro review 2025-01-08: Using only n_active made fossilizing an "escape hatch"
+    # from occupancy cost (0.01 → 0.002). Since fossilized seeds still occupy slots, they
+    # must count against the free_slots threshold until D3 (audit) creates proper incentives.
+    occupancy_rent = 0.0
+    fossilized_rent = 0.0
+    first_germ_bonus = 0.0
+
+    # Occupancy rent for occupied slots above free_slots threshold
+    # n_occupied includes both active AND fossilized seeds (they all consume slots)
+    n_occupied = n_active_seeds + num_fossilized_seeds
+    excess_occupied = max(0, n_occupied - config.free_slots)
+    if excess_occupied > 0:
+        occupancy_rent = config.seed_occupancy_cost * excess_occupied
+        reward -= occupancy_rent
+
+    # Fossilized maintenance rent (additional small cost for frozen compute)
+    if num_fossilized_seeds > 0:
+        fossilized_rent = config.fossilized_maintenance_cost * num_fossilized_seeds
+        reward -= fossilized_rent
+
+    # First-germination bonus (breaks "do nothing" symmetry)
+    # One-time bonus when agent takes first germination action
+    if action == LifecycleOp.GERMINATE and seeds_germinated_this_episode == 0:
+        first_germ_bonus = config.first_germinate_bonus
+        reward += first_germ_bonus
+
+    if components:
+        components.occupancy_rent = occupancy_rent
+        components.fossilized_rent = fossilized_rent
+        components.first_germinate_bonus = first_germ_bonus
+        components.n_active_seeds = n_active_seeds
 
     action_shaping = 0.0
 
@@ -751,6 +816,12 @@ def _contribution_prune_shaping(
 
     if seed_contribution is not None:
         if seed_contribution < config.prune_hurting_threshold:
+            # C3 fix: Age gate prevents germinate→hurt→prune farming.
+            # Only give bonus for pruning hurting seeds if they've existed long enough
+            # to rule out intentional harm-seeding for reward farming.
+            if seed_info.seed_age_epochs < config.min_prune_bonus_age:
+                # Young hurting seed: small penalty (discourages quick-cycle farming)
+                return -0.1
             return config.prune_hurting_bonus
         if seed_contribution < 0:
             return config.prune_acceptable_bonus

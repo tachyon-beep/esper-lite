@@ -764,6 +764,7 @@ def train_ppo_vectorized(
         VectorizedEmitter(
             env_id=i,
             device=env_device_map[i],
+            group_id=group_id,
             hub=hub,
             telemetry_config=telemetry_config,
             quiet_analytics=quiet_analytics,
@@ -1111,6 +1112,7 @@ def train_ppo_vectorized(
         telemetry_lifecycle_only=telemetry_lifecycle_only,
         hub=hub,
         signal_tracker_cls=SignalTracker,
+        group_id=group_id,
     )
 
     trainer = VectorizedPPOTrainer(

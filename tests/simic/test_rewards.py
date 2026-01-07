@@ -172,8 +172,8 @@ class TestPruneContributionShaping:
     def test_prune_toxic_seed_rewarded(self):
         """Pruning a toxic seed (negative contribution) should be rewarded."""
         config = ContributionRewardConfig()
-        # Use age >= MIN_PRUNE_AGE to avoid age penalty
-        seed_info = self._make_seed_info(STAGE_BLENDING, age=MIN_PRUNE_AGE, improvement=-1.0)
+        # C3: Use age >= min_prune_bonus_age to pass the anti-farming age gate
+        seed_info = self._make_seed_info(STAGE_BLENDING, age=config.min_prune_bonus_age, improvement=-1.0)
 
         # Toxic seed: contribution < hurting_threshold (-0.5)
         shaping = _contribution_prune_shaping(seed_info, seed_contribution=-1.0, config=config)

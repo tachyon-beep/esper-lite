@@ -129,7 +129,8 @@ def test_ppo_update_golden_metrics() -> None:
     assert metrics["finiteness_gate_skip_count"] == 0
 
     assert metrics["policy_loss"] == pytest.approx(3.570237398147583, abs=1e-6)
-    assert metrics["value_loss"] == pytest.approx(0.07017115503549576, abs=1e-6)
+    # D1: Value loss updated - now consistently applies 0.5 factor (was missing in clip_value=False case)
+    assert metrics["value_loss"] == pytest.approx(0.03508557751774788, abs=1e-6)
     assert metrics["entropy"] == pytest.approx(6.799738883972168, abs=1e-6)
     assert metrics["approx_kl"] == pytest.approx(0.004192419815808535, abs=1e-6)
     assert metrics["clip_fraction"] == pytest.approx(1.0, abs=1e-6)

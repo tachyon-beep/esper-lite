@@ -136,6 +136,13 @@ class PPOUpdateMetrics(TypedDict, total=False):
     lstm_c_max: float | None
     lstm_has_nan: bool | None
     lstm_has_inf: bool | None
+    # D5: Slot Saturation Diagnostics
+    # Track forced WAIT steps to understand PPO stability under slot saturation
+    forced_step_ratio: float  # Fraction of timesteps with forced decisions (no agency)
+    usable_actor_timesteps: int  # Count of timesteps where agent had real choice
+    decision_density: float  # Fraction with agency (1 - forced_step_ratio), higher = healthier
+    advantage_std_floored: bool  # True if advantage std was clamped to floor (degenerate batch)
+    pre_norm_advantage_std: float  # Raw std before normalization (for diagnostics)
 
 
 class HeadLogProbs(TypedDict):

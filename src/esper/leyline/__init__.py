@@ -141,6 +141,13 @@ DEFAULT_CLIP_RATIO = 0.2
 # Standard value is 0.95; higher reduces bias at cost of variance.
 DEFAULT_GAE_LAMBDA = 0.98
 
+# D4: Advantage standard deviation floor (prevents gradient amplification).
+# During slot saturation (forced WAIT corridors), advantage variance can collapse
+# because all steps have similar value estimates. When std drops below this floor,
+# we clamp it to prevent normalization from amplifying noise into huge gradients.
+# Typical healthy std: 0.5-2.0; below 0.1 indicates a degenerate batch.
+ADVANTAGE_STD_FLOOR: float = 0.1
+
 # Value function loss coefficient in combined PPO loss.
 # 1.0 gives critic equal weight with policy, important when value head
 # is underfitting (negative explained variance from batch 1).
@@ -724,6 +731,7 @@ __all__ = [
     "DEFAULT_LEARNING_RATE",
     "DEFAULT_CLIP_RATIO",
     "DEFAULT_GAE_LAMBDA",
+    "ADVANTAGE_STD_FLOOR",
     "DEFAULT_VALUE_COEF",
     "DEFAULT_MAX_GRAD_NORM",
     "DEFAULT_N_PPO_EPOCHS",

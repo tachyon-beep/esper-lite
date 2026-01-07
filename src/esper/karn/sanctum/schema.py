@@ -899,6 +899,15 @@ class TamiyoState:
     log_prob_min: float = float("nan")  # Most negative log prob this update
     log_prob_max: float = float("nan")  # Highest log prob (should be <= 0)
 
+    # D5: Slot Saturation Diagnostics
+    # Track decision agency to understand PPO stability under capacity pressure.
+    # When slots saturate, action space collapses to WAIT-only (forced steps).
+    decision_density: float = 1.0  # Fraction with agency (1 - forced_step_ratio), higher = healthier
+    forced_step_ratio: float = 0.0  # Fraction of forced steps (lower = healthier)
+    advantage_std_floored: bool = False  # True if std clamped to floor (degenerate batch)
+    pre_norm_advantage_std: float | None = None  # Raw advantage std (before normalization)
+    decision_density_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
+
     # Gradient health (shown in Vitals)
     dead_layers: int = 0
     exploding_layers: int = 0
