@@ -186,42 +186,9 @@ allow_hits:
 - key: src/esper/simic/telemetry/lstm_health.py:compute_lstm_health:tolist
   owner: John
   reason: Batched telemetry - single sync for 14 LSTM health metrics; optimized stack-then-sync pattern
-- key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item
+- key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:tolist
   owner: John
-  reason: Telemetry - observation stats extraction; NaN count for error detection
-- key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:10
-  owner: John
-  reason: Telemetry - observation stats extraction; near-clip saturation percentage
-- key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:11
-  owner: John
-  reason: Telemetry - observation stats extraction; clip saturation percentage
-- key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:12
-  owner: John
-  reason: Telemetry - observation stats extraction; normalization drift
-- key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:2
-  owner: John
-  reason: Telemetry - observation stats extraction; Inf count for error detection
-- key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:3
-  owner: John
-  reason: Telemetry - observation stats extraction; host features mean
-- key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:4
-  owner: John
-  reason: Telemetry - observation stats extraction; host features std
-- key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:5
-  owner: John
-  reason: Telemetry - observation stats extraction; context features mean
-- key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:6
-  owner: John
-  reason: Telemetry - observation stats extraction; context features std
-- key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:7
-  owner: John
-  reason: Telemetry - observation stats extraction; slot features mean
-- key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:8
-  owner: John
-  reason: Telemetry - observation stats extraction; slot features std
-- key: src/esper/simic/telemetry/observation_stats.py:compute_observation_stats:item:9
-  owner: John
-  reason: Telemetry - observation stats extraction; 3-sigma outlier count
+  reason: Batched telemetry - single sync for 12 observation stats; C2 fix replaced 12 .item() calls with stack-then-sync
 - key: src/esper/leyline/value_metrics.py:compute_value_function_metrics:tolist
   owner: John
   reason: Batched telemetry - single sync for 9 value function metrics; stack-then-sync pattern
