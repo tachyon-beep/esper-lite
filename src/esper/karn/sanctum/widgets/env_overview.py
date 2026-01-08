@@ -39,7 +39,7 @@ class EnvOverview(Static):
     """Per-environment overview table.
 
     Shows a row per environment with:
-    - Episode number (with A/B test cohort pip) - for telemetry search
+    - Episode index (with A/B test cohort pip) - unique ID for telemetry search
     - Accuracy (with color coding)
     - Reward (current and avg)
     - Sparklines for accuracy and reward history
@@ -51,7 +51,7 @@ class EnvOverview(Static):
     CRITICAL FIXES:
     1. Accuracy: Green if at best, yellow if stagnant >5 epochs
     2. Reward: >0 green, <-0.5 red, else white
-    3. A/B cohort: Colored pip (●) next to episode number based on reward_mode
+    3. A/B cohort: Colored pip (●) next to batch number based on reward_mode
     """
 
     def __init__(self, num_envs: int = 16, **kwargs: Any) -> None:
@@ -131,7 +131,7 @@ class EnvOverview(Static):
         slot_ids = self._snapshot.slot_ids if self._snapshot is not None else self._current_slot_ids
 
         # Fixed columns - ordered: Identity → Performance → Trends → Reward breakdown
-        self.table.add_column("Ep", key="episode")
+        self.table.add_column("Ep#", key="episode_idx")
         self.table.add_column("Acc", key="acc")
         self.table.add_column("Ep∑R", key="cum_rwd")  # Episode return so far (Σ raw step rewards)
         self.table.add_column("Loss", key="loss")  # Host loss (for overfitting detection)
@@ -287,13 +287,15 @@ class EnvOverview(Static):
         # Flash row briefly when a rollback occurs (no layout-breaking alert row)
         flash_rollback = self._should_flash_rollback(env, now)
 
-        # Episode number with A/B test cohort pip and action target indicator
+        # Episode index (unique per env) with A/B test cohort pip and action target indicator
+        # episode_idx = current_episode + env_id gives unique ID per environment row
         current_episode = self._snapshot.current_episode if self._snapshot else 0
+        episode_idx = current_episode + env.env_id
         last_action_env_id = self._snapshot.last_action_env_id if self._snapshot else None
         last_action_timestamp = self._snapshot.last_action_timestamp if self._snapshot else None
         env_id_cell = self._format_env_id(
             env,
-            episode=current_episode,
+            episode_idx=episode_idx,
             last_action_env_id=last_action_env_id,
             last_action_timestamp=last_action_timestamp,
         )
@@ -467,20 +469,20 @@ class EnvOverview(Static):
     def _format_env_id(
         self,
         env: "EnvState",
-        episode: int,
+        episode_idx: int,
         last_action_env_id: int | None = None,
         last_action_timestamp: "datetime | None" = None,
     ) -> str:
-        """Format episode number with A/B test cohort pip and action target indicator.
+        """Format episode index with A/B test cohort pip and action target indicator.
 
         Args:
             env: Environment state.
-            episode: Current episode number for telemetry search.
+            episode_idx: Unique episode index for this env (current_episode + env_id).
             last_action_env_id: ID of env that received last action (for highlighting).
             last_action_timestamp: When the last action occurred (for hysteresis).
 
         Returns:
-            Formatted episode number string with indicators.
+            Formatted episode index string with indicators.
         """
         from datetime import datetime, timezone
 
@@ -498,8 +500,8 @@ class EnvOverview(Static):
         # A/B cohort pip (existing logic)
         if env.reward_mode and env.reward_mode in _AB_STYLES:
             pip, color = _AB_STYLES[env.reward_mode]
-            return f"{action_pip}[{color}]{pip}[/{color}]{episode}"
-        return f"{action_pip}{episode}"
+            return f"{action_pip}[{color}]{pip}[/{color}]{episode_idx}"
+        return f"{action_pip}{episode_idx}"
 
     def _format_host_loss(self, env: "EnvState") -> str:
         """Format host loss with color coding for overfitting detection.
