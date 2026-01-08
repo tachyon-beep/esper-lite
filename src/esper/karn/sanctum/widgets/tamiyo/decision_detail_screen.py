@@ -63,6 +63,10 @@ class DecisionDetailScreen(ModalScreen[None]):
             with VerticalScroll(id="detail-scroll"):
                 yield Static(self._render_detail())
 
+    def on_click(self) -> None:
+        """Dismiss modal on click (consistent with other Sanctum modals)."""
+        self.dismiss()
+
     def _render_title(self) -> Text:
         title = Text()
         title.append("TAMIYO DECISION DETAIL", style="bold")
