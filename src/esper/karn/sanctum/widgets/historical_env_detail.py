@@ -186,12 +186,10 @@ class HistoricalEnvDetail(ModalScreen[None]):
         header.append("📜 HISTORICAL VIEW", style="bold yellow")
         header.append("  │  ")
 
-        # Episode number
-        header.append(f"Episode {record.episode + 1}", style="bold")
-        header.append("  │  ")
-
-        # Env ID
-        header.append(f"Env {record.env_id}", style="dim")
+        # Episode index (unique identifier for telemetry lookup)
+        # episode_idx = episode + env_id
+        episode_idx = record.episode + record.env_id
+        header.append(f"Episode# {episode_idx}", style="bold")
         header.append("  │  ")
 
         # Peak accuracy (the hero metric)

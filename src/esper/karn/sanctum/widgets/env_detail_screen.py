@@ -304,6 +304,7 @@ class EnvDetailScreen(ModalScreen[None]):
         slot_ids: list[str],
         *,
         group_id: str | None = None,
+        current_episode: int = 0,
         **kwargs: Any,
     ) -> None:
         """Initialize the detail screen.
@@ -312,12 +313,14 @@ class EnvDetailScreen(ModalScreen[None]):
             env_state: The environment state to display.
             slot_ids: List of slot IDs for the seed grid.
             group_id: Policy group identifier for multi-policy runs.
+            current_episode: Current episode count (for episode_idx computation).
         """
         super().__init__(**kwargs)
         self._env = env_state
         self._slot_ids = slot_ids
         self._env_id = env_state.env_id  # Track env_id for updates
         self._group_id = group_id
+        self._current_episode = current_episode
 
     @property
     def env_id(self) -> int:
@@ -371,15 +374,18 @@ class EnvDetailScreen(ModalScreen[None]):
         """Dismiss modal on click."""
         self.dismiss()
 
-    def update_env_state(self, env_state: "EnvState") -> None:
+    def update_env_state(self, env_state: "EnvState", current_episode: int | None = None) -> None:
         """Update the displayed environment state.
 
         Called by the app during refresh to keep modal in sync with live data.
 
         Args:
             env_state: Updated environment state.
+            current_episode: Updated episode count (for episode_idx computation).
         """
         self._env = env_state
+        if current_episode is not None:
+            self._current_episode = current_episode
 
         # Update header
         try:
@@ -431,8 +437,9 @@ class EnvDetailScreen(ModalScreen[None]):
 
         header = Text()
 
-        # Env ID
-        header.append(f"Environment {env.env_id}", style="bold")
+        # Episode index (unique identifier for telemetry lookup)
+        episode_idx = self._current_episode + env.env_id
+        header.append(f"Episode# {episode_idx}", style="bold")
         header.append("  │  ")
 
         # Status

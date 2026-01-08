@@ -759,7 +759,8 @@ class SanctumApp(App[None]):
                     and current_screen.env_id in modal_snapshot.envs
                 ):
                     current_screen.update_env_state(
-                        modal_snapshot.envs[current_screen.env_id]
+                        modal_snapshot.envs[current_screen.env_id],
+                        current_episode=modal_snapshot.current_episode,
                     )
                     self._last_detail_update_ts = now
 
@@ -949,6 +950,7 @@ class SanctumApp(App[None]):
                 env_state=env,
                 slot_ids=self._snapshot.slot_ids,
                 group_id=self._active_group_id,
+                current_episode=self._snapshot.current_episode,
             )
         )
 
@@ -1032,6 +1034,7 @@ class SanctumApp(App[None]):
                 env_state=env,
                 slot_ids=self._snapshot.slot_ids,
                 group_id=self._active_group_id,
+                current_episode=self._snapshot.current_episode,
             )
         )
 
