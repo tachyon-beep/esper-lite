@@ -206,6 +206,8 @@ def compute_losses(
     value_clip: float,
     value_coef: float,
     head_names: tuple[str, ...],
+    entropy_floor: dict[str, float] | None = None,
+    entropy_floor_penalty_coef: dict[str, float] | float = 0.1,
 ) -> LossMetrics:
     """Compute PPO policy/value/entropy losses for a single epoch.
 
@@ -286,7 +288,41 @@ def compute_losses(
         masked_ent = (entropy[key] * effective_mask).sum() / n_valid
         entropy_loss = entropy_loss - head_coef * masked_ent
 
-    total_loss = policy_loss + value_coef * value_loss + entropy_coef * entropy_loss
+    # Per-head entropy floor penalty (prevents sparse heads from collapsing)
+    entropy_floor_penalty = torch.tensor(0.0, device=values.device)
+    if entropy_floor is not None:
+        # Compute mean entropy per head for floor comparison
+        mean_entropy: dict[str, torch.Tensor] = {}
+        for key in entropy:
+            mask = head_masks[key]
+            if actor_weight is not None:
+                effective_mask = mask * actor_weight
+            else:
+                effective_mask = mask
+            n_valid = effective_mask.sum().clamp(min=1)
+            mean_entropy[key] = (entropy[key] * effective_mask).sum() / n_valid
+
+        # PYTORCH OPTIMIZATION: Normalize coefficient to dict ONCE at outer scope
+        # This avoids isinstance() check in the hot path (inner loop)
+        if isinstance(entropy_floor_penalty_coef, dict):
+            penalty_coef_dict = entropy_floor_penalty_coef
+        else:
+            # Broadcast scalar to all heads
+            penalty_coef_dict = {head: entropy_floor_penalty_coef for head in entropy_floor}
+
+        entropy_floor_penalty = compute_entropy_floor_penalty(
+            entropy=mean_entropy,
+            head_masks=head_masks,
+            entropy_floor=entropy_floor,
+            penalty_coef=penalty_coef_dict,
+        )
+
+    total_loss = (
+        policy_loss
+        + value_coef * value_loss
+        + entropy_coef * entropy_loss
+        + entropy_floor_penalty
+    )
 
     return LossMetrics(
         policy_loss=policy_loss,
