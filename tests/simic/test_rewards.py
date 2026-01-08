@@ -883,10 +883,6 @@ class TestRansomwareSeedDetection:
         contribution but the host actually declined. The agent shouldn't get
         credit for fossilizing such a seed.
         """
-        from enum import IntEnum
-        class MockAction(IntEnum):
-            FOSSILIZE = 1
-
         # HOLDING seed with high contribution but negative total improvement
         ransomware_seed = SeedInfo(
             stage=STAGE_HOLDING,
@@ -897,7 +893,7 @@ class TestRansomwareSeedDetection:
         )
 
         reward, components = compute_contribution_reward(
-            action=MockAction.FOSSILIZE,
+            action=LifecycleOp.FOSSILIZE,
             seed_contribution=17.51,  # High counterfactual
             val_acc=60.0,
             seed_info=ransomware_seed,
@@ -1024,10 +1020,6 @@ class TestHoldingIndecisionPenalty:
 
     def test_no_penalty_for_fossilize_action(self):
         """FOSSILIZE action should not receive WAIT penalty."""
-        from enum import IntEnum
-        class MockAction(IntEnum):
-            FOSSILIZE = 1
-
         holding_seed = SeedInfo(
             stage=STAGE_HOLDING,
             improvement_since_stage_start=1.0,
@@ -1037,7 +1029,7 @@ class TestHoldingIndecisionPenalty:
         )
 
         _, components = compute_contribution_reward(
-            action=MockAction.FOSSILIZE,
+            action=LifecycleOp.FOSSILIZE,
             seed_contribution=5.0,
             val_acc=65.0,
             seed_info=holding_seed,
