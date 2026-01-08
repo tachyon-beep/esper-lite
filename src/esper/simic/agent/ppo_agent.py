@@ -43,6 +43,8 @@ from esper.leyline import (
     DEFAULT_RATIO_EXPLOSION_THRESHOLD,
     DEFAULT_VALUE_CLIP,
     DEFAULT_VALUE_COEF,
+    ENTROPY_FLOOR_PER_HEAD,
+    ENTROPY_FLOOR_PENALTY_COEF,
     HEAD_NAMES,
     NUM_OPS,
 )
@@ -139,6 +141,10 @@ class PPOAgent:
         num_envs: int = DEFAULT_N_ENVS,  # For TamiyoRolloutBuffer
         max_steps_per_env: int = DEFAULT_EPISODE_LENGTH,  # For TamiyoRolloutBuffer (from leyline)
         compile_mode: str = "off",  # For checkpoint persistence (policy may already be compiled)
+        # Per-head entropy floor penalty (prevents sparse head collapse)
+        entropy_floor: dict[str, float] | None = None,
+        entropy_floor_penalty_coef: dict[str, float] | None = None,
+        total_train_steps: int | None = None,  # For late-training decay schedule
     ):
         # Store policy and extract slot_config
         self.policy = policy
@@ -187,6 +193,14 @@ class PPOAgent:
         self.entropy_coef_per_head = dict(ENTROPY_COEF_PER_HEAD)
         if entropy_coef_per_head is not None:
             self.entropy_coef_per_head.update(entropy_coef_per_head)
+        # Per-head entropy floor penalty (prevents sparse head collapse)
+        # Uses ENTROPY_FLOOR_PER_HEAD from leyline as defaults
+        self.entropy_floor = entropy_floor if entropy_floor is not None else dict(ENTROPY_FLOOR_PER_HEAD)
+        self.entropy_floor_penalty_coef = (
+            entropy_floor_penalty_coef if entropy_floor_penalty_coef is not None
+            else dict(ENTROPY_FLOOR_PENALTY_COEF)
+        )
+        self.total_train_steps = total_train_steps if total_train_steps is not None else 1_000_000
         self.value_coef = value_coef
         self.clip_value = clip_value
         self.value_clip = value_clip
@@ -329,6 +343,27 @@ class PPOAgent:
         progress = min(1.0, self.train_steps / self.entropy_anneal_steps)
         annealed = self.entropy_coef_start + progress * (self.entropy_coef_end - self.entropy_coef_start)
         return max(annealed, self.entropy_coef_min)
+
+    def _get_penalty_decay(self, progress: float) -> float:
+        """Decay entropy floor penalty coefficient in late training.
+
+        After 75% of training, linearly decay to 0.5x.
+        This allows natural convergence while preventing early collapse.
+
+        PyTorch Expert Note: Apply as scalar multiplier OUTSIDE compute_losses
+        to maintain clean separation of concerns.
+
+        Args:
+            progress: Training progress [0, 1] (train_steps / total_train_steps)
+
+        Returns:
+            Decay factor [0.5, 1.0]
+        """
+        if progress < 0.75:
+            return 1.0
+        # Linear decay from 1.0 at 75% to 0.5 at 100%
+        decay_progress = (progress - 0.75) / 0.25
+        return 1.0 - 0.5 * decay_progress
 
     def _collect_cuda_memory_metrics(self) -> dict[str, float]:
         """Collect CUDA memory statistics for infrastructure monitoring.
@@ -871,6 +906,19 @@ class PPOAgent:
             # Use masked mean to avoid bias from averaging zeros with real values
             valid_old_values = data["values"][valid_mask]
             entropy_coef = self.get_entropy_coef()
+
+            # Compute training progress for late-training decay
+            # This allows natural policy convergence after 75% of training while
+            # preventing premature entropy collapse in early/mid training
+            progress = self.train_steps / self.total_train_steps
+            decay_factor = self._get_penalty_decay(progress)
+
+            # Apply decay to ALL per-head coefficients uniformly
+            decayed_coef = {
+                head: coef * decay_factor
+                for head, coef in self.entropy_floor_penalty_coef.items()
+            }
+
             losses = compute_losses(
                 per_head_ratios=ratio_metrics.per_head_ratios,
                 per_head_advantages=per_head_advantages,
@@ -887,6 +935,8 @@ class PPOAgent:
                 value_clip=self.value_clip,
                 value_coef=self.value_coef,
                 head_names=HEAD_NAMES,
+                entropy_floor=self.entropy_floor,
+                entropy_floor_penalty_coef=decayed_coef,  # Decayed coefficients
             )
             update_result = PPOUpdateResult(ratio_metrics=ratio_metrics, loss_metrics=losses)
             loss_metrics = update_result.loss_metrics
@@ -1074,6 +1124,9 @@ class PPOAgent:
                 'entropy_coef_min': self.entropy_coef_min,
                 'entropy_anneal_steps': self.entropy_anneal_steps,
                 'entropy_coef_per_head': self.entropy_coef_per_head,
+                'entropy_floor': self.entropy_floor,
+                'entropy_floor_penalty_coef': self.entropy_floor_penalty_coef,
+                'total_train_steps': self.total_train_steps,
                 'value_coef': self.value_coef,
                 'clip_value': self.clip_value,
                 'value_clip': self.value_clip,

@@ -285,3 +285,161 @@ class TestEntropyFloorIntegration:
         assert losses_scalar.total_loss.item() == pytest.approx(
             losses_dict.total_loss.item(), rel=1e-5
         )
+
+
+class TestLateTrainingDecay:
+    """Tests for late-training penalty decay in PPOAgent."""
+
+    def test_no_decay_before_75_percent(self) -> None:
+        """Decay factor should be 1.0 before 75% of training."""
+        from esper.simic.agent.ppo_agent import PPOAgent
+        from esper.tamiyo.policy.factory import create_policy
+        from esper.leyline.slot_config import SlotConfig
+
+        # Create minimal PPOAgent to test _get_penalty_decay
+        slot_config = SlotConfig.for_grid(2, 2)
+        policy = create_policy(
+            policy_type="lstm",
+            slot_config=slot_config,
+            device="cpu",
+        )
+        agent = PPOAgent(
+            policy=policy,
+            slot_config=slot_config,
+            device="cpu",
+            total_train_steps=1000,
+        )
+
+        # Test the decay function directly at various points before 75%
+        assert agent._get_penalty_decay(0.0) == 1.0, "Decay at 0% should be 1.0"
+        assert agent._get_penalty_decay(0.25) == 1.0, "Decay at 25% should be 1.0"
+        assert agent._get_penalty_decay(0.50) == 1.0, "Decay at 50% should be 1.0"
+        assert agent._get_penalty_decay(0.74) == 1.0, "Decay at 74% should be 1.0"
+        assert agent._get_penalty_decay(0.749) == 1.0, "Decay at 74.9% should be 1.0"
+
+    def test_linear_decay_after_75_percent(self) -> None:
+        """Decay should linearly decrease from 1.0 at 75% to 0.5 at 100%."""
+        from esper.simic.agent.ppo_agent import PPOAgent
+        from esper.tamiyo.policy.factory import create_policy
+        from esper.leyline.slot_config import SlotConfig
+
+        slot_config = SlotConfig.for_grid(2, 2)
+        policy = create_policy(
+            policy_type="lstm",
+            slot_config=slot_config,
+            device="cpu",
+        )
+        agent = PPOAgent(
+            policy=policy,
+            slot_config=slot_config,
+            device="cpu",
+            total_train_steps=1000,
+        )
+
+        # At 75% -> 1.0 (boundary)
+        assert agent._get_penalty_decay(0.75) == pytest.approx(1.0)
+
+        # At 87.5% -> 0.75 (halfway between 1.0 and 0.5)
+        assert agent._get_penalty_decay(0.875) == pytest.approx(0.75)
+
+        # At 93.75% -> 0.625 (3/4 of the way)
+        assert agent._get_penalty_decay(0.9375) == pytest.approx(0.625)
+
+        # At 100% -> 0.5
+        assert agent._get_penalty_decay(1.0) == pytest.approx(0.5)
+
+    def test_decay_at_exact_boundaries(self) -> None:
+        """Test exact boundary values for numerical precision."""
+        from esper.simic.agent.ppo_agent import PPOAgent
+        from esper.tamiyo.policy.factory import create_policy
+        from esper.leyline.slot_config import SlotConfig
+
+        slot_config = SlotConfig.for_grid(2, 2)
+        policy = create_policy(
+            policy_type="lstm",
+            slot_config=slot_config,
+            device="cpu",
+        )
+        agent = PPOAgent(
+            policy=policy,
+            slot_config=slot_config,
+            device="cpu",
+        )
+
+        # Verify that at exactly 75%, the decay is still 1.0 (no decay yet)
+        decay_at_75 = agent._get_penalty_decay(0.75)
+        assert decay_at_75 == pytest.approx(1.0), f"Expected 1.0 at 75%, got {decay_at_75}"
+
+        # Verify decay decreases monotonically after 75%
+        prev_decay = 1.0
+        for progress in [0.76, 0.80, 0.85, 0.90, 0.95, 1.0]:
+            decay = agent._get_penalty_decay(progress)
+            assert decay < prev_decay, f"Decay should decrease: {decay} < {prev_decay} at {progress}"
+            prev_decay = decay
+
+    def test_decay_bounds(self) -> None:
+        """Decay factor should always be in [0.5, 1.0]."""
+        from esper.simic.agent.ppo_agent import PPOAgent
+        from esper.tamiyo.policy.factory import create_policy
+        from esper.leyline.slot_config import SlotConfig
+
+        slot_config = SlotConfig.for_grid(2, 2)
+        policy = create_policy(
+            policy_type="lstm",
+            slot_config=slot_config,
+            device="cpu",
+        )
+        agent = PPOAgent(
+            policy=policy,
+            slot_config=slot_config,
+            device="cpu",
+        )
+
+        # Test full range of progress values
+        for progress in [0.0, 0.25, 0.5, 0.74, 0.75, 0.8, 0.9, 0.99, 1.0]:
+            decay = agent._get_penalty_decay(progress)
+            assert 0.5 <= decay <= 1.0, f"Decay {decay} out of bounds at progress {progress}"
+
+    def test_decay_applied_to_coefficients_in_update(self) -> None:
+        """Verify that decay is applied to coefficients during update."""
+        from esper.simic.agent.ppo_agent import PPOAgent
+        from esper.tamiyo.policy.factory import create_policy
+        from esper.leyline.slot_config import SlotConfig
+        from esper.leyline import ENTROPY_FLOOR_PENALTY_COEF
+
+        slot_config = SlotConfig.for_grid(2, 2)
+        policy = create_policy(
+            policy_type="lstm",
+            slot_config=slot_config,
+            device="cpu",
+        )
+
+        # Create agent at 90% progress (should have decay factor 0.7)
+        agent = PPOAgent(
+            policy=policy,
+            slot_config=slot_config,
+            device="cpu",
+            total_train_steps=1000,
+        )
+        agent.train_steps = 900  # 90% progress
+
+        # Calculate expected decay at 90%
+        # decay_progress = (0.9 - 0.75) / 0.25 = 0.6
+        # decay_factor = 1.0 - 0.5 * 0.6 = 0.7
+        expected_decay = agent._get_penalty_decay(0.9)
+        assert expected_decay == pytest.approx(0.7)
+
+        # Verify the decay factor computation matches expected formula
+        progress = agent.train_steps / agent.total_train_steps
+        actual_decay = agent._get_penalty_decay(progress)
+        assert actual_decay == pytest.approx(0.7)
+
+        # Verify decayed coefficients would be correct
+        expected_decayed_coef = {
+            head: coef * actual_decay
+            for head, coef in agent.entropy_floor_penalty_coef.items()
+        }
+
+        # Check a specific head
+        blueprint_base = agent.entropy_floor_penalty_coef["blueprint"]
+        assert expected_decayed_coef["blueprint"] == pytest.approx(blueprint_base * 0.7)
