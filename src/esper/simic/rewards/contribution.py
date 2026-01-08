@@ -89,9 +89,13 @@ class ContributionRewardConfig:
     epoch_progress_bonus: float = 0.3
     max_progress_bonus: float = 2.0
 
-    # Compute rent (logarithmic scaling)
+    # Compute rent (logarithmic scaling, per-step)
+    # rent = min(rent_weight * log(1 + growth_ratio), max_rent)
+    # With growth_ratio=2.5 (typical): rent = 0.5 * log(3.5) ≈ 0.63 per step
     rent_weight: float = 0.5
-    max_rent: float = 8.0
+    # Per-step cap (previously 8.0 for per-episode, now scaled for per-step use)
+    # Limits rent to ~80% of avg attribution to prevent crushing small improvements
+    max_rent: float = 1.5
     # Floor for host_params normalization in rent/shock calculations.
     # Tiny hosts (e.g., 17 trainable params) would otherwise be crushed by any non-trivial seed.
     rent_host_params_floor: int = 200
@@ -496,9 +500,9 @@ def compute_contribution_reward(
             denom = max(host_params, config.rent_host_params_floor)
             growth_ratio = effective_overhead / denom
             scaled_cost = math.log(1.0 + growth_ratio)
-            rent_per_episode = min(config.rent_weight * scaled_cost, config.max_rent)
-            rent_normalizer = max_epochs if max_epochs > 0 else 1
-            rent_penalty = rent_per_episode / rent_normalizer
+            # Per-step rent penalty (same scale as attribution for balanced signal)
+            # Previously divided by max_epochs which created 150:1 asymmetry vs attribution
+            rent_penalty = min(config.rent_weight * scaled_cost, config.max_rent)
             reward -= rent_penalty
     if components:
         components.compute_rent = -rent_penalty
