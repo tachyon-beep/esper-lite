@@ -182,6 +182,46 @@ DEFAULT_ENTROPY_COEF_MIN = 0.01
 DEFAULT_ENTROPY_COLLAPSE_THRESHOLD = 0.1
 DEFAULT_ENTROPY_WARNING_THRESHOLD = 0.3
 
+# Per-head entropy floor thresholds (normalized 0-1 scale)
+# Higher floors for sparse heads that receive fewer gradient signals
+# These are SOFT floors enforced via quadratic penalty in PPO loss
+ENTROPY_FLOOR_PER_HEAD: dict[str, float] = {
+    "op": 0.15,           # Always active (100% of steps) - can exploit more
+    "slot": 0.20,         # Usually active (~60%)
+    "blueprint": 0.40,    # GERMINATE only (~18%) - CRITICAL: needs high floor
+    "style": 0.30,        # GERMINATE + SET_ALPHA_TARGET (~22%)
+    "tempo": 0.40,        # GERMINATE only (~18%) - needs high floor
+    "alpha_target": 0.25, # GERMINATE + SET_ALPHA_TARGET (~22%)
+    "alpha_speed": 0.20,  # SET_ALPHA_TARGET + PRUNE (~19%)
+    "alpha_curve": 0.20,  # SET_ALPHA_TARGET + PRUNE (~19%)
+}
+
+# Per-head entropy collapse thresholds (stricter than floor for detection)
+# Entropy below this triggers anomaly detection
+ENTROPY_COLLAPSE_PER_HEAD: dict[str, float] = {
+    "op": 0.08,
+    "slot": 0.10,
+    "blueprint": 0.05,  # Lower threshold but still detect collapse
+    "style": 0.08,
+    "tempo": 0.05,
+    "alpha_target": 0.08,
+    "alpha_speed": 0.08,
+    "alpha_curve": 0.08,
+}
+
+# Per-head entropy floor penalty coefficients (DRL Expert recommendation)
+# Sparse heads need stronger penalty signal to compensate for fewer gradients
+ENTROPY_FLOOR_PENALTY_COEF: dict[str, float] = {
+    "op": 0.05,           # Always active - minimal penalty needed
+    "slot": 0.10,         # Usually active
+    "blueprint": 0.20,    # GERMINATE only - needs stronger signal
+    "style": 0.15,        # GERMINATE + SET_ALPHA_TARGET
+    "tempo": 0.20,        # GERMINATE only - needs stronger signal
+    "alpha_target": 0.12, # GERMINATE + SET_ALPHA_TARGET
+    "alpha_speed": 0.10,  # SET_ALPHA_TARGET + PRUNE
+    "alpha_curve": 0.10,  # SET_ALPHA_TARGET + PRUNE
+}
+
 # M21: PPO ratio anomaly detection thresholds.
 # ratio = exp(new_log_prob - old_log_prob). Healthy ratio is close to 1.0.
 # - Explosion (>5.0): Policy changed too much, trust region violated
@@ -740,6 +780,9 @@ __all__ = [
     "DEFAULT_ENTROPY_COEF_MIN",
     "DEFAULT_ENTROPY_COLLAPSE_THRESHOLD",
     "DEFAULT_ENTROPY_WARNING_THRESHOLD",
+    "ENTROPY_FLOOR_PER_HEAD",
+    "ENTROPY_COLLAPSE_PER_HEAD",
+    "ENTROPY_FLOOR_PENALTY_COEF",
     "DEFAULT_RATIO_EXPLOSION_THRESHOLD",
     "DEFAULT_RATIO_COLLAPSE_THRESHOLD",
 
