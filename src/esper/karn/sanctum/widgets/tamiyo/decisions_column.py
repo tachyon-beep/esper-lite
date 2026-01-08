@@ -91,10 +91,12 @@ class DecisionCard(Static):
         result.append(age_str, style="dim")
         result.append("\n")
 
-        # Line 2: Training context (epoch, env, round)
+        # Line 2: Training context (epoch, episode_idx, round)
+        # episode_idx = episode + env_id is a unique identifier for telemetry lookup
+        episode_idx = decision.episode + decision.env_id
         result.append(f"epoch:{decision.epoch}", style="dim")
         result.append("  ", style="dim")
-        result.append(f"env:{decision.env_id}", style="cyan")
+        result.append(f"ep#:{episode_idx}", style="cyan")
         result.append("  ", style="dim")
         result.append(f"round:{decision.batch}", style="dim")
         result.append("\n")
