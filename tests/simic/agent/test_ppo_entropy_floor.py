@@ -405,7 +405,6 @@ class TestLateTrainingDecay:
         from esper.simic.agent.ppo_agent import PPOAgent
         from esper.tamiyo.policy.factory import create_policy
         from esper.leyline.slot_config import SlotConfig
-        from esper.leyline import ENTROPY_FLOOR_PENALTY_COEF
 
         slot_config = SlotConfig.for_grid(2, 2)
         policy = create_policy(
