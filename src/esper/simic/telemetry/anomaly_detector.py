@@ -13,6 +13,7 @@ from esper.leyline import (
     DEFAULT_ENTROPY_WARNING_THRESHOLD,
     DEFAULT_RATIO_EXPLOSION_THRESHOLD,
     DEFAULT_RATIO_COLLAPSE_THRESHOLD,
+    ENTROPY_COLLAPSE_PER_HEAD,
 )
 
 
@@ -316,6 +317,12 @@ class AnomalyDetector:
     lstm_max_rms: float = 10.0  # Explosion/saturation threshold (per-element magnitude)
     lstm_min_rms: float = 1e-6  # Vanishing threshold
 
+    # Per-head entropy collapse tracking (for hysteresis)
+    # Mutable default requires field(default_factory=...)
+    _head_collapse_streak: dict[str, int] = field(default_factory=dict)
+    collapse_streak_threshold: int = 3  # Consecutive updates before warning
+    recovery_multiplier: float = 1.5    # Entropy must exceed threshold * 1.5 to clear
+
     def check_lstm_health(
         self,
         h_rms: float,
@@ -383,6 +390,50 @@ class AnomalyDetector:
                 "lstm_c_vanishing",
                 f"c_rms={c_rms:.6f} < {self.lstm_min_rms}",
             )
+
+        return report
+
+    def check_per_head_entropy_collapse(
+        self,
+        head_entropies: dict[str, float],
+        thresholds: dict[str, float] | None = None,
+    ) -> AnomalyReport:
+        """Check for per-head entropy collapse with hysteresis.
+
+        Each head has its own threshold based on activation frequency.
+        Uses hysteresis to prevent warning spam:
+        - Requires N consecutive collapses before warning
+        - Requires entropy > threshold * 1.5 to clear the streak
+
+        Args:
+            head_entropies: Dict of head_name -> mean entropy (normalized 0-1)
+            thresholds: Optional custom thresholds per head (defaults to ENTROPY_COLLAPSE_PER_HEAD)
+
+        Returns:
+            AnomalyReport with any detected per-head collapse issues
+        """
+        report = AnomalyReport()
+        thresholds = thresholds or ENTROPY_COLLAPSE_PER_HEAD
+
+        for head, entropy in head_entropies.items():
+            threshold = thresholds.get(head, 0.1)  # Default fallback
+            current_streak = self._head_collapse_streak.get(head, 0)
+
+            if entropy < threshold:
+                # Increment streak
+                current_streak += 1
+                self._head_collapse_streak[head] = current_streak
+
+                # Only report after sustained collapse (N consecutive)
+                if current_streak >= self.collapse_streak_threshold:
+                    report.add_anomaly(
+                        f"entropy_collapse_{head}",
+                        f"{head} entropy={entropy:.4f} < {threshold} "
+                        f"({current_streak} consecutive updates)",
+                    )
+            elif entropy > threshold * self.recovery_multiplier:
+                # Clear streak only when entropy is well above threshold
+                self._head_collapse_streak[head] = 0
 
         return report
 
