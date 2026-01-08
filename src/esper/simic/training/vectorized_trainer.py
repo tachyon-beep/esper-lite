@@ -1651,6 +1651,28 @@ class VectorizedPPOTrainer:
                         # Add LSTM health to metrics for telemetry display in Sanctum
                         metrics.update(lstm_health.to_dict())
 
+                    # Per-head entropy collapse detection (Task 6)
+                    # Check individual action heads for collapse even when total entropy appears healthy
+                    head_entropies_raw = metrics.get("head_entropies")
+                    if head_entropies_raw:
+                        # Convert per-epoch lists to mean per head
+                        mean_head_entropies = {
+                            head: sum(values) / len(values) if values else 0.0
+                            for head, values in head_entropies_raw.items()
+                        }
+                        per_head_report = anomaly_detector.check_per_head_entropy_collapse(
+                            mean_head_entropies
+                        )
+                        if per_head_report.has_anomaly:
+                            # Log warnings but don't halt - this is early warning
+                            for anomaly_type in per_head_report.anomaly_types:
+                                detail = per_head_report.details.get(anomaly_type, "")
+                                logger.warning(f"Per-head entropy anomaly: {anomaly_type} - {detail}")
+                            # Merge into main anomaly report for telemetry escalation
+                            anomaly_report.has_anomaly = True
+                            anomaly_report.anomaly_types.extend(per_head_report.anomaly_types)
+                            anomaly_report.details.update(per_head_report.details)
+
                     handle_telemetry_escalation(anomaly_report, telemetry_config)
                     emit_anomaly_diagnostics(
                         hub,
