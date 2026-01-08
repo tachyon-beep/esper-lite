@@ -39,6 +39,7 @@ def shaped_config(
     By default we:
     - disable PBRS and terminal bonus
     - disable anti-gaming (ratio penalty + alpha shock)
+    - disable timing discount (D3)
     - zero out intervention costs and prune shaping
     """
     return ContributionRewardConfig(
@@ -72,6 +73,8 @@ def shaped_config(
         early_prune_penalty=0.0,
         # D2 capacity economics - disable for isolated SHAPED tests
         first_germinate_bonus=0.0,
+        # D3 timing discount - disable for isolated SHAPED tests
+        disable_timing_discount=True,
     )
 
 

@@ -58,6 +58,9 @@ class RewardComponentsTelemetry:
     first_germinate_bonus: float = 0.0  # One-time bonus for first germination (breaks "do nothing" symmetry)
     n_active_seeds: int = 0  # Count of active seeds (for diagnostics)
 
+    # D3: Anti-Timing-Gaming (early germination discount)
+    timing_discount: float = 1.0  # Discount factor for early germination [discount_floor, 1.0]
+
     # Context (for debugging) - DRL Expert recommended fields
     action_name: str = ""
     action_success: bool = True
@@ -165,6 +168,8 @@ class RewardComponentsTelemetry:
             "fossilized_rent": self.fossilized_rent,
             "first_germinate_bonus": self.first_germinate_bonus,
             "n_active_seeds": self.n_active_seeds,
+            # D3: Anti-timing-gaming
+            "timing_discount": self.timing_discount,
         }
 
     @classmethod
@@ -221,6 +226,8 @@ class RewardComponentsTelemetry:
             fossilized_rent=float(data.get("fossilized_rent", 0.0)),  # type: ignore[arg-type]
             first_germinate_bonus=float(data.get("first_germinate_bonus", 0.0)),  # type: ignore[arg-type]
             n_active_seeds=int(data.get("n_active_seeds", 0)),  # type: ignore[arg-type]
+            # D3: Anti-timing-gaming
+            timing_discount=float(data.get("timing_discount", 1.0)),  # type: ignore[arg-type]
         )
 
 

@@ -301,6 +301,7 @@ def compute_contribution_reward(
     progress = None
     escrow_credit_target = 0.0
     escrow_delta = 0.0
+    timing_discount = 1.0  # D3: Default to full credit (no discount)
 
     seed_is_fossilized = seed_info is not None and seed_info.stage == STAGE_FOSSILIZED
 
@@ -413,6 +414,16 @@ def compute_contribution_reward(
                 attributed *= attribution_discount
 
                 bounded_attribution = (config.contribution_weight * attributed) + ratio_penalty
+
+                # D3: Apply timing discount for early germination
+                if not config.disable_timing_discount and seed_info is not None:
+                    germination_epoch = epoch - seed_info.seed_age_epochs
+                    timing_discount = _compute_timing_discount(
+                        germination_epoch=germination_epoch,
+                        warmup_epochs=config.germination_warmup_epochs,
+                        discount_floor=config.germination_discount_floor,
+                    )
+                    bounded_attribution *= timing_discount
         elif seed_info is not None and not seed_is_fossilized:
             if acc_delta is not None and acc_delta > 0:
                 bounded_attribution = config.proxy_contribution_weight * acc_delta
@@ -437,6 +448,7 @@ def compute_contribution_reward(
         components.escrow_credit_target = escrow_credit_target
         components.escrow_delta = escrow_delta
         components.escrow_credit_next = escrow_credit_prev + escrow_delta
+        components.timing_discount = timing_discount
 
     blending_warning = 0.0
     if seed_info is not None and seed_info.stage == STAGE_BLENDING:
