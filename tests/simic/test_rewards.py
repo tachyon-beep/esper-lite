@@ -724,7 +724,7 @@ class TestRansomwareSeedDetection:
 
     def test_attribution_discount_for_negative_total_improvement(self):
         """Attribution should be discounted when total_improvement is negative."""
-        def get_attribution_and_discount(total_improvement: float) -> tuple[float, float]:
+        def get_attribution_and_discount(total_improvement: float) -> tuple[float | None, float]:
             seed_info = SeedInfo(
                 stage=STAGE_BLENDING,
                 improvement_since_stage_start=1.0,

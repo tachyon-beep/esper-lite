@@ -19,7 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal, Any
 
-import yaml  # type: ignore[import-untyped]
+import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from esper.leyline import OBS_V3_NON_BLUEPRINT_DIM

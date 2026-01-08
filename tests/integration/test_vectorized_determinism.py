@@ -108,7 +108,7 @@ class MockDeterministicAgent:
 @pytest.mark.integration
 class TestVectorizedDeterminism:
     
-    def run_trace(self, seed: int, n_steps: int = 20) -> list[dict]:
+    def run_trace(self, seed: int, n_steps: int = 20) -> dict[str, object]:
         """Run a short training loop and return history trace."""
         
         # 1. Set Global Seeds
