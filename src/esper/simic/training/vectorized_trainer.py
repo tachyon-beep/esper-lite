@@ -551,13 +551,21 @@ class VectorizedPPOTrainer:
                     env_configs: list[list[dict[str, Any]]] = []
                     for i, env_state in enumerate(env_states):
                         model = env_state.model
-                        active_slot_list = [
-                            sid
-                            for sid in slots
-                            if model.has_active_seed_in_slot(sid)
-                            and cast(SeedSlotProtocol, model.seed_slots[sid]).state
-                            and cast(SeedSlotProtocol, model.seed_slots[sid]).alpha > 0
-                        ]
+                        # CRITICAL: Exclude FOSSILIZED seeds from ablation.
+                        # Fossilized seeds are permanently integrated - disabling them
+                        # measures damage to the host, not the seed's contribution.
+                        # The host was trained WITH the fossilized seed's output;
+                        # suddenly removing it causes catastrophic accuracy drops.
+                        active_slot_list = []
+                        for sid in slots:
+                            if not model.has_active_seed_in_slot(sid):
+                                continue
+                            slot = cast(SeedSlotProtocol, model.seed_slots[sid])
+                            if slot.state is None or slot.alpha <= 0:
+                                continue
+                            if slot.state.stage == SeedStage.FOSSILIZED:
+                                continue
+                            active_slot_list.append(sid)
 
                         # Config 0: Main (current alphas)
                         configs = [{"_kind": "main"}]
