@@ -53,6 +53,7 @@ class PPOUpdateMetricsBuilder:
             aggregated_result["policy_loss"] = nan
             aggregated_result["value_loss"] = nan
             aggregated_result["entropy"] = nan
+            aggregated_result["entropy_floor_penalty"] = nan
             aggregated_result["approx_kl"] = nan
             aggregated_result["clip_fraction"] = nan
             aggregated_result["explained_variance"] = nan

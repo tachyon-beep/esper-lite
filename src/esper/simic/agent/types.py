@@ -69,6 +69,7 @@ class PPOUpdateMetrics(TypedDict, total=False):
     policy_loss: float
     value_loss: float
     entropy_loss: float
+    entropy_floor_penalty: float  # Per-head entropy floor penalty (for calibration debugging)
     total_loss: float
     approx_kl: float
     clip_fraction: float

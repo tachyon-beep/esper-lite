@@ -30,6 +30,7 @@ class LossMetrics:
     policy_loss: torch.Tensor
     value_loss: torch.Tensor
     entropy_loss: torch.Tensor
+    entropy_floor_penalty: torch.Tensor  # DRL Expert: Track separately for calibration debugging
     total_loss: torch.Tensor
 
 
@@ -328,6 +329,7 @@ def compute_losses(
         policy_loss=policy_loss,
         value_loss=value_loss,
         entropy_loss=entropy_loss,
+        entropy_floor_penalty=entropy_floor_penalty,
         total_loss=total_loss,
     )
 

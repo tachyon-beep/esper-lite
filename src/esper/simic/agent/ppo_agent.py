@@ -1007,7 +1007,7 @@ class PPOAgent:
             self.optimizer.step()
 
             # Track metrics
-            # PERF: Batch all 10 logging metrics into single GPU→CPU transfer
+            # PERF: Batch all logging metrics into single GPU→CPU transfer
             # BUG FIX: Use TRUE joint_ratio (product of all heads) computed at line 619
             # Previously this used per_head_ratios["op"] which hid divergence in other heads
             logging_tensors = torch.stack([
@@ -1023,6 +1023,7 @@ class PPOAgent:
                 values.std(),
                 values.min(),
                 values.max(),
+                losses.entropy_floor_penalty,  # DRL Expert: Track for calibration debugging
             ])
             metrics["policy_loss"].append(logging_tensors[0])
             metrics["value_loss"].append(logging_tensors[1])
@@ -1035,6 +1036,7 @@ class PPOAgent:
             metrics["value_std"].append(logging_tensors[8])
             metrics["value_min"].append(logging_tensors[9])
             metrics["value_max"].append(logging_tensors[10])
+            metrics["entropy_floor_penalty"].append(logging_tensors[11])
             # PERF: Reuse already-transferred ratio stats (indices 4,5) instead of
             # re-computing on GPU which would trigger 2 redundant syncs
             ratio_max_val = logging_tensors[4]
