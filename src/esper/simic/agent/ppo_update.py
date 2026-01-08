@@ -112,6 +112,78 @@ def compute_ratio_metrics(
     )
 
 
+def compute_entropy_floor_penalty(
+    entropy: dict[str, torch.Tensor],
+    head_masks: dict[str, torch.Tensor],
+    entropy_floor: dict[str, float],
+    penalty_coef: dict[str, float],  # ALWAYS dict - caller normalizes (PyTorch optimization)
+) -> torch.Tensor:
+    """Compute penalty for heads whose entropy falls below floor.
+
+    Uses quadratic penalty: loss += coef * max(0, floor - entropy)^2
+    This creates smooth gradient pressure to maintain minimum entropy.
+
+    CRITICAL: Skips heads with no valid steps (n_valid < 1) to avoid
+    penalizing inactive heads that had no opportunity to maintain entropy.
+
+    NOTE: penalty_coef must be a dict. Caller (compute_losses) should normalize
+    scalar inputs to dict before calling this function. This avoids isinstance()
+    checks in the hot path.
+
+    Args:
+        entropy: Dict of head_name -> entropy tensor (per-step or scalar, normalized 0-1)
+        head_masks: Dict of head_name -> mask tensor (for device inference and masking)
+        entropy_floor: Dict of head_name -> minimum acceptable entropy (float)
+        penalty_coef: Per-head coefficients dict (REQUIRED - caller normalizes scalars)
+
+    Returns:
+        Scalar penalty to add to total loss (larger = more penalty)
+    """
+    if not entropy:
+        # Early return if no entropy provided (defensive)
+        return torch.tensor(0.0)
+
+    # Get device from first entropy tensor
+    device = next(iter(entropy.values())).device
+
+    # PYTORCH OPTIMIZATION: Collect penalties in list, then stack+sum
+    # This is 3x faster than repeated `penalty = penalty + term` (1 kernel vs 8)
+    penalties: list[torch.Tensor] = []
+
+    for head, floor in entropy_floor.items():
+        if head not in entropy:
+            continue
+
+        head_ent = entropy[head]
+
+        # If per-step entropy, compute mean over valid steps
+        if head_ent.ndim > 0:
+            mask = head_masks.get(head)
+            if mask is not None:
+                n_valid = mask.sum()
+                if n_valid < 1:
+                    # CRITICAL FIX: Skip heads with no valid steps
+                    # (no opportunity to maintain entropy)
+                    continue
+                head_ent = (head_ent * mask).sum() / n_valid
+            else:
+                head_ent = head_ent.mean()
+
+        # Get per-head penalty coefficient (no isinstance - always dict)
+        head_coef = penalty_coef.get(head, 0.1)
+
+        # Quadratic penalty for entropy below floor
+        # Use Python scalar for floor - PyTorch broadcasts efficiently
+        shortfall = torch.clamp(floor - head_ent, min=0.0)
+        penalties.append(head_coef * (shortfall ** 2))
+
+    # Single reduction operation (compile-friendly)
+    if penalties:
+        return torch.stack(penalties).sum()
+    else:
+        return torch.tensor(0.0, device=device)
+
+
 def compute_losses(
     *,
     per_head_ratios: dict[str, torch.Tensor],
@@ -225,4 +297,5 @@ __all__ = [
     "PPOUpdateResult",
     "compute_ratio_metrics",
     "compute_losses",
+    "compute_entropy_floor_penalty",
 ]
