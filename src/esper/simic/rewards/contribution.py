@@ -855,6 +855,32 @@ def _contribution_prune_shaping(
     return 0.0
 
 
+def _compute_timing_discount(
+    germination_epoch: int,
+    warmup_epochs: int,
+    discount_floor: float,
+) -> float:
+    """Compute timing discount for early germination.
+
+    Seeds germinated before warmup_epochs receive discounted attribution.
+    Linear interpolation from discount_floor (epoch 0) to 1.0 (epoch >= warmup).
+
+    Args:
+        germination_epoch: Epoch when seed was germinated
+        warmup_epochs: Number of epochs before full credit
+        discount_floor: Minimum discount (applied at epoch 0)
+
+    Returns:
+        Discount factor in [discount_floor, 1.0]
+    """
+    if germination_epoch >= warmup_epochs:
+        return 1.0
+
+    # Linear interpolation: epoch 0 = floor, epoch warmup = 1.0
+    progress = germination_epoch / warmup_epochs
+    return discount_floor + (1.0 - discount_floor) * progress
+
+
 def _check_reward_hacking(
     hub: Any,
     *,
@@ -962,6 +988,7 @@ __all__ = [
     "_contribution_pbrs_bonus",
     "_contribution_prune_shaping",
     "_contribution_fossilize_shaping",
+    "_compute_timing_discount",
     "_check_reward_hacking",
     "_check_ransomware_signature",
     "get_intervention_cost",

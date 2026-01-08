@@ -241,3 +241,67 @@ def test_timing_discount_config_defaults() -> None:
     assert config.germination_discount_floor == 0.4
     # Default: timing discount enabled
     assert config.disable_timing_discount is False
+
+
+def test_timing_discount_epoch_1_interpolates() -> None:
+    """D3-Timing: Epoch 1 germination gets interpolated discount."""
+    from esper.simic.rewards.contribution import _compute_timing_discount
+
+    # Epoch 1 out of 10 warmup, floor=0.4
+    # discount = 0.4 + (1 - 0.4) * (1 / 10) = 0.4 + 0.06 = 0.46
+    discount = _compute_timing_discount(
+        germination_epoch=1,
+        warmup_epochs=10,
+        discount_floor=0.4,
+    )
+    assert discount == pytest.approx(0.46)
+
+
+def test_timing_discount_at_warmup_gets_full_credit() -> None:
+    """D3-Timing: Germination at warmup epoch gets full credit."""
+    from esper.simic.rewards.contribution import _compute_timing_discount
+
+    discount = _compute_timing_discount(
+        germination_epoch=10,
+        warmup_epochs=10,
+        discount_floor=0.4,
+    )
+    assert discount == pytest.approx(1.0)
+
+
+def test_timing_discount_after_warmup_gets_full_credit() -> None:
+    """D3-Timing: Germination after warmup gets full credit."""
+    from esper.simic.rewards.contribution import _compute_timing_discount
+
+    discount = _compute_timing_discount(
+        germination_epoch=50,
+        warmup_epochs=10,
+        discount_floor=0.4,
+    )
+    assert discount == pytest.approx(1.0)
+
+
+def test_timing_discount_mid_warmup_interpolates() -> None:
+    """D3-Timing: Mid-warmup germination gets linearly interpolated discount."""
+    from esper.simic.rewards.contribution import _compute_timing_discount
+
+    # Epoch 5 out of 10 warmup, floor=0.4
+    # discount = 0.4 + (1 - 0.4) * (5 / 10) = 0.4 + 0.3 = 0.7
+    discount = _compute_timing_discount(
+        germination_epoch=5,
+        warmup_epochs=10,
+        discount_floor=0.4,
+    )
+    assert discount == pytest.approx(0.7)
+
+
+def test_timing_discount_epoch_0_gets_floor() -> None:
+    """D3-Timing: Edge case - epoch 0 gets discount_floor."""
+    from esper.simic.rewards.contribution import _compute_timing_discount
+
+    discount = _compute_timing_discount(
+        germination_epoch=0,
+        warmup_epochs=10,
+        discount_floor=0.4,
+    )
+    assert discount == pytest.approx(0.4)
