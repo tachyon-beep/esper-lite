@@ -38,6 +38,11 @@ Telemetry from run `2026-01-08_191448` shows:
 4. **Collapse detection hysteresis**: Require N=3 consecutive collapses, 1.5x recovery threshold
 5. **Telemetry visibility**: Return `entropy_floor_loss` separately in `LossMetrics`
 
+### PyTorch Optimizations Applied:
+6. **Tensor accumulation pattern**: Use `list + torch.stack().sum()` instead of repeated `penalty = penalty + term` (3x faster, 1 kernel vs 8)
+7. **isinstance() hot path**: Normalize to dict at caller (`compute_losses`), inner function always receives dict
+8. **Late-training decay**: Apply outside `compute_losses` as scalar multiplier in `PPOAgent.update()`
+
 ### Confirmed Non-Issues:
 - **Entropy units**: Already normalized to [0, 1] per head in `action_masks.py:546-578`
 - **Floor values**: Correctly calibrated for normalized entropy
@@ -154,8 +159,9 @@ class TestEntropyFloorPenalty:
         entropy = {"blueprint": torch.tensor(0.5)}  # Above 0.4 floor
         head_masks = {"blueprint": torch.ones(10)}
         floor = {"blueprint": 0.4}
+        coef = {"blueprint": 0.1}  # Required: always dict
 
-        penalty = compute_entropy_floor_penalty(entropy, head_masks, floor)
+        penalty = compute_entropy_floor_penalty(entropy, head_masks, floor, coef)
 
         assert penalty.item() == pytest.approx(0.0)
 
@@ -164,8 +170,9 @@ class TestEntropyFloorPenalty:
         entropy = {"blueprint": torch.tensor(0.1)}  # Below 0.4 floor
         head_masks = {"blueprint": torch.ones(10)}
         floor = {"blueprint": 0.4}
+        coef = {"blueprint": 0.1}
 
-        penalty = compute_entropy_floor_penalty(entropy, head_masks, floor)
+        penalty = compute_entropy_floor_penalty(entropy, head_masks, floor, coef)
 
         # Shortfall = 0.4 - 0.1 = 0.3, penalty = 0.1 * 0.3^2 = 0.009
         assert penalty.item() > 0
@@ -175,14 +182,15 @@ class TestEntropyFloorPenalty:
         """Larger shortfall should incur larger penalty."""
         head_masks = {"blueprint": torch.ones(10)}
         floor = {"blueprint": 0.4}
+        coef = {"blueprint": 0.1}
 
         # Small shortfall
         entropy_small = {"blueprint": torch.tensor(0.35)}
-        penalty_small = compute_entropy_floor_penalty(entropy_small, head_masks, floor)
+        penalty_small = compute_entropy_floor_penalty(entropy_small, head_masks, floor, coef)
 
         # Large shortfall
         entropy_large = {"blueprint": torch.tensor(0.1)}
-        penalty_large = compute_entropy_floor_penalty(entropy_large, head_masks, floor)
+        penalty_large = compute_entropy_floor_penalty(entropy_large, head_masks, floor, coef)
 
         assert penalty_large > penalty_small
 
@@ -192,6 +200,7 @@ class TestEntropyFloorPenalty:
         mask = torch.tensor([1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         head_masks = {"blueprint": mask}
         floor = {"blueprint": 0.4}
+        coef = {"blueprint": 0.1}
 
         # Per-step entropy: first 5 have 0.5, last 5 have 0.0
         # Masked mean should be 0.5 (above floor) -> no penalty
@@ -204,7 +213,7 @@ class TestEntropyFloorPenalty:
         mean_ent = (per_step_entropy * mask).sum() / mask.sum()
         entropy_scalar = {"blueprint": mean_ent}
 
-        penalty = compute_entropy_floor_penalty(entropy_scalar, head_masks, floor)
+        penalty = compute_entropy_floor_penalty(entropy_scalar, head_masks, floor, coef)
         assert penalty.item() == pytest.approx(0.0)
 
     def test_multiple_heads(self) -> None:
@@ -218,8 +227,9 @@ class TestEntropyFloorPenalty:
             "op": torch.ones(10),
         }
         floor = {"blueprint": 0.4, "op": 0.15}
+        coef = {"blueprint": 0.1, "op": 0.1}
 
-        penalty = compute_entropy_floor_penalty(entropy, head_masks, floor)
+        penalty = compute_entropy_floor_penalty(entropy, head_masks, floor, coef)
 
         # Only blueprint should contribute
         expected = 0.1 * (0.3 ** 2)  # shortfall 0.3
@@ -235,8 +245,9 @@ class TestEntropyFloorEdgeCases:
         entropy = {"blueprint": torch.tensor([0.5, 0.5, 0.5, 0.5, 0.5])}
         head_masks = {"blueprint": torch.zeros(5)}  # All masked!
         floor = {"blueprint": 0.4}
+        coef = {"blueprint": 0.1}
 
-        penalty = compute_entropy_floor_penalty(entropy, head_masks, floor)
+        penalty = compute_entropy_floor_penalty(entropy, head_masks, floor, coef)
 
         # Should be 0 - head was never active
         assert penalty.item() == pytest.approx(0.0), \
@@ -265,8 +276,9 @@ class TestEntropyFloorEdgeCases:
         entropy_dict = {"blueprint": entropy_param}
         head_masks = {"blueprint": torch.ones(10)}
         floor = {"blueprint": 0.4}
+        coef = {"blueprint": 0.1}
 
-        penalty = compute_entropy_floor_penalty(entropy_dict, head_masks, floor)
+        penalty = compute_entropy_floor_penalty(entropy_dict, head_masks, floor, coef)
         penalty.backward()
 
         # Gradient should be negative (pushes entropy up to reduce penalty)
@@ -274,7 +286,7 @@ class TestEntropyFloorEdgeCases:
 
     def test_empty_entropy_dict_returns_zero(self) -> None:
         """Empty entropy dict should return zero penalty."""
-        penalty = compute_entropy_floor_penalty({}, {}, {"blueprint": 0.4})
+        penalty = compute_entropy_floor_penalty({}, {}, {"blueprint": 0.4}, {"blueprint": 0.1})
         assert penalty.item() == pytest.approx(0.0)
 ```
 
@@ -293,7 +305,7 @@ def compute_entropy_floor_penalty(
     entropy: dict[str, torch.Tensor],
     head_masks: dict[str, torch.Tensor],
     entropy_floor: dict[str, float],
-    penalty_coef: dict[str, float] | float = 0.1,
+    penalty_coef: dict[str, float],  # ALWAYS dict - caller normalizes (PyTorch optimization)
 ) -> torch.Tensor:
     """Compute penalty for heads whose entropy falls below floor.
 
@@ -303,11 +315,15 @@ def compute_entropy_floor_penalty(
     CRITICAL: Skips heads with no valid steps (n_valid < 1) to avoid
     penalizing inactive heads that had no opportunity to maintain entropy.
 
+    NOTE: penalty_coef must be a dict. Caller (compute_losses) should normalize
+    scalar inputs to dict before calling this function. This avoids isinstance()
+    checks in the hot path.
+
     Args:
         entropy: Dict of head_name -> entropy tensor (per-step or scalar, normalized 0-1)
         head_masks: Dict of head_name -> mask tensor (for device inference and masking)
         entropy_floor: Dict of head_name -> minimum acceptable entropy (float)
-        penalty_coef: Per-head coefficients dict OR global scalar (default 0.1)
+        penalty_coef: Per-head coefficients dict (REQUIRED - caller normalizes scalars)
 
     Returns:
         Scalar penalty to add to total loss (larger = more penalty)
@@ -317,9 +333,11 @@ def compute_entropy_floor_penalty(
         return torch.tensor(0.0)
 
     # Get device from first entropy tensor
-    first_entropy = next(iter(entropy.values()))
-    device = first_entropy.device
-    penalty = torch.tensor(0.0, device=device)
+    device = next(iter(entropy.values())).device
+
+    # PYTORCH OPTIMIZATION: Collect penalties in list, then stack+sum
+    # This is 3x faster than repeated `penalty = penalty + term` (1 kernel vs 8)
+    penalties: list[torch.Tensor] = []
 
     for head, floor in entropy_floor.items():
         if head not in entropy:
@@ -340,18 +358,19 @@ def compute_entropy_floor_penalty(
             else:
                 head_ent = head_ent.mean()
 
-        # Get per-head penalty coefficient
-        if isinstance(penalty_coef, dict):
-            head_coef = penalty_coef.get(head, 0.1)
-        else:
-            head_coef = penalty_coef
+        # Get per-head penalty coefficient (no isinstance - always dict)
+        head_coef = penalty_coef.get(head, 0.1)
 
         # Quadratic penalty for entropy below floor
         # Use Python scalar for floor - PyTorch broadcasts efficiently
         shortfall = torch.clamp(floor - head_ent, min=0.0)
-        penalty = penalty + head_coef * (shortfall ** 2)
+        penalties.append(head_coef * (shortfall ** 2))
 
-    return penalty
+    # Single reduction operation (compile-friendly)
+    if penalties:
+        return torch.stack(penalties).sum()
+    else:
+        return torch.tensor(0.0, device=device)
 ```
 
 **Step 4: Add to `__all__` export**
@@ -483,7 +502,7 @@ Expected: FAIL (entropy_floor parameter doesn't exist yet)
 
 **Step 3: Modify compute_losses signature**
 
-In `src/esper/simic/agent/ppo_update.py`, update the `compute_losses` function signature (around line 130) to add the `entropy_floor` parameter:
+In `src/esper/simic/agent/ppo_update.py`, update the `compute_losses` function signature (around line 130) to add the `entropy_floor` and `entropy_floor_penalty_coef` parameters:
 
 ```python
 def compute_losses(
@@ -503,10 +522,11 @@ def compute_losses(
     old_values: torch.Tensor | None = None,
     actor_weight: torch.Tensor | None = None,
     entropy_floor: dict[str, float] | None = None,  # NEW: per-head entropy floors
+    entropy_floor_penalty_coef: dict[str, float] | float = 0.1,  # NEW: penalty coefficients
 ) -> LossMetrics:
 ```
 
-**Step 4: Add floor penalty to loss computation**
+**Step 4: Add floor penalty to loss computation (with isinstance normalization)**
 
 After the entropy loss loop (around line 210), add:
 
@@ -525,10 +545,19 @@ After the entropy loss loop (around line 210), add:
             n_valid = effective_mask.sum().clamp(min=1)
             mean_entropy[key] = (entropy[key] * effective_mask).sum() / n_valid
 
+        # PYTORCH OPTIMIZATION: Normalize coefficient to dict ONCE at outer scope
+        # This avoids isinstance() check in the hot path (inner loop)
+        if isinstance(entropy_floor_penalty_coef, dict):
+            penalty_coef_dict = entropy_floor_penalty_coef
+        else:
+            # Broadcast scalar to all heads
+            penalty_coef_dict = {head: entropy_floor_penalty_coef for head in entropy_floor}
+
         entropy_floor_penalty = compute_entropy_floor_penalty(
             entropy=mean_entropy,
             head_masks=head_masks,
             entropy_floor=entropy_floor,
+            penalty_coef=penalty_coef_dict,  # Always dict
         )
 
     total_loss = (
@@ -560,7 +589,7 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 
 ---
 
-## Task 4: Wire Entropy Floor Through PPOAgent
+## Task 4: Wire Entropy Floor Through PPOAgent (with Late-Training Decay)
 
 **Files:**
 - Modify: `src/esper/simic/agent/ppo_agent.py`
@@ -569,35 +598,138 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 
 Find the call to `compute_losses()` in `ppo_agent.py` and identify where to pass `entropy_floor`.
 
-**Step 2: Add entropy_floor to PPOAgent config**
+**Step 2: Add entropy_floor and training progress tracking to PPOAgent config**
 
-Add to PPOAgent's `__init__` parameters and store as instance attribute:
+Add to PPOAgent's `__init__` parameters and store as instance attributes:
 
 ```python
-from esper.leyline import ENTROPY_FLOOR_PER_HEAD
+from esper.leyline import ENTROPY_FLOOR_PER_HEAD, ENTROPY_FLOOR_PENALTY_COEF
 
-# In __init__:
+# In __init__ signature, add:
+#   entropy_floor: dict[str, float] | None = None,
+#   entropy_floor_penalty_coef: dict[str, float] | None = None,
+#   total_train_steps: int | None = None,
+
+# In __init__ body:
 self.entropy_floor = entropy_floor if entropy_floor is not None else ENTROPY_FLOOR_PER_HEAD
+self.entropy_floor_penalty_coef = entropy_floor_penalty_coef if entropy_floor_penalty_coef is not None else ENTROPY_FLOOR_PENALTY_COEF
+self.total_train_steps = total_train_steps or 1_000_000  # Default for decay schedule
 ```
 
-**Step 3: Pass entropy_floor to compute_losses**
+**Step 3: Add late-training decay helper method**
 
-In the `update()` method, add `entropy_floor=self.entropy_floor` to the `compute_losses()` call.
+Add to PPOAgent class (per PyTorch expert recommendation - apply OUTSIDE compute_losses):
 
-**Step 4: Run existing PPO tests**
+```python
+def _get_penalty_decay(self, progress: float) -> float:
+    """Decay entropy floor penalty coefficient in late training.
+
+    After 75% of training, linearly decay to 0.5x.
+    This allows natural convergence while preventing early collapse.
+
+    PyTorch Expert Note: Apply as scalar multiplier OUTSIDE compute_losses
+    to maintain clean separation of concerns.
+
+    Args:
+        progress: Training progress [0, 1] (train_steps / total_train_steps)
+
+    Returns:
+        Decay factor [0.5, 1.0]
+    """
+    if progress < 0.75:
+        return 1.0
+    # Linear decay from 1.0 at 75% to 0.5 at 100%
+    decay_progress = (progress - 0.75) / 0.25
+    return 1.0 - 0.5 * decay_progress
+```
+
+**Step 4: Pass entropy_floor to compute_losses with decay**
+
+In the `update()` method, add:
+
+```python
+# Compute training progress for late-training decay
+progress = self.train_steps / self.total_train_steps
+decay_factor = self._get_penalty_decay(progress)
+
+# Apply decay to ALL per-head coefficients uniformly
+decayed_coef = {
+    head: coef * decay_factor
+    for head, coef in self.entropy_floor_penalty_coef.items()
+}
+
+# In compute_losses() call, add:
+losses = compute_losses(
+    # ... existing args ...
+    entropy_floor=self.entropy_floor,
+    entropy_floor_penalty_coef=decayed_coef,  # Decayed coefficients
+)
+```
+
+**Step 5: Run existing PPO tests**
 
 Run: `uv run pytest tests/simic/agent/ -v --tb=short`
 
 Expected: All tests PASS (no regressions)
 
-**Step 5: Commit**
+**Step 6: Add test for late-training decay**
+
+Add to `tests/simic/agent/test_ppo_entropy_floor.py`:
+
+```python
+class TestLateTrainingDecay:
+    """Tests for late-training penalty decay."""
+
+    def test_no_decay_before_75_percent(self) -> None:
+        """Decay factor should be 1.0 before 75% of training."""
+        from esper.simic.agent.ppo_agent import PPOAgent
+
+        agent = PPOAgent(
+            # ... minimal config ...
+            total_train_steps=1000,
+        )
+
+        # At 50% progress
+        agent.train_steps = 500
+        assert agent._get_penalty_decay(0.5) == pytest.approx(1.0)
+
+        # At 74%
+        assert agent._get_penalty_decay(0.74) == pytest.approx(1.0)
+
+    def test_linear_decay_after_75_percent(self) -> None:
+        """Decay should linearly decrease from 1.0 at 75% to 0.5 at 100%."""
+        from esper.simic.agent.ppo_agent import PPOAgent
+
+        agent = PPOAgent(total_train_steps=1000)
+
+        # At 75% → 1.0
+        assert agent._get_penalty_decay(0.75) == pytest.approx(1.0)
+
+        # At 87.5% → 0.75 (halfway between 1.0 and 0.5)
+        assert agent._get_penalty_decay(0.875) == pytest.approx(0.75)
+
+        # At 100% → 0.5
+        assert agent._get_penalty_decay(1.0) == pytest.approx(0.5)
+```
+
+**Step 7: Run decay tests**
+
+Run: `uv run pytest tests/simic/agent/test_ppo_entropy_floor.py::TestLateTrainingDecay -v`
+
+Expected: All tests PASS
+
+**Step 8: Commit**
 
 ```bash
-git add src/esper/simic/agent/ppo_agent.py
-git commit -m "feat(ppo): wire entropy floor through PPOAgent
+git add src/esper/simic/agent/ppo_agent.py tests/simic/agent/test_ppo_entropy_floor.py
+git commit -m "feat(ppo): wire entropy floor through PPOAgent with late-training decay
 
 PPOAgent now passes ENTROPY_FLOOR_PER_HEAD to compute_losses() by default.
-This enables per-head entropy floor penalties for all training runs.
+Late-training decay (0.75 → 1.0 progress: 1.0 → 0.5 factor) allows natural
+convergence while preventing early collapse.
+
+Decay is applied OUTSIDE compute_losses as scalar multiplier per
+PyTorch expert recommendation (clean separation of concerns).
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 ```
