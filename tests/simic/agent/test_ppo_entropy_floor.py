@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from esper.simic.agent.ppo_update import compute_entropy_floor_penalty
+from esper.simic.agent.ppo_update import compute_entropy_floor_penalty, compute_losses
 
 
 class TestEntropyFloorPenalty:
@@ -60,7 +60,6 @@ class TestEntropyFloorPenalty:
         # Per-step entropy: first 5 have 0.5, last 5 have 0.0
         # Masked mean should be 0.5 (above floor) -> no penalty
         per_step_entropy = torch.tensor([0.5] * 5 + [0.0] * 5)
-        entropy = {"blueprint": per_step_entropy}
 
         # Note: compute_entropy_floor_penalty expects pre-computed mean entropy per head
         # Actually, we need to check how it handles per-step vs scalar entropy
@@ -143,9 +142,6 @@ class TestEntropyFloorEdgeCases:
         """Empty entropy dict should return zero penalty."""
         penalty = compute_entropy_floor_penalty({}, {}, {"blueprint": 0.4}, {"blueprint": 0.1})
         assert penalty.item() == pytest.approx(0.0)
-
-
-from esper.simic.agent.ppo_update import compute_losses, LossMetrics
 
 
 class TestEntropyFloorIntegration:
