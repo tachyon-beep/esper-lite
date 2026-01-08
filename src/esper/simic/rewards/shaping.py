@@ -41,7 +41,7 @@ from esper.leyline import DEFAULT_GAMMA, SeedStage
 #       Result: Improved seed integration success rate
 #
 # VALIDATION:
-# Property-based tests in tests/properties/test_pbrs_telescoping.py verify:
+# Property-based tests in tests/simic/properties/test_pbrs_properties.py verify:
 # - Telescoping property holds for arbitrary stage sequences
 # - Potentials are monotonically increasing toward FOSSILIZED
 # - BLENDING has largest increment (value creation phase)
