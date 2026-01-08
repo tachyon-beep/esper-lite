@@ -87,7 +87,7 @@ class DecisionDetailScreen(ModalScreen[None]):
         t.append(f"  Decision ID: {d.decision_id}\n", style="dim")
         t.append(f"  Time:       {d.timestamp.isoformat()}\n", style="dim")
         t.append(f"  Age:        {age_str}\n", style="dim")
-        t.append(f"  Env:        {d.env_id}\n", style="dim")
+        t.append(f"  Episode:    {d.episode}\n", style="dim")
         t.append(f"  Epoch:      {d.epoch}\n", style="dim")
         t.append(f"  Round:      {d.batch}\n", style="dim")
         t.append("\n")

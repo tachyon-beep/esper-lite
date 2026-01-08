@@ -39,7 +39,7 @@ class EnvOverview(Static):
     """Per-environment overview table.
 
     Shows a row per environment with:
-    - Env ID (with A/B test cohort pip)
+    - Episode number (with A/B test cohort pip) - for telemetry search
     - Accuracy (with color coding)
     - Reward (current and avg)
     - Sparklines for accuracy and reward history
@@ -51,7 +51,7 @@ class EnvOverview(Static):
     CRITICAL FIXES:
     1. Accuracy: Green if at best, yellow if stagnant >5 epochs
     2. Reward: >0 green, <-0.5 red, else white
-    3. A/B cohort: Colored pip (●) next to env ID based on reward_mode
+    3. A/B cohort: Colored pip (●) next to episode number based on reward_mode
     """
 
     def __init__(self, num_envs: int = 16, **kwargs: Any) -> None:
@@ -71,7 +71,7 @@ class EnvOverview(Static):
         """Set filter text and refresh display.
 
         Filter matches:
-        - Env ID (number): "3" matches env 3
+        - Row index (number): "3" matches row 3 (env_id 3)
         - Status: "stall" matches stalled envs
         - Empty string: shows all envs
 
@@ -93,7 +93,7 @@ class EnvOverview(Static):
         if not self._filter_text:
             return True
 
-        # Match by env ID
+        # Match by env index (row number)
         if self._filter_text.isdigit():
             return str(env.env_id) == self._filter_text
 
@@ -131,7 +131,7 @@ class EnvOverview(Static):
         slot_ids = self._snapshot.slot_ids if self._snapshot is not None else self._current_slot_ids
 
         # Fixed columns - ordered: Identity → Performance → Trends → Reward breakdown
-        self.table.add_column("Env", key="env")
+        self.table.add_column("Ep", key="episode")
         self.table.add_column("Acc", key="acc")
         self.table.add_column("Ep∑R", key="cum_rwd")  # Episode return so far (Σ raw step rewards)
         self.table.add_column("Loss", key="loss")  # Host loss (for overfitting detection)
@@ -287,11 +287,13 @@ class EnvOverview(Static):
         # Flash row briefly when a rollback occurs (no layout-breaking alert row)
         flash_rollback = self._should_flash_rollback(env, now)
 
-        # Env ID with A/B test cohort pip and action target indicator
+        # Episode number with A/B test cohort pip and action target indicator
+        current_episode = self._snapshot.current_episode if self._snapshot else 0
         last_action_env_id = self._snapshot.last_action_env_id if self._snapshot else None
         last_action_timestamp = self._snapshot.last_action_timestamp if self._snapshot else None
         env_id_cell = self._format_env_id(
             env,
+            episode=current_episode,
             last_action_env_id=last_action_env_id,
             last_action_timestamp=last_action_timestamp,
         )
@@ -465,18 +467,20 @@ class EnvOverview(Static):
     def _format_env_id(
         self,
         env: "EnvState",
+        episode: int,
         last_action_env_id: int | None = None,
         last_action_timestamp: "datetime | None" = None,
     ) -> str:
-        """Format env ID with A/B test cohort pip and action target indicator.
+        """Format episode number with A/B test cohort pip and action target indicator.
 
         Args:
             env: Environment state.
+            episode: Current episode number for telemetry search.
             last_action_env_id: ID of env that received last action (for highlighting).
             last_action_timestamp: When the last action occurred (for hysteresis).
 
         Returns:
-            Formatted env ID string with indicators.
+            Formatted episode number string with indicators.
         """
         from datetime import datetime, timezone
 
@@ -494,8 +498,8 @@ class EnvOverview(Static):
         # A/B cohort pip (existing logic)
         if env.reward_mode and env.reward_mode in _AB_STYLES:
             pip, color = _AB_STYLES[env.reward_mode]
-            return f"{action_pip}[{color}]{pip}[/{color}]{env.env_id}"
-        return f"{action_pip}{env.env_id}"
+            return f"{action_pip}[{color}]{pip}[/{color}]{episode}"
+        return f"{action_pip}{episode}"
 
     def _format_host_loss(self, env: "EnvState") -> str:
         """Format host loss with color coding for overfitting detection.

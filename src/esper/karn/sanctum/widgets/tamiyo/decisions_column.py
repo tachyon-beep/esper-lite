@@ -443,6 +443,9 @@ class DecisionsColumn(Container):
 
         try:
             container = self.query_one("#cards-container", VerticalScroll)
+            # Guard: don't mount cards if container isn't fully attached yet
+            if not container.is_attached:
+                return
 
             # Remove ALL existing cards (use list() to avoid mutation during iteration)
             for card in list(container.query(DecisionCard)):
@@ -482,6 +485,12 @@ class DecisionsColumn(Container):
 
     def _refresh_cards(self) -> None:
         """Refresh card content without structural changes (updates ages)."""
-        container = self.query_one("#cards-container", VerticalScroll)
-        for card in container.query(DecisionCard):
-            card.refresh()
+        try:
+            container = self.query_one("#cards-container", VerticalScroll)
+            if not container.is_attached:
+                return
+            for card in container.query(DecisionCard):
+                card.refresh()
+        except Exception:
+            # Container not yet mounted - safe to skip refresh
+            pass

@@ -1758,6 +1758,7 @@ class SanctumAggregator:
                 decision_id=str(uuid.uuid4())[:8],
                 decision_entropy=payload.decision_entropy or 0.0,
                 env_id=env_id,
+                episode=self._current_episode,
                 epoch=self._current_epoch,
                 batch=self._current_batch,
                 value_residual=total_reward - value_s,

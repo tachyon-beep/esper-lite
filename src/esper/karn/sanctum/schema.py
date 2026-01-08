@@ -1225,6 +1225,8 @@ class DecisionSnapshot:
     decision_id: str = ""
     # Environment ID that made this decision (for TD advantage tracking)
     env_id: int = 0
+    # Episode number for telemetry search
+    episode: int = 0
     # Training context when decision was made
     epoch: int = 0
     batch: int = 0
