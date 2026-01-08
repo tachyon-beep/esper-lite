@@ -1,6 +1,7 @@
 """Tests for reward component telemetry."""
 
 
+from esper.leyline import LifecycleOp, SeedStage
 from esper.simic.rewards import RewardComponentsTelemetry
 from esper.simic.rewards import (
     compute_contribution_reward,
@@ -13,29 +14,20 @@ class TestRewardComponentsTelemetry:
 
     def test_from_contribution_reward(self):
         """Can capture components from compute_contribution_reward."""
-        # Create a mock action enum
-        from enum import IntEnum
-
-        class MockAction(IntEnum):
-            WAIT = 0
-            GERMINATE = 1
-            FOSSILIZE = 2
-            PRUNE = 3
-
         seed_info = SeedInfo(
-            stage=3,  # TRAINING
+            stage=SeedStage.TRAINING.value,
             improvement_since_stage_start=1.5,
             total_improvement=2.0,
             epochs_in_stage=5,
             seed_params=10000,
-            previous_stage=2,
+            previous_stage=SeedStage.GERMINATED.value,
             seed_age_epochs=8,
         )
 
         # Use the extended version that returns components
         # seed_contribution=None uses proxy signal path
         reward, components = compute_contribution_reward(
-            action=MockAction.WAIT,
+            action=LifecycleOp.WAIT,
             seed_contribution=None,
             val_acc=65.0,
             seed_info=seed_info,
@@ -52,23 +44,18 @@ class TestRewardComponentsTelemetry:
 
     def test_components_sum_to_total(self):
         """Component rewards sum to total reward."""
-        from enum import IntEnum
-
-        class MockAction(IntEnum):
-            WAIT = 0
-
         seed_info = SeedInfo(
-            stage=3,
+            stage=SeedStage.TRAINING.value,
             improvement_since_stage_start=1.0,
             total_improvement=1.5,
             epochs_in_stage=3,
             seed_params=5000,
-            previous_stage=2,
+            previous_stage=SeedStage.GERMINATED.value,
             seed_age_epochs=5,
         )
 
         reward, components = compute_contribution_reward(
-            action=MockAction.WAIT,
+            action=LifecycleOp.WAIT,
             seed_contribution=None,
             val_acc=60.0,
             seed_info=seed_info,

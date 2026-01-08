@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import cast
 
 from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
+from esper.leyline import SeedStage
 from esper.leyline.telemetry import (
     TelemetryEvent,
     AnalyticsSnapshotPayload,
@@ -28,7 +29,7 @@ def test_reward_components_flow_end_to_end(tmp_path):
     rc = RewardComponentsTelemetry(
         bounded_attribution=0.5,
         compute_rent=-0.1,
-        seed_stage=2,
+        seed_stage=SeedStage.GERMINATED.value,
         action_shaping=0.05,
         terminal_bonus=0.0,
         total_reward=0.45,
@@ -70,7 +71,7 @@ def test_reward_components_flow_end_to_end(tmp_path):
 
     # 5. Verify all fields came through
     assert result is not None
-    assert result[0] == 2  # seed_stage - WAS MISSING BEFORE
+    assert result[0] == SeedStage.GERMINATED.value  # seed_stage - WAS MISSING BEFORE
     assert result[1] == 0.05  # action_shaping - WAS MISSING BEFORE
     assert result[2] == 0.5  # bounded_attribution
     assert result[3] == 0.78  # val_acc - WAS MISSING BEFORE
@@ -101,7 +102,7 @@ def test_reward_components_all_fields_serialized(tmp_path):
         num_contributing_fossilized=1,
         action_name="GERMINATE",
         action_success=True,
-        seed_stage=3,
+        seed_stage=SeedStage.TRAINING.value,
         epoch=15,
         val_acc=0.82,
         acc_at_germination=0.65,

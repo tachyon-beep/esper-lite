@@ -105,12 +105,9 @@ class TestComputeSeedPotential:
 class TestPBRSStageBonus:
     """Tests for PBRS stage bonus behaviour using unified reward."""
 
-    class _TestAction(IntEnum):
-        NOOP = 0
-
     def test_transition_bonus_not_repeated_in_stage(self):
         """PBRS bonus for TRAINING->BLENDING transition should not repeat every epoch."""
-        action = self._TestAction.NOOP
+        action = LifecycleOp.WAIT  # WAIT=0 is the no-op action
 
         # Step immediately after TRAINING->BLENDING transition
         seed_step1 = SeedInfo(
@@ -263,9 +260,6 @@ class TestPruneContributionShaping:
 class TestWaitBlendingShaping:
     """Tests for WAIT action at BLENDING stage using unified reward."""
 
-    class _TestAction(IntEnum):
-        WAIT = 0
-
     def _make_seed_info(self, stage: int, improvement: float, epochs: int = 1) -> SeedInfo:
         return SeedInfo(
             stage=stage,
@@ -282,7 +276,7 @@ class TestWaitBlendingShaping:
         seed_info = self._make_seed_info(STAGE_BLENDING, improvement=1.0)
 
         reward = compute_contribution_reward(
-            action=self._TestAction.WAIT,
+            action=LifecycleOp.WAIT,
             seed_contribution=1.0,  # Positive contribution
             val_acc=70.0,
             seed_info=seed_info,
@@ -360,7 +354,6 @@ class TestContributionRewardComponents:
         from esper.leyline import SeedStage
 
         # Create a mock action enum
-        from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
@@ -398,7 +391,6 @@ class TestContributionRewardComponents:
         """Test that component values sum to total_reward."""
         from esper.leyline import SeedStage
 
-        from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
@@ -475,10 +467,6 @@ class TestContributionRewardComponents:
         """Test that components include action and epoch context."""
         from esper.leyline import SeedStage
 
-        from enum import IntEnum
-        class MockAction(IntEnum):
-            PRUNE = 1
-
         seed_info = SeedInfo(
             stage=SeedStage.TRAINING.value,
             improvement_since_stage_start=-1.0,
@@ -490,7 +478,7 @@ class TestContributionRewardComponents:
         )
 
         reward, components = compute_contribution_reward(
-            action=MockAction.PRUNE,
+            action=LifecycleOp.PRUNE,
             seed_contribution=-0.5,
             val_acc=68.0,
             seed_info=seed_info,
@@ -507,7 +495,6 @@ class TestContributionRewardComponents:
         """Test that components include DRL Expert recommended diagnostic fields."""
         from esper.leyline import SeedStage
 
-        from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
@@ -545,9 +532,6 @@ class TestContributionRewardComponents:
 class TestProxySignalPath:
     """Tests for the proxy signal path (when seed_contribution is None)."""
 
-    class _TestAction(IntEnum):
-        WAIT = 0
-
     def test_positive_acc_delta_gives_reward(self):
         """Positive acc_delta should give positive bounded_attribution."""
         seed_info = SeedInfo(
@@ -561,7 +545,7 @@ class TestProxySignalPath:
         )
 
         reward, components = compute_contribution_reward(
-            action=self._TestAction.WAIT,
+            action=LifecycleOp.WAIT,
             seed_contribution=None,  # Proxy path
             val_acc=65.0,
             seed_info=seed_info,
@@ -591,7 +575,7 @@ class TestProxySignalPath:
         )
 
         reward, components = compute_contribution_reward(
-            action=self._TestAction.WAIT,
+            action=LifecycleOp.WAIT,
             seed_contribution=None,  # Proxy path
             val_acc=64.0,
             seed_info=seed_info,
@@ -617,7 +601,7 @@ class TestProxySignalPath:
         )
 
         reward, components = compute_contribution_reward(
-            action=self._TestAction.WAIT,
+            action=LifecycleOp.WAIT,
             seed_contribution=None,
             val_acc=65.0,
             seed_info=seed_info,
@@ -637,9 +621,7 @@ class TestRansomwareSeedDetection:
     but negative total_improvement (hurt overall performance).
     """
 
-    class _TestAction(IntEnum):
-        WAIT = 0
-        FOSSILIZE = 1
+    # Use production LifecycleOp values directly - see leyline/factored_actions.py
 
     def test_fossilize_penalty_for_negative_total_delta(self):
         """FOSSILIZE with negative total_improvement should be penalized."""
@@ -696,7 +678,6 @@ class TestRansomwareSeedDetection:
 
     def test_blending_warning_escalates_over_epochs(self):
         """Blending warning should escalate as seed stays with negative trajectory."""
-        from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
@@ -733,7 +714,6 @@ class TestRansomwareSeedDetection:
 
     def test_no_blending_warning_for_positive_trajectory(self):
         """No blending warning when total_improvement is positive."""
-        from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
@@ -760,7 +740,6 @@ class TestRansomwareSeedDetection:
 
     def test_attribution_discount_for_negative_total_improvement(self):
         """Attribution should be discounted when total_improvement is negative."""
-        from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
@@ -800,7 +779,6 @@ class TestRansomwareSeedDetection:
 
     def test_attribution_discount_sigmoid_values(self):
         """Verify sigmoid discount values at specific total_improvement levels."""
-        from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
@@ -847,7 +825,6 @@ class TestRansomwareSeedDetection:
         Continuing to reward based on counterfactual would inflate rewards
         indefinitely for envs with successful fossilized seeds.
         """
-        from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
@@ -916,7 +893,6 @@ class TestHoldingIndecisionPenalty:
 
     def test_no_penalty_epoch_1_grace_period(self):
         """Epoch 1 in HOLDING should have no WAIT penalty (grace period)."""
-        from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
@@ -948,7 +924,6 @@ class TestHoldingIndecisionPenalty:
 
         DRL Expert review 2025-12-10: exponential penalty to overcome +7.5 attribution.
         """
-        from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
@@ -983,7 +958,6 @@ class TestHoldingIndecisionPenalty:
         the value function. Schedule: epoch 1: 0, epoch 2: -0.1, epoch 3: -0.15,
         epoch 4: -0.2, epoch 5: -0.25, epoch 6+: -0.3 (capped)
         """
-        from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
@@ -1045,7 +1019,6 @@ class TestHoldingIndecisionPenalty:
 
     def test_no_penalty_without_counterfactual_data(self):
         """No penalty if counterfactual data not yet available."""
-        from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
@@ -1082,7 +1055,6 @@ class TestSeedlessAttribution:
 
         Host-only learning shouldn't be credited as if a seed contributed.
         """
-        from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
@@ -1106,12 +1078,8 @@ class TestSeedlessAttribution:
 
     def test_seedless_germinate_gets_no_attribution(self):
         """GERMINATE with no existing seed should get zero attribution."""
-        from enum import IntEnum
-        class MockAction(IntEnum):
-            GERMINATE_NORM = 1
-
         _, components = compute_contribution_reward(
-            action=MockAction.GERMINATE_NORM,
+            action=LifecycleOp.GERMINATE,
             seed_contribution=None,
             val_acc=50.0,
             seed_info=None,  # No seed yet (germinating creates one)
@@ -1132,7 +1100,6 @@ class TestSeedlessAttribution:
         This is different from seedless - a seed exists but hasn't reached
         BLENDING yet, so we use acc_delta as a proxy signal.
         """
-        from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
@@ -1172,7 +1139,6 @@ class TestRatioPenalty:
 
     def test_no_penalty_for_low_contribution(self):
         """Contribution < 1.0 should not trigger ratio penalty."""
-        from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
@@ -1206,7 +1172,6 @@ class TestRatioPenalty:
         attribution. The ratio_penalty is then skipped (attribution_discount < 0.5) to
         avoid penalty stacking where the same ransomware seed is punished multiple times.
         """
-        from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
@@ -1242,7 +1207,6 @@ class TestRatioPenalty:
 
     def test_penalty_for_high_contribution_low_improvement(self):
         """High contribution with very low improvement should trigger penalty."""
-        from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
@@ -1279,7 +1243,6 @@ class TestRatioPenalty:
         This test uses low positive improvement (0.05) which keeps attribution_discount=1.0
         but still triggers the ratio penalty for suspiciously high contribution.
         """
-        from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
@@ -1319,7 +1282,6 @@ class TestRatioPenalty:
 
     def test_no_penalty_for_healthy_ratio(self):
         """Healthy seeds (contribution <= 5x improvement) should have no penalty."""
-        from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
@@ -1349,7 +1311,6 @@ class TestRatioPenalty:
 
     def test_penalty_for_suspicious_high_ratio(self):
         """Ratio > 5x should trigger escalating penalty."""
-        from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
@@ -1394,7 +1355,6 @@ class TestPenaltyAntiStacking:
         attribution_discount zeros the attribution. Additional penalties via
         ratio_penalty or holding_warning create an unlearnable landscape.
         """
-        from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
@@ -1440,7 +1400,6 @@ class TestPenaltyAntiStacking:
 
     def test_legitimate_seed_still_gets_holding_penalty(self):
         """Legitimate seed farming should still receive HOLD penalty."""
-        from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
@@ -1615,7 +1574,6 @@ class TestFossilizeTerminalBonus:
         total_improvement >= MIN_FOSSILIZE_CONTRIBUTION) get terminal bonus. This
         prevents bad fossilizations from being NPV-positive.
         """
-        from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
@@ -1657,7 +1615,6 @@ class TestFossilizeTerminalBonus:
 
     def test_no_terminal_bonus_before_max_epoch(self):
         """Terminal bonus should only apply at max_epochs."""
-        from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
@@ -1678,7 +1635,6 @@ class TestFossilizeTerminalBonus:
 
     def test_telemetry_tracks_fossilized_count(self):
         """Telemetry should track num_fossilized_seeds for debugging."""
-        from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
@@ -1698,7 +1654,6 @@ class TestFossilizeTerminalBonus:
 
     def test_terminal_bonus_config_override(self):
         """Custom config should allow adjusting fossilize_terminal_scale."""
-        from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
