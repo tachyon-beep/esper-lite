@@ -227,3 +227,17 @@ def test_shaped_prune_inverts_attribution_sign() -> None:
 
     assert components.bounded_attribution == pytest.approx(-3.0)
     assert reward == pytest.approx(-3.0)
+
+
+def test_timing_discount_config_defaults() -> None:
+    """D3-Timing: Config should have timing discount parameters with sensible defaults."""
+    from esper.simic.rewards import ContributionRewardConfig
+
+    config = ContributionRewardConfig()
+
+    # Default warmup period: 10 epochs before full credit
+    assert config.germination_warmup_epochs == 10
+    # Default floor: epoch-1 germination gets 40% credit
+    assert config.germination_discount_floor == 0.4
+    # Default: timing discount enabled
+    assert config.disable_timing_discount is False

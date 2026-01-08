@@ -213,6 +213,14 @@ class ContributionRewardConfig:
     fossilized_maintenance_cost: float = 0.002
     first_germinate_bonus: float = 0.2
 
+    # === D3: Anti-Timing-Gaming (early germination discount) ===
+    # Seeds germinated before warmup period receive discounted attribution.
+    # This prevents "germinate early to claim host drift" gaming pattern.
+    # Linear discount: epoch 1 = discount_floor, epoch warmup = 1.0
+    germination_warmup_epochs: int = 10
+    germination_discount_floor: float = 0.4
+    disable_timing_discount: bool = False
+
     @staticmethod
     def default() -> "ContributionRewardConfig":
         """Return default configuration."""
