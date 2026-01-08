@@ -140,8 +140,12 @@ def compute_entropy_floor_penalty(
         Scalar penalty to add to total loss (larger = more penalty)
     """
     if not entropy:
-        # Early return if no entropy provided (defensive)
-        return torch.tensor(0.0)
+        # Early return if no entropy provided
+        # Get device from head_masks if available to avoid device mismatch
+        if head_masks:
+            device = next(iter(head_masks.values())).device
+            return torch.tensor(0.0, device=device)
+        return torch.tensor(0.0)  # Fallback only if both empty
 
     # Get device from first entropy tensor
     device = next(iter(entropy.values())).device
@@ -170,7 +174,8 @@ def compute_entropy_floor_penalty(
                 head_ent = head_ent.mean()
 
         # Get per-head penalty coefficient (no isinstance - always dict)
-        head_coef = penalty_coef.get(head, 0.1)
+        # Direct access: missing key is a bug in caller, should fail loudly
+        head_coef = penalty_coef[head]
 
         # Quadratic penalty for entropy below floor
         # Use Python scalar for floor - PyTorch broadcasts efficiently
