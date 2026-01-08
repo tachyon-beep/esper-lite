@@ -900,6 +900,43 @@ def _compute_timing_discount(
     return discount_floor + (1.0 - discount_floor) * progress
 
 
+def _compute_attributed_value(
+    progress: float,
+    seed_contribution: float,
+    formula: str,
+) -> float:
+    """Compute attributed value using the specified formula.
+
+    Args:
+        progress: Accuracy improvement since germination (val_acc - acc_at_germination)
+        seed_contribution: Counterfactual contribution of the seed
+        formula: One of "geometric", "harmonic", "minimum"
+
+    Returns:
+        Attributed value combining progress and contribution
+
+    Formulas:
+        - geometric: sqrt(progress * contribution) - rewards host drift
+        - harmonic: 2*p*c/(p+c) - dominated by smaller value, anti-gaming
+        - minimum: min(progress, contribution) - very conservative
+    """
+    if progress <= 0 or seed_contribution <= 0:
+        return 0.0
+
+    if formula == "geometric":
+        return math.sqrt(progress * seed_contribution)
+
+    elif formula == "harmonic":
+        # Harmonic mean: 2ab/(a+b), dominated by smaller value
+        return 2 * progress * seed_contribution / (progress + seed_contribution)
+
+    elif formula == "minimum":
+        return min(progress, seed_contribution)
+
+    else:
+        raise ValueError(f"Unknown attribution formula: {formula}")
+
+
 def _check_reward_hacking(
     hub: Any,
     *,
@@ -1008,6 +1045,7 @@ __all__ = [
     "_contribution_prune_shaping",
     "_contribution_fossilize_shaping",
     "_compute_timing_discount",
+    "_compute_attributed_value",
     "_check_reward_hacking",
     "_check_ransomware_signature",
     "get_intervention_cost",

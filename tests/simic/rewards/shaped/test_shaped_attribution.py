@@ -419,3 +419,78 @@ def test_attribution_formula_config_default() -> None:
 
     # Default: geometric mean (current behavior)
     assert config.attribution_formula == "geometric"
+
+
+def test_compute_attributed_geometric_mean() -> None:
+    """D3-Attribution: Geometric mean formula (current behavior)."""
+    from esper.simic.rewards.contribution import _compute_attributed_value
+
+    # sqrt(4 * 9) = 6.0
+    result = _compute_attributed_value(
+        progress=4.0,
+        seed_contribution=9.0,
+        formula="geometric",
+    )
+    assert result == pytest.approx(6.0)
+
+
+def test_compute_attributed_harmonic_mean() -> None:
+    """D3-Attribution: Harmonic mean dominated by smaller value."""
+    from esper.simic.rewards.contribution import _compute_attributed_value
+
+    # 2 * 4 * 9 / (4 + 9) = 72 / 13 ≈ 5.54
+    result = _compute_attributed_value(
+        progress=4.0,
+        seed_contribution=9.0,
+        formula="harmonic",
+    )
+    assert result == pytest.approx(72 / 13)
+
+
+def test_compute_attributed_harmonic_handles_zero() -> None:
+    """D3-Attribution: Harmonic mean returns 0 when either input is 0."""
+    from esper.simic.rewards.contribution import _compute_attributed_value
+
+    result = _compute_attributed_value(
+        progress=0.0,
+        seed_contribution=9.0,
+        formula="harmonic",
+    )
+    assert result == pytest.approx(0.0)
+
+
+def test_compute_attributed_minimum() -> None:
+    """D3-Attribution: Minimum formula is very conservative."""
+    from esper.simic.rewards.contribution import _compute_attributed_value
+
+    result = _compute_attributed_value(
+        progress=4.0,
+        seed_contribution=9.0,
+        formula="minimum",
+    )
+    assert result == pytest.approx(4.0)
+
+
+def test_compute_attributed_harmonic_vs_geometric_with_large_progress() -> None:
+    """D3-Attribution: Harmonic much lower than geometric when progress >> contribution.
+
+    This is the key anti-gaming property: when a seed claims credit for
+    massive host drift (progress=29) with small actual contribution (0.5),
+    harmonic mean gives much less credit than geometric mean.
+    """
+    from esper.simic.rewards.contribution import _compute_attributed_value
+
+    progress = 29.0  # Host improved 29pp since germination
+    contribution = 0.5  # Seed only contributed 0.5pp
+
+    geometric = _compute_attributed_value(progress, contribution, "geometric")
+    harmonic = _compute_attributed_value(progress, contribution, "harmonic")
+
+    # Geometric: sqrt(29 * 0.5) ≈ 3.81
+    assert geometric == pytest.approx(3.807, rel=0.01)
+
+    # Harmonic: 2 * 29 * 0.5 / (29 + 0.5) = 29 / 29.5 ≈ 0.98
+    assert harmonic == pytest.approx(0.983, rel=0.01)
+
+    # Harmonic is ~4x lower for this gaming scenario
+    assert harmonic < geometric * 0.3
