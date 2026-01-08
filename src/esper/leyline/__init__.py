@@ -211,15 +211,17 @@ ENTROPY_COLLAPSE_PER_HEAD: dict[str, float] = {
 
 # Per-head entropy floor penalty coefficients (DRL Expert recommendation)
 # Sparse heads need stronger penalty signal to compensate for fewer gradients
+# 2026-01-09: Increased blueprint/tempo from 0.20 to 0.50 after observing
+# collapse in training run (entropy dropped to 0.01-0.02 despite floor of 0.40)
 ENTROPY_FLOOR_PENALTY_COEF: dict[str, float] = {
     "op": 0.05,           # Always active - minimal penalty needed
-    "slot": 0.10,         # Usually active
-    "blueprint": 0.20,    # GERMINATE only - needs stronger signal
-    "style": 0.15,        # GERMINATE + SET_ALPHA_TARGET
-    "tempo": 0.20,        # GERMINATE only - needs stronger signal
-    "alpha_target": 0.12, # GERMINATE + SET_ALPHA_TARGET
-    "alpha_speed": 0.10,  # SET_ALPHA_TARGET + PRUNE
-    "alpha_curve": 0.10,  # SET_ALPHA_TARGET + PRUNE
+    "slot": 0.15,         # Usually active (~60%) - increased from 0.10
+    "blueprint": 0.50,    # GERMINATE only (~18%) - CRITICAL: prone to collapse
+    "style": 0.20,        # GERMINATE + SET_ALPHA_TARGET (~22%) - increased from 0.15
+    "tempo": 0.50,        # GERMINATE only (~18%) - CRITICAL: prone to collapse
+    "alpha_target": 0.15, # GERMINATE + SET_ALPHA_TARGET (~22%) - increased from 0.12
+    "alpha_speed": 0.12,  # SET_ALPHA_TARGET + PRUNE (~19%) - increased from 0.10
+    "alpha_curve": 0.12,  # SET_ALPHA_TARGET + PRUNE (~19%) - increased from 0.10
 }
 
 # M21: PPO ratio anomaly detection thresholds.

@@ -344,11 +344,15 @@ class PPOAgent:
         annealed = self.entropy_coef_start + progress * (self.entropy_coef_end - self.entropy_coef_start)
         return max(annealed, self.entropy_coef_min)
 
-    def _get_penalty_decay(self, progress: float) -> float:
-        """Decay entropy floor penalty coefficient in late training.
+    def _get_penalty_schedule(self, progress: float) -> float:
+        """Schedule entropy floor penalty coefficient across training phases.
 
-        After 75% of training, linearly decay to 0.5x.
-        This allows natural convergence while preventing early collapse.
+        DRL Expert recommendation: Early-training boost + late-training decay.
+
+        Schedule:
+        - 0-25% (early): 1.5x boost - establish diverse exploration habits
+        - 25-75% (mid): 1.0x baseline
+        - 75-100% (late): decay from 1.0x to 0.5x - allow natural convergence
 
         PyTorch Expert Note: Apply as scalar multiplier OUTSIDE compute_losses
         to maintain clean separation of concerns.
@@ -357,13 +361,18 @@ class PPOAgent:
             progress: Training progress [0, 1] (train_steps / total_train_steps)
 
         Returns:
-            Decay factor [0.5, 1.0]
+            Schedule factor [0.5, 1.5]
         """
-        if progress < 0.75:
+        if progress < 0.25:
+            # Early training: 1.5x boost to establish exploration
+            return 1.5
+        elif progress < 0.75:
+            # Mid training: baseline
             return 1.0
-        # Linear decay from 1.0 at 75% to 0.5 at 100%
-        decay_progress = (progress - 0.75) / 0.25
-        return 1.0 - 0.5 * decay_progress
+        else:
+            # Late training: decay from 1.0 at 75% to 0.5 at 100%
+            decay_progress = (progress - 0.75) / 0.25
+            return 1.0 - 0.5 * decay_progress
 
     def _collect_cuda_memory_metrics(self) -> dict[str, float]:
         """Collect CUDA memory statistics for infrastructure monitoring.
@@ -907,15 +916,15 @@ class PPOAgent:
             valid_old_values = data["values"][valid_mask]
             entropy_coef = self.get_entropy_coef()
 
-            # Compute training progress for late-training decay
-            # This allows natural policy convergence after 75% of training while
-            # preventing premature entropy collapse in early/mid training
+            # Compute training progress for penalty schedule
+            # Schedule: 1.5x boost (0-25%), 1.0x baseline (25-75%), decay to 0.5x (75-100%)
+            # This prevents early entropy collapse while allowing late-training convergence
             progress = self.train_steps / self.total_train_steps
-            decay_factor = self._get_penalty_decay(progress)
+            schedule_factor = self._get_penalty_schedule(progress)
 
-            # Apply decay to ALL per-head coefficients uniformly
-            decayed_coef = {
-                head: coef * decay_factor
+            # Apply schedule to ALL per-head coefficients uniformly
+            scheduled_coef = {
+                head: coef * schedule_factor
                 for head, coef in self.entropy_floor_penalty_coef.items()
             }
 
@@ -936,7 +945,7 @@ class PPOAgent:
                 value_coef=self.value_coef,
                 head_names=HEAD_NAMES,
                 entropy_floor=self.entropy_floor,
-                entropy_floor_penalty_coef=decayed_coef,  # Decayed coefficients
+                entropy_floor_penalty_coef=scheduled_coef,  # Scheduled coefficients
             )
             update_result = PPOUpdateResult(ratio_metrics=ratio_metrics, loss_metrics=losses)
             loss_metrics = update_result.loss_metrics

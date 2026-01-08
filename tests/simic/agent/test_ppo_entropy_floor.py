@@ -287,16 +287,21 @@ class TestEntropyFloorIntegration:
         )
 
 
-class TestLateTrainingDecay:
-    """Tests for late-training penalty decay in PPOAgent."""
+class TestPenaltySchedule:
+    """Tests for three-phase penalty schedule in PPOAgent.
 
-    def test_no_decay_before_75_percent(self) -> None:
-        """Decay factor should be 1.0 before 75% of training."""
+    Schedule:
+    - 0-25% (early): 1.5x boost - establish diverse exploration habits
+    - 25-75% (mid): 1.0x baseline
+    - 75-100% (late): decay from 1.0x to 0.5x - allow natural convergence
+    """
+
+    def test_early_training_boost(self) -> None:
+        """Schedule factor should be 1.5 during first 25% of training."""
         from esper.simic.agent.ppo_agent import PPOAgent
         from esper.tamiyo.policy.factory import create_policy
         from esper.leyline.slot_config import SlotConfig
 
-        # Create minimal PPOAgent to test _get_penalty_decay
         slot_config = SlotConfig.for_grid(2, 2)
         policy = create_policy(
             policy_type="lstm",
@@ -310,12 +315,36 @@ class TestLateTrainingDecay:
             total_train_steps=1000,
         )
 
-        # Test the decay function directly at various points before 75%
-        assert agent._get_penalty_decay(0.0) == 1.0, "Decay at 0% should be 1.0"
-        assert agent._get_penalty_decay(0.25) == 1.0, "Decay at 25% should be 1.0"
-        assert agent._get_penalty_decay(0.50) == 1.0, "Decay at 50% should be 1.0"
-        assert agent._get_penalty_decay(0.74) == 1.0, "Decay at 74% should be 1.0"
-        assert agent._get_penalty_decay(0.749) == 1.0, "Decay at 74.9% should be 1.0"
+        # Test early-training boost (0-25%)
+        assert agent._get_penalty_schedule(0.0) == 1.5, "Schedule at 0% should be 1.5"
+        assert agent._get_penalty_schedule(0.10) == 1.5, "Schedule at 10% should be 1.5"
+        assert agent._get_penalty_schedule(0.24) == 1.5, "Schedule at 24% should be 1.5"
+        assert agent._get_penalty_schedule(0.249) == 1.5, "Schedule at 24.9% should be 1.5"
+
+    def test_mid_training_baseline(self) -> None:
+        """Schedule factor should be 1.0 during 25-75% of training."""
+        from esper.simic.agent.ppo_agent import PPOAgent
+        from esper.tamiyo.policy.factory import create_policy
+        from esper.leyline.slot_config import SlotConfig
+
+        slot_config = SlotConfig.for_grid(2, 2)
+        policy = create_policy(
+            policy_type="lstm",
+            slot_config=slot_config,
+            device="cpu",
+        )
+        agent = PPOAgent(
+            policy=policy,
+            slot_config=slot_config,
+            device="cpu",
+            total_train_steps=1000,
+        )
+
+        # Test mid-training baseline (25-75%)
+        assert agent._get_penalty_schedule(0.25) == 1.0, "Schedule at 25% should be 1.0"
+        assert agent._get_penalty_schedule(0.50) == 1.0, "Schedule at 50% should be 1.0"
+        assert agent._get_penalty_schedule(0.74) == 1.0, "Schedule at 74% should be 1.0"
+        assert agent._get_penalty_schedule(0.749) == 1.0, "Schedule at 74.9% should be 1.0"
 
     def test_linear_decay_after_75_percent(self) -> None:
         """Decay should linearly decrease from 1.0 at 75% to 0.5 at 100%."""
@@ -336,19 +365,19 @@ class TestLateTrainingDecay:
             total_train_steps=1000,
         )
 
-        # At 75% -> 1.0 (boundary)
-        assert agent._get_penalty_decay(0.75) == pytest.approx(1.0)
+        # At 75% -> 1.0 (boundary, start of decay)
+        assert agent._get_penalty_schedule(0.75) == pytest.approx(1.0)
 
         # At 87.5% -> 0.75 (halfway between 1.0 and 0.5)
-        assert agent._get_penalty_decay(0.875) == pytest.approx(0.75)
+        assert agent._get_penalty_schedule(0.875) == pytest.approx(0.75)
 
         # At 93.75% -> 0.625 (3/4 of the way)
-        assert agent._get_penalty_decay(0.9375) == pytest.approx(0.625)
+        assert agent._get_penalty_schedule(0.9375) == pytest.approx(0.625)
 
         # At 100% -> 0.5
-        assert agent._get_penalty_decay(1.0) == pytest.approx(0.5)
+        assert agent._get_penalty_schedule(1.0) == pytest.approx(0.5)
 
-    def test_decay_at_exact_boundaries(self) -> None:
+    def test_schedule_at_exact_boundaries(self) -> None:
         """Test exact boundary values for numerical precision."""
         from esper.simic.agent.ppo_agent import PPOAgent
         from esper.tamiyo.policy.factory import create_policy
@@ -366,19 +395,20 @@ class TestLateTrainingDecay:
             device="cpu",
         )
 
-        # Verify that at exactly 75%, the decay is still 1.0 (no decay yet)
-        decay_at_75 = agent._get_penalty_decay(0.75)
-        assert decay_at_75 == pytest.approx(1.0), f"Expected 1.0 at 75%, got {decay_at_75}"
+        # Verify exact boundary values
+        assert agent._get_penalty_schedule(0.0) == 1.5, "Start of training should be boosted"
+        assert agent._get_penalty_schedule(0.25) == 1.0, "At 25%, transition to baseline"
+        assert agent._get_penalty_schedule(0.75) == 1.0, "At 75%, start of decay (still 1.0)"
 
         # Verify decay decreases monotonically after 75%
-        prev_decay = 1.0
+        prev_factor = 1.0
         for progress in [0.76, 0.80, 0.85, 0.90, 0.95, 1.0]:
-            decay = agent._get_penalty_decay(progress)
-            assert decay < prev_decay, f"Decay should decrease: {decay} < {prev_decay} at {progress}"
-            prev_decay = decay
+            factor = agent._get_penalty_schedule(progress)
+            assert factor < prev_factor, f"Factor should decrease: {factor} < {prev_factor} at {progress}"
+            prev_factor = factor
 
-    def test_decay_bounds(self) -> None:
-        """Decay factor should always be in [0.5, 1.0]."""
+    def test_schedule_bounds(self) -> None:
+        """Schedule factor should always be in [0.5, 1.5]."""
         from esper.simic.agent.ppo_agent import PPOAgent
         from esper.tamiyo.policy.factory import create_policy
         from esper.leyline.slot_config import SlotConfig
@@ -396,12 +426,12 @@ class TestLateTrainingDecay:
         )
 
         # Test full range of progress values
-        for progress in [0.0, 0.25, 0.5, 0.74, 0.75, 0.8, 0.9, 0.99, 1.0]:
-            decay = agent._get_penalty_decay(progress)
-            assert 0.5 <= decay <= 1.0, f"Decay {decay} out of bounds at progress {progress}"
+        for progress in [0.0, 0.10, 0.24, 0.25, 0.5, 0.74, 0.75, 0.8, 0.9, 0.99, 1.0]:
+            factor = agent._get_penalty_schedule(progress)
+            assert 0.5 <= factor <= 1.5, f"Schedule factor {factor} out of bounds at progress {progress}"
 
-    def test_decay_applied_to_coefficients_in_update(self) -> None:
-        """Verify that decay is applied to coefficients during update."""
+    def test_schedule_applied_to_coefficients_in_update(self) -> None:
+        """Verify that schedule factor is applied to coefficients during update."""
         from esper.simic.agent.ppo_agent import PPOAgent
         from esper.tamiyo.policy.factory import create_policy
         from esper.leyline.slot_config import SlotConfig
@@ -413,32 +443,33 @@ class TestLateTrainingDecay:
             device="cpu",
         )
 
-        # Create agent at 90% progress (should have decay factor 0.7)
+        # Test at different progress points
         agent = PPOAgent(
             policy=policy,
             slot_config=slot_config,
             device="cpu",
             total_train_steps=1000,
         )
-        agent.train_steps = 900  # 90% progress
 
-        # Calculate expected decay at 90%
-        # decay_progress = (0.9 - 0.75) / 0.25 = 0.6
-        # decay_factor = 1.0 - 0.5 * 0.6 = 0.7
-        expected_decay = agent._get_penalty_decay(0.9)
+        # Early training (10% progress) - should have 1.5x boost
+        agent.train_steps = 100
+        expected_boost = agent._get_penalty_schedule(0.1)
+        assert expected_boost == 1.5
+
+        # Mid training (50% progress) - should have 1.0x baseline
+        agent.train_steps = 500
+        expected_baseline = agent._get_penalty_schedule(0.5)
+        assert expected_baseline == 1.0
+
+        # Late training (90% progress) - should have 0.7x decay
+        agent.train_steps = 900
+        expected_decay = agent._get_penalty_schedule(0.9)
         assert expected_decay == pytest.approx(0.7)
 
-        # Verify the decay factor computation matches expected formula
-        progress = agent.train_steps / agent.total_train_steps
-        actual_decay = agent._get_penalty_decay(progress)
-        assert actual_decay == pytest.approx(0.7)
-
-        # Verify decayed coefficients would be correct
-        expected_decayed_coef = {
-            head: coef * actual_decay
+        # Verify scheduled coefficients are correct at 90%
+        scheduled_coef = {
+            head: coef * expected_decay
             for head, coef in agent.entropy_floor_penalty_coef.items()
         }
-
-        # Check a specific head
         blueprint_base = agent.entropy_floor_penalty_coef["blueprint"]
-        assert expected_decayed_coef["blueprint"] == pytest.approx(blueprint_base * 0.7)
+        assert scheduled_coef["blueprint"] == pytest.approx(blueprint_base * 0.7)
