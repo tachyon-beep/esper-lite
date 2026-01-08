@@ -903,7 +903,7 @@ def _compute_timing_discount(
 def _compute_attributed_value(
     progress: float,
     seed_contribution: float,
-    formula: str,
+    formula: Literal["geometric", "harmonic", "minimum"],
 ) -> float:
     """Compute attributed value using the specified formula.
 
