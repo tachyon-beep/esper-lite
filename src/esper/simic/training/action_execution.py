@@ -462,7 +462,10 @@ def execute_actions(
             escrow_credit_prev = env_state.escrow_credit[target_slot]
             fossilized_seed_params = 0
             # D2: Count active seeds (non-fossilized seeds with state)
-            # Active seeds are in GERMINATED, TRAINING, BLENDING, or HOLDING stages
+            # Active seeds are in GERMINATED, TRAINING, BLENDING, or HOLDING stages.
+            # PRUNED seeds are excluded: once Tamiyo orders a prune, the seed is "dead"
+            # even if alpha hasn't decayed to 0 yet. Penalizing the decay period would
+            # create perverse incentives to delay pruning until the last moment.
             n_active_seeds = 0
             for slot_id in slots:
                 slot_obj = cast(SeedSlotProtocol, model.seed_slots[slot_id])
@@ -477,8 +480,11 @@ def execute_actions(
                         fossilized_seed_params += sum(
                             p.numel() for p in slot_obj.alpha_schedule.parameters()
                         )
+                elif slot_seed_state.stage == SeedStage.PRUNED:
+                    # PRUNED seeds don't count as active - Tamiyo already decided their fate
+                    pass
                 else:
-                    # Non-fossilized seed with state = active seed
+                    # Non-fossilized, non-pruned seed with state = active seed
                     n_active_seeds += 1
             acc_at_germination = (
                 env_state.acc_at_germination[target_slot]
@@ -562,7 +568,11 @@ def execute_actions(
                 slot_seed_state = slot_obj.state
                 if slot_seed_state is None:
                     continue
-                if slot_seed_state.stage != SeedStage.FOSSILIZED:
+                # Only forfeit escrow for seeds that are still "in play" (not terminal states).
+                # FOSSILIZED: Successful integration, escrow is earned
+                # PRUNED: Tamiyo already ordered removal, escrow was clawed back at prune time
+                # Penalizing PRUNED seeds during alpha decay would unfairly punish timely pruning.
+                if slot_seed_state.stage not in (SeedStage.FOSSILIZED, SeedStage.PRUNED):
                     escrow_forfeit += env_state.escrow_credit[slot_id]
             if escrow_forfeit != 0.0:
                 reward -= escrow_forfeit

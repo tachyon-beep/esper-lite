@@ -93,22 +93,44 @@ def apply_terminal_escrow_forfeit(
     *,
     reward: float,
     credits_by_slot: dict[str, float],
-    is_fossilized_by_slot: dict[str, bool],
+    is_fossilized_by_slot: dict[str, bool] | None = None,
+    stage_by_slot: dict[str, SeedStage] | None = None,
 ) -> tuple[float, float]:
     """Apply the vectorized training terminal clawback.
 
     Returns:
         (reward_after_forfeit, escrow_forfeit_component)
 
+    Args:
+        credits_by_slot: Escrow credit balance per slot.
+        is_fossilized_by_slot: Legacy API - True if slot is fossilized. Use stage_by_slot
+            for more precise control.
+        stage_by_slot: Preferred API - SeedStage per slot. FOSSILIZED and PRUNED slots
+            are excluded from forfeit (FOSSILIZED earned it, PRUNED already clawed back).
+
     Note:
         In production, this happens at `epoch == max_epochs` and is recorded as:
-        - `reward -= sum(non_fossilized_credits)`
-        - `components.escrow_forfeit = -sum(non_fossilized_credits)`
+        - `reward -= sum(non_terminal_credits)`
+        - `components.escrow_forfeit = -sum(non_terminal_credits)`
     """
+    if stage_by_slot is None and is_fossilized_by_slot is None:
+        raise ValueError("Must provide either stage_by_slot or is_fossilized_by_slot")
+
+    # Terminal stages that don't forfeit escrow:
+    # - FOSSILIZED: Successfully integrated, escrow is earned
+    # - PRUNED: Already ordered removal, escrow was clawed back at prune time
+    terminal_stages = {SeedStage.FOSSILIZED, SeedStage.PRUNED}
+
     escrow_forfeit = 0.0
     for slot_id, credit in credits_by_slot.items():
-        if not is_fossilized_by_slot[slot_id]:
-            escrow_forfeit += credit
+        if stage_by_slot is not None:
+            if stage_by_slot[slot_id] in terminal_stages:
+                continue
+        elif is_fossilized_by_slot is not None:
+            # Legacy path: only checks fossilized (doesn't know about PRUNED)
+            if is_fossilized_by_slot[slot_id]:
+                continue
+        escrow_forfeit += credit
     if escrow_forfeit == 0.0:
         return reward, 0.0
     return reward - escrow_forfeit, -escrow_forfeit

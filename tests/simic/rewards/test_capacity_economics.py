@@ -375,3 +375,59 @@ class TestCapacityEconomicsRLImplications:
         assert germinate_reward > wait_reward
         assert germinate_reward == pytest.approx(0.2)
         assert wait_reward == pytest.approx(0.0)
+
+    def test_pruned_seeds_excluded_from_n_active_seeds(self) -> None:
+        """PRUNED seeds should NOT count toward n_active_seeds for occupancy rent.
+
+        When Tamiyo orders a prune, the seed transitions to PRUNED but alpha takes
+        time to decay. During this period the slot appears occupied but Tamiyo
+        already made her decision. Charging occupancy rent would create perverse
+        incentives to delay pruning until the last moment.
+
+        Note: This tests the contract - the counting happens in action_execution.py,
+        not in compute_contribution_reward(). This verifies the expected behavior.
+        """
+        config = capacity_config(free_slots=1, seed_occupancy_cost=0.1)
+
+        # Scenario: 2 slots with seeds, but one is PRUNED (decaying)
+        # If PRUNED counted as active: 2 active, 1 excess → 0.1 rent
+        # Correct behavior: 1 active (PRUNED excluded), 0 excess → 0.0 rent
+        #
+        # n_active_seeds should be computed EXCLUDING PRUNED seeds
+        # (this is done in action_execution.py, not here)
+
+        # With correct counting (PRUNED excluded): only 1 active seed
+        reward_correct, components_correct = compute_contribution_reward(
+            action=LifecycleOp.WAIT,
+            seed_contribution=None,
+            val_acc=50.0,
+            seed_info=None,
+            epoch=1,
+            max_epochs=10,
+            config=config,
+            return_components=True,
+            n_active_seeds=1,  # PRUNED seed NOT counted
+            num_fossilized_seeds=0,
+        )
+
+        # With incorrect counting (PRUNED included): 2 active seeds
+        reward_wrong, components_wrong = compute_contribution_reward(
+            action=LifecycleOp.WAIT,
+            seed_contribution=None,
+            val_acc=50.0,
+            seed_info=None,
+            epoch=1,
+            max_epochs=10,
+            config=config,
+            return_components=True,
+            n_active_seeds=2,  # Bug: PRUNED seed counted as active
+            num_fossilized_seeds=0,
+        )
+
+        # Correct: no occupancy rent (1 active = 1 free)
+        assert components_correct.occupancy_rent == pytest.approx(0.0)
+        assert reward_correct == pytest.approx(0.0)
+
+        # Wrong: would charge rent (2 active - 1 free = 1 excess)
+        assert components_wrong.occupancy_rent == pytest.approx(0.1)
+        assert reward_wrong == pytest.approx(-0.1)
