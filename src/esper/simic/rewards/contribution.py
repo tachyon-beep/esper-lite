@@ -6,7 +6,7 @@ import logging
 import math
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from esper.leyline import (
     DEFAULT_GAMMA,
@@ -226,7 +226,7 @@ class ContributionRewardConfig:
     # - "geometric": sqrt(progress * contribution) - current default, rewards host drift
     # - "harmonic": 2*p*c/(p+c) - dominated by smaller value, conservative
     # - "minimum": min(progress, contribution) - very conservative
-    attribution_formula: str = "geometric"
+    attribution_formula: Literal["geometric", "harmonic", "minimum"] = "geometric"
 
     @staticmethod
     def default() -> "ContributionRewardConfig":
