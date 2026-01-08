@@ -10,6 +10,7 @@ import torch.amp as torch_amp
 
 from esper.karn.health import HealthMonitor
 from esper.kasmina.host import MorphogeneticModel
+from esper.utils.data import AugmentationBuffers
 from esper.leyline import (
     DEFAULT_GOVERNOR_ABSOLUTE_THRESHOLD,
     DEFAULT_GOVERNOR_DEATH_PENALTY,
@@ -151,9 +152,13 @@ def create_env_state(
     )
 
     augment_generator = None
+    augment_buffers = None
     if context.gpu_preload_augment:
         augment_generator = torch.Generator(device=env_device)
         augment_generator.manual_seed(base_seed + env_idx * 1009)
+        # Pre-allocate buffers to reduce memory fragmentation during augmentation.
+        # The ensure_capacity() method handles resizing if batch size changes.
+        augment_buffers = AugmentationBuffers(device=env_device)
 
     # Per-env AMP scaler to avoid stream race conditions (GradScaler state is not stream-safe)
     # Use new torch.amp.GradScaler API (torch.cuda.amp.GradScaler deprecated in PyTorch 2.4+)
@@ -228,6 +233,7 @@ def create_env_state(
         env_device=env_device,
         stream=stream,
         augment_generator=augment_generator,
+        augment_buffers=augment_buffers,
         scaler=env_scaler,
         seeds_created=0,
         episode_rewards=[],

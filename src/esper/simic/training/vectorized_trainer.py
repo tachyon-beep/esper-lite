@@ -34,7 +34,7 @@ from esper.simic.telemetry.emitters import check_performance_degradation
 from esper.simic.rewards import ContributionRewardInputs, LossRewardInputs
 from esper.tamiyo.policy.action_masks import build_slot_states, compute_action_masks
 from esper.tamiyo.policy.features import batch_obs_to_features
-from esper.utils.data import augment_cifar10_batch
+from esper.utils.data import AugmentationBuffers, augment_cifar10_batch
 
 from .action_execution import ActionExecutionContext, ResolveTargetSlot, execute_actions
 from .batch_ops import batch_signals_to_features, process_train_batch
@@ -425,11 +425,19 @@ class VectorizedPPOTrainer:
                                         inputs = augment_cifar10_batch(
                                             inputs,
                                             generator=env_state.augment_generator,
+                                            buffers=env_state.augment_buffers,
                                         )
+                                        # CRITICAL: record_stream() MUST be inside the stream context.
+                                        # This marks the tensor as used by this stream, preventing the
+                                        # allocator from reusing memory while augmentation is in flight.
+                                        # The epoch-end sync (line ~500) ensures kernels complete before
+                                        # CPU reads results.
+                                        inputs.record_stream(env_state.stream)
                                 else:
                                     inputs = augment_cifar10_batch(
                                         inputs,
                                         generator=env_state.augment_generator,
+                                        buffers=env_state.augment_buffers,
                                     )
 
                             # BUG-031: Defensive validation for NLL loss assertion failures

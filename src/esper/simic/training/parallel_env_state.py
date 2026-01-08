@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from esper.kasmina.host import MorphogeneticModel
     from esper.tamiyo.tracker import SignalTracker
     from esper.leyline import TelemetryCallback
+    from esper.utils.data import AugmentationBuffers
 
 
 @dataclass(slots=True)
@@ -45,6 +46,7 @@ class ParallelEnvState:
     env_device: str = "cpu"  # Device this env runs on
     stream: torch.cuda.Stream | None = None  # CUDA stream for async execution
     augment_generator: torch.Generator | None = None  # RNG for GPU augmentations
+    augment_buffers: "AugmentationBuffers | None" = None  # Pre-allocated buffers for GPU augmentation
     scaler: "GradScaler | None" = None  # Per-env AMP scaler for FP16 mixed precision
     seeds_created: int = 0
     seeds_fossilized: int = 0  # Total seeds fossilized this episode
