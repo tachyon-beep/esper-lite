@@ -409,3 +409,13 @@ def test_shaped_timing_discount_disabled_gives_full_credit() -> None:
 
     # No discount: attributed = 3.0
     assert components.bounded_attribution == pytest.approx(3.0)
+
+
+def test_attribution_formula_config_default() -> None:
+    """D3-Attribution: Config should support attribution formula selection."""
+    from esper.simic.rewards import ContributionRewardConfig
+
+    config = ContributionRewardConfig()
+
+    # Default: geometric mean (current behavior)
+    assert config.attribution_formula == "geometric"

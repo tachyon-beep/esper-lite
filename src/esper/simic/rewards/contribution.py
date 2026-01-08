@@ -221,6 +221,13 @@ class ContributionRewardConfig:
     germination_discount_floor: float = 0.4
     disable_timing_discount: bool = False
 
+    # === D3: Attribution formula variant ===
+    # Controls how progress and seed_contribution combine into attributed value.
+    # - "geometric": sqrt(progress * contribution) - current default, rewards host drift
+    # - "harmonic": 2*p*c/(p+c) - dominated by smaller value, conservative
+    # - "minimum": min(progress, contribution) - very conservative
+    attribution_formula: str = "geometric"
+
     @staticmethod
     def default() -> "ContributionRewardConfig":
         """Return default configuration."""
