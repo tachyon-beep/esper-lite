@@ -4,9 +4,17 @@
 
 **Goal:** Eliminate the triple-sync blueprint maintenance burden by compiling the BlueprintRegistry into a manifest, then add LayerScale helper and 4 new curriculum blueprints.
 
-**Architecture:** The `BlueprintRegistry` becomes the single source of truth. A `BlueprintCompiler` generates `BlueprintManifest` objects that Tamiyo consumes. The `BlueprintAction` enum is deleted and replaced with manifest lookups. New blueprints only require registration in one place.
+**Architecture:** The `BlueprintRegistry` becomes the single source of truth. A `BlueprintCompiler` generates `BlueprintManifest` objects that Tamiyo consumes using a **global index space** (indices are stable across topologies, with gaps allowed). The `BlueprintAction` enum is replaced with manifest lookups. New blueprints only require registration in one place.
 
 **Tech Stack:** Python dataclasses, PyTorch nn.Module, existing BlueprintRegistry pattern
+
+**Review Status:** v3 - All expert reviews passed (Python, Architecture, DRL, PyTorch specialists)
+
+**Expert Sign-offs:**
+- ✅ Python: MappingProxyType for immutable lookups, correct frozen dataclass patterns
+- ✅ Architecture: Global index semantics correct, indices 13-16 avoid collision
+- ✅ DRL: Learnability tests robust, signed residuals preserved correctly
+- ✅ PyTorch: LayerScale broadcasting correct, CoordSeed meshgrid fixed
 
 ---
 
@@ -202,65 +210,101 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 1.3: Create BlueprintManifest dataclass
+### Task 1.3: Create BlueprintManifest dataclass (Global Index Semantics)
 
 **Files:**
 - Create: `src/esper/kasmina/blueprints/manifest.py`
 - Test: `tests/kasmina/test_blueprint_manifest.py`
+
+**CRITICAL DESIGN NOTE:** The manifest uses **global index semantics**. Each blueprint's
+`action_index` is its position in the global action space (same across topologies).
+This means:
+- `index_of("lora")` returns 8 (not its position in a local list)
+- Manifests can have "gaps" - not all indices 0..N are occupied for a topology
+- `action_space_size` returns `max_index + 1` for policy head sizing
 
 **Step 1: Write the failing test**
 
 Create `tests/kasmina/test_blueprint_manifest.py`:
 
 ```python
-"""Tests for BlueprintManifest - compiled blueprint action space."""
+"""Tests for BlueprintManifest - compiled blueprint action space with GLOBAL indices."""
 
 import pytest
 
 
-def test_manifest_basic_properties():
-    """BlueprintManifest exposes name/index lookups."""
-    from esper.kasmina.blueprints.manifest import BlueprintManifest
+def test_manifest_uses_global_indices():
+    """BlueprintManifest uses explicit global action indices, not list positions."""
+    from esper.kasmina.blueprints.manifest import BlueprintEntry, BlueprintManifest
 
-    manifest = BlueprintManifest(
-        topology="cnn",
-        names=("noop", "norm", "conv_light"),
-        param_estimates=(0, 130, 37000),
-        descriptions=("Identity", "GroupNorm", "Light conv"),
+    entries = (
+        BlueprintEntry(name="noop", action_index=0, param_estimate=0, description=""),
+        BlueprintEntry(name="conv_light", action_index=1, param_estimate=37000, description=""),
+        BlueprintEntry(name="lora", action_index=8, param_estimate=5000, description=""),  # Gap!
     )
+    manifest = BlueprintManifest(topology="test", entries=entries)
 
-    assert manifest.topology == "cnn"
-    assert manifest.num_blueprints == 3
-    assert manifest.names == ("noop", "norm", "conv_light")
-    assert manifest.index_of("norm") == 1
-    assert manifest.name_of(2) == "conv_light"
+    # index_of returns the GLOBAL action_index, not list position
+    assert manifest.index_of("noop") == 0
+    assert manifest.index_of("conv_light") == 1
+    assert manifest.index_of("lora") == 8  # NOT 2!
+
+    # name_of takes global index
+    assert manifest.name_of(0) == "noop"
+    assert manifest.name_of(8) == "lora"
+
+    # action_space_size is max + 1 for policy head sizing
+    assert manifest.action_space_size == 9  # indices 0-8
 
 
 def test_manifest_index_of_unknown_raises():
     """index_of raises KeyError for unknown blueprint."""
-    from esper.kasmina.blueprints.manifest import BlueprintManifest
+    from esper.kasmina.blueprints.manifest import BlueprintEntry, BlueprintManifest
 
-    manifest = BlueprintManifest(
-        topology="cnn",
-        names=("noop", "norm"),
-        param_estimates=(0, 130),
-        descriptions=("", ""),
+    entries = (
+        BlueprintEntry(name="noop", action_index=0, param_estimate=0, description=""),
     )
+    manifest = BlueprintManifest(topology="cnn", entries=entries)
 
     with pytest.raises(KeyError, match="unknown_blueprint"):
         manifest.index_of("unknown_blueprint")
 
 
+def test_manifest_name_of_invalid_index_raises():
+    """name_of raises KeyError for index not in this topology."""
+    from esper.kasmina.blueprints.manifest import BlueprintEntry, BlueprintManifest
+
+    entries = (
+        BlueprintEntry(name="noop", action_index=0, param_estimate=0, description=""),
+        BlueprintEntry(name="lora", action_index=8, param_estimate=5000, description=""),
+    )
+    manifest = BlueprintManifest(topology="test", entries=entries)
+
+    # Index 5 is not in this topology (it's a gap)
+    with pytest.raises(KeyError, match="index 5"):
+        manifest.name_of(5)
+
+
+def test_manifest_valid_indices():
+    """valid_indices returns the set of action indices for this topology."""
+    from esper.kasmina.blueprints.manifest import BlueprintEntry, BlueprintManifest
+
+    entries = (
+        BlueprintEntry(name="noop", action_index=0, param_estimate=0, description=""),
+        BlueprintEntry(name="conv_light", action_index=1, param_estimate=37000, description=""),
+        BlueprintEntry(name="lora", action_index=8, param_estimate=5000, description=""),
+    )
+    manifest = BlueprintManifest(topology="test", entries=entries)
+
+    assert manifest.valid_indices == frozenset({0, 1, 8})
+
+
 def test_manifest_is_immutable():
     """BlueprintManifest is frozen dataclass."""
-    from esper.kasmina.blueprints.manifest import BlueprintManifest
+    from esper.kasmina.blueprints.manifest import BlueprintEntry, BlueprintManifest
 
-    manifest = BlueprintManifest(
-        topology="cnn",
-        names=("noop",),
-        param_estimates=(0,),
-        descriptions=("",),
-    )
+    entries = (BlueprintEntry(name="noop", action_index=0, param_estimate=0, description=""),)
+    manifest = BlueprintManifest(topology="cnn", entries=entries)
 
     with pytest.raises(AttributeError):
         manifest.topology = "transformer"  # type: ignore
@@ -284,67 +328,106 @@ Create `src/esper/kasmina/blueprints/manifest.py`:
 This module provides the compiled view of blueprints that Tamiyo consumes.
 The manifest is generated from BlueprintRegistry by BlueprintCompiler,
 eliminating the need for manual enum synchronization.
+
+IMPORTANT: Uses GLOBAL index semantics. Each blueprint's action_index is
+stable across topologies and checkpoints. Manifests can have "gaps" where
+some indices are not valid for a particular topology.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from functools import cached_property
+from dataclasses import dataclass, field
+from types import MappingProxyType
+from typing import Mapping
 
 
 @dataclass(frozen=True, slots=True)
+class BlueprintEntry:
+    """A single blueprint in the manifest."""
+
+    name: str
+    action_index: int  # GLOBAL index, matches legacy IntEnum value
+    param_estimate: int
+    description: str
+
+
+@dataclass(frozen=True)
 class BlueprintManifest:
-    """Compiled blueprint action space for a topology.
+    """Compiled blueprint action space for a topology (global index semantics).
 
     This is the interface between Kasmina (blueprint definitions) and
     Tamiyo (action space). All blueprint information Tamiyo needs is
     exposed through this manifest.
 
+    IMPORTANT: Uses GLOBAL indices. index_of() returns the blueprint's
+    global action_index (e.g., "lora" -> 8), NOT its position in a list.
+    This enables checkpoint compatibility across topology changes.
+
     Attributes:
         topology: The topology this manifest is for ("cnn" or "transformer")
-        names: Blueprint names in action index order
-        param_estimates: Parameter estimates in action index order
-        descriptions: Human-readable descriptions in action index order
+        entries: Blueprint entries with global action indices
     """
 
     topology: str
-    names: tuple[str, ...]
-    param_estimates: tuple[int, ...]
-    descriptions: tuple[str, ...]
+    entries: tuple[BlueprintEntry, ...]
+    # Computed lookups - immutable mappings via MappingProxyType
+    _by_name: Mapping[str, BlueprintEntry] = field(init=False, repr=False, compare=False)
+    _by_index: Mapping[int, BlueprintEntry] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        """Validate manifest consistency."""
-        if not (len(self.names) == len(self.param_estimates) == len(self.descriptions)):
-            raise ValueError(
-                f"Manifest length mismatch: names={len(self.names)}, "
-                f"param_estimates={len(self.param_estimates)}, "
-                f"descriptions={len(self.descriptions)}"
-            )
+        """Build immutable lookup tables."""
+        # Use object.__setattr__ since we're frozen
+        # MappingProxyType provides truly immutable dict view
+        object.__setattr__(
+            self, "_by_name",
+            MappingProxyType({e.name: e for e in self.entries})
+        )
+        object.__setattr__(
+            self, "_by_index",
+            MappingProxyType({e.action_index: e for e in self.entries})
+        )
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        """Blueprint names (for iteration, not indexing)."""
+        return tuple(e.name for e in self.entries)
+
+    @property
+    def name_to_index(self) -> dict[str, int]:
+        """Mapping from blueprint name to GLOBAL action index."""
+        return {e.name: e.action_index for e in self.entries}
+
+    @property
+    def valid_indices(self) -> frozenset[int]:
+        """Set of valid action indices for this topology (may have gaps)."""
+        return frozenset(e.action_index for e in self.entries)
+
+    @property
+    def action_space_size(self) -> int:
+        """Size needed for policy head (max_index + 1)."""
+        if not self.entries:
+            return 0
+        return max(e.action_index for e in self.entries) + 1
 
     @property
     def num_blueprints(self) -> int:
-        """Number of blueprints in this manifest."""
-        return len(self.names)
-
-    @cached_property
-    def name_to_index(self) -> dict[str, int]:
-        """Mapping from blueprint name to action index."""
-        return {name: i for i, name in enumerate(self.names)}
+        """Number of blueprints in this topology."""
+        return len(self.entries)
 
     def index_of(self, name: str) -> int:
-        """Get action index for a blueprint name.
+        """Get GLOBAL action index for a blueprint name.
 
         Args:
-            name: Blueprint name (e.g., "conv_light", "dilated")
+            name: Blueprint name (e.g., "conv_light", "lora")
 
         Returns:
-            Action index for use in policy networks.
+            Global action index for use in policy networks.
 
         Raises:
             KeyError: If blueprint name is not in this manifest.
         """
         try:
-            return self.name_to_index[name]
+            return self._by_name[name].action_index
         except KeyError:
             raise KeyError(
                 f"Unknown blueprint '{name}' for topology '{self.topology}'. "
@@ -352,21 +435,31 @@ class BlueprintManifest:
             )
 
     def name_of(self, index: int) -> str:
-        """Get blueprint name for an action index.
+        """Get blueprint name for a GLOBAL action index.
 
         Args:
-            index: Action index from policy network.
+            index: Global action index from policy network.
 
         Returns:
             Blueprint name.
 
         Raises:
-            IndexError: If index is out of range.
+            KeyError: If index is not valid for this topology.
         """
-        return self.names[index]
+        try:
+            return self._by_index[index].name
+        except KeyError:
+            raise KeyError(
+                f"Invalid action index {index} for topology '{self.topology}'. "
+                f"Valid indices: {sorted(self.valid_indices)}"
+            )
+
+    def get_entry(self, name: str) -> BlueprintEntry:
+        """Get full BlueprintEntry by name."""
+        return self._by_name[name]
 
 
-__all__ = ["BlueprintManifest"]
+__all__ = ["BlueprintEntry", "BlueprintManifest"]
 ```
 
 **Step 4: Run test to verify it passes**
@@ -381,17 +474,19 @@ Expected: PASS
 
 ```bash
 git add src/esper/kasmina/blueprints/manifest.py tests/kasmina/test_blueprint_manifest.py
-git commit -m "feat(kasmina): add BlueprintManifest dataclass
+git commit -m "feat(kasmina): add BlueprintManifest with global index semantics
 
-Compiled blueprint action space that Tamiyo consumes. Provides
-name/index lookups without hardcoded enum dependencies.
+Compiled blueprint action space using global indices for checkpoint
+compatibility. Supports gaps in index space (e.g., CNN has 0-7,
+transformer has 0,2,3,8-12). Uses simple @property (not cached_property)
+to avoid frozen+slots incompatibility.
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 ```
 
 ---
 
-### Task 1.4: Create BlueprintCompiler
+### Task 1.4: Create BlueprintCompiler (with duplicate index validation)
 
 **Files:**
 - Modify: `src/esper/kasmina/blueprints/manifest.py`
@@ -412,9 +507,8 @@ def test_compiler_generates_manifest_from_registry():
     assert manifest.num_blueprints > 0
     assert "noop" in manifest.names
     assert "conv_light" in manifest.names
-    # Verify param estimates are populated
-    noop_idx = manifest.index_of("noop")
-    assert manifest.param_estimates[noop_idx] == 0
+    # Verify we can look up by global index
+    assert manifest.index_of("noop") == 0
 
 
 def test_compiler_caches_manifests():
@@ -439,32 +533,52 @@ def test_compiler_invalidate_clears_cache():
     assert m1 is not m2  # New object after invalidation
 
 
-def test_compiler_sorts_by_action_index():
-    """Blueprints with explicit action_index are sorted correctly."""
+def test_compiler_detects_duplicate_action_indices():
+    """BlueprintCompiler raises on duplicate action_index values."""
+    from esper.kasmina.blueprints import BlueprintRegistry
+    from esper.kasmina.blueprints.manifest import BlueprintCompiler
+    import torch.nn as nn
+    import pytest
+
+    # Register two blueprints with the SAME action_index
+    @BlueprintRegistry.register("test_dup1", "cnn", param_estimate=100, action_index=999)
+    def create_dup1(dim: int) -> nn.Module:
+        return nn.Identity()
+
+    @BlueprintRegistry.register("test_dup2", "cnn", param_estimate=100, action_index=999)
+    def create_dup2(dim: int) -> nn.Module:
+        return nn.Identity()
+
+    try:
+        BlueprintCompiler.invalidate("cnn")
+        with pytest.raises(ValueError, match="Duplicate action_index"):
+            BlueprintCompiler.compile("cnn")
+    finally:
+        BlueprintRegistry.unregister("cnn", "test_dup1")
+        BlueprintRegistry.unregister("cnn", "test_dup2")
+        BlueprintCompiler.invalidate("cnn")
+
+
+def test_compiler_preserves_global_indices():
+    """Compiler preserves explicit action_index values (global semantics)."""
     from esper.kasmina.blueprints import BlueprintRegistry
     from esper.kasmina.blueprints.manifest import BlueprintCompiler
     import torch.nn as nn
 
-    # Register test blueprints with explicit indices
-    @BlueprintRegistry.register("test_z", "cnn", param_estimate=100, action_index=1000)
-    def create_z(dim: int) -> nn.Module:
-        return nn.Identity()
-
-    @BlueprintRegistry.register("test_a", "cnn", param_estimate=100, action_index=999)
-    def create_a(dim: int) -> nn.Module:
+    # Register test blueprints with explicit global indices
+    @BlueprintRegistry.register("test_high", "cnn", param_estimate=100, action_index=500)
+    def create_high(dim: int) -> nn.Module:
         return nn.Identity()
 
     try:
         BlueprintCompiler.invalidate("cnn")
         manifest = BlueprintCompiler.compile("cnn")
 
-        # test_a (999) should come before test_z (1000) regardless of name
-        idx_a = manifest.index_of("test_a")
-        idx_z = manifest.index_of("test_z")
-        assert idx_a < idx_z, f"test_a ({idx_a}) should be before test_z ({idx_z})"
+        # Should preserve the global index, not use list position
+        assert manifest.index_of("test_high") == 500
+        assert manifest.name_of(500) == "test_high"
     finally:
-        BlueprintRegistry.unregister("cnn", "test_z")
-        BlueprintRegistry.unregister("cnn", "test_a")
+        BlueprintRegistry.unregister("cnn", "test_high")
         BlueprintCompiler.invalidate("cnn")
 ```
 
@@ -491,6 +605,9 @@ class BlueprintCompiler:
     and Tamiyo's action space. It reads the registry and produces
     immutable manifests that define the action indices.
 
+    IMPORTANT: Validates for duplicate action_index values at compile time.
+    This catches configuration errors early rather than at training time.
+
     Caching: Manifests are cached by topology. Call invalidate() when
     the registry changes (e.g., in tests that register/unregister blueprints).
     """
@@ -505,11 +622,10 @@ class BlueprintCompiler:
             topology: Target topology ("cnn" or "transformer")
 
         Returns:
-            Compiled BlueprintManifest with action indices assigned.
+            Compiled BlueprintManifest with global action indices.
 
-        Blueprint ordering:
-            1. Blueprints with explicit action_index (sorted ascending)
-            2. Blueprints without action_index (sorted by name for stability)
+        Raises:
+            ValueError: If duplicate action_index values are detected.
         """
         if topology in cls._cache:
             return cls._cache[topology]
@@ -518,19 +634,46 @@ class BlueprintCompiler:
 
         specs = BlueprintRegistry.list_for_topology(topology)
 
-        # Sort: explicit action_index first (ascending), then by name
-        def sort_key(spec):
-            if spec.action_index is not None:
-                return (0, spec.action_index, spec.name)
-            return (1, 0, spec.name)
+        # Validate: no duplicate action_index values
+        indices = [s.action_index for s in specs if s.action_index is not None]
+        if len(indices) != len(set(indices)):
+            # Find the duplicates for error message
+            seen = set()
+            duplicates = []
+            for idx in indices:
+                if idx in seen:
+                    duplicates.append(idx)
+                seen.add(idx)
+            dup_names = [
+                s.name for s in specs
+                if s.action_index in duplicates
+            ]
+            raise ValueError(
+                f"Duplicate action_index values in {topology} manifest: "
+                f"indices {set(duplicates)} claimed by {dup_names}"
+            )
 
-        sorted_specs = sorted(specs, key=sort_key)
+        # Build entries with global indices
+        entries = []
+        for spec in specs:
+            if spec.action_index is None:
+                raise ValueError(
+                    f"Blueprint '{spec.name}' in {topology} has no action_index. "
+                    f"All blueprints must have explicit action_index for checkpoint stability."
+                )
+            entries.append(BlueprintEntry(
+                name=spec.name,
+                action_index=spec.action_index,
+                param_estimate=spec.param_estimate,
+                description=spec.description,
+            ))
+
+        # Sort by action_index for consistent iteration order
+        entries.sort(key=lambda e: e.action_index)
 
         manifest = BlueprintManifest(
             topology=topology,
-            names=tuple(s.name for s in sorted_specs),
-            param_estimates=tuple(s.param_estimate for s in sorted_specs),
-            descriptions=tuple(s.description for s in sorted_specs),
+            entries=tuple(entries),
         )
 
         cls._cache[topology] = manifest
@@ -549,7 +692,7 @@ class BlueprintCompiler:
             cls._cache.clear()
 
 
-__all__ = ["BlueprintManifest", "BlueprintCompiler"]
+__all__ = ["BlueprintEntry", "BlueprintManifest", "BlueprintCompiler"]
 ```
 
 **Step 4: Run tests to verify they pass**
@@ -564,11 +707,11 @@ Expected: PASS
 
 ```bash
 git add src/esper/kasmina/blueprints/manifest.py tests/kasmina/test_blueprint_manifest.py
-git commit -m "feat(kasmina): add BlueprintCompiler for manifest generation
+git commit -m "feat(kasmina): add BlueprintCompiler with duplicate index validation
 
 Compiles BlueprintRegistry into topology-specific manifests with
-deterministic action index ordering. Eliminates need for manual
-enum synchronization.
+global index semantics. Validates for duplicate action_index values
+at compile time to catch configuration errors early.
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 ```
@@ -736,7 +879,8 @@ git add src/esper/kasmina/blueprints/cnn.py tests/kasmina/test_blueprint_manifes
 git commit -m "feat(kasmina): assign action_index to CNN blueprints
 
 Explicit indices match legacy BlueprintAction enum values for
-checkpoint compatibility. New blueprints will use indices >= 8.
+checkpoint compatibility. New CNN blueprints will use indices >= 13
+(transformer uses 8-12).
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 ```
@@ -1615,34 +1759,46 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 Add to `tests/kasmina/test_blueprints.py`:
 
 ```python
-def test_bottleneck_has_gradient_at_init():
-    """Bottleneck should have non-zero gradients at initialization.
+def test_bottleneck_is_learnable():
+    """Bottleneck should be learnable - one optimizer step changes output.
 
-    The old zero-init pattern under ReLU caused dead branches.
-    LayerScale fix ensures gradients flow.
+    This is more robust than checking gradient magnitude (which is fragile).
+    Uses fixed seed for reproducibility, squared loss for sign-invariance.
     """
     import torch
     from esper.kasmina.blueprints import BlueprintRegistry
 
-    seed = BlueprintRegistry.create("cnn", "bottleneck", dim=64)
-    x = torch.randn(2, 64, 8, 8, requires_grad=True)
-    y = seed(x)
-    loss = y.sum()
-    loss.backward()
+    torch.manual_seed(42)
 
-    # All parameters should have gradients
-    for name, param in seed.named_parameters():
-        assert param.grad is not None, f"{name} has no gradient"
-        assert param.grad.abs().sum() > 0, f"{name} has zero gradient"
+    seed = BlueprintRegistry.create("cnn", "bottleneck", dim=64)
+    optimizer = torch.optim.SGD(seed.parameters(), lr=0.01)
+
+    x = torch.randn(2, 64, 8, 8)
+    target = torch.randn(2, 64, 8, 8)
+
+    # Forward pass before
+    y_before = seed(x).detach().clone()
+
+    # One gradient step
+    optimizer.zero_grad()
+    loss = ((seed(x) - target) ** 2).mean()
+    loss.backward()
+    optimizer.step()
+
+    # Forward pass after
+    y_after = seed(x).detach()
+
+    # Output should have changed (module is learnable)
+    assert not torch.allclose(y_before, y_after), "Bottleneck is not learnable - output unchanged after gradient step"
 ```
 
 **Step 2: Run test to check current state**
 
 ```bash
-uv run pytest tests/kasmina/test_blueprints.py::test_bottleneck_has_gradient_at_init -v
+uv run pytest tests/kasmina/test_blueprints.py::test_bottleneck_is_learnable -v
 ```
 
-This might pass or fail depending on current init. If it fails (zero gradients), proceed.
+This tests that the bottleneck can be trained - more robust than checking gradient magnitude.
 
 **Step 3: Refactor implementation**
 
@@ -1678,7 +1834,8 @@ def create_bottleneck_seed(dim: int, reduction: int = 4, layer_scale: float = 1e
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             y = F.relu(self.down(x))
             y = F.relu(self.conv(y))
-            y = F.relu(self.gn(self.up(y)))
+            # NO final ReLU - keep signed residuals for add/subtract capability
+            y = self.gn(self.up(y))
             return x + self.ls(y)
 
     return BottleneckSeed(dim, reduction, layer_scale)
@@ -1687,7 +1844,7 @@ def create_bottleneck_seed(dim: int, reduction: int = 4, layer_scale: float = 1e
 **Step 4: Run test to verify it passes**
 
 ```bash
-uv run pytest tests/kasmina/test_blueprints.py::test_bottleneck_has_gradient_at_init -v
+uv run pytest tests/kasmina/test_blueprints.py::test_bottleneck_is_learnable -v
 ```
 
 Expected: PASS
@@ -1696,11 +1853,13 @@ Expected: PASS
 
 ```bash
 git add src/esper/kasmina/blueprints/cnn.py tests/kasmina/test_blueprints.py
-git commit -m "fix(kasmina): bottleneck uses LayerScale to avoid dead branch
+git commit -m "fix(kasmina): bottleneck uses LayerScale with signed residuals
 
-Replaces zero-init pattern that caused dead branches when output
-goes through ReLU(0) -> zero gradient. LayerScale provides
-near-identity start with maintained gradient flow.
+Two fixes:
+1. LayerScale replaces zero-init (avoids dead branch)
+2. Remove final ReLU - residuals stay signed so the seed can
+   both ADD and SUBTRACT from feature maps. Rectified residuals
+   can only ever increase activations.
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 ```
@@ -1718,26 +1877,38 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 Add to `tests/kasmina/test_blueprints.py`:
 
 ```python
-def test_conv_small_has_gradient_at_init():
-    """ConvSmall should have non-zero gradients at initialization."""
+def test_conv_small_is_learnable():
+    """ConvSmall should be learnable - one optimizer step changes output.
+
+    Same robust test pattern as bottleneck.
+    """
     import torch
     from esper.kasmina.blueprints import BlueprintRegistry
 
-    seed = BlueprintRegistry.create("cnn", "conv_small", dim=64)
-    x = torch.randn(2, 64, 8, 8, requires_grad=True)
-    y = seed(x)
-    loss = y.sum()
-    loss.backward()
+    torch.manual_seed(42)
 
-    for name, param in seed.named_parameters():
-        assert param.grad is not None, f"{name} has no gradient"
-        assert param.grad.abs().sum() > 0, f"{name} has zero gradient"
+    seed = BlueprintRegistry.create("cnn", "conv_small", dim=64)
+    optimizer = torch.optim.SGD(seed.parameters(), lr=0.01)
+
+    x = torch.randn(2, 64, 8, 8)
+    target = torch.randn(2, 64, 8, 8)
+
+    y_before = seed(x).detach().clone()
+
+    optimizer.zero_grad()
+    loss = ((seed(x) - target) ** 2).mean()
+    loss.backward()
+    optimizer.step()
+
+    y_after = seed(x).detach()
+
+    assert not torch.allclose(y_before, y_after), "ConvSmall is not learnable"
 ```
 
 **Step 2: Run test to check current state**
 
 ```bash
-uv run pytest tests/kasmina/test_blueprints.py::test_conv_small_has_gradient_at_init -v
+uv run pytest tests/kasmina/test_blueprints.py::test_conv_small_is_learnable -v
 ```
 
 **Step 3: Refactor implementation**
@@ -1767,7 +1938,8 @@ def create_conv_small_seed(dim: int, layer_scale: float = 1e-3, **kwargs: Any) -
             self.ls = LayerScale(channels, init_value=layer_scale_init)
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
-            y = F.relu(self.gn(self.conv(x)))
+            # NO final ReLU - keep signed residuals for add/subtract capability
+            y = self.gn(self.conv(x))
             return x + self.ls(y)
 
     return ConvSmallSeed(dim, layer_scale)
@@ -1776,7 +1948,7 @@ def create_conv_small_seed(dim: int, layer_scale: float = 1e-3, **kwargs: Any) -
 **Step 4: Run test to verify it passes**
 
 ```bash
-uv run pytest tests/kasmina/test_blueprints.py::test_conv_small_has_gradient_at_init -v
+uv run pytest tests/kasmina/test_blueprints.py::test_conv_small_is_learnable -v
 ```
 
 Expected: PASS
@@ -1785,10 +1957,11 @@ Expected: PASS
 
 ```bash
 git add src/esper/kasmina/blueprints/cnn.py tests/kasmina/test_blueprints.py
-git commit -m "fix(kasmina): conv_small uses LayerScale to avoid dead branch
+git commit -m "fix(kasmina): conv_small uses LayerScale with signed residuals
 
-Same fix as bottleneck - LayerScale provides gradient-safe
-near-identity initialization.
+Same fix as bottleneck:
+1. LayerScale replaces zero-init (avoids dead branch)
+2. Remove final ReLU (keep signed residuals)
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 ```
@@ -1850,7 +2023,7 @@ Add to `src/esper/kasmina/blueprints/cnn.py`:
 @BlueprintRegistry.register(
     "dilated", "cnn",
     param_estimate=37000,
-    action_index=8,  # First new blueprint after conv_heavy (7)
+    action_index=13,  # First new CNN index (transformer uses 8-12)
     description="Dilated 3x3 conv (receptive field expansion)"
 )
 def create_dilated_seed(dim: int, dilation: int = 2, layer_scale: float = 1e-3, **kwargs: Any) -> nn.Module:
@@ -1958,7 +2131,7 @@ Add to `src/esper/kasmina/blueprints/cnn.py`:
 @BlueprintRegistry.register(
     "asymmetric", "cnn",
     param_estimate=25000,
-    action_index=9,
+    action_index=14,
     description="Factorised 3x1 then 1x3 conv"
 )
 def create_asymmetric_seed(dim: int, layer_scale: float = 1e-3, **kwargs: Any) -> nn.Module:
@@ -2063,7 +2236,7 @@ Add to `src/esper/kasmina/blueprints/cnn.py`:
 @BlueprintRegistry.register(
     "coord", "cnn",
     param_estimate=4500,
-    action_index=10,
+    action_index=15,
     description="Coordinate injection (CoordConv-lite)"
 )
 def create_coord_seed(dim: int, layer_scale: float = 1e-3, **kwargs: Any) -> nn.Module:
@@ -2092,8 +2265,9 @@ def create_coord_seed(dim: int, layer_scale: float = 1e-3, **kwargs: Any) -> nn.
             yy = torch.linspace(-1, 1, h, device=x.device, dtype=x.dtype)
             xx = torch.linspace(-1, 1, w, device=x.device, dtype=x.dtype)
             yy, xx = torch.meshgrid(yy, xx, indexing="ij")
-            yy = yy.expand(b, 1, h, w)
-            xx = xx.expand(b, 1, h, w)
+            # meshgrid returns [H, W] - unsqueeze to [1, 1, H, W] before expand
+            yy = yy.unsqueeze(0).unsqueeze(0).expand(b, 1, h, w)
+            xx = xx.unsqueeze(0).unsqueeze(0).expand(b, 1, h, w)
 
             inp = torch.cat([x, yy, xx], dim=1)
             y = F.relu(self.gn(self.embed(inp)))
@@ -2174,7 +2348,7 @@ Add to `src/esper/kasmina/blueprints/cnn.py`:
 @BlueprintRegistry.register(
     "gated", "cnn",
     param_estimate=8400,
-    action_index=11,
+    action_index=16,
     description="GLU-style gated 1x1 mixer"
 )
 def create_gated_seed(dim: int, gate_bias: float = 2.0, layer_scale: float = 1e-3, **kwargs: Any) -> nn.Module:
@@ -2296,10 +2470,12 @@ This plan delivers:
    - `bottleneck` and `conv_small` fixed for dead-branch risk
 
 4. **Curriculum Blueprints** (Tasks 4.1-4.5)
-   - `dilated` - receptive field expansion
-   - `asymmetric` - factorized convolutions
-   - `coord` - position encoding (CoordConv-lite)
-   - `gated` - GLU-style mixing
+   - `dilated` (index 13) - receptive field expansion
+   - `asymmetric` (index 14) - factorized convolutions
+   - `coord` (index 15) - position encoding (CoordConv-lite)
+   - `gated` (index 16) - GLU-style mixing
+
+   **Index allocation:** CNN 0-7 (legacy), Transformer 8-12 (legacy), new CNN 13+ (no collision)
 
 **Adding future blueprints now requires only:**
 1. Register with `@BlueprintRegistry.register(..., action_index=N)`
