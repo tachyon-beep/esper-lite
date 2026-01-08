@@ -436,9 +436,19 @@ def compute_contribution_reward(
     if components:
         components.blending_warning = blending_warning
 
+    # === Holding indecision penalty ===
+    # In HOLDING stage, penalize actions that don't resolve the decision.
+    # Terminal actions (FOSSILIZE, PRUNE) are exempt - they commit to a decision.
+    # Non-terminal actions (WAIT, SET_ALPHA_TARGET, etc.) incur penalty.
+    #
+    # Bug fix (2026-01-08): Previously only WAIT triggered this penalty, allowing
+    # Tamiyo to "turntable" SET_ALPHA_TARGET to avoid penalty while collecting
+    # dense positives. Now all non-terminal actions in HOLDING are penalized.
     holding_warning = 0.0
     if seed_info is not None and seed_info.stage == STAGE_HOLDING:
-        if action == LifecycleOp.WAIT:
+        # Terminal actions that resolve HOLDING - exempt from penalty
+        terminal_actions = (LifecycleOp.FOSSILIZE, LifecycleOp.PRUNE)
+        if action not in terminal_actions:
             if seed_info.epochs_in_stage >= 2 and bounded_attribution > 0:
                 has_counterfactual = (
                     seed_info.total_improvement is not None
