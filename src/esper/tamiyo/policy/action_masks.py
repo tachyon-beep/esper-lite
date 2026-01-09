@@ -3,7 +3,9 @@
 Only masks actions that are invalid under lifecycle constraints:
 - SLOT: only enabled slots (from --slots arg) are selectable
 - SLOT_BY_OP: op-conditioned slot validity mask (hierarchical sampling support)
-- GERMINATE: blocked if ALL enabled slots occupied OR at seed limit
+- GERMINATE: blocked if ALL enabled slots occupied OR at seed limit OR
+             D3: any seed in GERMINATED/TRAINING/PRUNED/EMBARGOED/RESETTING stages
+             (enforces sequential development, allows scaffolding during BLENDING)
 - ADVANCE: blocked if NO enabled slot is in GERMINATED/TRAINING/BLENDING, or if disabled by config
 - FOSSILIZE: blocked if NO enabled slot has a HOLDING seed
 - PRUNE: blocked if NO enabled slot has a prunable seed in GERMINATED/TRAINING/BLENDING/HOLDING
@@ -73,6 +75,25 @@ _ADVANCABLE_STAGES = frozenset({
     SeedStage.GERMINATED.value,
     SeedStage.TRAINING.value,
     SeedStage.BLENDING.value,
+})
+
+# D3: Stages that block GERMINATE - enforces sequential seed development
+# When any seed is in these stages, GERMINATE is masked out to prevent
+# PBRS farming (collecting +0.25 germination bonuses repeatedly).
+# Note: BLENDING explicitly excluded to enable scaffolding pattern
+# (old seed blending while new seed trains).
+_BLOCKS_GERMINATION = frozenset({
+    SeedStage.GERMINATED.value,
+    SeedStage.TRAINING.value,
+})
+
+# D3: Cleanup stages that also block GERMINATE to close PRUNE→GERMINATE exploit
+# Without this, agent could: GERMINATE (+0.25) → WAIT (MIN_PRUNE_AGE) → PRUNE → repeat
+# By blocking until slot fully resets to DORMANT, we force genuine sequential development.
+_CLEANUP_BLOCKS_GERMINATION = frozenset({
+    SeedStage.PRUNED.value,
+    SeedStage.EMBARGOED.value,
+    SeedStage.RESETTING.value,
 })
 
 
@@ -256,9 +277,26 @@ def compute_action_masks(
     )
 
     seed_limit_reached = max_seeds > 0 and total_seeds >= max_seeds
-    can_germinate = has_empty_enabled_slot and not seed_limit_reached
 
-    # GERMINATE: valid if ANY enabled slot is empty AND under seed limit
+    # D3: Check for seeds in active development or cleanup stages
+    # This blocks GERMINATE until the current seed lifecycle completes, enforcing
+    # sequential development and preventing PBRS germination farming.
+    has_developing_seed = any(
+        seed_info is not None and (
+            seed_info.stage in _BLOCKS_GERMINATION
+            or seed_info.stage in _CLEANUP_BLOCKS_GERMINATION
+        )
+        for slot_id in ordered
+        for seed_info in [slot_states[slot_id]]
+    )
+
+    can_germinate = (
+        has_empty_enabled_slot
+        and not seed_limit_reached
+        and not has_developing_seed
+    )
+
+    # GERMINATE: valid if ANY enabled slot is empty AND under seed limit AND no developing seed
     if can_germinate:
         op_mask[LifecycleOp.GERMINATE] = True
         for slot_id in ordered:
