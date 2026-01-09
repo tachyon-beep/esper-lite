@@ -417,8 +417,8 @@ def test_attribution_formula_config_default() -> None:
 
     config = ContributionRewardConfig()
 
-    # Default: geometric mean (current behavior)
-    assert config.attribution_formula == "geometric"
+    # Default: harmonic mean (anti-gaming behavior, per expert recommendation)
+    assert config.attribution_formula == "harmonic"
 
 
 def test_compute_attributed_geometric_mean() -> None:
