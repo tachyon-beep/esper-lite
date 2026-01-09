@@ -81,3 +81,33 @@ class TestRewardComponentsTelemetry:
             + components.synergy_bonus
         )
         assert abs(computed_sum - components.total_reward) < 1e-6
+
+    def test_timing_discount_round_trip(self):
+        """D3: timing_discount survives serialization round-trip."""
+        # Create telemetry with non-default timing_discount
+        original = RewardComponentsTelemetry(
+            total_reward=1.5,
+            bounded_attribution=1.0,
+            timing_discount=0.65,  # Non-default value to catch serialization bugs
+        )
+
+        # Serialize and deserialize
+        data = original.to_dict()
+        restored = RewardComponentsTelemetry.from_dict(data)
+
+        # Verify round-trip preserves timing_discount
+        assert restored.timing_discount == original.timing_discount
+        assert restored.timing_discount == 0.65
+
+    def test_timing_discount_default_preserved_on_missing(self):
+        """D3: Missing timing_discount in old data defaults to 1.0."""
+        # Create full telemetry, serialize, then remove timing_discount
+        # to simulate pre-D3 data that doesn't have the field
+        original = RewardComponentsTelemetry(total_reward=1.0, bounded_attribution=0.5)
+        old_data = original.to_dict()
+        del old_data["timing_discount"]  # Simulate pre-D3 data
+
+        restored = RewardComponentsTelemetry.from_dict(old_data)
+
+        # Should default to 1.0 (no discount)
+        assert restored.timing_discount == 1.0

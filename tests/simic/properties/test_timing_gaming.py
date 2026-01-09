@@ -177,3 +177,81 @@ def test_combined_fixes_reduce_gaming_incentive(inputs):
         f"Fixed attribution {components_fixed.bounded_attribution} > "
         f"baseline {components_baseline.bounded_attribution}"
     )
+
+
+# ============================================================================
+# Expert-Recommended Property Tests (DRL Expert / PyTorch Expert Reviews)
+# ============================================================================
+
+
+@given(
+    e1=st.integers(min_value=0, max_value=100),
+    e2=st.integers(min_value=0, max_value=100),
+    warmup=st.integers(min_value=5, max_value=50),
+    floor=st.floats(min_value=0.1, max_value=0.9),
+)
+@settings(max_examples=200)
+def test_timing_discount_monotonicity(e1: int, e2: int, warmup: int, floor: float):
+    """D3-Timing: Discount is monotonically non-decreasing with germination epoch.
+
+    Later germination (higher epoch) should yield higher or equal discount,
+    incentivizing waiting for stable training before germinating.
+    """
+    d1 = _compute_timing_discount(e1, warmup, floor)
+    d2 = _compute_timing_discount(e2, warmup, floor)
+
+    if e1 >= e2:
+        assert d1 >= d2, (
+            f"Monotonicity violated: epoch {e1} got discount {d1} < "
+            f"epoch {e2} got {d2} (warmup={warmup}, floor={floor})"
+        )
+
+
+@given(value=st.floats(min_value=0.01, max_value=100.0))
+@settings(max_examples=200)
+def test_formula_symmetry_when_equal(value: float):
+    """D3-Attribution: All formulas yield identical values when progress == contribution.
+
+    This is a mathematical identity for geometric/harmonic/minimum means:
+    - geometric: sqrt(a*a) = a
+    - harmonic: 2*a*a/(a+a) = a
+    - minimum: min(a, a) = a
+    """
+    geometric = _compute_attributed_value(value, value, "geometric")
+    harmonic = _compute_attributed_value(value, value, "harmonic")
+    minimum = _compute_attributed_value(value, value, "minimum")
+
+    assert abs(geometric - value) < 1e-6, f"Geometric({value}, {value}) = {geometric} != {value}"
+    assert abs(harmonic - value) < 1e-6, f"Harmonic({value}, {value}) = {harmonic} != {value}"
+    assert abs(minimum - value) < 1e-6, f"Minimum({value}, {value}) = {minimum} != {value}"
+
+
+@given(
+    progress=st.floats(min_value=0.01, max_value=100.0),
+    contribution=st.floats(min_value=0.01, max_value=100.0),
+)
+@settings(max_examples=300)
+def test_attribution_ordering_invariant(progress: float, contribution: float):
+    """D3-Attribution: minimum <= harmonic <= geometric always holds.
+
+    This ordering is a mathematical property of these means for positive values:
+    - Minimum is the most conservative (smallest)
+    - Harmonic is dominated by the smaller value
+    - Geometric is the middle ground
+    The equality holds when progress == contribution.
+    """
+    geometric = _compute_attributed_value(progress, contribution, "geometric")
+    harmonic = _compute_attributed_value(progress, contribution, "harmonic")
+    minimum = _compute_attributed_value(progress, contribution, "minimum")
+
+    # Allow small floating point tolerance
+    eps = 1e-6
+
+    assert minimum <= harmonic + eps, (
+        f"Ordering violated: minimum {minimum} > harmonic {harmonic} "
+        f"for progress={progress}, contribution={contribution}"
+    )
+    assert harmonic <= geometric + eps, (
+        f"Ordering violated: harmonic {harmonic} > geometric {geometric} "
+        f"for progress={progress}, contribution={contribution}"
+    )

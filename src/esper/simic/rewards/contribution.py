@@ -223,10 +223,10 @@ class ContributionRewardConfig:
 
     # === D3: Attribution formula variant ===
     # Controls how progress and seed_contribution combine into attributed value.
-    # - "geometric": sqrt(progress * contribution) - current default, rewards host drift
-    # - "harmonic": 2*p*c/(p+c) - dominated by smaller value, conservative
+    # - "geometric": sqrt(progress * contribution) - rewards host drift, legacy default
+    # - "harmonic": 2*p*c/(p+c) - dominated by smaller value, anti-gaming (recommended)
     # - "minimum": min(progress, contribution) - very conservative
-    attribution_formula: Literal["geometric", "harmonic", "minimum"] = "geometric"
+    attribution_formula: Literal["geometric", "harmonic", "minimum"] = "harmonic"
 
     @staticmethod
     def default() -> "ContributionRewardConfig":
@@ -892,12 +892,16 @@ def _compute_timing_discount(
 
     Args:
         germination_epoch: Epoch when seed was germinated
-        warmup_epochs: Number of epochs before full credit
+        warmup_epochs: Number of epochs before full credit (must be > 0)
         discount_floor: Minimum discount (applied at epoch 0)
 
     Returns:
         Discount factor in [discount_floor, 1.0]
     """
+    # Guard against invalid warmup_epochs (avoid division by zero)
+    if warmup_epochs <= 0:
+        return 1.0
+
     if germination_epoch >= warmup_epochs:
         return 1.0
 
@@ -934,7 +938,8 @@ def _compute_attributed_value(
 
     elif formula == "harmonic":
         # Harmonic mean: 2ab/(a+b), dominated by smaller value
-        return 2 * progress * seed_contribution / (progress + seed_contribution)
+        # Guard against division by near-zero when both values are tiny
+        return 2 * progress * seed_contribution / max(progress + seed_contribution, 1e-8)
 
     elif formula == "minimum":
         return min(progress, seed_contribution)
