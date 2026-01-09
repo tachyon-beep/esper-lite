@@ -494,3 +494,87 @@ def test_compute_attributed_harmonic_vs_geometric_with_large_progress() -> None:
 
     # Harmonic is ~4x lower for this gaming scenario
     assert harmonic < geometric * 0.3
+
+
+def test_shaped_harmonic_formula_reduces_drift_attribution() -> None:
+    """D3-Attribution: Harmonic formula gives less credit when contribution exceeds progress.
+
+    When seed_contribution >= progress, the bounded formula is applied.
+    Harmonic mean is more conservative than geometric mean when values differ.
+    This tests that the attribution_formula config is wired into compute_contribution_reward.
+    """
+    from esper.simic.rewards import compute_contribution_reward, ContributionRewardConfig
+    from esper.simic.rewards.types import SeedInfo
+    from esper.leyline import LifecycleOp, SeedStage
+
+    # Config with harmonic formula
+    config_harmonic = ContributionRewardConfig(
+        contribution_weight=1.0,
+        attribution_formula="harmonic",
+        disable_timing_discount=True,  # Isolate formula test
+        disable_pbrs=True,
+        disable_terminal_reward=True,
+        disable_anti_gaming=True,
+        rent_weight=0.0,
+        first_germinate_bonus=0.0,
+    )
+
+    # Config with geometric formula (default)
+    config_geometric = ContributionRewardConfig(
+        contribution_weight=1.0,
+        attribution_formula="geometric",
+        disable_timing_discount=True,
+        disable_pbrs=True,
+        disable_terminal_reward=True,
+        disable_anti_gaming=True,
+        rent_weight=0.0,
+        first_germinate_bonus=0.0,
+    )
+
+    seed = SeedInfo(
+        stage=SeedStage.TRAINING.value,
+        total_improvement=5.0,
+        improvement_since_stage_start=0.0,
+        epochs_in_stage=1,
+        seed_params=0,
+        previous_stage=SeedStage.GERMINATED.value,
+        previous_epochs_in_stage=0,
+        seed_age_epochs=50,
+        interaction_sum=0.0,
+        boost_received=0.0,
+    )
+
+    # Scenario: contribution >= progress triggers bounded formula
+    # progress = 70.0 - 66.0 = 4.0, contribution = 9.0
+    # Formula applied because 9.0 >= 4.0
+    _, components_geo = compute_contribution_reward(
+        action=LifecycleOp.WAIT,
+        seed_contribution=9.0,  # Exceeds progress
+        val_acc=70.0,
+        seed_info=seed,
+        epoch=55,
+        max_epochs=150,
+        acc_at_germination=66.0,  # progress = 4.0
+        config=config_geometric,
+        return_components=True,
+    )
+
+    _, components_harm = compute_contribution_reward(
+        action=LifecycleOp.WAIT,
+        seed_contribution=9.0,
+        val_acc=70.0,
+        seed_info=seed,
+        epoch=55,
+        max_epochs=150,
+        acc_at_germination=66.0,
+        config=config_harmonic,
+        return_components=True,
+    )
+
+    # Geometric: sqrt(4 * 9) = 6.0
+    # Harmonic: 2 * 4 * 9 / (4 + 9) = 72 / 13 ≈ 5.54
+    assert components_geo.bounded_attribution == pytest.approx(6.0, rel=0.01)
+    assert components_harm.bounded_attribution == pytest.approx(72 / 13, rel=0.01)
+
+    # Harmonic is lower (more conservative) than geometric
+    assert components_harm.bounded_attribution < components_geo.bounded_attribution

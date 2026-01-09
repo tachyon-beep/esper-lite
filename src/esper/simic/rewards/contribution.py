@@ -412,8 +412,14 @@ def compute_contribution_reward(
                     if progress <= 0:
                         attributed = 0.0
                     elif seed_contribution >= progress:
-                        attributed = math.sqrt(progress * seed_contribution)
+                        # Use configurable formula when contribution exceeds progress
+                        attributed = _compute_attributed_value(
+                            progress=progress,
+                            seed_contribution=seed_contribution,
+                            formula=config.attribution_formula,
+                        )
                     else:
+                        # contribution < progress: cap at contribution (unchanged)
                         attributed = seed_contribution
                 else:
                     attributed = seed_contribution * 0.5
