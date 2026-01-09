@@ -655,12 +655,41 @@ class EnvState:
                 self.best_reward_components = None
 
             if self.counterfactual_matrix and self.counterfactual_matrix.slot_ids:
-                self.best_counterfactual_matrix = CounterfactualSnapshot(
-                    slot_ids=self.counterfactual_matrix.slot_ids,
-                    configs=list(self.counterfactual_matrix.configs),
-                    strategy=self.counterfactual_matrix.strategy,
-                    compute_time_ms=self.counterfactual_matrix.compute_time_ms,
+                # CRITICAL: Filter counterfactual slot_ids to only include slots in best_seeds.
+                # The counterfactual matrix can be stale if no new matrix was emitted
+                # (e.g., when all seeds are FOSSILIZED or PRUNED). Without this filter,
+                # the ablation panel may show contributions for slots that appear DORMANT
+                # in the slot grid (because best_seeds doesn't include PRUNED seeds).
+                valid_slot_ids = tuple(
+                    sid for sid in self.counterfactual_matrix.slot_ids
+                    if sid in self.best_seeds
                 )
+                if valid_slot_ids:
+                    # Filter configs to only include those relevant to valid slots
+                    filtered_configs = []
+                    for cfg in self.counterfactual_matrix.configs:
+                        old_mask = cfg.seed_mask
+                        # A config is valid if it only references slots in valid_slot_ids
+                        # Rebuild mask with only valid positions
+                        new_mask = tuple(
+                            old_mask[old_idx]
+                            for old_idx, sid in enumerate(self.counterfactual_matrix.slot_ids)
+                            if sid in valid_slot_ids
+                        )
+                        # Check if this is a valid configuration (same length as valid_slot_ids)
+                        if len(new_mask) == len(valid_slot_ids):
+                            filtered_configs.append(CounterfactualConfig(
+                                seed_mask=new_mask,
+                                accuracy=cfg.accuracy,
+                            ))
+                    self.best_counterfactual_matrix = CounterfactualSnapshot(
+                        slot_ids=valid_slot_ids,
+                        configs=filtered_configs,
+                        strategy=self.counterfactual_matrix.strategy,
+                        compute_time_ms=self.counterfactual_matrix.compute_time_ms,
+                    )
+                else:
+                    self.best_counterfactual_matrix = None
             else:
                 self.best_counterfactual_matrix = None
 

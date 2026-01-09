@@ -9,6 +9,8 @@ from esper.karn.sanctum.schema import (
     SystemVitals,
     RewardComponents,
     GPUStats,
+    CounterfactualSnapshot,
+    CounterfactualConfig,
 )
 
 
@@ -67,6 +69,69 @@ class TestEnvState:
         env = EnvState(env_id=0)
         env.best_seeds["r0c0"] = SeedState(slot_id="r0c0", stage="FOSSILIZED")
         assert "r0c0" in env.best_seeds
+
+    def test_best_counterfactual_matrix_filters_stale_slots(self):
+        """Counterfactual matrix must only include slots present in best_seeds.
+
+        This prevents the historical view from showing contributions for slots
+        that appear as DORMANT in the slot grid. The bug scenario:
+        1. Epoch N: Seed in BLENDING in r0c1 (alpha > 0) → counterfactual has r0c1
+        2. Action: Seed is pruned → transitions to PRUNED (alpha → 0)
+        3. Epoch N+1: No active slots → no new counterfactual matrix emitted
+        4. New best accuracy: stale counterfactual still has r0c1, but seeds dict doesn't
+        5. Without filtering: ablation panel shows r0c1, slot grid shows DORMANT
+        """
+        env = EnvState(env_id=0)
+
+        # Set up a seed in BLENDING stage (contributes to accuracy)
+        env.seeds["r0c0"] = SeedState(slot_id="r0c0", stage="BLENDING", alpha=0.5)
+        # Also set up a stale counterfactual matrix that includes r0c1 (pruned slot)
+        env.counterfactual_matrix = CounterfactualSnapshot(
+            slot_ids=("r0c0", "r0c1"),  # r0c1 is stale - seed was pruned
+            configs=[
+                CounterfactualConfig(seed_mask=(False, False), accuracy=20.0),  # all off
+                CounterfactualConfig(seed_mask=(True, False), accuracy=35.0),   # r0c0 only
+                CounterfactualConfig(seed_mask=(False, True), accuracy=30.0),   # r0c1 only
+                CounterfactualConfig(seed_mask=(True, True), accuracy=45.0),    # both on
+            ],
+            strategy="full_factorial",
+        )
+
+        # Trigger best accuracy capture
+        env.add_accuracy(50.0, epoch=10)
+
+        # Verify: best_seeds only has r0c0 (BLENDING is a contributing stage)
+        assert "r0c0" in env.best_seeds
+        assert "r0c1" not in env.best_seeds  # PRUNED/missing seed not captured
+
+        # Verify: best_counterfactual_matrix should be filtered to only include r0c0
+        assert env.best_counterfactual_matrix is not None
+        assert env.best_counterfactual_matrix.slot_ids == ("r0c0",)
+
+        # Verify: configs should be filtered to single-slot masks
+        assert len(env.best_counterfactual_matrix.configs) > 0
+        for cfg in env.best_counterfactual_matrix.configs:
+            assert len(cfg.seed_mask) == 1  # Only r0c0
+
+    def test_best_counterfactual_matrix_empty_when_no_valid_slots(self):
+        """If no counterfactual slots match best_seeds, matrix should be None."""
+        env = EnvState(env_id=0)
+
+        # Set up counterfactual with slots that won't be in best_seeds
+        env.counterfactual_matrix = CounterfactualSnapshot(
+            slot_ids=("r0c1",),  # This slot has no seed in env.seeds
+            configs=[
+                CounterfactualConfig(seed_mask=(False,), accuracy=20.0),
+                CounterfactualConfig(seed_mask=(True,), accuracy=35.0),
+            ],
+            strategy="ablation_only",
+        )
+
+        # No seeds in env.seeds, so best_seeds will be empty
+        env.add_accuracy(50.0, epoch=10)
+
+        # Verify: best_counterfactual_matrix should be None (no valid slots)
+        assert env.best_counterfactual_matrix is None
 
     def test_fossilized_params_tracking(self):
         """Must track fossilized_params for scoreboard display."""
