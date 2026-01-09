@@ -580,9 +580,15 @@ DEFAULT_BLUEPRINT_PENALTY_THRESHOLD = 3.0
 # Seeds must show this much improvement before advancing.
 DEFAULT_MIN_TRAINING_IMPROVEMENT = 0.5
 
-# Minimum epochs in BLENDING stage before advancement allowed.
-# Ensures seed has time to demonstrate stable blending.
-DEFAULT_MIN_BLENDING_EPOCHS = 3
+# Minimum epochs in TRAINING stage before advancement to BLENDING allowed.
+# Ensures seed has time to exit the "initial chaos" phase of training.
+# PyTorch expert recommendation: 10-20 epochs for gradient stability.
+DEFAULT_MIN_BLENDING_EPOCHS = 10
+
+# Minimum gradient health (0-1) for safe blending (G2 gate, permissive mode).
+# Seeds with gradient health below this threshold may destabilize the host.
+# PyTorch expert recommendation: >= 0.7 for safety.
+DEFAULT_MIN_GRADIENT_HEALTH_FOR_BLENDING = 0.7
 
 # Alpha threshold for considering blending "complete" (G3 gate).
 # Seeds must reach this alpha level to be considered fully blended.
@@ -913,6 +919,7 @@ __all__ = [
     # Lifecycle Gate Thresholds (QualityGates)
     "DEFAULT_MIN_TRAINING_IMPROVEMENT",
     "DEFAULT_MIN_BLENDING_EPOCHS",
+    "DEFAULT_MIN_GRADIENT_HEALTH_FOR_BLENDING",
     "DEFAULT_ALPHA_COMPLETE_THRESHOLD",
     "DEFAULT_MAX_PROBATION_EPOCHS",
 

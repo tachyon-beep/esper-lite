@@ -8,7 +8,8 @@ SeedSlot.auto_forward_gates.
 import torch.nn as nn
 
 from esper.kasmina.slot import SeedSlot, SeedState, SeedMetrics, QualityGates, GateResult, GateLevel
-from esper.leyline import SeedStage, DEFAULT_MAX_PROBATION_EPOCHS
+from esper.leyline import SeedStage, DEFAULT_MAX_PROBATION_EPOCHS, DEFAULT_MIN_BLENDING_EPOCHS
+from esper.leyline.telemetry import SeedTelemetry
 
 
 class MockGates(QualityGates):
@@ -355,10 +356,25 @@ class TestStepEpochAutoForward:
         assert slot.isolate_gradients is True
 
     def test_auto_forward_g2_advances_training_to_blending_after_min_epochs(self):
-        """When G2 is enabled, TRAINING should auto-forward to BLENDING after gate age."""
+        """When G2 is enabled, TRAINING should auto-forward to BLENDING after min epochs.
+
+        Note: In permissive mode, G2 gate still requires safety checks:
+        1. Minimum epochs (DEFAULT_MIN_BLENDING_EPOCHS)
+        2. No exploding gradients
+        3. Gradient health above threshold
+        """
         slot = create_test_slot(QualityGates(permissive=True))
         setup_state_at_stage(slot, SeedStage.TRAINING)
-        slot.state.metrics.epochs_in_current_stage = 1
+        # Set epochs to exactly minimum (step_epoch checks >= min_epochs)
+        slot.state.metrics.epochs_in_current_stage = DEFAULT_MIN_BLENDING_EPOCHS
+        # Set up good gradient health for G2 safety check
+        slot.state.telemetry = SeedTelemetry(
+            seed_id="test_seed",
+            blueprint_id="test_blueprint",
+            gradient_health=1.0,  # Perfect health
+            has_exploding=False,
+            has_vanishing=False,
+        )
         slot.auto_forward_gates = frozenset({GateLevel.G2})
 
         slot.step_epoch()

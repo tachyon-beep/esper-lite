@@ -15,10 +15,12 @@ from esper.leyline import (
     GateLevel,
     DEFAULT_MIN_TRAINING_IMPROVEMENT,
     DEFAULT_MIN_BLENDING_EPOCHS,
+    DEFAULT_MIN_GRADIENT_HEALTH_FOR_BLENDING,
     DEFAULT_MIN_FOSSILIZE_CONTRIBUTION,
     DEFAULT_GRADIENT_RATIO_THRESHOLD,
 )
 from esper.leyline.alpha import AlphaMode
+from esper.leyline.telemetry import SeedTelemetry
 
 
 class TestG0Gate:
@@ -531,3 +533,187 @@ class TestGateLevelMapping:
         for failure_stage in [SeedStage.PRUNED, SeedStage.EMBARGOED, SeedStage.RESETTING]:
             with pytest.raises(ValueError, match="No gate defined"):
                 gates.check_gate(state, failure_stage)
+
+
+class TestG2PermissiveSafetyGate:
+    """Tests for G2 gate in permissive mode (safety checks only).
+
+    Permissive mode skips quality checks (improvement, gradient ratio) but
+    enforces SAFETY gates:
+    1. Minimum training epochs (to exit "initial chaos" phase)
+    2. No exploding gradients (hard requirement)
+    3. Gradient health above threshold (indicates stable learning)
+    """
+
+    def test_permissive_g2_passes_with_all_safety_conditions_met(self):
+        """Permissive G2 should pass when all safety conditions are met."""
+        gates = QualityGates(permissive=True)
+        state = SeedState(
+            seed_id="test",
+            blueprint_id="noop",
+            stage=SeedStage.TRAINING,
+        )
+
+        # Meet minimum epochs requirement
+        state.metrics.epochs_in_current_stage = DEFAULT_MIN_BLENDING_EPOCHS
+
+        # Good gradient health, no exploding
+        state.telemetry = SeedTelemetry(
+            seed_id="test",
+            blueprint_id="noop",
+            gradient_health=DEFAULT_MIN_GRADIENT_HEALTH_FOR_BLENDING + 0.1,
+            has_exploding=False,
+            has_vanishing=False,
+        )
+
+        result = gates.check_gate(state, SeedStage.BLENDING)
+
+        assert result.passed
+        assert result.gate == GateLevel.G2
+        assert any("trained" in check for check in result.checks_passed)
+        assert "no_exploding_gradients" in result.checks_passed
+        assert any("gradient_health" in check for check in result.checks_passed)
+
+    def test_permissive_g2_fails_with_insufficient_epochs(self):
+        """Permissive G2 should fail when not enough training epochs."""
+        gates = QualityGates(permissive=True)
+        state = SeedState(
+            seed_id="test",
+            blueprint_id="noop",
+            stage=SeedStage.TRAINING,
+        )
+
+        # Only 1 epoch (below minimum) - this is the "drive-through training" bug
+        state.metrics.epochs_in_current_stage = 1
+
+        # Even with perfect gradient health
+        state.telemetry = SeedTelemetry(
+            seed_id="test",
+            blueprint_id="noop",
+            gradient_health=1.0,
+            has_exploding=False,
+        )
+
+        result = gates.check_gate(state, SeedStage.BLENDING)
+
+        assert not result.passed
+        assert any("insufficient_training" in check for check in result.checks_failed)
+
+    def test_permissive_g2_fails_with_exploding_gradients(self):
+        """Permissive G2 should NEVER pass with exploding gradients.
+
+        This is a hard safety requirement - exploding gradients indicate
+        unbounded dynamics that will compound catastrophically when blended.
+        """
+        gates = QualityGates(permissive=True)
+        state = SeedState(
+            seed_id="test",
+            blueprint_id="noop",
+            stage=SeedStage.TRAINING,
+        )
+
+        # Meet epochs requirement
+        state.metrics.epochs_in_current_stage = DEFAULT_MIN_BLENDING_EPOCHS
+
+        # Exploding gradients - HARD FAIL
+        state.telemetry = SeedTelemetry(
+            seed_id="test",
+            blueprint_id="noop",
+            gradient_health=1.0,  # Even with perfect health score
+            has_exploding=True,  # THIS IS THE PROBLEM
+        )
+
+        result = gates.check_gate(state, SeedStage.BLENDING)
+
+        assert not result.passed
+        assert "exploding_gradients" in result.checks_failed
+
+    def test_permissive_g2_fails_with_low_gradient_health(self):
+        """Permissive G2 should fail when gradient health is below threshold."""
+        gates = QualityGates(permissive=True)
+        state = SeedState(
+            seed_id="test",
+            blueprint_id="noop",
+            stage=SeedStage.TRAINING,
+        )
+
+        # Meet epochs requirement
+        state.metrics.epochs_in_current_stage = DEFAULT_MIN_BLENDING_EPOCHS
+
+        # Low gradient health
+        state.telemetry = SeedTelemetry(
+            seed_id="test",
+            blueprint_id="noop",
+            gradient_health=DEFAULT_MIN_GRADIENT_HEALTH_FOR_BLENDING - 0.1,
+            has_exploding=False,
+        )
+
+        result = gates.check_gate(state, SeedStage.BLENDING)
+
+        assert not result.passed
+        assert any("gradient_health_low" in check for check in result.checks_failed)
+
+    def test_permissive_g2_requires_all_safety_conditions(self):
+        """Permissive G2 requires ALL safety conditions, not just one."""
+        gates = QualityGates(permissive=True)
+        state = SeedState(
+            seed_id="test",
+            blueprint_id="noop",
+            stage=SeedStage.TRAINING,
+        )
+
+        # Only epochs pass
+        state.metrics.epochs_in_current_stage = DEFAULT_MIN_BLENDING_EPOCHS
+        state.telemetry = SeedTelemetry(
+            seed_id="test",
+            blueprint_id="noop",
+            gradient_health=0.3,  # Low health
+            has_exploding=True,  # AND exploding
+        )
+
+        result = gates.check_gate(state, SeedStage.BLENDING)
+
+        assert not result.passed
+        # Should have multiple failures
+        assert len(result.checks_failed) >= 2
+
+    def test_permissive_g2_passes_without_telemetry(self):
+        """Permissive G2 should pass if no telemetry (defaults to safe)."""
+        gates = QualityGates(permissive=True)
+        state = SeedState(
+            seed_id="test",
+            blueprint_id="noop",
+            stage=SeedStage.TRAINING,
+        )
+
+        # Meet epochs requirement
+        state.metrics.epochs_in_current_stage = DEFAULT_MIN_BLENDING_EPOCHS
+        # No telemetry - should default to "safe" for gradient checks
+        state.telemetry = None
+
+        result = gates.check_gate(state, SeedStage.BLENDING)
+
+        assert result.passed  # Should pass with defaults
+
+    def test_permissive_g2_min_epochs_increased_to_10(self):
+        """Verify DEFAULT_MIN_BLENDING_EPOCHS is now 10 (not 3).
+
+        Per PyTorch expert review: 10-20 epochs needed to exit "initial chaos"
+        phase of training and achieve gradient stability.
+        """
+        # The constant should be at least 10
+        assert DEFAULT_MIN_BLENDING_EPOCHS >= 10, (
+            f"DEFAULT_MIN_BLENDING_EPOCHS should be >= 10 for safety, "
+            f"got {DEFAULT_MIN_BLENDING_EPOCHS}"
+        )
+
+    def test_permissive_g2_gradient_health_threshold_is_0_7(self):
+        """Verify DEFAULT_MIN_GRADIENT_HEALTH_FOR_BLENDING is 0.7.
+
+        Per PyTorch expert review: 0.7 gives headroom while ensuring
+        gradients are in a healthy regime.
+        """
+        assert DEFAULT_MIN_GRADIENT_HEALTH_FOR_BLENDING == 0.7, (
+            f"Expected gradient health threshold 0.7, "
+            f"got {DEFAULT_MIN_GRADIENT_HEALTH_FOR_BLENDING}"
+        )
