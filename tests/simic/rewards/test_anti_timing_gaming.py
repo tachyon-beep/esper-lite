@@ -250,3 +250,79 @@ class TestAntiTimingGamingIntegration:
                 f"At germination epoch {germ_epoch}: "
                 f"expected discount {expected_discount}, got {components.timing_discount}"
             )
+
+    def test_pbrs_germination_bonus_discounted_early(self) -> None:
+        """D3: PBRS germination bonus is discounted for early germination.
+
+        This is the key fix: the agent was germinating early because
+        PBRS gives ~0.25 immediate reward for transitioning to GERMINATED stage.
+        With timing discount, early germination gets reduced PBRS bonus.
+        """
+        # Configuration with D3 timing discount enabled
+        config_d3 = ContributionRewardConfig(
+            germination_warmup_epochs=10,
+            germination_discount_floor=0.4,
+            disable_timing_discount=False,
+            disable_pbrs=False,  # PBRS must be enabled
+        )
+
+        # Baseline without timing discount
+        config_baseline = ContributionRewardConfig(
+            disable_timing_discount=True,
+            disable_pbrs=False,
+        )
+
+        # Germinate at epoch 0 (earliest possible, maximum penalty)
+        reward_d3_early, comp_d3_early = compute_contribution_reward(
+            action=LifecycleOp.GERMINATE,
+            seed_contribution=None,  # No seed yet
+            val_acc=45.0,
+            seed_info=None,  # Empty slot
+            epoch=0,
+            max_epochs=150,
+            config=config_d3,
+            return_components=True,
+        )
+
+        reward_baseline_early, comp_baseline_early = compute_contribution_reward(
+            action=LifecycleOp.GERMINATE,
+            seed_contribution=None,
+            val_acc=45.0,
+            seed_info=None,
+            epoch=0,
+            max_epochs=150,
+            config=config_baseline,
+            return_components=True,
+        )
+
+        # Germinate at epoch 15 (after warmup, full bonus)
+        reward_d3_late, comp_d3_late = compute_contribution_reward(
+            action=LifecycleOp.GERMINATE,
+            seed_contribution=None,
+            val_acc=45.0,
+            seed_info=None,
+            epoch=15,
+            max_epochs=150,
+            config=config_d3,
+            return_components=True,
+        )
+
+        # PBRS bonus baseline: gamma * phi_germinated * pbrs_weight
+        # ≈ 0.99 * 1.0 * 0.3 ≈ 0.297, minus germinate_cost (-0.05) ≈ 0.247
+        # At epoch 0: discount = 0.4, so PBRS portion is 0.4 * 0.297 ≈ 0.119
+        # Total action_shaping ≈ 0.119 - 0.05 ≈ 0.069
+
+        # D3 early germination should get significantly less action_shaping
+        assert comp_d3_early.action_shaping < comp_baseline_early.action_shaping, (
+            f"D3 early ({comp_d3_early.action_shaping}) should be less than "
+            f"baseline ({comp_baseline_early.action_shaping})"
+        )
+
+        # D3 late germination (after warmup) should get full bonus
+        assert comp_d3_late.action_shaping == pytest.approx(
+            comp_baseline_early.action_shaping, rel=0.01
+        ), "Late germination should get full PBRS bonus"
+
+        # Verify the discount is significant (at least 40% reduction at epoch 0)
+        reduction = 1 - (comp_d3_early.action_shaping / comp_baseline_early.action_shaping)
+        assert reduction >= 0.35, f"Expected >= 35% reduction, got {reduction:.1%}"

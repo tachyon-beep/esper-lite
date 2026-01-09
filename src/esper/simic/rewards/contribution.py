@@ -597,6 +597,18 @@ def compute_contribution_reward(
                 phi_germinated = STAGE_POTENTIALS[SeedStage.GERMINATED]
                 phi_no_seed = 0.0
                 pbrs_germinate = config.gamma * phi_germinated - phi_no_seed
+
+                # D3: Apply timing discount to PBRS germination bonus.
+                # Early germination gets reduced immediate reward, incentivizing
+                # the agent to wait until after warmup for the full bonus.
+                if not config.disable_timing_discount:
+                    germination_discount = _compute_timing_discount(
+                        epoch,
+                        config.germination_warmup_epochs,
+                        config.germination_discount_floor,
+                    )
+                    pbrs_germinate *= germination_discount
+
                 action_shaping += config.pbrs_weight * pbrs_germinate
         action_shaping += config.germinate_cost
 
