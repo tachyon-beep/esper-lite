@@ -652,10 +652,6 @@ class PPOAgent:
                     q_val = self.policy.network._compute_value(lstm_out, op_tensor)
                     op_q_values[op_idx] = q_val.squeeze()
 
-                # Mask invalid ops for display; analytics use valid ops only.
-                masked_q_values = op_q_values.clone()
-                masked_q_values[~op_mask] = float("nan")
-
                 # Compute Q-variance and Q-spread over valid ops only.
                 valid_q_values = op_q_values[op_mask]
                 if valid_q_values.numel() >= 2:
@@ -665,7 +661,7 @@ class PPOAgent:
                     q_variance = torch.tensor(float("nan"), device=self.device)
                     q_spread = torch.tensor(float("nan"), device=self.device)
 
-                metrics["op_q_values"] = [masked_q_values]
+                metrics["op_q_values"] = [op_q_values]
                 metrics["op_valid_mask"] = [op_mask]
                 metrics["q_variance"] = [q_variance]
                 metrics["q_spread"] = [q_spread]
