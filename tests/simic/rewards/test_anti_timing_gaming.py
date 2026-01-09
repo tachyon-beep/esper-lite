@@ -308,9 +308,9 @@ class TestAntiTimingGamingIntegration:
         )
 
         # PBRS bonus baseline: gamma * phi_germinated * pbrs_weight
-        # ≈ 0.99 * 1.0 * 0.3 ≈ 0.297, minus germinate_cost (-0.05) ≈ 0.247
+        # ≈ 0.99 * 1.0 * 0.3 ≈ 0.297, minus germinate_cost (-0.15) ≈ 0.147
         # At epoch 0: discount = 0.4, so PBRS portion is 0.4 * 0.297 ≈ 0.119
-        # Total action_shaping ≈ 0.119 - 0.05 ≈ 0.069
+        # Total action_shaping ≈ 0.119 - 0.15 ≈ -0.03 (now NET NEGATIVE!)
 
         # D3 early germination should get significantly less action_shaping
         assert comp_d3_early.action_shaping < comp_baseline_early.action_shaping, (

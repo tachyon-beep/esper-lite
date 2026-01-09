@@ -116,7 +116,7 @@ class ContributionRewardConfig:
     germinate_with_seed_penalty: float = -0.3
 
     # Intervention costs (action friction)
-    germinate_cost: float = -0.05  # Increased from -0.02 (C3 fix: anti-farming rebalance)
+    germinate_cost: float = -0.15  # D3 fix: Makes early GERMINATE net-negative (0.119 - 0.15 = -0.03)
     fossilize_cost: float = -0.01
     prune_cost: float = -0.005
     set_alpha_target_cost: float = -0.005
