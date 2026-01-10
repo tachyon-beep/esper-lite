@@ -1507,12 +1507,21 @@ class TestFossilizeTerminalBonus:
     """
 
     def test_terminal_bonus_scales_with_contributing_fossilized_count(self):
-        """Terminal bonus should scale with number of CONTRIBUTING fossilized seeds.
+        """Terminal bonus uses tanh saturation on CONTRIBUTING fossilized seeds.
 
         DRL Expert review 2025-12-11: Only contributing fossilized seeds (those with
         total_improvement >= MIN_FOSSILIZE_CONTRIBUTION) get terminal bonus. This
         prevents bad fossilizations from being NPV-positive.
+
+        DRL Expert review 2026-01: Changed from linear (num * scale) to tanh saturation
+        (scale * tanh(num / ceiling)) for diminishing returns. This prevents unbounded
+        fossilization rewards that overwhelm step-by-step shaping signals.
+
+        Formula: fossil_bonus = scale * tanh(num_contributing / ceiling)
+        Defaults: scale=3.0, ceiling=3.0
         """
+        import math
+
         def get_terminal_bonus(num_contributing: int, num_total: int = 0) -> tuple[float, float]:
             _, components = compute_contribution_reward(
                 action=LifecycleOp.WAIT,
@@ -1528,26 +1537,31 @@ class TestFossilizeTerminalBonus:
             )
             return components.terminal_bonus, components.fossilize_terminal_bonus
 
-        # Default fossilize_terminal_scale = 3.0
-        # terminal_bonus = val_acc * 0.05 + num_contributing * 3.0
+        # Default: fossilize_terminal_scale=3.0, fossilize_quality_ceiling=3.0
+        # fossil_bonus = 3.0 * tanh(num / 3.0)
+        # terminal_bonus = val_acc * 0.05 + fossil_bonus
         # Base: 70 * 0.05 = 3.5
         total_0, fossil_0 = get_terminal_bonus(0)
-        assert fossil_0 == 0.0
+        assert fossil_0 == 0.0  # tanh(0) = 0
         assert total_0 == pytest.approx(3.5)  # Base only
 
+        # 1 contributing: 3.0 * tanh(1/3) ≈ 0.9645
         total_1, fossil_1 = get_terminal_bonus(1)
-        assert fossil_1 == pytest.approx(3.0)  # 1 * 3.0
-        assert total_1 == pytest.approx(6.5)  # 3.5 + 3.0
+        expected_1 = 3.0 * math.tanh(1 / 3.0)
+        assert fossil_1 == pytest.approx(expected_1)
+        assert total_1 == pytest.approx(3.5 + expected_1)
 
+        # 5 contributing: 3.0 * tanh(5/3) ≈ 2.7866 (saturating)
         total_5, fossil_5 = get_terminal_bonus(5)
-        assert fossil_5 == pytest.approx(15.0)  # 5 * 3.0
-        assert total_5 == pytest.approx(18.5)  # 3.5 + 15.0
+        expected_5 = 3.0 * math.tanh(5 / 3.0)
+        assert fossil_5 == pytest.approx(expected_5)
+        assert total_5 == pytest.approx(3.5 + expected_5)
 
         # Test asymmetric case: 3 total fossilized but only 1 contributing
-        # Only the contributing one should get terminal bonus
+        # Only the contributing one should affect the bonus
         total_asym, fossil_asym = get_terminal_bonus(num_contributing=1, num_total=3)
-        assert fossil_asym == pytest.approx(3.0)  # Only 1 contributing * 3.0
-        assert total_asym == pytest.approx(6.5)  # 3.5 + 3.0
+        assert fossil_asym == pytest.approx(expected_1)  # Only 1 contributing
+        assert total_asym == pytest.approx(3.5 + expected_1)
 
     def test_no_terminal_bonus_before_max_epoch(self):
         """Terminal bonus should only apply at max_epochs."""
@@ -1584,6 +1598,8 @@ class TestFossilizeTerminalBonus:
 
     def test_terminal_bonus_config_override(self):
         """Custom config should allow adjusting fossilize_terminal_scale."""
+        import math
+
         custom_config = ContributionRewardConfig(fossilize_terminal_scale=5.0)
 
         _, components = compute_contribution_reward(
@@ -1600,7 +1616,8 @@ class TestFossilizeTerminalBonus:
             num_contributing_fossilized=2,  # Both contributing
         )
 
-        # 2 * 5.0 = 10.0 fossilize bonus (only contributing seeds count)
-        assert components.fossilize_terminal_bonus == pytest.approx(10.0)
-        # Total: 70 * 0.05 + 10.0 = 13.5
-        assert components.terminal_bonus == pytest.approx(13.5)
+        # 5.0 * tanh(2/3.0) ≈ 2.907 fossilize bonus (tanh saturation with default ceiling=3.0)
+        expected_fossil = 5.0 * math.tanh(2 / 3.0)
+        assert components.fossilize_terminal_bonus == pytest.approx(expected_fossil)
+        # Total: 70 * 0.05 + expected_fossil ≈ 6.407
+        assert components.terminal_bonus == pytest.approx(3.5 + expected_fossil)

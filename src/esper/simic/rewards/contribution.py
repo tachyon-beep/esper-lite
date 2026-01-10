@@ -81,8 +81,10 @@ class ContributionRewardConfig:
     # Soft escrow: pay the CHANGE in an "unrealised credit target" so transient spikes are clawed back.
     # Stable accuracy uses min(last_k) to require sustained improvement ("prove it held").
     escrow_stable_window: int = 3
-    # Optional per-step cap on escrow delta (0 disables). Useful if reward spikes destabilize PPO.
-    escrow_delta_clip: float = 0.0
+    # Per-step cap on escrow delta. Clips large reward swings from transient accuracy spikes.
+    # DRL Expert review 2026-01-10: Enabled at 2.0 to reduce PPO variance while allowing
+    # meaningful updates. Set to 0.0 to disable (not recommended).
+    escrow_delta_clip: float = 2.0
 
     # PBRS stage progression
     pbrs_weight: float = 0.3
@@ -150,9 +152,14 @@ class ContributionRewardConfig:
 
     # Terminal bonus
     terminal_acc_weight: float = 0.05
-    # Terminal bonus per fossilized seed (incentivizes completion over farming)
+    # Terminal bonus scale for fossilized seeds (multiplied by tanh saturation)
     # DRL Expert review 2025-12-10: set to 3.0 to compete with post-scale attribution
+    # DRL Expert review 2026-01-10: now uses tanh(n/ceiling) to favor quality over count
     fossilize_terminal_scale: float = 3.0
+    # Number of fossils at which terminal bonus saturates (tanh ceiling)
+    # With ceiling=3: 1 fossil ≈ 32%, 2 ≈ 58%, 3 ≈ 76%, 5 ≈ 93% of max bonus
+    # This prevents "many mediocre seeds" from dominating "one excellent seed"
+    fossilize_quality_ceiling: float = 3.0
 
     # Gamma for PBRS (uses module constant for consistency)
     gamma: float = DEFAULT_GAMMA
@@ -638,7 +645,14 @@ def compute_contribution_reward(
     fossilize_terminal_bonus = 0.0
     if epoch == max_epochs and not config.disable_terminal_reward:
         terminal_bonus = val_acc * config.terminal_acc_weight
-        fossilize_terminal_bonus = num_contributing_fossilized * config.fossilize_terminal_scale
+        # P1 fix: Use tanh saturation to favor quality over count.
+        # Linear count rewarded "many mediocre seeds" over "one excellent seed".
+        # tanh(n/ceiling) provides diminishing returns, so marginal fossils
+        # contribute less. With ceiling=3: 5 fossils ≈ 2.79, not 15.0.
+        if num_contributing_fossilized > 0 and config.fossilize_quality_ceiling > 0:
+            fossilize_terminal_bonus = config.fossilize_terminal_scale * math.tanh(
+                num_contributing_fossilized / config.fossilize_quality_ceiling
+            )
         terminal_bonus += fossilize_terminal_bonus
         reward += terminal_bonus
     if components:
