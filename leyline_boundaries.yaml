@@ -355,6 +355,10 @@ allow_hits:
   # ============================================================================
   # UTILS: Data Loading
   # ============================================================================
+  - key: "src/esper/utils/data.py:dataclass:AugmentationBuffers"
+    owner: "john"
+    reason: "Internal GPU augmentation buffer management"
+
   - key: "src/esper/utils/data.py:dataclass:_GatherDeviceState"
     owner: "john"
     reason: "Internal GPU preload gather state"
