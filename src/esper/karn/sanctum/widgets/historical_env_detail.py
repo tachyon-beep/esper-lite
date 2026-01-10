@@ -205,11 +205,15 @@ class HistoricalEnvDetail(ModalScreen[None]):
     def _get_current_graveyard(self) -> tuple[dict[str, int], dict[str, int], dict[str, int]]:
         """Get graveyard data for current view state.
 
+        Note: BestRunRecord.blueprint_* fields contain peak-time graveyard data
+        (snapshotted at best accuracy). End-state graveyard fields were not added
+        to BestRunRecord, so both Peak and End views show the same graveyard data.
+
         Returns:
             Tuple of (spawns, fossilized, prunes) dictionaries.
         """
-        # Both peak and end use the same graveyard data (blueprint_spawns, etc.)
-        # The BestRunRecord stores peak graveyard in blueprint_* fields
+        # BestRunRecord stores peak graveyard in blueprint_* fields
+        # (copied from EnvState.best_blueprint_* at record creation)
         return (
             self._record.blueprint_spawns,
             self._record.blueprint_fossilized,
@@ -218,39 +222,31 @@ class HistoricalEnvDetail(ModalScreen[None]):
 
     def _update_display(self) -> None:
         """Update all displays based on current view state."""
+        # Skip updates if widget is not yet mounted
+        if not self.is_mounted:
+            return
+
         # Update header
-        try:
-            header = self.query_one("#detail-header", Static)
-            header.update(self._render_header())
-        except Exception:
-            pass
+        header = self.query_one("#detail-header", Static)
+        header.update(self._render_header())
 
         # Update seed cards
         seeds = self._get_current_seeds()
         slot_ids = self._record.slot_ids or sorted(self._record.seeds.keys())
         for slot_id in slot_ids:
-            try:
-                card = self.query_one(f"#seed-card-{slot_id}", SeedCard)
-                card.update_seed(seeds.get(slot_id))
-            except Exception:
-                pass
+            card = self.query_one(f"#seed-card-{slot_id}", SeedCard)
+            card.update_seed(seeds.get(slot_id))
 
         # Update graveyard
-        try:
-            graveyard = self.query_one("#seed-graveyard", Static)
-            graveyard.update(self._render_graveyard())
-        except Exception:
-            pass
+        graveyard = self.query_one("#seed-graveyard", Static)
+        graveyard.update(self._render_graveyard())
 
         # Update container border color
-        try:
-            container = self.query_one("#modal-container", Container)
-            if self._view_state == "peak":
-                container.styles.border = ("thick", "cyan")
-            else:
-                container.styles.border = ("thick", "yellow")
-        except Exception:
-            pass
+        container = self.query_one("#modal-container", Container)
+        if self._view_state == "peak":
+            container.styles.border = ("thick", "cyan")
+        else:
+            container.styles.border = ("thick", "yellow")
 
     def _render_header(self) -> Text:
         """Render the header bar with record summary."""
@@ -491,8 +487,8 @@ class HistoricalEnvDetail(ModalScreen[None]):
 
         All rows are always visible to prevent jarring layout shifts.
         Empty state shows header + placeholder row with "--" values.
+        Uses _get_current_graveyard() to show peak or end data based on view state.
         """
-        record = self._record
         lines = []
 
         # Header row (always visible)
@@ -504,10 +500,13 @@ class HistoricalEnvDetail(ModalScreen[None]):
         header.append("  rate", style="dim")
         lines.append(header)
 
+        # Get graveyard data for current view state
+        spawns, fossilized_dict, prunes = self._get_current_graveyard()
+
         # Combine all blueprints seen across spawns, fossilized, pruned
-        all_blueprints = set(record.blueprint_spawns.keys())
-        all_blueprints.update(record.blueprint_fossilized.keys())
-        all_blueprints.update(record.blueprint_prunes.keys())
+        all_blueprints = set(spawns.keys())
+        all_blueprints.update(fossilized_dict.keys())
+        all_blueprints.update(prunes.keys())
 
         if not all_blueprints:
             # Placeholder row when no seeds spawned (matches column structure)
@@ -521,9 +520,9 @@ class HistoricalEnvDetail(ModalScreen[None]):
         else:
             # Build graveyard display (no prefixes - header has column labels)
             for blueprint in sorted(all_blueprints):
-                spawned = record.blueprint_spawns.get(blueprint, 0)
-                fossilized = record.blueprint_fossilized.get(blueprint, 0)
-                pruned = record.blueprint_prunes.get(blueprint, 0)
+                spawned = spawns.get(blueprint, 0)
+                fossilized = fossilized_dict.get(blueprint, 0)
+                pruned = prunes.get(blueprint, 0)
 
                 line = Text()
                 line.append(f"{blueprint:15s} ", style="white")

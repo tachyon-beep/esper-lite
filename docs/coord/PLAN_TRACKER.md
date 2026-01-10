@@ -53,6 +53,7 @@
 
 | ID | Title | Type | Urgency | Complexity | Risk | Status |
 |----|-------|------|---------|------------|------|--------|
+| shaped-delta-clip | SHAPED Mode Delta Clipping | ready | high | S | low | 0% - DRL expert recommended |
 | reward-efficiency | Phase 1 Final Exam (A/B Testing) | ready | high | S | low | ⚠️ Infra 100% done, experiment never run |
 | telemetry-domain-sep | Telemetry Domain Separation | ready | high | L | medium | ~15% done (3/9 DRL fields), no renaming |
 | counterfactual-aux | Counterfactual Auxiliary Supervision | ready | high | M | medium | 0% - None of 4 phases started |
@@ -766,6 +767,49 @@ percent_complete: 0
 
 ---
 
+### shaped-delta-clip: SHAPED Mode Delta Clipping
+
+```yaml
+id: shaped-delta-clip
+title: SHAPED Mode Delta Clipping
+type: ready
+created: 2026-01-10
+updated: 2026-01-10
+location: docs/plans/ready/shaped-mode-delta-clipping.md
+
+urgency: high
+value: |
+  Fixes reward inflation in SHAPED mode where long-lived seeds get
+  unbounded rewards due to cumulative seed_contribution.
+  Adds shaped_delta_clip parameter (default 2.0) to mirror ESCROW's escrow_delta_clip.
+
+complexity: S
+risk: low
+risk_notes: |
+  - Mirrors proven ESCROW approach
+  - Rollback via shaped_delta_clip=0.0
+
+depends_on: []
+blocks: []
+
+status_notes: |
+  Telemetry analysis (2026-01-10) found episodes with 22-24% accuracy
+  getting 700+ episode rewards due to cumulative inflation.
+
+  DRL expert review confirmed delta-clipping is the correct fix.
+
+  6 phases:
+  1. Add shaped_delta_clip config param
+  2. Add telemetry fields
+  3. Implement delta clipping logic
+  4. Add function parameter
+  5. Wire through vectorized trainer
+  6. Add tests
+percent_complete: 0
+```
+
+---
+
 ### counterfactual-aux: Counterfactual Auxiliary Supervision
 
 ```yaml
@@ -1104,6 +1148,7 @@ Quick reference for all tracked plans:
 ### ready/ (Implementation-Ready)
 | File | ID |
 |------|-----|
+| `shaped-mode-delta-clipping.md` | shaped-delta-clip |
 | `2026-01-09-blueprint-compiler-and-curriculum-seeds.md` | blueprint-compiler |
 | `2026-01-09-blueprint-compiler-appendix-antipatterns.md` | blueprint-antipatterns |
 | `2026-01-09-blueprint-compiler-appendix-future-blueprints.md` | blueprint-future |

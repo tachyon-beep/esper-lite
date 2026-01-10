@@ -59,33 +59,43 @@ def test_historical_env_detail_get_current_seeds():
 
 
 def test_historical_env_detail_get_current_graveyard():
-    """_get_current_graveyard should return correct graveyard data based on state."""
+    """_get_current_graveyard returns graveyard data (same for peak and end).
+
+    Note: BestRunRecord.blueprint_* contains peak graveyard data.
+    End-state graveyard was not added to BestRunRecord, so both views
+    return the same data.
+    """
     record = BestRunRecord(
         env_id=0,
         episode=5,
         peak_accuracy=85.0,
         final_accuracy=82.0,
+        # Peak graveyard data (stored in blueprint_* fields)
         blueprint_spawns={"conv_light": 3},
         blueprint_fossilized={"conv_light": 2},
         blueprint_prunes={"conv_light": 1},
     )
     modal = HistoricalEnvDetail(record)
 
-    # Peak state - should return the best_blueprint_* data (which is blueprint_* for now)
+    # Peak state - returns blueprint_* data
     assert modal._view_state == "peak"
     spawns, fossilized, prunes = modal._get_current_graveyard()
     assert spawns == {"conv_light": 3}
     assert fossilized == {"conv_light": 2}
     assert prunes == {"conv_light": 1}
 
-    # Toggle to end state - should also work (same data for now)
+    # End state - also returns blueprint_* (no separate end graveyard data)
     modal._view_state = "end"
     spawns, fossilized, prunes = modal._get_current_graveyard()
     assert spawns == {"conv_light": 3}
+    assert fossilized == {"conv_light": 2}
+    assert prunes == {"conv_light": 1}
 
 
 def test_historical_env_detail_toggle_state():
     """action_toggle_state should toggle between peak and end states."""
+    from unittest.mock import patch
+
     record = BestRunRecord(
         env_id=0,
         episode=5,
@@ -97,14 +107,15 @@ def test_historical_env_detail_toggle_state():
     # Starts in peak
     assert modal._view_state == "peak"
 
-    # Toggle to end (note: we need to call the internal toggle method)
-    # Since _update_display requires mounted widgets, we test the state change directly
-    modal._view_state = "end" if modal._view_state == "peak" else "peak"
-    assert modal._view_state == "end"
+    # Mock _update_display since widget isn't mounted
+    with patch.object(modal, "_update_display"):
+        # Toggle to end - calling the actual action method
+        modal.action_toggle_state()
+        assert modal._view_state == "end"
 
-    # Toggle back to peak
-    modal._view_state = "end" if modal._view_state == "peak" else "peak"
-    assert modal._view_state == "peak"
+        # Toggle back to peak
+        modal.action_toggle_state()
+        assert modal._view_state == "peak"
 
 
 def test_historical_env_detail_header_shows_state():
