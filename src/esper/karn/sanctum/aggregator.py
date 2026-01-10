@@ -38,6 +38,7 @@ from esper.karn.sanctum.schema import (
     ShapleySnapshot,
     ShapleyEstimate,
     SeedLifecycleStats,
+    SeedLifecycleEvent,
     ObservationStats,
     EpisodeStats,
     compute_entropy_velocity,
@@ -1212,6 +1213,18 @@ class SanctumAggregator:
                 self._cumulative_blueprint_spawns.get(seed.blueprint_id, 0) + 1
             )
 
+            # Create lifecycle event
+            env.lifecycle_events.append(SeedLifecycleEvent(
+                epoch=event.epoch or 0,
+                action=f"GERMINATE({germinated_payload.blueprint_id})",
+                from_stage="DORMANT",
+                to_stage="GERMINATED",
+                blueprint_id=germinated_payload.blueprint_id,
+                slot_id=slot_id,
+                alpha=None,
+                accuracy_delta=None,
+            ))
+
         elif event_type == "SEED_STAGE_CHANGED" and isinstance(event.data, SeedStageChangedPayload):
             stage_changed_payload = event.data
             slot_id = event.slot_id or stage_changed_payload.slot_id
@@ -1240,6 +1253,25 @@ class SanctumAggregator:
             if stage_changed_payload.alpha is not None:
                 seed.alpha = stage_changed_payload.alpha
             seed.alpha_curve = stage_changed_payload.alpha_curve
+
+            # Determine action: explicit ADVANCE or [auto]
+            auto_transitions = {
+                ("GERMINATED", "TRAINING"),
+                ("BLENDING", "HOLDING"),
+            }
+            is_auto = (stage_changed_payload.from_stage, stage_changed_payload.to_stage) in auto_transitions
+            action = "[auto]" if is_auto else "ADVANCE"
+
+            env.lifecycle_events.append(SeedLifecycleEvent(
+                epoch=event.epoch or 0,
+                action=action,
+                from_stage=stage_changed_payload.from_stage,
+                to_stage=stage_changed_payload.to_stage,
+                blueprint_id=seed.blueprint_id or "unknown",
+                slot_id=slot_id,
+                alpha=stage_changed_payload.alpha,
+                accuracy_delta=None,
+            ))
 
         elif event_type == "SEED_FOSSILIZED" and isinstance(event.data, SeedFossilizedPayload):
             fossilized_payload = event.data
@@ -1282,6 +1314,18 @@ class SanctumAggregator:
                 self._cumulative_blueprint_fossilized.get(seed.blueprint_id, 0) + 1
             )
 
+            # Create lifecycle event
+            env.lifecycle_events.append(SeedLifecycleEvent(
+                epoch=event.epoch or 0,
+                action="FOSSILIZE",
+                from_stage=seed.stage,
+                to_stage="FOSSILIZED",
+                blueprint_id=seed.blueprint_id or "unknown",
+                slot_id=slot_id,
+                alpha=seed.alpha,
+                accuracy_delta=fossilized_payload.improvement,
+            ))
+
         elif event_type == "SEED_PRUNED" and isinstance(event.data, SeedPrunedPayload):
             pruned_payload = event.data
             slot_id = event.slot_id or pruned_payload.slot_id
@@ -1303,6 +1347,18 @@ class SanctumAggregator:
             # Capture pre-prune state for growth bookkeeping
             was_fossilized = seed.stage == "FOSSILIZED"
             fossilized_params = seed.seed_params
+
+            # Create lifecycle event (before clearing seed state)
+            env.lifecycle_events.append(SeedLifecycleEvent(
+                epoch=event.epoch or 0,
+                action="PRUNE",
+                from_stage=seed.stage,
+                to_stage="PRUNED",
+                blueprint_id=seed.blueprint_id or "unknown",
+                slot_id=slot_id,
+                alpha=seed.alpha,
+                accuracy_delta=None,
+            ))
 
             # Update from payload
             seed.prune_reason = pruned_payload.reason
