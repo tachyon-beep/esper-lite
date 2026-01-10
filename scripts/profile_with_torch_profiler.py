@@ -33,7 +33,7 @@ from esper.nissa import reset_hub  # noqa: E402 - import after CUDA check
 from esper.simic.training.vectorized import train_ppo_vectorized  # noqa: E402
 
 
-def profile_training():
+def profile_training() -> torch.profiler.profile | None:
     """Run profiled training session."""
     print("\n" + "=" * 70)
     print("Starting Profiled Training")
@@ -112,10 +112,11 @@ def profile_training():
     print("=" * 70)
     print(prof.key_averages().table(sort_by="self_cpu_time_total", row_limit=10))
 
-    return prof
+    result: torch.profiler.profile = prof
+    return result
 
 
-def analyze_profile(prof):
+def analyze_profile(prof: torch.profiler.profile | None) -> None:
     """Analyze profiling results."""
     if prof is None:
         return

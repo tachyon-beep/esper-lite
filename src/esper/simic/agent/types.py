@@ -114,6 +114,7 @@ class PPOUpdateMetrics(TypedDict, total=False):
     # Structured metrics
     gradient_stats: GradientStats | None
     head_entropies: dict[str, list[float]]  # Per-head, per-epoch
+    conditional_head_entropies: dict[str, list[float]]  # Entropy when head is causally relevant
     head_grad_norms: dict[str, list[float]]  # Per-head, per-epoch
     ratio_diagnostic: dict[str, Any]
     # Q-values (Policy V2 op-conditioned critic)

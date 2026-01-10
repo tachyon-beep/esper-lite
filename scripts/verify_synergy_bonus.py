@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Quick verification that synergy bonus computation works end-to-end."""
 
-from esper.simic.rewards import compute_contribution_reward, ContributionRewardConfig, SeedInfo
+from esper.simic.rewards import (
+    compute_contribution_reward,
+    ContributionRewardConfig,
+    SeedInfo,
+)
 from esper.kasmina.slot import SeedState, SeedMetrics
 from esper.leyline import SeedStage
 from esper.leyline.factored_actions import LifecycleOp
 
 
-def verify_synergy_pipeline():
+def verify_synergy_pipeline() -> None:
     """Verify that interaction metrics flow through the full pipeline."""
     print("=" * 70)
     print("Verifying Synergy Bonus Pipeline")
@@ -29,7 +33,7 @@ def verify_synergy_pipeline():
     )
 
     config = ContributionRewardConfig()
-    reward, components = compute_contribution_reward(
+    result = compute_contribution_reward(
         action=LifecycleOp.WAIT,
         seed_contribution=0.05,
         val_acc=70.0,
@@ -41,6 +45,8 @@ def verify_synergy_pipeline():
         config=config,
         return_components=True,
     )
+    assert isinstance(result, tuple)
+    reward, components = result
 
     print(f"   Interaction sum: {seed_info_direct.interaction_sum}")
     print(f"   Boost received: {seed_info_direct.boost_received}")
@@ -70,6 +76,7 @@ def verify_synergy_pipeline():
     )
 
     seed_info_from_state = SeedInfo.from_seed_state(seed_state, seed_params=10000)
+    assert seed_info_from_state is not None, "from_seed_state returned None!"
 
     print(f"   SeedMetrics interaction_sum: {metrics.interaction_sum}")
     print(f"   SeedInfo interaction_sum: {seed_info_from_state.interaction_sum}")
@@ -77,7 +84,7 @@ def verify_synergy_pipeline():
     assert seed_info_from_state.boost_received == 1.2, "boost_received not extracted!"
     print("   ✓ Metrics extraction works")
 
-    reward2, components2 = compute_contribution_reward(
+    result2 = compute_contribution_reward(
         action=LifecycleOp.WAIT,
         seed_contribution=0.05,
         val_acc=70.0,
@@ -89,6 +96,8 @@ def verify_synergy_pipeline():
         config=config,
         return_components=True,
     )
+    assert isinstance(result2, tuple)
+    reward2, components2 = result2
 
     print(f"   Synergy bonus: {components2.synergy_bonus:.6f}")
     assert components2.synergy_bonus > 0, "Synergy bonus should be positive!"
@@ -112,7 +121,7 @@ def verify_synergy_pipeline():
         boost_received=0.0,
     )
 
-    reward_no_synergy, components_no_synergy = compute_contribution_reward(
+    result3 = compute_contribution_reward(
         action=LifecycleOp.WAIT,
         seed_contribution=0.05,
         val_acc=70.0,
@@ -124,6 +133,8 @@ def verify_synergy_pipeline():
         config=config,
         return_components=True,
     )
+    assert isinstance(result3, tuple)
+    reward_no_synergy, components_no_synergy = result3
 
     print(f"   Reward without synergy: {reward_no_synergy:.6f}")
     print(f"   Synergy bonus difference: {reward - reward_no_synergy:.6f}")

@@ -3,13 +3,15 @@
 
 Run with: PYTHONPATH=src uv run python scripts/profile_gpu_sync.py
 """
-import torch
 import time
+from collections.abc import Generator
 from contextlib import contextmanager
+
+import torch
 
 
 @contextmanager
-def sync_timer(name: str):
+def sync_timer(name: str) -> Generator[None, None, None]:
     """Time a block including GPU sync."""
     torch.cuda.synchronize() if torch.cuda.is_available() else None
     start = time.perf_counter()
@@ -19,7 +21,7 @@ def sync_timer(name: str):
     print(f"{name}: {elapsed:.2f}ms")
 
 
-def profile_action_extraction():
+def profile_action_extraction() -> None:
     """Compare .item() vs .cpu().numpy() for action extraction."""
     device = "cuda" if torch.cuda.is_available() else "cpu"
     num_envs = 4
@@ -45,7 +47,7 @@ def profile_action_extraction():
                 _ = {key: int(actions_cpu[key][env_idx]) for key in actions_cpu}
 
 
-def profile_log_prob_storage():
+def profile_log_prob_storage() -> None:
     """Compare .item() vs tensor assignment for log_probs."""
     device = "cuda" if torch.cuda.is_available() else "cpu"
     num_envs = 4

@@ -13,8 +13,11 @@ Run with: PYTHONPATH=src uv run python scripts/profile_hot_path_operations.py
 
 import time
 import statistics
+from typing import Any
+
 import torch
 import torch.nn as nn
+from torch.amp import autocast, GradScaler  # type: ignore[attr-defined]
 
 
 class MockResNet(nn.Module):
@@ -34,20 +37,21 @@ class MockResNet(nn.Module):
         self.global_pool = nn.AdaptiveAvgPool2d(1)
         self.fc = nn.Linear(128, num_classes)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = torch.relu(self.bn1(self.conv1(x)))
         x = torch.relu(self.bn2(self.conv2(x)))
         x = torch.relu(self.bn3(self.conv3(x)))
         x = torch.relu(self.bn4(self.conv4(x)))
         x = self.global_pool(x).flatten(1)
-        return self.fc(x)
+        result: torch.Tensor = self.fc(x)
+        return result
 
 
 def benchmark_grad_clipping(
     model: nn.Module,
     max_grad_norm: float = 1.0,
     iterations: int = 100,
-) -> dict:
+) -> dict[str, Any]:
     """Benchmark gradient clipping overhead."""
     _device = next(model.parameters()).device  # verify model is on expected device
     params = list(model.parameters())
@@ -83,10 +87,10 @@ def benchmark_scaler_operations(
     model: nn.Module,
     optimizer: torch.optim.Optimizer,
     iterations: int = 100,
-) -> dict:
+) -> dict[str, Any]:
     """Benchmark GradScaler operations."""
     device = next(model.parameters()).device
-    scaler = torch.amp.GradScaler()
+    scaler = GradScaler()
 
     # Create a simple loss for backward
     inputs = torch.randn(32, 3, 32, 32, device=device)
@@ -104,7 +108,7 @@ def benchmark_scaler_operations(
         optimizer.zero_grad(set_to_none=True)
 
         # Forward + backward with scaling
-        with torch.amp.autocast(device_type="cuda"):
+        with autocast(device_type="cuda"):
             outputs = model(inputs)
             loss = criterion(outputs, targets)
 
@@ -148,7 +152,7 @@ def benchmark_scaler_operations(
 def benchmark_grad_presence_check(
     optimizer: torch.optim.Optimizer,
     iterations: int = 1000,
-) -> dict:
+) -> dict[str, Any]:
     """Benchmark the has_grads check pattern from process_train_batch."""
     times = []
 
@@ -170,7 +174,7 @@ def benchmark_param_iteration(
     model: nn.Module,
     num_slots: int = 4,
     iterations: int = 1000,
-) -> dict:
+) -> dict[str, Any]:
     """Benchmark parameter iteration patterns used in gradient clipping."""
     params = list(model.parameters())
 
@@ -185,7 +189,7 @@ def benchmark_param_iteration(
 
         # Pattern 2: extend pattern (like in the old code)
         start = time.perf_counter()
-        all_params = []
+        all_params: list[nn.Parameter] = []
         all_params.extend(model.parameters())
         times_extend.append(time.perf_counter() - start)
 
@@ -201,11 +205,11 @@ def benchmark_full_train_batch_pattern(
     iterations: int = 50,
     with_grad_clipping: bool = True,
     max_grad_norm: float = 1.0,
-) -> dict:
+) -> dict[str, Any]:
     """Benchmark the full process_train_batch pattern."""
     device = next(model.parameters()).device
     optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
-    scaler = torch.amp.GradScaler()
+    scaler = GradScaler()
     criterion = nn.CrossEntropyLoss()
 
     inputs = torch.randn(64, 3, 32, 32, device=device)
@@ -221,7 +225,7 @@ def benchmark_full_train_batch_pattern(
         start = time.perf_counter()
 
         # Forward pass with AMP
-        with torch.amp.autocast(device_type="cuda"):
+        with autocast(device_type="cuda"):
             outputs = model(inputs)
             loss = criterion(outputs, targets)
 
@@ -248,7 +252,7 @@ def benchmark_full_train_batch_pattern(
     }
 
 
-def main():
+def main() -> None:
     print("=" * 70)
     print("Hot Path Operations Profiling")
     print("=" * 70)
@@ -264,7 +268,7 @@ def main():
 
     # Create model
     model = MockResNet().to(device)
-    model.to(memory_format=torch.channels_last)
+    model.to(memory_format=torch.channels_last)  # type: ignore[call-overload]
     optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
 
     # Warmup

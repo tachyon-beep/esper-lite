@@ -5,8 +5,6 @@ creating an exploit where Tamiyo could turntable alpha settings to avoid
 the indecision penalty while collecting dense positive rewards.
 """
 
-import pytest
-
 from esper.leyline import LifecycleOp, MIN_PRUNE_AGE, SeedStage
 from esper.simic.rewards import compute_contribution_reward, ContributionRewardConfig
 from esper.simic.rewards.types import SeedInfo

@@ -60,7 +60,7 @@ class Whitelist:
                 raise ValueError(f"allow_paths '{path}' must include non-empty 'reason'")
             self.allow_paths.append(path)
 
-        self.allow_hits: dict[str, dict] = {}
+        self.allow_hits: dict[str, dict[str, object]] = {}
         allow_hits = data.get("allow_hits", [])
         if not isinstance(allow_hits, list):
             raise ValueError("allow_hits must be a list")
@@ -120,7 +120,7 @@ class Whitelist:
         if key in self.allow_hits:
             hit = self.allow_hits[key]
             if "expires" in hit:
-                expires = date.fromisoformat(hit["expires"])
+                expires = date.fromisoformat(str(hit["expires"]))
                 if expires < self.today:
                     return False, f"EXPIRED: {key} (was {hit['expires']})"
             return True, None

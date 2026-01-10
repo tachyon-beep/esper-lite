@@ -9,6 +9,8 @@ Run with: PYTHONPATH=src uv run python scripts/profile_float64_conversion.py
 
 import time
 import statistics
+from typing import Any
+
 import torch
 import torch.nn as nn
 
@@ -29,20 +31,21 @@ class MockResNet(nn.Module):
         self.global_pool = nn.AdaptiveAvgPool2d(1)
         self.fc = nn.Linear(128, num_classes)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = torch.relu(self.bn1(self.conv1(x)))
         x = torch.relu(self.bn2(self.conv2(x)))
         x = torch.relu(self.bn3(self.conv3(x)))
         x = torch.relu(self.bn4(self.conv4(x)))
         x = self.global_pool(x).flatten(1)
-        return self.fc(x)
+        result: torch.Tensor = self.fc(x)
+        return result
 
 
 def benchmark_gradient_collection(
     model: nn.Module,
     iterations: int = 100,
     with_float64: bool = True,
-) -> dict:
+) -> dict[str, Any]:
     """Benchmark gradient collection with/without float64 conversion."""
     _device = next(model.parameters()).device  # verify model is on expected device
 
@@ -85,7 +88,7 @@ def benchmark_gradient_collection(
 def benchmark_double_conversion_only(
     model: nn.Module,
     iterations: int = 100,
-) -> dict:
+) -> dict[str, Any]:
     """Benchmark just the .double() conversion."""
     _device = next(model.parameters()).device  # verify model is on expected device
 
@@ -117,7 +120,7 @@ def benchmark_double_conversion_only(
 def benchmark_foreach_norm_overhead(
     model: nn.Module,
     iterations: int = 100,
-) -> dict:
+) -> dict[str, Any]:
     """Benchmark _foreach_norm with different dtypes."""
     _device = next(model.parameters()).device  # verify model is on expected device
 
@@ -155,7 +158,7 @@ def benchmark_foreach_norm_overhead(
     }
 
 
-def main():
+def main() -> None:
     print("=" * 70)
     print("Float64 Conversion Overhead Profiling (B7-PT-01)")
     print("=" * 70)
@@ -171,7 +174,7 @@ def main():
 
     # Create model
     model = MockResNet().to(device)
-    model.to(memory_format=torch.channels_last)
+    model.to(memory_format=torch.channels_last)  # type: ignore[call-overload]
 
     # Count parameters
     total_params = sum(p.numel() for p in model.parameters())
@@ -181,7 +184,7 @@ def main():
     print("\nWarming up...")
     for p in model.parameters():
         p.grad = torch.randn_like(p)
-    _ = [g.double() for g in [p.grad for p in model.parameters()]]
+    _ = [g.double() for g in [p.grad for p in model.parameters() if p.grad is not None]]
     torch.cuda.synchronize()
 
     # Test 1: Just the .double() conversion
