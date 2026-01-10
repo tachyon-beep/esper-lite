@@ -27,7 +27,7 @@ from esper.karn.sanctum.widgets.env_detail_screen import SeedCard
 from esper.karn.sanctum.widgets.shapley_panel import ShapleyPanel
 
 if TYPE_CHECKING:
-    from esper.karn.sanctum.schema import BestRunRecord
+    from esper.karn.sanctum.schema import BestRunRecord, SeedState
 
 
 class HistoricalEnvDetail(ModalScreen[None]):
@@ -41,6 +41,7 @@ class HistoricalEnvDetail(ModalScreen[None]):
     BINDINGS = [
         Binding("escape", "dismiss", "Close", show=True),
         Binding("q", "dismiss", "Close", show=False),
+        Binding("s", "toggle_state", "Switch Peak/End", show=True),
     ]
 
     DEFAULT_CSS = """
@@ -53,7 +54,7 @@ class HistoricalEnvDetail(ModalScreen[None]):
         width: 95%;
         height: 95%;
         background: $surface;
-        border: thick $secondary;
+        border: thick cyan;
         padding: 1 2;
     }
 
@@ -132,6 +133,7 @@ class HistoricalEnvDetail(ModalScreen[None]):
         """
         super().__init__(**kwargs)
         self._record = record
+        self._view_state: str = "peak"  # "peak" or "end"
 
     def compose(self) -> ComposeResult:
         """Compose the modal layout."""
@@ -185,14 +187,82 @@ class HistoricalEnvDetail(ModalScreen[None]):
         """Dismiss modal on click."""
         self.dismiss()
 
+    def action_toggle_state(self) -> None:
+        """Toggle between peak and end state views."""
+        self._view_state = "end" if self._view_state == "peak" else "peak"
+        self._update_display()
+
+    def _get_current_seeds(self) -> dict[str, "SeedState"]:
+        """Get seeds for current view state.
+
+        Returns:
+            Seeds at peak if viewing peak state, end_seeds if viewing end state.
+        """
+        if self._view_state == "peak":
+            return self._record.seeds
+        return self._record.end_seeds
+
+    def _get_current_graveyard(self) -> tuple[dict[str, int], dict[str, int], dict[str, int]]:
+        """Get graveyard data for current view state.
+
+        Returns:
+            Tuple of (spawns, fossilized, prunes) dictionaries.
+        """
+        # Both peak and end use the same graveyard data (blueprint_spawns, etc.)
+        # The BestRunRecord stores peak graveyard in blueprint_* fields
+        return (
+            self._record.blueprint_spawns,
+            self._record.blueprint_fossilized,
+            self._record.blueprint_prunes,
+        )
+
+    def _update_display(self) -> None:
+        """Update all displays based on current view state."""
+        # Update header
+        try:
+            header = self.query_one("#detail-header", Static)
+            header.update(self._render_header())
+        except Exception:
+            pass
+
+        # Update seed cards
+        seeds = self._get_current_seeds()
+        slot_ids = self._record.slot_ids or sorted(self._record.seeds.keys())
+        for slot_id in slot_ids:
+            try:
+                card = self.query_one(f"#seed-card-{slot_id}", SeedCard)
+                card.update_seed(seeds.get(slot_id))
+            except Exception:
+                pass
+
+        # Update graveyard
+        try:
+            graveyard = self.query_one("#seed-graveyard", Static)
+            graveyard.update(self._render_graveyard())
+        except Exception:
+            pass
+
+        # Update container border color
+        try:
+            container = self.query_one("#modal-container", Container)
+            if self._view_state == "peak":
+                container.styles.border = ("thick", "cyan")
+            else:
+                container.styles.border = ("thick", "yellow")
+        except Exception:
+            pass
+
     def _render_header(self) -> Text:
         """Render the header bar with record summary."""
         record = self._record
 
         header = Text()
 
-        # Historical banner
-        header.append("📜 HISTORICAL VIEW", style="bold yellow")
+        # State indicator with color (cyan for peak, yellow for end)
+        if self._view_state == "peak":
+            header.append("PEAK STATE", style="bold cyan")
+        else:
+            header.append("END STATE", style="bold yellow")
         header.append("  │  ")
 
         # Episode index (unique identifier for telemetry lookup)

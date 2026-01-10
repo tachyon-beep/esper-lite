@@ -81,7 +81,8 @@ class TestHistoricalEnvDetailRendering:
         # episode_idx = episode + env_id = 42 + 0 = 42
         assert "Episode# 42" in header_text
         assert "Peak: 95.5%" in header_text
-        assert "HISTORICAL VIEW" in header_text
+        # Default view state is "peak", shown as "PEAK STATE"
+        assert "PEAK STATE" in header_text
 
     def test_header_uses_format_params(self):
         """Header should format host params using shared utility."""
