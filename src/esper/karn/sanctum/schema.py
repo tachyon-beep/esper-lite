@@ -511,7 +511,7 @@ class EnvState:
     accuracy_history: deque[float] = field(default_factory=lambda: deque(maxlen=50))
 
     # Reward tracking
-    cumulative_reward: float = 0.0  # Sum of all rewards received (for entire episode)
+    cumulative_reward: float = 0.0  # Running total across the episode (end-of-episode reward)
 
     # Best tracking
     best_reward: float = float('-inf')
@@ -519,6 +519,7 @@ class EnvState:
     best_accuracy: float = 0.0
     best_accuracy_epoch: int = 0
     best_accuracy_episode: int = 0
+    peak_cumulative_reward: float = 0.0  # Episode total at the moment best accuracy is achieved
     best_seeds: dict[str, SeedState] = field(default_factory=dict)
 
     # Snapshot volatile state at peak accuracy (for historical detail modal)
@@ -624,6 +625,7 @@ class EnvState:
             self.best_accuracy = accuracy
             self.best_accuracy_epoch = epoch
             self.best_accuracy_episode = episode
+            self.peak_cumulative_reward = self.cumulative_reward
             self.epochs_since_improvement = 0
             # Snapshot contributing seeds when new best is achieved
             # Include permanent (FOSSILIZED) and provisional (HOLDING, BLENDING)
@@ -1334,8 +1336,10 @@ class BestRunRecord:
 
     record_id: str = ""  # Unique ID for click targeting
 
-    # Total episode reward (sum of all rewards including terminal bonuses)
+    # End-of-episode total reward for the trajectory that reached the peak
     cumulative_reward: float = 0.0
+    # Episode total at the moment peak accuracy was achieved
+    peak_cumulative_reward: float = 0.0
 
     # === Full env snapshot at peak (for historical detail view) ===
     # Reward breakdown at peak

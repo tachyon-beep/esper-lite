@@ -594,7 +594,8 @@ class HistoricalEnvDetail(ModalScreen[None]):
         else:
             table.add_row("[dim italic]All components zero[/dim italic]", "", "")
 
-        # Title includes cumulative reward context
-        cumulative = record.cumulative_reward
-        title_suffix = f" (Episode Total: {cumulative:+.1f})" if cumulative != 0 else ""
+        # Title includes peak vs end-of-episode reward context
+        peak_total = record.peak_cumulative_reward
+        end_total = record.cumulative_reward
+        title_suffix = f" (Peak Total: {peak_total:+.1f} | End Total: {end_total:+.1f})"
         return Panel(table, title=f"Reward Breakdown{title_suffix}", border_style="yellow")

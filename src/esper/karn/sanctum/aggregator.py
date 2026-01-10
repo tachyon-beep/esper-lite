@@ -1448,7 +1448,8 @@ class SanctumAggregator:
                     slot_ids=list(self._slot_ids),  # All slots for showing DORMANT in detail
                     growth_ratio=growth_ratio,
                     record_id=str(uuid.uuid4())[:8],
-                    cumulative_reward=env.cumulative_reward,  # Total episode reward
+                    cumulative_reward=env.cumulative_reward,  # End-of-episode total reward for this trajectory
+                    peak_cumulative_reward=env.peak_cumulative_reward,
                     # Full env snapshot at peak (captured by EnvState.add_accuracy())
                     reward_components=env.best_reward_components,
                     counterfactual_matrix=env.best_counterfactual_matrix,
@@ -1506,6 +1507,7 @@ class SanctumAggregator:
             env.best_accuracy = 0.0
             env.best_accuracy_epoch = 0
             env.best_accuracy_episode = 0
+            env.peak_cumulative_reward = 0.0
             env.best_seeds.clear()
 
             # Volatile state snapshots (fresh per episode)

@@ -10,7 +10,7 @@ Columns:
 - Peak: Best accuracy achieved
 - Traj: Trajectory arrow showing peak→final (↗ climbing, ─→ held, ↘ regressed)
 - Grw: Parameter growth ratio
-- Rwd: Cumulative reward at peak (sum of reward_history)
+- EndRwd: End-of-episode total reward for the trajectory that reached the peak
 - Seeds: Seed status counts as "blending/holding/fossilized" (e.g., "1/0/2")
 """
 from __future__ import annotations
@@ -97,7 +97,7 @@ class Scoreboard(Static):
         """Setup leaderboard table columns.
 
         Layout:
-        │ Ep │ @ │ Peak │  Traj  │ Grw  │  Rwd  │ Seeds  │
+        │ Ep │ @ │ Peak │  Traj  │ Grw  │ EndRwd│ Seeds  │
         │ 47 │12 │85.5% │ ─→85.2 │1.03x │ +2.45 │ 1/0/2  │
         """
         self.table.clear(columns=True)
@@ -106,7 +106,7 @@ class Scoreboard(Static):
         self.table.add_column("Peak", key="peak", width=6)   # Peak accuracy
         self.table.add_column("Traj", key="traj", width=7)   # Trajectory arrow + final
         self.table.add_column("Grw", key="growth", width=5)  # Growth ratio
-        self.table.add_column("Rwd", key="reward", width=6)  # Cumulative reward at peak
+        self.table.add_column("EndRwd", key="reward", width=6)  # End-of-episode total reward
         self.table.add_column("Seeds", key="seeds", width=7)  # Seed status counts (B/H/F)
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
@@ -248,7 +248,7 @@ class Scoreboard(Static):
         self.bottom_table.add_column("Peak", key="peak", width=6)
         self.bottom_table.add_column("Traj", key="traj", width=7)
         self.bottom_table.add_column("Grw", key="growth", width=5)
-        self.bottom_table.add_column("Rwd", key="reward", width=6)  # Total episode reward
+        self.bottom_table.add_column("EndRwd", key="reward", width=6)  # End-of-episode total reward
         self.bottom_table.add_column("Seeds", key="seeds", width=7)  # Seed status counts (B/H/F)
 
     def _refresh_bottom_table(self) -> None:
@@ -403,7 +403,7 @@ class Scoreboard(Static):
         return f"[bold cyan]{ratio:.2f}x[/]"
 
     def _format_reward(self, cumulative_reward: float) -> str:
-        """Format total episode reward.
+        """Format end-of-episode total reward.
 
         Color coding:
         - Green: Positive reward (good outcome)
