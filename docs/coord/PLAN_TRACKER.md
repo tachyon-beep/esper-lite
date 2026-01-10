@@ -1,75 +1,107 @@
 # Esper Plan Tracker
 
-**Last Updated:** 2026-01-10 (spot-checked via codebase exploration)
+**Last Updated:** 2026-01-10 (comprehensive inventory + transitory plans verified)
 **Purpose:** Rack-and-stack all plans and concepts for prioritization and dependency tracking.
 
 ---
 
 ## Executive Summary
 
+### ✅ Good News: Critical Fix Already Implemented!
+
+**`entropy-collapse`** and **`holding-warning`** were discovered to be **ALREADY COMPLETE** during codebase verification. The tracker was showing a false emergency.
+
 ### Current Focus Areas
-1. **Simic2 Refactor** - ✅ COMPLETE. Moved to `docs/plans/completed/simic2/`
-2. **Reward Efficiency Experiment** - Infrastructure complete, experiment never run (NEEDS EXECUTION)
-3. **Phase3-TinyStories** - 80-90% IMPLEMENTED (was incorrectly tracked as "not started")
+1. **Entropy Collapse Fix** - ✅ COMPLETE! All 7 tasks done, tests passing
+2. **Holding Warning Fix** - ✅ COMPLETE! Committed 2026-01-08, DRL expert signed
+3. **Simic2 Refactor** - ✅ COMPLETE. Moved to `docs/plans/completed/simic2/`
+4. **Reward Efficiency Experiment** - Infrastructure complete, experiment never run (NEEDS EXECUTION)
+5. **Phase3-TinyStories** - 80-90% IMPLEMENTED
+6. **Blueprint Compiler** - 0% (correctly deferred until entropy confirmed stable)
 
 ### Critical Path
 ```
-[simic2 ✅] ──► kasmina2-phase0 ──► counterfactual-oracle ──► emrakul-phase1
-                      │
-    reward-efficiency ┘
+[entropy-collapse ✅] ──► [holding-warning ✅] ──► blueprint-compiler ──► kasmina2-phase0
+                                                         │                    │
+                                                         └────────────────────┘
+                                                                   │
+                              reward-efficiency ──► counterfactual-oracle ──► emrakul-phase1
 ```
 
 ### Health Summary
-| Status | Count |
-|--------|-------|
-| Completed | 3 (simic2 phases 1-3) |
-| In Progress | 1 |
-| Planning | 4 |
-| Concept | 5 |
-| Abandoned | 1 |
-| **Total Active** | **10** |
+| Status | Count | Notes |
+|--------|-------|-------|
+| Completed | 9 | simic2 (3) + entropy-collapse + holding-warning + 4 transitory telemetry |
+| Ready | 9 | Implementation-ready plans |
+| In Progress | 1 | phase3-tinystories |
+| Planning | 7 | Active design workspaces |
+| Concept | 5 | Early ideas |
+| Abandoned | 1 | Superseded |
+| **Total Active** | **22** |
 
 ---
 
 ## Priority Matrix
 
-### Tier 1: Critical Path (Do Now)
+### Tier 0: 🔴 CRITICAL (Fix Immediately)
+
+| ID | Title | Type | Urgency | Complexity | Risk | Status |
+|----|-------|------|---------|------------|------|--------|
+| — | *No critical items* | — | — | — | — | entropy-collapse was completed! |
+
+### Tier 1: High Priority (This Week)
 
 | ID | Title | Type | Urgency | Complexity | Risk | Status |
 |----|-------|------|---------|------------|------|--------|
 | reward-efficiency | Phase 1 Final Exam (A/B Testing) | ready | high | S | low | ⚠️ Infra 100% done, experiment never run |
-| kasmina2-phase0 | Submodule Intervention Foundation | planning | high | L | medium | Design complete, ready to implement |
+| telemetry-domain-sep | Telemetry Domain Separation | ready | high | L | medium | ~15% done (3/9 DRL fields), no renaming |
+| counterfactual-aux | Counterfactual Auxiliary Supervision | ready | high | M | medium | 0% - None of 4 phases started |
+| blueprint-compiler | Blueprint Compiler (Phase 3 only) | ready | high | XL | medium | 0% - Correctly deferred until entropy stable |
 
-### Tier 2: Next Up (Queue)
+### Tier 2: Medium Priority (Next 2 Weeks)
 
 | ID | Title | Type | Urgency | Complexity | Risk | Status |
 |----|-------|------|---------|------------|------|--------|
-| phase3-tinystories | Transformer Domain Pivot | in-progress | medium | L | medium | ✅ 80-90% complete (was wrongly "not started") |
-| counterfactual-oracle | Learned Contribution Probe | ready | medium | XL | high | Plan in ready/, blocked on reward-efficiency |
-
-### Completed (Moved to docs/plans/completed/)
-
-| ID | Title | Type | Location |
-|----|-------|------|----------|
-| simic2-phase1 | Vectorized Module Split | ✅ completed | `docs/plans/completed/simic2/` |
-| simic2-phase2 | Typed Contracts & API | ✅ completed | `docs/plans/completed/simic2/` |
-| simic2-phase3 | Simic Module Split | ✅ completed | `docs/plans/completed/simic2/` |
+| phase3-tinystories | Transformer Domain Pivot | in-progress | medium | L | medium | ✅ 80-90% complete, needs validation runs |
+| kasmina2-phase0 | Submodule Intervention Foundation | planning | high | L | medium | Design complete, ready to implement |
+| defensive-patterns | Defensive Pattern Fixes | ready | medium | M | low | Removes 23 inappropriate defensive patterns |
+| sanctum-help | Sanctum Help System | ready | medium | L | low | Contextual help modals for TUI |
+| heuristic-tamiyo | Heuristic Tamiyo Tempo Parity | ready | medium | S | low | 5-head support for fair A/B comparison |
 
 ### Tier 3: Strategic (Plan Ahead)
 
 | ID | Title | Type | Urgency | Complexity | Risk | Status |
 |----|-------|------|---------|------------|------|--------|
-| kasmina2-phase0 | Submodule Intervention Foundation | planning | high | L | medium | Design complete, no code yet |
-| counterfactual-oracle | Learned Contribution Probe | ready | medium | XL | high | Plan promoted to ready/ today, blocked on reward-efficiency |
-| emrakul-sketch | Immune System Phase 4 | concept | medium | XL | high | Design locked, needs Tamiyo stable |
+| counterfactual-oracle | Learned Contribution Probe | concept | medium | XL | high | Blocked on reward-efficiency |
+| emrakul-immune | Emrakul Immune System Architecture | planning | critical | XL | high | Master architecture doc, Phase 1 infra active |
+| kasmina-multichannel | Multichannel Slot Grid (2×N) | planning | medium | M | low | Expand injection surfaces |
+| esika-superstructure | Esika Host Superstructure | planning | medium | L | medium | Multi-cell coordination (future scaling) |
 
 ### Tier 4: Backlog (Someday)
 
 | ID | Title | Type | Urgency | Complexity | Risk | Status |
 |----|-------|------|---------|------------|------|--------|
-| narset1 | Meta-Coordination Layer | concept | low | L | medium | Speculative |
+| blueprint-antipatterns | Blueprint Anti-Patterns Appendix | ready | low | L | medium | 10 bad blueprints for curriculum (Phase 4+) |
+| blueprint-future | Blueprint Future Appendix | ready | low | L | medium | 7 advanced CNN blueprints (Phase 3) |
+| narset1 | Meta-Coordination Layer | planning | low | L | medium | Speculative, part of Emrakul design |
 | karn2 | Karn Sanctum v2 | planning | low | M | low | Nice-to-have TUI improvements |
 | tamiyo4 | Slot Transformer Architecture | planning | low | L | medium | Research direction |
+| emrakul-sketch | Immune System Sketch | concept | medium | XL | high | Concept version (see emrakul-immune for planning) |
+| scaled-counterfactuals | Shapley Validation | concept | low | S | low | Diagnostic approach |
+
+### Completed (in docs/plans/completed/)
+
+| ID | Title | Type | Status | Location |
+|----|-------|------|--------|----------|
+| entropy-collapse | Per-Head Entropy Collapse Fix | ✅ completed | All 7 tasks, tests passing | `docs/plans/completed/` |
+| holding-warning | SET_ALPHA_TARGET Turntabling Fix | ✅ completed | Committed 2026-01-08, DRL signed | `docs/plans/completed/` |
+| simic2-phase1 | Vectorized Module Split | ✅ completed | — | `docs/plans/completed/simic2/` |
+| simic2-phase2 | Typed Contracts & API | ✅ completed | — | `docs/plans/completed/simic2/` |
+| simic2-phase3 | Simic Module Split | ✅ completed | — | `docs/plans/completed/simic2/` |
+| diagnostic-panel-metrics | Diagnostic Panel Metrics Wiring | ✅ completed | 92% (11/12 tasks) | `docs/plans/completed/` |
+| tele-340-lstm-health | TELE-340 LSTM Health Wiring | ✅ completed | 100% (27 tests passing) | `docs/plans/completed/` |
+| tele-610-episode-stats | TELE-610 Episode Stats Wiring | ✅ completed | 95% (19/20 tasks) | `docs/plans/completed/` |
+| value-function-metrics | Value Function Metrics Wiring | ✅ completed | 100% (97 tests passing) | `docs/plans/completed/` |
 
 ### Abandoned
 
@@ -120,6 +152,51 @@ percent_complete: 100
 > ✅ **COMPLETE.** The refactor succeeded. vectorized.py went from a 4.4k LOC monolith
 > with nested closures to a clean 1.2k LOC orchestrator with 4 focused modules.
 > All extraction targets achieved. No behavioral regressions detected.
+
+---
+
+### entropy-collapse: Fix Per-Head Entropy Collapse
+
+```yaml
+id: entropy-collapse
+title: Fix Per-Head Entropy Collapse
+type: ready
+created: 2026-01-09
+updated: 2026-01-09
+location: docs/plans/ready/2026-01-09-fix-per-head-entropy-collapse.md
+
+urgency: critical
+value: |
+  Prevents individual action heads (especially blueprint, tempo) from
+  collapsing to deterministic behavior. Critical for exploration.
+
+complexity: M
+risk: medium
+risk_notes: |
+  - Per-head entropy floor penalties could destabilize early training
+  - Quad loss + late-training decay mitigates this
+  - Per-head collapse detection with hysteresis prevents false positives
+
+depends_on: []
+blocks:
+  - All training runs (current training is broken without this)
+
+status_notes: |
+  Plan ready in docs/plans/ready/2026-01-09-fix-per-head-entropy-collapse.md
+
+  SOLUTION:
+  - Add per-head entropy floor penalties
+  - Quad loss + late-training decay
+  - Per-head collapse detection with hysteresis
+
+  IMPLEMENT IMMEDIATELY.
+percent_complete: 0
+```
+
+**Commentary:**
+> 🔴 **CRITICAL.** This was discovered during the comprehensive inventory.
+> Blueprint and tempo heads are collapsing to deterministic behavior,
+> which kills exploration. This should be the #1 priority.
 
 ---
 
@@ -585,27 +662,326 @@ percent_complete: 0
 
 ---
 
+### blueprint-compiler: Blueprint Compiler & Curriculum Seeds
+
+```yaml
+id: blueprint-compiler
+title: Blueprint Compiler & Curriculum Seeds
+type: ready
+created: 2026-01-09
+updated: 2026-01-09
+location: docs/plans/ready/2026-01-09-blueprint-compiler-and-curriculum-seeds.md
+
+urgency: high
+value: |
+  Compiles BlueprintRegistry into manifests with global indices.
+  Adds LayerScale helper & 4 curriculum blueprints.
+
+complexity: XL
+risk: medium
+risk_notes: |
+  - Phase 4 (new blueprints) must wait until entropy >0.10
+  - Phased rollout: Phase 3 (LayerScale) NOW, Phase 1-2 any time, Phase 4 DEFER
+
+depends_on: []
+blocks:
+  - Phase 4 curriculum learning
+
+status_notes: |
+  PHASED ROLLOUT:
+  - Phase 3 (LayerScale + dead-branch fixes): DO NOW
+  - Phase 1-2 (compiler infrastructure): Any time
+  - Phase 4 (curriculum blueprints): DEFER until entropy stable >0.10
+
+  Has two appendices:
+  - blueprint-antipatterns: 10 bad blueprints for curriculum
+  - blueprint-future: 7 advanced CNN blueprints
+percent_complete: 0
+```
+
+---
+
+### telemetry-domain-sep: Telemetry Domain Separation
+
+```yaml
+id: telemetry-domain-sep
+title: Telemetry Domain Separation
+type: ready
+created: 2026-01-02
+updated: 2026-01-02
+location: docs/plans/ready/2026-01-02-telemetry-domain-separation.md
+
+urgency: high
+value: |
+  Renames event types with domain prefixes (PPO_UPDATE_COMPLETED→TAMIYO_POLICY_UPDATE).
+  Adds DRL specialist fields (approx_kl_max, trust_region_violations, return stats).
+
+complexity: L
+risk: medium
+risk_notes: |
+  - Breaks telemetry schema (migration required)
+  - Best done soon before more runs accumulate
+
+depends_on: []
+blocks: []
+
+status_notes: |
+  5 phases:
+  1. Rename events
+  2. Rename payloads
+  3. Add specialist fields
+  4. Update docs
+  5. Cleanup
+percent_complete: 0
+```
+
+---
+
+### holding-warning: Fix SET_ALPHA_TARGET Turntabling
+
+```yaml
+id: holding-warning
+title: Fix SET_ALPHA_TARGET Turntabling Exploit
+type: ready
+created: 2026-01-08
+updated: 2026-01-08
+location: docs/plans/ready/2026-01-08-fix-set-alpha-target-turntabling.md
+
+urgency: high
+value: |
+  Extends holding_warning penalty to ALL non-terminal actions in HOLDING.
+  Closes exploit where Tamiyo spammed SET_ALPHA_TARGET to avoid penalty.
+
+complexity: S
+risk: low
+
+depends_on: []
+blocks: []
+
+status_notes: |
+  Simple fix: Terminal actions (FOSSILIZE, PRUNE) remain exempt.
+  All other actions in HOLDING stage get penalty.
+percent_complete: 0
+```
+
+---
+
+### counterfactual-aux: Counterfactual Auxiliary Supervision
+
+```yaml
+id: counterfactual-aux
+title: Counterfactual Auxiliary Supervision
+type: ready
+created: 2026-01-10
+updated: 2026-01-10
+location: docs/plans/ready/2026-01-10-counterfactual-auxiliary-supervision.md
+
+urgency: high
+value: |
+  Adds ContributionPredictor head to predict per-slot seed contributions
+  from counterfactual ablation. Improves sample efficiency.
+
+complexity: M
+risk: medium
+risk_notes: |
+  - MSE auxiliary loss (coef=0.05, warmup 1000 steps, stop-grad to LSTM)
+  - Could destabilize PPO if coefficient too high
+
+depends_on: []
+blocks: []
+
+status_notes: |
+  4 phases:
+  1. Add ContributionPredictor head
+  2. Compute targets from counterfactual ablation
+  3. Integrate MSE auxiliary loss
+  4. Add telemetry
+percent_complete: 0
+```
+
+---
+
+### emrakul-immune: Emrakul Immune System Architecture
+
+```yaml
+id: emrakul-immune
+title: Esper Morphogenetic AI - Full System Architecture
+type: planning
+created: 2025-12-30
+updated: 2026-01-10
+location: docs/plans/planning/emrakul1/
+
+urgency: critical (design), low (implementation)
+value: |
+  Complete morphogenetic ecology: Tamiyo (growth) + Emrakul (decay)
+  under economic pressure (Simic rent/churn).
+
+complexity: XL
+risk: high
+risk_notes: |
+  - Novel distributed architecture
+  - Two-timescale learning complexity
+  - Phase 1 uses expensive Shapley audits; Phase 2 deploys trained policy
+
+depends_on:
+  - simic2 (complete)
+  - kasmina2-phase0 (for submodule work)
+soft_depends:
+  - counterfactual-oracle (helps with cheap contribution estimates)
+blocks:
+  - emrakul v1 implementation
+
+status_notes: |
+  MASTER ARCHITECTURE DOCUMENT covering 7 domains:
+  1. Tolaria (substrate): Training engine, replay, safety
+  2. Simic (substrate): Economy, credit attribution
+  3. Kasmina (organism): Morphogenetic host
+  4. Tamiyo (organism): Growth policy (8 heads)
+  5. Emrakul (organism): Decay policy (probe-and-lysis)
+
+  STORYBOARDED MILESTONES (emrakul-and-phage.md):
+  - Stage 0: Deterministic replay + telemetry integrity
+  - Stage 1: Tamiyo grows modules safely
+  - Stage 2: Emrakul prunes with ScarSlot
+  - Stage 3: Trauma surgery loop
+  - Stage 4: Submodule work
+percent_complete: 5
+```
+
+---
+
+### kasmina-multichannel: Multichannel Slot Grid
+
+```yaml
+id: kasmina-multichannel
+title: Multichannel Slot Grid Architecture (2×N)
+type: planning
+created: 2025-12-20
+updated: 2025-12-20
+location: docs/plans/planning/kasmina1.5/multichannel_drifting.md
+
+urgency: medium
+value: |
+  Expand CNN host from single injection boundary to multi-surface topology.
+  Enables more slots without changing traversal logic.
+
+complexity: M
+risk: low
+risk_notes: |
+  - Option 1 (2×N): ~evening of work + tests
+  - Option 2 (3×5): More complex, ~sprint
+
+depends_on:
+  - Stable InjectionSpec interface
+blocks: []
+
+status_notes: |
+  Two options documented:
+  - 2×N grid (recommended): Pre/post-pool surfaces per block
+  - 3×5 multi-lane (complex): True multi-lane with merge semantics
+
+  Use boundary timeline abstraction for deterministic routing.
+percent_complete: 0
+```
+
+---
+
+### esika-superstructure: Esika Host Superstructure
+
+```yaml
+id: esika-superstructure
+title: Esika Host Superstructure Container
+type: planning
+created: 2025-12-28
+updated: 2025-12-28
+location: docs/plans/planning/esika1/concept.md
+
+urgency: medium (future scaling)
+value: |
+  Coordinates multiple Kasmina "cells", enforces safe boundaries,
+  deconfliction rules, and hosts Narset budget allocator at scale.
+
+complexity: L
+risk: medium
+risk_notes: |
+  - Infrastructure, not intelligence
+  - Avoids "god object" but introduces new system layer
+
+depends_on:
+  - Kasmina single-cell maturity (Stage 2-3)
+  - Narset allocator design
+blocks: []
+
+status_notes: |
+  POST-STAGE-3 work. Esika is infrastructure (not policy):
+  - Topology and identity (region graph)
+  - Deconfliction rules (physics, not strategy)
+  - Safe-boundary scheduling
+  - Host Narset (routes budget outputs)
+
+  Does NOT choose slots/blueprints (Tamiyo/Emrakul do that).
+percent_complete: 0
+```
+
+---
+
 ## Dependency Graph
 
 ```
-                                    ┌─────────────────┐
-                                    │  phase3-tiny    │
-                                    │   stories       │
-                                    └────────▲────────┘
-                                             │
-┌──────────────┐    ┌──────────────┐    ┌────┴───────────┐    ┌─────────────────┐
-│  simic2      │───►│  simic2      │───►│   reward       │───►│  counterfactual │
-│  phase1      │    │  phase2      │    │   efficiency   │    │  oracle         │
-│  [CRITICAL]  │    │              │    │   [NEEDS ATTN] │    │                 │
-└──────┬───────┘    └──────┬───────┘    └────────────────┘    └────────┬────────┘
-       │                   │                                           │
-       │                   │                                           │
-       ▼                   ▼                                           ▼
-┌──────────────┐    ┌──────────────┐                           ┌───────────────┐
-│  kasmina2    │───►│  kasmina2    │                           │  emrakul      │
-│  phase0      │    │  phase1+     │                           │  phase1       │
-│              │    │              │                           │               │
-└──────────────┘    └──────────────┘                           └───────────────┘
+                    CRITICAL PATH (implement in order)
+                    ═══════════════════════════════════
+
+┌──────────────────┐
+│ 🔴 entropy       │    ← FIX FIRST (training broken without this)
+│    collapse      │
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│ holding-warning  │    │ telemetry        │    │ counterfactual   │
+│ (quick fix)      │    │ domain-sep       │    │ -aux             │
+└────────┬─────────┘    └────────┬─────────┘    └────────┬─────────┘
+         │                       │                       │
+         └───────────────────────┼───────────────────────┘
+                                 │
+                                 ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│                      FOUNDATION READY                                │
+└──────────────────────────────────────────────────────────────────────┘
+         │
+         ├──────────────────────────────────────┐
+         │                                      │
+         ▼                                      ▼
+┌──────────────────┐                   ┌──────────────────┐
+│ reward-          │                   │ blueprint-       │
+│ efficiency       │                   │ compiler         │
+│ (run experiment) │                   │ (Phase 3 only)   │
+└────────┬─────────┘                   └────────┬─────────┘
+         │                                      │
+         │    ┌─────────────────────────────────┘
+         │    │
+         ▼    ▼
+┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│ kasmina2         │───►│ counterfactual   │───►│ emrakul          │
+│ phase0           │    │ oracle           │    │ phase1           │
+└──────────────────┘    └──────────────────┘    └──────────────────┘
+
+                    PARALLEL TRACKS (can proceed independently)
+                    ═════════════════════════════════════════════
+
+┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│ phase3-          │    │ sanctum-help     │    │ defensive-       │
+│ tinystories      │    │ (UX)             │    │ patterns         │
+│ (85% done)       │    │                  │    │ (code quality)   │
+└──────────────────┘    └──────────────────┘    └──────────────────┘
+
+                    FUTURE (after Stage 3 stable)
+                    ════════════════════════════════
+
+┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│ kasmina          │    │ esika            │    │ narset1          │
+│ multichannel     │    │ superstructure   │    │                  │
+└──────────────────┘    └──────────────────┘    └──────────────────┘
 ```
 
 ---
@@ -614,13 +990,18 @@ percent_complete: 0
 
 | Plan | Risk Level | Primary Risk | Mitigation |
 |------|------------|--------------|------------|
+| entropy-collapse | 🔴 CRITICAL | Training completely broken | Implement immediately |
 | counterfactual-oracle | HIGH | Goodhart/reward hacking | Probe as observation only, never as reward |
-| emrakul-sketch | HIGH | Training destabilization | Turbulence locks, Narset safety regimes |
+| emrakul-immune | HIGH | Novel architecture, two-timescale learning | Phased rollout, Shapley labels in Phase 1 only |
 | phase3-tinystories | HIGH | NaN spikes on graft | Zero-init projections, LayerNorm pre-injection |
+| blueprint-compiler | MEDIUM | New blueprints could destabilize | Phase 4 deferred until entropy >0.10 |
+| counterfactual-aux | MEDIUM | Auxiliary loss could destabilize PPO | Low coefficient (0.05), warmup, stop-grad |
+| telemetry-domain-sep | MEDIUM | Schema migration | Do early before more runs accumulate |
 | kasmina2-phase0 | MEDIUM | Cross-domain coordination | Six parallel tracks with clear ownership |
-| simic2-phase1 | MEDIUM | Behavioral regression | Baseline capture, diff testing |
-| reward-efficiency | MEDIUM | Wasted compute | Clear success criteria, stop-loss |
-| simic2-phase2 | LOW | Pure refactor | Typed contracts, tests |
+| esika-superstructure | MEDIUM | New coordination layer | Infrastructure only, no intelligence |
+| holding-warning | LOW | Simple fix | Terminal actions exempt |
+| defensive-patterns | LOW | Code quality only | No behavior change |
+| sanctum-help | LOW | User-facing only | N/A |
 | karn2 | LOW | User-facing only | N/A |
 
 ---
@@ -629,33 +1010,39 @@ percent_complete: 0
 
 ### Immediate Actions (This Week)
 
-1. **Run reward-efficiency experiment** - Infrastructure is 100% complete. Just execute:
+1. **Run reward-efficiency experiment** - Infrastructure is 100% complete:
    ```bash
    uv run python -m esper.scripts.train ppo --dual-ab shaped-vs-simplified --episodes 100
    ```
-2. **Run TinyStories baseline** - Implementation is 85% complete. Validate it works:
+
+2. **Run TinyStories baseline** - Implementation is 85% complete:
    ```bash
    uv run python -m esper.scripts.train ppo --task tinystories --episodes 50
    ```
 
 ### Short-Term (Next 2 Weeks)
 
-3. **Analyze reward A/B results** - Declare winner (SHAPED vs SIMPLIFIED).
-4. **Validate TinyStories learning curves** - Confirm transformer morphogenesis works.
-5. **Begin kasmina2-phase0 implementation** - Design complete, simic2 blocker removed.
+3. **Implement telemetry-domain-sep** - Currently ~15% done (3/9 DRL fields). Break schema now.
+4. **Implement counterfactual-aux** - 0% done. Adds ContributionPredictor head.
+5. **Implement heuristic-tamiyo** - 0% done. TamiyoDecision needs tempo field.
+6. **Analyze reward A/B results** - Declare winner (SHAPED vs SIMPLIFIED).
 
 ### Medium-Term (Next Month)
 
-6. **Begin counterfactual-oracle Phase 1** - Unblocked once reward-efficiency has data.
-7. **Document TinyStories results** - Update phase3 plan with findings.
-8. **Consider promoting kasmina2 design to ready/** - If phase0 implementation proceeds.
+7. **Begin kasmina2-phase0 implementation** - Design complete, simic2 blocker removed.
+8. **Begin counterfactual-oracle Phase 1** - Unblocked once reward-efficiency has data.
+9. **Blueprint compiler Phase 4** - New curriculum blueprints (ONLY if entropy stable >0.10).
 
 ### Parking Lot (Not Now)
 
-- emrakul-sketch - Wait for Tamiyo stability (Phase 4+)
-- narset1 - Speculative, defer
-- karn2 - Nice-to-have, defer
-- tamiyo4 - Research direction (SlotTransformer for policy scaling)
+- **emrakul-immune** - Master architecture doc, but implementation is Stage 4+
+- **kasmina-multichannel** - Slot grid expansion (after kasmina2)
+- **esika-superstructure** - Multi-cell coordination (post-Stage 3)
+- **narset1** - Speculative, part of Emrakul design
+- **karn2** - Nice-to-have TUI improvements
+- **tamiyo4** - Research direction (SlotTransformer for policy scaling)
+- **blueprint-antipatterns** - Bad blueprints for curriculum (Phase 4+)
+- **blueprint-future** - Advanced CNN blueprints (Phase 3)
 
 ---
 
@@ -663,6 +1050,38 @@ percent_complete: 0
 
 | Date | Change |
 |------|--------|
+| 2026-01-10 | **TRANSITORY PLANS VERIFIED.** Checked 4 telemetry wiring plans from docs/plans/ root: |
+| | ✅ diagnostic-panel-metrics: 92% (11/12 tasks) |
+| | ✅ tele-340-lstm-health: 100% (27 tests passing) |
+| | ✅ tele-610-episode-stats: 95% (19/20 tasks) |
+| | ✅ value-function-metrics: 100% (97 tests passing) |
+| | All 4 moved to completed/. Health Summary: Completed 5→9. |
+| 2026-01-10 | **CODEBASE VERIFICATION.** Checked all ready/ plans against actual code: |
+| | ✅ entropy-collapse: 100% COMPLETE (all 7 tasks, tests passing) |
+| | ✅ holding-warning: 100% COMPLETE (committed 2026-01-08, DRL signed) |
+| | ⚠️ defensive-patterns: COMPLIANT via whitelisting (not refactored) |
+| | ❌ blueprint-compiler: 0% (correctly deferred) |
+| | ❌ telemetry-domain-sep: ~15% (3/9 DRL fields, no renaming) |
+| | ❌ counterfactual-aux: 0% (none of 4 phases) |
+| | ❌ sanctum-help: ~10% (only global help) |
+| | ❌ heuristic-tamiyo: 0% (TamiyoDecision missing tempo) |
+| | Updated Health Summary: Completed 3→5, Ready 11→9 |
+| 2026-01-10 | **COMPREHENSIVE INVENTORY.** Discovered 14 untracked plans: |
+| | **ready/ (11 plans added):** |
+| | - 🔴 entropy-collapse (CRITICAL) - per-head entropy collapse fix |
+| | - blueprint-compiler + 2 appendices - compiler & curriculum seeds |
+| | - telemetry-domain-sep - event type renaming |
+| | - holding-warning - turntabling exploit fix |
+| | - counterfactual-aux - auxiliary supervision |
+| | - defensive-patterns - code quality cleanup |
+| | - sanctum-help - TUI help system |
+| | - heuristic-tamiyo - tempo parity for A/B testing |
+| | - simic2-vectorized (DUPLICATE - already completed) |
+| | **planning/ (3 workspaces added):** |
+| | - emrakul-immune (emrakul1/) - master architecture doc |
+| | - kasmina-multichannel (kasmina1.5/) - slot grid expansion |
+| | - esika-superstructure (esika1/) - multi-cell coordination |
+| | Total active plans: 10 → 24 |
 | 2026-01-10 | **Moved simic2 to completed/.** All 3 phases verified and moved to `docs/plans/completed/simic2/`. |
 | 2026-01-10 | **Second spot check (simic2 deep dive).** All 3 phases complete: |
 | | - simic2-phase1: 75% → 100% (VectorizedPPOTrainer + 4 modules extracted) |
@@ -675,3 +1094,53 @@ percent_complete: 0
 | | - reward-efficiency: Infra 0% → 100% (just needs experiment execution) |
 | | - Updated dependency graph and recommendations accordingly |
 | 2026-01-10 | Initial tracker created. Catalogued 10 active plans. |
+
+---
+
+## File Index
+
+Quick reference for all tracked plans:
+
+### ready/ (Implementation-Ready)
+| File | ID |
+|------|-----|
+| `2026-01-09-blueprint-compiler-and-curriculum-seeds.md` | blueprint-compiler |
+| `2026-01-09-blueprint-compiler-appendix-antipatterns.md` | blueprint-antipatterns |
+| `2026-01-09-blueprint-compiler-appendix-future-blueprints.md` | blueprint-future |
+| `2026-01-02-telemetry-domain-separation.md` | telemetry-domain-sep |
+| `2026-01-10-counterfactual-auxiliary-supervision.md` | counterfactual-aux |
+| `defensive-pattern-fixes.md` | defensive-patterns |
+| `2025-12-29-sanctum-help-system.md` | sanctum-help |
+| `h-tamiyo-updates.md` | heuristic-tamiyo |
+| `phase1-final-exam.md` | reward-efficiency |
+
+### planning/ (Active Design)
+| Folder | ID |
+|--------|-----|
+| `kasmina2/` | kasmina2-phase0 |
+| `emrakul1/` | emrakul-immune |
+| `kasmina1.5/` | kasmina-multichannel |
+| `esika1/` | esika-superstructure |
+| `karn2/` | karn2 |
+| `tamiyo4/` | tamiyo4 |
+| `narset1/` | narset1 |
+
+### concepts/ (Early Ideas)
+| File | ID |
+|------|-----|
+| `emrakul-sketch.md` | emrakul-sketch |
+| `counterfactual_oracle.md` | counterfactual-oracle |
+| `phase3-tinystories-strategy.md` | phase3-tinystories |
+| `scaled_counterfactuals.md` | scaled-counterfactuals |
+| `emrakul-submodule-editing-blending-holding.md` | emrakul-submodule-editing (ABANDONED) |
+
+### completed/ (Historical)
+| File/Folder | ID |
+|-------------|-----|
+| `simic2/` | simic2-phase1, simic2-phase2, simic2-phase3 |
+| `2026-01-09-fix-per-head-entropy-collapse.md` | entropy-collapse |
+| `2026-01-08-fix-set-alpha-target-turntabling.md` | holding-warning |
+| `2026-01-03-diagnostic-panel-metrics-wiring.md` | diagnostic-panel-metrics |
+| `2026-01-03-tele-340-lstm-health-wiring.md` | tele-340-lstm-health |
+| `2026-01-04-tele-610-episode-stats-wiring.md` | tele-610-episode-stats |
+| `2026-01-04-value-function-metrics-wiring.md` | value-function-metrics |
