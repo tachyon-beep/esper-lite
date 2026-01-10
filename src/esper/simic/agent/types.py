@@ -146,6 +146,14 @@ class PPOUpdateMetrics(TypedDict, total=False):
     advantage_std_floored: bool  # True if advantage std was clamped to floor (degenerate batch)
     pre_norm_advantage_std: float  # Raw std before normalization (for diagnostics)
 
+    # Auxiliary contribution supervision metrics (Phase 4.1)
+    # DRL Expert: Monitor for prediction collapse and quality
+    aux_contribution_loss: float  # Raw auxiliary MSE loss value
+    effective_aux_coef: float  # Current warmup-scaled coefficient
+    aux_pred_variance: float  # Prediction variance - warn if < 0.01 (collapse)
+    aux_explained_variance: float  # Should increase over training
+    aux_pred_target_correlation: float  # Should be > 0.5 eventually
+
 
 class HeadLogProbs(TypedDict):
     """Per-head log probabilities from factored policy."""

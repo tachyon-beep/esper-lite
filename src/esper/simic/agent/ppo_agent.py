@@ -1015,10 +1015,62 @@ class PPOAgent:
                 loss = loss + effective_aux_coef * aux_loss
                 metrics["aux_contribution_loss"].append(aux_loss.detach())
                 metrics["effective_aux_coef"].append(torch.tensor(effective_aux_coef, device=aux_loss.device))
+
+                # Phase 4.1: Track prediction quality for collapse detection
+                # DRL Expert: Monitor variance, explained variance, and correlation
+                with torch.no_grad():
+                    fresh_mask = data["has_fresh_contribution"]
+                    if fresh_mask.any():
+                        # Flatten for quality metrics - pred_contributions is [batch, seq_len, num_slots]
+                        # valid_mask is [batch, seq_len], fresh_mask is also [batch, seq_len]
+                        # We want timesteps where valid_mask AND fresh_mask are True
+                        combined_mask = valid_mask & fresh_mask
+                        if combined_mask.any():
+                            pred_flat = result.pred_contributions[combined_mask].flatten()
+                            target_flat = data["contribution_targets"][combined_mask].flatten()
+
+                            # Variance (should NOT be ~0 - indicates collapse)
+                            pred_variance = pred_flat.var()
+
+                            # Explained variance (should increase over training)
+                            target_var = target_flat.var().clamp(min=0.01)
+                            residual_var = (pred_flat - target_flat).var()
+                            explained_var = 1.0 - (residual_var / target_var)
+
+                            # Correlation (should be > 0.5 eventually)
+                            if pred_flat.numel() > 2:
+                                corr = torch.corrcoef(
+                                    torch.stack([pred_flat, target_flat])
+                                )[0, 1]
+                                # Handle NaN from corrcoef when variance is zero
+                                if not torch.isfinite(corr):
+                                    corr = torch.tensor(0.0, device=pred_flat.device)
+                            else:
+                                corr = torch.tensor(0.0, device=pred_flat.device)
+
+                            metrics["aux_pred_variance"].append(pred_variance)
+                            metrics["aux_explained_variance"].append(explained_var)
+                            metrics["aux_pred_target_correlation"].append(corr)
+                        else:
+                            # No valid+fresh timesteps in this epoch
+                            nan_t = torch.tensor(float("nan"), device=loss.device)
+                            metrics["aux_pred_variance"].append(nan_t)
+                            metrics["aux_explained_variance"].append(nan_t)
+                            metrics["aux_pred_target_correlation"].append(nan_t)
+                    else:
+                        # No fresh measurements in this epoch
+                        nan_t = torch.tensor(float("nan"), device=loss.device)
+                        metrics["aux_pred_variance"].append(nan_t)
+                        metrics["aux_explained_variance"].append(nan_t)
+                        metrics["aux_pred_target_correlation"].append(nan_t)
             else:
-                # No contribution data in batch - skip aux loss
+                # No contribution data in batch - skip aux loss and quality metrics
                 metrics["aux_contribution_loss"].append(torch.tensor(0.0, device=loss.device))
                 metrics["effective_aux_coef"].append(torch.tensor(0.0, device=loss.device))
+                nan_t = torch.tensor(float("nan"), device=loss.device)
+                metrics["aux_pred_variance"].append(nan_t)
+                metrics["aux_explained_variance"].append(nan_t)
+                metrics["aux_pred_target_correlation"].append(nan_t)
 
             self.optimizer.zero_grad(set_to_none=True)
             loss.backward()  # type: ignore[no-untyped-call]
