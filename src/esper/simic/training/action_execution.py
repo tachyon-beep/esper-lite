@@ -1003,6 +1003,28 @@ def execute_actions(
         # (no agency, no gradient) but still included in GAE/LSTM unrolling.
         forced_step = forced_batch_cpu[env_idx]
 
+        # Phase 2.2: Build contribution targets from counterfactual ablation
+        # baseline_accs[env_idx][slot_id] = accuracy with that slot disabled
+        # contribution = val_acc - baseline_acc (positive = slot helps)
+        # DRL Expert: Only set has_fresh_contribution=True when counterfactual measured
+        env_baseline_accs = baseline_accs[env_idx]
+        has_fresh_contribution = len(env_baseline_accs) > 0
+        contribution_targets_tensor: torch.Tensor | None = None
+        contribution_mask_tensor: torch.Tensor | None = None
+
+        if has_fresh_contribution:
+            # Build contribution tensor in slot_config order
+            num_slots = slot_config.num_slots
+            contribution_targets_tensor = torch.zeros(num_slots, device=device)
+            contribution_mask_tensor = torch.zeros(num_slots, dtype=torch.bool, device=device)
+
+            for slot_id, baseline_acc in env_baseline_accs.items():
+                slot_idx = slot_config.index_for_slot_id(slot_id)
+                # contribution = how much accuracy drops when this slot is disabled
+                contribution = env_state.val_acc - baseline_acc
+                contribution_targets_tensor[slot_idx] = contribution
+                contribution_mask_tensor[slot_idx] = True
+
         step_idx = agent.buffer.step_counts[env_idx]
         agent.buffer.add(
             env_id=env_idx,
@@ -1041,6 +1063,10 @@ def execute_actions(
             truncated=truncated,
             bootstrap_value=0.0,
             forced_step=forced_step,
+            # Phase 2.2: Counterfactual contribution supervision targets
+            contribution_targets=contribution_targets_tensor,
+            contribution_mask=contribution_mask_tensor,
+            has_fresh_contribution=has_fresh_contribution,
         )
         if truncated:
             truncated_bootstrap_targets.append((env_idx, step_idx))
