@@ -24,10 +24,11 @@ from esper.karn.constants import DisplayThresholds
 from esper.karn.sanctum.formatting import format_params
 from esper.karn.sanctum.widgets.counterfactual_panel import CounterfactualPanel
 from esper.karn.sanctum.widgets.env_detail_screen import SeedCard
+from esper.karn.sanctum.widgets.lifecycle_panel import LifecyclePanel
 from esper.karn.sanctum.widgets.shapley_panel import ShapleyPanel
 
 if TYPE_CHECKING:
-    from esper.karn.sanctum.schema import BestRunRecord, SeedState
+    from esper.karn.sanctum.schema import BestRunRecord, SeedLifecycleEvent, SeedState
 
 
 class HistoricalEnvDetail(ModalScreen[None]):
@@ -123,6 +124,13 @@ class HistoricalEnvDetail(ModalScreen[None]):
         text-align: center;
         color: $text-muted;
     }
+
+    HistoricalEnvDetail .lifecycle-section {
+        height: auto;
+        margin-top: 1;
+        border-top: solid $secondary-lighten-2;
+        padding-top: 1;
+    }
     """
 
     def __init__(self, record: "BestRunRecord", **kwargs: Any) -> None:
@@ -177,6 +185,14 @@ class HistoricalEnvDetail(ModalScreen[None]):
                     id="shapley-panel",
                 )
 
+            # Lifecycle panel
+            with Vertical(classes="lifecycle-section"):
+                yield LifecyclePanel(
+                    events=self._get_current_lifecycle_events(),
+                    slot_filter=None,
+                    id="lifecycle-panel",
+                )
+
             # Footer hint
             yield Static(
                 "[dim]Press ESC, Q, or click to close[/dim]",
@@ -220,6 +236,12 @@ class HistoricalEnvDetail(ModalScreen[None]):
             self._record.blueprint_prunes,
         )
 
+    def _get_current_lifecycle_events(self) -> list["SeedLifecycleEvent"]:
+        """Get lifecycle events for current view state."""
+        if self._view_state == "peak":
+            return self._record.best_lifecycle_events
+        return self._record.end_lifecycle_events
+
     def _update_display(self) -> None:
         """Update all displays based on current view state."""
         # Skip updates if widget is not yet mounted
@@ -240,6 +262,10 @@ class HistoricalEnvDetail(ModalScreen[None]):
         # Update graveyard
         graveyard = self.query_one("#seed-graveyard", Static)
         graveyard.update(self._render_graveyard())
+
+        # Update lifecycle panel
+        lifecycle_panel = self.query_one("#lifecycle-panel", LifecyclePanel)
+        lifecycle_panel.update_events(self._get_current_lifecycle_events())
 
         # Update container border color
         container = self.query_one("#modal-container", Container)
