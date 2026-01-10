@@ -15,6 +15,7 @@ from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.containers import Container, VerticalScroll
+from textual.css.query import NoMatches
 from textual.message import Message
 from textual.widgets import Static
 
@@ -493,6 +494,6 @@ class DecisionsColumn(Container):
                 return
             for card in container.query(DecisionCard):
                 card.refresh()
-        except Exception:
+        except NoMatches:
             # Container not yet mounted - safe to skip refresh
             pass
