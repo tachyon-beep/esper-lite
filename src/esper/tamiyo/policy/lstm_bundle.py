@@ -219,6 +219,7 @@ class LSTMPolicyBundle:
         masks: dict[str, torch.Tensor],
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
         probability_floor: dict[str, float] | None = None,
+        aux_stop_gradient: bool = True,
     ) -> EvalResult:
         """Evaluate actions for PPO training.
 
@@ -232,11 +233,13 @@ class LSTMPolicyBundle:
             hidden: Optional initial LSTM hidden state
             probability_floor: Optional dict mapping head names to minimum probability
                 values. Passed through to network's evaluate_actions.
+            aux_stop_gradient: If True (default), detach LSTM output before computing
+                contribution predictions. Passed through to network's evaluate_actions.
 
         Returns:
-            EvalResult with log_probs, value, entropy, and new hidden state
+            EvalResult with log_probs, value, entropy, hidden, and pred_contributions
         """
-        log_probs, values, entropies, new_hidden = self._network.evaluate_actions(
+        log_probs, values, entropies, new_hidden, pred_contributions = self._network.evaluate_actions(
             features,
             blueprint_indices,
             actions,
@@ -251,6 +254,7 @@ class LSTMPolicyBundle:
             alpha_curve_mask=masks["alpha_curve"],
             hidden=hidden,
             probability_floor=probability_floor,
+            aux_stop_gradient=aux_stop_gradient,
         )
 
         return EvalResult(
@@ -258,6 +262,7 @@ class LSTMPolicyBundle:
             value=values,
             entropy=entropies,
             hidden=new_hidden,
+            pred_contributions=pred_contributions,
         )
 
     # === Off-Policy (not supported for LSTM) ===

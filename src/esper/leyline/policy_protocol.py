@@ -58,12 +58,16 @@ class EvalResult:
         value: State value estimate
         entropy: Dict mapping head names to entropy values
         hidden: New hidden state or None
+        pred_contributions: Predicted per-slot counterfactual contributions
+            [batch, seq_len, num_slots]. Used for auxiliary supervision during
+            training. Caller can ignore if not using counterfactual auxiliary loss.
     """
 
     log_prob: dict[str, torch.Tensor]
     value: torch.Tensor
     entropy: dict[str, torch.Tensor]
     hidden: tuple[torch.Tensor, torch.Tensor] | None
+    pred_contributions: torch.Tensor | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,6 +197,7 @@ class PolicyBundle(Protocol):
         masks: dict[str, torch.Tensor],
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
         probability_floor: dict[str, float] | None = None,
+        aux_stop_gradient: bool = True,
     ) -> EvalResult:
         """Evaluate actions for PPO update.
 
@@ -206,6 +211,9 @@ class PolicyBundle(Protocol):
                 values. When provided, all valid actions for that head are guaranteed
                 at least this probability, ensuring gradient flow even when entropy
                 would otherwise collapse. Typical: {"blueprint": 0.10, "tempo": 0.10}
+            aux_stop_gradient: If True (default), detach LSTM output before computing
+                contribution predictions. This prevents auxiliary loss gradients from
+                affecting the shared LSTM representations.
 
         Must be called with gradient tracking enabled (not in inference_mode).
         """

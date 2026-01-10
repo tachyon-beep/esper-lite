@@ -1047,11 +1047,13 @@ class FactoredRecurrentActorCritic(nn.Module):
         op_mask: torch.Tensor | None = None,
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
         probability_floor: dict[str, float] | None = None,
+        aux_stop_gradient: bool = True,
     ) -> tuple[
         dict[str, torch.Tensor],
         torch.Tensor,
         dict[str, torch.Tensor],
         tuple[torch.Tensor, torch.Tensor],
+        torch.Tensor,
     ]:
         """Evaluate actions for PPO update.
 
@@ -1068,12 +1070,17 @@ class FactoredRecurrentActorCritic(nn.Module):
                 values. When provided, all valid actions for that head are guaranteed
                 at least this probability, ensuring gradient flow even when the policy
                 would otherwise collapse. Typical: {"blueprint": 0.10, "tempo": 0.10}
+            aux_stop_gradient: If True (default), detach LSTM output before computing
+                contribution predictions. This prevents auxiliary loss gradients from
+                affecting the shared LSTM representations. Set to False to allow
+                auxiliary task to shape LSTM features (experimental).
 
         Returns:
             log_probs: Dict of per-head log probs [batch, seq_len]
             values: Value estimates Q(s, stored_op) [batch, seq_len]
             entropy: Dict of per-head entropies [batch, seq_len]
             hidden: Final hidden state
+            pred_contributions: Predicted per-slot contributions [batch, seq_len, num_slots]
         """
         batch_size = states.size(0)
         device = states.device
@@ -1097,6 +1104,11 @@ class FactoredRecurrentActorCritic(nn.Module):
 
         lstm_out = self.lstm_ln(lstm_out)
 
+        # Always compute contribution predictions (torch.compile friendly - no conditionals)
+        # PyTorch Expert: Avoid conditional `if return_contributions` which creates graph breaks
+        lstm_out_for_aux = lstm_out.detach() if aux_stop_gradient else lstm_out
+        pred_contributions = cast(torch.Tensor, self.contribution_predictor(lstm_out_for_aux))
+
         # Compute logits for each head
         slot_logits = self.slot_head(lstm_out)
         blueprint_logits = self.blueprint_head(lstm_out)
@@ -1113,7 +1125,7 @@ class FactoredRecurrentActorCritic(nn.Module):
         #
         # We apply op-conditional mask overrides below (e.g., allow blueprint=NOOP when
         # op!=GERMINATE). Pre-masking would permanently squash those placeholder logits
-        # to MASKED_LOGIT_VALUE, breaking the “single-valid-action => log_prob==0”
+        # to MASKED_LOGIT_VALUE, breaking the "single-valid-action => log_prob==0"
         # invariant and corrupting PPO ratios/joint KL diagnostics.
 
         # Use STORED op for value conditioning (not freshly sampled)
@@ -1235,7 +1247,7 @@ class FactoredRecurrentActorCritic(nn.Module):
             log_probs[key] = dist.log_prob(action_flat).reshape(batch, seq)
             entropy[key] = dist.entropy().reshape(batch, seq)
 
-        return log_probs, value, entropy, new_hidden
+        return log_probs, value, entropy, new_hidden, pred_contributions
 
 
 __all__ = ["BlueprintEmbedding", "FactoredRecurrentActorCritic", "GetActionResult"]
