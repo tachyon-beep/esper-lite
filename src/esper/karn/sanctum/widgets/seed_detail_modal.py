@@ -135,8 +135,8 @@ class SeedDetailModal(ModalScreen[None]):
         seed = self._seed
         lines = []
 
-        # Stage with color
-        stage_color = STAGE_COLORS.get(seed.stage, "white")
+        # Stage with color (STAGE_COLORS contains all valid stages from leyline)
+        stage_color = STAGE_COLORS[seed.stage]
         lines.append(Text(f"Stage: {seed.stage}", style=f"bold {stage_color}"))
 
         # Blueprint
@@ -147,20 +147,19 @@ class SeedDetailModal(ModalScreen[None]):
         if seed.seed_params and seed.seed_params > 0:
             lines.append(Text(f"Params: {format_params(seed.seed_params)}", style="dim"))
 
-        # Alpha with progress bar
-        if seed.alpha is not None and seed.alpha > 0:
+        # Alpha with progress bar (alpha is always a float per SeedState schema)
+        # Show for BLENDING/HOLDING always, show for others if non-zero
+        if seed.alpha > 0 or seed.stage in ("BLENDING", "HOLDING"):
             alpha_bar = self._make_alpha_bar(seed.alpha)
             lines.append(Text(f"Alpha: {seed.alpha:.2f} {alpha_bar}"))
-        elif seed.stage in ("BLENDING", "HOLDING"):
-            alpha_bar = self._make_alpha_bar(seed.alpha or 0.0)
-            lines.append(Text(f"Alpha: {seed.alpha or 0.0:.2f} {alpha_bar}"))
 
         # Blend tempo and curve
         if seed.stage in ("BLENDING", "HOLDING") and seed.blend_tempo_epochs is not None:
             tempo = seed.blend_tempo_epochs
             tempo_name = "FAST" if tempo <= 3 else ("STANDARD" if tempo <= 5 else "SLOW")
             tempo_arrows = ">>>" if tempo <= 3 else (">>" if tempo <= 5 else ">")
-            curve_glyph = ALPHA_CURVE_GLYPHS.get(seed.alpha_curve, "-")
+            # alpha_curve is always valid (default "LINEAR", all values in ALPHA_CURVE_GLYPHS)
+            curve_glyph = ALPHA_CURVE_GLYPHS[seed.alpha_curve]
             lines.append(Text(f"Tempo: {tempo_arrows} {tempo_name} ({tempo} epochs) {curve_glyph}"))
 
         # Accuracy delta
