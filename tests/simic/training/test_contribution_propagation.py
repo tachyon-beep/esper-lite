@@ -12,7 +12,6 @@ Key invariants:
 
 from __future__ import annotations
 
-import pytest
 import torch
 
 from esper.leyline.slot_config import SlotConfig
@@ -183,8 +182,6 @@ class TestBufferStorageIntegration:
             state_dim=64,
             slot_config=slot_config,
         )
-
-        num_slots = slot_config.num_slots
 
         # Add measurement timestep
         contribution_targets = torch.tensor([1.5, -0.5, 0.0])
