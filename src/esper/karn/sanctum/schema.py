@@ -1334,6 +1334,9 @@ class BestRunRecord:
 
     record_id: str = ""  # Unique ID for click targeting
 
+    # Total episode reward (sum of all rewards including terminal bonuses)
+    cumulative_reward: float = 0.0
+
     # === Full env snapshot at peak (for historical detail view) ===
     # Reward breakdown at peak
     reward_components: "RewardComponents | None" = None

@@ -88,6 +88,13 @@ class HistoricalEnvDetail(ModalScreen[None]):
         padding-right: 1;
     }
 
+    HistoricalEnvDetail .reward-breakdown-section {
+        width: 1fr;
+        height: auto;
+        padding: 0 1;
+        border-left: solid $secondary-lighten-2;
+    }
+
     HistoricalEnvDetail .graveyard-section {
         width: 1fr;
         height: auto;
@@ -141,10 +148,12 @@ class HistoricalEnvDetail(ModalScreen[None]):
                         seed = self._record.seeds.get(slot_id)  # None for DORMANT
                         yield SeedCard(seed, slot_id, id=f"seed-card-{slot_id}")
 
-            # Metrics + Graveyard side by side
+            # Metrics + Reward Breakdown + Graveyard side by side
             with Horizontal(classes="metrics-graveyard-row"):
                 with Vertical(classes="metrics-section"):
                     yield Static(self._render_metrics(), id="detail-metrics")
+                with Vertical(classes="reward-breakdown-section"):
+                    yield Static(self._render_reward_breakdown(), id="reward-breakdown")
                 with Vertical(classes="graveyard-section"):
                     yield Static(self._render_graveyard(), id="seed-graveyard")
 
@@ -470,3 +479,122 @@ class HistoricalEnvDetail(ModalScreen[None]):
 
         content = Group(*lines)
         return Panel(content, title="Seed Graveyard", border_style="dim")
+
+    def _render_reward_breakdown(self) -> Panel:
+        """Render reward component waterfall breakdown.
+
+        Shows each reward term with running total, making it easy to see
+        which components are responsible for the final reward.
+
+        Format:
+        │ Component       │  Value │ Running │
+        │ base_acc_delta  │ +0.123 │  +0.123 │
+        │ compute_rent    │ -0.050 │  +0.073 │
+        │ stage_bonus     │ +0.200 │  +0.273 │
+        │ ─────────────── │ ────── │ ─────── │
+        │ TOTAL           │        │  +0.273 │
+        """
+        record = self._record
+        rc = record.reward_components
+
+        table = Table(show_header=True, box=None, expand=True, padding=(0, 1))
+        table.add_column("Component", style="dim", width=18)
+        table.add_column("Value", justify="right", width=8)
+        table.add_column("Running", justify="right", width=8)
+
+        if rc is None:
+            table.add_row("[dim italic]No reward data[/dim italic]", "", "")
+            return Panel(table, title="Reward Breakdown", border_style="yellow")
+
+        # Collect non-zero components in waterfall order
+        # Order: base signals → costs → bonuses → terminal
+        components: list[tuple[str, float]] = []
+
+        # Base signals (accuracy-correlated)
+        if rc.base_acc_delta != 0:
+            components.append(("ΔAcc", rc.base_acc_delta))
+        if rc.bounded_attribution != 0:
+            label = "EscrowΔ" if record.reward_mode == "escrow" else "Attribution"
+            components.append((label, rc.bounded_attribution))
+        if rc.seed_contribution != 0:
+            components.append(("SeedContrib", rc.seed_contribution))
+
+        # Escrow system
+        if rc.escrow_delta != 0:
+            components.append(("EscrowPayout", rc.escrow_delta))
+        if rc.escrow_forfeit != 0:
+            components.append(("EscrowForfeit", rc.escrow_forfeit))
+
+        # Costs (always negative)
+        if rc.compute_rent != 0:
+            components.append(("ComputeRent", rc.compute_rent))
+        if rc.alpha_shock != 0:
+            components.append(("AlphaShock", rc.alpha_shock))
+        if rc.ratio_penalty != 0:
+            components.append(("RatioPenalty", rc.ratio_penalty))
+
+        # Warnings
+        if rc.blending_warning != 0:
+            components.append(("BlendWarn", rc.blending_warning))
+        if rc.holding_warning != 0:
+            components.append(("HoldWarn", rc.holding_warning))
+
+        # Bonuses
+        if rc.stage_bonus != 0:
+            components.append(("StageBonus", rc.stage_bonus))
+        if rc.hindsight_credit != 0:
+            components.append(("Hindsight", rc.hindsight_credit))
+        if rc.fossilize_terminal_bonus != 0:
+            components.append(("FossilBonus", rc.fossilize_terminal_bonus))
+
+        # Build waterfall
+        running = 0.0
+        for name, value in components:
+            running += value
+            # Color based on sign
+            if value > 0:
+                val_style = "green"
+            elif value < 0:
+                val_style = "red"
+            else:
+                val_style = "dim"
+
+            # Running total color
+            if running > 0:
+                run_style = "bold green"
+            elif running < 0:
+                run_style = "bold red"
+            else:
+                run_style = "dim"
+
+            table.add_row(
+                name,
+                Text(f"{value:+.3f}", style=val_style),
+                Text(f"{running:+.3f}", style=run_style),
+            )
+
+        # Separator and total
+        if components:
+            table.add_row("─" * 16, "─" * 6, "─" * 6)
+            total_style = "bold green" if rc.total >= 0 else "bold red"
+            table.add_row(
+                Text("TOTAL", style="bold"),
+                "",
+                Text(f"{rc.total:+.3f}", style=total_style),
+            )
+
+            # Sanity check: warn if running != total (indicates missing component)
+            if abs(running - rc.total) > 0.001:
+                diff = rc.total - running
+                table.add_row(
+                    Text("(untracked)", style="dim italic"),
+                    Text(f"{diff:+.3f}", style="yellow"),
+                    "",
+                )
+        else:
+            table.add_row("[dim italic]All components zero[/dim italic]", "", "")
+
+        # Title includes cumulative reward context
+        cumulative = record.cumulative_reward
+        title_suffix = f" (Episode Total: {cumulative:+.1f})" if cumulative != 0 else ""
+        return Panel(table, title=f"Reward Breakdown{title_suffix}", border_style="yellow")

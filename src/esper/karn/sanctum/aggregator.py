@@ -1448,6 +1448,7 @@ class SanctumAggregator:
                     slot_ids=list(self._slot_ids),  # All slots for showing DORMANT in detail
                     growth_ratio=growth_ratio,
                     record_id=str(uuid.uuid4())[:8],
+                    cumulative_reward=env.cumulative_reward,  # Total episode reward
                     # Full env snapshot at peak (captured by EnvState.add_accuracy())
                     reward_components=env.best_reward_components,
                     counterfactual_matrix=env.best_counterfactual_matrix,
