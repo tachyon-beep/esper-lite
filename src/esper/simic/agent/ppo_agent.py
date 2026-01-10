@@ -1051,6 +1051,29 @@ class PPOAgent:
                             metrics["aux_pred_variance"].append(pred_variance)
                             metrics["aux_explained_variance"].append(explained_var)
                             metrics["aux_pred_target_correlation"].append(corr)
+
+                            # Phase 4.2: Collapse detection warnings
+                            # DRL Expert: Detect prediction collapse after warmup period
+                            # Rate-limit warnings to avoid log spam (every 100 updates)
+                            if (
+                                self._aux_training_step > self.aux_warmup_steps
+                                and self._aux_training_step % 100 == 0
+                            ):
+                                pred_var_val = pred_variance.item()
+                                corr_val = corr.item()
+
+                                if pred_var_val < 0.01:
+                                    logger.warning(
+                                        "Contribution predictor may have collapsed (variance=%.4f). "
+                                        "Consider increasing aux_contribution_coef or disabling stop_gradient.",
+                                        pred_var_val,
+                                    )
+                                if corr_val < 0.2 and corr_val >= 0:  # Skip if NaN (corr_val < 0 can be valid)
+                                    logger.warning(
+                                        "Contribution predictor correlation low (%.3f). "
+                                        "Aux task may not be learning.",
+                                        corr_val,
+                                    )
                         else:
                             # No valid+fresh timesteps in this epoch
                             nan_t = torch.tensor(float("nan"), device=loss.device)
