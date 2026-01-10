@@ -349,14 +349,6 @@ class TestStreamContextDuringRollback:
         env_state.governor.snapshot()
 
         # The pattern from action_execution.py:384-390
-        rollback_ctx = (
-            torch.cuda.stream(env_state.stream)
-            if env_state.stream
-            else nullcontext()
-        )
-
-        # Verify we get a stream context, not nullcontext
-        # (In real code this would be a CUDA stream context)
         with patch("torch.cuda.stream") as mock_cuda_stream:
             mock_cuda_stream.return_value.__enter__ = MagicMock()
             mock_cuda_stream.return_value.__exit__ = MagicMock()
