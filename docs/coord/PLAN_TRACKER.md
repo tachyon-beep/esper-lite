@@ -7,36 +7,41 @@
 
 ## Executive Summary
 
-### ✅ Good News: Critical Fix Already Implemented!
+### 🔴 CRITICAL: Op Head Entropy Collapse
 
-**`entropy-collapse`** and **`holding-warning`** were discovered to be **ALREADY COMPLETE** during codebase verification. The tracker was showing a false emergency.
+**Previous entropy-collapse fix was INSUFFICIENT.** DRL expert telemetry analysis (2026-01-11) revealed:
+- Op head entropy floor (0.15) was too close to collapse point (0.14)
+- Policy freezes after batch 40: WAIT 99.9%, GERMINATE 0.07%
+- All 48 fossilizations occurred in Q1; Q2-Q4 had ZERO
+- Blueprint head collapsed to 0.000 entropy, picking worst blueprint 72% of the time
 
 ### Current Focus Areas
-1. **Entropy Collapse Fix** - ✅ COMPLETE! All 7 tasks done, tests passing
+1. **Op Entropy Collapse Fix** - 🔴 CRITICAL! Must implement probability floors + higher entropy floors
 2. **Holding Warning Fix** - ✅ COMPLETE! Committed 2026-01-08, DRL expert signed
 3. **Simic2 Refactor** - ✅ COMPLETE. Moved to `docs/plans/completed/simic2/`
-4. **Reward Efficiency Experiment** - Infrastructure complete, experiment never run (NEEDS EXECUTION)
-5. **Phase3-TinyStories** - 80-90% IMPLEMENTED
+4. **Reward Efficiency Experiment** - Infrastructure complete, experiment never run (BLOCKED by entropy fix)
+5. **Phase3-TinyStories** - 80-90% IMPLEMENTED (BLOCKED by entropy fix)
 6. **Blueprint Compiler** - 0% (correctly deferred until entropy confirmed stable)
 
 ### Critical Path
 ```
-[entropy-collapse ✅] ──► [holding-warning ✅] ──► blueprint-compiler ──► kasmina2-phase0
-                                                         │                    │
-                                                         └────────────────────┘
-                                                                   │
-                              reward-efficiency ──► counterfactual-oracle ──► emrakul-phase1
+[op-entropy-collapse 🔴] ──► reward-efficiency ──► counterfactual-oracle ──► emrakul-phase1
+         │
+         └──► blueprint-compiler ──► kasmina2-phase0
+         │
+         └──► phase3-tinystories (validation runs)
 ```
 
 ### Health Summary
 | Status | Count | Notes |
 |--------|-------|-------|
-| Completed | 9 | simic2 (3) + entropy-collapse + holding-warning + 4 transitory telemetry |
-| Ready | 9 | Implementation-ready plans |
+| 🔴 Critical | 1 | op-entropy-collapse (blocks all training) |
+| Completed | 8 | simic2 (3) + holding-warning + 4 transitory telemetry |
+| Ready | 8 | Implementation-ready plans |
 | In Progress | 1 | phase3-tinystories |
 | Planning | 7 | Active design workspaces |
 | Concept | 5 | Early ideas |
-| Abandoned | 1 | Superseded |
+| Abandoned | 2 | Superseded (shaped-delta-clip, emrakul-submodule-editing) |
 | **Total Active** | **22** |
 
 ---
@@ -47,13 +52,12 @@
 
 | ID | Title | Type | Urgency | Complexity | Risk | Status |
 |----|-------|------|---------|------------|------|--------|
-| — | *No critical items* | — | — | — | — | entropy-collapse was completed! |
+| op-entropy-collapse | Op Head Entropy Collapse Fix | ready | 🔴 critical | M | high | 0% - DRL expert diagnosed (2026-01-11) |
 
 ### Tier 1: High Priority (This Week)
 
 | ID | Title | Type | Urgency | Complexity | Risk | Status |
 |----|-------|------|---------|------------|------|--------|
-| shaped-delta-clip | SHAPED Mode Delta Clipping | ready | high | S | low | 0% - DRL expert recommended |
 | reward-efficiency | Phase 1 Final Exam (A/B Testing) | ready | high | S | low | ⚠️ Infra 100% done, experiment never run |
 | telemetry-domain-sep | Telemetry Domain Separation | ready | high | L | medium | ~15% done (3/9 DRL fields), no renaming |
 | counterfactual-aux | Counterfactual Auxiliary Supervision | ready | high | M | medium | 0% - None of 4 phases started |
@@ -109,6 +113,7 @@
 | ID | Title | Reason |
 |----|-------|--------|
 | emrakul-submodule-editing | BLENDING/HOLDING Mutations | Superseded by Track A+C Microstructured Ladders |
+| shaped-delta-clip | SHAPED Mode Delta Clipping | Superseded by op-entropy-collapse (root cause is entropy, not reward inflation) |
 
 ---
 
@@ -156,48 +161,63 @@ percent_complete: 100
 
 ---
 
-### entropy-collapse: Fix Per-Head Entropy Collapse
+### op-entropy-collapse: Op Head Entropy Collapse Fix
 
 ```yaml
-id: entropy-collapse
-title: Fix Per-Head Entropy Collapse
+id: op-entropy-collapse
+title: Op Head Entropy Collapse Fix
 type: ready
 created: 2026-01-09
-updated: 2026-01-09
-location: docs/plans/ready/2026-01-09-fix-per-head-entropy-collapse.md
+updated: 2026-01-11
+location: ~/.claude/plans/reactive-churning-mist.md
 
 urgency: critical
 value: |
-  Prevents individual action heads (especially blueprint, tempo) from
-  collapsing to deterministic behavior. Critical for exploration.
+  Fixes multi-stage entropy collapse that freezes the policy.
+  Op head collapses to 98% WAIT, starving sparse heads (blueprint, tempo)
+  of gradient signal. Policy stops learning after batch 40.
 
 complexity: M
-risk: medium
+risk: high
 risk_notes: |
-  - Per-head entropy floor penalties could destabilize early training
-  - Quad loss + late-training decay mitigates this
-  - Per-head collapse detection with hysteresis prevents false positives
+  - Higher entropy floors may initially reduce training efficiency
+  - Probability floors change action distribution (may affect early convergence)
+  - CRITICAL: Current state is completely broken - any fix is better than status quo
 
 depends_on: []
 blocks:
-  - All training runs (current training is broken without this)
+  - All training runs (policy freezes without this fix)
+  - blueprint-compiler (can't explore blueprints with collapsed policy)
 
 status_notes: |
-  Plan ready in docs/plans/ready/2026-01-09-fix-per-head-entropy-collapse.md
+  DRL EXPERT DIAGNOSIS (2026-01-11):
 
-  SOLUTION:
-  - Add per-head entropy floor penalties
-  - Quad loss + late-training decay
-  - Per-head collapse detection with hysteresis
+  Root cause is OP HEAD collapse, not sparse heads:
+  1. Op entropy: 0.51 → 0.14 (collapse point just above floor!)
+  2. WAIT rate: 92% → 99.9%
+  3. Blueprint entropy: 0.125 → 0.000 (zero gradients)
+  4. GERMINATE rate: 3.68% → 0.07%
+  5. Fossilizations: 47 (Q1) → 0 (Q2-Q4)
 
-  IMPLEMENT IMMEDIATELY.
+  SOLUTION (two-pronged):
+  1. HARD FLOOR: Add PROBABILITY_FLOOR_PER_HEAD with op=0.05
+  2. SOFT FLOOR: Increase ENTROPY_FLOOR_PER_HEAD op from 0.15 to 0.25
+  3. STRONGER PENALTY: Increase blueprint/tempo coef from 0.1 to 0.3
+
+  IMPLEMENT IMMEDIATELY - replaces shaped-delta-clip as priority.
 percent_complete: 0
 ```
 
 **Commentary:**
-> 🔴 **CRITICAL.** This was discovered during the comprehensive inventory.
-> Blueprint and tempo heads are collapsing to deterministic behavior,
-> which kills exploration. This should be the #1 priority.
+> 🔴 **CRITICAL.** DRL expert telemetry analysis (2026-01-11) revealed that the
+> previous entropy-collapse fix was insufficient. The op head floor (0.15) was
+> too close to the collapse point (0.14), allowing degenerate equilibrium.
+>
+> Key finding: 98% WAIT isn't "learned selectivity" - it's policy freeze.
+> Blueprint head collapsed to 0.000 entropy, picking conv_small (0% fossil rate)
+> 72% of the time in Q4. The policy stopped learning after batch 40.
+>
+> Supersedes shaped-delta-clip - the root cause is entropy collapse, not reward inflation.
 
 ---
 
@@ -1094,6 +1114,15 @@ percent_complete: 0
 
 | Date | Change |
 |------|--------|
+| 2026-01-11 | **OP-ENTROPY-COLLAPSE DIAGNOSIS.** DRL expert telemetry analysis of ESCROW run revealed: |
+| | - Previous entropy-collapse fix was insufficient (op floor 0.15 too close to collapse point 0.14) |
+| | - Policy freeze after batch 40: WAIT 99.9%, GERMINATE 0.07%, fossilizations 0 |
+| | - Blueprint head collapsed to 0.000 entropy, picking conv_small (0% fossil rate) 72% of the time |
+| | - Root cause is OP HEAD collapse, not sparse heads |
+| | **ACTIONS:** |
+| | - Created op-entropy-collapse plan (replaces entropy-collapse) |
+| | - Moved shaped-delta-clip to abandoned (root cause is entropy, not reward inflation) |
+| | - New fix: op probability floor 0.05, op entropy floor 0.25, blueprint/tempo penalty coef 0.3 |
 | 2026-01-10 | **TRANSITORY PLANS VERIFIED.** Checked 4 telemetry wiring plans from docs/plans/ root: |
 | | ✅ diagnostic-panel-metrics: 92% (11/12 tasks) |
 | | ✅ tele-340-lstm-health: 100% (27 tests passing) |
@@ -1148,7 +1177,6 @@ Quick reference for all tracked plans:
 ### ready/ (Implementation-Ready)
 | File | ID |
 |------|-----|
-| `shaped-mode-delta-clipping.md` | shaped-delta-clip |
 | `2026-01-09-blueprint-compiler-and-curriculum-seeds.md` | blueprint-compiler |
 | `2026-01-09-blueprint-compiler-appendix-antipatterns.md` | blueprint-antipatterns |
 | `2026-01-09-blueprint-compiler-appendix-future-blueprints.md` | blueprint-future |
@@ -1178,6 +1206,11 @@ Quick reference for all tracked plans:
 | `phase3-tinystories-strategy.md` | phase3-tinystories |
 | `scaled_counterfactuals.md` | scaled-counterfactuals |
 | `emrakul-submodule-editing-blending-holding.md` | emrakul-submodule-editing (ABANDONED) |
+
+### abandoned/ (Superseded)
+| File | ID |
+|------|-----|
+| `shaped-mode-delta-clipping.md` | shaped-delta-clip (superseded by op-entropy-collapse) |
 
 ### completed/ (Historical)
 | File/Folder | ID |
