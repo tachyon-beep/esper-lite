@@ -1282,6 +1282,7 @@ class VectorizedPPOTrainer:
                         masks=masks_batch,
                         hidden=batched_lstm_hidden,
                         deterministic=False,
+                        probability_floor=agent.probability_floor,
                     )
                     actions_dict = action_result.action
                     head_log_probs = action_result.log_prob
@@ -1437,6 +1438,7 @@ class VectorizedPPOTrainer:
                                 masks=post_masks_batch,
                                 hidden=batched_lstm_hidden,
                                 deterministic=True,
+                                probability_floor=agent.probability_floor,
                             )
                         # PERF: Move to CPU before .tolist() to avoid per-value GPU sync
                         bootstrap_values = bootstrap_result.value.cpu().tolist()
