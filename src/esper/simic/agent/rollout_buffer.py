@@ -174,6 +174,13 @@ class TamiyoRolloutBuffer:
     # D5: Forced-step tracking for slot saturation diagnostics
     forced_actions: torch.Tensor = field(init=False)
 
+    # Phase 2.1: Auxiliary supervision targets for contribution prediction
+    # Ground truth from counterfactual measurements (stored at measurement timesteps only)
+    # DRL Expert: Only valid at timesteps where has_fresh_contribution=True
+    contribution_targets: torch.Tensor = field(init=False)  # [num_envs, max_steps, num_slots]
+    contribution_mask: torch.Tensor = field(init=False)  # [num_envs, max_steps, num_slots] bool - active slots
+    has_fresh_contribution: torch.Tensor = field(init=False)  # [num_envs, max_steps] bool - measurement timesteps
+
     # Episode boundary tracking
     _current_episode_start: dict[int, int] = field(default_factory=dict, init=False)
     episode_boundaries: dict[int, list[tuple[int, int]]] = field(
@@ -280,6 +287,13 @@ class TamiyoRolloutBuffer:
         # D5: Track forced steps (where agent has no choice - only WAIT valid)
         self.forced_actions = torch.zeros(n, m, dtype=torch.bool, device=device)
 
+        # Phase 2.1: Auxiliary supervision targets for contribution prediction
+        # Ground truth from counterfactual - only valid at measurement timesteps
+        # DRL Expert: has_fresh_contribution=True ONLY at counterfactual measurement timesteps
+        self.contribution_targets = torch.zeros(n, m, self.num_slots, device=device)
+        self.contribution_mask = torch.zeros(n, m, self.num_slots, dtype=torch.bool, device=device)
+        self.has_fresh_contribution = torch.zeros(n, m, dtype=torch.bool, device=device)
+
     def start_episode(self, env_id: int) -> None:
         """Mark start of a new episode for an environment."""
         self._current_episode_start[env_id] = self.step_counts[env_id]
@@ -333,6 +347,10 @@ class TamiyoRolloutBuffer:
         truncated: bool = False,
         bootstrap_value: float | torch.Tensor = 0.0,
         forced_step: bool = False,
+        # Phase 2.1: Auxiliary supervision for contribution prediction
+        contribution_targets: torch.Tensor | None = None,  # [num_slots] ground truth per slot
+        contribution_mask: torch.Tensor | None = None,  # [num_slots] bool - which slots active
+        has_fresh_contribution: bool = False,  # True only at counterfactual measurement timesteps
     ) -> None:
         """Add a transition for a specific environment.
 
@@ -342,6 +360,12 @@ class TamiyoRolloutBuffer:
             env_id: Environment index
             state: State features [state_dim]
             blueprint_indices: Blueprint indices per slot [num_slots]
+            contribution_targets: Ground truth contributions per slot [num_slots].
+                Only valid when has_fresh_contribution=True.
+            contribution_mask: Boolean mask indicating which slots are active [num_slots].
+                Only valid when has_fresh_contribution=True.
+            has_fresh_contribution: True ONLY at counterfactual measurement timesteps.
+                Do NOT propagate stale contributions to non-measurement timesteps.
             ...: Other transition data
         """
         step_idx = self.step_counts[env_id]
@@ -398,6 +422,16 @@ class TamiyoRolloutBuffer:
 
         # D5: Track forced steps for slot saturation diagnostics
         self.forced_actions[env_id, step_idx] = forced_step
+
+        # Phase 2.1: Store contribution targets for auxiliary supervision
+        # has_fresh_contribution marks timesteps with valid ground truth
+        self.has_fresh_contribution[env_id, step_idx] = has_fresh_contribution
+        if has_fresh_contribution:
+            # Only store targets at measurement timesteps
+            if contribution_targets is not None:
+                self.contribution_targets[env_id, step_idx] = contribution_targets.detach()
+            if contribution_mask is not None:
+                self.contribution_mask[env_id, step_idx] = contribution_mask.detach().bool()
 
         self.step_counts[env_id] = step_idx + 1
 
@@ -629,6 +663,13 @@ class TamiyoRolloutBuffer:
             "initial_hidden_c": self.hidden_c[:, 0, :, :].permute(1, 0, 2).contiguous().to(device, non_blocking=nb),
             # D5: Forced steps for slot saturation diagnostics
             "forced_actions": self.forced_actions.to(device, non_blocking=nb),
+            # Phase 2.1: Auxiliary supervision for contribution prediction
+            # contribution_targets: [num_envs, max_steps, num_slots] ground truth per slot
+            # contribution_mask: [num_envs, max_steps, num_slots] bool - active slots
+            # has_fresh_contribution: [num_envs, max_steps] bool - measurement timesteps only
+            "contribution_targets": self.contribution_targets.to(device, non_blocking=nb),
+            "contribution_mask": self.contribution_mask.to(device, non_blocking=nb),
+            "has_fresh_contribution": self.has_fresh_contribution.to(device, non_blocking=nb),
         }
 
     def reset(self) -> None:
