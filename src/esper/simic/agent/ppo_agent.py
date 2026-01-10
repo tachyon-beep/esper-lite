@@ -18,7 +18,7 @@ import torch.nn as nn
 from .rollout_buffer import TamiyoRolloutBuffer
 from .advantages import compute_per_head_advantages
 from .ppo_metrics import PPOUpdateMetricsBuilder
-from .ppo_update import PPOUpdateResult, compute_losses, compute_ratio_metrics
+from .ppo_update import PPOUpdateResult, compute_contribution_aux_loss, compute_losses, compute_ratio_metrics
 from .types import PPOUpdateMetrics
 from esper.simic.telemetry import RatioExplosionDiagnostic
 from esper.simic.telemetry.lstm_health import compute_lstm_health
@@ -151,6 +151,12 @@ class PPOAgent:
         # ensuring gradients can always flow even when entropy would collapse.
         probability_floor: dict[str, float] | None = None,
         total_train_steps: int | None = None,  # For late-training decay schedule
+        # Auxiliary contribution supervision (Expert-reviewed defaults)
+        aux_contribution_coef: float = 0.05,  # DRL Expert: reduced from 0.1
+        aux_warmup_steps: int = 1000,  # DRL + PyTorch Expert: ramp from 0 → full
+        aux_stop_gradient: bool = True,  # DRL Expert: prevent representation collapse
+        contribution_loss_clip: float = 10.0,  # Clip targets to prevent outliers
+        enable_contribution_aux: bool = True,  # Can disable for ablation
     ):
         # Store policy and extract slot_config
         self.policy = policy
@@ -223,6 +229,14 @@ class PPOAgent:
         self.target_kl = target_kl
         self.weight_decay = weight_decay
         self.device = device
+
+        # Auxiliary contribution supervision config
+        self.aux_contribution_coef = aux_contribution_coef
+        self.aux_warmup_steps = aux_warmup_steps
+        self.aux_stop_gradient = aux_stop_gradient
+        self.contribution_loss_clip = contribution_loss_clip
+        self.enable_contribution_aux = enable_contribution_aux
+        self._aux_training_step = 0  # Track training steps for warmup
 
         # C4/H5: Runtime warning for risky recurrent configuration
         if self.recurrent_n_epochs > 1:
@@ -321,7 +335,8 @@ class PPOAgent:
                 list(base_net.feature_net.parameters()) +
                 list(base_net.lstm.parameters()) +
                 list(base_net.lstm_ln.parameters()) +
-                list(base_net.blueprint_embedding.parameters())  # Phase 4: blueprint embeddings
+                list(base_net.blueprint_embedding.parameters()) +  # Phase 4: blueprint embeddings
+                list(base_net.contribution_predictor.parameters())  # Phase 3: auxiliary contribution predictor
             )
 
             self.optimizer: torch.optim.Optimizer = torch.optim.AdamW([
@@ -766,6 +781,7 @@ class PPOAgent:
                     masks,
                     hidden=(hidden_h, hidden_c),
                     probability_floor=self.probability_floor,
+                    aux_stop_gradient=self.aux_stop_gradient,
                 )
             log_probs = result.log_prob
             values = result.value
@@ -982,6 +998,28 @@ class PPOAgent:
             assert loss_metrics is not None
             loss = loss_metrics.total_loss
 
+            # Compute auxiliary contribution loss (Phase 3.2)
+            # DRL Expert: Only compute when enabled and batch has fresh contribution data
+            if self.enable_contribution_aux and "has_fresh_contribution" in data:
+                aux_loss = compute_contribution_aux_loss(
+                    pred_contributions=result.pred_contributions,
+                    target_contributions=data["contribution_targets"],
+                    active_mask=data["contribution_mask"],
+                    has_fresh_target=data["has_fresh_contribution"],
+                    clip=self.contribution_loss_clip,
+                )
+                # Warmup coefficient (DRL Expert + PyTorch Expert recommendation)
+                # Ramp from 0 to full coefficient over aux_warmup_steps
+                warmup_progress = min(1.0, self._aux_training_step / max(1, self.aux_warmup_steps))
+                effective_aux_coef = self.aux_contribution_coef * warmup_progress
+                loss = loss + effective_aux_coef * aux_loss
+                metrics["aux_contribution_loss"].append(aux_loss.detach())
+                metrics["effective_aux_coef"].append(torch.tensor(effective_aux_coef, device=aux_loss.device))
+            else:
+                # No contribution data in batch - skip aux loss
+                metrics["aux_contribution_loss"].append(torch.tensor(0.0, device=loss.device))
+                metrics["effective_aux_coef"].append(torch.tensor(0.0, device=loss.device))
+
             self.optimizer.zero_grad(set_to_none=True)
             loss.backward()  # type: ignore[no-untyped-call]
 
@@ -1132,6 +1170,7 @@ class PPOAgent:
             # This ensures entropy annealing and other schedules track real updates,
             # not skipped finiteness-gate failures.
             self.train_steps += 1
+            self._aux_training_step += 1
 
         return result.metrics
 
@@ -1156,6 +1195,7 @@ class PPOAgent:
             'optimizer_state_dict': self.optimizer.state_dict(),
             'value_normalizer_state_dict': self.value_normalizer.state_dict(),
             'train_steps': self.train_steps,
+            'aux_training_step': self._aux_training_step,
             'config': {
                 'gamma': self.gamma,
                 'gae_lambda': self.gae_lambda,
@@ -1186,6 +1226,12 @@ class PPOAgent:
                 'weight_decay': self.weight_decay,
                 # torch.compile configuration (for resume)
                 'compile_mode': self.compile_mode,
+                # Auxiliary contribution supervision config
+                'aux_contribution_coef': self.aux_contribution_coef,
+                'aux_warmup_steps': self.aux_warmup_steps,
+                'aux_stop_gradient': self.aux_stop_gradient,
+                'contribution_loss_clip': self.contribution_loss_clip,
+                'enable_contribution_aux': self.enable_contribution_aux,
             },
             # Architecture info for load-time reconstruction
             'architecture': {
@@ -1250,6 +1296,9 @@ class PPOAgent:
                 f"This checkpoint was saved with an older version (before v2). "
                 f"Please retrain the model to create a compatible checkpoint."
             ) from e
+
+        # Extract aux_training_step (defaults to 0 for new field - not backwards compat, just sensible default)
+        aux_training_step = checkpoint.get('aux_training_step', 0)
 
         # M6: Free checkpoint memory immediately after extracting needed data.
         # Checkpoint holds a full copy of all model weights; waiting for GC to
@@ -1330,6 +1379,7 @@ class PPOAgent:
         agent.policy.load_state_dict(state_dict)
         agent.optimizer.load_state_dict(optimizer_state_dict)
         agent.train_steps = train_steps
+        agent._aux_training_step = aux_training_step
 
         # P1 FIX: Restore value_normalizer state if present
         # This ensures consistent normalization scale across training resumption
