@@ -356,6 +356,48 @@ def compute_losses(
     )
 
 
+def compute_contribution_aux_loss(
+    pred_contributions: torch.Tensor,
+    target_contributions: torch.Tensor,
+    active_mask: torch.Tensor,
+    has_fresh_target: torch.Tensor,
+    clip: float | None = 10.0,
+) -> torch.Tensor:
+    """Compute auxiliary MSE loss for contribution predictions.
+
+    DRL Expert critical fix: Only compute loss on timesteps with fresh counterfactual
+    measurements. Stale targets create systematic bias, not random noise.
+
+    Args:
+        pred_contributions: Predicted contributions [batch, seq, num_slots]
+        target_contributions: Ground truth from counterfactual [batch, seq, num_slots]
+        active_mask: Boolean mask for active slots [batch, seq, num_slots]
+        has_fresh_target: Boolean mask for timesteps with fresh measurements [batch, seq]
+        clip: Optional clip value for targets (prevents outlier domination)
+
+    Returns:
+        Scalar MSE loss over active slots at measurement timesteps only.
+        Returns 0.0 if no fresh measurements in batch.
+    """
+    # DRL Expert: Only supervise at measurement timesteps
+    if not has_fresh_target.any():
+        return torch.tensor(0.0, device=pred_contributions.device)
+
+    if clip is not None:
+        target_contributions = target_contributions.clamp(-clip, clip)
+
+    # Combine active slot mask with fresh measurement mask
+    # has_fresh_target: [batch, seq] -> [batch, seq, 1] for broadcasting
+    combined_mask = active_mask & has_fresh_target.unsqueeze(-1)
+
+    # MSE only over active slots at measurement timesteps
+    sq_error = (pred_contributions - target_contributions) ** 2
+    masked_error = sq_error * combined_mask.float()
+
+    n_valid = combined_mask.sum().clamp(min=1)
+    return masked_error.sum() / n_valid
+
+
 __all__ = [
     "RatioMetrics",
     "LossMetrics",
@@ -363,4 +405,5 @@ __all__ = [
     "compute_ratio_metrics",
     "compute_losses",
     "compute_entropy_floor_penalty",
+    "compute_contribution_aux_loss",
 ]
