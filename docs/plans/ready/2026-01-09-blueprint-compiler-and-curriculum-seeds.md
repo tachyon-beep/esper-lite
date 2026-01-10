@@ -18,6 +18,43 @@
 
 ---
 
+## ⚠️ Phased Rollout Advisory (2026-01-10)
+
+**Context:** Training runs are currently recovering from entropy collapse in sparse action heads (blueprint, tempo). Adding new blueprints while entropy is unstable would likely trigger another collapse.
+
+### Rollout Schedule
+
+| Phase | Description | When to Implement | Risk |
+|-------|-------------|-------------------|------|
+| **Phase 3** | LayerScale + dead-branch fixes | **NOW** - fixes existing blueprints | Low |
+| **Phase 1-2** | Compiler infrastructure | After Phase 3, any time | Low (refactor only) |
+| **Phase 4** | 4 new curriculum blueprints | **DEFER** until entropy stable >0.10 | High |
+
+### Why Phase 4 Must Wait
+
+1. **Action Space Expansion** - Adding 4 blueprints increases choices from 8→12, spreading probability mass thinner
+2. **Sparse Signal Dilution** - Blueprint head only gets gradient on ~5% of timesteps (GERMINATE). More blueprints = less signal per blueprint
+3. **Probability Floor Math** - 0.10 floor guarantees minimum mass; with more actions, each gets less
+4. **Learning Interruption** - Agent is learning current 7 blueprints; changing action space resets progress
+
+### Phase 4 Prerequisites
+
+Before implementing Phase 4, verify:
+- [ ] Blueprint entropy consistently >0.10 across 50+ batches
+- [ ] Tempo entropy consistently >0.10 across 50+ batches
+- [ ] GERMINATE rate stable at 5-15% (not collapsing toward 0%)
+- [ ] At least 100 fossilizations across diverse blueprint types
+
+### Recommended Approach for Phase 4
+
+When prerequisites are met:
+1. Add **ONE** new blueprint at a time, not all 4
+2. Train for 50+ batches after each addition
+3. Monitor entropy - if it drops, pause and stabilize before next blueprint
+4. Order: `dilated` → `asymmetric` → `coord` → `gated` (least to most complexity)
+
+---
+
 ## Phase 1: Blueprint Compiler Infrastructure
 
 ### Task 1.1: Add action_index to BlueprintSpec
