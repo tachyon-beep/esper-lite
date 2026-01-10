@@ -182,18 +182,19 @@ DEFAULT_ENTROPY_COEF_MIN = 0.01
 DEFAULT_ENTROPY_COLLAPSE_THRESHOLD = 0.1
 DEFAULT_ENTROPY_WARNING_THRESHOLD = 0.3
 
-# Per-head entropy floor thresholds (normalized 0-1 scale)
-# Higher floors for sparse heads that receive fewer gradient signals
-# These are SOFT floors enforced via quadratic penalty in PPO loss
+# Per-head entropy floor targets (normalized entropy, 0-1 scale)
+# DRL Expert update (2026-01-11): Increased op floor from 0.15 to 0.25
+# to push away from collapse earlier. Previous floor was too close to
+# the collapse point (0.14), allowing degenerate equilibrium.
 ENTROPY_FLOOR_PER_HEAD: dict[str, float] = {
-    "op": 0.15,           # Always active (100% of steps) - can exploit more
-    "slot": 0.20,         # Usually active (~60%)
-    "blueprint": 0.40,    # GERMINATE only (~18%) - CRITICAL: needs high floor
-    "style": 0.30,        # GERMINATE + SET_ALPHA_TARGET (~22%)
-    "tempo": 0.40,        # GERMINATE only (~18%) - needs high floor
-    "alpha_target": 0.25, # GERMINATE + SET_ALPHA_TARGET (~22%)
-    "alpha_speed": 0.20,  # SET_ALPHA_TARGET + PRUNE (~19%)
-    "alpha_curve": 0.20,  # SET_ALPHA_TARGET + PRUNE (~19%)
+    "op": 0.25,           # INCREASED from 0.15 - collapse point was 0.14!
+    "slot": 0.15,
+    "blueprint": 0.20,    # INCREASED from 0.15 - needs room to explore
+    "style": 0.15,
+    "tempo": 0.20,        # INCREASED from 0.15 - needs room to explore
+    "alpha_target": 0.10,
+    "alpha_speed": 0.10,
+    "alpha_curve": 0.10,
 }
 
 # Per-head entropy collapse thresholds (stricter than floor for detection)
@@ -209,36 +210,33 @@ ENTROPY_COLLAPSE_PER_HEAD: dict[str, float] = {
     "alpha_curve": 0.08,
 }
 
-# Per-head entropy floor penalty coefficients (DRL Expert recommendation)
-# Sparse heads need stronger penalty signal to compensate for fewer gradients
-# 2026-01-09: Increased blueprint/tempo from 0.20 to 0.50 after observing
-# collapse in training run (entropy dropped to 0.01-0.02 despite floor of 0.40)
+# Per-head entropy floor penalty coefficients
+# DRL Expert update (2026-01-11): Increased blueprint/tempo from 0.1 to 0.3
+# Sparse heads need stronger penalty to overcome gradient starvation.
 ENTROPY_FLOOR_PENALTY_COEF: dict[str, float] = {
-    "op": 0.05,           # Always active - minimal penalty needed
-    "slot": 0.15,         # Usually active (~60%) - increased from 0.10
-    "blueprint": 0.50,    # GERMINATE only (~18%) - CRITICAL: prone to collapse
-    "style": 0.20,        # GERMINATE + SET_ALPHA_TARGET (~22%) - increased from 0.15
-    "tempo": 0.50,        # GERMINATE only (~18%) - CRITICAL: prone to collapse
-    "alpha_target": 0.15, # GERMINATE + SET_ALPHA_TARGET (~22%) - increased from 0.12
-    "alpha_speed": 0.12,  # SET_ALPHA_TARGET + PRUNE (~19%) - increased from 0.10
-    "alpha_curve": 0.12,  # SET_ALPHA_TARGET + PRUNE (~19%) - increased from 0.10
+    "op": 0.2,            # INCREASED from 0.1 - critical head
+    "slot": 0.1,
+    "blueprint": 0.3,     # INCREASED from 0.1 - sparse head needs strong penalty
+    "style": 0.1,
+    "tempo": 0.3,         # INCREASED from 0.1 - sparse head needs strong penalty
+    "alpha_target": 0.1,
+    "alpha_speed": 0.1,
+    "alpha_curve": 0.1,
 }
 
 # Per-head probability floor (guarantees minimum exploration mass)
-# Higher floors for sparse heads that receive fewer gradient signals.
 # These are HARD floors enforced in MaskedCategorical - probabilities are
 # clamped and renormalized, ensuring gradients can always flow.
-# DRL Expert recommendation: 0.10 for blueprint/tempo (critical sparse heads)
 #
-# Unlike entropy floor penalties (soft loss term), probability floors are a
-# HARD constraint: all valid actions get at least min_prob probability mass.
-# This guarantees ∂π/∂θ ≠ 0 even when the policy would otherwise collapse.
+# DRL Expert diagnosis (2026-01-11): Op head collapse to WAIT is the root cause.
+# When op chooses WAIT, sparse heads (blueprint, tempo) receive no gradients.
+# The op floor of 0.05 guarantees ~5% non-WAIT actions, keeping sparse heads alive.
 PROBABILITY_FLOOR_PER_HEAD: dict[str, float] = {
-    "op": 0.02,           # High-frequency head, good gradient signal
+    "op": 0.05,           # CRITICAL: Guarantees ~5% non-WAIT to feed sparse heads
     "slot": 0.03,         # Usually few valid choices anyway
-    "blueprint": 0.10,    # GERMINATE only (~5%) - CRITICAL sparse head
+    "blueprint": 0.10,    # GERMINATE only (~5%) - needs high floor when active
     "style": 0.05,        # GERMINATE + SET_ALPHA_TARGET (~7%)
-    "tempo": 0.10,        # GERMINATE only (~5%) - CRITICAL sparse head
+    "tempo": 0.10,        # GERMINATE only (~5%) - needs high floor when active
     "alpha_target": 0.05, # GERMINATE + SET_ALPHA_TARGET (~7%)
     "alpha_speed": 0.05,  # SET_ALPHA_TARGET + PRUNE (~7%)
     "alpha_curve": 0.05,  # SET_ALPHA_TARGET + PRUNE (~7%)
