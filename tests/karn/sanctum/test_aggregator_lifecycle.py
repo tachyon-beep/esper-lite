@@ -7,6 +7,8 @@ from esper.leyline.telemetry import (
     SeedStageChangedPayload,
     SeedFossilizedPayload,
     SeedPrunedPayload,
+    BatchEpochCompletedPayload,
+    EpochCompletedPayload,
 )
 
 
@@ -222,3 +224,76 @@ def test_prune_creates_lifecycle_event():
     assert le.action == "PRUNE"
     assert le.from_stage == "GERMINATED"
     assert le.to_stage == "PRUNED"
+
+
+def test_best_run_record_has_dual_state():
+    """BestRunRecord should capture both peak and end state."""
+    agg = SanctumAggregator(num_envs=1)
+
+    # Germinate seed at epoch 5
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_GERMINATED,
+        slot_id="r0c0",
+        epoch=5,
+        data=SeedGerminatedPayload(
+            env_id=0,
+            slot_id="r0c0",
+            blueprint_id="conv_heavy",
+            params=1000,
+        ),
+    ))
+
+    # Reach peak accuracy at epoch 20 (seed still GERMINATED)
+    # This triggers add_accuracy() which snapshots best_lifecycle_events
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.EPOCH_COMPLETED,
+        data=EpochCompletedPayload(
+            env_id=0,
+            val_accuracy=85.0,
+            val_loss=0.5,
+            inner_epoch=20,
+        ),
+    ))
+
+    # Stage change after peak (GERMINATED -> TRAINING is automatic)
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_STAGE_CHANGED,
+        slot_id="r0c0",
+        epoch=30,
+        data=SeedStageChangedPayload(
+            env_id=0,
+            slot_id="r0c0",
+            from_stage="GERMINATED",
+            to_stage="TRAINING",
+        ),
+    ))
+
+    # End episode (triggers _handle_batch_epoch_completed which creates BestRunRecord)
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED,
+        data=BatchEpochCompletedPayload(
+            episodes_completed=1,
+            batch_idx=0,
+            avg_accuracy=85.0,
+            avg_reward=1.0,
+            total_episodes=1,
+            n_envs=1,
+        ),
+    ))
+
+    snapshot = agg.get_snapshot()
+
+    # Should have a best run record
+    assert len(snapshot.best_runs) >= 1
+    record = snapshot.best_runs[0]
+
+    # Peak state: 1 lifecycle event (just germinate at peak)
+    assert len(record.best_lifecycle_events) == 1
+    assert record.best_lifecycle_events[0].action == "GERMINATE(conv_heavy)"
+
+    # End state: 2 lifecycle events (germinate + stage change)
+    assert len(record.end_lifecycle_events) == 2
+    assert record.end_lifecycle_events[1].action == "[auto]"
+
+    # end_seeds should exist (may or may not have the seed depending on stage filtering)
+    assert isinstance(record.end_seeds, dict)

@@ -1518,10 +1518,18 @@ class SanctumAggregator:
                     fossilized_count=env.fossilized_count,
                     pruned_count=env.pruned_count,
                     reward_mode=env.reward_mode,
-                    # Seed graveyard: per-blueprint lifecycle stats
-                    blueprint_spawns=dict(env.blueprint_spawns),
-                    blueprint_fossilized=dict(env.blueprint_fossilized),
-                    blueprint_prunes=dict(env.blueprint_prunes),
+                    # Graveyard at peak (use snapshotted values)
+                    blueprint_spawns=dict(env.best_blueprint_spawns),
+                    blueprint_fossilized=dict(env.best_blueprint_fossilized),
+                    blueprint_prunes=dict(env.best_blueprint_prunes),
+                    # End-of-episode state (for Peak ↔ End toggle)
+                    end_seeds={k: replace(v) for k, v in env.seeds.items()},
+                    end_reward_components=(
+                        RewardComponents(**env.reward_components.__dict__)
+                        if env.reward_components else None
+                    ),
+                    best_lifecycle_events=list(env.best_lifecycle_events),
+                    end_lifecycle_events=list(env.lifecycle_events),
                 )
                 self._best_runs.append(record)
 
@@ -1570,6 +1578,13 @@ class SanctumAggregator:
             env.best_reward_components = None
             env.best_counterfactual_matrix = None
             env.best_action_history = []
+            env.best_blueprint_spawns.clear()
+            env.best_blueprint_fossilized.clear()
+            env.best_blueprint_prunes.clear()
+
+            # Lifecycle events (fresh per episode)
+            env.lifecycle_events.clear()
+            env.best_lifecycle_events.clear()
 
             # Action tracking (fresh distribution each episode)
             env.action_history.clear()

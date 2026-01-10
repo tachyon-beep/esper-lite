@@ -546,6 +546,10 @@ class EnvState:
     best_counterfactual_matrix: CounterfactualSnapshot | None = None
     best_shapley_snapshot: ShapleySnapshot | None = None
     best_action_history: list[str] = field(default_factory=list)
+    # Blueprint lifecycle stats at peak accuracy
+    best_blueprint_spawns: dict[str, int] = field(default_factory=dict)
+    best_blueprint_fossilized: dict[str, int] = field(default_factory=dict)
+    best_blueprint_prunes: dict[str, int] = field(default_factory=dict)
 
     # Seed lifecycle event tracking (for lifecycle panel)
     lifecycle_events: list[SeedLifecycleEvent] = field(default_factory=list)
@@ -727,6 +731,11 @@ class EnvState:
 
             # Snapshot lifecycle events at peak accuracy
             self.best_lifecycle_events = list(self.lifecycle_events)
+
+            # Snapshot blueprint lifecycle stats at peak accuracy
+            self.best_blueprint_spawns = dict(self.blueprint_spawns)
+            self.best_blueprint_fossilized = dict(self.blueprint_fossilized)
+            self.best_blueprint_prunes = dict(self.blueprint_prunes)
         else:
             self.epochs_since_improvement += 1
 
