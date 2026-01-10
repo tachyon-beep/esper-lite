@@ -95,3 +95,20 @@ def test_envstate_lifecycle_snapshot_on_best_accuracy():
     # best_lifecycle_events should NOT include post-peak event
     assert len(env.best_lifecycle_events) == 2
     assert len(env.lifecycle_events) == 3
+
+
+def test_bestrunrecord_has_dual_state_fields():
+    """BestRunRecord should have both peak and end state fields."""
+    from esper.karn.sanctum.schema import BestRunRecord
+
+    record = BestRunRecord(
+        env_id=0,
+        episode=5,
+        peak_accuracy=85.0,
+        final_accuracy=82.0,
+    )
+    # End state fields - direct access (no hasattr per CLAUDE.md)
+    assert record.end_seeds == {}
+    assert record.end_reward_components is None
+    assert record.best_lifecycle_events == []
+    assert record.end_lifecycle_events == []

@@ -1390,6 +1390,16 @@ class BestRunRecord:
     blueprint_fossilized: dict[str, int] = field(default_factory=dict)
     blueprint_prunes: dict[str, int] = field(default_factory=dict)
 
+    # === End-of-episode state (for Peak ↔ End toggle) ===
+    # Seeds at episode end (vs seeds which is at peak)
+    end_seeds: dict[str, "SeedState"] = field(default_factory=dict)
+    # Reward components at episode end
+    end_reward_components: "RewardComponents | None" = None
+    # Lifecycle events at peak accuracy
+    best_lifecycle_events: list["SeedLifecycleEvent"] = field(default_factory=list)
+    # Lifecycle events at episode end
+    end_lifecycle_events: list["SeedLifecycleEvent"] = field(default_factory=list)
+
 
 @dataclass
 class EventLogEntry:
