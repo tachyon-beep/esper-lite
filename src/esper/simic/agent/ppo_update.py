@@ -379,10 +379,6 @@ def compute_contribution_aux_loss(
         Scalar MSE loss over active slots at measurement timesteps only.
         Returns 0.0 if no fresh measurements in batch.
     """
-    # DRL Expert: Only supervise at measurement timesteps
-    if not has_fresh_target.any():
-        return torch.tensor(0.0, device=pred_contributions.device)
-
     if clip is not None:
         target_contributions = target_contributions.clamp(-clip, clip)
 
@@ -394,6 +390,8 @@ def compute_contribution_aux_loss(
     sq_error = (pred_contributions - target_contributions) ** 2
     masked_error = sq_error * combined_mask.float()
 
+    # When combined_mask is all-False: sum=0, n_valid=1, result=0.0
+    # No early return needed - torch.compile friendly
     n_valid = combined_mask.sum().clamp(min=1)
     return masked_error.sum() / n_valid
 
