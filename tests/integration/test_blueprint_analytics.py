@@ -22,7 +22,7 @@ class TestBlueprintAnalyticsIntegration:
 
         def callback(event: TelemetryEvent) -> None:
             # Slot events use env_id=-1 sentinel; inject env context without mutating frozen payloads.
-            emit_with_env_context(hub, env_idx=0, device="cpu", event=event)
+            emit_with_env_context(hub, env_idx=0, device="cpu", event=event, group_id="test")
 
         model.seed_slots["r0c1"].on_telemetry = callback
         model.seed_slots["r0c1"].fast_mode = False
