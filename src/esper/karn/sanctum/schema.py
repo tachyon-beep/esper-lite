@@ -547,6 +547,10 @@ class EnvState:
     best_shapley_snapshot: ShapleySnapshot | None = None
     best_action_history: list[str] = field(default_factory=list)
 
+    # Seed lifecycle event tracking (for lifecycle panel)
+    lifecycle_events: list[SeedLifecycleEvent] = field(default_factory=list)
+    best_lifecycle_events: list[SeedLifecycleEvent] = field(default_factory=list)
+
     # Per-env action tracking
     # ACTION NORMALIZATION: add_action() normalizes factored actions:
     #   GERMINATE_CONV_LIGHT → GERMINATE
@@ -720,6 +724,9 @@ class EnvState:
 
             # Snapshot action history (last 10 actions leading to peak)
             self.best_action_history = list(self.action_history)
+
+            # Snapshot lifecycle events at peak accuracy
+            self.best_lifecycle_events = list(self.lifecycle_events)
         else:
             self.epochs_since_improvement += 1
 
