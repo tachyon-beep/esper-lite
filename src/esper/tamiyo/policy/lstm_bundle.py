@@ -82,6 +82,7 @@ class LSTMPolicyBundle:
         masks: dict[str, torch.Tensor],
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
         deterministic: bool = False,
+        probability_floor: dict[str, float] | None = None,
     ) -> ActionResult:
         """Select action using the LSTM network.
 
@@ -94,6 +95,8 @@ class LSTMPolicyBundle:
             masks: Dict of boolean masks for each action head
             hidden: Optional LSTM hidden state
             deterministic: If True, use argmax instead of sampling
+            probability_floor: Optional per-head minimum probability. Must match
+                what is passed to evaluate_actions() for consistent log_probs.
 
         Returns:
             ActionResult with actions, log_probs, value, hidden, and op_logits
@@ -116,6 +119,7 @@ class LSTMPolicyBundle:
             alpha_curve_mask=masks["alpha_curve"],
             deterministic=deterministic,
             return_op_logits=True,
+            probability_floor=probability_floor,
         )
 
         # Network returns GetActionResult dataclass
@@ -214,6 +218,7 @@ class LSTMPolicyBundle:
         actions: dict[str, torch.Tensor],
         masks: dict[str, torch.Tensor],
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
+        probability_floor: dict[str, float] | None = None,
     ) -> EvalResult:
         """Evaluate actions for PPO training.
 
@@ -225,6 +230,8 @@ class LSTMPolicyBundle:
             actions: Stored actions from buffer
             masks: Dict of boolean masks for each action head
             hidden: Optional initial LSTM hidden state
+            probability_floor: Optional dict mapping head names to minimum probability
+                values. Passed through to network's evaluate_actions.
 
         Returns:
             EvalResult with log_probs, value, entropy, and new hidden state
@@ -243,6 +250,7 @@ class LSTMPolicyBundle:
             alpha_speed_mask=masks["alpha_speed"],
             alpha_curve_mask=masks["alpha_curve"],
             hidden=hidden,
+            probability_floor=probability_floor,
         )
 
         return EvalResult(

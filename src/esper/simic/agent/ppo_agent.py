@@ -29,6 +29,7 @@ from esper.leyline.value_metrics import (
 )
 from esper.leyline import (
     PolicyBundle,
+    compute_availability_masks,
     DEFAULT_BATCH_SIZE,
     DEFAULT_CLIP_RATIO,
     DEFAULT_ENTROPY_COEF,
@@ -47,6 +48,7 @@ from esper.leyline import (
     ENTROPY_FLOOR_PENALTY_COEF,
     HEAD_NAMES,
     NUM_OPS,
+    PROBABILITY_FLOOR_PER_HEAD,
 )
 from esper.leyline.slot_config import SlotConfig
 import logging
@@ -144,6 +146,10 @@ class PPOAgent:
         # Per-head entropy floor penalty (prevents sparse head collapse)
         entropy_floor: dict[str, float] | None = None,
         entropy_floor_penalty_coef: dict[str, float] | None = None,
+        # Per-head probability floor (HARD constraint - guarantees gradient flow)
+        # Unlike entropy penalties, this clamps action probabilities to a minimum,
+        # ensuring gradients can always flow even when entropy would collapse.
+        probability_floor: dict[str, float] | None = None,
         total_train_steps: int | None = None,  # For late-training decay schedule
     ):
         # Store policy and extract slot_config
@@ -199,6 +205,12 @@ class PPOAgent:
         self.entropy_floor_penalty_coef = (
             entropy_floor_penalty_coef if entropy_floor_penalty_coef is not None
             else dict(ENTROPY_FLOOR_PENALTY_COEF)
+        )
+        # Per-head probability floor (HARD constraint - guarantees gradient flow)
+        # Uses PROBABILITY_FLOOR_PER_HEAD from leyline as defaults
+        self.probability_floor = (
+            probability_floor if probability_floor is not None
+            else dict(PROBABILITY_FLOOR_PER_HEAD)
         )
         self.total_train_steps = total_train_steps if total_train_steps is not None else 1_000_000
         self.value_coef = value_coef
@@ -674,6 +686,9 @@ class PPOAgent:
 
         # Initialize per-head entropy tracking (P3-1)
         head_entropy_history: dict[str, list[torch.Tensor]] = {head: [] for head in HEAD_NAMES}
+        # Initialize conditional entropy tracking (P3-2: entropy only when head is causally relevant)
+        # This is the true exploration signal for sparse heads like blueprint/tempo
+        conditional_head_entropy_history: dict[str, list[torch.Tensor]] = {head: [] for head in HEAD_NAMES}
 
         # LSTM health tracking (TELE-340)
         lstm_health_history: dict[str, list[float | bool]] = defaultdict(list)
@@ -750,6 +765,7 @@ class PPOAgent:
                     actions,
                     masks,
                     hidden=(hidden_h, hidden_c),
+                    probability_floor=self.probability_floor,
                 )
             log_probs = result.log_prob
             values = result.value
@@ -861,6 +877,23 @@ class PPOAgent:
             )
             # B4-DRL-01: Masks from leyline.causal_masks (single source of truth)
 
+            # DRL Expert (2026-01): Compute AVAILABILITY masks for entropy regularization
+            # These track which heads COULD HAVE mattered (action was VALID), not which
+            # heads DID matter (action was CHOSEN). Critical for sparse head entropy floor
+            # penalty - prevents death spiral where heads collapse once agent stops exploring.
+            valid_op_masks = data["op_masks"][valid_mask]
+            availability_masks = compute_availability_masks(valid_op_masks)
+
+            # Track conditional entropy (P3-2): entropy only when head is causally relevant
+            # This is the true exploration signal for sparse heads like blueprint/tempo.
+            # head_masks[key] indicates whether that head affects the gradient for each timestep.
+            for key in HEAD_NAMES:
+                mask = head_masks[key].float()
+                n_relevant = mask.sum().clamp(min=1)
+                # Conditional mean: sum(entropy * mask) / count(mask)
+                conditional_ent = (entropy[key] * mask).sum() / n_relevant
+                conditional_head_entropy_history[key].append(conditional_ent)
+
             # Compute per-head ratios
             old_log_probs = {
                 "slot": data["slot_log_probs"][valid_mask],
@@ -942,6 +975,7 @@ class PPOAgent:
                 head_names=HEAD_NAMES,
                 entropy_floor=self.entropy_floor,
                 entropy_floor_penalty_coef=scheduled_coef,  # Scheduled coefficients
+                availability_masks=availability_masks,  # DRL Expert: Use availability not causal for entropy
             )
             update_result = PPOUpdateResult(ratio_metrics=ratio_metrics, loss_metrics=losses)
             loss_metrics = update_result.loss_metrics
@@ -1078,6 +1112,7 @@ class PPOAgent:
             finiteness_failures=finiteness_failures,
             epochs_completed=epochs_completed,
             head_entropies=head_entropy_history,
+            conditional_head_entropies=conditional_head_entropy_history,
             head_grad_norms=head_grad_norm_history,
             head_nan_detected=head_nan_detected,
             head_inf_detected=head_inf_detected,

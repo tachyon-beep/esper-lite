@@ -36,6 +36,10 @@ from esper.tamiyo.policy.action_masks import (
     compute_action_masks,
     compute_batch_masks,
     MaskedCategorical,
+    InvalidStateMachineError,
+    MaskSeedInfo,
+    build_slot_states,
+    slot_id_to_index,
 )
 
 # Import to trigger registration (must be after registry is defined)
@@ -113,4 +117,8 @@ __all__ = [
     "compute_action_masks",
     "compute_batch_masks",
     "MaskedCategorical",
+    "InvalidStateMachineError",
+    "MaskSeedInfo",
+    "build_slot_states",
+    "slot_id_to_index",
 ]

@@ -29,6 +29,7 @@ class PPOUpdateMetricsBuilder:
     finiteness_failures: list[FinitenessGateFailure]
     epochs_completed: int
     head_entropies: dict[str, list[torch.Tensor]]
+    conditional_head_entropies: dict[str, list[torch.Tensor]]  # Entropy only when head is causally relevant
     head_grad_norms: dict[str, list[torch.Tensor]]
     head_nan_detected: dict[str, bool]
     head_inf_detected: dict[str, bool]
@@ -113,6 +114,12 @@ class PPOUpdateMetricsBuilder:
 
         aggregated_result["head_entropies"] = {
             key: [val.item() for val in values] for key, values in self.head_entropies.items()
+        }
+        # Conditional entropy: entropy only when head is causally relevant (>1 valid action)
+        # This is the true exploration signal for sparse heads like blueprint/tempo
+        aggregated_result["conditional_head_entropies"] = {
+            key: [val.item() for val in values]
+            for key, values in self.conditional_head_entropies.items()
         }
         aggregated_result["head_grad_norms"] = {
             key: [val.item() for val in values] for key, values in self.head_grad_norms.items()

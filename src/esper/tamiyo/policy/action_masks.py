@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import torch
+import torch.nn.functional as F
 from torch.distributions import Categorical
 
 from esper.leyline import (
@@ -529,6 +530,9 @@ class MaskedCategorical:
 
     Computes entropy only over valid actions to avoid penalizing restricted states.
 
+    Optionally applies a probability floor to guarantee minimum exploration mass,
+    which ensures gradient flow even when entropy would otherwise collapse.
+
     Attributes:
         validate: Class-level toggle for validation. Set to False for production
             performance (disables CUDA sync from .any()/.sum() calls).
@@ -537,12 +541,22 @@ class MaskedCategorical:
 
     validate: bool = True  # Class-level validation toggle
 
-    def __init__(self, logits: torch.Tensor, mask: torch.Tensor):
+    def __init__(
+        self,
+        logits: torch.Tensor,
+        mask: torch.Tensor,
+        min_prob: float | None = None,
+    ):
         """Initialize masked categorical distribution.
 
         Args:
             logits: Raw policy logits [batch, num_actions]
             mask: Boolean mask, True = valid, False = invalid [batch, num_actions]
+            min_prob: Optional minimum probability for valid actions. If provided,
+                all valid actions are clamped to at least this probability, then
+                renormalized. This guarantees gradient flow even when the policy
+                would otherwise collapse to a near-deterministic distribution.
+                Typical values: 0.02-0.10 depending on head sparsity.
 
         Raises:
             InvalidStateMachineError: If any batch element has no valid actions
@@ -566,7 +580,99 @@ class MaskedCategorical:
         # outside autocast. But this upcast provides belt-and-suspenders safety.
         logits_f32 = logits.float()
         self.masked_logits = logits_f32.masked_fill(~mask, MASKED_LOGIT_VALUE)
+
+        # Apply probability floor if specified (guarantees gradient flow)
+        if min_prob is not None and min_prob > 0:
+            self.masked_logits = self._apply_probability_floor(
+                self.masked_logits, mask, min_prob
+            )
+
         self._dist = Categorical(logits=self.masked_logits)
+
+    def _apply_probability_floor(
+        self,
+        logits: torch.Tensor,
+        mask: torch.Tensor,
+        min_prob: float,
+    ) -> torch.Tensor:
+        """Apply probability floor to valid actions and renormalize.
+
+        Ensures all valid actions have at least min_prob probability,
+        which guarantees gradient flow even when entropy would otherwise collapse.
+
+        The algorithm (floor-preserving renormalization):
+        1. Compute softmax probabilities from logits
+        2. Cap floor at 1/num_valid * 0.99 (can't exceed uniform distribution)
+        3. Identify "underweight" actions (below floor) and "overweight" actions (above floor)
+        4. Set underweight actions to floor, scale overweight actions to fill remaining mass
+        5. Convert back to logits via log(prob)
+
+        This preserves the floor constraint after renormalization, unlike naive
+        clamp-then-renormalize which can violate the floor.
+
+        Args:
+            logits: Masked logits [batch, num_actions] (already masked)
+            mask: Boolean mask [batch, num_actions], True = valid
+            min_prob: Minimum probability for valid actions
+
+        Returns:
+            New logits with probability floor applied [batch, num_actions]
+        """
+        probs = F.softmax(logits, dim=-1)
+
+        # Cap floor at uniform distribution (can't exceed 1/num_valid)
+        num_valid = mask.sum(dim=-1, keepdim=True).float().clamp(min=1)
+        max_floor = 1.0 / num_valid
+        effective_floor = torch.minimum(
+            torch.tensor(min_prob, device=logits.device, dtype=logits.dtype),
+            max_floor * 0.99,
+        )
+
+        # Identify underweight (need boosting) vs overweight (can be scaled down)
+        # Only valid actions participate in floor logic
+        valid_probs = probs * mask.float()
+        is_underweight = mask & (probs < effective_floor)  # Below floor
+        is_overweight = mask & (probs >= effective_floor)  # At or above floor
+
+        # Count underweight actions and compute mass needed for flooring
+        num_underweight = is_underweight.sum(dim=-1, keepdim=True).float()
+        floor_mass_needed = num_underweight * effective_floor
+
+        # Mass available from overweight actions (above their floor allocation)
+        overweight_probs = torch.where(is_overweight, valid_probs, torch.zeros_like(valid_probs))
+        overweight_total = overweight_probs.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+
+        # Remaining mass for overweight actions after floor allocation
+        remaining_mass = (1.0 - floor_mass_needed).clamp(min=1e-8)
+
+        # Scale factor for overweight actions to fit in remaining mass
+        scale = remaining_mass / overweight_total
+
+        # Build final probabilities:
+        # - Underweight: set to floor
+        # - Overweight: scale down proportionally
+        # - Masked: keep at original (will be masked out anyway)
+        floored_probs = torch.where(
+            is_underweight,
+            effective_floor.expand_as(probs),
+            torch.where(
+                is_overweight,
+                probs * scale,
+                probs,  # Masked actions keep original prob (irrelevant)
+            ),
+        )
+
+        # Convert back to logits
+        # Use safe_probs to avoid log(0) for masked actions
+        safe_probs = torch.where(
+            mask,
+            floored_probs.clamp(min=1e-8),
+            torch.ones_like(floored_probs),
+        )
+        new_logits = torch.log(safe_probs)
+        new_logits = torch.where(mask, new_logits, torch.full_like(new_logits, MASKED_LOGIT_VALUE))
+
+        return new_logits
 
     @property
     def probs(self) -> torch.Tensor:

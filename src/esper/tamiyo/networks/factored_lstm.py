@@ -568,6 +568,7 @@ class FactoredRecurrentActorCritic(nn.Module):
         op_mask: torch.Tensor | None = None,
         deterministic: bool = False,
         return_op_logits: bool = False,
+        probability_floor: dict[str, float] | None = None,
     ) -> GetActionResult:
         """Sample actions from all heads (inference mode).
 
@@ -593,6 +594,9 @@ class FactoredRecurrentActorCritic(nn.Module):
             deterministic: If True, use argmax instead of sampling
             return_op_logits: If True, include raw masked op logits in result
                 for telemetry/decision snapshot. Default False for performance.
+            probability_floor: Optional dict mapping head names to minimum probability
+                values. Must match what is passed to evaluate_actions() for consistent
+                rollout/training log_probs. Typical: {"blueprint": 0.10, "tempo": 0.10}
 
         Returns:
             GetActionResult with actions, log_probs, values, hidden, sampled_op,
@@ -685,6 +689,46 @@ class FactoredRecurrentActorCritic(nn.Module):
                 "op": output["op_logits"][:, 0, :],
             }
 
+            def _apply_floor_to_logits(
+                logits: torch.Tensor,
+                mask: torch.Tensor,
+                min_prob: float,
+            ) -> torch.Tensor:
+                """Apply probability floor to logits (fast path version).
+
+                Mirrors MaskedCategorical._apply_probability_floor but operates
+                directly on logits without creating a distribution object.
+                """
+                probs = F.softmax(logits, dim=-1)
+
+                # Cap floor at uniform distribution
+                num_valid = mask.sum(dim=-1, keepdim=True).float().clamp(min=1)
+                max_floor = 1.0 / num_valid
+                effective_floor = torch.minimum(
+                    torch.tensor(min_prob, device=logits.device, dtype=logits.dtype),
+                    max_floor * 0.99,
+                )
+
+                # Clamp valid probs to at least effective_floor
+                floored_probs = torch.where(
+                    mask,
+                    torch.clamp(probs, min=effective_floor),
+                    probs,
+                )
+
+                # Renormalize over valid actions
+                valid_sum = (floored_probs * mask.float()).sum(dim=-1, keepdim=True).clamp(min=1e-8)
+                normalized_probs = floored_probs / valid_sum
+
+                # Convert back to logits
+                safe_probs = torch.where(
+                    mask,
+                    normalized_probs.clamp(min=1e-8),
+                    torch.ones_like(normalized_probs),
+                )
+                new_logits = torch.log(safe_probs)
+                return torch.where(mask, new_logits, torch.full_like(new_logits, MASKED_LOGIT_VALUE))
+
             def _sample_head(
                 key: str,
                 *,
@@ -710,6 +754,11 @@ class FactoredRecurrentActorCritic(nn.Module):
 
                 # Apply mask directly (same as MaskedCategorical)
                 masked_logits = logits.masked_fill(~mask, MASKED_LOGIT_VALUE)
+
+                # Apply probability floor if specified (guarantees gradient flow for sparse heads)
+                min_prob = probability_floor.get(key) if probability_floor else None
+                if min_prob is not None and min_prob > 0:
+                    masked_logits = _apply_floor_to_logits(masked_logits, mask, min_prob)
 
                 if deterministic:
                     action = masked_logits.argmax(dim=-1)
@@ -749,6 +798,11 @@ class FactoredRecurrentActorCritic(nn.Module):
 
             # Compute masked logits directly (same as MaskedCategorical)
             op_masked_logits = op_logits.masked_fill(~op_mask, MASKED_LOGIT_VALUE)
+
+            # Apply probability floor for op head if specified
+            op_min_prob = probability_floor.get("op") if probability_floor else None
+            if op_min_prob is not None and op_min_prob > 0:
+                op_masked_logits = _apply_floor_to_logits(op_masked_logits, op_mask, op_min_prob)
 
             if deterministic:
                 # Deterministic mode (bootstrap/eval): use argmax
@@ -911,6 +965,7 @@ class FactoredRecurrentActorCritic(nn.Module):
         alpha_curve_mask: torch.Tensor | None = None,
         op_mask: torch.Tensor | None = None,
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
+        probability_floor: dict[str, float] | None = None,
     ) -> tuple[
         dict[str, torch.Tensor],
         torch.Tensor,
@@ -928,6 +983,10 @@ class FactoredRecurrentActorCritic(nn.Module):
             actions: Stored actions from buffer, including 'op' key
             *_mask: Boolean masks [batch, seq_len, action_dim]
             hidden: Initial LSTM hidden state
+            probability_floor: Optional dict mapping head names to minimum probability
+                values. When provided, all valid actions for that head are guaranteed
+                at least this probability, ensuring gradient flow even when the policy
+                would otherwise collapse. Typical: {"blueprint": 0.10, "tempo": 0.10}
 
         Returns:
             log_probs: Dict of per-head log probs [batch, seq_len]
@@ -1089,7 +1148,9 @@ class FactoredRecurrentActorCritic(nn.Module):
 
                 mask_flat = mask.reshape(-1, action_dim)
 
-            dist = MaskedCategorical(logits=logits_flat, mask=mask_flat)
+            # Get per-head probability floor (guarantees gradient flow for sparse heads)
+            min_prob = probability_floor.get(key) if probability_floor else None
+            dist = MaskedCategorical(logits=logits_flat, mask=mask_flat, min_prob=min_prob)
             log_probs[key] = dist.log_prob(action_flat).reshape(batch, seq)
             entropy[key] = dist.entropy().reshape(batch, seq)
 

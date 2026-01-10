@@ -147,10 +147,20 @@ class PolicyBundle(Protocol):
         masks: dict[str, torch.Tensor],
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
         deterministic: bool = False,
+        probability_floor: dict[str, float] | None = None,
     ) -> ActionResult:
         """Select action given observations.
 
         Uses inference_mode internally - returned tensors are non-differentiable.
+
+        Args:
+            features: State features [batch, feature_dim]
+            blueprint_indices: Blueprint indices [batch, num_slots]
+            masks: Dict of boolean masks for action heads
+            hidden: Optional recurrent hidden state
+            deterministic: If True, use argmax instead of sampling
+            probability_floor: Optional per-head minimum probability. Must match
+                what is passed to evaluate_actions() for consistent log_probs.
         """
         ...
 
@@ -182,6 +192,7 @@ class PolicyBundle(Protocol):
         actions: dict[str, torch.Tensor],
         masks: dict[str, torch.Tensor],
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
+        probability_floor: dict[str, float] | None = None,
     ) -> EvalResult:
         """Evaluate actions for PPO update.
 
@@ -191,6 +202,10 @@ class PolicyBundle(Protocol):
             actions: Dict mapping head names to action tensors [batch, seq_len]
             masks: Dict mapping head names to boolean masks
             hidden: Optional recurrent hidden state
+            probability_floor: Optional dict mapping head names to minimum probability
+                values. When provided, all valid actions for that head are guaranteed
+                at least this probability, ensuring gradient flow even when entropy
+                would otherwise collapse. Typical: {"blueprint": 0.10, "tempo": 0.10}
 
         Must be called with gradient tracking enabled (not in inference_mode).
         """

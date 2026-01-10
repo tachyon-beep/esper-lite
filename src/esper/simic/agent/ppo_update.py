@@ -118,13 +118,19 @@ def compute_entropy_floor_penalty(
     head_masks: dict[str, torch.Tensor],
     entropy_floor: dict[str, float],
     penalty_coef: dict[str, float],  # ALWAYS dict - caller normalizes (PyTorch optimization)
+    availability_masks: dict[str, torch.Tensor] | None = None,
 ) -> torch.Tensor:
     """Compute penalty for heads whose entropy falls below floor.
 
     Uses quadratic penalty: loss += coef * max(0, floor - entropy)^2
     This creates smooth gradient pressure to maintain minimum entropy.
 
-    CRITICAL: Skips heads with no valid steps (n_valid < 1) to avoid
+    DRL Expert recommendation (2026-01): Uses AVAILABILITY masks (not causal masks)
+    for entropy regularization. This ensures sparse heads like blueprint/tempo are
+    regularized whenever GERMINATE was VALID, not just when it was CHOSEN. Without
+    this, heads collapse once the agent stops exploring them (death spiral).
+
+    CRITICAL: Skips heads with no available steps (n_available < 1) to avoid
     penalizing inactive heads that had no opportunity to maintain entropy.
 
     NOTE: penalty_coef must be a dict. Caller (compute_losses) should normalize
@@ -133,9 +139,13 @@ def compute_entropy_floor_penalty(
 
     Args:
         entropy: Dict of head_name -> entropy tensor (per-step or scalar, normalized 0-1)
-        head_masks: Dict of head_name -> mask tensor (for device inference and masking)
+        head_masks: Dict of head_name -> mask tensor (causal masks, for device inference)
         entropy_floor: Dict of head_name -> minimum acceptable entropy (float)
         penalty_coef: Per-head coefficients dict (REQUIRED - caller normalizes scalars)
+        availability_masks: Dict of head_name -> availability mask tensor. If provided,
+            uses availability (what actions were VALID) instead of causal masks (what
+            actions were TAKEN) for entropy normalization. This prevents sparse head
+            collapse by regularizing heads whenever they could have mattered.
 
     Returns:
         Scalar penalty to add to total loss (larger = more penalty)
@@ -151,6 +161,10 @@ def compute_entropy_floor_penalty(
     # Get device from first entropy tensor
     device = next(iter(entropy.values())).device
 
+    # Use availability masks if provided, otherwise fall back to causal masks
+    # (backwards compatible for callers that don't pass availability_masks)
+    effective_masks = availability_masks if availability_masks is not None else head_masks
+
     # PYTORCH OPTIMIZATION: Collect penalties in list, then stack+sum
     # This is 3x faster than repeated `penalty = penalty + term` (1 kernel vs 8)
     penalties: list[torch.Tensor] = []
@@ -161,16 +175,16 @@ def compute_entropy_floor_penalty(
 
         head_ent = entropy[head]
 
-        # If per-step entropy, compute mean over valid steps
+        # If per-step entropy, compute mean over AVAILABLE steps (not causal)
         if head_ent.ndim > 0:
-            mask = head_masks.get(head)
+            mask = effective_masks.get(head)
             if mask is not None:
-                n_valid = mask.sum()
-                if n_valid < 1:
-                    # CRITICAL FIX: Skip heads with no valid steps
+                n_available = mask.sum()
+                if n_available < 1:
+                    # CRITICAL FIX: Skip heads with no available steps
                     # (no opportunity to maintain entropy)
                     continue
-                head_ent = (head_ent * mask).sum() / n_valid
+                head_ent = (head_ent * mask).sum() / n_available
             else:
                 head_ent = head_ent.mean()
 
@@ -209,6 +223,7 @@ def compute_losses(
     head_names: tuple[str, ...],
     entropy_floor: dict[str, float] | None = None,
     entropy_floor_penalty_coef: dict[str, float] | float = 0.1,
+    availability_masks: dict[str, torch.Tensor] | None = None,
 ) -> LossMetrics:
     """Compute PPO policy/value/entropy losses for a single epoch.
 
@@ -290,18 +305,24 @@ def compute_losses(
         entropy_loss = entropy_loss - head_coef * masked_ent
 
     # Per-head entropy floor penalty (prevents sparse heads from collapsing)
+    # DRL Expert (2026-01): Use AVAILABILITY masks, not causal masks, to prevent
+    # death spiral where heads collapse once agent stops exploring them.
     entropy_floor_penalty = torch.tensor(0.0, device=values.device)
     if entropy_floor is not None:
-        # Compute mean entropy per head for floor comparison
+        # Use availability masks if provided, else fall back to causal masks
+        entropy_masks = availability_masks if availability_masks is not None else head_masks
+
+        # Compute mean entropy per head over AVAILABLE timesteps (not causal)
         mean_entropy: dict[str, torch.Tensor] = {}
         for key in entropy:
-            mask = head_masks[key]
+            # Use availability mask for entropy measurement
+            mask = entropy_masks.get(key, head_masks[key])
             if actor_weight is not None:
                 effective_mask = mask * actor_weight
             else:
                 effective_mask = mask
-            n_valid = effective_mask.sum().clamp(min=1)
-            mean_entropy[key] = (entropy[key] * effective_mask).sum() / n_valid
+            n_available = effective_mask.sum().clamp(min=1)
+            mean_entropy[key] = (entropy[key] * effective_mask).sum() / n_available
 
         # PYTORCH OPTIMIZATION: Normalize coefficient to dict ONCE at outer scope
         # This avoids isinstance() check in the hot path (inner loop)
@@ -313,9 +334,10 @@ def compute_losses(
 
         entropy_floor_penalty = compute_entropy_floor_penalty(
             entropy=mean_entropy,
-            head_masks=head_masks,
+            head_masks=head_masks,  # For device inference
             entropy_floor=entropy_floor,
             penalty_coef=penalty_coef_dict,
+            availability_masks=entropy_masks,
         )
 
     total_loss = (

@@ -224,6 +224,26 @@ ENTROPY_FLOOR_PENALTY_COEF: dict[str, float] = {
     "alpha_curve": 0.12,  # SET_ALPHA_TARGET + PRUNE (~19%) - increased from 0.10
 }
 
+# Per-head probability floor (guarantees minimum exploration mass)
+# Higher floors for sparse heads that receive fewer gradient signals.
+# These are HARD floors enforced in MaskedCategorical - probabilities are
+# clamped and renormalized, ensuring gradients can always flow.
+# DRL Expert recommendation: 0.10 for blueprint/tempo (critical sparse heads)
+#
+# Unlike entropy floor penalties (soft loss term), probability floors are a
+# HARD constraint: all valid actions get at least min_prob probability mass.
+# This guarantees ∂π/∂θ ≠ 0 even when the policy would otherwise collapse.
+PROBABILITY_FLOOR_PER_HEAD: dict[str, float] = {
+    "op": 0.02,           # High-frequency head, good gradient signal
+    "slot": 0.03,         # Usually few valid choices anyway
+    "blueprint": 0.10,    # GERMINATE only (~5%) - CRITICAL sparse head
+    "style": 0.05,        # GERMINATE + SET_ALPHA_TARGET (~7%)
+    "tempo": 0.10,        # GERMINATE only (~5%) - CRITICAL sparse head
+    "alpha_target": 0.05, # GERMINATE + SET_ALPHA_TARGET (~7%)
+    "alpha_speed": 0.05,  # SET_ALPHA_TARGET + PRUNE (~7%)
+    "alpha_curve": 0.05,  # SET_ALPHA_TARGET + PRUNE (~7%)
+}
+
 # M21: PPO ratio anomaly detection thresholds.
 # ratio = exp(new_log_prob - old_log_prob). Healthy ratio is close to 1.0.
 # - Explosion (>5.0): Policy changed too much, trust region violated
@@ -722,7 +742,7 @@ from esper.leyline.types import (
 # Causal masks for credit assignment (used by PPO + Karn UI)
 # NOTE: Lazy-loaded to avoid torch import at module level.
 # Access via module attribute (e.g., leyline.compute_causal_masks) or explicit import.
-_CAUSAL_MASK_EXPORTS = ("compute_causal_masks", "HEAD_RELEVANCE_BY_OP", "is_head_relevant")
+_CAUSAL_MASK_EXPORTS = ("compute_causal_masks", "compute_availability_masks", "HEAD_RELEVANCE_BY_OP", "is_head_relevant")
 
 # Host protocol (Train Anything principle - ROADMAP #5)
 from esper.leyline.host_protocol import HostProtocol
@@ -791,6 +811,7 @@ __all__ = [
     "ENTROPY_FLOOR_PER_HEAD",
     "ENTROPY_COLLAPSE_PER_HEAD",
     "ENTROPY_FLOOR_PENALTY_COEF",
+    "PROBABILITY_FLOOR_PER_HEAD",
     "DEFAULT_RATIO_EXPLOSION_THRESHOLD",
     "DEFAULT_RATIO_COLLAPSE_THRESHOLD",
 
@@ -819,6 +840,7 @@ __all__ = [
     "HEAD_RELEVANCE_BY_OP",
     "is_head_relevant",
     "compute_causal_masks",
+    "compute_availability_masks",
     "LifecycleOp",
     "MASKED_LOGIT_VALUE",
     "NUM_ALPHA_CURVES",
@@ -1064,11 +1086,13 @@ def __getattr__(name: str) -> Any:
     if name in _CAUSAL_MASK_EXPORTS:
         from esper.leyline.causal_masks import (
             compute_causal_masks,
+            compute_availability_masks,
             HEAD_RELEVANCE_BY_OP,
             is_head_relevant,
         )
         # Cache in module globals for subsequent access
         globals()["compute_causal_masks"] = compute_causal_masks
+        globals()["compute_availability_masks"] = compute_availability_masks
         globals()["HEAD_RELEVANCE_BY_OP"] = HEAD_RELEVANCE_BY_OP
         globals()["is_head_relevant"] = is_head_relevant
         return globals()[name]
