@@ -313,6 +313,26 @@ class FactoredRecurrentActorCritic(nn.Module):
             nn.Linear(head_hidden // 4, 1),  # 64 -> 1
         )
 
+        # Auxiliary contribution predictor head
+        # Predicts per-slot counterfactual contributions for auxiliary supervision.
+        # Input: lstm_out (lstm_hidden_dim)
+        # Output: [num_slots] predicted contributions (unbounded, can be negative)
+        #
+        # Architecture: 3-layer MLP with dropout to prevent shortcut learning.
+        # We don't condition on op because contributions are state properties, not action-dependent.
+        #
+        # DRL Expert review: Add Dropout(0.1) to prevent memorization/shortcut learning.
+        # PyTorch Expert review: Keep separate from value head to avoid gradient interference.
+        self.contribution_predictor = nn.Sequential(
+            nn.Linear(lstm_hidden_dim, head_hidden),
+            nn.LayerNorm(head_hidden),
+            nn.ReLU(),
+            nn.Dropout(0.1),  # DRL Expert: prevent shortcut learning
+            nn.Linear(head_hidden, head_hidden // 2),
+            nn.ReLU(),
+            nn.Linear(head_hidden // 2, self.num_slots),
+        )
+
         self._init_weights()
 
     def _init_weights(self) -> None:
@@ -345,6 +365,14 @@ class FactoredRecurrentActorCritic(nn.Module):
         last_value_layer = self.value_head[-1]
         if isinstance(last_value_layer, nn.Linear):
             nn.init.orthogonal_(last_value_layer.weight.data, gain=0.01)
+
+        # Contribution predictor output: gain=0.1 for regression targets
+        # PyTorch Expert review: gain=0.01 is too small for targets in [-10, +10];
+        # gain=0.1 allows faster initial range expansion while staying centered.
+        contrib_last = self.contribution_predictor[-1]
+        if isinstance(contrib_last, nn.Linear):
+            nn.init.orthogonal_(contrib_last.weight.data, gain=0.1)
+            nn.init.zeros_(contrib_last.bias.data)  # Center predictions at 0
 
         # LSTM-specific initialization
         for name, param in self.lstm.named_parameters():
