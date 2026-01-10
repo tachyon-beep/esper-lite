@@ -167,6 +167,23 @@ def compute_collapse_risk(
 
 
 @dataclass
+class SeedLifecycleEvent:
+    """A single lifecycle transition for a seed.
+
+    Captures Tamiyo's decisions and automatic transitions for the lifecycle panel.
+    """
+
+    epoch: int
+    action: str  # GERMINATE({blueprint}), ADVANCE, PRUNE, FOSSILIZE, or "[auto]"
+    from_stage: str  # Previous stage
+    to_stage: str  # New stage
+    blueprint_id: str  # Which blueprint
+    slot_id: str  # Which slot
+    alpha: float | None  # Alpha at transition (for BLENDING/HOLDING)
+    accuracy_delta: float | None  # Accuracy improvement (for FOSSILIZE)
+
+
+@dataclass
 class SeedLifecycleStats:
     """Seed lifecycle aggregate metrics for TamiyoBrain display.
 
