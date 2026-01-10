@@ -125,9 +125,10 @@ def validate_device(device: str, *, require_explicit_index: bool = False) -> tor
             f"Valid indices: cuda:0 through cuda:{available - 1}."
         )
 
-    # PyTorch device indices are stored in an int8 with -1 sentinel (no index).
-    # Large indices like "cuda:999" overflow and appear negative (or None),
-    # which can silently bypass range checks if we only trust dev.index.
+    # PyTorch device indices use a DeviceIndex type (int16 in PyTorch 2.x, was int8
+    # in older versions) with -1 sentinel for "no index". Very large indices can
+    # overflow and appear negative or wrap around, which would bypass range checks
+    # if we only trust dev.index. This explicit comparison catches such overflows.
     if dev.index != explicit_index:
         raise ValueError(
             f"Invalid CUDA device '{device}': parsed as {dev!s}. "
