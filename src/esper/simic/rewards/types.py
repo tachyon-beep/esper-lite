@@ -102,6 +102,11 @@ class ContributionRewardInputs:
     escrow_credit_prev: float = 0.0
     slot_id: str | None = None
     seed_id: str | None = None
+    # D2: Capacity Economics fields (slot saturation prevention)
+    # n_active_seeds: Count of seeds in TRAINING/BLENDING/HOLDING stages (not fossilized)
+    # seeds_germinated_this_episode: Count of GERMINATE actions this episode (for first-germinate bonus)
+    n_active_seeds: int = 0
+    seeds_germinated_this_episode: int = 0
 
 
 @dataclass(slots=True)

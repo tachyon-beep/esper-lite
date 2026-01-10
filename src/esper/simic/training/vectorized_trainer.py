@@ -425,11 +425,19 @@ class VectorizedPPOTrainer:
                                         inputs = augment_cifar10_batch(
                                             inputs,
                                             generator=env_state.augment_generator,
+                                            buffers=env_state.augment_buffers,
                                         )
+                                        # CRITICAL: record_stream() MUST be inside the stream context.
+                                        # This marks the tensor as used by this stream, preventing the
+                                        # allocator from reusing memory while augmentation is in flight.
+                                        # The epoch-end sync (line ~500) ensures kernels complete before
+                                        # CPU reads results.
+                                        inputs.record_stream(env_state.stream)
                                 else:
                                     inputs = augment_cifar10_batch(
                                         inputs,
                                         generator=env_state.augment_generator,
+                                        buffers=env_state.augment_buffers,
                                     )
 
                             # BUG-031: Defensive validation for NLL loss assertion failures
@@ -543,13 +551,21 @@ class VectorizedPPOTrainer:
                     env_configs: list[list[dict[str, Any]]] = []
                     for i, env_state in enumerate(env_states):
                         model = env_state.model
-                        active_slot_list = [
-                            sid
-                            for sid in slots
-                            if model.has_active_seed_in_slot(sid)
-                            and cast(SeedSlotProtocol, model.seed_slots[sid]).state
-                            and cast(SeedSlotProtocol, model.seed_slots[sid]).alpha > 0
-                        ]
+                        # CRITICAL: Exclude FOSSILIZED seeds from ablation.
+                        # Fossilized seeds are permanently integrated - disabling them
+                        # measures damage to the host, not the seed's contribution.
+                        # The host was trained WITH the fossilized seed's output;
+                        # suddenly removing it causes catastrophic accuracy drops.
+                        active_slot_list = []
+                        for sid in slots:
+                            if not model.has_active_seed_in_slot(sid):
+                                continue
+                            slot = cast(SeedSlotProtocol, model.seed_slots[sid])
+                            if slot.state is None or slot.alpha <= 0:
+                                continue
+                            if slot.state.stage == SeedStage.FOSSILIZED:
+                                continue
+                            active_slot_list.append(sid)
 
                         # Config 0: Main (current alphas)
                         configs = [{"_kind": "main"}]
@@ -1266,6 +1282,7 @@ class VectorizedPPOTrainer:
                         masks=masks_batch,
                         hidden=batched_lstm_hidden,
                         deterministic=False,
+                        probability_floor=agent.probability_floor,
                     )
                     actions_dict = action_result.action
                     head_log_probs = action_result.log_prob
@@ -1421,6 +1438,7 @@ class VectorizedPPOTrainer:
                                 masks=post_masks_batch,
                                 hidden=batched_lstm_hidden,
                                 deterministic=True,
+                                probability_floor=agent.probability_floor,
                             )
                         # PERF: Move to CPU before .tolist() to avoid per-value GPU sync
                         bootstrap_values = bootstrap_result.value.cpu().tolist()
@@ -1643,6 +1661,28 @@ class VectorizedPPOTrainer:
                         # Add LSTM health to metrics for telemetry display in Sanctum
                         metrics.update(lstm_health.to_dict())
 
+                    # Per-head entropy collapse detection (Task 6)
+                    # Check individual action heads for collapse even when total entropy appears healthy
+                    head_entropies_raw = metrics.get("head_entropies")
+                    if head_entropies_raw:
+                        # Convert per-epoch lists to mean per head
+                        mean_head_entropies = {
+                            head: sum(values) / len(values) if values else 0.0
+                            for head, values in head_entropies_raw.items()
+                        }
+                        per_head_report = anomaly_detector.check_per_head_entropy_collapse(
+                            mean_head_entropies
+                        )
+                        if per_head_report.has_anomaly:
+                            # Log warnings but don't halt - this is early warning
+                            for anomaly_type in per_head_report.anomaly_types:
+                                detail = per_head_report.details.get(anomaly_type, "")
+                                logger.warning(f"Per-head entropy anomaly: {anomaly_type} - {detail}")
+                            # Merge into main anomaly report for telemetry escalation
+                            anomaly_report.has_anomaly = True
+                            anomaly_report.anomaly_types.extend(per_head_report.anomaly_types)
+                            anomaly_report.details.update(per_head_report.details)
+
                     handle_telemetry_escalation(anomaly_report, telemetry_config)
                     emit_anomaly_diagnostics(
                         hub,
@@ -1741,6 +1781,7 @@ class VectorizedPPOTrainer:
                         rolling_avg_acc=rolling_avg_acc,
                         env_id=0,  # Aggregate metric across all envs
                         training_progress=training_progress,
+                        group_id=group_id,
                     )
 
                 batch_summary = BatchSummary(

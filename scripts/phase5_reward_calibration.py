@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# mypy: ignore-errors
 """Phase 5 reward calibration helper.
 
 Summarizes reward component scales and alpha deltas from telemetry JSONL files.

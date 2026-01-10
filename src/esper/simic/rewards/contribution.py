@@ -6,7 +6,7 @@ import logging
 import math
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from esper.leyline import (
     DEFAULT_GAMMA,
@@ -81,17 +81,23 @@ class ContributionRewardConfig:
     # Soft escrow: pay the CHANGE in an "unrealised credit target" so transient spikes are clawed back.
     # Stable accuracy uses min(last_k) to require sustained improvement ("prove it held").
     escrow_stable_window: int = 3
-    # Optional per-step cap on escrow delta (0 disables). Useful if reward spikes destabilize PPO.
-    escrow_delta_clip: float = 0.0
+    # Per-step cap on escrow delta. Clips large reward swings from transient accuracy spikes.
+    # DRL Expert review 2026-01-10: Enabled at 2.0 to reduce PPO variance while allowing
+    # meaningful updates. Set to 0.0 to disable (not recommended).
+    escrow_delta_clip: float = 2.0
 
     # PBRS stage progression
     pbrs_weight: float = 0.3
     epoch_progress_bonus: float = 0.3
     max_progress_bonus: float = 2.0
 
-    # Compute rent (logarithmic scaling)
+    # Compute rent (logarithmic scaling, per-step)
+    # rent = min(rent_weight * log(1 + growth_ratio), max_rent)
+    # With growth_ratio=2.5 (typical): rent = 0.5 * log(3.5) ≈ 0.63 per step
     rent_weight: float = 0.5
-    max_rent: float = 8.0
+    # Per-step cap (previously 8.0 for per-episode, now scaled for per-step use)
+    # Limits rent to ~80% of avg attribution to prevent crushing small improvements
+    max_rent: float = 1.5
     # Floor for host_params normalization in rent/shock calculations.
     # Tiny hosts (e.g., 17 trainable params) would otherwise be crushed by any non-trivial seed.
     rent_host_params_floor: int = 200
@@ -101,6 +107,10 @@ class ContributionRewardConfig:
     # Convex alpha shock coefficient (penalizes fast alpha changes).
     # Calibrated from telemetry_2025-12-20_044944: ~0.1958.
     alpha_shock_coef: float = 0.1958
+    # Maximum alpha shock penalty (prevents reward variance explosion).
+    # Without this cap, rapid alpha oscillations can produce unbounded negative rewards
+    # (e.g., 10 oscillations of Δ=1.0 → -1.958, 100 → -19.58), destabilizing PPO.
+    alpha_shock_cap: float = 1.0
 
     # Enforcement penalties (state machine compliance)
     invalid_fossilize_penalty: float = -1.0
@@ -108,7 +118,7 @@ class ContributionRewardConfig:
     germinate_with_seed_penalty: float = -0.3
 
     # Intervention costs (action friction)
-    germinate_cost: float = -0.02
+    germinate_cost: float = -0.15  # D3 fix: Makes early GERMINATE net-negative (0.119 - 0.15 = -0.03)
     fossilize_cost: float = -0.01
     prune_cost: float = -0.005
     set_alpha_target_cost: float = -0.005
@@ -119,10 +129,14 @@ class ContributionRewardConfig:
     fossilize_noncontributing_penalty: float = -0.2
 
     # Prune shaping
-    prune_hurting_bonus: float = 0.3
+    prune_hurting_bonus: float = 0.15  # Reduced from 0.3 (C3 fix: anti-farming rebalance)
     prune_acceptable_bonus: float = 0.1
     prune_good_seed_penalty: float = -0.3
     prune_hurting_threshold: float = -0.5
+    # Minimum age (epochs) before a seed can receive prune_hurting_bonus.
+    # Prevents germinate→hurt→prune farming where agent creates harmful seeds
+    # just to get the bonus for removing them. (C3 fix: age gate)
+    min_prune_bonus_age: int = 3
 
     # Anti-gaming: attribution discount and ratio penalty thresholds
     # Prevents seeds from gaming counterfactual by creating dependencies
@@ -138,9 +152,14 @@ class ContributionRewardConfig:
 
     # Terminal bonus
     terminal_acc_weight: float = 0.05
-    # Terminal bonus per fossilized seed (incentivizes completion over farming)
+    # Terminal bonus scale for fossilized seeds (multiplied by tanh saturation)
     # DRL Expert review 2025-12-10: set to 3.0 to compete with post-scale attribution
+    # DRL Expert review 2026-01-10: now uses tanh(n/ceiling) to favor quality over count
     fossilize_terminal_scale: float = 3.0
+    # Number of fossils at which terminal bonus saturates (tanh ceiling)
+    # With ceiling=3: 1 fossil ≈ 32%, 2 ≈ 58%, 3 ≈ 76%, 5 ≈ 93% of max bonus
+    # This prevents "many mediocre seeds" from dominating "one excellent seed"
+    fossilize_quality_ceiling: float = 3.0
 
     # Gamma for PBRS (uses module constant for consistency)
     gamma: float = DEFAULT_GAMMA
@@ -185,6 +204,36 @@ class ContributionRewardConfig:
     # (DRL Expert review 2025-12-17: prevents WAIT-spam policies that rely on
     # environment cleanup rather than learning proactive lifecycle management)
     auto_prune_penalty: float = -0.2
+
+    # === D2: Capacity Economics (slot saturation prevention) ===
+    # Threshold-based rent discourages early slot saturation and encourages
+    # efficient use of capacity. First N slots are "free" (no occupancy rent),
+    # excess slots incur per-epoch cost.
+    #
+    # DRL Expert Review 2025-01-08:
+    # - seed_occupancy_cost: Per-epoch cost per seed above free_slots threshold
+    # - free_slots: First N slots incur no occupancy rent (encourages some activity)
+    # - fossilized_maintenance_cost: Per-epoch cost per fossilized seed (they still consume capacity)
+    # - first_germinate_bonus: One-time bonus for first germination (breaks "do nothing" symmetry)
+    seed_occupancy_cost: float = 0.01
+    free_slots: int = 1
+    fossilized_maintenance_cost: float = 0.002
+    first_germinate_bonus: float = 0.2
+
+    # === D3: Anti-Timing-Gaming (early germination discount) ===
+    # Seeds germinated before warmup period receive discounted attribution.
+    # This prevents "germinate early to claim host drift" gaming pattern.
+    # Linear discount: epoch 1 = discount_floor, epoch warmup = 1.0
+    germination_warmup_epochs: int = 10
+    germination_discount_floor: float = 0.4
+    disable_timing_discount: bool = False
+
+    # === D3: Attribution formula variant ===
+    # Controls how progress and seed_contribution combine into attributed value.
+    # - "geometric": sqrt(progress * contribution) - rewards host drift, legacy default
+    # - "harmonic": 2*p*c/(p+c) - dominated by smaller value, anti-gaming (recommended)
+    # - "minimum": min(progress, contribution) - very conservative
+    attribution_formula: Literal["geometric", "harmonic", "minimum"] = "harmonic"
 
     @staticmethod
     def default() -> "ContributionRewardConfig":
@@ -237,6 +286,9 @@ def compute_contribution_reward(
     alpha_delta_sq_sum: float = 0.0,
     stable_val_acc: float | None = None,
     escrow_credit_prev: float = 0.0,
+    # D2: Capacity economics parameters
+    n_active_seeds: int = 0,
+    seeds_germinated_this_episode: int = 0,
 ) -> float | tuple[float, RewardComponentsTelemetry]:
     """Compute reward using bounded attribution (ransomware-resistant)."""
     if config is None:
@@ -263,6 +315,7 @@ def compute_contribution_reward(
     progress = None
     escrow_credit_target = 0.0
     escrow_delta = 0.0
+    timing_discount = 1.0  # D3: Default to full credit (no discount)
 
     seed_is_fossilized = seed_info is not None and seed_info.stage == STAGE_FOSSILIZED
 
@@ -366,8 +419,14 @@ def compute_contribution_reward(
                     if progress <= 0:
                         attributed = 0.0
                     elif seed_contribution >= progress:
-                        attributed = math.sqrt(progress * seed_contribution)
+                        # Use configurable formula when contribution exceeds progress
+                        attributed = _compute_attributed_value(
+                            progress=progress,
+                            seed_contribution=seed_contribution,
+                            formula=config.attribution_formula,
+                        )
                     else:
+                        # contribution < progress: cap at contribution (unchanged)
                         attributed = seed_contribution
                 else:
                     attributed = seed_contribution * 0.5
@@ -375,6 +434,16 @@ def compute_contribution_reward(
                 attributed *= attribution_discount
 
                 bounded_attribution = (config.contribution_weight * attributed) + ratio_penalty
+
+                # D3: Apply timing discount for early germination
+                if not config.disable_timing_discount and seed_info is not None:
+                    germination_epoch = epoch - seed_info.seed_age_epochs
+                    timing_discount = _compute_timing_discount(
+                        germination_epoch=germination_epoch,
+                        warmup_epochs=config.germination_warmup_epochs,
+                        discount_floor=config.germination_discount_floor,
+                    )
+                    bounded_attribution *= timing_discount
         elif seed_info is not None and not seed_is_fossilized:
             if acc_delta is not None and acc_delta > 0:
                 bounded_attribution = config.proxy_contribution_weight * acc_delta
@@ -399,6 +468,7 @@ def compute_contribution_reward(
         components.escrow_credit_target = escrow_credit_target
         components.escrow_delta = escrow_delta
         components.escrow_credit_next = escrow_credit_prev + escrow_delta
+        components.timing_discount = timing_discount
 
     blending_warning = 0.0
     if seed_info is not None and seed_info.stage == STAGE_BLENDING:
@@ -410,9 +480,19 @@ def compute_contribution_reward(
     if components:
         components.blending_warning = blending_warning
 
+    # === Holding indecision penalty ===
+    # In HOLDING stage, penalize actions that don't resolve the decision.
+    # Terminal actions (FOSSILIZE, PRUNE) are exempt - they commit to a decision.
+    # Non-terminal actions (WAIT, SET_ALPHA_TARGET, etc.) incur penalty.
+    #
+    # Bug fix (2026-01-08): Previously only WAIT triggered this penalty, allowing
+    # Tamiyo to "turntable" SET_ALPHA_TARGET to avoid penalty while collecting
+    # dense positives. Now all non-terminal actions in HOLDING are penalized.
     holding_warning = 0.0
     if seed_info is not None and seed_info.stage == STAGE_HOLDING:
-        if action == LifecycleOp.WAIT:
+        # Terminal actions that resolve HOLDING - exempt from penalty
+        terminal_actions = (LifecycleOp.FOSSILIZE, LifecycleOp.PRUNE)
+        if action not in terminal_actions:
             if seed_info.epochs_in_stage >= 2 and bounded_attribution > 0:
                 has_counterfactual = (
                     seed_info.total_improvement is not None
@@ -460,9 +540,9 @@ def compute_contribution_reward(
             denom = max(host_params, config.rent_host_params_floor)
             growth_ratio = effective_overhead / denom
             scaled_cost = math.log(1.0 + growth_ratio)
-            rent_per_episode = min(config.rent_weight * scaled_cost, config.max_rent)
-            rent_normalizer = max_epochs if max_epochs > 0 else 1
-            rent_penalty = rent_per_episode / rent_normalizer
+            # Per-step rent penalty (same scale as attribution for balanced signal)
+            # Previously divided by max_epochs which created 150:1 asymmetry vs attribution
+            rent_penalty = min(config.rent_weight * scaled_cost, config.max_rent)
             reward -= rent_penalty
     if components:
         components.compute_rent = -rent_penalty
@@ -470,10 +550,49 @@ def compute_contribution_reward(
 
     alpha_shock = 0.0
     if alpha_delta_sq_sum > 0 and config.alpha_shock_coef != 0.0 and not config.disable_anti_gaming:
-        alpha_shock = -config.alpha_shock_coef * alpha_delta_sq_sum
+        raw_shock = -config.alpha_shock_coef * alpha_delta_sq_sum
+        # Cap to prevent reward variance explosion (C2 fix: unbounded alpha_shock)
+        alpha_shock = max(raw_shock, -config.alpha_shock_cap)
         reward += alpha_shock
     if components:
         components.alpha_shock = alpha_shock
+
+    # === D2: Capacity Economics (slot saturation prevention) ===
+    # Threshold-based occupancy rent: first N slots are free, excess incurs per-epoch cost.
+    # This discourages early slot saturation and encourages efficient capacity use.
+    #
+    # IMPORTANT: Use n_occupied (active + fossilized) for threshold calculation.
+    # ChatGPT Pro review 2025-01-08: Using only n_active made fossilizing an "escape hatch"
+    # from occupancy cost (0.01 → 0.002). Since fossilized seeds still occupy slots, they
+    # must count against the free_slots threshold until D3 (audit) creates proper incentives.
+    occupancy_rent = 0.0
+    fossilized_rent = 0.0
+    first_germ_bonus = 0.0
+
+    # Occupancy rent for occupied slots above free_slots threshold
+    # n_occupied includes both active AND fossilized seeds (they all consume slots)
+    n_occupied = n_active_seeds + num_fossilized_seeds
+    excess_occupied = max(0, n_occupied - config.free_slots)
+    if excess_occupied > 0:
+        occupancy_rent = config.seed_occupancy_cost * excess_occupied
+        reward -= occupancy_rent
+
+    # Fossilized maintenance rent (additional small cost for frozen compute)
+    if num_fossilized_seeds > 0:
+        fossilized_rent = config.fossilized_maintenance_cost * num_fossilized_seeds
+        reward -= fossilized_rent
+
+    # First-germination bonus (breaks "do nothing" symmetry)
+    # One-time bonus when agent takes first germination action
+    if action == LifecycleOp.GERMINATE and seeds_germinated_this_episode == 0:
+        first_germ_bonus = config.first_germinate_bonus
+        reward += first_germ_bonus
+
+    if components:
+        components.occupancy_rent = occupancy_rent
+        components.fossilized_rent = fossilized_rent
+        components.first_germinate_bonus = first_germ_bonus
+        components.n_active_seeds = n_active_seeds
 
     action_shaping = 0.0
 
@@ -485,6 +604,18 @@ def compute_contribution_reward(
                 phi_germinated = STAGE_POTENTIALS[SeedStage.GERMINATED]
                 phi_no_seed = 0.0
                 pbrs_germinate = config.gamma * phi_germinated - phi_no_seed
+
+                # D3: Apply timing discount to PBRS germination bonus.
+                # Early germination gets reduced immediate reward, incentivizing
+                # the agent to wait until after warmup for the full bonus.
+                if not config.disable_timing_discount:
+                    germination_discount = _compute_timing_discount(
+                        epoch,
+                        config.germination_warmup_epochs,
+                        config.germination_discount_floor,
+                    )
+                    pbrs_germinate *= germination_discount
+
                 action_shaping += config.pbrs_weight * pbrs_germinate
         action_shaping += config.germinate_cost
 
@@ -514,7 +645,14 @@ def compute_contribution_reward(
     fossilize_terminal_bonus = 0.0
     if epoch == max_epochs and not config.disable_terminal_reward:
         terminal_bonus = val_acc * config.terminal_acc_weight
-        fossilize_terminal_bonus = num_contributing_fossilized * config.fossilize_terminal_scale
+        # P1 fix: Use tanh saturation to favor quality over count.
+        # Linear count rewarded "many mediocre seeds" over "one excellent seed".
+        # tanh(n/ceiling) provides diminishing returns, so marginal fossils
+        # contribute less. With ceiling=3: 5 fossils ≈ 2.79, not 15.0.
+        if num_contributing_fossilized > 0 and config.fossilize_quality_ceiling > 0:
+            fossilize_terminal_bonus = config.fossilize_terminal_scale * math.tanh(
+                num_contributing_fossilized / config.fossilize_quality_ceiling
+            )
         terminal_bonus += fossilize_terminal_bonus
         reward += terminal_bonus
     if components:
@@ -751,6 +889,12 @@ def _contribution_prune_shaping(
 
     if seed_contribution is not None:
         if seed_contribution < config.prune_hurting_threshold:
+            # C3 fix: Age gate prevents germinate→hurt→prune farming.
+            # Only give bonus for pruning hurting seeds if they've existed long enough
+            # to rule out intentional harm-seeding for reward farming.
+            if seed_info.seed_age_epochs < config.min_prune_bonus_age:
+                # Young hurting seed: small penalty (discourages quick-cycle farming)
+                return -0.1
             return config.prune_hurting_bonus
         if seed_contribution < 0:
             return config.prune_acceptable_bonus
@@ -760,6 +904,74 @@ def _contribution_prune_shaping(
         return max(scaled_penalty, max_penalty)
 
     return 0.0
+
+
+def _compute_timing_discount(
+    germination_epoch: int,
+    warmup_epochs: int,
+    discount_floor: float,
+) -> float:
+    """Compute timing discount for early germination.
+
+    Seeds germinated before warmup_epochs receive discounted attribution.
+    Linear interpolation from discount_floor (epoch 0) to 1.0 (epoch >= warmup).
+
+    Args:
+        germination_epoch: Epoch when seed was germinated
+        warmup_epochs: Number of epochs before full credit (must be > 0)
+        discount_floor: Minimum discount (applied at epoch 0)
+
+    Returns:
+        Discount factor in [discount_floor, 1.0]
+    """
+    # Guard against invalid warmup_epochs (avoid division by zero)
+    if warmup_epochs <= 0:
+        return 1.0
+
+    if germination_epoch >= warmup_epochs:
+        return 1.0
+
+    # Linear interpolation: epoch 0 = floor, epoch warmup = 1.0
+    progress = germination_epoch / warmup_epochs
+    return discount_floor + (1.0 - discount_floor) * progress
+
+
+def _compute_attributed_value(
+    progress: float,
+    seed_contribution: float,
+    formula: Literal["geometric", "harmonic", "minimum"],
+) -> float:
+    """Compute attributed value using the specified formula.
+
+    Args:
+        progress: Accuracy improvement since germination (val_acc - acc_at_germination)
+        seed_contribution: Counterfactual contribution of the seed
+        formula: One of "geometric", "harmonic", "minimum"
+
+    Returns:
+        Attributed value combining progress and contribution
+
+    Formulas:
+        - geometric: sqrt(progress * contribution) - rewards host drift
+        - harmonic: 2*p*c/(p+c) - dominated by smaller value, anti-gaming
+        - minimum: min(progress, contribution) - very conservative
+    """
+    if progress <= 0 or seed_contribution <= 0:
+        return 0.0
+
+    if formula == "geometric":
+        return math.sqrt(progress * seed_contribution)
+
+    elif formula == "harmonic":
+        # Harmonic mean: 2ab/(a+b), dominated by smaller value
+        # Guard against division by near-zero when both values are tiny
+        return 2 * progress * seed_contribution / max(progress + seed_contribution, 1e-8)
+
+    elif formula == "minimum":
+        return min(progress, seed_contribution)
+
+    else:
+        raise ValueError(f"Unknown attribution formula: {formula}")
 
 
 def _check_reward_hacking(
@@ -869,6 +1081,8 @@ __all__ = [
     "_contribution_pbrs_bonus",
     "_contribution_prune_shaping",
     "_contribution_fossilize_shaping",
+    "_compute_timing_discount",
+    "_compute_attributed_value",
     "_check_reward_hacking",
     "_check_ransomware_signature",
     "get_intervention_cost",

@@ -830,6 +830,16 @@ class PPOUpdatePayload:
     lstm_has_nan: bool = False  # NaN detected in hidden state
     lstm_has_inf: bool = False  # Inf detected in hidden state
 
+    # === D5: Slot Saturation Diagnostics ===
+    # Track forced WAIT steps to understand PPO stability under slot saturation.
+    # When all slots are occupied, the action space collapses to WAIT-only.
+    # These timesteps have no agency and should be excluded from actor loss.
+    forced_step_ratio: float = 0.0  # Fraction of timesteps with forced decisions
+    usable_actor_timesteps: int = 0  # Count of timesteps with real choice
+    decision_density: float = 1.0  # Fraction with agency (1 - forced_step_ratio), higher = healthier
+    advantage_std_floored: bool = False  # True if std clamped to floor (degenerate batch)
+    d5_pre_norm_advantage_std: float | None = None  # Raw std before normalization
+
     def __post_init__(self) -> None:
         if len(self.op_q_values) != NUM_OPS:
             raise ValueError(
@@ -962,6 +972,12 @@ class PPOUpdatePayload:
             # Always emitted - fail loudly if missing
             return_mean=data["return_mean"],
             return_std=data["return_std"],
+            # D5: Slot saturation diagnostics (H1 fix: missing from_dict fields)
+            forced_step_ratio=data.get("forced_step_ratio", 0.0),
+            usable_actor_timesteps=data.get("usable_actor_timesteps", 0),
+            decision_density=data.get("decision_density", 1.0),
+            advantage_std_floored=data.get("advantage_std_floored", False),
+            d5_pre_norm_advantage_std=data.get("d5_pre_norm_advantage_std"),
         )
 
     @classmethod

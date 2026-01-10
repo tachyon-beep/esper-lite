@@ -45,7 +45,7 @@ class TestG2GradientReadiness:
         # Set base accuracy to create improvement
         state.metrics.accuracy_at_stage_start = 50.0
         state.metrics.current_val_accuracy = 52.0  # 2.0% improvement
-        state.metrics.epochs_in_current_stage = 5
+        state.metrics.epochs_in_current_stage = 10  # Meet minimum training epochs
         state.metrics.seed_gradient_norm_ratio = 0.10  # Good seed activity (10%)
 
         result = gates._check_g2(state)

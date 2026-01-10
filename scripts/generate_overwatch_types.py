@@ -15,6 +15,7 @@ import sys
 import types
 from collections import deque
 from datetime import datetime
+from enum import Enum
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
 # Add src to path for imports
@@ -62,17 +63,25 @@ def python_to_ts_type(py_type: type, depth: int = 0) -> str:
     if isinstance(py_type, types.UnionType):
         ts_types = [python_to_ts_type(arg, depth + 1) for arg in get_args(py_type)]
         # Deduplicate (e.g., int|float both become number)
-        seen: set[str] = set()
-        unique_types = [t for t in ts_types if t not in seen and not seen.add(t)]  # type: ignore[func-returns-value]
+        seen_types: set[str] = set()
+        unique_types = []
+        for t in ts_types:
+            if t not in seen_types:
+                seen_types.add(t)
+                unique_types.append(t)
         return " | ".join(unique_types)
 
     # Handle typing.Union (includes Optional)
     if origin is Union:
         ts_types = [python_to_ts_type(arg, depth + 1) for arg in args]
         # Deduplicate (e.g., int|float both become number)
-        seen: set[str] = set()
-        unique_types = [t for t in ts_types if t not in seen and not seen.add(t)]  # type: ignore[func-returns-value]
-        return " | ".join(unique_types)
+        seen_union: set[str] = set()
+        unique_union = []
+        for t in ts_types:
+            if t not in seen_union:
+                seen_union.add(t)
+                unique_union.append(t)
+        return " | ".join(unique_union)
 
     # Handle list
     if origin is list:
@@ -144,7 +153,7 @@ def python_to_ts_type(py_type: type, depth: int = 0) -> str:
     return "unknown"
 
 
-def generate_enum(enum_cls: type) -> str:
+def generate_enum(enum_cls: type[Enum]) -> str:
     """Generate TypeScript type for Python IntEnum.
 
     Args:

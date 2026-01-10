@@ -93,7 +93,7 @@ class TestTELE800RecentDecisions:
         hub, backend = capture_hub
 
         # Create emitter with capture hub
-        emitter = VectorizedEmitter(env_id=0, device="cpu", hub=hub)
+        emitter = VectorizedEmitter(env_id=0, device="cpu", group_id="test", hub=hub)
 
         # Trigger last_action emission with minimal required fields
         action_indices = {
@@ -132,7 +132,7 @@ class TestTELE800RecentDecisions:
         """TELE-800: action_name field contains the operation name."""
         hub, backend = capture_hub
 
-        emitter = VectorizedEmitter(env_id=0, device="cpu", hub=hub)
+        emitter = VectorizedEmitter(env_id=0, device="cpu", group_id="test", hub=hub)
 
         # Test GERMINATE action (op index 1)
         action_indices = {
@@ -167,7 +167,7 @@ class TestTELE800RecentDecisions:
         """TELE-800: action_confidence field captures overall probability."""
         hub, backend = capture_hub
 
-        emitter = VectorizedEmitter(env_id=0, device="cpu", hub=hub)
+        emitter = VectorizedEmitter(env_id=0, device="cpu", group_id="test", hub=hub)
 
         action_indices = {
             "op": 0,
@@ -202,7 +202,7 @@ class TestTELE800RecentDecisions:
         """TELE-800: value_estimate field captures V(s) before action."""
         hub, backend = capture_hub
 
-        emitter = VectorizedEmitter(env_id=0, device="cpu", hub=hub)
+        emitter = VectorizedEmitter(env_id=0, device="cpu", group_id="test", hub=hub)
 
         action_indices = {
             "op": 0,
@@ -237,7 +237,7 @@ class TestTELE800RecentDecisions:
         """TELE-800: total_reward field captures reward for the step."""
         hub, backend = capture_hub
 
-        emitter = VectorizedEmitter(env_id=0, device="cpu", hub=hub)
+        emitter = VectorizedEmitter(env_id=0, device="cpu", group_id="test", hub=hub)
 
         action_indices = {
             "op": 0,
@@ -275,7 +275,7 @@ class TestTELE800HeadTelemetry:
         """TELE-800: head_telemetry contains per-head confidence values."""
         hub, backend = capture_hub
 
-        emitter = VectorizedEmitter(env_id=0, device="cpu", hub=hub)
+        emitter = VectorizedEmitter(env_id=0, device="cpu", group_id="test", hub=hub)
 
         action_indices = {
             "op": 0,
@@ -331,7 +331,7 @@ class TestTELE800HeadTelemetry:
         """TELE-800: head_telemetry contains per-head entropy values."""
         hub, backend = capture_hub
 
-        emitter = VectorizedEmitter(env_id=0, device="cpu", hub=hub)
+        emitter = VectorizedEmitter(env_id=0, device="cpu", group_id="test", hub=hub)
 
         action_indices = {
             "op": 0,
@@ -391,7 +391,7 @@ class TestTELE800DecisionContext:
         """TELE-800: slot_states field captures slot ID to state mapping."""
         hub, backend = capture_hub
 
-        emitter = VectorizedEmitter(env_id=0, device="cpu", hub=hub)
+        emitter = VectorizedEmitter(env_id=0, device="cpu", group_id="test", hub=hub)
 
         action_indices = {
             "op": 0,
@@ -438,7 +438,7 @@ class TestTELE800DecisionContext:
         """TELE-800: alternatives field captures top-2 alternative actions."""
         hub, backend = capture_hub
 
-        emitter = VectorizedEmitter(env_id=0, device="cpu", hub=hub)
+        emitter = VectorizedEmitter(env_id=0, device="cpu", group_id="test", hub=hub)
 
         action_indices = {
             "op": 0,  # WAIT
@@ -480,7 +480,7 @@ class TestTELE800DecisionContext:
         """TELE-800: decision_entropy field captures action distribution entropy."""
         hub, backend = capture_hub
 
-        emitter = VectorizedEmitter(env_id=0, device="cpu", hub=hub)
+        emitter = VectorizedEmitter(env_id=0, device="cpu", group_id="test", hub=hub)
 
         action_indices = {
             "op": 0,
@@ -519,7 +519,7 @@ class TestTELE800RewardComponents:
         """TELE-800: reward_components dataclass is included in snapshot."""
         hub, backend = capture_hub
 
-        emitter = VectorizedEmitter(env_id=0, device="cpu", hub=hub)
+        emitter = VectorizedEmitter(env_id=0, device="cpu", group_id="test", hub=hub)
 
         action_indices = {
             "op": 1,  # GERMINATE
@@ -575,7 +575,7 @@ class TestTELE800RewardComponents:
         """TELE-800: All reward component fields are preserved in telemetry."""
         hub, backend = capture_hub
 
-        emitter = VectorizedEmitter(env_id=0, device="cpu", hub=hub)
+        emitter = VectorizedEmitter(env_id=0, device="cpu", group_id="test", hub=hub)
 
         action_indices = {
             "op": 0,
@@ -677,7 +677,7 @@ class TestTELE800HeadChoices:
         """TELE-800: slot_id and blueprint_id reflect action indices."""
         hub, backend = capture_hub
 
-        emitter = VectorizedEmitter(env_id=0, device="cpu", hub=hub)
+        emitter = VectorizedEmitter(env_id=0, device="cpu", group_id="test", hub=hub)
 
         action_indices = {
             "op": 1,  # GERMINATE
@@ -715,7 +715,7 @@ class TestTELE800HeadChoices:
         """TELE-800: Per-head mask flags indicate which heads were forced."""
         hub, backend = capture_hub
 
-        emitter = VectorizedEmitter(env_id=0, device="cpu", hub=hub)
+        emitter = VectorizedEmitter(env_id=0, device="cpu", group_id="test", hub=hub)
 
         action_indices = {
             "op": 0,
@@ -769,7 +769,7 @@ class TestTELE800HeadChoices:
         """TELE-800: action_success indicates if action executed successfully."""
         hub, backend = capture_hub
 
-        emitter = VectorizedEmitter(env_id=0, device="cpu", hub=hub)
+        emitter = VectorizedEmitter(env_id=0, device="cpu", group_id="test", hub=hub)
 
         action_indices = {
             "op": 1,  # GERMINATE
@@ -808,7 +808,7 @@ class TestTELE800AlphaFields:
         """TELE-800: Alpha target, speed, curve, and algorithm fields captured."""
         hub, backend = capture_hub
 
-        emitter = VectorizedEmitter(env_id=0, device="cpu", hub=hub)
+        emitter = VectorizedEmitter(env_id=0, device="cpu", group_id="test", hub=hub)
 
         action_indices = {
             # SET_ALPHA_TARGET is the op where alpha schedule fields are meaningful.
@@ -857,7 +857,7 @@ class TestTELE800EnvContext:
         # Test with different env_ids
         for env_id in [0, 1, 3]:
             backend.clear()
-            emitter = VectorizedEmitter(env_id=env_id, device="cpu", hub=hub)
+            emitter = VectorizedEmitter(env_id=env_id, device="cpu", group_id="test", hub=hub)
 
             action_indices = {
                 "op": 0,
@@ -891,7 +891,7 @@ class TestTELE800EnvContext:
         """TELE-800: inner_epoch tracks epoch when decision was made."""
         hub, backend = capture_hub
 
-        emitter = VectorizedEmitter(env_id=0, device="cpu", hub=hub)
+        emitter = VectorizedEmitter(env_id=0, device="cpu", group_id="test", hub=hub)
 
         action_indices = {
             "op": 0,
@@ -929,7 +929,7 @@ class TestTELE800FullSnapshot:
         """TELE-800: Complete snapshot includes all decision context fields."""
         hub, backend = capture_hub
 
-        emitter = VectorizedEmitter(env_id=2, device="cuda:0", hub=hub)
+        emitter = VectorizedEmitter(env_id=2, device="cuda:0", group_id="test", hub=hub)
 
         action_indices = {
             "op": 1,  # GERMINATE

@@ -206,8 +206,10 @@ class TestLifecycleIntegration:
 
         slot = model.seed_slots["r0c1"]
         # Prepare G2 gate inputs before ADVANCE to BLENDING.
-        for acc in (50.0, 51.0, 52.0):
-            slot.state.metrics.record_accuracy(acc)
+        # G2 requires epochs_in_current_stage >= min_blending_epochs (default 10).
+        # record_accuracy() increments epochs_in_current_stage.
+        for i in range(10):
+            slot.state.metrics.record_accuracy(50.0 + i * 0.2)
         slot.state.metrics.seed_gradient_norm_ratio = 0.2
         result = slot.advance_stage(SeedStage.BLENDING)
         assert result.passed
@@ -215,7 +217,8 @@ class TestLifecycleIntegration:
         assert slot.state.stage == SeedStage.BLENDING
 
         # Tick blending progress.
-        for _ in range(5):
+        # G3 requires epochs_in_current_stage >= min_blending_epochs (default 10).
+        for _ in range(10):
             slot.state.metrics.record_accuracy(60.0)
             slot.step_epoch()
 
@@ -243,19 +246,21 @@ class TestLifecycleIntegration:
         assert model.seed_slots["r0c1"].state.stage == SeedStage.TRAINING
 
         # Drive metrics until TRAINING → BLENDING gate passes, then ADVANCE.
+        # G2 requires epochs_in_current_stage >= min_blending_epochs (default 10).
         acc = 60.0
         slot = model.seed_slots["r0c1"]
-        for _ in range(3):
+        for _ in range(10):
             slot.state.metrics.record_accuracy(acc)
             slot.state.metrics.seed_gradient_norm_ratio = 0.2
-            acc += 1.0
+            acc += 0.3
 
         result = slot.advance_stage(SeedStage.BLENDING)
         assert result.passed, f"Seed failed to leave TRAINING; current stage: {slot.state.stage}"
         assert slot.state.stage == SeedStage.BLENDING
 
         # Continue driving epochs to reach full amplitude, then ADVANCE.
-        for _ in range(5):
+        # G3 requires epochs_in_current_stage >= min_blending_epochs (default 10).
+        for _ in range(10):
             slot.state.metrics.record_accuracy(acc)
             slot.step_epoch()
             acc += 0.5
@@ -283,15 +288,16 @@ class TestLifecycleIntegration:
         model.germinate_seed("conv_heavy", "test_seed", slot="r0c1")
         model.seed_slots["r0c1"].state.transition(SeedStage.TRAINING)
         slot = model.seed_slots["r0c1"]
-        slot.state.metrics.record_accuracy(60.0)
-        slot.state.metrics.record_accuracy(61.0)
-        slot.state.metrics.record_accuracy(62.0)
+        # G2 requires epochs_in_current_stage >= min_blending_epochs (default 10).
+        for i in range(10):
+            slot.state.metrics.record_accuracy(60.0 + i * 0.1)
         slot.state.metrics.seed_gradient_norm_ratio = 0.2
         result = slot.advance_stage(SeedStage.BLENDING)
         assert result.passed
 
         # Simulate training/validation metrics to drive dwell counters and alpha
-        for _ in range(5):
+        # G3 requires epochs_in_current_stage >= min_blending_epochs (default 10).
+        for _ in range(10):
             slot.state.metrics.record_accuracy(60.0)
             slot.step_epoch()
         result = slot.advance_stage(SeedStage.HOLDING)

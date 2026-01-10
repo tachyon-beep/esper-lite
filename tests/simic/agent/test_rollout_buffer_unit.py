@@ -404,10 +404,11 @@ class TestNormalizeAdvantages:
         self._fill_buffer_with_advantages(buffer, [[1, 2, 3]])
         buffer.normalize_advantages()
 
-        mean, std = buffer.normalize_advantages()
+        mean, std, std_floored = buffer.normalize_advantages()
 
         assert mean != mean  # NaN check
         assert std != std
+        # std_floored should be False when returning NaN (already normalized)
 
 
 class TestGetBatchedSequences:
@@ -446,3 +447,198 @@ class TestGetBatchedSequences:
         # All tensors should be on CPU
         for key, tensor in data.items():
             assert tensor.device.type == "cpu", f"{key} not on CPU"
+
+
+class TestContributionTargets:
+    """Tests for Phase 2.1 contribution targets for auxiliary supervision."""
+
+    def _make_minimal_add_kwargs(
+        self, buffer: TamiyoRolloutBuffer, env_id: int = 0
+    ) -> dict:
+        """Create minimal valid kwargs for buffer.add()."""
+        num_slots = buffer.num_slots
+        return {
+            "env_id": env_id,
+            "state": torch.zeros(buffer.state_dim),
+            "blueprint_indices": torch.zeros(num_slots, dtype=torch.long),
+            "slot_action": 0,
+            "blueprint_action": 0,
+            "style_action": 0,
+            "tempo_action": 0,
+            "alpha_target_action": 0,
+            "alpha_speed_action": 0,
+            "alpha_curve_action": 0,
+            "op_action": 0,
+            "effective_op_action": 0,
+            "slot_log_prob": 0.0,
+            "blueprint_log_prob": 0.0,
+            "style_log_prob": 0.0,
+            "tempo_log_prob": 0.0,
+            "alpha_target_log_prob": 0.0,
+            "alpha_speed_log_prob": 0.0,
+            "alpha_curve_log_prob": 0.0,
+            "op_log_prob": 0.0,
+            "value": 0.5,
+            "reward": 1.0,
+            "done": False,
+            "slot_mask": torch.ones(num_slots, dtype=torch.bool),
+            "blueprint_mask": torch.ones(buffer.num_blueprints, dtype=torch.bool),
+            "style_mask": torch.ones(buffer.num_styles, dtype=torch.bool),
+            "tempo_mask": torch.ones(buffer.num_tempo, dtype=torch.bool),
+            "alpha_target_mask": torch.ones(buffer.num_alpha_targets, dtype=torch.bool),
+            "alpha_speed_mask": torch.ones(buffer.num_alpha_speeds, dtype=torch.bool),
+            "alpha_curve_mask": torch.ones(buffer.num_alpha_curves, dtype=torch.bool),
+            "op_mask": torch.ones(buffer.num_ops, dtype=torch.bool),
+            "hidden_h": torch.zeros(buffer.lstm_layers, 1, buffer.lstm_hidden_dim),
+            "hidden_c": torch.zeros(buffer.lstm_layers, 1, buffer.lstm_hidden_dim),
+        }
+
+    def test_contribution_fields_initialized_correctly(self) -> None:
+        """Contribution fields have correct shapes after init."""
+        buffer = TamiyoRolloutBuffer(
+            num_envs=4,
+            max_steps_per_env=25,
+            state_dim=128,
+        )
+
+        num_slots = buffer.num_slots
+        assert buffer.contribution_targets.shape == (4, 25, num_slots)
+        assert buffer.contribution_mask.shape == (4, 25, num_slots)
+        assert buffer.has_fresh_contribution.shape == (4, 25)
+        # All should be False/zero initially
+        assert not buffer.has_fresh_contribution.any()
+        assert buffer.contribution_targets.sum().item() == 0.0
+
+    def test_stores_contribution_at_measurement_timestep(self) -> None:
+        """Contribution targets are stored when has_fresh_contribution=True."""
+        buffer = TamiyoRolloutBuffer(
+            num_envs=2,
+            max_steps_per_env=10,
+            state_dim=64,
+        )
+        num_slots = buffer.num_slots
+
+        # Add step WITHOUT contribution (normal timestep)
+        kwargs = self._make_minimal_add_kwargs(buffer, env_id=0)
+        buffer.add(**kwargs)
+
+        assert not buffer.has_fresh_contribution[0, 0].item()
+
+        # Add step WITH contribution (measurement timestep)
+        contribution_targets = torch.tensor([0.5, -0.2, 0.0], dtype=torch.float)[:num_slots]
+        contribution_mask = torch.tensor([True, True, False], dtype=torch.bool)[:num_slots]
+
+        kwargs = self._make_minimal_add_kwargs(buffer, env_id=0)
+        kwargs["has_fresh_contribution"] = True
+        kwargs["contribution_targets"] = contribution_targets
+        kwargs["contribution_mask"] = contribution_mask
+        buffer.add(**kwargs)
+
+        # Verify storage
+        assert buffer.has_fresh_contribution[0, 1].item() is True
+        assert torch.allclose(buffer.contribution_targets[0, 1, :num_slots], contribution_targets)
+        assert (buffer.contribution_mask[0, 1, :num_slots] == contribution_mask).all()
+
+    def test_contribution_not_stored_when_flag_false(self) -> None:
+        """Contribution targets NOT stored when has_fresh_contribution=False (even if provided)."""
+        buffer = TamiyoRolloutBuffer(
+            num_envs=1,
+            max_steps_per_env=10,
+            state_dim=64,
+        )
+        num_slots = buffer.num_slots
+
+        # Provide targets but with has_fresh_contribution=False
+        contribution_targets = torch.tensor([1.0, 1.0, 1.0], dtype=torch.float)[:num_slots]
+        contribution_mask = torch.tensor([True, True, True], dtype=torch.bool)[:num_slots]
+
+        kwargs = self._make_minimal_add_kwargs(buffer, env_id=0)
+        kwargs["has_fresh_contribution"] = False  # Key: flag is False
+        kwargs["contribution_targets"] = contribution_targets
+        kwargs["contribution_mask"] = contribution_mask
+        buffer.add(**kwargs)
+
+        # Flag should be False (we explicitly passed False)
+        assert buffer.has_fresh_contribution[0, 0].item() is False
+        # Targets should NOT have been stored (remain at zero)
+        assert buffer.contribution_targets[0, 0].sum().item() == 0.0
+
+    def test_distinguishes_measurement_vs_non_measurement_timesteps(self) -> None:
+        """has_fresh_contribution properly distinguishes measurement from non-measurement timesteps."""
+        buffer = TamiyoRolloutBuffer(
+            num_envs=1,
+            max_steps_per_env=10,
+            state_dim=64,
+        )
+        num_slots = buffer.num_slots
+
+        # Add 5 timesteps: only step 2 and 4 are measurement timesteps
+        for i in range(5):
+            kwargs = self._make_minimal_add_kwargs(buffer, env_id=0)
+            is_measurement = i in (2, 4)
+            kwargs["has_fresh_contribution"] = is_measurement
+            if is_measurement:
+                kwargs["contribution_targets"] = torch.full((num_slots,), float(i))
+                kwargs["contribution_mask"] = torch.ones(num_slots, dtype=torch.bool)
+            buffer.add(**kwargs)
+
+        # Check has_fresh_contribution pattern
+        expected_pattern = torch.tensor([False, False, True, False, True])
+        actual_pattern = buffer.has_fresh_contribution[0, :5]
+        assert (actual_pattern == expected_pattern).all()
+
+        # Non-measurement steps should have zero contribution_targets
+        assert buffer.contribution_targets[0, 0].sum().item() == 0.0
+        assert buffer.contribution_targets[0, 1].sum().item() == 0.0
+        assert buffer.contribution_targets[0, 3].sum().item() == 0.0
+
+        # Measurement steps should have stored values
+        assert buffer.contribution_targets[0, 2].sum().item() == 2.0 * num_slots
+        assert buffer.contribution_targets[0, 4].sum().item() == 4.0 * num_slots
+
+    def test_contribution_fields_in_batched_sequences(self) -> None:
+        """get_batched_sequences includes contribution fields."""
+        buffer = TamiyoRolloutBuffer(
+            num_envs=2,
+            max_steps_per_env=5,
+            state_dim=64,
+        )
+        num_slots = buffer.num_slots
+
+        # Add one measurement step
+        kwargs = self._make_minimal_add_kwargs(buffer, env_id=0)
+        kwargs["has_fresh_contribution"] = True
+        kwargs["contribution_targets"] = torch.ones(num_slots)
+        kwargs["contribution_mask"] = torch.ones(num_slots, dtype=torch.bool)
+        buffer.add(**kwargs)
+
+        data = buffer.get_batched_sequences()
+
+        # Verify fields are present and have correct shapes
+        assert "contribution_targets" in data
+        assert "contribution_mask" in data
+        assert "has_fresh_contribution" in data
+
+        assert data["contribution_targets"].shape == (2, 5, num_slots)
+        assert data["contribution_mask"].shape == (2, 5, num_slots)
+        assert data["has_fresh_contribution"].shape == (2, 5)
+
+        # Verify data is correctly transferred
+        assert data["has_fresh_contribution"][0, 0].item() is True
+        assert data["contribution_targets"][0, 0].sum().item() == num_slots
+
+    def test_backward_compatibility_without_contribution_args(self) -> None:
+        """Buffer works correctly when contribution args are not provided (backward compat)."""
+        buffer = TamiyoRolloutBuffer(
+            num_envs=1,
+            max_steps_per_env=5,
+            state_dim=64,
+        )
+
+        # Add step without any contribution kwargs (default behavior)
+        kwargs = self._make_minimal_add_kwargs(buffer, env_id=0)
+        buffer.add(**kwargs)
+
+        # Should not raise, and has_fresh_contribution should be False
+        assert buffer.step_counts[0] == 1
+        assert buffer.has_fresh_contribution[0, 0].item() is False

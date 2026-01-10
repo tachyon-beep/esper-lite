@@ -63,6 +63,10 @@ class DecisionDetailScreen(ModalScreen[None]):
             with VerticalScroll(id="detail-scroll"):
                 yield Static(self._render_detail())
 
+    def on_click(self) -> None:
+        """Dismiss modal on click (consistent with other Sanctum modals)."""
+        self.dismiss()
+
     def _render_title(self) -> Text:
         title = Text()
         title.append("TAMIYO DECISION DETAIL", style="bold")
@@ -83,7 +87,9 @@ class DecisionDetailScreen(ModalScreen[None]):
         t.append(f"  Decision ID: {d.decision_id}\n", style="dim")
         t.append(f"  Time:       {d.timestamp.isoformat()}\n", style="dim")
         t.append(f"  Age:        {age_str}\n", style="dim")
-        t.append(f"  Env:        {d.env_id}\n", style="dim")
+        # episode_idx = episode + env_id is a unique identifier for telemetry lookup
+        episode_idx = d.episode + d.env_id
+        t.append(f"  Episode#:   {episode_idx}\n", style="dim")
         t.append(f"  Epoch:      {d.epoch}\n", style="dim")
         t.append(f"  Round:      {d.batch}\n", style="dim")
         t.append("\n")

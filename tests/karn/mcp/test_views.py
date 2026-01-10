@@ -21,6 +21,7 @@ def test_view_definitions_exist():
         "decisions",
         "action_distribution",
         "rewards",
+        "reward_calibration",
         "batch_stats",
         "anomalies",
         "episode_outcomes",

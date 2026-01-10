@@ -126,7 +126,7 @@ class SyncVisitor(ast.NodeVisitor):
         if hasattr(node, "lineno"):
             line_idx = node.lineno - 1
             if 0 <= line_idx < len(self.source_lines):
-                return self.source_lines[line_idx].strip()
+                return str(self.source_lines[line_idx]).strip()
         return "<unavailable>"
 
     def _record_hit(self, node: ast.AST, pattern: str) -> None:
@@ -195,7 +195,7 @@ class Whitelist:
             p["path"] for p in data.get("allow_paths", [])
         ]
         raw_allow_hits = data.get("allow_hits", [])
-        self.allow_hits: dict[str, dict] = {}
+        self.allow_hits: dict[str, dict[str, object]] = {}
         for entry in raw_allow_hits:
             key = entry["key"]
             parts = key.split(":")
@@ -233,7 +233,7 @@ class Whitelist:
             if entry is None:
                 continue
             if "expires" in entry:
-                expires = date.fromisoformat(entry["expires"])
+                expires = date.fromisoformat(str(entry["expires"]))
                 if expires < self.today:
                     return False, f"EXPIRED: {key} (was {entry['expires']})", key
             return True, None, key

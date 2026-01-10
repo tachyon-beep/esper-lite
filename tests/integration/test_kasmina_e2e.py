@@ -115,7 +115,8 @@ class TestCNNHostSingleSeedTraining:
         assert result.passed
 
         # Complete blending
-        for _ in range(5):
+        # G3 requires epochs_in_current_stage >= min_blending_epochs (default 10)
+        for _ in range(DEFAULT_MIN_BLENDING_EPOCHS):
             slot.state.metrics.record_accuracy(60.0)
             slot.step_epoch()
 

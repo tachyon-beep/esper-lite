@@ -69,6 +69,7 @@ class PPOUpdateMetrics(TypedDict, total=False):
     policy_loss: float
     value_loss: float
     entropy_loss: float
+    entropy_floor_penalty: float  # Per-head entropy floor penalty (for calibration debugging)
     total_loss: float
     approx_kl: float
     clip_fraction: float
@@ -113,6 +114,7 @@ class PPOUpdateMetrics(TypedDict, total=False):
     # Structured metrics
     gradient_stats: GradientStats | None
     head_entropies: dict[str, list[float]]  # Per-head, per-epoch
+    conditional_head_entropies: dict[str, list[float]]  # Entropy when head is causally relevant
     head_grad_norms: dict[str, list[float]]  # Per-head, per-epoch
     ratio_diagnostic: dict[str, Any]
     # Q-values (Policy V2 op-conditioned critic)
@@ -136,6 +138,21 @@ class PPOUpdateMetrics(TypedDict, total=False):
     lstm_c_max: float | None
     lstm_has_nan: bool | None
     lstm_has_inf: bool | None
+    # D5: Slot Saturation Diagnostics
+    # Track forced WAIT steps to understand PPO stability under slot saturation
+    forced_step_ratio: float  # Fraction of timesteps with forced decisions (no agency)
+    usable_actor_timesteps: int  # Count of timesteps where agent had real choice
+    decision_density: float  # Fraction with agency (1 - forced_step_ratio), higher = healthier
+    advantage_std_floored: bool  # True if advantage std was clamped to floor (degenerate batch)
+    pre_norm_advantage_std: float  # Raw std before normalization (for diagnostics)
+
+    # Auxiliary contribution supervision metrics (Phase 4.1)
+    # DRL Expert: Monitor for prediction collapse and quality
+    aux_contribution_loss: float  # Raw auxiliary MSE loss value
+    effective_aux_coef: float  # Current warmup-scaled coefficient
+    aux_pred_variance: float  # Prediction variance - warn if < 0.01 (collapse)
+    aux_explained_variance: float  # Should increase over training
+    aux_pred_target_correlation: float  # Should be > 0.5 eventually
 
 
 class HeadLogProbs(TypedDict):

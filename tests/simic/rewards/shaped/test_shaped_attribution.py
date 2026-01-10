@@ -227,3 +227,354 @@ def test_shaped_prune_inverts_attribution_sign() -> None:
 
     assert components.bounded_attribution == pytest.approx(-3.0)
     assert reward == pytest.approx(-3.0)
+
+
+def test_timing_discount_config_defaults() -> None:
+    """D3-Timing: Config should have timing discount parameters with sensible defaults."""
+    from esper.simic.rewards import ContributionRewardConfig
+
+    config = ContributionRewardConfig()
+
+    # Default warmup period: 10 epochs before full credit
+    assert config.germination_warmup_epochs == 10
+    # Default floor: epoch-1 germination gets 40% credit
+    assert config.germination_discount_floor == 0.4
+    # Default: timing discount enabled
+    assert config.disable_timing_discount is False
+
+
+def test_timing_discount_epoch_1_interpolates() -> None:
+    """D3-Timing: Epoch 1 germination gets interpolated discount."""
+    from esper.simic.rewards.contribution import _compute_timing_discount
+
+    # Epoch 1 out of 10 warmup, floor=0.4
+    # discount = 0.4 + (1 - 0.4) * (1 / 10) = 0.4 + 0.06 = 0.46
+    discount = _compute_timing_discount(
+        germination_epoch=1,
+        warmup_epochs=10,
+        discount_floor=0.4,
+    )
+    assert discount == pytest.approx(0.46)
+
+
+def test_timing_discount_at_warmup_gets_full_credit() -> None:
+    """D3-Timing: Germination at warmup epoch gets full credit."""
+    from esper.simic.rewards.contribution import _compute_timing_discount
+
+    discount = _compute_timing_discount(
+        germination_epoch=10,
+        warmup_epochs=10,
+        discount_floor=0.4,
+    )
+    assert discount == pytest.approx(1.0)
+
+
+def test_timing_discount_after_warmup_gets_full_credit() -> None:
+    """D3-Timing: Germination after warmup gets full credit."""
+    from esper.simic.rewards.contribution import _compute_timing_discount
+
+    discount = _compute_timing_discount(
+        germination_epoch=50,
+        warmup_epochs=10,
+        discount_floor=0.4,
+    )
+    assert discount == pytest.approx(1.0)
+
+
+def test_timing_discount_mid_warmup_interpolates() -> None:
+    """D3-Timing: Mid-warmup germination gets linearly interpolated discount."""
+    from esper.simic.rewards.contribution import _compute_timing_discount
+
+    # Epoch 5 out of 10 warmup, floor=0.4
+    # discount = 0.4 + (1 - 0.4) * (5 / 10) = 0.4 + 0.3 = 0.7
+    discount = _compute_timing_discount(
+        germination_epoch=5,
+        warmup_epochs=10,
+        discount_floor=0.4,
+    )
+    assert discount == pytest.approx(0.7)
+
+
+def test_timing_discount_epoch_0_gets_floor() -> None:
+    """D3-Timing: Edge case - epoch 0 gets discount_floor."""
+    from esper.simic.rewards.contribution import _compute_timing_discount
+
+    discount = _compute_timing_discount(
+        germination_epoch=0,
+        warmup_epochs=10,
+        discount_floor=0.4,
+    )
+    assert discount == pytest.approx(0.4)
+
+
+def test_shaped_timing_discount_reduces_early_germination_attribution() -> None:
+    """D3-Timing: Early germination receives discounted bounded_attribution."""
+    from esper.simic.rewards import compute_contribution_reward, ContributionRewardConfig
+    from esper.simic.rewards.types import SeedInfo
+    from esper.leyline import LifecycleOp, SeedStage
+
+    # Config with timing discount enabled
+    config = ContributionRewardConfig(
+        contribution_weight=1.0,
+        germination_warmup_epochs=10,
+        germination_discount_floor=0.4,
+        disable_timing_discount=False,
+        # Disable other components for isolation
+        disable_pbrs=True,
+        disable_terminal_reward=True,
+        disable_anti_gaming=True,
+        rent_weight=0.0,
+        first_germinate_bonus=0.0,
+    )
+
+    # Seed germinated at epoch 2, now at epoch 20
+    # germination_epoch = 20 - 18 = 2
+    seed = SeedInfo(
+        stage=SeedStage.TRAINING.value,
+        total_improvement=5.0,
+        improvement_since_stage_start=0.0,
+        epochs_in_stage=1,
+        seed_params=0,
+        previous_stage=SeedStage.GERMINATED.value,
+        previous_epochs_in_stage=0,
+        seed_age_epochs=18,  # epoch 20 - age 18 = germinated at epoch 2
+        interaction_sum=0.0,
+        boost_received=0.0,
+    )
+
+    reward, components = compute_contribution_reward(
+        action=LifecycleOp.WAIT,
+        seed_contribution=3.0,
+        val_acc=75.0,
+        seed_info=seed,
+        epoch=20,
+        max_epochs=150,
+        acc_at_germination=65.0,  # progress = 10.0
+        config=config,
+        return_components=True,
+    )
+
+    # Without discount: attributed = 3.0 (contribution < progress)
+    # With discount (epoch 2, warmup 10, floor 0.4): 0.4 + 0.6 * (2/10) = 0.52
+    # Expected attribution = 3.0 * 0.52 = 1.56
+    expected_discount = 0.4 + 0.6 * (2 / 10)
+    expected_attribution = 3.0 * expected_discount
+
+    assert components.bounded_attribution == pytest.approx(expected_attribution, rel=0.01)
+    assert components.timing_discount == pytest.approx(expected_discount, rel=0.01)
+
+
+def test_shaped_timing_discount_disabled_gives_full_credit() -> None:
+    """D3-Timing: When disabled, early germination gets full credit."""
+    from esper.simic.rewards import compute_contribution_reward, ContributionRewardConfig
+    from esper.simic.rewards.types import SeedInfo
+    from esper.leyline import LifecycleOp, SeedStage
+
+    config = ContributionRewardConfig(
+        contribution_weight=1.0,
+        germination_warmup_epochs=10,
+        germination_discount_floor=0.4,
+        disable_timing_discount=True,  # DISABLED
+        disable_pbrs=True,
+        disable_terminal_reward=True,
+        disable_anti_gaming=True,
+        rent_weight=0.0,
+        first_germinate_bonus=0.0,
+    )
+
+    seed = SeedInfo(
+        stage=SeedStage.TRAINING.value,
+        total_improvement=5.0,
+        improvement_since_stage_start=0.0,
+        epochs_in_stage=1,
+        seed_params=0,
+        previous_stage=SeedStage.GERMINATED.value,
+        previous_epochs_in_stage=0,
+        seed_age_epochs=18,
+        interaction_sum=0.0,
+        boost_received=0.0,
+    )
+
+    reward, components = compute_contribution_reward(
+        action=LifecycleOp.WAIT,
+        seed_contribution=3.0,
+        val_acc=75.0,
+        seed_info=seed,
+        epoch=20,
+        max_epochs=150,
+        acc_at_germination=65.0,
+        config=config,
+        return_components=True,
+    )
+
+    # No discount: attributed = 3.0
+    assert components.bounded_attribution == pytest.approx(3.0)
+
+
+def test_attribution_formula_config_default() -> None:
+    """D3-Attribution: Config should support attribution formula selection."""
+    from esper.simic.rewards import ContributionRewardConfig
+
+    config = ContributionRewardConfig()
+
+    # Default: harmonic mean (anti-gaming behavior, per expert recommendation)
+    assert config.attribution_formula == "harmonic"
+
+
+def test_compute_attributed_geometric_mean() -> None:
+    """D3-Attribution: Geometric mean formula (current behavior)."""
+    from esper.simic.rewards.contribution import _compute_attributed_value
+
+    # sqrt(4 * 9) = 6.0
+    result = _compute_attributed_value(
+        progress=4.0,
+        seed_contribution=9.0,
+        formula="geometric",
+    )
+    assert result == pytest.approx(6.0)
+
+
+def test_compute_attributed_harmonic_mean() -> None:
+    """D3-Attribution: Harmonic mean dominated by smaller value."""
+    from esper.simic.rewards.contribution import _compute_attributed_value
+
+    # 2 * 4 * 9 / (4 + 9) = 72 / 13 ≈ 5.54
+    result = _compute_attributed_value(
+        progress=4.0,
+        seed_contribution=9.0,
+        formula="harmonic",
+    )
+    assert result == pytest.approx(72 / 13)
+
+
+def test_compute_attributed_harmonic_handles_zero() -> None:
+    """D3-Attribution: Harmonic mean returns 0 when either input is 0."""
+    from esper.simic.rewards.contribution import _compute_attributed_value
+
+    result = _compute_attributed_value(
+        progress=0.0,
+        seed_contribution=9.0,
+        formula="harmonic",
+    )
+    assert result == pytest.approx(0.0)
+
+
+def test_compute_attributed_minimum() -> None:
+    """D3-Attribution: Minimum formula is very conservative."""
+    from esper.simic.rewards.contribution import _compute_attributed_value
+
+    result = _compute_attributed_value(
+        progress=4.0,
+        seed_contribution=9.0,
+        formula="minimum",
+    )
+    assert result == pytest.approx(4.0)
+
+
+def test_compute_attributed_harmonic_vs_geometric_with_large_progress() -> None:
+    """D3-Attribution: Harmonic much lower than geometric when progress >> contribution.
+
+    This is the key anti-gaming property: when a seed claims credit for
+    massive host drift (progress=29) with small actual contribution (0.5),
+    harmonic mean gives much less credit than geometric mean.
+    """
+    from esper.simic.rewards.contribution import _compute_attributed_value
+
+    progress = 29.0  # Host improved 29pp since germination
+    contribution = 0.5  # Seed only contributed 0.5pp
+
+    geometric = _compute_attributed_value(progress, contribution, "geometric")
+    harmonic = _compute_attributed_value(progress, contribution, "harmonic")
+
+    # Geometric: sqrt(29 * 0.5) ≈ 3.81
+    assert geometric == pytest.approx(3.807, rel=0.01)
+
+    # Harmonic: 2 * 29 * 0.5 / (29 + 0.5) = 29 / 29.5 ≈ 0.98
+    assert harmonic == pytest.approx(0.983, rel=0.01)
+
+    # Harmonic is ~4x lower for this gaming scenario
+    assert harmonic < geometric * 0.3
+
+
+def test_shaped_harmonic_formula_reduces_drift_attribution() -> None:
+    """D3-Attribution: Harmonic formula gives less credit when contribution exceeds progress.
+
+    When seed_contribution >= progress, the bounded formula is applied.
+    Harmonic mean is more conservative than geometric mean when values differ.
+    This tests that the attribution_formula config is wired into compute_contribution_reward.
+    """
+    from esper.simic.rewards import compute_contribution_reward, ContributionRewardConfig
+    from esper.simic.rewards.types import SeedInfo
+    from esper.leyline import LifecycleOp, SeedStage
+
+    # Config with harmonic formula
+    config_harmonic = ContributionRewardConfig(
+        contribution_weight=1.0,
+        attribution_formula="harmonic",
+        disable_timing_discount=True,  # Isolate formula test
+        disable_pbrs=True,
+        disable_terminal_reward=True,
+        disable_anti_gaming=True,
+        rent_weight=0.0,
+        first_germinate_bonus=0.0,
+    )
+
+    # Config with geometric formula (default)
+    config_geometric = ContributionRewardConfig(
+        contribution_weight=1.0,
+        attribution_formula="geometric",
+        disable_timing_discount=True,
+        disable_pbrs=True,
+        disable_terminal_reward=True,
+        disable_anti_gaming=True,
+        rent_weight=0.0,
+        first_germinate_bonus=0.0,
+    )
+
+    seed = SeedInfo(
+        stage=SeedStage.TRAINING.value,
+        total_improvement=5.0,
+        improvement_since_stage_start=0.0,
+        epochs_in_stage=1,
+        seed_params=0,
+        previous_stage=SeedStage.GERMINATED.value,
+        previous_epochs_in_stage=0,
+        seed_age_epochs=50,
+        interaction_sum=0.0,
+        boost_received=0.0,
+    )
+
+    # Scenario: contribution >= progress triggers bounded formula
+    # progress = 70.0 - 66.0 = 4.0, contribution = 9.0
+    # Formula applied because 9.0 >= 4.0
+    _, components_geo = compute_contribution_reward(
+        action=LifecycleOp.WAIT,
+        seed_contribution=9.0,  # Exceeds progress
+        val_acc=70.0,
+        seed_info=seed,
+        epoch=55,
+        max_epochs=150,
+        acc_at_germination=66.0,  # progress = 4.0
+        config=config_geometric,
+        return_components=True,
+    )
+
+    _, components_harm = compute_contribution_reward(
+        action=LifecycleOp.WAIT,
+        seed_contribution=9.0,
+        val_acc=70.0,
+        seed_info=seed,
+        epoch=55,
+        max_epochs=150,
+        acc_at_germination=66.0,
+        config=config_harmonic,
+        return_components=True,
+    )
+
+    # Geometric: sqrt(4 * 9) = 6.0
+    # Harmonic: 2 * 4 * 9 / (4 + 9) = 72 / 13 ≈ 5.54
+    assert components_geo.bounded_attribution == pytest.approx(6.0, rel=0.01)
+    assert components_harm.bounded_attribution == pytest.approx(72 / 13, rel=0.01)
+
+    # Harmonic is lower (more conservative) than geometric
+    assert components_harm.bounded_attribution < components_geo.bounded_attribution

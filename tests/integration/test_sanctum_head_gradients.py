@@ -481,7 +481,7 @@ def test_gradient_flow_with_full_network():
     }
 
     with torch_amp.autocast(device_type="cuda", dtype=torch.float16):
-        log_probs, values, entropy, _ = net.evaluate_actions(
+        log_probs, values, entropy, _, _ = net.evaluate_actions(
             states, bp_indices, actions,
             slot_mask=masks["slot"],
             blueprint_mask=masks["blueprint"],
@@ -667,7 +667,7 @@ def test_gradient_flow_full_ppo_loss():
     old_log_probs = {key: torch.randn(batch, seq, device=device) for key in actions}
 
     with torch_amp.autocast(device_type="cuda", dtype=torch.float16):
-        log_probs, values, entropy, _ = net.evaluate_actions(
+        log_probs, values, entropy, _, _ = net.evaluate_actions(
             states, bp_indices, actions,
             slot_mask=masks["slot"],
             blueprint_mask=masks["blueprint"],

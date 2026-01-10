@@ -152,3 +152,83 @@ class TestCheckLstmHealth:
         assert "lstm_nan" in report.anomaly_types
         assert "lstm_h_explosion" in report.anomaly_types
         assert "lstm_c_vanishing" in report.anomaly_types
+
+
+class TestPerHeadEntropyCollapse:
+    """Tests for per-head entropy collapse detection with hysteresis."""
+
+    def test_no_warning_on_single_collapse(self) -> None:
+        """Single collapse should not trigger warning (hysteresis)."""
+        detector = AnomalyDetector()
+        head_entropies = {"blueprint": 0.01}  # Below 0.05
+
+        report = detector.check_per_head_entropy_collapse(head_entropies)
+
+        # First collapse - no warning yet (need N consecutive)
+        assert not report.has_anomaly
+
+    def test_warning_after_consecutive_collapses(self) -> None:
+        """Warning should fire after N=3 consecutive collapses."""
+        detector = AnomalyDetector()
+        head_entropies = {"blueprint": 0.01}
+
+        # First two - no warning
+        detector.check_per_head_entropy_collapse(head_entropies)
+        detector.check_per_head_entropy_collapse(head_entropies)
+
+        # Third - warning fires
+        report = detector.check_per_head_entropy_collapse(head_entropies)
+        assert "entropy_collapse_blueprint" in report.anomaly_types
+
+    def test_no_detection_when_healthy(self) -> None:
+        """Should not flag healthy heads."""
+        detector = AnomalyDetector()
+
+        head_entropies = {
+            "op": 0.5,
+            "blueprint": 0.3,
+            "slot": 0.4,
+        }
+
+        report = detector.check_per_head_entropy_collapse(head_entropies)
+
+        assert not report.has_anomaly
+
+    def test_recovery_requires_margin(self) -> None:
+        """Recovery should require entropy above threshold * 1.5."""
+        detector = AnomalyDetector()
+
+        # Build up streak of 2 collapses
+        detector.check_per_head_entropy_collapse({"blueprint": 0.01})
+        detector.check_per_head_entropy_collapse({"blueprint": 0.01})
+
+        # Barely above threshold (0.06 > 0.05) - should NOT clear streak
+        detector.check_per_head_entropy_collapse({"blueprint": 0.06})
+
+        # Back to collapse - should continue streak and fire (now 3rd)
+        report = detector.check_per_head_entropy_collapse({"blueprint": 0.01})
+        assert "entropy_collapse_blueprint" in report.anomaly_types
+
+        # Well above threshold (0.10 > 0.075) - should clear
+        detector.check_per_head_entropy_collapse({"blueprint": 0.10})
+
+        # New collapse - should start fresh (only 1 in streak, no warning)
+        report = detector.check_per_head_entropy_collapse({"blueprint": 0.01})
+        assert not report.has_anomaly
+
+    def test_uses_per_head_thresholds(self) -> None:
+        """Different heads should have different collapse thresholds."""
+        detector = AnomalyDetector()
+
+        # op threshold is 0.08, blueprint is 0.05
+        head_entropies = {
+            "op": 0.07,        # Below 0.08 -> collapse streak
+            "blueprint": 0.06,  # Above 0.05 -> OK
+        }
+
+        # Need 3 consecutive to trigger
+        for _ in range(3):
+            report = detector.check_per_head_entropy_collapse(head_entropies)
+
+        assert "entropy_collapse_op" in report.anomaly_types
+        assert "entropy_collapse_blueprint" not in report.anomaly_types

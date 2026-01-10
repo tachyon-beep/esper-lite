@@ -17,6 +17,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+from typing import Any
+
 import torch
 from torch.profiler import profile, ProfilerActivity
 
@@ -26,7 +28,9 @@ from esper.leyline import NUM_OPS
 from esper.leyline.slot_config import SlotConfig
 
 
-def create_test_inputs(batch_size: int, device: torch.device, slot_config: SlotConfig):
+def create_test_inputs(
+    batch_size: int, device: torch.device, slot_config: SlotConfig
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
     """Create realistic test inputs for get_action()."""
     from esper.tamiyo.policy.features import get_feature_size
 
@@ -69,7 +73,7 @@ def benchmark_get_action(
     deterministic: bool,
     num_warmup: int = 10,
     num_iterations: int = 100,
-) -> dict:
+) -> dict[str, Any]:
     """Benchmark get_action() with proper GPU timing."""
     device = state.device
 
@@ -131,7 +135,7 @@ def profile_get_action_detailed(
     masks: dict[str, torch.Tensor],
     hidden: tuple[torch.Tensor, torch.Tensor] | None,
     deterministic: bool,
-):
+) -> profile:
     """Profile get_action() with stack traces."""
     device = state.device
 
@@ -176,10 +180,11 @@ def profile_get_action_detailed(
                 return_op_logits=True,
             )
 
-    return prof
+    result: profile = prof
+    return result
 
 
-def main():
+def main() -> None:
     print("=" * 70)
     print("Profiling get_action() - Investigating 16x Slowdown")
     print("=" * 70)
@@ -198,7 +203,7 @@ def main():
 
     network = FactoredRecurrentActorCritic(
         state_dim=state_dim,
-        num_slots=slot_config.num_slots,
+        slot_config=slot_config,
     ).to(device)
     network.eval()
 

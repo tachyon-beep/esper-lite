@@ -8,6 +8,7 @@ unrelated shaping terms.
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Literal
 
 from esper.leyline import MIN_PRUNE_AGE, LifecycleOp, SeedStage
 from esper.simic.rewards import ContributionRewardConfig, RewardMode, SeedInfo
@@ -33,12 +34,17 @@ def shaped_config(
     fossilize_cost: float = 0.0,
     germinate_cost: float = 0.0,
     set_alpha_target_cost: float = 0.0,
+    disable_timing_discount: bool = True,  # D3: default disabled for isolated tests
+    attribution_formula: Literal["geometric", "harmonic", "minimum"] = "geometric",  # D3
+    germination_warmup_epochs: int = 10,  # D3
+    germination_discount_floor: float = 0.4,  # D3
 ) -> ContributionRewardConfig:
     """Return a config that isolates the SHAPED path.
 
     By default we:
     - disable PBRS and terminal bonus
     - disable anti-gaming (ratio penalty + alpha shock)
+    - disable timing discount (D3)
     - zero out intervention costs and prune shaping
     """
     return ContributionRewardConfig(
@@ -70,6 +76,13 @@ def shaped_config(
         fossilize_noncontributing_penalty=0.0,
         early_prune_threshold=0,
         early_prune_penalty=0.0,
+        # D2 capacity economics - disable for isolated SHAPED tests
+        first_germinate_bonus=0.0,
+        # D3 timing discount - disable for isolated SHAPED tests
+        disable_timing_discount=disable_timing_discount,
+        attribution_formula=attribution_formula,
+        germination_warmup_epochs=germination_warmup_epochs,
+        germination_discount_floor=germination_discount_floor,
     )
 
 

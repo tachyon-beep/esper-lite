@@ -167,6 +167,23 @@ def compute_collapse_risk(
 
 
 @dataclass
+class SeedLifecycleEvent:
+    """A single lifecycle transition for a seed.
+
+    Captures Tamiyo's decisions and automatic transitions for the lifecycle panel.
+    """
+
+    epoch: int
+    action: str  # GERMINATE({blueprint}), ADVANCE, PRUNE, FOSSILIZE, or "[auto]"
+    from_stage: str  # Previous stage
+    to_stage: str  # New stage
+    blueprint_id: str  # Which blueprint
+    slot_id: str  # Which slot
+    alpha: float | None  # Alpha at transition (for BLENDING/HOLDING)
+    accuracy_delta: float | None  # Accuracy improvement (for FOSSILIZE)
+
+
+@dataclass
 class SeedLifecycleStats:
     """Seed lifecycle aggregate metrics for TamiyoBrain display.
 
@@ -511,7 +528,7 @@ class EnvState:
     accuracy_history: deque[float] = field(default_factory=lambda: deque(maxlen=50))
 
     # Reward tracking
-    cumulative_reward: float = 0.0  # Sum of all rewards received (for entire episode)
+    cumulative_reward: float = 0.0  # Running total across the episode (end-of-episode reward)
 
     # Best tracking
     best_reward: float = float('-inf')
@@ -519,6 +536,7 @@ class EnvState:
     best_accuracy: float = 0.0
     best_accuracy_epoch: int = 0
     best_accuracy_episode: int = 0
+    peak_cumulative_reward: float = 0.0  # Episode total at the moment best accuracy is achieved
     best_seeds: dict[str, SeedState] = field(default_factory=dict)
 
     # Snapshot volatile state at peak accuracy (for historical detail modal)
@@ -528,6 +546,14 @@ class EnvState:
     best_counterfactual_matrix: CounterfactualSnapshot | None = None
     best_shapley_snapshot: ShapleySnapshot | None = None
     best_action_history: list[str] = field(default_factory=list)
+    # Blueprint lifecycle stats at peak accuracy
+    best_blueprint_spawns: dict[str, int] = field(default_factory=dict)
+    best_blueprint_fossilized: dict[str, int] = field(default_factory=dict)
+    best_blueprint_prunes: dict[str, int] = field(default_factory=dict)
+
+    # Seed lifecycle event tracking (for lifecycle panel)
+    lifecycle_events: list[SeedLifecycleEvent] = field(default_factory=list)
+    best_lifecycle_events: list[SeedLifecycleEvent] = field(default_factory=list)
 
     # Per-env action tracking
     # ACTION NORMALIZATION: add_action() normalizes factored actions:
@@ -624,6 +650,7 @@ class EnvState:
             self.best_accuracy = accuracy
             self.best_accuracy_epoch = epoch
             self.best_accuracy_episode = episode
+            self.peak_cumulative_reward = self.cumulative_reward
             self.epochs_since_improvement = 0
             # Snapshot contributing seeds when new best is achieved
             # Include permanent (FOSSILIZED) and provisional (HOLDING, BLENDING)
@@ -655,12 +682,41 @@ class EnvState:
                 self.best_reward_components = None
 
             if self.counterfactual_matrix and self.counterfactual_matrix.slot_ids:
-                self.best_counterfactual_matrix = CounterfactualSnapshot(
-                    slot_ids=self.counterfactual_matrix.slot_ids,
-                    configs=list(self.counterfactual_matrix.configs),
-                    strategy=self.counterfactual_matrix.strategy,
-                    compute_time_ms=self.counterfactual_matrix.compute_time_ms,
+                # CRITICAL: Filter counterfactual slot_ids to only include slots in best_seeds.
+                # The counterfactual matrix can be stale if no new matrix was emitted
+                # (e.g., when all seeds are FOSSILIZED or PRUNED). Without this filter,
+                # the ablation panel may show contributions for slots that appear DORMANT
+                # in the slot grid (because best_seeds doesn't include PRUNED seeds).
+                valid_slot_ids = tuple(
+                    sid for sid in self.counterfactual_matrix.slot_ids
+                    if sid in self.best_seeds
                 )
+                if valid_slot_ids:
+                    # Filter configs to only include those relevant to valid slots
+                    filtered_configs = []
+                    for cfg in self.counterfactual_matrix.configs:
+                        old_mask = cfg.seed_mask
+                        # A config is valid if it only references slots in valid_slot_ids
+                        # Rebuild mask with only valid positions
+                        new_mask = tuple(
+                            old_mask[old_idx]
+                            for old_idx, sid in enumerate(self.counterfactual_matrix.slot_ids)
+                            if sid in valid_slot_ids
+                        )
+                        # Check if this is a valid configuration (same length as valid_slot_ids)
+                        if len(new_mask) == len(valid_slot_ids):
+                            filtered_configs.append(CounterfactualConfig(
+                                seed_mask=new_mask,
+                                accuracy=cfg.accuracy,
+                            ))
+                    self.best_counterfactual_matrix = CounterfactualSnapshot(
+                        slot_ids=valid_slot_ids,
+                        configs=filtered_configs,
+                        strategy=self.counterfactual_matrix.strategy,
+                        compute_time_ms=self.counterfactual_matrix.compute_time_ms,
+                    )
+                else:
+                    self.best_counterfactual_matrix = None
             else:
                 self.best_counterfactual_matrix = None
 
@@ -672,6 +728,14 @@ class EnvState:
 
             # Snapshot action history (last 10 actions leading to peak)
             self.best_action_history = list(self.action_history)
+
+            # Snapshot lifecycle events at peak accuracy
+            self.best_lifecycle_events = list(self.lifecycle_events)
+
+            # Snapshot blueprint lifecycle stats at peak accuracy
+            self.best_blueprint_spawns = dict(self.blueprint_spawns)
+            self.best_blueprint_fossilized = dict(self.blueprint_fossilized)
+            self.best_blueprint_prunes = dict(self.blueprint_prunes)
         else:
             self.epochs_since_improvement += 1
 
@@ -898,6 +962,15 @@ class TamiyoState:
     # NaN = no data (no PPO updates yet); 0.0 = deterministic action (valid but rare)
     log_prob_min: float = float("nan")  # Most negative log prob this update
     log_prob_max: float = float("nan")  # Highest log prob (should be <= 0)
+
+    # D5: Slot Saturation Diagnostics
+    # Track decision agency to understand PPO stability under capacity pressure.
+    # When slots saturate, action space collapses to WAIT-only (forced steps).
+    decision_density: float = 1.0  # Fraction with agency (1 - forced_step_ratio), higher = healthier
+    forced_step_ratio: float = 0.0  # Fraction of forced steps (lower = healthier)
+    advantage_std_floored: bool = False  # True if std clamped to floor (degenerate batch)
+    pre_norm_advantage_std: float | None = None  # Raw advantage std (before normalization)
+    decision_density_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
 
     # Gradient health (shown in Vitals)
     dead_layers: int = 0
@@ -1216,6 +1289,8 @@ class DecisionSnapshot:
     decision_id: str = ""
     # Environment ID that made this decision (for TD advantage tracking)
     env_id: int = 0
+    # Episode number for telemetry search
+    episode: int = 0
     # Training context when decision was made
     epoch: int = 0
     batch: int = 0
@@ -1294,6 +1369,11 @@ class BestRunRecord:
 
     record_id: str = ""  # Unique ID for click targeting
 
+    # End-of-episode total reward for the trajectory that reached the peak
+    cumulative_reward: float = 0.0
+    # Episode total at the moment peak accuracy was achieved
+    peak_cumulative_reward: float = 0.0
+
     # === Full env snapshot at peak (for historical detail view) ===
     # Reward breakdown at peak
     reward_components: "RewardComponents | None" = None
@@ -1318,6 +1398,16 @@ class BestRunRecord:
     blueprint_spawns: dict[str, int] = field(default_factory=dict)
     blueprint_fossilized: dict[str, int] = field(default_factory=dict)
     blueprint_prunes: dict[str, int] = field(default_factory=dict)
+
+    # === End-of-episode state (for Peak ↔ End toggle) ===
+    # Seeds at episode end (vs seeds which is at peak)
+    end_seeds: dict[str, "SeedState"] = field(default_factory=dict)
+    # Reward components at episode end
+    end_reward_components: "RewardComponents | None" = None
+    # Lifecycle events at peak accuracy
+    best_lifecycle_events: list["SeedLifecycleEvent"] = field(default_factory=list)
+    # Lifecycle events at episode end
+    end_lifecycle_events: list["SeedLifecycleEvent"] = field(default_factory=list)
 
 
 @dataclass

@@ -1,13 +1,103 @@
 # Kasmina + Tamiyo Submodule Intervention Roadmap (Track A + Track C)
 
-**Author role:** Esper Research Architect  
-**Status:** Research roadmap / planning deliverable (no code)  
-**Baseline assumed:** Obs V3, Policy V2, op-conditioned critic, ~150-step horizon  
+**Author role:** Esper Research Architect
+**Status:** Research roadmap / planning deliverable (no code)
+**Baseline assumed:** Obs V3, Policy V2, op-conditioned critic, ~150-step horizon
 **Non-negotiables:** Sensors match capabilities; no legacy/backcompat shims; no bug-hiding defensive patterns; GPU-first inverted control flow; DDP symmetry invariants; metaphors (organism for domains, botanical only for seed lifecycle)
 
 ---
 
-## 1) One-paragraph executive summary (what we’re building and why it fixes “conv_heavy dominance”)
+## Executive Summary: The "Good Stuff" in A + C
+
+### The Problem
+
+Esper is currently doing **module-level** morphogenesis: Tamiyo picks a blueprint and attaches it at a coarse boundary. That creates a structural bias toward **big, discrete upgrades** (for example `conv_heavy`), because:
+
+* Injection surfaces are **too coarse** so a "small" module often cannot buy a clean learning signal.
+* Blueprints are **step-function** capacity: if you need slightly more, you often have to jump to a much larger seed.
+
+Result: **conv_heavy dominance**, churn (germinate, overshoot, prune), and poor "budget utilisation" when the best move is a small adjustment.
+
+A + C fixes this by giving Tamiyo:
+
+1. **More meaningful places to act** (Track A), and
+2. **Smaller, reversible changes per decision** (Track C),
+
+without abandoning the project's determinism, compile constraints, or DDP invariants.
+
+### Track A: Better Injection Surfaces
+
+Track A increases *where* Tamiyo can intervene by exposing **denser, semantically meaningful attachment points**. The goal is not "hooks everywhere", it is **explicit, deterministic surfaces** that line up with real computation boundaries.
+
+Key principles:
+
+* **Stable slot identity:** deterministic slot IDs and a strict execution order.
+* **No hooks, no hidden callbacks:** all routing is explicit in the host forward path.
+* **Surface semantics matter:** "post-attention" and "post-MLP" mean something; "pre-pool" vs "post-pool" means something.
+
+Concrete wins:
+
+* Transformer: expose **POST_ATTN** and **POST_MLP** per layer so intervention sites reflect real sublayer structure.
+* CNN: expose **PRE_POOL** and **POST_POOL** per block so Tamiyo can pick high-resolution leverage vs cheaper late-stage edits.
+* Deterministic ordering via an integer `InjectionSpec.order` (float `position` stays visual-only).
+
+Why this helps: Tamiyo gets **clearer credit assignment** (the policy can learn that certain surfaces are consistently higher ROI), and small seeds stop being wasted at meaningless boundaries.
+
+### Track C: Microstructured Seeds
+
+Track C reduces the "lumpiness" by letting a seed have **internal capacity levels** controlled by a tiny set of lifecycle ops. Instead of repeatedly germinating/pruning heavy seeds, Tamiyo can:
+
+* germinate once, then
+* **grow/shrink internal capacity** in small steps, and
+* stop exactly where marginal benefit flattens out.
+
+Key principles:
+
+* **Bounded action space:** add only a couple of new ops first (GROW_INTERNAL / SHRINK_INTERNAL).
+* **Deterministic internal structure:** level maps to enabled blocks/groups with stable indexing.
+* **Reversible and measurable:** every internal change emits typed telemetry and shows up in Obs V3.
+
+Concrete wins:
+
+* "Ladder" seeds: internal level controls blocks, rank-blocks (LoRA), or groups (channels/heads).
+* Cheap exploration: Tamiyo can place "small bets" and back them out without the churn cycle.
+* Direct attack on `conv_heavy` dominance: the policy can scale capacity smoothly instead of jumping.
+
+### Contracts, Telemetry, and Determinism (Non-Negotiable)
+
+Everything above only works if the system stays measurable and replayable. We enforce:
+
+* **Leyline-typed telemetry for every new lever**, with Obs V3 fields that reflect actual capability.
+* **Strict determinism:** stable ordering, explicit enums for surfaces, no float tie-breaking, no runtime-discovered names.
+* **DDP symmetry invariants:** internal ops must be applied identically across ranks (broadcast/synchronise decisions).
+* **GPU-first control flow remains intact:** no Python-side GPU tensor writes in hot loops, no hook-based side channels.
+
+### Why A + C Together
+
+A and C complement each other:
+
+* A alone increases slot count but can still force heavy blueprints because capacity is chunky.
+* C alone makes capacity smooth, but a smooth knob at a meaningless boundary still underperforms.
+* Together, A + C enables **fine control at meaningful points**, producing:
+  * fewer heavyweight blueprint selections,
+  * lower prune/fossilise churn,
+  * better ROI per parameter, and
+  * clearer policy preferences over surfaces and capacity levels.
+
+### What Success Looks Like
+
+In early phases, we should see:
+
+* Internal ops used frequently enough to matter (not just available).
+* A measurable drop in heavy blueprint selection frequency, without lowering task ROI.
+* No spike in invalid actions, no rise in governor rollbacks, stable entropy trends.
+* Telemetry traces that let us explain "what changed, where, and why it paid off".
+
+That is the "good stuff": Tamiyo stops acting like a gambler forced to buy only expensive chips, and starts acting like an engineer with a proper set of knobs.
+
+---
+
+## 1) One-paragraph executive summary (what we're building and why it fixes "conv_heavy dominance")
 
 We will evolve Esper from **module-level** morphogenesis (“pick one blueprint, at one coarse boundary”) to **submodule-level** morphogenesis where Tamiyo can act more often with **smaller, reversible** adjustments. Today, the cheapest way to get immediate learning signal is frequently “buy a big module” (e.g., `conv_heavy`) because (1) injection surfaces are coarse, and (2) blueprint capacity is step-function discrete. Track **A** increases *where* Tamiyo can act by exposing denser, semantically meaningful injection surfaces (transformer post-attention vs post-MLP; CNN pre-pool vs post-pool) with deterministic slot IDs and ordering. Track **C** reduces the *mass per decision* by introducing microstructured “ladder” seeds whose capacity is controlled by a small internal state and a tiny number of lifecycle ops (grow/shrink/enable/disable), so Tamiyo can dial signal up/down without repeatedly germinating/pruning heavy seeds. Every new lever ships with **Leyline-typed telemetry + Obs V3 support** (ROADMAP commandment #1), preserves GPU-first inverted control flow (`src/esper/simic/training/vectorized.py`), and maintains SeedSlot DDP symmetry invariants (`src/esper/kasmina/slot.py`).
 
@@ -41,6 +131,53 @@ We will evolve Esper from **module-level** morphogenesis (“pick one blueprint,
 - **Stable slot order:** add `InjectionSpec.order: int` and sort SlotConfig by `order` (not float `position`) in `src/esper/leyline/slot_config.py`.
 - **Surface identity:** represent surfaces with a Leyline enum (e.g., `InjectionSurface`) instead of stringly-typed or module-name-based hooks.
 - **Internal IDs:** microstructure must have deterministic level/group indexing; no float tie-breaking; no runtime-discovered hook names.
+- **Slot ID format:** use delimiter or fixed-width fields (e.g., `r{layer}_s{surface}` or `r{layer:02d}c{surface:02d}`) to prevent collisions. Require host unit test: `InjectionSpec.order` must be strictly increasing and cover all emitted specs exactly once.
+
+**`internal_level` semantics (canonical contract):**
+- **Range:** `internal_level ∈ [0..L]` where `L = internal_max_level` (blueprint-defined constant, typically ≤4).
+- **Level 0 semantics:** "present but identity / effectively off" — the seed module exists but contributes zero transformation. This allows SHRINK_INTERNAL to "spend down" without forcing PRUNE.
+- **Normalization:** `internal_level_norm = internal_level / internal_max_level` genuinely covers `[0.0, 1.0]`.
+- **Determinism:** `level_to_structure(level)` is a pure function of `(blueprint_id, level)`; no runtime state affects the mapping.
+- **Mutability:** `internal_level` changes only via `GROW_INTERNAL` / `SHRINK_INTERNAL` lifecycle ops; never implicitly.
+- **Level 0 implementation strategy (Phase 0 decision):**
+  - **Phase 0 default: Identity-by-mask** — always run the full structure but multiply contribution by zero when level=0.
+    - Pros: compile-friendly (constant graph shape), simpler to implement
+    - Cons: compute doesn't actually drop (acceptable since Phase 0 is param-budget-first)
+  - **Phase 2+ option: Identity-by-skip** — don't run blocks when level=0.
+    - Pros: compute scales with level
+    - Cons: graph multiplicity / compile churn (mitigated by epoch-boundary + L≤4)
+  - Teams must use consistent strategy across all ladder seeds within a phase.
+
+**Parameterized blueprint aliases (size variants as ladder sugar):**
+- Size variants like `conv_ladder_slim` and `conv_ladder_tiny` are **not** separate blueprint families — they are **entry points** into the same microstructured ladder seed.
+- Implementation: aliases germinate the same seed family with `internal_level` initialised to a lower value.
+- **Contract:** size variants must map to internal structure, not fork contracts. They report the same `SeedInternalKind`, use the same telemetry events, and respond to the same internal ops.
+- **Footprint cap:** limit to **1–2 aliases per family** (e.g., `*_SLIM`, `*_TINY`). Do not let the blueprint head become a cluttered taxonomy.
+- **Phase 0 scope:** aliases are **optional** in Phase 0. Phase 0 can ship with just `CONV_LADDER` (no aliases) to avoid inflating blueprint action cardinality before validating the core mechanism.
+
+**Stage-gated refinement (validity window):**
+- **Phase 0 default:** GROW_INTERNAL / SHRINK_INTERNAL are valid during **TRAINING, BLENDING, and HOLDING** stages.
+  - Rationale: If ops are only valid during BLENDING+HOLDING, they may fire so rarely that Phase 0 "proves" they aren't useful when actually they were just unavailable.
+- **Hard rule:** After FOSSILIZED, internal ops are masked out, full stop. Custody transfers to Emrakul. This is non-negotiable.
+- **Alpha-mode gating (optional, not default):** `alpha_mode == HOLD` gating is available as a knob if thrash appears, but is NOT enabled by default in Phase 0. Enable only if empirical data shows it's needed.
+- **Optional cooldown:** internal ops on the same slot cannot happen more often than every N epochs (configurable); enforced via masking and reported via telemetry. Start with N=0 (no cooldown) in Phase 0.
+- **Later phases may tighten:** If TRAINING-stage internal ops prove harmful, Phase 1+ can restrict to BLENDING+HOLDING only.
+
+**Compute vs. param budget (microstructure economics):**
+- Each microstructure must define:
+  - **Trainable params at level:** `params(level)` — **hard requirement**, monotonic in level, correctly reported
+  - **Forward compute at level:** `flops(level)` — **soft requirement in Phase 0**; may be constant (always run full structure). Log an *estimated* "active capacity" metric for observability.
+- **Phase 0 budget semantics:**
+  - ROI is measured primarily against **trainable params** (rent).
+  - Compute scaling is observational telemetry only — do not require `flops(level)` to be strictly monotonic in Phase 0.
+  - Revisit compute scaling in Phase 2 (channel-group ladder) where it's more natural.
+- **Phase 2+ budget semantics:** governor and reward system must be explicit about which budget they care about (params, compute, or both).
+- **Prefer mask-based execution:** when torch.compile graph pressure becomes an issue, prefer microstructures that allow constant-shape, mask-based execution (channel groups, rank blocks) over variable-topology structures.
+
+**Obs dims are derived, not hand-maintained:**
+- **Contract discipline:** Obs dimensions are computed from Leyline head specs and feature field lists. There is no separate "update OBS_V3_* constants" step.
+- **Single source of truth:** base feature fields and per-slot fields are declared in `src/esper/leyline/__init__.py` as typed lists. Dims derive from these lists.
+- **Shape assertions:** `src/esper/tamiyo/policy/features.py` and `src/esper/simic/agent/rollout_buffer.py` assert shapes against the derived dims, not hardcoded values.
 
 ---
 
@@ -50,7 +187,7 @@ We will evolve Esper from **module-level** morphogenesis (“pick one blueprint,
 |---|---:|---|---|---|
 | **0 (A0 + C0)** | 1–2w | Phase 2.5 gates (reward exam) recommended | Low–Med | `GROW/SHRINK_INTERNAL` used; conv_heavy selection drops; ROI ≥ baseline; no rollback/invalid-action spikes |
 | **1 (A1 + C1)** | 2–3w | Phase 0 | Med | TinyStories ROI improves with post-attn/post-MLP lattice; LoRA ladder used vs `lora_large`; head entropies stable |
-| **2 (A2 + C2)** | 2–3w | Phase 0 + Phase 1 injection contracts | Med | CIFAR ROI improves with pre/post-pool surfaces; ladder upgrades replace “step-function” blueprint jumps; fossilize/prune efficiency improves |
+| **2 (A2 + C3)** | 2–3w | Phase 0 + Phase 1 injection contracts | Med | CIFAR ROI improves with pre/post-pool surfaces; channel-group ladder replaces "step-function" blueprint jumps; fossilize/prune efficiency improves |
 | **3 (A + C inventory)** | 3–4w | Phases 1–2 | High | Subtarget control used with low invalid-action rate; effective params reduced at same quality; stable entropy (new head if chosen) |
 | **4 (Phase α: Slot Transformer policy)** | 3–5w | Phase 3 or objective “slot pressure” trigger | High | PPO stable at ≥32 slots; ≤10% throughput hit; improved decision quality vs flat concat |
 | **5 (End-state)** | 4–8+w | Phase 4 | Very high | Replayable “grow then trim” run with stable governor outcomes + explainable telemetry |
@@ -105,18 +242,20 @@ We will evolve Esper from **module-level** morphogenesis (“pick one blueprint,
     - Optional: `active_params: int`
   - **Emission point:** `src/esper/kasmina/slot.py` on successful internal op execution (same style as `SEED_STAGE_CHANGED`).
   - **Storage/UI consumers:** Karn store views + Sanctum/Overwatch should display (at least) `from_level→to_level`, and correlate with ROI.
-- **Obs V3 constants (must stay in sync):**
-  - Adding new `LifecycleOp`s changes `NUM_OPS`, which changes the base “last_action_op one-hot” width in `src/esper/tamiyo/policy/features.py`.
-  - Update `src/esper/leyline/__init__.py`:
-    - `OBS_V3_BASE_FEATURE_SIZE` must become `17 + NUM_OPS` (not hard-coded 23), or be updated explicitly after op additions.
-    - `OBS_V3_SLOT_FEATURE_SIZE` increments by `+1` for `internal_level_norm`.
-    - `OBS_V3_NON_BLUEPRINT_DIM` recomputed accordingly.
-  - Downstream consumers that must change: `src/esper/tamiyo/networks/factored_lstm.py` (feature net input dim), `src/esper/simic/agent/rollout_buffer.py` (state_dim assertions), and any observation normalization shapes.
+- **Obs V3 constants (derived per cross-cutting contract):**
+  - Per "Obs dims are derived" contract: dimensions computed from Leyline field lists, not hardcoded.
+  - Adding new `LifecycleOp`s or per-slot fields updates the field lists; dims derive automatically.
+  - `src/esper/leyline/__init__.py` declares:
+    - Base feature field list (including last_action_op one-hot, derived from `NUM_OPS`)
+    - Per-slot feature field list (including `internal_level_norm`)
+  - Downstream consumers assert shapes against derived dims: `src/esper/tamiyo/networks/factored_lstm.py`, `src/esper/simic/agent/rollout_buffer.py`.
+  - **No manual constant updates** — shape mismatches fail fast with clear error messages.
 
 **Action space changes (avoid combinatorial blow-up):**
 - **New blueprint option (Leyline):** add to `src/esper/leyline/factored_actions.py:BlueprintAction`:
   - `CONV_LADDER` → `"conv_ladder"` (and include it in `CNN_BLUEPRINTS` so masking permits it on CNN tasks)
   - Downstream consumers that must change: `BLUEPRINT_IDS`/`BLUEPRINT_ID_TO_INDEX`, blueprint embedding table sizing (`BLUEPRINT_NULL_INDEX` in `src/esper/leyline/__init__.py`), and any UI blueprint-name tables.
+- **Size variant aliases (OPTIONAL in Phase 0):** `CONV_LADDER_SLIM`, `CONV_LADDER_TINY` may be added later as entry points that germinate with lower initial `internal_level`. Phase 0 can ship without these to minimize blueprint action cardinality.
 - **New ops (Leyline):** add to `src/esper/leyline/factored_actions.py:LifecycleOp`:
   - `GROW_INTERNAL`
   - `SHRINK_INTERNAL`
@@ -133,14 +272,15 @@ We will evolve Esper from **module-level** morphogenesis (“pick one blueprint,
 **Seed changes (C0):**
 - **Concrete seed family:** `conv_ladder` (CNN), implemented in `src/esper/kasmina/blueprints/cnn.py`.
   - Internal microstructure: `L` residual conv micro-blocks (`SeedConvBlock`-based), active blocks = `internal_level`.
-  - Level invariants: `1 <= internal_level <= L` when `internal_kind=CONV_LADDER` (seed exists); `internal_level=0` only when no seed.
+  - Level invariants: `0 <= internal_level <= L` per canonical contract. Level 0 = "present but identity" (allows SHRINK to spend down without forcing PRUNE).
   - Param accounting: only active blocks have `requires_grad=True` so `SeedSlot.active_seed_params` and `SeedMetrics.seed_param_count` reflect level (ties directly into rent & churn economy without hacks).
-  - Fossilization semantics: freeze `internal_level` at `SeedStage.FOSSILIZED` (internal ops masked out thereafter).
+  - Fossilization semantics: freeze `internal_level` at `SeedStage.FOSSILIZED` (internal ops masked out thereafter per stage-gating contract).
 
 **Safety constraints (DDP symmetry, torch.compile, governor, throughput):**
-- **DDP symmetry:** internal ops must be applied identically on all ranks. If actions are not already broadcast, mirror `_sync_gate_decision()` pattern for internal ops in `src/esper/kasmina/slot.py`.
-- **torch.compile:** internal_level-dependent control flow can multiply graphs. Mitigation: cap `L≤4`, and allow internal ops only at epoch boundaries (where SeedSlot already tolerates specialization).
-- **Governor interactions:** internal growth should not coincide with alpha ramps (`AlphaMode.UP/DOWN`). Mask internal ops unless `alpha_mode == HOLD` (in `src/esper/tamiyo/policy/action_masks.py`).
+- **DDP symmetry:** internal ops must be applied identically on all ranks. Mirror `_sync_gate_decision()` pattern for internal ops in `src/esper/kasmina/slot.py`. Add explicit unit test verifying DDP symmetry for internal ops.
+- **torch.compile:** Phase 0 uses identity-by-mask (constant graph shape), so no graph multiplicity from level changes. Epoch-boundary execution still applies.
+- **Stage gating:** internal ops valid during TRAINING, BLENDING, HOLDING per cross-cutting contract. Mask out after FOSSILIZED (hard rule).
+- **Governor interactions (optional in Phase 0):** alpha-mode gating (`alpha_mode == HOLD`) is available as a knob but NOT enabled by default. Enable only if empirical data shows thrash during alpha ramps.
 
 **Experiment plan:**
 - **Task/preset:** `cifar_scale` (`src/esper/runtime/tasks.py`), slots `r0c0..r0c4`, `max_seeds=2`, `episode-length=150`, `n_envs=8`.
@@ -151,13 +291,22 @@ We will evolve Esper from **module-level** morphogenesis (“pick one blueprint,
   - Accuracy ROI = `(final_acc - baseline_acc) / (added_trainable_params)` (use existing rent telemetry; verify with Karn).
   - Blueprint mix: drop in `CONV_HEAVY` selection frequency vs control.
   - Internal ops usage: non-trivial `SEED_INTERNAL_LEVEL_CHANGED` rate without oscillatory thrash.
+- **Anti-thrash metrics (first-class, measurable):**
+  - `level_change_rate`: internal ops per 100 steps/epochs — should be non-zero but bounded
+  - `net_level_change`: are we oscillating (near zero) or converging (positive/negative trend)?
+  - `ROI_per_level_change`: did level changes correlate with accuracy improvement?
+  - **Default cost knob:** small per-op intervention cost for internal ops, plus optional increasing cost for repeated toggles on the same slot within N epochs.
 - **Decision quality signals:**
   - Invalid-action rate (`last_action_success`), entropy trends per head, `GROW/SHRINK` selection entropy.
   - Governor events (`TelemetryEventType.GOVERNOR_ROLLBACK`) must not increase.
+- **Counterfactual telemetry (telemetry first, reward later):**
+  - Add `post_op_short_horizon_delta` telemetry: measure contribution/accuracy delta in the 1-3 epochs immediately following an internal op.
+  - **Do not promote to reward shaping in Phase 0** — use for debugging and analysis only.
+  - Decision on whether to use as reward signal deferred to Phase 1+ after observing signal quality.
 
 **Risks + mitigations:**
-- **Thrash (grow/shrink oscillation):** introduce small per-op cost; add churn telemetry (`level_changes_per_100_steps`) in Karn.
-- **Obs/shape drift:** update Obs V3 constants everywhere (Leyline is source of truth; no dual paths).
+- **Thrash (grow/shrink oscillation):** introduce small per-op cost; add churn telemetry (`level_changes_per_100_steps`) in Karn; enforce optional cooldown via masking.
+- **Obs/shape drift:** Obs dims are derived from Leyline field lists (no manual constant updates).
 
 **Exit criteria (gates to unlock Phase 1):**
 - `GROW/SHRINK_INTERNAL` used in ≥10% of non-WAIT decisions when ladder seed present, with invalid-action rate not materially worse than control.
@@ -215,7 +364,7 @@ We will evolve Esper from **module-level** morphogenesis (“pick one blueprint,
   - `slot_order_norm: float` (normalize `order / (max_order+1)`; range `[0,1]`)
   - `slot_surface_norm: float` (normalize `surface.value / max_surface_value`; small categorical proxy; optional to replace with small embedding later)
   - **Consumption points:** used by Tamiyo feature net; also used for action masking heuristics if needed later.
-- **Contracts/constants:** update `src/esper/leyline/__init__.py:OBS_V3_SLOT_FEATURE_SIZE` (+2) and recompute derived dims; update any shape assertions in Simic/Tamiyo.
+- **Contracts/constants:** add `slot_order_norm` and `slot_surface_norm` to the per-slot feature field list in `src/esper/leyline/__init__.py`. Dims derive automatically; shape assertions fail fast on mismatch.
 - **Emission points:** no new per-step emission; the host supplies metadata via InjectionSpec → SlotConfig at environment construction time (`src/esper/simic/training/vectorized.py` derives SlotConfig from injection specs).
 
 **Action space changes:**
@@ -254,7 +403,7 @@ We will evolve Esper from **module-level** morphogenesis (“pick one blueprint,
 
 ---
 
-### Phase 2 — **A2 + C2** CNN pre/post-pool surfaces + channel-group ladder
+### Phase 2 — **A2 + C3** CNN pre/post-pool surfaces + channel-group ladder
 
 **Objective:** Give CNN interventions submodule meaning aligned with spatial resolution changes (pre vs post pooling) and provide a structured microstructure option beyond “block-count ladder”.
 

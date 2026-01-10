@@ -183,6 +183,124 @@ class TestCounterfactualConfigDefaults:
         assert config.seed == 42
 
 
+class TestZeroSeedEdgeCases:
+    """Edge case tests for zero-seed attribution (from audit recommendations)."""
+
+    def test_generate_configs_empty_slots(self):
+        """generate_configs with empty slot list returns single empty config."""
+        engine = CounterfactualEngine()
+        configs = engine.generate_configs([])
+        # Empty slot list should return single config (the empty configuration)
+        assert len(configs) == 1
+        assert configs[0] == ()
+
+    def test_compute_matrix_empty_slots(self):
+        """compute_matrix with empty slots returns valid empty matrix."""
+        engine = CounterfactualEngine()
+
+        def mock_evaluate(alpha_settings: dict) -> tuple[float, float]:
+            # Empty alpha_settings means no seeds to evaluate
+            assert alpha_settings == {}
+            return (0.5, 0.7)  # (loss, accuracy)
+
+        matrix = engine.compute_matrix([], mock_evaluate)
+
+        assert matrix.strategy_used == "full_factorial"
+        assert len(matrix.configs) == 1
+        assert matrix.configs[0].config == ()
+        assert matrix.configs[0].slot_ids == ()
+        assert matrix.configs[0].val_accuracy == 0.7
+        assert matrix.configs[0].val_loss == 0.5
+
+    def test_compute_shapley_empty_matrix(self):
+        """compute_shapley_values with empty matrix returns empty dict."""
+        engine = CounterfactualEngine()
+        empty_matrix = CounterfactualMatrix(epoch=0, strategy_used="shapley")
+
+        shapley = engine.compute_shapley_values(empty_matrix)
+
+        assert shapley == {}
+
+    def test_compute_interaction_terms_empty_matrix(self):
+        """compute_interaction_terms with empty matrix returns empty dict."""
+        engine = CounterfactualEngine()
+        empty_matrix = CounterfactualMatrix(epoch=0, strategy_used="full_factorial")
+
+        interactions = engine.compute_interaction_terms(empty_matrix)
+
+        assert interactions == {}
+
+    def test_marginal_contribution_empty_matrix(self):
+        """marginal_contribution on empty matrix returns empty dict."""
+        matrix = CounterfactualMatrix(epoch=0)
+        # Accessing internal method via property should work
+        matrix._compute_marginal_contributions()
+
+        assert matrix._marginal_contributions == {}
+
+    def test_baseline_accuracy_no_all_false_config(self):
+        """baseline_accuracy returns 0.0 when no all-false config exists."""
+        matrix = CounterfactualMatrix(epoch=0)
+        # Add only configs with at least one True
+        matrix.configs.append(
+            CounterfactualResult(
+                config=(True,),
+                slot_ids=("r0c0",),
+                val_accuracy=0.8,
+                val_loss=0.2,
+            )
+        )
+
+        # No (False,) config exists
+        assert matrix.baseline_accuracy == 0.0
+
+    def test_full_accuracy_no_all_true_config(self):
+        """full_accuracy returns 0.0 when no all-true config exists."""
+        matrix = CounterfactualMatrix(epoch=0)
+        # Add only configs with at least one False
+        matrix.configs.append(
+            CounterfactualResult(
+                config=(False,),
+                slot_ids=("r0c0",),
+                val_accuracy=0.6,
+                val_loss=0.4,
+            )
+        )
+
+        # No (True,) config exists
+        assert matrix.full_accuracy == 0.0
+
+    def test_single_seed_shapley(self):
+        """Shapley with single seed should return valid contribution."""
+        slot_ids = ["r0c0"]
+        engine = CounterfactualEngine(CounterfactualConfig(seed=42))
+
+        matrix = CounterfactualMatrix(epoch=1, strategy_used="full_factorial")
+        # Two configs: seed off and seed on
+        matrix.configs.append(
+            CounterfactualResult(
+                config=(False,),
+                slot_ids=tuple(slot_ids),
+                val_accuracy=0.5,
+                val_loss=0.5,
+            )
+        )
+        matrix.configs.append(
+            CounterfactualResult(
+                config=(True,),
+                slot_ids=tuple(slot_ids),
+                val_accuracy=0.7,
+                val_loss=0.3,
+            )
+        )
+
+        shapley = engine.compute_shapley_values(matrix)
+
+        # With single seed, Shapley = marginal contribution = 0.7 - 0.5 = 0.2
+        assert "r0c0" in shapley
+        assert abs(shapley["r0c0"].mean - 0.2) < 0.01
+
+
 class TestCounterfactualHelperReset:
     """B8-CR-04: Test CounterfactualHelper.reset() behavior.
 

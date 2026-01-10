@@ -189,12 +189,13 @@ def test_network_evaluate_actions_accepts_tuple():
     }
 
     # Should NOT raise
-    log_probs, values, entropy, hidden = network.evaluate_actions(obs, blueprint_indices, actions)
+    log_probs, values, entropy, hidden, pred_contributions = network.evaluate_actions(obs, blueprint_indices, actions)
 
     # Check outputs
     assert values.shape == (2, 10)
     assert "op" in log_probs
     assert log_probs["op"].shape == (2, 10)
+    assert pred_contributions.shape == (2, 10, config.num_slots)
 
 
 def test_buffer_stores_blueprint_indices():

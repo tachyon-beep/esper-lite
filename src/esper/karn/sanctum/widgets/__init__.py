@@ -5,6 +5,7 @@ from esper.karn.sanctum.widgets.env_overview import EnvOverview
 from esper.karn.sanctum.widgets.event_log import EventLog
 from esper.karn.sanctum.widgets.event_log_detail import EventLogDetail
 from esper.karn.sanctum.widgets.historical_env_detail import HistoricalEnvDetail
+from esper.karn.sanctum.widgets.lifecycle_panel import LifecyclePanel
 from esper.karn.sanctum.widgets.reward_health import RewardHealthData, RewardHealthPanel
 from esper.karn.sanctum.widgets.run_header import RunHeader
 from esper.karn.sanctum.widgets.scoreboard import Scoreboard
@@ -18,6 +19,7 @@ __all__ = [
     "EventLog",
     "EventLogDetail",
     "HistoricalEnvDetail",
+    "LifecyclePanel",
     "RewardHealthData",
     "RewardHealthPanel",
     "RunHeader",

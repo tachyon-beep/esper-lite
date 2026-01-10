@@ -145,6 +145,10 @@ allow_hits:
     owner: "john"
     reason: "Textual framework - NoMatches for optional widget lookup"
 
+  - key: "src/esper/karn/sanctum/widgets/tamiyo/decisions_column.py:_refresh_cards:silent_except"
+    owner: "john"
+    reason: "Textual framework - NoMatches for optional widget lookup"
+
   # ============================================================================
   # QUEUE/ASYNC PATTERNS
   # ============================================================================

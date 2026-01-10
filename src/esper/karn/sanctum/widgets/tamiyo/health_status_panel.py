@@ -177,6 +177,10 @@ class HealthStatusPanel(Static):
         result.append(self._render_efficiency_stats())
         result.append("\n")
 
+        # D5: Decision agency (slot saturation monitoring)
+        result.append(self._render_decision_agency())
+        result.append("\n")
+
         # LSTM hidden state health (B7-DRL-04)
         result.append(self._render_lstm_health())
 
@@ -493,6 +497,68 @@ class HealthStatusPanel(Static):
         )
 
         return result
+
+    def _render_decision_agency(self) -> Text:
+        """Render D5: decision agency and slot saturation indicators.
+
+        Shows decision_density (fraction of timesteps with real choice) and
+        alerts when advantage std was floored (degenerate batch).
+        """
+        if self._snapshot is None:
+            return Text()
+
+        tamiyo = self._snapshot.tamiyo
+        result = Text()
+
+        # Decision density: 1.0 = full agency, 0.0 = all forced
+        density = tamiyo.decision_density
+        density_status = self._get_decision_density_status(density)
+
+        result.append("Decision     ", style="dim")
+        result.append(f"{density:.0%}", style=self._status_style(density_status))
+        result.append(" agency", style="dim")
+
+        # Warning indicators
+        if tamiyo.advantage_std_floored:
+            result.append(" STD⌊", style="yellow")  # Floor symbol
+        if density_status == "Critical":
+            result.append(" SATURATED", style="red bold")
+        elif density_status == "Warning":
+            result.append(" !", style="yellow")
+
+        # Sparkline for history (falling density = rising saturation)
+        if tamiyo.decision_density_history:
+            result.append(" ")
+            sparkline = render_sparkline(
+                list(tamiyo.decision_density_history),
+                width=self.SPARKLINE_WIDTH,
+                style=self._status_style(density_status),
+            )
+            result.append(sparkline)
+            # Trend arrow (falling is bad for decision density)
+            arrow, arrow_style = trend_arrow_for_history(
+                list(tamiyo.decision_density_history),
+                metric_name="decision_density",
+                metric_type="accuracy",  # Higher is better
+            )
+            if arrow:
+                result.append(arrow, style=arrow_style)
+
+        return result
+
+    def _get_decision_density_status(self, density: float) -> str:
+        """Check if decision density is healthy (higher = more agency).
+
+        Thresholds:
+        - > 0.7: OK (most timesteps have real choice)
+        - 0.3-0.7: Warning (significant forced corridor)
+        - < 0.3: Critical (severe slot saturation)
+        """
+        if density < 0.3:
+            return "Critical"
+        if density < 0.7:
+            return "Warning"
+        return "OK"
 
     def _get_lstm_rms_status(self, rms: float | None) -> str:
         """Check if LSTM hidden state RMS magnitude is healthy."""

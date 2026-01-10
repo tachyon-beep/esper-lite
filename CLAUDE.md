@@ -123,6 +123,24 @@ Plans are grouped into:
 
 When a plan is completed, move it to `docs/plans/completed/`. When a plan is superseded, deferred, or cancelled, move it to `docs/plans/abandoned/`. Keep `docs/plans/ready/` lean with only active/future work.
 
+### Plan Tracking
+
+**When creating, modifying, or obsoleting any plan, update `docs/coord/PLAN_TRACKER.md`.** This is the master coordination document for prioritization and dependency tracking. Use `docs/plans/PLAN_TEMPLATE.md` for metadata schemas.
+
+### Plan Review Requirements
+
+**All plans involving code changes MUST be reviewed by relevant specialist agents before approval.** Use the appropriate experts based on the plan's domain:
+
+| Domain | Required Reviewer |
+|--------|-------------------|
+| RL training, rewards, policies | `drl-expert` agent + `yzmir-deep-rl` skills |
+| PyTorch, tensors, torch.compile | `pytorch-expert` agent + `yzmir-pytorch-engineering` skills |
+| Python patterns, architecture | `axiom-python-engineering` skills |
+| Neural architectures | `yzmir-neural-architectures` skills |
+| Training stability, optimization | `yzmir-training-optimization` skills |
+
+For cross-domain plans (most non-trivial work), invoke **multiple specialists**. Document their sign-off in the plan's metadata under `reviewed_by`.
+
 ## Deferred Functionality
 
 Whenever we make an active design decision to defer functionality due to complexity, add a TODO comment in the most logical place:

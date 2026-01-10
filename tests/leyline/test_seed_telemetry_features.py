@@ -95,18 +95,19 @@ class TestSeedTelemetryFeatures:
 
     def test_telemetry_features_stage_one_hot(self):
         """Stage is one-hot encoded in first NUM_STAGES dims."""
+        from esper.leyline import SeedStage
         from esper.leyline.stage_schema import STAGE_TO_INDEX, NUM_STAGES
 
         telemetry = SeedTelemetry(
             seed_id="test",
-            stage=4,  # BLENDING
+            stage=SeedStage.BLENDING.value,
         )
 
         features = telemetry.to_features()
         stage_one_hot = features[:NUM_STAGES]
 
         assert sum(stage_one_hot) == 1.0
-        expected_idx = STAGE_TO_INDEX[4]
+        expected_idx = STAGE_TO_INDEX[SeedStage.BLENDING.value]
         assert stage_one_hot[expected_idx] == 1.0
 
     def test_telemetry_features_alpha_controller_normalized(self):

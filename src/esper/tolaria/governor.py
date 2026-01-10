@@ -192,6 +192,14 @@ class TolariaGovernor:
         - Only after consecutive panics (to avoid false positives)
 
         This is a NUCLEAR OPTION - should almost never trigger during normal training.
+
+        Thread Safety:
+        NOT THREAD-SAFE. This method reads and modifies instance state (loss_history,
+        consecutive_panics, _pending_panic, _panic_loss, _panic_reason) without
+        synchronization. Designed for single-threaded use within a training loop.
+        Each vectorized environment has its own TolariaGovernor instance, so
+        concurrent calls from different environments are safe. Concurrent calls
+        on the SAME Governor instance will cause data races.
         """
         # Immediate panic on NaN/Inf - these are always catastrophic
         # NOTE: We do NOT mutate consecutive_panics here. The counter should reflect
@@ -286,6 +294,17 @@ class TolariaGovernor:
         Philosophy: Fossils are committed stable memory. Live seeds are
         experimental hypotheses - a catastrophic event means they failed
         the safety test and should be discarded.
+
+        STREAM CONTRACT (different from snapshot):
+        Unlike snapshot() which REQUIRES the default stream, rollback may be
+        called from any CUDA stream context. This method performs device-level
+        synchronization (torch.cuda.synchronize(device)) before modifying weights,
+        which blocks until ALL streams on the device complete. This is more
+        expensive than stream-level sync but acceptable for the rare rollback path.
+
+        The asymmetry is intentional:
+        - snapshot() is called frequently during training → lighter constraint
+        - rollback() is called rarely during emergencies → can afford heavier sync
         """
         # Get device from parameters, falling back to CPU if no parameters
         try:

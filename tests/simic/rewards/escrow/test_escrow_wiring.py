@@ -134,3 +134,31 @@ def test_invalid_op_mapping_sampled_prune_rewarded_wait_does_not_refund_credit()
     assert components.escrow_credit_next == pytest.approx(credit_prev)
     assert reward == pytest.approx(0.0)
 
+
+def test_terminal_clawback_excludes_pruned_seeds():
+    """PRUNED seeds should NOT forfeit escrow at terminal - Tamiyo already paid at prune time.
+
+    When a seed is pruned, the escrow is immediately clawed back via negative escrow_delta.
+    If we then forfeit again at terminal (during alpha decay period), we double-penalize.
+    This test verifies the fix for: "pruned seeds shouldn't eat penalty just because
+    the slot isn't empty yet."
+    """
+    credits = {"r0c0": 1.0, "r0c1": 2.0, "r0c2": 0.5}
+    stages = {
+        "r0c0": SeedStage.FOSSILIZED,  # Earned escrow
+        "r0c1": SeedStage.PRUNED,       # Already clawed back at prune time
+        "r0c2": SeedStage.TRAINING,     # Still in play - should forfeit
+    }
+
+    reward_before = 10.0
+    reward_after, forfeit_component = apply_terminal_escrow_forfeit(
+        reward=reward_before,
+        credits_by_slot=credits,
+        stage_by_slot=stages,
+    )
+
+    # Only r0c2 (TRAINING) should forfeit its 0.5 credit
+    # r0c0 (FOSSILIZED) and r0c1 (PRUNED) are terminal states
+    assert forfeit_component == pytest.approx(-0.5)
+    assert reward_after == pytest.approx(reward_before - 0.5)
+

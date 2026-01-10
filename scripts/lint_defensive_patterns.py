@@ -79,7 +79,7 @@ class PatternVisitor(ast.NodeVisitor):
         if hasattr(node, "lineno"):
             line_idx = node.lineno - 1
             if 0 <= line_idx < len(self.source_lines):
-                return self.source_lines[line_idx].strip()
+                return str(self.source_lines[line_idx]).strip()
         return "<unavailable>"
 
     def _record_hit(self, node: ast.AST, pattern: str) -> None:
@@ -206,7 +206,7 @@ class Whitelist:
                 raise ValueError(f"allow_paths '{path}' must include non-empty 'reason'")
             self.allow_paths.append(path)
 
-        self.allow_hits: dict[str, dict] = {}
+        self.allow_hits: dict[str, dict[str, object]] = {}
         allow_hits = data.get("allow_hits", [])
         if not isinstance(allow_hits, list):
             raise ValueError("allow_hits must be a list")
@@ -291,7 +291,7 @@ class Whitelist:
             if key in self.allow_hits:
                 entry = self.allow_hits[key]
                 if "expires" in entry:
-                    expires = date.fromisoformat(entry["expires"])
+                    expires = date.fromisoformat(str(entry["expires"]))
                     if expires < self.today:
                         return (
                             False,

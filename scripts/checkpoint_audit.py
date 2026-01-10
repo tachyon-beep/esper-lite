@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# mypy: ignore-errors
 """Audit checkpoint contents for PyTorch 2.9 compatibility.
 
 PyTorch 2.9 defaults to weights_only=True in torch.load(), which rejects

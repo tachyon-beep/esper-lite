@@ -10,6 +10,7 @@ import torch.amp as torch_amp
 
 from esper.karn.health import HealthMonitor
 from esper.kasmina.host import MorphogeneticModel
+from esper.utils.data import AugmentationBuffers
 from esper.leyline import (
     DEFAULT_GOVERNOR_ABSOLUTE_THRESHOLD,
     DEFAULT_GOVERNOR_DEATH_PENALTY,
@@ -36,13 +37,14 @@ def make_telemetry_callback(
     env_idx: int,
     device: str,
     hub: Any,
+    group_id: str,
 ) -> Callable[[TelemetryEvent], None]:
-    """Create a telemetry callback that injects env_id and device."""
+    """Create a telemetry callback that injects env_id, device, and group_id."""
     if not hub:
         return lambda _: None
 
     def callback(event: TelemetryEvent) -> None:
-        emit_with_env_context(hub, env_idx, device, event)
+        emit_with_env_context(hub, env_idx, device, event, group_id)
 
     return callback
 
@@ -84,6 +86,7 @@ class EnvFactoryContext:
     telemetry_lifecycle_only: bool
     hub: Any
     signal_tracker_cls: type[SignalTracker]
+    group_id: str
 
 
 def create_env_state(
@@ -114,7 +117,7 @@ def create_env_state(
     # avoiding runtime layout permutations in conv layers.
     model = model.to(memory_format=torch.channels_last)
 
-    telemetry_cb = make_telemetry_callback(env_idx, env_device, context.hub)
+    telemetry_cb = make_telemetry_callback(env_idx, env_device, context.hub, context.group_id)
     for slot_module in model.seed_slots.values():
         slot = cast(SeedSlotProtocol, slot_module)
         slot.on_telemetry = telemetry_cb
@@ -149,9 +152,13 @@ def create_env_state(
     )
 
     augment_generator = None
+    augment_buffers = None
     if context.gpu_preload_augment:
         augment_generator = torch.Generator(device=env_device)
         augment_generator.manual_seed(base_seed + env_idx * 1009)
+        # Pre-allocate buffers to reduce memory fragmentation during augmentation.
+        # The ensure_capacity() method handles resizing if batch size changes.
+        augment_buffers = AugmentationBuffers(device=env_device)
 
     # Per-env AMP scaler to avoid stream race conditions (GradScaler state is not stream-safe)
     # Use new torch.amp.GradScaler API (torch.cuda.amp.GradScaler deprecated in PyTorch 2.4+)
@@ -226,6 +233,7 @@ def create_env_state(
         env_device=env_device,
         stream=stream,
         augment_generator=augment_generator,
+        augment_buffers=augment_buffers,
         scaler=env_scaler,
         seeds_created=0,
         episode_rewards=[],

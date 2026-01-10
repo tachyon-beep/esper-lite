@@ -87,6 +87,7 @@ from esper.leyline import (
     # QualityGates thresholds
     DEFAULT_MIN_TRAINING_IMPROVEMENT,
     DEFAULT_MIN_BLENDING_EPOCHS,
+    DEFAULT_MIN_GRADIENT_HEALTH_FOR_BLENDING,
     DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE,
     # Blueprint lookup
     BLUEPRINT_ID_TO_INDEX,
@@ -672,12 +673,14 @@ class QualityGates:
         min_blending_epochs: int = DEFAULT_MIN_BLENDING_EPOCHS,
         min_probation_stability: float = DEFAULT_MIN_PROBATION_STABILITY,
         min_seed_gradient_ratio: float = DEFAULT_GRADIENT_RATIO_THRESHOLD,
+        min_gradient_health_for_blending: float = DEFAULT_MIN_GRADIENT_HEALTH_FOR_BLENDING,
         permissive: bool = False,
     ):
         self.min_training_improvement = min_training_improvement
         self.min_blending_epochs = min_blending_epochs
         self.min_probation_stability = min_probation_stability
         self.min_seed_gradient_ratio = min_seed_gradient_ratio
+        self.min_gradient_health_for_blending = min_gradient_health_for_blending
         self.permissive = permissive
 
     def check_gate(self, state: SeedState, target_stage: SeedStage) -> GateResult:
@@ -786,21 +789,56 @@ class QualityGates:
 
         improvement = state.metrics.improvement_since_stage_start
 
-        # PERMISSIVE MODE: Only check structural minimum (trained at least 1 epoch)
+        # PERMISSIVE MODE: Skip quality checks but enforce SAFETY gates.
+        # Safety gates ensure the seed won't destabilize the host when blended.
+        # Per PyTorch expert review 2025-01-09:
+        # 1. Minimum epochs to exit "initial chaos" phase of training
+        # 2. No exploding gradients (hard requirement - never negotiable)
+        # 3. Gradient health above threshold (indicates stable learning)
         if self.permissive:
-            if state.metrics.epochs_in_current_stage >= 1:
-                checks_passed.append("trained_at_least_1_epoch")
-                passed = True
+            # Check 1: Minimum training epochs
+            min_epochs = self.min_blending_epochs
+            if state.metrics.epochs_in_current_stage >= min_epochs:
+                checks_passed.append(f"trained_{state.metrics.epochs_in_current_stage}_epochs")
+                epochs_ok = True
             else:
-                checks_failed.append("no_training_epochs")
-                passed = False
+                checks_failed.append(
+                    f"insufficient_training_{state.metrics.epochs_in_current_stage}_of_{min_epochs}"
+                )
+                epochs_ok = False
+
+            # Check 2: No exploding gradients (HARD REQUIREMENT)
+            # Exploding gradients indicate unbounded dynamics that will compound
+            # catastrophically when the seed's alpha is ramped up during blending.
+            telemetry = state.telemetry
+            if telemetry is not None and telemetry.has_exploding:
+                checks_failed.append("exploding_gradients")
+                exploding_ok = False
+            else:
+                checks_passed.append("no_exploding_gradients")
+                exploding_ok = True
+
+            # Check 3: Gradient health above safety threshold
+            # Low gradient health indicates the seed may destabilize the host.
+            gradient_health_ok = True  # Default to OK if no telemetry
+            if telemetry is not None:
+                health = telemetry.gradient_health
+                if health >= self.min_gradient_health_for_blending:
+                    checks_passed.append(f"gradient_health_{health:.2f}")
+                else:
+                    checks_failed.append(
+                        f"gradient_health_low_{health:.2f}_need_{self.min_gradient_health_for_blending:.2f}"
+                    )
+                    gradient_health_ok = False
+
+            passed = epochs_ok and exploding_ok and gradient_health_ok
             return GateResult(
                 gate=GateLevel.G2,
                 passed=passed,
                 score=min(1.0, improvement / 5.0) if improvement > 0 else 0.0,
                 checks_passed=checks_passed,
                 checks_failed=checks_failed,
-                message=f"Permissive G2: {improvement:.2f}% improvement",
+                message=f"Permissive G2 Safety: {'PASS' if passed else 'FAIL'}",
             )
 
         # STRICT MODE: Full quality checks
@@ -2361,9 +2399,11 @@ class SeedSlot(nn.Module):
             return
 
         # Auto-forward: TRAINING -> BLENDING (G2)
+        # NOTE: Both permissive and strict modes require min_blending_epochs.
+        # In permissive mode, G2 gate also checks gradient health and no exploding.
         if stage == SeedStage.TRAINING:
             if GateLevel.G2 in self.auto_forward_gates:
-                min_epochs = 1 if self.gates.permissive else self.gates.min_blending_epochs
+                min_epochs = self.gates.min_blending_epochs
                 if self.state.metrics.epochs_in_current_stage >= min_epochs:
                     self.advance_stage(SeedStage.BLENDING)
             return

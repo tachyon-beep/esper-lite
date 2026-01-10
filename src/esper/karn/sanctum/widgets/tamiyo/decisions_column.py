@@ -15,6 +15,7 @@ from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.containers import Container, VerticalScroll
+from textual.css.query import NoMatches
 from textual.message import Message
 from textual.widgets import Static
 
@@ -91,10 +92,12 @@ class DecisionCard(Static):
         result.append(age_str, style="dim")
         result.append("\n")
 
-        # Line 2: Training context (epoch, env, round)
+        # Line 2: Training context (epoch, episode_idx, round)
+        # episode_idx = episode + env_id is a unique identifier for telemetry lookup
+        episode_idx = decision.episode + decision.env_id
         result.append(f"epoch:{decision.epoch}", style="dim")
         result.append("  ", style="dim")
-        result.append(f"env:{decision.env_id}", style="cyan")
+        result.append(f"ep#:{episode_idx}", style="cyan")
         result.append("  ", style="dim")
         result.append(f"round:{decision.batch}", style="dim")
         result.append("\n")
@@ -443,6 +446,9 @@ class DecisionsColumn(Container):
 
         try:
             container = self.query_one("#cards-container", VerticalScroll)
+            # Guard: don't mount cards if container isn't fully attached yet
+            if not container.is_attached:
+                return
 
             # Remove ALL existing cards (use list() to avoid mutation during iteration)
             for card in list(container.query(DecisionCard)):
@@ -482,6 +488,12 @@ class DecisionsColumn(Container):
 
     def _refresh_cards(self) -> None:
         """Refresh card content without structural changes (updates ages)."""
-        container = self.query_one("#cards-container", VerticalScroll)
-        for card in container.query(DecisionCard):
-            card.refresh()
+        try:
+            container = self.query_one("#cards-container", VerticalScroll)
+            if not container.is_attached:
+                return
+            for card in container.query(DecisionCard):
+                card.refresh()
+        except NoMatches:
+            # Container not yet mounted - safe to skip refresh
+            pass

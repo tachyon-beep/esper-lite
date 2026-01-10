@@ -32,6 +32,7 @@ class TestFinitenessGateAggregation:
             finiteness_failures=finiteness_failures,
             epochs_completed=0,
             head_entropies={},
+            conditional_head_entropies={},  # Entropy only when head is causally relevant
             head_grad_norms={},
             head_nan_detected={},
             head_inf_detected={},

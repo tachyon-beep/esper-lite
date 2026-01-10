@@ -130,7 +130,7 @@ class TestGatedBlendLifecycleIntegration:
             slot_id="r0c0",
             stage=SeedStage.BLENDING,
         )
-        state.metrics.epochs_in_current_stage = 5
+        state.metrics.epochs_in_current_stage = 10  # Meet minimum blending epochs
 
         state.alpha = 0.5  # mid-progress
         state.alpha_controller.alpha = state.alpha

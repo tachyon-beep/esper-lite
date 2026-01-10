@@ -495,7 +495,8 @@ def run_heuristic_episode(
     def telemetry_callback(event: TelemetryEvent) -> None:
         # Slot telemetry events are emitted from Kasmina with env_id=-1 sentinel
         # (slots don't know their environment). Inject env_id=0 for heuristic runs.
-        emit_with_env_context(hub, 0, device, event)
+        # Heuristic runs don't have a group_id, use empty string.
+        emit_with_env_context(hub, 0, device, event, "")
 
     for slot_id in enabled_slots:
         slot = model.seed_slots[slot_id]

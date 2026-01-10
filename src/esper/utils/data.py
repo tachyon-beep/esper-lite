@@ -28,27 +28,112 @@ def _cifar10_pad_value(device: torch.device | str, dtype: torch.dtype) -> torch.
     return _CIFAR10_PAD_VALUE.to(device=device, dtype=dtype)
 
 
+@dataclass
+class AugmentationBuffers:
+    """Pre-allocated buffers for GPU augmentation to reduce memory fragmentation.
+
+    CIFAR-10 augmentation creates ~15MB of intermediate tensors per batch.
+    By reusing these buffers across batches, we:
+    1. Reduce allocation count from ~5 per batch to ~0 (after warmup)
+    2. Keep allocation sizes consistent (no fragmentation from varying sizes)
+    3. Reduce pressure on CUDA caching allocator
+
+    Usage:
+        buffers = AugmentationBuffers.create(batch_size=512, device="cuda:0")
+        for batch in data_loader:
+            augmented = augment_cifar10_batch(batch, generator=gen, buffers=buffers)
+    """
+
+    padded: torch.Tensor | None = None
+    device: str = "cuda:0"
+    batch_size: int = 0
+    padding: int = 4
+
+    @classmethod
+    def create(
+        cls,
+        batch_size: int,
+        device: str,
+        padding: int = 4,
+        channels: int = 3,
+        height: int = 32,
+        width: int = 32,
+        dtype: torch.dtype = torch.float32,
+    ) -> "AugmentationBuffers":
+        """Create pre-allocated buffers for the given batch size."""
+        padded_shape = (batch_size, channels, height + 2 * padding, width + 2 * padding)
+        padded = torch.empty(padded_shape, device=device, dtype=dtype)
+        return cls(padded=padded, device=device, batch_size=batch_size, padding=padding)
+
+    def ensure_capacity(
+        self,
+        batch_size: int,
+        channels: int,
+        height: int,
+        width: int,
+        dtype: torch.dtype,
+    ) -> None:
+        """Ensure buffers have sufficient capacity, reallocating if needed."""
+        padded_shape = (
+            batch_size,
+            channels,
+            height + 2 * self.padding,
+            width + 2 * self.padding,
+        )
+        if (
+            self.padded is None
+            or self.padded.shape != padded_shape
+            or self.padded.dtype != dtype
+        ):
+            # Release old buffer before allocating new to avoid temporary 2x memory spike
+            self.padded = None
+            self.padded = torch.empty(padded_shape, device=self.device, dtype=dtype)
+            self.batch_size = batch_size
+
+
 def augment_cifar10_batch(
     inputs: torch.Tensor,
     *,
     generator: torch.Generator,
     padding: int = 4,
     flip_prob: float = 0.5,
+    buffers: AugmentationBuffers | None = None,
 ) -> torch.Tensor:
-    """Apply CIFAR-10 RandomCrop + RandomHorizontalFlip on normalized tensors."""
+    """Apply CIFAR-10 RandomCrop + RandomHorizontalFlip on normalized tensors.
+
+    Args:
+        inputs: Input tensor of shape (B, C, H, W)
+        generator: Random number generator for reproducibility
+        padding: Padding size for random crop (default 4)
+        flip_prob: Probability of horizontal flip (default 0.5)
+        buffers: Optional pre-allocated buffers to reduce memory fragmentation.
+            When provided, the padded intermediate tensor is reused across calls,
+            reducing allocation churn from ~15MB/batch to near zero.
+
+    Returns:
+        Augmented tensor of same shape as inputs.
+    """
     if inputs.ndim != 4:
         raise ValueError(f"Expected inputs with shape (B,C,H,W), got {inputs.shape}")
     batch_size, channels, height, width = inputs.shape
 
     if padding > 0:
         pad_value = _cifar10_pad_value(inputs.device, inputs.dtype)
-        padded = torch.empty(
-            (batch_size, channels, height + 2 * padding, width + 2 * padding),
-            device=inputs.device,
-            dtype=inputs.dtype,
-        )
+
+        # FRAGMENTATION FIX: Reuse pre-allocated buffer when available.
+        # This reduces allocation count from ~5 per batch to ~1-2 (gather outputs).
+        if buffers is not None:
+            buffers.ensure_capacity(batch_size, channels, height, width, inputs.dtype)
+            padded = buffers.padded
+            assert padded is not None
+        else:
+            padded = torch.empty(
+                (batch_size, channels, height + 2 * padding, width + 2 * padding),
+                device=inputs.device,
+                dtype=inputs.dtype,
+            )
         padded[:] = pad_value.view(1, channels, 1, 1)
-        padded[:, :, padding:padding + height, padding:padding + width] = inputs
+        padded[:, :, padding : padding + height, padding : padding + width] = inputs
     else:
         padded = inputs
 
@@ -241,28 +326,42 @@ def clear_gpu_dataset_cache(
     dataset: str | None = None,
     device: str | None = None,
     data_root: str | None = None,
-) -> None:
+    augment_mode: str | None = None,
+) -> int:
     """Clear cached GPU-resident datasets.
 
     Intended for long-lived processes and tests where callers may want to vary
     data roots or free GPU memory.
+
+    Args:
+        dataset: Filter by dataset name (e.g., "cifar10")
+        device: Filter by device string (e.g., "cuda:0")
+        data_root: Filter by data root path
+        augment_mode: Filter by augment mode ("base" or "precompute")
+
+    Returns:
+        Number of cache entries cleared.
     """
     global _GPU_DATASET_CACHE
     normalized_root = _normalize_data_root(data_root) if data_root is not None else None
 
     keys_to_delete: list[tuple[str, str, str, str]] = []
     for cache_key in _GPU_DATASET_CACHE:
-        key_dataset, key_device, key_root, _key_version = cache_key
+        key_dataset, key_device, key_root, key_version = cache_key
         if dataset is not None and key_dataset != dataset:
             continue
         if device is not None and key_device != device:
             continue
         if normalized_root is not None and key_root != normalized_root:
             continue
+        if augment_mode is not None and augment_mode not in key_version:
+            continue
         keys_to_delete.append(cache_key)
 
     for cache_key in keys_to_delete:
         del _GPU_DATASET_CACHE[cache_key]
+
+    return len(keys_to_delete)
 
 
 def _ensure_cifar10_cached(
@@ -273,7 +372,14 @@ def _ensure_cifar10_cached(
     augment_mode: str = "base",
     seed: int | None = None,
 ) -> None:
-    """Ensure CIFAR-10 is cached on the specified device."""
+    """Ensure CIFAR-10 is cached on the specified device.
+
+    Memory Management:
+        When using augment_mode="precompute", this function automatically evicts
+        any existing precompute cache entries for the same device before creating
+        a new one. This bounds GPU memory to at most one precompute entry per device,
+        preventing unbounded cache growth when training with different seeds.
+    """
     global _GPU_DATASET_CACHE
     if augment_mode not in ("base", "precompute"):
         raise ValueError(f"Unsupported CIFAR-10 augment_mode: {augment_mode}")
@@ -283,6 +389,16 @@ def _ensure_cifar10_cached(
     cache_key = _cifar10_cache_key(
         device, data_root, augment_mode=augment_mode, seed=seed
     )
+
+    # MEMORY LEAK FIX: Before creating a precompute cache entry, evict any existing
+    # precompute entries for this device. This prevents unbounded cache growth when
+    # training with different seeds (each seed would otherwise create a ~750MB entry).
+    if augment_mode == "precompute" and cache_key not in _GPU_DATASET_CACHE:
+        evicted = clear_gpu_dataset_cache(device=device, augment_mode="precompute")
+        if evicted > 0:
+            # Release memory back to CUDA driver after eviction
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     if refresh or cache_key not in _GPU_DATASET_CACHE:
         # Load raw data (no augmentation for GPU-resident - applied at batch time)
@@ -611,6 +727,14 @@ class SharedGPUGatherBatchIterator:
     def __iter__(self) -> "SharedGPUGatherBatchIterator":
         for state in self._device_states.values():
             dataset_len = state.dataset_x.size(0)
+
+            # CRITICAL: Explicitly delete old permutation tensor before creating new one.
+            # Without this, old perm tensors accumulate in GPU memory across epochs,
+            # causing the "fill → thrash → free" pattern as the allocator hits device limit.
+            if state.perm is not None:
+                del state.perm
+                state.perm = None
+
             if state.shuffle:
                 perm_cpu = torch.randperm(dataset_len, generator=state.cpu_gen)
                 state.perm = perm_cpu.to(state.device)

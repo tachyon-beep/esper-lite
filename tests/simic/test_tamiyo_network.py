@@ -120,7 +120,7 @@ class TestFactoredRecurrentActorCritic:
             "op": torch.zeros(2, 5, dtype=torch.long),
         }
 
-        log_probs, values, entropy, hidden = net.evaluate_actions(state, bp_idx, actions)
+        log_probs, values, entropy, hidden, pred_contributions = net.evaluate_actions(state, bp_idx, actions)
 
         # Per-head log probs
         assert "slot" in log_probs
@@ -135,6 +135,9 @@ class TestFactoredRecurrentActorCritic:
         # All should be [batch, seq]
         assert log_probs["slot"].shape == (2, 5)
         assert log_probs["blueprint"].shape == (2, 5)
+
+        # Contribution predictions shape
+        assert pred_contributions.shape == (2, 5, 3)  # [batch, seq, num_slots]
 
     def test_get_action_returns_per_head_log_probs(self):
         """get_action must return per-head log probs for buffer storage."""
@@ -183,7 +186,7 @@ class TestFactoredRecurrentActorCritic:
             "op": torch.zeros(2, 5, dtype=torch.long),
         }
 
-        _, _, entropy, _ = net.evaluate_actions(state, bp_idx, actions)
+        *_, entropy, _, _ = net.evaluate_actions(state, bp_idx, actions)
 
         # Normalized entropy should be between 0 and 1
         for key in [
@@ -420,7 +423,7 @@ def test_entropy_normalization_with_single_action():
         "op": torch.randint(0, NUM_OPS, (2, 3)),
     }
 
-    log_probs, values, entropy, hidden = net.evaluate_actions(state, bp_idx, actions)
+    log_probs, values, entropy, hidden, _ = net.evaluate_actions(state, bp_idx, actions)
 
     # Entropy for single-action head should be 0 (no uncertainty), not inf/nan
     assert not torch.isnan(entropy["slot"]).any(), "Entropy should not be NaN"
@@ -448,7 +451,7 @@ def test_entropy_normalization_in_loss():
         "op": torch.randint(0, NUM_OPS, (2, 3)),
     }
 
-    log_probs, values, entropy, _ = net.evaluate_actions(state, bp_idx, actions)
+    log_probs, values, entropy, _, _ = net.evaluate_actions(state, bp_idx, actions)
 
     # Entropy loss should be bounded
     entropy_loss = sum(-ent.mean() for ent in entropy.values())
@@ -483,7 +486,7 @@ def test_entropy_respects_valid_actions_only():
         "op": torch.zeros(1, 2, dtype=torch.long),
     }
 
-    _, _, entropy, _ = net.evaluate_actions(
+    _, _, entropy, _, _ = net.evaluate_actions(
         states=state,
         blueprint_indices=bp_idx,
         actions=actions,
@@ -661,7 +664,7 @@ def test_stored_op_value_consistency():
     }
 
     # Evaluate with stored actions (simulates PPO update)
-    eval_log_probs, eval_value, eval_entropy, _ = net.evaluate_actions(
+    eval_log_probs, eval_value, eval_entropy, _, _ = net.evaluate_actions(
         state, bp_idx, actions
     )
 

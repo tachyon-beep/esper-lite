@@ -138,14 +138,20 @@ class SeedGradientCollector:
         Returns tensors instead of floats to avoid .item() sync inside CUDA streams.
         Call materialize_grad_stats() AFTER stream.synchronize() to get final values.
 
+        Thread-safe: Creates atomic clone of gradients before computation to prevent
+        race conditions with optimizer (C1 fix: gradient collection race condition).
+
         Args:
             parameters: Iterator of parameters (e.g., model.parameters())
 
         Returns:
             Dict with tensor values (call materialize_grad_stats to convert to Python types)
         """
-        # Filter params with grads
-        grads = [p.grad for p in parameters if p.grad is not None]
+        # C1 FIX: Clone gradients atomically to prevent race conditions.
+        # Without clone(), the optimizer could modify or clear p.grad between
+        # when we capture it and when we compute statistics on it.
+        with torch.no_grad():
+            grads = [p.grad.clone() for p in parameters if p.grad is not None]
 
         if not grads:
             return {

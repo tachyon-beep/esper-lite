@@ -14,6 +14,7 @@ from rich.table import Table
 from rich.text import Text
 from collections.abc import Iterable
 
+from textual import events
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
 from textual.css.query import NoMatches
@@ -22,6 +23,7 @@ from textual.widget import Widget
 from textual.widgets import Static
 
 from esper.karn.constants import DisplayThresholds
+from esper.karn.sanctum.widgets.seed_detail_modal import SeedDetailModal, SeedDetailRequested
 from esper.karn.sanctum.formatting import format_params
 from esper.karn.sanctum.widgets.counterfactual_panel import CounterfactualPanel
 from esper.karn.sanctum.widgets.shapley_panel import ShapleyPanel
@@ -71,6 +73,11 @@ class SeedCard(Static):
     def compose(self) -> Iterable[Widget]:
         """No child widgets - we render directly."""
         yield from []
+
+    def on_click(self, event: events.Click) -> None:
+        """Post message to open seed detail modal."""
+        event.stop()
+        self.post_message(SeedDetailRequested(slot_id=self._slot_id, seed=self._seed))
 
     def render(self) -> Panel:
         """Render the seed card as a Rich Panel."""
@@ -304,6 +311,7 @@ class EnvDetailScreen(ModalScreen[None]):
         slot_ids: list[str],
         *,
         group_id: str | None = None,
+        current_episode: int = 0,
         **kwargs: Any,
     ) -> None:
         """Initialize the detail screen.
@@ -312,12 +320,14 @@ class EnvDetailScreen(ModalScreen[None]):
             env_state: The environment state to display.
             slot_ids: List of slot IDs for the seed grid.
             group_id: Policy group identifier for multi-policy runs.
+            current_episode: Current episode count (for episode_idx computation).
         """
         super().__init__(**kwargs)
         self._env = env_state
         self._slot_ids = slot_ids
         self._env_id = env_state.env_id  # Track env_id for updates
         self._group_id = group_id
+        self._current_episode = current_episode
 
     @property
     def env_id(self) -> int:
@@ -363,7 +373,7 @@ class EnvDetailScreen(ModalScreen[None]):
 
             # Footer hint
             yield Static(
-                "[dim]Press ESC, Q, or click to close[/dim]",
+                "[dim]Press ESC or Q to close | Click a seed card for lifecycle details[/dim]",
                 classes="footer-hint",
             )
 
@@ -371,15 +381,28 @@ class EnvDetailScreen(ModalScreen[None]):
         """Dismiss modal on click."""
         self.dismiss()
 
-    def update_env_state(self, env_state: "EnvState") -> None:
+    def on_seed_detail_requested(self, event: SeedDetailRequested) -> None:
+        """Open seed detail modal with lifecycle history."""
+        self.app.push_screen(
+            SeedDetailModal(
+                seed=event.seed,
+                slot_id=event.slot_id,
+                lifecycle_events=self._env.lifecycle_events,
+            )
+        )
+
+    def update_env_state(self, env_state: "EnvState", current_episode: int | None = None) -> None:
         """Update the displayed environment state.
 
         Called by the app during refresh to keep modal in sync with live data.
 
         Args:
             env_state: Updated environment state.
+            current_episode: Updated episode count (for episode_idx computation).
         """
         self._env = env_state
+        if current_episode is not None:
+            self._current_episode = current_episode
 
         # Update header
         try:
@@ -431,8 +454,9 @@ class EnvDetailScreen(ModalScreen[None]):
 
         header = Text()
 
-        # Env ID
-        header.append(f"Environment {env.env_id}", style="bold")
+        # Episode index (unique identifier for telemetry lookup)
+        episode_idx = self._current_episode + env.env_id
+        header.append(f"Episode# {episode_idx}", style="bold")
         header.append("  │  ")
 
         # Status

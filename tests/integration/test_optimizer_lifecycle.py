@@ -23,6 +23,8 @@ class SurgeonAgent:
     def __init__(self, num_envs: int, *args, **kwargs):
         self.n_envs = num_envs
         self.step_count = 0
+        self.compile_mode = "off"  # Required by vectorized.py compile check
+        self.probability_floor = None  # Required by vectorized_trainer.py
         # Minimal PPO Interface needed by vectorized.py
         self.buffer = type("MockBuffer", (), {
             "add": lambda *args, **kwargs: None, 
@@ -126,9 +128,10 @@ class TestOptimizerLifecycle:
         print(f"\n[Lifecycle] Initial Optimizer Count: {initial_count}")
         
         # 2. Config setup
-        config = TrainingConfig.for_cifar10()
+        config = TrainingConfig.for_cifar_minimal()
         config.n_envs = 1 # Keep it simple
         config.max_epochs = 20 # Enough steps to cover the script
+        config.chunk_length = 20  # Must match max_epochs for current training loop
         config.seed = 42
         config.use_telemetry = False
         config.n_episodes = 1

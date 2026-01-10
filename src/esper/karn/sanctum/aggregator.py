@@ -38,6 +38,7 @@ from esper.karn.sanctum.schema import (
     ShapleySnapshot,
     ShapleyEstimate,
     SeedLifecycleStats,
+    SeedLifecycleEvent,
     ObservationStats,
     EpisodeStats,
     compute_entropy_velocity,
@@ -989,6 +990,13 @@ class SanctumAggregator:
         self._tamiyo.log_prob_min = payload.log_prob_min
         self._tamiyo.log_prob_max = payload.log_prob_max
 
+        # D5: Slot Saturation Diagnostics - have defaults
+        self._tamiyo.decision_density = payload.decision_density
+        self._tamiyo.forced_step_ratio = payload.forced_step_ratio
+        self._tamiyo.advantage_std_floored = payload.advantage_std_floored
+        self._tamiyo.pre_norm_advantage_std = payload.d5_pre_norm_advantage_std
+        self._tamiyo.decision_density_history.append(payload.decision_density)
+
         # Ratio statistics (PPO importance sampling ratios) - have defaults
         self._tamiyo.ratio_mean = payload.ratio_mean
         self._tamiyo.ratio_min = payload.ratio_min
@@ -1205,6 +1213,18 @@ class SanctumAggregator:
                 self._cumulative_blueprint_spawns.get(seed.blueprint_id, 0) + 1
             )
 
+            # Create lifecycle event
+            env.lifecycle_events.append(SeedLifecycleEvent(
+                epoch=event.epoch or 0,
+                action=f"GERMINATE({germinated_payload.blueprint_id})",
+                from_stage="DORMANT",
+                to_stage="GERMINATED",
+                blueprint_id=germinated_payload.blueprint_id,
+                slot_id=slot_id,
+                alpha=None,
+                accuracy_delta=None,
+            ))
+
         elif event_type == "SEED_STAGE_CHANGED" and isinstance(event.data, SeedStageChangedPayload):
             stage_changed_payload = event.data
             slot_id = event.slot_id or stage_changed_payload.slot_id
@@ -1233,6 +1253,25 @@ class SanctumAggregator:
             if stage_changed_payload.alpha is not None:
                 seed.alpha = stage_changed_payload.alpha
             seed.alpha_curve = stage_changed_payload.alpha_curve
+
+            # Determine action: explicit ADVANCE or [auto]
+            auto_transitions = {
+                ("GERMINATED", "TRAINING"),
+                ("BLENDING", "HOLDING"),
+            }
+            is_auto = (stage_changed_payload.from_stage, stage_changed_payload.to_stage) in auto_transitions
+            action = "[auto]" if is_auto else "ADVANCE"
+
+            env.lifecycle_events.append(SeedLifecycleEvent(
+                epoch=event.epoch or 0,
+                action=action,
+                from_stage=stage_changed_payload.from_stage,
+                to_stage=stage_changed_payload.to_stage,
+                blueprint_id=seed.blueprint_id or "unknown",
+                slot_id=slot_id,
+                alpha=stage_changed_payload.alpha,
+                accuracy_delta=None,
+            ))
 
         elif event_type == "SEED_FOSSILIZED" and isinstance(event.data, SeedFossilizedPayload):
             fossilized_payload = event.data
@@ -1275,6 +1314,18 @@ class SanctumAggregator:
                 self._cumulative_blueprint_fossilized.get(seed.blueprint_id, 0) + 1
             )
 
+            # Create lifecycle event
+            env.lifecycle_events.append(SeedLifecycleEvent(
+                epoch=event.epoch or 0,
+                action="FOSSILIZE",
+                from_stage=seed.stage,
+                to_stage="FOSSILIZED",
+                blueprint_id=seed.blueprint_id or "unknown",
+                slot_id=slot_id,
+                alpha=seed.alpha,
+                accuracy_delta=fossilized_payload.improvement,
+            ))
+
         elif event_type == "SEED_PRUNED" and isinstance(event.data, SeedPrunedPayload):
             pruned_payload = event.data
             slot_id = event.slot_id or pruned_payload.slot_id
@@ -1296,6 +1347,18 @@ class SanctumAggregator:
             # Capture pre-prune state for growth bookkeeping
             was_fossilized = seed.stage == "FOSSILIZED"
             fossilized_params = seed.seed_params
+
+            # Create lifecycle event (before clearing seed state)
+            env.lifecycle_events.append(SeedLifecycleEvent(
+                epoch=event.epoch or 0,
+                action="PRUNE",
+                from_stage=seed.stage,
+                to_stage="PRUNED",
+                blueprint_id=seed.blueprint_id or "unknown",
+                slot_id=slot_id,
+                alpha=seed.alpha,
+                accuracy_delta=None,
+            ))
 
             # Update from payload
             seed.prune_reason = pruned_payload.reason
@@ -1441,6 +1504,8 @@ class SanctumAggregator:
                     slot_ids=list(self._slot_ids),  # All slots for showing DORMANT in detail
                     growth_ratio=growth_ratio,
                     record_id=str(uuid.uuid4())[:8],
+                    cumulative_reward=env.cumulative_reward,  # End-of-episode total reward for this trajectory
+                    peak_cumulative_reward=env.peak_cumulative_reward,
                     # Full env snapshot at peak (captured by EnvState.add_accuracy())
                     reward_components=env.best_reward_components,
                     counterfactual_matrix=env.best_counterfactual_matrix,
@@ -1453,10 +1518,18 @@ class SanctumAggregator:
                     fossilized_count=env.fossilized_count,
                     pruned_count=env.pruned_count,
                     reward_mode=env.reward_mode,
-                    # Seed graveyard: per-blueprint lifecycle stats
-                    blueprint_spawns=dict(env.blueprint_spawns),
-                    blueprint_fossilized=dict(env.blueprint_fossilized),
-                    blueprint_prunes=dict(env.blueprint_prunes),
+                    # Graveyard at peak (use snapshotted values)
+                    blueprint_spawns=dict(env.best_blueprint_spawns),
+                    blueprint_fossilized=dict(env.best_blueprint_fossilized),
+                    blueprint_prunes=dict(env.best_blueprint_prunes),
+                    # End-of-episode state (for Peak ↔ End toggle)
+                    end_seeds={k: replace(v) for k, v in env.seeds.items()},
+                    end_reward_components=(
+                        RewardComponents(**env.reward_components.__dict__)
+                        if env.reward_components else None
+                    ),
+                    best_lifecycle_events=list(env.best_lifecycle_events),
+                    end_lifecycle_events=list(env.lifecycle_events),
                 )
                 self._best_runs.append(record)
 
@@ -1498,12 +1571,20 @@ class SanctumAggregator:
             env.best_accuracy = 0.0
             env.best_accuracy_epoch = 0
             env.best_accuracy_episode = 0
+            env.peak_cumulative_reward = 0.0
             env.best_seeds.clear()
 
             # Volatile state snapshots (fresh per episode)
             env.best_reward_components = None
             env.best_counterfactual_matrix = None
             env.best_action_history = []
+            env.best_blueprint_spawns.clear()
+            env.best_blueprint_fossilized.clear()
+            env.best_blueprint_prunes.clear()
+
+            # Lifecycle events (fresh per episode)
+            env.lifecycle_events.clear()
+            env.best_lifecycle_events.clear()
 
             # Action tracking (fresh distribution each episode)
             env.action_history.clear()
@@ -1751,6 +1832,7 @@ class SanctumAggregator:
                 decision_id=str(uuid.uuid4())[:8],
                 decision_entropy=payload.decision_entropy or 0.0,
                 env_id=env_id,
+                episode=self._current_episode,
                 epoch=self._current_epoch,
                 batch=self._current_batch,
                 value_residual=total_reward - value_s,

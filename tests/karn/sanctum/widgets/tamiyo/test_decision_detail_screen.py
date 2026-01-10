@@ -107,7 +107,7 @@ class TestDecisionDetailScreenRendering:
 
         assert "Summary" in detail_text
         assert "decision-abc-123" in detail_text
-        assert "Env:" in detail_text
+        assert "Episode#:" in detail_text  # episode_idx for telemetry lookup
         assert "Epoch:" in detail_text
 
     def test_decision_id_displayed_directly(self):
