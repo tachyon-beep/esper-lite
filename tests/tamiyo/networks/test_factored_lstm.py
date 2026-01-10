@@ -98,3 +98,99 @@ def test_contribution_predictor_has_dropout():
     ]
     assert len(dropout_layers) >= 1
     assert dropout_layers[0].p == 0.1
+
+
+def test_predict_contributions_method():
+    """predict_contributions() returns predictions from LSTM output."""
+    slot_config = SlotConfig.default()
+    num_slots = len(slot_config.slot_ids)
+
+    policy = FactoredRecurrentActorCritic(
+        state_dim=128,
+        slot_config=slot_config,
+    )
+
+    batch_size = 4
+    # state_dim=128 is the raw state dimension (before blueprint embeddings are added)
+    # feature_net expects state_dim + blueprint_embed_total_dim = 128 + 12 = 140
+    # But predict_contributions should handle the full forward path internally
+    features = torch.randn(batch_size, 128)
+    # Blueprint indices for 3 slots (valid range: -1 for inactive, 0-12 for active)
+    blueprint_indices = torch.randint(-1, 13, (batch_size, num_slots))
+    hidden = policy.get_initial_hidden(batch_size, torch.device("cpu"))
+
+    # Predict contributions
+    pred = policy.predict_contributions(features, blueprint_indices, hidden)
+
+    assert pred.shape == (batch_size, num_slots)
+    assert pred.requires_grad  # Should be differentiable
+
+
+def test_predict_contributions_stop_gradient():
+    """predict_contributions with stop_gradient=True detaches LSTM output."""
+    slot_config = SlotConfig.default()
+    num_slots = len(slot_config.slot_ids)
+    policy = FactoredRecurrentActorCritic(
+        state_dim=128,
+        slot_config=slot_config,
+    )
+
+    batch_size = 4
+    features = torch.randn(batch_size, 128, requires_grad=True)
+    blueprint_indices = torch.randint(-1, 13, (batch_size, num_slots))
+    hidden = policy.get_initial_hidden(batch_size, torch.device("cpu"))
+
+    # With stop_gradient=True (default), LSTM params should not get gradients
+    pred = policy.predict_contributions(features, blueprint_indices, hidden, stop_gradient=True)
+    loss = pred.sum()
+    loss.backward()
+
+    # feature_net should NOT have gradients (detached before contribution_predictor)
+    feature_net_grads = [
+        p.grad for p in policy.feature_net.parameters() if p.grad is not None
+    ]
+    assert (
+        len(feature_net_grads) == 0
+    ), "feature_net should not receive gradients with stop_gradient=True"
+
+    # contribution_predictor SHOULD have gradients
+    contrib_grads = [
+        p.grad for p in policy.contribution_predictor.parameters() if p.grad is not None
+    ]
+    assert len(contrib_grads) > 0, "contribution_predictor should receive gradients"
+
+
+def test_predict_contributions_no_stop_gradient():
+    """predict_contributions with stop_gradient=False allows LSTM gradients."""
+    slot_config = SlotConfig.default()
+    num_slots = len(slot_config.slot_ids)
+    policy = FactoredRecurrentActorCritic(
+        state_dim=128,
+        slot_config=slot_config,
+    )
+
+    batch_size = 4
+    features = torch.randn(batch_size, 128, requires_grad=True)
+    blueprint_indices = torch.randint(-1, 13, (batch_size, num_slots))
+    hidden = policy.get_initial_hidden(batch_size, torch.device("cpu"))
+
+    # With stop_gradient=False, LSTM params should receive gradients
+    pred = policy.predict_contributions(
+        features, blueprint_indices, hidden, stop_gradient=False
+    )
+    loss = pred.sum()
+    loss.backward()
+
+    # feature_net SHOULD have gradients (not detached)
+    feature_net_grads = [
+        p.grad for p in policy.feature_net.parameters() if p.grad is not None
+    ]
+    assert (
+        len(feature_net_grads) > 0
+    ), "feature_net should receive gradients with stop_gradient=False"
+
+    # contribution_predictor SHOULD also have gradients
+    contrib_grads = [
+        p.grad for p in policy.contribution_predictor.parameters() if p.grad is not None
+    ]
+    assert len(contrib_grads) > 0, "contribution_predictor should receive gradients"

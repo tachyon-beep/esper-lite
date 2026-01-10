@@ -449,6 +449,59 @@ class FactoredRecurrentActorCritic(nn.Module):
         value = cast(torch.Tensor, self.value_head(value_input))
         return value.squeeze(-1)
 
+    def predict_contributions(
+        self,
+        state: torch.Tensor,
+        blueprint_indices: torch.Tensor,
+        hidden: tuple[torch.Tensor, torch.Tensor],
+        stop_gradient: bool = True,
+    ) -> torch.Tensor:
+        """Predict per-slot counterfactual contributions.
+
+        Processes state through feature_net and LSTM, then predicts contributions.
+        Used for auxiliary supervision during training.
+
+        Args:
+            state: Input state [batch, state_dim]
+            blueprint_indices: Blueprint indices per slot [batch, num_slots].
+                Values 0-12 for active blueprints, -1 for inactive slots.
+            hidden: LSTM hidden state tuple (h, c)
+            stop_gradient: If True (default), detach LSTM output before prediction.
+                This prevents auxiliary gradients from affecting shared LSTM
+                representations, avoiding representation collapse.
+                DRL Expert recommendation: Start with True to maintain stable
+                LSTM features for the main policy; can experiment with False
+                later if auxiliary task improves policy learning.
+
+        Returns:
+            Predicted contributions [batch, num_slots]
+        """
+        # Add sequence dimension for LSTM (expects [batch, seq, feature])
+        state = state.unsqueeze(1)  # [batch, 1, state_dim]
+        blueprint_indices = blueprint_indices.unsqueeze(1)  # [batch, 1, num_slots]
+
+        # Blueprint embedding (same as forward path)
+        bp_emb = self.blueprint_embedding(blueprint_indices)  # [batch, 1, num_slots, embed_dim]
+        bp_emb_flat = bp_emb.flatten(start_dim=2)  # [batch, 1, num_slots * embed_dim]
+        state_with_bp = torch.cat([state, bp_emb_flat], dim=-1)  # [batch, 1, state_dim + 12]
+
+        # Process through feature net and LSTM (same as forward path)
+        features = self.feature_net(state_with_bp)
+        lstm_out, _ = self.lstm(features, hidden)
+
+        # Apply LayerNorm (same as forward path)
+        lstm_out = self.lstm_ln(lstm_out)
+
+        # Remove sequence dimension
+        lstm_out = lstm_out.squeeze(1)  # [batch, lstm_hidden_dim]
+
+        # DRL Expert: Stop gradient to prevent aux task from shaping LSTM features
+        # This prevents representation collapse from auxiliary gradients
+        if stop_gradient:
+            lstm_out = lstm_out.detach()
+
+        return cast(torch.Tensor, self.contribution_predictor(lstm_out))
+
     def forward(
         self,
         state: torch.Tensor,  # [batch, seq_len, state_dim]
