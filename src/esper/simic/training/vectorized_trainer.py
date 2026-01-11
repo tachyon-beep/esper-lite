@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-import math
 import os
 import time
 from contextlib import nullcontext
@@ -24,7 +23,6 @@ from esper.leyline.slot_id import validate_slot_ids
 from esper.simic.telemetry import (
     AnomalyDetector,
     GradientEMATracker,
-    compute_lstm_health,
     compute_observation_stats,
     materialize_dual_grad_stats,
     materialize_grad_stats,
@@ -40,6 +38,8 @@ from .action_execution import ActionExecutionContext, ResolveTargetSlot, execute
 from .batch_ops import batch_signals_to_features, process_train_batch
 from .counterfactual_eval import process_fused_val_batch
 from .env_factory import EnvFactoryContext, configure_slot_telemetry, create_env_state
+from .epoch_runner import EpochState
+from .ppo_coordinator import PPOCoordinator, PPOCoordinatorConfig
 from esper.simic.vectorized_types import (
     ActionMaskFlags,
     ActionOutcome,
@@ -119,6 +119,7 @@ class VectorizedPPOTrainer:
     device: str
     logger: logging.Logger
     action_execution_context: ActionExecutionContext = field(init=False)
+    ppo_coordinator: PPOCoordinator = field(init=False)
 
     def __post_init__(self) -> None:
         self.action_execution_context = ActionExecutionContext(
@@ -144,6 +145,30 @@ class VectorizedPPOTrainer:
             fossilize_active_seed=self.fossilize_active_seed,
             resolve_target_slot=self.resolve_target_slot,
             host_params_baseline=self.host_params_baseline,
+        )
+
+        # Create PPO coordinator for update phase
+        ppo_config = PPOCoordinatorConfig(
+            ppo_updates_per_batch=self.ppo_updates_per_batch,
+            max_epochs=self.max_epochs,
+            total_env_episodes=self.total_env_episodes,
+            amp_enabled=self.amp_enabled,
+            resolved_amp_dtype=self.resolved_amp_dtype,
+        )
+        self.ppo_coordinator = PPOCoordinator(
+            agent=self.agent,
+            config=ppo_config,
+            reward_normalizer=self.reward_normalizer,
+            anomaly_detector=self.anomaly_detector,
+            env_reward_configs=self.env_reward_configs,
+            reward_family_enum=self.reward_family_enum,
+            hub=self.hub,
+            telemetry_config=self.telemetry_config,
+            group_id=self.group_id,
+            run_ppo_updates_fn=self.run_ppo_updates,
+            handle_telemetry_escalation_fn=self.handle_telemetry_escalation,
+            emit_anomaly_diagnostics_fn=self.emit_anomaly_diagnostics,
+            logger=self.logger,
         )
 
     def run(self) -> list[dict[str, Any]]:
@@ -1471,229 +1496,57 @@ class VectorizedPPOTrainer:
                         prof.step()
                         prof_steps += 1
 
-                # PPO Update
-                metrics: dict[str, Any] = {}
-                ppo_grad_norm, ppo_update_time_ms = None, None
-                rollback_env_indices = [
-                    i for i, occurred in enumerate(env_rollback_occurred) if occurred
-                ]
-                if rollback_env_indices:
-                    for env_idx in rollback_env_indices:
-                        # B1-DRL-01 fix: Inject death penalty so PPO learns to avoid
-                        # catastrophic actions. Previously get_punishment_reward() was dead code.
-                        # P1-NORM fix: Normalize penalty to match other rewards' scale.
-                        # Use normalize_only to avoid polluting running stats with rare outliers.
-                        penalty = env_states[env_idx].governor.get_punishment_reward()
-                        normalized_penalty = reward_normalizer.normalize_only(penalty)
-                        agent.buffer.mark_terminal_with_penalty(
-                            env_idx, normalized_penalty
-                        )
-                        # B11-CR-03 fix: OVERWRITE last reward with RAW penalty (for telemetry interpretability).
-                        # Buffer gets normalized_penalty (for PPO training stability).
-                        # Telemetry gets raw penalty (for cross-run comparability).
-                        if env_states[env_idx].episode_rewards:
-                            env_states[env_idx].episode_rewards[-1] = penalty
+                # PPO Update (delegated to PPOCoordinator)
+                ppo_coordinator = self.ppo_coordinator
 
-                    # B11-CR-02 fix: Recompute metrics after penalty injection
-                    # Metrics were computed in the epoch loop (lines 3173-3214) BEFORE penalty was applied.
-                    # This caused EpisodeOutcome, episode_history, and stability to reflect PRE-PENALTY
-                    # rewards, making rollback episodes appear ~2x more rewarding and ~1.6x more stable.
-                    if rollback_env_indices:
-                        for env_idx in rollback_env_indices:
-                            env_state = env_states[env_idx]
+                # Handle rollbacks: inject death penalty and recompute metrics
+                ppo_coordinator.handle_rollbacks(
+                    env_states=env_states,
+                    env_rollback_occurred=env_rollback_occurred,
+                    env_total_rewards=env_total_rewards,
+                    episode_history=episode_history,
+                    episode_outcomes=episode_outcomes,
+                )
 
-                            # 1. Recompute total reward from post-penalty episode_rewards
-                            env_total_rewards[env_idx] = sum(env_state.episode_rewards)
+                # Execute PPO updates
+                metrics, update_skipped, ppo_update_time_ms = ppo_coordinator.run_update(
+                    raw_states_for_normalizer_update=raw_states_for_normalizer_update,
+                    obs_normalizer=obs_normalizer,
+                    envs_this_batch=envs_this_batch,
+                    throughput_step_time_ms_sum=throughput_step_time_ms_sum,
+                    throughput_dataloader_wait_ms_sum=throughput_dataloader_wait_ms_sum,
+                )
 
-                            # 2. Update episode_history entry for this env
-                            for entry in reversed(episode_history):
-                                if entry.env_id == env_idx:
-                                    entry.episode_reward = env_total_rewards[env_idx]
-                                    break
+                ppo_grad_norm = None
+                if not update_skipped and metrics:
+                    # Clear after the normalizer update in _run_ppo_updates.
+                    raw_states_for_normalizer_update = []
 
-                            # 3. Recompute stability from post-penalty variance
-                            recent_ep_rewards = (
-                                env_state.episode_rewards[-20:]
-                                if len(env_state.episode_rewards) >= 20
-                                else env_state.episode_rewards
-                            )
-                            if len(recent_ep_rewards) > 1:
-                                reward_var = float(np.var(recent_ep_rewards))
-                                stability = 1.0 / (1.0 + reward_var)
-                            else:
-                                stability = 1.0
-
-                            # 4. Find and replace EpisodeOutcome for this env
-                            for idx, outcome in enumerate(episode_outcomes):
-                                if outcome.env_id == env_idx:
-                                    corrected_outcome = dataclasses.replace(
-                                        outcome,
-                                        episode_reward=env_total_rewards[env_idx],
-                                        stability_score=stability,
-                                    )
-                                    episode_outcomes[idx] = corrected_outcome
-                                    break
-
-                if len(agent.buffer) == 0:
-                    update_skipped = True
-                else:
-                    update_start = time.perf_counter()
-                    metrics = run_ppo_updates(
-                        agent=agent,
-                        ppo_updates_per_batch=ppo_updates_per_batch,
-                        raw_states_for_normalizer_update=raw_states_for_normalizer_update,
-                        obs_normalizer=obs_normalizer,
-                        use_amp=amp_enabled,
-                        amp_dtype=resolved_amp_dtype,
-                    )
-                    ppo_update_time_ms = (time.perf_counter() - update_start) * 1000.0
-                    update_skipped = False
-
-                    if metrics:
-                        metrics["ppo_update_time_ms"] = ppo_update_time_ms
-                        metrics["ppo_grad_norm"] = metrics["pre_clip_grad_norm"]
-                        metrics["rollout_length"] = max_epochs
-                        metrics["rollout_episodes"] = envs_this_batch
-                        metrics["rollout_total_steps"] = len(agent.buffer)
-                        metrics["reward_mode"] = env_reward_configs[0].reward_mode.value
-                        metrics["reward_family"] = reward_family_enum.value
-                        metrics["entropy_coef"] = agent.entropy_coef
-
-                        metrics["throughput_step_time_ms_sum"] = (
-                            throughput_step_time_ms_sum
-                        )
-                        metrics["throughput_dataloader_wait_ms_sum"] = (
-                            throughput_dataloader_wait_ms_sum
-                        )
-
-                        # Clear after the normalizer update in _run_ppo_updates.
-                        raw_states_for_normalizer_update = []
-
-                    # PPO update time tracking
                     ppo_update_time_ms = metrics["ppo_update_time_ms"]
                     ppo_grad_norm = metrics["ppo_grad_norm"]
 
-                    # Gradient drift (P4-9)
-                    drift_metrics = None
-                    if grad_ema_tracker is not None and ppo_grad_norm is not None:
-                        # Compute gradient health (0-1)
-                        if ppo_grad_norm < 1e-7:
-                            grad_health = 0.3  # Vanishing gradients
-                        elif ppo_grad_norm > 100.0:
-                            grad_health = 0.3  # Exploding gradients
-                        else:
-                            grad_health = 1.0  # Healthy range
-                        drift_metrics = grad_ema_tracker.update(
-                            ppo_grad_norm, grad_health
+                    # Check finiteness gate
+                    consecutive_finiteness_failures, should_continue = (
+                        ppo_coordinator.check_finiteness_gate(
+                            metrics, consecutive_finiteness_failures
                         )
-
-                    # FINITENESS GATE CONTRACT: Check if PPO update actually occurred
-                    if not metrics["ppo_update_performed"]:
-                        # All epochs skipped due to non-finite values
-                        skip_count = metrics["finiteness_gate_skip_count"]
-                        consecutive_finiteness_failures += 1
-                        logger.warning(
-                            f"PPO update skipped (all {skip_count} epochs hit finiteness gate). "
-                            f"Consecutive failures: {consecutive_finiteness_failures}/3"
-                        )
-
-                        # Escalate after 3 consecutive failures (DRL best practice)
-                        if consecutive_finiteness_failures >= 3:
-                            raise RuntimeError(
-                                f"PPO training failed: {consecutive_finiteness_failures} consecutive updates "
-                                "skipped due to non-finite values. Check policy/value network outputs for NaN. "
-                                f"Last failure: {metrics['finiteness_gate_failures']}"
-                            )
+                    )
+                    if not should_continue:
                         # Skip anomaly detection for this batch - metrics are NaN
                         continue
 
-                    # Reset counter on successful update
-                    consecutive_finiteness_failures = 0
-
-                    metric_values = [
-                        v for v in metrics.values() if isinstance(v, (int, float))
-                    ]
-                    anomaly_report = anomaly_detector.check_all(
-                        # MANDATORY metrics after PPO update - fail loudly if missing
-                        ratio_max=metrics["ratio_max"],
-                        ratio_min=metrics["ratio_min"],
-                        explained_variance=metrics.get(
-                            "explained_variance", 0.0
-                        ),  # Optional: computed once
-                        has_nan=any(math.isnan(v) for v in metric_values),
-                        has_inf=any(math.isinf(v) for v in metric_values),
-                        current_episode=batch_epoch_id,
-                        total_episodes=total_env_episodes,
+                    # Check gradient drift
+                    drift_metrics = ppo_coordinator.check_gradient_drift(
+                        grad_ema_tracker, ppo_grad_norm
                     )
 
-                    # B7-DRL-01: Check gradient drift and merge into anomaly report
-                    if drift_metrics is not None:
-                        drift_report = anomaly_detector.check_gradient_drift(
-                            norm_drift=drift_metrics["norm_drift"],
-                            health_drift=drift_metrics["health_drift"],
-                        )
-                        if drift_report.has_anomaly:
-                            anomaly_report.has_anomaly = True
-                            anomaly_report.anomaly_types.extend(
-                                drift_report.anomaly_types
-                            )
-                            anomaly_report.details.update(drift_report.details)
-
-                    # B7-DRL-04: Check LSTM hidden state health after PPO update
-                    # LSTM hidden states can become corrupted during BPTT - monitor for
-                    # explosion/saturation (RMS > threshold), vanishing (RMS < 1e-6), or NaN/Inf.
-                    lstm_health = compute_lstm_health(batched_lstm_hidden)
-                    if lstm_health is not None:
-                        lstm_report = anomaly_detector.check_lstm_health(
-                            h_rms=lstm_health.h_rms,
-                            c_rms=lstm_health.c_rms,
-                            h_env_rms_max=lstm_health.h_env_rms_max,
-                            c_env_rms_max=lstm_health.c_env_rms_max,
-                            has_nan=lstm_health.has_nan,
-                            has_inf=lstm_health.has_inf,
-                        )
-                        if lstm_report.has_anomaly:
-                            anomaly_report.has_anomaly = True
-                            anomaly_report.anomaly_types.extend(
-                                lstm_report.anomaly_types
-                            )
-                            anomaly_report.details.update(lstm_report.details)
-                        # Add LSTM health to metrics for telemetry display in Sanctum
-                        metrics.update(lstm_health.to_dict())
-
-                    # Per-head entropy collapse detection (Task 6)
-                    # Check individual action heads for collapse even when total entropy appears healthy
-                    head_entropies_raw = metrics.get("head_entropies")
-                    if head_entropies_raw:
-                        # Convert per-epoch lists to mean per head
-                        mean_head_entropies = {
-                            head: sum(values) / len(values) if values else 0.0
-                            for head, values in head_entropies_raw.items()
-                        }
-                        per_head_report = anomaly_detector.check_per_head_entropy_collapse(
-                            mean_head_entropies
-                        )
-                        if per_head_report.has_anomaly:
-                            # Log warnings but don't halt - this is early warning
-                            for anomaly_type in per_head_report.anomaly_types:
-                                detail = per_head_report.details.get(anomaly_type, "")
-                                logger.warning(f"Per-head entropy anomaly: {anomaly_type} - {detail}")
-                            # Merge into main anomaly report for telemetry escalation
-                            anomaly_report.has_anomaly = True
-                            anomaly_report.anomaly_types.extend(per_head_report.anomaly_types)
-                            anomaly_report.details.update(per_head_report.details)
-
-                    handle_telemetry_escalation(anomaly_report, telemetry_config)
-                    emit_anomaly_diagnostics(
-                        hub,
-                        anomaly_report,
-                        agent,
-                        batch_epoch_id,
-                        batch_idx,
-                        max_epochs,
-                        total_env_episodes,
-                        False,
-                        group_id=group_id,
+                    # Run anomaly detection (includes LSTM health, per-head entropy)
+                    ppo_coordinator.run_anomaly_detection(
+                        metrics=metrics,
+                        drift_metrics=drift_metrics,
+                        batched_lstm_hidden=batched_lstm_hidden,
+                        batch_epoch_id=batch_epoch_id,
+                        batch_idx=batch_idx,
                     )
 
                 # If the epoch loop exited early (e.g. graceful shutdown), ensure the batch
