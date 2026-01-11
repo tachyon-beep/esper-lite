@@ -100,6 +100,8 @@ class TestFossilizationFarming:
         Seeds must "earn" fossilization by spending time in HOLDING.
         Rapid fossilization gets reduced bonus.
         """
+        import math
+
         from esper.leyline import MIN_HOLDING_EPOCHS
 
         seed_info = inputs["seed_info"]
@@ -111,10 +113,16 @@ class TestFossilizationFarming:
             config = ContributionRewardConfig()
 
             if inputs["seed_contribution"] and inputs["seed_contribution"] > 0:
-                # Verify legitimacy discount applied - shaping should be less than max possible
+                # Verify legitimacy discount applied - shaping should be less than max possible.
+                # Max possible includes:
+                # 1. fossilize_base_bonus + contribution_scale (from _contribution_fossilize_shaping)
+                # 2. immediate_fossilize_bonus (from P0 fix 2026-01-11)
+                # Both have legitimacy_discount applied, so undiscounted max should exceed actual.
                 max_possible = (
                     config.fossilize_base_bonus
                     + config.fossilize_contribution_scale * inputs["seed_contribution"]
+                    + config.fossilize_terminal_scale
+                    * math.tanh(1.0 / config.fossilize_quality_ceiling)
                 )
 
                 assert components.action_shaping < max_possible, (

@@ -302,8 +302,13 @@ def test_compute_reward_minimal_mode():
     assert reward == -0.1
 
 
-def test_compute_reward_basic_mode():
-    """compute_reward dispatches to BASIC reward when mode is BASIC."""
+def test_compute_reward_basic_mode_has_rent_every_step():
+    """BASIC mode: per-step rent prevents train-then-purge gaming.
+
+    With per-step rent, the policy pays rent during training epochs,
+    not just at terminal. This prevents gaming where the policy
+    accumulates rewards then prunes to avoid rent.
+    """
     from esper.simic.rewards import compute_reward
     config = ContributionRewardConfig(
         reward_mode=RewardMode.BASIC,
@@ -318,7 +323,42 @@ def test_compute_reward_basic_mode():
             seed_contribution=None,
             val_acc=70.0,
             seed_info=None,
-            epoch=1,
+            epoch=1,  # Non-terminal
+            max_epochs=25,
+            total_params=100_000,
+            host_params=100_000,
+            acc_at_germination=None,
+            acc_delta=1.0,
+            committed_val_acc=70.0,
+            fossilized_seed_params=0,
+            effective_seed_params=50_000,  # 10% of budget
+            config=config,
+        )
+    )
+
+    # Non-terminal: rent is paid every step, no accuracy bonus
+    # rent = 0.1 * (50_000 / 500_000) = 0.01
+    # No seed_info = no PBRS
+    assert abs(reward - (-0.01)) < 1e-8
+
+
+def test_compute_reward_basic_mode_terminal_includes_accuracy():
+    """BASIC mode: terminal step includes accuracy bonus + rent."""
+    from esper.simic.rewards import compute_reward
+    config = ContributionRewardConfig(
+        reward_mode=RewardMode.BASIC,
+        basic_acc_delta_weight=5.0,
+        param_budget=500_000,
+        param_penalty_weight=0.1,
+    )
+
+    reward = compute_reward(
+        ContributionRewardInputs(
+            action=LifecycleOp.WAIT,
+            seed_contribution=None,
+            val_acc=70.0,
+            seed_info=None,
+            epoch=25,  # Terminal
             max_epochs=25,
             total_params=100_000,
             host_params=100_000,
@@ -331,8 +371,169 @@ def test_compute_reward_basic_mode():
         )
     )
 
-    # Expected: 5.0 * (1/100) - 0.1 * (50_000 / 500_000) = 0.05 - 0.01 = 0.04
+    # Terminal: accuracy bonus + rent
+    # accuracy = 5.0 * (1/100) = 0.05
+    # rent = 0.1 * (50_000 / 500_000) = 0.01
+    # reward = 0.05 - 0.01 = 0.04
     assert abs(reward - 0.04) < 1e-8
+
+
+def test_basic_reward_direct_per_step_rent():
+    """Direct compute_basic_reward: rent is paid every step."""
+    from esper.simic.rewards import compute_basic_reward
+
+    config = ContributionRewardConfig(
+        basic_acc_delta_weight=5.0,
+        param_budget=500_000,
+        param_penalty_weight=0.1,
+    )
+
+    # Non-terminal epoch - rent is still paid
+    reward, rent, growth, pbrs, fossilize = compute_basic_reward(
+        acc_delta=2.0,
+        effective_seed_params=100_000,
+        total_params=200_000,
+        host_params=100_000,
+        config=config,
+        epoch=5,
+        max_epochs=25,
+    )
+
+    # rent = 0.1 * (100_000 / 500_000) = 0.02
+    # No seed_info = no PBRS, no accuracy (non-terminal)
+    assert abs(rent - 0.02) < 1e-8
+    assert abs(reward - (-0.02)) < 1e-8
+    assert pbrs == 0.0  # No seed_info
+    assert fossilize == 0.0  # No FOSSILIZE action
+
+
+def test_basic_reward_direct_terminal_includes_accuracy():
+    """Direct compute_basic_reward: terminal includes accuracy + rent."""
+    from esper.simic.rewards import compute_basic_reward
+
+    config = ContributionRewardConfig(
+        basic_acc_delta_weight=5.0,
+        param_budget=500_000,
+        param_penalty_weight=0.1,
+    )
+
+    # Terminal epoch
+    reward, rent, growth, pbrs, fossilize = compute_basic_reward(
+        acc_delta=2.0,  # 2 percentage points improvement
+        effective_seed_params=100_000,  # 20% of budget
+        total_params=200_000,
+        host_params=100_000,
+        config=config,
+        epoch=25,
+        max_epochs=25,
+    )
+
+    # Expected:
+    # accuracy = 5.0 * (2.0 / 100) = 0.10
+    # rent = 0.1 * (100_000 / 500_000) = 0.02
+    # reward = 0.10 - 0.02 = 0.08
+    assert abs(reward - 0.08) < 1e-8
+    assert abs(rent - 0.02) < 1e-8
+    assert growth > 0  # growth_ratio = 100_000 / 100_000 = 1.0
+    assert fossilize == 0.0  # No FOSSILIZE action
+
+
+def test_basic_reward_pbrs_provides_state_differentiation():
+    """BASIC mode: PBRS gives critic state differentiation.
+
+    The key insight from DRL expert: PBRS is policy-invariant
+    (Ng et al., 1999) and provides the critic with intermediate
+    signal to distinguish states without changing optimal policy.
+    """
+    from esper.simic.rewards import compute_basic_reward, SeedInfo
+    from esper.simic.rewards.types import STAGE_TRAINING
+
+    config = ContributionRewardConfig(
+        basic_acc_delta_weight=5.0,
+        param_budget=500_000,
+        param_penalty_weight=0.1,
+        pbrs_weight=0.3,
+    )
+
+    # Seed in TRAINING stage
+    seed_info = SeedInfo(
+        stage=STAGE_TRAINING,
+        improvement_since_stage_start=0.5,
+        total_improvement=1.0,
+        epochs_in_stage=3,
+        seed_params=50_000,
+        previous_stage=2,  # GERMINATED
+        previous_epochs_in_stage=1,
+        seed_age_epochs=4,
+    )
+
+    reward_with_seed, rent, growth, pbrs, _ = compute_basic_reward(
+        acc_delta=1.0,
+        effective_seed_params=50_000,
+        total_params=150_000,
+        host_params=100_000,
+        config=config,
+        epoch=10,
+        max_epochs=25,
+        seed_info=seed_info,
+    )
+
+    reward_no_seed, _, _, pbrs_no_seed, _ = compute_basic_reward(
+        acc_delta=1.0,
+        effective_seed_params=0,  # No seed
+        total_params=100_000,
+        host_params=100_000,
+        config=config,
+        epoch=10,
+        max_epochs=25,
+        seed_info=None,
+    )
+
+    # PBRS should be non-zero with seed
+    assert pbrs != 0.0
+    assert pbrs_no_seed == 0.0
+
+    # Critic can now distinguish states with vs without seeds
+    assert reward_with_seed != reward_no_seed
+
+
+def test_basic_reward_prevents_train_then_purge():
+    """Verify per-step rent prevents train-then-purge gaming.
+
+    The gaming pattern: accumulate dense attribution rewards during training,
+    then prune all seeds at the end to avoid rent.
+
+    With per-step rent, keeping a seed costs rent EVERY step, so the
+    cumulative rent paid during training is significant.
+    """
+    from esper.simic.rewards import compute_basic_reward
+
+    config = ContributionRewardConfig(
+        basic_acc_delta_weight=5.0,
+        param_budget=500_000,
+        param_penalty_weight=0.1,
+    )
+
+    # Simulate 24 epochs of having a seed
+    cumulative_rent_paid = 0.0
+    for epoch in range(1, 25):  # epochs 1-24 (non-terminal)
+        reward, rent, _, _, _ = compute_basic_reward(
+            acc_delta=0.0,  # No improvement yet
+            effective_seed_params=50_000,
+            total_params=150_000,
+            host_params=100_000,
+            config=config,
+            epoch=epoch,
+            max_epochs=25,
+        )
+        cumulative_rent_paid += rent
+
+    # Rent is 0.1 * (50_000 / 500_000) = 0.01 per step
+    # Over 24 steps: 0.24
+    assert abs(cumulative_rent_paid - 0.24) < 1e-8
+
+    # Train-then-purge now pays significant rent during training!
+    # This is the key fix that prevents gaming.
 
 
 def test_parallel_env_state_has_host_max_acc():

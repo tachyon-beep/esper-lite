@@ -29,9 +29,12 @@ LEYLINE_VERSION = "0.2.0"
 # Lifecycle Constants (shared across simic modules)
 # =============================================================================
 
-# Minimum seed age before PRUNE is allowed (need at least one counterfactual measurement)
-# Reduced from 10 to 1: let agent LEARN optimal timing via rewards, not hard masks
-MIN_PRUNE_AGE = 1
+# Minimum seed age before PRUNE is allowed.
+# Set to 5 epochs: seeds need training time to demonstrate value before being prunable.
+# The original "let agent learn via rewards" approach (MIN_PRUNE_AGE=1) failed because
+# short-term risk-aversion dominates - the agent learns PRUNE is "safe" and kills seeds
+# before they can prove themselves (171/318 seeds pruned after just 1 epoch).
+MIN_PRUNE_AGE = 5
 
 # Epochs needed for confident seed quality assessment
 FULL_EVALUATION_AGE = 10
@@ -109,7 +112,10 @@ DEFAULT_LSTM_HIDDEN_DIM = 512
 
 # Number of LSTM layers in the host model.
 # Used by: Karn TUI widgets (gradient health display), telemetry dashboards.
-DEFAULT_HOST_LSTM_LAYERS = 12
+# NOTE: Reduced from 12 to 4 to fix vanishing gradient problem.
+# With 12 stacked layers (no residuals), only ~3% of gradient reached layer 1.
+# 4 layers with residual connections (see ResidualLSTM) provides better gradient flow.
+DEFAULT_HOST_LSTM_LAYERS = 4
 
 # Parallel environments for vectorized training.
 # This controls sample DIVERSITY per Tamiyo update, not training quantity.
@@ -183,11 +189,11 @@ DEFAULT_ENTROPY_COLLAPSE_THRESHOLD = 0.1
 DEFAULT_ENTROPY_WARNING_THRESHOLD = 0.3
 
 # Per-head entropy floor targets (normalized entropy, 0-1 scale)
-# DRL Expert update (2026-01-11): Increased op floor from 0.15 to 0.25
-# to push away from collapse earlier. Previous floor was too close to
-# the collapse point (0.14), allowing degenerate equilibrium.
+# DRL Expert update (2026-01-11): Increased op floor from 0.25 to 0.30
+# to push further from collapse point. With 6 actions, 0.30 normalized
+# means minimum ~52% of maximum entropy - enough to maintain exploration.
 ENTROPY_FLOOR_PER_HEAD: dict[str, float] = {
-    "op": 0.25,           # INCREASED from 0.15 - collapse point was 0.14!
+    "op": 0.30,           # INCREASED from 0.25 - push further from collapse
     "slot": 0.15,
     "blueprint": 0.20,    # INCREASED from 0.15 - needs room to explore
     "style": 0.15,
@@ -211,10 +217,11 @@ ENTROPY_COLLAPSE_PER_HEAD: dict[str, float] = {
 }
 
 # Per-head entropy floor penalty coefficients
-# DRL Expert update (2026-01-11): Increased blueprint/tempo from 0.1 to 0.3
+# DRL Expert update (2026-01-11): Increased op from 0.2 to 0.3, blueprint/tempo to 0.3
 # Sparse heads need stronger penalty to overcome gradient starvation.
+# Op head is critical - collapse there cascades to all other heads.
 ENTROPY_FLOOR_PENALTY_COEF: dict[str, float] = {
-    "op": 0.2,            # INCREASED from 0.1 - critical head
+    "op": 0.3,            # INCREASED from 0.2 - critical head, stronger enforcement
     "slot": 0.1,
     "blueprint": 0.3,     # INCREASED from 0.1 - sparse head needs strong penalty
     "style": 0.1,
@@ -230,16 +237,17 @@ ENTROPY_FLOOR_PENALTY_COEF: dict[str, float] = {
 #
 # DRL Expert diagnosis (2026-01-11): Op head collapse to WAIT is the root cause.
 # When op chooses WAIT, sparse heads (blueprint, tempo) receive no gradients.
-# The op floor of 0.05 guarantees ~5% non-WAIT actions, keeping sparse heads alive.
+# AGGRESSIVE FLOORS: Previous 8% floor was insufficient - runs still collapsed
+# to 99.9% WAIT within 24 batches. Increased to 15% op floor.
 PROBABILITY_FLOOR_PER_HEAD: dict[str, float] = {
-    "op": 0.05,           # CRITICAL: Guarantees ~5% non-WAIT to feed sparse heads
-    "slot": 0.03,         # Usually few valid choices anyway
-    "blueprint": 0.10,    # GERMINATE only (~5%) - needs high floor when active
-    "style": 0.05,        # GERMINATE + SET_ALPHA_TARGET (~7%)
-    "tempo": 0.10,        # GERMINATE only (~5%) - needs high floor when active
-    "alpha_target": 0.05, # GERMINATE + SET_ALPHA_TARGET (~7%)
-    "alpha_speed": 0.05,  # SET_ALPHA_TARGET + PRUNE (~7%)
-    "alpha_curve": 0.05,  # SET_ALPHA_TARGET + PRUNE (~7%)
+    "op": 0.15,           # INCREASED from 0.08 - guarantees ~15% non-WAIT exploration
+    "slot": 0.05,         # Increased from 0.03 for more exploration
+    "blueprint": 0.12,    # GERMINATE only (~5%) - needs high floor when active
+    "style": 0.08,        # GERMINATE + SET_ALPHA_TARGET (~7%)
+    "tempo": 0.12,        # GERMINATE only (~5%) - needs high floor when active
+    "alpha_target": 0.08, # GERMINATE + SET_ALPHA_TARGET (~7%)
+    "alpha_speed": 0.06,  # SET_ALPHA_TARGET + PRUNE (~7%)
+    "alpha_curve": 0.06,  # SET_ALPHA_TARGET + PRUNE (~7%)
 }
 
 # M21: PPO ratio anomaly detection thresholds.

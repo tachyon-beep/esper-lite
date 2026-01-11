@@ -115,12 +115,17 @@ def compute_reward(
         )
 
     elif config.reward_mode == RewardMode.BASIC:
-        reward, rent_penalty, growth_ratio = compute_basic_reward(
+        reward, rent_penalty, growth_ratio, pbrs_bonus, fossilize_bonus = compute_basic_reward(
             acc_delta=inputs.acc_delta,
             effective_seed_params=inputs.effective_seed_params,
             total_params=inputs.total_params,
             host_params=inputs.host_params,
             config=config,
+            epoch=inputs.epoch,
+            max_epochs=inputs.max_epochs,
+            seed_info=inputs.seed_info,
+            action=inputs.action,
+            seed_contribution=inputs.seed_contribution,
         )
         if inputs.return_components:
             components = RewardComponentsTelemetry()
@@ -132,6 +137,8 @@ def compute_reward(
             components.base_acc_delta = inputs.acc_delta
             components.compute_rent = -rent_penalty
             components.growth_ratio = growth_ratio
+            components.pbrs_bonus = pbrs_bonus
+            components.fossilize_terminal_bonus = fossilize_bonus
             return reward, components
 
     elif config.reward_mode == RewardMode.SIMPLIFIED:

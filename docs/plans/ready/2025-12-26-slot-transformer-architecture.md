@@ -2,6 +2,19 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Consult `yzmir-pytorch-engineering` and `yzmir-neural-architectures` skills for transformer implementation details.
 
+---
+
+## Expert Review Summary (2026-01-12)
+
+| Reviewer | Verdict | Key Findings |
+|----------|---------|--------------|
+| **PyTorch Expert** | CONDITIONAL GO | Attention mask semantics inverted (PyTorch: `True=ignore`); CLS token needs explicit mask entry; pre-allocate buffers to avoid graph breaks; Xavier init for transformer layers |
+| **DRL Expert** | GO w/ modifications | Contribution predictor must use `slot_repr` not `lstm_out`; cross-attention must include `slot_active_mask`; value head architecture should match 4-layer depth |
+
+**Status:** Plan updated with all critical findings. Ready for implementation.
+
+---
+
 **Goal:** Replace flat observation concatenation with a Slot Transformer Encoder that provides weight sharing across slots, natural variable slot count support, and learned slot-slot interactions via self-attention. This enables scaling from 3 slots to 50+ slots without linear parameter growth.
 
 **Architecture:** Five-phase incremental delivery: (1) SlotTransformerEncoder module, (2) SlotTransformerActorCritic network, (3) PolicyBundle integration and factory, (4) Telemetry and Sanctum integration, (5) Benchmarking and cutover. Each phase is independently testable.
@@ -133,6 +146,20 @@ class SlotTransformerEncoder(nn.Module):
 4. Pre-LN transformer (norm_first=True) for training stability
 5. GELU activation in FFN
 
+**⚠️ CRITICAL (PyTorch Expert Review 2026-01-12):**
+
+6. **Attention mask semantics INVERTED**: PyTorch uses `True = ignore/pad`, not `True = valid`.
+   Must invert: `src_key_padding_mask = ~slot_active_mask`
+7. **CLS token must be in padding mask**: Prepend `False` (valid) for CLS position:
+   ```python
+   cls_mask = torch.zeros(B * T, 1, dtype=torch.bool, device=device)
+   full_padding_mask = torch.cat([cls_mask, ~slot_active_mask.view(B*T, N)], dim=1)
+   ```
+8. **Pre-allocate CLS mask as buffer** to avoid graph breaks:
+   ```python
+   self.register_buffer("_cls_valid", torch.zeros(1, 1, dtype=torch.bool), persistent=False)
+   ```
+
 **Test:** `tests/tamiyo/networks/test_slot_transformer.py::TestSlotTransformerEncoder`
 - Verify output shapes
 - Verify inactive slots don't affect CLS representation (masked properly)
@@ -203,15 +230,25 @@ def _compute_slot_logits(
     self,
     temporal_repr: Tensor,  # [B, T, H]
     slot_repr: Tensor,      # [B, T, N, D]
+    slot_active_mask: Tensor,  # [B, T, N] bool - CRITICAL: must mask inactive
 ) -> Tensor:
     """Compute slot selection logits via scaled dot-product attention."""
-    query = self.slot_query(temporal_repr)  # [B, T, D]
+    # PyTorch Expert: Scale BEFORE dot product to prevent overflow
+    query = self.slot_query(temporal_repr) / math.sqrt(self.embed_dim)  # [B, T, D]
     keys = self.slot_key(slot_repr)         # [B, T, N, D]
 
     # [B, T, D] @ [B, T, D, N] -> [B, T, N]
     logits = torch.einsum('btd,btnd->btn', query, keys)
-    return logits / math.sqrt(self.embed_dim)
+
+    # DRL Expert: MUST mask inactive slots for valid action selection
+    logits = logits.masked_fill(~slot_active_mask, MASKED_LOGIT_VALUE)
+    return logits
 ```
+
+**⚠️ CRITICAL (DRL Expert Review 2026-01-12):**
+- Cross-attention MUST include `slot_active_mask` parameter
+- Without masking, policy may select inactive slots for FOSSILIZE/PRUNE
+- Use `MASKED_LOGIT_VALUE` from leyline (same as MaskedCategorical)
 
 **Rationale:** This allows the network to score each slot based on learned query-key compatibility, rather than fixed positional weights. The LSTM hidden state "asks" which slots are relevant.
 
@@ -272,14 +309,140 @@ def _init_weights(self) -> None:
     for head in self._action_heads():
         nn.init.orthogonal_(head[-1].weight, gain=0.01)
 
-    # Standard init for value head
-    nn.init.orthogonal_(self.value_head[-1].weight, gain=1.0)
+    # Value head: gain=0.01 to start predictions near zero
+    nn.init.orthogonal_(self.value_head[-1].weight, gain=0.01)
+
+    # Contribution predictor: gain=0.1 for [-10, +10] target range
+    nn.init.orthogonal_(self.contribution_predictor[-1].weight, gain=0.1)
+    nn.init.zeros_(self.contribution_predictor[-1].bias)
 
     # LSTM forget gate bias = 1 (learn to remember by default)
     for name, param in self.lstm.named_parameters():
         if "bias" in name:
             n = param.size(0)
             param.data[n // 4 : n // 2].fill_(1.0)
+```
+
+### Task 2.5: Op-Conditioned Value Head (Q(s, op))
+
+**CRITICAL UPDATE (2026-01):** The current `FactoredRecurrentActorCritic` uses Q(s, op) not V(s).
+The value function is conditioned on the selected operation to learn distinct expected returns per action.
+
+```python
+def __init__(self, ...):
+    ...
+    # Value head input: temporal repr + one-hot op action
+    # This allows learning Q(s, GERMINATE) ≠ Q(s, PRUNE) for same state
+    value_input_dim = lstm_hidden_dim + self.num_ops  # 128 + 6 = 134
+    self.value_head = nn.Sequential(
+        nn.Linear(value_input_dim, head_hidden),  # 134 -> 256
+        nn.LayerNorm(head_hidden),
+        nn.ReLU(),
+        nn.Linear(head_hidden, head_hidden // 2),  # 256 -> 128
+        nn.LayerNorm(head_hidden // 2),
+        nn.ReLU(),
+        nn.Linear(head_hidden // 2, 1),  # 128 -> 1
+    )
+
+def _compute_value(self, lstm_out: Tensor, op: Tensor) -> Tensor:
+    """Compute Q(s, op) value conditioned on operation."""
+    op_one_hot = F.one_hot(op, num_classes=self.num_ops).to(lstm_out)
+    value_input = torch.cat([lstm_out, op_one_hot], dim=-1)
+    return self.value_head(value_input).squeeze(-1)
+```
+
+For transformer: fuse temporal LSTM output with slot CLS token before op-conditioning.
+
+### Task 2.6: Contribution Predictor Auxiliary Head
+
+**CRITICAL UPDATE (2026-01):** The current network includes an auxiliary head for predicting
+seed contributions. This is used for counterfactual proxy training.
+
+**⚠️ CRITICAL (DRL Expert Review 2026-01-12):**
+For transformer architecture, contribution predictor **MUST** use `slot_repr` (per-slot
+representations), NOT `lstm_out`. Using global LSTM output for per-slot predictions defeats
+the entire purpose of the transformer architecture—we want the predictor to leverage the
+rich per-slot features that self-attention produces.
+
+```python
+def __init__(self, ...):
+    ...
+    # Auxiliary head: predict seed contributions
+    # For LSTM: input is lstm_out broadcast to each slot
+    # For Transformer: input is slot_repr (per-slot representations from self-attention)
+    # Dropout prevents shortcut learning
+    self.contribution_predictor = nn.Sequential(
+        nn.Linear(embed_dim, head_hidden),  # embed_dim for slot_repr input
+        nn.LayerNorm(head_hidden),
+        nn.ReLU(),
+        nn.Dropout(0.1),
+        nn.Linear(head_hidden, head_hidden // 2),
+        nn.LayerNorm(head_hidden // 2),
+        nn.ReLU(),
+        nn.Dropout(0.1),
+        nn.Linear(head_hidden // 2, 1),  # One scalar per slot
+    )
+
+def predict_contributions(
+    self,
+    state: Tensor,
+    hidden: tuple[Tensor, Tensor] | None = None,
+    stop_gradient: bool = True,  # Prevent aux task from shaping features
+) -> Tensor:
+    """Predict per-slot contributions from state.
+
+    For transformer architecture: uses slot_repr [B, T, N, D] -> [B, T, N]
+    Each slot's prediction comes from its own rich representation.
+    """
+    # Get per-slot features from transformer encoder
+    _, slot_repr = self._forward_slot_transformer(state, hidden)  # [B, T, N, D]
+    if stop_gradient:
+        slot_repr = slot_repr.detach()
+    # Apply predictor to each slot's representation
+    return self.contribution_predictor(slot_repr).squeeze(-1)  # [B, T, N]
+```
+
+**Rationale:** Each slot's contribution prediction should be based on that slot's learned
+representation (which includes context from self-attention with other slots), not a global
+summary. This enables the predictor to learn slot-specific features like "this slot attends
+heavily to the host → higher contribution".
+
+### Task 2.7: ResidualLSTM Integration
+
+**CRITICAL UPDATE (2026-01):** The current implementation uses `ResidualLSTM` (from
+`factored_lstm.py`) with residual connections, layer normalization, and skip connections
+for training stability. The transformer architecture should use this instead of vanilla `nn.LSTM`.
+
+```python
+from esper.tamiyo.networks.factored_lstm import ResidualLSTM
+
+# In __init__:
+self.lstm = ResidualLSTM(
+    input_size=fusion_dim,  # Fused base + slot CLS
+    hidden_size=lstm_hidden_dim,
+    num_layers=lstm_layers,
+    dropout=0.0,  # Single layer = no dropout needed
+)
+```
+
+### Task 2.8: BlueprintEmbedding for Obs V3
+
+**CRITICAL UPDATE (2026-01):** The observation includes blueprint indices per slot.
+These need learned embeddings rather than raw indices.
+
+```python
+from esper.tamiyo.networks.factored_lstm import BlueprintEmbedding
+
+# In __init__:
+self.blueprint_embedding = BlueprintEmbedding(
+    num_blueprints=NUM_BLUEPRINTS,
+    embed_dim=DEFAULT_BLUEPRINT_EMBED_DIM,  # 4
+)
+
+# In forward:
+# blueprint_indices: [batch, seq, num_slots] with -1 for inactive
+bp_embeds = self.blueprint_embedding(blueprint_indices)  # [batch, seq, slots, 4]
+# Concatenate with slot features before transformer
 ```
 
 ---

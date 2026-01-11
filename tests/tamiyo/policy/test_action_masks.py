@@ -293,15 +293,15 @@ def test_compute_action_masks_min_prune_age():
     masks_age0 = compute_action_masks(slot_states_age0, enabled_slots=["r0c1"])
     assert not masks_age0["op"][LifecycleOp.PRUNE]
 
-    # Seed age 1 (minimum)
-    slot_states_age1 = {
+    # Seed age at MIN_PRUNE_AGE (should allow PRUNE)
+    slot_states_at_min = {
         "r0c1": MaskSeedInfo(
             stage=SeedStage.TRAINING.value,
-            seed_age_epochs=1,
+            seed_age_epochs=MIN_PRUNE_AGE,
         ),
     }
-    masks_age1 = compute_action_masks(slot_states_age1, enabled_slots=["r0c1"])
-    assert masks_age1["op"][LifecycleOp.PRUNE]
+    masks_at_min = compute_action_masks(slot_states_at_min, enabled_slots=["r0c1"])
+    assert masks_at_min["op"][LifecycleOp.PRUNE]
 
 
 def test_compute_action_masks_prune_requires_hold():
@@ -550,8 +550,8 @@ def test_mask_seed_info_dataclass():
 
 
 def test_min_prune_age_constant():
-    """MIN_PRUNE_AGE should be 1 (need one epoch for counterfactual)."""
-    assert MIN_PRUNE_AGE == 1
+    """MIN_PRUNE_AGE should be at least 5 (seeds need training time to prove value)."""
+    assert MIN_PRUNE_AGE >= 5
 
 
 # =============================================================================

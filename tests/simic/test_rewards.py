@@ -169,7 +169,9 @@ class TestPruneContributionShaping:
         """Pruning a toxic seed (negative contribution) should be rewarded."""
         config = ContributionRewardConfig()
         # C3: Use age >= min_prune_bonus_age to pass the anti-farming age gate
-        seed_info = self._make_seed_info(STAGE_BLENDING, age=config.min_prune_bonus_age, improvement=-1.0)
+        # Also must be >= MIN_PRUNE_AGE to avoid the early prune penalty
+        prune_age = max(config.min_prune_bonus_age, MIN_PRUNE_AGE)
+        seed_info = self._make_seed_info(STAGE_BLENDING, age=prune_age, improvement=-1.0)
 
         # Toxic seed: contribution < hurting_threshold (-0.5)
         shaping = _contribution_prune_shaping(seed_info, seed_contribution=-1.0, config=config)
@@ -191,7 +193,10 @@ class TestPruneContributionShaping:
 
     def test_prune_young_seed_without_counterfactual_penalized(self):
         """Pruning before counterfactual is available should be discouraged."""
-        config = ContributionRewardConfig()
+        # Use a config where early_prune_threshold > MIN_PRUNE_AGE so we can
+        # test the early-prune penalty for seeds that pass the MIN_PRUNE_AGE
+        # check but are still too young for reliable counterfactual
+        config = ContributionRewardConfig(early_prune_threshold=MIN_PRUNE_AGE + 2)
         seed_info = self._make_seed_info(STAGE_TRAINING, age=MIN_PRUNE_AGE)
 
         shaping = _contribution_prune_shaping(seed_info, seed_contribution=None, config=config)
@@ -1506,21 +1511,18 @@ class TestFossilizeTerminalBonus:
     vs WAIT-farming in HOLDING. Addresses H4 (terminating action problem).
     """
 
-    def test_terminal_bonus_scales_with_contributing_fossilized_count(self):
-        """Terminal bonus uses tanh saturation on CONTRIBUTING fossilized seeds.
+    def test_terminal_bonus_no_longer_includes_fossilize_bonus(self):
+        """P0 fix (2026-01-11): fossilize_terminal_bonus is now 0.0 at terminal step.
 
-        DRL Expert review 2025-12-11: Only contributing fossilized seeds (those with
-        total_improvement >= MIN_FOSSILIZE_CONTRIBUTION) get terminal bonus. This
-        prevents bad fossilizations from being NPV-positive.
+        The fossilize bonus is now paid IMMEDIATELY on the FOSSILIZE action (via
+        action_shaping) rather than at the terminal step. This fixes a critical
+        credit assignment bug where FOSSILIZE was averaging -0.91 reward despite
+        being the goal action.
 
-        DRL Expert review 2026-01: Changed from linear (num * scale) to tanh saturation
-        (scale * tanh(num / ceiling)) for diminishing returns. This prevents unbounded
-        fossilization rewards that overwhelm step-by-step shaping signals.
-
-        Formula: fossil_bonus = scale * tanh(num_contributing / ceiling)
-        Defaults: scale=3.0, ceiling=3.0
+        At terminal, only the accuracy-based bonus (val_acc * terminal_acc_weight)
+        is paid. The fossilize_terminal_bonus field is kept for telemetry backward
+        compatibility but will always be 0.0.
         """
-        import math
 
         def get_terminal_bonus(num_contributing: int, num_total: int = 0) -> tuple[float, float]:
             _, components = compute_contribution_reward(
@@ -1537,31 +1539,26 @@ class TestFossilizeTerminalBonus:
             )
             return components.terminal_bonus, components.fossilize_terminal_bonus
 
-        # Default: fossilize_terminal_scale=3.0, fossilize_quality_ceiling=3.0
-        # fossil_bonus = 3.0 * tanh(num / 3.0)
-        # terminal_bonus = val_acc * 0.05 + fossil_bonus
-        # Base: 70 * 0.05 = 3.5
+        # Base: 70 * 0.05 = 3.5 (accuracy portion only)
+        # Fossilize bonus is now paid on FOSSILIZE action, not at terminal
         total_0, fossil_0 = get_terminal_bonus(0)
-        assert fossil_0 == 0.0  # tanh(0) = 0
-        assert total_0 == pytest.approx(3.5)  # Base only
+        assert fossil_0 == 0.0  # Always 0.0 now (P0 fix)
+        assert total_0 == pytest.approx(3.5)  # Accuracy only
 
-        # 1 contributing: 3.0 * tanh(1/3) ≈ 0.9645
+        # Even with contributing fossils, terminal fossilize_terminal_bonus is 0.0
+        # (the actual bonus was paid on FOSSILIZE action)
         total_1, fossil_1 = get_terminal_bonus(1)
-        expected_1 = 3.0 * math.tanh(1 / 3.0)
-        assert fossil_1 == pytest.approx(expected_1)
-        assert total_1 == pytest.approx(3.5 + expected_1)
+        assert fossil_1 == 0.0  # P0 fix: no longer paid at terminal
+        assert total_1 == pytest.approx(3.5)  # Accuracy only
 
-        # 5 contributing: 3.0 * tanh(5/3) ≈ 2.7866 (saturating)
         total_5, fossil_5 = get_terminal_bonus(5)
-        expected_5 = 3.0 * math.tanh(5 / 3.0)
-        assert fossil_5 == pytest.approx(expected_5)
-        assert total_5 == pytest.approx(3.5 + expected_5)
+        assert fossil_5 == 0.0  # P0 fix: no longer paid at terminal
+        assert total_5 == pytest.approx(3.5)  # Accuracy only
 
-        # Test asymmetric case: 3 total fossilized but only 1 contributing
-        # Only the contributing one should affect the bonus
+        # Asymmetric case: still 0.0 for fossilize bonus at terminal
         total_asym, fossil_asym = get_terminal_bonus(num_contributing=1, num_total=3)
-        assert fossil_asym == pytest.approx(expected_1)  # Only 1 contributing
-        assert total_asym == pytest.approx(3.5 + expected_1)
+        assert fossil_asym == 0.0  # P0 fix
+        assert total_asym == pytest.approx(3.5)  # Accuracy only
 
     def test_no_terminal_bonus_before_max_epoch(self):
         """Terminal bonus should only apply at max_epochs."""
@@ -1597,9 +1594,12 @@ class TestFossilizeTerminalBonus:
         assert components.num_fossilized_seeds == 3
 
     def test_terminal_bonus_config_override(self):
-        """Custom config should allow adjusting fossilize_terminal_scale."""
-        import math
+        """P0 fix (2026-01-11): fossilize_terminal_scale only affects FOSSILIZE action.
 
+        After the P0 fix, the fossilize bonus is paid immediately on FOSSILIZE action
+        (where fossilize_terminal_scale is applied), not at the terminal step.
+        At terminal, fossilize_terminal_bonus is always 0.0.
+        """
         custom_config = ContributionRewardConfig(fossilize_terminal_scale=5.0)
 
         _, components = compute_contribution_reward(
@@ -1616,8 +1616,95 @@ class TestFossilizeTerminalBonus:
             num_contributing_fossilized=2,  # Both contributing
         )
 
-        # 5.0 * tanh(2/3.0) ≈ 2.907 fossilize bonus (tanh saturation with default ceiling=3.0)
-        expected_fossil = 5.0 * math.tanh(2 / 3.0)
-        assert components.fossilize_terminal_bonus == pytest.approx(expected_fossil)
-        # Total: 70 * 0.05 + expected_fossil ≈ 6.407
-        assert components.terminal_bonus == pytest.approx(3.5 + expected_fossil)
+        # P0 fix: fossilize bonus no longer paid at terminal
+        assert components.fossilize_terminal_bonus == 0.0
+        # Terminal bonus is only accuracy-based: 70 * 0.05 = 3.5
+        assert components.terminal_bonus == pytest.approx(3.5)
+
+    def test_immediate_fossilize_bonus_on_fossilize_action(self):
+        """P0 fix (2026-01-11): fossilize bonus is now paid via action_shaping.
+
+        The fossilize terminal bonus is now paid IMMEDIATELY on the FOSSILIZE action
+        instead of at the terminal step. This fixes credit assignment: the agent that
+        took the FOSSILIZE action receives the bonus directly.
+
+        The bonus is scaled by legitimacy_discount = min(1.0, epochs_in_stage / 5).
+        """
+        import math
+
+        from esper.leyline import MIN_HOLDING_EPOCHS
+        from esper.simic.rewards.types import STAGE_HOLDING
+
+        # Create a seed in HOLDING stage with full legitimacy (5 epochs)
+        # BLENDING = 4, HOLDING = 6 (value 5 was skipped in SeedStage enum)
+        seed_info = SeedInfo(
+            stage=STAGE_HOLDING,
+            improvement_since_stage_start=0.5,
+            total_improvement=1.0,
+            epochs_in_stage=MIN_HOLDING_EPOCHS,  # Full legitimacy
+            seed_params=1000,
+            previous_stage=4,  # BLENDING
+            previous_epochs_in_stage=3,
+            seed_age_epochs=10,
+            interaction_sum=0.0,
+            boost_received=0.0,
+        )
+
+        config = ContributionRewardConfig()
+
+        _, components = compute_contribution_reward(
+            action=LifecycleOp.FOSSILIZE,
+            seed_contribution=1.5,  # Contributing seed (>= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION=1.0)
+            val_acc=70.0,
+            seed_info=seed_info,
+            epoch=15,  # Not terminal
+            max_epochs=25,
+            config=config,
+            acc_at_germination=60.0,
+            return_components=True,
+        )
+
+        # Immediate bonus: fossilize_terminal_scale * tanh(1 / ceiling) * legitimacy_discount
+        # With full legitimacy: 3.0 * tanh(1/3) * 1.0 ≈ 0.9645
+        expected_immediate_bonus = config.fossilize_terminal_scale * math.tanh(
+            1.0 / config.fossilize_quality_ceiling
+        )
+
+        # action_shaping should include this bonus (among other components)
+        # The immediate bonus is part of action_shaping, which also includes
+        # _contribution_fossilize_shaping() result and fossilize_cost
+        assert components.action_shaping > 0, "FOSSILIZE on valid contributing seed should have positive action_shaping"
+
+        # Verify the immediate bonus component by checking against a seed with 0 epochs
+        # (which would get 0 legitimacy discount)
+        seed_info_no_legitimacy = SeedInfo(
+            stage=STAGE_HOLDING,
+            improvement_since_stage_start=0.5,
+            total_improvement=1.0,
+            epochs_in_stage=0,  # No legitimacy
+            seed_params=1000,
+            previous_stage=4,  # BLENDING
+            previous_epochs_in_stage=3,
+            seed_age_epochs=10,
+            interaction_sum=0.0,
+            boost_received=0.0,
+        )
+
+        _, components_no_leg = compute_contribution_reward(
+            action=LifecycleOp.FOSSILIZE,
+            seed_contribution=1.5,  # Same contribution as above
+            val_acc=70.0,
+            seed_info=seed_info_no_legitimacy,
+            epoch=15,
+            max_epochs=25,
+            config=config,
+            acc_at_germination=60.0,
+            return_components=True,
+        )
+
+        # With 0 legitimacy, the immediate bonus should be 0
+        # So action_shaping should be less than with full legitimacy
+        assert components.action_shaping > components_no_leg.action_shaping, (
+            f"Full legitimacy ({components.action_shaping}) should yield higher "
+            f"action_shaping than no legitimacy ({components_no_leg.action_shaping})"
+        )

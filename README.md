@@ -50,6 +50,29 @@ The system is organised into seven decoupled domains:
 
 ---
 
+## 📚 Terminology: Nested Training Loops
+
+Esper uses PPO to control *another neural network's training process*—an unusual meta-learning setup that creates terminology overlap. Here's how the nested loops work:
+
+```
+Outer loop: 200 batches (PPO updates)
+├── Each batch: n_envs environments run in parallel
+│   └── Each environment: 1 episode = 150 steps
+│       └── Each step: host trains 1 epoch, Tamiyo takes 1 action
+└── After batch completes: PPO update on collected trajectories
+```
+
+| Term | Meaning |
+|------|---------|
+| **Episode** | One complete host training run (e.g., 150 steps). The RL trajectory. |
+| **Step** | One policy decision point. Tamiyo observes host state and chooses an action (WAIT, GERMINATE, PRUNE, etc.). |
+| **Batch** | Collection of parallel episodes used for one PPO update. With `n_envs=10`, one batch = 10 episodes. |
+| **Host epoch** | One training iteration of the host neural network (domain term, not RL term). |
+
+> **Why the confusion?** In standard RL, "step" is unambiguous (one game frame, one physics tick). Here, each RL step is synchronized with one host training epoch—the "environment" is literally a neural network mid-training. So: *"At step 75 of episode 3, the host finished its 75th training epoch and Tamiyo decided to GERMINATE."*
+
+---
+
 ## ⚡ Quick Start
 
 ### 1. Installation

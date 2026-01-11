@@ -169,6 +169,14 @@ class ContributionRewardConfig:
     # - Accuracy improvement (acc_delta) scaled into a stable range
     # - Parameter rent scaled by param_budget
     basic_acc_delta_weight: float = 5.0
+    # Contribution-scaled fossilization bonus (immediate at FOSSILIZE action)
+    # DRL Expert review 2026-01-11: P0-style credit assignment at action time.
+    # Rewards quality fossilization (high seed_contribution) over quantity.
+    # Total bonus = (base + scale * contribution) * legitimacy_discount
+    basic_fossilize_base_bonus: float = 0.3  # Reward for meeting threshold
+    basic_contribution_scale: float = 0.5  # Per-contribution-point scaling
+    basic_fossilize_invalid_penalty: float = -0.5  # Wrong stage or negative trajectory
+    basic_fossilize_noncontributing_penalty: float = -0.2  # Below threshold
 
     # === Experiment Mode ===
     reward_mode: RewardMode = RewardMode.SHAPED
@@ -622,6 +630,37 @@ def compute_contribution_reward(
     elif action == LifecycleOp.FOSSILIZE:
         action_shaping += _contribution_fossilize_shaping(seed_info, seed_contribution, config)
         action_shaping += config.fossilize_cost
+        # P0 fix (2026-01-11): Pay fossilize terminal bonus IMMEDIATELY on FOSSILIZE action.
+        # Previously, the terminal bonus was paid at epoch==max_epochs to whoever took the
+        # last action (usually WAIT), creating a credit assignment bug where FOSSILIZE was
+        # punished (-0.91 avg) despite being the goal action. Now contributing fossils
+        # receive immediate reward, making the full lifecycle (GERMINATE→train→FOSSILIZE)
+        # have positive expected value.
+        #
+        # Guards (must match _contribution_fossilize_shaping for consistency):
+        # 1. seed_info exists and is in HOLDING stage (valid fossilize)
+        # 2. seed hasn't made accuracy worse (total_improvement >= 0)
+        # 3. seed meets contribution threshold
+        # 4. terminal rewards are enabled
+        is_valid_fossilize = (
+            seed_info is not None
+            and seed_info.stage == STAGE_HOLDING
+            and seed_info.total_improvement >= 0
+        )
+        if (
+            is_valid_fossilize
+            and seed_contribution is not None
+            and seed_contribution >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
+            and not config.disable_terminal_reward
+        ):
+            # Apply legitimacy discount: seeds must spend time in HOLDING to earn full bonus.
+            # This prevents gaming by rushing through the lifecycle.
+            legitimacy_discount = min(1.0, seed_info.epochs_in_stage / MIN_HOLDING_EPOCHS)
+            # Use tanh(1/ceiling) for single-fossil bonus to match saturation curve
+            immediate_fossilize_bonus = config.fossilize_terminal_scale * math.tanh(
+                1.0 / config.fossilize_quality_ceiling
+            ) * legitimacy_discount
+            action_shaping += immediate_fossilize_bonus
 
     elif action == LifecycleOp.PRUNE:
         if seed_info is not None and not config.disable_pbrs:
@@ -644,20 +683,17 @@ def compute_contribution_reward(
     terminal_bonus = 0.0
     fossilize_terminal_bonus = 0.0
     if epoch == max_epochs and not config.disable_terminal_reward:
+        # Accuracy-based terminal bonus (proportional to final validation accuracy)
         terminal_bonus = val_acc * config.terminal_acc_weight
-        # P1 fix: Use tanh saturation to favor quality over count.
-        # Linear count rewarded "many mediocre seeds" over "one excellent seed".
-        # tanh(n/ceiling) provides diminishing returns, so marginal fossils
-        # contribute less. With ceiling=3: 5 fossils ≈ 2.79, not 15.0.
-        if num_contributing_fossilized > 0 and config.fossilize_quality_ceiling > 0:
-            fossilize_terminal_bonus = config.fossilize_terminal_scale * math.tanh(
-                num_contributing_fossilized / config.fossilize_quality_ceiling
-            )
-        terminal_bonus += fossilize_terminal_bonus
+        # P0 fix (2026-01-11): fossilize_terminal_bonus is now paid IMMEDIATELY on
+        # FOSSILIZE action (see above), not at terminal step. This fixes the credit
+        # assignment bug where FOSSILIZE averaged -0.91 reward despite being the goal.
+        # The fossilize_terminal_bonus field is kept for telemetry backward compatibility
+        # but will always be 0.0 here (the actual bonus is in action_shaping).
         reward += terminal_bonus
     if components:
         components.terminal_bonus = terminal_bonus
-        components.fossilize_terminal_bonus = fossilize_terminal_bonus
+        components.fossilize_terminal_bonus = fossilize_terminal_bonus  # Always 0.0 now
         components.num_fossilized_seeds = num_fossilized_seeds
         components.num_contributing_fossilized = num_contributing_fossilized
 
@@ -721,27 +757,144 @@ def compute_basic_reward(
     total_params: int,
     host_params: int,
     config: ContributionRewardConfig,
-) -> tuple[float, float, float]:
-    """Compute BASIC reward: accuracy improvement minus parameter rent."""
+    epoch: int,
+    max_epochs: int,
+    seed_info: SeedInfo | None = None,
+    action: LifecycleOp = LifecycleOp.WAIT,
+    seed_contribution: float | None = None,
+) -> tuple[float, float, float, float, float]:
+    """Compute BASIC reward: PBRS + rent + fossilization bonus + terminal accuracy.
+
+    Four-component hybrid design (DRL Expert recommended):
+    1. PBRS stage bonus (every step) - policy-invariant state differentiation
+    2. Per-step parameter rent (every step) - prevents train-then-purge gaming
+    3. Contribution-scaled fossilization (at FOSSILIZE) - rewards quality seeds
+    4. Terminal accuracy bonus (terminal only) - ground truth outcome
+
+    The key insight: previous terminal-only caused critic collapse because all
+    timesteps had highly correlated returns. PBRS provides the critic with
+    state differentiation (can learn "having a seed is different from empty")
+    without changing the optimal policy (Ng et al., 1999).
+
+    Per-step rent (instead of terminal) prevents gaming because:
+    - Keeping a seed costs rent EVERY step it exists
+    - Pruning early avoids future rent (but loses PBRS progress)
+    - Train-then-purge now pays rent during training, not just at terminal
+
+    Contribution-scaled fossilization (DRL Expert review 2026-01-11):
+    - P0-style credit assignment: pay bonus when action is taken, not terminal
+    - Rewards quality (high seed_contribution) over quantity
+    - Includes legitimacy discount (time in HOLDING required)
+
+    Returns:
+        tuple of (total_reward, rent_penalty, growth_ratio, pbrs_bonus, fossilize_bonus)
+    """
     if config.param_budget <= 0:
         raise ValueError("param_budget must be positive")
 
-    accuracy_improvement = config.basic_acc_delta_weight * (acc_delta / 100.0)
+    reward = 0.0
 
+    # =========================================================================
+    # Component 1: PBRS Stage Progression (EVERY STEP)
+    # =========================================================================
+    # Policy-invariant shaping that gives the critic state differentiation.
+    # Sum over episode telescopes to γ^T × Φ(s_T) - Φ(s_0), so it doesn't
+    # change optimal actions - only helps the critic learn intermediate values.
+    #
+    # DRL Expert review 2026-01-12: PRUNE must forfeit accumulated potential.
+    # Previously, PRUNE got the same PBRS as WAIT (positive for seed progression),
+    # making GERMINATE→train→PRUNE a profitable cycle. Now PRUNE computes:
+    #   γ × Φ(no_seed) - Φ(current) = γ × 0 - Φ(current) < 0
+    # This makes PRUNE net-negative, correctly representing "you wasted the seed."
+    pbrs_bonus = 0.0
+    if seed_info is not None and not config.disable_pbrs:
+        if action == LifecycleOp.PRUNE:
+            # PRUNE forfeits accumulated potential: transition to no-seed state
+            phi_current = STAGE_POTENTIALS[SeedStage(seed_info.stage)]
+            phi_current += min(
+                seed_info.epochs_in_stage * config.epoch_progress_bonus,
+                config.max_progress_bonus,
+            )
+            pbrs_bonus = config.pbrs_weight * (config.gamma * 0.0 - phi_current)
+        else:
+            pbrs_bonus = _contribution_pbrs_bonus(seed_info, config)
+        reward += pbrs_bonus
+
+    # =========================================================================
+    # Component 2: Per-Step Parameter Rent (EVERY STEP)
+    # =========================================================================
+    # KEY FIX: Pay rent every step, not just terminal.
+    # This prevents train-then-purge because the policy pays rent during
+    # all those training epochs, not just at episode end.
     effective_overhead = (
         effective_seed_params
         if effective_seed_params is not None
         else max(total_params - host_params, 0)
     )
     rent_penalty = config.param_penalty_weight * (effective_overhead / config.param_budget)
+    reward -= rent_penalty
 
     growth_ratio = 0.0
     if host_params > 0:
         denom = max(host_params, config.rent_host_params_floor)
         growth_ratio = effective_overhead / denom
 
-    reward = accuracy_improvement - rent_penalty
-    return reward, rent_penalty, growth_ratio
+    # =========================================================================
+    # Component 3: Contribution-Scaled Fossilization (IMMEDIATE at FOSSILIZE)
+    # =========================================================================
+    # P0-style credit assignment: pay bonus when action is taken, not terminal.
+    # Guards: valid stage, positive trajectory, contribution threshold.
+    #
+    # DRL Expert review 2026-01-12: Use f(improvement, contribution) instead of
+    # just contribution. This prevents "ransomware" gaming where seeds create
+    # dependencies (high contribution) without genuine improvement (negative delta).
+    # The harmonic mean is dominated by the smaller value, so both signals must
+    # be positive for a meaningful reward.
+    fossilize_bonus = 0.0
+    if action == LifecycleOp.FOSSILIZE and seed_info is not None:
+        is_valid = seed_info.stage == STAGE_HOLDING
+        if is_valid:
+            improvement = seed_info.total_improvement
+            meets_threshold = (
+                seed_contribution is not None
+                and seed_contribution >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
+            )
+
+            if improvement > 0 and meets_threshold:
+                # Both improvement AND contribution are positive: genuine good seed
+                # Use attribution formula (harmonic by default) to combine signals
+                combined = _compute_attributed_value(
+                    progress=improvement,
+                    seed_contribution=seed_contribution,
+                    formula=config.attribution_formula,
+                )
+                legitimacy_discount = min(1.0, seed_info.epochs_in_stage / MIN_HOLDING_EPOCHS)
+                fossilize_bonus = (
+                    config.basic_fossilize_base_bonus
+                    + config.basic_contribution_scale * combined
+                ) * legitimacy_discount
+            elif improvement <= 0 and seed_contribution is not None and seed_contribution > 0.1:
+                # Ransomware signature: high contribution but no/negative improvement
+                # The seed made itself important without helping the host
+                fossilize_bonus = config.basic_fossilize_invalid_penalty
+            else:
+                # Non-contributing seed or marginal improvement
+                fossilize_bonus = config.basic_fossilize_noncontributing_penalty
+        else:
+            # Invalid fossilize (wrong stage)
+            fossilize_bonus = config.basic_fossilize_invalid_penalty
+
+    reward += fossilize_bonus
+
+    # =========================================================================
+    # Component 4: Terminal Accuracy Bonus (TERMINAL ONLY)
+    # =========================================================================
+    # Ground truth outcome - can't be gamed, measured at episode end.
+    if epoch == max_epochs:
+        accuracy_bonus = config.basic_acc_delta_weight * (acc_delta / 100.0)
+        reward += accuracy_bonus
+
+    return reward, rent_penalty, growth_ratio, pbrs_bonus, fossilize_bonus
 
 
 def compute_simplified_reward(

@@ -128,13 +128,13 @@ def test_ppo_update_golden_metrics() -> None:
     assert metrics["ppo_update_performed"] is True
     assert metrics["finiteness_gate_skip_count"] == 0
 
-    # Phase 3: contribution_predictor added to network, changing parameter init sequence
-    assert metrics["policy_loss"] == pytest.approx(-2.125775098800659, abs=1e-6)
-    assert metrics["value_loss"] == pytest.approx(0.03560290485620499, abs=1e-6)
-    assert metrics["entropy"] == pytest.approx(9.399896621704102, abs=1e-6)
-    assert metrics["approx_kl"] == pytest.approx(0.004839236848056316, abs=1e-6)
+    # Phase 4: ResidualLSTM hidden state shape fix (hidden=None now creates correct [batch, hidden])
+    assert metrics["policy_loss"] == pytest.approx(-2.1166460514068604, abs=1e-6)
+    assert metrics["value_loss"] == pytest.approx(0.03467179462313652, abs=1e-6)
+    assert metrics["entropy"] == pytest.approx(9.399517059326172, abs=1e-6)
+    assert metrics["approx_kl"] == pytest.approx(0.004860731307417154, abs=1e-6)
     assert metrics["clip_fraction"] == pytest.approx(1.0, abs=1e-6)
-    assert metrics["ratio_mean"] == pytest.approx(0.4493007957935333, abs=1e-6)
+    assert metrics["ratio_mean"] == pytest.approx(0.4489768147468567, abs=1e-6)
     assert metrics["ratio_max"] == pytest.approx(0.4493289887905121, abs=1e-6)
-    assert metrics["ratio_min"] == pytest.approx(0.449216365814209, abs=1e-6)
-    assert metrics["ratio_std"] == pytest.approx(5.628170765703544e-05, abs=1e-6)
+    assert metrics["ratio_min"] == pytest.approx(0.4479205310344696, abs=1e-6)
+    assert metrics["ratio_std"] == pytest.approx(0.0007041990756988525, abs=1e-6)

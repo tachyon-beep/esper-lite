@@ -161,10 +161,148 @@ class BlueprintEmbedding(nn.Module):
         return cast(torch.Tensor, self.embedding(safe_idx))
 
 
+class ResidualLSTM(nn.Module):
+    """LSTM with residual connections for gradient flow in deep networks.
+
+    Standard stacked LSTMs suffer from vanishing gradients when depth > 4.
+    With 12 layers and no residuals, only ~3% of gradient reaches layer 1
+    (compound attenuation: sigmoid(1)^12 ≈ 0.027).
+
+    This wrapper processes each LSTM layer separately with:
+    1. Per-layer LayerNorm (prevents activation drift)
+    2. Residual connection: output = input + lstm_output
+    3. Optional dropout between layers
+
+    The residual ensures gradient magnitude ≥ 1 at each layer boundary,
+    enabling training of arbitrarily deep recurrent networks.
+
+    Architecture reference: Highway Networks (Srivastava et al., 2015)
+    applied to LSTMs with identity gating (always pass residual).
+    """
+
+    def __init__(
+        self,
+        input_size: int,
+        hidden_size: int,
+        num_layers: int,
+        dropout: float = 0.0,
+        batch_first: bool = True,
+    ):
+        super().__init__()
+        self.num_layers = num_layers
+        self.hidden_size = hidden_size
+        self.batch_first = batch_first
+
+        # Input projection if input_size != hidden_size
+        self.input_proj = (
+            nn.Linear(input_size, hidden_size)
+            if input_size != hidden_size
+            else nn.Identity()
+        )
+
+        # Stack of single-layer LSTMs with LayerNorm
+        self.layers = nn.ModuleList()
+        self.layer_norms = nn.ModuleList()
+
+        for _ in range(num_layers):
+            self.layers.append(
+                nn.LSTM(hidden_size, hidden_size, num_layers=1, batch_first=batch_first)
+            )
+            self.layer_norms.append(nn.LayerNorm(hidden_size))
+
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+
+        # Initialize with depth-aware settings
+        self._init_weights()
+
+    def _init_weights(self) -> None:
+        """Depth-aware initialization for LSTM layers.
+
+        Key adjustments for deep LSTMs:
+        1. Forget bias = 1 + log(depth) for stronger memory retention
+        2. Orthogonal init for all weight matrices
+        """
+        forget_bias = 1.0 + math.log(self.num_layers)
+
+        for layer in self.layers:
+            for name, param in layer.named_parameters():
+                if "weight_ih" in name:
+                    nn.init.orthogonal_(param.data)
+                elif "weight_hh" in name:
+                    nn.init.orthogonal_(param.data)
+                elif "bias" in name:
+                    nn.init.zeros_(param)
+                    # Set forget gate bias (indices n//4 : n//2)
+                    n = param.size(0)
+                    param.data[n // 4 : n // 2].fill_(forget_bias)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
+    ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
+        """Forward with residual connections between layers.
+
+        Args:
+            x: Input tensor [batch, seq, input_size] if batch_first else [seq, batch, input_size]
+            hidden: Optional (h, c) tuple, each [num_layers, batch, hidden_size]
+
+        Returns:
+            output: [batch, seq, hidden_size] or [seq, batch, hidden_size]
+            hidden: (h, c) tuple, each [num_layers, batch, hidden_size]
+        """
+        if self.batch_first:
+            batch_size = x.size(0)
+        else:
+            batch_size = x.size(1)
+        device = x.device
+
+        # Initialize hidden if not provided
+        # Shape: [batch, hidden] per layer - unsqueeze(0) later produces [1, batch, hidden]
+        if hidden is None:
+            h_list = [
+                torch.zeros(batch_size, self.hidden_size, device=device)
+                for _ in range(self.num_layers)
+            ]
+            c_list = [
+                torch.zeros(batch_size, self.hidden_size, device=device)
+                for _ in range(self.num_layers)
+            ]
+        else:
+            # Split stacked hidden [num_layers, batch, hidden] into per-layer list
+            # unbind(0) gives [batch, hidden] tensors - matches init shape above
+            h_list = list(hidden[0].unbind(dim=0))
+            c_list = list(hidden[1].unbind(dim=0))
+
+        # Project input to hidden size
+        x = self.input_proj(x)
+
+        # Process through layers with residuals
+        new_h_list = []
+        new_c_list = []
+
+        for i, (lstm, ln) in enumerate(zip(self.layers, self.layer_norms)):
+            residual = x
+            # Each LSTM layer expects hidden [1, batch, hidden_size]
+            x, (h_i, c_i) = lstm(x, (h_list[i].unsqueeze(0), c_list[i].unsqueeze(0)))
+            x = ln(x)
+            x = self.dropout(x)
+            x = x + residual  # RESIDUAL CONNECTION - ensures gradient flow
+
+            new_h_list.append(h_i.squeeze(0))
+            new_c_list.append(c_i.squeeze(0))
+
+        # Stack hidden states back to [num_layers, batch, hidden_size]
+        new_h = torch.stack(new_h_list, dim=0)
+        new_c = torch.stack(new_c_list, dim=0)
+
+        return x, (new_h, new_c)
+
+
 class FactoredRecurrentActorCritic(nn.Module):
     """Recurrent actor-critic with factored action heads.
 
-    Uses LSTM for temporal reasoning over 10-20 epoch seed learning cycles.
+    Uses ResidualLSTM for temporal reasoning over 10-20 epoch seed learning cycles.
     All action heads share the same temporal context from the LSTM.
     """
 
@@ -206,23 +344,24 @@ class FactoredRecurrentActorCritic(nn.Module):
             nn.ReLU(),
         )
 
-        # LSTM for temporal reasoning
-        self.lstm = nn.LSTM(
+        # ResidualLSTM for temporal reasoning with gradient flow
+        # NOTE: Replaced stacked nn.LSTM with ResidualLSTM to fix vanishing gradients.
+        # With 12 stacked layers and no residuals, only ~3% of gradient reached layer 1.
+        # ResidualLSTM provides:
+        # 1. Per-layer LayerNorm (replaces post-LSTM lstm_ln)
+        # 2. Residual connections ensuring gradient magnitude ≥ 1 per layer
+        # 3. Depth-scaled forget bias (1 + log(num_layers))
+        self.lstm = ResidualLSTM(
             input_size=feature_dim,
             hidden_size=lstm_hidden_dim,
             num_layers=lstm_layers,
+            dropout=0.0,  # No dropout for now - can be tuned
             batch_first=True,
         )
 
-        # M7: Post-LSTM LayerNorm (CRITICAL for training stability)
-        # Why TWO LayerNorms (pre + post LSTM)?
-        # 1. Pre-LSTM LN: Stabilizes input distribution, helps LSTM gates
-        # 2. Post-LSTM LN: Prevents hidden state magnitude drift over 25-epoch sequences
-        #
-        # This is intentional and follows the "LN everywhere" pattern from transformer
-        # literature (Ba et al., 2016). LSTMs particularly benefit from post-output LN
-        # because hidden state magnitude can drift in long sequences without it.
-        self.lstm_ln = nn.LayerNorm(lstm_hidden_dim)
+        # NOTE: Post-LSTM LayerNorm removed - ResidualLSTM has per-layer LayerNorm.
+        # The lstm_ln attribute is kept as Identity for backwards compat in forward().
+        self.lstm_ln = nn.Identity()
 
         # H7: Removed unused max_entropies dict.
         # MaskedCategorical.entropy() already returns normalized entropy internally,
@@ -374,29 +513,11 @@ class FactoredRecurrentActorCritic(nn.Module):
             nn.init.orthogonal_(contrib_last.weight.data, gain=0.1)
             nn.init.zeros_(contrib_last.bias.data)  # Center predictions at 0
 
-        # LSTM-specific initialization
-        for name, param in self.lstm.named_parameters():
-            if "weight_ih" in name:
-                # param is a Parameter, access .data to get the Tensor
-                weight_tensor: torch.Tensor = param.data
-                nn.init.orthogonal_(weight_tensor)
-            elif "weight_hh" in name:
-                weight_tensor = param.data
-                nn.init.orthogonal_(weight_tensor)
-            elif "bias" in name:
-                nn.init.zeros_(param)
-                # M9: Set forget gate bias to 1 (helps with long-term memory)
-                #
-                # PyTorch LSTM packs 4 gate biases concatenated: [input, forget, cell, output]
-                # Each gate gets n/4 elements, so the forget gate is at indices n//4 : n//2.
-                #
-                # Why bias=1 for forget gate? (Gers et al., 2000 "Learning to Forget")
-                # - Forget gate controls how much of the previous cell state to retain
-                # - Sigmoid(1) ≈ 0.73, so default behavior is "mostly remember"
-                # - Without this, LSTM initially forgets too aggressively, hurting long sequences
-                # - Critical for our 25-epoch seed learning trajectories
-                n = param.size(0)
-                param.data[n // 4 : n // 2].fill_(1.0)
+        # NOTE: LSTM initialization is now handled by ResidualLSTM._init_weights()
+        # ResidualLSTM uses depth-scaled forget bias: 1 + log(num_layers)
+        # With 4 layers: forget_bias = 1 + log(4) ≈ 2.39 → sigmoid(2.39) ≈ 0.92 retention
+        # This is stronger than the old bias=1 (sigmoid(1) ≈ 0.73), which is correct for
+        # deeper networks that need better memory retention across layers.
 
     def get_initial_hidden(
         self,
@@ -543,19 +664,13 @@ class FactoredRecurrentActorCritic(nn.Module):
         # Feature extraction
         features = self.feature_net(state_with_bp)  # [batch, seq_len, feature_dim]
 
-        # LSTM forward
+        # ResidualLSTM forward (includes per-layer LayerNorm and residual connections)
         lstm_out, new_hidden = self.lstm(features, hidden)
         # lstm_out: [batch, seq_len, hidden_dim]
+        # NOTE: Soft clamp removed - it killed gradients (derivative ~0.42 at boundaries).
+        # ResidualLSTM's per-layer LayerNorm prevents magnitude drift without gradient penalty.
 
-        # Soft clamp cell state to prevent saturation (DRL Expert recommendation).
-        # Positive-biased inputs cause cell state accumulation. tanh(c/50)*50
-        # bounds |c| ≤ 50 while preserving gradients. LSTM output tanh(c) saturates
-        # around 20-30 anyway, so larger values are degenerate.
-        h, c = new_hidden
-        c = torch.tanh(c / 50.0) * 50.0
-        new_hidden = (h, c)
-
-        # LayerNorm on LSTM output (prevents magnitude drift)
+        # Legacy lstm_ln call (now nn.Identity) for backwards compat
         lstm_out = self.lstm_ln(lstm_out)
 
         # Compute logits for each head
@@ -777,12 +892,20 @@ class FactoredRecurrentActorCritic(nn.Module):
             ) -> torch.Tensor:
                 """Apply probability floor to logits (fast path version).
 
-                Mirrors MaskedCategorical._apply_probability_floor but operates
-                directly on logits without creating a distribution object.
+                MUST match MaskedCategorical._apply_probability_floor exactly to ensure
+                importance sampling ratios are correct. Uses underweight/overweight
+                algorithm, NOT clamp-then-renormalize (which violates floor guarantee).
+
+                Algorithm (floor-preserving renormalization):
+                1. Compute softmax probabilities from logits
+                2. Cap floor at 1/num_valid * 0.99 (can't exceed uniform distribution)
+                3. Identify "underweight" actions (below floor) and "overweight" actions
+                4. Set underweight actions to floor, scale overweight to fill remaining mass
+                5. Convert back to logits via log(prob)
                 """
                 probs = F.softmax(logits, dim=-1)
 
-                # Cap floor at uniform distribution
+                # Cap floor at uniform distribution (can't exceed 1/num_valid)
                 num_valid = mask.sum(dim=-1, keepdim=True).float().clamp(min=1)
                 max_floor = 1.0 / num_valid
                 effective_floor = torch.minimum(
@@ -790,22 +913,46 @@ class FactoredRecurrentActorCritic(nn.Module):
                     max_floor * 0.99,
                 )
 
-                # Clamp valid probs to at least effective_floor
+                # Identify underweight (need boosting) vs overweight (can be scaled down)
+                # Only valid actions participate in floor logic
+                valid_probs = probs * mask.float()
+                is_underweight = mask & (probs < effective_floor)  # Below floor
+                is_overweight = mask & (probs >= effective_floor)  # At or above floor
+
+                # Count underweight actions and compute mass needed for flooring
+                num_underweight = is_underweight.sum(dim=-1, keepdim=True).float()
+                floor_mass_needed = num_underweight * effective_floor
+
+                # Mass available from overweight actions (above their floor allocation)
+                overweight_probs = torch.where(is_overweight, valid_probs, torch.zeros_like(valid_probs))
+                overweight_total = overweight_probs.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+
+                # Remaining mass for overweight actions after floor allocation
+                remaining_mass = (1.0 - floor_mass_needed).clamp(min=1e-8)
+
+                # Scale factor for overweight actions to fit in remaining mass
+                scale = remaining_mass / overweight_total
+
+                # Build final probabilities:
+                # - Underweight: set to floor
+                # - Overweight: scale down proportionally
+                # - Masked: keep at original (will be masked out anyway)
                 floored_probs = torch.where(
-                    mask,
-                    torch.clamp(probs, min=effective_floor),
-                    probs,
+                    is_underweight,
+                    effective_floor.expand_as(probs),
+                    torch.where(
+                        is_overweight,
+                        probs * scale,
+                        probs,  # Masked actions keep original prob (irrelevant)
+                    ),
                 )
 
-                # Renormalize over valid actions
-                valid_sum = (floored_probs * mask.float()).sum(dim=-1, keepdim=True).clamp(min=1e-8)
-                normalized_probs = floored_probs / valid_sum
-
                 # Convert back to logits
+                # Use safe_probs to avoid log(0) for masked actions
                 safe_probs = torch.where(
                     mask,
-                    normalized_probs.clamp(min=1e-8),
-                    torch.ones_like(normalized_probs),
+                    floored_probs.clamp(min=1e-8),
+                    torch.ones_like(floored_probs),
                 )
                 new_logits = torch.log(safe_probs)
                 return torch.where(mask, new_logits, torch.full_like(new_logits, MASKED_LOGIT_VALUE))

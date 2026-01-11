@@ -123,6 +123,12 @@ class PPOAgent:
         # are only active during GERMINATE actions (less frequent than slot/op).
         entropy_coef_per_head: dict[str, float] | None = None,
         value_coef: float = DEFAULT_VALUE_COEF,
+        # Value coefficient warmup: start low, ramp up to value_coef over warmup_steps.
+        # This prevents critic collapse when early returns have low variance (before
+        # the policy discovers fossilization). The critic learns "be patient" by having
+        # less influence early, then gradually taking over as variance appears.
+        value_coef_start: float | None = None,  # Default: 0.1 * value_coef
+        value_warmup_steps: int = 0,  # 0 = no warmup, use fixed value_coef
         clip_value: bool = False,  # Disabled: return normalization provides stability
         # Separate clip range for value function (larger than policy clip_ratio)
         # Note: Research (Engstrom et al., 2020) suggests value clipping often hurts.
@@ -220,6 +226,9 @@ class PPOAgent:
         )
         self.total_train_steps = total_train_steps if total_train_steps is not None else 1_000_000
         self.value_coef = value_coef
+        # Value warmup: start at 10% of target by default, ramp up over warmup_steps
+        self.value_coef_start = value_coef_start if value_coef_start is not None else 0.1 * value_coef
+        self.value_warmup_steps = value_warmup_steps
         self.clip_value = clip_value
         self.value_clip = value_clip
         self.max_grad_norm = max_grad_norm
@@ -370,6 +379,25 @@ class PPOAgent:
         progress = min(1.0, self.train_steps / self.entropy_anneal_steps)
         annealed = self.entropy_coef_start + progress * (self.entropy_coef_end - self.entropy_coef_start)
         return max(annealed, self.entropy_coef_min)
+
+    def get_value_coef(self) -> float:
+        """Get current value coefficient with warmup.
+
+        Value warmup prevents critic collapse when early returns have low variance.
+        Before the policy discovers fossilization, all returns look similar and the
+        critic learns a constant (value collapse). By starting with low value_coef,
+        we tell the critic "be patient, don't overfit to early uniform returns."
+
+        Returns:
+            Value coefficient (ramped up if warmup enabled)
+        """
+        if self.value_warmup_steps == 0:
+            # No warmup - use fixed coefficient
+            return self.value_coef
+
+        # With warmup - ramp from value_coef_start to value_coef
+        progress = min(1.0, self.train_steps / self.value_warmup_steps)
+        return self.value_coef_start + progress * (self.value_coef - self.value_coef_start)
 
     def _get_penalty_schedule(self, progress: float) -> float:
         """Schedule entropy floor penalty coefficient across training phases.
@@ -987,7 +1015,7 @@ class PPOAgent:
                 clip_ratio=self.clip_ratio,
                 clip_value=self.clip_value,
                 value_clip=self.value_clip,
-                value_coef=self.value_coef,
+                value_coef=self.get_value_coef(),  # Use warmup-aware getter
                 head_names=HEAD_NAMES,
                 entropy_floor=self.entropy_floor,
                 entropy_floor_penalty_coef=scheduled_coef,  # Scheduled coefficients
@@ -1285,6 +1313,8 @@ class PPOAgent:
                 'entropy_floor_penalty_coef': self.entropy_floor_penalty_coef,
                 'total_train_steps': self.total_train_steps,
                 'value_coef': self.value_coef,
+                'value_coef_start': self.value_coef_start,
+                'value_warmup_steps': self.value_warmup_steps,
                 'clip_value': self.clip_value,
                 'value_clip': self.value_clip,
                 'target_kl': self.target_kl,

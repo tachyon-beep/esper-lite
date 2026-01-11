@@ -254,3 +254,47 @@ class TestSlotsStringRejection:
         config = TrainingConfig(slots=("r0c0", "r0c1"))
         assert config.slots == ["r0c0", "r0c1"]
         assert isinstance(config.slots, list)
+
+
+class TestBasicAccDeltaWeight:
+    """Tests for basic_acc_delta_weight parameter wiring."""
+
+    def test_default_value(self):
+        """basic_acc_delta_weight should default to 5.0."""
+        config = TrainingConfig()
+        assert config.basic_acc_delta_weight == 5.0
+
+    def test_configurable_from_constructor(self):
+        """basic_acc_delta_weight should be configurable via constructor."""
+        config = TrainingConfig(basic_acc_delta_weight=10.0)
+        assert config.basic_acc_delta_weight == 10.0
+
+    def test_from_dict_parses_correctly(self):
+        """basic_acc_delta_weight should be parsed from dict/JSON."""
+        config = TrainingConfig.from_dict({"basic_acc_delta_weight": 3.5})
+        assert config.basic_acc_delta_weight == 3.5
+
+    def test_flows_to_train_kwargs(self):
+        """basic_acc_delta_weight should be included in to_train_kwargs()."""
+        config = TrainingConfig(basic_acc_delta_weight=7.5)
+        kwargs = config.to_train_kwargs()
+        assert "basic_acc_delta_weight" in kwargs
+        assert kwargs["basic_acc_delta_weight"] == 7.5
+
+    def test_roundtrip_serialization(self):
+        """basic_acc_delta_weight should survive to_dict/from_dict roundtrip."""
+        original = TrainingConfig(basic_acc_delta_weight=2.5)
+        loaded = TrainingConfig.from_dict(original.to_dict())
+        assert loaded.basic_acc_delta_weight == 2.5
+
+    def test_basic_reward_mode_with_custom_weight(self):
+        """BASIC reward mode should work with custom basic_acc_delta_weight."""
+        config = TrainingConfig(
+            reward_mode=RewardMode.BASIC,
+            basic_acc_delta_weight=8.0,
+        )
+        assert config.reward_mode == RewardMode.BASIC
+        assert config.basic_acc_delta_weight == 8.0
+        kwargs = config.to_train_kwargs()
+        assert kwargs["reward_mode"] == "basic"
+        assert kwargs["basic_acc_delta_weight"] == 8.0

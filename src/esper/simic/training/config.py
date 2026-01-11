@@ -79,6 +79,22 @@ class TrainingConfig:
     # of annealing. Note: this is env-episode-based, not PPO-update-based.
     # Changing n_envs changes the number of PPO updates but not the total env experience.
     entropy_anneal_episodes: int = 0
+    # Per-head entropy coefficient multipliers. Sparse heads (blueprint, tempo)
+    # need higher multipliers to prevent collapse since they only receive gradients
+    # on specific ops. Default multipliers are in ppo_agent.ENTROPY_COEF_PER_HEAD.
+    # Example: {"blueprint": 2.0, "tempo": 2.0} to boost sparse heads.
+    entropy_coef_per_head: dict[str, float] | None = None
+
+    # === Value function ===
+    # Coefficient for value loss in combined PPO loss. Lower values reduce critic
+    # dominance when using shared backbone (LSTM shared between actor/critic).
+    value_coef: float = 0.5
+    # Value warmup: start with low value_coef, ramp up over warmup batches.
+    # Prevents critic collapse when early returns have low variance (before policy
+    # discovers fossilization). Set to 0 to disable warmup (use fixed value_coef).
+    # Expressed in batches (not episodes) so it scales correctly with n_envs.
+    value_warmup_batches: int = 10  # Default: warm up over first 10 batches
+    value_coef_start: float | None = None  # Default: 0.1 * value_coef
 
     # === Telemetry and runtime flags ===
     use_telemetry: bool = True
@@ -107,6 +123,9 @@ class TrainingConfig:
     # Floor for host-param normalization in rent/shock calculations.
     # Prevents tiny hosts (e.g., ~17 trainable params) being crushed by any seed growth.
     rent_host_params_floor: int = 200
+    # BASIC mode: weight for accuracy delta in reward calculation.
+    # reward = basic_acc_delta_weight * (acc_delta / 100) - param_penalty_weight * (params / budget)
+    basic_acc_delta_weight: float = 5.0
 
     # === Diagnostics thresholds ===
     plateau_threshold: float = 0.5
@@ -279,6 +298,9 @@ class TrainingConfig:
         if self.entropy_anneal_episodes > 0:
             entropy_steps = math.ceil(self.entropy_anneal_episodes / self.n_envs) * self.ppo_updates_per_batch
 
+        # Value warmup: convert batches to PPO update steps
+        value_warmup_steps = self.value_warmup_batches * self.ppo_updates_per_batch
+
         return {
             "lr": self.lr,
             "gamma": self.gamma,
@@ -289,6 +311,10 @@ class TrainingConfig:
             "entropy_coef_end": self.entropy_coef_end,
             "entropy_coef_min": self.entropy_coef_min,
             "entropy_anneal_steps": entropy_steps,
+            "entropy_coef_per_head": self.entropy_coef_per_head,
+            "value_coef": self.value_coef,
+            "value_coef_start": self.value_coef_start,
+            "value_warmup_steps": value_warmup_steps,
             "lstm_hidden_dim": self.lstm_hidden_dim,
             "chunk_length": self.chunk_length,
             "num_envs": self.n_envs,
@@ -314,6 +340,10 @@ class TrainingConfig:
             "entropy_coef_end": self.entropy_coef_end,
             "entropy_coef_min": self.entropy_coef_min,
             "entropy_anneal_episodes": self.entropy_anneal_episodes,
+            "entropy_coef_per_head": self.entropy_coef_per_head,
+            "value_coef": self.value_coef,
+            "value_warmup_batches": self.value_warmup_batches,
+            "value_coef_start": self.value_coef_start,
             "gamma": self.gamma,
             "gae_lambda": self.gae_lambda,
             "ppo_updates_per_batch": self.ppo_updates_per_batch,
@@ -330,6 +360,7 @@ class TrainingConfig:
             "param_penalty_weight": self.param_penalty_weight,
             "sparse_reward_scale": self.sparse_reward_scale,
             "rent_host_params_floor": self.rent_host_params_floor,
+            "basic_acc_delta_weight": self.basic_acc_delta_weight,
             "plateau_threshold": self.plateau_threshold,
             "improvement_threshold": self.improvement_threshold,
             "gradient_telemetry_stride": self.gradient_telemetry_stride,

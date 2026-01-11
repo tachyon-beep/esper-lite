@@ -1,6 +1,6 @@
 # Esper Plan Tracker
 
-**Last Updated:** 2026-01-10 (comprehensive inventory + transitory plans verified)
+**Last Updated:** 2026-01-12 (added post-fossilization drip reward plan)
 **Purpose:** Rack-and-stack all plans and concepts for prioritization and dependency tracking.
 
 ---
@@ -37,12 +37,12 @@
 |--------|-------|-------|
 | 🔴 Critical | 1 | op-entropy-collapse (blocks all training) |
 | Completed | 8 | simic2 (3) + holding-warning + 4 transitory telemetry |
-| Ready | 8 | Implementation-ready plans |
+| Ready | 10 | Implementation-ready plans (drip-reward added 2026-01-12) |
 | In Progress | 1 | phase3-tinystories |
-| Planning | 7 | Active design workspaces |
+| Planning | 6 | Active design workspaces |
 | Concept | 5 | Early ideas |
 | Abandoned | 2 | Superseded (shaped-delta-clip, emrakul-submodule-editing) |
-| **Total Active** | **22** |
+| **Total Active** | **23** |
 
 ---
 
@@ -67,6 +67,7 @@
 
 | ID | Title | Type | Urgency | Complexity | Risk | Status |
 |----|-------|------|---------|------------|------|--------|
+| drip-reward | Post-Fossilization Drip Reward | ready | high | M | medium | 0% - DRL expert reviewed 2026-01-12 |
 | phase3-tinystories | Transformer Domain Pivot | in-progress | medium | L | medium | ✅ 80-90% complete, needs validation runs |
 | kasmina2-phase0 | Submodule Intervention Foundation | planning | high | L | medium | Design complete, ready to implement |
 | defensive-patterns | Defensive Pattern Fixes | ready | medium | M | low | Removes 23 inappropriate defensive patterns |
@@ -90,7 +91,7 @@
 | blueprint-future | Blueprint Future Appendix | ready | low | L | medium | 7 advanced CNN blueprints (Phase 3) |
 | narset1 | Meta-Coordination Layer | planning | low | L | medium | Speculative, part of Emrakul design |
 | karn2 | Karn Sanctum v2 | planning | low | M | low | Nice-to-have TUI improvements |
-| tamiyo4 | Slot Transformer Architecture | planning | low | L | medium | Research direction |
+| tamiyo4 | Slot Transformer Architecture | ready | low | L | medium | Updated 2026-01: Q(s,op) value, contrib predictor, ResidualLSTM |
 | emrakul-sketch | Immune System Sketch | concept | medium | XL | high | Concept version (see emrakul-immune for planning) |
 | scaled-counterfactuals | Shapley Validation | concept | low | S | low | Diagnostic approach |
 
@@ -656,28 +657,33 @@ percent_complete: 0
 ```yaml
 id: tamiyo4
 title: Slot Transformer Architecture
-type: planning
+type: ready
 created: 2025-12-26
-updated: 2025-12-26
+updated: 2026-01-12
 
 urgency: low
 value: |
-  Replace LSTM policy backbone with Transformer.
-  Better for variable-length slot sequences.
+  Replace flat observation concatenation with Slot Transformer Encoder.
+  Enables O(1) parameters per slot, variable slot counts, learned slot-slot interactions.
 
 complexity: L
 risk: medium
 risk_notes: |
   - Architectural change to policy network
   - Needs careful A/B validation
+  - Must preserve Q(s,op) value conditioning
 
 depends_on:
-  - simic2-phase2 (cleaner training code)
+  - simic2-phase2 (cleaner training code) ✅ COMPLETE
 blocks: []
 
 status_notes: |
-  Research direction. Not blocking anything critical.
-  Could help with scaling to many slots.
+  READY FOR EXECUTION. Plan updated 2026-01-12 with critical features:
+  - Task 2.5: Op-conditioned value head Q(s,op) not V(s)
+  - Task 2.6: Contribution predictor auxiliary head
+  - Task 2.7: ResidualLSTM integration (not vanilla nn.LSTM)
+  - Task 2.8: BlueprintEmbedding for Obs V3
+  Moved to docs/plans/ready/
 percent_complete: 0
 ```
 
@@ -827,6 +833,58 @@ status_notes: |
   6. Add tests
 percent_complete: 0
 ```
+
+---
+
+### drip-reward: Post-Fossilization Drip Reward
+
+```yaml
+id: drip-reward
+title: Post-Fossilization Drip Reward
+type: ready
+created: 2026-01-12
+updated: 2026-01-12
+location: docs/plans/ready/2026-01-12-post-fossilization-drip-reward.md
+
+urgency: high
+value: |
+  Prevents seeds from gaming by fossilizing at peak metrics then degrading.
+  Enforces long-term accountability for fossilized seeds via drip reward.
+
+complexity: M
+risk: medium
+risk_notes: |
+  - PPO variance could increase if drip magnitude miscalibrated
+  - Credit assignment more complex (rewards arrive after action)
+  - Must ensure drip normalization prevents early-fossilization gaming
+
+depends_on: []
+blocks: []
+
+status_notes: |
+  DRL EXPERT REVIEWED (2026-01-12):
+
+  Design decisions:
+  - 70/30 split: 30% immediate for credit assignment, 70% drip for accountability
+  - Epoch-normalized drip scale prevents early-fossilization gaming
+  - Contribution-only for drip (not harmonic mean - improvement fixed at fossilization)
+  - Drip clipping at +/-0.1 prevents variance explosion
+  - Diminishing returns for multiple fossilized seeds
+
+  Key files:
+  - src/esper/simic/rewards/contribution.py (add drip logic)
+  - src/esper/simic/training/config.py (add drip config)
+  - src/esper/simic/rewards/reward_telemetry.py (add drip telemetry)
+percent_complete: 0
+```
+
+**Commentary:**
+> New plan to close post-fossilization gaming exploit. Seeds currently can fossilize
+> when metrics look good, then degrade after fossilization with no accountability.
+> The drip reward splits fossilize bonus into immediate (30%) and drip (70%) components.
+> Drip paid over remaining epochs based on continued contribution - negative contribution
+> produces negative drip (penalty). Epoch normalization ensures expected total is
+> independent of fossilization timing.
 
 ---
 
@@ -1104,7 +1162,7 @@ percent_complete: 0
 - **esika-superstructure** - Multi-cell coordination (post-Stage 3)
 - **narset1** - Speculative, part of Emrakul design
 - **karn2** - Nice-to-have TUI improvements
-- **tamiyo4** - Research direction (SlotTransformer for policy scaling)
+- **tamiyo4** - READY: SlotTransformer for policy scaling (updated 2026-01-12)
 - **blueprint-antipatterns** - Bad blueprints for curriculum (Phase 4+)
 - **blueprint-future** - Advanced CNN blueprints (Phase 3)
 
@@ -1114,6 +1172,13 @@ percent_complete: 0
 
 | Date | Change |
 |------|--------|
+| 2026-01-12 | **POST-FOSSILIZATION DRIP REWARD.** Added new plan to close gaming exploit: |
+| | - Seeds can fossilize at peak metrics then degrade with no accountability |
+| | - Solution: 70/30 split - 30% immediate, 70% drip over remaining epochs |
+| | - Drip based on continued contribution (negative contribution = penalty) |
+| | - Epoch normalization prevents early-fossilization gaming |
+| | - DRL expert reviewed and approved design decisions |
+| | - Location: `docs/plans/ready/2026-01-12-post-fossilization-drip-reward.md` |
 | 2026-01-11 | **OP-ENTROPY-COLLAPSE DIAGNOSIS.** DRL expert telemetry analysis of ESCROW run revealed: |
 | | - Previous entropy-collapse fix was insufficient (op floor 0.15 too close to collapse point 0.14) |
 | | - Policy freeze after batch 40: WAIT 99.9%, GERMINATE 0.07%, fossilizations 0 |
@@ -1182,6 +1247,7 @@ Quick reference for all tracked plans:
 | `2026-01-09-blueprint-compiler-appendix-future-blueprints.md` | blueprint-future |
 | `2026-01-02-telemetry-domain-separation.md` | telemetry-domain-sep |
 | `2026-01-10-counterfactual-auxiliary-supervision.md` | counterfactual-aux |
+| `2026-01-12-post-fossilization-drip-reward.md` | drip-reward |
 | `defensive-pattern-fixes.md` | defensive-patterns |
 | `2025-12-29-sanctum-help-system.md` | sanctum-help |
 | `h-tamiyo-updates.md` | heuristic-tamiyo |
