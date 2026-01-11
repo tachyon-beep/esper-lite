@@ -222,7 +222,7 @@ def compute_losses(
     value_coef: float,
     head_names: tuple[str, ...],
     entropy_floor: dict[str, float] | None = None,
-    entropy_floor_penalty_coef: dict[str, float] | float = 0.1,
+    entropy_floor_penalty_coef: dict[str, float] | None = None,
     availability_masks: dict[str, torch.Tensor] | None = None,
 ) -> LossMetrics:
     """Compute PPO policy/value/entropy losses for a single epoch.
@@ -238,6 +238,10 @@ def compute_losses(
     This prevents the policy from receiving noisy gradients from forced WAIT
     corridors where its output didn't matter, while still training the value
     function to predict returns in those states.
+
+    PYTORCH OPTIMIZATION: entropy_floor_penalty_coef MUST be a dict (not a scalar).
+    Caller (PPOAgent) normalizes scalar inputs to dict at __init__ time. This avoids
+    isinstance() checks in the hot path, enabling consistent torch.compile graph shapes.
     """
     # D1: Compute loss weights from forced mask
     if forced_mask is not None:
@@ -324,19 +328,13 @@ def compute_losses(
             n_available = effective_mask.sum().clamp(min=1)
             mean_entropy[key] = (entropy[key] * effective_mask).sum() / n_available
 
-        # PYTORCH OPTIMIZATION: Normalize coefficient to dict ONCE at outer scope
-        # This avoids isinstance() check in the hot path (inner loop)
-        if isinstance(entropy_floor_penalty_coef, dict):
-            penalty_coef_dict = entropy_floor_penalty_coef
-        else:
-            # Broadcast scalar to all heads
-            penalty_coef_dict = {head: entropy_floor_penalty_coef for head in entropy_floor}
-
+        # entropy_floor_penalty_coef is ALWAYS dict - caller normalizes at init time
+        # (PyTorch optimization: no isinstance() in hot path for consistent graph shapes)
         entropy_floor_penalty = compute_entropy_floor_penalty(
             entropy=mean_entropy,
             head_masks=head_masks,  # For device inference
             entropy_floor=entropy_floor,
-            penalty_coef=penalty_coef_dict,
+            penalty_coef=entropy_floor_penalty_coef,  # type: ignore[arg-type]  # None checked above
             availability_masks=entropy_masks,
         )
 

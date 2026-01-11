@@ -199,6 +199,7 @@ class TestEntropyFloorIntegration:
 
         # With floor penalty
         entropy_floor = {"blueprint": 0.4}  # Blueprint is at 0.05, well below 0.4
+        entropy_floor_penalty_coef = {"blueprint": 0.1}  # Dict required (P2 optimization)
         losses_with_floor = compute_losses(
             per_head_ratios=per_head_ratios,
             per_head_advantages=per_head_advantages,
@@ -215,13 +216,18 @@ class TestEntropyFloorIntegration:
             value_coef=0.5,
             head_names=head_names,
             entropy_floor=entropy_floor,
+            entropy_floor_penalty_coef=entropy_floor_penalty_coef,
         )
 
         # Total loss should be higher with floor penalty
         assert losses_with_floor.total_loss > losses_no_floor.total_loss
 
-    def test_compute_losses_entropy_floor_penalty_with_scalar_coef(self) -> None:
-        """entropy_floor_penalty_coef can be scalar (broadcasts to all heads)."""
+    def test_compute_losses_entropy_floor_penalty_with_per_head_coef(self) -> None:
+        """entropy_floor_penalty_coef dict allows per-head coefficient control.
+
+        P2 optimization: entropy_floor_penalty_coef MUST be a dict (no scalar support).
+        Caller (PPOAgent) normalizes at init time for torch.compile graph consistency.
+        """
         device = torch.device("cpu")
         batch_size = 16
         head_names = ("op", "blueprint")
@@ -241,8 +247,8 @@ class TestEntropyFloorIntegration:
         entropy_coef_per_head = {"op": 1.0, "blueprint": 1.0}
         entropy_floor = {"op": 0.4, "blueprint": 0.4}
 
-        # With scalar coef
-        losses_scalar = compute_losses(
+        # With uniform dict coef
+        losses_uniform = compute_losses(
             per_head_ratios=per_head_ratios,
             per_head_advantages=per_head_advantages,
             head_masks=head_masks,
@@ -258,11 +264,11 @@ class TestEntropyFloorIntegration:
             value_coef=0.5,
             head_names=head_names,
             entropy_floor=entropy_floor,
-            entropy_floor_penalty_coef=0.1,  # Scalar
+            entropy_floor_penalty_coef={"op": 0.1, "blueprint": 0.1},
         )
 
-        # With dict coef (same value)
-        losses_dict = compute_losses(
+        # With higher blueprint coef (should increase total loss)
+        losses_higher_blueprint = compute_losses(
             per_head_ratios=per_head_ratios,
             per_head_advantages=per_head_advantages,
             head_masks=head_masks,
@@ -278,13 +284,12 @@ class TestEntropyFloorIntegration:
             value_coef=0.5,
             head_names=head_names,
             entropy_floor=entropy_floor,
-            entropy_floor_penalty_coef={"op": 0.1, "blueprint": 0.1},  # Dict
+            entropy_floor_penalty_coef={"op": 0.1, "blueprint": 0.5},  # Higher blueprint
         )
 
-        # Should be equal
-        assert losses_scalar.total_loss.item() == pytest.approx(
-            losses_dict.total_loss.item(), rel=1e-5
-        )
+        # Higher blueprint coefficient should increase penalty (and total loss)
+        assert losses_higher_blueprint.entropy_floor_penalty > losses_uniform.entropy_floor_penalty
+        assert losses_higher_blueprint.total_loss > losses_uniform.total_loss
 
 
 class TestPenaltySchedule:
