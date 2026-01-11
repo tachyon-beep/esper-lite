@@ -91,6 +91,14 @@ class VectorizedEmitter:
         event.group_id = self.group_id
         self.hub.emit(event)
 
+    def emit(self, event: TelemetryEvent) -> None:
+        """Public interface for emitting telemetry events with env context.
+
+        Use for ad-hoc events that don't have dedicated methods (e.g., GOVERNOR_ROLLBACK).
+        Injects env_id, device, and group_id into the event before emission.
+        """
+        self._emit(event)
+
     def on_epoch_completed(
         self,
         epoch: int,

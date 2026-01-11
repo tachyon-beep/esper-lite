@@ -21,6 +21,7 @@ from esper.leyline import (
     EPISODE_SUCCESS_THRESHOLD,
     EpisodeOutcome,
     EpisodeOutcomePayload,
+    GovernorRollbackPayload,
     HEAD_NAMES,
     HINDSIGHT_CREDIT_WEIGHT,
     HeadTelemetry,
@@ -379,6 +380,11 @@ def execute_actions(
 
         # Governor rollback
         if env_idx in governor_panic_envs:
+            # Capture panic info BEFORE rollback (execute_rollback resets these)
+            panic_reason = env_state.governor._panic_reason
+            panic_loss = env_state.governor._panic_loss
+            consecutive_panics = env_state.governor.consecutive_panics
+
             # Stream safety: rollback mutates model tensors; ensure it runs on the
             # per-env CUDA stream to avoid default-stream leakage and races.
             rollback_ctx = (
@@ -401,6 +407,19 @@ def execute_actions(
             env_state.host_optimizer.state.clear()
             for seed_opt in env_state.seed_optimizers.values():
                 seed_opt.state.clear()
+
+            # Emit rollback telemetry for observability (P2 audit finding)
+            emitters[env_idx].emit(TelemetryEvent(
+                event_type=TelemetryEventType.GOVERNOR_ROLLBACK,
+                data=GovernorRollbackPayload(
+                    env_id=env_idx,
+                    device=str(device),
+                    reason=panic_reason or "unknown",
+                    loss_at_panic=panic_loss,
+                    consecutive_panics=consecutive_panics,
+                ),
+                severity="warning",
+            ))
 
         action_outcome.rollback_occurred = env_rollback_occurred[env_idx]
 

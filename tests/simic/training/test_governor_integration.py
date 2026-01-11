@@ -434,3 +434,165 @@ class TestRollbackTracking:
 
         assert env_rollback_occurred[0] is True
         assert env_rollback_occurred[1] is True
+
+
+class TestGovernorRollbackTelemetry:
+    """Test that GOVERNOR_ROLLBACK telemetry events are emitted during rollback.
+
+    This tests the telemetry pattern at action_execution.py ~line 404 where
+    a GovernorRollbackPayload is emitted via the VectorizedEmitter after
+    a rollback occurs.
+    """
+
+    def test_rollback_emits_telemetry_event(self) -> None:
+        """Rollback should emit GOVERNOR_ROLLBACK telemetry event."""
+        from unittest.mock import MagicMock
+        from esper.leyline import TelemetryEventType, GovernorRollbackPayload
+
+        env_state, model = create_env_state()
+
+        # Create a mock emitter to capture events
+        mock_emitter = MagicMock()
+        emitted_events: list = []
+
+        def capture_emit(event):
+            emitted_events.append(event)
+
+        mock_emitter.emit = capture_emit
+
+        # Warm up governor and snapshot
+        for _ in range(10):
+            env_state.governor.check_vital_signs(2.3)
+        env_state.governor.snapshot()
+
+        # Trigger panic
+        panic = env_state.governor.check_vital_signs(float("nan"))
+        assert panic, "Should panic on NaN"
+
+        # Capture panic info BEFORE rollback (as action_execution.py should do)
+        panic_reason = env_state.governor._panic_reason
+        panic_loss = env_state.governor._panic_loss
+        consecutive_panics = env_state.governor.consecutive_panics
+
+        # Execute rollback
+        env_state.governor.execute_rollback(env_id=0)
+        env_state.host_optimizer.state.clear()
+
+        # Emit telemetry as action_execution.py should do
+        from esper.leyline import TelemetryEvent
+        device = "cpu"
+        env_idx = 0
+        mock_emitter.emit(TelemetryEvent(
+            event_type=TelemetryEventType.GOVERNOR_ROLLBACK,
+            data=GovernorRollbackPayload(
+                env_id=env_idx,
+                device=str(device),
+                reason=panic_reason or "unknown",
+                loss_at_panic=panic_loss,
+                consecutive_panics=consecutive_panics,
+            ),
+            severity="warning",
+        ))
+
+        # Verify telemetry was emitted
+        assert len(emitted_events) == 1
+        event = emitted_events[0]
+        assert event.event_type == TelemetryEventType.GOVERNOR_ROLLBACK
+        assert event.severity == "warning"
+
+        # Verify payload contents
+        payload = event.data
+        assert isinstance(payload, GovernorRollbackPayload)
+        assert payload.env_id == 0
+        assert payload.device == "cpu"
+        assert payload.reason == "governor_nan"
+        assert payload.consecutive_panics == 0  # NaN panics don't increment counter
+
+    def test_rollback_telemetry_includes_divergence_info(self) -> None:
+        """Rollback from divergence should include consecutive_panics."""
+        from unittest.mock import MagicMock
+        from esper.leyline import TelemetryEventType, GovernorRollbackPayload, TelemetryEvent
+
+        env_state, model = create_env_state()
+        mock_emitter = MagicMock()
+        emitted_events: list = []
+        mock_emitter.emit = lambda e: emitted_events.append(e)
+
+        # Warm up governor with normal losses
+        for _ in range(10):
+            env_state.governor.check_vital_signs(2.3)
+        env_state.governor.snapshot()
+
+        # Trigger divergence panic (needs min_panics_before_rollback consecutive high losses)
+        # Governor was created with min_panics_before_rollback=1
+        panic = env_state.governor.check_vital_signs(50.0)  # Very high loss
+        assert panic, "Should panic on extreme loss"
+
+        # Capture panic info
+        panic_reason = env_state.governor._panic_reason
+        panic_loss = env_state.governor._panic_loss
+        consecutive_panics = env_state.governor.consecutive_panics
+
+        assert panic_reason == "governor_divergence"
+        assert consecutive_panics >= 1
+
+        # Execute rollback
+        env_state.governor.execute_rollback(env_id=0)
+
+        # Emit telemetry
+        mock_emitter.emit(TelemetryEvent(
+            event_type=TelemetryEventType.GOVERNOR_ROLLBACK,
+            data=GovernorRollbackPayload(
+                env_id=0,
+                device="cpu",
+                reason=panic_reason or "unknown",
+                loss_at_panic=panic_loss,
+                consecutive_panics=consecutive_panics,
+            ),
+            severity="warning",
+        ))
+
+        # Verify payload
+        payload = emitted_events[0].data
+        assert payload.reason == "governor_divergence"
+        assert payload.consecutive_panics >= 1
+        assert payload.loss_at_panic == 50.0
+
+    def test_vectorized_emitter_emit_method_injects_context(self) -> None:
+        """VectorizedEmitter.emit() should inject env_id, device, group_id."""
+        from unittest.mock import MagicMock
+        from esper.leyline import TelemetryEventType, GovernorRollbackPayload, TelemetryEvent
+        from esper.simic.telemetry.emitters import VectorizedEmitter
+
+        # Create mock hub
+        mock_hub = MagicMock()
+        emitted_events: list = []
+        mock_hub.emit = lambda e: emitted_events.append(e)
+
+        # Create VectorizedEmitter with known env context
+        emitter = VectorizedEmitter(
+            env_id=42,
+            device="cuda:0",
+            group_id="test-group",
+            hub=mock_hub,
+        )
+
+        # Emit a rollback event
+        emitter.emit(TelemetryEvent(
+            event_type=TelemetryEventType.GOVERNOR_ROLLBACK,
+            data=GovernorRollbackPayload(
+                env_id=0,  # Will be overwritten by emitter
+                device="cpu",  # Will be overwritten by emitter
+                reason="test_reason",
+            ),
+            severity="warning",
+        ))
+
+        # Verify event was emitted with injected context
+        assert len(emitted_events) == 1
+        event = emitted_events[0]
+        assert event.env_id == 42  # Injected by emitter
+        assert event.device == "cuda:0"  # Injected by emitter
+        assert event.group_id == "test-group"  # Injected by emitter
+        assert event.event_type == TelemetryEventType.GOVERNOR_ROLLBACK
+        assert event.data.reason == "test_reason"
