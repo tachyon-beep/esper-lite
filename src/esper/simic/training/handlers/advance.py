@@ -13,14 +13,8 @@ Note: HOLDING -> FOSSILIZED uses FOSSILIZE operation, not ADVANCE.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from esper.leyline import SeedStage
 from esper.simic.training.handlers.base import HandlerContext, HandlerResult
-
-if TYPE_CHECKING:
-    pass
-
 
 # Stages that can be advanced (excludes terminal stages and HOLDING)
 ADVANCEABLE_STAGES = frozenset(
@@ -90,8 +84,8 @@ def execute_advance(ctx: HandlerContext) -> HandlerResult:
             "pre_stage": pre_stage.name,
             "post_stage": ctx.seed_state.stage.name,
             "gate_passed": gate_result.passed,
-            "gate_level": gate_result.level.name if gate_result.level else None,
-            "gate_reason": gate_result.reason,
+            "gate_level": gate_result.gate.name,
+            "gate_message": gate_result.message,
         },
     )
 

@@ -13,7 +13,6 @@ Germination:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 from esper.leyline import (
     BLUEPRINT_IDS,
@@ -23,9 +22,6 @@ from esper.leyline import (
     TempoAction,
 )
 from esper.simic.training.handlers.base import HandlerContext, HandlerResult
-
-if TYPE_CHECKING:
-    pass
 
 
 @dataclass(slots=True)

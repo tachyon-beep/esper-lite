@@ -16,7 +16,6 @@ using the specified speed, curve, and algorithm.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 from esper.leyline import (
     ALPHA_SPEED_TO_STEPS,
@@ -28,9 +27,6 @@ from esper.leyline import (
     STYLE_ALPHA_ALGORITHMS,
 )
 from esper.simic.training.handlers.base import HandlerContext, HandlerResult
-
-if TYPE_CHECKING:
-    pass
 
 
 # Stages where SET_ALPHA_TARGET is valid

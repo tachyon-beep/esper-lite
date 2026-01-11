@@ -5,13 +5,13 @@ to their handler functions. This enables the Strategy pattern for
 lifecycle operations without modifying the main execution loop.
 
 Usage:
-    from esper.simic.training.handlers.registry import HANDLER_REGISTRY, CAN_EXECUTE_REGISTRY
+    from esper.simic.training.handlers.registry import get_handler, get_can_execute
 
-    # Check if operation is valid
-    can_fn = CAN_EXECUTE_REGISTRY.get(op_idx)
-    if can_fn and can_fn(ctx):
+    # Check if operation is valid in context
+    can_fn = get_can_execute(op_idx)
+    if can_fn(ctx):
         # Execute operation
-        execute_fn = HANDLER_REGISTRY.get(op_idx)
+        execute_fn = get_handler(op_idx)
         result = execute_fn(ctx, **params)
 """
 
@@ -64,28 +64,36 @@ HANDLER_REGISTRY: dict[int, ExecuteFn] = {
 }
 
 
-def get_handler(op_idx: int) -> ExecuteFn | None:
+def get_handler(op_idx: int) -> ExecuteFn:
     """Get the handler function for a lifecycle operation.
 
     Args:
         op_idx: Operation index (OP_WAIT, OP_GERMINATE, etc.)
 
     Returns:
-        Handler function or None if operation not registered.
+        Handler function.
+
+    Raises:
+        KeyError: If operation is not registered (indicates a bug - all valid
+            operations should be in the registry).
     """
-    return HANDLER_REGISTRY.get(op_idx)
+    return HANDLER_REGISTRY[op_idx]
 
 
-def get_can_execute(op_idx: int) -> CanExecuteFn | None:
+def get_can_execute(op_idx: int) -> CanExecuteFn:
     """Get the precondition check function for a lifecycle operation.
 
     Args:
         op_idx: Operation index (OP_WAIT, OP_GERMINATE, etc.)
 
     Returns:
-        Precondition function or None if operation not registered.
+        Precondition function.
+
+    Raises:
+        KeyError: If operation is not registered (indicates a bug - all valid
+            operations should be in the registry).
     """
-    return CAN_EXECUTE_REGISTRY.get(op_idx)
+    return CAN_EXECUTE_REGISTRY[op_idx]
 
 
 __all__ = [
