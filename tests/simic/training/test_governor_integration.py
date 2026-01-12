@@ -16,7 +16,6 @@ from __future__ import annotations
 from contextlib import nullcontext
 from unittest.mock import MagicMock, patch
 
-import pytest
 import torch
 import torch.nn as nn
 
@@ -353,7 +352,8 @@ class TestStreamContextDuringRollback:
             mock_cuda_stream.return_value.__enter__ = MagicMock()
             mock_cuda_stream.return_value.__exit__ = MagicMock()
 
-            rollback_ctx = (
+            # Execute the conditional to trigger torch.cuda.stream call
+            _ = (
                 torch.cuda.stream(env_state.stream)
                 if env_state.stream
                 else nullcontext()

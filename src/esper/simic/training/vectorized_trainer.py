@@ -176,7 +176,6 @@ class VectorizedPPOTrainer:
         slot_config = self.slot_config
         n_envs = self.n_envs
         max_epochs = self.max_epochs
-        ppo_updates_per_batch = self.ppo_updates_per_batch
         total_batches = self.total_batches
         total_env_episodes = self.total_env_episodes
         start_episode = self.start_episode
@@ -189,7 +188,6 @@ class VectorizedPPOTrainer:
         num_test_batches = self.num_test_batches
         env_reward_configs = self.env_reward_configs
         loss_reward_config = self.loss_reward_config
-        reward_family_enum = self.reward_family_enum
         reward_normalizer = self.reward_normalizer
         obs_normalizer = self.obs_normalizer
         initial_obs_normalizer_mean = self.initial_obs_normalizer_mean
@@ -201,7 +199,6 @@ class VectorizedPPOTrainer:
         max_grad_norm = self.max_grad_norm
         plateau_threshold = self.plateau_threshold
         improvement_threshold = self.improvement_threshold
-        anomaly_detector = self.anomaly_detector
         hub = self.hub
         analytics = self.analytics
         emitters = self.emitters
@@ -219,13 +216,9 @@ class VectorizedPPOTrainer:
         torch_profiler_with_stack = self.torch_profiler_with_stack
         torch_profiler_summary = self.torch_profiler_summary
         gpu_preload_augment = self.gpu_preload_augment
-        amp_enabled = self.amp_enabled
         resolved_amp_dtype = self.resolved_amp_dtype
         env_factory = self.env_factory
         compiled_loss_and_correct = self.compiled_loss_and_correct
-        run_ppo_updates = self.run_ppo_updates
-        handle_telemetry_escalation = self.handle_telemetry_escalation
-        emit_anomaly_diagnostics = self.emit_anomaly_diagnostics
         action_execution_context = self.action_execution_context
         effective_max_seeds = self.effective_max_seeds
         disable_advance = self.disable_advance

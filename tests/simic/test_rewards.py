@@ -1630,7 +1630,6 @@ class TestFossilizeTerminalBonus:
 
         The bonus is scaled by legitimacy_discount = min(1.0, epochs_in_stage / 5).
         """
-        import math
 
         from esper.leyline import MIN_HOLDING_EPOCHS
         from esper.simic.rewards.types import STAGE_HOLDING
@@ -1664,13 +1663,9 @@ class TestFossilizeTerminalBonus:
             return_components=True,
         )
 
-        # Immediate bonus: fossilize_terminal_scale * tanh(1 / ceiling) * legitimacy_discount
+        # action_shaping should include immediate bonus (among other components)
+        # Immediate bonus formula: fossilize_terminal_scale * tanh(1 / ceiling) * legitimacy_discount
         # With full legitimacy: 3.0 * tanh(1/3) * 1.0 ≈ 0.9645
-        expected_immediate_bonus = config.fossilize_terminal_scale * math.tanh(
-            1.0 / config.fossilize_quality_ceiling
-        )
-
-        # action_shaping should include this bonus (among other components)
         # The immediate bonus is part of action_shaping, which also includes
         # _contribution_fossilize_shaping() result and fossilize_cost
         assert components.action_shaping > 0, "FOSSILIZE on valid contributing seed should have positive action_shaping"
