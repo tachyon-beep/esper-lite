@@ -72,14 +72,14 @@ class TestHistoricalEnvDetailRendering:
         assert modal._record == record
 
     def test_renders_header_with_episode_and_peak(self):
-        """Header should show episode_idx and peak accuracy."""
+        """Header should show episode number (1-indexed) and peak accuracy."""
         record = make_minimal_record(episode=42, peak_accuracy=95.5)
         modal = HistoricalEnvDetail(record)
         header = modal._render_header()
         header_text = header.plain
 
-        # episode_idx = episode + env_id = 42 + 0 = 42
-        assert "Episode# 42" in header_text
+        # 1-indexed display: episode + 1 = 42 + 1 = 43
+        assert "Episode# 43" in header_text
         assert "Peak: 95.5%" in header_text
         # Default view state is "peak", shown as "PEAK STATE"
         assert "PEAK STATE" in header_text

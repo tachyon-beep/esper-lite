@@ -39,7 +39,7 @@
   "auto_forward_g2": true,
   "auto_forward_g3": true,
   "max_seeds": 3,
-  "reward_mode": "basic",
+  "reward_mode": "basic_plus",
   "reward_family": "contribution",
   "basic_acc_delta_weight": 5.0,
   "param_budget": 500000,

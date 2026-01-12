@@ -139,19 +139,6 @@ stateDiagram-v2
 
 ---
 
-## 📊 Results (POC)
-
-Preliminary results on CIFAR-10 (ResNet-style Host):
-
-| Approach              | Final Accuracy | Notes                                                                 |
-| :-------------------- | :------------- | :-------------------------------------------------------------------- |
-| **Static Baseline**   | 69.31%         | Standard training, no growth.                                         |
-| **From-Scratch**      | 65.97%         | Re-initialising larger model (poor convergence).                      |
-| **Esper (Heuristic)** | **82.16%**     | Staged growth managed by Tamiyo.                                      |
-| **Esper (PPO)**       | *Training...*  | Learning to optimise fossilisation timing and multi-seed scaffolding. |
-
----
-
 ## 🛠️ Development
 
 **Project Structure:**
@@ -394,11 +381,25 @@ When enabled, Kasmina will automatically advance through the configured gated tr
 
 | Parameter              | Default          | Description                                                                   |
 | ---------------------- | ---------------- | ----------------------------------------------------------------------------- |
-| `reward_mode`          | `"shaped"`       | `"shaped"` (dense signals), `"simplified"` (cleaner gradients), or `"sparse"` |
+| `reward_mode`          | `"shaped"`       | Reward signal strategy (see modes below)                                      |
 | `reward_family`        | `"contribution"` | `"contribution"` (counterfactual) or `"loss"` (direct loss delta)             |
 | `param_budget`         | `500000`         | Parameter budget for seeds (penalty if exceeded)                              |
 | `param_penalty_weight` | `0.1`            | Weight of parameter budget penalty in reward                                  |
 | `rent_host_params_floor` | `200`          | Host-size normalization floor for rent/alpha-shock (prevents tiny hosts being crushed) |
+
+**Reward Modes:**
+
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| `shaped` | 7-component dense signals (PBRS + attribution + rent + warnings) | Default; rich feedback but potential Goodhart risk |
+| `simplified` | 3-component (PBRS + intervention cost + terminal bonus) | Cleaner gradients for temporal credit assignment |
+| `basic` | Minimal viable reward: contribution + rent | Baseline for ablation |
+| `basic_plus` | BASIC + post-fossilization drip accountability | Prevents early-fossilization gaming |
+| `sparse` | Terminal-only: final accuracy minus rent | Hard mode; theoretically perfect alignment |
+| `minimal` | Sparse + early-cull penalty | Penalises wasted compute |
+| `escrow` | Delayed attribution via escrow accounts | Experimental |
+
+> **Drip Mechanism (BASIC_PLUS):** After a seed fossilizes, rewards continue to "drip" based on ongoing contribution. Controlled by `drip_fraction` (default 0.7 = 70% drip, 30% immediate). Prevents gaming where seeds are fossilized to lock in short-term gains before regression.
 
 #### A/B Testing (True)
 

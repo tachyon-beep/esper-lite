@@ -33,18 +33,33 @@ if TYPE_CHECKING:
     from esper.runtime.tasks import TaskSpec
 
 
+class EpisodeContext:
+    """Mutable holder for episode-level context needed by telemetry callbacks.
+
+    Callbacks are created early (before env_state exists) but need access to
+    episode_idx which is set later. This holder bridges that gap.
+    """
+
+    __slots__ = ("episode_idx",)
+
+    def __init__(self) -> None:
+        self.episode_idx: int | None = None
+
+
 def make_telemetry_callback(
     env_idx: int,
     device: str,
     hub: Any,
     group_id: str,
+    episode_context: EpisodeContext | None = None,
 ) -> Callable[[TelemetryEvent], None]:
-    """Create a telemetry callback that injects env_id, device, and group_id."""
+    """Create a telemetry callback that injects env_id, device, group_id, and episode_idx."""
     if not hub:
         return lambda _: None
 
     def callback(event: TelemetryEvent) -> None:
-        emit_with_env_context(hub, env_idx, device, event, group_id)
+        episode_idx = episode_context.episode_idx if episode_context else None
+        emit_with_env_context(hub, env_idx, device, event, group_id, episode_idx=episode_idx)
 
     return callback
 
@@ -117,7 +132,11 @@ def create_env_state(
     # avoiding runtime layout permutations in conv layers.
     model = model.to(memory_format=torch.channels_last)
 
-    telemetry_cb = make_telemetry_callback(env_idx, env_device, context.hub, context.group_id)
+    # Create episode context for telemetry (training loop updates episode_idx at episode start)
+    episode_context = EpisodeContext() if context.use_telemetry else None
+    telemetry_cb = make_telemetry_callback(
+        env_idx, env_device, context.hub, context.group_id, episode_context
+    )
     for slot_module in model.seed_slots.values():
         slot = cast(SeedSlotProtocol, slot_module)
         slot.on_telemetry = telemetry_cb
@@ -236,6 +255,7 @@ def create_env_state(
         augment_buffers=augment_buffers,
         scaler=env_scaler,
         seeds_created=0,
+        episode_context=episode_context,
         episode_rewards=[],
         action_enum=context.action_enum,
         telemetry_cb=telemetry_cb,

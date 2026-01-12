@@ -71,6 +71,15 @@ class VectorizedEmitter:
         self.group_id = group_id
         self.telemetry_config = telemetry_config
         self.quiet_analytics = quiet_analytics
+        # Episode context - updated via set_episode_idx() at episode start
+        self.episode_idx: int | None = None
+
+    def set_episode_idx(self, episode_idx: int) -> None:
+        """Update episode index for subsequent events.
+
+        Called at the start of each episode by the training loop.
+        """
+        self.episode_idx = episode_idx
 
     def _should_emit(self, level: str = "ops_normal") -> bool:
         if self.hub is None:
@@ -138,6 +147,7 @@ class VectorizedEmitter:
             epoch=epoch,
             data=EpochCompletedPayload(
                 env_id=self.env_id,
+                episode_idx=self.episode_idx,
                 val_accuracy=env_state.val_acc,
                 val_loss=env_state.val_loss,
                 inner_epoch=epoch,
@@ -305,6 +315,7 @@ class VectorizedEmitter:
             data=AnalyticsSnapshotPayload(
                 kind="last_action",
                 env_id=self.env_id,
+                episode_idx=self.episode_idx,
                 inner_epoch=epoch,
                 total_reward=outcome.reward_raw,
                 action_name=action_name,
@@ -528,17 +539,31 @@ class VectorizedEmitter:
 
 
 def emit_with_env_context(
-    hub: Any, env_idx: int, device: str, event: TelemetryEvent, group_id: str
+    hub: Any,
+    env_idx: int,
+    device: str,
+    event: TelemetryEvent,
+    group_id: str,
+    *,
+    episode_idx: int | None = None,
 ) -> None:
-    """Emit telemetry with env_id and group_id injected for per-environment events.
+    """Emit telemetry with env_id, group_id, and episode_idx injected for per-environment events.
 
     Creates a new event with the additional context rather than mutating the input.
 
-    For typed payloads from slots (which don't know their env_id), replaces the
-    sentinel env_id=-1 with the actual env_id.
+    For typed payloads from slots (which don't know their env_id or episode_idx),
+    replaces the sentinel env_id=-1 with the actual env_id and injects episode_idx.
 
     NOTE: Only use for per-env events (seed lifecycle, epoch completed, etc.).
     Batch-level events (PPO updates, batch completed) should use hub.emit() directly.
+
+    Args:
+        hub: Telemetry hub for event emission
+        env_idx: Environment index to inject
+        device: Device string (unused but kept for API consistency)
+        event: The telemetry event with typed payload
+        group_id: A/B testing group identifier
+        episode_idx: Episode index to inject (for filtering events by episode)
 
     Raises:
         TypeError: If event.data is None, a dict, or missing env_id attribute.
@@ -554,10 +579,10 @@ def emit_with_env_context(
             "Migrate emitter to use typed dataclass payload."
         )
 
-    # Typed payload - replace sentinel env_id with actual env_id
-    # Type ignore: union type from TelemetryPayload doesn't expose env_id,
-    # but all seed-lifecycle payloads have it (checked at runtime above)
-    payload = dataclasses.replace(event.data, env_id=env_idx)  # type: ignore[arg-type]
+    # Typed payload - replace sentinel env_id with actual env_id and inject episode_idx
+    # Type ignore: union type from TelemetryPayload doesn't expose env_id/episode_idx,
+    # but all seed-lifecycle payloads have them (checked at runtime above)
+    payload = dataclasses.replace(event.data, env_id=env_idx, episode_idx=episode_idx)  # type: ignore[arg-type]
     new_event = dataclasses.replace(event, data=payload, group_id=group_id)
     hub.emit(new_event)
 

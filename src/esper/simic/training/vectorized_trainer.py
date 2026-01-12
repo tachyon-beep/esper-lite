@@ -292,6 +292,11 @@ class VectorizedPPOTrainer:
                 for env_idx in range(envs_this_batch):
                     env_states[env_idx].reset_episode_state(slots)
                     agent.buffer.start_episode(env_id=env_idx)
+                    # Set episode context for telemetry (used by seed lifecycle events via emit_with_env_context)
+                    if env_states[env_idx].episode_context is not None:
+                        env_states[env_idx].episode_context.episode_idx = episodes_completed + env_idx
+                    # Also set on VectorizedEmitter (used by on_epoch_completed, on_last_action)
+                    emitters[env_idx].set_episode_idx(episodes_completed + env_idx)
 
                 # Initialize batched LSTM hidden state for all environments
                 # (Batched hidden management avoids per-step cat/slice overhead)

@@ -52,6 +52,9 @@ class ParallelEnvState:
     seeds_created: int = 0
     seeds_fossilized: int = 0  # Total seeds fossilized this episode
     contributing_fossilized: int = 0  # Seeds with total_improvement >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
+    # Episode context for telemetry (mutable holder shared with telemetry_cb closure)
+    # Training loop updates episode_context.episode_idx at episode start
+    episode_context: Any = None  # TYPE: EpisodeContext (avoid circular import)
     # Action counters for episode diagnostics (TELE-610)
     germinate_count: int = 0
     prune_count: int = 0

@@ -215,7 +215,7 @@ class Scoreboard(Static):
             # Use record_id if available, otherwise fallback to index-based key
             row_key = record.record_id if record.record_id else f"row_{i}"
             self.table.add_row(
-                str(record.episode + record.env_id),
+                str(record.episode),  # 0-indexed to match telemetry
                 self._format_epoch(record),
                 f"[bold green]{record.peak_accuracy:.1f}[/bold green]",
                 self._format_trajectory(record),
@@ -294,7 +294,7 @@ class Scoreboard(Static):
         for i, record in enumerate(bottom_5, start=1):
             row_key = f"bottom_{record.record_id}" if record.record_id else f"bottom_row_{i}"
             self.bottom_table.add_row(
-                str(record.episode + record.env_id),
+                str(record.episode),  # 0-indexed to match telemetry
                 self._format_epoch(record),
                 f"[yellow]{record.peak_accuracy:.1f}[/yellow]",
                 self._format_trajectory(record),

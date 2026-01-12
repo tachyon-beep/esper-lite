@@ -1072,7 +1072,7 @@ class SanctumApp(App[None]):
         """
         self.push_screen(HistoricalEnvDetail(record=event.record))
         self.log.info(
-            f"Opened historical detail for Ep {event.record.episode + 1} "
+            f"Opened historical detail for Ep {event.record.episode} "
             f"(peak: {event.record.peak_accuracy:.1f}%)"
         )
 
