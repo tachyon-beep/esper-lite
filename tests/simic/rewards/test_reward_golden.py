@@ -376,3 +376,157 @@ def test_basic_mode_drip_disabled_when_fraction_zero() -> None:
     assert new_drip is None
     # Full bonus paid immediately
     assert foss_bonus > 0
+
+
+def test_basic_mode_drip_payout_positive() -> None:
+    """Drip payout rewards continued positive contribution."""
+    from esper.simic.rewards.contribution import (
+        compute_basic_reward,
+        ContributionRewardConfig,
+        FossilizedSeedDripState,
+    )
+    from esper.leyline import LifecycleOp
+
+    config = ContributionRewardConfig(
+        drip_fraction=0.7,
+        max_drip_per_epoch=0.1,
+        negative_drip_ratio=0.5,
+    )
+
+    drip_state = FossilizedSeedDripState(
+        seed_id="test-seed",
+        slot_id="r0c1",
+        fossilize_epoch=20,
+        max_epochs=150,
+        drip_total=1.96,
+        drip_scale=1.96 / 130,  # ~0.015 per epoch
+    )
+
+    result = compute_basic_reward(
+        acc_delta=0.1,
+        effective_seed_params=10_000,
+        total_params=110_000,
+        host_params=100_000,
+        config=config,
+        epoch=25,
+        max_epochs=150,
+        seed_info=None,
+        action=LifecycleOp.WAIT,
+        seed_contribution=None,
+        fossilized_drip_states=[drip_state],
+        fossilized_contributions={"test-seed": 3.0},
+    )
+
+    reward, _, _, _, _, _, drip_epoch = result
+
+    # Drip = drip_scale * contribution = 0.015 * 3.0 = 0.045
+    assert drip_epoch == pytest.approx(0.045, abs=0.005)
+    assert drip_epoch > 0
+
+
+def test_basic_mode_drip_payout_negative() -> None:
+    """Drip payout penalizes negative contribution (seed now hurting)."""
+    from esper.simic.rewards.contribution import (
+        compute_basic_reward,
+        ContributionRewardConfig,
+        FossilizedSeedDripState,
+    )
+    from esper.leyline import LifecycleOp
+
+    config = ContributionRewardConfig(
+        drip_fraction=0.7,
+        max_drip_per_epoch=0.1,
+        negative_drip_ratio=0.5,
+    )
+
+    drip_state = FossilizedSeedDripState(
+        seed_id="test-seed",
+        slot_id="r0c1",
+        fossilize_epoch=20,
+        max_epochs=150,
+        drip_total=1.96,
+        drip_scale=0.015,
+    )
+
+    result = compute_basic_reward(
+        acc_delta=-1.0,
+        effective_seed_params=10_000,
+        total_params=110_000,
+        host_params=100_000,
+        config=config,
+        epoch=25,
+        max_epochs=150,
+        seed_info=None,
+        action=LifecycleOp.WAIT,
+        seed_contribution=None,
+        fossilized_drip_states=[drip_state],
+        fossilized_contributions={"test-seed": -2.0},
+    )
+
+    reward, _, _, _, _, _, drip_epoch = result
+
+    # Drip = 0.015 * (-2.0) = -0.03
+    assert drip_epoch == pytest.approx(-0.03, abs=0.005)
+    assert drip_epoch < 0, "Negative contribution should produce negative drip"
+
+
+def test_basic_mode_drip_asymmetric_clipping() -> None:
+    """Large negative drip is clipped more aggressively than positive."""
+    from esper.simic.rewards.contribution import (
+        compute_basic_reward,
+        ContributionRewardConfig,
+        FossilizedSeedDripState,
+    )
+    from esper.leyline import LifecycleOp
+
+    config = ContributionRewardConfig(
+        drip_fraction=0.7,
+        max_drip_per_epoch=0.1,
+        negative_drip_ratio=0.5,  # -0.05 cap
+    )
+
+    drip_state = FossilizedSeedDripState(
+        seed_id="test-seed",
+        slot_id="r0c1",
+        fossilize_epoch=140,  # Late fossilization = high drip_scale
+        max_epochs=150,
+        drip_total=1.96,
+        drip_scale=1.96 / 10,  # ~0.196 per epoch
+    )
+
+    # Test positive clipping
+    result_pos = compute_basic_reward(
+        acc_delta=0.1,
+        effective_seed_params=10_000,
+        total_params=110_000,
+        host_params=100_000,
+        config=config,
+        epoch=145,
+        max_epochs=150,
+        seed_info=None,
+        action=LifecycleOp.WAIT,
+        fossilized_drip_states=[drip_state],
+        fossilized_contributions={"test-seed": 5.0},
+    )
+    _, _, _, _, _, _, drip_pos = result_pos
+    assert drip_pos == pytest.approx(0.1, abs=0.001), "Positive clipped to +0.1"
+
+    # Reset drip_paid for next test
+    drip_state.drip_paid = 0.0
+
+    # Test negative clipping (asymmetric - tighter)
+    result_neg = compute_basic_reward(
+        acc_delta=-1.0,
+        effective_seed_params=10_000,
+        total_params=110_000,
+        host_params=100_000,
+        config=config,
+        epoch=145,
+        max_epochs=150,
+        seed_info=None,
+        action=LifecycleOp.WAIT,
+        fossilized_drip_states=[drip_state],
+        fossilized_contributions={"test-seed": -5.0},
+    )
+    _, _, _, _, _, _, drip_neg = result_neg
+    assert drip_neg == pytest.approx(-0.05, abs=0.001), "Negative clipped to -0.05 (asymmetric)"
