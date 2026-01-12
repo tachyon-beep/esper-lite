@@ -155,6 +155,8 @@ def compute_reward(
             components.fossilize_terminal_bonus = fossilize_bonus
             # Drip telemetry (expanded in BASIC_PLUS mode)
             components.drip_this_epoch = drip_this_epoch
+            # Pass new_drip_state to caller for collection (created on FOSSILIZE)
+            components.new_drip_state = new_drip_state
             return reward, components
 
     elif config.reward_mode == RewardMode.SIMPLIFIED:

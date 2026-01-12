@@ -548,6 +548,23 @@ def execute_actions(
             reward_inputs.n_active_seeds = n_active_seeds
             reward_inputs.seeds_germinated_this_episode = env_state.germinate_count
 
+            # Drip reward parameters (BASIC_PLUS mode: post-fossilization accountability)
+            # Pass existing drip states and build contributions from counterfactual baselines
+            reward_inputs.fossilized_drip_states = env_state.fossilized_drip_states
+            if env_state.fossilized_drip_states:
+                # Build fossilized_contributions from current counterfactual measurements
+                # Each drip state's seed_id maps to its current contribution
+                fossilized_contributions: dict[str, float] = {}
+                for drip_state in env_state.fossilized_drip_states:
+                    slot_id = drip_state.slot_id
+                    if slot_id in baseline_accs[env_idx]:
+                        # contribution = accuracy drop when seed is disabled
+                        contribution = env_state.val_acc - baseline_accs[env_idx][slot_id]
+                        fossilized_contributions[drip_state.seed_id] = contribution
+                reward_inputs.fossilized_contributions = fossilized_contributions
+            else:
+                reward_inputs.fossilized_contributions = None
+
             reward_result = compute_reward(reward_inputs)
             if return_components:
                 reward, reward_components = cast(
@@ -795,6 +812,17 @@ def execute_actions(
                         # The snapshot must be taken OUTSIDE the CUDA stream context,
                         # so we set a flag here and take the snapshot later.
                         env_state.needs_governor_snapshot = True
+
+                        # Collect drip state for BASIC_PLUS mode post-fossilization accountability
+                        # new_drip_state is created in compute_basic_reward when action=FOSSILIZE;
+                        # we only add it to tracking if the fossilization actually succeeded.
+                        if (
+                            reward_components is not None
+                            and reward_components.new_drip_state is not None
+                        ):
+                            env_state.fossilized_drip_states.append(
+                                reward_components.new_drip_state
+                            )
                 elif (
                     op_action == OP_PRUNE
                     and model.has_active_seed_in_slot(target_slot)

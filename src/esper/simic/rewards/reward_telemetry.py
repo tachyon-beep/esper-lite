@@ -7,6 +7,10 @@ for diagnosing reward hacking and tuning reward weights.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from esper.simic.rewards.contribution import FossilizedSeedDripState
 
 
 @dataclass(slots=True)
@@ -66,6 +70,7 @@ class RewardComponentsTelemetry:
     drip_immediate_bonus: float = 0.0  # 30% portion paid on FOSSILIZE
     drip_deferred_total: float = 0.0  # 70% pool created this epoch (on FOSSILIZE)
     num_drip_sources: int = 0  # Number of fossilized seeds contributing drip
+    new_drip_state: "FossilizedSeedDripState | None" = None  # Created when FOSSILIZE occurs (caller collects)
 
     # Context (for debugging) - DRL Expert recommended fields
     action_name: str = ""
