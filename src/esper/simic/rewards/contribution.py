@@ -858,14 +858,20 @@ def compute_basic_reward(
     seed_info: SeedInfo | None = None,
     action: LifecycleOp = LifecycleOp.WAIT,
     seed_contribution: float | None = None,
-) -> tuple[float, float, float, float, float]:
-    """Compute BASIC reward: PBRS + rent + fossilization bonus + terminal accuracy.
+    # NEW: Drip-related parameters
+    seed_id: str | None = None,
+    slot_id: str | None = None,
+    fossilized_drip_states: list[FossilizedSeedDripState] | None = None,
+    fossilized_contributions: dict[str, float] | None = None,
+) -> tuple[float, float, float, float, float, FossilizedSeedDripState | None, float]:
+    """Compute BASIC reward: PBRS + rent + fossilization bonus + terminal accuracy + drip.
 
-    Four-component hybrid design (DRL Expert recommended):
+    Five-component hybrid design (DRL Expert recommended):
     1. PBRS stage bonus (every step) - policy-invariant state differentiation
     2. Per-step parameter rent (every step) - prevents train-then-purge gaming
     3. Contribution-scaled fossilization (at FOSSILIZE) - rewards quality seeds
     4. Terminal accuracy bonus (terminal only) - ground truth outcome
+    5. Post-fossilization drip (each epoch after FOSSILIZE) - accountability for fossilized seeds
 
     The key insight: previous terminal-only caused critic collapse because all
     timesteps had highly correlated returns. PBRS provides the critic with
@@ -882,8 +888,33 @@ def compute_basic_reward(
     - Rewards quality (high seed_contribution) over quantity
     - Includes legitimacy discount (time in HOLDING required)
 
+    Post-fossilization drip (DRL Expert review 2026-01-12):
+    - Splits fossilize bonus into immediate (30%) + drip pool (70%)
+    - Drip paid each epoch based on continued seed contribution
+    - Prevents early-fossilization gaming (fossil then degrade)
+    - Asymmetric clipping: positive capped at max_drip, negative at -ratio*max_drip
+
+    Args:
+        acc_delta: Accuracy delta (improvement since episode start)
+        effective_seed_params: Effective parameter count for this seed
+        total_params: Total model parameters
+        host_params: Host model parameters (excluding seeds)
+        config: Reward configuration
+        epoch: Current epoch
+        max_epochs: Maximum epochs in episode
+        seed_info: Information about the seed (if any)
+        action: Lifecycle action taken this step
+        seed_contribution: Counterfactual contribution of the seed
+        seed_id: Unique seed identifier (required for drip state creation)
+        slot_id: Slot identifier (required for drip state creation)
+        fossilized_drip_states: List of drip states for already-fossilized seeds
+        fossilized_contributions: Dict mapping seed_id to current contribution for fossilized seeds
+
     Returns:
-        tuple of (total_reward, rent_penalty, growth_ratio, pbrs_bonus, fossilize_bonus)
+        tuple of (total_reward, rent_penalty, growth_ratio, pbrs_bonus, fossilize_bonus,
+                  new_drip_state, drip_this_epoch)
+        - new_drip_state: Created when FOSSILIZE with drip_fraction > 0
+        - drip_this_epoch: Sum of drip payouts from all fossilized_drip_states
     """
     if config.param_budget <= 0:
         raise ValueError("param_budget must be positive")
@@ -946,7 +977,13 @@ def compute_basic_reward(
     # dependencies (high contribution) without genuine improvement (negative delta).
     # The harmonic mean is dominated by the smaller value, so both signals must
     # be positive for a meaningful reward.
+    #
+    # Drip split (DRL Expert review 2026-01-12): When drip_fraction > 0, the
+    # fossilize bonus is split into immediate (1 - drip_fraction) and drip pool
+    # (drip_fraction). The drip pool is paid out over remaining epochs based on
+    # continued contribution of the fossilized seed.
     fossilize_bonus = 0.0
+    new_drip_state: FossilizedSeedDripState | None = None
     if action == LifecycleOp.FOSSILIZE and seed_info is not None:
         is_valid = seed_info.stage == STAGE_HOLDING
         if is_valid:
@@ -965,10 +1002,32 @@ def compute_basic_reward(
                     formula=config.attribution_formula,
                 )
                 legitimacy_discount = min(1.0, seed_info.epochs_in_stage / MIN_HOLDING_EPOCHS)
-                fossilize_bonus = (
+                full_bonus = (
                     config.basic_fossilize_base_bonus
                     + config.basic_contribution_scale * combined
                 ) * legitimacy_discount
+
+                # Split into immediate and drip pool based on drip_fraction
+                if config.drip_fraction > 0 and seed_id is not None and slot_id is not None:
+                    # Immediate portion (e.g., 30% with drip_fraction=0.7)
+                    fossilize_bonus = full_bonus * (1.0 - config.drip_fraction)
+
+                    # Create drip state for the remaining portion
+                    drip_total = full_bonus * config.drip_fraction
+                    remaining_epochs = max(max_epochs - epoch, config.min_drip_epochs)
+                    drip_scale = drip_total / remaining_epochs
+
+                    new_drip_state = FossilizedSeedDripState(
+                        seed_id=seed_id,
+                        slot_id=slot_id,
+                        fossilize_epoch=epoch,
+                        max_epochs=max_epochs,
+                        drip_total=drip_total,
+                        drip_scale=drip_scale,
+                    )
+                else:
+                    # Drip disabled or missing identifiers: pay full bonus immediately
+                    fossilize_bonus = full_bonus
             elif improvement <= 0 and seed_contribution is not None and seed_contribution > 0.1:
                 # Ransomware signature: high contribution but no/negative improvement
                 # The seed made itself important without helping the host
@@ -990,7 +1049,29 @@ def compute_basic_reward(
         accuracy_bonus = config.basic_acc_delta_weight * (acc_delta / 100.0)
         reward += accuracy_bonus
 
-    return reward, rent_penalty, growth_ratio, pbrs_bonus, fossilize_bonus
+    # =========================================================================
+    # Component 5: Post-Fossilization Drip (EVERY EPOCH for fossilized seeds)
+    # =========================================================================
+    # DRL Expert review 2026-01-12: Compute drip payout for each fossilized seed
+    # based on its current counterfactual contribution. Positive contribution
+    # means the seed is still helping; negative means it's hurting.
+    # Asymmetric clipping prevents death spirals while rewarding sustained value.
+    drip_this_epoch = 0.0
+    if fossilized_drip_states and fossilized_contributions:
+        for drip_state in fossilized_drip_states:
+            contribution = fossilized_contributions.get(drip_state.seed_id, 0.0)
+            epoch_drip = drip_state.compute_epoch_drip(
+                current_contribution=contribution,
+                max_drip=config.max_drip_per_epoch,
+                negative_drip_ratio=config.negative_drip_ratio,
+            )
+            drip_this_epoch += epoch_drip
+            # Update accumulated drip for telemetry (mutable field)
+            drip_state.drip_paid += epoch_drip
+
+    reward += drip_this_epoch
+
+    return reward, rent_penalty, growth_ratio, pbrs_bonus, fossilize_bonus, new_drip_state, drip_this_epoch
 
 
 def compute_simplified_reward(

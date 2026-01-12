@@ -12,6 +12,7 @@ from typing import cast
 from esper.leyline import DEFAULT_GAMMA
 from .contribution import (
     ContributionRewardConfig,
+    FossilizedSeedDripState,
     RewardMode,
     compute_basic_reward,
     compute_contribution_reward,
@@ -115,7 +116,15 @@ def compute_reward(
         )
 
     elif config.reward_mode == RewardMode.BASIC:
-        reward, rent_penalty, growth_ratio, pbrs_bonus, fossilize_bonus = compute_basic_reward(
+        (
+            reward,
+            rent_penalty,
+            growth_ratio,
+            pbrs_bonus,
+            fossilize_bonus,
+            new_drip_state,
+            drip_this_epoch,
+        ) = compute_basic_reward(
             acc_delta=inputs.acc_delta,
             effective_seed_params=inputs.effective_seed_params,
             total_params=inputs.total_params,
@@ -127,6 +136,9 @@ def compute_reward(
             action=inputs.action,
             seed_contribution=inputs.seed_contribution,
         )
+        # Note: new_drip_state and drip_this_epoch are available for callers
+        # who need drip tracking. The compute_reward dispatcher doesn't expose
+        # them yet (needs inputs.fossilized_drip_states etc. to be wired through).
         if inputs.return_components:
             components = RewardComponentsTelemetry()
             components.total_reward = reward
@@ -188,6 +200,7 @@ def compute_reward_for_family(
 
 __all__ = [
     "ContributionRewardConfig",
+    "FossilizedSeedDripState",
     "RewardMode",
     "RewardFamily",
     "SeedInfo",

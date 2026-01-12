@@ -266,3 +266,113 @@ def test_basic_mode_fossilize_ransomware_penalty() -> None:
     # fossilize_bonus = -0.5 (invalid penalty)
     # This seed should NOT be rewarded despite high contribution
     assert reward < 0, "Ransomware seed should get penalty"
+
+
+def test_basic_mode_fossilize_drip_split() -> None:
+    """FOSSILIZE in BASIC mode splits reward into immediate and drip pool.
+
+    With drip_fraction=0.7, only 30% of the bonus is paid immediately.
+    """
+    from esper.simic.rewards.contribution import (
+        compute_basic_reward,
+        ContributionRewardConfig,
+        FossilizedSeedDripState,
+    )
+    from esper.simic.rewards.types import SeedInfo
+    from esper.leyline import LifecycleOp, SeedStage
+
+    config = ContributionRewardConfig(
+        drip_fraction=0.7,
+        basic_fossilize_base_bonus=0.3,
+        basic_contribution_scale=0.5,
+    )
+
+    seed_info = SeedInfo(
+        stage=SeedStage.HOLDING.value,
+        improvement_since_stage_start=0.5,
+        total_improvement=5.0,
+        epochs_in_stage=5,
+        seed_params=10_000,
+        previous_stage=SeedStage.BLENDING.value,
+        previous_epochs_in_stage=3,
+        seed_age_epochs=20,
+    )
+
+    result = compute_basic_reward(
+        acc_delta=5.0,
+        effective_seed_params=10_000,
+        total_params=110_000,
+        host_params=100_000,
+        config=config,
+        epoch=20,
+        max_epochs=150,
+        seed_info=seed_info,
+        action=LifecycleOp.FOSSILIZE,
+        seed_contribution=5.0,
+        seed_id="test-seed",
+        slot_id="r0c1",
+    )
+
+    # Result now includes drip state
+    reward, rent, growth, pbrs, foss_bonus, new_drip, drip_epoch = result
+
+    # Immediate should be 30% of full bonus
+    # Full bonus calculation depends on implementation - just check it's reduced
+    assert new_drip is not None
+    assert isinstance(new_drip, FossilizedSeedDripState)
+    assert new_drip.drip_total > 0
+    assert new_drip.seed_id == "test-seed"
+    assert new_drip.slot_id == "r0c1"
+    assert new_drip.remaining_epochs == 130  # 150 - 20
+
+    # No drip payout this epoch (just fossilized)
+    assert drip_epoch == 0.0
+
+
+def test_basic_mode_drip_disabled_when_fraction_zero() -> None:
+    """When drip_fraction=0, full bonus is immediate and no drip state created."""
+    from esper.simic.rewards.contribution import (
+        compute_basic_reward,
+        ContributionRewardConfig,
+    )
+    from esper.simic.rewards.types import SeedInfo
+    from esper.leyline import LifecycleOp, SeedStage
+
+    config = ContributionRewardConfig(
+        drip_fraction=0.0,  # Disabled
+        basic_fossilize_base_bonus=0.3,
+        basic_contribution_scale=0.5,
+    )
+
+    seed_info = SeedInfo(
+        stage=SeedStage.HOLDING.value,
+        improvement_since_stage_start=0.5,
+        total_improvement=5.0,
+        epochs_in_stage=5,
+        seed_params=10_000,
+        previous_stage=SeedStage.BLENDING.value,
+        previous_epochs_in_stage=3,
+        seed_age_epochs=20,
+    )
+
+    result = compute_basic_reward(
+        acc_delta=5.0,
+        effective_seed_params=10_000,
+        total_params=110_000,
+        host_params=100_000,
+        config=config,
+        epoch=20,
+        max_epochs=150,
+        seed_info=seed_info,
+        action=LifecycleOp.FOSSILIZE,
+        seed_contribution=5.0,
+        seed_id="test-seed",
+        slot_id="r0c1",
+    )
+
+    reward, rent, growth, pbrs, foss_bonus, new_drip, drip_epoch = result
+
+    # No drip state created when drip disabled
+    assert new_drip is None
+    # Full bonus paid immediately
+    assert foss_bonus > 0

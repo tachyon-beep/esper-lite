@@ -389,7 +389,7 @@ def test_basic_reward_direct_per_step_rent():
     )
 
     # Non-terminal epoch - rent is still paid
-    reward, rent, growth, pbrs, fossilize = compute_basic_reward(
+    reward, rent, growth, pbrs, fossilize, new_drip, drip_epoch = compute_basic_reward(
         acc_delta=2.0,
         effective_seed_params=100_000,
         total_params=200_000,
@@ -405,6 +405,8 @@ def test_basic_reward_direct_per_step_rent():
     assert abs(reward - (-0.02)) < 1e-8
     assert pbrs == 0.0  # No seed_info
     assert fossilize == 0.0  # No FOSSILIZE action
+    assert new_drip is None  # No fossilize
+    assert drip_epoch == 0.0  # No drip states
 
 
 def test_basic_reward_direct_terminal_includes_accuracy():
@@ -418,7 +420,7 @@ def test_basic_reward_direct_terminal_includes_accuracy():
     )
 
     # Terminal epoch
-    reward, rent, growth, pbrs, fossilize = compute_basic_reward(
+    reward, rent, growth, pbrs, fossilize, new_drip, drip_epoch = compute_basic_reward(
         acc_delta=2.0,  # 2 percentage points improvement
         effective_seed_params=100_000,  # 20% of budget
         total_params=200_000,
@@ -436,6 +438,8 @@ def test_basic_reward_direct_terminal_includes_accuracy():
     assert abs(rent - 0.02) < 1e-8
     assert growth > 0  # growth_ratio = 100_000 / 100_000 = 1.0
     assert fossilize == 0.0  # No FOSSILIZE action
+    assert new_drip is None  # No fossilize
+    assert drip_epoch == 0.0  # No drip states
 
 
 def test_basic_reward_pbrs_provides_state_differentiation():
@@ -467,7 +471,7 @@ def test_basic_reward_pbrs_provides_state_differentiation():
         seed_age_epochs=4,
     )
 
-    reward_with_seed, rent, growth, pbrs, _ = compute_basic_reward(
+    reward_with_seed, rent, growth, pbrs, _, _, _ = compute_basic_reward(
         acc_delta=1.0,
         effective_seed_params=50_000,
         total_params=150_000,
@@ -478,7 +482,7 @@ def test_basic_reward_pbrs_provides_state_differentiation():
         seed_info=seed_info,
     )
 
-    reward_no_seed, _, _, pbrs_no_seed, _ = compute_basic_reward(
+    reward_no_seed, _, _, pbrs_no_seed, _, _, _ = compute_basic_reward(
         acc_delta=1.0,
         effective_seed_params=0,  # No seed
         total_params=100_000,
@@ -517,7 +521,7 @@ def test_basic_reward_prevents_train_then_purge():
     # Simulate 24 epochs of having a seed
     cumulative_rent_paid = 0.0
     for epoch in range(1, 25):  # epochs 1-24 (non-terminal)
-        reward, rent, _, _, _ = compute_basic_reward(
+        reward, rent, _, _, _, _, _ = compute_basic_reward(
             acc_delta=0.0,  # No improvement yet
             effective_seed_params=50_000,
             total_params=150_000,
