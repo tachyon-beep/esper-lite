@@ -47,12 +47,13 @@ class MockPolicyBundle:
             hidden=None,
         )
 
-    def evaluate_actions(self, features, blueprint_indices, actions, masks, hidden=None):
+    def evaluate_actions(self, features, blueprint_indices, actions, masks, hidden=None, aux_stop_gradient=True):
         return EvalResult(
             log_prob={'op': torch.tensor(0.0)},
             value=torch.tensor(0.0),
             entropy={'op': torch.tensor(0.5)},
             hidden=None,
+            pred_contributions=None,
         )
 
     def get_q_values(self, features, action):

@@ -82,7 +82,10 @@ def test_compute_action_masks_single_slot_enabled():
 
 
 def test_compute_action_masks_active_slot_training_stage():
-    """Active slot in TRAINING should allow PRUNE, not FOSSILIZE."""
+    """Active slot in TRAINING should allow PRUNE, not FOSSILIZE.
+
+    D3: TRAINING stage now blocks GERMINATE to enforce sequential seed development.
+    """
     slot_states = {
         "r0c0": None,
         "r0c1": MaskSeedInfo(
@@ -97,8 +100,8 @@ def test_compute_action_masks_active_slot_training_stage():
     # WAIT always valid
     assert masks["op"][LifecycleOp.WAIT]
 
-    # GERMINATE still valid (empty slots exist)
-    assert masks["op"][LifecycleOp.GERMINATE]
+    # D3: GERMINATE blocked while any seed is in TRAINING
+    assert not masks["op"][LifecycleOp.GERMINATE]
 
     # PRUNE valid (mid has seed age >= MIN_PRUNE_AGE)
     assert masks["op"][LifecycleOp.PRUNE]
@@ -290,15 +293,15 @@ def test_compute_action_masks_min_prune_age():
     masks_age0 = compute_action_masks(slot_states_age0, enabled_slots=["r0c1"])
     assert not masks_age0["op"][LifecycleOp.PRUNE]
 
-    # Seed age 1 (minimum)
-    slot_states_age1 = {
+    # Seed age at MIN_PRUNE_AGE (should allow PRUNE)
+    slot_states_at_min = {
         "r0c1": MaskSeedInfo(
             stage=SeedStage.TRAINING.value,
-            seed_age_epochs=1,
+            seed_age_epochs=MIN_PRUNE_AGE,
         ),
     }
-    masks_age1 = compute_action_masks(slot_states_age1, enabled_slots=["r0c1"])
-    assert masks_age1["op"][LifecycleOp.PRUNE]
+    masks_at_min = compute_action_masks(slot_states_at_min, enabled_slots=["r0c1"])
+    assert masks_at_min["op"][LifecycleOp.PRUNE]
 
 
 def test_compute_action_masks_prune_requires_hold():
@@ -334,11 +337,14 @@ def test_compute_action_masks_governor_override_allows_prune():
 
 
 def test_compute_batch_masks():
-    """Should compute masks for a batch of observations."""
+    """Should compute masks for a batch of observations.
+
+    D3: TRAINING now blocks GERMINATE in Env 1 to enforce sequential development.
+    """
     batch_slot_states = [
         # Env 0: empty slots
         {"r0c0": None, "r0c1": None, "r0c2": None},
-        # Env 1: r0c1 slot active in TRAINING
+        # Env 1: r0c1 slot active in TRAINING - D3: blocks GERMINATE
         {
             "r0c0": None,
             "r0c1": MaskSeedInfo(
@@ -371,8 +377,8 @@ def test_compute_batch_masks():
     assert not masks["op"][0, LifecycleOp.FOSSILIZE]
     assert not masks["op"][0, LifecycleOp.ADVANCE]
 
-    # Env 1: can GERMINATE (empty slots), PRUNE; not FOSSILIZE
-    assert masks["op"][1, LifecycleOp.GERMINATE]
+    # Env 1: D3: cannot GERMINATE (TRAINING blocks), can PRUNE; not FOSSILIZE
+    assert not masks["op"][1, LifecycleOp.GERMINATE]  # D3: TRAINING blocks GERMINATE
     assert masks["op"][1, LifecycleOp.PRUNE]
     assert not masks["op"][1, LifecycleOp.FOSSILIZE]
     assert masks["op"][1, LifecycleOp.ADVANCE]
@@ -458,12 +464,15 @@ def test_compute_action_masks_under_seed_limit():
 
 
 def test_compute_action_masks_seed_limit_with_active_seed():
-    """Seed limit should only affect GERMINATE, not WAIT/PRUNE."""
+    """Seed limit should only affect GERMINATE, not WAIT/PRUNE.
+
+    Note: In this test, GERMINATE is blocked by BOTH seed limit AND D3 TRAINING block.
+    """
     # Active slot with seed
     slot_states = {
         "r0c0": None,
         "r0c1": MaskSeedInfo(
-            stage=SeedStage.TRAINING.value,
+            stage=SeedStage.TRAINING.value,  # D3: also blocks GERMINATE
             seed_age_epochs=5,
         ),
         "r0c2": None,
@@ -474,7 +483,7 @@ def test_compute_action_masks_seed_limit_with_active_seed():
         slot_states, enabled_slots=["r0c0", "r0c1", "r0c2"], total_seeds=10, max_seeds=10
     )
 
-    # GERMINATE masked due to limit (even though empty slots exist)
+    # GERMINATE masked due to limit AND D3 TRAINING block
     assert not masks["op"][LifecycleOp.GERMINATE]
 
     # PRUNE should still be valid
@@ -541,8 +550,8 @@ def test_mask_seed_info_dataclass():
 
 
 def test_min_prune_age_constant():
-    """MIN_PRUNE_AGE should be 1 (need one epoch for counterfactual)."""
-    assert MIN_PRUNE_AGE == 1
+    """MIN_PRUNE_AGE should be at least 5 (seeds need training time to prove value)."""
+    assert MIN_PRUNE_AGE >= 5
 
 
 # =============================================================================
@@ -587,18 +596,22 @@ def test_compute_action_masks_prune_any_slot():
 
 
 def test_compute_action_masks_germinate_any_empty_slot():
-    """GERMINATE should be valid if ANY enabled slot is empty."""
+    """GERMINATE requires empty slot AND no developing seed (D3).
+
+    D3: Even with empty slot, GERMINATE is blocked if any seed is in
+    GERMINATED/TRAINING/PRUNED/EMBARGOED/RESETTING to enforce sequential development.
+    """
     slot_states = {
         "r0c0": MaskSeedInfo(
-            stage=SeedStage.TRAINING.value,
+            stage=SeedStage.TRAINING.value,  # D3: blocks GERMINATE
             seed_age_epochs=5,
         ),
         "r0c1": None,  # Empty
     }
 
-    # Both slots enabled - GERMINATE valid because r0c1 is empty
+    # D3: GERMINATE blocked despite empty slot (TRAINING blocks germination)
     masks = compute_action_masks(slot_states, enabled_slots=["r0c0", "r0c1"])
-    assert masks["op"][LifecycleOp.GERMINATE]
+    assert not masks["op"][LifecycleOp.GERMINATE]
 
 
 def test_compute_action_masks_only_enabled_slots_checked():
@@ -873,15 +886,19 @@ class TestActionMaskEdgeCases:
             )
 
     def test_large_config_9_slots(self):
-        """9-slot (3x3) grid should mask correctly."""
+        """9-slot (3x3) grid should mask correctly.
+
+        D3: Uses non-blocking stages (BLENDING, HOLDING, FOSSILIZED) to test
+        GERMINATE while still having seeds present.
+        """
         from esper.leyline.slot_config import SlotConfig
 
         slot_config = SlotConfig.for_grid(rows=3, cols=3)
 
-        # Mix of states
+        # Mix of states - D3: no blocking stages (GERMINATED/TRAINING/cleanup)
         slot_states = {
             "r0c0": None,
-            "r0c1": MaskSeedInfo(stage=SeedStage.TRAINING.value, seed_age_epochs=5),
+            "r0c1": MaskSeedInfo(stage=SeedStage.BLENDING.value, seed_age_epochs=5),  # D3: non-blocking
             "r0c2": None,
             "r1c0": MaskSeedInfo(stage=SeedStage.HOLDING.value, seed_age_epochs=10),
             "r1c1": None,
@@ -907,7 +924,7 @@ class TestActionMaskEdgeCases:
 
         # Ops check
         assert masks["op"][LifecycleOp.WAIT]  # Always valid
-        assert masks["op"][LifecycleOp.GERMINATE]  # Empty slots exist
+        assert masks["op"][LifecycleOp.GERMINATE]  # Empty slots exist, no blocking stages
         assert masks["op"][LifecycleOp.PRUNE]  # Seeds with age >= 1 exist
         assert masks["op"][LifecycleOp.FOSSILIZE]  # HOLDING seed exists
 
@@ -1321,13 +1338,12 @@ def test_embargo_blocks_germination():
 
 
 def test_embargoed_vs_dormant_germination():
-    """Verify GERMINATE is enabled only for DORMANT slots, not EMBARGOED.
+    """D3: EMBARGOED slots block GERMINATE even if DORMANT slots exist.
 
-    This test distinguishes between:
-    - DORMANT: Empty, available for germination
-    - EMBARGOED: Empty but in cooldown period, NOT available
+    D3 changed this behavior: ANY slot in a cleanup stage (EMBARGOED, PRUNED,
+    RESETTING) blocks GERMINATE to prevent PRUNE→GERMINATE farming.
 
-    Both are "empty" (no seed), but only DORMANT allows germination.
+    The cleanup stages block germination system-wide, not per-slot.
     """
     # Scenario: Mix of DORMANT and EMBARGOED slots
     slot_states = {
@@ -1344,13 +1360,14 @@ def test_embargoed_vs_dormant_germination():
 
     masks = compute_action_masks(slot_states, enabled_slots=["r0c0", "r0c1", "r0c2"])
 
-    # GERMINATE should be enabled (r0c0 is dormant/None)
-    assert masks["op"][LifecycleOp.GERMINATE], (
-        "GERMINATE should be enabled when at least one slot is DORMANT (None). "
-        "r0c0 is None (dormant), so germination is possible."
+    # D3: GERMINATE is blocked because EMBARGOED slots exist
+    # (cleanup stages block germination system-wide to prevent farming)
+    assert not masks["op"][LifecycleOp.GERMINATE], (
+        "D3: GERMINATE should be blocked when ANY slot is in cleanup stage (EMBARGOED). "
+        "This prevents PRUNE→GERMINATE farming."
     )
 
-    # Slot mask should allow all slots (policy decides which to target)
+    # Slot mask should allow all slots (for other ops)
     assert masks["slot"][0], "r0c0 (DORMANT) should be selectable"
     assert masks["slot"][1], "r0c1 should be selectable"
     assert masks["slot"][2], "r0c2 should be selectable"
@@ -1586,4 +1603,242 @@ class TestComputeBatchMasksValidation:
                 batch_slot_states,
                 enabled_slots=["r0c0"],
                 topology="invalid",  # type: ignore[arg-type]
+            )
+
+
+# =============================================================================
+# D3 Sequential Seed Development Tests
+# =============================================================================
+
+
+class TestD3SequentialSeedDevelopment:
+    """Tests for D3 action masking that enforces sequential seed development.
+
+    D3 blocks GERMINATE when any seed is in active development or cleanup stages:
+    - GERMINATED, TRAINING: active development
+    - PRUNED, EMBARGOED, RESETTING: cleanup stages
+
+    This prevents PBRS farming (collecting +0.25 germination bonuses repeatedly)
+    while allowing the scaffolding pattern (BLENDING + new TRAINING seed).
+    """
+
+    def test_germinated_blocks_germination(self):
+        """GERMINATED stage blocks GERMINATE to enforce sequential development."""
+        slot_states = {
+            "r0c0": MaskSeedInfo(stage=SeedStage.GERMINATED.value, seed_age_epochs=0),
+            "r0c1": None,  # Empty slot available
+        }
+
+        masks = compute_action_masks(slot_states, enabled_slots=["r0c0", "r0c1"])
+
+        assert not masks["op"][LifecycleOp.GERMINATE], (
+            "GERMINATED stage should block GERMINATE"
+        )
+
+    def test_training_blocks_germination(self):
+        """TRAINING stage blocks GERMINATE to enforce sequential development."""
+        slot_states = {
+            "r0c0": MaskSeedInfo(stage=SeedStage.TRAINING.value, seed_age_epochs=5),
+            "r0c1": None,  # Empty slot available
+        }
+
+        masks = compute_action_masks(slot_states, enabled_slots=["r0c0", "r0c1"])
+
+        assert not masks["op"][LifecycleOp.GERMINATE], (
+            "TRAINING stage should block GERMINATE"
+        )
+
+    def test_pruned_blocks_germination(self):
+        """PRUNED stage blocks GERMINATE to prevent PRUNE→GERMINATE farming."""
+        slot_states = {
+            "r0c0": MaskSeedInfo(stage=SeedStage.PRUNED.value, seed_age_epochs=5),
+            "r0c1": None,  # Empty slot available
+        }
+
+        masks = compute_action_masks(slot_states, enabled_slots=["r0c0", "r0c1"])
+
+        assert not masks["op"][LifecycleOp.GERMINATE], (
+            "PRUNED stage should block GERMINATE to prevent farming"
+        )
+
+    def test_resetting_blocks_germination(self):
+        """RESETTING stage blocks GERMINATE to prevent farming."""
+        slot_states = {
+            "r0c0": MaskSeedInfo(stage=SeedStage.RESETTING.value, seed_age_epochs=1),
+            "r0c1": None,  # Empty slot available
+        }
+
+        masks = compute_action_masks(slot_states, enabled_slots=["r0c0", "r0c1"])
+
+        assert not masks["op"][LifecycleOp.GERMINATE], (
+            "RESETTING stage should block GERMINATE"
+        )
+
+    def test_blending_allows_germination_scaffolding(self):
+        """BLENDING stage allows GERMINATE for scaffolding pattern.
+
+        Scaffolding: Old seed in BLENDING helps new seed in TRAINING.
+        This is the key behavior that allows collaborative development.
+        """
+        slot_states = {
+            "r0c0": MaskSeedInfo(stage=SeedStage.BLENDING.value, seed_age_epochs=10),
+            "r0c1": None,  # Empty slot for new seed
+        }
+
+        masks = compute_action_masks(slot_states, enabled_slots=["r0c0", "r0c1"])
+
+        assert masks["op"][LifecycleOp.GERMINATE], (
+            "BLENDING stage should allow GERMINATE for scaffolding pattern"
+        )
+
+    def test_holding_allows_germination(self):
+        """HOLDING stage allows GERMINATE (terminal wait state)."""
+        slot_states = {
+            "r0c0": MaskSeedInfo(stage=SeedStage.HOLDING.value, seed_age_epochs=15),
+            "r0c1": None,  # Empty slot available
+        }
+
+        masks = compute_action_masks(slot_states, enabled_slots=["r0c0", "r0c1"])
+
+        assert masks["op"][LifecycleOp.GERMINATE], (
+            "HOLDING stage should allow GERMINATE"
+        )
+
+    def test_fossilized_allows_germination(self):
+        """FOSSILIZED stage allows GERMINATE (terminal success state)."""
+        slot_states = {
+            "r0c0": MaskSeedInfo(stage=SeedStage.FOSSILIZED.value, seed_age_epochs=20),
+            "r0c1": None,  # Empty slot available
+        }
+
+        masks = compute_action_masks(slot_states, enabled_slots=["r0c0", "r0c1"])
+
+        assert masks["op"][LifecycleOp.GERMINATE], (
+            "FOSSILIZED stage should allow GERMINATE"
+        )
+
+    def test_all_empty_allows_germination(self):
+        """All empty slots (DORMANT) allows GERMINATE."""
+        slot_states = {
+            "r0c0": None,
+            "r0c1": None,
+            "r0c2": None,
+        }
+
+        masks = compute_action_masks(slot_states, enabled_slots=["r0c0", "r0c1", "r0c2"])
+
+        assert masks["op"][LifecycleOp.GERMINATE], (
+            "All empty slots should allow GERMINATE"
+        )
+
+    def test_multiple_blocking_stages_all_block(self):
+        """Multiple seeds in blocking stages should still block GERMINATE."""
+        slot_states = {
+            "r0c0": MaskSeedInfo(stage=SeedStage.TRAINING.value, seed_age_epochs=5),
+            "r0c1": MaskSeedInfo(stage=SeedStage.GERMINATED.value, seed_age_epochs=1),
+            "r0c2": None,  # Empty slot available
+        }
+
+        masks = compute_action_masks(slot_states, enabled_slots=["r0c0", "r0c1", "r0c2"])
+
+        assert not masks["op"][LifecycleOp.GERMINATE], (
+            "Multiple blocking stages should still block GERMINATE"
+        )
+
+    def test_mixed_blocking_and_nonblocking_blocks(self):
+        """Any blocking stage among non-blocking should still block."""
+        slot_states = {
+            "r0c0": MaskSeedInfo(stage=SeedStage.FOSSILIZED.value, seed_age_epochs=20),  # Non-blocking
+            "r0c1": MaskSeedInfo(stage=SeedStage.TRAINING.value, seed_age_epochs=5),  # Blocking
+            "r0c2": None,  # Empty slot available
+        }
+
+        masks = compute_action_masks(slot_states, enabled_slots=["r0c0", "r0c1", "r0c2"])
+
+        assert not masks["op"][LifecycleOp.GERMINATE], (
+            "Single blocking stage should block even with non-blocking stages present"
+        )
+
+    def test_cleanup_then_dormant_sequence(self):
+        """Sequence: cleanup blocks, then dormant allows (simulating embargo expiry)."""
+        # During cleanup (EMBARGOED)
+        slot_states_cleanup = {
+            "r0c0": MaskSeedInfo(stage=SeedStage.EMBARGOED.value, seed_age_epochs=3),
+            "r0c1": None,
+        }
+        masks_cleanup = compute_action_masks(slot_states_cleanup, enabled_slots=["r0c0", "r0c1"])
+        assert not masks_cleanup["op"][LifecycleOp.GERMINATE], "EMBARGOED should block"
+
+        # After cleanup (slot becomes DORMANT/None)
+        slot_states_ready = {
+            "r0c0": None,  # Slot returned to dormant
+            "r0c1": None,
+        }
+        masks_ready = compute_action_masks(slot_states_ready, enabled_slots=["r0c0", "r0c1"])
+        assert masks_ready["op"][LifecycleOp.GERMINATE], "After cleanup, GERMINATE should be allowed"
+
+    def test_prune_to_germinate_farming_blocked(self):
+        """Verify PRUNE→GERMINATE farming exploit is blocked.
+
+        Without D3, agent could:
+        1. GERMINATE (+0.25 PBRS)
+        2. WAIT (MIN_PRUNE_AGE epochs)
+        3. PRUNE (tiny cost)
+        4. GERMINATE again (+0.25 PBRS)
+
+        D3 closes this by blocking GERMINATE during PRUNED/EMBARGOED/RESETTING.
+        """
+        # After PRUNE action, seed enters PRUNED stage
+        slot_states = {
+            "r0c0": MaskSeedInfo(stage=SeedStage.PRUNED.value, seed_age_epochs=5),
+            "r0c1": None,  # Empty slot exists
+        }
+
+        masks = compute_action_masks(slot_states, enabled_slots=["r0c0", "r0c1"])
+
+        assert not masks["op"][LifecycleOp.GERMINATE], (
+            "GERMINATE should be blocked during PRUNED to prevent farming"
+        )
+        # WAIT should still be valid
+        assert masks["op"][LifecycleOp.WAIT], "WAIT should always be available"
+
+    def test_d3_blocks_germination_comprehensive(self):
+        """Comprehensive test of all stages and their germination blocking behavior."""
+        blocking_stages = [
+            SeedStage.GERMINATED,
+            SeedStage.TRAINING,
+            SeedStage.PRUNED,
+            SeedStage.EMBARGOED,
+            SeedStage.RESETTING,
+        ]
+
+        non_blocking_stages = [
+            SeedStage.BLENDING,
+            SeedStage.HOLDING,
+            SeedStage.FOSSILIZED,
+            SeedStage.DORMANT,
+        ]
+
+        for stage in blocking_stages:
+            slot_states = {
+                "r0c0": MaskSeedInfo(stage=stage.value, seed_age_epochs=5),
+                "r0c1": None,
+            }
+            masks = compute_action_masks(slot_states, enabled_slots=["r0c0", "r0c1"])
+            assert not masks["op"][LifecycleOp.GERMINATE], (
+                f"{stage.name} should BLOCK germination"
+            )
+
+        for stage in non_blocking_stages:
+            if stage == SeedStage.DORMANT:
+                # DORMANT is represented as None
+                slot_states = {"r0c0": None, "r0c1": None}
+            else:
+                slot_states = {
+                    "r0c0": MaskSeedInfo(stage=stage.value, seed_age_epochs=10),
+                    "r0c1": None,
+                }
+            masks = compute_action_masks(slot_states, enabled_slots=["r0c0", "r0c1"])
+            assert masks["op"][LifecycleOp.GERMINATE], (
+                f"{stage.name} should ALLOW germination"
             )

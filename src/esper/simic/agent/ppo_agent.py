@@ -18,7 +18,7 @@ import torch.nn as nn
 from .rollout_buffer import TamiyoRolloutBuffer
 from .advantages import compute_per_head_advantages
 from .ppo_metrics import PPOUpdateMetricsBuilder
-from .ppo_update import PPOUpdateResult, compute_losses, compute_ratio_metrics
+from .ppo_update import PPOUpdateResult, compute_contribution_aux_loss, compute_losses, compute_ratio_metrics
 from .types import PPOUpdateMetrics
 from esper.simic.telemetry import RatioExplosionDiagnostic
 from esper.simic.telemetry.lstm_health import compute_lstm_health
@@ -29,6 +29,7 @@ from esper.leyline.value_metrics import (
 )
 from esper.leyline import (
     PolicyBundle,
+    compute_availability_masks,
     DEFAULT_BATCH_SIZE,
     DEFAULT_CLIP_RATIO,
     DEFAULT_ENTROPY_COEF,
@@ -43,8 +44,11 @@ from esper.leyline import (
     DEFAULT_RATIO_EXPLOSION_THRESHOLD,
     DEFAULT_VALUE_CLIP,
     DEFAULT_VALUE_COEF,
+    ENTROPY_FLOOR_PER_HEAD,
+    ENTROPY_FLOOR_PENALTY_COEF,
     HEAD_NAMES,
     NUM_OPS,
+    PROBABILITY_FLOOR_PER_HEAD,
 )
 from esper.leyline.slot_config import SlotConfig
 import logging
@@ -119,6 +123,12 @@ class PPOAgent:
         # are only active during GERMINATE actions (less frequent than slot/op).
         entropy_coef_per_head: dict[str, float] | None = None,
         value_coef: float = DEFAULT_VALUE_COEF,
+        # Value coefficient warmup: start low, ramp up to value_coef over warmup_steps.
+        # This prevents critic collapse when early returns have low variance (before
+        # the policy discovers fossilization). The critic learns "be patient" by having
+        # less influence early, then gradually taking over as variance appears.
+        value_coef_start: float | None = None,  # Default: 0.1 * value_coef
+        value_warmup_steps: int = 0,  # 0 = no warmup, use fixed value_coef
         clip_value: bool = False,  # Disabled: return normalization provides stability
         # Separate clip range for value function (larger than policy clip_ratio)
         # Note: Research (Engstrom et al., 2020) suggests value clipping often hurts.
@@ -139,6 +149,20 @@ class PPOAgent:
         num_envs: int = DEFAULT_N_ENVS,  # For TamiyoRolloutBuffer
         max_steps_per_env: int = DEFAULT_EPISODE_LENGTH,  # For TamiyoRolloutBuffer (from leyline)
         compile_mode: str = "off",  # For checkpoint persistence (policy may already be compiled)
+        # Per-head entropy floor penalty (prevents sparse head collapse)
+        entropy_floor: dict[str, float] | None = None,
+        entropy_floor_penalty_coef: dict[str, float] | None = None,
+        # Per-head probability floor (HARD constraint - guarantees gradient flow)
+        # Unlike entropy penalties, this clamps action probabilities to a minimum,
+        # ensuring gradients can always flow even when entropy would collapse.
+        probability_floor: dict[str, float] | None = None,
+        total_train_steps: int | None = None,  # For late-training decay schedule
+        # Auxiliary contribution supervision (Expert-reviewed defaults)
+        aux_contribution_coef: float = 0.05,  # DRL Expert: reduced from 0.1
+        aux_warmup_steps: int = 1000,  # DRL + PyTorch Expert: ramp from 0 → full
+        aux_stop_gradient: bool = True,  # DRL Expert: prevent representation collapse
+        contribution_loss_clip: float = 10.0,  # Clip targets to prevent outliers
+        enable_contribution_aux: bool = True,  # Can disable for ablation
     ):
         # Store policy and extract slot_config
         self.policy = policy
@@ -187,7 +211,24 @@ class PPOAgent:
         self.entropy_coef_per_head = dict(ENTROPY_COEF_PER_HEAD)
         if entropy_coef_per_head is not None:
             self.entropy_coef_per_head.update(entropy_coef_per_head)
+        # Per-head entropy floor penalty (prevents sparse head collapse)
+        # Uses ENTROPY_FLOOR_PER_HEAD from leyline as defaults
+        self.entropy_floor = entropy_floor if entropy_floor is not None else dict(ENTROPY_FLOOR_PER_HEAD)
+        self.entropy_floor_penalty_coef = (
+            entropy_floor_penalty_coef if entropy_floor_penalty_coef is not None
+            else dict(ENTROPY_FLOOR_PENALTY_COEF)
+        )
+        # Per-head probability floor (HARD constraint - guarantees gradient flow)
+        # Uses PROBABILITY_FLOOR_PER_HEAD from leyline as defaults
+        self.probability_floor = (
+            probability_floor if probability_floor is not None
+            else dict(PROBABILITY_FLOOR_PER_HEAD)
+        )
+        self.total_train_steps = total_train_steps if total_train_steps is not None else 1_000_000
         self.value_coef = value_coef
+        # Value warmup: start at 10% of target by default, ramp up over warmup_steps
+        self.value_coef_start = value_coef_start if value_coef_start is not None else 0.1 * value_coef
+        self.value_warmup_steps = value_warmup_steps
         self.clip_value = clip_value
         self.value_clip = value_clip
         self.max_grad_norm = max_grad_norm
@@ -197,6 +238,14 @@ class PPOAgent:
         self.target_kl = target_kl
         self.weight_decay = weight_decay
         self.device = device
+
+        # Auxiliary contribution supervision config
+        self.aux_contribution_coef = aux_contribution_coef
+        self.aux_warmup_steps = aux_warmup_steps
+        self.aux_stop_gradient = aux_stop_gradient
+        self.contribution_loss_clip = contribution_loss_clip
+        self.enable_contribution_aux = enable_contribution_aux
+        self._aux_training_step = 0  # Track training steps for warmup
 
         # C4/H5: Runtime warning for risky recurrent configuration
         if self.recurrent_n_epochs > 1:
@@ -295,7 +344,8 @@ class PPOAgent:
                 list(base_net.feature_net.parameters()) +
                 list(base_net.lstm.parameters()) +
                 list(base_net.lstm_ln.parameters()) +
-                list(base_net.blueprint_embedding.parameters())  # Phase 4: blueprint embeddings
+                list(base_net.blueprint_embedding.parameters()) +  # Phase 4: blueprint embeddings
+                list(base_net.contribution_predictor.parameters())  # Phase 3: auxiliary contribution predictor
             )
 
             self.optimizer: torch.optim.Optimizer = torch.optim.AdamW([
@@ -329,6 +379,55 @@ class PPOAgent:
         progress = min(1.0, self.train_steps / self.entropy_anneal_steps)
         annealed = self.entropy_coef_start + progress * (self.entropy_coef_end - self.entropy_coef_start)
         return max(annealed, self.entropy_coef_min)
+
+    def get_value_coef(self) -> float:
+        """Get current value coefficient with warmup.
+
+        Value warmup prevents critic collapse when early returns have low variance.
+        Before the policy discovers fossilization, all returns look similar and the
+        critic learns a constant (value collapse). By starting with low value_coef,
+        we tell the critic "be patient, don't overfit to early uniform returns."
+
+        Returns:
+            Value coefficient (ramped up if warmup enabled)
+        """
+        if self.value_warmup_steps == 0:
+            # No warmup - use fixed coefficient
+            return self.value_coef
+
+        # With warmup - ramp from value_coef_start to value_coef
+        progress = min(1.0, self.train_steps / self.value_warmup_steps)
+        return self.value_coef_start + progress * (self.value_coef - self.value_coef_start)
+
+    def _get_penalty_schedule(self, progress: float) -> float:
+        """Schedule entropy floor penalty coefficient across training phases.
+
+        DRL Expert recommendation: Early-training boost + late-training decay.
+
+        Schedule:
+        - 0-25% (early): 1.5x boost - establish diverse exploration habits
+        - 25-75% (mid): 1.0x baseline
+        - 75-100% (late): decay from 1.0x to 0.5x - allow natural convergence
+
+        PyTorch Expert Note: Apply as scalar multiplier OUTSIDE compute_losses
+        to maintain clean separation of concerns.
+
+        Args:
+            progress: Training progress [0, 1] (train_steps / total_train_steps)
+
+        Returns:
+            Schedule factor [0.5, 1.5]
+        """
+        if progress < 0.25:
+            # Early training: 1.5x boost to establish exploration
+            return 1.5
+        elif progress < 0.75:
+            # Mid training: baseline
+            return 1.0
+        else:
+            # Late training: decay from 1.0 at 75% to 0.5 at 100%
+            decay_progress = (progress - 0.75) / 0.25
+            return 1.0 - 0.5 * decay_progress
 
     def _collect_cuda_memory_metrics(self) -> dict[str, float]:
         """Collect CUDA memory statistics for infrastructure monitoring.
@@ -423,7 +522,23 @@ class PPOAgent:
             gae_lambda=self.gae_lambda,
             value_normalizer=self.value_normalizer,
         )
-        pre_norm_adv_mean, pre_norm_adv_std = self.buffer.normalize_advantages()
+        pre_norm_adv_mean, pre_norm_adv_std, std_floored = self.buffer.normalize_advantages()
+
+        # D5: Compute forced step ratio from buffer data
+        # Forced steps are timesteps where agent had no choice (only WAIT valid)
+        forced_actions = self.buffer.forced_actions
+        total_timesteps = sum(self.buffer.step_counts)
+        if total_timesteps > 0:
+            forced_count = 0
+            for env_id in range(self.buffer.num_envs):
+                num_steps = self.buffer.step_counts[env_id]
+                if num_steps > 0:
+                    forced_count += int(forced_actions[env_id, :num_steps].sum().item())
+            forced_step_ratio = forced_count / total_timesteps
+            usable_actor_timesteps = total_timesteps - forced_count
+        else:
+            forced_step_ratio = 0.0
+            usable_actor_timesteps = 0
 
         # Compute value function metrics (TELE-220 to TELE-228)
         value_func_metrics = self._compute_value_function_metrics()
@@ -499,6 +614,20 @@ class PPOAgent:
             torch.tensor(pre_norm_adv_mean, device=valid_returns.device)
         ]
         metrics["pre_norm_advantage_std"] = [
+            torch.tensor(pre_norm_adv_std, device=valid_returns.device)
+        ]
+
+        # D4/D5: Slot saturation diagnostics
+        metrics["forced_step_ratio"] = [
+            torch.tensor(forced_step_ratio, device=valid_returns.device)
+        ]
+        metrics["usable_actor_timesteps"] = [
+            torch.tensor(usable_actor_timesteps, device=valid_returns.device, dtype=torch.long)
+        ]
+        metrics["advantage_std_floored"] = [
+            torch.tensor(std_floored, device=valid_returns.device, dtype=torch.bool)
+        ]
+        metrics["d5_pre_norm_advantage_std"] = [
             torch.tensor(pre_norm_adv_std, device=valid_returns.device)
         ]
 
@@ -578,10 +707,6 @@ class PPOAgent:
                     q_val = self.policy.network._compute_value(lstm_out, op_tensor)
                     op_q_values[op_idx] = q_val.squeeze()
 
-                # Mask invalid ops for display; analytics use valid ops only.
-                masked_q_values = op_q_values.clone()
-                masked_q_values[~op_mask] = float("nan")
-
                 # Compute Q-variance and Q-spread over valid ops only.
                 valid_q_values = op_q_values[op_mask]
                 if valid_q_values.numel() >= 2:
@@ -591,7 +716,7 @@ class PPOAgent:
                     q_variance = torch.tensor(float("nan"), device=self.device)
                     q_spread = torch.tensor(float("nan"), device=self.device)
 
-                metrics["op_q_values"] = [masked_q_values]
+                metrics["op_q_values"] = [op_q_values]
                 metrics["op_valid_mask"] = [op_mask]
                 metrics["q_variance"] = [q_variance]
                 metrics["q_spread"] = [q_spread]
@@ -604,6 +729,9 @@ class PPOAgent:
 
         # Initialize per-head entropy tracking (P3-1)
         head_entropy_history: dict[str, list[torch.Tensor]] = {head: [] for head in HEAD_NAMES}
+        # Initialize conditional entropy tracking (P3-2: entropy only when head is causally relevant)
+        # This is the true exploration signal for sparse heads like blueprint/tempo
+        conditional_head_entropy_history: dict[str, list[torch.Tensor]] = {head: [] for head in HEAD_NAMES}
 
         # LSTM health tracking (TELE-340)
         lstm_health_history: dict[str, list[float | bool]] = defaultdict(list)
@@ -680,6 +808,8 @@ class PPOAgent:
                     actions,
                     masks,
                     hidden=(hidden_h, hidden_c),
+                    probability_floor=self.probability_floor,
+                    aux_stop_gradient=self.aux_stop_gradient,
                 )
             log_probs = result.log_prob
             values = result.value
@@ -777,6 +907,10 @@ class PPOAgent:
             valid_advantages = data["advantages"][valid_mask]
             valid_returns = data["returns"][valid_mask]
 
+            # D1: Extract forced mask for loss weighting
+            # Forced steps have no agency (only WAIT valid) - exclude from actor loss
+            forced_mask = data["forced_actions"][valid_mask]
+
             # Compute per-head advantages with causal masking
             # Returns both advantages AND masks to avoid redundant computation
             valid_op_actions = data["op_actions"][valid_mask]
@@ -786,6 +920,23 @@ class PPOAgent:
                 valid_advantages, valid_effective_op_actions
             )
             # B4-DRL-01: Masks from leyline.causal_masks (single source of truth)
+
+            # DRL Expert (2026-01): Compute AVAILABILITY masks for entropy regularization
+            # These track which heads COULD HAVE mattered (action was VALID), not which
+            # heads DID matter (action was CHOSEN). Critical for sparse head entropy floor
+            # penalty - prevents death spiral where heads collapse once agent stops exploring.
+            valid_op_masks = data["op_masks"][valid_mask]
+            availability_masks = compute_availability_masks(valid_op_masks)
+
+            # Track conditional entropy (P3-2): entropy only when head is causally relevant
+            # This is the true exploration signal for sparse heads like blueprint/tempo.
+            # head_masks[key] indicates whether that head affects the gradient for each timestep.
+            for key in HEAD_NAMES:
+                mask = head_masks[key].float()
+                n_relevant = mask.sum().clamp(min=1)
+                # Conditional mean: sum(entropy * mask) / count(mask)
+                conditional_ent = (entropy[key] * mask).sum() / n_relevant
+                conditional_head_entropy_history[key].append(conditional_ent)
 
             # Compute per-head ratios
             old_log_probs = {
@@ -798,7 +949,7 @@ class PPOAgent:
                 "alpha_curve": data["alpha_curve_log_probs"][valid_mask],
                 "op": data["op_log_probs"][valid_mask],
             }
-            total_timesteps = valid_mask.sum().float().clamp(min=1)
+            batch_timesteps = valid_mask.sum().float().clamp(min=1)
             ratio_metrics = compute_ratio_metrics(
                 log_probs=log_probs,
                 old_log_probs=old_log_probs,
@@ -806,7 +957,7 @@ class PPOAgent:
                 clip_ratio=self.clip_ratio,
                 target_kl=self.target_kl,
                 head_names=HEAD_NAMES,
-                total_timesteps=total_timesteps,
+                total_timesteps=batch_timesteps,
             )
             update_result = PPOUpdateResult(ratio_metrics=ratio_metrics, loss_metrics=None)
             for key, max_val in update_result.ratio_metrics.per_head_ratio_max.items():
@@ -837,10 +988,24 @@ class PPOAgent:
             # Use masked mean to avoid bias from averaging zeros with real values
             valid_old_values = data["values"][valid_mask]
             entropy_coef = self.get_entropy_coef()
+
+            # Compute training progress for penalty schedule
+            # Schedule: 1.5x boost (0-25%), 1.0x baseline (25-75%), decay to 0.5x (75-100%)
+            # This prevents early entropy collapse while allowing late-training convergence
+            progress = self.train_steps / self.total_train_steps
+            schedule_factor = self._get_penalty_schedule(progress)
+
+            # Apply schedule to ALL per-head coefficients uniformly
+            scheduled_coef = {
+                head: coef * schedule_factor
+                for head, coef in self.entropy_floor_penalty_coef.items()
+            }
+
             losses = compute_losses(
                 per_head_ratios=ratio_metrics.per_head_ratios,
                 per_head_advantages=per_head_advantages,
                 head_masks=head_masks,
+                forced_mask=forced_mask,  # D1: Exclude forced steps from actor loss
                 values=values,
                 normalized_returns=normalized_returns,
                 old_values=valid_old_values,
@@ -850,13 +1015,113 @@ class PPOAgent:
                 clip_ratio=self.clip_ratio,
                 clip_value=self.clip_value,
                 value_clip=self.value_clip,
-                value_coef=self.value_coef,
+                value_coef=self.get_value_coef(),  # Use warmup-aware getter
                 head_names=HEAD_NAMES,
+                entropy_floor=self.entropy_floor,
+                entropy_floor_penalty_coef=scheduled_coef,  # Scheduled coefficients
+                availability_masks=availability_masks,  # DRL Expert: Use availability not causal for entropy
             )
             update_result = PPOUpdateResult(ratio_metrics=ratio_metrics, loss_metrics=losses)
             loss_metrics = update_result.loss_metrics
             assert loss_metrics is not None
             loss = loss_metrics.total_loss
+
+            # Compute auxiliary contribution loss (Phase 3.2)
+            # DRL Expert: Only compute when enabled and batch has fresh contribution data
+            if self.enable_contribution_aux and "has_fresh_contribution" in data:
+                aux_loss = compute_contribution_aux_loss(
+                    pred_contributions=result.pred_contributions,
+                    target_contributions=data["contribution_targets"],
+                    active_mask=data["contribution_mask"],
+                    has_fresh_target=data["has_fresh_contribution"],
+                    clip=self.contribution_loss_clip,
+                )
+                # Warmup coefficient (DRL Expert + PyTorch Expert recommendation)
+                # Ramp from 0 to full coefficient over aux_warmup_steps
+                warmup_progress = min(1.0, self._aux_training_step / max(1, self.aux_warmup_steps))
+                effective_aux_coef = self.aux_contribution_coef * warmup_progress
+                loss = loss + effective_aux_coef * aux_loss
+                metrics["aux_contribution_loss"].append(aux_loss.detach())
+                metrics["effective_aux_coef"].append(torch.tensor(effective_aux_coef, device=aux_loss.device))
+
+                # Phase 4.1: Track prediction quality for collapse detection
+                # DRL Expert: Monitor variance, explained variance, and correlation
+                with torch.no_grad():
+                    fresh_mask = data["has_fresh_contribution"]
+                    if fresh_mask.any():
+                        # Flatten for quality metrics - pred_contributions is [batch, seq_len, num_slots]
+                        # valid_mask is [batch, seq_len], fresh_mask is also [batch, seq_len]
+                        # We want timesteps where valid_mask AND fresh_mask are True
+                        combined_mask = valid_mask & fresh_mask
+                        if combined_mask.any():
+                            pred_flat = result.pred_contributions[combined_mask].flatten()
+                            target_flat = data["contribution_targets"][combined_mask].flatten()
+
+                            # Variance (should NOT be ~0 - indicates collapse)
+                            pred_variance = pred_flat.var()
+
+                            # Explained variance (should increase over training)
+                            target_var = target_flat.var().clamp(min=0.01)
+                            residual_var = (pred_flat - target_flat).var()
+                            explained_var = 1.0 - (residual_var / target_var)
+
+                            # Correlation (should be > 0.5 eventually)
+                            if pred_flat.numel() > 2:
+                                corr = torch.corrcoef(
+                                    torch.stack([pred_flat, target_flat])
+                                )[0, 1]
+                                # Handle NaN from corrcoef when variance is zero
+                                if not torch.isfinite(corr):
+                                    corr = torch.tensor(0.0, device=pred_flat.device)
+                            else:
+                                corr = torch.tensor(0.0, device=pred_flat.device)
+
+                            metrics["aux_pred_variance"].append(pred_variance)
+                            metrics["aux_explained_variance"].append(explained_var)
+                            metrics["aux_pred_target_correlation"].append(corr)
+
+                            # Phase 4.2: Collapse detection warnings
+                            # DRL Expert: Detect prediction collapse after warmup period
+                            # Rate-limit warnings to avoid log spam (every 100 updates)
+                            if (
+                                self._aux_training_step > self.aux_warmup_steps
+                                and self._aux_training_step % 100 == 0
+                            ):
+                                pred_var_val = pred_variance.item()
+                                corr_val = corr.item()
+
+                                if pred_var_val < 0.01:
+                                    logger.warning(
+                                        "Contribution predictor may have collapsed (variance=%.4f). "
+                                        "Consider increasing aux_contribution_coef or disabling stop_gradient.",
+                                        pred_var_val,
+                                    )
+                                if corr_val < 0.2 and corr_val >= 0:  # Skip if NaN (corr_val < 0 can be valid)
+                                    logger.warning(
+                                        "Contribution predictor correlation low (%.3f). "
+                                        "Aux task may not be learning.",
+                                        corr_val,
+                                    )
+                        else:
+                            # No valid+fresh timesteps in this epoch
+                            nan_t = torch.tensor(float("nan"), device=loss.device)
+                            metrics["aux_pred_variance"].append(nan_t)
+                            metrics["aux_explained_variance"].append(nan_t)
+                            metrics["aux_pred_target_correlation"].append(nan_t)
+                    else:
+                        # No fresh measurements in this epoch
+                        nan_t = torch.tensor(float("nan"), device=loss.device)
+                        metrics["aux_pred_variance"].append(nan_t)
+                        metrics["aux_explained_variance"].append(nan_t)
+                        metrics["aux_pred_target_correlation"].append(nan_t)
+            else:
+                # No contribution data in batch - skip aux loss and quality metrics
+                metrics["aux_contribution_loss"].append(torch.tensor(0.0, device=loss.device))
+                metrics["effective_aux_coef"].append(torch.tensor(0.0, device=loss.device))
+                nan_t = torch.tensor(float("nan"), device=loss.device)
+                metrics["aux_pred_variance"].append(nan_t)
+                metrics["aux_explained_variance"].append(nan_t)
+                metrics["aux_pred_target_correlation"].append(nan_t)
 
             self.optimizer.zero_grad(set_to_none=True)
             loss.backward()  # type: ignore[no-untyped-call]
@@ -922,7 +1187,7 @@ class PPOAgent:
             self.optimizer.step()
 
             # Track metrics
-            # PERF: Batch all 10 logging metrics into single GPU→CPU transfer
+            # PERF: Batch all logging metrics into single GPU→CPU transfer
             # BUG FIX: Use TRUE joint_ratio (product of all heads) computed at line 619
             # Previously this used per_head_ratios["op"] which hid divergence in other heads
             logging_tensors = torch.stack([
@@ -938,6 +1203,7 @@ class PPOAgent:
                 values.std(),
                 values.min(),
                 values.max(),
+                losses.entropy_floor_penalty,  # DRL Expert: Track for calibration debugging
             ])
             metrics["policy_loss"].append(logging_tensors[0])
             metrics["value_loss"].append(logging_tensors[1])
@@ -950,6 +1216,7 @@ class PPOAgent:
             metrics["value_std"].append(logging_tensors[8])
             metrics["value_min"].append(logging_tensors[9])
             metrics["value_max"].append(logging_tensors[10])
+            metrics["entropy_floor_penalty"].append(logging_tensors[11])
             # PERF: Reuse already-transferred ratio stats (indices 4,5) instead of
             # re-computing on GPU which would trigger 2 redundant syncs
             ratio_max_val = logging_tensors[4]
@@ -986,6 +1253,7 @@ class PPOAgent:
             finiteness_failures=finiteness_failures,
             epochs_completed=epochs_completed,
             head_entropies=head_entropy_history,
+            conditional_head_entropies=conditional_head_entropy_history,
             head_grad_norms=head_grad_norm_history,
             head_nan_detected=head_nan_detected,
             head_inf_detected=head_inf_detected,
@@ -1005,6 +1273,7 @@ class PPOAgent:
             # This ensures entropy annealing and other schedules track real updates,
             # not skipped finiteness-gate failures.
             self.train_steps += 1
+            self._aux_training_step += 1
 
         return result.metrics
 
@@ -1029,6 +1298,7 @@ class PPOAgent:
             'optimizer_state_dict': self.optimizer.state_dict(),
             'value_normalizer_state_dict': self.value_normalizer.state_dict(),
             'train_steps': self.train_steps,
+            'aux_training_step': self._aux_training_step,
             'config': {
                 'gamma': self.gamma,
                 'gae_lambda': self.gae_lambda,
@@ -1039,7 +1309,12 @@ class PPOAgent:
                 'entropy_coef_min': self.entropy_coef_min,
                 'entropy_anneal_steps': self.entropy_anneal_steps,
                 'entropy_coef_per_head': self.entropy_coef_per_head,
+                'entropy_floor': self.entropy_floor,
+                'entropy_floor_penalty_coef': self.entropy_floor_penalty_coef,
+                'total_train_steps': self.total_train_steps,
                 'value_coef': self.value_coef,
+                'value_coef_start': self.value_coef_start,
+                'value_warmup_steps': self.value_warmup_steps,
                 'clip_value': self.clip_value,
                 'value_clip': self.value_clip,
                 'target_kl': self.target_kl,
@@ -1056,6 +1331,12 @@ class PPOAgent:
                 'weight_decay': self.weight_decay,
                 # torch.compile configuration (for resume)
                 'compile_mode': self.compile_mode,
+                # Auxiliary contribution supervision config
+                'aux_contribution_coef': self.aux_contribution_coef,
+                'aux_warmup_steps': self.aux_warmup_steps,
+                'aux_stop_gradient': self.aux_stop_gradient,
+                'contribution_loss_clip': self.contribution_loss_clip,
+                'enable_contribution_aux': self.enable_contribution_aux,
             },
             # Architecture info for load-time reconstruction
             'architecture': {
@@ -1120,6 +1401,9 @@ class PPOAgent:
                 f"This checkpoint was saved with an older version (before v2). "
                 f"Please retrain the model to create a compatible checkpoint."
             ) from e
+
+        # Extract aux_training_step (defaults to 0 for new field - not backwards compat, just sensible default)
+        aux_training_step = checkpoint.get('aux_training_step', 0)
 
         # M6: Free checkpoint memory immediately after extracting needed data.
         # Checkpoint holds a full copy of all model weights; waiting for GC to
@@ -1200,6 +1484,7 @@ class PPOAgent:
         agent.policy.load_state_dict(state_dict)
         agent.optimizer.load_state_dict(optimizer_state_dict)
         agent.train_steps = train_steps
+        agent._aux_training_step = aux_training_step
 
         # P1 FIX: Restore value_normalizer state if present
         # This ensures consistent normalization scale across training resumption

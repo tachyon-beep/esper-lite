@@ -5,12 +5,12 @@ Two-panel layout (equal size):
 2. Worst Trajectory (1fr): Bottom 5 runs with most regression from peak
 
 Columns:
-- # (rank): Plain numeric rank (1-5)
 - Ep: Episode number
 - @: Epoch when peak was achieved (early peak = more potential)
 - Peak: Best accuracy achieved
 - Traj: Trajectory arrow showing peak→final (↗ climbing, ─→ held, ↘ regressed)
-- Growth: Parameter growth ratio
+- Grw: Parameter growth ratio
+- EndRwd: End-of-episode total reward for the trajectory that reached the peak
 - Seeds: Seed status counts as "blending/holding/fossilized" (e.g., "1/0/2")
 """
 from __future__ import annotations
@@ -97,16 +97,16 @@ class Scoreboard(Static):
         """Setup leaderboard table columns.
 
         Layout:
-        │ #  │ Ep │ @ │ Peak │  Traj  │Growth│ Seeds  │
-        │ 1  │ 47 │12 │85.5% │ ─→85.2 │1.03x │ 1/0/2  │
+        │ Ep │ @ │ Peak │  Traj  │ Grw  │ EndRwd│ Seeds  │
+        │ 47 │12 │85.5% │ ─→85.2 │1.03x │ +2.45 │ 1/0/2  │
         """
         self.table.clear(columns=True)
-        self.table.add_column("#", key="rank", width=4)      # Rank number (1-5)
         self.table.add_column("Ep", key="episode", width=3)  # Episode number
         self.table.add_column("@", key="epoch", width=2)     # Epoch of peak
         self.table.add_column("Peak", key="peak", width=6)   # Peak accuracy
         self.table.add_column("Traj", key="traj", width=7)   # Trajectory arrow + final
-        self.table.add_column("Grw", key="growth", width=5)  # Growth ratio (shortened)
+        self.table.add_column("Grw", key="growth", width=5)  # Growth ratio
+        self.table.add_column("EndRwd", key="reward", width=6)  # End-of-episode total reward
         self.table.add_column("Seeds", key="seeds", width=7)  # Seed status counts (B/H/F)
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
@@ -215,12 +215,12 @@ class Scoreboard(Static):
             # Use record_id if available, otherwise fallback to index-based key
             row_key = record.record_id if record.record_id else f"row_{i}"
             self.table.add_row(
-                str(i),
-                str(record.episode + 1),
+                str(record.episode),  # 0-indexed to match telemetry
                 self._format_epoch(record),
                 f"[bold green]{record.peak_accuracy:.1f}[/bold green]",
                 self._format_trajectory(record),
                 self._format_growth_ratio(record.growth_ratio),
+                self._format_reward(record.cumulative_reward),
                 self._format_seeds(record.seeds),
                 key=row_key,
             )
@@ -243,12 +243,12 @@ class Scoreboard(Static):
         Same columns as best runs panel but for runs with worst trajectory.
         """
         self.bottom_table.clear(columns=True)
-        self.bottom_table.add_column("#", key="rank", width=4)
         self.bottom_table.add_column("Ep", key="episode", width=3)
         self.bottom_table.add_column("@", key="epoch", width=2)
         self.bottom_table.add_column("Peak", key="peak", width=6)
         self.bottom_table.add_column("Traj", key="traj", width=7)
         self.bottom_table.add_column("Grw", key="growth", width=5)
+        self.bottom_table.add_column("EndRwd", key="reward", width=6)  # End-of-episode total reward
         self.bottom_table.add_column("Seeds", key="seeds", width=7)  # Seed status counts (B/H/F)
 
     def _refresh_bottom_table(self) -> None:
@@ -294,12 +294,12 @@ class Scoreboard(Static):
         for i, record in enumerate(bottom_5, start=1):
             row_key = f"bottom_{record.record_id}" if record.record_id else f"bottom_row_{i}"
             self.bottom_table.add_row(
-                str(i),
-                str(record.episode + 1),
+                str(record.episode),  # 0-indexed to match telemetry
                 self._format_epoch(record),
                 f"[yellow]{record.peak_accuracy:.1f}[/yellow]",
                 self._format_trajectory(record),
                 self._format_growth_ratio(record.growth_ratio),
+                self._format_reward(record.cumulative_reward),
                 self._format_seeds(record.seeds),
                 key=row_key,
             )
@@ -401,3 +401,24 @@ class Scoreboard(Static):
         if ratio < 1.1:
             return f"[cyan]{ratio:.2f}x[/]"
         return f"[bold cyan]{ratio:.2f}x[/]"
+
+    def _format_reward(self, cumulative_reward: float) -> str:
+        """Format end-of-episode total reward.
+
+        Color coding:
+        - Green: Positive reward (good outcome)
+        - Red: Negative reward (poor outcome)
+        - Dim: Near zero (neutral)
+
+        Uses compact format: +2.3, -1.5, ~0.0
+        """
+        if abs(cumulative_reward) < 0.1:
+            return "[dim]~0.0[/dim]"
+        elif cumulative_reward > 0:
+            if cumulative_reward >= 5.0:
+                return f"[bold green]+{cumulative_reward:.1f}[/bold green]"
+            return f"[green]+{cumulative_reward:.1f}[/green]"
+        else:
+            if cumulative_reward <= -5.0:
+                return f"[bold red]{cumulative_reward:.1f}[/bold red]"
+            return f"[red]{cumulative_reward:.1f}[/red]"

@@ -333,9 +333,9 @@ class SeedTelemetry:
         from datetime import datetime
         from esper.leyline.stage_schema import STAGE_SCHEMA_VERSION
 
-        # Validate schema version if present (fail-fast on mismatch)
-        schema_version = data.get("schema_version")
-        if schema_version is not None and schema_version != STAGE_SCHEMA_VERSION:
+        # REQUIRED: schema_version is always emitted by to_dict().
+        schema_version = data["schema_version"]
+        if schema_version != STAGE_SCHEMA_VERSION:
             raise ValueError(
                 f"SeedTelemetry schema version mismatch: "
                 f"expected {STAGE_SCHEMA_VERSION}, got {schema_version}. "
@@ -482,18 +482,22 @@ class TrainingStartedPayload:
             param_budget=data["param_budget"],
             policy_device=data["policy_device"],
             env_devices=_ensure_tuple(data["env_devices"]),
-            # Required field
             reward_mode=data["reward_mode"],
-            # Optional fields with defaults
+            # OPTIONAL: These fields have sensible defaults for single-GPU, non-resume runs.
+            # Resume path and episode_id may be empty when starting fresh.
             episode_id=data.get("episode_id", ""),
             resume_path=data.get("resume_path", ""),
             start_episode=data.get("start_episode", 0),
+            # OPTIONAL: entropy_anneal schedule may not be configured.
             entropy_anneal=data.get("entropy_anneal"),
+            # OPTIONAL: Distributed training fields default to single-GPU (rank 0, world_size 1).
             world_size=data.get("world_size", 1),
             rank=data.get("rank", 0),
             local_rank=data.get("local_rank", 0),
+            # OPTIONAL: AMP may not be enabled; dtype only present when amp_enabled=True.
             amp_enabled=data.get("amp_enabled", False),
             amp_dtype=data.get("amp_dtype"),
+            # OPTIONAL: torch.compile may not be enabled; backend/mode only present when enabled.
             compile_enabled=data.get("compile_enabled", False),
             compile_backend=data.get("compile_backend"),
             compile_mode=data.get("compile_mode"),
@@ -523,6 +527,9 @@ class EpochCompletedPayload:
     val_loss: float
     inner_epoch: int
 
+    # OPTIONAL - episode context for filtering in telemetry views
+    episode_idx: int | None = None
+
     # OPTIONAL - training metrics (None = not computed, 0.0 = computed as zero)
     train_loss: float | None = None
     train_accuracy: float | None = None
@@ -550,9 +557,12 @@ class EpochCompletedPayload:
             val_accuracy=data["val_accuracy"],
             val_loss=data["val_loss"],
             inner_epoch=data["inner_epoch"],
+            episode_idx=data["episode_idx"],
+            # OPTIONAL: Training metrics may not be computed in all epochs (None != 0.0).
             train_loss=data.get("train_loss"),
             train_accuracy=data.get("train_accuracy"),
             host_grad_norm=data.get("host_grad_norm"),
+            # OPTIONAL: Per-seed telemetry only present when seeds exist.
             seeds=data.get("seeds"),
             observation_stats=observation_stats,
         )
@@ -601,6 +611,7 @@ class BatchEpochCompletedPayload:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "BatchEpochCompletedPayload":
         """Parse from dict. Raises KeyError on missing required fields."""
+        # OPTIONAL: env_accuracies only present when per-env tracking is enabled.
         env_accuracies = data.get("env_accuracies")
         if env_accuracies is not None:
             env_accuracies = _ensure_tuple(env_accuracies)
@@ -612,6 +623,7 @@ class BatchEpochCompletedPayload:
             avg_reward=data["avg_reward"],
             total_episodes=data["total_episodes"],
             n_envs=data["n_envs"],
+            # OPTIONAL: Resume-aware fields default to 0 for fresh runs.
             start_episode=data.get("start_episode", 0),
             requested_episodes=data.get("requested_episodes", 0),
             rolling_accuracy=data.get("rolling_accuracy", 0.0),
@@ -830,6 +842,16 @@ class PPOUpdatePayload:
     lstm_has_nan: bool = False  # NaN detected in hidden state
     lstm_has_inf: bool = False  # Inf detected in hidden state
 
+    # === D5: Slot Saturation Diagnostics ===
+    # Track forced WAIT steps to understand PPO stability under slot saturation.
+    # When all slots are occupied, the action space collapses to WAIT-only.
+    # These timesteps have no agency and should be excluded from actor loss.
+    forced_step_ratio: float = 0.0  # Fraction of timesteps with forced decisions
+    usable_actor_timesteps: int = 0  # Count of timesteps with real choice
+    decision_density: float = 1.0  # Fraction with agency (1 - forced_step_ratio), higher = healthier
+    advantage_std_floored: bool = False  # True if std clamped to floor (degenerate batch)
+    d5_pre_norm_advantage_std: float | None = None  # Raw std before normalization
+
     def __post_init__(self) -> None:
         if len(self.op_q_values) != NUM_OPS:
             raise ValueError(
@@ -844,51 +866,55 @@ class PPOUpdatePayload:
     def from_dict(cls, data: dict[str, Any]) -> "PPOUpdatePayload":
         """Parse from dict. Raises KeyError on missing required fields."""
         return cls(
+            # REQUIRED: Core PPO health metrics (always emitted).
             policy_loss=data["policy_loss"],
             value_loss=data["value_loss"],
             entropy=data["entropy"],
             grad_norm=data["grad_norm"],
             kl_divergence=data["kl_divergence"],
             clip_fraction=data["clip_fraction"],
-            # DRL-03 fix: nan_grad_count is required (fail-fast on missing)
             nan_grad_count=data["nan_grad_count"],
-            # Always emitted - fail loudly if missing
             pre_clip_grad_norm=data["pre_clip_grad_norm"],
-            # Conditionally optional
+            # OPTIONAL: explained_variance can be NaN early in training.
             explained_variance=data.get("explained_variance"),
-            entropy_loss=data.get("entropy_loss", 0.0),  # Legacy: hardcoded to 0
-            # Advantage stats - always emitted
+            # REQUIRED: Always emitted by emit_ppo_update_event.
+            entropy_loss=data["entropy_loss"],
+            # REQUIRED: Advantage stats (always emitted).
             advantage_mean=data["advantage_mean"],
             advantage_std=data["advantage_std"],
             advantage_skewness=data["advantage_skewness"],
             advantage_kurtosis=data["advantage_kurtosis"],
             advantage_positive_ratio=data["advantage_positive_ratio"],
-            # Ratio stats - always emitted
+            # REQUIRED: Ratio stats (always emitted).
             ratio_mean=data["ratio_mean"],
             ratio_min=data["ratio_min"],
             ratio_max=data["ratio_max"],
             ratio_std=data["ratio_std"],
-            # Log prob extremes - always emitted
+            # REQUIRED: Log prob extremes (always emitted).
             log_prob_min=data["log_prob_min"],
             log_prob_max=data["log_prob_max"],
+            # OPTIONAL: LR and entropy_coef may not be logged in all configs.
             lr=data.get("lr"),
             entropy_coef=data.get("entropy_coef"),
+            # OPTIONAL: Gradient health (inf separate from nan, defaults to 0).
             inf_grad_count=data.get("inf_grad_count", 0),
             dead_layers=data.get("dead_layers", 0),
             exploding_layers=data.get("exploding_layers", 0),
             layer_gradient_health=data.get("layer_gradient_health"),
-            # Always emitted
+            # REQUIRED: Entropy collapse detection.
             entropy_collapsed=data["entropy_collapsed"],
-            # Per-head NaN/Inf detection (optional)
+            # OPTIONAL: Per-head NaN/Inf detection (only for factored policies).
             head_nan_detected=data.get("head_nan_detected"),
             head_inf_detected=data.get("head_inf_detected"),
-            # Conditionally optional (AMP-related)
+            # OPTIONAL: AMP fields (only present when AMP enabled).
             loss_scale=data.get("loss_scale"),
             amp_overflow_detected=data.get("amp_overflow_detected", False),
             update_skipped=data.get("update_skipped", False),
-            # Always emitted
+            # REQUIRED: Timing.
             update_time_ms=data["update_time_ms"],
+            # OPTIONAL: Early stop epoch only present when KL early-stopping triggered.
             early_stop_epoch=data.get("early_stop_epoch"),
+            # OPTIONAL: Multi-head entropy/gradients (only for factored policies).
             head_slot_entropy=data.get("head_slot_entropy"),
             head_blueprint_entropy=data.get("head_blueprint_entropy"),
             head_slot_grad_norm=data.get("head_slot_grad_norm"),
@@ -905,7 +931,7 @@ class PPOUpdatePayload:
             head_alpha_speed_entropy=data.get("head_alpha_speed_entropy"),
             head_alpha_curve_entropy=data.get("head_alpha_curve_entropy"),
             head_op_entropy=data.get("head_op_entropy"),
-            # Per-head ratio max
+            # OPTIONAL: Per-head ratio max (only for factored policies, defaults to 1.0).
             head_slot_ratio_max=data.get("head_slot_ratio_max", 1.0),
             head_blueprint_ratio_max=data.get("head_blueprint_ratio_max", 1.0),
             head_style_ratio_max=data.get("head_style_ratio_max", 1.0),
@@ -915,33 +941,34 @@ class PPOUpdatePayload:
             head_alpha_curve_ratio_max=data.get("head_alpha_curve_ratio_max", 1.0),
             head_op_ratio_max=data.get("head_op_ratio_max", 1.0),
             joint_ratio_max=data.get("joint_ratio_max", 1.0),
-            # Always emitted
+            # REQUIRED: PPO inner loop context.
             inner_epoch=data["inner_epoch"],
             batch=data["batch"],
             ppo_updates_count=data["ppo_updates_count"],
-            # Conditionally optional (buffer rollback)
+            # OPTIONAL: Buffer rollback flag.
             skipped=data.get("skipped", False),
-            # Value function statistics - always emitted
+            # REQUIRED: Value function statistics.
             value_mean=data["value_mean"],
             value_std=data["value_std"],
             value_min=data["value_min"],
             value_max=data["value_max"],
-            # Q-values
+            # REQUIRED: Q-values.
             op_q_values=_ensure_tuple(data["op_q_values"]),
             op_valid_mask=_ensure_tuple(data["op_valid_mask"]),
             q_variance=data["q_variance"],
             q_spread=data["q_spread"],
-            # Gradient quality metrics - always emitted
+            # REQUIRED: Gradient quality metrics.
             clip_fraction_positive=data["clip_fraction_positive"],
             clip_fraction_negative=data["clip_fraction_negative"],
             gradient_cv=data["gradient_cv"],
-            # Infrastructure metrics
+            # OPTIONAL: CUDA memory (only sampled periodically to amortize sync overhead).
             cuda_memory_allocated_gb=data.get("cuda_memory_allocated_gb", 0.0),
             cuda_memory_reserved_gb=data.get("cuda_memory_reserved_gb", 0.0),
             cuda_memory_peak_gb=data.get("cuda_memory_peak_gb", 0.0),
             cuda_memory_fragmentation=data.get("cuda_memory_fragmentation", 0.0),
+            # REQUIRED: Dataloader wait ratio.
             dataloader_wait_ratio=data["dataloader_wait_ratio"],
-            # LSTM health metrics (B7-DRL-04)
+            # OPTIONAL: LSTM health (only present when using recurrent policy).
             lstm_h_l2_total=data.get("lstm_h_l2_total"),
             lstm_c_l2_total=data.get("lstm_c_l2_total"),
             lstm_h_rms=data.get("lstm_h_rms"),
@@ -954,14 +981,18 @@ class PPOUpdatePayload:
             lstm_c_max=data.get("lstm_c_max"),
             lstm_has_nan=data.get("lstm_has_nan", False),
             lstm_has_inf=data.get("lstm_has_inf", False),
-            # Pre-normalization advantage stats (for diagnosing value collapse)
-            # Always emitted - fail loudly if missing
+            # REQUIRED: Pre-normalization advantage stats.
             pre_norm_advantage_mean=data["pre_norm_advantage_mean"],
             pre_norm_advantage_std=data["pre_norm_advantage_std"],
-            # Return statistics (for diagnosing value loss scale)
-            # Always emitted - fail loudly if missing
+            # REQUIRED: Return statistics.
             return_mean=data["return_mean"],
             return_std=data["return_std"],
+            # OPTIONAL: D5 slot saturation diagnostics (defaults for non-D5 batches).
+            forced_step_ratio=data.get("forced_step_ratio", 0.0),
+            usable_actor_timesteps=data.get("usable_actor_timesteps", 0),
+            decision_density=data.get("decision_density", 1.0),
+            advantage_std_floored=data.get("advantage_std_floored", False),
+            d5_pre_norm_advantage_std=data.get("d5_pre_norm_advantage_std"),
         )
 
     @classmethod
@@ -999,6 +1030,9 @@ class TamiyoInitiatedPayload:
     stabilization_epochs: int  # Required epochs for stabilization
     val_loss: float  # Validation loss at stabilization
 
+    # CONTEXT (injected by emit_with_env_context)
+    episode_idx: int | None = None
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "TamiyoInitiatedPayload":
         """Parse from dict. Raises KeyError on missing required fields."""
@@ -1008,6 +1042,7 @@ class TamiyoInitiatedPayload:
             stable_count=data["stable_count"],
             stabilization_epochs=data["stabilization_epochs"],
             val_loss=data["val_loss"],
+            episode_idx=data["episode_idx"],
         )
 
 
@@ -1026,6 +1061,9 @@ class SeedGerminatedPayload:
     blueprint_id: str
     params: int
 
+    # CONTEXT (injected by emit_with_env_context)
+    episode_idx: int | None = None
+
     # OPTIONAL
     alpha: float = 0.0
     grad_ratio: float = 0.0
@@ -1039,17 +1077,20 @@ class SeedGerminatedPayload:
     def from_dict(cls, data: dict[str, Any]) -> "SeedGerminatedPayload":
         """Parse from dict. Raises KeyError on missing required fields."""
         return cls(
+            # REQUIRED: Core identification.
             slot_id=data["slot_id"],
             env_id=data["env_id"],
             blueprint_id=data["blueprint_id"],
             params=data["params"],
+            episode_idx=data["episode_idx"],
+            alpha_curve=data["alpha_curve"],
+            # OPTIONAL: Gradient health (defaults to healthy state at germination).
             alpha=data.get("alpha", 0.0),
             grad_ratio=data.get("grad_ratio", 0.0),
             has_vanishing=data.get("has_vanishing", False),
             has_exploding=data.get("has_exploding", False),
             epochs_in_stage=data.get("epochs_in_stage", 0),
             blend_tempo_epochs=data.get("blend_tempo_epochs", 5),
-            alpha_curve=data["alpha_curve"],
         )
 
 
@@ -1068,6 +1109,9 @@ class SeedStageChangedPayload:
     from_stage: str
     to_stage: str
 
+    # CONTEXT (injected by emit_with_env_context)
+    episode_idx: int | None = None
+
     # OPTIONAL
     alpha: float | None = None
     accuracy_delta: float = 0.0
@@ -1083,17 +1127,21 @@ class SeedStageChangedPayload:
     def from_dict(cls, data: dict[str, Any]) -> "SeedStageChangedPayload":
         """Parse from dict. Raises KeyError on missing required fields."""
         return cls(
+            # REQUIRED: Core transition info.
             slot_id=data["slot_id"],
             env_id=data["env_id"],
             from_stage=data["from_stage"],
             to_stage=data["to_stage"],
+            episode_idx=data["episode_idx"],
+            alpha_curve=data["alpha_curve"],
+            # OPTIONAL: Alpha may be None for non-blending transitions.
             alpha=data.get("alpha"),
+            # OPTIONAL: Gradient health (defaults to healthy state).
             accuracy_delta=data.get("accuracy_delta", 0.0),
             epochs_in_stage=data.get("epochs_in_stage", 0),
             grad_ratio=data.get("grad_ratio", 0.0),
             has_vanishing=data.get("has_vanishing", False),
             has_exploding=data.get("has_exploding", False),
-            alpha_curve=data["alpha_curve"],
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -1105,6 +1153,7 @@ class SeedStageChangedPayload:
         return {
             "slot_id": self.slot_id,
             "env_id": self.env_id,
+            "episode_idx": self.episode_idx,
             "from_stage": self.from_stage,
             "to_stage": self.to_stage,
             "alpha": self.alpha,
@@ -1133,6 +1182,9 @@ class SeedFossilizedPayload:
     improvement: float
     params_added: int
 
+    # CONTEXT (injected by emit_with_env_context)
+    episode_idx: int | None = None
+
     # OPTIONAL (None = not computed, 0.0 = computed as zero)
     alpha: float = 1.0
     epochs_total: int = 0
@@ -1143,13 +1195,17 @@ class SeedFossilizedPayload:
     def from_dict(cls, data: dict[str, Any]) -> "SeedFossilizedPayload":
         """Parse from dict. Raises KeyError on missing required fields."""
         return cls(
+            # REQUIRED: Core fossilization info.
             slot_id=data["slot_id"],
             env_id=data["env_id"],
             blueprint_id=data["blueprint_id"],
             improvement=data["improvement"],
             params_added=data["params_added"],
+            episode_idx=data["episode_idx"],
+            # OPTIONAL: Final alpha (default 1.0 = fully blended).
             alpha=data.get("alpha", 1.0),
             epochs_total=data.get("epochs_total", 0),
+            # OPTIONAL: Counterfactual/blending analysis (None = not computed).
             counterfactual=data.get("counterfactual"),
             blending_delta=data.get("blending_delta"),
         )
@@ -1169,6 +1225,9 @@ class SeedPrunedPayload:
     env_id: int  # -1 = sentinel (replaced by emit_with_env_context)
     reason: str
 
+    # CONTEXT (injected by emit_with_env_context)
+    episode_idx: int | None = None
+
     # OPTIONAL (None = not computed, 0.0 = computed as zero)
     blueprint_id: str | None = None
     improvement: float = 0.0
@@ -1182,15 +1241,20 @@ class SeedPrunedPayload:
     def from_dict(cls, data: dict[str, Any]) -> "SeedPrunedPayload":
         """Parse from dict. Raises KeyError on missing required fields."""
         return cls(
+            # REQUIRED: Core prune info.
             slot_id=data["slot_id"],
             env_id=data["env_id"],
             reason=data["reason"],
+            episode_idx=data["episode_idx"],
+            # OPTIONAL: Blueprint may be unknown if pruning very early.
             blueprint_id=data.get("blueprint_id"),
             improvement=data.get("improvement", 0.0),
             auto_pruned=data.get("auto_pruned", False),
             epochs_total=data.get("epochs_total", 0),
+            # OPTIONAL: Counterfactual/blending analysis (None = not computed).
             counterfactual=data.get("counterfactual"),
             blending_delta=data.get("blending_delta"),
+            # OPTIONAL: Initiator context (defaults to policy).
             initiator=data.get("initiator", "policy"),
         )
 
@@ -1213,6 +1277,9 @@ class SeedGateEvaluatedPayload:
     checks_passed: tuple[str, ...]
     checks_failed: tuple[str, ...]
 
+    # CONTEXT (injected by emit_with_env_context)
+    episode_idx: int | None = None
+
     # OPTIONAL
     message: str | None = None
 
@@ -1220,6 +1287,7 @@ class SeedGateEvaluatedPayload:
     def from_dict(cls, data: dict[str, Any]) -> "SeedGateEvaluatedPayload":
         """Parse from dict. Raises KeyError on missing required fields."""
         return cls(
+            # REQUIRED: Gate evaluation info.
             slot_id=data["slot_id"],
             env_id=data["env_id"],
             gate=data["gate"],
@@ -1227,6 +1295,8 @@ class SeedGateEvaluatedPayload:
             target_stage=data["target_stage"],
             checks_passed=_ensure_tuple(data["checks_passed"]),
             checks_failed=_ensure_tuple(data["checks_failed"]),
+            episode_idx=data["episode_idx"],
+            # OPTIONAL: Human-readable message for debugging.
             message=data.get("message"),
         )
 
@@ -1240,6 +1310,9 @@ class CounterfactualMatrixPayload:
     slot_ids: tuple[str, ...]
     configs: tuple[dict[str, Any], ...]
 
+    # CONTEXT (injected by emit_with_env_context)
+    episode_idx: int | None = None
+
     # OPTIONAL
     strategy: str = "unavailable"
     compute_time_ms: float = 0.0
@@ -1248,9 +1321,12 @@ class CounterfactualMatrixPayload:
     def from_dict(cls, data: dict[str, Any]) -> "CounterfactualMatrixPayload":
         """Parse from dict. Raises KeyError on missing required fields."""
         return cls(
+            # REQUIRED: Matrix identification.
             env_id=data["env_id"],
             slot_ids=_ensure_tuple(data["slot_ids"]),
             configs=_ensure_tuple(data["configs"]),
+            episode_idx=data["episode_idx"],
+            # OPTIONAL: Computation metadata (defaults when not tracked).
             strategy=data.get("strategy", "unavailable"),
             compute_time_ms=data.get("compute_time_ms", 0.0),
         )
@@ -1288,8 +1364,13 @@ class HeadTelemetry:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "HeadTelemetry":
-        """Parse from dict. All fields have defaults of 0.0."""
+        """Parse from dict.
+
+        ALL fields are optional with defaults of 0.0 because different heads
+        may be inactive depending on policy configuration and action masking.
+        """
         return cls(
+            # OPTIONAL: All confidence/entropy fields default to 0.0 for inactive heads.
             op_confidence=data.get("op_confidence", 0.0),
             slot_confidence=data.get("slot_confidence", 0.0),
             blueprint_confidence=data.get("blueprint_confidence", 0.0),
@@ -1356,6 +1437,7 @@ class AnalyticsSnapshotPayload:
 
     # For kind="last_action", includes decision context
     env_id: int | None = None
+    episode_idx: int | None = None  # Episode index for filtering in telemetry views
     total_reward: float | None = None
     action_name: str | None = None  # The op name (e.g., "WAIT", "GERMINATE")
     action_confidence: float | None = None
@@ -1462,10 +1544,20 @@ class AnalyticsSnapshotPayload:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AnalyticsSnapshotPayload":
-        """Parse from dict. Raises KeyError on missing required fields."""
+        """Parse from dict. Raises KeyError on missing required fields.
+
+        This is a DISCRIMINATED UNION payload - the `kind` field determines which
+        subset of optional fields are present. All fields except `kind` and
+        `episode_idx` are optional because different kinds populate different subsets.
+        """
         return cls(
+            # REQUIRED: Discriminator field.
             kind=data["kind"],
+            episode_idx=data["episode_idx"],
+            # OPTIONAL: All following fields are kind-dependent.
+            # kind="action_distribution": action_counts
             action_counts=data.get("action_counts"),
+            # kind="last_action": env context, decision data, reward breakdown
             env_id=data.get("env_id"),
             total_reward=data.get("total_reward"),
             action_name=data.get("action_name"),
@@ -1482,6 +1574,7 @@ class AnalyticsSnapshotPayload:
             alpha_algorithm=data.get("alpha_algorithm"),
             alpha_algorithm_selected=data.get("alpha_algorithm_selected"),
             action_success=data.get("action_success"),
+            # kind="last_action": Per-head mask flags
             op_masked=data.get("op_masked"),
             slot_masked=data.get("slot_masked"),
             blueprint_masked=data.get("blueprint_masked"),
@@ -1490,18 +1583,21 @@ class AnalyticsSnapshotPayload:
             alpha_target_masked=data.get("alpha_target_masked"),
             alpha_speed_masked=data.get("alpha_speed_masked"),
             alpha_curve_masked=data.get("alpha_curve_masked"),
+            # kind="throughput": performance metrics
             batch=data.get("batch"),
             episodes_completed=data.get("episodes_completed"),
             fps=data.get("fps"),
             step_time_ms=data.get("step_time_ms"),
             dataloader_wait_ms=data.get("dataloader_wait_ms"),
+            # kind="reward_summary": reward breakdown
             summary=data.get("summary"),
-            # Scaffold hindsight credit fields (Phase 3.2)
             hindsight_credit=data.get("hindsight_credit"),
             scaffold_count=data.get("scaffold_count"),
             avg_scaffold_delay=data.get("avg_scaffold_delay"),
+            # kind="mask_hit_rates": per-head mask stats
             mask_hits=data.get("mask_hits"),
             mask_total=data.get("mask_total"),
+            # kind="batch_stats": training metrics
             inner_epoch=data.get("inner_epoch"),
             accuracy=data.get("accuracy"),
             host_accuracy=data.get("host_accuracy"),
@@ -1511,9 +1607,10 @@ class AnalyticsSnapshotPayload:
             seeds_created=data.get("seeds_created"),
             seeds_fossilized=data.get("seeds_fossilized"),
             skipped_update=data.get("skipped_update"),
+            # kind="summary_table": formatted tables
             summary_table=data.get("summary_table"),
             scoreboard_tables=data.get("scoreboard_tables"),
-            # Heuristic mode fields
+            # kind="heuristic_config": run configuration
             mode=data.get("mode"),
             task=data.get("task"),
             topology=data.get("topology"),
@@ -1525,19 +1622,18 @@ class AnalyticsSnapshotPayload:
             min_fossilize_improvement=data.get("min_fossilize_improvement"),
             telemetry_lifecycle_only=data.get("telemetry_lifecycle_only"),
             telemetry_level=data.get("telemetry_level"),
+            # kind="heuristic_episode": episode completion
             episode_id=data.get("episode_id"),
             episode=data.get("episode"),
             episodes_total=data.get("episodes_total"),
             base_seed=data.get("base_seed"),
             final_accuracy=data.get("final_accuracy"),
-            # Shapley fields
+            # kind="shapley_computed": Shapley values
             shapley_values=data.get("shapley_values"),
             num_slots=data.get("num_slots"),
-            # Reward components (nested dataclass)
+            # Nested dataclasses (kind-dependent)
             reward_components=cls._parse_reward_components(data.get("reward_components")),
-            # Observation stats (nested dataclass)
             observation_stats=cls._parse_observation_stats(data.get("observation_stats")),
-            # Head telemetry (nested dataclass)
             head_telemetry=cls._parse_head_telemetry(data.get("head_telemetry")),
         )
 
@@ -1630,18 +1726,21 @@ class AnomalyDetectedPayload:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AnomalyDetectedPayload":
         """Parse from dict. Raises KeyError on missing required fields."""
-        # Convert list to tuple for gradient_stats (JSON deserialization compatibility)
+        # OPTIONAL: Debug fields only populated when collect_debug=True.
         gradient_stats = data.get("gradient_stats")
         if gradient_stats is not None:
             gradient_stats = _ensure_tuple(gradient_stats)
 
         return cls(
+            # REQUIRED: Core anomaly metadata.
             anomaly_type=data["anomaly_type"],
             episode=data["episode"],
             batch=data["batch"],
             inner_epoch=data["inner_epoch"],
             total_episodes=data["total_episodes"],
+            # OPTIONAL: Human-readable description.
             detail=data.get("detail", ""),
+            # OPTIONAL: Debug fields (only populated when collect_debug=True).
             gradient_stats=gradient_stats,
             stability=data.get("stability"),
             ratio_diagnostic=data.get("ratio_diagnostic"),
@@ -1663,6 +1762,9 @@ class PerformanceDegradationPayload:
     drop_percent: float  # Relative drop as percentage (0-100)
     threshold_percent: float  # Threshold that was exceeded
 
+    # CONTEXT (injected by emit_with_env_context)
+    episode_idx: int | None = None
+
     # OPTIONAL
     training_progress: float = 0.0  # Progress through training (0.0 to 1.0)
 
@@ -1670,11 +1772,14 @@ class PerformanceDegradationPayload:
     def from_dict(cls, data: dict[str, Any]) -> "PerformanceDegradationPayload":
         """Parse from dict. Raises KeyError on missing required fields."""
         return cls(
+            # REQUIRED: Core degradation info.
             env_id=data["env_id"],
             current_acc=data["current_acc"],
             rolling_avg_acc=data["rolling_avg_acc"],
             drop_percent=data["drop_percent"],
             threshold_percent=data["threshold_percent"],
+            episode_idx=data["episode_idx"],
+            # OPTIONAL: Training progress (defaults to 0 at start).
             training_progress=data.get("training_progress", 0.0),
         )
 
@@ -1735,15 +1840,23 @@ class RewardHackingSuspectedPayload:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "RewardHackingSuspectedPayload":
-        """Parse from dict. Raises KeyError on missing required fields."""
+        """Parse from dict. Raises KeyError on missing required fields.
+
+        This is a DISCRIMINATED UNION by `pattern` field:
+        - pattern="attribution_ratio": uses ratio, threshold
+        - pattern="ransomware_signature": uses contribution_threshold, degradation_threshold
+        """
         return cls(
+            # REQUIRED: Pattern-independent fields.
             pattern=data["pattern"],
             slot_id=data["slot_id"],
             seed_id=data["seed_id"],
             seed_contribution=data["seed_contribution"],
             total_improvement=data["total_improvement"],
+            # OPTIONAL: pattern="attribution_ratio" fields.
             ratio=data.get("ratio"),
             threshold=data.get("threshold"),
+            # OPTIONAL: pattern="ransomware_signature" fields.
             contribution_threshold=data.get("contribution_threshold"),
             degradation_threshold=data.get("degradation_threshold"),
         )
@@ -1785,6 +1898,7 @@ class EpisodeOutcomePayload:
     def from_dict(cls, data: dict[str, Any]) -> "EpisodeOutcomePayload":
         """Parse from dict. Raises KeyError on missing required fields."""
         return cls(
+            # REQUIRED: Core episode outcome info.
             env_id=data["env_id"],
             episode_idx=data["episode_idx"],
             final_accuracy=data["final_accuracy"],
@@ -1794,11 +1908,12 @@ class EpisodeOutcomePayload:
             episode_reward=data["episode_reward"],
             stability_score=data["stability_score"],
             reward_mode=data["reward_mode"],
-            episode_length=data.get("episode_length", 0),
-            outcome_type=data.get("outcome_type", "unknown"),
-            germinate_count=data.get("germinate_count", 0),
-            prune_count=data.get("prune_count", 0),
-            fossilize_count=data.get("fossilize_count", 0),
+            # REQUIRED: Episode diagnostics (TELE-610, always emitted).
+            episode_length=data["episode_length"],
+            outcome_type=data["outcome_type"],
+            germinate_count=data["germinate_count"],
+            prune_count=data["prune_count"],
+            fossilize_count=data["fossilize_count"],
         )
 
 
@@ -1828,6 +1943,9 @@ class GovernorRollbackPayload:
     device: str
     reason: str
 
+    # CONTEXT (injected by emit_with_env_context)
+    episode_idx: int | None = None
+
     # Panic context (present for initial rollback trigger)
     loss_at_panic: float | None = None
     loss_threshold: float | None = None
@@ -1840,15 +1958,24 @@ class GovernorRollbackPayload:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "GovernorRollbackPayload":
-        """Parse from dict. Raises KeyError on missing required fields."""
+        """Parse from dict. Raises KeyError on missing required fields.
+
+        This is a DISCRIMINATED UNION by emission context:
+        - Initial panic: has loss_at_panic, loss_threshold, consecutive_panics, panic_reason
+        - Key mismatch warning: has missing_keys, unexpected_keys
+        """
         return cls(
+            # REQUIRED: Always present.
             env_id=data["env_id"],
             device=data["device"],
             reason=data["reason"],
+            episode_idx=data["episode_idx"],
+            # OPTIONAL: Panic context (present for initial rollback trigger).
             loss_at_panic=data.get("loss_at_panic"),
             loss_threshold=data.get("loss_threshold"),
             consecutive_panics=data.get("consecutive_panics"),
             panic_reason=data.get("panic_reason"),
+            # OPTIONAL: State dict mismatch context (present for key mismatch warnings).
             missing_keys=list(data["missing_keys"]) if data.get("missing_keys") else None,
             unexpected_keys=list(data["unexpected_keys"]) if data.get("unexpected_keys") else None,
         )

@@ -58,9 +58,11 @@ class HeuristicPolicyBundle:
     def get_action(
         self,
         features: torch.Tensor,
+        blueprint_indices: torch.Tensor,
         masks: dict[str, torch.Tensor],
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
         deterministic: bool = False,
+        probability_floor: dict[str, float] | None = None,
     ) -> ActionResult:
         """Not directly usable - heuristic needs TrainingSignals.
 
@@ -85,9 +87,11 @@ class HeuristicPolicyBundle:
     def evaluate_actions(
         self,
         features: torch.Tensor,
+        blueprint_indices: torch.Tensor,
         actions: dict[str, torch.Tensor],
         masks: dict[str, torch.Tensor],
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
+        probability_floor: dict[str, float] | None = None,
     ) -> EvalResult:
         """Not supported for heuristic (no learnable parameters)."""
         raise NotImplementedError("Heuristic has no learnable parameters")

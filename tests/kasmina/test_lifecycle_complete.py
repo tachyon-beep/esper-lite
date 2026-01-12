@@ -85,7 +85,8 @@ class TestFullLifecycleHappyPath:
         slot.start_blending(total_steps=5)
 
         # Simulate blending completion (record accuracy to accumulate epochs_in_current_stage for G3)
-        for _ in range(5):
+        # Must accumulate DEFAULT_MIN_BLENDING_EPOCHS (10) epochs in BLENDING
+        for _ in range(DEFAULT_MIN_BLENDING_EPOCHS):
             slot.state.metrics.record_accuracy(65.0)  # G3 needs epochs_in_current_stage
             slot.step_epoch()
 

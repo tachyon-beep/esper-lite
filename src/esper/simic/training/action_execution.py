@@ -21,6 +21,7 @@ from esper.leyline import (
     EPISODE_SUCCESS_THRESHOLD,
     EpisodeOutcome,
     EpisodeOutcomePayload,
+    GovernorRollbackPayload,
     HEAD_NAMES,
     HINDSIGHT_CREDIT_WEIGHT,
     HeadTelemetry,
@@ -310,6 +311,15 @@ def execute_actions(
     alpha_curve_masks_batch = masks_batch["alpha_curve"]
     op_masks_batch = masks_batch["op"]
 
+    # D5: Vectorized forced step detection (single GPU sync for all envs)
+    # A step is "forced" if only 1 valid op AND that op is WAIT.
+    # ChatGPT Pro review 2025-01-08: Move detection OUTSIDE env loop to avoid
+    # N separate GPU→CPU syncs from .item() calls in hot path.
+    num_valid_ops_batch = op_masks_batch.sum(dim=1)  # [num_envs]
+    wait_valid_batch = op_masks_batch[:, OP_WAIT]  # [num_envs]
+    forced_batch = (num_valid_ops_batch == 1) & wait_valid_batch  # [num_envs]
+    forced_batch_cpu = forced_batch.tolist()  # Single GPU→CPU sync
+
     for env_idx, env_state in enumerate(env_states):
         model = env_state.model
         signals = all_signals[env_idx]
@@ -370,6 +380,11 @@ def execute_actions(
 
         # Governor rollback
         if env_idx in governor_panic_envs:
+            # Capture panic info BEFORE rollback (execute_rollback resets these)
+            panic_reason = env_state.governor._panic_reason
+            panic_loss = env_state.governor._panic_loss
+            consecutive_panics = env_state.governor.consecutive_panics
+
             # Stream safety: rollback mutates model tensors; ensure it runs on the
             # per-env CUDA stream to avoid default-stream leakage and races.
             rollback_ctx = (
@@ -392,6 +407,19 @@ def execute_actions(
             env_state.host_optimizer.state.clear()
             for seed_opt in env_state.seed_optimizers.values():
                 seed_opt.state.clear()
+
+            # Emit rollback telemetry for observability (P2 audit finding)
+            emitters[env_idx].emit(TelemetryEvent(
+                event_type=TelemetryEventType.GOVERNOR_ROLLBACK,
+                data=GovernorRollbackPayload(
+                    env_id=env_idx,
+                    device=str(device),
+                    reason=panic_reason or "unknown",
+                    loss_at_panic=panic_loss,
+                    consecutive_panics=consecutive_panics,
+                ),
+                severity="warning",
+            ))
 
         action_outcome.rollback_occurred = env_rollback_occurred[env_idx]
 
@@ -452,6 +480,12 @@ def execute_actions(
                 stable_val_acc = min(acc_history[-k:])
             escrow_credit_prev = env_state.escrow_credit[target_slot]
             fossilized_seed_params = 0
+            # D2: Count active seeds (non-fossilized seeds with state)
+            # Active seeds are in GERMINATED, TRAINING, BLENDING, or HOLDING stages.
+            # PRUNED seeds are excluded: once Tamiyo orders a prune, the seed is "dead"
+            # even if alpha hasn't decayed to 0 yet. Penalizing the decay period would
+            # create perverse incentives to delay pruning until the last moment.
+            n_active_seeds = 0
             for slot_id in slots:
                 slot_obj = cast(SeedSlotProtocol, model.seed_slots[slot_id])
                 slot_seed_state = slot_obj.state
@@ -465,6 +499,12 @@ def execute_actions(
                         fossilized_seed_params += sum(
                             p.numel() for p in slot_obj.alpha_schedule.parameters()
                         )
+                elif slot_seed_state.stage == SeedStage.PRUNED:
+                    # PRUNED seeds don't count as active - Tamiyo already decided their fate
+                    pass
+                else:
+                    # Non-fossilized, non-pruned seed with state = active seed
+                    n_active_seeds += 1
             acc_at_germination = (
                 env_state.acc_at_germination[target_slot]
                 if target_slot in env_state.acc_at_germination
@@ -504,6 +544,26 @@ def execute_actions(
             reward_inputs.escrow_credit_prev = escrow_credit_prev
             reward_inputs.slot_id = target_slot
             reward_inputs.seed_id = seed_id
+            # D2: Capacity Economics (slot saturation prevention)
+            reward_inputs.n_active_seeds = n_active_seeds
+            reward_inputs.seeds_germinated_this_episode = env_state.germinate_count
+
+            # Drip reward parameters (BASIC_PLUS mode: post-fossilization accountability)
+            # Pass existing drip states and build contributions from counterfactual baselines
+            reward_inputs.fossilized_drip_states = env_state.fossilized_drip_states
+            if env_state.fossilized_drip_states:
+                # Build fossilized_contributions from current counterfactual measurements
+                # Each drip state's seed_id maps to its current contribution
+                fossilized_contributions: dict[str, float] = {}
+                for drip_state in env_state.fossilized_drip_states:
+                    slot_id = drip_state.slot_id
+                    if slot_id in baseline_accs[env_idx]:
+                        # contribution = accuracy drop when seed is disabled
+                        contribution = env_state.val_acc - baseline_accs[env_idx][slot_id]
+                        fossilized_contributions[drip_state.seed_id] = contribution
+                reward_inputs.fossilized_contributions = fossilized_contributions
+            else:
+                reward_inputs.fossilized_contributions = None
 
             reward_result = compute_reward(reward_inputs)
             if return_components:
@@ -544,7 +604,11 @@ def execute_actions(
                 slot_seed_state = slot_obj.state
                 if slot_seed_state is None:
                     continue
-                if slot_seed_state.stage != SeedStage.FOSSILIZED:
+                # Only forfeit escrow for seeds that are still "in play" (not terminal states).
+                # FOSSILIZED: Successful integration, escrow is earned
+                # PRUNED: Tamiyo already ordered removal, escrow was clawed back at prune time
+                # Penalizing PRUNED seeds during alpha decay would unfairly punish timely pruning.
+                if slot_seed_state.stage not in (SeedStage.FOSSILIZED, SeedStage.PRUNED):
                     escrow_forfeit += env_state.escrow_credit[slot_id]
             if escrow_forfeit != 0.0:
                 reward -= escrow_forfeit
@@ -748,6 +812,17 @@ def execute_actions(
                         # The snapshot must be taken OUTSIDE the CUDA stream context,
                         # so we set a flag here and take the snapshot later.
                         env_state.needs_governor_snapshot = True
+
+                        # Collect drip state for BASIC_PLUS mode post-fossilization accountability
+                        # new_drip_state is created in compute_basic_reward when action=FOSSILIZE;
+                        # we only add it to tracking if the fossilization actually succeeded.
+                        if (
+                            reward_components is not None
+                            and reward_components.new_drip_state is not None
+                        ):
+                            env_state.fossilized_drip_states.append(
+                                reward_components.new_drip_state
+                            )
                 elif (
                     op_action == OP_PRUNE
                     and model.has_active_seed_in_slot(target_slot)
@@ -969,6 +1044,34 @@ def execute_actions(
         action_outcome.truncated = truncated
         effective_op_action = int(action_for_reward)
 
+        # D5: Detect forced step from pre-computed array (no GPU sync in loop)
+        # When all slots are occupied and no operations are valid, the action space
+        # collapses to WAIT-only. These timesteps should be excluded from actor loss
+        # (no agency, no gradient) but still included in GAE/LSTM unrolling.
+        forced_step = forced_batch_cpu[env_idx]
+
+        # Phase 2.2: Build contribution targets from counterfactual ablation
+        # baseline_accs[env_idx][slot_id] = accuracy with that slot disabled
+        # contribution = val_acc - baseline_acc (positive = slot helps)
+        # DRL Expert: Only set has_fresh_contribution=True when counterfactual measured
+        env_baseline_accs = baseline_accs[env_idx]
+        has_fresh_contribution = len(env_baseline_accs) > 0
+        contribution_targets_tensor: torch.Tensor | None = None
+        contribution_mask_tensor: torch.Tensor | None = None
+
+        if has_fresh_contribution:
+            # Build contribution tensor in slot_config order
+            num_slots = slot_config.num_slots
+            contribution_targets_tensor = torch.zeros(num_slots, device=device)
+            contribution_mask_tensor = torch.zeros(num_slots, dtype=torch.bool, device=device)
+
+            for slot_id, baseline_acc in env_baseline_accs.items():
+                slot_idx = slot_config.index_for_slot_id(slot_id)
+                # contribution = how much accuracy drops when this slot is disabled
+                contribution = env_state.val_acc - baseline_acc
+                contribution_targets_tensor[slot_idx] = contribution
+                contribution_mask_tensor[slot_idx] = True
+
         step_idx = agent.buffer.step_counts[env_idx]
         agent.buffer.add(
             env_id=env_idx,
@@ -1006,6 +1109,11 @@ def execute_actions(
             hidden_c=pre_step_hiddens[env_idx][1].detach(),
             truncated=truncated,
             bootstrap_value=0.0,
+            forced_step=forced_step,
+            # Phase 2.2: Counterfactual contribution supervision targets
+            contribution_targets=contribution_targets_tensor,
+            contribution_mask=contribution_mask_tensor,
+            has_fresh_contribution=has_fresh_contribution,
         )
         if truncated:
             truncated_bootstrap_targets.append((env_idx, step_idx))

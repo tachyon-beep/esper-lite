@@ -29,9 +29,12 @@ LEYLINE_VERSION = "0.2.0"
 # Lifecycle Constants (shared across simic modules)
 # =============================================================================
 
-# Minimum seed age before PRUNE is allowed (need at least one counterfactual measurement)
-# Reduced from 10 to 1: let agent LEARN optimal timing via rewards, not hard masks
-MIN_PRUNE_AGE = 1
+# Minimum seed age before PRUNE is allowed.
+# Set to 5 epochs: seeds need training time to demonstrate value before being prunable.
+# The original "let agent learn via rewards" approach (MIN_PRUNE_AGE=1) failed because
+# short-term risk-aversion dominates - the agent learns PRUNE is "safe" and kills seeds
+# before they can prove themselves (171/318 seeds pruned after just 1 epoch).
+MIN_PRUNE_AGE = 5
 
 # Epochs needed for confident seed quality assessment
 FULL_EVALUATION_AGE = 10
@@ -109,7 +112,10 @@ DEFAULT_LSTM_HIDDEN_DIM = 512
 
 # Number of LSTM layers in the host model.
 # Used by: Karn TUI widgets (gradient health display), telemetry dashboards.
-DEFAULT_HOST_LSTM_LAYERS = 12
+# NOTE: Reduced from 12 to 4 to fix vanishing gradient problem.
+# With 12 stacked layers (no residuals), only ~3% of gradient reached layer 1.
+# 4 layers with residual connections (see ResidualLSTM) provides better gradient flow.
+DEFAULT_HOST_LSTM_LAYERS = 4
 
 # Parallel environments for vectorized training.
 # This controls sample DIVERSITY per Tamiyo update, not training quantity.
@@ -140,6 +146,13 @@ DEFAULT_CLIP_RATIO = 0.2
 # (was 0.97; increased to capture delayed scaffold effects)
 # Standard value is 0.95; higher reduces bias at cost of variance.
 DEFAULT_GAE_LAMBDA = 0.98
+
+# D4: Advantage standard deviation floor (prevents gradient amplification).
+# During slot saturation (forced WAIT corridors), advantage variance can collapse
+# because all steps have similar value estimates. When std drops below this floor,
+# we clamp it to prevent normalization from amplifying noise into huge gradients.
+# Typical healthy std: 0.5-2.0; below 0.1 indicates a degenerate batch.
+ADVANTAGE_STD_FLOOR: float = 0.1
 
 # Value function loss coefficient in combined PPO loss.
 # 1.0 gives critic equal weight with policy, important when value head
@@ -174,6 +187,68 @@ DEFAULT_ENTROPY_COEF_MIN = 0.01
 # - Warning: Policy is converging, may need entropy boost (<30% of max)
 DEFAULT_ENTROPY_COLLAPSE_THRESHOLD = 0.1
 DEFAULT_ENTROPY_WARNING_THRESHOLD = 0.3
+
+# Per-head entropy floor targets (normalized entropy, 0-1 scale)
+# DRL Expert update (2026-01-11): Increased op floor from 0.25 to 0.30
+# to push further from collapse point. With 6 actions, 0.30 normalized
+# means minimum ~52% of maximum entropy - enough to maintain exploration.
+ENTROPY_FLOOR_PER_HEAD: dict[str, float] = {
+    "op": 0.30,           # INCREASED from 0.25 - push further from collapse
+    "slot": 0.15,
+    "blueprint": 0.20,    # INCREASED from 0.15 - needs room to explore
+    "style": 0.15,
+    "tempo": 0.20,        # INCREASED from 0.15 - needs room to explore
+    "alpha_target": 0.10,
+    "alpha_speed": 0.10,
+    "alpha_curve": 0.10,
+}
+
+# Per-head entropy collapse thresholds (stricter than floor for detection)
+# Entropy below this triggers anomaly detection
+ENTROPY_COLLAPSE_PER_HEAD: dict[str, float] = {
+    "op": 0.08,
+    "slot": 0.10,
+    "blueprint": 0.05,  # Lower threshold but still detect collapse
+    "style": 0.08,
+    "tempo": 0.05,
+    "alpha_target": 0.08,
+    "alpha_speed": 0.08,
+    "alpha_curve": 0.08,
+}
+
+# Per-head entropy floor penalty coefficients
+# DRL Expert update (2026-01-11): Increased op from 0.2 to 0.3, blueprint/tempo to 0.3
+# Sparse heads need stronger penalty to overcome gradient starvation.
+# Op head is critical - collapse there cascades to all other heads.
+ENTROPY_FLOOR_PENALTY_COEF: dict[str, float] = {
+    "op": 0.3,            # INCREASED from 0.2 - critical head, stronger enforcement
+    "slot": 0.1,
+    "blueprint": 0.3,     # INCREASED from 0.1 - sparse head needs strong penalty
+    "style": 0.1,
+    "tempo": 0.3,         # INCREASED from 0.1 - sparse head needs strong penalty
+    "alpha_target": 0.1,
+    "alpha_speed": 0.1,
+    "alpha_curve": 0.1,
+}
+
+# Per-head probability floor (guarantees minimum exploration mass)
+# These are HARD floors enforced in MaskedCategorical - probabilities are
+# clamped and renormalized, ensuring gradients can always flow.
+#
+# DRL Expert diagnosis (2026-01-11): Op head collapse to WAIT is the root cause.
+# When op chooses WAIT, sparse heads (blueprint, tempo) receive no gradients.
+# AGGRESSIVE FLOORS: Previous 8% floor was insufficient - runs still collapsed
+# to 99.9% WAIT within 24 batches. Increased to 15% op floor.
+PROBABILITY_FLOOR_PER_HEAD: dict[str, float] = {
+    "op": 0.15,           # INCREASED from 0.08 - guarantees ~15% non-WAIT exploration
+    "slot": 0.05,         # Increased from 0.03 for more exploration
+    "blueprint": 0.12,    # GERMINATE only (~5%) - needs high floor when active
+    "style": 0.08,        # GERMINATE + SET_ALPHA_TARGET (~7%)
+    "tempo": 0.12,        # GERMINATE only (~5%) - needs high floor when active
+    "alpha_target": 0.08, # GERMINATE + SET_ALPHA_TARGET (~7%)
+    "alpha_speed": 0.06,  # SET_ALPHA_TARGET + PRUNE (~7%)
+    "alpha_curve": 0.06,  # SET_ALPHA_TARGET + PRUNE (~7%)
+}
 
 # M21: PPO ratio anomaly detection thresholds.
 # ratio = exp(new_log_prob - old_log_prob). Healthy ratio is close to 1.0.
@@ -531,9 +606,15 @@ DEFAULT_BLUEPRINT_PENALTY_THRESHOLD = 3.0
 # Seeds must show this much improvement before advancing.
 DEFAULT_MIN_TRAINING_IMPROVEMENT = 0.5
 
-# Minimum epochs in BLENDING stage before advancement allowed.
-# Ensures seed has time to demonstrate stable blending.
-DEFAULT_MIN_BLENDING_EPOCHS = 3
+# Minimum epochs in TRAINING stage before advancement to BLENDING allowed.
+# Ensures seed has time to exit the "initial chaos" phase of training.
+# PyTorch expert recommendation: 10-20 epochs for gradient stability.
+DEFAULT_MIN_BLENDING_EPOCHS = 10
+
+# Minimum gradient health (0-1) for safe blending (G2 gate, permissive mode).
+# Seeds with gradient health below this threshold may destabilize the host.
+# PyTorch expert recommendation: >= 0.7 for safety.
+DEFAULT_MIN_GRADIENT_HEALTH_FOR_BLENDING = 0.7
 
 # Alpha threshold for considering blending "complete" (G3 gate).
 # Seeds must reach this alpha level to be considered fully blended.
@@ -667,7 +748,7 @@ from esper.leyline.types import (
 # Causal masks for credit assignment (used by PPO + Karn UI)
 # NOTE: Lazy-loaded to avoid torch import at module level.
 # Access via module attribute (e.g., leyline.compute_causal_masks) or explicit import.
-_CAUSAL_MASK_EXPORTS = ("compute_causal_masks", "HEAD_RELEVANCE_BY_OP", "is_head_relevant")
+_CAUSAL_MASK_EXPORTS = ("compute_causal_masks", "compute_availability_masks", "HEAD_RELEVANCE_BY_OP", "is_head_relevant")
 
 # Host protocol (Train Anything principle - ROADMAP #5)
 from esper.leyline.host_protocol import HostProtocol
@@ -724,6 +805,7 @@ __all__ = [
     "DEFAULT_LEARNING_RATE",
     "DEFAULT_CLIP_RATIO",
     "DEFAULT_GAE_LAMBDA",
+    "ADVANTAGE_STD_FLOOR",
     "DEFAULT_VALUE_COEF",
     "DEFAULT_MAX_GRAD_NORM",
     "DEFAULT_N_PPO_EPOCHS",
@@ -732,6 +814,10 @@ __all__ = [
     "DEFAULT_ENTROPY_COEF_MIN",
     "DEFAULT_ENTROPY_COLLAPSE_THRESHOLD",
     "DEFAULT_ENTROPY_WARNING_THRESHOLD",
+    "ENTROPY_FLOOR_PER_HEAD",
+    "ENTROPY_COLLAPSE_PER_HEAD",
+    "ENTROPY_FLOOR_PENALTY_COEF",
+    "PROBABILITY_FLOOR_PER_HEAD",
     "DEFAULT_RATIO_EXPLOSION_THRESHOLD",
     "DEFAULT_RATIO_COLLAPSE_THRESHOLD",
 
@@ -760,6 +846,7 @@ __all__ = [
     "HEAD_RELEVANCE_BY_OP",
     "is_head_relevant",
     "compute_causal_masks",
+    "compute_availability_masks",
     "LifecycleOp",
     "MASKED_LOGIT_VALUE",
     "NUM_ALPHA_CURVES",
@@ -860,6 +947,7 @@ __all__ = [
     # Lifecycle Gate Thresholds (QualityGates)
     "DEFAULT_MIN_TRAINING_IMPROVEMENT",
     "DEFAULT_MIN_BLENDING_EPOCHS",
+    "DEFAULT_MIN_GRADIENT_HEALTH_FOR_BLENDING",
     "DEFAULT_ALPHA_COMPLETE_THRESHOLD",
     "DEFAULT_MAX_PROBATION_EPOCHS",
 
@@ -1004,11 +1092,13 @@ def __getattr__(name: str) -> Any:
     if name in _CAUSAL_MASK_EXPORTS:
         from esper.leyline.causal_masks import (
             compute_causal_masks,
+            compute_availability_masks,
             HEAD_RELEVANCE_BY_OP,
             is_head_relevant,
         )
         # Cache in module globals for subsequent access
         globals()["compute_causal_masks"] = compute_causal_masks
+        globals()["compute_availability_masks"] = compute_availability_masks
         globals()["HEAD_RELEVANCE_BY_OP"] = HEAD_RELEVANCE_BY_OP
         globals()["is_head_relevant"] = is_head_relevant
         return globals()[name]

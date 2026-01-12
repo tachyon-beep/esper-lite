@@ -159,6 +159,23 @@ def _calculate_entropy_anneal_steps(
     return batches_for_anneal * updates_per_batch
 
 
+def _calculate_value_warmup_steps(
+    value_warmup_batches: int,
+    ppo_updates_per_batch: int,
+) -> int:
+    """Convert batch-based value warmup to PPO update steps.
+
+    Value warmup starts the critic with a low coefficient (e.g., 0.1 * target) and
+    ramps up over the warmup period. This prevents critic collapse when early
+    returns have low variance (before policy discovers high-value strategies).
+
+    Expressed in batches (not episodes) so it scales correctly with n_envs.
+    """
+    if value_warmup_batches <= 0:
+        return 0
+    return value_warmup_batches * max(1, ppo_updates_per_batch)
+
+
 def _aggregate_ppo_metrics(update_metrics: list[PPOUpdateMetrics]) -> dict[str, Any]:
     """Aggregate metrics across multiple PPO updates for a single batch."""
     if not update_metrics:
@@ -437,6 +454,10 @@ def train_ppo_vectorized(
     entropy_coef_end: float | None = None,
     entropy_coef_min: float = DEFAULT_ENTROPY_COEF_MIN,  # From leyline
     entropy_anneal_episodes: int = 0,
+    entropy_coef_per_head: dict[str, float] | None = None,  # Per-head multipliers
+    value_coef: float = 0.5,  # Value loss coefficient (lower reduces critic dominance)
+    value_warmup_batches: int = 0,  # Batches to ramp up value_coef (0 = no warmup)
+    value_coef_start: float | None = None,  # Starting value_coef (default: 0.1 * value_coef)
     gamma: float = DEFAULT_GAMMA,
     gae_lambda: float = DEFAULT_GAE_LAMBDA,  # From leyline
     ppo_updates_per_batch: int = 1,
@@ -467,6 +488,7 @@ def train_ppo_vectorized(
     param_penalty_weight: float = 0.1,
     sparse_reward_scale: float = 1.0,
     rent_host_params_floor: int = 200,
+    basic_acc_delta_weight: float = 5.0,
     reward_family: str = "contribution",
     permissive_gates: bool = True,
     auto_forward_g1: bool = False,
@@ -665,6 +687,7 @@ def train_ppo_vectorized(
         param_penalty_weight=param_penalty_weight,
         sparse_reward_scale=sparse_reward_scale,
         rent_host_params_floor=rent_host_params_floor,
+        basic_acc_delta_weight=basic_acc_delta_weight,
         disable_pbrs=disable_pbrs,
         disable_terminal_reward=disable_terminal_reward,
         disable_anti_gaming=disable_anti_gaming,
@@ -759,11 +782,18 @@ def train_ppo_vectorized(
         ppo_updates_per_batch=ppo_updates_per_batch,
     )
 
+    # Convert batch-based value warmup to step-based
+    value_warmup_steps = _calculate_value_warmup_steps(
+        value_warmup_batches=value_warmup_batches,
+        ppo_updates_per_batch=ppo_updates_per_batch,
+    )
+
     # Create per-environment emitters for consolidated telemetry logic
     emitters = [
         VectorizedEmitter(
             env_id=i,
             device=env_device_map[i],
+            group_id=group_id,
             hub=hub,
             telemetry_config=telemetry_config,
             quiet_analytics=quiet_analytics,
@@ -855,6 +885,10 @@ def train_ppo_vectorized(
             entropy_coef_end=entropy_coef_end,
             entropy_coef_min=entropy_coef_min,
             entropy_anneal_steps=entropy_anneal_steps,
+            entropy_coef_per_head=entropy_coef_per_head,
+            value_coef=value_coef,
+            value_coef_start=value_coef_start,
+            value_warmup_steps=value_warmup_steps,
             device=device,
             chunk_length=chunk_length,
             num_envs=n_envs,
@@ -1111,6 +1145,7 @@ def train_ppo_vectorized(
         telemetry_lifecycle_only=telemetry_lifecycle_only,
         hub=hub,
         signal_tracker_cls=SignalTracker,
+        group_id=group_id,
     )
 
     trainer = VectorizedPPOTrainer(

@@ -29,6 +29,7 @@ class PPOUpdateMetricsBuilder:
     finiteness_failures: list[FinitenessGateFailure]
     epochs_completed: int
     head_entropies: dict[str, list[torch.Tensor]]
+    conditional_head_entropies: dict[str, list[torch.Tensor]]  # Entropy only when head is causally relevant
     head_grad_norms: dict[str, list[torch.Tensor]]
     head_nan_detected: dict[str, bool]
     head_inf_detected: dict[str, bool]
@@ -53,6 +54,7 @@ class PPOUpdateMetricsBuilder:
             aggregated_result["policy_loss"] = nan
             aggregated_result["value_loss"] = nan
             aggregated_result["entropy"] = nan
+            aggregated_result["entropy_floor_penalty"] = nan
             aggregated_result["approx_kl"] = nan
             aggregated_result["clip_fraction"] = nan
             aggregated_result["explained_variance"] = nan
@@ -92,6 +94,15 @@ class PPOUpdateMetricsBuilder:
             if k == "ratio_diagnostic":
                 aggregated_result[k] = v[0]  # type: ignore[literal-required]
                 continue
+            # D5: Integer metrics - sum across batches
+            if k == "usable_actor_timesteps":
+                stacked = torch.stack(v)
+                aggregated_result[k] = int(stacked.sum().item())  # type: ignore[literal-required]
+                continue
+            # D5: Boolean metrics - any() across batches (True if any batch was floored)
+            if k == "advantage_std_floored":
+                aggregated_result[k] = any(t.item() for t in v)  # type: ignore[literal-required]
+                continue
 
             stacked = torch.stack(v)
             if k in ("ratio_max", "value_max", "pre_clip_grad_norm"):
@@ -103,6 +114,12 @@ class PPOUpdateMetricsBuilder:
 
         aggregated_result["head_entropies"] = {
             key: [val.item() for val in values] for key, values in self.head_entropies.items()
+        }
+        # Conditional entropy: entropy only when head is causally relevant (>1 valid action)
+        # This is the true exploration signal for sparse heads like blueprint/tempo
+        aggregated_result["conditional_head_entropies"] = {
+            key: [val.item() for val in values]
+            for key, values in self.conditional_head_entropies.items()
         }
         aggregated_result["head_grad_norms"] = {
             key: [val.item() for val in values] for key, values in self.head_grad_norms.items()

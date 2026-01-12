@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, DefaultDict, cast
 import torch
 
 from esper.leyline import LifecycleOp, SeedSlotProtocol
+from esper.simic.rewards import FossilizedSeedDripState
 
 if TYPE_CHECKING:
     from torch.amp.grad_scaler import GradScaler
@@ -25,6 +26,8 @@ if TYPE_CHECKING:
     from esper.kasmina.host import MorphogeneticModel
     from esper.tamiyo.tracker import SignalTracker
     from esper.leyline import TelemetryCallback
+    from esper.utils.data import AugmentationBuffers
+    from esper.simic.training.env_factory import EpisodeContext
 
 
 @dataclass(slots=True)
@@ -45,10 +48,14 @@ class ParallelEnvState:
     env_device: str = "cpu"  # Device this env runs on
     stream: torch.cuda.Stream | None = None  # CUDA stream for async execution
     augment_generator: torch.Generator | None = None  # RNG for GPU augmentations
+    augment_buffers: "AugmentationBuffers | None" = None  # Pre-allocated buffers for GPU augmentation
     scaler: "GradScaler | None" = None  # Per-env AMP scaler for FP16 mixed precision
     seeds_created: int = 0
     seeds_fossilized: int = 0  # Total seeds fossilized this episode
     contributing_fossilized: int = 0  # Seeds with total_improvement >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
+    # Episode context for telemetry (mutable holder shared with telemetry_cb closure)
+    # Training loop updates episode_context.episode_idx at episode start
+    episode_context: "EpisodeContext | None" = None
     # Action counters for episode diagnostics (TELE-610)
     germinate_count: int = 0
     prune_count: int = 0
@@ -107,6 +114,13 @@ class ParallelEnvState:
     # Pre-computed autocast decision for hot path performance
     # Avoids repeated device type checks and amp flag evaluation per batch
     autocast_enabled: bool = False
+
+    # === Post-Fossilization Drip Reward (BASIC_PLUS mode) ===
+    # Tracks FossilizedSeedDripState for each fossilized seed.
+    # Drip provides post-fossilization accountability: if a fossilized seed degrades
+    # after fossilization, drip becomes negative (penalty).
+    # DRL Expert review 2026-01-12: Per-epoch counterfactual is the correct signal.
+    fossilized_drip_states: list[FossilizedSeedDripState] = field(default_factory=list)
 
     # === Obs V3 Action Feedback (Phase 2a½) ===
     # last_action_success: True = no prior action to fail (first step has none)
@@ -230,6 +244,8 @@ class ParallelEnvState:
         self.gradient_ratio_ema = {slot_id: 0.0 for slot_id in slots}
         self.scaffold_boost_ledger.clear()
         self.pending_hindsight_credit = 0.0
+        # Clear drip states on episode reset (BASIC_PLUS mode accountability)
+        self.fossilized_drip_states.clear()
 
         # Reset Obs V3 action feedback (Phase 2a½)
         self.last_action_success = True  # No prior action to fail

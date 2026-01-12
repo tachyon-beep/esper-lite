@@ -40,6 +40,30 @@ As of the current “Tamiyo Next” baseline, the RL-controlled stack supports l
 
 ---
 
+## 📚 Terminology: Nested Training Loops
+
+Esper uses PPO to control *another neural network's training process*—an unusual meta-learning setup that creates terminology overlap. Here's how the nested loops work:
+
+```
+Outer loop: 200 batches (PPO updates)
+├── Each batch: n_envs environments run in parallel
+│   └── Each environment: 1 episode = 150 steps
+│       └── Each step: host trains 1 epoch, Tamiyo takes 1 action
+└── After batch completes: PPO update on collected trajectories
+```
+
+| Term | Meaning |
+|------|---------|
+| **Episode** | One complete host training run (e.g., 150 steps). The RL trajectory. |
+| **Step** | One policy decision point. Tamiyo observes host state and chooses an action (WAIT, GERMINATE, PRUNE, etc.). |
+| **Batch** | Collection of parallel episodes used for one PPO update. With `n_envs=10`, one batch = 10 episodes. |
+| **Host epoch** | One training iteration of the host neural network (domain term, not RL term). |
+
+> **Why the confusion?** In standard RL, "step" is unambiguous (one game frame, one physics tick). Here, each RL step is synchronized with one host training epoch—the "environment" is literally a neural network mid-training. So: *"At step 75 of episode 3, the host finished its 75th training epoch and Tamiyo decided to GERMINATE."*
+
+---
+
+## ⚡ Quick Start
 ## Key ideas
 
 ### Seed lifecycle (Kasmina)
@@ -76,6 +100,9 @@ Telemetry is treated like a contract:
 
 ---
 
+## 🛠️ Development
+
+**Project Structure:**
 ## Quick start
 
 ### Installation
@@ -207,6 +234,33 @@ Run tests:
 uv run pytest -q
 ```
 
+#### Reward Configuration
+
+| Parameter              | Default          | Description                                                                   |
+| ---------------------- | ---------------- | ----------------------------------------------------------------------------- |
+| `reward_mode`          | `"shaped"`       | Reward signal strategy (see modes below)                                      |
+| `reward_family`        | `"contribution"` | `"contribution"` (counterfactual) or `"loss"` (direct loss delta)             |
+| `param_budget`         | `500000`         | Parameter budget for seeds (penalty if exceeded)                              |
+| `param_penalty_weight` | `0.1`            | Weight of parameter budget penalty in reward                                  |
+| `rent_host_params_floor` | `200`          | Host-size normalization floor for rent/alpha-shock (prevents tiny hosts being crushed) |
+
+**Reward Modes:**
+
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| `shaped` | 7-component dense signals (PBRS + attribution + rent + warnings) | Default; rich feedback but potential Goodhart risk |
+| `simplified` | 3-component (PBRS + intervention cost + terminal bonus) | Cleaner gradients for temporal credit assignment |
+| `basic` | Minimal viable reward: contribution + rent | Baseline for ablation |
+| `basic_plus` | BASIC + post-fossilization drip accountability | Prevents early-fossilization gaming |
+| `sparse` | Terminal-only: final accuracy minus rent | Hard mode; theoretically perfect alignment |
+| `minimal` | Sparse + early-cull penalty | Penalises wasted compute |
+| `escrow` | Delayed attribution via escrow accounts | Experimental |
+
+> **Drip Mechanism (BASIC_PLUS):** After a seed fossilizes, rewards continue to "drip" based on ongoing contribution. Controlled by `drip_fraction` (default 0.7 = 70% drip, 30% immediate). Prevents gaming where seeds are fossilized to lock in short-term gains before regression.
+
+#### A/B Testing (True)
+
+Use `--dual-ab` to train separate policies on separate GPUs (e.g. `shaped-vs-simplified`).
 Project structure:
 
 ```text

@@ -63,6 +63,60 @@ def compute_causal_masks(op_actions: torch.Tensor) -> dict[str, torch.Tensor]:
     }
 
 
+def compute_availability_masks(op_masks: torch.Tensor) -> dict[str, torch.Tensor]:
+    """Compute availability masks - which heads COULD HAVE mattered.
+
+    Unlike causal masks (which check what action was taken), availability masks
+    check what actions were VALID. This is critical for entropy regularization:
+    - Causal masks: Use for policy gradient (credit assignment for taken actions)
+    - Availability masks: Use for entropy regularization (maintain exploration
+      for heads that could have been relevant)
+
+    DRL Expert recommendation (2026-01): Use availability masks for entropy floor
+    penalty to prevent sparse head collapse. When blueprint is only regularized
+    on timesteps where GERMINATE was chosen (causal), the head collapses once
+    the agent stops exploring GERMINATE. Using availability masks regularizes
+    blueprint whenever GERMINATE was an option.
+
+    Args:
+        op_masks: Boolean tensor [batch, NUM_OPS] indicating which ops were valid.
+                  op_masks[:, LifecycleOp.GERMINATE] = True when GERMINATE was valid.
+
+    Returns:
+        Dict mapping head names to boolean masks indicating availability.
+        True = head could have affected the outcome (action was valid).
+    """
+    # Which ops were valid at each timestep
+    germinate_valid = op_masks[:, LifecycleOp.GERMINATE]
+    set_alpha_valid = op_masks[:, LifecycleOp.SET_ALPHA_TARGET]
+    prune_valid = op_masks[:, LifecycleOp.PRUNE]
+    wait_valid = op_masks[:, LifecycleOp.WAIT]
+
+    # Any non-WAIT op valid means slot head could matter
+    # (WAIT doesn't require slot selection)
+    any_non_wait_valid = (
+        germinate_valid
+        | set_alpha_valid
+        | prune_valid
+        | op_masks[:, LifecycleOp.FOSSILIZE]
+        | op_masks[:, LifecycleOp.ADVANCE]
+    )
+
+    # alpha_speed and alpha_curve share identical availability
+    alpha_schedule_available = set_alpha_valid | prune_valid
+
+    return {
+        "op": torch.ones_like(wait_valid),        # Always available (op is always relevant)
+        "slot": any_non_wait_valid,               # Any non-WAIT op valid
+        "blueprint": germinate_valid,             # GERMINATE valid
+        "style": germinate_valid | set_alpha_valid,
+        "tempo": germinate_valid,                 # GERMINATE valid
+        "alpha_target": germinate_valid | set_alpha_valid,
+        "alpha_speed": alpha_schedule_available,  # SET_ALPHA_TARGET or PRUNE valid
+        "alpha_curve": alpha_schedule_available,  # SET_ALPHA_TARGET or PRUNE valid
+    }
+
+
 # =============================================================================
 # Static Relevance Lookup (for UI - no tensor operations needed)
 # =============================================================================
@@ -99,4 +153,4 @@ def is_head_relevant(op_name: str, head_name: str) -> bool:
     return head_name.lower() in relevant_heads
 
 
-__all__ = ["compute_causal_masks", "HEAD_RELEVANCE_BY_OP", "is_head_relevant"]
+__all__ = ["compute_causal_masks", "compute_availability_masks", "HEAD_RELEVANCE_BY_OP", "is_head_relevant"]

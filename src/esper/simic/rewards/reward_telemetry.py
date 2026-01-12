@@ -7,6 +7,10 @@ for diagnosing reward hacking and tuning reward weights.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from esper.simic.rewards.contribution import FossilizedSeedDripState
 
 
 @dataclass(slots=True)
@@ -51,6 +55,22 @@ class RewardComponentsTelemetry:
     hindsight_credit: float = 0.0  # Scaffold contribution credit applied at fossilization
     num_fossilized_seeds: int = 0  # Total fossilized seeds for debugging
     num_contributing_fossilized: int = 0  # Seeds with total_improvement >= MIN_FOSSILIZE_CONTRIBUTION
+
+    # D2: Capacity Economics (slot saturation prevention)
+    occupancy_rent: float = 0.0  # Per-epoch cost for seeds above free_slots threshold
+    fossilized_rent: float = 0.0  # Per-epoch maintenance cost for fossilized seeds
+    first_germinate_bonus: float = 0.0  # One-time bonus for first germination (breaks "do nothing" symmetry)
+    n_active_seeds: int = 0  # Count of active seeds (for diagnostics)
+
+    # D3: Anti-Timing-Gaming (early germination discount)
+    timing_discount: float = 1.0  # Discount factor for early germination [discount_floor, 1.0]
+
+    # Drip reward (BASIC_PLUS mode post-fossilization accountability)
+    drip_this_epoch: float = 0.0  # Sum of drip payouts from all fossilized seeds this epoch
+    drip_immediate_bonus: float = 0.0  # 30% portion paid on FOSSILIZE
+    drip_deferred_total: float = 0.0  # 70% pool created this epoch (on FOSSILIZE)
+    num_drip_sources: int = 0  # Number of fossilized seeds contributing drip
+    new_drip_state: "FossilizedSeedDripState | None" = None  # Created when FOSSILIZE occurs (caller collects)
 
     # Context (for debugging) - DRL Expert recommended fields
     action_name: str = ""
@@ -105,6 +125,10 @@ class RewardComponentsTelemetry:
             + self.holding_warning
             + self.ratio_penalty
             + self.escrow_forfeit
+            # D2: Capacity economics (shaping terms)
+            - self.occupancy_rent  # Already negative in reward, store as positive
+            - self.fossilized_rent  # Already negative in reward, store as positive
+            + self.first_germinate_bonus
         )
         return abs(shaped) / abs(self.total_reward)
 
@@ -150,6 +174,18 @@ class RewardComponentsTelemetry:
             "growth_ratio": self.growth_ratio,
             "total_reward": self.total_reward,
             "shaped_reward_ratio": self.shaped_reward_ratio,
+            # D2: Capacity economics
+            "occupancy_rent": self.occupancy_rent,
+            "fossilized_rent": self.fossilized_rent,
+            "first_germinate_bonus": self.first_germinate_bonus,
+            "n_active_seeds": self.n_active_seeds,
+            # D3: Anti-timing-gaming
+            "timing_discount": self.timing_discount,
+            # Drip reward (BASIC_PLUS mode)
+            "drip_this_epoch": self.drip_this_epoch,
+            "drip_immediate_bonus": self.drip_immediate_bonus,
+            "drip_deferred_total": self.drip_deferred_total,
+            "num_drip_sources": self.num_drip_sources,
         }
 
     @classmethod
@@ -201,6 +237,18 @@ class RewardComponentsTelemetry:
             host_baseline_acc=float(data["host_baseline_acc"]) if data["host_baseline_acc"] is not None else None,
             growth_ratio=float(data["growth_ratio"]),  # type: ignore[arg-type]
             total_reward=float(data["total_reward"]),  # type: ignore[arg-type]
+            # D2: Capacity economics
+            occupancy_rent=float(data.get("occupancy_rent", 0.0)),  # type: ignore[arg-type]
+            fossilized_rent=float(data.get("fossilized_rent", 0.0)),  # type: ignore[arg-type]
+            first_germinate_bonus=float(data.get("first_germinate_bonus", 0.0)),  # type: ignore[arg-type]
+            n_active_seeds=int(data.get("n_active_seeds", 0)),  # type: ignore[arg-type]
+            # D3: Anti-timing-gaming
+            timing_discount=float(data.get("timing_discount", 1.0)),  # type: ignore[arg-type]
+            # Drip reward (BASIC_PLUS mode)
+            drip_this_epoch=float(data.get("drip_this_epoch", 0.0)),  # type: ignore[arg-type]
+            drip_immediate_bonus=float(data.get("drip_immediate_bonus", 0.0)),  # type: ignore[arg-type]
+            drip_deferred_total=float(data.get("drip_deferred_total", 0.0)),  # type: ignore[arg-type]
+            num_drip_sources=int(data.get("num_drip_sources", 0)),  # type: ignore[arg-type]
         )
 
 

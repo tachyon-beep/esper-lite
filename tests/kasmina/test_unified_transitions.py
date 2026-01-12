@@ -2,6 +2,7 @@
 
 
 from esper.kasmina.slot import SeedSlot
+from esper.leyline import DEFAULT_MIN_BLENDING_EPOCHS
 from esper.leyline.stages import SeedStage
 from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
 from esper.tamiyo.policy.features import TaskConfig
@@ -134,8 +135,8 @@ class TestUnifiedTransitions:
         assert slot.alpha_schedule is not None
 
         # Simulate blending completion
-        # Need to record some epochs in BLENDING stage to pass G3 gate min_blending_epochs check
-        for _ in range(5):
+        # Need to record epochs in BLENDING stage to pass G3 gate min_blending_epochs check
+        for _ in range(DEFAULT_MIN_BLENDING_EPOCHS):
             slot.state.metrics.record_accuracy(slot.state.metrics.current_val_accuracy)
         slot.set_alpha(1.0)
         slot.state.alpha_controller.alpha_mode = AlphaMode.HOLD

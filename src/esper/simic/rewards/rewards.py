@@ -12,6 +12,7 @@ from typing import cast
 from esper.leyline import DEFAULT_GAMMA
 from .contribution import (
     ContributionRewardConfig,
+    FossilizedSeedDripState,
     RewardMode,
     compute_basic_reward,
     compute_contribution_reward,
@@ -84,6 +85,9 @@ def compute_reward(
             alpha_delta_sq_sum=inputs.alpha_delta_sq_sum,
             stable_val_acc=inputs.stable_val_acc,
             escrow_credit_prev=inputs.escrow_credit_prev,
+            # D2: Capacity Economics (slot saturation prevention)
+            n_active_seeds=inputs.n_active_seeds,
+            seeds_germinated_this_episode=inputs.seeds_germinated_this_episode,
         )
 
     if config.reward_mode == RewardMode.SPARSE:
@@ -111,13 +115,31 @@ def compute_reward(
             config=config,
         )
 
-    elif config.reward_mode == RewardMode.BASIC:
-        reward, rent_penalty, growth_ratio = compute_basic_reward(
+    elif config.reward_mode in (RewardMode.BASIC, RewardMode.BASIC_PLUS):
+        (
+            reward,
+            rent_penalty,
+            growth_ratio,
+            pbrs_bonus,
+            fossilize_bonus,
+            new_drip_state,
+            drip_this_epoch,
+        ) = compute_basic_reward(
             acc_delta=inputs.acc_delta,
             effective_seed_params=inputs.effective_seed_params,
             total_params=inputs.total_params,
             host_params=inputs.host_params,
             config=config,
+            epoch=inputs.epoch,
+            max_epochs=inputs.max_epochs,
+            seed_info=inputs.seed_info,
+            action=inputs.action,
+            seed_contribution=inputs.seed_contribution,
+            # Pass drip parameters
+            seed_id=inputs.seed_id,
+            slot_id=inputs.slot_id,
+            fossilized_drip_states=inputs.fossilized_drip_states,
+            fossilized_contributions=inputs.fossilized_contributions,
         )
         if inputs.return_components:
             components = RewardComponentsTelemetry()
@@ -129,6 +151,12 @@ def compute_reward(
             components.base_acc_delta = inputs.acc_delta
             components.compute_rent = -rent_penalty
             components.growth_ratio = growth_ratio
+            components.pbrs_bonus = pbrs_bonus
+            components.fossilize_terminal_bonus = fossilize_bonus
+            # Drip telemetry (expanded in BASIC_PLUS mode)
+            components.drip_this_epoch = drip_this_epoch
+            # Pass new_drip_state to caller for collection (created on FOSSILIZE)
+            components.new_drip_state = new_drip_state
             return reward, components
 
     elif config.reward_mode == RewardMode.SIMPLIFIED:
@@ -178,6 +206,7 @@ def compute_reward_for_family(
 
 __all__ = [
     "ContributionRewardConfig",
+    "FossilizedSeedDripState",
     "RewardMode",
     "RewardFamily",
     "SeedInfo",

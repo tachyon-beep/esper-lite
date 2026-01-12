@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from esper.simic.control import ValueNormalizer
 
 from esper.leyline import (
+    ADVANTAGE_STD_FLOOR,
     DEFAULT_GAMMA,
     DEFAULT_LSTM_HIDDEN_DIM,
     AlphaTargetAction,
@@ -170,6 +171,16 @@ class TamiyoRolloutBuffer:
     returns: torch.Tensor = field(init=False)
     td_errors: torch.Tensor = field(init=False)
 
+    # D5: Forced-step tracking for slot saturation diagnostics
+    forced_actions: torch.Tensor = field(init=False)
+
+    # Phase 2.1: Auxiliary supervision targets for contribution prediction
+    # Ground truth from counterfactual measurements (stored at measurement timesteps only)
+    # DRL Expert: Only valid at timesteps where has_fresh_contribution=True
+    contribution_targets: torch.Tensor = field(init=False)  # [num_envs, max_steps, num_slots]
+    contribution_mask: torch.Tensor = field(init=False)  # [num_envs, max_steps, num_slots] bool - active slots
+    has_fresh_contribution: torch.Tensor = field(init=False)  # [num_envs, max_steps] bool - measurement timesteps
+
     # Episode boundary tracking
     _current_episode_start: dict[int, int] = field(default_factory=dict, init=False)
     episode_boundaries: dict[int, list[tuple[int, int]]] = field(
@@ -273,6 +284,16 @@ class TamiyoRolloutBuffer:
         self.returns = torch.zeros(n, m, device=device)
         self.td_errors = torch.zeros(n, m, device=device)
 
+        # D5: Track forced steps (where agent has no choice - only WAIT valid)
+        self.forced_actions = torch.zeros(n, m, dtype=torch.bool, device=device)
+
+        # Phase 2.1: Auxiliary supervision targets for contribution prediction
+        # Ground truth from counterfactual - only valid at measurement timesteps
+        # DRL Expert: has_fresh_contribution=True ONLY at counterfactual measurement timesteps
+        self.contribution_targets = torch.zeros(n, m, self.num_slots, device=device)
+        self.contribution_mask = torch.zeros(n, m, self.num_slots, dtype=torch.bool, device=device)
+        self.has_fresh_contribution = torch.zeros(n, m, dtype=torch.bool, device=device)
+
     def start_episode(self, env_id: int) -> None:
         """Mark start of a new episode for an environment."""
         self._current_episode_start[env_id] = self.step_counts[env_id]
@@ -325,6 +346,11 @@ class TamiyoRolloutBuffer:
         hidden_c: torch.Tensor,
         truncated: bool = False,
         bootstrap_value: float | torch.Tensor = 0.0,
+        forced_step: bool = False,
+        # Phase 2.1: Auxiliary supervision for contribution prediction
+        contribution_targets: torch.Tensor | None = None,  # [num_slots] ground truth per slot
+        contribution_mask: torch.Tensor | None = None,  # [num_slots] bool - which slots active
+        has_fresh_contribution: bool = False,  # True only at counterfactual measurement timesteps
     ) -> None:
         """Add a transition for a specific environment.
 
@@ -334,6 +360,12 @@ class TamiyoRolloutBuffer:
             env_id: Environment index
             state: State features [state_dim]
             blueprint_indices: Blueprint indices per slot [num_slots]
+            contribution_targets: Ground truth contributions per slot [num_slots].
+                Only valid when has_fresh_contribution=True.
+            contribution_mask: Boolean mask indicating which slots are active [num_slots].
+                Only valid when has_fresh_contribution=True.
+            has_fresh_contribution: True ONLY at counterfactual measurement timesteps.
+                Do NOT propagate stale contributions to non-measurement timesteps.
             ...: Other transition data
         """
         step_idx = self.step_counts[env_id]
@@ -387,6 +419,19 @@ class TamiyoRolloutBuffer:
         # Squeeze batch dim (dim=1) to get [num_layers, hidden_dim]
         self.hidden_h[env_id, step_idx] = hidden_h.detach().squeeze(1)
         self.hidden_c[env_id, step_idx] = hidden_c.detach().squeeze(1)
+
+        # D5: Track forced steps for slot saturation diagnostics
+        self.forced_actions[env_id, step_idx] = forced_step
+
+        # Phase 2.1: Store contribution targets for auxiliary supervision
+        # has_fresh_contribution marks timesteps with valid ground truth
+        self.has_fresh_contribution[env_id, step_idx] = has_fresh_contribution
+        if has_fresh_contribution:
+            # Only store targets at measurement timesteps
+            if contribution_targets is not None:
+                self.contribution_targets[env_id, step_idx] = contribution_targets.detach()
+            if contribution_mask is not None:
+                self.contribution_mask[env_id, step_idx] = contribution_mask.detach().bool()
 
         self.step_counts[env_id] = step_idx + 1
 
@@ -494,7 +539,7 @@ class TamiyoRolloutBuffer:
         # P2 FIX: New advantages computed - they need normalization
         self._advantages_normalized = False
 
-    def normalize_advantages(self) -> tuple[float, float]:
+    def normalize_advantages(self) -> tuple[float, float, bool]:
         """Normalize advantages globally across all environments.
 
         P2 FIX: Idempotent normalization - skips if already normalized.
@@ -504,12 +549,17 @@ class TamiyoRolloutBuffer:
         More importantly, this flag ensures we properly handle the case where
         GAE is recomputed between updates - new advantages WILL be normalized.
 
+        D4 FIX: Clamps std to ADVANTAGE_STD_FLOOR to prevent gradient amplification
+        when advantage variance collapses (e.g., during forced WAIT corridors).
+
         Returns:
-            Tuple of (pre_norm_mean, pre_norm_std) for telemetry diagnostics.
-            Returns (NaN, NaN) if already normalized or no advantages.
+            Tuple of (pre_norm_mean, pre_norm_std, std_floored):
+            - pre_norm_mean, pre_norm_std: For telemetry diagnostics
+            - std_floored: True if std was clamped to floor (signals degenerate batch)
+            Returns (NaN, NaN, False) if already normalized or no advantages.
         """
         if self._advantages_normalized:
-            return (float("nan"), float("nan"))  # Already normalized
+            return (float("nan"), float("nan"), False)  # Already normalized
 
         # Collect all valid advantages
         all_advantages = []
@@ -519,18 +569,22 @@ class TamiyoRolloutBuffer:
                 all_advantages.append(self.advantages[env_id, :num_steps])
 
         if not all_advantages:
-            return (float("nan"), float("nan"))
+            return (float("nan"), float("nan"), False)
 
         # Compute global stats
         all_adv = torch.cat(all_advantages)
         mean = all_adv.mean()
         # Use correction=0 to avoid NaNs for single-element tensors.
         # (Bessel correction is undefined for n=1.)
-        std = all_adv.std(correction=0)
+        raw_std = all_adv.std(correction=0)
 
         # Capture pre-normalization stats for telemetry
         pre_norm_mean = mean.item()
-        pre_norm_std = std.item()
+        pre_norm_std = raw_std.item()
+
+        # D4: Clamp std to floor to prevent gradient amplification in degenerate batches
+        std_floored = raw_std.item() < ADVANTAGE_STD_FLOOR
+        effective_std = raw_std.clamp(min=ADVANTAGE_STD_FLOOR)
 
         # Normalize in-place
         for env_id in range(self.num_envs):
@@ -538,12 +592,12 @@ class TamiyoRolloutBuffer:
             if num_steps > 0:
                 self.advantages[env_id, :num_steps] = (
                     self.advantages[env_id, :num_steps] - mean
-                ) / (std + 1e-8)
+                ) / (effective_std + 1e-8)
 
         # P2 FIX: Mark as normalized to prevent redundant re-normalization
         self._advantages_normalized = True
 
-        return (pre_norm_mean, pre_norm_std)
+        return (pre_norm_mean, pre_norm_std, std_floored)
 
     def get_batched_sequences(
         self,
@@ -607,6 +661,15 @@ class TamiyoRolloutBuffer:
             # LSTM expects [lstm_layers, batch, hidden_dim], so permute after slicing
             "initial_hidden_h": self.hidden_h[:, 0, :, :].permute(1, 0, 2).contiguous().to(device, non_blocking=nb),
             "initial_hidden_c": self.hidden_c[:, 0, :, :].permute(1, 0, 2).contiguous().to(device, non_blocking=nb),
+            # D5: Forced steps for slot saturation diagnostics
+            "forced_actions": self.forced_actions.to(device, non_blocking=nb),
+            # Phase 2.1: Auxiliary supervision for contribution prediction
+            # contribution_targets: [num_envs, max_steps, num_slots] ground truth per slot
+            # contribution_mask: [num_envs, max_steps, num_slots] bool - active slots
+            # has_fresh_contribution: [num_envs, max_steps] bool - measurement timesteps only
+            "contribution_targets": self.contribution_targets.to(device, non_blocking=nb),
+            "contribution_mask": self.contribution_mask.to(device, non_blocking=nb),
+            "has_fresh_contribution": self.has_fresh_contribution.to(device, non_blocking=nb),
         }
 
     def reset(self) -> None:

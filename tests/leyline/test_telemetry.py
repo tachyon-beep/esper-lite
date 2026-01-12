@@ -82,6 +82,7 @@ def test_epoch_completed_payload_accepts_null_observation_stats() -> None:
             "val_accuracy": 0.75,
             "val_loss": 0.42,
             "inner_epoch": 3,
+            "episode_idx": 0,  # REQUIRED: injected by emit_with_env_context
             "observation_stats": None,
         }
     )
@@ -176,6 +177,7 @@ def test_ppo_update_payload_from_dict_parses_new_fields():
         "clip_fraction": 0.15,
         "nan_grad_count": 0,
         "pre_clip_grad_norm": 4.5,
+        "entropy_loss": 0.0,  # REQUIRED: always emitted
         # Advantage stats (always emitted)
         "advantage_mean": 0.5,
         "advantage_std": 1.0,
@@ -486,6 +488,7 @@ def test_ppo_update_payload_from_dict_with_per_head_nan_inf_flags():
         "clip_fraction": 0.1,
         "nan_grad_count": 0,
         "pre_clip_grad_norm": 0.5,
+        "entropy_loss": 0.0,  # REQUIRED: always emitted
         # Advantage stats (always emitted)
         "advantage_mean": 0.0,
         "advantage_std": 1.0,
@@ -553,6 +556,7 @@ def test_ppo_update_payload_from_dict_with_q_values():
         "clip_fraction": 0.15,
         "nan_grad_count": 0,
         "pre_clip_grad_norm": 8.5,
+        "entropy_loss": 0.0,  # REQUIRED: always emitted
         # Advantage stats (always emitted)
         "advantage_mean": 0.3,
         "advantage_std": 0.8,

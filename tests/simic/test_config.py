@@ -254,3 +254,113 @@ class TestSlotsStringRejection:
         config = TrainingConfig(slots=("r0c0", "r0c1"))
         assert config.slots == ["r0c0", "r0c1"]
         assert isinstance(config.slots, list)
+
+
+class TestBasicAccDeltaWeight:
+    """Tests for basic_acc_delta_weight parameter wiring."""
+
+    def test_default_value(self):
+        """basic_acc_delta_weight should default to 5.0."""
+        config = TrainingConfig()
+        assert config.basic_acc_delta_weight == 5.0
+
+    def test_configurable_from_constructor(self):
+        """basic_acc_delta_weight should be configurable via constructor."""
+        config = TrainingConfig(basic_acc_delta_weight=10.0)
+        assert config.basic_acc_delta_weight == 10.0
+
+    def test_from_dict_parses_correctly(self):
+        """basic_acc_delta_weight should be parsed from dict/JSON."""
+        config = TrainingConfig.from_dict({"basic_acc_delta_weight": 3.5})
+        assert config.basic_acc_delta_weight == 3.5
+
+    def test_flows_to_train_kwargs(self):
+        """basic_acc_delta_weight should be included in to_train_kwargs()."""
+        config = TrainingConfig(basic_acc_delta_weight=7.5)
+        kwargs = config.to_train_kwargs()
+        assert "basic_acc_delta_weight" in kwargs
+        assert kwargs["basic_acc_delta_weight"] == 7.5
+
+    def test_roundtrip_serialization(self):
+        """basic_acc_delta_weight should survive to_dict/from_dict roundtrip."""
+        original = TrainingConfig(basic_acc_delta_weight=2.5)
+        loaded = TrainingConfig.from_dict(original.to_dict())
+        assert loaded.basic_acc_delta_weight == 2.5
+
+    def test_basic_reward_mode_with_custom_weight(self):
+        """BASIC reward mode should work with custom basic_acc_delta_weight."""
+        config = TrainingConfig(
+            reward_mode=RewardMode.BASIC,
+            basic_acc_delta_weight=8.0,
+        )
+        assert config.reward_mode == RewardMode.BASIC
+        assert config.basic_acc_delta_weight == 8.0
+        kwargs = config.to_train_kwargs()
+        assert kwargs["reward_mode"] == "basic"
+        assert kwargs["basic_acc_delta_weight"] == 8.0
+
+
+def test_basic_plus_reward_mode_exists() -> None:
+    """BASIC_PLUS reward mode is available."""
+    from esper.simic.rewards.contribution import RewardMode
+
+    assert hasattr(RewardMode, "BASIC_PLUS")
+    assert RewardMode.BASIC_PLUS.value == "basic_plus"
+
+
+def test_drip_config_fields_exist() -> None:
+    """ContributionRewardConfig has drip-related fields with correct defaults."""
+    from esper.simic.rewards.contribution import ContributionRewardConfig
+
+    config = ContributionRewardConfig()
+
+    # Core drip fields - default is 0.0 (disabled for BASIC mode)
+    assert hasattr(config, "drip_fraction")
+    assert config.drip_fraction == 0.0  # BASIC mode default: drip disabled
+
+    assert hasattr(config, "max_drip_per_epoch")
+    assert config.max_drip_per_epoch == 0.1
+
+    assert hasattr(config, "min_drip_epochs")
+    assert config.min_drip_epochs == 5
+
+    # Asymmetric clipping ratio
+    assert hasattr(config, "negative_drip_ratio")
+    assert config.negative_drip_ratio == 0.5  # -0.05 = -0.5 * 0.1
+
+
+def test_drip_config_validation() -> None:
+    """Drip configuration validates bounds."""
+    from esper.simic.rewards.contribution import ContributionRewardConfig
+    import pytest
+
+    # drip_fraction must be in [0, 1]
+    with pytest.raises(ValueError, match="drip_fraction"):
+        ContributionRewardConfig(drip_fraction=1.5)
+
+    with pytest.raises(ValueError, match="drip_fraction"):
+        ContributionRewardConfig(drip_fraction=-0.1)
+
+    # max_drip_per_epoch must be positive
+    with pytest.raises(ValueError, match="max_drip_per_epoch"):
+        ContributionRewardConfig(max_drip_per_epoch=0.0)
+
+
+def test_basic_plus_mode_enables_drip_by_default() -> None:
+    """BASIC_PLUS mode automatically sets drip_fraction=0.7."""
+    from esper.simic.rewards.contribution import ContributionRewardConfig, RewardMode
+
+    # BASIC mode: drip disabled
+    basic_config = ContributionRewardConfig(reward_mode=RewardMode.BASIC)
+    assert basic_config.drip_fraction == 0.0
+
+    # BASIC_PLUS mode: drip enabled automatically
+    basic_plus_config = ContributionRewardConfig(reward_mode=RewardMode.BASIC_PLUS)
+    assert basic_plus_config.drip_fraction == 0.7
+
+    # BASIC_PLUS with explicit drip_fraction: honor the explicit value
+    explicit_config = ContributionRewardConfig(
+        reward_mode=RewardMode.BASIC_PLUS,
+        drip_fraction=0.5,
+    )
+    assert explicit_config.drip_fraction == 0.5

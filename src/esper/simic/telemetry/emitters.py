@@ -60,6 +60,7 @@ class VectorizedEmitter:
         self,
         env_id: int,
         device: str,
+        group_id: str,
         hub: Any = None,
         telemetry_config: "TelemetryConfig | None" = None,
         quiet_analytics: bool = False,
@@ -67,8 +68,18 @@ class VectorizedEmitter:
         self.hub = hub or get_hub()
         self.env_id = env_id
         self.device = device
+        self.group_id = group_id
         self.telemetry_config = telemetry_config
         self.quiet_analytics = quiet_analytics
+        # Episode context - updated via set_episode_idx() at episode start
+        self.episode_idx: int | None = None
+
+    def set_episode_idx(self, episode_idx: int) -> None:
+        """Update episode index for subsequent events.
+
+        Called at the start of each episode by the training loop.
+        """
+        self.episode_idx = episode_idx
 
     def _should_emit(self, level: str = "ops_normal") -> bool:
         if self.hub is None:
@@ -78,10 +89,24 @@ class VectorizedEmitter:
         return self.telemetry_config.should_collect(level)
 
     def _emit(self, event: TelemetryEvent) -> None:
-        """Emit event with environment context injected."""
+        """Emit event with environment context injected.
+
+        Note: This mutates the event in-place. Callers should not reuse event objects
+        across multiple emitters. In practice, each emit site creates a fresh
+        TelemetryEvent, so this is safe.
+        """
         event.env_id = self.env_id  # type: ignore[attr-defined]
         event.device = self.device  # type: ignore[attr-defined]
+        event.group_id = self.group_id
         self.hub.emit(event)
+
+    def emit(self, event: TelemetryEvent) -> None:
+        """Public interface for emitting telemetry events with env context.
+
+        Use for ad-hoc events that don't have dedicated methods (e.g., GOVERNOR_ROLLBACK).
+        Injects env_id, device, and group_id into the event before emission.
+        """
+        self._emit(event)
 
     def on_epoch_completed(
         self,
@@ -122,6 +147,7 @@ class VectorizedEmitter:
             epoch=epoch,
             data=EpochCompletedPayload(
                 env_id=self.env_id,
+                episode_idx=self.episode_idx,
                 val_accuracy=env_state.val_acc,
                 val_loss=env_state.val_loss,
                 inner_epoch=epoch,
@@ -289,6 +315,7 @@ class VectorizedEmitter:
             data=AnalyticsSnapshotPayload(
                 kind="last_action",
                 env_id=self.env_id,
+                episode_idx=self.episode_idx,
                 inner_epoch=epoch,
                 total_reward=outcome.reward_raw,
                 action_name=action_name,
@@ -364,6 +391,7 @@ class VectorizedEmitter:
             optimizer=agent.optimizer,
             grad_norm=ppo_grad_norm,
             update_time_ms=ppo_update_time_ms,
+            group_id=self.group_id,
         )
 
     def on_batch_completed(
@@ -404,6 +432,7 @@ class VectorizedEmitter:
         self.hub.emit(TelemetryEvent(
             event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
             epoch=episodes_completed,
+            group_id=self.group_id,
             data=AnalyticsSnapshotPayload(
                 kind="batch_stats",
                 inner_epoch=epoch,
@@ -433,6 +462,7 @@ class VectorizedEmitter:
             if event_type:
                 self.hub.emit(TelemetryEvent(
                     event_type=event_type,
+                    group_id=self.group_id,
                     data=TrendDetectedPayload(
                         batch_idx=batch_idx + 1,
                         episodes_completed=episodes_completed,
@@ -446,6 +476,7 @@ class VectorizedEmitter:
         self.hub.emit(TelemetryEvent(
             event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED,
             epoch=episodes_completed,
+            group_id=self.group_id,
             data=BatchEpochCompletedPayload(
                 episodes_completed=episodes_completed,
                 batch_idx=batch_idx + 1,
@@ -477,6 +508,7 @@ class VectorizedEmitter:
                 episodes_completed=episodes_completed,
                 action_counts=action_counts,
                 success_counts=success_counts,
+                group_id=self.group_id,
             )
 
         # Analytics table
@@ -494,6 +526,7 @@ class VectorizedEmitter:
             self.hub.emit(TelemetryEvent(
                 event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
                 severity="info",
+                group_id=self.group_id,
                 message=message,
                 data=AnalyticsSnapshotPayload(
                     kind="summary_table",
@@ -505,16 +538,32 @@ class VectorizedEmitter:
             ))
 
 
-def emit_with_env_context(hub: Any, env_idx: int, device: str, event: TelemetryEvent) -> None:
-    """Emit telemetry with env_id injected for per-environment events.
+def emit_with_env_context(
+    hub: Any,
+    env_idx: int,
+    device: str,
+    event: TelemetryEvent,
+    group_id: str,
+    *,
+    episode_idx: int | None = None,
+) -> None:
+    """Emit telemetry with env_id, group_id, and episode_idx injected for per-environment events.
 
     Creates a new event with the additional context rather than mutating the input.
 
-    For typed payloads from slots (which don't know their env_id), replaces the
-    sentinel env_id=-1 with the actual env_id.
+    For typed payloads from slots (which don't know their env_id or episode_idx),
+    replaces the sentinel env_id=-1 with the actual env_id and injects episode_idx.
 
     NOTE: Only use for per-env events (seed lifecycle, epoch completed, etc.).
     Batch-level events (PPO updates, batch completed) should use hub.emit() directly.
+
+    Args:
+        hub: Telemetry hub for event emission
+        env_idx: Environment index to inject
+        device: Device string (unused but kept for API consistency)
+        event: The telemetry event with typed payload
+        group_id: A/B testing group identifier
+        episode_idx: Episode index to inject (for filtering events by episode)
 
     Raises:
         TypeError: If event.data is None, a dict, or missing env_id attribute.
@@ -530,11 +579,11 @@ def emit_with_env_context(hub: Any, env_idx: int, device: str, event: TelemetryE
             "Migrate emitter to use typed dataclass payload."
         )
 
-    # Typed payload - replace sentinel env_id with actual env_id
-    # Type ignore: union type from TelemetryPayload doesn't expose env_id,
-    # but all seed-lifecycle payloads have it (checked at runtime above)
-    payload = dataclasses.replace(event.data, env_id=env_idx)  # type: ignore[arg-type]
-    new_event = dataclasses.replace(event, data=payload)
+    # Typed payload - replace sentinel env_id with actual env_id and inject episode_idx
+    # Type ignore: union type from TelemetryPayload doesn't expose env_id/episode_idx,
+    # but all seed-lifecycle payloads have them (checked at runtime above)
+    payload = dataclasses.replace(event.data, env_id=env_idx, episode_idx=episode_idx)  # type: ignore[arg-type]
+    new_event = dataclasses.replace(event, data=payload, group_id=group_id)
     hub.emit(new_event)
 
 
@@ -550,12 +599,14 @@ def emit_batch_completed(
     avg_reward: float,
     start_episode: int,
     requested_episodes: int,
+    group_id: str,
 ) -> None:
     """Emit batch epoch completion telemetry with resume-aware totals."""
     clamped_completed = min(episodes_completed, total_episodes)
     hub.emit(
         TelemetryEvent(
             event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED,
+            group_id=group_id,
             data=BatchEpochCompletedPayload(
                 episodes_completed=clamped_completed,
                 batch_idx=batch_idx,
@@ -587,6 +638,7 @@ def emit_last_action(
     slot_id: str,
     masked: dict[str, bool],
     success: bool,
+    group_id: str,
     active_alpha_algorithm: str | None = None,
 ) -> dict[str, Any]:
     """Standalone last-action emitter for UNIT TESTING.
@@ -656,6 +708,7 @@ def emit_last_action(
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
         epoch=epoch,
+        group_id=group_id,
         severity="debug",
         message="Last action",
         data=payload,
@@ -932,6 +985,12 @@ def emit_ppo_update_event(
             return_p90=metrics.get("return_p90", 0.0),
             return_variance=metrics.get("return_variance", 0.0),
             return_skewness=metrics.get("return_skewness", 0.0),
+            # D5: Slot Saturation Diagnostics
+            forced_step_ratio=metrics.get("forced_step_ratio", 0.0),
+            usable_actor_timesteps=metrics.get("usable_actor_timesteps", 0),
+            decision_density=1.0 - metrics.get("forced_step_ratio", 0.0),  # Higher = more agency
+            advantage_std_floored=metrics.get("advantage_std_floored", False),
+            d5_pre_norm_advantage_std=metrics.get("d5_pre_norm_advantage_std"),
             inner_epoch=epoch,
             batch=batch_idx + 1,
             # BUG FIX: Track actual PPO update count (inner_epoch was misleading)
@@ -948,11 +1007,13 @@ def emit_action_distribution(
     episodes_completed: int,
     action_counts: dict[str, int],
     success_counts: dict[str, int],
+    group_id: str,
 ) -> None:
     """Emit per-batch action distribution summary."""
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
         epoch=episodes_completed,
+        group_id=group_id,
         data=AnalyticsSnapshotPayload(
             kind="action_distribution",
             action_counts=dict(action_counts),
@@ -968,12 +1029,14 @@ def emit_throughput(
     episodes_completed: int,
     step_time_ms: float,
     dataloader_wait_ms: float,
+    group_id: str,
 ) -> None:
     """Emit per-env throughput metrics for this batch."""
     fps = 1000.0 / step_time_ms if step_time_ms > 0 else None
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
         epoch=episodes_completed,
+        group_id=group_id,
         data=AnalyticsSnapshotPayload(
             kind="throughput",
             env_id=env_id,
@@ -992,6 +1055,7 @@ def emit_reward_summary(
     env_id: int,
     batch_idx: int,
     summary: dict[str, float],
+    group_id: str,
     episodes_completed: int = 0,
 ) -> None:
     """Emit compact reward summary for this batch.
@@ -1012,6 +1076,7 @@ def emit_reward_summary(
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
         epoch=episodes_completed,
+        group_id=group_id,
         data=AnalyticsSnapshotPayload(
             kind="reward_summary",
             env_id=env_id,
@@ -1033,11 +1098,13 @@ def emit_mask_hit_rates(
     episodes_completed: int,
     mask_hits: dict[str, int],
     mask_total: dict[str, int],
+    group_id: str,
 ) -> None:
     """Emit per-head mask hit rates for this batch."""
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
         epoch=episodes_completed,
+        group_id=group_id,
         data=AnalyticsSnapshotPayload(
             kind="mask_hit_rates",
             batch=batch_idx,
@@ -1053,6 +1120,7 @@ def check_performance_degradation(
     *,
     current_acc: float,
     rolling_avg_acc: float,
+    group_id: str,
     degradation_threshold: float = 0.1,
     env_id: int = 0,
     training_progress: float = 1.0,
@@ -1068,6 +1136,7 @@ def check_performance_degradation(
         hub: Telemetry hub for event emission
         current_acc: Current accuracy value
         rolling_avg_acc: Rolling average accuracy for comparison
+        group_id: A/B testing group identifier
         degradation_threshold: Minimum relative drop to trigger (default 10%)
         env_id: Environment ID for attribution
         training_progress: Progress through training (0.0 to 1.0)
@@ -1092,6 +1161,7 @@ def check_performance_degradation(
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.PERFORMANCE_DEGRADATION,
         severity="warning",
+        group_id=group_id,
         data=PerformanceDegradationPayload(
             env_id=env_id,
             current_acc=current_acc,

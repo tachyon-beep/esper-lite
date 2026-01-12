@@ -82,6 +82,7 @@ class LSTMPolicyBundle:
         masks: dict[str, torch.Tensor],
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
         deterministic: bool = False,
+        probability_floor: dict[str, float] | None = None,
     ) -> ActionResult:
         """Select action using the LSTM network.
 
@@ -94,6 +95,8 @@ class LSTMPolicyBundle:
             masks: Dict of boolean masks for each action head
             hidden: Optional LSTM hidden state
             deterministic: If True, use argmax instead of sampling
+            probability_floor: Optional per-head minimum probability. Must match
+                what is passed to evaluate_actions() for consistent log_probs.
 
         Returns:
             ActionResult with actions, log_probs, value, hidden, and op_logits
@@ -116,6 +119,7 @@ class LSTMPolicyBundle:
             alpha_curve_mask=masks["alpha_curve"],
             deterministic=deterministic,
             return_op_logits=True,
+            probability_floor=probability_floor,
         )
 
         # Network returns GetActionResult dataclass
@@ -214,6 +218,8 @@ class LSTMPolicyBundle:
         actions: dict[str, torch.Tensor],
         masks: dict[str, torch.Tensor],
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
+        probability_floor: dict[str, float] | None = None,
+        aux_stop_gradient: bool = True,
     ) -> EvalResult:
         """Evaluate actions for PPO training.
 
@@ -225,11 +231,15 @@ class LSTMPolicyBundle:
             actions: Stored actions from buffer
             masks: Dict of boolean masks for each action head
             hidden: Optional initial LSTM hidden state
+            probability_floor: Optional dict mapping head names to minimum probability
+                values. Passed through to network's evaluate_actions.
+            aux_stop_gradient: If True (default), detach LSTM output before computing
+                contribution predictions. Passed through to network's evaluate_actions.
 
         Returns:
-            EvalResult with log_probs, value, entropy, and new hidden state
+            EvalResult with log_probs, value, entropy, hidden, and pred_contributions
         """
-        log_probs, values, entropies, new_hidden = self._network.evaluate_actions(
+        log_probs, values, entropies, new_hidden, pred_contributions = self._network.evaluate_actions(
             features,
             blueprint_indices,
             actions,
@@ -243,6 +253,8 @@ class LSTMPolicyBundle:
             alpha_speed_mask=masks["alpha_speed"],
             alpha_curve_mask=masks["alpha_curve"],
             hidden=hidden,
+            probability_floor=probability_floor,
+            aux_stop_gradient=aux_stop_gradient,
         )
 
         return EvalResult(
@@ -250,6 +262,7 @@ class LSTMPolicyBundle:
             value=values,
             entropy=entropies,
             hidden=new_hidden,
+            pred_contributions=pred_contributions,
         )
 
     # === Off-Policy (not supported for LSTM) ===

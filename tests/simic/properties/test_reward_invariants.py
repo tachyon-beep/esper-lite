@@ -83,6 +83,10 @@ class TestRewardComposition:
             + components.action_shaping
             + components.terminal_bonus
             + components.synergy_bonus  # B6-CR-01: was missing, caused silent failures
+            # D2 capacity economics
+            - components.occupancy_rent  # Subtracted: slots above threshold incur cost
+            - components.fossilized_rent  # Subtracted: maintenance cost for fossilized seeds
+            + components.first_germinate_bonus  # Added: breaks "do nothing" symmetry
         )
 
         assert abs(component_sum - reward) < 1e-6, (

@@ -247,6 +247,7 @@ def test_batch_tail_event_order_is_stable() -> None:
     emitter = VectorizedEmitter(
         env_id=0,
         device="cpu",
+        group_id="test",
         hub=hub,
         telemetry_config=telemetry_config,
     )
@@ -472,7 +473,7 @@ class TestVectorizedEmitterRewardComponents:
         """on_last_action should accept RewardComponentsTelemetry directly."""
         from esper.simic.rewards.reward_telemetry import RewardComponentsTelemetry
 
-        emitter = VectorizedEmitter(env_id=0, device="cpu", hub=mock_hub)
+        emitter = VectorizedEmitter(env_id=0, device="cpu", group_id="test", hub=mock_hub)
 
         rc = RewardComponentsTelemetry(
             bounded_attribution=0.5,
@@ -518,7 +519,7 @@ class TestVectorizedEmitterRewardComponents:
 
     def test_on_last_action_accepts_none_reward_components(self, mock_hub):
         """on_last_action should accept None for reward_components (LOSS family)."""
-        emitter = VectorizedEmitter(env_id=0, device="cpu", hub=mock_hub)
+        emitter = VectorizedEmitter(env_id=0, device="cpu", group_id="test", hub=mock_hub)
 
         # Should not raise when reward_components is None
         action_spec = _build_action_spec(
@@ -558,7 +559,7 @@ class TestVectorizedEmitterRewardComponents:
         """on_last_action should accept and forward HeadTelemetry."""
         from esper.leyline.telemetry import HeadTelemetry
 
-        emitter = VectorizedEmitter(env_id=0, device="cpu", hub=mock_hub)
+        emitter = VectorizedEmitter(env_id=0, device="cpu", group_id="test", hub=mock_hub)
 
         head_telem = HeadTelemetry(
             op_confidence=0.85,
@@ -621,7 +622,7 @@ class TestCounterfactualMatrixEmission:
         hub.events = []
         hub.emit.side_effect = hub.events.append
 
-        emitter = VectorizedEmitter(env_id=0, device="cpu", hub=hub)
+        emitter = VectorizedEmitter(env_id=0, device="cpu", group_id="test", hub=hub)
 
         active_slots = ["r0c0", "r0c1", "r0c2"]
         # Accuracy when the target slot is disabled (two seeds remain active)

@@ -77,6 +77,7 @@ VIEW_DEFINITIONS: dict[str, str] = {
             group_id,
             epoch,
             json_extract(data, '$.env_id')::INTEGER as env_id,
+            json_extract(data, '$.episode_idx')::INTEGER as episode_idx,
             json_extract(data, '$.inner_epoch')::INTEGER as inner_epoch,
             json_extract(data, '$.val_accuracy')::DOUBLE as val_accuracy,
             json_extract(data, '$.val_loss')::DOUBLE as val_loss,
@@ -208,6 +209,7 @@ VIEW_DEFINITIONS: dict[str, str] = {
             seed_id,
             slot_id,
             json_extract(data, '$.env_id')::INTEGER as env_id,
+            json_extract(data, '$.episode_idx')::INTEGER as episode_idx,
             json_extract_string(data, '$.blueprint_id') as blueprint_id,
             json_extract(data, '$.params')::INTEGER as params,
             json_extract(data, '$.params_added')::INTEGER as params_added,
@@ -244,6 +246,7 @@ VIEW_DEFINITIONS: dict[str, str] = {
             run_dir,
             group_id,
             json_extract(data, '$.env_id')::INTEGER as env_id,
+            json_extract(data, '$.episode_idx')::INTEGER as episode_idx,
             json_extract(data, '$.inner_epoch')::INTEGER as inner_epoch,
             json_extract_string(data, '$.action_name') as action_name,
             json_extract(data, '$.action_success')::BOOLEAN as action_success,
@@ -341,6 +344,7 @@ VIEW_DEFINITIONS: dict[str, str] = {
             run_dir,
             group_id,
             json_extract(data, '$.env_id')::INTEGER as env_id,
+            json_extract(data, '$.episode_idx')::INTEGER as episode_idx,
             json_extract(data, '$.inner_epoch')::INTEGER as inner_epoch,
             json_extract_string(data, '$.action_name') as action_name,
             json_extract(data, '$.action_success')::BOOLEAN as action_success,
@@ -471,6 +475,86 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract_string(data, '$.reward_mode') as reward_mode
         FROM raw_events
         WHERE event_type = 'EPISODE_OUTCOME'
+    """,
+    "reward_calibration": """
+        CREATE OR REPLACE VIEW reward_calibration AS
+        -- Reward-accuracy calibration metrics per run and reward_mode
+        -- Diagnoses reward function quality: high correlation = reward aligns with outcomes
+        -- Low/negative correlation = reward is misaligned (mediocre seeds getting high reward)
+        WITH episode_data AS (
+            SELECT
+                run_dir,
+                group_id,
+                reward_mode,
+                final_accuracy,
+                episode_reward
+            FROM episode_outcomes
+            WHERE final_accuracy IS NOT NULL
+              AND episode_reward IS NOT NULL
+        ),
+        stats AS (
+            SELECT
+                run_dir,
+                group_id,
+                reward_mode,
+                COUNT(*) as n_episodes,
+                AVG(final_accuracy) as mean_accuracy,
+                AVG(episode_reward) as mean_reward,
+                STDDEV_SAMP(final_accuracy) as std_accuracy,
+                STDDEV_SAMP(episode_reward) as std_reward,
+                MIN(final_accuracy) as min_accuracy,
+                MAX(final_accuracy) as max_accuracy,
+                MIN(episode_reward) as min_reward,
+                MAX(episode_reward) as max_reward
+            FROM episode_data
+            GROUP BY run_dir, group_id, reward_mode
+        ),
+        -- Compute covariance by joining back to episode data
+        covariance AS (
+            SELECT
+                s.run_dir,
+                s.group_id,
+                s.reward_mode,
+                SUM((e.final_accuracy - s.mean_accuracy) * (e.episode_reward - s.mean_reward)) as cov_sum
+            FROM stats s
+            JOIN episode_data e
+                ON e.run_dir = s.run_dir
+                AND COALESCE(e.group_id, '') = COALESCE(s.group_id, '')
+                AND COALESCE(e.reward_mode, '') = COALESCE(s.reward_mode, '')
+            GROUP BY s.run_dir, s.group_id, s.reward_mode
+        )
+        SELECT
+            s.run_dir,
+            s.group_id,
+            s.reward_mode,
+            s.n_episodes,
+            s.mean_accuracy,
+            s.mean_reward,
+            s.std_accuracy,
+            s.std_reward,
+            s.min_accuracy,
+            s.max_accuracy,
+            s.min_reward,
+            s.max_reward,
+            -- Pearson correlation coefficient: cov(X,Y) / (std_X * std_Y)
+            CASE
+                WHEN s.std_accuracy > 0 AND s.std_reward > 0 AND s.n_episodes > 1
+                THEN c.cov_sum / ((s.n_episodes - 1) * s.std_accuracy * s.std_reward)
+                ELSE NULL
+            END as reward_accuracy_correlation,
+            -- Interpretation flag
+            CASE
+                WHEN s.std_accuracy = 0 OR s.std_reward = 0 OR s.n_episodes <= 1 THEN 'insufficient_data'
+                WHEN c.cov_sum / ((s.n_episodes - 1) * s.std_accuracy * s.std_reward) >= 0.7 THEN 'well_calibrated'
+                WHEN c.cov_sum / ((s.n_episodes - 1) * s.std_accuracy * s.std_reward) >= 0.3 THEN 'moderate'
+                WHEN c.cov_sum / ((s.n_episodes - 1) * s.std_accuracy * s.std_reward) >= 0.0 THEN 'weak'
+                ELSE 'inverted'  -- Negative correlation: high accuracy = low reward
+            END as calibration_status
+        FROM stats s
+        JOIN covariance c
+            ON c.run_dir = s.run_dir
+            AND COALESCE(c.group_id, '') = COALESCE(s.group_id, '')
+            AND COALESCE(c.reward_mode, '') = COALESCE(s.reward_mode, '')
     """,
 }
 

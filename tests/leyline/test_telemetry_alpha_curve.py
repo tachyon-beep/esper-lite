@@ -94,6 +94,7 @@ class TestSeedGerminatedPayloadAlphaCurve:
             "blueprint_id": "conv_l",
             "params": 1000,
             "alpha_curve": "COSINE",
+            "episode_idx": 0,  # REQUIRED: injected by emit_with_env_context
         }
         payload = SeedGerminatedPayload.from_dict(data)
         assert payload.alpha_curve == "COSINE"
@@ -154,6 +155,7 @@ class TestSeedStageChangedPayloadAlphaCurve:
             "from_stage": "TRAINING",
             "to_stage": "BLENDING",
             "alpha_curve": "SIGMOID_GENTLE",
+            "episode_idx": 0,  # REQUIRED: injected by emit_with_env_context
         }
         payload = SeedStageChangedPayload.from_dict(data)
         assert payload.alpha_curve == "SIGMOID_GENTLE"

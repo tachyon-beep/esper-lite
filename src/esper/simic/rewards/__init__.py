@@ -14,6 +14,7 @@ from .types import ContributionRewardInputs, LossRewardInputs
 from .rewards import (
     # Config classes (LossRewardConfig moved to esper.leyline)
     ContributionRewardConfig,
+    FossilizedSeedDripState,
     RewardMode,
     RewardFamily,
     # Seed info
@@ -57,6 +58,7 @@ __all__ = [
     "RewardComponentsTelemetry",
     # Config classes (LossRewardConfig moved to esper.leyline)
     "ContributionRewardConfig",
+    "FossilizedSeedDripState",
     "RewardMode",
     "RewardFamily",
     # Seed info

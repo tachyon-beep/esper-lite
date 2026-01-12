@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import torch
-import torch.nn.functional as F
 
 
 @dataclass(slots=True)
@@ -31,6 +30,7 @@ class LossMetrics:
     policy_loss: torch.Tensor
     value_loss: torch.Tensor
     entropy_loss: torch.Tensor
+    entropy_floor_penalty: torch.Tensor  # DRL Expert: Track separately for calibration debugging
     total_loss: torch.Tensor
 
 
@@ -113,11 +113,103 @@ def compute_ratio_metrics(
     )
 
 
+def compute_entropy_floor_penalty(
+    entropy: dict[str, torch.Tensor],
+    head_masks: dict[str, torch.Tensor],
+    entropy_floor: dict[str, float],
+    penalty_coef: dict[str, float],  # ALWAYS dict - caller normalizes (PyTorch optimization)
+    availability_masks: dict[str, torch.Tensor] | None = None,
+) -> torch.Tensor:
+    """Compute penalty for heads whose entropy falls below floor.
+
+    Uses quadratic penalty: loss += coef * max(0, floor - entropy)^2
+    This creates smooth gradient pressure to maintain minimum entropy.
+
+    DRL Expert recommendation (2026-01): Uses AVAILABILITY masks (not causal masks)
+    for entropy regularization. This ensures sparse heads like blueprint/tempo are
+    regularized whenever GERMINATE was VALID, not just when it was CHOSEN. Without
+    this, heads collapse once the agent stops exploring them (death spiral).
+
+    CRITICAL: Skips heads with no available steps (n_available < 1) to avoid
+    penalizing inactive heads that had no opportunity to maintain entropy.
+
+    NOTE: penalty_coef must be a dict. Caller (compute_losses) should normalize
+    scalar inputs to dict before calling this function. This avoids isinstance()
+    checks in the hot path.
+
+    Args:
+        entropy: Dict of head_name -> entropy tensor (per-step or scalar, normalized 0-1)
+        head_masks: Dict of head_name -> mask tensor (causal masks, for device inference)
+        entropy_floor: Dict of head_name -> minimum acceptable entropy (float)
+        penalty_coef: Per-head coefficients dict (REQUIRED - caller normalizes scalars)
+        availability_masks: Dict of head_name -> availability mask tensor. If provided,
+            uses availability (what actions were VALID) instead of causal masks (what
+            actions were TAKEN) for entropy normalization. This prevents sparse head
+            collapse by regularizing heads whenever they could have mattered.
+
+    Returns:
+        Scalar penalty to add to total loss (larger = more penalty)
+    """
+    if not entropy:
+        # Early return if no entropy provided
+        # Get device from head_masks if available to avoid device mismatch
+        if head_masks:
+            device = next(iter(head_masks.values())).device
+            return torch.tensor(0.0, device=device)
+        return torch.tensor(0.0)  # Fallback only if both empty
+
+    # Get device from first entropy tensor
+    device = next(iter(entropy.values())).device
+
+    # Use availability masks if provided, otherwise fall back to causal masks
+    # (backwards compatible for callers that don't pass availability_masks)
+    effective_masks = availability_masks if availability_masks is not None else head_masks
+
+    # PYTORCH OPTIMIZATION: Collect penalties in list, then stack+sum
+    # This is 3x faster than repeated `penalty = penalty + term` (1 kernel vs 8)
+    penalties: list[torch.Tensor] = []
+
+    for head, floor in entropy_floor.items():
+        if head not in entropy:
+            continue
+
+        head_ent = entropy[head]
+
+        # If per-step entropy, compute mean over AVAILABLE steps (not causal)
+        if head_ent.ndim > 0:
+            mask = effective_masks.get(head)
+            if mask is not None:
+                n_available = mask.sum()
+                if n_available < 1:
+                    # CRITICAL FIX: Skip heads with no available steps
+                    # (no opportunity to maintain entropy)
+                    continue
+                head_ent = (head_ent * mask).sum() / n_available
+            else:
+                head_ent = head_ent.mean()
+
+        # Get per-head penalty coefficient (no isinstance - always dict)
+        # Direct access: missing key is a bug in caller, should fail loudly
+        head_coef = penalty_coef[head]
+
+        # Quadratic penalty for entropy below floor
+        # Use Python scalar for floor - PyTorch broadcasts efficiently
+        shortfall = torch.clamp(floor - head_ent, min=0.0)
+        penalties.append(head_coef * (shortfall ** 2))
+
+    # Single reduction operation (compile-friendly)
+    if penalties:
+        return torch.stack(penalties).sum()
+    else:
+        return torch.tensor(0.0, device=device)
+
+
 def compute_losses(
     *,
     per_head_ratios: dict[str, torch.Tensor],
     per_head_advantages: dict[str, torch.Tensor],
     head_masks: dict[str, torch.Tensor],
+    forced_mask: torch.Tensor | None = None,
     values: torch.Tensor,
     normalized_returns: torch.Tensor,
     old_values: torch.Tensor,
@@ -129,8 +221,39 @@ def compute_losses(
     value_clip: float,
     value_coef: float,
     head_names: tuple[str, ...],
+    entropy_floor: dict[str, float] | None = None,
+    entropy_floor_penalty_coef: dict[str, float] | None = None,
+    availability_masks: dict[str, torch.Tensor] | None = None,
 ) -> LossMetrics:
-    """Compute PPO policy/value/entropy losses for a single epoch."""
+    """Compute PPO policy/value/entropy losses for a single epoch.
+
+    D1: Forced-Action Masking
+    -------------------------
+    When forced_mask is provided, timesteps where the agent had no choice (e.g.,
+    all slots occupied, only WAIT valid) receive modified loss weights:
+    - Actor loss: weight=0 (no policy gradient for no-choice timesteps)
+    - Value loss: weight=0.2 (still learn state values, but with less confidence)
+    - Entropy loss: unchanged (entropy on forced steps is meaningless anyway)
+
+    This prevents the policy from receiving noisy gradients from forced WAIT
+    corridors where its output didn't matter, while still training the value
+    function to predict returns in those states.
+
+    PYTORCH OPTIMIZATION: entropy_floor_penalty_coef MUST be a dict (not a scalar).
+    Caller (PPOAgent) normalizes scalar inputs to dict at __init__ time. This avoids
+    isinstance() checks in the hot path, enabling consistent torch.compile graph shapes.
+    """
+    # D1: Compute loss weights from forced mask
+    if forced_mask is not None:
+        # Actor: 0 for forced, 1 for free choice
+        actor_weight = (~forced_mask).float()
+        # Value: 0.2 for forced (still learn state values, but with less confidence)
+        # Use Python scalars directly - PyTorch broadcasts efficiently without tensor allocation
+        value_weight = torch.where(forced_mask, 0.2, 1.0)
+    else:
+        actor_weight = None
+        value_weight = None
+
     policy_loss: torch.Tensor = torch.tensor(0.0, device=values.device)
     for key in head_names:
         ratio = per_head_ratios[key]
@@ -141,34 +264,134 @@ def compute_losses(
         surr2 = torch.clamp(ratio, 1 - clip_ratio, 1 + clip_ratio) * adv
         clipped_surr = torch.min(surr1, surr2)
 
-        n_valid = mask.sum().clamp(min=1)
-        head_loss = -(clipped_surr * mask).sum() / n_valid
+        # D1: Combine causal mask with forced-action mask
+        if actor_weight is not None:
+            effective_mask = mask * actor_weight  # Both must be active
+        else:
+            effective_mask = mask
+
+        n_valid = effective_mask.sum().clamp(min=1)
+        head_loss = -(clipped_surr * effective_mask).sum() / n_valid
         policy_loss = policy_loss + head_loss
 
+    # Value loss with per-timestep weighting
     if clip_value:
         values_clipped = old_values + torch.clamp(values - old_values, -value_clip, value_clip)
         value_loss_unclipped = (values - normalized_returns) ** 2
         value_loss_clipped = (values_clipped - normalized_returns) ** 2
-        value_loss = 0.5 * torch.max(value_loss_unclipped, value_loss_clipped).mean()
+        per_step_value_loss = torch.max(value_loss_unclipped, value_loss_clipped)
     else:
-        value_loss = F.mse_loss(values, normalized_returns)
+        per_step_value_loss = (values - normalized_returns) ** 2
 
+    # D1: Weighted mean for value loss (0.2 weight for forced steps)
+    if value_weight is not None:
+        value_loss = 0.5 * (per_step_value_loss * value_weight).sum() / value_weight.sum().clamp(min=1)
+    else:
+        value_loss = 0.5 * per_step_value_loss.mean()
+
+    # D1: Entropy loss - also exclude forced steps (entropy is meaningless when no choice)
+    # ChatGPT Pro review 2025-01-08: Entropy over a single-valid-action distribution is
+    # either 0 (if masked properly) or noise (if computed over full logits). Either way,
+    # including forced steps dilutes the entropy signal from real decision points.
     entropy_loss: torch.Tensor = torch.tensor(0.0, device=values.device)
     for key in entropy:
         head_coef = entropy_coef_per_head[key]
         mask = head_masks[key]
-        n_valid = mask.sum().clamp(min=1)
-        masked_ent = (entropy[key] * mask).sum() / n_valid
+
+        # D1: Combine causal mask with forced-action mask for entropy
+        if actor_weight is not None:
+            effective_mask = mask * actor_weight
+        else:
+            effective_mask = mask
+
+        n_valid = effective_mask.sum().clamp(min=1)
+        masked_ent = (entropy[key] * effective_mask).sum() / n_valid
         entropy_loss = entropy_loss - head_coef * masked_ent
 
-    total_loss = policy_loss + value_coef * value_loss + entropy_coef * entropy_loss
+    # Per-head entropy floor penalty (prevents sparse heads from collapsing)
+    # DRL Expert (2026-01): Use AVAILABILITY masks, not causal masks, to prevent
+    # death spiral where heads collapse once agent stops exploring them.
+    entropy_floor_penalty = torch.tensor(0.0, device=values.device)
+    if entropy_floor is not None:
+        # Use availability masks if provided, else fall back to causal masks
+        entropy_masks = availability_masks if availability_masks is not None else head_masks
+
+        # Compute mean entropy per head over AVAILABLE timesteps (not causal)
+        mean_entropy: dict[str, torch.Tensor] = {}
+        for key in entropy:
+            # Use availability mask for entropy measurement
+            mask = entropy_masks.get(key, head_masks[key])
+            if actor_weight is not None:
+                effective_mask = mask * actor_weight
+            else:
+                effective_mask = mask
+            n_available = effective_mask.sum().clamp(min=1)
+            mean_entropy[key] = (entropy[key] * effective_mask).sum() / n_available
+
+        # entropy_floor_penalty_coef is ALWAYS dict - caller normalizes at init time
+        # (PyTorch optimization: no isinstance() in hot path for consistent graph shapes)
+        entropy_floor_penalty = compute_entropy_floor_penalty(
+            entropy=mean_entropy,
+            head_masks=head_masks,  # For device inference
+            entropy_floor=entropy_floor,
+            penalty_coef=entropy_floor_penalty_coef,  # type: ignore[arg-type]  # None checked above
+            availability_masks=entropy_masks,
+        )
+
+    total_loss = (
+        policy_loss
+        + value_coef * value_loss
+        + entropy_coef * entropy_loss
+        + entropy_floor_penalty
+    )
 
     return LossMetrics(
         policy_loss=policy_loss,
         value_loss=value_loss,
         entropy_loss=entropy_loss,
+        entropy_floor_penalty=entropy_floor_penalty,
         total_loss=total_loss,
     )
+
+
+def compute_contribution_aux_loss(
+    pred_contributions: torch.Tensor,
+    target_contributions: torch.Tensor,
+    active_mask: torch.Tensor,
+    has_fresh_target: torch.Tensor,
+    clip: float | None = 10.0,
+) -> torch.Tensor:
+    """Compute auxiliary MSE loss for contribution predictions.
+
+    DRL Expert critical fix: Only compute loss on timesteps with fresh counterfactual
+    measurements. Stale targets create systematic bias, not random noise.
+
+    Args:
+        pred_contributions: Predicted contributions [batch, seq, num_slots]
+        target_contributions: Ground truth from counterfactual [batch, seq, num_slots]
+        active_mask: Boolean mask for active slots [batch, seq, num_slots]
+        has_fresh_target: Boolean mask for timesteps with fresh measurements [batch, seq]
+        clip: Optional clip value for targets (prevents outlier domination)
+
+    Returns:
+        Scalar MSE loss over active slots at measurement timesteps only.
+        Returns 0.0 if no fresh measurements in batch.
+    """
+    if clip is not None:
+        target_contributions = target_contributions.clamp(-clip, clip)
+
+    # Combine active slot mask with fresh measurement mask
+    # has_fresh_target: [batch, seq] -> [batch, seq, 1] for broadcasting
+    combined_mask = active_mask & has_fresh_target.unsqueeze(-1)
+
+    # MSE only over active slots at measurement timesteps
+    sq_error = (pred_contributions - target_contributions) ** 2
+    masked_error = sq_error * combined_mask.float()
+
+    # When combined_mask is all-False: sum=0, n_valid=1, result=0.0
+    # No early return needed - torch.compile friendly
+    n_valid = combined_mask.sum().clamp(min=1)
+    return masked_error.sum() / n_valid
 
 
 __all__ = [
@@ -177,4 +400,6 @@ __all__ = [
     "PPOUpdateResult",
     "compute_ratio_metrics",
     "compute_losses",
+    "compute_entropy_floor_penalty",
+    "compute_contribution_aux_loss",
 ]

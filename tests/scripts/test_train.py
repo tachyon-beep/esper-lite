@@ -153,14 +153,19 @@ class TestTamiyoCentricFlags:
         assert args.episode_length == 30
 
     def test_flags_default_to_none(self):
-        """Tamiyo flags should default to None (config takes precedence)."""
+        """Tamiyo flags should default to None (config takes precedence).
+
+        Note: memory_size has a visible default (512) for --help but uses
+        explicit flag detection for override logic, so it's not tested here.
+        """
         parser = build_parser()
         args = parser.parse_args(["ppo"])
         assert args.rounds is None
         assert args.envs is None
         assert args.episode_length is None
         assert args.ppo_epochs is None
-        assert args.memory_size is None
+        # memory_size uses DEFAULT_LSTM_HIDDEN_DIM (512) for --help visibility
+        # but override logic uses explicit flag detection, not None-check
         assert args.entropy_anneal_episodes is None
 
     def test_positive_int_validator_rejects_zero(self):

@@ -12,12 +12,13 @@ Tier 3: Anti-Gaming Properties
 """
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import given, settings, strategies as st
 
 from esper.simic.rewards import (
     compute_contribution_reward,
     ContributionRewardConfig,
 )
+from esper.simic.rewards.contribution import FossilizedSeedDripState
 
 from tests.simic.strategies import (
     ransomware_seed_inputs,
@@ -100,6 +101,8 @@ class TestFossilizationFarming:
         Seeds must "earn" fossilization by spending time in HOLDING.
         Rapid fossilization gets reduced bonus.
         """
+        import math
+
         from esper.leyline import MIN_HOLDING_EPOCHS
 
         seed_info = inputs["seed_info"]
@@ -111,10 +114,16 @@ class TestFossilizationFarming:
             config = ContributionRewardConfig()
 
             if inputs["seed_contribution"] and inputs["seed_contribution"] > 0:
-                # Verify legitimacy discount applied - shaping should be less than max possible
+                # Verify legitimacy discount applied - shaping should be less than max possible.
+                # Max possible includes:
+                # 1. fossilize_base_bonus + contribution_scale (from _contribution_fossilize_shaping)
+                # 2. immediate_fossilize_bonus (from P0 fix 2026-01-11)
+                # Both have legitimacy_discount applied, so undiscounted max should exceed actual.
                 max_possible = (
                     config.fossilize_base_bonus
                     + config.fossilize_contribution_scale * inputs["seed_contribution"]
+                    + config.fossilize_terminal_scale
+                    * math.tanh(1.0 / config.fossilize_quality_ceiling)
                 )
 
                 assert components.action_shaping < max_possible, (
@@ -175,3 +184,146 @@ class TestRatioPenalty:
             f"improvement={total_imp}) should trigger ratio_penalty, "
             f"got {components.ratio_penalty}"
         )
+
+
+@pytest.mark.property
+class TestDripAntiGaming:
+    """Property tests for drip reward anti-gaming guarantees."""
+
+    @given(
+        fossilize_epoch=st.integers(min_value=10, max_value=140),
+        contribution_at_foss=st.floats(min_value=1.0, max_value=10.0),
+    )
+    @settings(max_examples=100)
+    def test_epoch_normalization_prevents_early_gaming(
+        self, fossilize_epoch: int, contribution_at_foss: float
+    ) -> None:
+        """Expected total drip is roughly equal regardless of fossilization timing.
+
+        Without epoch normalization, early fossilization would capture more
+        total drip. Normalization by remaining_epochs should equalize this.
+        """
+        max_epochs = 150
+        config = ContributionRewardConfig(
+            drip_fraction=0.7,
+            max_drip_per_epoch=0.1,
+            min_drip_epochs=5,
+        )
+
+        remaining = max(max_epochs - fossilize_epoch, config.min_drip_epochs)
+
+        # Simulate drip with constant contribution
+        drip_state = FossilizedSeedDripState(
+            seed_id="test",
+            slot_id="r0c1",
+            fossilize_epoch=fossilize_epoch,
+            max_epochs=max_epochs,
+            drip_total=2.0,
+            drip_scale=2.0 / remaining,
+        )
+
+        # Sum drip over remaining epochs with constant contribution
+        total_drip = 0.0
+        actual_remaining = max_epochs - fossilize_epoch
+        for _ in range(actual_remaining):
+            epoch_drip = drip_state.compute_epoch_drip(
+                current_contribution=contribution_at_foss,
+                max_drip=config.max_drip_per_epoch,
+                negative_drip_ratio=0.5,
+            )
+            total_drip += epoch_drip
+
+        # Expected total (without clipping): drip_total * contribution
+        expected_max = 2.0 * contribution_at_foss
+
+        # Total should be bounded regardless of timing
+        assert total_drip <= expected_max + 0.1, (
+            f"Total drip {total_drip} exceeds expected max {expected_max} "
+            f"for fossilize_epoch={fossilize_epoch}"
+        )
+
+    @given(
+        contribution_sequence=st.lists(
+            st.floats(min_value=-5.0, max_value=5.0),
+            min_size=10,
+            max_size=50,
+        )
+    )
+    @settings(max_examples=100)
+    def test_negative_drip_for_degrading_seeds(
+        self, contribution_sequence: list[float]
+    ) -> None:
+        """Seeds that degrade post-fossilization receive negative drip (penalty)."""
+        config = ContributionRewardConfig(
+            drip_fraction=0.7,
+            max_drip_per_epoch=0.1,
+            negative_drip_ratio=0.5,
+        )
+
+        drip_state = FossilizedSeedDripState(
+            seed_id="test",
+            slot_id="r0c1",
+            fossilize_epoch=100,
+            max_epochs=150,
+            drip_total=2.0,
+            drip_scale=2.0 / 50,
+        )
+
+        total_drip = 0.0
+        positive_drip_sum = 0.0
+        negative_drip_sum = 0.0
+        for contrib in contribution_sequence:
+            epoch_drip = drip_state.compute_epoch_drip(
+                current_contribution=contrib,
+                max_drip=config.max_drip_per_epoch,
+                negative_drip_ratio=0.5,
+            )
+            total_drip += epoch_drip
+            if contrib < 0:
+                negative_drip_sum += epoch_drip
+                # Negative contribution should produce negative or zero drip
+                assert epoch_drip <= 0, (
+                    f"Negative contribution {contrib} produced positive drip {epoch_drip}"
+                )
+            elif contrib > 0:
+                positive_drip_sum += epoch_drip
+                # Positive contribution should produce positive or zero drip
+                assert epoch_drip >= 0, (
+                    f"Positive contribution {contrib} produced negative drip {epoch_drip}"
+                )
+
+        # Note: Total drip sign may differ from total contribution sign due to
+        # asymmetric clipping (positive capped at +0.1, negative at -0.05).
+        # This is intentional - prevents death spirals while still penalizing degradation.
+        # We verify the per-epoch invariant above, not total sign.
+
+    @given(
+        drip_scale=st.floats(min_value=0.01, max_value=1.0),
+        contribution=st.floats(min_value=-10.0, max_value=10.0),
+    )
+    @settings(max_examples=100)
+    def test_asymmetric_clipping_invariant(
+        self, drip_scale: float, contribution: float
+    ) -> None:
+        """Asymmetric clipping: positive cap is 2x the negative cap."""
+        drip_state = FossilizedSeedDripState(
+            seed_id="test",
+            slot_id="r0c1",
+            fossilize_epoch=100,
+            max_epochs=150,
+            drip_total=2.0,
+            drip_scale=drip_scale,
+        )
+
+        max_drip = 0.1
+        negative_ratio = 0.5
+
+        drip = drip_state.compute_epoch_drip(
+            current_contribution=contribution,
+            max_drip=max_drip,
+            negative_drip_ratio=negative_ratio,
+        )
+
+        # Invariant: drip is always in [-0.05, +0.1]
+        assert drip >= -max_drip * negative_ratio - 1e-9
+        assert drip <= max_drip + 1e-9

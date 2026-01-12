@@ -82,14 +82,15 @@ dev = [
     "mypy>=1.19.1",
     "types-psutil>=7.1.3.20251211",
     "types-tqdm>=4.67.0",
-    "textual>=0.47.0",  # TUI widgets - needed for test imports
+    "textual>=0.47.0", # TUI widgets - needed for test imports
+    "types-pyyaml>=6.0.12.20250915",
 ]
 
 # Type checking configuration
 [tool.mypy]
 python_version = "3.11"
 mypy_path = "src"
-packages = ["esper"]
+packages = ["esper", "tests"]
 # Phase 2-3: Stricter checks without full strict mode (incremental adoption)
 warn_return_any = true
 warn_unused_configs = true
@@ -106,12 +107,42 @@ exclude = [
     "^build/",
     "^dist/",
     "^\\.venv/",
+    "^mutants/",  # Mutation testing workspace - duplicates src/esper/
 ]
 
 # Per-module overrides for strictness gradients
+# Tests: Very relaxed - many tests intentionally trigger type errors to verify type safety.
+# We only catch egregious issues like syntax errors and missing imports.
 [[tool.mypy.overrides]]
 module = "tests.*"
-disallow_untyped_defs = false  # Tests can be less strict
+disallow_untyped_defs = false
+check_untyped_defs = false
+warn_return_any = false
+disable_error_code = [
+    "union-attr",   # Tests access payload unions without narrowing (intentional)
+    "arg-type",     # Many negative tests pass wrong types (intentional)
+    "operator",     # Tests verify operator behavior with wrong types
+    "no-untyped-call",  # Tests call untyped fixtures
+    "no-untyped-def",   # Test functions/fixtures don't need full annotations
+    "misc",         # Read-only property tests, etc.
+    "attr-defined", # Some tests verify missing attribute handling
+    "type-arg",     # Generic type parameters not needed in tests
+    "var-annotated", # Variable annotations not needed in tests
+    "no-any-return", # Tests can return Any
+    "index",        # Tests verify indexing behavior
+    "assignment",   # Tests verify assignment constraints
+    "call-arg",     # Tests verify argument handling
+    "list-item",    # Tests can have heterogeneous lists
+    "untyped-decorator", # Test decorators (pytest.fixture, etc.)
+    "unused-ignore", # Existing type: ignore comments become redundant with relaxed settings
+]
+
+# Scripts are developer tools, not production code - relaxed strictness
+[[tool.mypy.overrides]]
+module = "scripts.*"
+disallow_untyped_defs = false
+warn_return_any = false
+check_untyped_defs = false
 
 [[tool.mypy.overrides]]
 module = "esper.leyline.telemetry"

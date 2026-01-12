@@ -244,9 +244,11 @@ class TestMultiEnvMaskIndependence:
         assert masks_env0["slot"].all(), "All slots should be valid when empty"
         assert masks_env0["op"][LifecycleOp.GERMINATE], "GERMINATE should be valid"
 
-        # Env 1: Two slots empty, one occupied
-        assert masks_env1["slot"][0]  # r0c0 occupied, but slot selection is valid
-        assert masks_env1["op"][LifecycleOp.GERMINATE], "GERMINATE valid with empty slots"
+        # Env 1: Two slots empty, one TRAINING seed
+        # D3: GERMINATE is BLOCKED while any seed is in TRAINING stage (sequential development)
+        # This prevents PBRS farming (repeatedly collecting +0.25 germination bonuses)
+        assert masks_env1["slot"][0]  # r0c0 occupied, but slot selection is valid for other ops
+        assert not masks_env1["op"][LifecycleOp.GERMINATE], "GERMINATE blocked by D3 while TRAINING seed exists"
 
         # Env 2: All slots occupied - GERMINATE should be invalid
         assert not masks_env2["op"][LifecycleOp.GERMINATE], "GERMINATE invalid when all slots full"
@@ -276,10 +278,11 @@ class TestMultiEnvMaskIndependence:
         batched_op_masks = torch.stack([m["op"] for m in all_masks])
 
         # Verify GERMINATE validity differs across environments
+        # D3: GERMINATE is BLOCKED while any seed is in TRAINING stage (sequential development)
         germinate_valid = batched_op_masks[:, LifecycleOp.GERMINATE]
         assert germinate_valid[0].item() is True, "Env 0 (empty) should allow GERMINATE"
-        assert germinate_valid[1].item() is True, "Env 1 (1 seed) should allow GERMINATE"
-        assert germinate_valid[2].item() is True, "Env 2 (2 seeds) should allow GERMINATE"
+        assert germinate_valid[1].item() is False, "Env 1 (TRAINING seed) blocked by D3"
+        assert germinate_valid[2].item() is False, "Env 2 (TRAINING seeds) blocked by D3"
         assert germinate_valid[3].item() is False, "Env 3 (all full) should NOT allow GERMINATE"
 
 
@@ -310,11 +313,12 @@ class TestSlotSaturationAndRecovery:
         """GERMINATE should be re-enabled after culling frees a slot."""
         config = SlotConfig.default()
 
-        # Initially all slots full
+        # Initially all slots full with BLENDING/HOLDING/FOSSILIZED seeds
+        # (D3 only blocks GERMINATE for GERMINATED/TRAINING stages, not these)
         slot_states_full = {
-            "r0c0": MaskSeedInfo(stage=SeedStage.TRAINING, seed_age_epochs=10),
-            "r0c1": MaskSeedInfo(stage=SeedStage.TRAINING, seed_age_epochs=5),
-            "r0c2": MaskSeedInfo(stage=SeedStage.TRAINING, seed_age_epochs=2),
+            "r0c0": MaskSeedInfo(stage=SeedStage.BLENDING, seed_age_epochs=10),
+            "r0c1": MaskSeedInfo(stage=SeedStage.HOLDING, seed_age_epochs=5),
+            "r0c2": MaskSeedInfo(stage=SeedStage.FOSSILIZED, seed_age_epochs=2),
         }
 
         masks_full = compute_action_masks(
@@ -324,11 +328,12 @@ class TestSlotSaturationAndRecovery:
         )
         assert not masks_full["op"][LifecycleOp.GERMINATE], "GERMINATE should be masked when full"
 
-        # After culling r0c1, it becomes empty
+        # After culling r0c1, it becomes empty - GERMINATE should be valid
+        # because remaining seeds are in BLENDING/FOSSILIZED (D3-allowed stages)
         slot_states_after_cull = {
-            "r0c0": MaskSeedInfo(stage=SeedStage.TRAINING, seed_age_epochs=10),
+            "r0c0": MaskSeedInfo(stage=SeedStage.BLENDING, seed_age_epochs=10),
             "r0c1": None,  # Culled
-            "r0c2": MaskSeedInfo(stage=SeedStage.TRAINING, seed_age_epochs=2),
+            "r0c2": MaskSeedInfo(stage=SeedStage.FOSSILIZED, seed_age_epochs=2),
         }
 
         masks_after_cull = compute_action_masks(

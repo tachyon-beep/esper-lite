@@ -30,8 +30,14 @@ class _NullOutput(OutputBackend):
     def __init__(self) -> None:
         self.events = 0
 
+    def start(self) -> bool | None:
+        return True
+
     def emit(self, event: TelemetryEvent) -> None:
         self.events += 1
+
+    def close(self) -> None:
+        pass
 
 
 @dataclass(frozen=True)

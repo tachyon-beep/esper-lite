@@ -42,6 +42,7 @@ def populated_snapshot():
     snapshot = SanctumSnapshot(
         slot_ids=["R0C0", "R0C1", "R1C0"],
         current_epoch=100,
+        current_episode=359,  # Used to compute episode_idx for telemetry search
         max_epochs=1000,
         task_name="MNIST",
     )
@@ -196,16 +197,20 @@ async def test_update_snapshot_updates_display(populated_snapshot):
         # Should have 3 env rows + separator + aggregate row = 5 rows
         assert widget.table.row_count == 5
 
-        # Verify env IDs are present by getting row data
+        # Verify episode_idx is present in first column (unique per env)
+        # episode_idx = current_episode + env_id, so:
+        #   env_id=0 → 359+0 = 359
+        #   env_id=1 → 359+1 = 360
+        #   env_id=2 → 359+2 = 361
         row_keys = list(widget.table.rows)
         row0_data = widget.table.get_row(row_keys[0])
         row1_data = widget.table.get_row(row_keys[1])
         row2_data = widget.table.get_row(row_keys[2])
 
-        # First column is env ID
-        assert "0" in str(row0_data[0])
-        assert "1" in str(row1_data[0])
-        assert "2" in str(row2_data[0])
+        # First column is episode_idx (unique per env)
+        assert "359" in str(row0_data[0])  # current_episode + env_id=0
+        assert "360" in str(row1_data[0])  # current_episode + env_id=1
+        assert "361" in str(row2_data[0])  # current_episode + env_id=2
 
 
 @pytest.mark.asyncio
@@ -356,7 +361,7 @@ async def test_status_color_coding(populated_snapshot):
 
 @pytest.mark.asyncio
 async def test_ab_test_cohort_styling(populated_snapshot):
-    """A/B test cohort should show colored pip next to env ID."""
+    """A/B test cohort should show colored pip next to episode index."""
     app = EnvOverviewTestApp()
     async with app.run_test():
         widget = app.query_one(EnvOverview)
@@ -661,7 +666,7 @@ def test_env_overview_highlights_last_action_env():
     env = EnvState(env_id=2, host_accuracy=75.0, status="healthy")
     now = datetime.now(timezone.utc)
 
-    result = widget._format_env_id(env, last_action_env_id=2, last_action_timestamp=now)
+    result = widget._format_env_id(env, episode_idx=359, last_action_env_id=2, last_action_timestamp=now)
 
     # Should have action indicator pip (▶ per UX accessibility review)
     assert "▶" in result, f"Expected action indicator ▶ in: {result}"
@@ -677,7 +682,7 @@ def test_env_overview_no_highlight_for_other_env():
     env = EnvState(env_id=1, host_accuracy=72.0, status="healthy")
     now = datetime.now(timezone.utc)
 
-    result = widget._format_env_id(env, last_action_env_id=2, last_action_timestamp=now)
+    result = widget._format_env_id(env, episode_idx=359, last_action_env_id=2, last_action_timestamp=now)
 
     # Should NOT have action indicator
     assert "▶" not in result, f"Expected no ▶ for non-target env: {result}"
@@ -693,7 +698,7 @@ def test_env_overview_no_highlight_after_hysteresis():
     env = EnvState(env_id=2, host_accuracy=75.0, status="healthy")
     old_timestamp = datetime.now(timezone.utc) - timedelta(seconds=10)
 
-    result = widget._format_env_id(env, last_action_env_id=2, last_action_timestamp=old_timestamp)
+    result = widget._format_env_id(env, episode_idx=359, last_action_env_id=2, last_action_timestamp=old_timestamp)
 
     # Should NOT have action indicator (hysteresis expired)
     assert "▶" not in result, f"Expected no ▶ after hysteresis: {result}"

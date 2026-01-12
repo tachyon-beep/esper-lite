@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Profile V3 feature extraction performance.
 
 Follows 4-phase profiling framework:

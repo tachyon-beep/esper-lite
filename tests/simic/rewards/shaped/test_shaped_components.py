@@ -103,7 +103,12 @@ def test_synergy_bonus_is_bounded_and_gated() -> None:
     assert reward == pytest.approx(components.total_reward)
 
 
-def test_compute_rent_penalty_scales_by_episode_horizon() -> None:
+def test_compute_rent_is_per_step_cost() -> None:
+    """Rent is computed per-step (not amortized across episode).
+
+    This ensures rent is visible relative to per-step attribution signals,
+    preventing the 150:1 asymmetry that made parameter cost invisible.
+    """
     config = shaped_config(rent_weight=1.0, rent_host_params_floor=1)
 
     reward, components = compute_contribution_reward(
@@ -119,8 +124,9 @@ def test_compute_rent_penalty_scales_by_episode_horizon() -> None:
         return_components=True,
     )
 
+    # Per-step rent (no division by max_epochs)
     growth_ratio = (200 - 100) / 100
-    expected_rent = math.log(1.0 + growth_ratio) / 10
+    expected_rent = math.log(1.0 + growth_ratio)  # log(2) ≈ 0.693
     assert components.growth_ratio == pytest.approx(growth_ratio)
     assert components.compute_rent == pytest.approx(-expected_rent)
     assert reward == pytest.approx(-expected_rent)

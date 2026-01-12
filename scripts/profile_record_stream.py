@@ -9,8 +9,10 @@ Run with: PYTHONPATH=src uv run python scripts/profile_record_stream.py
 """
 
 import time
-import torch
+from typing import Any
+
 import statistics
+import torch
 
 
 def benchmark_record_stream(
@@ -21,7 +23,7 @@ def benchmark_record_stream(
     width: int = 32,
     iterations: int = 1000,
     num_streams: int = 4,  # Typical multi-env setup
-) -> dict:
+) -> dict[str, Any]:
     """Benchmark record_stream() overhead.
 
     Simulates the hot path pattern:
@@ -36,7 +38,10 @@ def benchmark_record_stream(
     device = torch.device("cuda:0")
 
     # Create streams (simulating multi-env parallel execution)
-    streams = [torch.cuda.Stream(device=device) for _ in range(num_streams)]
+    streams = [
+        torch.cuda.Stream(device=device)  # type: ignore[no-untyped-call]
+        for _ in range(num_streams)
+    ]
 
     # Pre-allocate tensors (inputs and targets for each env)
     # Shape: [batch_size, channels, height, width] for inputs
@@ -105,7 +110,7 @@ def benchmark_process_fused_val_pattern(
     height: int = 32,
     width: int = 32,
     iterations: int = 500,
-) -> dict:
+) -> dict[str, Any]:
     """Benchmark the exact pattern from process_fused_val_batch.
 
     This is the pattern from lines 1619-1634 in vectorized.py:
@@ -120,7 +125,7 @@ def benchmark_process_fused_val_pattern(
         return {}
 
     device = torch.device("cuda:0")
-    stream = torch.cuda.Stream(device=device)
+    stream = torch.cuda.Stream(device=device)  # type: ignore[no-untyped-call]
 
     # Pre-allocate
     inputs = torch.randn(batch_size, channels, height, width, device=device)
@@ -184,7 +189,7 @@ def benchmark_process_fused_val_pattern(
 
 def benchmark_accumulator_pattern(
     iterations: int = 1000,
-) -> dict:
+) -> dict[str, Any]:
     """Benchmark record_stream on accumulators (lines 1800-1801).
 
     This is called once per epoch, not per batch.
@@ -196,7 +201,10 @@ def benchmark_accumulator_pattern(
     device = torch.device("cuda:0")
     num_envs = 4  # Typical multi-env setup
 
-    streams = [torch.cuda.Stream(device=device) for _ in range(num_envs)]
+    streams = [
+        torch.cuda.Stream(device=device)  # type: ignore[no-untyped-call]
+        for _ in range(num_envs)
+    ]
     loss_accums = [torch.zeros(1, device=device) for _ in range(num_envs)]
     correct_accums = [torch.zeros(1, device=device) for _ in range(num_envs)]
 
@@ -229,7 +237,7 @@ def benchmark_accumulator_pattern(
     }
 
 
-def main():
+def main() -> None:
     print("=" * 70)
     print("record_stream() Overhead Profiling")
     print("=" * 70)

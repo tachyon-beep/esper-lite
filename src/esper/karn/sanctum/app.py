@@ -409,6 +409,7 @@ class SanctumApp(App[None]):
         self._refresh_timer: "Timer | None" = None
         self._pending_view: SanctumView | None = None
         self._apply_view_scheduled = False
+        self._apply_view_scheduled_at: float = 0.0  # Track when flag was set
         self._last_heavy_widget_update_ts: float = 0.0
         self._last_detail_update_ts: float = 0.0
         self._last_reward_health_update_ts: float = 0.0
@@ -659,11 +660,29 @@ class SanctumApp(App[None]):
             )
 
     def watch_view(self, view: SanctumView | None) -> None:
-        """Apply latest view model to widgets."""
+        """Apply latest view model to widgets.
+
+        Uses call_after_refresh to apply views after layout, with a stale
+        check to recover from lost callbacks (e.g., during modal pushes).
+        """
+        now = time.monotonic()
         self._pending_view = view
+
+        # Stale check: if flag has been True for >1s, callback was likely lost
+        # This can happen when a modal is pushed at the wrong moment
         if self._apply_view_scheduled:
-            return
+            stale_threshold = 1.0  # seconds
+            if (now - self._apply_view_scheduled_at) > stale_threshold:
+                self.log.warning(
+                    f"Stale _apply_view_scheduled detected "
+                    f"(age={now - self._apply_view_scheduled_at:.2f}s), recovering"
+                )
+                self._apply_view_scheduled = False
+            else:
+                return  # Normal deduplication: callback is pending
+
         self._apply_view_scheduled = True
+        self._apply_view_scheduled_at = now
         self.call_after_refresh(self._apply_pending_view)
 
     def _apply_pending_view(self) -> None:
@@ -740,7 +759,8 @@ class SanctumApp(App[None]):
                     and current_screen.env_id in modal_snapshot.envs
                 ):
                     current_screen.update_env_state(
-                        modal_snapshot.envs[current_screen.env_id]
+                        modal_snapshot.envs[current_screen.env_id],
+                        current_episode=modal_snapshot.current_episode,
                     )
                     self._last_detail_update_ts = now
 
@@ -930,6 +950,7 @@ class SanctumApp(App[None]):
                 env_state=env,
                 slot_ids=self._snapshot.slot_ids,
                 group_id=self._active_group_id,
+                current_episode=self._snapshot.current_episode,
             )
         )
 
@@ -1013,6 +1034,7 @@ class SanctumApp(App[None]):
                 env_state=env,
                 slot_ids=self._snapshot.slot_ids,
                 group_id=self._active_group_id,
+                current_episode=self._snapshot.current_episode,
             )
         )
 
@@ -1050,7 +1072,7 @@ class SanctumApp(App[None]):
         """
         self.push_screen(HistoricalEnvDetail(record=event.record))
         self.log.info(
-            f"Opened historical detail for Ep {event.record.episode + 1} "
+            f"Opened historical detail for Ep {event.record.episode} "
             f"(peak: {event.record.peak_accuracy:.1f}%)"
         )
 

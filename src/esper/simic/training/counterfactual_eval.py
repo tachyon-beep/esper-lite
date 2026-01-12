@@ -98,5 +98,9 @@ def process_fused_val_batch(
             # Fallback for scalar loss (regular criterion with reduction='mean')
             loss_per_config = loss.unsqueeze(0).expand(num_configs)
 
+        # M1 fix: Guard against edge case where batch_size < num_configs
+        # This can happen during debugging or with very small batches
         total_per_config = total // num_configs
+        if total_per_config == 0:
+            total_per_config = 1  # Prevent divide-by-zero downstream
         return loss_per_config, correct_per_config, total_per_config

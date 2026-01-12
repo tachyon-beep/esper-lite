@@ -1,11 +1,13 @@
+import logging
 
 import torch
+
 from esper.simic.training.vectorized import train_ppo_vectorized
-import logging
 
 logging.basicConfig(level=logging.INFO)
 
-def smoke_test_vectorized():
+
+def smoke_test_vectorized() -> None:
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
 

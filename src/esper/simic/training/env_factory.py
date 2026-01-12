@@ -10,6 +10,7 @@ import torch.amp as torch_amp
 
 from esper.karn.health import HealthMonitor
 from esper.kasmina.host import MorphogeneticModel
+from esper.utils.data import AugmentationBuffers
 from esper.leyline import (
     DEFAULT_GOVERNOR_ABSOLUTE_THRESHOLD,
     DEFAULT_GOVERNOR_DEATH_PENALTY,
@@ -32,17 +33,33 @@ if TYPE_CHECKING:
     from esper.runtime.tasks import TaskSpec
 
 
+class EpisodeContext:
+    """Mutable holder for episode-level context needed by telemetry callbacks.
+
+    Callbacks are created early (before env_state exists) but need access to
+    episode_idx which is set later. This holder bridges that gap.
+    """
+
+    __slots__ = ("episode_idx",)
+
+    def __init__(self) -> None:
+        self.episode_idx: int | None = None
+
+
 def make_telemetry_callback(
     env_idx: int,
     device: str,
     hub: Any,
+    group_id: str,
+    episode_context: EpisodeContext | None = None,
 ) -> Callable[[TelemetryEvent], None]:
-    """Create a telemetry callback that injects env_id and device."""
+    """Create a telemetry callback that injects env_id, device, group_id, and episode_idx."""
     if not hub:
         return lambda _: None
 
     def callback(event: TelemetryEvent) -> None:
-        emit_with_env_context(hub, env_idx, device, event)
+        episode_idx = episode_context.episode_idx if episode_context else None
+        emit_with_env_context(hub, env_idx, device, event, group_id, episode_idx=episode_idx)
 
     return callback
 
@@ -84,6 +101,7 @@ class EnvFactoryContext:
     telemetry_lifecycle_only: bool
     hub: Any
     signal_tracker_cls: type[SignalTracker]
+    group_id: str
 
 
 def create_env_state(
@@ -114,7 +132,11 @@ def create_env_state(
     # avoiding runtime layout permutations in conv layers.
     model = model.to(memory_format=torch.channels_last)
 
-    telemetry_cb = make_telemetry_callback(env_idx, env_device, context.hub)
+    # Create episode context for telemetry (training loop updates episode_idx at episode start)
+    episode_context = EpisodeContext() if context.use_telemetry else None
+    telemetry_cb = make_telemetry_callback(
+        env_idx, env_device, context.hub, context.group_id, episode_context
+    )
     for slot_module in model.seed_slots.values():
         slot = cast(SeedSlotProtocol, slot_module)
         slot.on_telemetry = telemetry_cb
@@ -149,9 +171,13 @@ def create_env_state(
     )
 
     augment_generator = None
+    augment_buffers = None
     if context.gpu_preload_augment:
         augment_generator = torch.Generator(device=env_device)
         augment_generator.manual_seed(base_seed + env_idx * 1009)
+        # Pre-allocate buffers to reduce memory fragmentation during augmentation.
+        # The ensure_capacity() method handles resizing if batch size changes.
+        augment_buffers = AugmentationBuffers(device=env_device)
 
     # Per-env AMP scaler to avoid stream race conditions (GradScaler state is not stream-safe)
     # Use new torch.amp.GradScaler API (torch.cuda.amp.GradScaler deprecated in PyTorch 2.4+)
@@ -226,8 +252,10 @@ def create_env_state(
         env_device=env_device,
         stream=stream,
         augment_generator=augment_generator,
+        augment_buffers=augment_buffers,
         scaler=env_scaler,
         seeds_created=0,
+        episode_context=episode_context,
         episode_rewards=[],
         action_enum=context.action_enum,
         telemetry_cb=telemetry_cb,
