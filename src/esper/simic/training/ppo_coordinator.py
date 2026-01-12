@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from esper.simic.control import RewardNormalizer
     from esper.simic.telemetry import AnomalyDetector, GradientEMATracker
     from esper.simic.training.parallel_env_state import ParallelEnvState
-    from esper.simic.vectorized_types import EpisodeRecord, RewardSummaryAccumulator
+    from esper.simic.vectorized_types import EpisodeRecord
     from esper.leyline import EpisodeOutcome
 
 

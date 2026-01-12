@@ -17,7 +17,7 @@ Usage:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Callable
 
 from esper.leyline import (
     OP_ADVANCE,
@@ -35,7 +35,7 @@ from esper.simic.training.handlers.prune import can_prune, execute_prune
 from esper.simic.training.handlers.wait import can_wait, execute_wait
 
 if TYPE_CHECKING:
-    from esper.simic.training.handlers.base import HandlerContext, HandlerResult
+    from esper.simic.training.handlers.base import HandlerResult
 
 # Type aliases for handler function signatures
 CanExecuteFn = Callable[..., bool]

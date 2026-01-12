@@ -17,7 +17,7 @@ from esper.simic.vectorized_types import (
 )
 
 if TYPE_CHECKING:
-    from esper.leyline import LifecycleOp
+    pass
 
 
 @dataclass

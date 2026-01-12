@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import dataclasses
 import logging
 import os
 import time
@@ -38,7 +37,6 @@ from .action_execution import ActionExecutionContext, ResolveTargetSlot, execute
 from .batch_ops import batch_signals_to_features, process_train_batch
 from .counterfactual_eval import process_fused_val_batch
 from .env_factory import EnvFactoryContext, configure_slot_telemetry, create_env_state
-from .epoch_runner import EpochState
 from .ppo_coordinator import PPOCoordinator, PPOCoordinatorConfig
 from esper.simic.vectorized_types import (
     ActionMaskFlags,
