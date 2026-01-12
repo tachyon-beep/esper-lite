@@ -751,6 +751,7 @@ def compute_contribution_reward(
         ):
             # Apply legitimacy discount: seeds must spend time in HOLDING to earn full bonus.
             # This prevents gaming by rushing through the lifecycle.
+            assert seed_info is not None  # Guaranteed by is_valid_fossilize check above
             legitimacy_discount = min(1.0, seed_info.epochs_in_stage / MIN_HOLDING_EPOCHS)
             # Use tanh(1/ceiling) for single-fossil bonus to match saturation curve
             immediate_fossilize_bonus = config.fossilize_terminal_scale * math.tanh(
@@ -996,6 +997,7 @@ def compute_basic_reward(
             if improvement > 0 and meets_threshold:
                 # Both improvement AND contribution are positive: genuine good seed
                 # Use attribution formula (harmonic by default) to combine signals
+                assert seed_contribution is not None  # Guaranteed by meets_threshold check
                 combined = _compute_attributed_value(
                     progress=improvement,
                     seed_contribution=seed_contribution,

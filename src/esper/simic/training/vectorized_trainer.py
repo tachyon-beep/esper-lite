@@ -293,8 +293,9 @@ class VectorizedPPOTrainer:
                     env_states[env_idx].reset_episode_state(slots)
                     agent.buffer.start_episode(env_id=env_idx)
                     # Set episode context for telemetry (used by seed lifecycle events via emit_with_env_context)
-                    if env_states[env_idx].episode_context is not None:
-                        env_states[env_idx].episode_context.episode_idx = episodes_completed + env_idx
+                    episode_ctx = env_states[env_idx].episode_context
+                    if episode_ctx is not None:
+                        episode_ctx.episode_idx = episodes_completed + env_idx
                     # Also set on VectorizedEmitter (used by on_epoch_completed, on_last_action)
                     emitters[env_idx].set_episode_idx(episodes_completed + env_idx)
 

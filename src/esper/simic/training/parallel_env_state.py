@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from esper.tamiyo.tracker import SignalTracker
     from esper.leyline import TelemetryCallback
     from esper.utils.data import AugmentationBuffers
+    from esper.simic.training.env_factory import EpisodeContext
 
 
 @dataclass(slots=True)
@@ -54,7 +55,7 @@ class ParallelEnvState:
     contributing_fossilized: int = 0  # Seeds with total_improvement >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
     # Episode context for telemetry (mutable holder shared with telemetry_cb closure)
     # Training loop updates episode_context.episode_idx at episode start
-    episode_context: Any = None  # TYPE: EpisodeContext (avoid circular import)
+    episode_context: "EpisodeContext | None" = None
     # Action counters for episode diagnostics (TELE-610)
     germinate_count: int = 0
     prune_count: int = 0

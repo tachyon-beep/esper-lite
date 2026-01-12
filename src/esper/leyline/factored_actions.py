@@ -217,14 +217,15 @@ ALPHA_CURVE_GLYPHS: dict[str, str] = {
 OP_NAMES: tuple[str, ...] = tuple(op.name for op in LifecycleOp)
 
 # Blueprint ID lookup (matches BlueprintAction.to_blueprint_id())
-BLUEPRINT_IDS: tuple[str | None, ...] = tuple(bp.to_blueprint_id() for bp in BlueprintAction)
+# All blueprints have valid string IDs - to_blueprint_id() returns str, not str | None
+BLUEPRINT_IDS: tuple[str, ...] = tuple(bp.to_blueprint_id() for bp in BlueprintAction)
 
 # Reverse mapping: blueprint_id string -> embedding index
 # Used by SeedStateReport.blueprint_index for efficient embedding lookup.
 # Maps lowercase strings (e.g., "conv_heavy") to BlueprintAction enum values (0-12).
 # Returns -1 for unknown/empty blueprint_id.
 BLUEPRINT_ID_TO_INDEX: dict[str, int] = {
-    bid: idx for idx, bid in enumerate(BLUEPRINT_IDS) if bid is not None
+    bid: idx for idx, bid in enumerate(BLUEPRINT_IDS)
 }
 
 STYLE_NAMES: tuple[str, ...] = tuple(style.name for style in GerminationStyle)
