@@ -548,3 +548,104 @@ def test_parallel_env_state_has_host_max_acc():
     # Check the dataclass has the field
     hints = inspect.get_annotations(ParallelEnvState)
     assert "host_max_acc" in hints, "ParallelEnvState should have host_max_acc field"
+
+
+def test_basic_plus_mode_dispatches_through_compute_reward() -> None:
+    """BASIC_PLUS mode dispatches correctly through compute_reward."""
+    from esper.simic.rewards.contribution import ContributionRewardConfig, RewardMode
+    from esper.simic.rewards.rewards import compute_reward
+    from esper.simic.rewards.types import ContributionRewardInputs, SeedInfo
+    from esper.leyline import SeedStage
+
+    config = ContributionRewardConfig(reward_mode=RewardMode.BASIC_PLUS)
+
+    # BASIC_PLUS should have drip enabled by default
+    assert config.drip_fraction == 0.7
+
+    seed_info = SeedInfo(
+        stage=SeedStage.HOLDING.value,
+        improvement_since_stage_start=0.5,
+        total_improvement=5.0,
+        epochs_in_stage=5,
+        seed_params=10_000,
+        previous_stage=SeedStage.BLENDING.value,
+        previous_epochs_in_stage=3,
+        seed_age_epochs=20,
+    )
+
+    inputs = ContributionRewardInputs(
+        action=LifecycleOp.FOSSILIZE,
+        seed_contribution=5.0,
+        val_acc=0.85,
+        seed_info=seed_info,
+        epoch=20,
+        max_epochs=150,
+        total_params=110_000,
+        host_params=100_000,
+        acc_at_germination=0.70,
+        acc_delta=5.0,
+        config=config,
+        return_components=False,
+        seed_id="test-seed",
+        slot_id="r0c1",
+    )
+
+    # Should NOT raise - BASIC_PLUS is now handled
+    reward = compute_reward(inputs)
+    assert isinstance(reward, float)
+    assert reward > 0  # FOSSILIZE with positive contribution should yield positive reward
+
+
+def test_basic_plus_mode_creates_drip_state() -> None:
+    """BASIC_PLUS mode creates drip state on valid FOSSILIZE."""
+    from esper.simic.rewards.contribution import (
+        ContributionRewardConfig,
+        RewardMode,
+        compute_basic_reward,
+    )
+    from esper.simic.rewards.types import SeedInfo
+    from esper.leyline import SeedStage
+
+    config = ContributionRewardConfig(reward_mode=RewardMode.BASIC_PLUS)
+
+    seed_info = SeedInfo(
+        stage=SeedStage.HOLDING.value,
+        improvement_since_stage_start=0.5,
+        total_improvement=5.0,
+        epochs_in_stage=5,
+        seed_params=10_000,
+        previous_stage=SeedStage.BLENDING.value,
+        previous_epochs_in_stage=3,
+        seed_age_epochs=20,
+    )
+
+    (
+        reward,
+        rent_penalty,
+        growth_ratio,
+        pbrs_bonus,
+        fossilize_bonus,
+        new_drip_state,
+        drip_this_epoch,
+    ) = compute_basic_reward(
+        acc_delta=5.0,
+        effective_seed_params=10_000,
+        total_params=110_000,
+        host_params=100_000,
+        config=config,
+        epoch=20,
+        max_epochs=150,
+        seed_info=seed_info,
+        action=LifecycleOp.FOSSILIZE,
+        seed_contribution=5.0,
+        seed_id="test-seed",
+        slot_id="r0c1",
+    )
+
+    # Should create drip state for valid fossilization
+    assert new_drip_state is not None
+    assert new_drip_state.seed_id == "test-seed"
+    assert new_drip_state.slot_id == "r0c1"
+    assert new_drip_state.drip_total > 0
+    # Immediate bonus should be 30% of full bonus (drip_fraction=0.7)
+    assert fossilize_bonus > 0

@@ -115,7 +115,7 @@ def compute_reward(
             config=config,
         )
 
-    elif config.reward_mode == RewardMode.BASIC:
+    elif config.reward_mode in (RewardMode.BASIC, RewardMode.BASIC_PLUS):
         (
             reward,
             rent_penalty,
@@ -135,10 +135,12 @@ def compute_reward(
             seed_info=inputs.seed_info,
             action=inputs.action,
             seed_contribution=inputs.seed_contribution,
+            # Pass drip parameters
+            seed_id=inputs.seed_id,
+            slot_id=inputs.slot_id,
+            fossilized_drip_states=inputs.fossilized_drip_states,
+            fossilized_contributions=inputs.fossilized_contributions,
         )
-        # Note: new_drip_state and drip_this_epoch are available for callers
-        # who need drip tracking. The compute_reward dispatcher doesn't expose
-        # them yet (needs inputs.fossilized_drip_states etc. to be wired through).
         if inputs.return_components:
             components = RewardComponentsTelemetry()
             components.total_reward = reward
@@ -151,6 +153,8 @@ def compute_reward(
             components.growth_ratio = growth_ratio
             components.pbrs_bonus = pbrs_bonus
             components.fossilize_terminal_bonus = fossilize_bonus
+            # Drip telemetry (expanded in BASIC_PLUS mode)
+            components.drip_this_epoch = drip_this_epoch
             return reward, components
 
     elif config.reward_mode == RewardMode.SIMPLIFIED:

@@ -107,6 +107,9 @@ class ContributionRewardInputs:
     # seeds_germinated_this_episode: Count of GERMINATE actions this episode (for first-germinate bonus)
     n_active_seeds: int = 0
     seeds_germinated_this_episode: int = 0
+    # Drip reward fields (BASIC/BASIC_PLUS mode post-fossilization accountability)
+    fossilized_drip_states: list[Any] | None = None  # list[FossilizedSeedDripState]
+    fossilized_contributions: dict[str, float] | None = None
 
 
 @dataclass(slots=True)

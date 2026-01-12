@@ -61,6 +61,9 @@ class RewardComponentsTelemetry:
     # D3: Anti-Timing-Gaming (early germination discount)
     timing_discount: float = 1.0  # Discount factor for early germination [discount_floor, 1.0]
 
+    # Drip reward (BASIC_PLUS mode post-fossilization accountability)
+    drip_this_epoch: float = 0.0  # Sum of drip payouts from all fossilized seeds this epoch
+
     # Context (for debugging) - DRL Expert recommended fields
     action_name: str = ""
     action_success: bool = True
@@ -170,6 +173,8 @@ class RewardComponentsTelemetry:
             "n_active_seeds": self.n_active_seeds,
             # D3: Anti-timing-gaming
             "timing_discount": self.timing_discount,
+            # Drip reward (BASIC_PLUS mode)
+            "drip_this_epoch": self.drip_this_epoch,
         }
 
     @classmethod
@@ -228,6 +233,8 @@ class RewardComponentsTelemetry:
             n_active_seeds=int(data.get("n_active_seeds", 0)),  # type: ignore[arg-type]
             # D3: Anti-timing-gaming
             timing_discount=float(data.get("timing_discount", 1.0)),  # type: ignore[arg-type]
+            # Drip reward (BASIC_PLUS mode)
+            drip_this_epoch=float(data.get("drip_this_epoch", 0.0)),  # type: ignore[arg-type]
         )
 
 
