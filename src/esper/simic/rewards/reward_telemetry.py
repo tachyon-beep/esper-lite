@@ -63,6 +63,9 @@ class RewardComponentsTelemetry:
 
     # Drip reward (BASIC_PLUS mode post-fossilization accountability)
     drip_this_epoch: float = 0.0  # Sum of drip payouts from all fossilized seeds this epoch
+    drip_immediate_bonus: float = 0.0  # 30% portion paid on FOSSILIZE
+    drip_deferred_total: float = 0.0  # 70% pool created this epoch (on FOSSILIZE)
+    num_drip_sources: int = 0  # Number of fossilized seeds contributing drip
 
     # Context (for debugging) - DRL Expert recommended fields
     action_name: str = ""
@@ -175,6 +178,9 @@ class RewardComponentsTelemetry:
             "timing_discount": self.timing_discount,
             # Drip reward (BASIC_PLUS mode)
             "drip_this_epoch": self.drip_this_epoch,
+            "drip_immediate_bonus": self.drip_immediate_bonus,
+            "drip_deferred_total": self.drip_deferred_total,
+            "num_drip_sources": self.num_drip_sources,
         }
 
     @classmethod
@@ -235,6 +241,9 @@ class RewardComponentsTelemetry:
             timing_discount=float(data.get("timing_discount", 1.0)),  # type: ignore[arg-type]
             # Drip reward (BASIC_PLUS mode)
             drip_this_epoch=float(data.get("drip_this_epoch", 0.0)),  # type: ignore[arg-type]
+            drip_immediate_bonus=float(data.get("drip_immediate_bonus", 0.0)),  # type: ignore[arg-type]
+            drip_deferred_total=float(data.get("drip_deferred_total", 0.0)),  # type: ignore[arg-type]
+            num_drip_sources=int(data.get("num_drip_sources", 0)),  # type: ignore[arg-type]
         )
 
 
