@@ -298,3 +298,11 @@ class TestBasicAccDeltaWeight:
         kwargs = config.to_train_kwargs()
         assert kwargs["reward_mode"] == "basic"
         assert kwargs["basic_acc_delta_weight"] == 8.0
+
+
+def test_basic_plus_reward_mode_exists() -> None:
+    """BASIC_PLUS reward mode is available."""
+    from esper.simic.rewards.contribution import RewardMode
+
+    assert hasattr(RewardMode, "BASIC_PLUS")
+    assert RewardMode.BASIC_PLUS.value == "basic_plus"

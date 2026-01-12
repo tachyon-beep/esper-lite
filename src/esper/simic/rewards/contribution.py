@@ -35,6 +35,7 @@ class RewardMode(Enum):
     SHAPED: Current dense shaping with PBRS, attribution, warnings (default)
     ESCROW: Dense, reversible attribution (anti-peak / anti-thrash)
     BASIC: Accuracy improvement minus parameter rent (minimal, no lifecycle shaping)
+    BASIC_PLUS: BASIC + post-fossilization drip reward (accountability for fossilized seeds)
     SPARSE: Terminal-only ground truth (accuracy - param_cost)
     MINIMAL: Sparse + early-prune penalty only
     SIMPLIFIED: DRL Expert recommended - PBRS + intervention cost + terminal only
@@ -43,6 +44,7 @@ class RewardMode(Enum):
     SHAPED = "shaped"
     ESCROW = "escrow"
     BASIC = "basic"
+    BASIC_PLUS = "basic_plus"  # BASIC with drip accountability
     SPARSE = "sparse"
     MINIMAL = "minimal"
     SIMPLIFIED = "simplified"
