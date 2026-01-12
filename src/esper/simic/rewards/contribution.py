@@ -245,6 +245,41 @@ class ContributionRewardConfig:
     # - "minimum": min(progress, contribution) - very conservative
     attribution_formula: Literal["geometric", "harmonic", "minimum"] = "harmonic"
 
+    # === Drip Reward Configuration (BASIC_PLUS mode) ===
+    # Post-fossilization accountability: drip reward paid over remaining epochs
+    # based on continued seed contribution. DRL Expert review 2026-01-12.
+
+    # Fraction of fossilize reward paid as drip (vs immediate)
+    # 0.0 = disable drip (BASIC mode default)
+    # 0.7 = 70% drip, 30% immediate (BASIC_PLUS mode)
+    drip_fraction: float = 0.0  # Default: disabled (BASIC mode unchanged)
+
+    # Maximum drip per epoch (prevents variance explosion)
+    max_drip_per_epoch: float = 0.1
+
+    # Minimum remaining epochs for drip calculation (floor for epoch normalization)
+    # Prevents division by near-zero for late fossilization
+    min_drip_epochs: int = 5
+
+    # Ratio for asymmetric negative clipping (negative_clip = -ratio * max_drip)
+    # DRL Expert: asymmetric clipping prevents death spirals while allowing full positive signal
+    negative_drip_ratio: float = 0.5
+
+    def __post_init__(self) -> None:
+        """Validate drip configuration and set mode-specific defaults."""
+        # BASIC_PLUS mode: enable drip by default if not explicitly set
+        if self.reward_mode == RewardMode.BASIC_PLUS and self.drip_fraction == 0.0:
+            self.drip_fraction = 0.7
+
+        if self.drip_fraction < 0.0 or self.drip_fraction > 1.0:
+            raise ValueError("drip_fraction must be in [0.0, 1.0]")
+        if self.max_drip_per_epoch <= 0:
+            raise ValueError("max_drip_per_epoch must be positive")
+        if self.min_drip_epochs < 1:
+            raise ValueError("min_drip_epochs must be >= 1")
+        if self.negative_drip_ratio < 0 or self.negative_drip_ratio > 1.0:
+            raise ValueError("negative_drip_ratio must be in [0.0, 1.0]")
+
     @staticmethod
     def default() -> "ContributionRewardConfig":
         """Return default configuration."""
