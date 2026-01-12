@@ -29,6 +29,65 @@ from .types import (
 _logger = logging.getLogger(__name__)
 
 
+@dataclass(slots=True)
+class FossilizedSeedDripState:
+    """Tracks drip reward state for a fossilized seed.
+
+    Created at fossilization, updated each epoch until episode end.
+    Drip provides post-fossilization accountability: if the seed degrades
+    after fossilization, drip becomes negative (penalty).
+
+    DRL Expert review 2026-01-12: Per-epoch counterfactual is the correct
+    signal for drip (Markovian, answers "is this seed helping right now?").
+    Terminal Shapley is used for telemetry only, not reward calculation.
+    """
+
+    seed_id: str
+    slot_id: str
+    fossilize_epoch: int
+    max_epochs: int
+
+    # Total drip pool (70% of original fossilize bonus)
+    drip_total: float
+
+    # Per-epoch drip scale (normalized by remaining epochs)
+    drip_scale: float
+
+    # Accumulated drip paid so far (for telemetry)
+    drip_paid: float = 0.0
+
+    @property
+    def remaining_epochs(self) -> int:
+        """Epochs remaining when seed was fossilized."""
+        return self.max_epochs - self.fossilize_epoch
+
+    def compute_epoch_drip(
+        self,
+        current_contribution: float,
+        max_drip: float,
+        negative_drip_ratio: float,
+    ) -> float:
+        """Compute drip for this epoch with asymmetric clipping.
+
+        Args:
+            current_contribution: Counterfactual contribution this epoch
+            max_drip: Maximum positive drip per epoch
+            negative_drip_ratio: Ratio for negative clip (neg_clip = -ratio * max_drip)
+
+        Returns:
+            Clipped drip amount for this epoch
+        """
+        # Base drip from contribution
+        raw_drip = self.drip_scale * current_contribution
+
+        # Asymmetric clipping (DRL Expert: prevents death spirals)
+        if raw_drip >= 0:
+            return min(raw_drip, max_drip)
+        else:
+            negative_clip = -negative_drip_ratio * max_drip
+            return max(raw_drip, negative_clip)
+
+
 class RewardMode(Enum):
     """Reward function variant for experimentation.
 
@@ -1260,6 +1319,7 @@ def get_intervention_cost(action: LifecycleOp) -> float:
 
 
 __all__ = [
+    "FossilizedSeedDripState",
     "RewardMode",
     "ContributionRewardConfig",
     "compute_contribution_reward",
