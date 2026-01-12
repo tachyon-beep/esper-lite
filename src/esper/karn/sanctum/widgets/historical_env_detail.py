@@ -193,9 +193,11 @@ class HistoricalEnvDetail(ModalScreen[None]):
                     id="lifecycle-panel",
                 )
 
-            # Footer hint
+            # Footer hint with toggle explanation
             yield Static(
-                "[dim]Press ESC, Q, or click to close[/dim]",
+                "[dim]TAB: Toggle Peak↔End state  │  "
+                "Peak=snapshot at best accuracy, End=episode finish  │  "
+                "ESC/Q: Close[/dim]",
                 classes="footer-hint",
             )
 
@@ -324,6 +326,32 @@ class HistoricalEnvDetail(ModalScreen[None]):
         header.append(f"Fossilized: {record.fossilized_count}", style="green")
         header.append("  │  ")
         header.append(f"Pruned: {record.pruned_count}", style="red")
+
+        # Add contextual hint when viewing End state if seeds differ from peak
+        if self._view_state == "end" and record.end_seeds:
+            # Check if any seed states differ between peak and end
+            peak_seeds = record.seeds
+            end_seeds = record.end_seeds
+            differences = []
+            for slot_id in set(peak_seeds.keys()) | set(end_seeds.keys()):
+                peak_seed = peak_seeds.get(slot_id)
+                end_seed = end_seeds.get(slot_id)
+                if peak_seed and end_seed:
+                    if peak_seed.stage != end_seed.stage:
+                        differences.append(f"{slot_id}: {peak_seed.stage}→{end_seed.stage}")
+                    elif peak_seed.alpha_curve != end_seed.alpha_curve:
+                        differences.append(f"{slot_id}: curve {peak_seed.alpha_curve}→{end_seed.alpha_curve}")
+                elif peak_seed and not end_seed:
+                    differences.append(f"{slot_id}: present→absent")
+                elif end_seed and not peak_seed:
+                    differences.append(f"{slot_id}: absent→present")
+
+            if differences:
+                header.append("\n")
+                header.append("Δ Peak→End: ", style="dim italic")
+                header.append(", ".join(differences[:3]), style="yellow dim")
+                if len(differences) > 3:
+                    header.append(f" (+{len(differences) - 3} more)", style="dim")
 
         return header
 
