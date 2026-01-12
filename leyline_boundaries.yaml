@@ -50,6 +50,10 @@ allow_hits:
     owner: "john"
     reason: "Reward debugging telemetry, simic-internal"
 
+  - key: "src/esper/simic/rewards/contribution.py:dataclass:FossilizedSeedDripState"
+    owner: "john"
+    reason: "Post-fossilization drip tracking (BASIC_PLUS mode), simic-internal"
+
   # ============================================================================
   # SIMIC: Telemetry Implementation
   # ============================================================================
@@ -170,6 +174,49 @@ allow_hits:
   - key: "src/esper/simic/training/helpers.py:protocol:_HasSeedParameters"
     owner: "john"
     reason: "Internal protocol for parameter counting helpers"
+
+  - key: "src/esper/simic/training/epoch_runner.py:dataclass:EpochState"
+    owner: "john"
+    reason: "Epoch execution state, simic-internal"
+
+  - key: "src/esper/simic/training/ppo_coordinator.py:dataclass:PPOUpdateResult"
+    owner: "john"
+    reason: "PPO update result container, simic-internal"
+
+  - key: "src/esper/simic/training/ppo_coordinator.py:dataclass:PPOCoordinatorConfig"
+    owner: "john"
+    reason: "PPO coordinator configuration, simic-internal"
+
+  # ============================================================================
+  # SIMIC: Lifecycle Handlers (env-refactor)
+  # ============================================================================
+  - key: "src/esper/simic/training/handlers/base.py:dataclass:HandlerContext"
+    owner: "john"
+    reason: "Context for lifecycle action handlers, simic-internal"
+
+  - key: "src/esper/simic/training/handlers/base.py:dataclass:HandlerResult"
+    owner: "john"
+    reason: "Result from lifecycle action handlers, simic-internal"
+
+  - key: "src/esper/simic/training/handlers/base.py:protocol:LifecycleHandler"
+    owner: "john"
+    reason: "Protocol for lifecycle action handlers, simic-internal"
+
+  - key: "src/esper/simic/training/handlers/alpha.py:dataclass:AlphaTargetParams"
+    owner: "john"
+    reason: "Parameters for SET_ALPHA_TARGET handler, simic-internal"
+
+  - key: "src/esper/simic/training/handlers/germinate.py:dataclass:GerminateParams"
+    owner: "john"
+    reason: "Parameters for GERMINATE handler, simic-internal"
+
+  - key: "src/esper/simic/training/handlers/prune.py:dataclass:PruneParams"
+    owner: "john"
+    reason: "Parameters for PRUNE handler, simic-internal"
+
+  - key: "src/esper/simic/training/handlers/fossilize.py:dataclass:HindsightCreditResult"
+    owner: "john"
+    reason: "Scaffold hindsight credit calculation result, simic-internal"
 
   # ============================================================================
   # SIMIC: Agent Internals
