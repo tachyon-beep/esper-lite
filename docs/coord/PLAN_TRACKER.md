@@ -844,7 +844,7 @@ title: Post-Fossilization Drip Reward
 type: ready
 created: 2026-01-12
 updated: 2026-01-12
-location: docs/plans/ready/2026-01-12-post-fossilization-drip-reward.md
+location: docs/plans/ready/2026-01-12-post-fossilization-drip-reward-impl.md
 
 urgency: high
 value: |
@@ -861,30 +861,42 @@ risk_notes: |
 depends_on: []
 blocks: []
 
-status_notes: |
-  DRL EXPERT REVIEWED (2026-01-12):
+reviewed_by:
+  - reviewer: drl-expert
+    date: 2026-01-12
+    verdict: approved_with_modifications
 
-  Design decisions:
+status_notes: |
+  DRL EXPERT REVIEWED & APPROVED (2026-01-12):
+
+  APPROVED DESIGN:
   - 70/30 split: 30% immediate for credit assignment, 70% drip for accountability
   - Epoch-normalized drip scale prevents early-fossilization gaming
   - Contribution-only for drip (not harmonic mean - improvement fixed at fossilization)
-  - Drip clipping at +/-0.1 prevents variance explosion
-  - Diminishing returns for multiple fossilized seeds
+  - Per-epoch counterfactual is correct signal (NOT terminal Shapley)
+  - ~85% effective value due to gamma discounting (desirable - slight pessimism)
 
-  Key files:
-  - src/esper/simic/rewards/contribution.py (add drip logic)
-  - src/esper/simic/training/config.py (add drip config)
-  - src/esper/simic/rewards/reward_telemetry.py (add drip telemetry)
+  MODIFICATIONS FROM ORIGINAL PLAN:
+  1. REMOVED: Diminishing returns for multiple fossils (replace with contribution threshold)
+  2. ADDED: Asymmetric clipping (+0.1 positive, -0.05 negative to prevent death spirals)
+  3. CONFIRMED: No Shapley reconciliation needed (per-epoch counterfactual is Markovian)
+
+  IMPLEMENTATION PLAN: 8 TDD tasks with bite-sized steps
+  - Task 1: Add drip config fields
+  - Task 2: Add FossilizedSeedDripState dataclass
+  - Task 3: Modify compute_basic_reward for drip split
+  - Task 4-5: Golden tests and property tests
+  - Task 6-7: Update dispatcher and telemetry
+  - Task 8: Integrate in VectorizedPPOTrainer
 percent_complete: 0
 ```
 
 **Commentary:**
-> New plan to close post-fossilization gaming exploit. Seeds currently can fossilize
-> when metrics look good, then degrade after fossilization with no accountability.
-> The drip reward splits fossilize bonus into immediate (30%) and drip (70%) components.
-> Drip paid over remaining epochs based on continued contribution - negative contribution
-> produces negative drip (penalty). Epoch normalization ensures expected total is
-> independent of fossilization timing.
+> DRL Expert reviewed both the core design and the counterfactual vs Shapley question.
+> Key insight: per-epoch counterfactual and terminal Shapley answer different causal questions.
+> Counterfactual ("is this seed helping right now?") is correct for Markovian dense rewards.
+> Shapley ("what was fair attribution of total gain?") is correct for terminal evaluation only.
+> Implementation plan has 8 TDD tasks with complete code snippets and test commands.
 
 ---
 
