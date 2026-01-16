@@ -94,6 +94,7 @@ The following commands can destroy uncommitted work or rewrite history. **ALWAYS
 **A messy commit or wrong files in a commit is a minor, fixable problem. Lost uncommitted work is permanent.**
 
 If you make a mistake (wrong files staged, bad commit message, etc.):
+
 1. Make another commit to fix it
 2. Or ask the user if they want to do an interactive rebase
 3. NEVER unilaterally run destructive commands to "clean up"
@@ -284,7 +285,7 @@ No Bug-Hiding Patterns: This codebase prohibits defensive patterns that mask bug
 
 ### Legitimate Uses
 
-This prohibition does not exclude genuine uses of type checking or error handling where appropriate, such as:
+This prohibition does not extend to genuine uses of type checking or error handling where appropriate, such as:
 
 - **PyTorch tensor operations** (9): Converting tensors to scalars, device moves
 - **Device type normalization** (6): `str` → `torch.device` conversion
