@@ -1,48 +1,49 @@
 # Esper Plan Tracker
 
-**Last Updated:** 2026-01-12 (added post-fossilization drip reward plan)
+**Last Updated:** 2026-02-21 (full audit after 1-month hiatus)
 **Purpose:** Rack-and-stack all plans and concepts for prioritization and dependency tracking.
 
 ---
 
 ## Executive Summary
 
-### 🔴 CRITICAL: Op Head Entropy Collapse
+### Post-Hiatus Audit (2026-02-21)
 
-**Previous entropy-collapse fix was INSUFFICIENT.** DRL expert telemetry analysis (2026-01-11) revealed:
-- Op head entropy floor (0.15) was too close to collapse point (0.14)
-- Policy freezes after batch 40: WAIT 99.9%, GERMINATE 0.07%
-- All 48 fossilizations occurred in Q1; Q2-Q4 had ZERO
-- Blueprint head collapsed to 0.000 entropy, picking worst blueprint 72% of the time
+Full codebase audit performed after returning from a month off. Many plans marked "0%" were
+actually completed during the Jan 9-17 implementation sprint but the tracker was never updated.
+
+### 🔴 CRITICAL: Op/Value Mismatch Bug
+
+**CRITICAL-op-value-mismatch** (in `docs/bugs/investigations/`): Q(s,op) value head samples
+op twice independently — once in `forward()` for value computation, once in `get_action()` for
+the stored action. These ops frequently diverge, corrupting advantage estimates. Blocks Phase 7.
 
 ### Current Focus Areas
-1. **Op Entropy Collapse Fix** - 🔴 CRITICAL! Must implement probability floors + higher entropy floors
-2. **Holding Warning Fix** - ✅ COMPLETE! Committed 2026-01-08, DRL expert signed
-3. **Simic2 Refactor** - ✅ COMPLETE. Moved to `docs/plans/completed/simic2/`
-4. **Reward Efficiency Experiment** - Infrastructure complete, experiment never run (BLOCKED by entropy fix)
-5. **Phase3-TinyStories** - 80-90% IMPLEMENTED (BLOCKED by entropy fix)
+1. **Op/Value Mismatch** - 🔴 CRITICAL! Fix double-sampling in factored_lstm.py
+2. **Reward Efficiency Experiment** - Infrastructure complete, experiment never run
+3. **Phase3-TinyStories** - 85% IMPLEMENTED, needs validation runs
+4. **Drip Reward Implementation** - ~70% done, needs integration completion
+5. **Telemetry Domain Separation** - ~30% done
 6. **Blueprint Compiler** - 0% (correctly deferred until entropy confirmed stable)
 
-### Critical Path
+### Critical Path (Updated)
 ```
-[op-entropy-collapse 🔴] ──► reward-efficiency ──► counterfactual-oracle ──► emrakul-phase1
-         │
-         └──► blueprint-compiler ──► kasmina2-phase0
-         │
-         └──► phase3-tinystories (validation runs)
+[op-value-mismatch 🔴] ──► reward-efficiency ──► counterfactual-oracle ──► emrakul-phase1
+                                    │
+                                    └──► blueprint-compiler ──► kasmina2-phase0
 ```
 
 ### Health Summary
 | Status | Count | Notes |
 |--------|-------|-------|
-| 🔴 Critical | 1 | op-entropy-collapse (blocks all training) |
-| Completed | 8 | simic2 (3) + holding-warning + 4 transitory telemetry |
-| Ready | 10 | Implementation-ready plans (drip-reward added 2026-01-12) |
-| In Progress | 1 | phase3-tinystories |
+| 🔴 Critical | 1 | op-value-mismatch (corrupts advantage estimates) |
+| Completed | 14 | simic2 (3) + entropy fixes (2) + holding-warning + simic-audit + dual-state lifecycle (2) + drip-reward design + 4 telemetry |
+| Ready | 11 | Implementation-ready plans |
+| In Progress | 1 | phase3-tinystories (85%) |
 | Planning | 6 | Active design workspaces |
-| Concept | 5 | Early ideas |
-| Abandoned | 2 | Superseded (shaped-delta-clip, emrakul-submodule-editing) |
-| **Total Active** | **23** |
+| Concept | 3 | counterfactual-oracle, emrakul-sketch, scaled-counterfactuals |
+| Abandoned | 3 | shaped-delta-clip, emrakul-submodule-editing, scry-design |
+| **Total Active** | **25** |
 
 ---
 
@@ -52,14 +53,15 @@
 
 | ID | Title | Type | Urgency | Complexity | Risk | Status |
 |----|-------|------|---------|------------|------|--------|
-| op-entropy-collapse | Op Head Entropy Collapse Fix | ready | 🔴 critical | M | high | 0% - DRL expert diagnosed (2026-01-11) |
+| op-value-mismatch | Q(s,op) Double-Sampling Bug | investigation | 🔴 critical | M | high | Diagnosed 2025-12-31, blocks Phase 7. See `docs/bugs/investigations/` |
 
 ### Tier 1: High Priority (This Week)
 
 | ID | Title | Type | Urgency | Complexity | Risk | Status |
 |----|-------|------|---------|------------|------|--------|
 | reward-efficiency | Phase 1 Final Exam (A/B Testing) | ready | high | S | low | ⚠️ Infra 100% done, experiment never run |
-| telemetry-domain-sep | Telemetry Domain Separation | ready | high | L | medium | ~15% done (3/9 DRL fields), no renaming |
+| drip-reward-impl | Post-Fossilization Drip Reward (impl) | ready | high | M | medium | ~70% done - dataclass + config complete, integration pending |
+| telemetry-domain-sep | Telemetry Domain Separation | ready | high | L | medium | ~30% done (3/9 DRL fields), no event renaming |
 | counterfactual-aux | Counterfactual Auxiliary Supervision | ready | high | M | medium | 0% - None of 4 phases started |
 | blueprint-compiler | Blueprint Compiler (Phase 3 only) | ready | high | XL | medium | 0% - Correctly deferred until entropy stable |
 
@@ -67,9 +69,8 @@
 
 | ID | Title | Type | Urgency | Complexity | Risk | Status |
 |----|-------|------|---------|------------|------|--------|
-| drip-reward | Post-Fossilization Drip Reward | ready | high | M | medium | 0% - DRL expert reviewed 2026-01-12 |
-| phase3-tinystories | Transformer Domain Pivot | in-progress | medium | L | medium | ✅ 80-90% complete, needs validation runs |
-| kasmina2-phase0 | Submodule Intervention Foundation | planning | high | L | medium | Design complete, ready to implement |
+| phase3-tinystories | Transformer Domain Pivot | in-progress | medium | L | medium | ✅ 85% complete, needs validation runs |
+| kasmina2-phase0 | Submodule Intervention Foundation | planning | high | L | medium | Design complete, simic2 blocker removed |
 | defensive-patterns | Defensive Pattern Fixes | ready | medium | M | low | Removes 23 inappropriate defensive patterns |
 | sanctum-help | Sanctum Help System | ready | medium | L | low | Contextual help modals for TUI |
 | heuristic-tamiyo | Heuristic Tamiyo Tempo Parity | ready | medium | S | low | 5-head support for fair A/B comparison |
@@ -99,8 +100,12 @@
 
 | ID | Title | Type | Status | Location |
 |----|-------|------|--------|----------|
+| op-entropy-collapse | Op Head Entropy Collapse Fix | ✅ completed | Two-pronged fix: probability floors + entropy floors. Jan 9-11 sprint. | `docs/plans/completed/` |
 | entropy-collapse | Per-Head Entropy Collapse Fix | ✅ completed | All 7 tasks, tests passing | `docs/plans/completed/` |
 | holding-warning | SET_ALPHA_TARGET Turntabling Fix | ✅ completed | Committed 2026-01-08, DRL signed | `docs/plans/completed/` |
+| simic-audit | Simic Audit Remediation | ✅ completed | Governor tests, action handlers, PPOCoordinator extraction. Jan 10-11. | `docs/plans/completed/` |
+| dual-state-lifecycle | Historical Dual-State Lifecycle | ✅ completed | SeedLifecycleEvent, LifecyclePanel, Peak/End toggle. Jan 10. | `docs/plans/completed/` |
+| drip-reward-design | Post-Fossilization Drip Reward (design) | ✅ completed | DRL expert reviewed 2026-01-12, approved with modifications | `docs/plans/completed/` |
 | simic2-phase1 | Vectorized Module Split | ✅ completed | — | `docs/plans/completed/simic2/` |
 | simic2-phase2 | Typed Contracts & API | ✅ completed | — | `docs/plans/completed/simic2/` |
 | simic2-phase3 | Simic Module Split | ✅ completed | — | `docs/plans/completed/simic2/` |
@@ -115,6 +120,7 @@
 |----|-------|--------|
 | emrakul-submodule-editing | BLENDING/HOLDING Mutations | Superseded by Track A+C Microstructured Ladders |
 | shaped-delta-clip | SHAPED Mode Delta Clipping | Superseded by op-entropy-collapse (root cause is entropy, not reward inflation) |
+| scry-design | Scry Interface | Superseded; no scry directory exists |
 
 ---
 
@@ -167,58 +173,47 @@ percent_complete: 100
 ```yaml
 id: op-entropy-collapse
 title: Op Head Entropy Collapse Fix
-type: ready
+type: completed
 created: 2026-01-09
-updated: 2026-01-11
-location: ~/.claude/plans/reactive-churning-mist.md
+updated: 2026-02-21
+location: docs/plans/completed/2026-01-11-op-head-entropy-collapse-fix.md
 
-urgency: critical
+urgency: N/A (done)
 value: |
-  Fixes multi-stage entropy collapse that freezes the policy.
-  Op head collapses to 98% WAIT, starving sparse heads (blueprint, tempo)
-  of gradient signal. Policy stops learning after batch 40.
+  Fixed multi-stage entropy collapse that froze the policy.
 
 complexity: M
-risk: high
-risk_notes: |
-  - Higher entropy floors may initially reduce training efficiency
-  - Probability floors change action distribution (may affect early convergence)
-  - CRITICAL: Current state is completely broken - any fix is better than status quo
+risk: N/A (completed successfully)
 
 depends_on: []
-blocks:
-  - All training runs (policy freezes without this fix)
-  - blueprint-compiler (can't explore blueprints with collapsed policy)
+blocks: []
 
 status_notes: |
-  DRL EXPERT DIAGNOSIS (2026-01-11):
+  ✅ COMPLETED (Jan 9-11 implementation sprint)
 
-  Root cause is OP HEAD collapse, not sparse heads:
-  1. Op entropy: 0.51 → 0.14 (collapse point just above floor!)
-  2. WAIT rate: 92% → 99.9%
-  3. Blueprint entropy: 0.125 → 0.000 (zero gradients)
-  4. GERMINATE rate: 3.68% → 0.07%
-  5. Fossilizations: 47 (Q1) → 0 (Q2-Q4)
+  TWO-PRONGED FIX:
+  1. HARD FLOOR: PROBABILITY_FLOOR_PER_HEAD in MaskedCategorical (op=0.05)
+     - Guarantees minimum probability mass on all valid actions
+     - 741 lines across 13 files (commit 288643a7)
+  2. SOFT FLOOR: Updated ENTROPY_FLOOR_PER_HEAD (op: 0.15→0.25)
+     - Quadratic penalty, per-head coefficients, late-training decay
+     - Blueprint/tempo penalty coef: 0.1→0.3
 
-  SOLUTION (two-pronged):
-  1. HARD FLOOR: Add PROBABILITY_FLOOR_PER_HEAD with op=0.05
-  2. SOFT FLOOR: Increase ENTROPY_FLOOR_PER_HEAD op from 0.15 to 0.25
-  3. STRONGER PENALTY: Increase blueprint/tempo coef from 0.1 to 0.3
+  ALSO DELIVERED:
+  - Availability masks (compute_availability_masks in leyline/causal_masks.py)
+  - Per-head entropy collapse detection with hysteresis in anomaly_detector.py
+  - Governor rollback telemetry
+  - 379-line probability floor test suite
 
-  IMPLEMENT IMMEDIATELY - replaces shaped-delta-clip as priority.
-percent_complete: 0
+  Plan moved to completed/ on 2026-01-11.
+percent_complete: 100
 ```
 
 **Commentary:**
-> 🔴 **CRITICAL.** DRL expert telemetry analysis (2026-01-11) revealed that the
-> previous entropy-collapse fix was insufficient. The op head floor (0.15) was
-> too close to the collapse point (0.14), allowing degenerate equilibrium.
->
-> Key finding: 98% WAIT isn't "learned selectivity" - it's policy freeze.
-> Blueprint head collapsed to 0.000 entropy, picking conv_small (0% fossil rate)
-> 72% of the time in Q4. The policy stopped learning after batch 40.
->
-> Supersedes shaped-delta-clip - the root cause is entropy collapse, not reward inflation.
+> ✅ **COMPLETE.** Implemented during the Jan 9-11 sprint. The two-pronged fix
+> (probability floors + entropy floors) addresses both the hard guarantee
+> (gradients always flow) and the soft pressure (penalty pushes entropy up).
+> The PLAN_TRACKER was stale — this was marked "0%" but was fully committed.
 
 ---
 
@@ -841,10 +836,12 @@ percent_complete: 0
 ```yaml
 id: drip-reward
 title: Post-Fossilization Drip Reward
-type: ready
+type: split (design=completed, impl=in-progress)
 created: 2026-01-12
-updated: 2026-01-12
-location: docs/plans/ready/2026-01-12-post-fossilization-drip-reward-impl.md
+updated: 2026-02-21
+
+design_doc: docs/plans/completed/2026-01-12-post-fossilization-drip-reward.md
+impl_plan: docs/plans/ready/2026-01-12-post-fossilization-drip-reward-impl.md
 
 urgency: high
 value: |
@@ -853,10 +850,6 @@ value: |
 
 complexity: M
 risk: medium
-risk_notes: |
-  - PPO variance could increase if drip magnitude miscalibrated
-  - Credit assignment more complex (rewards arrive after action)
-  - Must ensure drip normalization prevents early-fossilization gaming
 
 depends_on: []
 blocks: []
@@ -867,28 +860,22 @@ reviewed_by:
     verdict: approved_with_modifications
 
 status_notes: |
-  DRL EXPERT REVIEWED & APPROVED (2026-01-12):
+  DESIGN: ✅ COMPLETE (moved to completed/)
+  IMPLEMENTATION: ~70% done (Jan 12 sprint)
 
-  APPROVED DESIGN:
-  - 70/30 split: 30% immediate for credit assignment, 70% drip for accountability
-  - Epoch-normalized drip scale prevents early-fossilization gaming
-  - Contribution-only for drip (not harmonic mean - improvement fixed at fossilization)
-  - Per-epoch counterfactual is correct signal (NOT terminal Shapley)
-  - ~85% effective value due to gamma discounting (desirable - slight pessimism)
+  IMPLEMENTED:
+  ✅ Task 1: BASIC_PLUS reward mode enum added
+  ✅ Task 2: FossilizedSeedDripState dataclass (contribution.py)
+  ✅ Task 3: Drip split in compute_basic_reward (70/30)
+  ✅ Task 4-5: Golden tests and property tests for drip anti-gaming
+  ✅ Task 6: BASIC_PLUS wired into reward dispatcher
+  ✅ Task 7: Complete drip telemetry fields added
 
-  MODIFICATIONS FROM ORIGINAL PLAN:
-  1. REMOVED: Diminishing returns for multiple fossils (replace with contribution threshold)
-  2. ADDED: Asymmetric clipping (+0.1 positive, -0.05 negative to prevent death spirals)
-  3. CONFIRMED: No Shapley reconciliation needed (per-epoch counterfactual is Markovian)
+  REMAINING:
+  ❌ Task 8: Full integration in VectorizedPPOTrainer (partial)
+  ❌ End-to-end validation run
 
-  IMPLEMENTATION PLAN: 8 TDD tasks with bite-sized steps
-  - Task 1: Add drip config fields
-  - Task 2: Add FossilizedSeedDripState dataclass
-  - Task 3: Modify compute_basic_reward for drip split
-  - Task 4-5: Golden tests and property tests
-  - Task 6-7: Update dispatcher and telemetry
-  - Task 8: Integrate in VectorizedPPOTrainer
-percent_complete: 0
+percent_complete: 70
 ```
 
 **Commentary:**
@@ -1066,22 +1053,9 @@ percent_complete: 0
                     ═══════════════════════════════════
 
 ┌──────────────────┐
-│ 🔴 entropy       │    ← FIX FIRST (training broken without this)
-│    collapse      │
+│ 🔴 op-value      │    ← FIX FIRST (corrupts advantage estimates)
+│    mismatch      │
 └────────┬─────────┘
-         │
-         ▼
-┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
-│ holding-warning  │    │ telemetry        │    │ counterfactual   │
-│ (quick fix)      │    │ domain-sep       │    │ -aux             │
-└────────┬─────────┘    └────────┬─────────┘    └────────┬─────────┘
-         │                       │                       │
-         └───────────────────────┼───────────────────────┘
-                                 │
-                                 ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                      FOUNDATION READY                                │
-└──────────────────────────────────────────────────────────────────────┘
          │
          ├──────────────────────────────────────┐
          │                                      │
@@ -1104,10 +1078,27 @@ percent_complete: 0
                     ═════════════════════════════════════════════
 
 ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│ drip-reward-impl │    │ telemetry        │    │ counterfactual   │
+│ (70% done)       │    │ domain-sep (30%) │    │ -aux             │
+└──────────────────┘    └──────────────────┘    └──────────────────┘
+
+┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
 │ phase3-          │    │ sanctum-help     │    │ defensive-       │
 │ tinystories      │    │ (UX)             │    │ patterns         │
 │ (85% done)       │    │                  │    │ (code quality)   │
 └──────────────────┘    └──────────────────┘    └──────────────────┘
+
+                    COMPLETED (Jan 9-17 sprint)
+                    ════════════════════════════
+
+┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│ ✅ entropy       │    │ ✅ holding       │    │ ✅ simic-audit   │
+│    collapse      │    │    warning       │    │    remediation   │
+└──────────────────┘    └──────────────────┘    └──────────────────┘
+┌──────────────────┐    ┌──────────────────┐
+│ ✅ dual-state    │    │ ✅ drip-reward   │
+│    lifecycle     │    │    design        │
+└──────────────────┘    └──────────────────┘
 
                     FUTURE (after Stage 3 stable)
                     ════════════════════════════════
@@ -1124,7 +1115,7 @@ percent_complete: 0
 
 | Plan | Risk Level | Primary Risk | Mitigation |
 |------|------------|--------------|------------|
-| entropy-collapse | 🔴 CRITICAL | Training completely broken | Implement immediately |
+| op-value-mismatch | 🔴 CRITICAL | Corrupts advantage estimates in all training | Fix double-sampling in factored_lstm.py |
 | counterfactual-oracle | HIGH | Goodhart/reward hacking | Probe as observation only, never as reward |
 | emrakul-immune | HIGH | Novel architecture, two-timescale learning | Phased rollout, Shapley labels in Phase 1 only |
 | phase3-tinystories | HIGH | NaN spikes on graft | Zero-init projections, LayerNorm pre-injection |
@@ -1133,7 +1124,6 @@ percent_complete: 0
 | telemetry-domain-sep | MEDIUM | Schema migration | Do early before more runs accumulate |
 | kasmina2-phase0 | MEDIUM | Cross-domain coordination | Six parallel tracks with clear ownership |
 | esika-superstructure | MEDIUM | New coordination layer | Infrastructure only, no intelligence |
-| holding-warning | LOW | Simple fix | Terminal actions exempt |
 | defensive-patterns | LOW | Code quality only | No behavior change |
 | sanctum-help | LOW | User-facing only | N/A |
 | karn2 | LOW | User-facing only | N/A |
@@ -1144,28 +1134,31 @@ percent_complete: 0
 
 ### Immediate Actions (This Week)
 
-1. **Run reward-efficiency experiment** - Infrastructure is 100% complete:
+1. **Fix op-value-mismatch** - CRITICAL bug corrupting advantage estimates. See `docs/bugs/investigations/CRITICAL-op-value-mismatch.md`
+
+2. **Run reward-efficiency experiment** - Infrastructure is 100% complete:
    ```bash
    uv run python -m esper.scripts.train ppo --dual-ab shaped-vs-simplified --episodes 100
    ```
 
-2. **Run TinyStories baseline** - Implementation is 85% complete:
+3. **Run TinyStories baseline** - Implementation is 85% complete:
    ```bash
    uv run python -m esper.scripts.train ppo --task tinystories --episodes 50
    ```
 
 ### Short-Term (Next 2 Weeks)
 
-3. **Implement telemetry-domain-sep** - Currently ~15% done (3/9 DRL fields). Break schema now.
-4. **Implement counterfactual-aux** - 0% done. Adds ContributionPredictor head.
-5. **Implement heuristic-tamiyo** - 0% done. TamiyoDecision needs tempo field.
-6. **Analyze reward A/B results** - Declare winner (SHAPED vs SIMPLIFIED).
+4. **Complete drip-reward integration** - ~70% done, needs pipeline wiring and telemetry
+5. **Implement telemetry-domain-sep** - Currently ~30% done. Break schema now.
+6. **Implement counterfactual-aux** - 0% done. Adds ContributionPredictor head.
+7. **Triage generated bugs** - 14 Codex analysis files in `docs/bugs/generated/` need review
+8. **Analyze reward A/B results** - Declare winner (SHAPED vs SIMPLIFIED).
 
 ### Medium-Term (Next Month)
 
-7. **Begin kasmina2-phase0 implementation** - Design complete, simic2 blocker removed.
-8. **Begin counterfactual-oracle Phase 1** - Unblocked once reward-efficiency has data.
-9. **Blueprint compiler Phase 4** - New curriculum blueprints (ONLY if entropy stable >0.10).
+9. **Begin kasmina2-phase0 implementation** - Design complete, simic2 blocker removed.
+10. **Begin counterfactual-oracle Phase 1** - Unblocked once reward-efficiency has data.
+11. **Blueprint compiler Phase 4** - New curriculum blueprints (ONLY if entropy stable >0.10).
 
 ### Parking Lot (Not Now)
 
@@ -1184,6 +1177,24 @@ percent_complete: 0
 
 | Date | Change |
 |------|--------|
+| 2026-02-21 | **POST-HIATUS FULL AUDIT.** Returned after 1-month break. Comprehensive codebase audit using explore agents: |
+| | **Plans moved to completed/ (5 files):** |
+| | - op-entropy-collapse: FULLY IMPLEMENTED Jan 9-11 (probability floors + entropy floors) |
+| | - simic-audit-remediation: Effectively completed Jan 10-11 (Governor tests, action handlers, PPOCoordinator) |
+| | - historical-dual-state-lifecycle (2 files): Complete (SeedLifecycleEvent, LifecyclePanel) |
+| | - post-fossilization-drip-reward design: DRL expert reviewed and approved |
+| | **Plans moved to abandoned/ (1 file):** |
+| | - emrakul-submodule-editing: Moved from concepts/ (self-documents supersession) |
+| | **Plans moved to ready/ (1 file):** |
+| | - phase3-tinystories-strategy: Moved from concepts/ (85% implemented, needs validation runs) |
+| | **Critical bug surfaced:** |
+| | - CRITICAL-op-value-mismatch in investigations/: Q(s,op) double-sampling corrupts advantages |
+| | **Bugs folder audited:** 307+ files across fixed/triaged/wontfix/not-a-bug/generated. |
+| | - 14 generated Codex analysis files need triage |
+| | - 0 skip/xfail markers in tests (good hygiene) |
+| | **Key takeaway:** The Jan 9-17 sprint completed far more than the tracker reflected. |
+| | Entropy collapse, simic audit, dual-state lifecycle, drip reward design all done. |
+| | Updated Health Summary: Completed 8→14, Concept 5→3, Abandoned 2→3. |
 | 2026-01-12 | **POST-FOSSILIZATION DRIP REWARD.** Added new plan to close gaming exploit: |
 | | - Seeds can fossilize at peak metrics then degrade with no accountability |
 | | - Solution: 70/30 split - 30% immediate, 70% drip over remaining epochs |
@@ -1259,11 +1270,13 @@ Quick reference for all tracked plans:
 | `2026-01-09-blueprint-compiler-appendix-future-blueprints.md` | blueprint-future |
 | `2026-01-02-telemetry-domain-separation.md` | telemetry-domain-sep |
 | `2026-01-10-counterfactual-auxiliary-supervision.md` | counterfactual-aux |
-| `2026-01-12-post-fossilization-drip-reward.md` | drip-reward |
+| `2026-01-12-post-fossilization-drip-reward-impl.md` | drip-reward-impl |
 | `defensive-pattern-fixes.md` | defensive-patterns |
 | `2025-12-29-sanctum-help-system.md` | sanctum-help |
+| `2025-12-26-slot-transformer-architecture.md` | tamiyo4 |
 | `h-tamiyo-updates.md` | heuristic-tamiyo |
 | `phase1-final-exam.md` | reward-efficiency |
+| `phase3-tinystories-strategy.md` | phase3-tinystories |
 
 ### planning/ (Active Design)
 | Folder | ID |
@@ -1273,7 +1286,6 @@ Quick reference for all tracked plans:
 | `kasmina1.5/` | kasmina-multichannel |
 | `esika1/` | esika-superstructure |
 | `karn2/` | karn2 |
-| `tamiyo4/` | tamiyo4 |
 | `narset1/` | narset1 |
 
 ### concepts/ (Early Ideas)
@@ -1281,22 +1293,36 @@ Quick reference for all tracked plans:
 |------|-----|
 | `emrakul-sketch.md` | emrakul-sketch |
 | `counterfactual_oracle.md` | counterfactual-oracle |
-| `phase3-tinystories-strategy.md` | phase3-tinystories |
 | `scaled_counterfactuals.md` | scaled-counterfactuals |
-| `emrakul-submodule-editing-blending-holding.md` | emrakul-submodule-editing (ABANDONED) |
 
 ### abandoned/ (Superseded)
 | File | ID |
 |------|-----|
 | `shaped-mode-delta-clipping.md` | shaped-delta-clip (superseded by op-entropy-collapse) |
+| `emrakul-submodule-editing-blending-holding.md` | emrakul-submodule-editing (superseded by Track A+C) |
 
 ### completed/ (Historical)
 | File/Folder | ID |
 |-------------|-----|
 | `simic2/` | simic2-phase1, simic2-phase2, simic2-phase3 |
 | `2026-01-09-fix-per-head-entropy-collapse.md` | entropy-collapse |
+| `2026-01-11-op-head-entropy-collapse-fix.md` | op-entropy-collapse |
 | `2026-01-08-fix-set-alpha-target-turntabling.md` | holding-warning |
+| `2026-01-11-simic-audit-remediation.md` | simic-audit |
+| `2026-01-10-historical-dual-state-lifecycle-design.md` | dual-state-lifecycle (design) |
+| `2026-01-10-historical-dual-state-lifecycle.md` | dual-state-lifecycle (impl) |
+| `2026-01-12-post-fossilization-drip-reward.md` | drip-reward-design |
 | `2026-01-03-diagnostic-panel-metrics-wiring.md` | diagnostic-panel-metrics |
 | `2026-01-03-tele-340-lstm-health-wiring.md` | tele-340-lstm-health |
 | `2026-01-04-tele-610-episode-stats-wiring.md` | tele-610-episode-stats |
 | `2026-01-04-value-function-metrics-wiring.md` | value-function-metrics |
+
+### bugs/ (Issue Tracking)
+| Category | Count | Notes |
+|----------|-------|-------|
+| `investigations/` | 4 | Includes CRITICAL-op-value-mismatch |
+| `fixed/` | 90 | Resolved with code changes |
+| `triaged/` | 108 | Analyzed, awaiting implementation |
+| `wontfix/` | 49 | Intentionally deferred |
+| `not-a-bug/` | 56 | False positives |
+| `generated/` | 14 | Codex analysis, needs triage |
