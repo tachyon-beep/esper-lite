@@ -1,0 +1,4 @@
+
+[mcp_servers.filigree]
+command = "/home/john/esper-lite/.venv/bin/filigree-mcp"
+args = ["--project", "/home/john/esper-lite"]

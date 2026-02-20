@@ -101,13 +101,13 @@ class Scoreboard(Static):
         │ 47 │12 │85.5% │ ─→85.2 │1.03x │ +2.45 │ 1/0/2  │
         """
         self.table.clear(columns=True)
-        self.table.add_column("Ep", key="episode", width=3)  # Episode number
+        self.table.add_column("Ep", key="episode", width=5)  # Episode number
         self.table.add_column("@", key="epoch", width=2)     # Epoch of peak
         self.table.add_column("Peak", key="peak", width=6)   # Peak accuracy
         self.table.add_column("Traj", key="traj", width=7)   # Trajectory arrow + final
         self.table.add_column("Grw", key="growth", width=5)  # Growth ratio
         self.table.add_column("EndRwd", key="reward", width=6)  # End-of-episode total reward
-        self.table.add_column("Seeds", key="seeds", width=7)  # Seed status counts (B/H/F)
+        self.table.add_column("Seeds", key="seeds", width=5)  # Seed status counts (B/H/F)
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Update widget with new snapshot data."""
@@ -243,13 +243,13 @@ class Scoreboard(Static):
         Same columns as best runs panel but for runs with worst trajectory.
         """
         self.bottom_table.clear(columns=True)
-        self.bottom_table.add_column("Ep", key="episode", width=3)
+        self.bottom_table.add_column("Ep", key="episode", width=5)
         self.bottom_table.add_column("@", key="epoch", width=2)
         self.bottom_table.add_column("Peak", key="peak", width=6)
         self.bottom_table.add_column("Traj", key="traj", width=7)
         self.bottom_table.add_column("Grw", key="growth", width=5)
         self.bottom_table.add_column("EndRwd", key="reward", width=6)  # End-of-episode total reward
-        self.bottom_table.add_column("Seeds", key="seeds", width=7)  # Seed status counts (B/H/F)
+        self.bottom_table.add_column("Seeds", key="seeds", width=5)  # Seed status counts (B/H/F)
 
     def _refresh_bottom_table(self) -> None:
         """Refresh the bottom 5 table showing worst trajectory runs.

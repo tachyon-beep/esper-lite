@@ -537,7 +537,7 @@ def compute_contribution_reward(
 
                 attributed *= attribution_discount
 
-                bounded_attribution = (config.contribution_weight * attributed) + ratio_penalty
+                bounded_attribution = config.contribution_weight * attributed
 
                 # D3: Apply timing discount for early germination
                 if not config.disable_timing_discount and seed_info is not None:
@@ -558,6 +558,18 @@ def compute_contribution_reward(
 
     if action == LifecycleOp.PRUNE and not escrow_mode:
         bounded_attribution = -bounded_attribution
+
+    # Apply ratio_penalty AFTER the PRUNE sign inversion so it always acts
+    # as a penalty (≤ 0) regardless of action type.  Previously it was added
+    # to bounded_attribution before the flip, causing it to become positive
+    # for PRUNE actions — effectively rewarding gaming behavior.
+    # Guards:
+    #   - Escrow mode: ratio_penalty is already in the credit target (line 508)
+    #   - Fossilized seeds: don't receive attribution, so no penalty needed
+    #     (ratio_penalty may be nonzero from the unconditional computation but
+    #      was never applied in the fossilized branch)
+    if not escrow_mode and not seed_is_fossilized:
+        bounded_attribution += ratio_penalty
 
     reward += bounded_attribution
 

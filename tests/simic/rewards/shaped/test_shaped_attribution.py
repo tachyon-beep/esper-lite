@@ -229,6 +229,65 @@ def test_shaped_prune_inverts_attribution_sign() -> None:
     assert reward == pytest.approx(-3.0)
 
 
+def test_prune_sign_inversion_preserves_ratio_penalty_as_negative() -> None:
+    """Bug fix: ratio_penalty must remain negative after PRUNE sign inversion.
+
+    Previously, ratio_penalty was added to bounded_attribution BEFORE the
+    PRUNE sign flip (line 559-560), causing the negative penalty to flip
+    positive. This rewarded gaming behavior instead of penalizing it.
+
+    The fix: apply ratio_penalty AFTER the sign inversion so it's always
+    a penalty regardless of action type.
+    """
+    # Enable anti-gaming to trigger ratio_penalty, disable everything else
+    base_config = shaped_config(disable_anti_gaming=False)
+    config = with_prune_good_seed_penalty(base_config, prune_good_seed_penalty=-0.3)
+
+    # Scenario: seed_contribution=2.0 with total_improvement=0.05
+    # This triggers the "danger zone" ratio penalty path (total_imp <= safe_threshold)
+    # ratio_penalty = prune_good_seed_penalty * min(1.0, contribution / 10.0)
+    #              = -0.3 * min(1.0, 2.0 / 10.0) = -0.3 * 0.2 = -0.06
+
+    # First, verify WAIT gives the expected penalty (baseline)
+    _, wait_components = compute_contribution_reward(
+        action=LifecycleOp.WAIT,
+        seed_contribution=2.0,
+        val_acc=64.0,
+        seed_info=seed_info(stage=SeedStage.BLENDING, total_improvement=0.05),
+        epoch=9,
+        max_epochs=10,
+        acc_at_germination=None,  # attributed = 0.5 * 2.0 = 1.0
+        config=config,
+        return_components=True,
+    )
+    assert wait_components.ratio_penalty == pytest.approx(-0.06)
+    # WAIT: bounded_attribution = 1.0 + (-0.06) = 0.94
+    assert wait_components.bounded_attribution == pytest.approx(0.94)
+
+    # Now test PRUNE: the ratio_penalty should still be negative (a penalty)
+    _, prune_components = compute_contribution_reward(
+        action=LifecycleOp.PRUNE,
+        seed_contribution=2.0,
+        val_acc=64.0,
+        seed_info=seed_info(stage=SeedStage.BLENDING, total_improvement=0.05),
+        epoch=9,
+        max_epochs=10,
+        acc_at_germination=None,
+        config=config,
+        return_components=True,
+    )
+
+    assert prune_components.ratio_penalty == pytest.approx(-0.06)
+
+    # CORRECT behavior: PRUNE flips attribution (1.0 -> -1.0) then adds penalty (-0.06)
+    # bounded_attribution = -1.0 + (-0.06) = -1.06
+    # The penalty makes PRUNE MORE negative (harsher), not less.
+    assert prune_components.bounded_attribution == pytest.approx(-1.06)
+
+    # Verify the penalty always makes things worse (more negative for PRUNE)
+    assert prune_components.bounded_attribution < -abs(wait_components.bounded_attribution)
+
+
 def test_timing_discount_config_defaults() -> None:
     """D3-Timing: Config should have timing discount parameters with sensible defaults."""
     from esper.simic.rewards import ContributionRewardConfig

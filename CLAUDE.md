@@ -94,6 +94,7 @@ The following commands can destroy uncommitted work or rewrite history. **ALWAYS
 **A messy commit or wrong files in a commit is a minor, fixable problem. Lost uncommitted work is permanent.**
 
 If you make a mistake (wrong files staged, bad commit message, etc.):
+
 1. Make another commit to fix it
 2. Or ask the user if they want to do an interactive rebase
 3. NEVER unilaterally run destructive commands to "clean up"
@@ -284,7 +285,7 @@ No Bug-Hiding Patterns: This codebase prohibits defensive patterns that mask bug
 
 ### Legitimate Uses
 
-This prohibition does not exclude genuine uses of type checking or error handling where appropriate, such as:
+This prohibition does not extend to genuine uses of type checking or error handling where appropriate, such as:
 
 - **PyTorch tensor operations** (9): Converting tensors to scalars, device moves
 - **Device type normalization** (6): `str` → `torch.device` conversion
@@ -295,3 +296,84 @@ This prohibition does not exclude genuine uses of type checking or error handlin
 - **Serialization polymorphism** (3): Enum, datetime, Path handling
 
 For absence of doubt, when using these ask yourself "is this defensive programming to hide a bug that should not be possible in a well designed system, or is this legitimate type handling?' If the former, remove it and fix the underlying issue.
+
+<!-- filigree:instructions -->
+## Filigree Issue Tracker
+
+Use `filigree` for all task tracking in this project. Data lives in `.filigree/`.
+
+### Quick Reference
+
+```bash
+# Finding work
+filigree ready                              # Show issues ready to work (no blockers)
+filigree list --status=open                 # All open issues
+filigree list --status=in_progress          # Active work
+filigree show <id>                          # Detailed issue view
+
+# Creating & updating
+filigree create "Title" --type=task --priority=2          # New issue
+filigree update <id> --status=in_progress                # Claim work
+filigree close <id>                                      # Mark complete
+filigree close <id> --reason="explanation"               # Close with reason
+
+# Dependencies
+filigree add-dep <issue> <depends-on>       # Add dependency
+filigree remove-dep <issue> <depends-on>    # Remove dependency
+filigree blocked                            # Show blocked issues
+
+# Comments & labels
+filigree add-comment <id> "text"            # Add comment
+filigree get-comments <id>                  # List comments
+filigree add-label <id> <label>             # Add label
+filigree remove-label <id> <label>          # Remove label
+
+# Workflow templates
+filigree types                              # List registered types with state flows
+filigree type-info <type>                   # Full workflow definition for a type
+filigree transitions <id>                   # Valid next states for an issue
+filigree packs                              # List enabled workflow packs
+filigree validate <id>                      # Validate issue against template
+filigree guide <pack>                       # Display workflow guide for a pack
+
+# Atomic claiming
+filigree claim <id> --assignee <name>            # Claim issue (optimistic lock)
+filigree claim-next --assignee <name>            # Claim highest-priority ready issue
+
+# Batch operations
+filigree batch-update <ids...> --priority=0      # Update multiple issues
+filigree batch-close <ids...>                    # Close multiple with error reporting
+
+# Planning
+filigree create-plan --file plan.json            # Create milestone/phase/step hierarchy
+
+# Event history
+filigree changes --since 2026-01-01T00:00:00    # Events since timestamp
+filigree events <id>                             # Event history for issue
+filigree explain-state <type> <state>            # Explain a workflow state
+
+# All commands support --json and --actor flags
+filigree --actor bot-1 create "Title"            # Specify actor identity
+filigree list --json                             # Machine-readable output
+
+# Project health
+filigree stats                              # Project statistics
+filigree search "query"                     # Search issues
+filigree doctor                             # Health check
+```
+
+### Workflow
+1. `filigree ready` to find available work
+2. `filigree show <id>` to review details
+3. `filigree transitions <id>` to see valid state changes
+4. `filigree update <id> --status=in_progress` to claim it
+5. Do the work, commit code
+6. `filigree close <id>` when done
+
+### Priority Scale
+- P0: Critical (drop everything)
+- P1: High (do next)
+- P2: Medium (default)
+- P3: Low
+- P4: Backlog
+<!-- /filigree:instructions -->

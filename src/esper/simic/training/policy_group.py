@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """PolicyGroup: Independent policy with dedicated environments for A/B testing.
 
 This module provides the core abstraction for dual-policy A/B testing, where
@@ -23,13 +25,16 @@ Example:
 """
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import torch
 
 from esper.simic.agent import PPOAgent
 from esper.simic.rewards import ContributionRewardConfig, RewardMode
-from esper.simic.training.parallel_env_state import ParallelEnvState
 from esper.simic.vectorized_types import EpisodeRecord
+
+if TYPE_CHECKING:
+    from esper.simic.training.parallel_env_state import ParallelEnvState
 
 @dataclass
 class PolicyGroup:
@@ -72,7 +77,7 @@ class PolicyGroup:
     # NOTE: envs field is for future parallel implementation - currently unused
     # because we delegate to train_ppo_vectorized which manages its own environments.
     # This field will be populated when we implement true parallel lockstep training.
-    envs: list[ParallelEnvState] = field(default_factory=list)
+    envs: list["ParallelEnvState"] = field(default_factory=list)
     reward_config: ContributionRewardConfig = field(default_factory=ContributionRewardConfig)
     episode_history: list[EpisodeRecord] = field(default_factory=list)
 
