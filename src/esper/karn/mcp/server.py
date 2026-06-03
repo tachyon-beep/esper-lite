@@ -3,6 +3,7 @@
 This is a standalone entry point for the MCP server.
 Run with: uv run python -m esper.karn.mcp.server
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -11,24 +12,63 @@ from typing import Any
 
 import duckdb
 
-from esper.karn.mcp.query import execute_query, format_as_json, format_as_markdown, rows_to_records
+from esper.karn.mcp.query import (
+    execute_query,
+    format_as_json,
+    format_as_markdown,
+    rows_to_records,
+)
 from esper.karn.mcp.reports import build_run_overview
-from esper.karn.mcp.views import VIEW_DEFINITIONS, create_views, telemetry_has_event_files
+from esper.karn.mcp.views import (
+    VIEW_DEFINITIONS,
+    create_views,
+    telemetry_has_event_files,
+)
 
 VIEW_CATALOG: list[dict[str, str]] = [
     {"name": "runs", "description": "Run metadata (task, hyperparameters, devices)."},
     {"name": "epochs", "description": "Per-environment epoch metrics (accuracy/loss)."},
-    {"name": "ppo_updates", "description": "PPO health metrics (entropy, KL, clip frac, grad norms)."},
-    {"name": "batch_epochs", "description": "Batch/episode progress events (throughput + rolling accuracy)."},
-    {"name": "batch_stats", "description": "Batch-level PPO/accuracy summary snapshots."},
-    {"name": "seed_lifecycle", "description": "Seed lifecycle events (germinate, stage change, fossilize, prune)."},
-    {"name": "decisions", "description": "Decision snapshots (last_action context + head telemetry)."},
-    {"name": "action_distribution", "description": "Per-batch action distribution snapshots (counts + pct)."},
-    {"name": "rewards", "description": "Decision snapshots (reward components breakdown)."},
-    {"name": "trends", "description": "Detected trends (plateau/degradation/improvement)."},
-    {"name": "anomalies", "description": "Training pathologies (collapses, rollbacks, numerical issues)."},
+    {
+        "name": "ppo_updates",
+        "description": "PPO health metrics (entropy, KL, clip frac, grad norms).",
+    },
+    {
+        "name": "batch_epochs",
+        "description": "Batch/episode progress events (throughput + rolling accuracy).",
+    },
+    {
+        "name": "batch_stats",
+        "description": "Batch-level PPO/accuracy summary snapshots.",
+    },
+    {
+        "name": "seed_lifecycle",
+        "description": "Seed lifecycle events (germinate, stage change, fossilize, prune).",
+    },
+    {
+        "name": "decisions",
+        "description": "Decision snapshots (last_action context + head telemetry).",
+    },
+    {
+        "name": "action_distribution",
+        "description": "Per-batch action distribution snapshots (counts + pct).",
+    },
+    {
+        "name": "rewards",
+        "description": "Decision snapshots (reward components breakdown).",
+    },
+    {
+        "name": "trends",
+        "description": "Detected trends (plateau/degradation/improvement).",
+    },
+    {
+        "name": "anomalies",
+        "description": "Training pathologies (collapses, rollbacks, numerical issues).",
+    },
     {"name": "episode_outcomes", "description": "Per-episode outcome summary events."},
-    {"name": "raw_events", "description": "Raw event envelope + payload JSON (for custom queries)."},
+    {
+        "name": "raw_events",
+        "description": "Raw event envelope + payload JSON (for custom queries).",
+    },
 ]
 
 VIEW_EXAMPLES: list[str] = [
@@ -124,13 +164,17 @@ class KarnMCPServer:
             result = self._conn.execute(f"PRAGMA table_info('{view_name}')")
             columns = [desc[0] for desc in result.description]
             rows = result.fetchall()
-        return {"ok": True, "view": view_name, "columns": rows_to_records(columns, rows)}
+        return {
+            "ok": True,
+            "view": view_name,
+            "columns": rows_to_records(columns, rows),
+        }
 
     def list_runs_sync(self, limit: int = 50) -> dict[str, Any]:
         with self._conn_lock:
             self._refresh_views_if_needed()
             result = self._conn.execute(
-                f"""
+                """
                 SELECT
                     run_dir,
                     group_id,
@@ -144,20 +188,31 @@ class KarnMCPServer:
                     param_budget
                 FROM runs
                 ORDER BY started_at DESC
-                LIMIT {limit}
-                """
+                LIMIT ?
+                """,
+                [limit],
             )
             columns = [desc[0] for desc in result.description]
             rows = result.fetchall()
-        return {"ok": True, "runs": rows_to_records(columns, rows), "row_count": len(rows)}
+        return {
+            "ok": True,
+            "runs": rows_to_records(columns, rows),
+            "row_count": len(rows),
+        }
 
     def run_overview_sync(
-        self, run_dir: str | None = None, group_id: str | None = None, recent_limit: int = 20
+        self,
+        run_dir: str | None = None,
+        group_id: str | None = None,
+        recent_limit: int = 20,
     ) -> dict[str, Any]:
         with self._conn_lock:
             self._refresh_views_if_needed()
             return build_run_overview(
-                self._conn, run_dir=run_dir, group_id=group_id, recent_limit=recent_limit
+                self._conn,
+                run_dir=run_dir,
+                group_id=group_id,
+                recent_limit=recent_limit,
             )
 
     async def query_sql(self, query: str, limit: int = 100) -> dict[str, Any]:
@@ -204,7 +259,10 @@ class KarnMCPServer:
         )
 
     async def run_overview(
-        self, run_dir: str | None = None, group_id: str | None = None, recent_limit: int = 20
+        self,
+        run_dir: str | None = None,
+        group_id: str | None = None,
+        recent_limit: int = 20,
     ) -> dict[str, Any]:
         return await asyncio.wait_for(
             asyncio.to_thread(self.run_overview_sync, run_dir, group_id, recent_limit),
