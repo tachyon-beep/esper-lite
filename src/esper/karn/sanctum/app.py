@@ -804,6 +804,7 @@ class SanctumApp(App[None]):
 
         next_group_id = ordered[(idx + 1) % len(ordered)]
         self._active_group_id = next_group_id
+        self._last_primary_group_id = current
         self.notify(f"Policy group: {next_group_id}", severity="information")
 
         self.view = SanctumView(
