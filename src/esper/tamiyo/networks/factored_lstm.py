@@ -703,7 +703,7 @@ class FactoredRecurrentActorCritic(nn.Module):
             op_logits = op_logits.masked_fill(~op_mask, MASKED_LOGIT_VALUE)
 
         # Validate op mask and logits before sampling (matches MaskedCategorical behavior)
-        # CRITICAL: Catches state machine bugs (empty masks) and network instability
+        # Catches state machine bugs (empty masks) and network instability
         # (inf/nan logits) during forward pass. Only runs when validation is enabled.
         if MaskedCategorical.validate:
             # Validate mask if provided (check all batch×seq elements have valid actions)
@@ -974,7 +974,7 @@ class FactoredRecurrentActorCritic(nn.Module):
                     mask = torch.ones_like(logits, dtype=torch.bool)
 
                 # Validate mask and logits (matches MaskedCategorical behavior)
-                # CRITICAL: Catches state machine bugs (empty masks) and network
+                # Catches state machine bugs (empty masks) and network
                 # instability (inf/nan logits) early instead of silently proceeding.
                 if MaskedCategorical.validate:
                     _validate_action_mask(mask)
@@ -1018,7 +1018,7 @@ class FactoredRecurrentActorCritic(nn.Module):
                 op_mask = torch.ones_like(op_logits, dtype=torch.bool)
 
             # Validate mask and logits (matches MaskedCategorical behavior)
-            # CRITICAL: This validation catches state machine bugs early rather than
+            # This validation catches state machine bugs early rather than
             # silently selecting invalid actions. Only runs when validation is enabled.
             if MaskedCategorical.validate:
                 _validate_action_mask(op_mask)
