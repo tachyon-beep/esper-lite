@@ -596,13 +596,14 @@ def create_views(conn: duckdb.DuckDBPyConnection, telemetry_dir: str) -> None:
     conn.execute("PRAGMA disable_progress_bar")
 
     has_files = telemetry_has_event_files(telemetry_dir)
+    safe_telemetry_dir = str(telemetry_dir).replace("'", "''")
 
     for view_name, view_sql in VIEW_DEFINITIONS.items():
         if view_name == "raw_events" and not has_files:
             _create_empty_raw_events_view(conn)
             continue
 
-        sql = view_sql.format(telemetry_dir=telemetry_dir)
+        sql = view_sql.format(telemetry_dir=safe_telemetry_dir)
         try:
             conn.execute(sql)
         except duckdb.IOException as e:
