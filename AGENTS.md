@@ -26,23 +26,28 @@ For absence of doubt, when using these ask yourself "is this defensive programmi
 
 ## Project Structure & Module Organization
 
-- `src/esper/`: main Python package (domain modules: `kasmina/`, `leyline/`, `tamiyo/`, `tolaria/`, `simic/`, `nissa/`, `karn/`, plus `scripts/`).
-- `tests/`: pytest suite (unit-style tests at repo root and module folders; integration tests in `tests/integration/`; property-based tests in `tests/properties/`).
+- `src/esper/`: main Python package (core domains: `kasmina/`, `leyline/`, `tamiyo/`, `tolaria/`, `simic/`, `nissa/`, `karn/`, plus `runtime/` and `scripts/`).
+- `tests/`: pytest suite grouped mostly by domain (`tests/<domain>/`), with cross-cutting suites in `tests/integration/`, `tests/stress/`, and `tests/**/properties/`.
+- `src/esper/karn/overwatch/web/`: Vite/Vue frontend for the Overwatch dashboard, including Playwright/Vitest coverage for the web UI.
 - `docs/`: architecture notes and implementation plans.
-- `scripts/`: helper shell entrypoints (e.g., `scripts/train_cifar.sh`).
+- `scripts/`: repository helper scripts and CI guardrails (for example the custom lint checks used in GitHub Actions).
 - `data/` and `telemetry/`: local datasets and run artifacts (gitignored; only `.gitkeep` is tracked).
 
 ## Build, Test, and Development Commands
 
-- Install deps (preferred): `uv sync`
+- Install deps (preferred): `uv sync --group dev`
+- Add optional extras when needed: `uv sync --group dev --extra dashboard` for Overwatch, `uv sync --group dev --extra wandb` for Weights & Biases
 - Run training CLI:
-  - Heuristic: `PYTHONPATH=src uv run python -m esper.scripts.train heuristic --task cifar10 --episodes 1`
-  - PPO: `PYTHONPATH=src uv run python -m esper.scripts.train ppo --task cifar10 --episodes 10 --n-envs 4`
-- Optional dashboard deps: `uv sync --extra dashboard` (then add `--dashboard` to the train command).
-- Run tests: `uv run pytest` (common: `uv run pytest -m "not slow"`)
+  - Heuristic: `PYTHONPATH=src uv run python -m esper.scripts.train heuristic --task cifar_baseline --episodes 1`
+  - PPO: `PYTHONPATH=src uv run python -m esper.scripts.train ppo --task cifar_baseline --rounds 100 --envs 4 --episode-length 150`
+- Developer UIs: add `--sanctum` for the Textual debugger UI or `--overwatch` for the web dashboard (`--overwatch-port` is optional)
+- Run tests: `uv run pytest` (defaults to `-m "not integration and not stress"` via `pytest.ini`)
+- Run property tests: `HYPOTHESIS_PROFILE=ci PYTHONPATH=src uv run pytest -m property -v -x --hypothesis-show-statistics`
+- Run integration tests: `PYTHONPATH=src uv run pytest -m integration -v -x`
 - CI parity checks:
-  - Lint: `ruff check src/ tests/`
-  - Types: `mypy src/`
+  - Policy guardrails: `uv run python scripts/lint_leyline_types.py`, `uv run python scripts/lint_defensive_patterns.py`, `uv run python scripts/lint_gpu_sync.py`
+  - Lint: `uv run ruff check src/ tests/`
+  - Types: `MYPYPATH=src uv run mypy -p esper`
 
 ## Coding Style & Naming Conventions
 
@@ -53,9 +58,10 @@ For absence of doubt, when using these ask yourself "is this defensive programmi
 
 ## Testing Guidelines
 
-- Tests follow `test_*.py` naming and use pytest markers from `pytest.ini` (e.g., `integration`, `slow`, `property`).
-- Hypothesis uses profiles via `HYPOTHESIS_PROFILE` (`dev` default; `ci`/`thorough` available).
-- Coverage: CI enforces ≥80% when run with `pytest --cov` (see `.github/workflows/test-suite.yml`).
+- Tests follow `test_*.py` naming; module suites live under `tests/<domain>/`, with stress tests in `tests/stress/` and property suites in `tests/**/properties/`.
+- Pytest markers come from `pytest.ini` (`integration`, `slow`, `stress`, `property`, `e2e`, `benchmark`, `tamiyo`, `simic`, `no_torch_seeding`).
+- Hypothesis uses profiles via `HYPOTHESIS_PROFILE` (`dev` default; `ci` and `thorough` are used in CI/nightly flows).
+- Coverage: the CI unit-test job enforces `75%` on the reduced suite (`not integration and not stress and not property`); full local coverage with all test types is roughly `81%` (see `.github/workflows/test-suite.yml` and `pytest.ini`).
 
 ## Commit & Pull Request Guidelines
 
@@ -63,83 +69,121 @@ For absence of doubt, when using these ask yourself "is this defensive programmi
 - PRs should include: intent + summary, commands run (tests/lint), linked issues if any, and screenshots for TUI/dashboard changes.
 - Do not commit generated artifacts from `data/` or `telemetry/`.
 
-<!-- filigree:instructions -->
+<!-- filigree:instructions:v2.2.0:9dff6e6d -->
 ## Filigree Issue Tracker
 
-Use `filigree` for all task tracking in this project. Data lives in `.filigree/`.
-
-### Quick Reference
-
-```bash
-# Finding work
-filigree ready                              # Show issues ready to work (no blockers)
-filigree list --status=open                 # All open issues
-filigree list --status=in_progress          # Active work
-filigree show <id>                          # Detailed issue view
-
-# Creating & updating
-filigree create "Title" --type=task --priority=2          # New issue
-filigree update <id> --status=in_progress                # Claim work
-filigree close <id>                                      # Mark complete
-filigree close <id> --reason="explanation"               # Close with reason
-
-# Dependencies
-filigree add-dep <issue> <depends-on>       # Add dependency
-filigree remove-dep <issue> <depends-on>    # Remove dependency
-filigree blocked                            # Show blocked issues
-
-# Comments & labels
-filigree add-comment <id> "text"            # Add comment
-filigree get-comments <id>                  # List comments
-filigree add-label <id> <label>             # Add label
-filigree remove-label <id> <label>          # Remove label
-
-# Workflow templates
-filigree types                              # List registered types with state flows
-filigree type-info <type>                   # Full workflow definition for a type
-filigree transitions <id>                   # Valid next states for an issue
-filigree packs                              # List enabled workflow packs
-filigree validate <id>                      # Validate issue against template
-filigree guide <pack>                       # Display workflow guide for a pack
-
-# Atomic claiming
-filigree claim <id> --assignee <name>            # Claim issue (optimistic lock)
-filigree claim-next --assignee <name>            # Claim highest-priority ready issue
-
-# Batch operations
-filigree batch-update <ids...> --priority=0      # Update multiple issues
-filigree batch-close <ids...>                    # Close multiple with error reporting
-
-# Planning
-filigree create-plan --file plan.json            # Create milestone/phase/step hierarchy
-
-# Event history
-filigree changes --since 2026-01-01T00:00:00    # Events since timestamp
-filigree events <id>                             # Event history for issue
-filigree explain-state <type> <state>            # Explain a workflow state
-
-# All commands support --json and --actor flags
-filigree --actor bot-1 create "Title"            # Specify actor identity
-filigree list --json                             # Machine-readable output
-
-# Project health
-filigree stats                              # Project statistics
-filigree search "query"                     # Search issues
-filigree doctor                             # Health check
-```
+`filigree` tracks tasks for this project. Data lives in `.filigree/`. Prefer
+the MCP tools (`mcp__filigree__*`) when available; fall back to the `filigree`
+CLI otherwise.
 
 ### Workflow
-1. `filigree ready` to find available work
-2. `filigree show <id>` to review details
-3. `filigree transitions <id>` to see valid state changes
-4. `filigree update <id> --status=in_progress` to claim it
-5. Do the work, commit code
-6. `filigree close <id>` when done
 
-### Priority Scale
+```bash
+# At session start
+filigree session-context                            # ready / in-progress / critical path
+
+# Pick up the next startable issue (atomic claim + transition into its working status)
+filigree start-next-work --assignee <name>
+# ...or claim a specific issue
+filigree start-work <id> --assignee <name>
+
+# Do the work, commit, then
+filigree close <id>
+```
+
+Use the atomic claim+transition verbs — `start_work` / `start_next_work`
+(MCP) or `start-work` / `start-next-work` (CLI). Do **not** chain
+`claim_issue` (MCP) or `filigree claim` (CLI) with a subsequent status
+update — the two-step form races against other agents; the combined verb is
+atomic.
+
+**Ready ≠ startable.** The working status is type-specific (tasks →
+`in_progress`, features → `building`). Bugs start at `triage`, which has no
+single-hop transition into work (`triage → confirmed → fixing`), so a triage
+bug is *ready* but not directly *startable*: `start_work` on one returns
+`INVALID_TRANSITION` naming the next status, and `start_next_work` skips it.
+`get_ready` items carry a `startable` flag (plus a `next_action` hint when
+false). Pass `advance=true` (MCP) / `--advance` (CLI) to walk the soft
+transitions to the nearest working status automatically.
+
+### Observations: when (and when not) to use them
+
+`observe` is a fire-and-forget scratchpad for *incidental* defects — things
+you notice *outside the scope of your current task* (a code smell in a
+neighbouring file, a stale TODO, a missing test for an edge case you happened
+to spot). Notes expire after 14 days unless promoted. Include `file_path` and
+`line` when relevant. At session end, skim `list_observations` and either
+`dismiss_observation` or `promote_observation` for what has accumulated.
+
+**You fix bugs in your currently defined scope. You do NOT use observations
+to finish work prematurely.** If a defect, gap, or follow-up belongs to your
+current task, you own it — handle it as part of that task: fix it now, expand
+the task's scope, file a proper issue with a dependency, or surface it to the
+user. Filing it as an observation and closing the task is *not* completing
+the task; it is shipping known-broken work and hiding the debt in a 14-day
+expiring scratchpad. The test is "would I have noticed this even if I weren't
+working on this task?" If no, it's task scope, not an observation.
+
+### Priority scale
+
 - P0: Critical (drop everything)
 - P1: High (do next)
 - P2: Medium (default)
 - P3: Low
 - P4: Backlog
+
+### Reaching for tools
+
+MCP tool schemas describe each tool; `filigree --help` and `filigree <verb>
+--help` are the authoritative CLI reference. You do not need to memorise
+either catalogue. The verbs you will reach for most:
+
+- **Find work:** `get_ready`, `get_blocked`, `list_issues`, `search_issues`
+- **Claim work:** `start_work`, `start_next_work`
+- **Update:** `add_comment`, `add_label`, `update_issue`, `close_issue`
+- **Admin (irreversible):** `delete_issue` (MCP) / `delete-issue` (CLI) —
+  hard-deletes a terminal issue and its rows; `undo_last` cannot reverse it.
+- **Scratchpad:** `observe`, `list_observations`, `promote_observation`, `dismiss_observation`
+- **Cross-product entity bindings (ADR-029):** `add_entity_association`,
+  `remove_entity_association`, `list_entity_associations`,
+  `list_associations_by_entity`. Used when a sibling tool (e.g.
+  Clarion) needs to bind a Filigree issue to a function, class, or
+  module identifier it owns. The `entity_id` is an opaque string
+  from Filigree's perspective; the consumer (the sibling tool's read
+  path) does drift detection against the stored
+  `content_hash_at_attach`. `list_associations_by_entity` is the
+  reverse-lookup surface — given a Clarion entity ID, return every
+  Filigree issue bound to it (project isolation is by DB file). Also
+  reachable over HTTP as
+  `GET/POST /api/issue/{issue_id}/entity-associations`,
+  `DELETE /api/issue/{issue_id}/entity-associations?entity_id=…`,
+  and `GET /api/entity-associations?entity_id=…`.
+- **Health:** `get_stats`, `get_metrics`, `get_mcp_status`
+
+Pass `--actor <name>` (CLI) so events attribute to your agent identity. It
+works in either position — before the verb (`filigree --actor X update …`) or
+after it (`filigree update … --actor X`); the post-verb value overrides the
+group-level one.
+
+### Error handling
+
+Errors return `{error: str, code: ErrorCode, details?: dict}`. Switch on
+`code`, not on message text. Codes: `VALIDATION`, `NOT_FOUND`, `CONFLICT`,
+`INVALID_TRANSITION`, `PERMISSION`, `NOT_INITIALIZED`, `IO`,
+`INVALID_API_URL`, `FILE_REGISTRY_DISPLACED`, `REGISTRY_UNAVAILABLE`,
+`CLARION_REGISTRY_VERSION_MISMATCH`, `BRIEFING_BLOCKED`, `STOP_FAILED`,
+`SCHEMA_MISMATCH`, `INTERNAL`.
+
+On `INVALID_TRANSITION`, call `get_valid_transitions` (MCP) or
+`filigree transitions <id>` to see what the workflow allows from here.
+
+Two failure modes deserve a specific response:
+
+- **`SCHEMA_MISMATCH`** — the installed `filigree` is older than the project
+  database. The error message contains upgrade guidance. Surface it to the
+  user; do not retry.
+- **`ForeignDatabaseError`** — filigree found a parent project's database
+  but no local `.filigree.conf`. Run `filigree init` in the current
+  directory. Do **not** `cd` upward to a different project unless that was
+  the actual intent.
 <!-- /filigree:instructions -->

@@ -196,20 +196,21 @@ class PPOCoordinator:
         )
         ppo_update_time_ms = (time.perf_counter() - update_start) * 1000.0
 
+        update_skipped = bool(metrics) and not metrics.get("ppo_update_performed", True)
         if metrics:
             metrics["ppo_update_time_ms"] = ppo_update_time_ms
-            metrics["ppo_grad_norm"] = metrics["pre_clip_grad_norm"]
             metrics["rollout_length"] = self.config.max_epochs
             metrics["rollout_episodes"] = envs_this_batch
             metrics["rollout_total_steps"] = len(self.agent.buffer)
             metrics["reward_mode"] = self.env_reward_configs[0].reward_mode.value
             metrics["reward_family"] = self.reward_family_enum.value
             metrics["entropy_coef"] = self.agent.entropy_coef
-
             metrics["throughput_step_time_ms_sum"] = throughput_step_time_ms_sum
             metrics["throughput_dataloader_wait_ms_sum"] = throughput_dataloader_wait_ms_sum
+            if not update_skipped:
+                metrics["ppo_grad_norm"] = metrics["pre_clip_grad_norm"]
 
-        return metrics, False, ppo_update_time_ms
+        return metrics, update_skipped, ppo_update_time_ms
 
     def check_finiteness_gate(
         self,
@@ -222,8 +223,14 @@ class PPOCoordinator:
             Tuple of (updated consecutive_failures count, should_continue flag)
         """
         if not metrics.get("ppo_update_performed", True):
-            # All epochs skipped due to non-finite values
             skip_count = metrics.get("finiteness_gate_skip_count", 0)
+            if skip_count == 0:
+                # KL early-stop can abort before backward()/optimizer.step(). That is a
+                # skipped PPO update, but it is not a finiteness failure and should not
+                # poison the consecutive-failure counter.
+                return 0, True
+
+            # All epochs skipped due to non-finite values
             consecutive_finiteness_failures += 1
             self.logger.warning(
                 f"PPO update skipped (all {skip_count} epochs hit finiteness gate). "

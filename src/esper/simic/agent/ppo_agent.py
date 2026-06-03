@@ -1246,7 +1246,10 @@ class PPOAgent:
 
         # Aggregate into typed result dict (metrics aggregation owns list->scalar logic)
         finiteness_failures = metrics["finiteness_gate_failures"]
-        epochs_completed = len(metrics["ratio_max"])
+        # Count actual optimizer steps, not epochs that only reached ratio diagnostics.
+        # KL early-stop at epoch 0 records ratio stats before breaking, but it does not
+        # execute backward(), gradient clipping, or optimizer.step().
+        epochs_completed = len(metrics["pre_clip_grad_norm"])
 
         builder = PPOUpdateMetricsBuilder(
             metrics=metrics,

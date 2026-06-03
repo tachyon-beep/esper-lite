@@ -317,8 +317,12 @@ class LSTMPolicyBundle:
             blueprint_indices = blueprint_indices.unsqueeze(1)
 
         output = self._network.forward(features, blueprint_indices, hidden)
-        # value is [batch, seq_len], return [batch]
-        return output["value"][:, 0] if output["value"].dim() > 1 else output["value"]
+        # The network critic is Q(s, op), and forward() conditions that value on a
+        # sampled op. get_value() is the deterministic inference path, so recompute
+        # Q(s, argmax_op) instead of returning the sampled forward() value.
+        argmax_op = output["op_logits"].argmax(dim=-1)
+        value = self._network._compute_value(output["lstm_out"], argmax_op)
+        return value[:, 0] if value.dim() > 1 else value
 
     # === Recurrent State ===
 
