@@ -122,7 +122,7 @@ class TolariaGovernor:
                     f"Call snapshot() outside stream context after synchronization."
                 )
 
-        # C7 FIX: Explicitly free old snapshot to allow garbage collection
+        # Explicitly free old snapshot to allow garbage collection
         # NOTE: We intentionally do NOT call torch.cuda.empty_cache() here.
         # The CUDA caching allocator is designed to hold freed memory for fast
         # reallocation. Calling empty_cache() forces:
