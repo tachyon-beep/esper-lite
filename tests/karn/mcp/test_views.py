@@ -598,3 +598,18 @@ def test_batch_epochs_and_trends_views_parse_payloads(tmp_path):
         "SELECT event_type, batch_idx, rolling_delta FROM trends"
     ).fetchone()
     assert trend_row == ("PLATEAU_DETECTED", 4, 0.001)
+
+def test_create_views_on_dir_with_quotes(tmp_path):
+    import duckdb
+    from esper.karn.mcp.views import create_views
+
+    run_dir = tmp_path / "telemetry'dir"
+    run_dir.mkdir()
+    events_file = run_dir / "events.jsonl"
+    events_file.write_text('{"event_id": "test"}\n')
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    result = conn.execute("SELECT * FROM runs LIMIT 1").fetchall()
+    assert result == []
