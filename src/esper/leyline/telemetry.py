@@ -79,9 +79,6 @@ class TelemetryEventType(Enum):
     TAMIYO_INITIATED = auto()  # Host stabilized, germination now allowed
 
     # Health events
-    # TODO: [DEAD CODE] - ISOLATION_VIOLATION is defined but never emitted or handled.
-    # Appears to be planned functionality that was never implemented. Delete or implement.
-    ISOLATION_VIOLATION = auto()
     GRADIENT_ANOMALY = auto()
     PERFORMANCE_DEGRADATION = auto()
 
