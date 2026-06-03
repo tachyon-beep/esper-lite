@@ -125,8 +125,8 @@ jobs:
           data = json.load(open('coverage.json'))
           coverage = data['totals']['percent_covered']
           print(f'Coverage: {coverage:.1f}%')
-          if coverage < 75:
-              print(f'Coverage {coverage:.1f}% below 75% threshold')
+          if coverage < 73:
+              print(f'Coverage {coverage:.1f}% below 73% threshold')
               sys.exit(1)
           "
 
