@@ -39,6 +39,7 @@ def test_phase6_regression_baseline():
         max_epochs=10,       # Only 10 epochs per episode
         n_envs=2,            # Minimal parallelism
         task="cifar_baseline",
+        device="cpu",        # Force CPU to avoid CUDA dependency in CI
         use_telemetry=False, # Disable telemetry for speed
         reward_mode=RewardMode.SIMPLIFIED,  # Faster reward computation
         save_path=None,      # Don't save checkpoints
