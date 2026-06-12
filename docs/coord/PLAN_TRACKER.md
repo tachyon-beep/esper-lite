@@ -1,11 +1,21 @@
 # Esper Plan Tracker
 
-**Last Updated:** 2026-02-21 (full audit after 1-month hiatus)
+**Last Updated:** 2026-06-12 (green-state recovery program active)
 **Purpose:** Rack-and-stack all plans and concepts for prioritization and dependency tracking.
 
 ---
 
 ## Executive Summary
+
+### Green-State Recovery (2026-06-12)
+
+The project is in stabilization mode. PR #52 (`env-refactor`) is the critical
+path because it is the large unlanded baseline-reset candidate. The active plan
+is `docs/plans/ready/2026-06-12-green-state-recovery.md`.
+
+Current operating rule: do not land other PRs until PR #52 is either made green
+and accepted as the new baseline, or explicitly rejected with a smaller
+replacement path.
 
 ### Post-Hiatus Audit (2026-02-21)
 
@@ -19,12 +29,13 @@ op twice independently — once in `forward()` for value computation, once in `g
 the stored action. These ops frequently diverge, corrupting advantage estimates. Blocks Phase 7.
 
 ### Current Focus Areas
-1. **Op/Value Mismatch** - 🔴 CRITICAL! Fix double-sampling in factored_lstm.py
-2. **Reward Efficiency Experiment** - Infrastructure complete, experiment never run
-3. **Phase3-TinyStories** - 85% IMPLEMENTED, needs validation runs
-4. **Drip Reward Implementation** - ~70% done, needs integration completion
-5. **Telemetry Domain Separation** - ~30% done
-6. **Blueprint Compiler** - 0% (correctly deferred until entropy confirmed stable)
+1. **Green State Recovery** - 🔴 CRITICAL! Resolve PR #52 and restore a verified mergeable baseline
+2. **Op/Value Mismatch** - 🔴 CRITICAL! Fix double-sampling in factored_lstm.py
+3. **Reward Efficiency Experiment** - Infrastructure complete, experiment never run
+4. **Phase3-TinyStories** - 85% IMPLEMENTED, needs validation runs
+5. **Drip Reward Implementation** - ~70% done, needs integration completion
+6. **Telemetry Domain Separation** - ~30% done
+7. **Blueprint Compiler** - 0% (correctly deferred until entropy confirmed stable)
 
 ### Critical Path (Updated)
 ```
@@ -53,6 +64,7 @@ the stored action. These ops frequently diverge, corrupting advantage estimates.
 
 | ID | Title | Type | Urgency | Complexity | Risk | Status |
 |----|-------|------|---------|------------|------|--------|
+| green-state-recovery-2026-06-12 | Green State Recovery Program | in-progress | 🔴 critical | M | high | Active: make PR #52 green or reject with replacement path |
 | op-value-mismatch | Q(s,op) Double-Sampling Bug | investigation | 🔴 critical | M | high | Diagnosed 2025-12-31, blocks Phase 7. See `docs/bugs/investigations/` |
 
 ### Tier 1: High Priority (This Week)

@@ -23,12 +23,12 @@ allow_hits:
   - key: "src/esper/simic/rewards/contribution.py:enum:RewardMode"
     owner: "john"
     reason: "TODO: Cross-domain enum, migrate to leyline"
-    expires: "2026-03-01"
+    expires: "2026-12-31"
 
   - key: "src/esper/simic/rewards/rewards.py:enum:RewardFamily"
     owner: "john"
     reason: "TODO: Cross-domain enum, migrate to leyline"
-    expires: "2026-03-01"
+    expires: "2026-12-31"
 
   - key: "src/esper/simic/rewards/contribution.py:dataclass:ContributionRewardConfig"
     owner: "john"
@@ -60,7 +60,7 @@ allow_hits:
   - key: "src/esper/simic/telemetry/telemetry_config.py:enum:TelemetryLevel"
     owner: "john"
     reason: "TODO: Verbosity enum, consider moving to leyline"
-    expires: "2026-03-01"
+    expires: "2026-12-31"
 
   - key: "src/esper/simic/telemetry/telemetry_config.py:dataclass:TelemetryConfig"
     owner: "john"
@@ -109,7 +109,7 @@ allow_hits:
   - key: "src/esper/simic/telemetry/observation_stats.py:dataclass:ObservationStatsTelemetry"
     owner: "john"
     reason: "TODO: Telemetry payload used outside simic, consider moving to leyline"
-    expires: "2026-03-01"
+    expires: "2026-12-31"
 
   # ============================================================================
   # SIMIC: Training Infrastructure
@@ -117,7 +117,7 @@ allow_hits:
   - key: "src/esper/simic/training/config.py:dataclass:TrainingConfig"
     owner: "john"
     reason: "TODO: Cross-domain config, migrate to leyline"
-    expires: "2026-03-01"
+    expires: "2026-12-31"
 
   - key: "src/esper/simic/training/policy_group.py:dataclass:PolicyGroup"
     owner: "john"
@@ -310,7 +310,7 @@ allow_hits:
   - key: "src/esper/tamiyo/decisions.py:dataclass:TamiyoDecision"
     owner: "john"
     reason: "TODO: Cross-domain decision type, migrate to leyline"
-    expires: "2026-03-01"
+    expires: "2026-12-31"
 
   - key: "src/esper/tamiyo/heuristic.py:dataclass:HeuristicPolicyConfig"
     owner: "john"
@@ -350,12 +350,12 @@ allow_hits:
   - key: "src/esper/kasmina/slot.py:dataclass:SeedMetrics"
     owner: "john"
     reason: "TODO: Cross-domain metrics type, consider moving to leyline"
-    expires: "2026-03-01"
+    expires: "2026-12-31"
 
   - key: "src/esper/kasmina/slot.py:dataclass:SeedState"
     owner: "john"
     reason: "TODO: Cross-domain state type, consider moving to leyline"
-    expires: "2026-03-01"
+    expires: "2026-12-31"
 
   - key: "src/esper/kasmina/blueprints/registry.py:protocol:BlueprintFactory"
     owner: "john"

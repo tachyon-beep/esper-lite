@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """PolicyGroup: Independent policy with dedicated environments for A/B testing.
 
 This module provides the core abstraction for dual-policy A/B testing, where
@@ -24,6 +22,8 @@ Example:
     RewardMode.SHAPED
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -35,6 +35,7 @@ from esper.simic.vectorized_types import EpisodeRecord
 
 if TYPE_CHECKING:
     from esper.simic.training.parallel_env_state import ParallelEnvState
+
 
 @dataclass
 class PolicyGroup:
