@@ -851,11 +851,13 @@ def execute_actions(
                     ]
                     curve_action_obj = AlphaCurveAction(alpha_curve_action)
                     curve = curve_action_obj.to_curve()
+                    steepness = curve_action_obj.to_steepness()
 
                     # Schedule prune: force alpha to 0 with requested speed/curve.
                     action_success = slot_obj.schedule_prune(
                         steps=speed_steps,
                         curve=curve,
+                        steepness=steepness,
                         initiator="policy",
                     )
                     if action_success:
@@ -866,10 +868,12 @@ def execute_actions(
                     ]
                     curve_action_obj = AlphaCurveAction(alpha_curve_action)
                     curve = curve_action_obj.to_curve()
+                    steepness = curve_action_obj.to_steepness()
                     action_success = slot_obj.set_alpha_target(
                         alpha_target=alpha_target,
                         steps=speed_steps,
                         curve=curve,
+                        steepness=steepness,
                         alpha_algorithm=alpha_algorithm,
                         initiator="policy",
                     )

@@ -13,6 +13,19 @@ if TYPE_CHECKING:
     from esper.simic.rewards.contribution import FossilizedSeedDripState
 
 
+def _parse_bool_field(value: float | int | str | bool | None, field_name: str) -> bool:
+    """Parse serialized boolean telemetry without truthiness coercion."""
+    if type(value) is bool:
+        return value
+    if type(value) is str:
+        normalized = value.lower()
+        if normalized == "true":
+            return True
+        if normalized == "false":
+            return False
+    raise ValueError(f"{field_name} must be bool, 'True', or 'False'; got {value!r}")
+
+
 @dataclass(slots=True)
 class RewardComponentsTelemetry:
     """Breakdown of reward components for debugging.
@@ -229,7 +242,7 @@ class RewardComponentsTelemetry:
             num_fossilized_seeds=int(data["num_fossilized_seeds"]),  # type: ignore[arg-type]
             num_contributing_fossilized=int(data["num_contributing_fossilized"]),  # type: ignore[arg-type]
             action_name=str(data["action_name"]),
-            action_success=bool(data["action_success"]),
+            action_success=_parse_bool_field(data["action_success"], "action_success"),
             seed_stage=int(data["seed_stage"]) if data["seed_stage"] is not None else None,
             epoch=int(data["epoch"]),  # type: ignore[arg-type]
             val_acc=float(data["val_acc"]),  # type: ignore[arg-type]

@@ -123,6 +123,7 @@ def execute_set_alpha_target(
     speed_steps = ALPHA_SPEED_TO_STEPS[AlphaSpeedAction(params.alpha_speed_idx)]
     curve_action = AlphaCurveAction(params.alpha_curve_idx)
     curve = curve_action.to_curve()
+    steepness = curve_action.to_steepness()
     alpha_algorithm = STYLE_ALPHA_ALGORITHMS[params.style_idx]
 
     # Record current alpha for telemetry
@@ -133,6 +134,7 @@ def execute_set_alpha_target(
         alpha_target=alpha_target,
         steps=speed_steps,
         curve=curve,
+        steepness=steepness,
         alpha_algorithm=alpha_algorithm,
         initiator="policy",
     )
@@ -150,6 +152,7 @@ def execute_set_alpha_target(
             "alpha_target": alpha_target,
             "speed_steps": speed_steps,
             "curve": curve.name if curve else None,
+            "steepness": steepness,
             "alpha_algorithm": alpha_algorithm.name if alpha_algorithm else None,
         },
     )
