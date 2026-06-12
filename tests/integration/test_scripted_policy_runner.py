@@ -15,6 +15,7 @@ from esper.leyline import (
     FactoredAction,
     GerminationStyle,
     LifecycleOp,
+    MIN_PRUNE_AGE,
     SeedStage,
     SlotConfig,
     TEMPO_TO_EPOCHS,
@@ -46,6 +47,13 @@ class ScriptedHost(nn.Module):
     @property
     def injection_points(self) -> dict[str, int]:
         return {"r0c1": 16}
+
+    @property
+    def topology(self) -> str:
+        return "cnn"
+
+    def execution_order(self) -> list[str]:
+        return ["r0c1"]
 
     def injection_specs(self):
         from esper.leyline import InjectionSpec
@@ -238,6 +246,10 @@ def test_scripted_policy_runner_smoke() -> None:
             slot._on_enter_stage(SeedStage.BLENDING, SeedStage.TRAINING)
             slot.set_alpha(0.7)
             slot.state.alpha_controller.alpha_target = 0.7
+            slot.state.alpha_controller.alpha_mode = AlphaMode.HOLD
+        elif action.op == LifecycleOp.SET_ALPHA_TARGET:
+            slot = model.seed_slots["r0c1"]
+            slot.state.metrics.epochs_total = MIN_PRUNE_AGE
             slot.state.alpha_controller.alpha_mode = AlphaMode.HOLD
         elif action.op == LifecycleOp.PRUNE and action.alpha_speed_steps > 0:
             # Scheduled prune completes on subsequent step_epoch ticks.
