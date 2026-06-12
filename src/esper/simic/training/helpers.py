@@ -256,7 +256,7 @@ def _train_one_epoch(
 
     This function extracts the repeated inline loop pattern. Callers use
     returned values to compute metrics:
-        train_loss = running_loss / len(trainloader)
+        train_loss = running_loss / total
         train_acc = 100.0 * correct / total
 
     Args:
@@ -271,7 +271,7 @@ def _train_one_epoch(
 
     Returns:
         Tuple of (running_loss, correct_count, total_count, grad_stats)
-        - running_loss: Sum of loss values across batches (float)
+        - running_loss: Sample-weighted sum of loss values across batches (float)
         - correct_count: Sum of correct predictions (float/int)
         - total_count: Total samples processed (int)
         - grad_stats: GradientHealthStats if collect_gradients=True, else None
@@ -303,8 +303,7 @@ def _train_one_epoch(
             correct_batch = predicted.eq(targets).sum()
             batch_total = targets.size(0)
         else:  # LM task
-            # Use zeros with dtype=long to match classification branch's .sum() output
-            correct_batch = torch.zeros((), device=outputs.device, dtype=torch.long)
+            correct_batch = outputs.argmax(dim=-1).eq(targets).sum()
             batch_total = targets.numel()
         loss.backward()  # type: ignore[no-untyped-call]
 
@@ -324,7 +323,7 @@ def _train_one_epoch(
             seed_optimizer.step()
 
         # Accumulate on device - no .item() sync in hot path
-        running_loss.add_(loss.detach())
+        running_loss.add_(loss.detach() * batch_total)
         running_correct.add_(correct_batch)
         total += batch_total
 
@@ -607,12 +606,12 @@ def run_heuristic_episode(
                 seed_optimizer.step()
 
             # Accumulate on device - no .item() sync in hot path
-            running_loss.add_(loss.detach())
+            running_loss.add_(loss.detach() * batch_total)
             running_correct.add_(correct_batch)
             total += batch_total
 
         # Single sync at end of training
-        train_loss = running_loss.item() / max(1, batch_count)
+        train_loss = running_loss.item() / total if total > 0 else 0.0
         train_acc = 100.0 * running_correct.item() / total if total > 0 else 0.0
 
         # Finalize per-slot gradient stats AFTER the sync above (safe to call .item()).
@@ -642,12 +641,12 @@ def run_heuristic_episode(
                 targets = targets.to(device, non_blocking=True)
                 outputs = model(inputs)
                 loss, correct_batch, batch_total = compute_task_loss_with_metrics(outputs, targets, criterion, task_type)
-                val_loss_accum.add_(loss)
+                val_loss_accum.add_(loss * batch_total)
                 val_correct_accum.add_(correct_batch)
                 total += batch_total
 
         # Single sync at end of validation
-        val_loss = val_loss_accum.item() / max(1, batch_count)
+        val_loss = val_loss_accum.item() / total if total > 0 else 0.0
         val_acc = 100.0 * val_correct_accum.item() / total if total > 0 else 0.0
 
         # Gather active seeds across ALL enabled slots (multi-slot support).
