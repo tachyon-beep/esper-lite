@@ -17,11 +17,14 @@ Lightweight helpers should also be imported directly to avoid circular imports:
     from esper.simic.training.helpers import train_heuristic, run_heuristic_episode
 """
 
-from .parallel_env_state import ParallelEnvState
+from typing import TYPE_CHECKING, Any
 
 from .config import TrainingConfig
 
 from esper.simic.vectorized_types import EpisodeRecord
+
+if TYPE_CHECKING:
+    from .parallel_env_state import ParallelEnvState as ParallelEnvState
 
 # NOTE: vectorized and dual_ab are NOT imported here to avoid import-time side effects
 # Import them explicitly when needed
@@ -37,3 +40,18 @@ __all__ = [
     # "train_ppo_vectorized",  # from .vectorized
     # "train_dual_policy_ab",  # from .dual_ab
 ]
+
+
+def __getattr__(name: str) -> Any:
+    """Lazy import training exports that pull heavy runtime dependencies."""
+    if name == "ParallelEnvState":
+        from .parallel_env_state import ParallelEnvState
+
+        globals()["ParallelEnvState"] = ParallelEnvState
+        return ParallelEnvState
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    """Expose the public training API without importing heavy modules."""
+    return sorted(set(globals().keys()) | set(__all__))

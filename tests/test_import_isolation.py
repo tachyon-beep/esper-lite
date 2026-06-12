@@ -143,6 +143,137 @@ print(json.dumps({
     assert result["vectorized_loaded"] is True
 
 
+def test_simic_training_import_does_not_load_parallel_env_state():
+    """Importing esper.simic.training should not load heavy env state machinery."""
+    result = _run_isolated(
+        """
+import json
+import sys
+
+import esper.simic.training
+
+print(json.dumps({
+    "torch_loaded": "torch" in sys.modules,
+    "parallel_env_state_loaded": "esper.simic.training.parallel_env_state" in sys.modules,
+    "ParallelEnvState_in_dir": "ParallelEnvState" in dir(esper.simic.training),
+}))
+""".strip()
+    )
+
+    assert result["torch_loaded"] is False
+    assert result["parallel_env_state_loaded"] is False
+    assert result["ParallelEnvState_in_dir"] is True
+
+
+def test_simic_training_parallel_env_state_lazy_attribute_works():
+    """ParallelEnvState should load only when the public attribute is accessed."""
+    result = _run_isolated(
+        """
+import json
+import sys
+
+import esper.simic.training
+from esper.simic.training import ParallelEnvState
+
+print(json.dumps({
+    "is_class": str(type(ParallelEnvState)),
+    "cached": "ParallelEnvState" in vars(esper.simic.training),
+    "parallel_env_state_loaded": "esper.simic.training.parallel_env_state" in sys.modules,
+    "torch_loaded": "torch" in sys.modules,
+}))
+""".strip()
+    )
+
+    assert "type" in result["is_class"]
+    assert result["cached"] is True
+    assert result["parallel_env_state_loaded"] is True
+    assert result["torch_loaded"] is True
+
+
+def test_simic_safe_task_config_resolve_from_leyline_without_tamiyo():
+    """safe and TaskConfig should not route through Tamiyo's heavy policy module."""
+    result = _run_isolated(
+        """
+import json
+import sys
+
+import esper.simic
+from esper.simic import TaskConfig, safe
+
+print(json.dumps({
+    "safe_result": safe(None, 3.0),
+    "task_config_module": TaskConfig.__module__,
+    "cached_safe": "safe" in vars(esper.simic),
+    "cached_task_config": "TaskConfig" in vars(esper.simic),
+    "tamiyo_features_loaded": "esper.tamiyo.policy.features" in sys.modules,
+    "torch_loaded": "torch" in sys.modules,
+}))
+""".strip()
+    )
+
+    assert result["safe_result"] == 3.0
+    assert result["task_config_module"] == "esper.leyline.task_config"
+    assert result["cached_safe"] is True
+    assert result["cached_task_config"] is True
+    assert result["tamiyo_features_loaded"] is False
+    assert result["torch_loaded"] is False
+
+
+def test_simic_telemetry_import_isolation():
+    """Importing telemetry should not eagerly load heavy collectors and emitters."""
+    result = _run_isolated(
+        """
+import json
+import sys
+
+import esper.simic.telemetry
+
+print(json.dumps({
+    "torch_loaded": "torch" in sys.modules,
+    "debug_loaded": "esper.simic.telemetry.debug_telemetry" in sys.modules,
+    "gradient_collector_loaded": "esper.simic.telemetry.gradient_collector" in sys.modules,
+    "emitters_loaded": "esper.simic.telemetry.emitters" in sys.modules,
+    "RatioExplosionDiagnostic_in_dir": "RatioExplosionDiagnostic" in dir(esper.simic.telemetry),
+}))
+""".strip()
+    )
+
+    assert result["torch_loaded"] is False
+    assert result["debug_loaded"] is False
+    assert result["gradient_collector_loaded"] is False
+    assert result["emitters_loaded"] is False
+    assert result["RatioExplosionDiagnostic_in_dir"] is True
+
+
+def test_simic_telemetry_lazy_attribute_works():
+    """Telemetry exports should load their source modules only when accessed."""
+    result = _run_isolated(
+        """
+import json
+import sys
+
+import esper.simic.telemetry
+from esper.simic.telemetry import RatioExplosionDiagnostic, TelemetryConfig
+
+print(json.dumps({
+    "RatioExplosionDiagnostic_type": str(type(RatioExplosionDiagnostic)),
+    "TelemetryConfig_type": str(type(TelemetryConfig)),
+    "diagnostic_cached": "RatioExplosionDiagnostic" in vars(esper.simic.telemetry),
+    "config_cached": "TelemetryConfig" in vars(esper.simic.telemetry),
+    "debug_loaded": "esper.simic.telemetry.debug_telemetry" in sys.modules,
+    "telemetry_config_loaded": "esper.simic.telemetry.telemetry_config" in sys.modules,
+}))
+""".strip()
+    )
+
+    assert "type" in result["RatioExplosionDiagnostic_type"]
+    assert "type" in result["TelemetryConfig_type"]
+    assert result["diagnostic_cached"] is True
+    assert result["config_cached"] is True
+    assert result["debug_loaded"] is True
+    assert result["telemetry_config_loaded"] is True
+
+
 def test_kasmina_import_isolation():
     """Importing esper.kasmina should NOT load torch or heavy modules."""
     result = _run_isolated(
