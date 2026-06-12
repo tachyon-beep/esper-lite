@@ -6,6 +6,8 @@ Property tests in test_buffer_properties.py cover mathematical properties.
 
 from __future__ import annotations
 
+import inspect
+
 import pytest
 import torch
 
@@ -409,6 +411,48 @@ class TestNormalizeAdvantages:
         assert mean != mean  # NaN check
         assert std != std
         # std_floored should be False when returning NaN (already normalized)
+
+
+class TestComputeAdvantagesAndReturns:
+    """Tests for GAE advantage and return computation."""
+
+    def _make_buffer(self) -> TamiyoRolloutBuffer:
+        return TamiyoRolloutBuffer(
+            num_envs=1,
+            max_steps_per_env=4,
+            state_dim=8,
+        )
+
+    def test_gae_loop_does_not_branch_on_tensor_scalars(self) -> None:
+        """GAE must not use CUDA tensor truthiness or scalar extraction in the loop."""
+        source = inspect.getsource(TamiyoRolloutBuffer.compute_advantages_and_returns)
+
+        assert "if truncated[t]" not in source
+        assert "float(dones[t]" not in source
+        assert "dones[t] and not truncated[t]" not in source
+
+    def test_terminal_reset_and_truncation_bootstrap_preserved(self) -> None:
+        """GAE resets at true terminals and bootstraps truncated final steps."""
+        buffer = self._make_buffer()
+        buffer.step_counts[0] = 4
+        buffer.rewards[0, :4] = torch.tensor([1.0, 1.0, 10.0, 2.0])
+        buffer.values[0, :4] = torch.tensor([0.5, 0.25, 1.0, 0.75])
+        buffer.dones[0, :4] = torch.tensor([False, True, False, True])
+        buffer.truncated[0, :4] = torch.tensor([False, False, False, True])
+        buffer.bootstrap_values[0, :4] = torch.tensor([0.0, 0.0, 0.0, 4.0])
+
+        buffer.compute_advantages_and_returns(gamma=0.9, gae_lambda=0.5)
+
+        expected_advantages = torch.tensor([
+            1.0625,
+            0.75,
+            11.8575,
+            4.85,
+        ])
+        expected_returns = expected_advantages + buffer.values[0, :4]
+
+        assert torch.allclose(buffer.advantages[0, :4], expected_advantages)
+        assert torch.allclose(buffer.returns[0, :4], expected_returns)
 
 
 class TestGetBatchedSequences:

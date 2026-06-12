@@ -172,13 +172,10 @@ def compute_observation_stats(
     total_elements = batch_size * obs_dim
 
     # Replace NaN/Inf with 0 for stats computation
-    # Check via .any() which is faster than sum > 0 for sparse masks
-    has_bad_values = nan_mask.any() or inf_mask.any()
-    if has_bad_values:
-        clean_obs = obs_tensor.clone()
-        clean_obs[nan_mask | inf_mask] = 0.0
-    else:
-        clean_obs = obs_tensor
+    # Keep the decision tensor-native; branching on nan_mask.any() / inf_mask.any()
+    # would synchronize CUDA tensors with the host on every telemetry sample.
+    zero = torch.zeros((), device=obs_tensor.device, dtype=obs_tensor.dtype)
+    clean_obs = torch.where(nan_mask | inf_mask, zero, obs_tensor)
 
     # Group stats (Obs V3 layout)
     host = clean_obs[:, :_OBS_V3_HOST_FEATURE_SIZE]
