@@ -42,6 +42,21 @@ class TestTrainDualPolicyAB:
                 n_episodes=1,
             )
 
+    def test_validates_unique_group_ids(self):
+        """Duplicate group IDs would corrupt result and telemetry grouping."""
+        from esper.simic.training.dual_ab import train_dual_policy_ab
+
+        with pytest.raises(ValueError, match="group_id values must be unique"):
+            train_dual_policy_ab(
+                n_envs_per_group=1,
+                group_configs=[
+                    ("A", RewardMode.SHAPED),
+                    ("A", RewardMode.SIMPLIFIED),
+                ],
+                devices=["cpu", "cpu"],
+                n_episodes=1,
+            )
+
     @pytest.mark.skipif(
         torch.cuda.is_available(),
         reason="Test expects CUDA to be unavailable",
@@ -120,6 +135,21 @@ class TestTrainDualPolicyAB:
 
         # Seeds should be different
         assert group_a_seed != group_b_seed
+
+    def test_comparison_requires_rolling_accuracy_metric(self):
+        """Comparison summaries fail fast when history violates its contract."""
+        from esper.simic.training.dual_ab import _print_dual_ab_comparison
+
+        results = {
+            "A": (None, [{"avg_accuracy": 50.0}]),
+            "B": (None, [{"avg_accuracy": 60.0, "rolling_avg_accuracy": 60.0}]),
+        }
+
+        with pytest.raises(KeyError, match="rolling_avg_accuracy"):
+            _print_dual_ab_comparison(
+                [("A", RewardMode.SHAPED), ("B", RewardMode.SIMPLIFIED)],
+                results,
+            )
 
 
 class TestTelemetryGroupId:
