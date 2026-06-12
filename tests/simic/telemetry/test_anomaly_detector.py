@@ -194,6 +194,16 @@ class TestPerHeadEntropyCollapse:
 
         assert not report.has_anomaly
 
+    def test_nan_entropy_triggers_anomaly_immediately(self) -> None:
+        """NaN entropy must not bypass per-head collapse detection."""
+        detector = AnomalyDetector()
+
+        report = detector.check_per_head_entropy_collapse({"blueprint": float("nan")})
+
+        assert report.has_anomaly
+        assert "entropy_nan_inf_blueprint" in report.anomaly_types
+        assert "entropy=nan" in report.details["entropy_nan_inf_blueprint"]
+
     def test_recovery_requires_margin(self) -> None:
         """Recovery should require entropy above threshold * 1.5."""
         detector = AnomalyDetector()

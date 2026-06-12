@@ -36,7 +36,12 @@ from esper.utils.data import augment_cifar10_batch
 from .action_execution import ActionExecutionContext, ResolveTargetSlot, execute_actions
 from .batch_ops import batch_signals_to_features, process_train_batch
 from .counterfactual_eval import process_fused_val_batch
-from .env_factory import EnvFactoryContext, configure_slot_telemetry, create_env_state
+from .env_factory import (
+    EnvFactoryContext,
+    configure_slot_telemetry,
+    create_env_state,
+    make_env_seed,
+)
 from .ppo_coordinator import PPOCoordinator, PPOCoordinatorConfig
 from esper.simic.vectorized_types import (
     ActionMaskFlags,
@@ -290,9 +295,17 @@ class VectorizedPPOTrainer:
 
                 # Create fresh environments for this batch
                 # DataLoaders are shared via SharedBatchIterator (not per-env)
-                base_seed = seed + batch_idx * 10000
                 env_states = [
-                    create_env_state(i, base_seed, env_factory)
+                    create_env_state(
+                        i,
+                        make_env_seed(
+                            root_seed=seed,
+                            batch_idx=batch_idx,
+                            env_idx=i,
+                            envs_per_batch=envs_this_batch,
+                        ),
+                        env_factory,
+                    )
                     for i in range(envs_this_batch)
                 ]
                 criterion = nn.CrossEntropyLoss()

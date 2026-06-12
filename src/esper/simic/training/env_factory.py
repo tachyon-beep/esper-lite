@@ -46,6 +46,31 @@ class EpisodeContext:
         self.episode_idx: int | None = None
 
 
+ENV_SEED_STRIDE = 1009
+AUGMENT_SEED_OFFSET = 1
+
+
+def make_env_seed(
+    *,
+    root_seed: int,
+    batch_idx: int,
+    env_idx: int,
+    envs_per_batch: int,
+) -> int:
+    """Create the exact seed for one vectorized environment."""
+    if batch_idx < 0:
+        raise ValueError(f"batch_idx must be non-negative, got {batch_idx}")
+    if envs_per_batch <= 0:
+        raise ValueError(f"envs_per_batch must be positive, got {envs_per_batch}")
+    if env_idx < 0 or env_idx >= envs_per_batch:
+        raise ValueError(
+            f"env_idx must be in [0, {envs_per_batch}), got {env_idx}"
+        )
+
+    stream_idx = batch_idx * envs_per_batch + env_idx
+    return root_seed + stream_idx * ENV_SEED_STRIDE
+
+
 def make_telemetry_callback(
     env_idx: int,
     device: str,
@@ -106,7 +131,7 @@ class EnvFactoryContext:
 
 def create_env_state(
     env_idx: int,
-    base_seed: int,
+    env_seed: int,
     context: EnvFactoryContext,
 ) -> ParallelEnvState:
     """Create environment state with CUDA stream.
@@ -114,8 +139,8 @@ def create_env_state(
     DataLoaders are now shared via SharedBatchIterator, not per-env.
     """
     env_device = context.env_device_map[env_idx]
-    torch.manual_seed(base_seed + env_idx * 1000)
-    random.seed(base_seed + env_idx * 1000)
+    torch.manual_seed(env_seed)
+    random.seed(env_seed)
 
     model_raw = context.create_model(
         task=context.task_spec,
@@ -174,7 +199,7 @@ def create_env_state(
     augment_buffers = None
     if context.gpu_preload_augment:
         augment_generator = torch.Generator(device=env_device)
-        augment_generator.manual_seed(base_seed + env_idx * 1009)
+        augment_generator.manual_seed(env_seed + AUGMENT_SEED_OFFSET)
         # Pre-allocate buffers to reduce memory fragmentation during augmentation.
         # The ensure_capacity() method handles resizing if batch size changes.
         augment_buffers = AugmentationBuffers(device=env_device)
@@ -229,14 +254,14 @@ def create_env_state(
     )
 
     # Create CounterfactualHelper for Shapley value analysis at episode end
-    # Use base_seed for reproducible Shapley permutation sampling (B5-CR-01)
+    # Use env_seed for reproducible Shapley permutation sampling (B5-CR-01)
     # Pass telemetry_cb for per-env context (same pattern as HealthMonitor)
     counterfactual_helper = (
         CounterfactualHelper(
             strategy="auto",  # Full factorial for <=4 slots, Shapley sampling otherwise
             shapley_samples=20,
             emit_callback=telemetry_cb,  # Pre-wired with env context
-            seed=base_seed,
+            seed=env_seed,
         )
         if context.use_telemetry
         else None
