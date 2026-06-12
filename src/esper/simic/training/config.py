@@ -315,7 +315,6 @@ class TrainingConfig:
             "value_coef": self.value_coef,
             "value_coef_start": self.value_coef_start,
             "value_warmup_steps": value_warmup_steps,
-            "lstm_hidden_dim": self.lstm_hidden_dim,
             "chunk_length": self.chunk_length,
             "num_envs": self.n_envs,
             "max_steps_per_env": self.max_epochs,

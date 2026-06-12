@@ -419,6 +419,13 @@ class AnomalyDetector:
             threshold = thresholds.get(head, 0.1)  # Default fallback
             current_streak = self._head_collapse_streak.get(head, 0)
 
+            if not math.isfinite(entropy):
+                report.add_anomaly(
+                    f"entropy_nan_inf_{head}",
+                    f"{head} entropy={entropy} is non-finite",
+                )
+                continue
+
             if entropy < threshold:
                 # Increment streak
                 current_streak += 1

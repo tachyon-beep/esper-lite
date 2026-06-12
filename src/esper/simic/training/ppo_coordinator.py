@@ -157,7 +157,8 @@ class PPOCoordinator:
                 stability = 1.0
 
             # 4. Find and replace EpisodeOutcome for this env
-            for idx, outcome in enumerate(episode_outcomes):
+            for idx in range(len(episode_outcomes) - 1, -1, -1):
+                outcome = episode_outcomes[idx]
                 if outcome.env_id == env_idx:
                     corrected_outcome = dataclasses.replace(
                         outcome,

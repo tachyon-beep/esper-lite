@@ -5,6 +5,7 @@ import inspect
 import pytest
 
 from esper.simic.rewards import RewardFamily, RewardMode
+from esper.simic.agent import PPOAgent
 from esper.simic.training import TrainingConfig
 from esper.simic.training.vectorized import train_ppo_vectorized
 
@@ -70,7 +71,7 @@ class TestTrainingConfigConversion:
     """Tests for TrainingConfig to kwargs conversion methods."""
 
     def test_lstm_config_to_ppo_kwargs(self):
-        """LSTM params should flow to PPOAgent kwargs."""
+        """LSTM sizing is policy construction input, not a PPOAgent kwarg."""
         config = TrainingConfig(
             lstm_hidden_dim=256,
             max_epochs=25,  # chunk_length must match max_epochs
@@ -80,7 +81,7 @@ class TestTrainingConfigConversion:
             ppo_updates_per_batch=2,
         )
         kwargs = config.to_ppo_kwargs()
-        assert kwargs["lstm_hidden_dim"] == 256
+        assert "lstm_hidden_dim" not in kwargs
         assert kwargs["chunk_length"] == 25
         # ceil(episodes / n_envs) * updates_per_batch
         assert kwargs["entropy_anneal_steps"] == 4
@@ -111,6 +112,16 @@ class TestTrainingConfigConversion:
 
         config = TrainingConfig()
         kwargs = set(config.to_train_kwargs())
+
+        assert kwargs <= allowed
+
+    def test_to_ppo_kwargs_is_subset_of_ppo_agent_signature(self):
+        """Config → PPO kwargs must stay in sync with PPOAgent constructor."""
+        signature = inspect.signature(PPOAgent.__init__)
+        allowed = set(signature.parameters)
+
+        config = TrainingConfig()
+        kwargs = set(config.to_ppo_kwargs())
 
         assert kwargs <= allowed
 
