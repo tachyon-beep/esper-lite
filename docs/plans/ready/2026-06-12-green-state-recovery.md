@@ -4,7 +4,7 @@
 # Plan Metadata
 id: green-state-recovery-2026-06-12
 title: Green State Recovery Program
-type: in-progress
+type: completed
 created: 2026-06-12
 updated: 2026-06-13
 owner: Codex
@@ -21,21 +21,17 @@ risk_notes: >
 
 depends_on: []
 soft_depends: []
-blocks:
-  - reward-efficiency
-  - phase3-tinystories
-  - dependency-security-drain
+blocks: []
 
 status_notes: >
   PR #52 was made green, accepted, and merged as the new baseline on 2026-06-12.
   Main CI passed on merge commit cdff9c43. Recovery PR #72 landed the initial
   P0 Filigree bug drain. Follow-up PRs #78 and #79 merged telemetry and
   training-control correctness fixes. PRs #80, #81, #82, #83, #84, #85, #86,
-  and #87 merged eight P2 batches. The repository is green on CI, but not yet
-  steady. The final bug-drain batch is locally fixed and verified against
-  focused tests, custom/static guardrails, full pytest, and Wardline gates; PR,
-  CI, and tracker closure are next.
-percent_complete: 98
+  #87, and #88 merged nine P2 batches. The repository is green on CI and the
+  recovery bug drain is closed. Filigree reports 0 WIP bugs, 0 blocked items,
+  and only the non-startable P4 Future release planning shell ready.
+percent_complete: 100
 
 reviewed_by:
   - reviewer: python-engineering
@@ -281,8 +277,19 @@ Return the project to a steady state:
   - `MYPYPATH=src uv run mypy -p esper`
   - `uv run pytest` (`4712 passed, 10 skipped, 69 deselected`)
   - `wardline scan . --fail-on ERROR` (`0 active`)
-- Filigree on 2026-06-13 reports `1 ready`, `0 blocked`, and `2 fixing`
-  after claiming `esper-lite-352e3c` and `esper-lite-5d7260`.
+- PR #88 (`codex/final-bug-drain`) was merged into `main` on 2026-06-13 at
+  merge commit `fa8c3f268239b1784e12bbda9797b2653474eddf`.
+- PR #88 verification run `27430759187` passed:
+  - `lint`
+  - `typecheck`
+  - `property-tests`
+  - `unit-and-integration-tests`
+  - `e2e-smoke-tests`
+- The final recovery bugs were fixed and closed:
+  - `esper-lite-352e3c` `EpochState.reset_for_new_batch()` omitted contribution/loss reward inputs from resize
+  - `esper-lite-5d7260` `ActionDict` type annotation declared scalar `int` values while runtime action heads are tensors
+- Filigree on 2026-06-13 reports `1 ready`, `0 blocked`, and `0 WIP`; the
+  only ready item is the non-startable P4 `Future` release planning shell.
 - Loomweave MCP is visible, but the active MCP server still reports no
   `.weft/loomweave/loomweave.db` even after a worktree analysis pass. The
   available MCP session needs a reconnect before graph queries can be used.
@@ -544,23 +551,22 @@ uv run pytest
 
 Current queue snapshot, 2026-06-13:
 
-- Ready bugs: 1
+- Ready items: 1 non-startable P4 release shell
 - Blocked: 0
-- WIP: 2
+- WIP: 0
 
-Current local batch:
+Final local batch:
 
 1. `esper-lite-352e3c` `EpochState.reset_for_new_batch()` omits
    contribution/loss reward inputs from resize.
 2. `esper-lite-5d7260` `ActionDict` type annotation declares scalar `int`
    values while runtime action heads are tensors.
 
-These both affect shared Simic contracts and are verified together with focused
+These both affected shared Simic contracts and were verified together with focused
 regression tests, PPO agent consumer tests, defensive-pattern, GPU-sync, type,
 full default pytest, and Wardline gates.
 
-Status: fixed and locally verified on branch `codex/final-bug-drain`.
-PR and tracker closure are next.
+Status: fixed in PR #88, merged at `fa8c3f26`, and closed in Filigree.
 
 ## Execution Log
 
@@ -589,5 +595,9 @@ PR and tracker closure are next.
   `esper-lite-0c7b3b`, `esper-lite-7481c4`, and `esper-lite-eb5662`; PR #87
   merged and tracker closure completed.
 - 2026-06-13: Locally fixed and verified final bug-drain batch
-  `esper-lite-352e3c` and `esper-lite-5d7260`; PR, CI, and tracker closure are
-  next.
+  `esper-lite-352e3c` and `esper-lite-5d7260`; PR #88 merged and tracker
+  closure completed.
+- 2026-06-13: Recovery program reached steady state: required CI is green,
+  full local pytest and Wardline gates passed, all recovery bugs are closed,
+  and the remaining Filigree ready item is the non-startable P4 `Future`
+  release planning shell.
