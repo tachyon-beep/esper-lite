@@ -47,6 +47,16 @@ class TestTrainingConfigDefaults:
         config = TrainingConfig(max_epochs=25, chunk_length=25)
         assert config.chunk_length == 25
 
+    def test_negative_value_warmup_batches_rejected(self):
+        """Negative critic warmup should fail instead of disabling warmup."""
+        with pytest.raises(ValueError, match="value_warmup_batches"):
+            TrainingConfig(value_warmup_batches=-1)
+
+    def test_zero_value_warmup_batches_disables_warmup(self):
+        """Zero remains the explicit switch for disabling critic warmup."""
+        config = TrainingConfig(value_warmup_batches=0)
+        assert config.to_ppo_kwargs()["value_warmup_steps"] == 0
+
 
 class TestTrainingConfigPresets:
     """Tests for TrainingConfig preset helpers."""
