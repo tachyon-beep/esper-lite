@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
+import torch
 
 from esper.karn.sanctum.aggregator import SanctumAggregator
 from esper.karn.sanctum.schema import (
@@ -27,8 +28,13 @@ from esper.leyline import (
     BatchEpochCompletedPayload,
     EpochCompletedPayload,
     EpisodeOutcomePayload,
+    OBS_V3_BASE_FEATURE_SIZE,
+    OBS_V3_SLOT_FEATURE_SIZE,
 )
-from esper.simic.telemetry.observation_stats import ObservationStatsTelemetry
+from esper.simic.telemetry.observation_stats import (
+    ObservationStatsTelemetry,
+    compute_observation_stats,
+)
 
 
 # =============================================================================
@@ -304,6 +310,21 @@ class TestTELE603NormalizationDrift:
 
         snapshot = agg.get_snapshot()
         assert snapshot.observation_stats.normalization_drift == pytest.approx(1.75)
+
+    def test_normalization_drift_includes_variance_shift(self) -> None:
+        """Changing only normalizer variance must still report drift."""
+        obs_dim = OBS_V3_BASE_FEATURE_SIZE + OBS_V3_SLOT_FEATURE_SIZE
+        obs = torch.zeros((2, obs_dim))
+
+        obs_stats = compute_observation_stats(
+            obs,
+            normalized_obs_tensor=obs,
+            normalizer_mean=torch.zeros(obs_dim),
+            normalizer_var=torch.full((obs_dim,), 4.0),
+            initial_normalizer_mean=torch.zeros(obs_dim),
+        )
+
+        assert obs_stats.normalization_drift == pytest.approx(1.0)
 
 
 # =============================================================================
