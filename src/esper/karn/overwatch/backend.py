@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import threading
 import time
 from collections import deque
@@ -21,6 +22,8 @@ from enum import Enum
 from pathlib import Path
 from queue import Empty, Queue
 from typing import TYPE_CHECKING, Any
+
+import numpy as np
 
 from esper.karn.sanctum.registry import AggregatorRegistry
 from esper.karn.sanctum.schema import SanctumSnapshot
@@ -49,9 +52,30 @@ def _json_serializer(obj: Any) -> Any:
         return str(obj)
     if isinstance(obj, deque):
         return list(obj)
+    if isinstance(obj, np.generic):
+        return obj.item()
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
     if is_dataclass(obj) and not isinstance(obj, type):
         return asdict(obj)
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
+def _json_safe(obj: Any) -> Any:
+    """Convert snapshot objects into strict JSON-compatible values."""
+    if is_dataclass(obj) and not isinstance(obj, type):
+        return _json_safe(asdict(obj))
+    if isinstance(obj, dict):
+        return {str(key): _json_safe(value) for key, value in obj.items()}
+    if isinstance(obj, deque):
+        return [_json_safe(value) for value in obj]
+    if isinstance(obj, list | tuple):
+        return [_json_safe(value) for value in obj]
+    if isinstance(obj, Enum | datetime | Path | np.generic | np.ndarray):
+        return _json_safe(_json_serializer(obj))
+    if isinstance(obj, float) and not math.isfinite(obj):
+        return None
+    return obj
 
 
 class OverwatchBackend:
@@ -154,7 +178,7 @@ class OverwatchBackend:
         Returns:
             JSON string representation.
         """
-        return json.dumps(asdict(snapshot), default=_json_serializer)
+        return json.dumps(_json_safe(snapshot), allow_nan=False)
 
     def maybe_broadcast(self) -> None:
         """Trigger a rate-limited broadcast.
@@ -193,13 +217,10 @@ class OverwatchBackend:
             {
                 "type": "snapshot",
                 "primary_group_id": primary_group_id,
-                "data": asdict(snapshot),
-                "snapshots_by_group": {
-                    group_id: asdict(group_snapshot)
-                    for group_id, group_snapshot in snapshots_by_group.items()
-                },
+                "data": _json_safe(snapshot),
+                "snapshots_by_group": _json_safe(snapshots_by_group),
             },
-            default=_json_serializer,
+            allow_nan=False,
         )
 
         # Queue for async broadcast (bounded to prevent backlog on slow clients)
@@ -226,6 +247,7 @@ class OverwatchBackend:
             from fastapi import FastAPI, Response, WebSocket, WebSocketDisconnect
             from fastapi.responses import FileResponse
             from fastapi.staticfiles import StaticFiles
+            from starlette.routing import WebSocketRoute
 
             # Mark as running only after successful import
             self._running = True
@@ -272,7 +294,6 @@ class OverwatchBackend:
             async def start_broadcaster() -> None:
                 asyncio.create_task(broadcaster_loop())
 
-            @app.websocket("/ws")  # type: ignore[untyped-decorator]
             async def websocket_endpoint(websocket: WebSocket) -> None:
                 await websocket.accept()
 
@@ -309,6 +330,8 @@ class OverwatchBackend:
                     with self._clients_lock:
                         if websocket in self._clients:
                             self._clients.remove(websocket)
+
+            app.router.routes.append(WebSocketRoute("/ws", websocket_endpoint))
 
             # Serve index.html at root
             @app.get("/")  # type: ignore[untyped-decorator]

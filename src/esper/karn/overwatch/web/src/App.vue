@@ -19,8 +19,10 @@ import PhaseGatePanel from './components/PhaseGatePanel.vue'
 import ActionContextPanel from './components/ActionContextPanel.vue'
 import CohortComparisonPanel from './components/CohortComparisonPanel.vue'
 
-// WebSocket URL - can be configured via environment variable
-const wsUrl = import.meta.env.VITE_WS_URL ?? 'ws://localhost:8765'
+// WebSocket URL - can be configured via environment variable.
+// Default to same-origin so packaged/proxied dashboards keep HTTP and WS together.
+const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+const wsUrl = import.meta.env.VITE_WS_URL ?? `${wsProtocol}//${window.location.host}/ws`
 
 // Initialize the overwatch composable
 const {

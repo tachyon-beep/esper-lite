@@ -3,8 +3,10 @@
 import json
 from unittest.mock import MagicMock, patch
 
+import numpy as np
+
 from esper.karn.overwatch.backend import OverwatchBackend
-from esper.karn.sanctum.schema import SanctumSnapshot
+from esper.karn.sanctum.schema import EventLogEntry, SanctumSnapshot
 
 
 class TestOverwatchBackend:
@@ -163,7 +165,7 @@ class TestOverwatchBackend:
         assert backend._broadcast_queue.maxsize == 10
 
     def test_snapshot_to_json_handles_special_types(self) -> None:
-        """JSON serialization should handle enums, datetime, Path."""
+        """JSON serialization should handle enums, datetime, Path, and NumPy."""
         from datetime import datetime, timezone
 
         backend = OverwatchBackend(port=8080)
@@ -172,6 +174,13 @@ class TestOverwatchBackend:
         snapshot = backend.get_snapshot()
         snapshot.start_time = datetime.now(timezone.utc)
         snapshot.connected = True
+        snapshot.event_log.append(EventLogEntry(
+            timestamp="12:00:00",
+            event_type="TEST_EVENT",
+            env_id=None,
+            message="NumPy metric",
+            metadata={"metric": np.float32(1.5), "pending": float("-inf")},
+        ))
 
         json_str = backend.snapshot_to_json(snapshot)
         parsed = json.loads(json_str)
@@ -180,6 +189,8 @@ class TestOverwatchBackend:
         assert "start_time" in parsed
         # connected should be serialized as bool
         assert parsed["connected"] is True
+        assert parsed["event_log"][0]["metadata"]["metric"] == 1.5
+        assert parsed["event_log"][0]["metadata"]["pending"] is None
 
     def test_get_all_snapshots_returns_grouped_snapshots(self) -> None:
         """A/B runs should expose one snapshot per policy group."""
