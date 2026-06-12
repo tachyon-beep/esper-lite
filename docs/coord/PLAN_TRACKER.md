@@ -1,6 +1,6 @@
 # Esper Plan Tracker
 
-**Last Updated:** 2026-06-13 (baseline green; P1 follow-up PRs merged; PR #80 merged; second P2 batch locally verified)
+**Last Updated:** 2026-06-13 (baseline green; P1 follow-up PRs merged; PRs #80/#81 merged; counterfactual P2 batch locally verified)
 **Purpose:** Rack-and-stack all plans and concepts for prioritization and dependency tracking.
 
 ---
@@ -17,9 +17,10 @@ main CI passed. The active plan is
 Current operating rule: drain high-risk correctness bugs before feature work.
 Recovery PR #72 is merged. Follow-up PRs #78 and #79 merged telemetry and
 training-control correctness fixes with passing CI. PR #80 merged the first
-P2 contract batch and closed three tracker bugs. The second P2 action/reward
-contract batch now has local fixes and passing focused/static/full-test/Wardline
-gates on `codex/p2-action-reward-contracts`; PR and tracker closure are next.
+P2 contract batch and closed three tracker bugs. PR #81 merged the second P2
+action/reward contract batch and closed two tracker bugs. The P2 counterfactual
+telemetry batch now has local fixes and passing focused/static/full-test/Wardline
+gates on `codex/p2-counterfactual-telemetry`; PR and tracker closure are next.
 
 ### Post-Hiatus Audit (2026-02-21)
 
@@ -70,7 +71,7 @@ the stored action. These ops frequently diverge, corrupting advantage estimates.
 
 | ID | Title | Type | Urgency | Complexity | Risk | Status |
 |----|-------|------|---------|------------|------|--------|
-| green-state-recovery-2026-06-12 | Green State Recovery Program | in-progress | 🔴 critical | M | high | Active: second P2 action/reward batch locally verified; PR/tracker closure pending |
+| green-state-recovery-2026-06-12 | Green State Recovery Program | in-progress | 🔴 critical | M | high | Active: P2 counterfactual telemetry batch locally verified; PR/tracker closure pending |
 | p1-stability-batch-1 | PPO/Telemetry Stability Batch 1 | completed-batch | 🔴 critical | M | high | Completed and merged; six bugs closed, broad gates passed |
 | filigree-p0-drain | Critical Filigree P0 Bug Drain | completed-batch | 🔴 critical | L | high | Initial six P0s fixed, verified, and closed |
 | op-value-mismatch | Q(s,op) Double-Sampling Bug | investigation | 🔴 critical | M | high | Diagnosed 2025-12-31, blocks Phase 7. See `docs/bugs/investigations/` |

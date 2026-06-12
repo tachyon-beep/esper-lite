@@ -746,6 +746,7 @@ class VectorizedPPOTrainer:
                         )
 
                     # Iterate validation batches using shared iterator
+                    validation_start = time.perf_counter()
                     test_iter = iter(shared_test_iter)
                     for batch_step in range(num_test_batches):
                         try:
@@ -891,6 +892,7 @@ class VectorizedPPOTrainer:
                     for env_state in env_states:
                         if env_state.stream:
                             env_state.stream.synchronize()
+                    validation_elapsed_seconds = time.perf_counter() - validation_start
 
                     # PERF: Batch GPU→CPU transfer before iterating
                     # Moving tensors to CPU after sync is ~free (data already computed).
@@ -1110,6 +1112,7 @@ class VectorizedPPOTrainer:
                                 env_state.counterfactual_helper.compute_contributions_from_results(
                                     slot_ids=active_slots,
                                     results=shapley_results[i],
+                                    compute_time_seconds=validation_elapsed_seconds,
                                     epoch=batch_idx + 1,
                                 )
                             except (KeyError, ZeroDivisionError, ValueError) as e:
