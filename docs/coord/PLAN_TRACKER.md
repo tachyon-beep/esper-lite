@@ -1,6 +1,6 @@
 # Esper Plan Tracker
 
-**Last Updated:** 2026-06-13 (baseline green; P1 follow-up PRs merged; PRs #80/#81/#82/#83 merged; Dual-AB P2 batch locally verified)
+**Last Updated:** 2026-06-13 (baseline green; P1 follow-up PRs merged; PRs #80/#81/#82/#83/#84 merged; config P2 batch locally verified)
 **Purpose:** Rack-and-stack all plans and concepts for prioritization and dependency tracking.
 
 ---
@@ -20,9 +20,10 @@ training-control correctness fixes with passing CI. PR #80 merged the first
 P2 contract batch and closed three tracker bugs. PR #81 merged the second P2
 action/reward contract batch and closed two tracker bugs. PR #82 merged the P2
 counterfactual telemetry batch and closed two tracker bugs. PR #83 merged the
-P2 GPU-sync batch and closed two tracker bugs. The P2 Dual-AB config contract
-batch now has local fixes and passing focused/static/full-test/Wardline gates
-on `codex/p2-dual-ab-config-contracts`; PR and tracker closure are next.
+P2 GPU-sync batch and closed two tracker bugs. PR #84 merged the P2 Dual-AB
+config contract batch and closed two tracker bugs. The P2 config-contract batch
+now has local fixes and passing focused/static/full-test/Wardline gates on
+`codex/p2-config-contracts`; PR and tracker closure are next.
 
 ### Post-Hiatus Audit (2026-02-21)
 
@@ -36,7 +37,7 @@ op twice independently — once in `forward()` for value computation, once in `g
 the stored action. These ops frequently diverge, corrupting advantage estimates. Blocks Phase 7.
 
 ### Current Focus Areas
-1. **Green State Recovery** - 🔴 CRITICAL! Baseline green; Dual-AB P2 batch locally verified
+1. **Green State Recovery** - 🔴 CRITICAL! Baseline green; config P2 batch locally verified
 2. **P1 Stability Batch 1** - ✅ Completed and merged; six high-risk PPO/telemetry correctness bugs closed
 3. **P0 Filigree Bug Drain** - ✅ Initial six P0s fixed and closed
 4. **Op/Value Mismatch** - 🔴 CRITICAL! Fix double-sampling in factored_lstm.py
@@ -73,7 +74,7 @@ the stored action. These ops frequently diverge, corrupting advantage estimates.
 
 | ID | Title | Type | Urgency | Complexity | Risk | Status |
 |----|-------|------|---------|------------|------|--------|
-| green-state-recovery-2026-06-12 | Green State Recovery Program | in-progress | 🔴 critical | M | high | Active: P2 Dual-AB config batch locally verified; PR/tracker closure pending |
+| green-state-recovery-2026-06-12 | Green State Recovery Program | in-progress | 🔴 critical | M | high | Active: P2 config-contract batch locally verified; PR/tracker closure pending |
 | p1-stability-batch-1 | PPO/Telemetry Stability Batch 1 | completed-batch | 🔴 critical | M | high | Completed and merged; six bugs closed, broad gates passed |
 | filigree-p0-drain | Critical Filigree P0 Bug Drain | completed-batch | 🔴 critical | L | high | Initial six P0s fixed, verified, and closed |
 | op-value-mismatch | Q(s,op) Double-Sampling Bug | investigation | 🔴 critical | M | high | Diagnosed 2025-12-31, blocks Phase 7. See `docs/bugs/investigations/` |

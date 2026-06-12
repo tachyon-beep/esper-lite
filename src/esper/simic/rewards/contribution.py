@@ -24,6 +24,7 @@ from .types import (
     STAGE_BLENDING,
     STAGE_FOSSILIZED,
     STAGE_HOLDING,
+    STAGE_TRAINING,
 )
 
 _logger = logging.getLogger(__name__)
@@ -782,6 +783,9 @@ def compute_contribution_reward(
             action_shaping += config.pbrs_weight * pbrs_cull
         action_shaping += _contribution_prune_shaping(seed_info, seed_contribution, config)
         action_shaping += config.prune_cost
+    elif action == LifecycleOp.ADVANCE:
+        if seed_info is not None and seed_info.stage == STAGE_TRAINING:
+            action_shaping += config.advance_from_training_penalty
     elif action == LifecycleOp.SET_ALPHA_TARGET:
         action_shaping += config.set_alpha_target_cost
 

@@ -31,11 +31,11 @@ status_notes: >
   Main CI passed on merge commit cdff9c43. Recovery PR #72 landed the initial
   P0 Filigree bug drain and project Filigree install removal. Follow-up PRs
   #78 and #79 merged telemetry and training-control correctness fixes. PRs
-  #80, #81, #82, and #83 merged the first four P2 batches. The repository is
-  green on CI, but not yet steady. The P2 Dual-AB config contract batch is
-  locally fixed and verified against focused tests, custom guardrails, type,
-  lint, full pytest, and Wardline gates.
-percent_complete: 88
+  #80, #81, #82, #83, and #84 merged the first five P2 batches. The repository
+  is green on CI, but not yet steady. The P2 config-contract batch is locally
+  fixed and verified against focused tests, custom/static guardrails, full
+  pytest, and Wardline gates; PR and tracker closure are next.
+percent_complete: 90
 
 reviewed_by:
   - reviewer: python-engineering
@@ -192,13 +192,34 @@ Return the project to a steady state:
   - `MYPYPATH=src uv run mypy -p esper`
   - `uv run pytest` (`4699 passed, 10 skipped, 69 deselected`)
   - `wardline scan . --fail-on ERROR` (`0 active`)
+- PR #84 (`codex/p2-dual-ab-config-contracts`) was merged into `main` on
+  2026-06-12 at merge commit `96df2048d5425949f7bd149f1726a6716096ce07`.
+- PR #84 verification run `27426675468` passed:
+  - `lint`
+  - `typecheck`
+  - `property-tests`
+  - `unit-and-integration-tests`
+  - `e2e-smoke-tests`
+- The P2 Dual-AB config contract bugs were fixed and closed:
+  - `esper-lite-5bc044` Dual-AB config used `.get()` defensive fallback hiding missing keys
+  - `esper-lite-78a856` Dual-AB lacked group_id uniqueness validation allowing silent config collision
+- Local P2 config-contract batch verification on 2026-06-13 passed:
+  - `uv run pytest tests/simic/test_rewards.py::TestContributionRewardComponents::test_advance_from_training_uses_configured_penalty tests/simic/test_config.py::TestTrainingConfigDefaults::test_negative_value_warmup_batches_rejected tests/simic/test_config.py::TestTrainingConfigDefaults::test_zero_value_warmup_batches_disables_warmup -q`
+  - `uv run pytest tests/simic/test_rewards.py tests/simic/test_config.py -q`
+  - `uv run python scripts/lint_defensive_patterns.py`
+  - `uv run python scripts/lint_leyline_types.py`
+  - `uv run python scripts/lint_gpu_sync.py`
+  - `uv run ruff check src/ tests/`
+  - `MYPYPATH=src uv run mypy -p esper`
+  - `uv run pytest` (`4702 passed, 10 skipped, 69 deselected`)
+  - `wardline scan . --fail-on ERROR` (`0 active`)
 - Filigree was removed from the UV tool install on 2026-06-13:
   `uv tool uninstall filigree` removed `filigree`, `filigree-dashboard`,
   `filigree-mcp`, `filigree-scanner-claude`, and `filigree-scanner-codex`.
   `uv tool list` now retains only Legis, Loomweave, Loomweave plugins, and
   Wardline from the local standard tooling set.
-- Filigree on 2026-06-13 reports `11 ready`, `0 blocked`, and `2 wip`
-  after claiming `esper-lite-5bc044` and `esper-lite-78a856`.
+- Filigree on 2026-06-13 reports `9 ready`, `0 blocked`, and `2 wip`
+  after claiming `esper-lite-702e66` and `esper-lite-c8a6df`.
 - Loomweave MCP is visible, but the active MCP server still reports no
   `.weft/loomweave/loomweave.db` even after a worktree analysis pass. The
   available MCP session needs a reconnect before graph queries can be used.

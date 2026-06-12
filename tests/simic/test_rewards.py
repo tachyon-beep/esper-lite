@@ -461,6 +461,35 @@ class TestContributionRewardComponents:
         assert components.alpha_shock == pytest.approx(-0.25)
         assert reward == pytest.approx(components.total_reward)
 
+    def test_advance_from_training_uses_configured_penalty(self):
+        """ADVANCE from TRAINING should apply the declared shaping penalty."""
+        seed_info = SeedInfo(
+            stage=STAGE_TRAINING,
+            improvement_since_stage_start=0.5,
+            total_improvement=0.5,
+            epochs_in_stage=2,
+            seed_params=1000,
+            previous_stage=STAGE_GERMINATED,
+            seed_age_epochs=2,
+        )
+        config = ContributionRewardConfig(advance_from_training_penalty=-0.25)
+
+        _reward, components = compute_contribution_reward(
+            action=LifecycleOp.ADVANCE,
+            seed_contribution=None,
+            val_acc=70.0,
+            seed_info=seed_info,
+            epoch=4,
+            max_epochs=25,
+            total_params=101_000,
+            host_params=100_000,
+            acc_delta=0.0,
+            return_components=True,
+            config=config,
+        )
+
+        assert components.action_shaping == pytest.approx(-0.25)
+
     def test_components_track_context(self):
         """Test that components include action and epoch context."""
         from esper.leyline import SeedStage

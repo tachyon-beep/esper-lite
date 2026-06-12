@@ -417,6 +417,8 @@ class TrainingConfig:
 
         if self.entropy_anneal_episodes < 0:
             raise ValueError("entropy_anneal_episodes cannot be negative")
+        if self.value_warmup_batches < 0:
+            raise ValueError("value_warmup_batches cannot be negative")
 
         if self.max_seeds is not None and self.max_seeds < 1:
             raise ValueError("max_seeds must be >= 1 when provided")
