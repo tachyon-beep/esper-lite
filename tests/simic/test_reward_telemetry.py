@@ -111,3 +111,29 @@ class TestRewardComponentsTelemetry:
 
         with pytest.raises(KeyError, match="timing_discount"):
             RewardComponentsTelemetry.from_dict(data)
+
+    def test_from_dict_parses_false_action_success_string(self):
+        """String boolean telemetry from intermediate exports preserves False."""
+        data = RewardComponentsTelemetry(action_success=True).to_dict()
+        data["action_success"] = "False"
+
+        restored = RewardComponentsTelemetry.from_dict(data)
+
+        assert restored.action_success is False
+
+    def test_from_dict_parses_true_action_success_string(self):
+        """String boolean telemetry from intermediate exports preserves True."""
+        data = RewardComponentsTelemetry(action_success=False).to_dict()
+        data["action_success"] = "True"
+
+        restored = RewardComponentsTelemetry.from_dict(data)
+
+        assert restored.action_success is True
+
+    def test_from_dict_rejects_invalid_action_success_string(self):
+        """Malformed action_success strings should fail instead of guessing."""
+        data = RewardComponentsTelemetry(action_success=True).to_dict()
+        data["action_success"] = "truthy"
+
+        with pytest.raises(ValueError, match="action_success"):
+            RewardComponentsTelemetry.from_dict(data)
