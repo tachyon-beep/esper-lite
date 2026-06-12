@@ -41,7 +41,12 @@ function getSeedForSlot(slotId: string): SeedState {
     epochs_total: 0,
     counterfactual: 0.0,
     blend_tempo_epochs: 0,
-    alpha_curve: 'LINEAR'
+    alpha_curve: 'LINEAR',
+    contribution_velocity: 0.0,
+    interaction_sum: 0.0,
+    boost_received: 0.0,
+    upstream_alpha_sum: 0.0,
+    downstream_alpha_sum: 0.0
   }
 }
 

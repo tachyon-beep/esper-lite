@@ -29,12 +29,21 @@ from esper.karn.sanctum.schema import (
     EnvState,
     EventLogEntry,
     GPUStats,
+    GradientQualityMetrics,
+    InfrastructureMetrics,
+    ObservationStats,
+    EpisodeStats,
     RewardComponents,
     RunConfig,
     SanctumSnapshot,
+    SeedLifecycleEvent,
     SeedState,
+    SeedLifecycleStats,
+    ShapleyEstimate,
+    ShapleySnapshot,
     SystemVitals,
     TamiyoState,
+    ValueFunctionMetrics,
 )
 from esper.leyline import SeedStage
 
@@ -195,7 +204,7 @@ def generate_interface(cls: type) -> str:
 def main() -> None:
     """Generate all TypeScript types."""
     print("// Auto-generated from Python schema - DO NOT EDIT")
-    print("// Run: python scripts/generate_overwatch_types.py")
+    print("// Run: npm run generate:types from src/esper/karn/overwatch/web")
     print("// Generated from: esper.karn.sanctum.schema")
     print()
 
@@ -209,11 +218,20 @@ def main() -> None:
         CounterfactualConfig,
         CounterfactualSnapshot,
         GPUStats,
+        SeedLifecycleEvent,
+        ShapleyEstimate,
+        ShapleySnapshot,
         SeedState,
         RewardComponents,
         DecisionSnapshot,
         EventLogEntry,
         RunConfig,
+        SeedLifecycleStats,
+        ObservationStats,
+        EpisodeStats,
+        ValueFunctionMetrics,
+        GradientQualityMetrics,
+        InfrastructureMetrics,
         # Types with dependencies on base types
         BestRunRecord,
         TamiyoState,
@@ -223,9 +241,10 @@ def main() -> None:
         SanctumSnapshot,
     ]
 
-    for cls in dataclasses_to_generate:
+    for index, cls in enumerate(dataclasses_to_generate):
         print(generate_interface(cls))
-        print()
+        if index != len(dataclasses_to_generate) - 1:
+            print()
 
 
 if __name__ == "__main__":

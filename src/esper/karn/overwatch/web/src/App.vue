@@ -14,12 +14,22 @@ import EventTimeline from './components/EventTimeline.vue'
 import SeedSwimlane from './components/SeedSwimlane.vue'
 import ContributionWaterfall from './components/ContributionWaterfall.vue'
 import KeyboardHelp from './components/KeyboardHelp.vue'
+import ExperimentVerdictPanel from './components/ExperimentVerdictPanel.vue'
+import PhaseGatePanel from './components/PhaseGatePanel.vue'
+import ActionContextPanel from './components/ActionContextPanel.vue'
+import CohortComparisonPanel from './components/CohortComparisonPanel.vue'
 
 // WebSocket URL - can be configured via environment variable
 const wsUrl = import.meta.env.VITE_WS_URL ?? 'ws://localhost:8765'
 
 // Initialize the overwatch composable
-const { snapshot, connectionState, staleness } = useOverwatch(wsUrl)
+const {
+  snapshot,
+  snapshotsByGroup,
+  primaryGroupId,
+  connectionState,
+  staleness
+} = useOverwatch(wsUrl)
 
 // Local focused env ID (can be overridden by user selection)
 const localFocusedEnvId = ref<number | null>(null)
@@ -143,6 +153,10 @@ const loadingText = computed(() => {
 const isLoading = computed(() => {
   return connectionState.value === 'connecting' || !snapshot.value
 })
+
+const hasCohortComparison = computed(() => {
+  return Object.keys(snapshotsByGroup.value).length >= 2
+})
 </script>
 
 <template>
@@ -195,6 +209,13 @@ const isLoading = computed(() => {
         data-testid="main-content"
         tabindex="-1"
       >
+        <ExperimentVerdictPanel :snapshot="snapshot!" />
+        <PhaseGatePanel :snapshot="snapshot!" />
+        <CohortComparisonPanel
+          v-if="hasCohortComparison"
+          :snapshots-by-group="snapshotsByGroup"
+          :primary-group-id="primaryGroupId"
+        />
         <HealthGauges
           :vitals="snapshot!.vitals"
           :tamiyo="snapshot!.tamiyo"
@@ -218,6 +239,11 @@ const isLoading = computed(() => {
         data-testid="right-panel"
         tabindex="-1"
       >
+        <div class="panel-section">
+          <h3 class="panel-title">Action Context</h3>
+          <ActionContextPanel :snapshot="snapshot!" />
+        </div>
+
         <div class="panel-section">
           <h3 class="panel-title">Policy Diagnostics</h3>
           <PolicyDiagnostics
@@ -387,11 +413,17 @@ const isLoading = computed(() => {
   }
 
   .left-sidebar {
+    order: 2;
     flex-direction: row;
     overflow-x: auto;
   }
 
+  .main-content {
+    order: 1;
+  }
+
   .right-panel {
+    order: 3;
     flex-direction: row;
     flex-wrap: wrap;
   }

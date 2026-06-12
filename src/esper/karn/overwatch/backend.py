@@ -22,7 +22,7 @@ from pathlib import Path
 from queue import Empty, Queue
 from typing import TYPE_CHECKING, Any
 
-from esper.karn.sanctum.aggregator import SanctumAggregator
+from esper.karn.sanctum.registry import AggregatorRegistry
 from esper.karn.sanctum.schema import SanctumSnapshot
 
 if TYPE_CHECKING:
@@ -90,8 +90,8 @@ class OverwatchBackend:
         self.snapshot_rate_hz = snapshot_rate_hz
         self._min_broadcast_interval = 1.0 / snapshot_rate_hz
 
-        # Aggregator for event processing (same as Sanctum TUI)
-        self.aggregator = SanctumAggregator(num_envs=num_envs)
+        # Group-aware aggregators for event processing (same as Sanctum TUI)
+        self._registry = AggregatorRegistry(num_envs=num_envs)
 
         # Rate limiting state
         self._last_broadcast_time: float = 0.0
@@ -122,7 +122,7 @@ class OverwatchBackend:
         Args:
             event: The telemetry event to process.
         """
-        self.aggregator.process_event(event)
+        self._registry.process_event(event)
         self.maybe_broadcast()
 
     def get_snapshot(self) -> SanctumSnapshot:
@@ -131,7 +131,19 @@ class OverwatchBackend:
         Returns:
             Current aggregated snapshot state.
         """
-        return self.aggregator.get_snapshot()
+        snapshots = self.get_all_snapshots()
+        group_id = self._select_primary_group_id(snapshots)
+        if group_id is None:
+            return SanctumSnapshot()
+        return snapshots[group_id]
+
+    def get_all_snapshots(self) -> dict[str, SanctumSnapshot]:
+        """Get snapshots for all policy groups.
+
+        Returns:
+            Mapping from policy group ID to current snapshot state.
+        """
+        return self._registry.get_all_snapshots()
 
     def snapshot_to_json(self, snapshot: SanctumSnapshot) -> str:
         """Serialize a SanctumSnapshot to JSON.
@@ -169,10 +181,24 @@ class OverwatchBackend:
             if not self._clients:
                 return
 
-        snapshot = self.get_snapshot()
+        snapshots_by_group = self.get_all_snapshots()
+        primary_group_id = self._select_primary_group_id(snapshots_by_group)
+        if primary_group_id is None:
+            snapshot = SanctumSnapshot()
+        else:
+            snapshot = snapshots_by_group[primary_group_id]
+
         # Serialize once: wrap snapshot in message envelope and serialize together
         message = json.dumps(
-            {"type": "snapshot", "data": asdict(snapshot)},
+            {
+                "type": "snapshot",
+                "primary_group_id": primary_group_id,
+                "data": asdict(snapshot),
+                "snapshots_by_group": {
+                    group_id: asdict(group_snapshot)
+                    for group_id, group_snapshot in snapshots_by_group.items()
+                },
+            },
             default=_json_serializer,
         )
 
@@ -356,6 +382,16 @@ class OverwatchBackend:
             self._clients.clear()
 
         _logger.info("Overwatch backend stopped")
+
+    def _select_primary_group_id(
+        self,
+        snapshots_by_group: dict[str, SanctumSnapshot],
+    ) -> str | None:
+        if not snapshots_by_group:
+            return None
+        if "default" in snapshots_by_group:
+            return "default"
+        return sorted(snapshots_by_group.keys())[0]
 
     def close(self) -> None:
         """Close the backend (called by Nissa hub on shutdown).

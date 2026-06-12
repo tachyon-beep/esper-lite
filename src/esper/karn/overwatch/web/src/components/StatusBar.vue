@@ -143,4 +143,36 @@ const stalenessClass = computed(() => {
 .separator {
   color: var(--text-dim);
 }
+
+@media (max-width: 640px) {
+  .status-bar {
+    flex-wrap: wrap;
+    gap: var(--space-xs) var(--space-sm);
+    padding: var(--space-xs) var(--space-sm);
+  }
+
+  .title {
+    order: -1;
+    width: 100%;
+    text-align: center;
+    letter-spacing: 2px;
+  }
+
+  .status-section,
+  .metrics-section {
+    flex: 1 1 auto;
+    min-width: 0;
+    gap: var(--space-xs);
+  }
+
+  .metrics-section {
+    justify-content: flex-end;
+  }
+
+  .status-indicator,
+  .metric,
+  .staleness {
+    font-size: 10px;
+  }
+}
 </style>

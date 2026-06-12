@@ -185,8 +185,10 @@ const showTempWarning = computed(() => props.vitals.gpu_temperature > TEMP_WARNI
 
 <style scoped>
 .health-gauges {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
   align-items: center;
+  justify-items: center;
   gap: var(--space-md);
   padding: var(--space-sm);
 }
@@ -196,6 +198,8 @@ const showTempWarning = computed(() => props.vitals.gpu_temperature > TEMP_WARNI
   display: flex;
   flex-direction: column;
   align-items: center;
+  width: 96px;
+  min-width: 0;
 }
 
 .gauge-svg {
@@ -251,6 +255,7 @@ const showTempWarning = computed(() => props.vitals.gpu_temperature > TEMP_WARNI
 .temp-warning {
   display: flex;
   align-items: center;
+  justify-content: center;
   padding: var(--space-xs) var(--space-sm);
   background: var(--status-warn-glow);
   border: 1px solid var(--status-warn);
@@ -258,5 +263,12 @@ const showTempWarning = computed(() => props.vitals.gpu_temperature > TEMP_WARNI
   font-size: 11px;
   font-weight: 600;
   color: var(--status-warn);
+}
+
+@media (max-width: 640px) {
+  .health-gauges {
+    grid-template-columns: repeat(3, minmax(88px, 1fr));
+    gap: var(--space-sm);
+  }
 }
 </style>
