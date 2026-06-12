@@ -5,14 +5,18 @@ from __future__ import annotations
 import logging
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 from esper.simic.training.ppo_coordinator import PPOCoordinator, PPOCoordinatorConfig
 
 
 class _StubBuffer:
+    def __init__(self, length: int = 5) -> None:
+        self.length = length
+
     def __len__(self) -> int:
-        return 5
+        return self.length
 
 
 class _StubAgent:
@@ -72,6 +76,34 @@ def test_run_update_treats_epoch0_kl_abort_as_skipped_update():
     assert ppo_update_time_ms is not None
 
 
+def test_run_update_reports_rollout_total_steps_before_buffer_clear():
+    """rollout_total_steps should reflect the rollout size before PPO clears it."""
+
+    coordinator = None
+
+    def _run_ppo_updates_fn(**_kwargs):
+        assert coordinator is not None
+        coordinator.agent.buffer.length = 0
+        return {
+            "ppo_update_performed": True,
+            "pre_clip_grad_norm": 1.0,
+        }
+
+    coordinator = _make_coordinator(run_ppo_updates_fn=_run_ppo_updates_fn)
+
+    metrics, update_skipped, ppo_update_time_ms = coordinator.run_update(
+        raw_states_for_normalizer_update=[torch.ones(1, 3)],
+        obs_normalizer=SimpleNamespace(update=lambda _tensor: None),
+        envs_this_batch=2,
+        throughput_step_time_ms_sum=10.0,
+        throughput_dataloader_wait_ms_sum=1.0,
+    )
+
+    assert update_skipped is False
+    assert metrics["rollout_total_steps"] == 5
+    assert ppo_update_time_ms is not None
+
+
 def test_check_finiteness_gate_ignores_non_finiteness_skip_without_gradient_step():
     """KL early-stop before backward should not increment the finiteness failure counter."""
 
@@ -88,3 +120,19 @@ def test_check_finiteness_gate_ignores_non_finiteness_skip_without_gradient_step
 
     assert consecutive_failures == 0
     assert should_continue is True
+
+
+@pytest.mark.parametrize("bad_norm", [float("nan"), float("inf"), float("-inf")])
+def test_check_gradient_drift_rejects_non_finite_norm_without_poisoning_tracker(bad_norm):
+    """Non-finite grad norms must fail before entering EMA state."""
+    from esper.simic.telemetry import GradientEMATracker
+
+    coordinator = _make_coordinator(run_ppo_updates_fn=lambda **_kwargs: {})
+    tracker = GradientEMATracker()
+    tracker.update(grad_norm=10.0, grad_health=1.0)
+    state_before = tracker.state_dict()
+
+    with pytest.raises(ValueError, match="ppo_grad_norm must be finite"):
+        coordinator.check_gradient_drift(tracker, bad_norm)
+
+    assert tracker.state_dict() == state_before

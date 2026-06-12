@@ -28,10 +28,13 @@ blocks:
 
 status_notes: >
   PR #52 was made green, accepted, and merged as the new baseline on 2026-06-12.
-  Main CI passed on merge commit cdff9c43. The initial P0 Filigree bug drain is
-  complete for the six critical reward, gradient, resume, and attribution
-  defects identified in this recovery program.
-percent_complete: 90
+  Main CI passed on merge commit cdff9c43. Recovery PR #72 landed the initial
+  P0 Filigree bug drain and project Filigree install removal at merge commit
+  514e04a6. P1 stability batch 1 is locally complete: six high-priority
+  PPO/telemetry bugs are closed, focused tests passed, broad static gates
+  passed, and the broad Simic sweep passed with known local CUDA/data-fetch
+  exclusions.
+percent_complete: 94
 
 reviewed_by:
   - reviewer: python-engineering
@@ -72,6 +75,14 @@ Return the project to a steady state:
   - `esper-lite-b765c2` missing slot config validation on resume
   - `esper-lite-30e631` pair attribution order mismatch
   - `esper-lite-102ff8` FP16-scaled gradients collected before unscale
+- Recovery PR #72 (`codex/steady-state-recovery`) was merged into `main` on
+  2026-06-12 at merge commit `514e04a6d7235eba0ef61a147477f7768448730f`.
+- PR #72 verification run `27414100263` passed:
+  - `lint`
+  - `typecheck`
+  - `property-tests`
+  - `unit-and-integration-tests`
+  - `e2e-smoke-tests`
 - The working tree also contains unrelated dirty skill/config files. These must not be reverted or silently included in the PR #52 stabilization commit.
 
 ## Definition Of Green
@@ -235,7 +246,42 @@ Status:
 
 - Completed: initial six P0 issues fixed, verified, and closed.
 - Completed: broad local gates passed where environment permits.
+- Completed: recovery PR #72 merged into `main` at `514e04a6`.
+- Completed: P1 stability batch 1 commit `b4b8f2d0` fixed or verified and closed:
+  - `esper-lite-18eb2f`
+  - `esper-lite-2fcc87`
+  - `esper-lite-5f7f67`
+  - `esper-lite-1bbfb2`
+  - `esper-lite-c82e50`
+  - `esper-lite-ee44b1`
 - Blocked by local CUDA/data fetch: full `tests/simic` includes CUDA CIFAR iterator smoke files that attempted SSL dataset access and timed out locally.
+
+### H. Drain P1 Stability Batch 1
+
+Owner: primary agent with read-only specialist subagents.
+
+Scope:
+
+- Fix or close as stale the first six claimed P1 issues:
+  - `esper-lite-18eb2f` entropy floor schedule inversion
+  - `esper-lite-2fcc87` epoch-0 KL no-step accounting
+  - `esper-lite-5f7f67` zero-availability entropy floor penalty
+  - `esper-lite-1bbfb2` zero-mask KL weighting dilution
+  - `esper-lite-c82e50` `rollout_total_steps` after buffer clear
+  - `esper-lite-ee44b1` non-finite gradient drift poisoning
+- Keep the branch limited to PPO math, PPO coordinator, gradient EMA, tests,
+  and plan/tracker updates.
+
+Acceptance:
+
+- Every claimed issue has focused regression evidence or a stale-issue closure
+  comment referencing current tests.
+- Branch gates pass locally.
+- GitHub PR checks pass before merge.
+
+Status:
+
+- Locally complete on branch `codex/p1-stability-batch-1`; pending PR and GitHub checks.
 
 Final local evidence:
 

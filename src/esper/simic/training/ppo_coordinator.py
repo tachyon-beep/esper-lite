@@ -185,6 +185,7 @@ class PPOCoordinator:
         if len(self.agent.buffer) == 0:
             return {}, True, None
 
+        rollout_total_steps = len(self.agent.buffer)
         update_start = time.perf_counter()
         metrics = self.run_ppo_updates_fn(
             agent=self.agent,
@@ -201,7 +202,7 @@ class PPOCoordinator:
             metrics["ppo_update_time_ms"] = ppo_update_time_ms
             metrics["rollout_length"] = self.config.max_epochs
             metrics["rollout_episodes"] = envs_this_batch
-            metrics["rollout_total_steps"] = len(self.agent.buffer)
+            metrics["rollout_total_steps"] = rollout_total_steps
             metrics["reward_mode"] = self.env_reward_configs[0].reward_mode.value
             metrics["reward_family"] = self.reward_family_enum.value
             metrics["entropy_coef"] = self.agent.entropy_coef
@@ -260,6 +261,9 @@ class PPOCoordinator:
         """
         if grad_ema_tracker is None or ppo_grad_norm is None:
             return None
+
+        if not math.isfinite(ppo_grad_norm):
+            raise ValueError(f"ppo_grad_norm must be finite, got {ppo_grad_norm}")
 
         # Compute gradient health (0-1)
         if ppo_grad_norm < 1e-7:
