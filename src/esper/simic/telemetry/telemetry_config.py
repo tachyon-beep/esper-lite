@@ -72,7 +72,7 @@ class TelemetryConfig:
             return level >= TelemetryLevel.NORMAL
         elif category == "debug":
             return level >= TelemetryLevel.DEBUG
-        return False
+        raise ValueError(f"Unknown telemetry category: {category}")
 
     def escalate_temporarily(self, epochs: int | None = None) -> None:
         """Temporarily escalate to DEBUG level.

@@ -24,6 +24,7 @@ from esper.simic.training.vectorized import (
     _run_ppo_updates,
 )
 from esper.simic.training.vectorized_trainer import (
+    _masked_op_probs_for_telemetry,
     _pair_index_accs_for_active_slots,
     _pair_slot_key,
 )
@@ -60,6 +61,39 @@ def test_pair_attribution_keys_survive_non_lexicographic_slot_order():
     )
 
     assert emitter_pair_accs == {(2, 1): 47.0}
+
+
+def test_masked_op_probs_for_telemetry_excludes_invalid_ops():
+    """Decision telemetry op probabilities should be normalized over valid ops."""
+    logits = torch.tensor([[5.0, 4.0, 3.0, 2.0, 1.0, 0.0]])
+    mask = torch.tensor([[True, False, True, False, False, False]])
+
+    probs = _masked_op_probs_for_telemetry(
+        op_logits=logits,
+        op_mask=mask,
+        probability_floor=None,
+    )
+
+    assert probs[0, 1] == pytest.approx(0.0)
+    assert probs[0, 3] == pytest.approx(0.0)
+    assert probs[0, 4] == pytest.approx(0.0)
+    assert probs[0, 5] == pytest.approx(0.0)
+    assert probs[0, 0] + probs[0, 2] == pytest.approx(1.0)
+
+
+def test_masked_op_probs_for_telemetry_applies_op_probability_floor():
+    """Decision telemetry should match the policy's op probability floor."""
+    logits = torch.tensor([[10.0, 0.0, -10.0]])
+    mask = torch.tensor([[True, True, True]])
+
+    probs = _masked_op_probs_for_telemetry(
+        op_logits=logits,
+        op_mask=mask,
+        probability_floor={"op": 0.2},
+    )
+
+    assert probs.sum().item() == pytest.approx(1.0)
+    assert probs.min().item() >= 0.2 - 1e-6
 
 
 def test_lifecycle_only_keeps_slot_telemetry():

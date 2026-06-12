@@ -29,7 +29,11 @@ from esper.simic.telemetry import (
 )
 from esper.simic.telemetry.emitters import check_performance_degradation
 from esper.simic.rewards import ContributionRewardInputs, LossRewardInputs
-from esper.tamiyo.policy.action_masks import build_slot_states, compute_action_masks
+from esper.tamiyo.policy.action_masks import (
+    MaskedCategorical,
+    build_slot_states,
+    compute_action_masks,
+)
 from esper.tamiyo.policy.features import batch_obs_to_features
 from esper.utils.data import augment_cifar10_batch
 
@@ -72,6 +76,19 @@ def _pair_index_accs_for_active_slots(
         (slot_to_index[slot_a], slot_to_index[slot_b]): pair_acc
         for (slot_a, slot_b), pair_acc in pair_accs_by_slot.items()
     }
+
+
+def _masked_op_probs_for_telemetry(
+    *,
+    op_logits: torch.Tensor,
+    op_mask: torch.Tensor,
+    probability_floor: dict[str, float] | None,
+) -> torch.Tensor:
+    """Return op probabilities using the same mask/floor contract as action sampling."""
+    op_min_prob = None
+    if probability_floor is not None and "op" in probability_floor:
+        op_min_prob = probability_floor["op"]
+    return MaskedCategorical(op_logits, op_mask, min_prob=op_min_prob).probs
 
 
 @dataclass
@@ -1395,8 +1412,12 @@ class VectorizedPPOTrainer:
                     # per step instead of 1. This was the root cause of 90% throughput drop.
                     op_probs_cpu: np.ndarray | None = None
                     if ops_telemetry_enabled and action_result.op_logits is not None:
-                        # Batch softmax over all envs, single GPU->CPU transfer
-                        op_probs_all = torch.softmax(action_result.op_logits, dim=-1)
+                        # Batch masked distribution over all envs, single GPU->CPU transfer.
+                        op_probs_all = _masked_op_probs_for_telemetry(
+                            op_logits=action_result.op_logits,
+                            op_mask=masks_batch["op"],
+                            probability_floor=agent.probability_floor,
+                        )
                         op_probs_cpu = op_probs_all.cpu().numpy()
 
                     # PERF: Pre-compute per-head confidences AND entropy for telemetry.
