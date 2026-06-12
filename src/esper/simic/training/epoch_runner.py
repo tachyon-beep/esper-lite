@@ -5,7 +5,7 @@ reducing the cognitive load of the main training loop.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from esper.simic.rewards import ContributionRewardInputs, LossRewardInputs
@@ -128,6 +128,8 @@ class EpochState:
             self.action_specs.append(ActionSpec())
             self.action_outcomes.append(ActionOutcome())
             self.action_mask_flags.append(ActionMaskFlags())
+            self.contribution_reward_inputs.append(replace(self.contribution_reward_inputs[-1]))
+            self.loss_reward_inputs.append(replace(self.loss_reward_inputs[-1]))
             self.env_rollback_occurred.append(False)
 
         # Reset values

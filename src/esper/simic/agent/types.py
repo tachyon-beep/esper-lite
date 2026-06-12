@@ -187,14 +187,14 @@ class HeadEntropies(TypedDict):
 class ActionDict(TypedDict):
     """Factored action dictionary."""
 
-    slot: int
-    blueprint: int
-    style: int
-    tempo: int
-    alpha_target: int
-    alpha_speed: int
-    alpha_curve: int
-    op: int
+    slot: torch.Tensor
+    blueprint: torch.Tensor
+    style: torch.Tensor
+    tempo: torch.Tensor
+    alpha_target: torch.Tensor
+    alpha_speed: torch.Tensor
+    alpha_curve: torch.Tensor
+    op: torch.Tensor
 
 
 __all__ = [
