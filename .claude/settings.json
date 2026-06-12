@@ -1,5 +1,52 @@
 {
   "enabledPlugins": {
     "code-review@claude-plugins-official": true
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "loomweave hook session-start --path '/home/john/esper-lite'",
+            "type": "command"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/john/.local/bin/legis session-context",
+            "timeout": 5000
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/john/.local/bin/filigree session-context",
+            "timeout": 5000
+          },
+          {
+            "type": "command",
+            "command": "/home/john/.local/bin/filigree ensure-dashboard",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "mcp__filigree__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/john/.local/bin/filigree ensure-dashboard",
+            "timeout": 5000
+          }
+        ]
+      }
+    ]
   }
 }
