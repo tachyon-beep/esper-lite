@@ -10,7 +10,7 @@ updated: 2026-06-12
 owner: Codex
 
 urgency: critical
-value: Restore Esper to a mergeable, verified baseline by resolving the long-running env-refactor PR, then draining or closing stale PRs against that baseline.
+value: Restore Esper to a mergeable, verified baseline and then drain the critical correctness backlog against that baseline.
 
 complexity: M
 risk: high
@@ -27,10 +27,11 @@ blocks:
   - dependency-security-drain
 
 status_notes: >
-  Active recovery program. PR #52 is the critical path. No other PR should land
-  until #52 is either made green and accepted as the new baseline, or explicitly
-  rejected with a smaller replacement path.
-percent_complete: 20
+  PR #52 was made green, accepted, and merged as the new baseline on 2026-06-12.
+  Main CI is running on merge commit cdff9c43. The active critical path is now
+  P0 Filigree bug drainage, starting with reward/gradient/resume correctness
+  defects that can silently corrupt learning signals.
+percent_complete: 45
 
 reviewed_by:
   - reviewer: python-engineering
@@ -50,21 +51,27 @@ Return the project to a steady state:
 2. Required CI and local validation gates pass.
 3. PR #52 is either merged as the new baseline or replaced by an explicit smaller path.
 4. Remaining open PRs are classified, closed, merged, or retargeted against the selected baseline.
-5. The plan tracker and status notes reflect current reality.
+5. Critical Filigree P0 bugs that can silently corrupt training, telemetry, or resume behavior are fixed or explicitly reclassified.
+6. The plan tracker and status notes reflect current reality.
 
 ## Current Evidence
 
-- Current branch: `env-refactor`, PR #52.
-- PR #52 is the large unlanded baseline-reset candidate.
-- Previous GitHub CI for PR #52 failed in `lint` on `src/esper/simic/training/policy_group.py`.
-- Local targeted verification after the stabilization patch passed:
-  - `uv run ruff check src/ tests/`
-  - `uv run ruff check scripts/`
-  - `uv run python scripts/lint_leyline_types.py`
-  - `uv run python scripts/lint_defensive_patterns.py`
-  - `uv run python scripts/lint_gpu_sync.py`
-  - `MYPYPATH=src uv run mypy -p esper`
-  - `PYTHONPATH=src uv run pytest tests/simic -q`
+- PR #52 (`env-refactor`) was merged into `main` on 2026-06-12.
+- Merge commit: `cdff9c43847efdab65ca30faba79deade278bc1e`.
+- PR #52 verification run `27410877590` passed:
+  - `lint`
+  - `typecheck`
+  - `property-tests`
+  - `unit-and-integration-tests`
+  - `e2e-smoke-tests`
+- Main post-merge Test Suite run: `27411344212` (pending at plan update time).
+- Filigree currently reports 50 ready issues, with six P0 bugs at the top of the queue:
+  - `esper-lite-41841f` BASIC_PLUS drip state silently lost when `return_components=False`
+  - `esper-lite-7078b7` NaN gradient norms bypass exploding detection
+  - `esper-lite-52ee59` resume path loads checkpoint twice to GPU
+  - `esper-lite-b765c2` missing slot config validation on resume
+  - `esper-lite-30e631` pair attribution order mismatch
+  - `esper-lite-102ff8` FP16-scaled gradients collected before unscale
 - The working tree also contains unrelated dirty skill/config files. These must not be reverted or silently included in the PR #52 stabilization commit.
 
 ## Definition Of Green
@@ -81,12 +88,13 @@ MYPYPATH=src uv run mypy -p esper
 PYTHONPATH=src uv run pytest tests/simic -q
 ```
 
-PR #52 is remotely green only when GitHub Actions for the PR has no failing required checks. Skipped optional/nightly jobs are acceptable only if the workflow intentionally skips them for that event.
+PR #52 was remotely green when GitHub Actions for the PR had no failing required checks. Skipped optional/nightly jobs are acceptable only if the workflow intentionally skips them for that event.
 
 The project is steady only when:
 
 - `main` contains the selected baseline.
 - `main` or the merge commit has a passing required CI run.
+- Critical P0 issues are fixed, closed, or explicitly reclassified with evidence.
 - Open PRs have an explicit disposition.
 - No known task-scope defects are hidden as scratch observations.
 
@@ -177,6 +185,11 @@ Acceptance:
 - `main` has the selected baseline.
 - Required checks pass on the resulting merge or post-merge main run.
 
+Status:
+
+- Completed: PR #52 merged to `main` at `cdff9c43`.
+- Pending: post-merge main CI run `27411344212`.
+
 ### F. Drain Or Retarget Remaining PRs
 
 Owner: primary agent with subagents as needed.
@@ -192,7 +205,26 @@ Acceptance:
 - Open PR list no longer contains stale ambiguous PRs.
 - Remaining open PRs have a clear next action.
 
+### G. Drain Critical Filigree P0 Bugs
+
+Owner: primary agent with specialist subagents as needed.
+
+Scope:
+
+- Fix P0 bugs that silently corrupt reward accounting, gradient health,
+  checkpoint resume, or slot attribution.
+- Use atomic Filigree `start-work --advance` before editing.
+- Add focused regression tests for each corrected invariant.
+- Run the local gate appropriate to the touched subsystem before commit.
+
+Acceptance:
+
+- Each claimed P0 has a comment summarizing the fix and verification.
+- Each fixed P0 is closed in Filigree after code is committed.
+- Full repository gates are rerun after a coherent batch of P0 fixes.
+
 ## Execution Log
 
 - 2026-06-12: Program opened. PR #52 identified as critical path. Sidecar subagents dispatched for `origin/main` baseline verification and open PR classification.
-
+- 2026-06-12: PR #52 made green and merged as baseline at `cdff9c43`.
+- 2026-06-12: Recovery program moved to P0 Filigree bug drainage while post-merge main CI runs.

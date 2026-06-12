@@ -1,6 +1,6 @@
 # Esper Plan Tracker
 
-**Last Updated:** 2026-06-12 (green-state recovery program active)
+**Last Updated:** 2026-06-12 (baseline merged; P0 recovery active)
 **Purpose:** Rack-and-stack all plans and concepts for prioritization and dependency tracking.
 
 ---
@@ -9,13 +9,13 @@
 
 ### Green-State Recovery (2026-06-12)
 
-The project is in stabilization mode. PR #52 (`env-refactor`) is the critical
-path because it is the large unlanded baseline-reset candidate. The active plan
-is `docs/plans/ready/2026-06-12-green-state-recovery.md`.
+The project is in stabilization mode. PR #52 (`env-refactor`) was made green and
+merged into `main` as the new baseline at merge commit `cdff9c43`. The active
+plan is `docs/plans/ready/2026-06-12-green-state-recovery.md`.
 
-Current operating rule: do not land other PRs until PR #52 is either made green
-and accepted as the new baseline, or explicitly rejected with a smaller
-replacement path.
+Current operating rule: drain critical P0 correctness bugs against the merged
+baseline before starting feature work. Security/dependency PRs remain next after
+the P0 queue is stable and post-merge main CI is confirmed green.
 
 ### Post-Hiatus Audit (2026-02-21)
 
@@ -29,13 +29,14 @@ op twice independently — once in `forward()` for value computation, once in `g
 the stored action. These ops frequently diverge, corrupting advantage estimates. Blocks Phase 7.
 
 ### Current Focus Areas
-1. **Green State Recovery** - 🔴 CRITICAL! Resolve PR #52 and restore a verified mergeable baseline
-2. **Op/Value Mismatch** - 🔴 CRITICAL! Fix double-sampling in factored_lstm.py
-3. **Reward Efficiency Experiment** - Infrastructure complete, experiment never run
-4. **Phase3-TinyStories** - 85% IMPLEMENTED, needs validation runs
-5. **Drip Reward Implementation** - ~70% done, needs integration completion
-6. **Telemetry Domain Separation** - ~30% done
-7. **Blueprint Compiler** - 0% (correctly deferred until entropy confirmed stable)
+1. **Green State Recovery** - 🔴 CRITICAL! Baseline merged; drain P0 correctness bugs and confirm post-merge CI
+2. **P0 Filigree Bug Drain** - 🔴 CRITICAL! Fix silent reward, gradient, resume, and attribution corruption
+3. **Op/Value Mismatch** - 🔴 CRITICAL! Fix double-sampling in factored_lstm.py
+4. **Reward Efficiency Experiment** - Infrastructure complete, experiment never run
+5. **Phase3-TinyStories** - 85% IMPLEMENTED, needs validation runs
+6. **Drip Reward Implementation** - ~70% done, needs integration completion
+7. **Telemetry Domain Separation** - ~30% done
+8. **Blueprint Compiler** - 0% (correctly deferred until entropy confirmed stable)
 
 ### Critical Path (Updated)
 ```
@@ -64,7 +65,8 @@ the stored action. These ops frequently diverge, corrupting advantage estimates.
 
 | ID | Title | Type | Urgency | Complexity | Risk | Status |
 |----|-------|------|---------|------------|------|--------|
-| green-state-recovery-2026-06-12 | Green State Recovery Program | in-progress | 🔴 critical | M | high | Active: make PR #52 green or reject with replacement path |
+| green-state-recovery-2026-06-12 | Green State Recovery Program | in-progress | 🔴 critical | M | high | Active: PR #52 merged; post-merge CI + P0 bug drain |
+| filigree-p0-drain | Critical Filigree P0 Bug Drain | in-progress | 🔴 critical | L | high | Six P0s ready; start with reward/gradient/resume corruption |
 | op-value-mismatch | Q(s,op) Double-Sampling Bug | investigation | 🔴 critical | M | high | Diagnosed 2025-12-31, blocks Phase 7. See `docs/bugs/investigations/` |
 
 ### Tier 1: High Priority (This Week)
