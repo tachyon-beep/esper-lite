@@ -1,16 +1,39 @@
 # CRITICAL BUG: Op Value/Action Mismatch in Q(s, op) Implementation
 
-**Status**: CRITICAL - Blocks Phase 7
+**Status**: RESOLVED - Fixed in `FactoredRecurrentActorCritic.get_action()` and covered by regression tests
 **Discovered**: 2025-12-31 (post-Phase 6 release review)
 **Severity**: Undermines Q(s, op) design, causes biased advantages
+**Resolved**: 2026-06-13 verification pass
 
 ---
 
 ## Executive Summary
 
-The Q(s, op) value head implementation in `FactoredRecurrentActorCritic.get_action()` computes the value using a **different op** than the op action stored in the buffer. This creates systematic bias in PPO advantage estimates.
+The historical Q(s, op) value head bug in `FactoredRecurrentActorCritic.get_action()` computed the value using a **different op** than the op action stored in the buffer. This created systematic bias in PPO advantage estimates.
 
-**Root Cause**: `forward()` samples the op for value computation, but `get_action()` independently samples (or argmaxes) the op for the action. These two ops frequently diverge.
+**Root Cause**: `forward()` sampled the op for value computation, but `get_action()` independently sampled (or argmaxed) the op for the action. These two ops frequently diverged.
+
+## Resolution
+
+Current `main` no longer has the mismatch described below.
+`FactoredRecurrentActorCritic.get_action()` now enforces one selected operation per action result:
+
+- stochastic rollout mode reuses `output["sampled_op"]` from `forward()` and returns the existing `Q(s, sampled_op)` value;
+- deterministic bootstrap mode selects the argmax operation and recomputes `Q(s, argmax_op)`;
+- `sampled_op`, `actions["op"]`, `log_probs["op"]`, and `values` are returned from the same selected operation contract.
+
+Regression coverage:
+
+- `tests/tamiyo/networks/test_op_value_consistency.py`
+- `tests/simic/training/test_bootstrap_consistency.py`
+
+Verification command:
+
+```bash
+uv run --python 3.11 pytest tests/tamiyo/networks/test_op_value_consistency.py tests/simic/training/test_bootstrap_consistency.py -q
+```
+
+The sections below are retained as historical diagnosis of the failure mode.
 
 ---
 

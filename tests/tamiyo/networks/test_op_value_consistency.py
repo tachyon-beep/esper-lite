@@ -4,10 +4,11 @@ CRITICAL BUG FIX: Verify that get_action() uses the same op for both
 value computation and action selection. This prevents biased advantages
 and bootstrap corruption.
 
-Related bug report: docs/bugs/CRITICAL-op-value-mismatch.md
+Related bug report: docs/bugs/investigations/CRITICAL-op-value-mismatch.md
 """
 
 import torch
+from torch import nn
 import pytest
 from esper.tamiyo.networks import FactoredRecurrentActorCritic
 from esper.leyline import HEAD_NAMES
@@ -27,6 +28,53 @@ class TestOpValueConsistency:
         bp_idx = torch.randint(0, 13, (batch_size, 3))
         masks = {k: None for k in HEAD_NAMES}
         return state, bp_idx, masks
+
+    def test_stochastic_value_is_conditioned_on_returned_op(self, monkeypatch, network, inputs):
+        """Stochastic rollouts must not use a second independent op sample for value."""
+        state, bp_idx, _ = inputs
+
+        class UniformOpHead(nn.Module):
+            def forward(self, lstm_out: torch.Tensor) -> torch.Tensor:
+                return lstm_out.new_zeros((*lstm_out.shape[:-1], network.num_ops))
+
+        def value_equals_op(lstm_out: torch.Tensor, op: torch.Tensor) -> torch.Tensor:
+            return op.to(lstm_out)
+
+        network.op_head = UniformOpHead()
+        monkeypatch.setattr(network, "_compute_value", value_equals_op)
+
+        torch.manual_seed(0)
+        result = network.get_action(state, bp_idx, hidden=None, deterministic=False)
+
+        torch.testing.assert_close(
+            result.values,
+            result.actions["op"].to(result.values),
+            msg="rollout value must be Q(s, returned op), not Q(s, an earlier op sample)",
+        )
+
+    def test_deterministic_value_is_conditioned_on_argmax_op(self, monkeypatch, network, inputs):
+        """Bootstrap values must be recomputed for the deterministic argmax op."""
+        state, bp_idx, _ = inputs
+
+        class UniformOpHead(nn.Module):
+            def forward(self, lstm_out: torch.Tensor) -> torch.Tensor:
+                return lstm_out.new_zeros((*lstm_out.shape[:-1], network.num_ops))
+
+        def value_equals_op(lstm_out: torch.Tensor, op: torch.Tensor) -> torch.Tensor:
+            return op.to(lstm_out)
+
+        network.op_head = UniformOpHead()
+        monkeypatch.setattr(network, "_compute_value", value_equals_op)
+
+        torch.manual_seed(0)
+        result = network.get_action(state, bp_idx, hidden=None, deterministic=True)
+
+        assert (result.actions["op"] == 0).all()
+        torch.testing.assert_close(
+            result.values,
+            torch.zeros_like(result.values),
+            msg="deterministic value must be Q(s, argmax op), not Q(s, forward sample)",
+        )
 
     def test_deterministic_op_value_match(self, network, inputs):
         """In deterministic mode, value must use argmax op."""

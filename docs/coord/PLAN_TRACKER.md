@@ -1,6 +1,6 @@
 # Esper Plan Tracker
 
-**Last Updated:** 2026-06-13 (baseline green; recovery bug drain closed; Karn telemetry quality arc drafted)
+**Last Updated:** 2026-06-13 (baseline green; recovery bug drain closed; op/value mismatch verified resolved; Karn telemetry quality arc drafted)
 **Purpose:** Rack-and-stack all plans and concepts for prioritization and dependency tracking.
 
 ---
@@ -34,19 +34,23 @@ planning shell ready.
 Full codebase audit performed after returning from a month off. Many plans marked "0%" were
 actually completed during the Jan 9-17 implementation sprint but the tracker was never updated.
 
-### 🔴 CRITICAL: Op/Value Mismatch Bug
+### ✅ Resolved: Op/Value Mismatch Bug
 
 **CRITICAL-op-value-mismatch** (in `docs/bugs/investigations/`): Q(s,op) value head samples
 op twice independently — once in `forward()` for value computation, once in `get_action()` for
-the stored action. These ops frequently diverge, corrupting advantage estimates. Blocks Phase 7.
+the stored action. These ops frequently diverge, corrupting advantage estimates. This formerly
+blocked Phase 7.
+
+Resolution verified 2026-06-13: `get_action()` now reuses the sampled op in stochastic rollout mode,
+recomputes Q(s,argmax op) in deterministic bootstrap mode, and focused regression tests cover both paths.
 
 ### Current Focus Areas
 1. **Green State Recovery** - ✅ Completed; baseline green and recovery bug drain closed
-2. **Dependency/Branch Drain** - In progress; consolidate patch dependency PRs and return checkout to `main`
+2. **Dependency/Branch Drain** - ✅ Completed; patch dependency PRs consolidated, stale branches drained, checkout returned to `main`
 3. **Karn Telemetry Quality Arc** - Drafted; next upgrade package focused on Sanctum, Overwatch, MCP analytics, and telemetry contracts
 4. **P1 Stability Batch 1** - ✅ Completed and merged; six high-risk PPO/telemetry correctness bugs closed
 5. **P0 Filigree Bug Drain** - ✅ Initial six P0s fixed and closed
-6. **Op/Value Mismatch** - 🔴 CRITICAL! Fix double-sampling in factored_lstm.py
+6. **Op/Value Mismatch** - ✅ Resolved; focused regression tests cover rollout and bootstrap consistency
 7. **Reward Efficiency Experiment** - Infrastructure complete, experiment never run
 8. **Phase3-TinyStories** - 85% IMPLEMENTED, needs validation runs
 9. **Drip Reward Implementation** - ~70% done, needs integration completion
@@ -55,16 +59,16 @@ the stored action. These ops frequently diverge, corrupting advantage estimates.
 
 ### Critical Path (Updated)
 ```
-[op-value-mismatch 🔴] ──► reward-efficiency ──► counterfactual-oracle ──► emrakul-phase1
-                                    │
-                                    └──► blueprint-compiler ──► kasmina2-phase0
+reward-efficiency ──► counterfactual-oracle ──► emrakul-phase1
+              │
+              └──► blueprint-compiler ──► kasmina2-phase0
 ```
 
 ### Health Summary
 | Status | Count | Notes |
 |--------|-------|-------|
-| 🔴 Critical | 1 | op-value-mismatch (corrupts advantage estimates) |
-| Completed | 14 | simic2 (3) + entropy fixes (2) + holding-warning + simic-audit + dual-state lifecycle (2) + drip-reward design + 4 telemetry |
+| 🔴 Critical | 0 | No active Tier 0 correctness blockers after op/value verification |
+| Completed | 15 | simic2 (3) + entropy fixes (2) + holding-warning + simic-audit + dual-state lifecycle (2) + drip-reward design + 4 telemetry + op/value mismatch |
 | Ready | 11 | Implementation-ready plans |
 | In Progress | 1 | phase3-tinystories (85%) |
 | Planning | 6 | Active design workspaces |
@@ -83,7 +87,7 @@ the stored action. These ops frequently diverge, corrupting advantage estimates.
 | green-state-recovery-2026-06-12 | Green State Recovery Program | completed-batch | 🔴 critical | M | high | Completed: PRs #52, #72, #78-#88 merged; recovery bugs closed |
 | p1-stability-batch-1 | PPO/Telemetry Stability Batch 1 | completed-batch | 🔴 critical | M | high | Completed and merged; six bugs closed, broad gates passed |
 | filigree-p0-drain | Critical Filigree P0 Bug Drain | completed-batch | 🔴 critical | L | high | Initial six P0s fixed, verified, and closed |
-| op-value-mismatch | Q(s,op) Double-Sampling Bug | investigation | 🔴 critical | M | high | Diagnosed 2025-12-31, blocks Phase 7. See `docs/bugs/investigations/` |
+| op-value-mismatch | Q(s,op) Double-Sampling Bug | investigation | 🔴 critical | M | high | Completed: stochastic rollout uses one sampled op; deterministic bootstrap recomputes Q(s,argmax op); regression tests pass |
 
 ### Tier 1: High Priority (This Week)
 
@@ -1147,7 +1151,7 @@ percent_complete: 0
 
 | Plan | Risk Level | Primary Risk | Mitigation |
 |------|------------|--------------|------------|
-| op-value-mismatch | 🔴 CRITICAL | Corrupts advantage estimates in all training | Fix double-sampling in factored_lstm.py |
+| op-value-mismatch | RESOLVED | Formerly corrupted advantage estimates in all training | Fixed in factored_lstm.py; regression tests cover stochastic and deterministic paths |
 | counterfactual-oracle | HIGH | Goodhart/reward hacking | Probe as observation only, never as reward |
 | emrakul-immune | HIGH | Novel architecture, two-timescale learning | Phased rollout, Shapley labels in Phase 1 only |
 | phase3-tinystories | HIGH | NaN spikes on graft | Zero-init projections, LayerNorm pre-injection |
@@ -1166,16 +1170,19 @@ percent_complete: 0
 
 ### Immediate Actions (This Week)
 
-1. **Fix op-value-mismatch** - CRITICAL bug corrupting advantage estimates. See `docs/bugs/investigations/CRITICAL-op-value-mismatch.md`
-
-2. **Run reward-efficiency experiment** - Infrastructure is 100% complete:
+1. **Run reward-efficiency experiment** - Infrastructure is 100% complete and the op/value blocker is resolved:
    ```bash
    uv run python -m esper.scripts.train ppo --dual-ab shaped-vs-simplified --episodes 100
    ```
 
-3. **Run TinyStories baseline** - Implementation is 85% complete:
+2. **Run TinyStories baseline** - Implementation is 85% complete:
    ```bash
    uv run python -m esper.scripts.train ppo --task tinystories --episodes 50
+   ```
+
+3. **Start Karn Telemetry Quality Sprint 1** - Repair the evidence surface before deeper refactors:
+   ```bash
+   uv run --python 3.11 pytest tests/karn -q
    ```
 
 ### Short-Term (Next 2 Weeks)
@@ -1209,6 +1216,7 @@ percent_complete: 0
 
 | Date | Change |
 |------|--------|
+| 2026-06-13 | **OP/VALUE MISMATCH VERIFIED RESOLVED.** `get_action()` uses one selected op for action, log-prob, and Q(s,op) value in stochastic rollout mode, and recomputes Q(s,argmax op) for deterministic bootstrap. Added direct regression probes and updated active critical count to 0. |
 | 2026-02-21 | **POST-HIATUS FULL AUDIT.** Returned after 1-month break. Comprehensive codebase audit using explore agents: |
 | | **Plans moved to completed/ (5 files):** |
 | | - op-entropy-collapse: FULLY IMPLEMENTED Jan 9-11 (probability floors + entropy floors) |
@@ -1219,8 +1227,8 @@ percent_complete: 0
 | | - emrakul-submodule-editing: Moved from concepts/ (self-documents supersession) |
 | | **Plans moved to ready/ (1 file):** |
 | | - phase3-tinystories-strategy: Moved from concepts/ (85% implemented, needs validation runs) |
-| | **Critical bug surfaced:** |
-| | - CRITICAL-op-value-mismatch in investigations/: Q(s,op) double-sampling corrupts advantages |
+| | **Critical bug surfaced, later resolved 2026-06-13:** |
+| | - CRITICAL-op-value-mismatch in investigations/: Q(s,op) double-sampling corrupted advantages |
 | | **Bugs folder audited:** 307+ files across fixed/triaged/wontfix/not-a-bug/generated. |
 | | - 14 generated Codex analysis files need triage |
 | | - 0 skip/xfail markers in tests (good hygiene) |
@@ -1352,7 +1360,7 @@ Quick reference for all tracked plans:
 ### bugs/ (Issue Tracking)
 | Category | Count | Notes |
 |----------|-------|-------|
-| `investigations/` | 4 | Includes CRITICAL-op-value-mismatch |
+| `investigations/` | 4 | Includes resolved CRITICAL-op-value-mismatch historical diagnosis |
 | `fixed/` | 90 | Resolved with code changes |
 | `triaged/` | 108 | Analyzed, awaiting implementation |
 | `wontfix/` | 49 | Intentionally deferred |
