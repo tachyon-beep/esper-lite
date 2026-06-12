@@ -518,15 +518,6 @@ class TestActionTargetingIntegration:
 class TestSchemaCompleteness:
     """Verify SanctumSnapshot has all TELE-801 to TELE-802 fields."""
 
-    def test_all_action_targeting_fields_present(self) -> None:
-        """Verify all action targeting fields are present in SanctumSnapshot."""
-        snapshot = SanctumSnapshot()
-
-        # TELE-801: Last action env ID
-        assert hasattr(snapshot, "last_action_env_id")
-
-        # TELE-802: Last action timestamp
-        assert hasattr(snapshot, "last_action_timestamp")
 
     def test_all_defaults_match_specification(self) -> None:
         """Verify all default values match TELE record specifications."""

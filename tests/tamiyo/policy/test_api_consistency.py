@@ -209,8 +209,6 @@ def test_buffer_stores_blueprint_indices():
         device=torch.device("cpu"),
     )
 
-    # Verify buffer has blueprint_indices tensor
-    assert hasattr(buffer, "blueprint_indices")
     assert buffer.blueprint_indices.shape == (4, 10, config.num_slots)
     assert buffer.blueprint_indices.dtype == torch.int64
 

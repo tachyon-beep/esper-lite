@@ -3,35 +3,7 @@ import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
 import LeaderboardTable from '../LeaderboardTable.vue'
 import type { BestRunRecord } from '../../types/sanctum'
-
-// Factory to create a valid BestRunRecord for testing
-function createBestRunRecord(overrides: Partial<BestRunRecord> = {}): BestRunRecord {
-  const defaults: BestRunRecord = {
-    env_id: 0,
-    episode: 1,
-    peak_accuracy: 0.873,
-    final_accuracy: 0.865,
-    epoch: 100,
-    seeds: {},
-    slot_ids: ['slot_0', 'slot_1'],
-    growth_ratio: 1.05,
-    record_id: 'run-001',
-    reward_components: null,
-    counterfactual_matrix: null,
-    action_history: ['OBSERVE', 'GERMINATE'],
-    reward_history: [0.1, 0.2],
-    accuracy_history: [0.8, 0.85],
-    host_loss: 0.45,
-    host_params: 1000000,
-    fossilized_count: 2,
-    pruned_count: 1,
-    reward_mode: 'standard',
-    blueprint_spawns: {},
-    blueprint_fossilized: {},
-    blueprint_prunes: {}
-  }
-  return { ...defaults, ...overrides }
-}
+import { createBestRunRecord } from './fixtures'
 
 describe('LeaderboardTable', () => {
   it('renders correct number of rows', () => {

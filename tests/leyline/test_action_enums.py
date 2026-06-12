@@ -18,10 +18,10 @@ def test_build_action_enum_cnn():
 
     assert issubclass(CNNAction, IntEnum)
     assert CNNAction.WAIT.value == 0
-    assert hasattr(CNNAction, "GERMINATE_NORM")
-    assert hasattr(CNNAction, "FOSSILIZE")
-    assert hasattr(CNNAction, "PRUNE")
-    assert hasattr(CNNAction, "ADVANCE")
+    assert CNNAction.GERMINATE_NORM.name == "GERMINATE_NORM"
+    assert CNNAction.FOSSILIZE.name == "FOSSILIZE"
+    assert CNNAction.PRUNE.name == "PRUNE"
+    assert CNNAction.ADVANCE.name == "ADVANCE"
 
 
 def test_build_action_enum_transformer():
@@ -32,10 +32,10 @@ def test_build_action_enum_transformer():
 
     assert issubclass(TransformerAction, IntEnum)
     assert TransformerAction.WAIT.value == 0
-    assert hasattr(TransformerAction, "GERMINATE_LORA")
-    assert hasattr(TransformerAction, "FOSSILIZE")
-    assert hasattr(TransformerAction, "PRUNE")
-    assert hasattr(TransformerAction, "ADVANCE")
+    assert TransformerAction.GERMINATE_LORA.name == "GERMINATE_LORA"
+    assert TransformerAction.FOSSILIZE.name == "FOSSILIZE"
+    assert TransformerAction.PRUNE.name == "PRUNE"
+    assert TransformerAction.ADVANCE.name == "ADVANCE"
 
 
 def test_action_enum_values_sequential():

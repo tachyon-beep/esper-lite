@@ -629,12 +629,16 @@ class TestNissaHubTimeoutBehavior:
 
     def test_flush_logs_warning_on_timeout(self, caplog: pytest.LogCaptureFixture):
         """flush() should log warning when timeout expires."""
+        import threading
+
+        release_emit = threading.Event()
+
         class SlowBackend(OutputBackend):
             def start(self) -> None:
                 pass
 
             def emit(self, event: TelemetryEvent) -> None:
-                time.sleep(10)  # Very slow
+                release_emit.wait()
 
             def close(self) -> None:
                 pass
@@ -664,6 +668,7 @@ class TestNissaHubTimeoutBehavior:
         ]
         assert len(timeout_warnings) >= 1
 
+        release_emit.set()
         hub.close(timeout=0.1)
 
 
@@ -800,6 +805,8 @@ class TestNissaHubConcurrentAddRemove:
 
         events_received: list[tuple[str, int | None]] = []
         events_lock = threading.Lock()
+        removal_started = threading.Event()
+        release_removed_backend = threading.Event()
 
         class SlowBackend(OutputBackend):
             def __init__(self, name: str):
@@ -809,7 +816,9 @@ class TestNissaHubConcurrentAddRemove:
                 pass
 
             def emit(self, event: TelemetryEvent) -> None:
-                time.sleep(0.01)  # Slow enough to allow race
+                if self.name == "backend1":
+                    removal_started.set()
+                    release_removed_backend.wait()
                 with events_lock:
                     events_received.append((self.name, event.epoch))
 
@@ -833,8 +842,14 @@ class TestNissaHubConcurrentAddRemove:
             )
             hub.emit(event)
 
+        assert removal_started.wait(timeout=1.0)
         # Remove backend1 while events are still being processed
-        hub.remove_backend(backend1)
+        remove_thread = threading.Thread(target=hub.remove_backend, args=(backend1,))
+        remove_thread.start()
+        assert remove_thread.is_alive()
+        release_removed_backend.set()
+        remove_thread.join(timeout=1.0)
+        assert not remove_thread.is_alive()
 
         # Emit more events (should only go to backend2)
         for i in range(10, 15):

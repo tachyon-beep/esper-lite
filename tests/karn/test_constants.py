@@ -78,8 +78,6 @@ def test_kl_thresholds_exist():
     """KL divergence should have both warning and critical thresholds."""
     from esper.karn.constants import TUIThresholds
 
-    assert hasattr(TUIThresholds, 'KL_WARNING')
-    assert hasattr(TUIThresholds, 'KL_CRITICAL')
     assert TUIThresholds.KL_WARNING == 0.015
     assert TUIThresholds.KL_CRITICAL == 0.03
 

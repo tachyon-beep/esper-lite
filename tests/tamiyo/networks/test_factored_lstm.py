@@ -17,7 +17,6 @@ def test_policy_has_contribution_predictor():
         slot_config=slot_config,
     )
 
-    assert hasattr(policy, "contribution_predictor")
     assert policy.contribution_predictor is not None
 
 

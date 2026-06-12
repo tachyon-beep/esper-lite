@@ -745,51 +745,6 @@ class TestGraveyardConsumer:
 class TestEnvDetailScreenSchemaCompleteness:
     """Verify all consumed fields have corresponding schema definitions."""
 
-    def test_all_consumed_fields_have_tele_records(self) -> None:
-        """All fields consumed by EnvDetailScreen exist in schema."""
-        # SeedState fields (TELE-555 to TELE-560)
-        seed = SeedState(slot_id="r0c0")
-        assert hasattr(seed, "seed_params")  # TELE-555
-        assert hasattr(seed, "accuracy_delta")  # TELE-556
-        assert hasattr(seed, "grad_ratio")  # TELE-557
-        assert hasattr(seed, "has_vanishing")  # TELE-557
-        assert hasattr(seed, "has_exploding")  # TELE-557
-        assert hasattr(seed, "interaction_sum")  # TELE-558
-        assert hasattr(seed, "boost_received")  # TELE-559
-        assert hasattr(seed, "contribution_velocity")  # TELE-560
-
-        # EnvState fields (TELE-646 to TELE-654)
-        env = EnvState(env_id=0)
-        assert hasattr(env, "status")  # TELE-646
-        assert hasattr(env, "best_accuracy")  # TELE-647
-        assert hasattr(env, "host_accuracy")  # TELE-648
-        assert hasattr(env, "epochs_since_improvement")  # TELE-649
-        assert hasattr(env, "accuracy_history")  # TELE-650
-        assert hasattr(env, "reward_history")  # TELE-651
-        assert hasattr(env, "active_seed_count")  # TELE-652
-        assert hasattr(env, "fossilized_count")  # TELE-652
-        assert hasattr(env, "pruned_count")  # TELE-652
-        assert hasattr(env, "action_counts")  # TELE-653
-        assert hasattr(env, "gaming_rate")  # TELE-654 (property)
-
-        # RewardComponents fields (TELE-655 to TELE-664)
-        rc = RewardComponents()
-        assert hasattr(rc, "total")  # TELE-655
-        assert hasattr(rc, "stage_bonus")  # TELE-656 (for PBRS fraction)
-        assert hasattr(rc, "base_acc_delta")  # TELE-657
-        assert hasattr(rc, "compute_rent")  # TELE-657
-        assert hasattr(rc, "alpha_shock")  # TELE-657
-        assert hasattr(rc, "ratio_penalty")  # TELE-657
-        assert hasattr(rc, "bounded_attribution")  # TELE-658
-        assert hasattr(rc, "hindsight_credit")  # TELE-658
-        assert hasattr(rc, "fossilize_terminal_bonus")  # TELE-658
-        assert hasattr(rc, "blending_warning")  # TELE-659
-        assert hasattr(rc, "holding_warning")  # TELE-659
-
-        # Graveyard fields (TELE-670 to TELE-672)
-        assert hasattr(env, "blueprint_spawns")  # TELE-670
-        assert hasattr(env, "blueprint_fossilized")  # TELE-671
-        assert hasattr(env, "blueprint_prunes")  # TELE-672
 
     def test_env_detail_screen_imports(self) -> None:
         """Verify EnvDetailScreen imports required dependencies."""

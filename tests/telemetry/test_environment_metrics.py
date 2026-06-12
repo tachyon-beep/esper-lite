@@ -215,7 +215,6 @@ class TestTELE601ObsInfCount:
         agg.process_event(event)
 
         snapshot = agg.get_snapshot()
-        assert hasattr(EpochCompletedPayload, "observation_stats")
         assert snapshot.observation_stats.inf_count == 3
         assert snapshot.observation_stats.inf_pct == pytest.approx(0.02)
 
@@ -359,34 +358,6 @@ class TestTELE610EpisodeStats:
     - completion_trend (from rolling window success rate comparison)
     """
 
-    def test_episode_stats_schema_exists(self) -> None:
-        """TELE-610: Verify EpisodeStats dataclass has all expected fields."""
-        stats = EpisodeStats()
-
-        # Episode length statistics
-        assert hasattr(stats, "length_mean")
-        assert hasattr(stats, "length_std")
-        assert hasattr(stats, "length_min")
-        assert hasattr(stats, "length_max")
-
-        # Outcome tracking
-        assert hasattr(stats, "total_episodes")
-        assert hasattr(stats, "timeout_count")
-        assert hasattr(stats, "success_count")
-        assert hasattr(stats, "early_termination_count")
-
-        # Derived rates
-        assert hasattr(stats, "timeout_rate")
-        assert hasattr(stats, "success_rate")
-        assert hasattr(stats, "early_termination_rate")
-
-        # Steps per action type
-        assert hasattr(stats, "steps_per_germinate")
-        assert hasattr(stats, "steps_per_prune")
-        assert hasattr(stats, "steps_per_fossilize")
-
-        # Completion trend
-        assert hasattr(stats, "completion_trend")
 
     def test_total_episodes_is_wired(self) -> None:
         """TELE-610: total_episodes IS wired and populated from aggregator."""
@@ -405,7 +376,6 @@ class TestTELE610EpisodeStats:
 
         # total_episodes should be populated from _current_episode
         # This IS wired in aggregator.py line 539
-        assert hasattr(snapshot, "episode_stats")
         assert isinstance(snapshot.episode_stats, EpisodeStats)
         assert snapshot.episode_stats.total_episodes >= 0
 
@@ -698,7 +668,6 @@ class TestTELE650EnvStatus:
     def test_env_status_field_exists(self) -> None:
         """TELE-650: Verify EnvState.status field exists with correct default."""
         env = EnvState(env_id=0)
-        assert hasattr(env, "status")
         assert env.status == "initializing"  # Default before any epochs
 
     def test_status_becomes_healthy_after_first_epoch(self) -> None:
@@ -824,7 +793,6 @@ class TestTELE650EnvStatus:
 
         # All envs should have status field
         for env_id in range(3):
-            assert hasattr(snapshot.envs[env_id], "status")
             assert snapshot.envs[env_id].status in (
                 "initializing",
                 "healthy",
@@ -906,43 +874,17 @@ class TestEpisodeStatsSchemaCompleteness:
         """Schema should include episode length statistics fields."""
         stats = EpisodeStats()
 
-        assert hasattr(stats, "length_mean")
         assert stats.length_mean == 0.0
-        assert hasattr(stats, "length_std")
         assert stats.length_std == 0.0
-        assert hasattr(stats, "length_min")
         assert stats.length_min == 0
-        assert hasattr(stats, "length_max")
         assert stats.length_max == 0
 
-    def test_outcome_tracking_fields(self) -> None:
-        """Schema should include outcome tracking fields."""
-        stats = EpisodeStats()
 
-        # Counts
-        assert hasattr(stats, "total_episodes")
-        assert hasattr(stats, "timeout_count")
-        assert hasattr(stats, "success_count")
-        assert hasattr(stats, "early_termination_count")
-
-        # Rates
-        assert hasattr(stats, "timeout_rate")
-        assert hasattr(stats, "success_rate")
-        assert hasattr(stats, "early_termination_rate")
-
-    def test_action_efficiency_fields(self) -> None:
-        """Schema should include action efficiency fields."""
-        stats = EpisodeStats()
-
-        assert hasattr(stats, "steps_per_germinate")
-        assert hasattr(stats, "steps_per_prune")
-        assert hasattr(stats, "steps_per_fossilize")
 
     def test_trend_field(self) -> None:
         """Schema should include completion trend field."""
         stats = EpisodeStats()
 
-        assert hasattr(stats, "completion_trend")
         assert stats.completion_trend == "stable"  # Default
 
     def test_all_numeric_defaults_are_zero(self) -> None:

@@ -50,7 +50,7 @@ class TestConfiguration:
         assert cnn_policy._action_enum is not None
         assert transformer_policy._action_enum is not None
         # CNN has GERMINATE_CONV_LIGHT, transformer might not
-        assert hasattr(cnn_policy._action_enum, "GERMINATE_CONV_LIGHT")
+        assert cnn_policy._action_enum.GERMINATE_CONV_LIGHT.name == "GERMINATE_CONV_LIGHT"
 
 
 @pytest.mark.tamiyo

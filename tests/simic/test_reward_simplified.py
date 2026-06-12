@@ -14,7 +14,6 @@ from esper.simic.rewards import (
 )
 def test_simplified_mode_exists():
     """RewardMode.SIMPLIFIED should be a valid enum member."""
-    assert hasattr(RewardMode, "SIMPLIFIED")
     assert RewardMode.SIMPLIFIED.value == "simplified"
 
 

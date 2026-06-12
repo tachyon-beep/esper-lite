@@ -11,6 +11,8 @@ to TypeScript interfaces for the Overwatch web dashboard.
 from __future__ import annotations
 
 import dataclasses
+import importlib.util
+from pathlib import Path
 import sys
 import types
 from collections import deque
@@ -18,25 +20,41 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
-# Add src to path for imports
+# Add src to path for leyline imports used by the schema module.
 sys.path.insert(0, "src")
 
-from esper.karn.sanctum.schema import (
-    BestRunRecord,
-    CounterfactualConfig,
-    CounterfactualSnapshot,
-    DecisionSnapshot,
-    EnvState,
-    EventLogEntry,
-    GPUStats,
-    RewardComponents,
-    RunConfig,
-    SanctumSnapshot,
-    SeedState,
-    SystemVitals,
-    TamiyoState,
-)
 from esper.leyline import SeedStage
+
+SCHEMA_PATH = Path("src/esper/karn/sanctum/schema.py").resolve()
+SCHEMA_SPEC = importlib.util.spec_from_file_location("_overwatch_sanctum_schema", SCHEMA_PATH)
+if SCHEMA_SPEC is None or SCHEMA_SPEC.loader is None:
+    raise RuntimeError(f"Unable to load Sanctum schema from {SCHEMA_PATH}")
+SANCTUM_SCHEMA = importlib.util.module_from_spec(SCHEMA_SPEC)
+sys.modules[SCHEMA_SPEC.name] = SANCTUM_SCHEMA
+SCHEMA_SPEC.loader.exec_module(SANCTUM_SCHEMA)
+
+BestRunRecord = SANCTUM_SCHEMA.BestRunRecord
+CounterfactualConfig = SANCTUM_SCHEMA.CounterfactualConfig
+CounterfactualSnapshot = SANCTUM_SCHEMA.CounterfactualSnapshot
+DecisionSnapshot = SANCTUM_SCHEMA.DecisionSnapshot
+EnvState = SANCTUM_SCHEMA.EnvState
+EventLogEntry = SANCTUM_SCHEMA.EventLogEntry
+GPUStats = SANCTUM_SCHEMA.GPUStats
+GradientQualityMetrics = SANCTUM_SCHEMA.GradientQualityMetrics
+InfrastructureMetrics = SANCTUM_SCHEMA.InfrastructureMetrics
+ObservationStats = SANCTUM_SCHEMA.ObservationStats
+EpisodeStats = SANCTUM_SCHEMA.EpisodeStats
+RewardComponents = SANCTUM_SCHEMA.RewardComponents
+RunConfig = SANCTUM_SCHEMA.RunConfig
+SanctumSnapshot = SANCTUM_SCHEMA.SanctumSnapshot
+SeedLifecycleEvent = SANCTUM_SCHEMA.SeedLifecycleEvent
+SeedLifecycleStats = SANCTUM_SCHEMA.SeedLifecycleStats
+SeedState = SANCTUM_SCHEMA.SeedState
+ShapleyEstimate = SANCTUM_SCHEMA.ShapleyEstimate
+ShapleySnapshot = SANCTUM_SCHEMA.ShapleySnapshot
+SystemVitals = SANCTUM_SCHEMA.SystemVitals
+TamiyoState = SANCTUM_SCHEMA.TamiyoState
+ValueFunctionMetrics = SANCTUM_SCHEMA.ValueFunctionMetrics
 
 
 def python_to_ts_type(py_type: type, depth: int = 0) -> str:
@@ -206,9 +224,18 @@ def main() -> None:
     # Generate interfaces in dependency order (dependencies first)
     dataclasses_to_generate = [
         # Base types (no dependencies)
+        ShapleyEstimate,
+        ShapleySnapshot,
         CounterfactualConfig,
         CounterfactualSnapshot,
         GPUStats,
+        InfrastructureMetrics,
+        GradientQualityMetrics,
+        ValueFunctionMetrics,
+        SeedLifecycleEvent,
+        SeedLifecycleStats,
+        ObservationStats,
+        EpisodeStats,
         SeedState,
         RewardComponents,
         DecisionSnapshot,
@@ -223,9 +250,10 @@ def main() -> None:
         SanctumSnapshot,
     ]
 
-    for cls in dataclasses_to_generate:
+    for index, cls in enumerate(dataclasses_to_generate):
         print(generate_interface(cls))
-        print()
+        if index < len(dataclasses_to_generate) - 1:
+            print()
 
 
 if __name__ == "__main__":
