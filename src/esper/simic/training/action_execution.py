@@ -1278,6 +1278,16 @@ def execute_actions(
                     and cast(SeedSlotProtocol, model.seed_slots[sid]).alpha > 0
                 ]
                 if active_slot_ids:
+                    shapley_epoch = batch_idx + 1
+                    has_exact_results = (
+                        env_state.counterfactual_helper.has_precomputed_matrix_for(
+                            active_slot_ids,
+                            epoch=shapley_epoch,
+                        )
+                    )
+                    if has_exact_results:
+                        continue
+
                     cached_baselines = baseline_accs[env_idx]
 
                     def eval_fn(alpha_settings: dict[str, float]) -> tuple[float, float]:
@@ -1294,7 +1304,7 @@ def execute_actions(
                             )
                         if disabled:
                             return env_state.val_loss * 1.2, sum(
-                                cached_baselines.get(s, env_state.val_acc)
+                                cached_baselines[s]
                                 for s in disabled
                             ) / len(disabled)
                         return env_state.val_loss, env_state.val_acc
@@ -1303,7 +1313,7 @@ def execute_actions(
                         env_state.counterfactual_helper.compute_contributions(
                             slot_ids=active_slot_ids,
                             evaluate_fn=eval_fn,
-                            epoch=batch_idx + 1,
+                            epoch=shapley_epoch,
                         )
                     except (KeyError, ZeroDivisionError, ValueError) as e:
                         # HIGH-01 fix: Narrow to expected failures in Shapley computation
