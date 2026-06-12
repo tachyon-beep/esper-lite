@@ -1378,7 +1378,36 @@ class PPOAgent:
         Raises:
             RuntimeError: If checkpoint architecture is incompatible
         """
-        checkpoint = torch.load(path, map_location=device, weights_only=True)
+        checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+        return cls.load_from_checkpoint_dict(
+            checkpoint,
+            device=device,
+            compile_mode=compile_mode,
+        )
+
+    @classmethod
+    def load_from_checkpoint_dict(
+        cls,
+        checkpoint: dict[str, Any],
+        *,
+        device: str = "cuda:0",
+        compile_mode: str | None = None,
+        expected_slot_config: SlotConfig | None = None,
+    ) -> "PPOAgent":
+        """Load agent from an already materialized checkpoint dictionary.
+
+        Args:
+            checkpoint: Checkpoint dictionary loaded on CPU.
+            device: Device to place the reconstructed agent on.
+            compile_mode: Override checkpoint's torch.compile mode.
+            expected_slot_config: Runtime slot config that must match the checkpoint.
+
+        Returns:
+            PPOAgent with restored weights and configuration.
+
+        Raises:
+            RuntimeError: If checkpoint architecture is incompatible.
+        """
 
         # Required checkpoint fields - fail fast if missing (no backwards compat)
         try:
@@ -1427,7 +1456,17 @@ class PPOAgent:
                 "Incompatible checkpoint: architecture.slot_ids is required. "
                 "Please retrain the model to create a compatible checkpoint."
             )
-        slot_config = SlotConfig(slot_ids=tuple(architecture['slot_ids']))
+        checkpoint_slot_ids = tuple(architecture['slot_ids'])
+        if (
+            expected_slot_config is not None
+            and checkpoint_slot_ids != expected_slot_config.slot_ids
+        ):
+            raise RuntimeError(
+                "Checkpoint slot_ids do not match runtime slot_ids: "
+                f"checkpoint={checkpoint_slot_ids}, "
+                f"runtime={expected_slot_config.slot_ids}"
+            )
+        slot_config = SlotConfig(slot_ids=checkpoint_slot_ids)
 
         # === Pre-load validation ===
         expected_num_slots = slot_config.num_slots

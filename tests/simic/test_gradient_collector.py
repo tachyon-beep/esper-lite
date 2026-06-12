@@ -1,5 +1,7 @@
 """Tests for gradient collector performance and correctness."""
 
+import math
+
 import torch
 import torch.nn as nn
 import pytest
@@ -172,6 +174,19 @@ class TestSeedGradientCollectorEdgeCases:
         assert stats["has_exploding"] is True
         assert stats["gradient_health"] < 1.0
 
+    def test_nan_gradient_norm_counts_as_exploding_and_unhealthy(self):
+        """NaN gradients must trip exploding detection and zero health."""
+        param = torch.nn.Parameter(torch.ones(2, 2))
+        param.grad = torch.tensor([[1.0, float("nan")], [2.0, 3.0]])
+
+        collector = SeedGradientCollector()
+        stats = collector.collect([param])
+
+        assert math.isnan(stats["gradient_norm"])
+        assert stats["has_exploding"] is True
+        assert stats["has_vanishing"] is False
+        assert stats["gradient_health"] == 0.0
+
     def test_gradient_health_scoring_orders(self):
         """Healthy gradients score higher than mixed vanishing+exploding."""
         collector = SeedGradientCollector()
@@ -277,6 +292,23 @@ class TestEnhancedCollector:
         assert result.gradient_norm > 0
         assert result.min_layer_norm > 0
         assert result.max_layer_norm >= result.min_layer_norm
+
+    def test_collect_seed_gradients_nan_counts_as_exploding_and_unhealthy(self):
+        """Convenience collector agrees with SeedGradientCollector on NaN safety."""
+        param = torch.nn.Parameter(torch.ones(2, 2))
+        param.grad = torch.tensor([[1.0, float("nan")], [2.0, 3.0]])
+
+        basic = collect_seed_gradients([param])
+        enhanced = collect_seed_gradients([param], return_enhanced=True)
+
+        assert math.isnan(basic["gradient_norm"])
+        assert basic["has_exploding"] is True
+        assert basic["gradient_health"] == 0.0
+        assert isinstance(enhanced, GradientHealthMetrics)
+        assert math.isnan(enhanced.gradient_norm)
+        assert enhanced.has_exploding is True
+        assert enhanced.gradient_health == 0.0
+        assert enhanced.nan_count == 1
 
 
 # =============================================================================

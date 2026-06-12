@@ -200,12 +200,6 @@ def process_train_batch(
             env_state.scaler.scale(loss).backward()  # type: ignore[no-untyped-call]
         else:
             loss.backward()  # type: ignore[no-untyped-call]
-        # Collect gradient telemetry (isolated from torch.compile)
-        grad_stats_by_slot = None
-        if use_telemetry:
-            grad_stats_by_slot = _collect_gradient_telemetry_for_batch(
-                model, slots_with_active_seeds, env_dev
-            )
 
         # Compute grad presence once for each seed optimizer (avoid redundant checks)
         # Guard: Only call scaler.step() if optimizer has gradients.
@@ -220,10 +214,28 @@ def process_train_batch(
             )
             seed_opts_with_grads[slot_id] = (seed_opt, has_grads)
 
+        clipping_enabled = max_grad_norm is not None and max_grad_norm > 0
+        grads_unscaled = False
+        if env_state.scaler is not None and (use_telemetry or clipping_enabled):
+            env_state.scaler.unscale_(env_state.host_optimizer)
+            for slot_id, (seed_opt, has_grads) in seed_opts_with_grads.items():
+                if has_grads:
+                    env_state.scaler.unscale_(seed_opt)
+            grads_unscaled = True
+
+        # Collect gradient telemetry (isolated from torch.compile).
+        # FP16 GradScaler stores scaled grads after backward; collect only after unscale.
+        grad_stats_by_slot = None
+        if use_telemetry:
+            grad_stats_by_slot = _collect_gradient_telemetry_for_batch(
+                model, slots_with_active_seeds, env_dev
+            )
+
         # Gradient clipping (AMP-safe)
         # AMP ordering: scale() -> backward() -> unscale_() -> clip_grad_norm_() -> step() -> update()
-        if max_grad_norm is not None and max_grad_norm > 0:
-            if env_state.scaler is not None:
+        if clipping_enabled:
+            assert max_grad_norm is not None
+            if env_state.scaler is not None and not grads_unscaled:
                 # Unscale before clipping (required for correct FP32 magnitude)
                 env_state.scaler.unscale_(env_state.host_optimizer)
                 for slot_id, (seed_opt, has_grads) in seed_opts_with_grads.items():

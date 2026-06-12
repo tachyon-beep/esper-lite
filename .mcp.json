@@ -8,12 +8,6 @@
         "-m",
         "esper.karn.mcp"
       ]
-    },
-    "filigree": {
-      "type": "stdio",
-      "command": "/home/john/.local/bin/filigree-mcp",
-      "args": [],
-      "env": {}
     }
   }
 }

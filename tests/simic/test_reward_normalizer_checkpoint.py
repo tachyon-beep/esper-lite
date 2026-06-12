@@ -157,7 +157,11 @@ def test_resume_restores_reward_normalizer_state(monkeypatch, tmp_path):
     monkeypatch.setattr(vectorized, "get_hub", lambda: StubHub())
     monkeypatch.setattr(vectorized, "RewardNormalizer", StubRewardNormalizer)
     monkeypatch.setattr(vectorized, "SharedBatchIterator", StubSharedBatchIterator)
-    monkeypatch.setattr(vectorized.PPOAgent, "load", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        vectorized.PPOAgent,
+        "load_from_checkpoint_dict",
+        lambda *args, **kwargs: object(),
+    )
 
     checkpoint_path = tmp_path / "checkpoint.pt"
     torch.save(
@@ -196,3 +200,127 @@ def test_resume_restores_reward_normalizer_state(monkeypatch, tmp_path):
     assert reward_normalizer.mean == 1.23
     assert reward_normalizer.m2 == 4.56
     assert reward_normalizer.count == 7
+
+
+def test_resume_uses_single_preloaded_checkpoint_for_agent_and_metadata(
+    monkeypatch, tmp_path
+):
+    import esper.runtime as runtime
+    import esper.simic.training.vectorized as vectorized
+    from esper.leyline import TelemetryEventType
+
+    original_get_task_spec = runtime.get_task_spec
+    original_torch_load = torch.load
+    load_calls = []
+
+    def get_task_spec_mock(name: str):
+        spec = original_get_task_spec(name)
+        spec.dataloader_defaults["mock"] = True
+        return spec
+
+    def torch_load_mock(*args, **kwargs):
+        load_calls.append((args, kwargs))
+        return original_torch_load(*args, **kwargs)
+
+    class StubHub:
+        def add_backend(self, _backend) -> None:
+            return None
+
+        def emit(self, event) -> None:
+            if event.event_type == TelemetryEventType.CHECKPOINT_LOADED:
+                raise _StopAfterCheckpointLoaded()
+            return None
+
+    class StubSharedBatchIterator:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        def __len__(self) -> int:
+            return 0
+
+    monkeypatch.setattr(runtime, "get_task_spec", get_task_spec_mock)
+    monkeypatch.setattr(vectorized, "get_hub", lambda: StubHub())
+    monkeypatch.setattr(vectorized, "SharedBatchIterator", StubSharedBatchIterator)
+    monkeypatch.setattr(vectorized.torch, "load", torch_load_mock)
+    monkeypatch.setattr(
+        vectorized.PPOAgent,
+        "load_from_checkpoint_dict",
+        lambda *args, **kwargs: object(),
+    )
+
+    checkpoint_path = tmp_path / "checkpoint.pt"
+    torch.save(
+        {
+            "metadata": {
+                "n_episodes": 0,
+                "batches_completed": 0,
+                "n_envs": 1,
+            }
+        },
+        checkpoint_path,
+    )
+
+    with pytest.raises(_StopAfterCheckpointLoaded):
+        vectorized.train_ppo_vectorized(
+            n_episodes=1,
+            n_envs=1,
+            max_epochs=1,
+            chunk_length=1,
+            device="cpu",
+            devices=["cpu"],
+            task="cifar_baseline",
+            slots=["r0c1"],
+            use_telemetry=False,
+            num_workers=0,
+            resume_path=str(checkpoint_path),
+            quiet_analytics=True,
+        )
+
+    assert len(load_calls) == 1
+    assert load_calls[0][0][0] == str(checkpoint_path)
+    assert load_calls[0][1]["map_location"] == "cpu"
+
+
+def test_resume_rejects_checkpoint_slot_ids_that_do_not_match_runtime_slots(
+    tmp_path,
+):
+    import esper.simic.training.vectorized as vectorized
+    from esper.leyline.slot_config import SlotConfig
+    from esper.simic.agent import PPOAgent
+    from esper.tamiyo.policy.factory import create_policy
+    from esper.tamiyo.policy.features import get_feature_size
+
+    checkpoint_slot_config = SlotConfig(slot_ids=("r0c0",))
+    policy = create_policy(
+        policy_type="lstm",
+        state_dim=get_feature_size(checkpoint_slot_config),
+        slot_config=checkpoint_slot_config,
+        device="cpu",
+        compile_mode="off",
+    )
+    agent = PPOAgent(policy=policy, slot_config=checkpoint_slot_config, device="cpu")
+    checkpoint_path = tmp_path / "checkpoint.pt"
+    agent.save(
+        checkpoint_path,
+        metadata={
+            "n_episodes": 0,
+            "batches_completed": 0,
+            "n_envs": 1,
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="checkpoint=.*r0c0.*runtime=.*r0c1"):
+        vectorized.train_ppo_vectorized(
+            n_episodes=1,
+            n_envs=1,
+            max_epochs=1,
+            chunk_length=1,
+            device="cpu",
+            devices=["cpu"],
+            task="cifar_baseline",
+            slots=["r0c1"],
+            use_telemetry=False,
+            num_workers=0,
+            resume_path=str(checkpoint_path),
+            quiet_analytics=True,
+        )

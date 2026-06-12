@@ -804,8 +804,12 @@ def train_ppo_vectorized(
 
     # Create or resume PPO agent
     if resume_path:
-        checkpoint = torch.load(resume_path, map_location=device, weights_only=True)
-        agent = PPOAgent.load(resume_path, device=device)
+        checkpoint = torch.load(resume_path, map_location="cpu", weights_only=True)
+        agent = PPOAgent.load_from_checkpoint_dict(
+            checkpoint,
+            device=device,
+            expected_slot_config=slot_config,
+        )
 
         # Restore observation normalizer state
         metadata = checkpoint["metadata"]

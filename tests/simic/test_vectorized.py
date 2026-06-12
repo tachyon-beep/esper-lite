@@ -23,6 +23,10 @@ from esper.simic.training.vectorized import (
     _resolve_target_slot,
     _run_ppo_updates,
 )
+from esper.simic.training.vectorized_trainer import (
+    _pair_index_accs_for_active_slots,
+    _pair_slot_key,
+)
 from esper.simic.telemetry.emitters import (
     apply_slot_telemetry,
     check_performance_degradation,
@@ -40,6 +44,22 @@ from esper.simic.telemetry.emitters import (
 # =============================================================================
 # Telemetry Emission Tests
 # =============================================================================
+
+
+def test_pair_attribution_keys_survive_non_lexicographic_slot_order():
+    """Pair attribution stores slot IDs before any sorted decoding occurs."""
+    user_slot_order = ["r0c2", "r0c0", "r0c1"]
+    pair_key = _pair_slot_key(user_slot_order, (0, 2))
+
+    assert pair_key == ("r0c2", "r0c1")
+
+    sorted_active_slots = sorted(user_slot_order)
+    emitter_pair_accs = _pair_index_accs_for_active_slots(
+        {pair_key: 47.0},
+        sorted_active_slots,
+    )
+
+    assert emitter_pair_accs == {(2, 1): 47.0}
 
 
 def test_lifecycle_only_keeps_slot_telemetry():

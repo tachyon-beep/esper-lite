@@ -48,6 +48,27 @@ from esper.simic.vectorized_types import (
 )
 
 
+def _pair_slot_key(
+    active_slot_list: list[str],
+    pair_indices: tuple[int, int],
+) -> tuple[str, str]:
+    """Convert pair config indices into stable slot IDs at encode time."""
+    idx_i, idx_j = pair_indices
+    return active_slot_list[idx_i], active_slot_list[idx_j]
+
+
+def _pair_index_accs_for_active_slots(
+    pair_accs_by_slot: dict[tuple[str, str], float],
+    active_slots: list[str],
+) -> dict[tuple[int, int], float]:
+    """Convert slot-keyed pair accuracies to emitter index keys."""
+    slot_to_index = {slot_id: idx for idx, slot_id in enumerate(active_slots)}
+    return {
+        (slot_to_index[slot_a], slot_to_index[slot_b]): pair_acc
+        for (slot_a, slot_b), pair_acc in pair_accs_by_slot.items()
+    }
+
+
 @dataclass
 class VectorizedPPOTrainer:
     agent: Any
@@ -638,7 +659,10 @@ class VectorizedPPOTrainer:
                                             if k != idx_i and k != idx_j
                                         }
                                         pair_config["_kind"] = "pair"
-                                        pair_config["_pair"] = (idx_i, idx_j)
+                                        pair_config["_pair"] = _pair_slot_key(
+                                            active_slot_list,
+                                            (idx_i, idx_j),
+                                        )
                                         configs.append(pair_config)
 
                             # Committed accuracy: only fossilized seeds enabled.
@@ -694,7 +718,7 @@ class VectorizedPPOTrainer:
                         {} for _ in range(envs_this_batch)
                     ]
                     all_disabled_accs: dict[int, float] = {}
-                    pair_accs: dict[int, dict[tuple[int, int], float]] = {}
+                    pair_accs: dict[int, dict[tuple[str, str], float]] = {}
                     shapley_results: dict[
                         int, dict[tuple[bool, ...], tuple[float, float]]
                     ] = {}
@@ -955,6 +979,14 @@ class VectorizedPPOTrainer:
                         # Lexicographic sort on slot IDs ensures correct upstream/downstream alpha sums.
                         active_slots = sorted(baseline_accs[i].keys())
                         if active_slots:
+                            pair_accs_for_emitter = (
+                                _pair_index_accs_for_active_slots(
+                                    pair_accs[i],
+                                    active_slots,
+                                )
+                                if i in pair_accs
+                                else {}
+                            )
                             emitters[i].on_counterfactual_matrix(
                                 active_slots=active_slots,
                                 baseline_accs=baseline_accs[i],
@@ -962,7 +994,7 @@ class VectorizedPPOTrainer:
                                 all_disabled_acc=all_disabled_accs.get(
                                     i
                                 ),  # None triggers emitter fallback
-                                pair_accs=pair_accs.get(i, {}),
+                                pair_accs=pair_accs_for_emitter,
                                 solo_accs=solo_on_accs[i],
                             )
 
@@ -973,10 +1005,7 @@ class VectorizedPPOTrainer:
                             all_off_acc = all_disabled_accs.get(i)
                             if all_off_acc is None:
                                 all_off_acc = min(baseline_accs[i].values())
-                            for (idx_a, idx_b), pair_acc in pair_accs[i].items():
-                                # Map indices to slot IDs
-                                slot_a = active_slots[idx_a]
-                                slot_b = active_slots[idx_b]
+                            for (slot_a, slot_b), pair_acc in pair_accs[i].items():
                                 # Solo accuracies MUST exist - active_slots derived from baseline_accs keys
                                 solo_a = baseline_accs[i][slot_a]
                                 solo_b = baseline_accs[i][slot_b]
