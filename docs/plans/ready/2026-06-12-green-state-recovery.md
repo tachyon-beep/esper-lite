@@ -30,12 +30,12 @@ status_notes: >
   PR #52 was made green, accepted, and merged as the new baseline on 2026-06-12.
   Main CI passed on merge commit cdff9c43. Recovery PR #72 landed the initial
   P0 Filigree bug drain. Follow-up PRs #78 and #79 merged telemetry and
-  training-control correctness fixes. PRs #80, #81, #82, #83, #84, and #85
-  merged the first six P2 batches. The repository is green on CI, but not yet
-  steady. The P2 telemetry-contract batch is locally fixed and verified against
+  training-control correctness fixes. PRs #80, #81, #82, #83, #84, #85, and
+  #86 merged seven P2 batches. The repository is green on CI, but not yet
+  steady. The import-hygiene batch is locally fixed and verified against
   focused tests, custom/static guardrails, full pytest, and Wardline gates; PR
   and tracker closure are next.
-percent_complete: 92
+percent_complete: 94
 
 reviewed_by:
   - reviewer: python-engineering
@@ -234,11 +234,34 @@ Return the project to a steady state:
   - `MYPYPATH=src uv run mypy -p esper`
   - `uv run pytest` (`4706 passed, 10 skipped, 69 deselected`)
   - `wardline scan . --fail-on ERROR` (`0 active`)
+- PR #86 (`codex/p2-telemetry-contracts`) was merged into `main` on
+  2026-06-13 at merge commit `bad835e8`.
+- PR #86 verification run `27428779288` passed:
+  - `lint`
+  - `typecheck`
+  - `property-tests`
+  - `unit-and-integration-tests`
+  - `e2e-smoke-tests`
+- The P2 telemetry-contract bugs were fixed and closed:
+  - `esper-lite-a402a5` decision telemetry used unmasked op probabilities
+  - `esper-lite-157dbe` telemetry `should_collect()` silently disabled unknown categories
+  - `esper-lite-2bcb91` ratio-explosion diagnostic accepted dead reserved parameters
+- Local import-hygiene batch verification on 2026-06-13 passed:
+  - `uv run pytest tests/test_import_isolation.py::test_simic_training_import_does_not_load_parallel_env_state tests/test_import_isolation.py::test_simic_training_parallel_env_state_lazy_attribute_works tests/test_import_isolation.py::test_simic_safe_task_config_resolve_from_leyline_without_tamiyo tests/test_import_isolation.py::test_simic_telemetry_import_isolation tests/test_import_isolation.py::test_simic_telemetry_lazy_attribute_works -q`
+  - `uv run pytest tests/test_import_isolation.py -q`
+  - `uv run pytest tests/simic/test_telemetry_config.py tests/simic/test_debug_telemetry.py tests/simic/test_gradient_collector.py tests/simic/test_anomaly_detector.py tests/simic/test_config.py tests/simic/training/test_config_validation.py -q`
+  - `uv run python scripts/lint_defensive_patterns.py`
+  - `uv run python scripts/lint_leyline_types.py`
+  - `uv run python scripts/lint_gpu_sync.py`
+  - `uv run ruff check src/ tests/`
+  - `MYPYPATH=src uv run mypy -p esper`
+  - `uv run pytest` (`4711 passed, 10 skipped, 69 deselected`)
+  - `wardline scan . --fail-on ERROR` (`0 active`)
 - Filigree remains an installed server-side utility and is not a removal target
   for this recovery program. Use it only as needed for tracker workflow.
-- Filigree on 2026-06-13 reports `6 ready`, `0 blocked`, and `3 fixing`
-  after claiming `esper-lite-a402a5`, `esper-lite-157dbe`, and
-  `esper-lite-2bcb91`.
+- Filigree on 2026-06-13 reports `3 ready`, `0 blocked`, and `3 fixing`
+  after claiming `esper-lite-0c7b3b`, `esper-lite-7481c4`, and
+  `esper-lite-eb5662`.
 - Loomweave MCP is visible, but the active MCP server still reports no
   `.weft/loomweave/loomweave.db` even after a worktree analysis pass. The
   available MCP session needs a reconnect before graph queries can be used.
@@ -500,21 +523,22 @@ uv run pytest
 
 Current queue snapshot, 2026-06-13:
 
-- Ready bugs: 6
+- Ready bugs: 3
 - Blocked: 0
 - WIP: 3
 
 Current local batch:
 
-1. `esper-lite-a402a5` decision telemetry uses unmasked op probabilities.
-2. `esper-lite-157dbe` telemetry `should_collect()` silently disables unknown categories.
-3. `esper-lite-2bcb91` ratio-explosion diagnostic accepts dead reserved parameters.
+1. `esper-lite-0c7b3b` `training/__init__.py` eagerly imports `ParallelEnvState`.
+2. `esper-lite-7481c4` `simic.__getattr__` resolves `safe` and `TaskConfig` through Tamiyo.
+3. `esper-lite-eb5662` `telemetry/__init__.py` eagerly imports heavy telemetry modules.
 
-These all affect telemetry contracts and should be verified together with
-focused telemetry/vectorized suites, defensive-pattern, GPU-sync, type, full
-default pytest, and Wardline gates.
+These all affect import hygiene and package-level public exports. They should
+be verified together with import-isolation tests, telemetry/config import
+consumers, defensive-pattern, GPU-sync, type, full default pytest, and Wardline
+gates.
 
-Status: fixed and locally verified on branch `codex/p2-telemetry-contracts`.
+Status: fixed and locally verified on branch `codex/p2-import-hygiene`.
 PR and tracker closure are next.
 
 ## Execution Log
@@ -538,5 +562,8 @@ PR and tracker closure are next.
 - 2026-06-13: PRs #81, #82, #83, #84, and #85 merged five more P2 batches,
   closing ten additional tracker bugs.
 - 2026-06-13: Locally fixed and verified P2 telemetry-contract batch
-  `esper-lite-a402a5`, `esper-lite-157dbe`, and `esper-lite-2bcb91`; PR and
+  `esper-lite-a402a5`, `esper-lite-157dbe`, and `esper-lite-2bcb91`; PR #86
+  merged and tracker closure completed.
+- 2026-06-13: Locally fixed and verified import-hygiene batch
+  `esper-lite-0c7b3b`, `esper-lite-7481c4`, and `esper-lite-eb5662`; PR and
   tracker closure are next.
