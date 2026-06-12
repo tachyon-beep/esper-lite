@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import pytest
 
+from esper.simic.training.config import TrainingConfig
 from esper.simic.telemetry import (
     SeedGradientCollector,
     materialize_grad_stats,
@@ -15,6 +16,7 @@ from esper.simic.telemetry import (
     GradientHealthMetrics,
     DualGradientStats,
 )
+from esper.simic.telemetry.gradient_collector import DEFAULT_EXPLODING_THRESHOLD
 
 
 # =============================================================================
@@ -24,6 +26,12 @@ from esper.simic.telemetry import (
 
 class TestSeedGradientCollector:
     """Tests for basic SeedGradientCollector functionality."""
+
+    def test_default_exploding_threshold_matches_training_clip_norm(self):
+        """Default telemetry threshold tracks the vectorized training clip norm."""
+        assert DEFAULT_EXPLODING_THRESHOLD == pytest.approx(
+            10.0 * TrainingConfig().max_grad_norm
+        )
 
     def test_gradient_collector_vectorized(self):
         """Verify gradient collection uses vectorized operations."""

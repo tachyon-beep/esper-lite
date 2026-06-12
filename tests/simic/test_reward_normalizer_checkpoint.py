@@ -212,6 +212,7 @@ def test_resume_uses_single_preloaded_checkpoint_for_agent_and_metadata(
     original_get_task_spec = runtime.get_task_spec
     original_torch_load = torch.load
     load_calls = []
+    agent_load_calls = []
 
     def get_task_spec_mock(name: str):
         spec = original_get_task_spec(name)
@@ -221,6 +222,10 @@ def test_resume_uses_single_preloaded_checkpoint_for_agent_and_metadata(
     def torch_load_mock(*args, **kwargs):
         load_calls.append((args, kwargs))
         return original_torch_load(*args, **kwargs)
+
+    def load_from_checkpoint_dict_mock(*args, **kwargs):
+        agent_load_calls.append((args, kwargs))
+        return object()
 
     class StubHub:
         def add_backend(self, _backend) -> None:
@@ -245,7 +250,7 @@ def test_resume_uses_single_preloaded_checkpoint_for_agent_and_metadata(
     monkeypatch.setattr(
         vectorized.PPOAgent,
         "load_from_checkpoint_dict",
-        lambda *args, **kwargs: object(),
+        load_from_checkpoint_dict_mock,
     )
 
     checkpoint_path = tmp_path / "checkpoint.pt"
@@ -279,6 +284,84 @@ def test_resume_uses_single_preloaded_checkpoint_for_agent_and_metadata(
     assert len(load_calls) == 1
     assert load_calls[0][0][0] == str(checkpoint_path)
     assert load_calls[0][1]["map_location"] == "cpu"
+    assert len(agent_load_calls) == 1
+    assert agent_load_calls[0][1]["compile_mode"] == "off"
+
+
+def test_resume_force_compile_overrides_quiet_analytics(monkeypatch, tmp_path):
+    import esper.runtime as runtime
+    import esper.simic.training.vectorized as vectorized
+    from esper.leyline import TelemetryEventType
+
+    original_get_task_spec = runtime.get_task_spec
+    agent_load_calls = []
+
+    def get_task_spec_mock(name: str):
+        spec = original_get_task_spec(name)
+        spec.dataloader_defaults["mock"] = True
+        return spec
+
+    def load_from_checkpoint_dict_mock(*args, **kwargs):
+        agent_load_calls.append((args, kwargs))
+        return object()
+
+    class StubHub:
+        def add_backend(self, _backend) -> None:
+            return None
+
+        def emit(self, event) -> None:
+            if event.event_type == TelemetryEventType.CHECKPOINT_LOADED:
+                raise _StopAfterCheckpointLoaded()
+            return None
+
+    class StubSharedBatchIterator:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        def __len__(self) -> int:
+            return 0
+
+    monkeypatch.setattr(runtime, "get_task_spec", get_task_spec_mock)
+    monkeypatch.setattr(vectorized, "get_hub", lambda: StubHub())
+    monkeypatch.setattr(vectorized, "SharedBatchIterator", StubSharedBatchIterator)
+    monkeypatch.setattr(
+        vectorized.PPOAgent,
+        "load_from_checkpoint_dict",
+        load_from_checkpoint_dict_mock,
+    )
+
+    checkpoint_path = tmp_path / "checkpoint.pt"
+    torch.save(
+        {
+            "metadata": {
+                "n_episodes": 0,
+                "batches_completed": 0,
+                "n_envs": 1,
+            }
+        },
+        checkpoint_path,
+    )
+
+    with pytest.raises(_StopAfterCheckpointLoaded):
+        vectorized.train_ppo_vectorized(
+            n_episodes=1,
+            n_envs=1,
+            max_epochs=1,
+            chunk_length=1,
+            device="cpu",
+            devices=["cpu"],
+            task="cifar_baseline",
+            slots=["r0c1"],
+            use_telemetry=False,
+            num_workers=0,
+            resume_path=str(checkpoint_path),
+            quiet_analytics=True,
+            force_compile=True,
+            compile_mode="reduce-overhead",
+        )
+
+    assert len(agent_load_calls) == 1
+    assert agent_load_calls[0][1]["compile_mode"] == "reduce-overhead"
 
 
 def test_resume_rejects_checkpoint_slot_ids_that_do_not_match_runtime_slots(

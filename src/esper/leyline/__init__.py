@@ -166,6 +166,11 @@ DEFAULT_VALUE_COEF = 1.0
 # preserving direction while preventing true explosions (>100 norm).
 DEFAULT_MAX_GRAD_NORM = 5.0
 
+# Maximum gradient norm for host/seed supervised updates in vectorized training.
+# PPO policy clipping uses DEFAULT_MAX_GRAD_NORM; training-loop clipping uses
+# this stricter value because host/seed gradients are on a different scale.
+DEFAULT_TRAINING_MAX_GRAD_NORM = 1.0
+
 # Number of PPO epochs per batch of experience.
 # More epochs = more sample efficiency, but risks overfitting.
 DEFAULT_N_PPO_EPOCHS = 10
@@ -808,6 +813,7 @@ __all__ = [
     "ADVANTAGE_STD_FLOOR",
     "DEFAULT_VALUE_COEF",
     "DEFAULT_MAX_GRAD_NORM",
+    "DEFAULT_TRAINING_MAX_GRAD_NORM",
     "DEFAULT_N_PPO_EPOCHS",
     "DEFAULT_BATCH_SIZE",
     "DEFAULT_ENTROPY_COEF",

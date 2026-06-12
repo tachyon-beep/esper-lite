@@ -14,11 +14,11 @@ from typing import Iterator, TypedDict
 import torch
 import torch.nn as nn
 
-from esper.leyline import DEFAULT_MAX_GRAD_NORM
+from esper.leyline import DEFAULT_TRAINING_MAX_GRAD_NORM
 
-# H14: PPO-tuned gradient thresholds
-# These defaults are calibrated for PPO with gradient clipping at DEFAULT_MAX_GRAD_NORM (0.5).
-# Collection happens BEFORE clipping, so we detect:
+# H14: host/seed training gradient thresholds
+# These defaults are calibrated for host/seed training with gradient clipping
+# at DEFAULT_TRAINING_MAX_GRAD_NORM. Collection happens BEFORE clipping, so we detect:
 # - Vanishing: gradients too small to provide learning signal
 # - Exploding: gradients that will be heavily clipped (10x clip norm)
 #
@@ -27,7 +27,7 @@ from esper.leyline import DEFAULT_MAX_GRAD_NORM
 # - This is informative (heavy clipping) but not catastrophic
 # - True explosions (100x+) indicate numerical instability
 DEFAULT_VANISHING_THRESHOLD = 1e-7  # Very small but non-zero
-DEFAULT_EXPLODING_THRESHOLD = 10.0 * DEFAULT_MAX_GRAD_NORM  # = 5.0 with default clip
+DEFAULT_EXPLODING_THRESHOLD = 10.0 * DEFAULT_TRAINING_MAX_GRAD_NORM
 
 
 class GradientHealthStats(TypedDict):
@@ -111,7 +111,7 @@ class SeedGradientCollector:
             vanishing_threshold: Gradient norm below this is considered vanishing.
                 Default: 1e-7 (very small but non-zero).
             exploding_threshold: Gradient norm above this is considered exploding.
-                Default: 10x clip norm (5.0 with DEFAULT_MAX_GRAD_NORM=0.5).
+                Default: 10x training clip norm.
                 At this level, gradients will be scaled down 10x by clipping.
         """
         self.vanishing_threshold = vanishing_threshold
