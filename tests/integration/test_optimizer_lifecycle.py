@@ -4,9 +4,11 @@ Ensures that per-seed optimizers are physically destroyed (garbage collected)
 after pruning, preventing long-term memory leaks.
 """
 
+from dataclasses import replace
+import gc
+
 import pytest
 import torch
-import gc
 
 from esper.simic.training.vectorized import train_ppo_vectorized
 from esper.simic.training.config import TrainingConfig
@@ -118,10 +120,23 @@ class TestOptimizerLifecycle:
                 count += 1
         return count
 
-    def test_optimizer_cleanup(self):
+    def test_optimizer_cleanup(self, monkeypatch: pytest.MonkeyPatch):
         """
         Verifies that seed optimizers are physically destroyed after pruning.
         """
+        import esper.runtime as runtime
+
+        original_get_task_spec = runtime.get_task_spec
+
+        def get_mock_task_spec(name: str):
+            spec = original_get_task_spec(name)
+            return replace(
+                spec,
+                dataloader_defaults={**spec.dataloader_defaults, "mock": True},
+            )
+
+        monkeypatch.setattr(runtime, "get_task_spec", get_mock_task_spec)
+
         # 1. Baseline Sweep
         gc.collect()
         initial_count = self.count_optimizers()

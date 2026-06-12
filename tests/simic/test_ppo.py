@@ -225,10 +225,12 @@ def test_kl_early_stopping_with_single_epoch():
     assert metrics["early_stop_epoch"] == 0, \
         "Should have early stopped at epoch 0 (the only epoch)"
 
-    # Key assertion: NO update should have happened
-    # (policy_loss won't be in metrics because we broke before computing it)
-    assert "policy_loss" not in metrics, \
-        "No policy_loss should be computed when early stopping at epoch 0"
+    # Key assertion: NO optimizer step should have happened.
+    # The no-step contract returns explicit NaNs rather than pretending a valid loss exists.
+    assert math.isnan(metrics["policy_loss"]), \
+        "No-step KL abort should surface policy loss as NaN"
+    assert metrics["ppo_update_performed"] is False, \
+        "Epoch-0 KL abort should report that no optimizer step was performed"
 
 
 def test_value_clipping_uses_appropriate_range():

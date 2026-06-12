@@ -488,12 +488,15 @@ class TrainingConfig:
         if self.auto_forward_g3:
             auto_forward.append("G3")
 
+        entropy_start = self.entropy_coef_start if self.entropy_coef_start is not None else self.entropy_coef
+        entropy_end = self.entropy_coef_end if self.entropy_coef_end is not None else self.entropy_coef
+
         lines = [
             "TrainingConfig:",
             f"  PPO: lr={self.lr}, gamma={self.gamma}, gae_lambda={self.gae_lambda}, clip={self.clip_ratio}",
             f"  Rounds: {self.n_episodes} (env episodes={self.n_episodes * self.n_envs}), "
             f"envs={self.n_envs}, max_epochs={self.max_epochs}",
-            f"  Entropy: {self.entropy_coef}" + (f" -> {self.entropy_coef_end}" if self.entropy_coef_end else ""),
+            f"  Entropy: {entropy_start}" + (f" -> {entropy_end}" if entropy_end != entropy_start else ""),
             f"  Updates/batch: {self.ppo_updates_per_batch}, amp={'on' if self.amp else 'off'}, amp_dtype={self.amp_dtype}, compile={self.compile_mode}",
             f"  LSTM: hidden={self.lstm_hidden_dim}, chunk={self.chunk_length}",
             f"  Slots: {','.join(self.slots)} | reward_family={self.reward_family.value} mode={self.reward_mode.value}",

@@ -214,6 +214,58 @@ def test_get_value_does_not_create_grad_graph(lstm_bundle, slot_config):
     )
 
 
+def test_lstm_bundle_get_value_uses_deterministic_argmax_value(
+    lstm_bundle, slot_config, monkeypatch
+):
+    """get_value() should ignore forward()'s sampled value and recompute argmax Q."""
+    features = torch.randn(1, lstm_bundle.feature_dim)
+    bp_idx = torch.randint(0, NUM_BLUEPRINTS, (1, slot_config.num_slots))
+    hidden_out = (
+        torch.zeros(1, 1, lstm_bundle.hidden_dim),
+        torch.zeros(1, 1, lstm_bundle.hidden_dim),
+    )
+    call_count = {"forward": 0, "compute": 0}
+
+    def fake_forward(
+        features_arg: torch.Tensor,
+        blueprint_indices_arg: torch.Tensor,
+        hidden_arg=None,
+    ):
+        call_count["forward"] += 1
+        sampled_value = 1.0 if call_count["forward"] == 1 else 2.0
+        return {
+            "slot_logits": torch.zeros(1, 1, slot_config.num_slots),
+            "blueprint_logits": torch.zeros(1, 1, NUM_BLUEPRINTS),
+            "style_logits": torch.zeros(1, 1, NUM_STYLES),
+            "tempo_logits": torch.zeros(1, 1, NUM_TEMPO),
+            "alpha_target_logits": torch.zeros(1, 1, NUM_ALPHA_TARGETS),
+            "alpha_speed_logits": torch.zeros(1, 1, NUM_ALPHA_SPEEDS),
+            "alpha_curve_logits": torch.zeros(1, 1, NUM_ALPHA_CURVES),
+            "op_logits": torch.tensor([[[0.0, 5.0, -1.0, -2.0, -3.0, -4.0]]]),
+            "value": torch.tensor([[sampled_value]]),
+            "lstm_out": torch.ones(1, 1, lstm_bundle.hidden_dim),
+            "sampled_op": torch.tensor([[0]]),
+            "hidden": hidden_out,
+        }
+
+    def fake_compute_value(lstm_out_arg: torch.Tensor, op_arg: torch.Tensor) -> torch.Tensor:
+        call_count["compute"] += 1
+        expected_op = torch.tensor([[1]])
+        torch.testing.assert_close(op_arg, expected_op)
+        return torch.tensor([[42.0]])
+
+    monkeypatch.setattr(lstm_bundle._network, "forward", fake_forward)
+    monkeypatch.setattr(lstm_bundle._network, "_compute_value", fake_compute_value)
+
+    value1 = lstm_bundle.get_value(features, bp_idx)
+    value2 = lstm_bundle.get_value(features, bp_idx)
+
+    torch.testing.assert_close(value1, torch.tensor([42.0]))
+    torch.testing.assert_close(value2, torch.tensor([42.0]))
+    assert call_count["forward"] == 2
+    assert call_count["compute"] == 2
+
+
 def test_lstm_bundle_forward_missing_mask_key_raises(lstm_bundle, slot_config):
     """forward() should fail fast if any required mask key is missing."""
     features = torch.randn(1, 1, lstm_bundle.feature_dim)

@@ -60,6 +60,12 @@ class TestCullBehavior:
         """Pruning good seed = bad, pruning bad seed = good.
 
         Without inversion, policy learns 'PRUNE everything for +attribution rewards'.
+
+        Note: The sign-inversion property applies to the *attribution* component
+        only, not to ratio_penalty.  ratio_penalty is an anti-gaming term that
+        should always be ≤ 0 regardless of action type.  When the attribution
+        component is zero (e.g. zero progress) and only ratio_penalty remains,
+        both WAIT and PRUNE correctly show negative bounded_attribution.
         """
         # Need a seed with counterfactual (BLENDING+ stage)
         seed_info = inputs["seed_info"]
@@ -76,11 +82,18 @@ class TestCullBehavior:
         prune_test_inputs = {**inputs, "action": LifecycleOp.PRUNE}
         _, comp_prune = compute_contribution_reward(**prune_test_inputs, return_components=True)
 
-        # If WAIT gave positive attribution, PRUNE should give negative (and vice versa)
-        if abs(comp_wait.bounded_attribution) > 0.01:
-            assert comp_prune.bounded_attribution * comp_wait.bounded_attribution <= 0, (
-                f"PRUNE attribution {comp_prune.bounded_attribution} should oppose "
-                f"WAIT attribution {comp_wait.bounded_attribution}"
+        # Extract attribution-only component (without ratio_penalty)
+        # ratio_penalty is applied identically to both actions and should
+        # not participate in the sign-inversion check.
+        wait_attribution = comp_wait.bounded_attribution - comp_wait.ratio_penalty
+        prune_attribution = comp_prune.bounded_attribution - comp_prune.ratio_penalty
+
+        # If WAIT gave meaningful attribution, PRUNE should invert it
+        if abs(wait_attribution) > 0.01:
+            assert prune_attribution * wait_attribution <= 0, (
+                f"PRUNE attribution {prune_attribution} should oppose "
+                f"WAIT attribution {wait_attribution} "
+                f"(ratio_penalty={comp_wait.ratio_penalty} excluded from check)"
             )
 
 

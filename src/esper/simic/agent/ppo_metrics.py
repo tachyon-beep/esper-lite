@@ -63,6 +63,10 @@ class PPOUpdateMetricsBuilder:
             aggregated_result["op_valid_mask"] = tuple(False for _ in range(NUM_OPS))
             aggregated_result["q_variance"] = nan
             aggregated_result["q_spread"] = nan
+            if "approx_kl" in self.metrics and self.metrics["approx_kl"]:
+                aggregated_result["approx_kl"] = torch.stack(self.metrics["approx_kl"]).mean().item()
+            if "early_stop_epoch" in self.metrics and self.metrics["early_stop_epoch"]:
+                aggregated_result["early_stop_epoch"] = int(self.metrics["early_stop_epoch"][0].item())
             if self.finiteness_failures:
                 aggregated_result["finiteness_gate_failures"] = self.finiteness_failures
             return PPOUpdateMetricsResult(metrics=aggregated_result, update_performed=False)

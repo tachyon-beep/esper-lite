@@ -1521,36 +1521,39 @@ class VectorizedPPOTrainer:
                 )
 
                 ppo_grad_norm = None
-                if not update_skipped and metrics:
+                if metrics:
                     # Clear after the normalizer update in _run_ppo_updates.
                     raw_states_for_normalizer_update = []
 
                     ppo_update_time_ms = metrics["ppo_update_time_ms"]
-                    ppo_grad_norm = metrics["ppo_grad_norm"]
 
-                    # Check finiteness gate
-                    consecutive_finiteness_failures, should_continue = (
-                        ppo_coordinator.check_finiteness_gate(
-                            metrics, consecutive_finiteness_failures
+                    if update_skipped:
+                        # Distinguish benign "no optimizer step" cases (for example
+                        # epoch-0 KL early-stop) from true finiteness-gate failures.
+                        consecutive_finiteness_failures, should_continue = (
+                            ppo_coordinator.check_finiteness_gate(
+                                metrics, consecutive_finiteness_failures
+                            )
                         )
-                    )
-                    if not should_continue:
-                        # Skip anomaly detection for this batch - metrics are NaN
-                        continue
+                        if not should_continue:
+                            # Skip anomaly detection for this batch - metrics are NaN
+                            continue
+                    else:
+                        ppo_grad_norm = metrics["ppo_grad_norm"]
 
-                    # Check gradient drift
-                    drift_metrics = ppo_coordinator.check_gradient_drift(
-                        grad_ema_tracker, ppo_grad_norm
-                    )
+                        # Check gradient drift
+                        drift_metrics = ppo_coordinator.check_gradient_drift(
+                            grad_ema_tracker, ppo_grad_norm
+                        )
 
-                    # Run anomaly detection (includes LSTM health, per-head entropy)
-                    ppo_coordinator.run_anomaly_detection(
-                        metrics=metrics,
-                        drift_metrics=drift_metrics,
-                        batched_lstm_hidden=batched_lstm_hidden,
-                        batch_epoch_id=batch_epoch_id,
-                        batch_idx=batch_idx,
-                    )
+                        # Run anomaly detection (includes LSTM health, per-head entropy)
+                        ppo_coordinator.run_anomaly_detection(
+                            metrics=metrics,
+                            drift_metrics=drift_metrics,
+                            batched_lstm_hidden=batched_lstm_hidden,
+                            batch_epoch_id=batch_epoch_id,
+                            batch_idx=batch_idx,
+                        )
 
                 # If the epoch loop exited early (e.g. graceful shutdown), ensure the batch
                 # summary reflects the partial episode outcomes instead of the default zeros.

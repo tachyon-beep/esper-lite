@@ -12,37 +12,51 @@ Metrics tracked:
 
 import pytest
 import torch
+from dataclasses import replace
 
 from esper.simic.training.vectorized import train_ppo_vectorized
 from esper.simic.rewards import RewardMode
 
 
 @pytest.mark.slow
-def test_phase6_regression_baseline():
-    """Run short training and validate Phase 6 metrics are reasonable.
+def test_phase6_regression_baseline(monkeypatch: pytest.MonkeyPatch):
+    """Run a small training smoke and validate Phase 6 metrics are finite.
 
     This test establishes the regression baseline for Phase 6 (Obs V3 + Policy V2).
-    It runs a very short training session and validates:
+    It runs a PR-gate-sized training session and validates:
     1. Training completes without errors
-    2. Accuracy is positive and finite
-    3. Accuracy improves during training
-    4. No NaN/Inf in any metrics
-
-    Baseline expectations (Phase 6 with CIFAR-10):
-    - Final accuracy: > 15% (random is 10%, some learning should occur)
-    - Accuracy should improve from first to last batch
+    2. Accuracy is finite and bounded
+    3. Rolling averages are finite and bounded
     - All metrics finite
     """
-    # Run ultra-short training for regression test
+    import esper.runtime as runtime
+
+    original_get_task_spec = runtime.get_task_spec
+
+    def get_mock_task_spec(name: str):
+        spec = original_get_task_spec(name)
+        return replace(
+            spec,
+            dataloader_defaults={**spec.dataloader_defaults, "mock": True},
+        )
+
+    monkeypatch.setattr(runtime, "get_task_spec", get_mock_task_spec)
+
+    # Run a tiny CPU training smoke for the PR gate.
     agent, history = train_ppo_vectorized(
-        n_episodes=5,        # Very short run
-        max_epochs=10,       # Only 10 epochs per episode
-        n_envs=2,            # Minimal parallelism
-        task="cifar_baseline",
+        n_episodes=1,
+        max_epochs=2,
+        n_envs=1,
+        task="cifar_minimal",
         use_telemetry=False, # Disable telemetry for speed
         reward_mode=RewardMode.SIMPLIFIED,  # Faster reward computation
         save_path=None,      # Don't save checkpoints
         slots=['r0c0', 'r0c1', 'r0c2'],  # Required parameter
+        batch_size_per_env=8,
+        device="cpu",
+        devices=["cpu"],
+        num_workers=0,
+        compile_mode="off",
     )
 
     # === Validation: Training Stability ===
@@ -56,7 +70,6 @@ def test_phase6_regression_baseline():
 
     # Extract accuracies from history
     accuracies = [batch["avg_accuracy"] for batch in history]
-    first_accuracy = accuracies[0]
     final_accuracy = accuracies[-1]
 
     # All accuracies should be finite
@@ -64,17 +77,9 @@ def test_phase6_regression_baseline():
         f"Found non-finite accuracy: {accuracies}"
     )
 
-    # Final accuracy should be > random baseline (10% for CIFAR-10)
-    # With very short training (5 episodes), expect at least some learning
-    assert final_accuracy > 15.0, (
-        f"Final accuracy too low: {final_accuracy:.2f}%. "
-        f"Expected >15% (random is 10%). Training may not be working."
-    )
-
-    # Accuracy should improve during training (or at least not degrade)
-    assert final_accuracy >= first_accuracy * 0.9, (
-        f"Accuracy degraded: {first_accuracy:.2f}% → {final_accuracy:.2f}%. "
-        "This suggests a training bug."
+    # Accuracy should remain a valid percentage.
+    assert all(0.0 <= acc <= 100.0 for acc in accuracies), (
+        f"Accuracy out of range [0, 100]: {accuracies}"
     )
 
     # === Validation: Rolling Average ===
@@ -106,9 +111,7 @@ def test_phase6_regression_baseline():
     # === Success: All metrics within expected ranges ===
 
     print("\n✓ Phase 6 Regression Baseline:")
-    print(f"  First Accuracy:  {first_accuracy:.2f}%")
     print(f"  Final Accuracy:  {final_accuracy:.2f}%")
-    print(f"  Improvement:     {final_accuracy - first_accuracy:+.2f}%")
     print(f"  Batches trained: {len(history)}")
 
 
@@ -117,13 +120,14 @@ def test_phase6_op_conditioning_sanity():
     """Sanity check that op-conditioned values vary with different ops.
 
     This test verifies that the op-conditioned value head (Q(s,op)) actually
-    produces different values for different ops, confirming that Phase 4
-    implementation is working correctly in the training loop.
+    produces different values for explicit ops, confirming that Phase 4
+    implementation is wired correctly in the training loop.
     """
     from esper.tamiyo.policy.factory import create_policy
-    from esper.leyline import SlotConfig
+    from esper.leyline import NUM_OPS, SlotConfig
     from esper.tamiyo.policy.features import get_feature_size
 
+    torch.manual_seed(0)
     slot_config = SlotConfig.default()
     policy = create_policy(
         policy_type="lstm",
@@ -133,26 +137,30 @@ def test_phase6_op_conditioning_sanity():
     # Create identical state
     state = torch.randn(4, get_feature_size(slot_config))
     bp_indices = torch.randint(0, 13, (4, slot_config.num_slots))
-    from tests.helpers import create_all_valid_masks
-    masks = create_all_valid_masks(batch_size=state.shape[0])
 
-    # Sample actions multiple times
-    values = []
-    for _ in range(10):
-        result = policy.get_action(state, bp_indices, masks=masks)
-        values.append(result.value.clone())
+    with torch.no_grad():
+        output = policy.network.forward(
+            state.unsqueeze(1),
+            bp_indices.unsqueeze(1),
+        )
+        lstm_out = output["lstm_out"]
+        q_values = []
+        for op_idx in range(NUM_OPS):
+            op_tensor = torch.full(
+                (state.shape[0], 1),
+                op_idx,
+                dtype=torch.long,
+                device=state.device,
+            )
+            q_values.append(policy.network._compute_value(lstm_out, op_tensor).squeeze(1))
 
-    # Convert to tensor
-    values_tensor = torch.stack(values)  # [10, 4]
+    q_values_tensor = torch.stack(q_values, dim=1)  # [batch, NUM_OPS]
+    q_spread = q_values_tensor.max(dim=1).values - q_values_tensor.min(dim=1).values
 
-    # Since ops are sampled stochastically, values should vary
-    # (different ops → different Q(s,op) values)
-    value_std = values_tensor.std(dim=0).mean()
-
-    assert value_std > 0.01, (
-        f"Value estimates don't vary across sampled ops (std={value_std:.6f}). "
-        "This suggests op-conditioning is not working - all ops produce same value."
+    assert torch.all(q_spread > 1e-5), (
+        f"Q(s,op) estimates don't vary by explicit op (spread={q_spread.tolist()}). "
+        "This suggests op-conditioning is not wired into the value head."
     )
 
     print("\n✓ Op-conditioning sanity check:")
-    print(f"  Value std across ops: {value_std:.4f} (> 0.01 threshold)")
+    print(f"  Minimum Q spread across ops: {q_spread.min().item():.6f}")

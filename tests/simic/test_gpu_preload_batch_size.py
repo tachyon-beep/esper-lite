@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 
 
@@ -6,10 +8,19 @@ class _StopAfterGpuIteratorInit(RuntimeError):
 
 
 def test_gpu_preload_uses_batch_size_override(monkeypatch):
+    import esper.runtime as runtime
     import esper.simic.training.vectorized as vectorized
     import esper.utils.data as data
 
     gpu_iter_inits: list[dict] = []
+    original_get_task_spec = runtime.get_task_spec
+
+    def get_mock_task_spec(name: str):
+        spec = original_get_task_spec(name)
+        return replace(
+            spec,
+            dataloader_defaults={**spec.dataloader_defaults, "mock": True},
+        )
 
     class StubHub:
         def add_backend(self, _backend) -> None:
@@ -25,6 +36,7 @@ def test_gpu_preload_uses_batch_size_override(monkeypatch):
                 raise _StopAfterGpuIteratorInit()
 
     monkeypatch.setattr(vectorized, "get_hub", lambda: StubHub())
+    monkeypatch.setattr(runtime, "get_task_spec", get_mock_task_spec)
     monkeypatch.setattr(data, "SharedGPUBatchIterator", StubSharedGPUBatchIterator)
 
     with pytest.raises(_StopAfterGpuIteratorInit):

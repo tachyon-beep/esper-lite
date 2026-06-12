@@ -1104,24 +1104,24 @@ class PPOAgent:
                                     )
                         else:
                             # No valid+fresh timesteps in this epoch
-                            nan_t = torch.tensor(float("nan"), device=loss.device)
-                            metrics["aux_pred_variance"].append(nan_t)
-                            metrics["aux_explained_variance"].append(nan_t)
-                            metrics["aux_pred_target_correlation"].append(nan_t)
+                            zero_t = torch.tensor(0.0, device=loss.device)
+                            metrics["aux_pred_variance"].append(zero_t)
+                            metrics["aux_explained_variance"].append(zero_t)
+                            metrics["aux_pred_target_correlation"].append(zero_t)
                     else:
                         # No fresh measurements in this epoch
-                        nan_t = torch.tensor(float("nan"), device=loss.device)
-                        metrics["aux_pred_variance"].append(nan_t)
-                        metrics["aux_explained_variance"].append(nan_t)
-                        metrics["aux_pred_target_correlation"].append(nan_t)
+                        zero_t = torch.tensor(0.0, device=loss.device)
+                        metrics["aux_pred_variance"].append(zero_t)
+                        metrics["aux_explained_variance"].append(zero_t)
+                        metrics["aux_pred_target_correlation"].append(zero_t)
             else:
                 # No contribution data in batch - skip aux loss and quality metrics
                 metrics["aux_contribution_loss"].append(torch.tensor(0.0, device=loss.device))
                 metrics["effective_aux_coef"].append(torch.tensor(0.0, device=loss.device))
-                nan_t = torch.tensor(float("nan"), device=loss.device)
-                metrics["aux_pred_variance"].append(nan_t)
-                metrics["aux_explained_variance"].append(nan_t)
-                metrics["aux_pred_target_correlation"].append(nan_t)
+                zero_t = torch.tensor(0.0, device=loss.device)
+                metrics["aux_pred_variance"].append(zero_t)
+                metrics["aux_explained_variance"].append(zero_t)
+                metrics["aux_pred_target_correlation"].append(zero_t)
 
             self.optimizer.zero_grad(set_to_none=True)
             loss.backward()  # type: ignore[no-untyped-call]
@@ -1246,7 +1246,10 @@ class PPOAgent:
 
         # Aggregate into typed result dict (metrics aggregation owns list->scalar logic)
         finiteness_failures = metrics["finiteness_gate_failures"]
-        epochs_completed = len(metrics["ratio_max"])
+        # Count actual optimizer steps, not epochs that only reached ratio diagnostics.
+        # KL early-stop at epoch 0 records ratio stats before breaking, but it does not
+        # execute backward(), gradient clipping, or optimizer.step().
+        epochs_completed = len(metrics["pre_clip_grad_norm"])
 
         builder = PPOUpdateMetricsBuilder(
             metrics=metrics,

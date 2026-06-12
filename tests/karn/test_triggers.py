@@ -1,7 +1,27 @@
 """Tests for Karn trigger logic (AnomalyDetector / RollingStats)."""
 
-from esper.karn.triggers import AnomalyDetector
-from esper.karn.store import EpochSnapshot
+from esper.karn.triggers import AnomalyDetector, PolicyAnomalyDetector, RollingStats
+from esper.karn.store import BatchMetrics, DenseTraceTrigger, EpochSnapshot, GateEvaluationTrace, SlotSnapshot
+from esper.leyline import SeedStage
+
+
+class TestRollingStats:
+    """RollingStats baseline and ratio calculations."""
+
+    def test_loss_accuracy_and_gradient_baselines_initialize_once(self) -> None:
+        stats = RollingStats(alpha=0.5)
+
+        assert stats.update_loss(2.0) == 1.0
+        assert stats.update_loss(4.0) == 2.0
+        assert stats.loss_ema == 3.0
+
+        assert stats.update_accuracy(80.0) == 0.0
+        assert stats.update_accuracy(72.5) == 7.5
+        assert stats.prev_accuracy == 72.5
+
+        assert stats.update_grad_norm(0.0) == 1.0
+        assert stats.grad_norm_ema == 0.01
+        assert stats.update_grad_norm(0.05) == 5.0
 
 
 class TestAnomalyDetectorAccuracyDrop:
@@ -27,6 +47,84 @@ class TestAnomalyDetectorAccuracyDrop:
         reason = detector.check_epoch(epoch_3)
         assert reason is not None
         assert "accuracy_drop:5.5pp" in reason
+
+    def test_combined_epoch_reasons_include_loss_grad_stage_gate_and_force(self) -> None:
+        detector = AnomalyDetector(
+            config=DenseTraceTrigger(
+                loss_spike_threshold=2.0,
+                accuracy_drop_threshold=5.0,
+                gradient_explosion=3.0,
+                force_dense=True,
+            )
+        )
+        first = EpochSnapshot(epoch=1)
+        first.host.val_loss = 1.0
+        first.host.val_accuracy = 80.0
+        first.host.host_grad_norm = 1.0
+        assert detector.check_epoch(first) == "force_dense"
+
+        second = EpochSnapshot(epoch=2)
+        second.host.val_loss = 3.0
+        second.host.val_accuracy = 70.0
+        second.host.host_grad_norm = 5.0
+        second.slots["r0c0"] = SlotSnapshot(
+            slot_id="r0c0",
+            stage=SeedStage.GERMINATED,
+            epochs_in_stage=0,
+            last_gate_attempted="G2",
+            last_gate_passed=False,
+        )
+
+        reason = detector.check_epoch(second)
+
+        assert reason == (
+            "loss_spike:3.0x,accuracy_drop:10.0pp,gradient_explosion:5x,"
+            "stage_transition:r0c0:GERMINATED,gate_failure:r0c0:G2,force_dense"
+        )
+
+    def test_trace_lifecycle_collects_metrics_and_resets(self) -> None:
+        detector = AnomalyDetector()
+
+        trace = detector.start_trace(epoch=5, reason="loss_spike:3.0x")
+        detector.add_batch_metrics(BatchMetrics(epoch=5, batch_idx=7, loss=1.5))
+        detector.add_gate_evaluation(GateEvaluationTrace(gate_id="G3", slot_id="r0c0"))
+
+        assert detector.is_capturing is True
+        assert trace.window_start_epoch == 5
+        assert trace.window_end_epoch == 8
+        assert trace.batch_metrics[0].batch_idx == 7
+        assert trace.gate_evaluation_details.gate_id == "G3"
+        assert detector.finalize_trace(epoch=7) is None
+        assert detector.finalize_trace(epoch=8) is trace
+        assert detector.is_capturing is False
+
+        detector.start_trace(epoch=9, reason="force_dense")
+        detector.reset()
+
+        assert detector.is_capturing is False
+
+
+class TestPolicyAnomalyDetector:
+    """Policy anomaly rolling checks."""
+
+    def test_value_entropy_and_kl_anomalies(self) -> None:
+        detector = PolicyAnomalyDetector(
+            value_std_threshold=0.10,
+            entropy_threshold=0.20,
+            kl_threshold=0.30,
+            window_size=3,
+        )
+
+        assert detector.check_value_collapse(0.05) is False
+        assert detector.check_value_collapse(0.04) is False
+        assert detector.check_value_collapse(0.03) is True
+        assert detector.check_entropy_collapse(0.10) is True
+        assert detector.check_kl_spike(0.40) is True
+
+        detector.reset()
+
+        assert detector.value_stds == []
+        assert detector.entropies == []
 
 
 class TestCollectorStageTransitionTriggers:
@@ -198,4 +296,3 @@ class TestCollectorStageTransitionTriggers:
             f"Expected 2 traces (germinate + prune), got {len(traces)}: "
             f"{[t.trigger_reason for t in traces]}"
         )
-

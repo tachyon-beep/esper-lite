@@ -63,3 +63,6 @@ mutants/
 
 # Debug screenshots
 image.png
+
+# Filigree issue tracker
+.filigree/

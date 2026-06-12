@@ -10,6 +10,7 @@ import torch
 import numpy as np
 import random
 import hashlib
+from dataclasses import replace
 
 from esper.simic.training.vectorized import train_ppo_vectorized
 from esper.simic.training.config import TrainingConfig
@@ -120,14 +121,16 @@ class TestVectorizedDeterminism:
         torch.backends.cudnn.benchmark = False
 
         # 2. Config
-        # Use tinystories or cifar10? Cifar10 is standard.
-        # Use CPU to avoid GPU non-determinism issues complicating the baseline check
-        config = TrainingConfig.for_cifar10()
+        # Use CPU to avoid GPU non-determinism issues complicating the baseline check.
+        config = TrainingConfig.for_cifar_minimal()
+        config.task = "cifar_minimal"
         config.n_envs = 2
         config.max_epochs = n_steps
+        config.chunk_length = n_steps
         config.seed = seed
         config.use_telemetry = False # Reduce noise
         config.n_episodes = 2 # Short run
+        config.batch_size_per_env = 16
         
         # 3. Run
         # We invoke train_ppo_vectorized directly.
@@ -165,8 +168,21 @@ class TestVectorizedDeterminism:
             "weights_digest": weights_digest
         }
 
-    def test_end_to_end_determinism(self):
+    def test_end_to_end_determinism(self, monkeypatch: pytest.MonkeyPatch):
         """Verify that two runs with same seed produce identical results."""
+        import esper.runtime as runtime
+
+        original_get_task_spec = runtime.get_task_spec
+
+        def get_mock_task_spec(name: str):
+            spec = original_get_task_spec(name)
+            return replace(
+                spec,
+                dataloader_defaults={**spec.dataloader_defaults, "mock": True},
+            )
+
+        monkeypatch.setattr(runtime, "get_task_spec", get_mock_task_spec)
+
         seed = 42
         steps = 5  # Short run to be fast
         
@@ -186,11 +202,17 @@ class TestVectorizedDeterminism:
             "History length mismatch"
             
         # Compare each step
+        nondeterministic_metric_fragments = (
+            "time_ms",
+            "dataloader_wait",
+        )
         for i, (h1, h2) in enumerate(zip(result1["history"], result2["history"])):
             # Compare scalar metrics
             for k in h1:
+                if any(fragment in k for fragment in nondeterministic_metric_fragments):
+                    continue
                 v1 = h1[k]
-                v2 = h2.get(k)
+                v2 = h2[k]
                 
                 # Allow slight floating point noise if any? 
                 # On CPU with deterministic seeds, it should be exact or very close.

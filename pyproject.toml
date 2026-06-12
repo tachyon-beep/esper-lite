@@ -84,6 +84,9 @@ dev = [
     "types-tqdm>=4.67.0",
     "textual>=0.47.0", # TUI widgets - needed for test imports
     "types-pyyaml>=6.0.12.20250915",
+    "pyrate-limiter>=4.0.2",
+    "tenacity>=9.1.4",
+    "tqdm>=4.67.1",
 ]
 
 # Type checking configuration

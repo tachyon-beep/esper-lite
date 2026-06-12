@@ -54,14 +54,14 @@ class PPOUpdateMetrics(TypedDict, total=False):
     head_entropies and head_grad_norms retain per-epoch structure.
 
     Finiteness Gate Contract:
-    - ppo_update_performed: True if at least one epoch completed successfully
+    - ppo_update_performed: True if at least one optimizer step completed
     - finiteness_gate_skip_count: Number of epochs skipped due to non-finite values
-    - When all epochs skip: ppo_update_performed=False, other metrics are NaN
+    - When no optimizer step occurs: ppo_update_performed=False
     - Callers should check ppo_update_performed before using other metrics
     """
 
     # Update status (finiteness gate contract)
-    ppo_update_performed: bool  # True if at least one epoch completed
+    ppo_update_performed: bool  # True if at least one optimizer step completed
     finiteness_gate_skip_count: int  # Number of epochs skipped due to NaN/Inf
     finiteness_gate_failures: list[FinitenessGateFailure]  # One entry per skipped epoch
 
