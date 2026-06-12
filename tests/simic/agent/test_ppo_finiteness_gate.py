@@ -17,6 +17,19 @@ from esper.leyline import NUM_OPS
 from esper.simic.agent.ppo_metrics import PPOUpdateMetricsBuilder
 
 
+VALUE_FUNC_NAN_METRICS = {
+    "v_return_correlation": float("nan"),
+    "td_error_mean": float("nan"),
+    "td_error_std": float("nan"),
+    "bellman_error": float("nan"),
+    "return_p10": float("nan"),
+    "return_p50": float("nan"),
+    "return_p90": float("nan"),
+    "return_variance": float("nan"),
+    "return_skewness": float("nan"),
+}
+
+
 class TestFinitenessGateAggregation:
     """Test the aggregation logic when all epochs skip."""
 
@@ -41,17 +54,7 @@ class TestFinitenessGateAggregation:
             log_prob_max_across_epochs=torch.tensor(float("-inf")),
             head_ratio_max_across_epochs={},
             joint_ratio_max_across_epochs=torch.tensor(float("-inf")),
-            value_func_metrics={
-                "v_return_correlation": float("nan"),
-                "td_error_mean": float("nan"),
-                "td_error_std": float("nan"),
-                "bellman_error": float("nan"),
-                "return_p10": float("nan"),
-                "return_p50": float("nan"),
-                "return_p90": float("nan"),
-                "return_variance": float("nan"),
-                "return_skewness": float("nan"),
-            },
+            value_func_metrics=VALUE_FUNC_NAN_METRICS,
             cuda_memory_metrics={},
             head_names=(),
         )
@@ -63,6 +66,36 @@ class TestFinitenessGateAggregation:
         assert not any(result["op_valid_mask"])
         assert math.isnan(result["q_variance"])
         assert math.isnan(result["q_spread"])
+
+    def test_empty_finiteness_gate_failures_stays_list_when_update_succeeds(self):
+        """Successful updates should preserve an empty failure list as [] rather than 0.0."""
+        metrics: dict[str, list[Any]] = defaultdict(list)
+        metrics["ratio_max"].append(torch.tensor(1.1))
+        metrics["ratio_min"].append(torch.tensor(0.9))
+        metrics["finiteness_gate_failures"] = []
+
+        builder = PPOUpdateMetricsBuilder(
+            metrics=metrics,
+            finiteness_failures=metrics["finiteness_gate_failures"],
+            epochs_completed=1,
+            head_entropies={},
+            conditional_head_entropies={},
+            head_grad_norms={},
+            head_nan_detected={},
+            head_inf_detected={},
+            lstm_health_history=defaultdict(list),
+            log_prob_min_across_epochs=torch.tensor(float("inf")),
+            log_prob_max_across_epochs=torch.tensor(float("-inf")),
+            head_ratio_max_across_epochs={},
+            joint_ratio_max_across_epochs=torch.tensor(float("-inf")),
+            value_func_metrics=VALUE_FUNC_NAN_METRICS,
+            cuda_memory_metrics={},
+            head_names=(),
+        )
+
+        result = builder.finalize().metrics
+
+        assert result["finiteness_gate_failures"] == []
 
     def test_all_epochs_skipped_returns_explicit_signal(self):
         """When all epochs hit finiteness gate, ppo_update_performed=False."""

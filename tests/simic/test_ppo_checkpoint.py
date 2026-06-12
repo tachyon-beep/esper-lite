@@ -222,6 +222,46 @@ class TestPPOCheckpointNoBackwardsCompatibility:
         with pytest.raises(RuntimeError, match="Checkpoint version mismatch"):
             PPOAgent.load(tmp_path / "wrong_version.pt", device="cpu")
 
+    def test_missing_aux_training_step_fails_fast(self, tmp_path: Path):
+        """Checkpoints must include aux_training_step rather than defaulting to zero."""
+        slot_config = SlotConfig.default()
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=get_feature_size(slot_config),
+            slot_config=slot_config,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(policy=policy, device="cpu")
+        agent.save(tmp_path / "agent.pt")
+
+        checkpoint = torch.load(tmp_path / "agent.pt", weights_only=False)
+        del checkpoint["aux_training_step"]
+        torch.save(checkpoint, tmp_path / "missing_aux_step.pt")
+
+        with pytest.raises(RuntimeError, match="aux_training_step"):
+            PPOAgent.load(tmp_path / "missing_aux_step.pt", device="cpu")
+
+    def test_checkpoint_with_removed_n_epochs_fails_fast(self, tmp_path: Path):
+        """Old checkpoint config containing removed n_epochs is incompatible."""
+        slot_config = SlotConfig.default()
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=get_feature_size(slot_config),
+            slot_config=slot_config,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(policy=policy, device="cpu")
+        agent.save(tmp_path / "agent.pt")
+
+        checkpoint = torch.load(tmp_path / "agent.pt", weights_only=False)
+        checkpoint["config"]["n_epochs"] = 4
+        torch.save(checkpoint, tmp_path / "removed_n_epochs.pt")
+
+        with pytest.raises(RuntimeError, match="config.n_epochs"):
+            PPOAgent.load(tmp_path / "removed_n_epochs.pt", device="cpu")
+
 
 class TestPPOCheckpointVersion:
     """Checkpoint version handling."""
