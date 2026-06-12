@@ -1,6 +1,6 @@
 # Esper Plan Tracker
 
-**Last Updated:** 2026-06-12 (baseline green; P1 stability batch 1 active)
+**Last Updated:** 2026-06-12 (baseline green; P1 stability batch 1 locally complete)
 **Purpose:** Rack-and-stack all plans and concepts for prioritization and dependency tracking.
 
 ---
@@ -15,10 +15,9 @@ main CI passed. The active plan is
 `docs/plans/ready/2026-06-12-green-state-recovery.md`.
 
 Current operating rule: drain high-risk correctness bugs before feature work.
-Recovery PR #72 is merged. The active follow-up is
-`docs/plans/ready/2026-06-12-p1-stability-batch-1.md`.
-Security/dependency PRs remain next after the first P1 stability batch unless a
-fresh critical correctness bug appears.
+Recovery PR #72 is merged. P1 stability batch 1 is locally complete and ready
+for PR verification. Security/dependency PRs remain next unless a fresh critical
+correctness bug appears.
 
 ### Post-Hiatus Audit (2026-02-21)
 
@@ -33,7 +32,7 @@ the stored action. These ops frequently diverge, corrupting advantage estimates.
 
 ### Current Focus Areas
 1. **Green State Recovery** - 🔴 CRITICAL! Baseline green; post-baseline P1 stability drain active
-2. **P1 Stability Batch 1** - 🔴 CRITICAL! Six high-risk PPO/telemetry correctness bugs claimed
+2. **P1 Stability Batch 1** - ✅ Locally complete; six high-risk PPO/telemetry correctness bugs closed
 3. **P0 Filigree Bug Drain** - ✅ Initial six P0s fixed and closed
 4. **Op/Value Mismatch** - 🔴 CRITICAL! Fix double-sampling in factored_lstm.py
 5. **Reward Efficiency Experiment** - Infrastructure complete, experiment never run
@@ -70,7 +69,7 @@ the stored action. These ops frequently diverge, corrupting advantage estimates.
 | ID | Title | Type | Urgency | Complexity | Risk | Status |
 |----|-------|------|---------|------------|------|--------|
 | green-state-recovery-2026-06-12 | Green State Recovery Program | in-progress | 🔴 critical | M | high | Active: final gates and PR disposition after green baseline + P0 fixes |
-| p1-stability-batch-1 | PPO/Telemetry Stability Batch 1 | in-progress | 🔴 critical | M | high | Active: entropy/KL accounting, rollout_total_steps, non-finite gradient drift |
+| p1-stability-batch-1 | PPO/Telemetry Stability Batch 1 | ready-for-pr | 🔴 critical | M | high | Locally complete: six bugs closed, broad gates passed |
 | filigree-p0-drain | Critical Filigree P0 Bug Drain | completed-batch | 🔴 critical | L | high | Initial six P0s fixed, verified, and closed |
 | op-value-mismatch | Q(s,op) Double-Sampling Bug | investigation | 🔴 critical | M | high | Diagnosed 2025-12-31, blocks Phase 7. See `docs/bugs/investigations/` |
 

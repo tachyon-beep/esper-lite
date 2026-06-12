@@ -30,9 +30,11 @@ status_notes: >
   PR #52 was made green, accepted, and merged as the new baseline on 2026-06-12.
   Main CI passed on merge commit cdff9c43. Recovery PR #72 landed the initial
   P0 Filigree bug drain and project Filigree install removal at merge commit
-  514e04a6. The next active slice is the P1 stability batch covering PPO
-  entropy/KL accounting, rollout telemetry, and non-finite gradient drift.
-percent_complete: 92
+  514e04a6. P1 stability batch 1 is locally complete: six high-priority
+  PPO/telemetry bugs are closed, focused tests passed, broad static gates
+  passed, and the broad Simic sweep passed with known local CUDA/data-fetch
+  exclusions.
+percent_complete: 94
 
 reviewed_by:
   - reviewer: python-engineering
@@ -245,6 +247,13 @@ Status:
 - Completed: initial six P0 issues fixed, verified, and closed.
 - Completed: broad local gates passed where environment permits.
 - Completed: recovery PR #72 merged into `main` at `514e04a6`.
+- Completed: P1 stability batch 1 commit `b4b8f2d0` fixed or verified and closed:
+  - `esper-lite-18eb2f`
+  - `esper-lite-2fcc87`
+  - `esper-lite-5f7f67`
+  - `esper-lite-1bbfb2`
+  - `esper-lite-c82e50`
+  - `esper-lite-ee44b1`
 - Blocked by local CUDA/data fetch: full `tests/simic` includes CUDA CIFAR iterator smoke files that attempted SSL dataset access and timed out locally.
 
 ### H. Drain P1 Stability Batch 1
@@ -272,7 +281,7 @@ Acceptance:
 
 Status:
 
-- Active on branch `codex/p1-stability-batch-1`.
+- Locally complete on branch `codex/p1-stability-batch-1`; pending PR and GitHub checks.
 
 Final local evidence:
 

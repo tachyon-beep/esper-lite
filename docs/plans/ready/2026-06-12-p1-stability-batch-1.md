@@ -12,6 +12,8 @@
 - Branch from current `origin/main`: `codex/p1-stability-batch-1`.
 - Claimed Filigree issues: `esper-lite-18eb2f`, `esper-lite-2fcc87`, `esper-lite-5f7f67`, `esper-lite-1bbfb2`, `esper-lite-c82e50`, `esper-lite-ee44b1`.
 - Preserve unrelated dirty files in `/home/john/esper-lite`; do all code edits in `/home/john/.config/superpowers/worktrees/esper-lite/codex-steady-state-recovery`.
+- Implementation commit: `b4b8f2d0`.
+- Filigree status: all six issues closed after `fixing -> verifying -> closed`.
 
 ---
 
@@ -109,7 +111,7 @@
 
 ## Verification
 
-Run the focused gate first:
+Focused gate:
 
 ```bash
 PYTHONPATH=src uv run pytest tests/simic/agent/test_ppo_entropy_floor.py tests/simic/test_ppo.py tests/simic/training/test_ppo_coordinator.py tests/simic/test_gradient_ema.py -q
@@ -118,11 +120,36 @@ MYPYPATH=src uv run mypy -p esper
 uv run python scripts/lint_defensive_patterns.py
 ```
 
-Then run the broader recovery gate before opening the PR:
+Result:
+
+- Passed: `39 passed in 1.26s`.
+- Passed: touched-file Ruff.
+- Passed: targeted mypy on touched source files.
+- Passed: `uv run python scripts/lint_defensive_patterns.py`.
+
+Broad recovery gate:
 
 ```bash
 uv run ruff check src/ tests/
+uv run ruff check scripts/
 uv run python scripts/lint_leyline_types.py
 uv run python scripts/lint_gpu_sync.py
+MYPYPATH=src uv run mypy -p esper
 PYTHONPATH=src uv run pytest tests/simic --ignore=tests/simic/test_data_opt.py --ignore=tests/simic/test_record_stream_fix.py --ignore=tests/simic/training/test_dual_ab.py -q
 ```
+
+Result:
+
+- Passed: `uv run ruff check src/ tests/`.
+- Passed: `uv run ruff check scripts/`.
+- Passed: `uv run python scripts/lint_leyline_types.py`.
+- Passed: `uv run python scripts/lint_gpu_sync.py`.
+- Passed: `MYPYPATH=src uv run mypy -p esper` (`195 source files`).
+- Passed: Simic broad sweep with known local CUDA/data-fetch exclusions (`1107 passed, 4 warnings in 29.70s`).
+
+## Execution Log
+
+- 2026-06-12: Claimed six P1 bugs in Filigree.
+- 2026-06-12: Read-only subagents reviewed PPO loss/KL math and coordinator gradient telemetry.
+- 2026-06-12: Implemented and committed `b4b8f2d0`.
+- 2026-06-12: Verified locally and closed all six Filigree issues.
