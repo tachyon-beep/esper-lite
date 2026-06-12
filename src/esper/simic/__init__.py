@@ -90,13 +90,15 @@ def __getattr__(name: str) -> Any:
     Heavy modules (tamiyo policy features/masks with torch, telemetry with torch,
     training loops) are only loaded when accessed, not at package import time.
     """
-    # Features (HEAVY - from tamiyo.policy which loads torch)
+    # Lightweight feature contracts from leyline.
     if name in ("safe", "TaskConfig"):
-        from esper.tamiyo.policy.features import safe, TaskConfig
+        from esper.leyline import safe, TaskConfig
+
         mapping: dict[str, Any] = {
             "safe": safe,
             "TaskConfig": TaskConfig,
         }
+        globals().update(mapping)
         return mapping[name]
 
     # Action Masks (HEAVY - from tamiyo.policy which loads torch)

@@ -1,6 +1,6 @@
 # Esper Plan Tracker
 
-**Last Updated:** 2026-06-12 (green-state recovery program active)
+**Last Updated:** 2026-06-13 (baseline green; PRs #80-#88 merged; recovery bug drain closed)
 **Purpose:** Rack-and-stack all plans and concepts for prioritization and dependency tracking.
 
 ---
@@ -9,13 +9,25 @@
 
 ### Green-State Recovery (2026-06-12)
 
-The project is in stabilization mode. PR #52 (`env-refactor`) is the critical
-path because it is the large unlanded baseline-reset candidate. The active plan
-is `docs/plans/ready/2026-06-12-green-state-recovery.md`.
+The recovery stabilization program has reached steady state. PR #52 (`env-refactor`) was made green and
+merged into `main` as the new baseline at merge commit `cdff9c43`; post-merge
+main CI passed. The completed recovery plan is
+`docs/plans/ready/2026-06-12-green-state-recovery.md`.
 
-Current operating rule: do not land other PRs until PR #52 is either made green
-and accepted as the new baseline, or explicitly rejected with a smaller
-replacement path.
+Current operating rule: drain high-risk correctness bugs before feature work.
+Recovery PR #72 is merged. Follow-up PRs #78 and #79 merged telemetry and
+training-control correctness fixes with passing CI. PR #80 merged the first
+P2 contract batch and closed three tracker bugs. PR #81 merged the second P2
+action/reward contract batch and closed two tracker bugs. PR #82 merged the P2
+counterfactual telemetry batch and closed two tracker bugs. PR #83 merged the
+P2 GPU-sync batch and closed two tracker bugs. PR #84 merged the P2 Dual-AB
+config contract batch and closed two tracker bugs. PR #85 merged the P2
+config-contract batch and closed two tracker bugs. PR #86 merged the P2
+telemetry-contract batch and closed three tracker bugs. The import-hygiene
+batch landed in PR #87 and closed three tracker bugs. The final bug-drain
+batch landed in PR #88 and closed the last two recovery bugs. Filigree now has
+0 WIP bugs, 0 blocked items, and only the non-startable P4 `Future` release
+planning shell ready.
 
 ### Post-Hiatus Audit (2026-02-21)
 
@@ -29,13 +41,15 @@ op twice independently — once in `forward()` for value computation, once in `g
 the stored action. These ops frequently diverge, corrupting advantage estimates. Blocks Phase 7.
 
 ### Current Focus Areas
-1. **Green State Recovery** - 🔴 CRITICAL! Resolve PR #52 and restore a verified mergeable baseline
-2. **Op/Value Mismatch** - 🔴 CRITICAL! Fix double-sampling in factored_lstm.py
-3. **Reward Efficiency Experiment** - Infrastructure complete, experiment never run
-4. **Phase3-TinyStories** - 85% IMPLEMENTED, needs validation runs
-5. **Drip Reward Implementation** - ~70% done, needs integration completion
-6. **Telemetry Domain Separation** - ~30% done
-7. **Blueprint Compiler** - 0% (correctly deferred until entropy confirmed stable)
+1. **Green State Recovery** - ✅ Completed; baseline green and recovery bug drain closed
+2. **P1 Stability Batch 1** - ✅ Completed and merged; six high-risk PPO/telemetry correctness bugs closed
+3. **P0 Filigree Bug Drain** - ✅ Initial six P0s fixed and closed
+4. **Op/Value Mismatch** - 🔴 CRITICAL! Fix double-sampling in factored_lstm.py
+5. **Reward Efficiency Experiment** - Infrastructure complete, experiment never run
+6. **Phase3-TinyStories** - 85% IMPLEMENTED, needs validation runs
+7. **Drip Reward Implementation** - ~70% done, needs integration completion
+8. **Telemetry Domain Separation** - ~30% done
+9. **Blueprint Compiler** - 0% (correctly deferred until entropy confirmed stable)
 
 ### Critical Path (Updated)
 ```
@@ -64,7 +78,9 @@ the stored action. These ops frequently diverge, corrupting advantage estimates.
 
 | ID | Title | Type | Urgency | Complexity | Risk | Status |
 |----|-------|------|---------|------------|------|--------|
-| green-state-recovery-2026-06-12 | Green State Recovery Program | in-progress | 🔴 critical | M | high | Active: make PR #52 green or reject with replacement path |
+| green-state-recovery-2026-06-12 | Green State Recovery Program | completed-batch | 🔴 critical | M | high | Completed: PRs #52, #72, #78-#88 merged; recovery bugs closed |
+| p1-stability-batch-1 | PPO/Telemetry Stability Batch 1 | completed-batch | 🔴 critical | M | high | Completed and merged; six bugs closed, broad gates passed |
+| filigree-p0-drain | Critical Filigree P0 Bug Drain | completed-batch | 🔴 critical | L | high | Initial six P0s fixed, verified, and closed |
 | op-value-mismatch | Q(s,op) Double-Sampling Bug | investigation | 🔴 critical | M | high | Diagnosed 2025-12-31, blocks Phase 7. See `docs/bugs/investigations/` |
 
 ### Tier 1: High Priority (This Week)

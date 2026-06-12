@@ -8,7 +8,12 @@ import torch
 from torch import nn
 
 from esper.karn.sanctum.schema import CounterfactualConfig, CounterfactualSnapshot
-from esper.leyline import NUM_OPS, TelemetryEventType
+from esper.leyline import (
+    GovernorRollbackPayload,
+    NUM_OPS,
+    TelemetryEvent,
+    TelemetryEventType,
+)
 from esper.simic.telemetry import TelemetryConfig, TelemetryLevel
 from esper.simic.telemetry.emitters import (
     VectorizedEmitter,
@@ -137,6 +142,36 @@ class _StubEnvState:
         self.seeds_fossilized = 0
         self.action_counts = {"WAIT": 1}
         self.successful_action_counts = {"WAIT": 1}
+
+
+def test_vectorized_emitter_injects_context_into_typed_payload() -> None:
+    """VectorizedEmitter.emit updates the typed payload, not only wrapper attrs."""
+    hub = _RecordingHub()
+    emitter = VectorizedEmitter(
+        env_id=42,
+        device="cuda:0",
+        group_id="test-group",
+        hub=hub,
+    )
+    emitter.set_episode_idx(7)
+
+    emitter.emit(TelemetryEvent(
+        event_type=TelemetryEventType.GOVERNOR_ROLLBACK,
+        data=GovernorRollbackPayload(
+            env_id=-1,
+            device="cpu",
+            reason="panic",
+        ),
+    ))
+
+    assert len(hub.events) == 1
+    event = hub.events[0]
+    assert event.env_id == 42
+    assert event.device == "cuda:0"
+    assert event.group_id == "test-group"
+    assert event.data.env_id == 42
+    assert event.data.device == "cuda:0"
+    assert event.data.episode_idx == 7
 
 
 def test_emit_ppo_update_event_propagates_group_id():

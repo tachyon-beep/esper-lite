@@ -29,14 +29,23 @@ from esper.simic.telemetry import (
 )
 from esper.simic.telemetry.emitters import check_performance_degradation
 from esper.simic.rewards import ContributionRewardInputs, LossRewardInputs
-from esper.tamiyo.policy.action_masks import build_slot_states, compute_action_masks
+from esper.tamiyo.policy.action_masks import (
+    MaskedCategorical,
+    build_slot_states,
+    compute_action_masks,
+)
 from esper.tamiyo.policy.features import batch_obs_to_features
 from esper.utils.data import augment_cifar10_batch
 
 from .action_execution import ActionExecutionContext, ResolveTargetSlot, execute_actions
 from .batch_ops import batch_signals_to_features, process_train_batch
 from .counterfactual_eval import process_fused_val_batch
-from .env_factory import EnvFactoryContext, configure_slot_telemetry, create_env_state
+from .env_factory import (
+    EnvFactoryContext,
+    configure_slot_telemetry,
+    create_env_state,
+    make_env_seed,
+)
 from .ppo_coordinator import PPOCoordinator, PPOCoordinatorConfig
 from esper.simic.vectorized_types import (
     ActionMaskFlags,
@@ -46,6 +55,40 @@ from esper.simic.vectorized_types import (
     EpisodeRecord,
     RewardSummaryAccumulator,
 )
+
+
+def _pair_slot_key(
+    active_slot_list: list[str],
+    pair_indices: tuple[int, int],
+) -> tuple[str, str]:
+    """Convert pair config indices into stable slot IDs at encode time."""
+    idx_i, idx_j = pair_indices
+    return active_slot_list[idx_i], active_slot_list[idx_j]
+
+
+def _pair_index_accs_for_active_slots(
+    pair_accs_by_slot: dict[tuple[str, str], float],
+    active_slots: list[str],
+) -> dict[tuple[int, int], float]:
+    """Convert slot-keyed pair accuracies to emitter index keys."""
+    slot_to_index = {slot_id: idx for idx, slot_id in enumerate(active_slots)}
+    return {
+        (slot_to_index[slot_a], slot_to_index[slot_b]): pair_acc
+        for (slot_a, slot_b), pair_acc in pair_accs_by_slot.items()
+    }
+
+
+def _masked_op_probs_for_telemetry(
+    *,
+    op_logits: torch.Tensor,
+    op_mask: torch.Tensor,
+    probability_floor: dict[str, float] | None,
+) -> torch.Tensor:
+    """Return op probabilities using the same mask/floor contract as action sampling."""
+    op_min_prob = None
+    if probability_floor is not None and "op" in probability_floor:
+        op_min_prob = probability_floor["op"]
+    return MaskedCategorical(op_logits, op_mask, min_prob=op_min_prob).probs
 
 
 @dataclass
@@ -269,9 +312,17 @@ class VectorizedPPOTrainer:
 
                 # Create fresh environments for this batch
                 # DataLoaders are shared via SharedBatchIterator (not per-env)
-                base_seed = seed + batch_idx * 10000
                 env_states = [
-                    create_env_state(i, base_seed, env_factory)
+                    create_env_state(
+                        i,
+                        make_env_seed(
+                            root_seed=seed,
+                            batch_idx=batch_idx,
+                            env_idx=i,
+                            envs_per_batch=envs_this_batch,
+                        ),
+                        env_factory,
+                    )
                     for i in range(envs_this_batch)
                 ]
                 criterion = nn.CrossEntropyLoss()
@@ -638,7 +689,10 @@ class VectorizedPPOTrainer:
                                             if k != idx_i and k != idx_j
                                         }
                                         pair_config["_kind"] = "pair"
-                                        pair_config["_pair"] = (idx_i, idx_j)
+                                        pair_config["_pair"] = _pair_slot_key(
+                                            active_slot_list,
+                                            (idx_i, idx_j),
+                                        )
                                         configs.append(pair_config)
 
                             # Committed accuracy: only fossilized seeds enabled.
@@ -694,7 +748,7 @@ class VectorizedPPOTrainer:
                         {} for _ in range(envs_this_batch)
                     ]
                     all_disabled_accs: dict[int, float] = {}
-                    pair_accs: dict[int, dict[tuple[int, int], float]] = {}
+                    pair_accs: dict[int, dict[tuple[str, str], float]] = {}
                     shapley_results: dict[
                         int, dict[tuple[bool, ...], tuple[float, float]]
                     ] = {}
@@ -709,6 +763,7 @@ class VectorizedPPOTrainer:
                         )
 
                     # Iterate validation batches using shared iterator
+                    validation_start = time.perf_counter()
                     test_iter = iter(shared_test_iter)
                     for batch_step in range(num_test_batches):
                         try:
@@ -854,6 +909,7 @@ class VectorizedPPOTrainer:
                     for env_state in env_states:
                         if env_state.stream:
                             env_state.stream.synchronize()
+                    validation_elapsed_seconds = time.perf_counter() - validation_start
 
                     # PERF: Batch GPU→CPU transfer before iterating
                     # Moving tensors to CPU after sync is ~free (data already computed).
@@ -955,6 +1011,14 @@ class VectorizedPPOTrainer:
                         # Lexicographic sort on slot IDs ensures correct upstream/downstream alpha sums.
                         active_slots = sorted(baseline_accs[i].keys())
                         if active_slots:
+                            pair_accs_for_emitter = (
+                                _pair_index_accs_for_active_slots(
+                                    pair_accs[i],
+                                    active_slots,
+                                )
+                                if i in pair_accs
+                                else {}
+                            )
                             emitters[i].on_counterfactual_matrix(
                                 active_slots=active_slots,
                                 baseline_accs=baseline_accs[i],
@@ -962,7 +1026,7 @@ class VectorizedPPOTrainer:
                                 all_disabled_acc=all_disabled_accs.get(
                                     i
                                 ),  # None triggers emitter fallback
-                                pair_accs=pair_accs.get(i, {}),
+                                pair_accs=pair_accs_for_emitter,
                                 solo_accs=solo_on_accs[i],
                             )
 
@@ -973,10 +1037,7 @@ class VectorizedPPOTrainer:
                             all_off_acc = all_disabled_accs.get(i)
                             if all_off_acc is None:
                                 all_off_acc = min(baseline_accs[i].values())
-                            for (idx_a, idx_b), pair_acc in pair_accs[i].items():
-                                # Map indices to slot IDs
-                                slot_a = active_slots[idx_a]
-                                slot_b = active_slots[idx_b]
+                            for (slot_a, slot_b), pair_acc in pair_accs[i].items():
                                 # Solo accuracies MUST exist - active_slots derived from baseline_accs keys
                                 solo_a = baseline_accs[i][slot_a]
                                 solo_b = baseline_accs[i][slot_b]
@@ -1068,6 +1129,7 @@ class VectorizedPPOTrainer:
                                 env_state.counterfactual_helper.compute_contributions_from_results(
                                     slot_ids=active_slots,
                                     results=shapley_results[i],
+                                    compute_time_seconds=validation_elapsed_seconds,
                                     epoch=batch_idx + 1,
                                 )
                             except (KeyError, ZeroDivisionError, ValueError) as e:
@@ -1350,8 +1412,12 @@ class VectorizedPPOTrainer:
                     # per step instead of 1. This was the root cause of 90% throughput drop.
                     op_probs_cpu: np.ndarray | None = None
                     if ops_telemetry_enabled and action_result.op_logits is not None:
-                        # Batch softmax over all envs, single GPU->CPU transfer
-                        op_probs_all = torch.softmax(action_result.op_logits, dim=-1)
+                        # Batch masked distribution over all envs, single GPU->CPU transfer.
+                        op_probs_all = _masked_op_probs_for_telemetry(
+                            op_logits=action_result.op_logits,
+                            op_mask=masks_batch["op"],
+                            probability_floor=agent.probability_floor,
+                        )
                         op_probs_cpu = op_probs_all.cpu().numpy()
 
                     # PERF: Pre-compute per-head confidences AND entropy for telemetry.

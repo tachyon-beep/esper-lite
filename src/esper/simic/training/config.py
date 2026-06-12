@@ -43,6 +43,7 @@ from esper.leyline import (
     DEFAULT_CLIP_RATIO,
     DEFAULT_ENTROPY_COEF,
     DEFAULT_ENTROPY_COEF_MIN,
+    DEFAULT_TRAINING_MAX_GRAD_NORM,
 )
 from esper.simic.rewards import RewardFamily, RewardMode
 
@@ -159,8 +160,9 @@ class TrainingConfig:
 
     # === Gradient Clipping ===
     # Maximum gradient norm for host/seed training.
-    # Default 1.0 is standard for supervised training (PPO policy uses 0.5).
-    max_grad_norm: float = 1.0
+    # Default 1.0 is standard for supervised training; PPO policy clipping
+    # uses a separate default because policy gradients are on a different scale.
+    max_grad_norm: float = DEFAULT_TRAINING_MAX_GRAD_NORM
 
     def __post_init__(self) -> None:
         """Validate and set defaults.
@@ -197,8 +199,8 @@ class TrainingConfig:
     def for_cifar_baseline_stable() -> "TrainingConfig":
         """Conservative configuration for CIFAR tasks (slower, more stable PPO).
 
-        Note: lr=1e-4 was removed after max_grad_norm increased from 1.0 to 5.0.
-        The low LR was compensating for aggressive clipping; now uses default 3e-4.
+        Note: lr=1e-4 was removed after host/seed clipping was separated from
+        PPO policy clipping. The preset now uses default 3e-4.
         """
         return TrainingConfig(
             n_episodes=200,
@@ -315,7 +317,6 @@ class TrainingConfig:
             "value_coef": self.value_coef,
             "value_coef_start": self.value_coef_start,
             "value_warmup_steps": value_warmup_steps,
-            "lstm_hidden_dim": self.lstm_hidden_dim,
             "chunk_length": self.chunk_length,
             "num_envs": self.n_envs,
             "max_steps_per_env": self.max_epochs,
@@ -416,6 +417,8 @@ class TrainingConfig:
 
         if self.entropy_anneal_episodes < 0:
             raise ValueError("entropy_anneal_episodes cannot be negative")
+        if self.value_warmup_batches < 0:
+            raise ValueError("value_warmup_batches cannot be negative")
 
         if self.max_seeds is not None and self.max_seeds < 1:
             raise ValueError("max_seeds must be >= 1 when provided")

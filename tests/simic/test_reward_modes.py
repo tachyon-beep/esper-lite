@@ -649,3 +649,54 @@ def test_basic_plus_mode_creates_drip_state() -> None:
     assert new_drip_state.drip_total > 0
     # Immediate bonus should be 30% of full bonus (drip_fraction=0.7)
     assert fossilize_bonus > 0
+
+
+def test_basic_plus_action_execution_requests_components_for_drip_transport() -> None:
+    """BASIC_PLUS must request components even without telemetry collection."""
+    from esper.leyline import LifecycleOp, SeedStage
+    from esper.simic.rewards.contribution import ContributionRewardConfig, RewardMode
+    from esper.simic.rewards.rewards import compute_reward
+    from esper.simic.rewards.types import ContributionRewardInputs, SeedInfo
+    from esper.simic.training.action_execution import (
+        _reward_components_required_for_state_transport,
+    )
+
+    config = ContributionRewardConfig(reward_mode=RewardMode.BASIC_PLUS)
+    return_components = (
+        False
+        or False
+        or _reward_components_required_for_state_transport(config.reward_mode)
+    )
+
+    inputs = ContributionRewardInputs(
+        action=LifecycleOp.FOSSILIZE,
+        seed_contribution=5.0,
+        val_acc=0.85,
+        seed_info=SeedInfo(
+            stage=SeedStage.HOLDING.value,
+            improvement_since_stage_start=0.5,
+            total_improvement=5.0,
+            epochs_in_stage=5,
+            seed_params=10_000,
+            previous_stage=SeedStage.BLENDING.value,
+            previous_epochs_in_stage=3,
+            seed_age_epochs=20,
+        ),
+        epoch=20,
+        max_epochs=150,
+        total_params=110_000,
+        host_params=100_000,
+        acc_at_germination=0.70,
+        acc_delta=5.0,
+        config=config,
+        return_components=return_components,
+        seed_id="test-seed",
+        slot_id="r0c1",
+    )
+
+    reward, components = compute_reward(inputs)
+
+    assert reward > 0
+    assert components.new_drip_state is not None
+    assert components.new_drip_state.seed_id == "test-seed"
+    assert components.new_drip_state.slot_id == "r0c1"

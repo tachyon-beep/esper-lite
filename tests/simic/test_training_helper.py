@@ -6,6 +6,17 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 
 
+class _LogitReplayModel(nn.Module):
+    """Model that treats inputs as logits while keeping a gradient path."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.dummy = nn.Parameter(torch.zeros(()))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x + self.dummy * 0.0
+
+
 class TestTrainOneEpoch:
     """Tests for _train_one_epoch helper function."""
 
@@ -147,6 +158,71 @@ class TestTrainOneEpoch:
         assert total == 32
         assert running_loss > 0
         assert 0 <= correct <= total
+        assert grad_stats is None
+
+    def test_lm_task_counts_token_accuracy(self):
+        """LM accuracy should count correct token predictions, not always zero."""
+        from esper.simic.training.helpers import _train_one_epoch
+
+        logits = torch.tensor([
+            [[10.0, 0.0, 0.0], [0.0, 10.0, 0.0]],
+            [[0.0, 0.0, 10.0], [10.0, 0.0, 0.0]],
+        ])
+        targets = torch.tensor([
+            [0, 1],
+            [2, 0],
+        ])
+        dataloader = DataLoader(TensorDataset(logits, targets), batch_size=1)
+        model = _LogitReplayModel()
+        criterion = nn.CrossEntropyLoss()
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.0)
+
+        _running_loss, correct, total, grad_stats = _train_one_epoch(
+            model=model,
+            trainloader=dataloader,
+            criterion=criterion,
+            host_optimizer=optimizer,
+            seed_optimizer=None,
+            device="cpu",
+            task_type="lm",
+        )
+
+        assert total == 4
+        assert correct == 4
+        assert grad_stats is None
+
+    def test_loss_accumulation_is_sample_weighted_for_uneven_batches(self):
+        """Returned loss should be the summed per-sample loss, not mean-of-means."""
+        from esper.simic.training.helpers import _train_one_epoch
+
+        logits = torch.tensor([
+            [0.0, 0.0],
+            [0.0, 0.0],
+            [0.0, 1.3862944],
+        ])
+        targets = torch.tensor([0, 0, 0])
+        dataloader = DataLoader(TensorDataset(logits, targets), batch_size=2)
+        model = _LogitReplayModel()
+        criterion = nn.CrossEntropyLoss()
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.0)
+
+        running_loss, _correct, total, grad_stats = _train_one_epoch(
+            model=model,
+            trainloader=dataloader,
+            criterion=criterion,
+            host_optimizer=optimizer,
+            seed_optimizer=None,
+            device="cpu",
+            task_type="classification",
+        )
+
+        expected_loss_sum = (
+            criterion(logits[:2], targets[:2]).item() * 2
+            + criterion(logits[2:], targets[2:]).item()
+        )
+        assert total == 3
+        assert running_loss == pytest.approx(expected_loss_sum)
+        assert running_loss / total == pytest.approx(expected_loss_sum / 3)
         assert grad_stats is None
 
     def test_empty_dataloader(self):

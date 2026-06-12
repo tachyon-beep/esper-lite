@@ -152,6 +152,9 @@ def train_dual_policy_ab(
         raise ValueError(
             f"Need at least 2 groups for A/B testing, got {len(group_configs)}"
         )
+    group_ids = [group_id for group_id, _reward_mode in group_configs]
+    if len(set(group_ids)) != len(group_ids):
+        raise ValueError("Dual A/B group_id values must be unique")
 
     # Auto-detect devices if not provided
     if devices is None:
@@ -262,11 +265,7 @@ def _print_dual_ab_comparison(
 
         final_acc = avg_accs[-1] if avg_accs else 0.0
         best_acc = max(avg_accs) if avg_accs else 0.0
-        # Use rolling_avg_accuracy if available, otherwise avg_accuracy
-        rolling_accs = [
-            cast(float, batch.get("rolling_avg_accuracy", batch.get("avg_accuracy", 0.0)))
-            for batch in history
-        ]
+        rolling_accs = [cast(float, batch["rolling_avg_accuracy"]) for batch in history]
         avg_rolling = sum(rolling_accs) / len(rolling_accs) if rolling_accs else 0.0
 
         group_stats.append({

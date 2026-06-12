@@ -8,9 +8,9 @@ Extracted from vectorized.py to reduce file size and improve clarity.
 
 from __future__ import annotations
 
-import dataclasses
 import logging
-from typing import TYPE_CHECKING, Any, Sequence
+import dataclasses
+from typing import TYPE_CHECKING, Any, Sequence, cast
 
 import torch
 from torch import nn
@@ -91,13 +91,30 @@ class VectorizedEmitter:
     def _emit(self, event: TelemetryEvent) -> None:
         """Emit event with environment context injected.
 
-        Note: This mutates the event in-place. Callers should not reuse event objects
+        Note: This mutates the event wrapper in-place and replaces frozen typed
+        payloads with updated copies. Callers should not reuse event objects
         across multiple emitters. In practice, each emit site creates a fresh
         TelemetryEvent, so this is safe.
         """
         event.env_id = self.env_id  # type: ignore[attr-defined]
         event.device = self.device  # type: ignore[attr-defined]
         event.group_id = self.group_id
+        if event.data is not None and dataclasses.is_dataclass(event.data):
+            payload_fields = {field.name for field in dataclasses.fields(event.data)}
+            payload_updates: dict[str, int | str] = {}
+            if "env_id" in payload_fields:
+                payload_updates["env_id"] = self.env_id
+            if "device" in payload_fields:
+                payload_updates["device"] = self.device
+            if "group_id" in payload_fields:
+                payload_updates["group_id"] = self.group_id
+            if self.episode_idx is not None and "episode_idx" in payload_fields:
+                payload_updates["episode_idx"] = self.episode_idx
+            if payload_updates:
+                event.data = cast(
+                    Any,
+                    dataclasses.replace(cast(Any, event.data), **payload_updates),
+                )
         self.hub.emit(event)
 
     def emit(self, event: TelemetryEvent) -> None:

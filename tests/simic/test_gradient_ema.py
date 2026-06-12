@@ -1,5 +1,7 @@
 """Tests for GradientEMATracker (B7-DRL-01)."""
 
+import math
+
 import pytest
 
 from esper.simic.telemetry import GradientEMATracker
@@ -108,3 +110,39 @@ class TestGradientEMATracker:
         # Fast tracker moved more (0.5 * 10 + 0.5 * 20 = 15.0)
         assert slow_metrics["ema_grad_norm"] == pytest.approx(10.1, rel=1e-6)
         assert fast_metrics["ema_grad_norm"] == pytest.approx(15.0, rel=1e-6)
+
+    def test_update_rejects_nan_grad_norm_without_state_change(self):
+        """NaN gradient norms must fail before corrupting EMA state."""
+        tracker = GradientEMATracker()
+        tracker.update(grad_norm=10.0, grad_health=1.0)
+
+        with pytest.raises(ValueError, match="grad_norm"):
+            tracker.update(grad_norm=float("nan"), grad_health=0.0)
+
+        assert tracker.ema_norm == 10.0
+        assert tracker.ema_health == 1.0
+        assert tracker._update_count == 1
+
+    def test_update_rejects_inf_grad_norm_without_state_change(self):
+        """Inf gradient norms must fail before corrupting EMA state."""
+        tracker = GradientEMATracker()
+        tracker.update(grad_norm=10.0, grad_health=1.0)
+
+        with pytest.raises(ValueError, match="grad_norm"):
+            tracker.update(grad_norm=float("inf"), grad_health=0.0)
+
+        assert tracker.ema_norm == 10.0
+        assert tracker.ema_health == 1.0
+        assert tracker._update_count == 1
+
+    def test_update_rejects_nan_grad_health_without_state_change(self):
+        """NaN health values must fail before corrupting EMA state."""
+        tracker = GradientEMATracker()
+        tracker.update(grad_norm=10.0, grad_health=1.0)
+
+        with pytest.raises(ValueError, match="grad_health"):
+            tracker.update(grad_norm=11.0, grad_health=float("nan"))
+
+        assert math.isfinite(tracker.ema_norm)
+        assert math.isfinite(tracker.ema_health)
+        assert tracker._update_count == 1

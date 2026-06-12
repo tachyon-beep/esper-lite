@@ -1,5 +1,7 @@
 """Tests for ratio explosion diagnostics."""
 
+import inspect
+
 import torch
 
 from esper.simic.telemetry import RatioExplosionDiagnostic
@@ -14,9 +16,7 @@ class TestRatioExplosionDiagnostic:
         ratio = torch.tensor([0.5, 1.0, 1.5, 6.0, 0.05])
         old_log_probs = torch.tensor([-1.0, -0.5, -0.8, -0.3, -2.0])
         new_log_probs = torch.tensor([-1.2, -0.5, -0.4, 1.5, -5.0])
-        states = torch.randn(5, 10)
         actions = torch.tensor([0, 1, 2, 1, 0])
-        action_masks = torch.ones(5, 4)
 
         diag = RatioExplosionDiagnostic.from_batch(
             ratio=ratio,
@@ -25,12 +25,17 @@ class TestRatioExplosionDiagnostic:
             actions=actions,
             max_threshold=5.0,
             min_threshold=0.1,
-            states=states,
-            action_masks=action_masks,
         )
 
         assert len(diag.worst_ratio_indices) == 2  # 6.0 > 5.0, 0.05 < 0.1
         assert diag.logit_diff_max > 0
+
+    def test_from_batch_signature_has_no_reserved_dead_parameters(self):
+        """from_batch should not accept unused states/action_masks parameters."""
+        parameters = inspect.signature(RatioExplosionDiagnostic.from_batch).parameters
+
+        assert "states" not in parameters
+        assert "action_masks" not in parameters
 
     def test_to_dict_serializable(self):
         """Diagnostic can be serialized to dict."""

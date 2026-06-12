@@ -224,6 +224,8 @@ class PPOAgent:
             probability_floor if probability_floor is not None
             else dict(PROBABILITY_FLOOR_PER_HEAD)
         )
+        if total_train_steps is not None and total_train_steps <= 0:
+            raise ValueError(f"total_train_steps must be positive, got {total_train_steps}")
         self.total_train_steps = total_train_steps if total_train_steps is not None else 1_000_000
         self.value_coef = value_coef
         # Value warmup: start at 10% of target by default, ramp up over warmup_steps
@@ -418,6 +420,7 @@ class PPOAgent:
         Returns:
             Schedule factor [0.5, 1.5]
         """
+        progress = min(1.0, max(0.0, progress))
         if progress < 0.25:
             # Early training: 1.5x boost to establish exploration
             return 1.5
@@ -1378,7 +1381,36 @@ class PPOAgent:
         Raises:
             RuntimeError: If checkpoint architecture is incompatible
         """
-        checkpoint = torch.load(path, map_location=device, weights_only=True)
+        checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+        return cls.load_from_checkpoint_dict(
+            checkpoint,
+            device=device,
+            compile_mode=compile_mode,
+        )
+
+    @classmethod
+    def load_from_checkpoint_dict(
+        cls,
+        checkpoint: dict[str, Any],
+        *,
+        device: str = "cuda:0",
+        compile_mode: str | None = None,
+        expected_slot_config: SlotConfig | None = None,
+    ) -> "PPOAgent":
+        """Load agent from an already materialized checkpoint dictionary.
+
+        Args:
+            checkpoint: Checkpoint dictionary loaded on CPU.
+            device: Device to place the reconstructed agent on.
+            compile_mode: Override checkpoint's torch.compile mode.
+            expected_slot_config: Runtime slot config that must match the checkpoint.
+
+        Returns:
+            PPOAgent with restored weights and configuration.
+
+        Raises:
+            RuntimeError: If checkpoint architecture is incompatible.
+        """
 
         # Required checkpoint fields - fail fast if missing (no backwards compat)
         try:
@@ -1388,6 +1420,7 @@ class PPOAgent:
             architecture = checkpoint['architecture']
             config = checkpoint['config']
             train_steps = checkpoint['train_steps']
+            aux_training_step = checkpoint['aux_training_step']
         except KeyError as e:
             raise RuntimeError(
                 f"Incompatible checkpoint format: missing required field {e}. "
@@ -1404,9 +1437,6 @@ class PPOAgent:
                 f"This checkpoint was saved with an older version (before v2). "
                 f"Please retrain the model to create a compatible checkpoint."
             ) from e
-
-        # Extract aux_training_step (defaults to 0 for new field - not backwards compat, just sensible default)
-        aux_training_step = checkpoint.get('aux_training_step', 0)
 
         # M6: Free checkpoint memory immediately after extracting needed data.
         # Checkpoint holds a full copy of all model weights; waiting for GC to
@@ -1427,7 +1457,17 @@ class PPOAgent:
                 "Incompatible checkpoint: architecture.slot_ids is required. "
                 "Please retrain the model to create a compatible checkpoint."
             )
-        slot_config = SlotConfig(slot_ids=tuple(architecture['slot_ids']))
+        checkpoint_slot_ids = tuple(architecture['slot_ids'])
+        if (
+            expected_slot_config is not None
+            and checkpoint_slot_ids != expected_slot_config.slot_ids
+        ):
+            raise RuntimeError(
+                "Checkpoint slot_ids do not match runtime slot_ids: "
+                f"checkpoint={checkpoint_slot_ids}, "
+                f"runtime={expected_slot_config.slot_ids}"
+            )
+        slot_config = SlotConfig(slot_ids=checkpoint_slot_ids)
 
         # === Pre-load validation ===
         expected_num_slots = slot_config.num_slots
@@ -1472,10 +1512,13 @@ class PPOAgent:
         )
 
         # === Create agent with restored config ===
-        # Remove config params that are now part of PolicyBundle or removed
-        # P2 FIX: Also filter 'n_epochs' - removed dead parameter (old checkpoints may have it)
-        agent_config = {k: v for k, v in config.items()
-                       if k not in ('lstm_hidden_dim', 'n_epochs')}
+        if "n_epochs" in config:
+            raise RuntimeError(
+                "Incompatible checkpoint: config.n_epochs is no longer supported. "
+                "Please retrain the model to create a compatible checkpoint."
+            )
+        # Remove config params that are now part of PolicyBundle.
+        agent_config = {k: v for k, v in config.items() if k != 'lstm_hidden_dim'}
         agent = cls(
             policy=policy,
             slot_config=slot_config,

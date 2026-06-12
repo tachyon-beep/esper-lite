@@ -137,6 +137,41 @@ class TestPPOCheckpointValidation:
         with pytest.raises(RuntimeError, match="architecture.slot_ids is required"):
             PPOAgent.load(tmp_path / "corrupted.pt", device="cpu")
 
+    def test_load_from_checkpoint_dict_rejects_expected_slot_id_mismatch_before_policy_creation(
+        self,
+        monkeypatch,
+    ):
+        """Runtime slot IDs must match checkpoint slot IDs before policy creation."""
+        import esper.tamiyo.policy.factory as policy_factory
+
+        def fail_create_policy(*args, **kwargs):
+            raise AssertionError("slot mismatch should fail before policy creation")
+
+        monkeypatch.setattr(policy_factory, "create_policy", fail_create_policy)
+
+        checkpoint = {
+            "checkpoint_version": CHECKPOINT_VERSION,
+            "network_state_dict": {},
+            "optimizer_state_dict": {},
+            "value_normalizer_state_dict": {},
+            "train_steps": 0,
+            "aux_training_step": 0,
+            "config": {
+                "compile_mode": "off",
+            },
+            "architecture": {
+                "slot_ids": ("r0c0",),
+                "state_dim": 1,
+            },
+        }
+
+        with pytest.raises(RuntimeError, match="checkpoint=.*r0c0.*runtime=.*r0c1"):
+            PPOAgent.load_from_checkpoint_dict(
+                checkpoint,
+                device="cpu",
+                expected_slot_config=SlotConfig(slot_ids=("r0c1",)),
+            )
+
 
 class TestPPOCheckpointNoBackwardsCompatibility:
     """Verify legacy checkpoints are rejected (No Legacy Code Policy)."""
@@ -186,6 +221,46 @@ class TestPPOCheckpointNoBackwardsCompatibility:
         # Should fail with version mismatch error
         with pytest.raises(RuntimeError, match="Checkpoint version mismatch"):
             PPOAgent.load(tmp_path / "wrong_version.pt", device="cpu")
+
+    def test_missing_aux_training_step_fails_fast(self, tmp_path: Path):
+        """Checkpoints must include aux_training_step rather than defaulting to zero."""
+        slot_config = SlotConfig.default()
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=get_feature_size(slot_config),
+            slot_config=slot_config,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(policy=policy, device="cpu")
+        agent.save(tmp_path / "agent.pt")
+
+        checkpoint = torch.load(tmp_path / "agent.pt", weights_only=False)
+        del checkpoint["aux_training_step"]
+        torch.save(checkpoint, tmp_path / "missing_aux_step.pt")
+
+        with pytest.raises(RuntimeError, match="aux_training_step"):
+            PPOAgent.load(tmp_path / "missing_aux_step.pt", device="cpu")
+
+    def test_checkpoint_with_removed_n_epochs_fails_fast(self, tmp_path: Path):
+        """Old checkpoint config containing removed n_epochs is incompatible."""
+        slot_config = SlotConfig.default()
+        policy = create_policy(
+            policy_type="lstm",
+            state_dim=get_feature_size(slot_config),
+            slot_config=slot_config,
+            device="cpu",
+            compile_mode="off",
+        )
+        agent = PPOAgent(policy=policy, device="cpu")
+        agent.save(tmp_path / "agent.pt")
+
+        checkpoint = torch.load(tmp_path / "agent.pt", weights_only=False)
+        checkpoint["config"]["n_epochs"] = 4
+        torch.save(checkpoint, tmp_path / "removed_n_epochs.pt")
+
+        with pytest.raises(RuntimeError, match="config.n_epochs"):
+            PPOAgent.load(tmp_path / "removed_n_epochs.pt", device="cpu")
 
 
 class TestPPOCheckpointVersion:

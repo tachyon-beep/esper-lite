@@ -5,6 +5,7 @@ import inspect
 import pytest
 
 from esper.simic.rewards import RewardFamily, RewardMode
+from esper.simic.agent import PPOAgent
 from esper.simic.training import TrainingConfig
 from esper.simic.training.vectorized import train_ppo_vectorized
 
@@ -46,6 +47,16 @@ class TestTrainingConfigDefaults:
         config = TrainingConfig(max_epochs=25, chunk_length=25)
         assert config.chunk_length == 25
 
+    def test_negative_value_warmup_batches_rejected(self):
+        """Negative critic warmup should fail instead of disabling warmup."""
+        with pytest.raises(ValueError, match="value_warmup_batches"):
+            TrainingConfig(value_warmup_batches=-1)
+
+    def test_zero_value_warmup_batches_disables_warmup(self):
+        """Zero remains the explicit switch for disabling critic warmup."""
+        config = TrainingConfig(value_warmup_batches=0)
+        assert config.to_ppo_kwargs()["value_warmup_steps"] == 0
+
 
 class TestTrainingConfigPresets:
     """Tests for TrainingConfig preset helpers."""
@@ -70,7 +81,7 @@ class TestTrainingConfigConversion:
     """Tests for TrainingConfig to kwargs conversion methods."""
 
     def test_lstm_config_to_ppo_kwargs(self):
-        """LSTM params should flow to PPOAgent kwargs."""
+        """LSTM sizing is policy construction input, not a PPOAgent kwarg."""
         config = TrainingConfig(
             lstm_hidden_dim=256,
             max_epochs=25,  # chunk_length must match max_epochs
@@ -80,7 +91,7 @@ class TestTrainingConfigConversion:
             ppo_updates_per_batch=2,
         )
         kwargs = config.to_ppo_kwargs()
-        assert kwargs["lstm_hidden_dim"] == 256
+        assert "lstm_hidden_dim" not in kwargs
         assert kwargs["chunk_length"] == 25
         # ceil(episodes / n_envs) * updates_per_batch
         assert kwargs["entropy_anneal_steps"] == 4
@@ -111,6 +122,16 @@ class TestTrainingConfigConversion:
 
         config = TrainingConfig()
         kwargs = set(config.to_train_kwargs())
+
+        assert kwargs <= allowed
+
+    def test_to_ppo_kwargs_is_subset_of_ppo_agent_signature(self):
+        """Config → PPO kwargs must stay in sync with PPOAgent constructor."""
+        signature = inspect.signature(PPOAgent.__init__)
+        allowed = set(signature.parameters)
+
+        config = TrainingConfig()
+        kwargs = set(config.to_ppo_kwargs())
 
         assert kwargs <= allowed
 

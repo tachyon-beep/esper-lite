@@ -94,6 +94,11 @@ _HEAD_OP_IDX = _HEAD_NAME_TO_IDX["op"]
 _logger = logging.getLogger(__name__)
 
 
+def _reward_components_required_for_state_transport(reward_mode: RewardMode) -> bool:
+    """Reward modes that persist state via RewardComponentsTelemetry."""
+    return reward_mode in (RewardMode.ESCROW, RewardMode.BASIC_PLUS)
+
+
 class ResolveTargetSlot(Protocol):
     def __call__(
         self,
@@ -511,8 +516,8 @@ def execute_actions(
                 else None
             )
             seed_id = seed_state.seed_id if seed_state is not None else None
-            force_reward_components = (
-                env_reward_configs[env_idx].reward_mode == RewardMode.ESCROW
+            force_reward_components = _reward_components_required_for_state_transport(
+                env_reward_configs[env_idx].reward_mode
             )
             return_components = (
                 emit_reward_components_event
@@ -575,7 +580,10 @@ def execute_actions(
                     reward_components.host_baseline_acc = baseline_accs[env_idx][
                         target_slot
                     ]
-                if force_reward_components and reward_components is not None:
+                if (
+                    env_reward_configs[env_idx].reward_mode == RewardMode.ESCROW
+                    and reward_components is not None
+                ):
                     env_state.escrow_credit[target_slot] = (
                         reward_components.escrow_credit_next
                     )
@@ -843,11 +851,13 @@ def execute_actions(
                     ]
                     curve_action_obj = AlphaCurveAction(alpha_curve_action)
                     curve = curve_action_obj.to_curve()
+                    steepness = curve_action_obj.to_steepness()
 
                     # Schedule prune: force alpha to 0 with requested speed/curve.
                     action_success = slot_obj.schedule_prune(
                         steps=speed_steps,
                         curve=curve,
+                        steepness=steepness,
                         initiator="policy",
                     )
                     if action_success:
@@ -858,10 +868,12 @@ def execute_actions(
                     ]
                     curve_action_obj = AlphaCurveAction(alpha_curve_action)
                     curve = curve_action_obj.to_curve()
+                    steepness = curve_action_obj.to_steepness()
                     action_success = slot_obj.set_alpha_target(
                         alpha_target=alpha_target,
                         steps=speed_steps,
                         curve=curve,
+                        steepness=steepness,
                         alpha_algorithm=alpha_algorithm,
                         initiator="policy",
                     )
@@ -1270,6 +1282,16 @@ def execute_actions(
                     and cast(SeedSlotProtocol, model.seed_slots[sid]).alpha > 0
                 ]
                 if active_slot_ids:
+                    shapley_epoch = batch_idx + 1
+                    has_exact_results = (
+                        env_state.counterfactual_helper.has_precomputed_matrix_for(
+                            active_slot_ids,
+                            epoch=shapley_epoch,
+                        )
+                    )
+                    if has_exact_results:
+                        continue
+
                     cached_baselines = baseline_accs[env_idx]
 
                     def eval_fn(alpha_settings: dict[str, float]) -> tuple[float, float]:
@@ -1286,7 +1308,7 @@ def execute_actions(
                             )
                         if disabled:
                             return env_state.val_loss * 1.2, sum(
-                                cached_baselines.get(s, env_state.val_acc)
+                                cached_baselines[s]
                                 for s in disabled
                             ) / len(disabled)
                         return env_state.val_loss, env_state.val_acc
@@ -1295,7 +1317,7 @@ def execute_actions(
                         env_state.counterfactual_helper.compute_contributions(
                             slot_ids=active_slot_ids,
                             evaluate_fn=eval_fn,
-                            epoch=batch_idx + 1,
+                            epoch=shapley_epoch,
                         )
                     except (KeyError, ZeroDivisionError, ValueError) as e:
                         # HIGH-01 fix: Narrow to expected failures in Shapley computation

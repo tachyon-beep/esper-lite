@@ -1,5 +1,7 @@
 """Tests for reward component telemetry."""
 
+import pytest
+
 
 from esper.leyline import LifecycleOp, SeedStage
 from esper.simic.rewards import RewardComponentsTelemetry
@@ -99,15 +101,39 @@ class TestRewardComponentsTelemetry:
         assert restored.timing_discount == original.timing_discount
         assert restored.timing_discount == 0.65
 
-    def test_timing_discount_default_preserved_on_missing(self):
-        """D3: Missing timing_discount in old data defaults to 1.0."""
-        # Create full telemetry, serialize, then remove timing_discount
-        # to simulate pre-D3 data that doesn't have the field
-        original = RewardComponentsTelemetry(total_reward=1.0, bounded_attribution=0.5)
-        old_data = original.to_dict()
-        del old_data["timing_discount"]  # Simulate pre-D3 data
+    def test_from_dict_requires_d2_d3_and_drip_fields(self):
+        """Missing current reward component fields should fail loudly."""
+        data = RewardComponentsTelemetry(
+            total_reward=1.0,
+            bounded_attribution=0.5,
+        ).to_dict()
+        del data["timing_discount"]
 
-        restored = RewardComponentsTelemetry.from_dict(old_data)
+        with pytest.raises(KeyError, match="timing_discount"):
+            RewardComponentsTelemetry.from_dict(data)
 
-        # Should default to 1.0 (no discount)
-        assert restored.timing_discount == 1.0
+    def test_from_dict_parses_false_action_success_string(self):
+        """String boolean telemetry from intermediate exports preserves False."""
+        data = RewardComponentsTelemetry(action_success=True).to_dict()
+        data["action_success"] = "False"
+
+        restored = RewardComponentsTelemetry.from_dict(data)
+
+        assert restored.action_success is False
+
+    def test_from_dict_parses_true_action_success_string(self):
+        """String boolean telemetry from intermediate exports preserves True."""
+        data = RewardComponentsTelemetry(action_success=False).to_dict()
+        data["action_success"] = "True"
+
+        restored = RewardComponentsTelemetry.from_dict(data)
+
+        assert restored.action_success is True
+
+    def test_from_dict_rejects_invalid_action_success_string(self):
+        """Malformed action_success strings should fail instead of guessing."""
+        data = RewardComponentsTelemetry(action_success=True).to_dict()
+        data["action_success"] = "truthy"
+
+        with pytest.raises(ValueError, match="action_success"):
+            RewardComponentsTelemetry.from_dict(data)

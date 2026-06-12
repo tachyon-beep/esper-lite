@@ -120,7 +120,7 @@ def augment_cifar10_batch(
     if padding > 0:
         pad_value = _cifar10_pad_value(inputs.device, inputs.dtype)
 
-        # FRAGMENTATION FIX: Reuse pre-allocated buffer when available.
+        # Reuse pre-allocated buffer when available.
         # This reduces allocation count from ~5 per batch to ~1-2 (gather outputs).
         if buffers is not None:
             buffers.ensure_capacity(batch_size, channels, height, width, inputs.dtype)
@@ -390,7 +390,7 @@ def _ensure_cifar10_cached(
         device, data_root, augment_mode=augment_mode, seed=seed
     )
 
-    # MEMORY LEAK FIX: Before creating a precompute cache entry, evict any existing
+    # Before creating a precompute cache entry, evict any existing
     # precompute entries for this device. This prevents unbounded cache growth when
     # training with different seeds (each seed would otherwise create a ~750MB entry).
     if augment_mode == "precompute" and cache_key not in _GPU_DATASET_CACHE:

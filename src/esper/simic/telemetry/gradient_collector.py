@@ -8,16 +8,17 @@ during comparison and training loops.
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
+import math
 from typing import Iterator, TypedDict
 
 import torch
 import torch.nn as nn
 
-from esper.leyline import DEFAULT_MAX_GRAD_NORM
+from esper.leyline import DEFAULT_TRAINING_MAX_GRAD_NORM
 
-# H14: PPO-tuned gradient thresholds
-# These defaults are calibrated for PPO with gradient clipping at DEFAULT_MAX_GRAD_NORM (0.5).
-# Collection happens BEFORE clipping, so we detect:
+# H14: host/seed training gradient thresholds
+# These defaults are calibrated for host/seed training with gradient clipping
+# at DEFAULT_TRAINING_MAX_GRAD_NORM. Collection happens BEFORE clipping, so we detect:
 # - Vanishing: gradients too small to provide learning signal
 # - Exploding: gradients that will be heavily clipped (10x clip norm)
 #
@@ -26,7 +27,7 @@ from esper.leyline import DEFAULT_MAX_GRAD_NORM
 # - This is informative (heavy clipping) but not catastrophic
 # - True explosions (100x+) indicate numerical instability
 DEFAULT_VANISHING_THRESHOLD = 1e-7  # Very small but non-zero
-DEFAULT_EXPLODING_THRESHOLD = 10.0 * DEFAULT_MAX_GRAD_NORM  # = 5.0 with default clip
+DEFAULT_EXPLODING_THRESHOLD = 10.0 * DEFAULT_TRAINING_MAX_GRAD_NORM
 
 
 class GradientHealthStats(TypedDict):
@@ -110,7 +111,7 @@ class SeedGradientCollector:
             vanishing_threshold: Gradient norm below this is considered vanishing.
                 Default: 1e-7 (very small but non-zero).
             exploding_threshold: Gradient norm above this is considered exploding.
-                Default: 10x clip norm (5.0 with DEFAULT_MAX_GRAD_NORM=0.5).
+                Default: 10x training clip norm.
                 At this level, gradients will be scaled down 10x by clipping.
         """
         self.vanishing_threshold = vanishing_threshold
@@ -185,7 +186,9 @@ class SeedGradientCollector:
             '_total_squared_norm': total_squared_norm,
             '_all_norms': all_norms,
             '_n_vanishing': (all_norms < self.vanishing_threshold).sum(),
-            '_n_exploding': (all_norms > self.exploding_threshold).sum(),
+            '_n_exploding': (
+                (all_norms > self.exploding_threshold) | ~torch.isfinite(all_norms)
+            ).sum(),
         }
 
 
@@ -230,15 +233,19 @@ def materialize_grad_stats(async_stats: dict[str, bool | int | float | torch.Ten
     # NOTE: Previous code divided by n_grads, producing values incomparable to
     # clipping thresholds. Global L2 = sqrt(sum(||g_i||²)) without division.
     gradient_norm = total_squared_norm ** 0.5
+    norm_is_finite = math.isfinite(gradient_norm)
 
     # Compute health score (0-1, higher is healthier)
     vanishing_ratio = n_vanishing / n_grads
     exploding_ratio = n_exploding / n_grads
 
-    health = 1.0
-    health -= vanishing_ratio * 0.5  # Penalize vanishing
-    health -= exploding_ratio * 0.8  # Penalize exploding more
-    health = max(0.0, min(1.0, health))
+    if norm_is_finite:
+        health = 1.0
+        health -= vanishing_ratio * 0.5  # Penalize vanishing
+        health -= exploding_ratio * 0.8  # Penalize exploding more
+        health = max(0.0, min(1.0, health))
+    else:
+        health = 0.0
 
     return {
         'gradient_norm': gradient_norm,
@@ -309,7 +316,9 @@ def collect_seed_gradients(
     min_norm_t = all_norms.min()
     max_norm_t = all_norms.max()
     n_vanishing_t = (all_norms < vanishing_threshold).sum()
-    n_exploding_t = (all_norms > exploding_threshold).sum()
+    n_exploding_t = (
+        (all_norms > exploding_threshold) | ~torch.isfinite(all_norms)
+    ).sum()
 
     # C6 FIX: Vectorized quality checks to avoid torch.compile graph breaks.
     # Trade-off: allocates O(total_params) temporary tensor, but eliminates
@@ -344,6 +353,7 @@ def collect_seed_gradients(
     # NOTE: Previous code divided by n_grads, producing values incomparable to
     # clipping thresholds. Global L2 = sqrt(sum(||g_i||²)) without division.
     gradient_norm = total_squared_val ** 0.5
+    norm_is_finite = math.isfinite(gradient_norm)
     n_vanishing = int(n_vanishing)
     n_exploding = int(n_exploding)
     zero_fraction = zero_count / max(total_elements, 1)
@@ -356,10 +366,13 @@ def collect_seed_gradients(
     # Health score
     vanishing_ratio = n_vanishing / n_grads
     exploding_ratio = n_exploding / n_grads
-    health = 1.0
-    health -= vanishing_ratio * 0.5
-    health -= exploding_ratio * 0.8
-    health = max(0.0, min(1.0, health))
+    if norm_is_finite:
+        health = 1.0
+        health -= vanishing_ratio * 0.5
+        health -= exploding_ratio * 0.8
+        health = max(0.0, min(1.0, health))
+    else:
+        health = 0.0
 
     if return_enhanced:
         return GradientHealthMetrics(

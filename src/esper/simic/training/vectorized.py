@@ -802,10 +802,25 @@ def train_ppo_vectorized(
     ]
     batch_emitter = emitters[0]
 
+    # TUI mode (Sanctum/Overwatch) is optimized for debuggability. Disable
+    # torch.compile here to avoid TorchInductor failures that are difficult
+    # to recover from in an interactive session.
+    # Determine effective compile mode: quiet_analytics disables compilation
+    # unless force_compile is set (for testing compilation with TUI).
+    if force_compile:
+        effective_compile_mode = compile_mode
+    else:
+        effective_compile_mode = compile_mode if not quiet_analytics else "off"
+
     # Create or resume PPO agent
     if resume_path:
-        checkpoint = torch.load(resume_path, map_location=device, weights_only=True)
-        agent = PPOAgent.load(resume_path, device=device)
+        checkpoint = torch.load(resume_path, map_location="cpu", weights_only=True)
+        agent = PPOAgent.load_from_checkpoint_dict(
+            checkpoint,
+            device=device,
+            expected_slot_config=slot_config,
+            compile_mode=effective_compile_mode,
+        )
 
         # Restore observation normalizer state
         metadata = checkpoint["metadata"]
@@ -850,16 +865,6 @@ def train_ppo_vectorized(
             )
         )
     else:
-        # TUI mode (Sanctum/Overwatch) is optimized for debuggability. Disable
-        # torch.compile here to avoid TorchInductor failures that are difficult
-        # to recover from in an interactive session.
-        # Determine effective compile mode: quiet_analytics disables compilation
-        # unless force_compile is set (for testing compilation with TUI).
-        if force_compile:
-            effective_compile_mode = compile_mode
-        else:
-            effective_compile_mode = compile_mode if not quiet_analytics else "off"
-
         # Create policy via Tamiyo factory
         # IMPORTANT: Pass actual slot_config to ensure action heads/masks align
         # with environment slot ordering (critical for non-default slot layouts)

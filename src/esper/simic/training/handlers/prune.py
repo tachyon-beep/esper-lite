@@ -144,11 +144,13 @@ def execute_prune(
     speed_steps = ALPHA_SPEED_TO_STEPS[AlphaSpeedAction(params.alpha_speed_idx)]
     curve_action = AlphaCurveAction(params.alpha_curve_idx)
     curve = curve_action.to_curve()
+    steepness = curve_action.to_steepness()
 
     # Schedule the prune (alpha decay to 0)
     success = ctx.slot.schedule_prune(
         steps=speed_steps,
         curve=curve,
+        steepness=steepness,
         initiator="policy",
     )
 
@@ -166,6 +168,7 @@ def execute_prune(
         telemetry={
             "speed_steps": speed_steps,
             "curve": curve.name if curve else None,
+            "steepness": steepness,
             "pre_stage": ctx.seed_state.stage.name if ctx.seed_state else None,
             "seed_age_epochs": seed_info.seed_age_epochs if seed_info else 0,
         },

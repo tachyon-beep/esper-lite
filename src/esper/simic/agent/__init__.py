@@ -21,7 +21,6 @@ from .ppo_agent import (
 )
 
 from .types import (
-    GradientStats,
     PPOUpdateMetrics,
     HeadLogProbs,
     HeadEntropies,
@@ -38,7 +37,6 @@ __all__ = [
     "CHECKPOINT_VERSION",
     "PPOAgent",
     # Types
-    "GradientStats",
     "PPOUpdateMetrics",
     "HeadLogProbs",
     "HeadEntropies",

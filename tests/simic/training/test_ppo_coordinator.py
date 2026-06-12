@@ -5,14 +5,24 @@ from __future__ import annotations
 import logging
 from types import SimpleNamespace
 
+import pytest
 import torch
 
+from esper.leyline import EpisodeOutcome
 from esper.simic.training.ppo_coordinator import PPOCoordinator, PPOCoordinatorConfig
 
 
 class _StubBuffer:
+    def __init__(self, length: int = 5) -> None:
+        self.length = length
+        self.penalty_calls: list[tuple[int, float]] = []
+
     def __len__(self) -> int:
-        return 5
+        return self.length
+
+    def mark_terminal_with_penalty(self, env_id: int, penalty: float) -> bool:
+        self.penalty_calls.append((env_id, penalty))
+        return True
 
 
 class _StubAgent:
@@ -31,7 +41,7 @@ def _make_coordinator(*, run_ppo_updates_fn):
             amp_enabled=False,
             resolved_amp_dtype=None,
         ),
-        reward_normalizer=SimpleNamespace(),
+        reward_normalizer=SimpleNamespace(normalize_only=lambda reward: reward),
         anomaly_detector=SimpleNamespace(),
         env_reward_configs=[SimpleNamespace(reward_mode=SimpleNamespace(value="basic"))],
         reward_family_enum=SimpleNamespace(value="dense"),
@@ -72,6 +82,84 @@ def test_run_update_treats_epoch0_kl_abort_as_skipped_update():
     assert ppo_update_time_ms is not None
 
 
+def _make_outcome(env_id: int, episode_idx: int, reward: float) -> EpisodeOutcome:
+    return EpisodeOutcome(
+        env_id=env_id,
+        episode_idx=episode_idx,
+        final_accuracy=0.5,
+        param_ratio=1.0,
+        num_fossilized=0,
+        num_contributing_fossilized=0,
+        episode_reward=reward,
+        stability_score=1.0,
+        reward_mode="basic",
+    )
+
+
+def test_handle_rollbacks_corrects_latest_episode_outcome_for_env():
+    """Rollback correction must update the most recent outcome for the env."""
+    coordinator = _make_coordinator(run_ppo_updates_fn=lambda **_kwargs: {})
+    env_states = [
+        SimpleNamespace(
+            governor=SimpleNamespace(get_punishment_reward=lambda: -10.0),
+            episode_rewards=[1.0, 2.0],
+        )
+    ]
+    env_total_rewards = [3.0]
+    episode_history = [
+        SimpleNamespace(env_id=0, episode_reward=100.0),
+        SimpleNamespace(env_id=0, episode_reward=3.0),
+    ]
+    episode_outcomes = [
+        _make_outcome(env_id=0, episode_idx=1, reward=100.0),
+        _make_outcome(env_id=0, episode_idx=2, reward=3.0),
+    ]
+
+    rollback_envs = coordinator.handle_rollbacks(
+        env_states=env_states,
+        env_rollback_occurred=[True],
+        env_total_rewards=env_total_rewards,
+        episode_history=episode_history,
+        episode_outcomes=episode_outcomes,
+    )
+
+    assert rollback_envs == [0]
+    assert coordinator.agent.buffer.penalty_calls == [(0, -10.0)]
+    assert env_total_rewards == [-9.0]
+    assert episode_history[0].episode_reward == 100.0
+    assert episode_history[1].episode_reward == -9.0
+    assert episode_outcomes[0].episode_reward == 100.0
+    assert episode_outcomes[1].episode_reward == -9.0
+
+
+def test_run_update_reports_rollout_total_steps_before_buffer_clear():
+    """rollout_total_steps should reflect the rollout size before PPO clears it."""
+
+    coordinator = None
+
+    def _run_ppo_updates_fn(**_kwargs):
+        assert coordinator is not None
+        coordinator.agent.buffer.length = 0
+        return {
+            "ppo_update_performed": True,
+            "pre_clip_grad_norm": 1.0,
+        }
+
+    coordinator = _make_coordinator(run_ppo_updates_fn=_run_ppo_updates_fn)
+
+    metrics, update_skipped, ppo_update_time_ms = coordinator.run_update(
+        raw_states_for_normalizer_update=[torch.ones(1, 3)],
+        obs_normalizer=SimpleNamespace(update=lambda _tensor: None),
+        envs_this_batch=2,
+        throughput_step_time_ms_sum=10.0,
+        throughput_dataloader_wait_ms_sum=1.0,
+    )
+
+    assert update_skipped is False
+    assert metrics["rollout_total_steps"] == 5
+    assert ppo_update_time_ms is not None
+
+
 def test_check_finiteness_gate_ignores_non_finiteness_skip_without_gradient_step():
     """KL early-stop before backward should not increment the finiteness failure counter."""
 
@@ -88,3 +176,19 @@ def test_check_finiteness_gate_ignores_non_finiteness_skip_without_gradient_step
 
     assert consecutive_failures == 0
     assert should_continue is True
+
+
+@pytest.mark.parametrize("bad_norm", [float("nan"), float("inf"), float("-inf")])
+def test_check_gradient_drift_rejects_non_finite_norm_without_poisoning_tracker(bad_norm):
+    """Non-finite grad norms must fail before entering EMA state."""
+    from esper.simic.telemetry import GradientEMATracker
+
+    coordinator = _make_coordinator(run_ppo_updates_fn=lambda **_kwargs: {})
+    tracker = GradientEMATracker()
+    tracker.update(grad_norm=10.0, grad_health=1.0)
+    state_before = tracker.state_dict()
+
+    with pytest.raises(ValueError, match="ppo_grad_norm must be finite"):
+        coordinator.check_gradient_drift(tracker, bad_norm)
+
+    assert tracker.state_dict() == state_before

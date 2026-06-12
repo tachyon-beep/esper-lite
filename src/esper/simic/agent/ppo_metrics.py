@@ -75,6 +75,9 @@ class PPOUpdateMetricsBuilder:
         aggregated_result["finiteness_gate_skip_count"] = len(self.finiteness_failures)
 
         for k, v in self.metrics.items():
+            if k == "finiteness_gate_failures":
+                aggregated_result[k] = v  # type: ignore[literal-required]
+                continue
             if not v:
                 if k in ("op_q_values", "op_valid_mask"):
                     raise ValueError(f"Missing required PPO metric '{k}'.")
@@ -88,9 +91,6 @@ class PPOUpdateMetricsBuilder:
             if k == "op_valid_mask":
                 op_mask = v[0]
                 aggregated_result[k] = tuple(bool(x) for x in op_mask.tolist())  # type: ignore[literal-required]
-                continue
-            if k == "finiteness_gate_failures":
-                aggregated_result[k] = v  # type: ignore[literal-required]
                 continue
             if k == "early_stop_epoch":
                 aggregated_result[k] = int(v[0].item())  # type: ignore[literal-required]

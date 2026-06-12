@@ -123,7 +123,8 @@ def compute_observation_stats(
         obs_tensor: Raw observation tensor [batch_size, obs_dim]
         normalized_obs_tensor: Normalized+clipped tensor fed to policy [batch_size, obs_dim]
         normalizer_mean: Current running mean from normalizer (optional)
-        normalizer_var: Current running variance from normalizer (optional)
+        normalizer_var: Current running variance from normalizer (optional).
+            Compared against the normalizer's initial variance of 1.0.
         initial_normalizer_mean: Initial running mean for drift calculation (optional)
         clip: Normalizer clip value (used for saturation/clipping indicators)
 
@@ -171,13 +172,10 @@ def compute_observation_stats(
     total_elements = batch_size * obs_dim
 
     # Replace NaN/Inf with 0 for stats computation
-    # Check via .any() which is faster than sum > 0 for sparse masks
-    has_bad_values = nan_mask.any() or inf_mask.any()
-    if has_bad_values:
-        clean_obs = obs_tensor.clone()
-        clean_obs[nan_mask | inf_mask] = 0.0
-    else:
-        clean_obs = obs_tensor
+    # Keep the decision tensor-native; branching on nan_mask.any() / inf_mask.any()
+    # would synchronize CUDA tensors with the host on every telemetry sample.
+    zero = torch.zeros((), device=obs_tensor.device, dtype=obs_tensor.dtype)
+    clean_obs = torch.where(nan_mask | inf_mask, zero, obs_tensor)
 
     # Group stats (Obs V3 layout)
     host = clean_obs[:, :_OBS_V3_HOST_FEATURE_SIZE]
@@ -208,13 +206,20 @@ def compute_observation_stats(
     near_clip_pct_t = (abs_norm >= (0.9 * clip)).float().mean()
     clip_pct_t = (abs_norm >= (clip - 1e-6)).float().mean()
 
-    # Normalization drift (how much the running mean has shifted)
+    # Normalization drift (how much the running mean/std has shifted)
+    drift_parts = []
     if (
         normalizer_mean is not None
         and initial_normalizer_mean is not None
         and normalizer_mean.shape == initial_normalizer_mean.shape
     ):
-        drift_t = (normalizer_mean - initial_normalizer_mean).abs().mean()
+        drift_parts.append((normalizer_mean - initial_normalizer_mean).abs().mean())
+    if normalizer_var is not None:
+        current_std = torch.sqrt(normalizer_var.clamp_min(0.0))
+        initial_std = torch.ones_like(current_std)
+        drift_parts.append((current_std - initial_std).abs().mean())
+    if drift_parts:
+        drift_t = torch.stack(drift_parts).sum()
     else:
         drift_t = torch.tensor(0.0, device=obs_tensor.device)
 

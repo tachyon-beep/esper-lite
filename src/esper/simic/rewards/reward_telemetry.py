@@ -13,6 +13,19 @@ if TYPE_CHECKING:
     from esper.simic.rewards.contribution import FossilizedSeedDripState
 
 
+def _parse_bool_field(value: float | int | str | bool | None, field_name: str) -> bool:
+    """Parse serialized boolean telemetry without truthiness coercion."""
+    if type(value) is bool:
+        return value
+    if type(value) is str:
+        normalized = value.lower()
+        if normalized == "true":
+            return True
+        if normalized == "false":
+            return False
+    raise ValueError(f"{field_name} must be bool, 'True', or 'False'; got {value!r}")
+
+
 @dataclass(slots=True)
 class RewardComponentsTelemetry:
     """Breakdown of reward components for debugging.
@@ -229,7 +242,7 @@ class RewardComponentsTelemetry:
             num_fossilized_seeds=int(data["num_fossilized_seeds"]),  # type: ignore[arg-type]
             num_contributing_fossilized=int(data["num_contributing_fossilized"]),  # type: ignore[arg-type]
             action_name=str(data["action_name"]),
-            action_success=bool(data["action_success"]),
+            action_success=_parse_bool_field(data["action_success"], "action_success"),
             seed_stage=int(data["seed_stage"]) if data["seed_stage"] is not None else None,
             epoch=int(data["epoch"]),  # type: ignore[arg-type]
             val_acc=float(data["val_acc"]),  # type: ignore[arg-type]
@@ -238,17 +251,17 @@ class RewardComponentsTelemetry:
             growth_ratio=float(data["growth_ratio"]),  # type: ignore[arg-type]
             total_reward=float(data["total_reward"]),  # type: ignore[arg-type]
             # D2: Capacity economics
-            occupancy_rent=float(data.get("occupancy_rent", 0.0)),  # type: ignore[arg-type]
-            fossilized_rent=float(data.get("fossilized_rent", 0.0)),  # type: ignore[arg-type]
-            first_germinate_bonus=float(data.get("first_germinate_bonus", 0.0)),  # type: ignore[arg-type]
-            n_active_seeds=int(data.get("n_active_seeds", 0)),  # type: ignore[arg-type]
+            occupancy_rent=float(data["occupancy_rent"]),  # type: ignore[arg-type]
+            fossilized_rent=float(data["fossilized_rent"]),  # type: ignore[arg-type]
+            first_germinate_bonus=float(data["first_germinate_bonus"]),  # type: ignore[arg-type]
+            n_active_seeds=int(data["n_active_seeds"]),  # type: ignore[arg-type]
             # D3: Anti-timing-gaming
-            timing_discount=float(data.get("timing_discount", 1.0)),  # type: ignore[arg-type]
+            timing_discount=float(data["timing_discount"]),  # type: ignore[arg-type]
             # Drip reward (BASIC_PLUS mode)
-            drip_this_epoch=float(data.get("drip_this_epoch", 0.0)),  # type: ignore[arg-type]
-            drip_immediate_bonus=float(data.get("drip_immediate_bonus", 0.0)),  # type: ignore[arg-type]
-            drip_deferred_total=float(data.get("drip_deferred_total", 0.0)),  # type: ignore[arg-type]
-            num_drip_sources=int(data.get("num_drip_sources", 0)),  # type: ignore[arg-type]
+            drip_this_epoch=float(data["drip_this_epoch"]),  # type: ignore[arg-type]
+            drip_immediate_bonus=float(data["drip_immediate_bonus"]),  # type: ignore[arg-type]
+            drip_deferred_total=float(data["drip_deferred_total"]),  # type: ignore[arg-type]
+            num_drip_sources=int(data["num_drip_sources"]),  # type: ignore[arg-type]
         )
 
 
