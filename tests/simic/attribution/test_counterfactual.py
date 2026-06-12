@@ -3,6 +3,8 @@
 B5-CR-01 regression tests: verify seeded RNG produces reproducible results.
 """
 
+import pytest
+
 from esper.simic.attribution.counterfactual import (
     CounterfactualConfig,
     CounterfactualEngine,
@@ -299,6 +301,92 @@ class TestZeroSeedEdgeCases:
         # With single seed, Shapley = marginal contribution = 0.7 - 0.5 = 0.2
         assert "r0c0" in shapley
         assert abs(shapley["r0c0"].mean - 0.2) < 0.01
+
+
+class TestCounterfactualInteractions:
+    """Regression coverage for interaction term validity."""
+
+    def test_compute_matrix_propagates_evaluation_failure(self):
+        """Failed required evaluations should not return a partial matrix."""
+        engine = CounterfactualEngine()
+
+        def failing_evaluate(_alpha_settings: dict[str, float]) -> tuple[float, float]:
+            raise RuntimeError("required config failed")
+
+        with pytest.raises(RuntimeError, match="required config failed"):
+            engine.compute_matrix(["r0c0", "r0c1"], failing_evaluate)
+
+    def test_interaction_terms_reject_partial_matrix(self):
+        """Missing required coalitions should not be substituted with 0.0."""
+        engine = CounterfactualEngine()
+        matrix = CounterfactualMatrix(epoch=1, strategy_used="full_factorial")
+        matrix.configs.append(
+            CounterfactualResult(
+                config=(False, False),
+                slot_ids=("r0c0", "r0c1"),
+                val_accuracy=0.50,
+                val_loss=0.50,
+            )
+        )
+        matrix.configs.append(
+            CounterfactualResult(
+                config=(True, True),
+                slot_ids=("r0c0", "r0c1"),
+                val_accuracy=0.80,
+                val_loss=0.20,
+            )
+        )
+
+        with pytest.raises(ValueError, match="missing required configs"):
+            engine.compute_interaction_terms(matrix)
+
+
+class TestCounterfactualHelperShapley:
+    """Regression coverage for helper-level Shapley processing."""
+
+    def test_single_slot_results_compute_shapley(self):
+        """Single-slot full-factorial results should produce Shapley telemetry data."""
+        from esper.leyline import TelemetryEvent
+        from esper.simic.attribution.counterfactual_helper import CounterfactualHelper
+
+        events: list[TelemetryEvent] = []
+        helper = CounterfactualHelper(seed=42, emit_callback=events.append)
+
+        contributions = helper.compute_contributions_from_results(
+            slot_ids=["r0c0"],
+            results={
+                (False,): (0.5, 0.50),
+                (True,): (0.3, 0.70),
+            },
+            epoch=7,
+        )
+
+        assert contributions["r0c0"].contribution == pytest.approx(0.20)
+        assert contributions["r0c0"].shapley_mean == pytest.approx(0.20)
+        assert contributions["r0c0"].shapley_std == pytest.approx(0.0)
+        assert len(events) == 1
+        assert events[0].data.kind == "shapley_computed"
+        assert events[0].data.shapley_values["r0c0"]["mean"] == pytest.approx(0.20)
+
+    def test_precomputed_matrix_marker_matches_slot_ids_and_epoch(self):
+        """Episode-end code needs to know when exact fused results already landed."""
+        from esper.simic.attribution.counterfactual_helper import CounterfactualHelper
+
+        helper = CounterfactualHelper(seed=42, emit_callback=None)
+        helper.compute_contributions_from_results(
+            slot_ids=["r0c0", "r0c1"],
+            results={
+                (False, False): (0.5, 0.50),
+                (True, False): (0.4, 0.60),
+                (False, True): (0.4, 0.65),
+                (True, True): (0.3, 0.75),
+            },
+            epoch=7,
+        )
+
+        assert helper.has_precomputed_matrix_for(["r0c0", "r0c1"], epoch=7)
+        assert not helper.has_precomputed_matrix_for(["r0c1", "r0c0"], epoch=7)
+        assert not helper.has_precomputed_matrix_for(["r0c0", "r0c1"], epoch=8)
 
 
 class TestCounterfactualHelperReset:

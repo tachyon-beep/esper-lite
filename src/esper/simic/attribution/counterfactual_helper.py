@@ -139,8 +139,8 @@ class CounterfactualHelper:
                 contribution=contribution,
             )
 
-        # Add Shapley values if we have enough configs
-        if len(matrix.configs) > len(slot_ids) + 1:
+        # Add Shapley values when the matrix contains at least off/on states.
+        if len(matrix.configs) >= 2:
             shapley_values = self.engine.compute_shapley_values(matrix)
             for slot_id, estimate in shapley_values.items():
                 if slot_id in results:
@@ -170,6 +170,23 @@ class CounterfactualHelper:
     def last_matrix(self) -> CounterfactualMatrix | None:
         """Get the last computed counterfactual matrix."""
         return self._last_matrix
+
+    def has_precomputed_matrix_for(
+        self,
+        slot_ids: list[str],
+        *,
+        epoch: int,
+    ) -> bool:
+        """Return whether exact precomputed results already exist for this episode."""
+        if self._last_matrix is None:
+            return False
+        if self._last_matrix.source != "precomputed":
+            return False
+        if self._last_matrix.epoch != epoch:
+            return False
+        if not self._last_matrix.configs:
+            return False
+        return self._last_matrix.configs[0].slot_ids == tuple(slot_ids)
 
     def reset(self) -> None:
         """Reset cached state for new episode.

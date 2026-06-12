@@ -89,6 +89,7 @@ class CounterfactualMatrix:
     epoch: int = 0
     configs: list[CounterfactualResult] = field(default_factory=list)
     strategy_used: str = ""
+    source: Literal["evaluated", "precomputed"] = "evaluated"
     compute_time_seconds: float = 0.0
     failed_configs: int = 0
 
@@ -254,18 +255,7 @@ class CounterfactualEngine:
                 for slot_id, enabled in zip(slot_ids, config_tuple)
             }
 
-            # Evaluate
-            try:
-                val_loss, val_accuracy = evaluate_fn(alpha_settings)
-            except Exception as e:
-                matrix.failed_configs += 1
-                if matrix.failed_configs <= 5:  # Throttle logs
-                    _logger.warning(
-                        "Counterfactual evaluation failed for config %s: %s",
-                        config_tuple,
-                        e,
-                    )
-                continue  # Skip failed evaluations
+            val_loss, val_accuracy = evaluate_fn(alpha_settings)
 
             result = CounterfactualResult(
                 config=config_tuple,
@@ -287,7 +277,7 @@ class CounterfactualEngine:
         """Compute matrix from pre-calculated results (e.g. fused validation)."""
         n_seeds = len(slot_ids)
         strategy = self.config.effective_strategy(n_seeds)
-        matrix = CounterfactualMatrix(strategy_used=strategy)
+        matrix = CounterfactualMatrix(strategy_used=strategy, source="precomputed")
 
         # We assume the results passed in match what generate_configs would request,
         # or at least contain the subsets we care about.
@@ -499,22 +489,41 @@ class CounterfactualEngine:
 
         # f(empty)
         empty = tuple(False for _ in range(n))
-        f_empty = lookup.get(empty, 0.0)
+        if empty not in lookup:
+            raise ValueError(
+                f"Counterfactual matrix missing required configs for interactions: {empty}"
+            )
+        f_empty = lookup[empty]
 
         interactions = {}
         for i in range(n):
             for j in range(i + 1, n):
                 # f({i})
                 config_i = tuple(k == i for k in range(n))
-                f_i = lookup.get(config_i, f_empty)
+                if config_i not in lookup:
+                    raise ValueError(
+                        "Counterfactual matrix missing required configs for "
+                        f"interactions: {config_i}"
+                    )
+                f_i = lookup[config_i]
 
                 # f({j})
                 config_j = tuple(k == j for k in range(n))
-                f_j = lookup.get(config_j, f_empty)
+                if config_j not in lookup:
+                    raise ValueError(
+                        "Counterfactual matrix missing required configs for "
+                        f"interactions: {config_j}"
+                    )
+                f_j = lookup[config_j]
 
                 # f({i,j})
                 config_ij = tuple(k == i or k == j for k in range(n))
-                f_ij = lookup.get(config_ij, f_empty)
+                if config_ij not in lookup:
+                    raise ValueError(
+                        "Counterfactual matrix missing required configs for "
+                        f"interactions: {config_ij}"
+                    )
+                f_ij = lookup[config_ij]
 
                 # Interaction term
                 interaction = f_ij - f_i - f_j + f_empty
