@@ -249,10 +249,6 @@ allow_hits:
     owner: "john"
     reason: "Rollout buffer implementation, simic-internal"
 
-  - key: "src/esper/simic/agent/types.py:typeddict:GradientStats"
-    owner: "john"
-    reason: "PPO update gradient stats schema"
-
   - key: "src/esper/simic/agent/types.py:typeddict:HeadGradientNorms"
     owner: "john"
     reason: "Per-head gradient norms schema"

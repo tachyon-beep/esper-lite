@@ -1420,6 +1420,7 @@ class PPOAgent:
             architecture = checkpoint['architecture']
             config = checkpoint['config']
             train_steps = checkpoint['train_steps']
+            aux_training_step = checkpoint['aux_training_step']
         except KeyError as e:
             raise RuntimeError(
                 f"Incompatible checkpoint format: missing required field {e}. "
@@ -1436,9 +1437,6 @@ class PPOAgent:
                 f"This checkpoint was saved with an older version (before v2). "
                 f"Please retrain the model to create a compatible checkpoint."
             ) from e
-
-        # Extract aux_training_step (defaults to 0 for new field - not backwards compat, just sensible default)
-        aux_training_step = checkpoint.get('aux_training_step', 0)
 
         # M6: Free checkpoint memory immediately after extracting needed data.
         # Checkpoint holds a full copy of all model weights; waiting for GC to
@@ -1514,10 +1512,13 @@ class PPOAgent:
         )
 
         # === Create agent with restored config ===
-        # Remove config params that are now part of PolicyBundle or removed
-        # P2 FIX: Also filter 'n_epochs' - removed dead parameter (old checkpoints may have it)
-        agent_config = {k: v for k, v in config.items()
-                       if k not in ('lstm_hidden_dim', 'n_epochs')}
+        if "n_epochs" in config:
+            raise RuntimeError(
+                "Incompatible checkpoint: config.n_epochs is no longer supported. "
+                "Please retrain the model to create a compatible checkpoint."
+            )
+        # Remove config params that are now part of PolicyBundle.
+        agent_config = {k: v for k, v in config.items() if k != 'lstm_hidden_dim'}
         agent = cls(
             policy=policy,
             slot_config=slot_config,

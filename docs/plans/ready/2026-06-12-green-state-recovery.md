@@ -6,7 +6,7 @@ id: green-state-recovery-2026-06-12
 title: Green State Recovery Program
 type: in-progress
 created: 2026-06-12
-updated: 2026-06-12
+updated: 2026-06-13
 owner: Codex
 
 urgency: critical
@@ -29,12 +29,13 @@ blocks:
 status_notes: >
   PR #52 was made green, accepted, and merged as the new baseline on 2026-06-12.
   Main CI passed on merge commit cdff9c43. Recovery PR #72 landed the initial
-  P0 Filigree bug drain and project Filigree install removal at merge commit
-  514e04a6. P1 stability batch 1 is locally complete: six high-priority
-  PPO/telemetry bugs are closed, focused tests passed, broad static gates
-  passed, and the broad Simic sweep passed with known local CUDA/data-fetch
-  exclusions.
-percent_complete: 94
+  P0 Filigree bug drain and project Filigree install removal. Follow-up PRs
+  #78 and #79 merged telemetry and training-control correctness fixes. The
+  repository is green on CI, but not yet steady. The first P2 contract batch
+  is locally fixed and verified against checkpoint, PPO metrics, type, lint,
+  full pytest, and Wardline gates. Filigree tracker closure is pending an
+  available update surface after removing the UV tool install.
+percent_complete: 80
 
 reviewed_by:
   - reviewer: python-engineering
@@ -83,6 +84,46 @@ Return the project to a steady state:
   - `property-tests`
   - `unit-and-integration-tests`
   - `e2e-smoke-tests`
+- PR #78 (`codex/p1-telemetry-correctness`) was merged into `main` on
+  2026-06-12 at merge commit `9cd6284cdcbe266ddaefec3925e7620222d16960`.
+- PR #78 verification run `27418134962` passed:
+  - `lint`
+  - `typecheck`
+  - `property-tests`
+  - `unit-and-integration-tests`
+  - `e2e-smoke-tests`
+- PR #79 (`codex/p1-training-correctness`) was merged into `main` on
+  2026-06-12 at merge commit `e66517dee8abeabb8e6855b09d0efee1915a68e3`.
+- PR #79 verification run `27420206496` passed:
+  - `lint`
+  - `typecheck`
+  - `property-tests`
+  - `unit-and-integration-tests`
+  - `e2e-smoke-tests`
+- Local full-suite verification after PR #79: `uv run pytest` passed
+  `4681 passed, 10 skipped, 69 deselected`.
+- Local P2 contract batch verification on 2026-06-13 passed:
+  - `uv run pytest tests/simic/test_ppo_checkpoint.py tests/simic/agent/test_ppo_finiteness_gate.py tests/simic/agent/test_ppo_metrics_contract.py -q`
+  - `uv run python scripts/lint_defensive_patterns.py`
+  - `uv run python scripts/lint_leyline_types.py`
+  - `uv run python scripts/lint_gpu_sync.py`
+  - `uv run ruff check src/ tests/`
+  - `MYPYPATH=src uv run mypy -p esper`
+  - `uv run pytest` (`4686 passed, 10 skipped, 69 deselected`)
+  - `wardline scan . --fail-on ERROR` (`0 active`)
+- Filigree was removed from the UV tool install on 2026-06-13:
+  `uv tool uninstall filigree` removed `filigree`, `filigree-dashboard`,
+  `filigree-mcp`, `filigree-scanner-claude`, and `filigree-scanner-codex`.
+  `uv tool list` now retains only Legis, Loomweave, Loomweave plugins, and
+  Wardline from the local standard tooling set.
+- Filigree on 2026-06-13 reports `22 ready`, `0 blocked`, and `0 wip`.
+  The ready queue includes 19 P2 bugs and 2 P3 bugs plus the future release
+  placeholder.
+- Loomweave MCP is reachable, but the active MCP server still reports no
+  `.weft/loomweave/loomweave.db`. The index exists in `/home/john/esper-lite`
+  and is absent in the clean recovery worktree, so code archaeology must fall
+  back to shell search until the server is reconnected or the index is copied
+  into the worktree.
 - The working tree also contains unrelated dirty skill/config files. These must not be reverted or silently included in the PR #52 stabilization commit.
 
 ## Definition Of Green
@@ -106,6 +147,10 @@ The project is steady only when:
 - `main` contains the selected baseline.
 - `main` or the merge commit has a passing required CI run.
 - Critical P0 issues are fixed, closed, or explicitly reclassified with evidence.
+- P1 correctness issues found during recovery are fixed, closed, or explicitly
+  reclassified with evidence.
+- Remaining P2/P3 issues are either fixed and closed, bundled into a documented
+  follow-up release plan, or intentionally reclassified with evidence.
 - Open PRs have an explicit disposition.
 - No known task-scope defects are hidden as scratch observations.
 
@@ -301,6 +346,61 @@ The excluded files are CUDA/data-dependent smoke tests:
 - `tests/simic/test_record_stream_fix.py`
 - `tests/simic/training/test_dual_ab.py`
 
+### I. Drain P1/P2 Contract Bugs
+
+Owner: primary agent with specialist subagents as needed.
+
+Scope:
+
+- Continue from the current Filigree ready queue after PR #79.
+- Prefer coherent batches that share verification gates and code ownership:
+  checkpoint/resume contracts, telemetry schema contracts, PPO/tensor
+  performance contracts, and action-handler parameter contracts.
+- Keep each batch small enough to review and merge independently.
+- Do not mix dependency-security work with training-correctness fixes unless a
+  dependency update is directly required by a fix.
+
+Acceptance:
+
+- Use `filigree start-work <id> --advance --assignee Codex` before editing.
+- Every claimed issue has a focused regression test or an explicit stale-issue
+  closure comment backed by current source/tests.
+- Full local static gates pass for any batch that changes shared contracts:
+
+```bash
+uv run python scripts/lint_defensive_patterns.py
+uv run python scripts/lint_leyline_types.py
+uv run python scripts/lint_gpu_sync.py
+uv run ruff check src/ tests/
+MYPYPATH=src uv run mypy -p esper
+uv run pytest
+```
+
+- GitHub PR checks pass before merge.
+- Filigree issues move `fixing -> verifying -> closed` only after merged code
+  or explicit current-state verification.
+
+Current queue snapshot, 2026-06-13:
+
+- P2 ready bugs: 19
+- P3 ready bugs: 2
+- Blocked: 0
+- WIP: 0
+
+Current local batch:
+
+1. `esper-lite-aa2a27` checkpoint load fallback/legacy filtering.
+2. `esper-lite-dcb298` PPO update metrics TypedDict drift.
+3. `esper-lite-860e79` finiteness gate failure list type preservation.
+
+These all affect typed training/checkpoint/telemetry contracts and should be
+verified together with checkpoint, PPO metric, defensive-pattern, type, and
+full default pytest gates.
+
+Status: fixed and locally verified on branch `codex/p2-steady-state-drain`.
+Tracker closure remains pending because the Filigree UV tool install was
+removed and no writable Filigree MCP tool is currently exposed in this session.
+
 ## Execution Log
 
 - 2026-06-12: Program opened. PR #52 identified as critical path. Sidecar subagents dispatched for `origin/main` baseline verification and open PR classification.
@@ -309,3 +409,13 @@ The excluded files are CUDA/data-dependent smoke tests:
 - 2026-06-12: Main post-merge Test Suite `27411344212` passed.
 - 2026-06-12: Closed initial six P0 bugs: `esper-lite-41841f`, `esper-lite-7078b7`, `esper-lite-52ee59`, `esper-lite-b765c2`, `esper-lite-30e631`, and `esper-lite-102ff8`.
 - 2026-06-12: Final local gates passed except CUDA/data-dependent smoke files blocked by local SSL dataset fetch.
+- 2026-06-12: PR #78 merged telemetry correctness fixes and closed
+  `esper-lite-0aa641`, `esper-lite-2ac173`, and `esper-lite-d612b3`.
+- 2026-06-12: PR #79 merged training-control correctness fixes and closed
+  `esper-lite-afaf1a`, `esper-lite-df2f30`, and `esper-lite-6cc6b6`.
+- 2026-06-13: Recovery plan refreshed for the remaining P2/P3 contract drain.
+- 2026-06-13: Removed Filigree from the UV tool install; Legis, Loomweave, and
+  Wardline remain installed as UV tools.
+- 2026-06-13: Locally fixed and verified P2 contract batch
+  `esper-lite-aa2a27`, `esper-lite-dcb298`, and `esper-lite-860e79`; tracker
+  closure is pending a writable Filigree surface.
