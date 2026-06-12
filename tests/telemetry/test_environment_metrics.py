@@ -11,6 +11,7 @@ These tests cover:
 - TELE-650: env_status (FULLY WIRED)
 """
 
+import inspect
 from dataclasses import fields
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
@@ -325,6 +326,13 @@ class TestTELE603NormalizationDrift:
         )
 
         assert obs_stats.normalization_drift == pytest.approx(1.0)
+
+    def test_observation_stats_does_not_branch_on_tensor_masks(self) -> None:
+        """NaN/Inf cleanup must not use CUDA tensor truthiness checks."""
+        source = inspect.getsource(compute_observation_stats)
+
+        assert "nan_mask.any() or inf_mask.any()" not in source
+        assert "if has_bad_values" not in source
 
 
 # =============================================================================

@@ -30,13 +30,12 @@ status_notes: >
   PR #52 was made green, accepted, and merged as the new baseline on 2026-06-12.
   Main CI passed on merge commit cdff9c43. Recovery PR #72 landed the initial
   P0 Filigree bug drain and project Filigree install removal. Follow-up PRs
-  #78 and #79 merged telemetry and training-control correctness fixes. PR #80
-  merged the first P2 contract batch, and PR #81 merged the second P2
-  action/reward contract batch. The repository is green on CI, but not yet
-  steady. The P2 counterfactual telemetry batch is locally fixed and verified
-  against focused tests, custom guardrails, type, lint, full pytest, and
-  Wardline gates.
-percent_complete: 84
+  #78 and #79 merged telemetry and training-control correctness fixes. PRs
+  #80, #81, and #82 merged the first three P2 batches. The repository is green
+  on CI, but not yet steady. The P2 GPU-sync batch is locally fixed and
+  verified against focused tests, custom guardrails, type, lint, full pytest,
+  and Wardline gates.
+percent_complete: 86
 
 reviewed_by:
   - reviewer: python-engineering
@@ -153,13 +152,33 @@ Return the project to a steady state:
   - `MYPYPATH=src uv run mypy -p esper`
   - `uv run pytest` (`4694 passed, 10 skipped, 69 deselected`)
   - `wardline scan . --fail-on ERROR` (`0 active`)
+- PR #82 (`codex/p2-counterfactual-telemetry`) was merged into `main` on
+  2026-06-12 at merge commit `68398d4a447f2051eb423e3ebc07cc85802125ef`.
+- PR #82 verification run `27424591784` passed:
+  - `lint`
+  - `typecheck`
+  - `property-tests`
+  - `unit-and-integration-tests`
+  - `e2e-smoke-tests`
+- The P2 counterfactual telemetry bugs were fixed and closed:
+  - `esper-lite-65d044` counterfactual matrices persisted compute time as zero
+  - `esper-lite-d9edae` simple ablation treated missing data as neutral baseline
+- Local P2 GPU-sync batch verification on 2026-06-13 passed:
+  - `uv run pytest tests/simic/agent/test_rollout_buffer_unit.py tests/telemetry/test_environment_metrics.py -q`
+  - `uv run python scripts/lint_gpu_sync.py`
+  - `uv run python scripts/lint_leyline_types.py`
+  - `uv run python scripts/lint_defensive_patterns.py`
+  - `uv run ruff check src/ tests/`
+  - `MYPYPATH=src uv run mypy -p esper`
+  - `uv run pytest` (`4697 passed, 10 skipped, 69 deselected`)
+  - `wardline scan . --fail-on ERROR` (`0 active`)
 - Filigree was removed from the UV tool install on 2026-06-13:
   `uv tool uninstall filigree` removed `filigree`, `filigree-dashboard`,
   `filigree-mcp`, `filigree-scanner-claude`, and `filigree-scanner-codex`.
   `uv tool list` now retains only Legis, Loomweave, Loomweave plugins, and
   Wardline from the local standard tooling set.
-- Filigree on 2026-06-13 reports `15 ready`, `0 blocked`, and `2 wip`
-  after claiming `esper-lite-65d044` and `esper-lite-d9edae`.
+- Filigree on 2026-06-13 reports `13 ready`, `0 blocked`, and `2 wip`
+  after claiming `esper-lite-1eeab1` and `esper-lite-52d4c3`.
 - Loomweave MCP is visible, but the active MCP server still reports no
   `.weft/loomweave/loomweave.db` even after a worktree analysis pass. The
   available MCP session needs a reconnect before graph queries can be used.

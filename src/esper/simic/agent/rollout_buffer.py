@@ -469,12 +469,13 @@ class TamiyoRolloutBuffer:
         rollouts). Would provide ~num_envs× speedup for this function.
         """
         # PERF: Pre-allocate zero tensor once (avoid O(steps * envs) allocations)
-        zero_tensor = torch.tensor(0.0, device=self.device)
+        zero_tensor = torch.tensor(0.0, device=self.device, dtype=self.values.dtype)
 
         # PERF: Pre-compute constants as tensors to avoid Python/tensor type mixing
         # in hot loop. This prevents type promotion overhead and ensures consistent dtype.
         gamma_t = torch.tensor(gamma, device=self.device, dtype=self.values.dtype)
         gamma_lambda_t = torch.tensor(gamma * gae_lambda, device=self.device, dtype=self.values.dtype)
+        one_tensor = torch.tensor(1.0, device=self.device, dtype=self.values.dtype)
 
         for env_id in range(self.num_envs):
             num_steps = self.step_counts[env_id]
@@ -504,23 +505,23 @@ class TamiyoRolloutBuffer:
             for t in reversed(range(num_steps)):
                 if t == num_steps - 1:
                     # Last step: use bootstrap value if truncated
-                    if truncated[t]:
-                        next_value = bootstrap_values[t]
-                        # Truncation is NOT a true terminal - the episode was cut off
-                        # by time limit. We MUST use next_non_terminal=1.0 so the
-                        # bootstrap value contributes to delta and GAE propagates.
-                        next_non_terminal = 1.0
-                    else:
-                        next_value = zero_tensor
-                        next_non_terminal = 1.0 - float(dones[t])
+                    next_value = torch.where(truncated[t], bootstrap_values[t], zero_tensor)
+                    # Truncation is NOT a true terminal - the episode was cut off
+                    # by time limit. We MUST use next_non_terminal=1.0 so the
+                    # bootstrap value contributes to delta and GAE propagates.
+                    next_non_terminal = torch.where(
+                        truncated[t],
+                        one_tensor,
+                        one_tensor - dones[t].to(dtype=self.values.dtype),
+                    )
                 else:
                     next_value = values[t + 1]
                     # For non-terminal steps, only reset on TRUE terminal (not truncation)
-                    next_non_terminal = 1.0 - float(dones[t] and not truncated[t])
+                    true_terminal = dones[t] & ~truncated[t]
+                    next_non_terminal = one_tensor - true_terminal.to(dtype=self.values.dtype)
 
                 # Reset GAE at true terminal (not truncation)
-                if dones[t] and not truncated[t]:
-                    last_gae = zero_tensor.clone()
+                last_gae = last_gae * next_non_terminal
 
                 delta = rewards[t] + gamma_t * next_value * next_non_terminal - values[t]
                 last_gae = delta + gamma_lambda_t * next_non_terminal * last_gae
