@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import duckdb
+import pytest
 
 from esper.karn.mcp.views import create_views, VIEW_DEFINITIONS
 
@@ -598,3 +599,19 @@ def test_batch_epochs_and_trends_views_parse_payloads(tmp_path):
         "SELECT event_type, batch_idx, rolling_delta FROM trends"
     ).fetchone()
     assert trend_row == ("PLATEAU_DETECTED", 4, 0.001)
+
+
+def test_create_views_escapes_telemetry_dir_sql_literal(tmp_path):
+    injected_table = "injected_by_path"
+    telemetry_dir = tmp_path / f"telemetry'; CREATE TABLE {injected_table} AS SELECT 1; --"
+    run_dir = telemetry_dir / "run-a"
+    run_dir.mkdir(parents=True)
+    events_file = run_dir / "events.jsonl"
+    events_file.write_text('{"event_id": "evt-1", "event_type": "TEST"}\n')
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(telemetry_dir))
+
+    assert conn.execute("SELECT event_id FROM raw_events").fetchone() == ("evt-1",)
+    with pytest.raises(duckdb.CatalogException):
+        conn.execute(f"SELECT * FROM {injected_table}")
