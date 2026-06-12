@@ -76,8 +76,8 @@ def compute_ratio_metrics(
             mask = head_masks[key]
             log_ratio_clamped = log_ratios_for_joint[key]
             kl_per_step = (torch.exp(log_ratio_clamped) - 1) - log_ratio_clamped
-            n_valid = mask.sum().float().clamp(min=1)
-            head_kl = (kl_per_step * mask).sum() / n_valid
+            n_valid = mask.sum().float()
+            head_kl = (kl_per_step * mask).sum() / n_valid.clamp(min=1)
             causal_weight = n_valid / total_timesteps
             weighted_kl_sum = weighted_kl_sum + causal_weight * head_kl
             total_weight = total_weight + causal_weight
@@ -320,12 +320,14 @@ def compute_losses(
         mean_entropy: dict[str, torch.Tensor] = {}
         for key in entropy:
             # Use availability mask for entropy measurement
-            mask = entropy_masks.get(key, head_masks[key])
+            mask = entropy_masks[key]
             if actor_weight is not None:
                 effective_mask = mask * actor_weight
             else:
                 effective_mask = mask
-            n_available = effective_mask.sum().clamp(min=1)
+            n_available = effective_mask.sum()
+            if n_available < 1:
+                continue
             mean_entropy[key] = (entropy[key] * effective_mask).sum() / n_available
 
         # entropy_floor_penalty_coef is ALWAYS dict - caller normalizes at init time

@@ -1,6 +1,6 @@
 # Esper Plan Tracker
 
-**Last Updated:** 2026-06-12 (baseline green; initial P0 recovery complete)
+**Last Updated:** 2026-06-12 (baseline green; P1 stability batch 1 active)
 **Purpose:** Rack-and-stack all plans and concepts for prioritization and dependency tracking.
 
 ---
@@ -14,9 +14,11 @@ merged into `main` as the new baseline at merge commit `cdff9c43`; post-merge
 main CI passed. The active plan is
 `docs/plans/ready/2026-06-12-green-state-recovery.md`.
 
-Current operating rule: finish broad local gates and open PR disposition before
-starting feature work. Security/dependency PRs remain next after the recovery
-branch is landed.
+Current operating rule: drain high-risk correctness bugs before feature work.
+Recovery PR #72 is merged. The active follow-up is
+`docs/plans/ready/2026-06-12-p1-stability-batch-1.md`.
+Security/dependency PRs remain next after the first P1 stability batch unless a
+fresh critical correctness bug appears.
 
 ### Post-Hiatus Audit (2026-02-21)
 
@@ -30,14 +32,15 @@ op twice independently — once in `forward()` for value computation, once in `g
 the stored action. These ops frequently diverge, corrupting advantage estimates. Blocks Phase 7.
 
 ### Current Focus Areas
-1. **Green State Recovery** - 🔴 CRITICAL! Baseline green; recovery branch needs final gates and PR disposition
-2. **P0 Filigree Bug Drain** - ✅ Initial six P0s fixed and closed
-3. **Op/Value Mismatch** - 🔴 CRITICAL! Fix double-sampling in factored_lstm.py
-4. **Reward Efficiency Experiment** - Infrastructure complete, experiment never run
-5. **Phase3-TinyStories** - 85% IMPLEMENTED, needs validation runs
-6. **Drip Reward Implementation** - ~70% done, needs integration completion
-7. **Telemetry Domain Separation** - ~30% done
-8. **Blueprint Compiler** - 0% (correctly deferred until entropy confirmed stable)
+1. **Green State Recovery** - 🔴 CRITICAL! Baseline green; post-baseline P1 stability drain active
+2. **P1 Stability Batch 1** - 🔴 CRITICAL! Six high-risk PPO/telemetry correctness bugs claimed
+3. **P0 Filigree Bug Drain** - ✅ Initial six P0s fixed and closed
+4. **Op/Value Mismatch** - 🔴 CRITICAL! Fix double-sampling in factored_lstm.py
+5. **Reward Efficiency Experiment** - Infrastructure complete, experiment never run
+6. **Phase3-TinyStories** - 85% IMPLEMENTED, needs validation runs
+7. **Drip Reward Implementation** - ~70% done, needs integration completion
+8. **Telemetry Domain Separation** - ~30% done
+9. **Blueprint Compiler** - 0% (correctly deferred until entropy confirmed stable)
 
 ### Critical Path (Updated)
 ```
@@ -67,6 +70,7 @@ the stored action. These ops frequently diverge, corrupting advantage estimates.
 | ID | Title | Type | Urgency | Complexity | Risk | Status |
 |----|-------|------|---------|------------|------|--------|
 | green-state-recovery-2026-06-12 | Green State Recovery Program | in-progress | 🔴 critical | M | high | Active: final gates and PR disposition after green baseline + P0 fixes |
+| p1-stability-batch-1 | PPO/Telemetry Stability Batch 1 | in-progress | 🔴 critical | M | high | Active: entropy/KL accounting, rollout_total_steps, non-finite gradient drift |
 | filigree-p0-drain | Critical Filigree P0 Bug Drain | completed-batch | 🔴 critical | L | high | Initial six P0s fixed, verified, and closed |
 | op-value-mismatch | Q(s,op) Double-Sampling Bug | investigation | 🔴 critical | M | high | Diagnosed 2025-12-31, blocks Phase 7. See `docs/bugs/investigations/` |
 

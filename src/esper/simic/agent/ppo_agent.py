@@ -224,6 +224,8 @@ class PPOAgent:
             probability_floor if probability_floor is not None
             else dict(PROBABILITY_FLOOR_PER_HEAD)
         )
+        if total_train_steps is not None and total_train_steps <= 0:
+            raise ValueError(f"total_train_steps must be positive, got {total_train_steps}")
         self.total_train_steps = total_train_steps if total_train_steps is not None else 1_000_000
         self.value_coef = value_coef
         # Value warmup: start at 10% of target by default, ramp up over warmup_steps
@@ -418,6 +420,7 @@ class PPOAgent:
         Returns:
             Schedule factor [0.5, 1.5]
         """
+        progress = min(1.0, max(0.0, progress))
         if progress < 0.25:
             # Early training: 1.5x boost to establish exploration
             return 1.5

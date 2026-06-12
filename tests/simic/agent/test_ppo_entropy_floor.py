@@ -291,6 +291,49 @@ class TestEntropyFloorIntegration:
         assert losses_higher_blueprint.entropy_floor_penalty > losses_uniform.entropy_floor_penalty
         assert losses_higher_blueprint.total_loss > losses_uniform.total_loss
 
+    def test_compute_losses_skips_entropy_floor_for_zero_availability_head(self) -> None:
+        """A head with no available decisions must not receive entropy-floor penalty."""
+        device = torch.device("cpu")
+        batch_size = 8
+        head_names = ("op", "blueprint")
+
+        per_head_ratios = {k: torch.ones(batch_size, device=device) for k in head_names}
+        per_head_advantages = {k: torch.zeros(batch_size, device=device) for k in head_names}
+        head_masks = {k: torch.ones(batch_size, device=device) for k in head_names}
+        values = torch.zeros(batch_size, device=device)
+        normalized_returns = torch.zeros(batch_size, device=device)
+        old_values = torch.zeros(batch_size, device=device)
+        entropy = {
+            "op": torch.full((batch_size,), 0.5, device=device),
+            "blueprint": torch.full((batch_size,), 0.0, device=device),
+        }
+        availability_masks = {
+            "op": torch.ones(batch_size, device=device),
+            "blueprint": torch.zeros(batch_size, device=device),
+        }
+
+        losses = compute_losses(
+            per_head_ratios=per_head_ratios,
+            per_head_advantages=per_head_advantages,
+            head_masks=head_masks,
+            values=values,
+            normalized_returns=normalized_returns,
+            old_values=old_values,
+            entropy=entropy,
+            entropy_coef_per_head={"op": 1.0, "blueprint": 1.0},
+            entropy_coef=0.01,
+            clip_ratio=0.2,
+            clip_value=False,
+            value_clip=0.2,
+            value_coef=0.5,
+            head_names=head_names,
+            entropy_floor={"op": 0.4, "blueprint": 0.4},
+            entropy_floor_penalty_coef={"op": 0.1, "blueprint": 0.1},
+            availability_masks=availability_masks,
+        )
+
+        assert losses.entropy_floor_penalty.item() == pytest.approx(0.0)
+
 
 class TestPenaltySchedule:
     """Tests for three-phase penalty schedule in PPOAgent.
@@ -434,6 +477,47 @@ class TestPenaltySchedule:
         for progress in [0.0, 0.10, 0.24, 0.25, 0.5, 0.74, 0.75, 0.8, 0.9, 0.99, 1.0]:
             factor = agent._get_penalty_schedule(progress)
             assert 0.5 <= factor <= 1.5, f"Schedule factor {factor} out of bounds at progress {progress}"
+
+    def test_schedule_clamps_progress_above_one(self) -> None:
+        """Overrunning planned train steps must not invert entropy penalty into reward."""
+        from esper.simic.agent.ppo_agent import PPOAgent
+        from esper.tamiyo.policy.factory import create_policy
+        from esper.leyline.slot_config import SlotConfig
+
+        slot_config = SlotConfig.for_grid(2, 2)
+        policy = create_policy(
+            policy_type="lstm",
+            slot_config=slot_config,
+            device="cpu",
+        )
+        agent = PPOAgent(
+            policy=policy,
+            slot_config=slot_config,
+            device="cpu",
+        )
+
+        assert agent._get_penalty_schedule(1.5) == pytest.approx(0.5)
+
+    def test_total_train_steps_must_be_positive(self) -> None:
+        """Zero total_train_steps would make update progress undefined."""
+        from esper.simic.agent.ppo_agent import PPOAgent
+        from esper.tamiyo.policy.factory import create_policy
+        from esper.leyline.slot_config import SlotConfig
+
+        slot_config = SlotConfig.for_grid(2, 2)
+        policy = create_policy(
+            policy_type="lstm",
+            slot_config=slot_config,
+            device="cpu",
+        )
+
+        with pytest.raises(ValueError, match="total_train_steps"):
+            PPOAgent(
+                policy=policy,
+                slot_config=slot_config,
+                device="cpu",
+                total_train_steps=0,
+            )
 
     def test_schedule_applied_to_coefficients_in_update(self) -> None:
         """Verify that schedule factor is applied to coefficients during update."""

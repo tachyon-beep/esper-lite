@@ -13,6 +13,7 @@ Why EMA for gradients:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 
 
 @dataclass(slots=True)
@@ -46,6 +47,11 @@ class GradientEMATracker:
         Returns:
             Dict with ema values and drift indicators
         """
+        if not math.isfinite(grad_norm):
+            raise ValueError(f"grad_norm must be finite, got {grad_norm}")
+        if not math.isfinite(grad_health):
+            raise ValueError(f"grad_health must be finite, got {grad_health}")
+
         self._update_count += 1
 
         if not self._initialized:
