@@ -273,11 +273,22 @@ class CounterfactualEngine:
         self,
         slot_ids: list[str],
         results: dict[tuple[bool, ...], tuple[float, float]],
+        *,
+        compute_time_seconds: float,
     ) -> CounterfactualMatrix:
         """Compute matrix from pre-calculated results (e.g. fused validation)."""
+        if compute_time_seconds < 0.0:
+            raise ValueError(
+                f"compute_time_seconds must be non-negative, got {compute_time_seconds}"
+            )
+
         n_seeds = len(slot_ids)
         strategy = self.config.effective_strategy(n_seeds)
-        matrix = CounterfactualMatrix(strategy_used=strategy, source="precomputed")
+        matrix = CounterfactualMatrix(
+            strategy_used=strategy,
+            source="precomputed",
+            compute_time_seconds=compute_time_seconds,
+        )
 
         # We assume the results passed in match what generate_configs would request,
         # or at least contain the subsets we care about.

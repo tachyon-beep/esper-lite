@@ -31,11 +31,12 @@ status_notes: >
   Main CI passed on merge commit cdff9c43. Recovery PR #72 landed the initial
   P0 Filigree bug drain and project Filigree install removal. Follow-up PRs
   #78 and #79 merged telemetry and training-control correctness fixes. PR #80
-  merged the first P2 contract batch. The repository is green on CI, but not
-  yet steady. The second P2 action/reward contract batch is locally fixed and
-  verified against focused tests, custom guardrails, type, lint, full pytest,
-  and Wardline gates.
-percent_complete: 82
+  merged the first P2 contract batch, and PR #81 merged the second P2
+  action/reward contract batch. The repository is green on CI, but not yet
+  steady. The P2 counterfactual telemetry batch is locally fixed and verified
+  against focused tests, custom guardrails, type, lint, full pytest, and
+  Wardline gates.
+percent_complete: 84
 
 reviewed_by:
   - reviewer: python-engineering
@@ -132,13 +133,33 @@ Return the project to a steady state:
   - `MYPYPATH=src uv run mypy -p esper`
   - `uv run pytest` (`4690 passed, 10 skipped, 69 deselected`)
   - `wardline scan . --fail-on ERROR` (`0 active`)
+- PR #81 (`codex/p2-action-reward-contracts`) was merged into `main` on
+  2026-06-12 at merge commit `32ddc39df5018a70c68e5c3603d586759cb527bf`.
+- PR #81 verification run `27423441338` passed:
+  - `lint`
+  - `typecheck`
+  - `property-tests`
+  - `unit-and-integration-tests`
+  - `e2e-smoke-tests`
+- The second P2 action/reward contract bugs were fixed and closed:
+  - `esper-lite-642150` alpha target handling dropped sigmoid steepness variants
+  - `esper-lite-c8d465` reward telemetry deserialized string `"False"` as true
+- Local P2 counterfactual telemetry batch verification on 2026-06-13 passed:
+  - `uv run pytest tests/simic/attribution/test_counterfactual.py -q`
+  - `uv run python scripts/lint_defensive_patterns.py`
+  - `uv run python scripts/lint_leyline_types.py`
+  - `uv run python scripts/lint_gpu_sync.py`
+  - `uv run ruff check src/ tests/`
+  - `MYPYPATH=src uv run mypy -p esper`
+  - `uv run pytest` (`4694 passed, 10 skipped, 69 deselected`)
+  - `wardline scan . --fail-on ERROR` (`0 active`)
 - Filigree was removed from the UV tool install on 2026-06-13:
   `uv tool uninstall filigree` removed `filigree`, `filigree-dashboard`,
   `filigree-mcp`, `filigree-scanner-claude`, and `filigree-scanner-codex`.
   `uv tool list` now retains only Legis, Loomweave, Loomweave plugins, and
   Wardline from the local standard tooling set.
-- Filigree on 2026-06-13 reports `17 ready`, `0 blocked`, and `2 wip`
-  after claiming `esper-lite-642150` and `esper-lite-c8d465`.
+- Filigree on 2026-06-13 reports `15 ready`, `0 blocked`, and `2 wip`
+  after claiming `esper-lite-65d044` and `esper-lite-d9edae`.
 - Loomweave MCP is visible, but the active MCP server still reports no
   `.weft/loomweave/loomweave.db` even after a worktree analysis pass. The
   available MCP session needs a reconnect before graph queries can be used.

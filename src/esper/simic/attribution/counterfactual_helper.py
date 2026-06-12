@@ -88,13 +88,19 @@ class CounterfactualHelper:
         self,
         slot_ids: list[str],
         results: dict[tuple[bool, ...], tuple[float, float]],
+        *,
+        compute_time_seconds: float,
         epoch: int | None = None,
     ) -> dict[str, ContributionResult]:
         """Compute contributions from pre-calculated batch results."""
         if not slot_ids:
             return {}
 
-        matrix = self.engine.compute_matrix_from_results(slot_ids, results)
+        matrix = self.engine.compute_matrix_from_results(
+            slot_ids,
+            results,
+            compute_time_seconds=compute_time_seconds,
+        )
         if epoch is not None:
             matrix.epoch = epoch  # Propagate PPO batch index for telemetry tagging
         return self._process_matrix(matrix, slot_ids)
@@ -216,12 +222,17 @@ def compute_simple_ablation(
     Returns:
         Dict mapping slot_id to contribution (removal cost)
     """
+    missing_slot_ids = [
+        slot_id for slot_id in slot_ids if slot_id not in per_slot_accuracy
+    ]
+    if missing_slot_ids:
+        raise KeyError(
+            "Missing per-slot ablation accuracy for slots: "
+            f"{', '.join(missing_slot_ids)}"
+        )
+
     contributions = {}
     for slot_id in slot_ids:
-        if slot_id in per_slot_accuracy:
-            # Removal cost = full - without_slot
-            # Positive means slot is helping
-            contributions[slot_id] = full_accuracy - per_slot_accuracy[slot_id]
-        else:
-            contributions[slot_id] = 0.0
+        # Removal cost = full - without_slot. Positive means slot is helping.
+        contributions[slot_id] = full_accuracy - per_slot_accuracy[slot_id]
     return contributions

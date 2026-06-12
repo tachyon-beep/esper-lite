@@ -11,6 +11,7 @@ from esper.simic.attribution.counterfactual import (
     CounterfactualMatrix,
     CounterfactualResult,
 )
+from esper.simic.attribution.counterfactual_helper import compute_simple_ablation
 
 
 class TestShapleyReproducibility:
@@ -341,6 +342,40 @@ class TestCounterfactualInteractions:
             engine.compute_interaction_terms(matrix)
 
 
+class TestCounterfactualPrecomputedTiming:
+    """Regression coverage for precomputed-matrix timing telemetry."""
+
+    def test_compute_matrix_from_results_records_elapsed_time(self):
+        """Fused validation callers must propagate measured compute time."""
+        engine = CounterfactualEngine()
+
+        matrix = engine.compute_matrix_from_results(
+            slot_ids=["r0c0"],
+            results={
+                (False,): (0.5, 0.50),
+                (True,): (0.3, 0.70),
+            },
+            compute_time_seconds=1.25,
+        )
+
+        assert matrix.source == "precomputed"
+        assert matrix.compute_time_seconds == pytest.approx(1.25)
+
+    def test_compute_matrix_from_results_rejects_negative_elapsed_time(self):
+        """Negative elapsed time is invalid telemetry input."""
+        engine = CounterfactualEngine()
+
+        with pytest.raises(ValueError, match="compute_time_seconds"):
+            engine.compute_matrix_from_results(
+                slot_ids=["r0c0"],
+                results={
+                    (False,): (0.5, 0.50),
+                    (True,): (0.3, 0.70),
+                },
+                compute_time_seconds=-0.1,
+            )
+
+
 class TestCounterfactualHelperShapley:
     """Regression coverage for helper-level Shapley processing."""
 
@@ -359,6 +394,7 @@ class TestCounterfactualHelperShapley:
                 (True,): (0.3, 0.70),
             },
             epoch=7,
+            compute_time_seconds=0.5,
         )
 
         assert contributions["r0c0"].contribution == pytest.approx(0.20)
@@ -382,11 +418,41 @@ class TestCounterfactualHelperShapley:
                 (True, True): (0.3, 0.75),
             },
             epoch=7,
+            compute_time_seconds=0.5,
         )
 
         assert helper.has_precomputed_matrix_for(["r0c0", "r0c1"], epoch=7)
         assert not helper.has_precomputed_matrix_for(["r0c1", "r0c0"], epoch=7)
         assert not helper.has_precomputed_matrix_for(["r0c0", "r0c1"], epoch=8)
+
+
+class TestSimpleAblation:
+    """Regression coverage for simple ablation input contracts."""
+
+    def test_compute_simple_ablation_raises_for_missing_slot_accuracy(self):
+        """Missing required slot measurements must fail loudly."""
+        with pytest.raises(KeyError, match="r0c1"):
+            compute_simple_ablation(
+                slot_ids=["r0c0", "r0c1"],
+                full_accuracy=80.0,
+                per_slot_accuracy={"r0c0": 70.0},
+            )
+
+    def test_compute_simple_ablation_uses_required_measurements(self):
+        """Removal costs are computed from explicit per-slot measurements."""
+        contributions = compute_simple_ablation(
+            slot_ids=["r0c0", "r0c1"],
+            full_accuracy=80.0,
+            per_slot_accuracy={
+                "r0c0": 70.0,
+                "r0c1": 75.0,
+            },
+        )
+
+        assert contributions == {
+            "r0c0": pytest.approx(10.0),
+            "r0c1": pytest.approx(5.0),
+        }
 
 
 class TestCounterfactualHelperReset:
