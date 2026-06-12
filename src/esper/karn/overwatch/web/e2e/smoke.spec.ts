@@ -537,6 +537,21 @@ function createMockCohortSnapshots(): Record<string, SanctumSnapshot> {
       reward_mode: 'simplified'
     }
   ]
+  simplified.event_log = [
+    {
+      timestamp: '19:02:11',
+      event_type: 'NUMERICAL_INSTABILITY_DETECTED',
+      env_id: null,
+      message: 'Numerical instability',
+      episode: 4,
+      relative_time: '(2s)',
+      metadata: {
+        detail: 'Detected: NaN',
+        batch: 1,
+        inner_epoch: 150
+      }
+    }
+  ]
 
   return { A: shaped, B: simplified }
 }
@@ -744,6 +759,9 @@ test.describe('Overwatch Dashboard Smoke Tests', () => {
     await expect(page.locator('[data-testid="cohort-A"]')).toContainText('shaped')
     await expect(page.locator('[data-testid="cohort-B"]')).toContainText('simplified')
     await expect(page.locator('[data-testid="cohort-B"]')).toContainText('83%')
+    await expect(page.locator('[data-testid="cohort-B"]')).toContainText('unstable')
+    await expect(page.locator('[data-testid="cohort-B"]')).toContainText('NaN')
+    await expect(page.locator('[data-testid="cohort-verdict"]')).toContainText('blocked')
   })
 
   test('pressing ? opens keyboard help overlay', async ({ page }) => {

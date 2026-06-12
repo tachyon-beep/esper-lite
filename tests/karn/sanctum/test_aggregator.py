@@ -2,7 +2,11 @@
 
 from esper.karn.sanctum.aggregator import SanctumAggregator
 from esper.leyline import TelemetryEvent, TelemetryEventType
-from esper.leyline.telemetry import PPOUpdatePayload, SeedGateEvaluatedPayload
+from esper.leyline.telemetry import (
+    AnomalyDetectedPayload,
+    PPOUpdatePayload,
+    SeedGateEvaluatedPayload,
+)
 
 
 def test_ppo_update_populates_history():
@@ -207,6 +211,36 @@ def test_seed_gate_evaluated_event_is_handled() -> None:
     assert entry.env_id == 0
     assert entry.metadata["gate"] == "G2"
     assert entry.metadata["result"] == "FAIL"
+
+
+def test_numerical_instability_event_log_preserves_anomaly_detail() -> None:
+    """NUMERICAL_INSTABILITY_DETECTED should preserve detail for operator review."""
+    agg = SanctumAggregator(num_envs=1)
+
+    event = TelemetryEvent(
+        event_type=TelemetryEventType.NUMERICAL_INSTABILITY_DETECTED,
+        epoch=4,
+        data=AnomalyDetectedPayload(
+            anomaly_type="numerical_instability",
+            episode=4,
+            batch=1,
+            inner_epoch=150,
+            total_episodes=400,
+            detail="Detected: NaN",
+        ),
+        group_id="B",
+    )
+    agg.process_event(event)
+
+    snapshot = agg.get_snapshot()
+    entry = snapshot.event_log[-1]
+
+    assert entry.event_type == "NUMERICAL_INSTABILITY_DETECTED"
+    assert entry.episode == 4
+    assert entry.message == "Numerical instability"
+    assert entry.metadata["detail"] == "Detected: NaN"
+    assert entry.metadata["batch"] == 1
+    assert entry.metadata["inner_epoch"] == 150
 
 
 def test_ppo_update_with_none_group_id():
