@@ -1,7 +1,7 @@
 <!-- src/esper/karn/overwatch/web/src/components/LeaderboardTable.vue -->
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import type { BestRunRecord } from '../types/sanctum'
+import type { BestRunRecord, SeedState } from '../types/sanctum'
 
 const props = withDefaults(defineProps<{
   runs: BestRunRecord[]
@@ -17,7 +17,13 @@ const emit = defineEmits<{
   select: [recordId: string]
 }>()
 
-type SortColumn = 'env_id' | 'episode' | 'peak_accuracy' | 'fossilized_count' | 'pruned_count'
+type SortColumn =
+  | 'env_id'
+  | 'episode'
+  | 'epoch'
+  | 'peak_accuracy'
+  | 'growth_ratio'
+  | 'cumulative_reward'
 
 const sortColumn = ref<SortColumn>('peak_accuracy')
 const sortAscending = ref(false)
@@ -43,6 +49,60 @@ function handleSort(column: SortColumn) {
 
 function formatAccuracy(value: number): string {
   return `${(value * 100).toFixed(1)}%`
+}
+
+function formatGrowthRatio(value: number): string {
+  return `${value.toFixed(2)}x`
+}
+
+function formatReward(value: number): string {
+  if (Math.abs(value) < 0.1) {
+    return '~0.0'
+  }
+  return value > 0 ? `+${value.toFixed(1)}` : value.toFixed(1)
+}
+
+function trajectoryClass(run: BestRunRecord): string {
+  const deltaPoints = (run.final_accuracy - run.peak_accuracy) * 100
+  if (deltaPoints > 0.5) {
+    return 'trajectory-up'
+  }
+  if (deltaPoints >= -1.0) {
+    return 'trajectory-held'
+  }
+  if (deltaPoints >= -2.0) {
+    return 'trajectory-soft-down'
+  }
+  return 'trajectory-down'
+}
+
+function trajectoryGlyph(run: BestRunRecord): string {
+  const tone = trajectoryClass(run)
+  if (tone === 'trajectory-up') {
+    return '\u2197'
+  }
+  if (tone === 'trajectory-held') {
+    return '\u2500\u2192'
+  }
+  return '\u2198'
+}
+
+function seedSnapshot(run: BestRunRecord): Record<string, SeedState> {
+  const endSeeds = Object.values(run.end_seeds)
+  return endSeeds.length > 0 ? run.end_seeds : run.seeds
+}
+
+function formatSeedComposition(run: BestRunRecord): string {
+  const seeds = Object.values(seedSnapshot(run))
+  const blendingCount = seeds.filter(seed => seed.stage === 'BLENDING').length
+  const holdingCount = seeds.filter(seed => seed.stage === 'HOLDING').length
+  const fossilizedCount = seeds.filter(seed => seed.stage === 'FOSSILIZED').length
+
+  if (blendingCount + holdingCount + fossilizedCount === 0) {
+    return '-'
+  }
+
+  return `${blendingCount}/${holdingCount}/${fossilizedCount}`
 }
 
 function handleRowClick(recordId: string) {
@@ -74,8 +134,18 @@ function handleRowClick(recordId: string) {
             data-testid="header-episode"
             @click="handleSort('episode')"
           >
-            Episode
+            Ep
             <span v-if="sortColumn === 'episode'" class="sort-indicator">
+              {{ sortAscending ? '\u25B2' : '\u25BC' }}
+            </span>
+          </th>
+          <th
+            class="sortable"
+            data-testid="header-epoch"
+            @click="handleSort('epoch')"
+          >
+            @
+            <span v-if="sortColumn === 'epoch'" class="sort-indicator">
               {{ sortAscending ? '\u25B2' : '\u25BC' }}
             </span>
           </th>
@@ -84,31 +154,33 @@ function handleRowClick(recordId: string) {
             data-testid="header-peak-acc"
             @click="handleSort('peak_accuracy')"
           >
-            Peak Acc
+            Peak
             <span v-if="sortColumn === 'peak_accuracy'" class="sort-indicator">
               {{ sortAscending ? '\u25B2' : '\u25BC' }}
             </span>
           </th>
+          <th>Traj</th>
           <th
             class="sortable"
-            data-testid="header-fossilized"
-            @click="handleSort('fossilized_count')"
+            data-testid="header-growth"
+            @click="handleSort('growth_ratio')"
           >
-            Fossilized
-            <span v-if="sortColumn === 'fossilized_count'" class="sort-indicator">
+            Grw
+            <span v-if="sortColumn === 'growth_ratio'" class="sort-indicator">
               {{ sortAscending ? '\u25B2' : '\u25BC' }}
             </span>
           </th>
           <th
             class="sortable"
-            data-testid="header-pruned"
-            @click="handleSort('pruned_count')"
+            data-testid="header-reward"
+            @click="handleSort('cumulative_reward')"
           >
-            Pruned
-            <span v-if="sortColumn === 'pruned_count'" class="sort-indicator">
+            EndRwd
+            <span v-if="sortColumn === 'cumulative_reward'" class="sort-indicator">
               {{ sortAscending ? '\u25B2' : '\u25BC' }}
             </span>
           </th>
+          <th>Seeds</th>
         </tr>
       </thead>
       <tbody>
@@ -122,9 +194,20 @@ function handleRowClick(recordId: string) {
           <td :data-testid="`rank-${run.record_id}`">{{ index + 1 }}</td>
           <td :data-testid="`env-${run.record_id}`">{{ run.env_id }}</td>
           <td :data-testid="`episode-${run.record_id}`">{{ run.episode }}</td>
+          <td :data-testid="`epoch-${run.record_id}`">{{ run.epoch }}</td>
           <td :data-testid="`peak-acc-${run.record_id}`">{{ formatAccuracy(run.peak_accuracy) }}</td>
-          <td :data-testid="`fossilized-${run.record_id}`">{{ run.fossilized_count }}</td>
-          <td :data-testid="`pruned-${run.record_id}`">{{ run.pruned_count }}</td>
+          <td
+            class="trajectory-cell"
+            :class="trajectoryClass(run)"
+            :data-testid="`trajectory-${run.record_id}`"
+          >
+            {{ trajectoryGlyph(run) }}{{ formatAccuracy(run.final_accuracy) }}
+          </td>
+          <td :data-testid="`growth-${run.record_id}`">{{ formatGrowthRatio(run.growth_ratio) }}</td>
+          <td :data-testid="`reward-${run.record_id}`">{{ formatReward(run.cumulative_reward) }}</td>
+          <td class="seed-counts" :data-testid="`seeds-${run.record_id}`">
+            {{ formatSeedComposition(run) }}
+          </td>
         </tr>
       </tbody>
     </table>
@@ -221,5 +304,23 @@ td:first-child {
   text-align: center;
   font-weight: 600;
   color: var(--text-secondary);
+}
+
+.trajectory-cell,
+.seed-counts {
+  font-variant-numeric: tabular-nums;
+}
+
+.trajectory-up {
+  color: var(--status-win);
+}
+
+.trajectory-held,
+.trajectory-soft-down {
+  color: var(--text-secondary);
+}
+
+.trajectory-down {
+  color: var(--status-warn);
 }
 </style>

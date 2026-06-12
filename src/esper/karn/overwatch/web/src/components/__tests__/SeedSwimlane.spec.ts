@@ -3,29 +3,7 @@ import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
 import SeedSwimlane from '../SeedSwimlane.vue'
 import type { SeedState, SeedStage } from '../../types/sanctum'
-
-function createSeedState(overrides: Partial<SeedState> = {}): SeedState {
-  return {
-    slot_id: 'slot_0',
-    stage: 'TRAINING',
-    blueprint_id: null,
-    alpha: 0.0,
-    accuracy_delta: 0.01,
-    seed_params: 1000,
-    grad_ratio: 0.5,
-    has_vanishing: false,
-    has_exploding: false,
-    epochs_in_stage: 10,
-    improvement: 0.05,
-    prune_reason: '',
-    auto_pruned: false,
-    epochs_total: 50,
-    counterfactual: 0.0,
-    blend_tempo_epochs: 0,
-    alpha_curve: 'LINEAR',
-    ...overrides
-  }
-}
+import { createSeedState } from './factories'
 
 describe('SeedSwimlane', () => {
   it('renders correct number of slot rows', () => {

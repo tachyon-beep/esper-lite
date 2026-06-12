@@ -53,6 +53,7 @@ from esper.leyline import (
     DEFAULT_EPISODE_LENGTH,
     DEFAULT_GAMMA,
     TrainingStartedPayload,
+    AnomalyDetectedPayload,
     EpochCompletedPayload,
     BatchEpochCompletedPayload,
     PPOUpdatePayload,
@@ -2042,6 +2043,7 @@ class SanctumAggregator:
         # Generic message + structured metadata based on event type
         metadata: dict[str, str | int | float] = {"event_id": event.event_id}
         env_id: int | None = None
+        episode = self._current_episode
 
         if event_type.startswith("SEED_"):
             if event_type == "SEED_GERMINATED" and isinstance(event.data, SeedGerminatedPayload):
@@ -2105,6 +2107,15 @@ class SanctumAggregator:
                 metadata["episodes"] = event.data.episodes_completed
             else:
                 message = "Batch complete (unknown payload)"
+        elif isinstance(event.data, AnomalyDetectedPayload):
+            message = event.data.anomaly_type.replace("_", " ").capitalize()
+            episode = event.data.episode
+            metadata["anomaly_type"] = event.data.anomaly_type
+            metadata["batch"] = event.data.batch
+            metadata["inner_epoch"] = event.data.inner_epoch
+            metadata["total_episodes"] = event.data.total_episodes
+            if event.data.detail:
+                metadata["detail"] = event.data.detail
         else:
             message = event.message or event_type
 
@@ -2113,7 +2124,7 @@ class SanctumAggregator:
             event_type=event_type,
             env_id=env_id,
             message=message,
-            episode=self._current_episode,
+            episode=episode,
             relative_time=relative_time,
             metadata=metadata,
         ))

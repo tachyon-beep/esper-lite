@@ -65,12 +65,38 @@ describe('useOverwatch', () => {
     ws.simulateOpen()
     ws.simulateMessage({
       type: 'snapshot',
-      data: { current_episode: 42, current_epoch: 10 }
+      primary_group_id: 'default',
+      data: { current_episode: 42, current_epoch: 10 },
+      snapshots_by_group: {
+        default: { current_episode: 42, current_epoch: 10 }
+      }
     })
     await nextTick()
 
     expect(snapshot.value?.current_episode).toBe(42)
     expect(snapshot.value?.current_epoch).toBe(10)
+  })
+
+  it('updates grouped snapshots when cohort message received', async () => {
+    const { snapshot, snapshotsByGroup, primaryGroupId } = useOverwatch('ws://localhost:8080/ws')
+
+    const ws = MockWebSocket.instances[0]
+    ws.simulateOpen()
+    ws.simulateMessage({
+      type: 'snapshot',
+      primary_group_id: 'B',
+      data: { current_episode: 12, reward_mode: 'simplified' },
+      snapshots_by_group: {
+        A: { current_episode: 10, reward_mode: 'shaped' },
+        B: { current_episode: 12, reward_mode: 'simplified' }
+      }
+    })
+    await nextTick()
+
+    expect(primaryGroupId.value).toBe('B')
+    expect(snapshot.value?.reward_mode).toBe('simplified')
+    expect(snapshotsByGroup.value.A.reward_mode).toBe('shaped')
+    expect(snapshotsByGroup.value.B.current_episode).toBe(12)
   })
 
   it('tracks staleness', async () => {
@@ -79,7 +105,14 @@ describe('useOverwatch', () => {
 
     const ws = MockWebSocket.instances[0]
     ws.simulateOpen()
-    ws.simulateMessage({ type: 'snapshot', data: { current_episode: 1 } })
+    ws.simulateMessage({
+      type: 'snapshot',
+      primary_group_id: 'default',
+      data: { current_episode: 1 },
+      snapshots_by_group: {
+        default: { current_episode: 1 }
+      }
+    })
     await nextTick()
 
     expect(lastUpdate.value).toBeGreaterThan(0)

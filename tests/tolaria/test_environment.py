@@ -35,9 +35,9 @@ class TestEnvironment:
         model = create_model(device="cpu", slots=["r0c1"])
         assert isinstance(model, MorphogeneticModel)
         # Verify the interface that downstream code depends on
-        assert hasattr(model, "seed_slots")
-        assert hasattr(model, "get_host_parameters")
-        assert hasattr(model, "host")
+        assert "r0c1" in model.seed_slots
+        assert callable(model.get_host_parameters)
+        assert model.host.training is True
 
     def test_create_model_rejects_duplicate_slots(self):
         """Duplicate slot IDs should raise ValueError with helpful message.

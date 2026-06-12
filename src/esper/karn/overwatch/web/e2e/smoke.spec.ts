@@ -6,7 +6,119 @@
  * WebSocket connections are mocked to allow testing without a backend.
  */
 import { test, expect } from '@playwright/test'
-import type { SanctumSnapshot } from '../src/types/sanctum'
+import type {
+  DecisionSnapshot,
+  RewardComponents,
+  SanctumSnapshot,
+  SeedState
+} from '../src/types/sanctum'
+
+function createMockSeedState(overrides: Partial<SeedState> = {}): SeedState {
+  return {
+    slot_id: 'slot_0',
+    stage: 'TRAINING',
+    blueprint_id: 'resnet_block',
+    alpha: 0.5,
+    accuracy_delta: 0.02,
+    seed_params: 50000,
+    grad_ratio: 1.0,
+    has_vanishing: false,
+    has_exploding: false,
+    epochs_in_stage: 10,
+    improvement: 0.015,
+    prune_reason: '',
+    auto_pruned: false,
+    epochs_total: 42,
+    counterfactual: 0.8,
+    blend_tempo_epochs: 20,
+    alpha_curve: 'LINEAR',
+    contribution_velocity: 0.01,
+    interaction_sum: 0.02,
+    boost_received: 0.01,
+    upstream_alpha_sum: 0,
+    downstream_alpha_sum: 0,
+    ...overrides
+  }
+}
+
+function createMockRewardComponents(
+  overrides: Partial<RewardComponents> = {}
+): RewardComponents {
+  return {
+    total: 0.5,
+    base_acc_delta: 0.02,
+    bounded_attribution: 0.1,
+    seed_contribution: 0.15,
+    escrow_credit_prev: 0.02,
+    escrow_credit_target: 0.03,
+    escrow_delta: 0.01,
+    escrow_credit_next: 0.03,
+    escrow_forfeit: 0,
+    compute_rent: -0.01,
+    alpha_shock: 0,
+    ratio_penalty: 0,
+    stage_bonus: 0.1,
+    fossilize_terminal_bonus: 0,
+    blending_warning: 0,
+    holding_warning: 0,
+    hindsight_credit: 0,
+    scaffold_count: 0,
+    avg_scaffold_delay: 0,
+    env_id: 0,
+    val_acc: 0.85,
+    stable_val_acc: 0.84,
+    last_action: 'SPAWN',
+    ...overrides
+  }
+}
+
+function createMockDecisionSnapshot(
+  overrides: Partial<DecisionSnapshot> = {}
+): DecisionSnapshot {
+  return {
+    timestamp: new Date().toISOString(),
+    slot_states: { slot_0: 'TRAINING' },
+    host_accuracy: 0.85,
+    chosen_action: 'WAIT',
+    chosen_slot: null,
+    confidence: 0.81,
+    expected_value: 0.2,
+    actual_reward: 0.1,
+    alternatives: [['WAIT', 0.2], ['GERMINATE', 0.12]],
+    action_success: true,
+    decision_id: 'decision-001',
+    env_id: 0,
+    episode: 1,
+    epoch: 42,
+    batch: 5,
+    value_residual: 0.04,
+    td_advantage: 0.04,
+    decision_entropy: 0.5,
+    chosen_blueprint: null,
+    chosen_tempo: null,
+    chosen_style: null,
+    chosen_curve: null,
+    chosen_alpha_target: null,
+    chosen_alpha_speed: null,
+    op_confidence: 0.81,
+    slot_confidence: 0,
+    blueprint_confidence: 0,
+    style_confidence: 0,
+    tempo_confidence: 0,
+    alpha_target_confidence: 0,
+    alpha_speed_confidence: 0,
+    curve_confidence: 0,
+    op_entropy: 0.5,
+    slot_entropy: 0,
+    blueprint_entropy: 0,
+    style_entropy: 0,
+    tempo_entropy: 0,
+    alpha_target_entropy: 0,
+    alpha_speed_entropy: 0,
+    curve_entropy: 0,
+    ...overrides
+  }
+}
 
 /**
  * Creates a minimal valid SanctumSnapshot for testing.
@@ -22,24 +134,7 @@ function createMockSnapshot(): SanctumSnapshot {
         host_loss: 0.23,
         host_params: 1000000,
         seeds: {
-          'slot_0': {
-            slot_id: 'slot_0',
-            stage: 'TRAINING',
-            blueprint_id: 'resnet_block',
-            alpha: 0.5,
-            accuracy_delta: 0.02,
-            seed_params: 50000,
-            grad_ratio: 1.0,
-            has_vanishing: false,
-            has_exploding: false,
-            epochs_in_stage: 10,
-            improvement: 0.015,
-            prune_reason: '',
-            auto_pruned: false,
-            epochs_total: 42,
-            counterfactual: 0.8,
-            blend_tempo_epochs: 20
-          }
+          'slot_0': createMockSeedState()
         },
         active_seed_count: 1,
         fossilized_count: 0,
@@ -48,22 +143,7 @@ function createMockSnapshot(): SanctumSnapshot {
         blueprint_spawns: { 'resnet_block': 1 },
         blueprint_prunes: {},
         blueprint_fossilized: {},
-        reward_components: {
-          total: 0.5,
-          base_acc_delta: 0.02,
-          bounded_attribution: 0.1,
-          seed_contribution: 0.15,
-          compute_rent: -0.01,
-          alpha_shock: 0,
-          ratio_penalty: 0,
-          stage_bonus: 0.1,
-          fossilize_terminal_bonus: 0,
-          blending_warning: 0,
-          holding_warning: 0,
-          env_id: 0,
-          val_acc: 0.85,
-          last_action: 'SPAWN'
-        },
+        reward_components: createMockRewardComponents(),
         counterfactual_matrix: {
           slot_ids: ['slot_0'],
           configs: [{ seed_mask: [true], accuracy: 0.85 }],
@@ -106,15 +186,40 @@ function createMockSnapshot(): SanctumSnapshot {
       ratio_std: 0.05,
       advantage_mean: 0.0,
       advantage_std: 1.0,
+      advantage_skewness: 0.0,
+      advantage_kurtosis: 0.0,
       advantage_min: -2.0,
       advantage_max: 2.0,
       advantage_raw_mean: 0.5,
       advantage_raw_std: 1.2,
+      advantage_positive_ratio: 0.5,
+      log_prob_min: -1.0,
+      log_prob_max: -0.1,
+      decision_density: 0.9,
+      forced_step_ratio: 0.1,
+      advantage_std_floored: false,
+      pre_norm_advantage_std: 1.2,
+      decision_density_history: [0.9],
       dead_layers: 0,
       exploding_layers: 0,
       nan_grad_count: 0,
+      inf_grad_count: 0,
+      head_nan_latch: {},
+      head_inf_latch: {},
       layer_gradient_health: { 'layer_0': 1.0, 'layer_1': 0.9 },
       entropy_collapsed: false,
+      lstm_h_l2_total: null,
+      lstm_c_l2_total: null,
+      lstm_h_rms: null,
+      lstm_c_rms: null,
+      lstm_h_env_rms_mean: null,
+      lstm_h_env_rms_max: null,
+      lstm_c_env_rms_mean: null,
+      lstm_c_env_rms_max: null,
+      lstm_h_max: null,
+      lstm_c_max: null,
+      lstm_has_nan: false,
+      lstm_has_inf: false,
       update_time_ms: 50,
       early_stop_epoch: null,
       head_slot_entropy: 1.2,
@@ -133,6 +238,23 @@ function createMockSnapshot(): SanctumSnapshot {
       head_alpha_speed_grad_norm: 0.1,
       head_alpha_curve_grad_norm: 0.1,
       head_op_grad_norm: 0.1,
+      head_slot_grad_norm_prev: 0.1,
+      head_blueprint_grad_norm_prev: 0.1,
+      head_style_grad_norm_prev: 0.1,
+      head_tempo_grad_norm_prev: 0.1,
+      head_alpha_target_grad_norm_prev: 0.1,
+      head_alpha_speed_grad_norm_prev: 0.1,
+      head_alpha_curve_grad_norm_prev: 0.1,
+      head_op_grad_norm_prev: 0.1,
+      head_slot_ratio_max: 1.1,
+      head_blueprint_ratio_max: 1.1,
+      head_style_ratio_max: 1.1,
+      head_tempo_ratio_max: 1.1,
+      head_alpha_target_ratio_max: 1.1,
+      head_alpha_speed_ratio_max: 1.1,
+      head_alpha_curve_ratio_max: 1.1,
+      head_op_ratio_max: 1.1,
+      joint_ratio_max: 1.1,
       episode_return_history: [0.3, 0.4, 0.5],
       current_episode_return: 0.5,
       current_episode: 1,
@@ -147,9 +269,69 @@ function createMockSnapshot(): SanctumSnapshot {
       ppo_batch: 1,
       action_counts: { 'SPAWN': 10, 'WAIT': 50 },
       total_actions: 60,
+      cumulative_action_counts: { 'WAIT': 50, 'SPAWN': 10 },
+      cumulative_total_actions: 60,
       ppo_data_received: true,
-      recent_decisions: [],
-      group_id: 'test-group'
+      recent_decisions: [
+        createMockDecisionSnapshot({
+          decision_id: 'decision-002',
+          chosen_action: 'GERMINATE',
+          chosen_slot: 'slot_0',
+          confidence: 0.72,
+          expected_value: 0.24,
+          actual_reward: 0.18,
+          alternatives: [['GERMINATE', 0.24], ['WAIT', 0.16], ['PRUNE', -0.08]],
+          td_advantage: 0.12,
+          op_confidence: 0.72,
+          slot_confidence: 0.68
+        }),
+        createMockDecisionSnapshot()
+      ],
+      group_id: 'test-group',
+      entropy_velocity: 0.0,
+      collapse_risk_score: 0.1,
+      _previous_risk: 0.1,
+      entropy_clip_correlation: 0.0,
+      value_mean: 0.2,
+      value_std: 0.1,
+      value_min: 0,
+      value_max: 0.4,
+      initial_value_spread: 0.4,
+      op_q_values: [0.1, 0.2, 0.15, 0.05, 0.08, 0.12],
+      op_valid_mask: [true, true, true, true, true, true],
+      q_variance: 0.12,
+      q_spread: 0.15,
+      last_action_success: true,
+      last_action_op: 'WAIT',
+      infrastructure: {
+        cuda_memory_allocated_gb: 2,
+        cuda_memory_reserved_gb: 4,
+        cuda_memory_peak_gb: 4,
+        cuda_memory_fragmentation: 0.1,
+        dataloader_wait_ratio: 0.05,
+        compile_enabled: false,
+        compile_backend: '',
+        compile_mode: ''
+      },
+      gradient_quality: {
+        gradient_cv: 0.5,
+        clip_fraction_positive: 0.05,
+        clip_fraction_negative: 0.04
+      },
+      value_function: {
+        v_return_correlation: 0.65,
+        td_error_mean: 0.1,
+        td_error_std: 0.2,
+        bellman_error: 0.3,
+        return_p10: -1,
+        return_p50: 0.5,
+        return_p90: 1.5,
+        return_skewness: 0.1,
+        return_variance: 0.5,
+        value_predictions: [0.2],
+        actual_returns: [0.4],
+        td_errors: [0.1]
+      }
     },
     vitals: {
       gpu_stats: {
@@ -172,22 +354,7 @@ function createMockSnapshot(): SanctumSnapshot {
       batches_per_hour: 150,
       host_params: 1000000
     },
-    rewards: {
-      total: 0.5,
-      base_acc_delta: 0.02,
-      bounded_attribution: 0.1,
-      seed_contribution: 0.15,
-      compute_rent: -0.01,
-      alpha_shock: 0,
-      ratio_penalty: 0,
-      stage_bonus: 0.1,
-      fossilize_terminal_bonus: 0,
-      blending_warning: 0,
-      holding_warning: 0,
-      env_id: 0,
-      val_acc: 0.85,
-      last_action: 'SPAWN'
-    },
+    rewards: createMockRewardComponents(),
     slot_ids: ['slot_0', 'slot_1', 'slot_2', 'slot_3'],
     current_episode: 1,
     current_batch: 5,
@@ -239,10 +406,13 @@ function createMockSnapshot(): SanctumSnapshot {
         epoch: 42,
         seeds: {},
         slot_ids: ['slot_0'],
-        growth_ratio: 0.05,
+        growth_ratio: 1.05,
         record_id: 'best-001',
+        cumulative_reward: 1.5,
+        peak_cumulative_reward: 1.5,
         reward_components: null,
         counterfactual_matrix: null,
+        shapley_snapshot: null,
         action_history: ['SPAWN', 'WAIT'],
         reward_history: [0.3, 0.5],
         accuracy_history: [0.8, 0.85],
@@ -253,9 +423,16 @@ function createMockSnapshot(): SanctumSnapshot {
         reward_mode: 'STANDARD',
         blueprint_spawns: { 'resnet_block': 1 },
         blueprint_fossilized: {},
-        blueprint_prunes: {}
+        blueprint_prunes: {},
+        end_seeds: {
+          'slot_0': createMockSeedState({ stage: 'BLENDING' })
+        },
+        end_reward_components: null,
+        best_lifecycle_events: [],
+        end_lifecycle_events: []
       }
     ],
+    cumulative_germinated: 1,
     cumulative_fossilized: 0,
     cumulative_pruned: 0,
     cumulative_blueprint_spawns: { 'resnet_block': 1 },
@@ -267,8 +444,116 @@ function createMockSnapshot(): SanctumSnapshot {
     avg_epochs_in_stage: 10,
     last_ppo_update: new Date().toISOString(),
     last_reward_update: new Date().toISOString(),
-    focused_env_id: 0
+    seed_lifecycle: {
+      germination_count: 1,
+      prune_count: 0,
+      fossilize_count: 0,
+      active_count: 1,
+      total_slots: 4,
+      germination_rate: 1,
+      prune_rate: 0,
+      fossilize_rate: 0,
+      blend_success_rate: 0,
+      avg_lifespan_epochs: 10,
+      germination_trend: 'stable',
+      prune_trend: 'stable',
+      fossilize_trend: 'stable'
+    },
+    observation_stats: {
+      slot_features_mean: 0,
+      slot_features_std: 1,
+      host_features_mean: 0,
+      host_features_std: 1,
+      context_features_mean: 0,
+      context_features_std: 1,
+      outlier_pct: 0,
+      near_clip_pct: 0,
+      clip_pct: 0,
+      nan_count: 0,
+      inf_count: 0,
+      nan_pct: 0,
+      inf_pct: 0,
+      normalization_drift: 0,
+      batch_size: 1
+    },
+    episode_stats: {
+      length_mean: 150,
+      length_std: 0,
+      length_min: 150,
+      length_max: 150,
+      total_episodes: 8,
+      episodes_per_second: 0.3,
+      timeout_count: 0,
+      success_count: 4,
+      early_termination_count: 0,
+      timeout_rate: 0,
+      success_rate: 0.5,
+      early_termination_rate: 0,
+      steps_per_germinate: 4,
+      steps_per_prune: 0,
+      steps_per_fossilize: 0,
+      action_entropy: 0.4,
+      yield_rate: 0.4,
+      slot_utilization: 0.25,
+      completion_trend: 'stable'
+    },
+    focused_env_id: 0,
+    last_action_env_id: 0,
+    last_action_timestamp: new Date().toISOString()
   }
+}
+
+function createMockCohortSnapshots(): Record<string, SanctumSnapshot> {
+  const shaped = createMockSnapshot()
+  shaped.reward_mode = 'shaped'
+  shaped.tamiyo.group_id = 'A'
+  shaped.episode_stats.total_episodes = 64
+  shaped.episode_stats.yield_rate = 0.22
+  shaped.episode_stats.action_entropy = 1.35
+  shaped.best_runs = [
+    {
+      ...shaped.best_runs[0],
+      record_id: 'best-A',
+      final_accuracy: 0.74,
+      peak_accuracy: 0.78,
+      growth_ratio: 1.12,
+      reward_mode: 'shaped'
+    }
+  ]
+
+  const simplified = createMockSnapshot()
+  simplified.reward_mode = 'simplified'
+  simplified.tamiyo.group_id = 'B'
+  simplified.episode_stats.total_episodes = 68
+  simplified.episode_stats.yield_rate = 0.48
+  simplified.episode_stats.action_entropy = 0.82
+  simplified.best_runs = [
+    {
+      ...simplified.best_runs[0],
+      record_id: 'best-B',
+      final_accuracy: 0.83,
+      peak_accuracy: 0.84,
+      growth_ratio: 1.06,
+      reward_mode: 'simplified'
+    }
+  ]
+  simplified.event_log = [
+    {
+      timestamp: '19:02:11',
+      event_type: 'NUMERICAL_INSTABILITY_DETECTED',
+      env_id: null,
+      message: 'Numerical instability',
+      episode: 4,
+      relative_time: '(2s)',
+      metadata: {
+        detail: 'Detected: NaN',
+        batch: 1,
+        inner_epoch: 150
+      }
+    }
+  ]
+
+  return { A: shaped, B: simplified }
 }
 
 /**
@@ -322,11 +607,24 @@ async function mockWebSocket(page: typeof import('@playwright/test').Page.protot
 
       private sendMockData() {
         // This will be populated by the test
-        const mockData = (window as unknown as { __MOCK_SNAPSHOT__?: unknown }).__MOCK_SNAPSHOT__
+        const testWindow = window as unknown as {
+          __MOCK_SNAPSHOT__?: unknown
+          __MOCK_SNAPSHOTS_BY_GROUP__?: unknown
+          __MOCK_PRIMARY_GROUP_ID__?: string
+        }
+        const mockData = testWindow.__MOCK_SNAPSHOT__
         if (mockData) {
-          // useOverwatch expects messages in format { type: 'snapshot', data: ... }
+          const primaryGroupId = testWindow.__MOCK_PRIMARY_GROUP_ID__ ?? 'default'
+          const snapshotsByGroup = testWindow.__MOCK_SNAPSHOTS_BY_GROUP__ ?? {
+            default: mockData
+          }
           const messageEvent = new MessageEvent('message', {
-            data: JSON.stringify({ type: 'snapshot', data: mockData })
+            data: JSON.stringify({
+              type: 'snapshot',
+              primary_group_id: primaryGroupId,
+              data: mockData,
+              snapshots_by_group: snapshotsByGroup
+            })
           })
           this.dispatchEvent(messageEvent)
           if (this.onmessage) this.onmessage(messageEvent)
@@ -430,9 +728,40 @@ test.describe('Overwatch Dashboard Smoke Tests', () => {
     const statusBar = page.locator('[data-testid="status-bar"]')
     await expect(statusBar).toBeVisible()
 
+    // Verify top-level interpretation panels are rendered
+    await expect(page.locator('[data-testid="experiment-verdict"]')).toBeVisible()
+    await expect(page.locator('[data-testid="phase-gate"]')).toBeVisible()
+
     // Verify loading state is hidden
     const loadingState = page.locator('[data-testid="loading-state"]')
     await expect(loadingState).not.toBeVisible()
+  })
+
+  test('cohort comparison renders when grouped telemetry arrives', async ({ page }) => {
+    const groupedSnapshots = createMockCohortSnapshots()
+    await page.addInitScript((payload) => {
+      const testWindow = window as unknown as {
+        __MOCK_SNAPSHOT__?: unknown
+        __MOCK_SNAPSHOTS_BY_GROUP__?: unknown
+        __MOCK_PRIMARY_GROUP_ID__?: string
+      }
+      testWindow.__MOCK_SNAPSHOT__ = payload.primary
+      testWindow.__MOCK_SNAPSHOTS_BY_GROUP__ = payload.snapshotsByGroup
+      testWindow.__MOCK_PRIMARY_GROUP_ID__ = 'B'
+    }, {
+      primary: groupedSnapshots.B,
+      snapshotsByGroup: groupedSnapshots
+    })
+
+    await page.goto('/')
+    await page.waitForSelector('[data-testid="cohort-comparison"]', { timeout: 5000 })
+
+    await expect(page.locator('[data-testid="cohort-A"]')).toContainText('shaped')
+    await expect(page.locator('[data-testid="cohort-B"]')).toContainText('simplified')
+    await expect(page.locator('[data-testid="cohort-B"]')).toContainText('83%')
+    await expect(page.locator('[data-testid="cohort-B"]')).toContainText('unstable')
+    await expect(page.locator('[data-testid="cohort-B"]')).toContainText('NaN')
+    await expect(page.locator('[data-testid="cohort-verdict"]')).toContainText('blocked')
   })
 
   test('pressing ? opens keyboard help overlay', async ({ page }) => {

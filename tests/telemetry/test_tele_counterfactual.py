@@ -135,10 +135,6 @@ def mock_seeds():
 class TestTELE520Strategy:
     """TELE-520: Counterfactual strategy enum field."""
 
-    def test_strategy_field_exists_in_schema(self):
-        """TELE-520: CounterfactualSnapshot has strategy field."""
-        snapshot = CounterfactualSnapshot()
-        assert hasattr(snapshot, "strategy")
 
     def test_strategy_default_value_is_unavailable(self):
         """TELE-520: Default strategy is 'unavailable'."""
@@ -181,10 +177,6 @@ class TestTELE520Strategy:
 class TestTELE521BaselineAccuracy:
     """TELE-521: Counterfactual baseline accuracy property."""
 
-    def test_baseline_accuracy_property_exists(self):
-        """TELE-521: CounterfactualSnapshot has baseline_accuracy property."""
-        snapshot = CounterfactualSnapshot()
-        assert hasattr(snapshot, "baseline_accuracy")
 
     def test_baseline_accuracy_default_is_zero(self):
         """TELE-521: Default baseline_accuracy is 0.0 when no configs."""
@@ -237,10 +229,6 @@ class TestTELE521BaselineAccuracy:
 class TestTELE522CombinedAccuracy:
     """TELE-522: Counterfactual combined accuracy property."""
 
-    def test_combined_accuracy_property_exists(self):
-        """TELE-522: CounterfactualSnapshot has combined_accuracy property."""
-        snapshot = CounterfactualSnapshot()
-        assert hasattr(snapshot, "combined_accuracy")
 
     def test_combined_accuracy_default_is_zero(self):
         """TELE-522: Default combined_accuracy is 0.0 when no configs."""
@@ -296,7 +284,6 @@ class TestTELE523TotalSynergy:
     def test_total_synergy_method_exists(self):
         """TELE-523: CounterfactualSnapshot has total_synergy method."""
         snapshot = CounterfactualSnapshot()
-        assert hasattr(snapshot, "total_synergy")
         assert callable(snapshot.total_synergy)
 
     def test_total_synergy_default_is_zero(self):
@@ -385,7 +372,6 @@ class TestTELE524IndividualContributions:
     def test_individual_contributions_method_exists(self):
         """TELE-524: CounterfactualSnapshot has individual_contributions method."""
         snapshot = CounterfactualSnapshot()
-        assert hasattr(snapshot, "individual_contributions")
         assert callable(snapshot.individual_contributions)
 
     def test_individual_contributions_default_is_empty(self):
@@ -454,7 +440,6 @@ class TestTELE525PairContributions:
     def test_pair_contributions_method_exists(self):
         """TELE-525: CounterfactualSnapshot has pair_contributions method."""
         snapshot = CounterfactualSnapshot()
-        assert hasattr(snapshot, "pair_contributions")
         assert callable(snapshot.pair_contributions)
 
     def test_pair_contributions_default_is_empty(self):

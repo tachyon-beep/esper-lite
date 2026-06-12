@@ -1255,11 +1255,11 @@ class TestSanctumBackend:
         """Backend should implement start/emit/close."""
         backend = SanctumBackend(num_envs=4)
 
-        assert hasattr(backend, "start")
-        assert hasattr(backend, "emit")
-        assert hasattr(backend, "close")
-        assert hasattr(backend, "get_snapshot")
-        assert hasattr(backend, "compute_reward_health_by_group")
+        assert callable(backend.start)
+        assert callable(backend.emit)
+        assert callable(backend.close)
+        assert callable(backend.get_snapshot)
+        assert callable(backend.compute_reward_health_by_group)
 
     def test_emit_ignored_before_start(self):
         """emit() before start() should fail loud (misconfigured telemetry)."""

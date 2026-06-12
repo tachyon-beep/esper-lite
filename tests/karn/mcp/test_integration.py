@@ -9,10 +9,13 @@ from esper.karn.mcp.views import telemetry_has_event_files
 
 # Skip if no telemetry directory exists or contains no event files.
 TELEMETRY_DIR = Path("telemetry")
-pytestmark = pytest.mark.skipif(
-    not TELEMETRY_DIR.exists() or not telemetry_has_event_files(str(TELEMETRY_DIR)),
-    reason="No telemetry event files available",
-)
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not TELEMETRY_DIR.exists() or not telemetry_has_event_files(str(TELEMETRY_DIR)),
+        reason="No telemetry event files available",
+    ),
+]
 
 
 @pytest.fixture

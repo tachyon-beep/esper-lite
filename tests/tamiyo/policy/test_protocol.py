@@ -30,39 +30,31 @@ def test_policy_bundle_protocol_methods():
     Note: process_signals is NOT in this list - feature extraction is
     handled by Simic's signals_to_features() which requires training context.
     """
-    required_methods = [
-        'get_action',
-        'forward',
-        'evaluate_actions',
-        'get_q_values',
-        'sync_from',
-        'get_value',
-        'initial_hidden',
-        'state_dict',
-        'load_state_dict',
-        'to',
-        'enable_gradient_checkpointing',
-        'compile',  # torch.compile integration
-    ]
-    for method in required_methods:
-        assert hasattr(PolicyBundle, method), f"Missing method: {method}"
+    assert callable(PolicyBundle.get_action)
+    assert callable(PolicyBundle.forward)
+    assert callable(PolicyBundle.evaluate_actions)
+    assert callable(PolicyBundle.get_q_values)
+    assert callable(PolicyBundle.sync_from)
+    assert callable(PolicyBundle.get_value)
+    assert callable(PolicyBundle.initial_hidden)
+    assert callable(PolicyBundle.state_dict)
+    assert callable(PolicyBundle.load_state_dict)
+    assert callable(PolicyBundle.to)
+    assert callable(PolicyBundle.enable_gradient_checkpointing)
+    assert callable(PolicyBundle.compile)
 
 
 def test_policy_bundle_protocol_properties():
     """PolicyBundle should define all required properties."""
-    required_properties = [
-        'is_recurrent',
-        'supports_off_policy',
-        'device',
-        'dtype',
-        'slot_config',
-        'feature_dim',
-        'hidden_dim',
-        'network',
-        'is_compiled',
-    ]
-    for prop in required_properties:
-        assert hasattr(PolicyBundle, prop), f"Missing property: {prop}"
+    assert isinstance(PolicyBundle.is_recurrent, property)
+    assert isinstance(PolicyBundle.supports_off_policy, property)
+    assert isinstance(PolicyBundle.device, property)
+    assert isinstance(PolicyBundle.dtype, property)
+    assert isinstance(PolicyBundle.slot_config, property)
+    assert isinstance(PolicyBundle.feature_dim, property)
+    assert isinstance(PolicyBundle.hidden_dim, property)
+    assert isinstance(PolicyBundle.network, property)
+    assert isinstance(PolicyBundle.is_compiled, property)
 
 
 def test_action_result_dataclass():

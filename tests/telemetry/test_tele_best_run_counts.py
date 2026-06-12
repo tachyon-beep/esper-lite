@@ -50,7 +50,6 @@ class TestTELE628BestRunFossilizedCount:
             final_accuracy=82.0,
             fossilized_count=3,
         )
-        assert hasattr(record, "fossilized_count")
         assert record.fossilized_count == 3
 
     def test_fossilized_count_default_is_zero(self) -> None:
@@ -192,7 +191,6 @@ class TestTELE629BestRunPrunedCount:
             final_accuracy=82.0,
             pruned_count=2,
         )
-        assert hasattr(record, "pruned_count")
         assert record.pruned_count == 2
 
     def test_pruned_count_default_is_zero(self) -> None:

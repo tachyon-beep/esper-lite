@@ -251,15 +251,14 @@ class TestTamiyoState:
         """TamiyoState should have per-head entropy for all 8 action heads."""
         tamiyo = TamiyoState()
 
-        # Should have all 8 head entropy fields
-        assert hasattr(tamiyo, 'head_slot_entropy')
-        assert hasattr(tamiyo, 'head_blueprint_entropy')
-        assert hasattr(tamiyo, 'head_style_entropy')
-        assert hasattr(tamiyo, 'head_tempo_entropy')
-        assert hasattr(tamiyo, 'head_alpha_target_entropy')
-        assert hasattr(tamiyo, 'head_alpha_speed_entropy')
-        assert hasattr(tamiyo, 'head_alpha_curve_entropy')
-        assert hasattr(tamiyo, 'head_op_entropy')
+        assert tamiyo.head_slot_entropy == 0.0
+        assert tamiyo.head_blueprint_entropy == 0.0
+        assert tamiyo.head_style_entropy == 0.0
+        assert tamiyo.head_tempo_entropy == 0.0
+        assert tamiyo.head_alpha_target_entropy == 0.0
+        assert tamiyo.head_alpha_speed_entropy == 0.0
+        assert tamiyo.head_alpha_curve_entropy == 0.0
+        assert tamiyo.head_op_entropy == 0.0
 
     def test_tamiyo_state_has_group_id(self):
         """TamiyoState should have group_id for A/B testing identification."""
@@ -770,10 +769,6 @@ def test_tamiyo_state_has_nan_inf_latch_fields():
     from esper.karn.sanctum.schema import TamiyoState
 
     state = TamiyoState()
-
-    # Should have latch dicts pre-populated with all heads set to False
-    assert hasattr(state, "head_nan_latch")
-    assert hasattr(state, "head_inf_latch")
 
     # All HEAD_NAMES keys should exist (no .get() needed in display code)
     for head in HEAD_NAMES:

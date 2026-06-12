@@ -139,6 +139,25 @@ class TestBufferAdd:
 
         assert buffer.rewards[0, 0].item() == 42.0
 
+    def test_add_stores_op_conditioned_value_tuple(self) -> None:
+        """Sampled op, effective op, and critic value stay aligned in one timestep."""
+        buffer = TamiyoRolloutBuffer(
+            num_envs=2,
+            max_steps_per_env=10,
+            state_dim=64,
+        )
+
+        kwargs = self._make_minimal_add_kwargs(buffer, env_id=1)
+        kwargs["op_action"] = 3
+        kwargs["effective_op_action"] = 0
+        kwargs["value"] = torch.tensor(7.25, requires_grad=True)
+        buffer.add(**kwargs)
+
+        assert buffer.op_actions[1, 0].item() == 3
+        assert buffer.effective_op_actions[1, 0].item() == 0
+        assert buffer.values[1, 0].item() == pytest.approx(7.25)
+        assert buffer.step_counts == [0, 1]
+
     def test_add_raises_on_overflow(self) -> None:
         """Adding beyond max_steps raises RuntimeError."""
         buffer = TamiyoRolloutBuffer(
@@ -670,19 +689,3 @@ class TestContributionTargets:
         # Verify data is correctly transferred
         assert data["has_fresh_contribution"][0, 0].item() is True
         assert data["contribution_targets"][0, 0].sum().item() == num_slots
-
-    def test_backward_compatibility_without_contribution_args(self) -> None:
-        """Buffer works correctly when contribution args are not provided (backward compat)."""
-        buffer = TamiyoRolloutBuffer(
-            num_envs=1,
-            max_steps_per_env=5,
-            state_dim=64,
-        )
-
-        # Add step without any contribution kwargs (default behavior)
-        kwargs = self._make_minimal_add_kwargs(buffer, env_id=0)
-        buffer.add(**kwargs)
-
-        # Should not raise, and has_fresh_contribution should be False
-        assert buffer.step_counts[0] == 1
-        assert buffer.has_fresh_contribution[0, 0].item() is False

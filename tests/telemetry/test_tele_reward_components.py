@@ -151,10 +151,6 @@ class TestTELE651BaseAccDelta:
     Display Format: +.2f
     """
 
-    def test_field_exists(self):
-        """TELE-651: base_acc_delta field exists in schema."""
-        components = RewardComponents()
-        assert hasattr(components, "base_acc_delta")
 
     def test_default_value(self):
         """TELE-651: Default value is 0.0 per TELE record."""
@@ -212,10 +208,6 @@ class TestTELE652SeedContribution:
     Display Format: +.1f%
     """
 
-    def test_field_exists(self):
-        """TELE-652: seed_contribution field exists in schema."""
-        components = RewardComponents()
-        assert hasattr(components, "seed_contribution")
 
     def test_default_value(self):
         """TELE-652: Default value is 0.0 per TELE record."""
@@ -273,10 +265,6 @@ class TestTELE653BoundedAttribution:
     Display Format: +.2f
     """
 
-    def test_field_exists(self):
-        """TELE-653: bounded_attribution field exists in schema."""
-        components = RewardComponents()
-        assert hasattr(components, "bounded_attribution")
 
     def test_default_value(self):
         """TELE-653: Default value is 0.0 per TELE record."""
@@ -334,10 +322,6 @@ class TestTELE654ComputeRent:
     Display Format: .2f
     """
 
-    def test_field_exists(self):
-        """TELE-654: compute_rent field exists in schema."""
-        components = RewardComponents()
-        assert hasattr(components, "compute_rent")
 
     def test_default_value(self):
         """TELE-654: Default value is 0.0 per TELE record."""
@@ -391,7 +375,6 @@ class TestEnvOverviewReadsRewardComponents:
     def test_env_has_reward_components(self):
         """EnvState has reward_components field of type RewardComponents."""
         env = EnvState(env_id=0)
-        assert hasattr(env, "reward_components")
         assert isinstance(env.reward_components, RewardComponents)
 
     def test_reward_components_default_values_in_env(self):
@@ -820,10 +803,6 @@ class TestTELE655RewardTotal:
     Display Format: +.3f with bold green (>= 0) or bold red (< 0)
     """
 
-    def test_total_field_exists(self):
-        """TELE-655: total field exists in schema."""
-        components = RewardComponents()
-        assert hasattr(components, "total")
 
     def test_total_default_value(self):
         """TELE-655: Default value is 0.0 per TELE record."""
@@ -891,10 +870,6 @@ class TestTELE656RewardStageBonus:
     PBRS Fraction: abs(stage_bonus) / abs(total), healthy range 10-40%
     """
 
-    def test_stage_bonus_field_exists(self):
-        """TELE-656: stage_bonus field exists in schema."""
-        components = RewardComponents()
-        assert hasattr(components, "stage_bonus")
 
     def test_stage_bonus_default_value(self):
         """TELE-656: Default value is 0.0 per TELE record."""
@@ -968,10 +943,6 @@ class TestTELE657RewardAlphaShock:
     Formula: -alpha_shock_coef * sum(alpha_delta^2)
     """
 
-    def test_alpha_shock_field_exists(self):
-        """TELE-657: alpha_shock field exists in schema."""
-        components = RewardComponents()
-        assert hasattr(components, "alpha_shock")
 
     def test_alpha_shock_default_value(self):
         """TELE-657: Default value is 0.0 per TELE record."""
@@ -1028,10 +999,6 @@ class TestTELE658RewardRatioPenalty:
     Triggered when: seed_contribution / total_improvement > 5.0 (500%)
     """
 
-    def test_ratio_penalty_field_exists(self):
-        """TELE-658: ratio_penalty field exists in schema."""
-        components = RewardComponents()
-        assert hasattr(components, "ratio_penalty")
 
     def test_ratio_penalty_default_value(self):
         """TELE-658: Default value is 0.0 per TELE record."""
@@ -1081,10 +1048,6 @@ class TestTELE659RewardHindsightCredit:
     Display: Blue styling, with scaffold metadata "(Nx, Y.Ye)"
     """
 
-    def test_hindsight_credit_field_exists(self):
-        """TELE-659: hindsight_credit field exists in schema."""
-        components = RewardComponents()
-        assert hasattr(components, "hindsight_credit")
 
     def test_hindsight_credit_default_value(self):
         """TELE-659: Default value is 0.0 per TELE record."""
@@ -1139,10 +1102,6 @@ class TestTELE660RewardScaffoldCount:
     Display: Shown as "(Nx, ...)" alongside hindsight_credit
     """
 
-    def test_scaffold_count_field_exists(self):
-        """TELE-660: scaffold_count field exists in schema."""
-        components = RewardComponents()
-        assert hasattr(components, "scaffold_count")
 
     def test_scaffold_count_default_value(self):
         """TELE-660: Default value is 0 per TELE record."""
@@ -1195,10 +1154,6 @@ class TestTELE661RewardAvgScaffoldDelay:
     Display Format: "X.Xe" (e.g., "3.5e" for 3.5 epochs)
     """
 
-    def test_avg_scaffold_delay_field_exists(self):
-        """TELE-661: avg_scaffold_delay field exists in schema."""
-        components = RewardComponents()
-        assert hasattr(components, "avg_scaffold_delay")
 
     def test_avg_scaffold_delay_default_value(self):
         """TELE-661: Default value is 0.0 per TELE record."""
@@ -1249,10 +1204,6 @@ class TestTELE662RewardFossilizeTerminalBonus:
     Formula: num_contributing_fossilized * fossilize_terminal_scale
     """
 
-    def test_fossilize_terminal_bonus_field_exists(self):
-        """TELE-662: fossilize_terminal_bonus field exists in schema."""
-        components = RewardComponents()
-        assert hasattr(components, "fossilize_terminal_bonus")
 
     def test_fossilize_terminal_bonus_default_value(self):
         """TELE-662: Default value is 0.0 per TELE record."""
@@ -1303,10 +1254,6 @@ class TestTELE663RewardBlendingWarning:
     Formula: -0.1 - escalation (where escalation increases with degradation)
     """
 
-    def test_blending_warning_field_exists(self):
-        """TELE-663: blending_warning field exists in schema."""
-        components = RewardComponents()
-        assert hasattr(components, "blending_warning")
 
     def test_blending_warning_default_value(self):
         """TELE-663: Default value is 0.0 per TELE record."""
@@ -1357,10 +1304,6 @@ class TestTELE664RewardHoldingWarning:
     Purpose: Encourages timely decision (fossilize or prune)
     """
 
-    def test_holding_warning_field_exists(self):
-        """TELE-664: holding_warning field exists in schema."""
-        components = RewardComponents()
-        assert hasattr(components, "holding_warning")
 
     def test_holding_warning_default_value(self):
         """TELE-664: Default value is 0.0 per TELE record."""

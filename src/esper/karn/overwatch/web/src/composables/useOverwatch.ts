@@ -5,6 +5,8 @@ export type ConnectionState = 'connecting' | 'connected' | 'disconnected'
 
 export interface UseOverwatchReturn {
   snapshot: Ref<SanctumSnapshot | null>
+  snapshotsByGroup: Ref<Record<string, SanctumSnapshot>>
+  primaryGroupId: Ref<string | null>
   connectionState: Ref<ConnectionState>
   lastUpdate: Ref<number>
   staleness: ComputedRef<number>
@@ -13,6 +15,8 @@ export interface UseOverwatchReturn {
 
 export function useOverwatch(url: string): UseOverwatchReturn {
   const snapshot = ref<SanctumSnapshot | null>(null)
+  const snapshotsByGroup = ref<Record<string, SanctumSnapshot>>({})
+  const primaryGroupId = ref<string | null>(null)
   const connectionState = ref<ConnectionState>('connecting')
   const lastUpdate = ref<number>(0)
 
@@ -55,6 +59,8 @@ export function useOverwatch(url: string): UseOverwatchReturn {
         const message = JSON.parse(event.data)
         if (message.type === 'snapshot') {
           snapshot.value = message.data
+          snapshotsByGroup.value = message.snapshots_by_group
+          primaryGroupId.value = message.primary_group_id
           lastUpdate.value = Date.now()
         }
       } catch (e) {
@@ -95,6 +101,8 @@ export function useOverwatch(url: string): UseOverwatchReturn {
 
   return {
     snapshot,
+    snapshotsByGroup,
+    primaryGroupId,
     connectionState,
     lastUpdate,
     staleness,

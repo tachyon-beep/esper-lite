@@ -19,15 +19,6 @@ def test_alpha_schedule_protocol_contract():
     ]
 
     for blend in blend_instances:
-        # Verify all required attributes exist
-        assert hasattr(blend, "algorithm_id"), \
-            f"{type(blend).__name__} missing algorithm_id"
-        assert hasattr(blend, "total_steps"), \
-            f"{type(blend).__name__} missing total_steps"
-        assert hasattr(blend, "_current_step"), \
-            f"{type(blend).__name__} missing _current_step"
-
-        # Verify attribute types
         assert isinstance(blend.algorithm_id, str), \
             f"{type(blend).__name__}.algorithm_id must be str"
         assert isinstance(blend.total_steps, int), \
@@ -66,7 +57,7 @@ def test_blend_registry():
     assert "gated" in available
 
     blend = BlendCatalog.create("gated", channels=64, total_steps=10)
-    assert hasattr(blend, "algorithm_id")
+    assert blend.algorithm_id == "gated"
 
 
 def test_alpha_schedule_protocol_includes_get_alpha_for_blend():
@@ -79,17 +70,10 @@ def test_alpha_schedule_protocol_includes_get_alpha_for_blend():
     """
     from esper.kasmina.blending import AlphaScheduleProtocol, GatedBlend
 
-    # Verify Protocol defines the method
-    assert hasattr(AlphaScheduleProtocol, "get_alpha_for_blend"), (
-        "AlphaScheduleProtocol must define get_alpha_for_blend method. "
-        "Without this, callers need type: ignore to call the method."
-    )
+    assert callable(AlphaScheduleProtocol.get_alpha_for_blend)
 
     # Verify GatedBlend satisfies the full protocol including the method
     blend = GatedBlend(channels=64, total_steps=10)
-    assert hasattr(blend, "get_alpha_for_blend"), (
-        "GatedBlend must implement get_alpha_for_blend"
-    )
     assert callable(blend.get_alpha_for_blend), (
         "get_alpha_for_blend must be callable"
     )

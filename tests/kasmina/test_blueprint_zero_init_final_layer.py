@@ -39,5 +39,14 @@ class TestBlueprintFinalLayerZeroInit:
 
     def test_zero_init_final_layer_allow_missing_is_noop(self) -> None:
         seed = BlueprintRegistry.create("cnn", "noop", dim=16)
+        state_before = {
+            name: tensor.detach().clone()
+            for name, tensor in seed.state_dict().items()
+        }
+
         zero_init_final_layer(seed, allow_missing=True)
 
+        state_after = seed.state_dict()
+        assert state_after.keys() == state_before.keys()
+        for name, tensor_before in state_before.items():
+            torch.testing.assert_close(state_after[name], tensor_before)

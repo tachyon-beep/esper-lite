@@ -108,10 +108,6 @@ class TestTELE220VReturnCorrelation:
     - Critical: < 0.3 (value network not learning)
     """
 
-    def test_field_exists(self):
-        """TELE-220: v_return_correlation field exists in schema."""
-        metrics = ValueFunctionMetrics()
-        assert hasattr(metrics, "v_return_correlation")
 
     def test_default_value(self):
         """TELE-220: Default value is 0.0 per TELE record."""
@@ -175,10 +171,6 @@ class TestTELE221TDErrorMean:
     - Critical: abs(value) >= 15
     """
 
-    def test_field_exists(self):
-        """TELE-221: td_error_mean field exists in schema."""
-        metrics = ValueFunctionMetrics()
-        assert hasattr(metrics, "td_error_mean")
 
     def test_default_value(self):
         """TELE-221: Default value is 0.0 per TELE record."""
@@ -230,10 +222,6 @@ class TestTELE222TDErrorStd:
     High std in early training is normal; should decrease as value network converges.
     """
 
-    def test_field_exists(self):
-        """TELE-222: td_error_std field exists in schema."""
-        metrics = ValueFunctionMetrics()
-        assert hasattr(metrics, "td_error_std")
 
     def test_default_value(self):
         """TELE-222: Default value is 0.0 per TELE record."""
@@ -282,10 +270,6 @@ class TestTELE223BellmanError:
     - Critical: >= 50 (NaN likely imminent)
     """
 
-    def test_field_exists(self):
-        """TELE-223: bellman_error field exists in schema."""
-        metrics = ValueFunctionMetrics()
-        assert hasattr(metrics, "bellman_error")
 
     def test_default_value(self):
         """TELE-223: Default value is 0.0 per TELE record."""
@@ -334,10 +318,6 @@ class TestTELE224ReturnP10:
     - Bimodal Warning: P90 - P10 > 50 (policy inconsistent)
     """
 
-    def test_field_exists(self):
-        """TELE-224: return_p10 field exists in schema."""
-        metrics = ValueFunctionMetrics()
-        assert hasattr(metrics, "return_p10")
 
     def test_default_value(self):
         """TELE-224: Default value is 0.0 per TELE record."""
@@ -380,10 +360,6 @@ class TestTELE225ReturnP50:
     - Concern: < 0 (typical episode has negative return)
     """
 
-    def test_field_exists(self):
-        """TELE-225: return_p50 field exists in schema."""
-        metrics = ValueFunctionMetrics()
-        assert hasattr(metrics, "return_p50")
 
     def test_default_value(self):
         """TELE-225: Default value is 0.0 per TELE record."""
@@ -427,10 +403,6 @@ class TestTELE226ReturnP90:
     - Bimodal Warning: P90 - P10 > 50 (policy inconsistent)
     """
 
-    def test_field_exists(self):
-        """TELE-226: return_p90 field exists in schema."""
-        metrics = ValueFunctionMetrics()
-        assert hasattr(metrics, "return_p90")
 
     def test_default_value(self):
         """TELE-226: Default value is 0.0 per TELE record."""
@@ -481,10 +453,6 @@ class TestTELE227ReturnVariance:
     - Warning: > 100 (sigma > 10, high variability)
     """
 
-    def test_field_exists(self):
-        """TELE-227: return_variance field exists in schema."""
-        metrics = ValueFunctionMetrics()
-        assert hasattr(metrics, "return_variance")
 
     def test_default_value(self):
         """TELE-227: Default value is 0.0 per TELE record."""
@@ -537,10 +505,6 @@ class TestTELE228ReturnSkewness:
     - Critical: abs(value) >= 2.0 (severely skewed)
     """
 
-    def test_field_exists(self):
-        """TELE-228: return_skewness field exists in schema."""
-        metrics = ValueFunctionMetrics()
-        assert hasattr(metrics, "return_skewness")
 
     def test_default_value(self):
         """TELE-228: Default value is 0.0 per TELE record."""
@@ -803,9 +767,6 @@ class TestValueFunctionMetricsIntegration:
         """ValueFunctionMetrics has deques for correlation computation."""
         metrics = ValueFunctionMetrics()
 
-        assert hasattr(metrics, "value_predictions")
-        assert hasattr(metrics, "actual_returns")
-        assert hasattr(metrics, "td_errors")
 
         assert isinstance(metrics.value_predictions, deque)
         assert isinstance(metrics.actual_returns, deque)

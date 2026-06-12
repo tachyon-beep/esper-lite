@@ -1,5 +1,7 @@
 """Tests for SlotConfig dataclass."""
 
+from dataclasses import FrozenInstanceError
+
 import pytest
 
 from esper.leyline.slot_config import SlotConfig
@@ -75,7 +77,7 @@ def test_num_slots_property():
 def test_slot_config_frozen():
     """SlotConfig should be frozen (immutable)."""
     config = SlotConfig.default()
-    with pytest.raises(Exception):  # dataclass frozen raises FrozenInstanceError
+    with pytest.raises(FrozenInstanceError):
         config.slot_ids = ("r0c0",)  # type: ignore
 
 
