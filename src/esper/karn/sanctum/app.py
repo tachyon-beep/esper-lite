@@ -807,12 +807,15 @@ class SanctumApp(App[None]):
         self._active_group_id = next_group_id
         self.notify(f"Policy group: {next_group_id}", severity="information")
 
-        self.view = SanctumView(
+        next_view = SanctumView(
             primary_group_id=next_group_id,
             primary=view.snapshots_by_group[next_group_id],
             snapshots_by_group=view.snapshots_by_group,
             reward_health_by_group=view.reward_health_by_group,
         )
+        self.view = next_view
+        self._snapshot = next_view.primary
+        self._apply_view(next_view)
 
     def action_show_run_info(self) -> None:
         """Show full run information modal (untruncated task name, etc.)."""
