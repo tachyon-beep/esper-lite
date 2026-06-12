@@ -66,3 +66,10 @@ image.png
 
 # Filigree issue tracker
 .filigree/
+
+# Filigree issue tracker
+.weft/
+.env
+
+# Legis — local working dir / config (regenerated/local; never commit)
+.weft/legis/
