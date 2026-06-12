@@ -4,10 +4,20 @@ These tests verify that gradient clipping is correctly implemented with proper
 AMP-safe ordering (unscale_ before clip_grad_norm_).
 """
 
+from dataclasses import dataclass
+from typing import Iterator
+from unittest.mock import MagicMock
+
+import pytest
 import torch
 import torch.nn as nn
-from unittest.mock import MagicMock
-from typing import Iterator
+
+from esper.leyline import SeedStage
+from esper.simic.telemetry.gradient_collector import (
+    DEFAULT_EXPLODING_THRESHOLD,
+    materialize_grad_stats,
+)
+from esper.simic.training.batch_ops import process_train_batch
 
 
 class MockSlottedModel(nn.Module):
@@ -31,6 +41,67 @@ class MockSlottedModel(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.host_linear(x) + self.seed_linear(x)
+
+
+@dataclass
+class _TaskSpec:
+    seed_lr: float = 0.01
+    task_type: str = "classification"
+
+
+class _FakeScaler:
+    def __init__(self, scale_factor: float):
+        self.scale_factor = scale_factor
+        self.unscale_calls = 0
+        self.step_calls = 0
+        self.update_calls = 0
+
+    def scale(self, loss: torch.Tensor) -> torch.Tensor:
+        return loss * self.scale_factor
+
+    def unscale_(self, optimizer: torch.optim.Optimizer) -> None:
+        self.unscale_calls += 1
+        for group in optimizer.param_groups:
+            for param in group["params"]:
+                if param.grad is not None:
+                    param.grad.div_(self.scale_factor)
+
+    def step(self, optimizer: torch.optim.Optimizer) -> None:
+        self.step_calls += 1
+        optimizer.step()
+
+    def update(self) -> None:
+        self.update_calls += 1
+
+
+def _loss_and_correct(
+    outputs: torch.Tensor,
+    targets: torch.Tensor,
+    criterion: nn.Module,
+    *,
+    task_type: str,
+) -> tuple[torch.Tensor, torch.Tensor, int]:
+    loss = criterion(outputs, targets)
+    correct = torch.tensor(0, device=outputs.device)
+    return loss, correct, int(targets.shape[0])
+
+
+def _make_env_state_with_scaler(
+    model: MockSlottedModel,
+    scaler: _FakeScaler,
+) -> MagicMock:
+    slot = MagicMock()
+    slot.state = MagicMock(stage=SeedStage.TRAINING)
+    model.seed_slots["r0c1"] = slot
+    env_state = MagicMock()
+    env_state.model = model
+    env_state.env_device = "cpu"
+    env_state.stream = None
+    env_state.autocast_enabled = False
+    env_state.scaler = scaler
+    env_state.host_optimizer = torch.optim.SGD(model.host_linear.parameters(), lr=0.01)
+    env_state.seed_optimizers = {}
+    return env_state
 
 
 class TestGradientClippingAMPOrdering:
@@ -74,6 +145,39 @@ class TestGradientClippingAMPOrdering:
         unscale_idx = next(i for i, c in enumerate(call_order) if c.startswith("unscale_"))
         clip_idx = call_order.index("clip_grad_norm_")
         assert unscale_idx < clip_idx, "unscale_() must be called before clip_grad_norm_()"
+
+    @pytest.mark.parametrize("max_grad_norm", [0.5, None])
+    def test_process_train_batch_collects_unscaled_amp_telemetry(
+        self,
+        max_grad_norm: float | None,
+    ):
+        """AMP telemetry uses unscaled gradients before optional clipping."""
+        torch.manual_seed(0)
+        model = MockSlottedModel()
+        scaler = _FakeScaler(scale_factor=1024.0)
+        env_state = _make_env_state_with_scaler(model, scaler)
+        criterion = nn.MSELoss()
+        inputs = torch.randn(4, 10)
+        targets = torch.zeros(4, 10)
+
+        _, _, _, grad_stats = process_train_batch(
+            env_state,
+            inputs,
+            targets,
+            criterion,
+            use_telemetry=True,
+            slots=["r0c1"],
+            max_grad_norm=max_grad_norm,
+            task_spec=_TaskSpec(),
+            resolved_amp_dtype=None,
+            loss_and_correct_fn=_loss_and_correct,
+        )
+
+        assert grad_stats is not None
+        health_stats = materialize_grad_stats(grad_stats["r0c1"]["_health_stats"])
+        assert health_stats["gradient_norm"] < DEFAULT_EXPLODING_THRESHOLD
+        assert health_stats["has_exploding"] is False
+        assert scaler.unscale_calls == 2
 
     def test_clip_grad_norm_actually_clips_large_gradients(self):
         """Verify that clip_grad_norm_ actually limits gradient magnitude."""
