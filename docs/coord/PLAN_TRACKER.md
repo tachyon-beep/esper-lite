@@ -1,6 +1,6 @@
 # Esper Plan Tracker
 
-**Last Updated:** 2026-06-13 (baseline green; PRs #80-#88 merged; recovery bug drain closed)
+**Last Updated:** 2026-06-13 (baseline green; recovery bug drain closed; Karn telemetry quality arc drafted)
 **Purpose:** Rack-and-stack all plans and concepts for prioritization and dependency tracking.
 
 ---
@@ -42,14 +42,16 @@ the stored action. These ops frequently diverge, corrupting advantage estimates.
 
 ### Current Focus Areas
 1. **Green State Recovery** - ✅ Completed; baseline green and recovery bug drain closed
-2. **P1 Stability Batch 1** - ✅ Completed and merged; six high-risk PPO/telemetry correctness bugs closed
-3. **P0 Filigree Bug Drain** - ✅ Initial six P0s fixed and closed
-4. **Op/Value Mismatch** - 🔴 CRITICAL! Fix double-sampling in factored_lstm.py
-5. **Reward Efficiency Experiment** - Infrastructure complete, experiment never run
-6. **Phase3-TinyStories** - 85% IMPLEMENTED, needs validation runs
-7. **Drip Reward Implementation** - ~70% done, needs integration completion
-8. **Telemetry Domain Separation** - ~30% done
-9. **Blueprint Compiler** - 0% (correctly deferred until entropy confirmed stable)
+2. **Dependency/Branch Drain** - In progress; consolidate patch dependency PRs and return checkout to `main`
+3. **Karn Telemetry Quality Arc** - Drafted; next upgrade package focused on Sanctum, Overwatch, MCP analytics, and telemetry contracts
+4. **P1 Stability Batch 1** - ✅ Completed and merged; six high-risk PPO/telemetry correctness bugs closed
+5. **P0 Filigree Bug Drain** - ✅ Initial six P0s fixed and closed
+6. **Op/Value Mismatch** - 🔴 CRITICAL! Fix double-sampling in factored_lstm.py
+7. **Reward Efficiency Experiment** - Infrastructure complete, experiment never run
+8. **Phase3-TinyStories** - 85% IMPLEMENTED, needs validation runs
+9. **Drip Reward Implementation** - ~70% done, needs integration completion
+10. **Telemetry Domain Separation** - ~30% done
+11. **Blueprint Compiler** - 0% (correctly deferred until entropy confirmed stable)
 
 ### Critical Path (Updated)
 ```
@@ -88,6 +90,8 @@ the stored action. These ops frequently diverge, corrupting advantage estimates.
 | ID | Title | Type | Urgency | Complexity | Risk | Status |
 |----|-------|------|---------|------------|------|--------|
 | reward-efficiency | Phase 1 Final Exam (A/B Testing) | ready | high | S | low | ⚠️ Infra 100% done, experiment never run |
+| karn-telemetry-quality-arc | Karn Telemetry Quality Strategic Arc | planning | high | L | medium | Drafted 2026-06-13; establishes Karn as the next quality-upgrade package |
+| karn-telemetry-sprint-1 | Karn Telemetry Quality Sprint 1 | planning | high | M | medium | Drafted 2026-06-13; dependency drain, Sanctum CI determinism, branch hygiene, Overwatch contract inventory |
 | drip-reward-impl | Post-Fossilization Drip Reward (impl) | ready | high | M | medium | ~70% done - dataclass + config complete, integration pending |
 | telemetry-domain-sep | Telemetry Domain Separation | ready | high | L | medium | ~30% done (3/9 DRL fields), no event renaming |
 | counterfactual-aux | Counterfactual Auxiliary Supervision | ready | high | M | medium | 0% - None of 4 phases started |
