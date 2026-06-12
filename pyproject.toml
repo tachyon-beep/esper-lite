@@ -18,7 +18,6 @@ dependencies = [
     "duckdb>=1.4.3",
     "mcp>=1.25.0",
     "psutil>=5.9.0",  # System resource monitoring for Sanctum
-    "filigree==1.2.0",
 ]
 
 [project.optional-dependencies]
