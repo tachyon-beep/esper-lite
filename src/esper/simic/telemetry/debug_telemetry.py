@@ -323,8 +323,6 @@ class RatioExplosionDiagnostic:
         actions: "torch.Tensor",
         max_threshold: float = 5.0,
         min_threshold: float = 0.1,
-        states: "torch.Tensor | None" = None,
-        action_masks: "torch.Tensor | None" = None,
     ) -> "RatioExplosionDiagnostic":
         """Create diagnostic from batch tensors.
 
@@ -335,8 +333,6 @@ class RatioExplosionDiagnostic:
             actions: Actions taken [N]
             max_threshold: Ratio above this is problematic
             min_threshold: Ratio below this is problematic
-            states: State observations [N, state_dim] (unused, reserved for future)
-            action_masks: Valid action masks [N, action_dim] (unused, reserved for future)
 
         Returns:
             RatioExplosionDiagnostic

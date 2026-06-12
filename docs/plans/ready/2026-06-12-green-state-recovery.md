@@ -29,13 +29,13 @@ blocks:
 status_notes: >
   PR #52 was made green, accepted, and merged as the new baseline on 2026-06-12.
   Main CI passed on merge commit cdff9c43. Recovery PR #72 landed the initial
-  P0 Filigree bug drain and project Filigree install removal. Follow-up PRs
-  #78 and #79 merged telemetry and training-control correctness fixes. PRs
-  #80, #81, #82, #83, and #84 merged the first five P2 batches. The repository
-  is green on CI, but not yet steady. The P2 config-contract batch is locally
-  fixed and verified against focused tests, custom/static guardrails, full
-  pytest, and Wardline gates; PR and tracker closure are next.
-percent_complete: 90
+  P0 Filigree bug drain. Follow-up PRs #78 and #79 merged telemetry and
+  training-control correctness fixes. PRs #80, #81, #82, #83, #84, and #85
+  merged the first six P2 batches. The repository is green on CI, but not yet
+  steady. The P2 telemetry-contract batch is locally fixed and verified against
+  focused tests, custom/static guardrails, full pytest, and Wardline gates; PR
+  and tracker closure are next.
+percent_complete: 92
 
 reviewed_by:
   - reviewer: python-engineering
@@ -213,13 +213,32 @@ Return the project to a steady state:
   - `MYPYPATH=src uv run mypy -p esper`
   - `uv run pytest` (`4702 passed, 10 skipped, 69 deselected`)
   - `wardline scan . --fail-on ERROR` (`0 active`)
-- Filigree was removed from the UV tool install on 2026-06-13:
-  `uv tool uninstall filigree` removed `filigree`, `filigree-dashboard`,
-  `filigree-mcp`, `filigree-scanner-claude`, and `filigree-scanner-codex`.
-  `uv tool list` now retains only Legis, Loomweave, Loomweave plugins, and
-  Wardline from the local standard tooling set.
-- Filigree on 2026-06-13 reports `9 ready`, `0 blocked`, and `2 wip`
-  after claiming `esper-lite-702e66` and `esper-lite-c8a6df`.
+- PR #85 (`codex/p2-config-contracts`) was merged into `main` on 2026-06-13
+  at merge commit `2e95e9198a8630688bc3e45c5926c3fec53061d2`.
+- PR #85 verification run `27427700826` passed:
+  - `lint`
+  - `typecheck`
+  - `property-tests`
+  - `unit-and-integration-tests`
+  - `e2e-smoke-tests`
+- The P2 config-contract bugs were fixed and closed:
+  - `esper-lite-702e66` advance-from-training reward penalty was configured but not applied
+  - `esper-lite-c8a6df` negative `value_warmup_batches` bypassed config validation
+- Local P2 telemetry-contract batch verification on 2026-06-13 passed:
+  - `uv run pytest tests/simic/test_vectorized.py::test_masked_op_probs_for_telemetry_excludes_invalid_ops tests/simic/test_vectorized.py::test_masked_op_probs_for_telemetry_applies_op_probability_floor tests/simic/test_telemetry_config.py::TestTelemetryConfig::test_should_collect_rejects_unknown_category tests/simic/test_ratio_explosion.py::TestRatioExplosionDiagnostic::test_from_batch_signature_has_no_reserved_dead_parameters -q`
+  - `uv run pytest tests/simic/test_vectorized.py tests/simic/test_telemetry_config.py tests/simic/test_ratio_explosion.py tests/simic/test_debug_telemetry.py -q`
+  - `uv run python scripts/lint_defensive_patterns.py`
+  - `uv run python scripts/lint_leyline_types.py`
+  - `uv run python scripts/lint_gpu_sync.py`
+  - `uv run ruff check src/ tests/`
+  - `MYPYPATH=src uv run mypy -p esper`
+  - `uv run pytest` (`4706 passed, 10 skipped, 69 deselected`)
+  - `wardline scan . --fail-on ERROR` (`0 active`)
+- Filigree remains an installed server-side utility and is not a removal target
+  for this recovery program. Use it only as needed for tracker workflow.
+- Filigree on 2026-06-13 reports `6 ready`, `0 blocked`, and `3 fixing`
+  after claiming `esper-lite-a402a5`, `esper-lite-157dbe`, and
+  `esper-lite-2bcb91`.
 - Loomweave MCP is visible, but the active MCP server still reports no
   `.weft/loomweave/loomweave.db` even after a worktree analysis pass. The
   available MCP session needs a reconnect before graph queries can be used.
@@ -481,24 +500,22 @@ uv run pytest
 
 Current queue snapshot, 2026-06-13:
 
-- P2 ready bugs: 19
-- P3 ready bugs: 2
+- Ready bugs: 6
 - Blocked: 0
-- WIP: 0
+- WIP: 3
 
 Current local batch:
 
-1. `esper-lite-aa2a27` checkpoint load fallback/legacy filtering.
-2. `esper-lite-dcb298` PPO update metrics TypedDict drift.
-3. `esper-lite-860e79` finiteness gate failure list type preservation.
+1. `esper-lite-a402a5` decision telemetry uses unmasked op probabilities.
+2. `esper-lite-157dbe` telemetry `should_collect()` silently disables unknown categories.
+3. `esper-lite-2bcb91` ratio-explosion diagnostic accepts dead reserved parameters.
 
-These all affect typed training/checkpoint/telemetry contracts and should be
-verified together with checkpoint, PPO metric, defensive-pattern, type, and
-full default pytest gates.
+These all affect telemetry contracts and should be verified together with
+focused telemetry/vectorized suites, defensive-pattern, GPU-sync, type, full
+default pytest, and Wardline gates.
 
-Status: fixed and locally verified on branch `codex/p2-steady-state-drain`.
-Tracker closure remains pending because the Filigree UV tool install was
-removed and no writable Filigree MCP tool is currently exposed in this session.
+Status: fixed and locally verified on branch `codex/p2-telemetry-contracts`.
+PR and tracker closure are next.
 
 ## Execution Log
 
@@ -513,8 +530,13 @@ removed and no writable Filigree MCP tool is currently exposed in this session.
 - 2026-06-12: PR #79 merged training-control correctness fixes and closed
   `esper-lite-afaf1a`, `esper-lite-df2f30`, and `esper-lite-6cc6b6`.
 - 2026-06-13: Recovery plan refreshed for the remaining P2/P3 contract drain.
-- 2026-06-13: Removed Filigree from the UV tool install; Legis, Loomweave, and
-  Wardline remain installed as UV tools.
 - 2026-06-13: Locally fixed and verified P2 contract batch
-  `esper-lite-aa2a27`, `esper-lite-dcb298`, and `esper-lite-860e79`; tracker
-  closure is pending a writable Filigree surface.
+  `esper-lite-aa2a27`, `esper-lite-dcb298`, and `esper-lite-860e79`; PR #80
+  merged and tracker closure completed.
+- 2026-06-13: Left the installed Filigree server utility alone; it is not part
+  of the recovery removal scope.
+- 2026-06-13: PRs #81, #82, #83, #84, and #85 merged five more P2 batches,
+  closing ten additional tracker bugs.
+- 2026-06-13: Locally fixed and verified P2 telemetry-contract batch
+  `esper-lite-a402a5`, `esper-lite-157dbe`, and `esper-lite-2bcb91`; PR and
+  tracker closure are next.

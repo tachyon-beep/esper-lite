@@ -1,6 +1,8 @@
 """Tests for telemetry configuration."""
 
 
+import pytest
+
 from esper.simic.telemetry import TelemetryLevel, TelemetryConfig
 
 
@@ -69,3 +71,9 @@ class TestTelemetryConfig:
         config = TelemetryConfig(level=TelemetryLevel.MINIMAL)
         assert config.should_collect("ops_normal") is False
         assert config.should_collect("debug") is False
+
+    def test_should_collect_rejects_unknown_category(self):
+        """Unknown telemetry categories should fail instead of silently disabling."""
+        config = TelemetryConfig(level=TelemetryLevel.DEBUG)
+        with pytest.raises(ValueError, match="Unknown telemetry category"):
+            config.should_collect("new_category")
