@@ -28,10 +28,10 @@ blocks:
 
 status_notes: >
   PR #52 was made green, accepted, and merged as the new baseline on 2026-06-12.
-  Main CI is running on merge commit cdff9c43. The active critical path is now
-  P0 Filigree bug drainage, starting with reward/gradient/resume correctness
-  defects that can silently corrupt learning signals.
-percent_complete: 45
+  Main CI passed on merge commit cdff9c43. The initial P0 Filigree bug drain is
+  complete for the six critical reward, gradient, resume, and attribution
+  defects identified in this recovery program.
+percent_complete: 75
 
 reviewed_by:
   - reviewer: python-engineering
@@ -64,8 +64,8 @@ Return the project to a steady state:
   - `property-tests`
   - `unit-and-integration-tests`
   - `e2e-smoke-tests`
-- Main post-merge Test Suite run: `27411344212` (pending at plan update time).
-- Filigree currently reports 50 ready issues, with six P0 bugs at the top of the queue:
+- Main post-merge Test Suite run `27411344212` passed on merge commit `cdff9c43`.
+- The six initial P0 Filigree bugs were fixed and closed:
   - `esper-lite-41841f` BASIC_PLUS drip state silently lost when `return_components=False`
   - `esper-lite-7078b7` NaN gradient norms bypass exploding detection
   - `esper-lite-52ee59` resume path loads checkpoint twice to GPU
@@ -188,7 +188,7 @@ Acceptance:
 Status:
 
 - Completed: PR #52 merged to `main` at `cdff9c43`.
-- Pending: post-merge main CI run `27411344212`.
+- Completed: post-merge main CI run `27411344212` passed.
 
 ### F. Drain Or Retarget Remaining PRs
 
@@ -223,8 +223,15 @@ Acceptance:
 - Each fixed P0 is closed in Filigree after code is committed.
 - Full repository gates are rerun after a coherent batch of P0 fixes.
 
+Status:
+
+- Completed: initial six P0 issues fixed, verified, and closed.
+- Pending: broad final repository gates and PR disposition pass.
+
 ## Execution Log
 
 - 2026-06-12: Program opened. PR #52 identified as critical path. Sidecar subagents dispatched for `origin/main` baseline verification and open PR classification.
 - 2026-06-12: PR #52 made green and merged as baseline at `cdff9c43`.
 - 2026-06-12: Recovery program moved to P0 Filigree bug drainage while post-merge main CI runs.
+- 2026-06-12: Main post-merge Test Suite `27411344212` passed.
+- 2026-06-12: Closed initial six P0 bugs: `esper-lite-41841f`, `esper-lite-7078b7`, `esper-lite-52ee59`, `esper-lite-b765c2`, `esper-lite-30e631`, and `esper-lite-102ff8`.

@@ -1,6 +1,6 @@
 # Esper Plan Tracker
 
-**Last Updated:** 2026-06-12 (baseline merged; P0 recovery active)
+**Last Updated:** 2026-06-12 (baseline green; initial P0 recovery complete)
 **Purpose:** Rack-and-stack all plans and concepts for prioritization and dependency tracking.
 
 ---
@@ -10,12 +10,13 @@
 ### Green-State Recovery (2026-06-12)
 
 The project is in stabilization mode. PR #52 (`env-refactor`) was made green and
-merged into `main` as the new baseline at merge commit `cdff9c43`. The active
-plan is `docs/plans/ready/2026-06-12-green-state-recovery.md`.
+merged into `main` as the new baseline at merge commit `cdff9c43`; post-merge
+main CI passed. The active plan is
+`docs/plans/ready/2026-06-12-green-state-recovery.md`.
 
-Current operating rule: drain critical P0 correctness bugs against the merged
-baseline before starting feature work. Security/dependency PRs remain next after
-the P0 queue is stable and post-merge main CI is confirmed green.
+Current operating rule: finish broad local gates and open PR disposition before
+starting feature work. Security/dependency PRs remain next after the recovery
+branch is landed.
 
 ### Post-Hiatus Audit (2026-02-21)
 
@@ -29,8 +30,8 @@ op twice independently — once in `forward()` for value computation, once in `g
 the stored action. These ops frequently diverge, corrupting advantage estimates. Blocks Phase 7.
 
 ### Current Focus Areas
-1. **Green State Recovery** - 🔴 CRITICAL! Baseline merged; drain P0 correctness bugs and confirm post-merge CI
-2. **P0 Filigree Bug Drain** - 🔴 CRITICAL! Fix silent reward, gradient, resume, and attribution corruption
+1. **Green State Recovery** - 🔴 CRITICAL! Baseline green; recovery branch needs final gates and PR disposition
+2. **P0 Filigree Bug Drain** - ✅ Initial six P0s fixed and closed
 3. **Op/Value Mismatch** - 🔴 CRITICAL! Fix double-sampling in factored_lstm.py
 4. **Reward Efficiency Experiment** - Infrastructure complete, experiment never run
 5. **Phase3-TinyStories** - 85% IMPLEMENTED, needs validation runs
@@ -65,8 +66,8 @@ the stored action. These ops frequently diverge, corrupting advantage estimates.
 
 | ID | Title | Type | Urgency | Complexity | Risk | Status |
 |----|-------|------|---------|------------|------|--------|
-| green-state-recovery-2026-06-12 | Green State Recovery Program | in-progress | 🔴 critical | M | high | Active: PR #52 merged; post-merge CI + P0 bug drain |
-| filigree-p0-drain | Critical Filigree P0 Bug Drain | in-progress | 🔴 critical | L | high | Six P0s ready; start with reward/gradient/resume corruption |
+| green-state-recovery-2026-06-12 | Green State Recovery Program | in-progress | 🔴 critical | M | high | Active: final gates and PR disposition after green baseline + P0 fixes |
+| filigree-p0-drain | Critical Filigree P0 Bug Drain | completed-batch | 🔴 critical | L | high | Initial six P0s fixed, verified, and closed |
 | op-value-mismatch | Q(s,op) Double-Sampling Bug | investigation | 🔴 critical | M | high | Diagnosed 2025-12-31, blocks Phase 7. See `docs/bugs/investigations/` |
 
 ### Tier 1: High Priority (This Week)
