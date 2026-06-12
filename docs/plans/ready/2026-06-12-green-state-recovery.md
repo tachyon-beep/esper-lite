@@ -31,7 +31,7 @@ status_notes: >
   Main CI passed on merge commit cdff9c43. The initial P0 Filigree bug drain is
   complete for the six critical reward, gradient, resume, and attribution
   defects identified in this recovery program.
-percent_complete: 75
+percent_complete: 90
 
 reviewed_by:
   - reviewer: python-engineering
@@ -205,6 +205,14 @@ Acceptance:
 - Open PR list no longer contains stale ambiguous PRs.
 - Remaining open PRs have a clear next action.
 
+Status:
+
+- Pending user action:
+  - `#71` Add Knowledge Base in `jules/` — `human-decision`; likely keep only if still desired after baseline.
+  - `#69`, `#65`, `#64` cleanup/comment PRs — `close-obsolete-after-baseline` unless still relevant after recovery branch lands.
+  - `#70` SQL injection fix — `security-priority-after-baseline`; inspect and rebase/land next.
+  - `#45`-`#63` Dependabot PRs and draft `#51` dependency consolidation — `security-priority-after-baseline` for security updates, otherwise retarget/consolidate after recovery branch.
+
 ### G. Drain Critical Filigree P0 Bugs
 
 Owner: primary agent with specialist subagents as needed.
@@ -226,7 +234,26 @@ Acceptance:
 Status:
 
 - Completed: initial six P0 issues fixed, verified, and closed.
-- Pending: broad final repository gates and PR disposition pass.
+- Completed: broad local gates passed where environment permits.
+- Blocked by local CUDA/data fetch: full `tests/simic` includes CUDA CIFAR iterator smoke files that attempted SSL dataset access and timed out locally.
+
+Final local evidence:
+
+```bash
+uv run ruff check src/ tests/
+uv run ruff check scripts/
+uv run python scripts/lint_leyline_types.py
+uv run python scripts/lint_defensive_patterns.py
+uv run python scripts/lint_gpu_sync.py
+MYPYPATH=src uv run mypy -p esper
+PYTHONPATH=src uv run pytest tests/simic --ignore=tests/simic/test_data_opt.py --ignore=tests/simic/test_record_stream_fix.py --ignore=tests/simic/training/test_dual_ab.py -q
+```
+
+The excluded files are CUDA/data-dependent smoke tests:
+
+- `tests/simic/test_data_opt.py`
+- `tests/simic/test_record_stream_fix.py`
+- `tests/simic/training/test_dual_ab.py`
 
 ## Execution Log
 
@@ -235,3 +262,4 @@ Status:
 - 2026-06-12: Recovery program moved to P0 Filigree bug drainage while post-merge main CI runs.
 - 2026-06-12: Main post-merge Test Suite `27411344212` passed.
 - 2026-06-12: Closed initial six P0 bugs: `esper-lite-41841f`, `esper-lite-7078b7`, `esper-lite-52ee59`, `esper-lite-b765c2`, `esper-lite-30e631`, and `esper-lite-102ff8`.
+- 2026-06-12: Final local gates passed except CUDA/data-dependent smoke files blocked by local SSL dataset fetch.
