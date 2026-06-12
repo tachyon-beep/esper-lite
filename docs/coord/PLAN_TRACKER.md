@@ -1,6 +1,6 @@
 # Esper Plan Tracker
 
-**Last Updated:** 2026-06-13 (baseline green; recovery bug drain closed; op/value mismatch verified resolved; Karn telemetry quality arc drafted)
+**Last Updated:** 2026-06-13 (baseline green; recovery bug drain closed; op/value mismatch verified resolved; Karn telemetry quality arc drafted; proof confounder drain drafted)
 **Purpose:** Rack-and-stack all plans and concepts for prioritization and dependency tracking.
 
 ---
@@ -48,20 +48,22 @@ recomputes Q(s,argmax op) in deterministic bootstrap mode, and focused regressio
 1. **Green State Recovery** - ✅ Completed; baseline green and recovery bug drain closed
 2. **Dependency/Branch Drain** - ✅ Completed; patch dependency PRs consolidated, stale branches drained, checkout returned to `main`
 3. **Karn Telemetry Quality Arc** - Drafted; next upgrade package focused on Sanctum, Overwatch, MCP analytics, and telemetry contracts
-4. **P1 Stability Batch 1** - ✅ Completed and merged; six high-risk PPO/telemetry correctness bugs closed
-5. **P0 Filigree Bug Drain** - ✅ Initial six P0s fixed and closed
-6. **Op/Value Mismatch** - ✅ Resolved; focused regression tests cover rollout and bootstrap consistency
-7. **Reward Efficiency Experiment** - Infrastructure complete, experiment never run
-8. **Phase3-TinyStories** - 85% IMPLEMENTED, needs validation runs
-9. **Drip Reward Implementation** - ~70% done, needs integration completion
-10. **Telemetry Domain Separation** - ~30% done
-11. **Blueprint Compiler** - 0% (correctly deferred until entropy confirmed stable)
+4. **Proof Confounder Drain** - Drafted; signal-recovery package to remove result-dampening confounders before the reward-efficiency verdict
+5. **P1 Stability Batch 1** - ✅ Completed and merged; six high-risk PPO/telemetry correctness bugs closed
+6. **P0 Filigree Bug Drain** - ✅ Initial six P0s fixed and closed
+7. **Op/Value Mismatch** - ✅ Resolved; focused regression tests cover rollout and bootstrap consistency
+8. **Reward Efficiency Experiment** - Infrastructure complete; should run after proof confounder gates can mark invalid runs honestly
+9. **Phase3-TinyStories** - 85% IMPLEMENTED, needs validation runs
+10. **Drip Reward Implementation** - ~70% done, needs integration completion
+11. **Telemetry Domain Separation** - ~30% done
+12. **Blueprint Compiler** - 0% (correctly deferred until entropy confirmed stable)
 
 ### Critical Path (Updated)
 ```
-reward-efficiency ──► counterfactual-oracle ──► emrakul-phase1
-              │
-              └──► blueprint-compiler ──► kasmina2-phase0
+proof-confounder-drain ──► reward-efficiency verdict ──► counterfactual-oracle ──► emrakul-phase1
+                    │                      │
+                    │                      └──► blueprint-compiler ──► kasmina2-phase0
+                    └──► phase3-tinystories validation
 ```
 
 ### Health Summary
@@ -71,10 +73,10 @@ reward-efficiency ──► counterfactual-oracle ──► emrakul-phase1
 | Completed | 15 | simic2 (3) + entropy fixes (2) + holding-warning + simic-audit + dual-state lifecycle (2) + drip-reward design + 4 telemetry + op/value mismatch |
 | Ready | 11 | Implementation-ready plans |
 | In Progress | 1 | phase3-tinystories (85%) |
-| Planning | 6 | Active design workspaces |
+| Planning | 7 | Active design workspaces |
 | Concept | 3 | counterfactual-oracle, emrakul-sketch, scaled-counterfactuals |
 | Abandoned | 3 | shaped-delta-clip, emrakul-submodule-editing, scry-design |
-| **Total Active** | **25** |
+| **Total Active** | **26** |
 
 ---
 
@@ -96,6 +98,7 @@ reward-efficiency ──► counterfactual-oracle ──► emrakul-phase1
 | reward-efficiency | Phase 1 Final Exam (A/B Testing) | ready | high | S | low | ⚠️ Infra 100% done, experiment never run |
 | karn-telemetry-quality-arc | Karn Telemetry Quality Strategic Arc | planning | high | L | medium | Drafted 2026-06-13; establishes Karn as the next quality-upgrade package |
 | karn-telemetry-sprint-1 | Karn Telemetry Quality Sprint 1 | planning | high | M | medium | Drafted 2026-06-13; dependency drain, Sanctum CI determinism, branch hygiene, Overwatch contract inventory |
+| proof-confounder-drain | Proof Confounder Drain | planning | high | L | high | Drafted 2026-06-13; signal-recovery package for confounder gates, learnability telemetry, counterfactual freshness, reward accounting, and proof packet |
 | drip-reward-impl | Post-Fossilization Drip Reward (impl) | ready | high | M | medium | ~70% done - dataclass + config complete, integration pending |
 | telemetry-domain-sep | Telemetry Domain Separation | ready | high | L | medium | ~30% done (3/9 DRL fields), no event renaming |
 | counterfactual-aux | Counterfactual Auxiliary Supervision | ready | high | M | medium | 0% - None of 4 phases started |
@@ -288,14 +291,16 @@ status_notes: |
   - CLI: --dual-ab shaped-vs-simplified ready
   - Configs: configs/ablations/{shaped,simplified,sparse}_baseline.json
 
-  NEVER EXECUTED. Just run it:
-  uv run python -m esper.scripts.train ppo --dual-ab shaped-vs-simplified --episodes 100
+  NEVER EXECUTED. Do not run the long exam until proof-confounder-drain can mark invalid runs honestly.
+  Current CLI uses --rounds for PPO update rounds:
+  PYTHONPATH=src uv run python -m esper.scripts.train ppo --task cifar_impaired --dual-ab shaped-vs-simplified --rounds 100 --envs 8 --episode-length 150
 percent_complete: 100 (infra) / 0 (experiment)
 ```
 
 **Commentary:**
-> **MAJOR FINDING:** All the code exists. The experiment was simply never run.
-> This is a "just press the button" situation, not a development task.
+> **MAJOR FINDING:** All the experiment code exists, but weaker-than-expected
+> prior signal means this should now run behind proof-confounder-drain rather
+> than as a raw "press the button" experiment.
 >
 > The dual-policy A/B system trains separate PPO agents per reward mode with
 > isolated environments, policies, and optimizers. Results would directly
@@ -1170,34 +1175,37 @@ percent_complete: 0
 
 ### Immediate Actions (This Week)
 
-1. **Run reward-efficiency experiment** - Infrastructure is 100% complete and the op/value blocker is resolved:
-   ```bash
-   uv run python -m esper.scripts.train ppo --dual-ab shaped-vs-simplified --episodes 100
-   ```
-
-2. **Run TinyStories baseline** - Implementation is 85% complete:
-   ```bash
-   uv run python -m esper.scripts.train ppo --task tinystories --episodes 50
-   ```
-
-3. **Start Karn Telemetry Quality Sprint 1** - Repair the evidence surface before deeper refactors:
+1. **Promote and execute proof-confounder-drain** - Prior runs strongly suggest the theory has signal, but weaker-than-expected effect size points to confounders. Build the proof-blocking gates before spending on the full reward exam:
    ```bash
    uv run --python 3.11 pytest tests/karn -q
+   uv run --python 3.11 pytest tests/simic tests/telemetry tests/leyline -q
    ```
+
+2. **Rehearse the reward-efficiency exam after confounder gates exist** - Validate telemetry, proof packet generation, and invalid-run handling on a short run before the expensive pass:
+   ```bash
+   PYTHONPATH=src uv run python -m esper.scripts.train ppo --task cifar_impaired --dual-ab shaped-vs-simplified --rounds 2 --envs 2 --episode-length 25
+   ```
+
+3. **Run reward-efficiency experiment only after the rehearsal packet is valid** - Infrastructure is 100% complete and the op/value blocker is resolved, but the proof packet must be able to mark confounded runs invalid:
+   ```bash
+   PYTHONPATH=src uv run python -m esper.scripts.train ppo --task cifar_impaired --dual-ab shaped-vs-simplified --rounds 100 --envs 8 --episode-length 150
+   ```
+
+4. **Run TinyStories baseline after the CIFAR proof verdict** - Implementation is 85% complete, but transformer validation should not outrun the confounder drain.
 
 ### Short-Term (Next 2 Weeks)
 
-4. **Complete drip-reward integration** - ~70% done, needs pipeline wiring and telemetry
-5. **Implement telemetry-domain-sep** - Currently ~30% done. Break schema now.
-6. **Implement counterfactual-aux** - 0% done. Adds ContributionPredictor head.
-7. **Triage generated bugs** - 14 Codex analysis files in `docs/bugs/generated/` need review
-8. **Analyze reward A/B results** - Declare winner (SHAPED vs SIMPLIFIED).
+5. **Complete drip-reward integration** - ~70% done, needs pipeline wiring and telemetry
+6. **Implement telemetry-domain-sep** - Currently ~30% done. Break schema now.
+7. **Implement counterfactual-aux** - 0% done. Adds ContributionPredictor head.
+8. **Triage generated bugs** - 14 Codex analysis files in `docs/bugs/generated/` need review
+9. **Analyze reward A/B results** - Declare winner or next confounder (SHAPED vs SIMPLIFIED).
 
 ### Medium-Term (Next Month)
 
-9. **Begin kasmina2-phase0 implementation** - Design complete, simic2 blocker removed.
-10. **Begin counterfactual-oracle Phase 1** - Unblocked once reward-efficiency has data.
-11. **Blueprint compiler Phase 4** - New curriculum blueprints (ONLY if entropy stable >0.10).
+10. **Begin kasmina2-phase0 implementation** - Design complete, simic2 blocker removed.
+11. **Begin counterfactual-oracle Phase 1** - Unblocked once reward-efficiency has data.
+12. **Blueprint compiler Phase 4** - New curriculum blueprints (ONLY if entropy stable >0.10).
 
 ### Parking Lot (Not Now)
 
@@ -1216,6 +1224,7 @@ percent_complete: 0
 
 | Date | Change |
 |------|--------|
+| 2026-06-13 | **PROOF CONFOUNDER DRAIN DRAFTED.** Added `docs/plans/planning/2026-06-13-proof-confounder-drain.md` as the next major signal-recovery package. Framing: prior results strongly suggest Esper's underlying theory is sound, but weaker-than-expected effect size points to confounders. The package gates proof runs on anomaly/confounder ledger, action-head learnability, counterfactual freshness, reward-accounting closure, and a generated proof packet before the full reward-efficiency verdict. |
 | 2026-06-13 | **OP/VALUE MISMATCH VERIFIED RESOLVED.** `get_action()` uses one selected op for action, log-prob, and Q(s,op) value in stochastic rollout mode, and recomputes Q(s,argmax op) for deterministic bootstrap. Added direct regression probes and updated active critical count to 0. |
 | 2026-02-21 | **POST-HIATUS FULL AUDIT.** Returned after 1-month break. Comprehensive codebase audit using explore agents: |
 | | **Plans moved to completed/ (5 files):** |
