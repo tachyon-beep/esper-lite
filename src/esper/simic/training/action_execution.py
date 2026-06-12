@@ -94,6 +94,11 @@ _HEAD_OP_IDX = _HEAD_NAME_TO_IDX["op"]
 _logger = logging.getLogger(__name__)
 
 
+def _reward_components_required_for_state_transport(reward_mode: RewardMode) -> bool:
+    """Reward modes that persist state via RewardComponentsTelemetry."""
+    return reward_mode in (RewardMode.ESCROW, RewardMode.BASIC_PLUS)
+
+
 class ResolveTargetSlot(Protocol):
     def __call__(
         self,
@@ -511,8 +516,8 @@ def execute_actions(
                 else None
             )
             seed_id = seed_state.seed_id if seed_state is not None else None
-            force_reward_components = (
-                env_reward_configs[env_idx].reward_mode == RewardMode.ESCROW
+            force_reward_components = _reward_components_required_for_state_transport(
+                env_reward_configs[env_idx].reward_mode
             )
             return_components = (
                 emit_reward_components_event
@@ -575,7 +580,10 @@ def execute_actions(
                     reward_components.host_baseline_acc = baseline_accs[env_idx][
                         target_slot
                     ]
-                if force_reward_components and reward_components is not None:
+                if (
+                    env_reward_configs[env_idx].reward_mode == RewardMode.ESCROW
+                    and reward_components is not None
+                ):
                     env_state.escrow_credit[target_slot] = (
                         reward_components.escrow_credit_next
                     )
