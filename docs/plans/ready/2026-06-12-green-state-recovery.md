@@ -30,12 +30,12 @@ status_notes: >
   PR #52 was made green, accepted, and merged as the new baseline on 2026-06-12.
   Main CI passed on merge commit cdff9c43. Recovery PR #72 landed the initial
   P0 Filigree bug drain. Follow-up PRs #78 and #79 merged telemetry and
-  training-control correctness fixes. PRs #80, #81, #82, #83, #84, #85, and
-  #86 merged seven P2 batches. The repository is green on CI, but not yet
-  steady. The import-hygiene batch is locally fixed and verified against
-  focused tests, custom/static guardrails, full pytest, and Wardline gates; PR
-  and tracker closure are next.
-percent_complete: 94
+  training-control correctness fixes. PRs #80, #81, #82, #83, #84, #85, #86,
+  and #87 merged eight P2 batches. The repository is green on CI, but not yet
+  steady. The final bug-drain batch is locally fixed and verified against
+  focused tests, custom/static guardrails, full pytest, and Wardline gates; PR,
+  CI, and tracker closure are next.
+percent_complete: 98
 
 reviewed_by:
   - reviewer: python-engineering
@@ -259,9 +259,30 @@ Return the project to a steady state:
   - `wardline scan . --fail-on ERROR` (`0 active`)
 - Filigree remains an installed server-side utility and is not a removal target
   for this recovery program. Use it only as needed for tracker workflow.
-- Filigree on 2026-06-13 reports `3 ready`, `0 blocked`, and `3 fixing`
-  after claiming `esper-lite-0c7b3b`, `esper-lite-7481c4`, and
-  `esper-lite-eb5662`.
+- PR #87 (`codex/p2-import-hygiene`) was merged into `main` on 2026-06-13 at
+  merge commit `8e529d57`.
+- PR #87 verification run `27429796520` passed:
+  - `lint`
+  - `typecheck`
+  - `property-tests`
+  - `unit-and-integration-tests`
+  - `e2e-smoke-tests`
+- The P2 import-hygiene bugs were fixed and closed:
+  - `esper-lite-0c7b3b` `training/__init__.py` eagerly imported `ParallelEnvState`
+  - `esper-lite-7481c4` `simic.__getattr__` resolved `safe` and `TaskConfig` through Tamiyo
+  - `esper-lite-eb5662` `telemetry/__init__.py` eagerly imported heavy telemetry modules
+- Local final bug-drain verification on 2026-06-13 passed:
+  - `uv run pytest tests/simic/training/test_epoch_runner.py::test_epoch_state_reset_for_new_batch_reuses_and_resizes_allocations tests/simic/agent/test_types.py::test_action_dict_action_heads_are_tensors -q`
+  - `uv run pytest tests/simic/training/test_epoch_runner.py tests/simic/agent/test_types.py tests/simic/agent/test_ppo_update.py tests/simic/agent/test_ppo_metrics_contract.py -q`
+  - `uv run python scripts/lint_defensive_patterns.py`
+  - `uv run python scripts/lint_leyline_types.py`
+  - `uv run python scripts/lint_gpu_sync.py`
+  - `uv run ruff check src/ tests/`
+  - `MYPYPATH=src uv run mypy -p esper`
+  - `uv run pytest` (`4712 passed, 10 skipped, 69 deselected`)
+  - `wardline scan . --fail-on ERROR` (`0 active`)
+- Filigree on 2026-06-13 reports `1 ready`, `0 blocked`, and `2 fixing`
+  after claiming `esper-lite-352e3c` and `esper-lite-5d7260`.
 - Loomweave MCP is visible, but the active MCP server still reports no
   `.weft/loomweave/loomweave.db` even after a worktree analysis pass. The
   available MCP session needs a reconnect before graph queries can be used.
@@ -523,22 +544,22 @@ uv run pytest
 
 Current queue snapshot, 2026-06-13:
 
-- Ready bugs: 3
+- Ready bugs: 1
 - Blocked: 0
-- WIP: 3
+- WIP: 2
 
 Current local batch:
 
-1. `esper-lite-0c7b3b` `training/__init__.py` eagerly imports `ParallelEnvState`.
-2. `esper-lite-7481c4` `simic.__getattr__` resolves `safe` and `TaskConfig` through Tamiyo.
-3. `esper-lite-eb5662` `telemetry/__init__.py` eagerly imports heavy telemetry modules.
+1. `esper-lite-352e3c` `EpochState.reset_for_new_batch()` omits
+   contribution/loss reward inputs from resize.
+2. `esper-lite-5d7260` `ActionDict` type annotation declares scalar `int`
+   values while runtime action heads are tensors.
 
-These all affect import hygiene and package-level public exports. They should
-be verified together with import-isolation tests, telemetry/config import
-consumers, defensive-pattern, GPU-sync, type, full default pytest, and Wardline
-gates.
+These both affect shared Simic contracts and are verified together with focused
+regression tests, PPO agent consumer tests, defensive-pattern, GPU-sync, type,
+full default pytest, and Wardline gates.
 
-Status: fixed and locally verified on branch `codex/p2-import-hygiene`.
+Status: fixed and locally verified on branch `codex/final-bug-drain`.
 PR and tracker closure are next.
 
 ## Execution Log
@@ -565,5 +586,8 @@ PR and tracker closure are next.
   `esper-lite-a402a5`, `esper-lite-157dbe`, and `esper-lite-2bcb91`; PR #86
   merged and tracker closure completed.
 - 2026-06-13: Locally fixed and verified import-hygiene batch
-  `esper-lite-0c7b3b`, `esper-lite-7481c4`, and `esper-lite-eb5662`; PR and
-  tracker closure are next.
+  `esper-lite-0c7b3b`, `esper-lite-7481c4`, and `esper-lite-eb5662`; PR #87
+  merged and tracker closure completed.
+- 2026-06-13: Locally fixed and verified final bug-drain batch
+  `esper-lite-352e3c` and `esper-lite-5d7260`; PR, CI, and tracker closure are
+  next.

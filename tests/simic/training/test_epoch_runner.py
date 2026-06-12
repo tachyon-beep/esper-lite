@@ -69,9 +69,14 @@ def test_epoch_state_reset_for_new_batch_reuses_and_resizes_allocations() -> Non
     assert len(state.action_specs) == 3
     assert len(state.action_outcomes) == 3
     assert len(state.action_mask_flags) == 3
+    assert len(state.contribution_reward_inputs) == 3
+    assert len(state.loss_reward_inputs) == 3
     assert state.env_final_accs == [0.0, 0.0, 0.0]
     assert state.env_total_rewards == [0.0, 0.0, 0.0]
     assert state.env_rollback_occurred == [False, False, False]
+    assert state.contribution_reward_inputs[1].action is LifecycleOp.WAIT
+    assert state.contribution_reward_inputs[1].config is env_reward_configs[0]
+    assert state.loss_reward_inputs[1].action is LifecycleOp.WAIT
     assert state.raw_states_for_normalizer_update == []
     assert state.throughput_step_time_ms_sum == 0.0
     assert state.throughput_dataloader_wait_ms_sum == 0.0
