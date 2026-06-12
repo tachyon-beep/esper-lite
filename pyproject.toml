@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Morphogenetic neural network training - proof of concept"
 requires-python = ">=3.11"
 dependencies = [
-    "torch>=2.8.0",
+    "torch>=2.12.0",
     "torchvision>=0.18.0", # CIFAR-10 data loading
     "numpy>=1.24.0",
     "hypothesis>=6.148.3",
