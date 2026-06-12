@@ -159,9 +159,5 @@ def test_historical_env_detail_has_lifecycle_panel():
     )
     modal = HistoricalEnvDetail(record)
 
-    # Should have lifecycle panel in compose
-    # This is a structural test - full integration would need async test
-    assert hasattr(modal, "_get_current_lifecycle_events")
-
     peak_events = modal._get_current_lifecycle_events()
     assert len(peak_events) == 1

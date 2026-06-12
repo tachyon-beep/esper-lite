@@ -55,7 +55,7 @@ paths_to_mutate = [
 ]
 tests_dir = ["tests/tamiyo/", "tests/kasmina/", "tests/simic/rewards/"]
 # Keep mutation testing focused on the fast/stable suite.
-pytest_add_cli_args_test_selection = ["-m", "not integration and not stress and not property"]
+pytest_add_cli_args_test_selection = ["-m", "not integration and not stress and not property and not slow"]
 # Tests import from `src/` via `pytest.ini`'s `pythonpath=src`, so mutmut needs enough of the
 # source tree available inside `mutants/` (not just the mutated paths). Avoid copying the full
 # `src/` tree because it may include local `node_modules/` from Overwatch web development.

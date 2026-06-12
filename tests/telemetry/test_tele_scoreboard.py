@@ -44,7 +44,6 @@ class TestTELE620PeakAccuracy:
             peak_accuracy=85.5,
             final_accuracy=82.0,
         )
-        assert hasattr(record, "peak_accuracy")
         assert record.peak_accuracy == 85.5
 
     def test_peak_accuracy_type_is_float(self) -> None:
@@ -104,7 +103,6 @@ class TestTELE621FinalAccuracy:
             peak_accuracy=85.5,
             final_accuracy=82.0,
         )
-        assert hasattr(record, "final_accuracy")
         assert record.final_accuracy == 82.0
 
     def test_final_accuracy_type_is_float(self) -> None:
@@ -297,7 +295,6 @@ class TestTELE623GrowthRatio:
             final_accuracy=82.0,
             growth_ratio=1.05,
         )
-        assert hasattr(record, "growth_ratio")
         assert record.growth_ratio == 1.05
 
     def test_growth_ratio_default_is_one(self) -> None:
@@ -394,7 +391,6 @@ class TestTELE624Episode:
             peak_accuracy=85.0,
             final_accuracy=82.0,
         )
-        assert hasattr(record, "episode")
         assert record.episode == 42
 
     def test_episode_type_is_int(self) -> None:
@@ -459,7 +455,6 @@ class TestTELE625Epoch:
             final_accuracy=82.0,
             epoch=30,
         )
-        assert hasattr(record, "epoch")
         assert record.epoch == 30
 
     def test_epoch_default_is_zero(self) -> None:
@@ -707,34 +702,6 @@ class TestTELE627MeanBest:
 class TestBestRunRecordSchemaCompleteness:
     """Verify BestRunRecord schema has all expected fields."""
 
-    def test_all_required_fields_exist(self) -> None:
-        """BestRunRecord must have all required fields."""
-        record = BestRunRecord(
-            env_id=0,
-            episode=1,
-            peak_accuracy=85.0,
-            final_accuracy=82.0,
-        )
-
-        # Core identity
-        assert hasattr(record, "env_id")
-        assert hasattr(record, "episode")
-
-        # Accuracy metrics
-        assert hasattr(record, "peak_accuracy")
-        assert hasattr(record, "final_accuracy")
-
-        # Epoch tracking
-        assert hasattr(record, "epoch")
-
-        # Growth tracking
-        assert hasattr(record, "growth_ratio")
-
-        # Seed snapshot
-        assert hasattr(record, "seeds")
-
-        # Click targeting
-        assert hasattr(record, "record_id")
 
     def test_default_values(self) -> None:
         """Verify default values for optional fields."""

@@ -295,14 +295,13 @@ class TestAsyncSafeMetrics:
         assert correct.ndim == 0
 
 
-class TestBackwardsCompatibility:
-    """Tests ensuring the new functions match the old implementations."""
+class TestLossContracts:
+    """Tests ensuring task loss helpers match their public mathematical contract."""
 
-    def test_matches_simic_loss_and_correct(self):
-        """Should produce identical results to simic._loss_and_correct."""
+    def test_classification_loss_and_correct_count_match_cross_entropy_contract(self):
+        """Classification metrics should use cross entropy and exact argmax hits."""
         from esper.utils.loss import compute_task_loss_with_metrics
 
-        # Test classification
         outputs = torch.randn(16, 10)
         targets = torch.randint(0, 10, (16,))
         criterion = nn.CrossEntropyLoss()
@@ -311,29 +310,26 @@ class TestBackwardsCompatibility:
             outputs, targets, criterion, "classification"
         )
 
-        # Manual reimplementation of old logic
-        old_loss = criterion(outputs, targets)
+        expected_loss = criterion(outputs, targets)
         _, predicted = outputs.max(1)
-        old_correct = float(predicted.eq(targets).sum().item())
-        old_total = targets.size(0)
+        expected_correct = float(predicted.eq(targets).sum().item())
+        expected_total = targets.size(0)
 
-        assert torch.allclose(loss, old_loss)
-        assert correct == old_correct
-        assert total == old_total
+        assert torch.allclose(loss, expected_loss)
+        assert correct == expected_correct
+        assert total == expected_total
 
-    def test_matches_tolaria_compute_loss(self):
-        """Should produce identical results to tolaria._compute_loss."""
+    def test_language_model_loss_flattens_batch_and_sequence_axes(self):
+        """Language-model loss should flatten batch and sequence axes before CE."""
         from esper.utils.loss import compute_task_loss
 
-        # Test LM
         outputs = torch.randn(4, 8, 500)
         targets = torch.randint(0, 500, (4, 8))
         criterion = nn.CrossEntropyLoss()
 
         loss = compute_task_loss(outputs, targets, criterion, "lm")
 
-        # Manual reimplementation of old logic
         vocab = outputs.size(-1)
-        old_loss = criterion(outputs.view(-1, vocab), targets.view(-1))
+        expected_loss = criterion(outputs.view(-1, vocab), targets.view(-1))
 
-        assert torch.allclose(loss, old_loss)
+        assert torch.allclose(loss, expected_loss)

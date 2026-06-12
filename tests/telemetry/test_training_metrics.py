@@ -943,7 +943,6 @@ class TestTELE020RuntimeSecondsWiring:
 
     def test_runtime_seconds_positive_after_training_started(self):
         """TELE-020 WIRING: runtime_seconds > 0 after TRAINING_STARTED."""
-        import time
         from esper.karn.sanctum.aggregator import SanctumAggregator
 
         aggregator = SanctumAggregator(num_envs=4)
@@ -955,8 +954,7 @@ class TestTELE020RuntimeSecondsWiring:
         )
         aggregator.process_event(event)
 
-        # Small sleep to ensure measurable elapsed time
-        time.sleep(0.01)
+        aggregator._start_time -= 0.25
 
         snapshot = aggregator.get_snapshot()
         # After TRAINING_STARTED, runtime should be > 0
@@ -964,7 +962,6 @@ class TestTELE020RuntimeSecondsWiring:
 
     def test_runtime_seconds_increases_over_time(self):
         """TELE-020 WIRING: runtime_seconds increases with elapsed time."""
-        import time
         from esper.karn.sanctum.aggregator import SanctumAggregator
 
         aggregator = SanctumAggregator(num_envs=4)
@@ -978,7 +975,7 @@ class TestTELE020RuntimeSecondsWiring:
 
         # Take two snapshots with a delay between them
         snapshot1 = aggregator.get_snapshot()
-        time.sleep(0.02)
+        aggregator._start_time -= 0.25
         snapshot2 = aggregator.get_snapshot()
 
         # Second snapshot should have larger runtime

@@ -4,6 +4,19 @@
 
 export type SeedStage = "UNKNOWN" | "DORMANT" | "GERMINATED" | "TRAINING" | "BLENDING" | "HOLDING" | "FOSSILIZED" | "PRUNED" | "EMBARGOED" | "RESETTING";
 
+export interface ShapleyEstimate {
+  mean: number;
+  std: number;
+  n_samples: number;
+}
+
+export interface ShapleySnapshot {
+  slot_ids: string[];
+  values: Record<string, ShapleyEstimate>;
+  epoch: number;
+  timestamp: string | null;
+}
+
 export interface CounterfactualConfig {
   seed_mask: boolean[];
   accuracy: number;
@@ -24,6 +37,38 @@ export interface GPUStats {
   temperature: number;
 }
 
+export interface InfrastructureMetrics {
+  cuda_memory_allocated_gb: number;
+  cuda_memory_reserved_gb: number;
+  cuda_memory_peak_gb: number;
+  cuda_memory_fragmentation: number;
+  dataloader_wait_ratio: number;
+  compile_enabled: boolean;
+  compile_backend: string;
+  compile_mode: string;
+}
+
+export interface GradientQualityMetrics {
+  gradient_cv: number;
+  clip_fraction_positive: number;
+  clip_fraction_negative: number;
+}
+
+export interface ValueFunctionMetrics {
+  v_return_correlation: number;
+  td_error_mean: number;
+  td_error_std: number;
+  bellman_error: number;
+  return_p10: number;
+  return_p50: number;
+  return_p90: number;
+  return_skewness: number;
+  return_variance: number;
+  value_predictions: number[];
+  actual_returns: number[];
+  td_errors: number[];
+}
+
 export interface SeedLifecycleEvent {
   epoch: number;
   action: string;
@@ -35,17 +80,60 @@ export interface SeedLifecycleEvent {
   accuracy_delta: number | null;
 }
 
-export interface ShapleyEstimate {
-  mean: number;
-  std: number;
-  n_samples: number;
+export interface SeedLifecycleStats {
+  germination_count: number;
+  prune_count: number;
+  fossilize_count: number;
+  active_count: number;
+  total_slots: number;
+  germination_rate: number;
+  prune_rate: number;
+  fossilize_rate: number;
+  blend_success_rate: number;
+  avg_lifespan_epochs: number;
+  germination_trend: string;
+  prune_trend: string;
+  fossilize_trend: string;
 }
 
-export interface ShapleySnapshot {
-  slot_ids: string[];
-  values: Record<string, ShapleyEstimate>;
-  epoch: number;
-  timestamp: string | null;
+export interface ObservationStats {
+  slot_features_mean: number;
+  slot_features_std: number;
+  host_features_mean: number;
+  host_features_std: number;
+  context_features_mean: number;
+  context_features_std: number;
+  outlier_pct: number;
+  near_clip_pct: number;
+  clip_pct: number;
+  nan_count: number;
+  inf_count: number;
+  nan_pct: number;
+  inf_pct: number;
+  normalization_drift: number;
+  batch_size: number;
+}
+
+export interface EpisodeStats {
+  length_mean: number;
+  length_std: number;
+  length_min: number;
+  length_max: number;
+  total_episodes: number;
+  episodes_per_second: number;
+  timeout_count: number;
+  success_count: number;
+  early_termination_count: number;
+  timeout_rate: number;
+  success_rate: number;
+  early_termination_rate: number;
+  steps_per_germinate: number;
+  steps_per_prune: number;
+  steps_per_fossilize: number;
+  action_entropy: number;
+  yield_rate: number;
+  slot_utilization: number;
+  completion_trend: string;
 }
 
 export interface SeedState {
@@ -161,94 +249,6 @@ export interface RunConfig {
   param_budget: number;
   resume_path: string;
   entropy_anneal: Record<string, number>;
-}
-
-export interface SeedLifecycleStats {
-  germination_count: number;
-  prune_count: number;
-  fossilize_count: number;
-  active_count: number;
-  total_slots: number;
-  germination_rate: number;
-  prune_rate: number;
-  fossilize_rate: number;
-  blend_success_rate: number;
-  avg_lifespan_epochs: number;
-  germination_trend: string;
-  prune_trend: string;
-  fossilize_trend: string;
-}
-
-export interface ObservationStats {
-  slot_features_mean: number;
-  slot_features_std: number;
-  host_features_mean: number;
-  host_features_std: number;
-  context_features_mean: number;
-  context_features_std: number;
-  outlier_pct: number;
-  near_clip_pct: number;
-  clip_pct: number;
-  nan_count: number;
-  inf_count: number;
-  nan_pct: number;
-  inf_pct: number;
-  normalization_drift: number;
-  batch_size: number;
-}
-
-export interface EpisodeStats {
-  length_mean: number;
-  length_std: number;
-  length_min: number;
-  length_max: number;
-  total_episodes: number;
-  episodes_per_second: number;
-  timeout_count: number;
-  success_count: number;
-  early_termination_count: number;
-  timeout_rate: number;
-  success_rate: number;
-  early_termination_rate: number;
-  steps_per_germinate: number;
-  steps_per_prune: number;
-  steps_per_fossilize: number;
-  action_entropy: number;
-  yield_rate: number;
-  slot_utilization: number;
-  completion_trend: string;
-}
-
-export interface ValueFunctionMetrics {
-  v_return_correlation: number;
-  td_error_mean: number;
-  td_error_std: number;
-  bellman_error: number;
-  return_p10: number;
-  return_p50: number;
-  return_p90: number;
-  return_skewness: number;
-  return_variance: number;
-  value_predictions: number[];
-  actual_returns: number[];
-  td_errors: number[];
-}
-
-export interface GradientQualityMetrics {
-  gradient_cv: number;
-  clip_fraction_positive: number;
-  clip_fraction_negative: number;
-}
-
-export interface InfrastructureMetrics {
-  cuda_memory_allocated_gb: number;
-  cuda_memory_reserved_gb: number;
-  cuda_memory_peak_gb: number;
-  cuda_memory_fragmentation: number;
-  dataloader_wait_ratio: number;
-  compile_enabled: boolean;
-  compile_backend: string;
-  compile_mode: string;
 }
 
 export interface BestRunRecord {

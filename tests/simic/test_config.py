@@ -325,7 +325,6 @@ def test_basic_plus_reward_mode_exists() -> None:
     """BASIC_PLUS reward mode is available."""
     from esper.simic.rewards.contribution import RewardMode
 
-    assert hasattr(RewardMode, "BASIC_PLUS")
     assert RewardMode.BASIC_PLUS.value == "basic_plus"
 
 
@@ -336,17 +335,13 @@ def test_drip_config_fields_exist() -> None:
     config = ContributionRewardConfig()
 
     # Core drip fields - default is 0.0 (disabled for BASIC mode)
-    assert hasattr(config, "drip_fraction")
     assert config.drip_fraction == 0.0  # BASIC mode default: drip disabled
 
-    assert hasattr(config, "max_drip_per_epoch")
     assert config.max_drip_per_epoch == 0.1
 
-    assert hasattr(config, "min_drip_epochs")
     assert config.min_drip_epochs == 5
 
     # Asymmetric clipping ratio
-    assert hasattr(config, "negative_drip_ratio")
     assert config.negative_drip_ratio == 0.5  # -0.05 = -0.5 * 0.1
 
 

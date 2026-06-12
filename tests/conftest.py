@@ -76,6 +76,21 @@ settings.register_profile(
 settings.load_profile(os.getenv("HYPOTHESIS_PROFILE", "dev"))
 
 # =============================================================================
+# Marker Discipline
+# =============================================================================
+
+def pytest_collection_modifyitems(items):
+    """Keep test lanes defined by directory, not by per-file marker memory."""
+    for item in items:
+        path = Path(str(item.fspath))
+        parts = set(path.parts)
+        if "properties" in parts:
+            item.add_marker(pytest.mark.property)
+        if "stress" in parts:
+            item.add_marker(pytest.mark.stress)
+
+
+# =============================================================================
 # Path Fixtures
 # =============================================================================
 

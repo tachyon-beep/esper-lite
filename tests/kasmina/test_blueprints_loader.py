@@ -91,12 +91,13 @@ def test_ensure_all_loaded_populates_registry():
         assert topology in _LOADED, f"{topology} should be loaded"
 
 
-def test_unknown_topology_does_not_raise():
-    """ensure_loaded() for unknown topology should silently pass."""
-    from esper.kasmina.blueprints.loader import ensure_loaded
+def test_unknown_topology_does_not_mutate_loaded_topology_set():
+    """Unknown topologies are external-extension names, not built-in modules."""
+    from esper.kasmina.blueprints.loader import _LOADED, ensure_loaded
 
-    # This should not raise - unknown topologies just don't have built-in blueprints
+    loaded_before = set(_LOADED)
     ensure_loaded("unknown_topology")
+    assert _LOADED == loaded_before
 
 
 def test_registry_list_for_topology_triggers_lazy_load():
@@ -137,7 +138,7 @@ def test_convblock_lazy_import():
     from esper.kasmina.blueprints import ConvBlock
 
     # Verify it's the actual class
-    assert hasattr(ConvBlock, "__init__"), "ConvBlock should be a class"
+    assert ConvBlock.__name__ == "ConvBlock"
     assert "ConvBlock" in str(ConvBlock), "Should be the ConvBlock class"
 
 

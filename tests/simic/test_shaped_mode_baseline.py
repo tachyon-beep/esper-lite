@@ -204,9 +204,7 @@ class TestShapedModeBaseline:
             return_components=True,
         )
 
-        # Components should exist
         assert components is not None
-        assert hasattr(components, 'total_reward')
 
         # Total should match
         assert abs(components.total_reward - reward) < 0.001, (

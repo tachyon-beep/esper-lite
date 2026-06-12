@@ -47,10 +47,6 @@ class TestTELE550SeedBlueprintId:
     - Display truncates to 6 characters: "conv_light" -> "conv_l"
     """
 
-    def test_blueprint_id_field_exists(self) -> None:
-        """TELE-550: Verify SeedState.blueprint_id field exists."""
-        seed = SeedState(slot_id="r0c0")
-        assert hasattr(seed, "blueprint_id")
 
     def test_blueprint_id_default_value(self) -> None:
         """TELE-550: Default blueprint_id is None (no seed in slot)."""
@@ -143,10 +139,6 @@ class TestTELE551SeedAlpha:
     Display format: "{alpha:.1f}" (1 decimal place)
     """
 
-    def test_alpha_field_exists(self) -> None:
-        """TELE-551: Verify SeedState.alpha field exists."""
-        seed = SeedState(slot_id="r0c0")
-        assert hasattr(seed, "alpha")
 
     def test_alpha_default_value(self) -> None:
         """TELE-551: Default alpha is 0.0 (seed not blending)."""
@@ -221,10 +213,6 @@ class TestTELE552SeedEpochsInStage:
     - Display: "e5" means seed has been in stage for 5 epochs
     """
 
-    def test_epochs_in_stage_field_exists(self) -> None:
-        """TELE-552: Verify SeedState.epochs_in_stage field exists."""
-        seed = SeedState(slot_id="r0c0")
-        assert hasattr(seed, "epochs_in_stage")
 
     def test_epochs_in_stage_default_value(self) -> None:
         """TELE-552: Default epochs_in_stage is 0 (just entered stage)."""
@@ -297,10 +285,6 @@ class TestTELE553SeedAlphaCurve:
     - SIGMOID_SHARP: Near-step function (steepness=24)
     """
 
-    def test_alpha_curve_field_exists(self) -> None:
-        """TELE-553: Verify SeedState.alpha_curve field exists."""
-        seed = SeedState(slot_id="r0c0")
-        assert hasattr(seed, "alpha_curve")
 
     def test_alpha_curve_default_value(self) -> None:
         """TELE-553: Default alpha_curve is 'LINEAR'."""
@@ -401,10 +385,6 @@ class TestTELE554SeedBlendTempoEpochs:
     - > 5: single arrow (gradual)
     """
 
-    def test_blend_tempo_epochs_field_exists(self) -> None:
-        """TELE-554: Verify SeedState.blend_tempo_epochs field exists."""
-        seed = SeedState(slot_id="r0c0")
-        assert hasattr(seed, "blend_tempo_epochs")
 
     def test_blend_tempo_epochs_default_value(self) -> None:
         """TELE-554: Default blend_tempo_epochs is 5 (STANDARD)."""
@@ -551,10 +531,6 @@ class TestTELE555SeedParams:
     - >= 1,000,000: M suffix (e.g., "1.2M")
     """
 
-    def test_seed_params_field_exists(self) -> None:
-        """TELE-555: Verify SeedState.seed_params field exists."""
-        seed = SeedState(slot_id="r0c0")
-        assert hasattr(seed, "seed_params")
 
     def test_seed_params_default_value(self) -> None:
         """TELE-555: Default seed_params is 0 (no parameters)."""
@@ -623,10 +599,6 @@ class TestTELE556SeedAccuracyDelta:
     - BLENDING/HOLDING: Active contribution measurement
     """
 
-    def test_accuracy_delta_field_exists(self) -> None:
-        """TELE-556: Verify SeedState.accuracy_delta field exists."""
-        seed = SeedState(slot_id="r0c0")
-        assert hasattr(seed, "accuracy_delta")
 
     def test_accuracy_delta_default_value(self) -> None:
         """TELE-556: Default accuracy_delta is 0.0 (no contribution)."""
@@ -703,10 +675,6 @@ class TestTELE557SeedGradRatio:
     - = 0.0: No gradient data available
     """
 
-    def test_grad_ratio_field_exists(self) -> None:
-        """TELE-557: Verify SeedState.grad_ratio field exists."""
-        seed = SeedState(slot_id="r0c0")
-        assert hasattr(seed, "grad_ratio")
 
     def test_grad_ratio_default_value(self) -> None:
         """TELE-557: Default grad_ratio is 0.0 (no gradient data)."""
@@ -772,10 +740,6 @@ class TestTELE558SeedInteractionSum:
     - < 0: Net negative synergy (seed conflicts with others)
     """
 
-    def test_interaction_sum_field_exists(self) -> None:
-        """TELE-558: Verify SeedState.interaction_sum field exists."""
-        seed = SeedState(slot_id="r0c0")
-        assert hasattr(seed, "interaction_sum")
 
     def test_interaction_sum_default_value(self) -> None:
         """TELE-558: Default interaction_sum is 0.0 (no interaction data)."""
@@ -839,10 +803,6 @@ class TestTELE559SeedBoostReceived:
     - = 0: No significant positive interactions from other seeds
     """
 
-    def test_boost_received_field_exists(self) -> None:
-        """TELE-559: Verify SeedState.boost_received field exists."""
-        seed = SeedState(slot_id="r0c0")
-        assert hasattr(seed, "boost_received")
 
     def test_boost_received_default_value(self) -> None:
         """TELE-559: Default boost_received is 0.0 (no boost)."""
@@ -907,10 +867,6 @@ class TestTELE560SeedContributionVelocity:
     - < -EPSILON: Declining (contribution is decreasing)
     """
 
-    def test_contribution_velocity_field_exists(self) -> None:
-        """TELE-560: Verify SeedState.contribution_velocity field exists."""
-        seed = SeedState(slot_id="r0c0")
-        assert hasattr(seed, "contribution_velocity")
 
     def test_contribution_velocity_default_value(self) -> None:
         """TELE-560: Default contribution_velocity is 0.0 (stable)."""
@@ -964,42 +920,6 @@ class TestTELE560SeedContributionVelocity:
 class TestSeedStateSchemaCompleteness:
     """Verify SeedState has all TELE-550 to TELE-560 fields."""
 
-    def test_all_seed_detail_fields_present(self) -> None:
-        """Verify all seed detail fields are present in SeedState."""
-        seed = SeedState(slot_id="r0c0")
-
-        # TELE-550: Blueprint ID
-        assert hasattr(seed, "blueprint_id")
-
-        # TELE-551: Alpha
-        assert hasattr(seed, "alpha")
-
-        # TELE-552: Epochs in stage
-        assert hasattr(seed, "epochs_in_stage")
-
-        # TELE-553: Alpha curve
-        assert hasattr(seed, "alpha_curve")
-
-        # TELE-554: Blend tempo epochs
-        assert hasattr(seed, "blend_tempo_epochs")
-
-        # TELE-555: Seed params
-        assert hasattr(seed, "seed_params")
-
-        # TELE-556: Accuracy delta
-        assert hasattr(seed, "accuracy_delta")
-
-        # TELE-557: Grad ratio
-        assert hasattr(seed, "grad_ratio")
-
-        # TELE-558: Interaction sum
-        assert hasattr(seed, "interaction_sum")
-
-        # TELE-559: Boost received
-        assert hasattr(seed, "boost_received")
-
-        # TELE-560: Contribution velocity
-        assert hasattr(seed, "contribution_velocity")
 
     def test_all_defaults_match_spec(self) -> None:
         """Verify all default values match TELE record specifications."""
