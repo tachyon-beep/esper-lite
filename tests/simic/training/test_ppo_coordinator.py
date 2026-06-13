@@ -122,10 +122,14 @@ def _make_outcome(env_id: int, episode_idx: int, reward: float) -> EpisodeOutcom
 def test_handle_rollbacks_corrects_latest_episode_outcome_for_env():
     """Rollback correction must update the most recent outcome for the env."""
     coordinator = _make_coordinator(run_ppo_updates_fn=lambda **_kwargs: {})
+    emitted: list[object] = []
     env_states = [
         SimpleNamespace(
             governor=SimpleNamespace(get_punishment_reward=lambda: -10.0),
             episode_rewards=[1.0, 2.0],
+            telemetry_cb=emitted.append,
+            val_acc=12.5,
+            action_counts={"GERMINATE": 2, "PRUNE": 1, "FOSSILIZE": 0},
         )
     ]
     env_total_rewards = [3.0]
@@ -155,6 +159,59 @@ def test_handle_rollbacks_corrects_latest_episode_outcome_for_env():
     assert episode_history[1].episode_reward == -9.0
     assert episode_outcomes[0].episode_reward == 100.0
     assert episode_outcomes[1].episode_reward == -9.0
+
+
+def test_handle_rollbacks_emits_exactly_one_corrected_episode_outcome():
+    """SIMIC-PROD-001: a rollback episode emits exactly one penalty-adjusted EPISODE_OUTCOME."""
+    coordinator = _make_coordinator(run_ppo_updates_fn=lambda **_kwargs: {})
+    emitted: list[object] = []
+    # Two episode rewards with variance so stability is recomputed (not the default 1.0).
+    env_states = [
+        SimpleNamespace(
+            governor=SimpleNamespace(get_punishment_reward=lambda: -10.0),
+            episode_rewards=[1.0, 2.0],
+            telemetry_cb=emitted.append,
+            val_acc=12.5,
+            action_counts={"GERMINATE": 2, "PRUNE": 1, "FOSSILIZE": 0},
+        )
+    ]
+    env_total_rewards = [3.0]
+    episode_history = [SimpleNamespace(env_id=0, episode_reward=3.0)]
+    episode_outcomes = [_make_outcome(env_id=0, episode_idx=7, reward=3.0)]
+
+    coordinator.handle_rollbacks(
+        env_states=env_states,
+        env_rollback_occurred=[True],
+        env_total_rewards=env_total_rewards,
+        episode_history=episode_history,
+        episode_outcomes=episode_outcomes,
+    )
+
+    # EXACTLY ONE corrected outcome is emitted (no uncorrected + corrected double-emit).
+    outcome_events = [
+        e for e in emitted
+        if e.event_type == TelemetryEventType.EPISODE_OUTCOME
+    ]
+    assert len(outcome_events) == 1
+
+    payload = outcome_events[0].data
+    # Penalty-adjusted reward (3.0 episode reward overwritten to penalty -10.0 -> sum -9.0)
+    # MUST match the corrected in-memory outcome, not the pre-penalty value.
+    assert payload.episode_reward == -9.0
+    assert payload.episode_reward == episode_outcomes[0].episode_reward
+    # Recomputed stability from post-penalty variance of [1.0, -10.0], not the default 1.0.
+    import numpy as np
+
+    expected_stability = 1.0 / (1.0 + float(np.var([1.0, -10.0])))
+    assert payload.stability_score == pytest.approx(expected_stability)
+    assert payload.stability_score == pytest.approx(episode_outcomes[0].stability_score)
+    # Real post-episode diagnostics taken from env_state (not placeholders).
+    assert payload.episode_idx == 7
+    assert payload.episode_length == coordinator.config.max_epochs
+    assert payload.outcome_type == "timeout"  # val_acc 12.5 below success threshold
+    assert payload.germinate_count == 2
+    assert payload.prune_count == 1
+    assert payload.fossilize_count == 0
 
 
 def test_run_update_reports_rollout_total_steps_before_buffer_clear():

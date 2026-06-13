@@ -20,7 +20,6 @@ from esper.leyline import (
     EPISODE_SUCCESS_THRESHOLD,
     EpisodeOutcome,
     EpisodeOutcomePayload,
-    GovernorRollbackPayload,
     HEAD_NAMES,
     HeadTelemetry,
     LifecycleMutationCausalContext,
@@ -601,10 +600,11 @@ def execute_actions(
 
         # Governor rollback
         if env_idx in governor_panic_envs:
-            # Capture panic info BEFORE rollback (execute_rollback resets these)
+            # Capture panic info BEFORE rollback (execute_rollback resets these).
+            # Used only for the joinable morphology causal-log rows below; the
+            # authoritative GOVERNOR_ROLLBACK panic record is emitted by the governor.
             panic_reason = env_state.governor._panic_reason
             panic_loss = env_state.governor._panic_loss
-            consecutive_panics = env_state.governor.consecutive_panics
 
             # Stream safety: rollback mutates model tensors; ensure it runs on the
             # per-env CUDA stream to avoid default-stream leakage and races.
@@ -629,18 +629,14 @@ def execute_actions(
             for seed_opt in env_state.seed_optimizers.values():
                 seed_opt.state.clear()
 
-            # Emit rollback telemetry for observability (P2 audit finding)
-            emitters[env_idx].emit(TelemetryEvent(
-                event_type=TelemetryEventType.GOVERNOR_ROLLBACK,
-                data=GovernorRollbackPayload(
-                    env_id=env_idx,
-                    device=str(device),
-                    reason=panic_reason or "unknown",
-                    loss_at_panic=panic_loss,
-                    consecutive_panics=consecutive_panics,
-                ),
-                severity="warning",
-            ))
+            # KTS-003: The GOVERNOR_ROLLBACK telemetry event is emitted by the
+            # SINGLE authoritative source — TolariaGovernor.execute_rollback() — which
+            # carries the complete panic context (loss_at_panic, loss_threshold,
+            # consecutive_panics, panic_reason, and any state_dict key mismatches).
+            # Simic must NOT emit a second, partial GOVERNOR_ROLLBACK here; the governor
+            # is the panic authority. Simic only records the joinable morphology causal
+            # log rows below (which describe the *aborted lifecycle action*, not the
+            # panic itself).
             rollback_blueprint_id = (
                 BLUEPRINT_IDS[blueprint_action] if op_action == OP_GERMINATE else None
             )
@@ -1181,20 +1177,28 @@ def execute_actions(
                     slot_obj.clear_pending_morphology_context()
                 action_success = handler_result.success
                 if morphology_context is not None:
+                    # KTS-002: These rows describe the mutation DISPATCH on this step.
+                    # No genuine delayed post-mutation measurement exists here —
+                    # env_state.val_loss is the PRE-mutation loss for this step, so it
+                    # MUST NOT be attached as watch/audit evidence. We therefore emit a
+                    # "dispatch" phase (the mutation was handed to the handler) and the
+                    # terminal commit/fossilization outcome WITHOUT watch_window_evidence,
+                    # rather than mislabelling pre-mutation loss as post-mutation evidence.
+                    # A real watch window would require deferring evidence to a later
+                    # epoch's validation pass (future work), not a same-step placeholder.
                     emitters[env_idx].emit(TelemetryEvent(
                         event_type=TelemetryEventType.MORPHOLOGY_CAUSAL_LOG,
                         data=_build_morphology_causal_log_payload(
-                            phase="watch",
+                            phase="dispatch",
                             context=morphology_context,
                             env_idx=env_idx,
                             blueprint_id=morphology_blueprint_id,
                             governor_approved=True,
                             governor_reason="approved",
-                            watch_window_evidence=env_state.val_loss,
                             linked_event_id=morphology_context.mutation_id,
                         ),
                         severity="debug",
-                        message="Morphology watch evidence",
+                        message="Morphology mutation dispatched",
                     ))
                     terminal_phase: MorphologyCausalLogPhase = (
                         "fossilization"
@@ -1210,26 +1214,10 @@ def execute_actions(
                             blueprint_id=morphology_blueprint_id,
                             governor_approved=True,
                             governor_reason="approved",
-                            watch_window_evidence=env_state.val_loss,
                             linked_event_id=morphology_context.mutation_id,
                         ),
                         severity="debug",
-                        message="Morphology commit",
-                    ))
-                    emitters[env_idx].emit(TelemetryEvent(
-                        event_type=TelemetryEventType.MORPHOLOGY_CAUSAL_LOG,
-                        data=_build_morphology_causal_log_payload(
-                            phase="audit",
-                            context=morphology_context,
-                            env_idx=env_idx,
-                            blueprint_id=morphology_blueprint_id,
-                            governor_approved=True,
-                            governor_reason="approved",
-                            watch_window_evidence=env_state.val_loss,
-                            linked_event_id=morphology_context.mutation_id,
-                        ),
-                        severity="debug",
-                        message="Morphology audit",
+                        message="Morphology dispatch committed",
                     ))
             elif op_action == OP_WAIT:
                 action_success = True

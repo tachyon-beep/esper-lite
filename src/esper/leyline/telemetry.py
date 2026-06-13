@@ -2084,7 +2084,7 @@ MorphologyCausalLogPhase = Literal[
     "proposal",
     "verdict",
     "mutation",
-    "watch",
+    "dispatch",
     "commit",
     "rollback",
     "fossilization",

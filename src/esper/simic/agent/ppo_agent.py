@@ -694,12 +694,45 @@ class PPOAgent:
                 if not op_mask.any():
                     raise ValueError("Op mask has no valid ops - state machine bug.")
 
-                # Forward pass to get LSTM output
+                # TPD-002: Recover the ROLLOUT row's stored LSTM hidden state.
+                # The buffer records, for every transition, the hidden state that was
+                # the recurrent INPUT to the network when that observation was consumed
+                # (pre_step_hiddens during rollout collection). For the recurrent policy,
+                # Q(s, op) telemetry is only meaningful if it conditions on that same
+                # recurrent context. Passing hidden=None would force the network's
+                # initial (zero) hidden state and produce a fake, context-free diagnostic.
+                #
+                # Stored shape: data["hidden_h"]/["hidden_c"] are
+                # [num_envs, max_steps, lstm_layers, hidden_dim]. The network's forward()
+                # expects (h, c) each [lstm_layers, batch, hidden_dim]. We slice the chosen
+                # (env, step) row to [lstm_layers, hidden_dim] and insert a batch dim of 1.
+                #
+                # Every row that exists in the buffer carries a real stored hidden state
+                # (the rollout always supplies pre_step_hiddens; the first step of an
+                # episode stores the network's genuine initial hidden, which is a real
+                # zero-state, NOT a missing value). There is therefore no "no hidden"
+                # case to silently substitute None for — the contract is that a valid row
+                # always has a real recurrent state, and we pass it through unconditionally.
+                sample_hidden_h = (
+                    data["hidden_h"][sample_row, sample_col]  # [lstm_layers, hidden_dim]
+                    .unsqueeze(1)  # [lstm_layers, 1, hidden_dim]
+                    .to(device=self.device, dtype=sample_obs.dtype)
+                    .contiguous()
+                )
+                sample_hidden_c = (
+                    data["hidden_c"][sample_row, sample_col]  # [lstm_layers, hidden_dim]
+                    .unsqueeze(1)  # [lstm_layers, 1, hidden_dim]
+                    .to(device=self.device, dtype=sample_obs.dtype)
+                    .contiguous()
+                )
+
+                # Forward pass to get LSTM output, conditioned on the rollout row's
+                # actual recurrent state (not the initial hidden state).
                 with torch.no_grad():
                     forward_result = self.policy.network.forward(
                         state=sample_obs,
                         blueprint_indices=sample_blueprints,
-                        hidden=None,  # Use initial hidden state for consistency
+                        hidden=(sample_hidden_h, sample_hidden_c),
                     )
                     lstm_out = forward_result["lstm_out"]  # [1, 1, hidden_dim]
 

@@ -89,9 +89,9 @@ def test_morphology_causal_log_view_extracts_joinable_fields(tmp_path):
         "slot_id": None,
         "epoch": 7,
         "group_id": "default",
-        "message": "Morphology watch evidence",
+        "message": "Morphology audit evidence",
         "data": {
-            "phase": "watch",
+            "phase": "audit",
             "env_id": 0,
             "slot_id": "r0c0",
             "operation": "GERMINATE",
@@ -147,7 +147,7 @@ def test_morphology_causal_log_view_extracts_joinable_fields(tmp_path):
     assert row == (
         "test_run",
         7,
-        "watch",
+        "audit",
         0,
         "r0c0",
         "GERMINATE",

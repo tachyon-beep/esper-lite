@@ -21,6 +21,7 @@ import torch
 
 from esper.leyline import (
     AnomalyDetectedPayload,
+    EpisodeOutcomePayload,
     TelemetryEvent,
     TelemetryEventType,
 )
@@ -178,9 +179,60 @@ class PPOCoordinator:
                         stability_score=stability,
                     )
                     episode_outcomes[idx] = corrected_outcome
+                    # SIMIC-PROD-001: Emit the corrected EPISODE_OUTCOME exactly once.
+                    # action_execution.py SKIPS EPISODE_OUTCOME emission for rollback
+                    # episodes (env_rollback_occurred is set), so the only emitted
+                    # outcome for this env is the penalty-adjusted one computed here.
+                    # This makes the coordinator the single source of truth for rollback
+                    # episode outcomes (no uncorrected + corrected double-emit).
+                    self._emit_corrected_episode_outcome(env_state, corrected_outcome)
                     break
 
         return rollback_env_indices
+
+    def _emit_corrected_episode_outcome(
+        self,
+        env_state: "ParallelEnvState",
+        outcome: "EpisodeOutcome",
+    ) -> None:
+        """Emit the single penalty-adjusted EPISODE_OUTCOME for a rollback episode.
+
+        Routes through env_state.telemetry_cb (the same per-env callback used by the
+        action path) so env_id/device/episode_idx context is injected consistently.
+        The episode diagnostics fields are real post-episode measurements taken from
+        env_state, not placeholders.
+        """
+        telemetry_cb = env_state.telemetry_cb
+        if telemetry_cb is None:
+            return
+
+        # classify_episode_outcome lives in action_execution; import at call scope to
+        # avoid a module-level import cycle (action_execution imports coordinator types).
+        from esper.simic.training.action_execution import classify_episode_outcome
+
+        outcome_type = classify_episode_outcome(env_state.val_acc)
+        telemetry_cb(
+            TelemetryEvent(
+                event_type=TelemetryEventType.EPISODE_OUTCOME,
+                epoch=outcome.episode_idx,
+                data=EpisodeOutcomePayload(
+                    env_id=outcome.env_id,
+                    episode_idx=outcome.episode_idx,
+                    final_accuracy=outcome.final_accuracy,
+                    param_ratio=outcome.param_ratio,
+                    num_fossilized=outcome.num_fossilized,
+                    num_contributing_fossilized=outcome.num_contributing_fossilized,
+                    episode_reward=outcome.episode_reward,
+                    stability_score=outcome.stability_score,
+                    reward_mode=outcome.reward_mode,
+                    episode_length=self.config.max_epochs,
+                    outcome_type=outcome_type,
+                    germinate_count=env_state.action_counts["GERMINATE"],
+                    prune_count=env_state.action_counts["PRUNE"],
+                    fossilize_count=env_state.action_counts["FOSSILIZE"],
+                ),
+            )
+        )
 
     def run_update(
         self,

@@ -741,7 +741,10 @@ def test_execute_actions_emits_joinable_morphology_causal_log(
         if event.event_type == action_execution.TelemetryEventType.MORPHOLOGY_CAUSAL_LOG
     ]
     phases = [event.data.phase for event in causal_events]
-    assert phases == ["proposal", "verdict", "mutation", "watch", "commit", "audit"]
+    # KTS-002: the post-dispatch phase is "dispatch" (not "watch"); there is no
+    # genuine delayed post-mutation measurement on this step, so the dispatch and
+    # terminal-commit rows must NOT carry watch/audit evidence.
+    assert phases == ["proposal", "verdict", "mutation", "dispatch", "commit"]
     ids = {(event.data.action_id, event.data.proposal_id, event.data.verdict_id, event.data.mutation_id) for event in causal_events}
     assert ids == {
         (
@@ -756,7 +759,12 @@ def test_execute_actions_emits_joinable_morphology_causal_log(
     assert causal_events[0].data.topology == "cnn"
     assert causal_events[0].data.blueprint_id == action_execution.BLUEPRINT_IDS[1]
     assert causal_events[1].data.governor_approved is True
-    assert causal_events[3].data.watch_window_evidence == 1.0
+    # KTS-002: same-step rows must NOT mislabel pre-mutation val_loss as post-mutation
+    # evidence. dispatch + terminal commit carry no watch_window_evidence.
+    dispatch_event = next(e for e in causal_events if e.data.phase == "dispatch")
+    commit_event = next(e for e in causal_events if e.data.phase == "commit")
+    assert dispatch_event.data.watch_window_evidence is None
+    assert commit_event.data.watch_window_evidence is None
     assert causal_events[-1].data.linked_event_id == "morph-b0-e1-env0-r0c0-op1-mutation"
 
 

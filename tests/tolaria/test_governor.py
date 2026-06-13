@@ -428,6 +428,49 @@ class TestTolariaGovernor:
             assert event.data.env_id == 7
             assert event.data.device == "cpu"
 
+    def test_panic_rollback_emits_exactly_one_complete_governor_rollback(self):
+        """KTS-003: the governor is the SINGLE authoritative GOVERNOR_ROLLBACK source.
+
+        A single panic rollback must emit EXACTLY ONE GOVERNOR_ROLLBACK event per env,
+        and that record must carry the COMPLETE panic context (loss_at_panic, threshold,
+        consecutive_panics, panic_reason). No second, partial rollback record is allowed.
+        """
+        from unittest.mock import Mock, patch
+
+        from esper.leyline import TelemetryEventType
+        from esper.tolaria import TolariaGovernor
+
+        model = DummyModel()
+        gov = TolariaGovernor(model)
+
+        # Drive a genuine NaN panic so the panic context is populated by the governor.
+        assert gov.check_vital_signs(float("nan")) is True
+        assert gov._panic_reason == "governor_nan"
+
+        with patch("esper.nissa.get_hub") as get_hub:
+            hub = Mock()
+            get_hub.return_value = hub
+
+            gov.execute_rollback(env_id=3)
+
+        rollback_events = [
+            call.args[0]
+            for call in hub.emit.call_args_list
+            if call.args[0].event_type == TelemetryEventType.GOVERNOR_ROLLBACK
+        ]
+        # EXACTLY ONE complete record from the single authoritative source.
+        assert len(rollback_events) == 1
+
+        payload = rollback_events[0].data
+        assert payload.env_id == 3
+        assert payload.device == "cpu"
+        assert payload.reason  # non-empty
+        # COMPLETE panic context (the partial Simic duplicate would omit these).
+        assert payload.panic_reason == "governor_nan"
+        assert payload.loss_at_panic is not None
+        assert payload.loss_threshold is not None
+        assert payload.consecutive_panics is not None
+
     def test_execute_rollback_resets_consecutive_panics_each_time(self):
         """Test that each rollback resets panic counter (not increments)."""
         from esper.tolaria import TolariaGovernor
