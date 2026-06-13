@@ -18,36 +18,13 @@ const allStages: SeedStage[] = [
 // Check if we have any seeds to display
 const hasSeeds = computed(() => props.slotIds.length > 0)
 
-// Get seed state for a slot, or return a default dormant state
-function getSeedForSlot(slotId: string): SeedState {
-  if (props.seeds[slotId]) {
-    return props.seeds[slotId]
-  }
-  // Return default dormant state for missing seeds
-  return {
-    slot_id: slotId,
-    stage: 'DORMANT',
-    blueprint_id: null,
-    alpha: 0.0,
-    accuracy_delta: 0.0,
-    seed_params: 0,
-    grad_ratio: 0.0,
-    has_vanishing: false,
-    has_exploding: false,
-    epochs_in_stage: 0,
-    improvement: 0.0,
-    prune_reason: '',
-    auto_pruned: false,
-    epochs_total: 0,
-    counterfactual: 0.0,
-    blend_tempo_epochs: 0,
-    alpha_curve: 'LINEAR',
-    contribution_velocity: 0.0,
-    interaction_sum: 0.0,
-    boost_received: 0.0,
-    upstream_alpha_sum: 0.0,
-    downstream_alpha_sum: 0.0
-  }
+// A configured slot that has NEVER been observed is absent from `seeds`. This
+// is distinct from a slot that was observed in the DORMANT stage: an observed
+// dormant seed has an explicit SeedState entry. We never fabricate a dormant
+// state for a never-observed slot, because "absent / never measured" is not the
+// same fact as "observed dormant".
+function getSeedForSlot(slotId: string): SeedState | null {
+  return props.seeds[slotId] ?? null
 }
 
 // Abbreviate slot ID for display (e.g., "slot_0" -> "S0")
@@ -72,6 +49,9 @@ function getBarWidth(epochsInStage: number): string {
 function getBarTooltip(seed: SeedState): string {
   return `${seed.stage}: ${seed.epochs_in_stage} epochs`
 }
+
+// Tooltip for a configured-but-never-observed slot.
+const pendingTooltip = 'Pending: no data observed for this slot yet'
 
 // Format stage name for legend display
 function formatStageName(stage: SeedStage): string {
@@ -100,13 +80,24 @@ function formatStageName(stage: SeedStage): string {
             {{ abbreviateSlotId(slotId) }}
           </span>
           <div class="bar-container">
+            <!-- Observed seed: render its stage lane. -->
             <div
+              v-if="getSeedForSlot(slotId)"
               class="stage-bar"
-              :class="getStageClass(getSeedForSlot(slotId).stage)"
-              :style="{ width: getBarWidth(getSeedForSlot(slotId).epochs_in_stage) }"
-              :title="getBarTooltip(getSeedForSlot(slotId))"
+              :class="getStageClass(getSeedForSlot(slotId)!.stage)"
+              :style="{ width: getBarWidth(getSeedForSlot(slotId)!.epochs_in_stage) }"
+              :title="getBarTooltip(getSeedForSlot(slotId)!)"
               data-testid="stage-bar"
             />
+            <!-- Never-observed configured slot: distinct pending lane. -->
+            <div
+              v-else
+              class="stage-bar stage-pending"
+              :title="pendingTooltip"
+              data-testid="pending-bar"
+            >
+              <span class="pending-label">—</span>
+            </div>
           </div>
         </div>
       </div>
@@ -216,6 +207,24 @@ function formatStageName(stage: SeedStage): string {
 .stage-embargoed,
 .stage-resetting {
   background: var(--text-dim);
+}
+
+/* Never-observed configured slot: a distinct empty/pending lane, NOT a
+   dormant lane. Rendered as a hatched/dashed placeholder so a slot with no
+   data reads differently from an observed dormant seed. */
+.stage-pending {
+  width: 100%;
+  background: transparent;
+  border: 1px dashed var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pending-label {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
 }
 
 /* Legend */

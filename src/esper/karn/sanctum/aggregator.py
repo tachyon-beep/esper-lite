@@ -1315,6 +1315,11 @@ class SanctumAggregator:
                 env.seeds[slot_id] = SeedState(slot_id=slot_id)
             seed = env.seeds[slot_id]
 
+            # Capture the prior stage BEFORE mutating seed.stage, so the
+            # lifecycle event records the real transition (e.g. BLENDING ->
+            # FOSSILIZED) rather than a self-transition.
+            from_stage = seed.stage
+
             # Update from payload
             seed.stage = "FOSSILIZED"
             seed.improvement = fossilized_payload.improvement
@@ -1342,7 +1347,7 @@ class SanctumAggregator:
             env.lifecycle_events.append(SeedLifecycleEvent(
                 epoch=event.epoch or 0,
                 action="FOSSILIZE",
-                from_stage=seed.stage,
+                from_stage=from_stage,
                 to_stage="FOSSILIZED",
                 blueprint_id=seed.blueprint_id or "unknown",
                 slot_id=slot_id,
@@ -1386,7 +1391,7 @@ class SanctumAggregator:
                 blueprint_id=seed.blueprint_id or "unknown",
                 slot_id=slot_id,
                 alpha=seed.alpha,
-                accuracy_delta=None,
+                accuracy_delta=pruned_payload.improvement,
                 morphology_proposal_id=pruned_payload.morphology_proposal_id,
                 morphology_verdict_id=pruned_payload.morphology_verdict_id,
                 morphology_mutation_id=pruned_payload.morphology_mutation_id,

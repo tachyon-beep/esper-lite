@@ -153,6 +153,91 @@ def test_fossilize_creates_lifecycle_event():
     assert le.accuracy_delta == 2.3
 
 
+def test_fossilize_records_original_from_stage():
+    """SEED_FOSSILIZED must record the real prior stage, not a self-transition.
+
+    Regression for KTS-004: the fossilize handler mutated seed.stage to
+    FOSSILIZED before the lifecycle event read from_stage, producing a
+    FOSSILIZED -> FOSSILIZED self-transition that erased the real origin.
+    """
+    agg = SanctumAggregator(num_envs=4)
+
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_GERMINATED,
+        slot_id="r0c0",
+        epoch=5,
+        data=SeedGerminatedPayload(
+            env_id=0, slot_id="r0c0", blueprint_id="conv_heavy", params=1000,
+        ),
+    ))
+    # Advance the seed into BLENDING so it has a non-terminal prior stage.
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_STAGE_CHANGED,
+        slot_id="r0c0",
+        epoch=20,
+        data=SeedStageChangedPayload(
+            env_id=0, slot_id="r0c0", from_stage="TRAINING", to_stage="BLENDING",
+            alpha=0.5,
+        ),
+    ))
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_FOSSILIZED,
+        slot_id="r0c0",
+        epoch=50,
+        data=SeedFossilizedPayload(
+            env_id=0, slot_id="r0c0", blueprint_id="conv_heavy",
+            improvement=2.3, params_added=500,
+        ),
+    ))
+
+    le = agg.get_snapshot().envs[0].lifecycle_events[-1]
+    assert le.action == "FOSSILIZE"
+    assert le.from_stage == "BLENDING"
+    assert le.to_stage == "FOSSILIZED"
+    assert le.accuracy_delta == 2.3
+
+
+def test_prune_records_original_from_stage_and_delta():
+    """SEED_PRUNED records the real prior stage AND carries the payload delta.
+
+    Regression for KTS-004: the prune handler hard-coded accuracy_delta=None
+    even though the pruned payload's improvement carried the real delta.
+    """
+    agg = SanctumAggregator(num_envs=4)
+
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_GERMINATED,
+        slot_id="r0c0",
+        epoch=5,
+        data=SeedGerminatedPayload(
+            env_id=0, slot_id="r0c0", blueprint_id="conv_heavy", params=1000,
+        ),
+    ))
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_STAGE_CHANGED,
+        slot_id="r0c0",
+        epoch=20,
+        data=SeedStageChangedPayload(
+            env_id=0, slot_id="r0c0", from_stage="TRAINING", to_stage="BLENDING",
+            alpha=0.5,
+        ),
+    ))
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_PRUNED,
+        slot_id="r0c0",
+        epoch=30,
+        data=SeedPrunedPayload(
+            env_id=0, slot_id="r0c0", reason="gate_failure", improvement=-1.7,
+        ),
+    ))
+
+    le = agg.get_snapshot().envs[0].lifecycle_events[-1]
+    assert le.action == "PRUNE"
+    assert le.from_stage == "BLENDING"
+    assert le.to_stage == "PRUNED"
+    assert le.accuracy_delta == -1.7
+
+
 def test_blending_to_holding_auto_transition():
     """BLENDING -> HOLDING should be marked as [auto] transition."""
     agg = SanctumAggregator(num_envs=4)
@@ -224,6 +309,48 @@ def test_prune_creates_lifecycle_event():
     assert le.action == "PRUNE"
     assert le.from_stage == "GERMINATED"
     assert le.to_stage == "PRUNED"
+
+
+def test_never_observed_slot_absent_while_dormant_seed_present():
+    """A never-observed configured slot is absent from env.seeds; an observed
+    dormant seed has an explicit entry.
+
+    Regression for UI-005: the snapshot must let consumers distinguish
+    "missing / never measured" from "observed dormant". The aggregator never
+    fabricates a dormant SeedState for a slot that has never produced an event.
+    """
+    agg = SanctumAggregator(num_envs=1)
+
+    # slot r0c0 is observed (germinated). slot r0c1 is configured (it appears in
+    # slot_ids once any sibling event registers it) but never produces an event.
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_GERMINATED,
+        slot_id="r0c0",
+        epoch=5,
+        data=SeedGerminatedPayload(
+            env_id=0, slot_id="r0c0", blueprint_id="conv_heavy", params=1000,
+        ),
+    ))
+    # Observe a second slot and immediately prune it, then nothing for a third.
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_GERMINATED,
+        slot_id="r0c1",
+        epoch=5,
+        data=SeedGerminatedPayload(
+            env_id=0, slot_id="r0c1", blueprint_id="conv_heavy", params=1000,
+        ),
+    ))
+
+    snapshot = agg.get_snapshot()
+    env = snapshot.envs[0]
+
+    # Both observed slots have explicit SeedState entries.
+    assert "r0c0" in env.seeds
+    assert "r0c1" in env.seeds
+    # A configured-but-never-observed slot is simply absent from env.seeds:
+    # the frontend renders such slots (present in slot_ids, absent from seeds)
+    # as a distinct pending lane rather than a fabricated dormant seed.
+    assert "r0c9" not in env.seeds
 
 
 def test_germinate_preserves_causal_ids():
