@@ -531,11 +531,18 @@ class PPOAgent:
         forced_actions = self.buffer.forced_actions
         total_timesteps = sum(self.buffer.step_counts)
         if total_timesteps > 0:
-            forced_count = 0
-            for env_id in range(self.buffer.num_envs):
-                num_steps = self.buffer.step_counts[env_id]
-                if num_steps > 0:
-                    forced_count += int(forced_actions[env_id, :num_steps].sum().item())
+            # P1-VEC: one GPU->CPU sync instead of num_envs. Build the per-env validity
+            # mask (step t valid iff t < step_counts[env]) on device, AND it with the
+            # forced flags, and reduce once. Equivalent to summing forced_actions[env, :n].
+            max_steps = forced_actions.shape[1]
+            step_counts_t = torch.as_tensor(
+                self.buffer.step_counts, device=forced_actions.device, dtype=torch.long
+            )
+            step_valid = (
+                torch.arange(max_steps, device=forced_actions.device)[None, :]
+                < step_counts_t[:, None]
+            )
+            forced_count = int((forced_actions & step_valid).sum().item())  # 1 sync, was num_envs
             forced_step_ratio = forced_count / total_timesteps
             usable_actor_timesteps = total_timesteps - forced_count
         else:
@@ -736,11 +743,15 @@ class PPOAgent:
                     lstm_out = forward_result["lstm_out"]  # [1, 1, hidden_dim]
 
                 # Compute Q(s, op) vector in LifecycleOp order (NUM_OPS indices).
-                op_q_values = torch.empty(NUM_OPS, device=self.device)
-                for op_idx in range(NUM_OPS):
-                    op_tensor = torch.tensor([[op_idx]], dtype=torch.long, device=self.device)
-                    q_val = self.policy.network._compute_value(lstm_out, op_tensor)
-                    op_q_values[op_idx] = q_val.squeeze()
+                # P1-QLOOP: one batched _compute_value call over all ops instead of NUM_OPS
+                # serial launches. lstm_out is [1, 1, hidden]; broadcast over the op axis.
+                op_indices = torch.arange(
+                    NUM_OPS, device=self.device, dtype=torch.long
+                ).reshape(NUM_OPS, 1)
+                lstm_out_rep = lstm_out.expand(NUM_OPS, 1, -1).contiguous()  # [NUM_OPS, 1, hidden]
+                op_q_values = self.policy.network._compute_value(
+                    lstm_out_rep, op_indices
+                ).reshape(NUM_OPS)
 
                 # Compute Q-variance and Q-spread over valid ops only.
                 valid_q_values = op_q_values[op_mask]
