@@ -1308,6 +1308,75 @@ def test_emit_anomaly_diagnostics_collects_when_debug_enabled(monkeypatch):
     assert data.ratio_diagnostic == {"foo": "bar"}
 
 
+class _CollectStubHub:
+    def __init__(self):
+        self.events = []
+
+    def emit(self, event):
+        self.events.append(event)
+
+
+class _CollectStubAgent:
+    class _Policy:
+        class _Net:
+            pass
+
+        def __init__(self):
+            self._network = _CollectStubAgent._Policy._Net()
+
+        @property
+        def network(self):
+            return self._network
+
+    def __init__(self):
+        self.policy = self._Policy()
+
+
+@pytest.mark.parametrize(
+    "anomaly_type",
+    ["gradient_norm_drift", "gradient_health_drift"],
+)
+def test_emit_anomaly_diagnostics_maps_gradient_pathology(anomaly_type):
+    """TT-002: gradient-pathology anomalies emit GRADIENT_PATHOLOGY_DETECTED."""
+    hub = _CollectStubHub()
+    report = AnomalyReport(has_anomaly=True, anomaly_types=[anomaly_type])
+
+    _emit_anomaly_diagnostics(
+        hub=hub,
+        anomaly_report=report,
+        agent=_CollectStubAgent(),
+        batch_epoch_id=3,
+        batch_idx=0,
+        max_epochs=5,
+        total_episodes=10,
+        collect_debug=False,
+    )
+
+    assert len(hub.events) == 1
+    assert hub.events[0].event_type == TelemetryEventType.GRADIENT_PATHOLOGY_DETECTED
+
+
+def test_emit_anomaly_diagnostics_unmapped_falls_back_to_gradient_anomaly():
+    """TT-002: genuinely-unmapped anomaly types still fall back to GRADIENT_ANOMALY."""
+    hub = _CollectStubHub()
+    # lstm_h_explosion has no dedicated event type -> generic fallback.
+    report = AnomalyReport(has_anomaly=True, anomaly_types=["lstm_h_explosion"])
+
+    _emit_anomaly_diagnostics(
+        hub=hub,
+        anomaly_report=report,
+        agent=_CollectStubAgent(),
+        batch_epoch_id=3,
+        batch_idx=0,
+        max_epochs=5,
+        total_episodes=10,
+        collect_debug=False,
+    )
+
+    assert len(hub.events) == 1
+    assert hub.events[0].event_type == TelemetryEventType.GRADIENT_ANOMALY
+
+
 # =============================================================================
 # Batch Completion Tests
 # =============================================================================

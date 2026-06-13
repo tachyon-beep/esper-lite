@@ -224,11 +224,42 @@ class WandbBackend(OutputBackend):
 
         # Update wandb config with training parameters
         # wandb.config.update is safe to call multiple times
-        wandb.config.update({
-            "n_envs": event.data.n_envs,
-            "max_epochs": event.data.max_epochs,
-            "task": event.data.task,
-        })
+        d = event.data
+        config_update: dict[str, Any] = {
+            "n_envs": d.n_envs,
+            "max_epochs": d.max_epochs,
+            "max_batches": d.max_batches,
+            "task": d.task,
+            # host_params: model size baseline; param efficiency is measured
+            # against this, so it must land in the run config.
+            "host_params": d.host_params,
+            "param_budget": d.param_budget,
+            "n_episodes": d.n_episodes,
+            "seed": d.seed,
+            # Key PPO hyperparameters for cross-run comparison.
+            "lr": d.lr,
+            "clip_ratio": d.clip_ratio,
+            "entropy_coef": d.entropy_coef,
+            "reward_mode": d.reward_mode,
+            "policy_device": d.policy_device,
+            # Distributed / precision posture.
+            "world_size": d.world_size,
+            "amp_enabled": d.amp_enabled,
+            "compile_enabled": d.compile_enabled,
+        }
+        # Optional diagnostics (omit when absent - never fabricate).
+        if d.amp_dtype is not None:
+            config_update["amp_dtype"] = d.amp_dtype
+        if d.compile_backend is not None:
+            config_update["compile_backend"] = d.compile_backend
+        if d.compile_mode is not None:
+            config_update["compile_mode"] = d.compile_mode
+        if d.proof_baseline_mode is not None:
+            config_update["proof_baseline_mode"] = d.proof_baseline_mode
+        if d.proof_baseline_pair_id is not None:
+            config_update["proof_baseline_pair_id"] = d.proof_baseline_pair_id
+
+        wandb.config.update(config_update)
 
     def _handle_epoch_completed(self, event: TelemetryEvent) -> None:
         """Log per-environment epoch metrics.
@@ -308,22 +339,72 @@ class WandbBackend(OutputBackend):
             wandb.log({"ppo/update_skipped": 1}, step=step)
             return
 
+        p = event.data
         metrics = {
-            "ppo/policy_loss": event.data.policy_loss,
-            "ppo/value_loss": event.data.value_loss,
-            "ppo/entropy": event.data.entropy,
-            "ppo/kl_divergence": event.data.kl_divergence,
-            "ppo/clip_fraction": event.data.clip_fraction,
-            "ppo/grad_norm": event.data.grad_norm,
+            "ppo/policy_loss": p.policy_loss,
+            "ppo/value_loss": p.value_loss,
+            "ppo/entropy": p.entropy,
+            "ppo/kl_divergence": p.kl_divergence,
+            "ppo/clip_fraction": p.clip_fraction,
+            "ppo/grad_norm": p.grad_norm,
+            # Gradient health: pre-clip norm reveals true gradient magnitude
+            # (post-clip ~1.0 hides explosion); NaN/Inf grad counts are the
+            # fail-fast signal; dead/exploding layer counts localize pathology.
+            "ppo/pre_clip_grad_norm": p.pre_clip_grad_norm,
+            "ppo/nan_grad_count": p.nan_grad_count,
+            "ppo/inf_grad_count": p.inf_grad_count,
+            "ppo/dead_layers": p.dead_layers,
+            "ppo/exploding_layers": p.exploding_layers,
+            # Ratio extremes: explosion/collapse precede training divergence.
+            "ppo/ratio_max": p.ratio_max,
+            "ppo/ratio_min": p.ratio_min,
+            "ppo/joint_ratio_max": p.joint_ratio_max,
+            # Directional clip fractions: WHERE clipping bites (up vs down).
+            "ppo/clip_fraction_positive": p.clip_fraction_positive,
+            "ppo/clip_fraction_negative": p.clip_fraction_negative,
+            # Value-function quality: scale, calibration, Bellman residual.
+            "ppo/value_target_scale": p.value_target_scale,
+            "ppo/v_return_correlation": p.v_return_correlation,
+            "ppo/td_error_mean": p.td_error_mean,
+            "ppo/bellman_error": p.bellman_error,
         }
 
-        # Optional metrics (may be None)
-        if event.data.explained_variance is not None:
-            metrics["ppo/explained_variance"] = event.data.explained_variance
-        if event.data.entropy_coef is not None:
-            metrics["ppo/entropy_coef"] = event.data.entropy_coef
-        if event.data.lr is not None:
-            metrics["ppo/lr"] = event.data.lr
+        # Optional metrics (may be None - omit rather than fabricate)
+        if p.explained_variance is not None:
+            metrics["ppo/explained_variance"] = p.explained_variance
+        if p.entropy_coef is not None:
+            metrics["ppo/entropy_coef"] = p.entropy_coef
+        if p.lr is not None:
+            metrics["ppo/lr"] = p.lr
+
+        # LSTM hidden-state health (B7-DRL-04 / SIMIC-PROD-003).
+        # Update-time vs rollout-time are distinct signals; log both when present.
+        # RMS metrics are scale-free; nan/inf flags catch irrecoverable corruption.
+        if p.lstm_h_rms is not None:
+            metrics["ppo/lstm_h_rms"] = p.lstm_h_rms
+        if p.lstm_c_rms is not None:
+            metrics["ppo/lstm_c_rms"] = p.lstm_c_rms
+        if p.lstm_h_env_rms_max is not None:
+            metrics["ppo/lstm_h_env_rms_max"] = p.lstm_h_env_rms_max
+        if p.lstm_c_env_rms_max is not None:
+            metrics["ppo/lstm_c_env_rms_max"] = p.lstm_c_env_rms_max
+        metrics["ppo/lstm_has_nan"] = int(p.lstm_has_nan)
+        metrics["ppo/lstm_has_inf"] = int(p.lstm_has_inf)
+        if p.rollout_lstm_h_rms is not None:
+            metrics["ppo/rollout_lstm_h_rms"] = p.rollout_lstm_h_rms
+        if p.rollout_lstm_c_rms is not None:
+            metrics["ppo/rollout_lstm_c_rms"] = p.rollout_lstm_c_rms
+        if p.rollout_lstm_h_env_rms_max is not None:
+            metrics["ppo/rollout_lstm_h_env_rms_max"] = p.rollout_lstm_h_env_rms_max
+        if p.rollout_lstm_c_env_rms_max is not None:
+            metrics["ppo/rollout_lstm_c_env_rms_max"] = p.rollout_lstm_c_env_rms_max
+        metrics["ppo/rollout_lstm_has_nan"] = int(p.rollout_lstm_has_nan)
+        metrics["ppo/rollout_lstm_has_inf"] = int(p.rollout_lstm_has_inf)
+
+        # AMP finiteness: overflow detection drives loss-scale backoff / skips.
+        metrics["ppo/amp_overflow_detected"] = int(p.amp_overflow_detected)
+        if p.loss_scale is not None:
+            metrics["ppo/loss_scale"] = p.loss_scale
 
         wandb.log(metrics, step=step)
 
@@ -341,7 +422,7 @@ class WandbBackend(OutputBackend):
         if step is None:
             return
 
-        slot_id = event.data.slot_id or event.slot_id
+        slot_id = event.slot_id or event.data.slot_id
         if slot_id is None:
             raise ValueError("slot_id required for SEED_GERMINATED event")
 
@@ -367,9 +448,9 @@ class WandbBackend(OutputBackend):
         if step is None:
             return
 
-        if event.slot_id is None:
+        slot_id = event.slot_id or event.data.slot_id
+        if slot_id is None:
             raise ValueError("slot_id required for SEED_STAGE_CHANGED event")
-        slot_id = event.slot_id
 
         # Log stage name
         metrics = {
@@ -392,9 +473,9 @@ class WandbBackend(OutputBackend):
         if step is None:
             return
 
-        if event.slot_id is None:
+        slot_id = event.slot_id or event.data.slot_id
+        if slot_id is None:
             raise ValueError("slot_id required for SEED_FOSSILIZED event")
-        slot_id = event.slot_id
 
         metrics = {
             "seeds/fossilized_count": 1,
@@ -430,9 +511,9 @@ class WandbBackend(OutputBackend):
         if step is None:
             return
 
-        if event.slot_id is None:
+        slot_id = event.slot_id or event.data.slot_id
+        if slot_id is None:
             raise ValueError("slot_id required for SEED_PRUNED event")
-        slot_id = event.slot_id
 
         metrics = {
             "seeds/pruned_count": 1,

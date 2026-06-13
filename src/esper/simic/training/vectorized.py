@@ -498,6 +498,12 @@ def _emit_anomaly_diagnostics(
         "ratio_collapse": TelemetryEventType.RATIO_COLLAPSE_DETECTED,
         "value_collapse": TelemetryEventType.VALUE_COLLAPSE_DETECTED,
         "numerical_instability": TelemetryEventType.NUMERICAL_INSTABILITY_DETECTED,
+        # Gradient-pathology anomalies from AnomalyDetector.check_gradient_drift.
+        # These signal slow divergence of gradient norm/health from the EMA and
+        # have a dedicated event type so consumers can distinguish them from the
+        # generic GRADIENT_ANOMALY catch-all.
+        "gradient_norm_drift": TelemetryEventType.GRADIENT_PATHOLOGY_DETECTED,
+        "gradient_health_drift": TelemetryEventType.GRADIENT_PATHOLOGY_DETECTED,
     }
 
     gradient_stats = None
