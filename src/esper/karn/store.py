@@ -396,9 +396,17 @@ class TelemetryStore:
         self.current_epoch = None
 
     def start_epoch(self, epoch: int) -> EpochSnapshot:
-        """Start building a new epoch snapshot."""
-        self.current_epoch = EpochSnapshot(epoch=epoch)
-        return self.current_epoch
+        """Start building a new epoch snapshot.
+
+        Seeds the host snapshot's ``host_params`` from the episode context so
+        every epoch (including the first) carries the real host parameter count
+        captured at TRAINING_STARTED, rather than a fabricated zero.
+        """
+        snapshot = EpochSnapshot(epoch=epoch)
+        if self.context is not None:
+            snapshot.host.host_params = self.context.host_params
+        self.current_epoch = snapshot
+        return snapshot
 
     def commit_epoch(self) -> None:
         """Commit current epoch to history."""
@@ -899,6 +907,10 @@ class TelemetryStore:
                         task_type=data.get("task", "classification"),
                         reward_mode=data.get("reward_mode", "shaped"),
                         max_epochs=data.get("max_epochs", 75),
+                        # host_params is a required field on TrainingStartedPayload;
+                        # carry it verbatim so the import preserves the real host
+                        # parameter count instead of defaulting it to zero.
+                        host_params=data["host_params"],
                         hyperparameters=hyperparameters,
                     )
                 elif event_type == "EPOCH_COMPLETED":

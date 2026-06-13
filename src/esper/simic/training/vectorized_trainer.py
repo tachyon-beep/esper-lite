@@ -138,11 +138,33 @@ def apply_proof_baseline_action_controls(
     if lifecycle_policy == "paired_lockstep_reward_comparison":
         return
 
+    # These policies would require real control machinery that does not exist:
+    #   - freeze_replayed_final_topology (static_final) needs topology
+    #     persistence + replay so envs start at a previously-evolved FINAL
+    #     topology and hold it fixed.
+    #   - apply_declared_lifecycle_schedule (fixed_schedule) needs a schedule
+    #     injector that emits non-WAIT ops on a predetermined schedule while
+    #     bypassing the policy.
+    # Masking the op head to WAIT does NEITHER — it would produce a fake
+    # control (a run frozen at its INITIAL topology, applying no ops). Refuse
+    # loudly rather than silently degrade to WAIT-only and invalidate the proof.
+    unsupported_policies = (
+        "freeze_replayed_final_topology",
+        "apply_declared_lifecycle_schedule",
+    )
+    if lifecycle_policy in unsupported_policies:
+        raise RuntimeError(
+            "Proof baseline lifecycle policy "
+            f"{lifecycle_policy!r} is not supported by this runner: it has no "
+            "real control implementation and masking the op head to WAIT would "
+            "produce a fake control that invalidates the morphogenesis proof. "
+            "Mark the cohort current_runner_supported=False or implement the "
+            "real control."
+        )
+
     wait_only_policies = (
         "force_wait_only",
         "freeze_initial_topology",
-        "freeze_replayed_final_topology",
-        "apply_declared_lifecycle_schedule",
     )
     if lifecycle_policy not in wait_only_policies:
         raise ValueError(f"Unknown proof baseline lifecycle policy: {lifecycle_policy}")

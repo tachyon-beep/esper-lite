@@ -57,6 +57,12 @@ def build_blueprint_health_proof_plan(
                 proof_baseline_pair_id=plan_id,
                 current_runner_supported=True,
             ),
+            # static_final requires replaying a previously-evolved FINAL
+            # topology and holding it fixed. The runtime has no topology
+            # persistence/replay machinery, so forcing WAIT-only from epoch 0
+            # would leave the run at its INITIAL topology — a fake control
+            # indistinguishable from static_initial. Mark unsupported rather
+            # than ship a silently-WAIT-only impostor control.
             ProofBaselineCohort(
                 cohort_id="static_final",
                 mode=ProofBaselineMode.STATIC_FINAL,
@@ -64,8 +70,13 @@ def build_blueprint_health_proof_plan(
                 training_seed=base_seed + 30_000,
                 lifecycle_policy="freeze_replayed_final_topology",
                 proof_baseline_pair_id=plan_id,
-                current_runner_supported=True,
+                current_runner_supported=False,
             ),
+            # fixed_schedule requires applying morphogenesis ops on a
+            # predetermined (non-policy) schedule. The runtime has no schedule
+            # injection machinery — it can only mask the op head to WAIT — so a
+            # "scheduled" cohort would in fact apply no ops at all. Mark
+            # unsupported rather than ship a silently-WAIT-only impostor control.
             ProofBaselineCohort(
                 cohort_id="fixed_schedule",
                 mode=ProofBaselineMode.FIXED_SCHEDULE,
@@ -73,7 +84,7 @@ def build_blueprint_health_proof_plan(
                 training_seed=base_seed + 40_000,
                 lifecycle_policy="apply_declared_lifecycle_schedule",
                 proof_baseline_pair_id=plan_id,
-                current_runner_supported=True,
+                current_runner_supported=False,
             ),
             ProofBaselineCohort(
                 cohort_id="lockstep_reward_ab_A",

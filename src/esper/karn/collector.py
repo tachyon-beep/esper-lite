@@ -284,6 +284,7 @@ class KarnCollector:
                 task_type=event.data.task,
                 reward_mode=event.data.reward_mode or "shaped",
                 max_epochs=event.data.max_epochs,
+                host_params=event.data.host_params,
             )
         else:
             _logger.warning(f"Unknown data type in TRAINING_STARTED: {type(event.data)}")
@@ -655,11 +656,17 @@ class KarnCollector:
         task_type: str = "classification",
         reward_mode: str = "shaped",
         max_epochs: int = 75,
+        host_params: int = 0,
         **kwargs: Any,
     ) -> EpisodeContext:
         """Start a new training episode.
 
         Creates EpisodeContext and initializes the store.
+
+        ``host_params`` is the post-materialization host parameter count emitted
+        on ``TrainingStartedPayload``; it is threaded into the context so the
+        export (and every host snapshot derived from it) carries the real value
+        instead of a fabricated zero.
         """
         context = EpisodeContext(
             episode_id=episode_id or str(uuid4()),
@@ -669,6 +676,7 @@ class KarnCollector:
             task_type=task_type,
             reward_mode=reward_mode,
             max_epochs=max_epochs,
+            host_params=host_params,
             hyperparameters=tuple(kwargs.items()),
         )
 
