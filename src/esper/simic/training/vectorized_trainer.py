@@ -1876,6 +1876,26 @@ class VectorizedPPOTrainer:
                         group_id=group_id,
                     )
 
+                    # P2-FRAGMETRIC: per-device CUDA caching-allocator snapshot (host-side,
+                    # no sync) into Karn raw_events. Emitted while env_states is still alive
+                    # (before the P2-DEL teardown); validates P0-ALLOC + the structural
+                    # fragmentation cure (reserved-vs-allocated, retries, OOMs).
+                    for frag_device in sorted({es.env_device for es in env_states}):
+                        if torch.device(frag_device).type != "cuda":
+                            continue
+                        alloc_stats = torch.cuda.memory_stats(frag_device)
+                        frag_allocated = alloc_stats["allocated_bytes.all.current"]
+                        frag_reserved = alloc_stats["reserved_bytes.all.current"]
+                        batch_emitter.on_allocator_stats(
+                            batch_idx=batch_idx,
+                            device=str(frag_device),
+                            allocated_bytes=frag_allocated,
+                            reserved_bytes=frag_reserved,
+                            fragmentation_bytes=frag_reserved - frag_allocated,
+                            num_alloc_retries=alloc_stats["num_alloc_retries"],
+                            num_ooms=alloc_stats["num_ooms"],
+                        )
+
                 batch_summary = BatchSummary(
                     batch=batch_idx + 1,
                     episodes=batch_epoch_id,

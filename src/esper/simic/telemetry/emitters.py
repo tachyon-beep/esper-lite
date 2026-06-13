@@ -19,6 +19,7 @@ from esper.leyline import (
     ALPHA_CURVE_NAMES,
     ALPHA_SPEED_NAMES,
     ALPHA_TARGET_VALUES,
+    AllocatorStatsPayload,
     AnalyticsSnapshotPayload,
     BatchEpochCompletedPayload,
     BLUEPRINT_IDS,
@@ -562,6 +563,41 @@ class VectorizedEmitter:
                     scoreboard_tables=scoreboard_tables,
                 ),
             ))
+
+    def on_allocator_stats(
+        self,
+        *,
+        batch_idx: int,
+        device: str,
+        allocated_bytes: int,
+        reserved_bytes: int,
+        fragmentation_bytes: int,
+        num_alloc_retries: int,
+        num_ooms: int,
+    ) -> None:
+        """Emit a per-device CUDA caching-allocator snapshot (P2-FRAGMETRIC).
+
+        Batch/device-level event: emitted directly (not via _emit) so the payload's
+        ``device`` is the MEASURED device, not the emitter's env device. The stats are
+        host-side allocator accounting (no CUDA sync). Consumed via the Karn raw_events
+        view (auto-ingested by event_type='ALLOCATOR_STATS'); no dedicated view wiring.
+        """
+        if not self.hub:
+            return
+        self.hub.emit(TelemetryEvent(
+            event_type=TelemetryEventType.ALLOCATOR_STATS,
+            epoch=batch_idx,
+            group_id=self.group_id,
+            data=AllocatorStatsPayload(
+                batch_idx=batch_idx,
+                device=device,
+                allocated_bytes=allocated_bytes,
+                reserved_bytes=reserved_bytes,
+                fragmentation_bytes=fragmentation_bytes,
+                num_alloc_retries=num_alloc_retries,
+                num_ooms=num_ooms,
+            ),
+        ))
 
 
 def emit_with_env_context(

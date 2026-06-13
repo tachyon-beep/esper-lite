@@ -114,6 +114,9 @@ class TelemetryEventType(Enum):
     # === Episode Events ===
     EPISODE_OUTCOME = auto()  # Multi-objective outcome for Pareto analysis
 
+    # === Memory / Allocator Events ===
+    ALLOCATOR_STATS = auto()  # Per-device CUDA caching-allocator stats (frag, retries, OOMs)
+
 
 @dataclass
 class TelemetryEvent:
@@ -2038,6 +2041,50 @@ class MemoryWarningPayload:
         )
 
 
+@dataclass(slots=True, frozen=True)
+class AllocatorStatsPayload:
+    """Payload for ALLOCATOR_STATS event.
+
+    Per-device snapshot of the CUDA caching allocator (host-side accounting, no sync).
+    fragmentation_bytes = reserved - allocated = memory the allocator holds but cannot
+    hand out; a high ratio reserved/allocated with climbing num_alloc_retries is the
+    per-stream segment-stranding signature this telemetry exists to measure (P2-FRAGMETRIC).
+    """
+
+    # REQUIRED
+    batch_idx: int
+    device: str
+    allocated_bytes: int
+    reserved_bytes: int
+    fragmentation_bytes: int
+    num_alloc_retries: int
+    num_ooms: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "batch_idx": self.batch_idx,
+            "device": self.device,
+            "allocated_bytes": self.allocated_bytes,
+            "reserved_bytes": self.reserved_bytes,
+            "fragmentation_bytes": self.fragmentation_bytes,
+            "num_alloc_retries": self.num_alloc_retries,
+            "num_ooms": self.num_ooms,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "AllocatorStatsPayload":
+        """Parse from dict. Raises KeyError on missing required fields."""
+        return cls(
+            batch_idx=data["batch_idx"],
+            device=data["device"],
+            allocated_bytes=data["allocated_bytes"],
+            reserved_bytes=data["reserved_bytes"],
+            fragmentation_bytes=data["fragmentation_bytes"],
+            num_alloc_retries=data["num_alloc_retries"],
+            num_ooms=data["num_ooms"],
+        )
+
+
 RewardHackingPattern = Literal[
     "attribution_ratio",
     "ransomware_signature",
@@ -2302,6 +2349,7 @@ TelemetryPayload = (
     | TrendDetectedPayload
     | PPOUpdatePayload
     | MemoryWarningPayload
+    | AllocatorStatsPayload
     | RewardHackingSuspectedPayload
     | TamiyoInitiatedPayload
     | SeedGerminatedPayload
