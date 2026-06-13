@@ -128,13 +128,26 @@ class PPOCoordinator:
             # Use normalize_only to avoid polluting running stats with rare outliers.
             penalty = env_states[env_idx].governor.get_punishment_reward()
             normalized_penalty = self.reward_normalizer.normalize_only(penalty)
-            self.agent.buffer.mark_terminal_with_penalty(
+            # Do NOT resolve triggering_action_id eagerly: last_action_id() raises
+            # on an empty buffer (first-step panic with no executed transition).
+            # mark_terminal_with_penalty resolves it internally to the prior
+            # executed transition's id AFTER its own step_count==0 guard, so the
+            # death penalty attaches to the action that actually caused the panic.
+            penalty_applied = self.agent.buffer.mark_terminal_with_penalty(
                 env_idx,
                 normalized_penalty,
                 severity=abs(penalty),
-                triggering_action_id=self.agent.buffer.last_action_id(env_idx),
                 watch_window_evidence=abs(penalty),
             )
+            if not penalty_applied:
+                # No executed transition to attribute the catastrophe to (first-step
+                # panic). The penalty is correctly dropped, but surface it rather
+                # than swallowing it silently so a high rate is observable.
+                self.logger.warning(
+                    "Rollback penalty for env %d not applied: no executed "
+                    "transition to attribute (first-step panic).",
+                    env_idx,
+                )
             # B11-CR-03 fix: OVERWRITE last reward with RAW penalty (for telemetry interpretability).
             # Buffer gets normalized_penalty (for PPO training stability).
             # Telemetry gets raw penalty (for cross-run comparability).

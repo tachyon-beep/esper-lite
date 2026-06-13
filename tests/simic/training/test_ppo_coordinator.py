@@ -33,9 +33,15 @@ class _StubBuffer:
         penalty: float,
         *,
         severity: float,
-        triggering_action_id: str,
+        triggering_action_id: str | None = None,
         watch_window_evidence: float,
     ) -> bool:
+        # Mirror the real buffer: when the caller does not supply a triggering
+        # action id, resolve it from the most recent (prior, executed)
+        # transition. The coordinator passes None so attribution lands on the
+        # action that actually caused the panic, not a phantom rollback row.
+        if triggering_action_id is None:
+            triggering_action_id = self.last_action_id(env_id)
         self.penalty_calls.append((env_id, penalty, severity, triggering_action_id))
         return True
 
@@ -159,6 +165,64 @@ def test_handle_rollbacks_corrects_latest_episode_outcome_for_env():
     assert episode_history[1].episode_reward == -9.0
     assert episode_outcomes[0].episode_reward == 100.0
     assert episode_outcomes[1].episode_reward == -9.0
+
+
+def test_handle_rollbacks_drops_penalty_when_no_executed_transition(caplog):
+    """First-step panic (no prior executed transition) must not crash.
+
+    P2 fix: the coordinator must not eagerly resolve ``last_action_id`` (which
+    raises when the buffer is empty). When ``mark_terminal_with_penalty``
+    reports no transition was modified, the dropped penalty is surfaced via a
+    warning rather than silently swallowed.
+    """
+
+    class _EmptyBuffer:
+        def __len__(self) -> int:
+            return 0
+
+        def last_action_id(self, env_id: int) -> str:
+            raise ValueError(f"env_id {env_id} has no transitions")
+
+        def mark_terminal_with_penalty(
+            self,
+            env_id: int,
+            penalty: float,
+            *,
+            severity: float,
+            triggering_action_id: str | None = None,
+            watch_window_evidence: float,
+        ) -> bool:
+            # The coordinator must NOT have eagerly resolved an action id from
+            # an empty buffer (that would have raised before reaching here).
+            assert triggering_action_id is None
+            return False
+
+    coordinator = _make_coordinator(run_ppo_updates_fn=lambda **_kwargs: {})
+    coordinator.agent.buffer = _EmptyBuffer()
+    env_states = [
+        SimpleNamespace(
+            governor=SimpleNamespace(get_punishment_reward=lambda: -10.0),
+            episode_rewards=[],
+            telemetry_cb=lambda event: None,
+            val_acc=12.5,
+            action_counts={},
+        )
+    ]
+
+    with caplog.at_level(logging.WARNING):
+        rollback_envs = coordinator.handle_rollbacks(
+            env_states=env_states,
+            env_rollback_occurred=[True],
+            env_total_rewards=[0.0],
+            episode_history=[],
+            episode_outcomes=[],
+        )
+
+    assert rollback_envs == [0]
+    assert any(
+        "penalt" in record.getMessage().lower()
+        for record in caplog.records
+    )
 
 
 def test_handle_rollbacks_emits_exactly_one_corrected_episode_outcome():

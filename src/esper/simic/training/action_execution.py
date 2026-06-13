@@ -672,50 +672,17 @@ def execute_actions(
             action_outcome.truncated = False
             env_state.last_action_success = False
             env_state.last_action_op = OP_WAIT
-            env_state.episode_rewards.append(0.0)
 
-            agent.buffer.add(
-                env_id=env_idx,
-                state=states_batch_normalized[env_idx].detach(),
-                blueprint_indices=blueprint_indices_batch[env_idx].detach(),
-                slot_action=slot_action,
-                blueprint_action=blueprint_action,
-                style_action=style_action,
-                tempo_action=tempo_action,
-                alpha_target_action=alpha_target_action,
-                alpha_speed_action=alpha_speed_action,
-                alpha_curve_action=alpha_curve_action,
-                op_action=op_action,
-                effective_op_action=OP_WAIT,
-                slot_log_prob=slot_log_probs_batch[env_idx],
-                blueprint_log_prob=blueprint_log_probs_batch[env_idx],
-                style_log_prob=style_log_probs_batch[env_idx],
-                tempo_log_prob=tempo_log_probs_batch[env_idx],
-                alpha_target_log_prob=alpha_target_log_probs_batch[env_idx],
-                alpha_speed_log_prob=alpha_speed_log_probs_batch[env_idx],
-                alpha_curve_log_prob=alpha_curve_log_probs_batch[env_idx],
-                op_log_prob=op_log_probs_batch[env_idx],
-                value=value,
-                reward=0.0,
-                done=True,
-                slot_mask=slot_by_op_masks_batch[env_idx, OP_WAIT],
-                blueprint_mask=blueprint_masks_batch[env_idx],
-                style_mask=style_masks_batch[env_idx],
-                tempo_mask=tempo_masks_batch[env_idx],
-                alpha_target_mask=alpha_target_masks_batch[env_idx],
-                alpha_speed_mask=alpha_speed_masks_batch[env_idx],
-                alpha_curve_mask=alpha_curve_masks_batch[env_idx],
-                op_mask=op_masks_batch[env_idx],
-                hidden_h=pre_step_hiddens[env_idx][0].detach(),
-                hidden_c=pre_step_hiddens[env_idx][1].detach(),
-                truncated=False,
-                bootstrap_value=0.0,
-                forced_step=forced_batch_cpu[env_idx],
-                action_id=action_id,
-                contribution_targets=None,
-                contribution_mask=None,
-                has_fresh_contribution=False,
-            )
+            # Credit assignment: the panic was detected from the CURRENT val_loss
+            # (a consequence of the PRIOR executed transition); this step's sampled
+            # action never executed (rollback ran instead). We must NOT add a buffer
+            # row for that unexecuted action — doing so would make handle_rollbacks'
+            # mark_terminal_with_penalty (which targets the last transition) blame
+            # an innocent action and train PPO to avoid it. Instead we end the
+            # episode here so the PRIOR executed transition becomes the terminal
+            # row that receives the death penalty. If this env had no prior
+            # transition (first-step panic), the penalty is correctly dropped
+            # (mark_terminal_with_penalty returns False — nothing to attribute).
             agent.buffer.end_episode(env_id=env_idx)
             continue
 
@@ -1200,25 +1167,33 @@ def execute_actions(
                         severity="debug",
                         message="Morphology mutation dispatched",
                     ))
-                    terminal_phase: MorphologyCausalLogPhase = (
-                        "fossilization"
-                        if op_action == OP_FOSSILIZE and handler_result.success
-                        else "commit"
-                    )
-                    emitters[env_idx].emit(TelemetryEvent(
-                        event_type=TelemetryEventType.MORPHOLOGY_CAUSAL_LOG,
-                        data=_build_morphology_causal_log_payload(
-                            phase=terminal_phase,
-                            context=morphology_context,
-                            env_idx=env_idx,
-                            blueprint_id=morphology_blueprint_id,
-                            governor_approved=True,
-                            governor_reason="approved",
-                            linked_event_id=morphology_context.mutation_id,
-                        ),
-                        severity="debug",
-                        message="Morphology dispatch committed",
-                    ))
+                    # Only emit a terminal commit/fossilization row when the
+                    # handler actually mutated. A declined handler (failed ADVANCE
+                    # gate, FOSSILIZE G5 check) returns success=False after governor
+                    # approval; emitting phase='commit' there would mark a no-op as a
+                    # committed mutation and corrupt the proof/audit trail. The
+                    # 'dispatch' row already records the attempt; no terminal row
+                    # follows a declined handler.
+                    if handler_result.success:
+                        terminal_phase: MorphologyCausalLogPhase = (
+                            "fossilization"
+                            if op_action == OP_FOSSILIZE
+                            else "commit"
+                        )
+                        emitters[env_idx].emit(TelemetryEvent(
+                            event_type=TelemetryEventType.MORPHOLOGY_CAUSAL_LOG,
+                            data=_build_morphology_causal_log_payload(
+                                phase=terminal_phase,
+                                context=morphology_context,
+                                env_idx=env_idx,
+                                blueprint_id=morphology_blueprint_id,
+                                governor_approved=True,
+                                governor_reason="approved",
+                                linked_event_id=morphology_context.mutation_id,
+                            ),
+                            severity="debug",
+                            message="Morphology dispatch committed",
+                        ))
             elif op_action == OP_WAIT:
                 action_success = True
 

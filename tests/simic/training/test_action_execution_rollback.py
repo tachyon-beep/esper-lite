@@ -258,9 +258,14 @@ def test_rollback_step_skips_stale_lifecycle_action(monkeypatch: pytest.MonkeyPa
     assert model.germinate_calls == []
     assert env_state.germinate_count == 0
     assert env_state.last_action_success is False
-    assert buffer.add_calls[0]["done"] is True
-    assert buffer.add_calls[0]["truncated"] is False
-    assert buffer.add_calls[0]["effective_op_action"] == OP_WAIT
+    # P2 fix: the rollback env must NOT record a buffer transition for the
+    # sampled-but-unexecuted action. The panic reflects the PRIOR executed
+    # transition; the death penalty (applied later by handle_rollbacks via
+    # mark_terminal_with_penalty) must attach to that prior row, not a fresh
+    # row holding an action that never ran. The episode is still ended so the
+    # prior transition becomes the terminal.
+    assert buffer.add_calls == []
+    assert env_state.episode_rewards == []
     assert buffer.ended_envs == [0]
 
 
@@ -766,6 +771,175 @@ def test_execute_actions_emits_joinable_morphology_causal_log(
     assert dispatch_event.data.watch_window_evidence is None
     assert commit_event.data.watch_window_evidence is None
     assert causal_events[-1].data.linked_event_id == "morph-b0-e1-env0-r0c0-op1-mutation"
+
+
+def test_execute_actions_failed_handler_does_not_emit_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A declined lifecycle handler must NOT emit a terminal 'commit' row.
+
+    P2 fix: when the handler returns success=False (e.g. a failed ADVANCE gate
+    or FOSSILIZE G5 check) after governor approval, emitting phase='commit'
+    would mark a no-op/failed attempt as a committed mutation and corrupt the
+    proof/audit trail. The 'dispatch' row already records the attempt; no
+    terminal commit/fossilization row should follow a declined handler.
+    """
+    monkeypatch.setattr(
+        action_execution,
+        "compute_rent_and_shock_inputs",
+        lambda **_: (0, 0.0),
+    )
+    reward_components = SimpleNamespace(
+        bounded_attribution=None,
+        compute_rent=0.0,
+        alpha_shock=0.0,
+        new_drip_state=None,
+        total_reward=0.0,
+    )
+    monkeypatch.setattr(
+        action_execution,
+        "compute_reward",
+        lambda inputs: (0.0, reward_components),
+    )
+
+    def fake_failing_handler(ctx: object, params: object) -> HandlerResult:
+        return HandlerResult(success=False, telemetry={})
+
+    monkeypatch.setitem(
+        handler_registry.HANDLER_REGISTRY,
+        OP_GERMINATE,
+        fake_failing_handler,
+    )
+
+    model = _FakeModel()
+    governor = _ApprovingGovernor()
+    emitted: list[object] = []
+    env_state = SimpleNamespace(
+        model=model,
+        stream=None,
+        governor=governor,
+        host_optimizer=SimpleNamespace(state={}),
+        seed_optimizers={},
+        action_counts=defaultdict(int),
+        successful_action_counts=defaultdict(int),
+        val_acc=50.0,
+        val_loss=1.0,
+        train_loss=1.0,
+        train_acc=50.0,
+        committed_val_acc=50.0,
+        prev_slot_alphas={},
+        prev_slot_params={},
+        acc_at_germination={},
+        escrow_credit=defaultdict(float),
+        seeds_created=0,
+        germinate_count=0,
+        seeds_fossilized=0,
+        fossilize_count=0,
+        contributing_fossilized=0,
+        scaffold_boost_ledger={},
+        fossilized_drip_states=[],
+        pending_auto_prune_penalty=0.0,
+        pending_hindsight_credit=0.0,
+        episode_rewards=[],
+        last_action_success=True,
+        last_action_op=OP_WAIT,
+        gradient_ratio_ema={},
+        gradient_health_prev={},
+        epochs_since_counterfactual={},
+        telemetry_cb=None,
+        init_obs_v3_slot_tracking=lambda slot_id: None,
+        clear_obs_v3_slot_tracking=lambda slot_id: None,
+    )
+
+    buffer = _FakeBuffer()
+    slot_config = SlotConfig.default()
+    reward_config = SimpleNamespace(
+        reward_mode=RewardMode.SHAPED,
+        rent_host_params_floor=1,
+        base_slot_rent_ratio=0.0,
+    )
+    context = ActionExecutionContext(
+        slots=["r0c0"],
+        ordered_slots=["r0c0"],
+        slot_config=slot_config,
+        task_spec=SimpleNamespace(topology="cnn"),
+        env_reward_configs=[reward_config],
+        reward_family_enum=RewardFamily.CONTRIBUTION,
+        reward_config=SimpleNamespace(auto_prune_penalty=-1.0),
+        loss_reward_config=SimpleNamespace(),
+        reward_normalizer=SimpleNamespace(update_and_normalize=lambda reward: reward),
+        telemetry_config=None,
+        ops_telemetry_enabled=False,
+        disable_advance=False,
+        effective_max_seeds=1,
+        max_epochs=5,
+        num_train_batches=1,
+        device="cpu",
+        analytics=SimpleNamespace(_get_scoreboard=lambda env_idx: SimpleNamespace(host_params=100)),
+        emitters=[SimpleNamespace(emit=emitted.append)],
+        agent=SimpleNamespace(buffer=buffer),
+        fossilize_active_seed=lambda model, slot_id: True,
+        resolve_target_slot=_resolve_target_slot,
+        host_params_baseline=100,
+    )
+
+    actions_np = np.zeros((len(HEAD_NAMES), 1), dtype=np.int64)
+    actions_np[HEAD_NAMES.index("op"), 0] = OP_GERMINATE
+    actions_np[HEAD_NAMES.index("blueprint"), 0] = 1
+    head_log_probs = {head: torch.zeros(1) for head in HEAD_NAMES}
+    masks_batch = {head: torch.ones((1, 1), dtype=torch.bool) for head in HEAD_NAMES}
+    masks_batch["op"] = torch.ones((1, len(action_execution.OP_NAMES)), dtype=torch.bool)
+    masks_batch["slot_by_op"] = torch.ones(
+        (1, len(action_execution.OP_NAMES), slot_config.num_slots),
+        dtype=torch.bool,
+    )
+
+    execute_actions(
+        context=context,
+        env_states=[env_state],
+        actions_np=actions_np,
+        values=[0.0],
+        all_signals=[SimpleNamespace(metrics=SimpleNamespace(accuracy_delta=0.0), accuracy_history=[50.0])],
+        all_slot_reports=[{}],
+        states_batch_normalized=torch.tensor([[1.0, 2.0, 3.0, 4.0]]),
+        blueprint_indices_batch=torch.zeros((1, slot_config.num_slots), dtype=torch.long),
+        pre_step_hiddens=[(torch.zeros(1, 1, 2), torch.zeros(1, 1, 2))],
+        head_log_probs=head_log_probs,
+        masks_batch=masks_batch,
+        action_specs=[ActionSpec()],
+        action_outcomes=[ActionOutcome()],
+        mask_flags=[ActionMaskFlags()],
+        contribution_reward_inputs=[SimpleNamespace()],
+        loss_reward_inputs=[SimpleNamespace()],
+        head_confidences_cpu=None,
+        head_entropies_cpu=None,
+        op_probs_cpu=None,
+        masked_np=None,
+        baseline_accs=[{}],
+        governor_panic_envs=[],
+        env_rollback_occurred=[False],
+        reward_summary_accum=[RewardSummaryAccumulator()],
+        env_final_accs=[0.0],
+        env_total_rewards=[0.0],
+        episode_history=[],
+        episode_outcomes=[],
+        step_obs_stats=None,
+        epoch=1,
+        episodes_completed=0,
+        batch_idx=0,
+    )
+
+    causal_events = [
+        event
+        for event in emitted
+        if event.event_type == action_execution.TelemetryEventType.MORPHOLOGY_CAUSAL_LOG
+    ]
+    phases = [event.data.phase for event in causal_events]
+    # The handler declined: the dispatch row records the attempt, but NO terminal
+    # commit/fossilization row may follow — that would be a false committed mutation.
+    assert phases == ["proposal", "verdict", "mutation", "dispatch"]
+    assert "commit" not in phases
+    assert "fossilization" not in phases
 
 
 def test_rollback_step_emits_cooldown_and_audit_causal_log(
