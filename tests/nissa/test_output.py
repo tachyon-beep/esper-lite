@@ -13,7 +13,40 @@ from esper.leyline.telemetry import (
     EpochCompletedPayload,
     SeedGerminatedPayload,
 )
-from esper.nissa.output import DirectoryOutput, NissaHub, OutputBackend, _join_with_timeout
+from esper.nissa.output import (
+    DirectoryOutput,
+    FileOutput,
+    NissaHub,
+    OutputBackend,
+    _join_with_timeout,
+)
+
+
+class TestFileOutputEpisodeIdx:
+    """LN-001: FileOutput JSONL rows must carry episode_idx."""
+
+    def test_jsonl_row_includes_episode_idx(self, tmp_path: Path):
+        backend = FileOutput(tmp_path / "events.jsonl", buffer_size=1)
+
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            seed_id="seed_0",
+            epoch=3,
+            data=EpochCompletedPayload(
+                env_id=1,
+                inner_epoch=3,
+                val_loss=0.4,
+                val_accuracy=80.0,
+                episode_idx=7,
+                seeds=None,
+            ),
+        )
+        backend.emit(event)
+        backend.close()
+
+        with open(tmp_path / "events.jsonl") as f:
+            data = json.loads(f.readline())
+        assert data["data"]["episode_idx"] == 7
 
 
 class TestDirectoryOutput:
@@ -63,6 +96,32 @@ class TestDirectoryOutput:
             assert data["event_type"] == "EPOCH_COMPLETED"
             assert data["seed_id"] == "seed_0"
             assert data["data"]["val_accuracy"] == 85.5
+
+    def test_jsonl_row_includes_episode_idx(self, tmp_path: Path):
+        """LN-001: DirectoryOutput JSONL rows must carry episode_idx (no silent drop)."""
+        backend = DirectoryOutput(tmp_path)
+
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            seed_id="seed_0",
+            epoch=5,
+            data=EpochCompletedPayload(
+                env_id=0,
+                inner_epoch=5,
+                val_loss=0.5,
+                val_accuracy=85.5,
+                episode_idx=9,
+                seeds=None,
+            ),
+        )
+        backend.emit(event)
+        backend.close()
+
+        events_file = list(tmp_path.iterdir())[0] / "events.jsonl"
+        with open(events_file) as f:
+            data = json.loads(f.readline())
+        assert "episode_idx" in data["data"]
+        assert data["data"]["episode_idx"] == 9
 
     def test_output_dir_property_returns_timestamped_path(self, tmp_path: Path):
         """DirectoryOutput.output_dir returns the full path to timestamped directory."""

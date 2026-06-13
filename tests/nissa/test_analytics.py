@@ -4,7 +4,12 @@ import logging
 
 import pytest
 
-from esper.nissa.analytics import BlueprintStats, SeedScoreboard, compute_cost_for_blueprint
+from esper.nissa.analytics import (
+    BLUEPRINT_COMPUTE_MULTIPLIERS,
+    BlueprintStats,
+    SeedScoreboard,
+    compute_cost_for_blueprint,
+)
 from esper.leyline import TelemetryEvent, TelemetryEventType
 from esper.leyline.telemetry import (
     SeedGerminatedPayload,
@@ -29,9 +34,9 @@ class TestBlueprintStats:
         assert stats.churns == []
 
     def test_mean_acc_delta_empty(self):
-        """Empty acc_deltas returns 0."""
+        """Empty acc_deltas is absent (None), not a measured 0.0."""
         stats = BlueprintStats()
-        assert stats.mean_acc_delta == 0.0
+        assert stats.mean_acc_delta is None
 
     def test_mean_acc_delta_with_values(self):
         """Mean accuracy delta calculated correctly."""
@@ -249,3 +254,89 @@ class TestComputeCostForBlueprint:
 
         with pytest.raises(KeyError):
             compute_cost_for_blueprint("atention")  # typo: 'atention' vs 'attention'
+
+
+class TestPrunedUnknownBlueprint:
+    """LN-002: a prune with blueprint_id=None is bucketed, never crashes."""
+
+    def test_prune_with_none_blueprint_does_not_raise(self):
+        """A legitimate None blueprint is bucketed under UNKNOWN_BLUEPRINT."""
+        from esper.nissa.analytics import UNKNOWN_BLUEPRINT
+
+        analytics = BlueprintAnalytics(quiet=True)
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.SEED_PRUNED,
+            seed_id="seed_001",
+            data=SeedPrunedPayload(
+                slot_id="r0c0",
+                env_id=0,
+                reason="probation",
+                blueprint_id=None,  # culled before germination recorded a blueprint
+                improvement=-0.2,
+            ),
+        )
+
+        analytics.emit(event)  # must not raise
+
+        # Bucketed explicitly; not coerced onto any real blueprint id.
+        assert analytics.stats[UNKNOWN_BLUEPRINT].pruned == 1
+        assert UNKNOWN_BLUEPRINT not in BLUEPRINT_COMPUTE_MULTIPLIERS
+        assert analytics.scoreboards[0].total_pruned == 1
+
+
+class TestMissingAttributionStaysAbsent:
+    """LN-003: missing attribution renders absent (None/'n/a'), zero stays zero."""
+
+    def _prune_event(self, *, blending_delta, counterfactual):
+        return TelemetryEvent(
+            event_type=TelemetryEventType.SEED_PRUNED,
+            seed_id="seed_x",
+            data=SeedPrunedPayload(
+                slot_id="r0c0",
+                env_id=0,
+                reason="no_improvement",
+                blueprint_id="attention",
+                improvement=-0.1,
+                blending_delta=blending_delta,
+                counterfactual=counterfactual,
+            ),
+        )
+
+    def test_absent_attribution_is_none_not_zero(self):
+        """When blending_delta/counterfactual are never measured, means are None."""
+        analytics = BlueprintAnalytics(quiet=True)
+        analytics.emit(self._prune_event(blending_delta=None, counterfactual=None))
+
+        stats = analytics.stats["attention"]
+        # No measurements recorded -> absent, not a fabricated 0.0.
+        assert stats.blending_deltas == []
+        assert stats.counterfactuals == []
+        assert stats.mean_blending_delta is None
+        assert stats.mean_counterfactual is None
+
+        snap = analytics.snapshot()["stats"]["attention"]
+        assert snap["mean_blending_delta"] is None
+        assert snap["mean_counterfactual"] is None
+
+    def test_measured_zero_stays_zero(self):
+        """A genuinely computed 0.0 is recorded and stays distinguishable from absent."""
+        analytics = BlueprintAnalytics(quiet=True)
+        analytics.emit(self._prune_event(blending_delta=0.0, counterfactual=0.0))
+
+        stats = analytics.stats["attention"]
+        assert stats.blending_deltas == [0.0]
+        assert stats.counterfactuals == [0.0]
+        assert stats.mean_blending_delta == 0.0
+        assert stats.mean_counterfactual == 0.0
+
+        snap = analytics.snapshot()["stats"]["attention"]
+        assert snap["mean_blending_delta"] == 0.0
+        assert snap["mean_counterfactual"] == 0.0
+
+    def test_summary_table_renders_absent_as_na(self):
+        """Absent means render as 'n/a' in the summary table, not as +0.00%."""
+        analytics = BlueprintAnalytics(quiet=True)
+        analytics.emit(self._prune_event(blending_delta=None, counterfactual=None))
+
+        table = analytics.summary_table()
+        assert "n/a" in table

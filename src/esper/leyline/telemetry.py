@@ -593,6 +593,7 @@ class EpochCompletedPayload:
             "val_accuracy": self.val_accuracy,
             "val_loss": self.val_loss,
             "inner_epoch": self.inner_epoch,
+            "episode_idx": self.episode_idx,
             "train_loss": self.train_loss,
             "train_accuracy": self.train_accuracy,
             "host_grad_norm": self.host_grad_norm,
@@ -1334,7 +1335,9 @@ class SeedPrunedPayload:
     # CONTEXT (injected by emit_with_env_context)
     episode_idx: int | None = None
 
-    # OPTIONAL (None = not computed, 0.0 = computed as zero)
+    # OPTIONAL (None = not yet known, e.g. a slot culled before germination
+    # recorded a blueprint). Consumers MUST bucket None as "unknown blueprint"
+    # explicitly rather than crash or coerce to a fake id.
     blueprint_id: str | None = None
     improvement: float = 0.0
     auto_pruned: bool = False
@@ -1357,7 +1360,8 @@ class SeedPrunedPayload:
             env_id=data["env_id"],
             reason=data["reason"],
             episode_idx=data["episode_idx"],
-            # OPTIONAL: Blueprint may be unknown if pruning very early.
+            # OPTIONAL: Blueprint may be unknown if a slot was culled before
+            # germination recorded one (None = unknown, bucketed by consumers).
             blueprint_id=data.get("blueprint_id"),
             improvement=data.get("improvement", 0.0),
             auto_pruned=data.get("auto_pruned", False),

@@ -360,7 +360,10 @@ class ConsoleOutput(OutputBackend):
                     msg = event.message or event_type
             elif event_type == "SEED_PRUNED":
                 if isinstance(event.data, SeedPrunedPayload):
-                    blueprint_id = event.data.blueprint_id or "?"
+                    # blueprint_id is None when a slot was culled before
+                    # germination recorded one; render that as "n/a", not a
+                    # fake id.
+                    blueprint_id = event.data.blueprint_id if event.data.blueprint_id is not None else "n/a"
                     improvement = event.data.improvement
                     reason = event.data.reason
                     reason_str = f" ({reason})" if reason else ""

@@ -647,3 +647,103 @@ def test_ppo_update_payload_from_dict_with_q_values():
     assert payload.ppo_updates_count == 2
     assert payload.op_q_values == (0.5, 5.2, 4.0, -1.5, 2.8, 3.1)
     assert payload.q_variance == 2.3
+
+
+# =============================================================================
+# LN-001: EpochCompletedPayload.episode_idx survives serialization
+# =============================================================================
+
+
+def test_epoch_completed_to_dict_includes_episode_idx() -> None:
+    """to_dict() must emit episode_idx; from_dict() requires it (no silent drop)."""
+    from esper.leyline.telemetry import EpochCompletedPayload
+
+    payload = EpochCompletedPayload(
+        env_id=2,
+        val_accuracy=0.81,
+        val_loss=0.33,
+        inner_epoch=7,
+        episode_idx=5,
+    )
+
+    serialized = payload.to_dict()
+    assert "episode_idx" in serialized
+    assert serialized["episode_idx"] == 5
+
+
+def test_epoch_completed_to_dict_preserves_none_episode_idx() -> None:
+    """A genuinely absent episode_idx (None) round-trips as None, not 0."""
+    from esper.leyline.telemetry import EpochCompletedPayload
+
+    payload = EpochCompletedPayload(
+        env_id=0,
+        val_accuracy=0.5,
+        val_loss=1.0,
+        inner_epoch=0,
+        episode_idx=None,
+        observation_stats=None,
+    )
+
+    serialized = payload.to_dict()
+    assert serialized["episode_idx"] is None
+
+    restored = EpochCompletedPayload.from_dict(serialized)
+    assert restored.episode_idx is None
+
+
+def test_epoch_completed_round_trip_preserves_episode_idx() -> None:
+    """to_dict() -> from_dict() must preserve episode_idx exactly."""
+    from esper.leyline.telemetry import EpochCompletedPayload
+
+    original = EpochCompletedPayload(
+        env_id=3,
+        val_accuracy=0.9,
+        val_loss=0.12,
+        inner_epoch=4,
+        episode_idx=11,
+        observation_stats=None,
+    )
+
+    restored = EpochCompletedPayload.from_dict(original.to_dict())
+    assert restored.episode_idx == 11
+    assert restored == original
+
+
+# =============================================================================
+# LN-002: SeedPrunedPayload.blueprint_id optionality
+# =============================================================================
+
+
+def test_seed_pruned_payload_preserves_blueprint_id() -> None:
+    """A normal prune carries its blueprint id through from_dict unchanged."""
+    from esper.leyline.telemetry import SeedPrunedPayload
+
+    payload = SeedPrunedPayload.from_dict(
+        {
+            "slot_id": "r0c0",
+            "env_id": 0,
+            "reason": "no_improvement",
+            "episode_idx": 4,
+            "blueprint_id": "attention",
+        }
+    )
+    assert payload.blueprint_id == "attention"
+
+
+def test_seed_pruned_payload_allows_absent_blueprint_id() -> None:
+    """A slot culled before germination recorded a blueprint has blueprint_id=None.
+
+    None is a legitimate, distinguishable "unknown blueprint" marker, not coerced
+    to a fake id.
+    """
+    from esper.leyline.telemetry import SeedPrunedPayload
+
+    payload = SeedPrunedPayload.from_dict(
+        {
+            "slot_id": "r0c0",
+            "env_id": 0,
+            "reason": "probation",
+            "episode_idx": 1,
+        }
+    )
+    assert payload.blueprint_id is None
