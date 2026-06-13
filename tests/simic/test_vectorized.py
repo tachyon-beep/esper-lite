@@ -1061,17 +1061,21 @@ def test_run_ppo_updates_rejects_multiple_updates_for_recurrent_policies():
         )
 
 
-def test_run_ppo_updates_uses_amp_context_when_enabled(monkeypatch):
-    """AMP path should call agent.update under autocast when enabled."""
+def test_run_ppo_updates_uses_policy_amp_context_when_enabled(monkeypatch):
+    """The PPO update must run agent.update under the SHARED policy_amp_context (the same
+    factory the rollout legs use), called with the run's (use_amp, amp_dtype)."""
     from contextlib import contextmanager
+    from esper.simic.training import vectorized as vmod
     from esper.simic.training.vectorized import _run_ppo_updates
 
+    entered: list[tuple] = []
+
     @contextmanager
-    def _fake_autocast(*_args, **_kwargs):
+    def _fake_ctx(amp_enabled, dtype):
+        entered.append((amp_enabled, dtype))
         yield
 
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr("esper.simic.training.vectorized.torch_amp.autocast", _fake_autocast)
+    monkeypatch.setattr(vmod, "policy_amp_context", _fake_ctx)
 
     class _StubBuffer:
         def reset(self) -> None:
@@ -1099,9 +1103,10 @@ def test_run_ppo_updates_uses_amp_context_when_enabled(monkeypatch):
         raw_states_for_normalizer_update=[],
         obs_normalizer=_StubNormalizer(),
         use_amp=True,
-        amp_dtype=torch.float16,
+        amp_dtype=torch.bfloat16,
     )
     assert agent.calls == [True]
+    assert entered == [(True, torch.bfloat16)]
 
 # =============================================================================
 # Telemetry Escalation Tests
