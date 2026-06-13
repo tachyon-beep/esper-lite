@@ -78,6 +78,11 @@ export interface SeedLifecycleEvent {
   slot_id: string;
   alpha: number | null;
   accuracy_delta: number | null;
+  morphology_proposal_id: string | null;
+  morphology_verdict_id: string | null;
+  morphology_mutation_id: string | null;
+  rng_stream: string | null;
+  rng_seed: number | null;
 }
 
 export interface SeedLifecycleStats {
@@ -94,6 +99,27 @@ export interface SeedLifecycleStats {
   germination_trend: string;
   prune_trend: string;
   fossilize_trend: string;
+}
+
+export interface MorphologyCausalLogEntry {
+  phase: string;
+  env_id: number;
+  slot_id: string;
+  operation: string;
+  action_id: string;
+  proposal_id: string;
+  verdict_id: string;
+  mutation_id: string;
+  observation_hash: string;
+  rng_stream: string;
+  rng_seed: number;
+  topology: string;
+  blueprint_id: string | null;
+  governor_approved: boolean | null;
+  governor_reason: string | null;
+  governor_blocked_factor: string | null;
+  watch_window_evidence: number | null;
+  linked_event_id: string | null;
 }
 
 export interface ObservationStats {
@@ -520,6 +546,7 @@ export interface SanctumSnapshot {
   seed_lifecycle: SeedLifecycleStats;
   observation_stats: ObservationStats;
   episode_stats: EpisodeStats;
+  morphology_causal_log: MorphologyCausalLogEntry[];
   focused_env_id: number;
   last_action_env_id: number | null;
   last_action_timestamp: string | null;

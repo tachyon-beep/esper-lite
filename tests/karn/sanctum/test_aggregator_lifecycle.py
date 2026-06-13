@@ -226,6 +226,171 @@ def test_prune_creates_lifecycle_event():
     assert le.to_stage == "PRUNED"
 
 
+def test_germinate_preserves_causal_ids():
+    """SEED_GERMINATED causal IDs / RNG identity survive into the lifecycle event."""
+    agg = SanctumAggregator(num_envs=4)
+
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_GERMINATED,
+        slot_id="r0c0",
+        epoch=5,
+        data=SeedGerminatedPayload(
+            env_id=0,
+            slot_id="r0c0",
+            blueprint_id="conv_heavy",
+            params=1000,
+            morphology_proposal_id="prop-1",
+            morphology_verdict_id="ver-1",
+            morphology_mutation_id="mut-1",
+            rng_stream="kasmina:germinate",
+            rng_seed=7,
+        ),
+    ))
+
+    le = agg.get_snapshot().envs[0].lifecycle_events[0]
+    assert le.morphology_proposal_id == "prop-1"
+    assert le.morphology_verdict_id == "ver-1"
+    assert le.morphology_mutation_id == "mut-1"
+    assert le.rng_stream == "kasmina:germinate"
+    assert le.rng_seed == 7
+
+
+def test_stage_change_preserves_causal_ids():
+    """SEED_STAGE_CHANGED causal IDs survive into the lifecycle event."""
+    agg = SanctumAggregator(num_envs=4)
+
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_GERMINATED,
+        slot_id="r0c0",
+        epoch=5,
+        data=SeedGerminatedPayload(
+            env_id=0, slot_id="r0c0", blueprint_id="conv_heavy", params=1000,
+        ),
+    ))
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_STAGE_CHANGED,
+        slot_id="r0c0",
+        epoch=20,
+        data=SeedStageChangedPayload(
+            env_id=0,
+            slot_id="r0c0",
+            from_stage="TRAINING",
+            to_stage="BLENDING",
+            alpha=0.2,
+            morphology_proposal_id="prop-2",
+            morphology_verdict_id="ver-2",
+            morphology_mutation_id="mut-2",
+            rng_stream="tamiyo:advance",
+            rng_seed=11,
+        ),
+    ))
+
+    le = agg.get_snapshot().envs[0].lifecycle_events[1]
+    assert le.action == "ADVANCE"
+    assert le.morphology_proposal_id == "prop-2"
+    assert le.morphology_verdict_id == "ver-2"
+    assert le.morphology_mutation_id == "mut-2"
+    assert le.rng_stream == "tamiyo:advance"
+    assert le.rng_seed == 11
+
+
+def test_fossilize_preserves_causal_ids():
+    """SEED_FOSSILIZED causal IDs survive into the lifecycle event."""
+    agg = SanctumAggregator(num_envs=4)
+
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_GERMINATED,
+        slot_id="r0c0",
+        epoch=5,
+        data=SeedGerminatedPayload(
+            env_id=0, slot_id="r0c0", blueprint_id="conv_heavy", params=1000,
+        ),
+    ))
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_FOSSILIZED,
+        slot_id="r0c0",
+        epoch=50,
+        data=SeedFossilizedPayload(
+            env_id=0,
+            slot_id="r0c0",
+            blueprint_id="conv_heavy",
+            improvement=2.3,
+            params_added=500,
+            morphology_proposal_id="prop-3",
+            morphology_verdict_id="ver-3",
+            morphology_mutation_id="mut-3",
+            rng_stream="kasmina:fossilize",
+            rng_seed=13,
+        ),
+    ))
+
+    le = agg.get_snapshot().envs[0].lifecycle_events[1]
+    assert le.action == "FOSSILIZE"
+    assert le.morphology_proposal_id == "prop-3"
+    assert le.morphology_verdict_id == "ver-3"
+    assert le.morphology_mutation_id == "mut-3"
+    assert le.rng_stream == "kasmina:fossilize"
+    assert le.rng_seed == 13
+
+
+def test_prune_preserves_causal_ids():
+    """SEED_PRUNED causal IDs survive into the lifecycle event."""
+    agg = SanctumAggregator(num_envs=4)
+
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_GERMINATED,
+        slot_id="r0c0",
+        epoch=5,
+        data=SeedGerminatedPayload(
+            env_id=0, slot_id="r0c0", blueprint_id="conv_heavy", params=1000,
+        ),
+    ))
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_PRUNED,
+        slot_id="r0c0",
+        epoch=30,
+        data=SeedPrunedPayload(
+            env_id=0,
+            slot_id="r0c0",
+            reason="gate_failure",
+            morphology_proposal_id="prop-4",
+            morphology_verdict_id="ver-4",
+            morphology_mutation_id="mut-4",
+            rng_stream="governor:prune",
+            rng_seed=17,
+        ),
+    ))
+
+    le = agg.get_snapshot().envs[0].lifecycle_events[1]
+    assert le.action == "PRUNE"
+    assert le.morphology_proposal_id == "prop-4"
+    assert le.morphology_verdict_id == "ver-4"
+    assert le.morphology_mutation_id == "mut-4"
+    assert le.rng_stream == "governor:prune"
+    assert le.rng_seed == 17
+
+
+def test_lifecycle_causal_ids_default_none_when_absent():
+    """Payloads without causal IDs yield None (not a crash, not a fake value)."""
+    agg = SanctumAggregator(num_envs=4)
+
+    agg.process_event(TelemetryEvent(
+        event_type=TelemetryEventType.SEED_GERMINATED,
+        slot_id="r0c0",
+        epoch=5,
+        data=SeedGerminatedPayload(
+            env_id=0, slot_id="r0c0", blueprint_id="conv_heavy", params=1000,
+        ),
+    ))
+
+    le = agg.get_snapshot().envs[0].lifecycle_events[0]
+    assert le.morphology_proposal_id is None
+    assert le.morphology_verdict_id is None
+    assert le.morphology_mutation_id is None
+    assert le.rng_stream is None
+    assert le.rng_seed is None
+
+
 def test_best_run_record_has_dual_state():
     """BestRunRecord should capture both peak and end state."""
     agg = SanctumAggregator(num_envs=1)

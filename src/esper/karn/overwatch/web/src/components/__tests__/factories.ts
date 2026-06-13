@@ -4,6 +4,7 @@ import type {
   DecisionSnapshot,
   EnvState,
   EventLogEntry,
+  MorphologyCausalLogEntry,
   RewardComponents,
   RunConfig,
   SanctumSnapshot,
@@ -555,9 +556,36 @@ export function createSnapshot(overrides: Partial<SanctumSnapshot> = {}): Sanctu
       slot_utilization: 0.75,
       completion_trend: 'stable'
     },
+    morphology_causal_log: [],
     focused_env_id: 0,
     last_action_env_id: 0,
     last_action_timestamp: '2024-01-01T00:59:45Z'
+  }
+  return Object.assign(defaults, overrides)
+}
+
+export function createMorphologyCausalLogEntry(
+  overrides: Partial<MorphologyCausalLogEntry> = {}
+): MorphologyCausalLogEntry {
+  const defaults: MorphologyCausalLogEntry = {
+    phase: 'verdict',
+    env_id: 0,
+    slot_id: 'slot_0',
+    operation: 'GERMINATE',
+    action_id: 'act-1',
+    proposal_id: 'prop-1',
+    verdict_id: 'ver-1',
+    mutation_id: 'mut-1',
+    observation_hash: 'obs-1',
+    rng_stream: 'kasmina:germinate',
+    rng_seed: 42,
+    topology: 'conv_heavy@slot_0',
+    blueprint_id: 'conv_heavy',
+    governor_approved: true,
+    governor_reason: 'watch_evidence_sufficient',
+    governor_blocked_factor: null,
+    watch_window_evidence: 0.87,
+    linked_event_id: 'evt-1'
   }
   return Object.assign(defaults, overrides)
 }

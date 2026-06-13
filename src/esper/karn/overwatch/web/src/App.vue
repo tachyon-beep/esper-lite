@@ -12,6 +12,7 @@ import PolicyDiagnostics from './components/PolicyDiagnostics.vue'
 import GradientHeatmap from './components/GradientHeatmap.vue'
 import EventTimeline from './components/EventTimeline.vue'
 import SeedSwimlane from './components/SeedSwimlane.vue'
+import MorphologyCausalLogPanel from './components/MorphologyCausalLogPanel.vue'
 import ContributionWaterfall from './components/ContributionWaterfall.vue'
 import KeyboardHelp from './components/KeyboardHelp.vue'
 import ExperimentVerdictPanel from './components/ExperimentVerdictPanel.vue'
@@ -267,6 +268,14 @@ const hasCohortComparison = computed(() => {
             :seeds="focusedEnvSeeds"
             :slot-ids="snapshot!.slot_ids"
             :current-epoch="snapshot!.current_epoch"
+          />
+        </div>
+
+        <div class="panel-section">
+          <h3 class="panel-title">Causal Log</h3>
+          <MorphologyCausalLogPanel
+            :snapshot="snapshot!"
+            max-height="300px"
           />
         </div>
 

@@ -42,6 +42,7 @@ EventLogEntry = SANCTUM_SCHEMA.EventLogEntry
 GPUStats = SANCTUM_SCHEMA.GPUStats
 GradientQualityMetrics = SANCTUM_SCHEMA.GradientQualityMetrics
 InfrastructureMetrics = SANCTUM_SCHEMA.InfrastructureMetrics
+MorphologyCausalLogEntry = SANCTUM_SCHEMA.MorphologyCausalLogEntry
 ObservationStats = SANCTUM_SCHEMA.ObservationStats
 EpisodeStats = SANCTUM_SCHEMA.EpisodeStats
 RewardComponents = SANCTUM_SCHEMA.RewardComponents
@@ -234,6 +235,7 @@ def main() -> None:
         ValueFunctionMetrics,
         SeedLifecycleEvent,
         SeedLifecycleStats,
+        MorphologyCausalLogEntry,
         ObservationStats,
         EpisodeStats,
         SeedState,
