@@ -56,6 +56,31 @@ from esper.simic.vectorized_types import (
     RewardSummaryAccumulator,
 )
 
+_logger = logging.getLogger(__name__)
+
+
+def log_frag(device: str | torch.device, tag: str) -> None:
+    """Read-only CUDA fragmentation probe (no sync, no empty_cache).
+
+    frag_gap = reserved - allocated = memory the allocator holds but can't hand out.
+    All three reads (memory_stats / memory_allocated / memory_reserved) are host-side
+    allocator accounting; none issues a CUDA synchronize, so this is hot-path-safe.
+    """
+    if not torch.cuda.is_available():
+        return
+    dev = torch.device(device)                 # authorized device-normalization (CLAUDE.md #6)
+    if dev.type != "cuda":
+        return
+    stats = torch.cuda.memory_stats(dev)
+    allocated = torch.cuda.memory_allocated(dev) / 1024**2
+    reserved = torch.cuda.memory_reserved(dev) / 1024**2
+    _logger.info(
+        "frag[%s] dev=%s alloc=%.0fMB reserved=%.0fMB active=%.0fMB frag_gap=%.0fMB nalloc_retries=%d",
+        tag, dev, allocated, reserved,
+        stats["active_bytes.all.current"] / 1024**2,
+        reserved - allocated, stats["num_alloc_retries"],
+    )
+
 
 def _pair_slot_key(
     active_slot_list: list[str],
@@ -266,6 +291,11 @@ class VectorizedPPOTrainer:
     ppo_coordinator: PPOCoordinator = field(init=False)
 
     def __post_init__(self) -> None:
+        # Ada sm_89 TF32: ~2x FP32 matmul/conv on tensor cores at ~1e-3 rel error.
+        # set_float32_matmul_precision("high") is the current API; we do NOT also set the
+        # deprecated torch.backends.cuda.matmul.allow_tf32 (a redundant second path).
+        torch.set_float32_matmul_precision("high")
+        torch.backends.cudnn.allow_tf32 = True
         self.action_execution_context = ActionExecutionContext(
             slots=self.slots,
             ordered_slots=validate_slot_ids(list(self.slots)),
@@ -406,6 +436,7 @@ class VectorizedPPOTrainer:
             grad_ema_tracker = GradientEMATracker() if use_telemetry else None
 
             while batch_idx < total_batches:
+                log_frag(self.device, f"batch{batch_idx}.start")
                 # One PPO update per full batch of environments.
                 envs_this_batch = n_envs
                 # Monotonic epoch id for all per-batch snapshot events (commit barrier, PPO, analytics).
@@ -1846,6 +1877,7 @@ class VectorizedPPOTrainer:
                     best_avg_acc = rolling_avg_acc
 
                 episodes_completed = batch_epoch_id
+                log_frag(self.device, f"batch{batch_idx}.end")
                 batch_idx += 1
 
                 # Check for graceful shutdown request (e.g., user quit TUI)

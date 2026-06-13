@@ -1,6 +1,32 @@
 #!/usr/bin/env python3
 """Training CLI for Simic RL algorithms."""
 
+import os
+
+# Allocator policy MUST precede the first CUDA allocation (and the spawn re-import at
+# the bottom of this module, since workers inherit os.environ). expandable_segments
+# cures per-stream segment stranding from the per-batch env rebuild; gc_threshold caps
+# reserved-pool bloat on the 16 GB cards. torch 2.9 renamed the key from the now-deprecated
+# PYTORCH_CUDA_ALLOC_CONF to PYTORCH_ALLOC_CONF; we set the current name. setdefault lets an
+# operator's exported override win (the documented PyTorch channel, not a back-compat shim).
+os.environ.setdefault(
+    "PYTORCH_ALLOC_CONF",
+    "expandable_segments:True,garbage_collection_threshold:0.8",
+)
+
+# Fail loud (not silent) if a transitive import already created the CUDA context: the
+# allocator policy is read at first context creation, so a late set silently does nothing.
+import torch as _t
+
+if _t.cuda.is_initialized():
+    import warnings
+
+    warnings.warn(
+        "PYTORCH_ALLOC_CONF set after CUDA init; allocator policy will NOT apply.",
+        RuntimeWarning,
+        stacklevel=2,
+    )
+
 import argparse
 import logging
 import sys
