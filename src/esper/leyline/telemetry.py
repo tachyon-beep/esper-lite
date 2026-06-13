@@ -1099,6 +1099,20 @@ class PPOUpdatePayload:
             # REQUIRED: Return statistics.
             return_mean=data["return_mean"],
             return_std=data["return_std"],
+            # OPTIONAL: Value function quality metrics (TELE-220..228). Default
+            # to 0.0 (matching field declarations) when an older/partial event
+            # predates them; emitted via the generic asdict serializer.
+            v_return_correlation=data.get("v_return_correlation", 0.0),
+            td_error_mean=data.get("td_error_mean", 0.0),
+            td_error_std=data.get("td_error_std", 0.0),
+            bellman_error=data.get("bellman_error", 0.0),
+            return_p10=data.get("return_p10", 0.0),
+            return_p50=data.get("return_p50", 0.0),
+            return_p90=data.get("return_p90", 0.0),
+            return_variance=data.get("return_variance", 0.0),
+            return_skewness=data.get("return_skewness", 0.0),
+            # OPTIONAL: Value target scale (default 1.0, matching declaration).
+            value_target_scale=data.get("value_target_scale", 1.0),
             # OPTIONAL: D5 slot saturation diagnostics (defaults for non-D5 batches).
             forced_step_ratio=data.get("forced_step_ratio", 0.0),
             usable_actor_timesteps=data.get("usable_actor_timesteps", 0),
@@ -1770,6 +1784,24 @@ class AnalyticsSnapshotPayload:
             alpha_algorithm=data.get("alpha_algorithm"),
             alpha_algorithm_selected=data.get("alpha_algorithm_selected"),
             action_success=data.get("action_success"),
+            # kind="last_action": reward component breakdown (RewardHealthPanel).
+            # Optional floats; None = not populated for this kind.
+            base_acc_delta=data.get("base_acc_delta"),
+            bounded_attribution=data.get("bounded_attribution"),
+            compute_rent=data.get("compute_rent"),
+            stage_bonus=data.get("stage_bonus"),
+            ratio_penalty=data.get("ratio_penalty"),
+            alpha_shock=data.get("alpha_shock"),
+            # kind="last_action": TamiyoBrain decision-card context.
+            slot_states=data.get("slot_states"),
+            # JSON has no tuple type: re-tuple the inner (action, prob) pairs to
+            # honour the declared list[tuple[str, float]] contract.
+            alternatives=(
+                [tuple(pair) for pair in data["alternatives"]]
+                if data.get("alternatives") is not None
+                else None
+            ),
+            decision_entropy=data.get("decision_entropy"),
             # kind="last_action": Per-head mask flags
             op_masked=data.get("op_masked"),
             slot_masked=data.get("slot_masked"),
@@ -1816,6 +1848,8 @@ class AnalyticsSnapshotPayload:
             max_epochs=data.get("max_epochs"),
             max_batches=data.get("max_batches"),
             min_fossilize_improvement=data.get("min_fossilize_improvement"),
+            max_seeds=data.get("max_seeds"),
+            reward_mode=data.get("reward_mode"),
             telemetry_lifecycle_only=data.get("telemetry_lifecycle_only"),
             telemetry_level=data.get("telemetry_level"),
             # kind="heuristic_episode": episode completion

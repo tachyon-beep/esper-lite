@@ -964,3 +964,229 @@ class TestNissaHubConcurrentAddRemove:
             f"Backend2 should have received events after backend1 removal. "
             f"Got {len(backend2_events)} events."
         )
+
+
+class TestTGV001JsonlPayloadFields:
+    """TGV-001: Nissa JSONL output must preserve non-default payload fields.
+
+    The FileOutput/DirectoryOutput JSONL path serializes a payload via
+    ``_payload_to_dict`` (``payload.to_dict()`` if present, else
+    ``dataclasses.asdict``). These tests assert the key proof/diagnostic
+    payloads survive that path with their distinctive non-default fields
+    intact, AND that the emitted JSONL re-parses back through ``from_dict``
+    without losing those fields. This is the Nissa-path complement to
+    ``tests/leyline/test_payload_round_trip.py``.
+    """
+
+    @staticmethod
+    def _emit_and_read(tmp_path: Path, event: TelemetryEvent) -> dict:
+        backend = FileOutput(tmp_path / "events.jsonl", buffer_size=1)
+        backend.emit(event)
+        backend.close()
+        with open(tmp_path / "events.jsonl") as f:
+            return json.loads(f.readline())
+
+    def test_seed_germinated_proof_fields_survive_jsonl(self, tmp_path: Path):
+        """Morphology proof / RNG provenance fields survive the JSONL path."""
+        from esper.leyline.telemetry import SeedGerminatedPayload
+
+        payload = SeedGerminatedPayload(
+            slot_id="slot_3",
+            env_id=2,
+            blueprint_id="bp_xyz",
+            params=4096,
+            episode_idx=11,
+            alpha=0.33,
+            grad_ratio=1.7,
+            has_vanishing=True,
+            has_exploding=True,
+            epochs_in_stage=9,
+            blend_tempo_epochs=8,
+            alpha_curve="COSINE",
+            morphology_proposal_id="prop-1",
+            morphology_verdict_id="ver-2",
+            morphology_mutation_id="mut-3",
+            rng_stream="germinate",
+            rng_seed=123456,
+        )
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.SEED_GERMINATED,
+            data=payload,
+        )
+        row = self._emit_and_read(tmp_path, event)
+        data = row["data"]
+        # Distinctive non-default fields must be present in JSONL.
+        assert data["episode_idx"] == 11
+        assert data["morphology_proposal_id"] == "prop-1"
+        assert data["morphology_verdict_id"] == "ver-2"
+        assert data["morphology_mutation_id"] == "mut-3"
+        assert data["rng_stream"] == "germinate"
+        assert data["rng_seed"] == 123456
+        assert data["alpha_curve"] == "COSINE"
+        # And the JSONL re-parses back to an equal payload.
+        assert SeedGerminatedPayload.from_dict(data) == payload
+
+    def test_seed_stage_changed_proof_fields_survive_jsonl(self, tmp_path: Path):
+        from esper.leyline.telemetry import SeedStageChangedPayload
+
+        payload = SeedStageChangedPayload(
+            slot_id="slot_1",
+            env_id=4,
+            from_stage="TRAINING",
+            to_stage="BLENDING",
+            episode_idx=22,
+            alpha=0.6,
+            accuracy_delta=2.5,
+            epochs_in_stage=7,
+            grad_ratio=1.25,
+            has_vanishing=True,
+            has_exploding=True,
+            alpha_curve="EXPONENTIAL",
+            morphology_proposal_id="prop-9",
+            morphology_verdict_id="ver-8",
+            morphology_mutation_id="mut-7",
+            rng_stream="stage",
+            rng_seed=99,
+        )
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.SEED_STAGE_CHANGED,
+            data=payload,
+        )
+        row = self._emit_and_read(tmp_path, event)
+        data = row["data"]
+        assert data["episode_idx"] == 22
+        assert data["morphology_proposal_id"] == "prop-9"
+        assert data["rng_seed"] == 99
+        assert data["alpha_curve"] == "EXPONENTIAL"
+        assert SeedStageChangedPayload.from_dict(data) == payload
+
+    def test_episode_outcome_diagnostics_survive_jsonl(self, tmp_path: Path):
+        from esper.leyline.telemetry import EpisodeOutcomePayload
+
+        payload = EpisodeOutcomePayload(
+            env_id=3,
+            episode_idx=14,
+            final_accuracy=91.2,
+            param_ratio=1.18,
+            num_fossilized=2,
+            num_contributing_fossilized=1,
+            episode_reward=12.5,
+            stability_score=0.87,
+            reward_mode="shaped",
+            episode_length=25,
+            outcome_type="success",
+            germinate_count=3,
+            prune_count=1,
+            fossilize_count=2,
+        )
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.EPISODE_OUTCOME,
+            data=payload,
+        )
+        row = self._emit_and_read(tmp_path, event)
+        data = row["data"]
+        assert data["episode_length"] == 25
+        assert data["outcome_type"] == "success"
+        assert data["germinate_count"] == 3
+        assert data["prune_count"] == 1
+        assert data["fossilize_count"] == 2
+        assert EpisodeOutcomePayload.from_dict(data) == payload
+
+    def test_governor_rollback_panic_fields_survive_jsonl(self, tmp_path: Path):
+        from esper.leyline.telemetry import GovernorRollbackPayload
+
+        payload = GovernorRollbackPayload(
+            env_id=0,
+            device="cuda:0",
+            reason="loss diverged",
+            episode_idx=5,
+            loss_at_panic=42.0,
+            loss_threshold=10.0,
+            consecutive_panics=3,
+            panic_reason="governor_divergence",
+        )
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.GOVERNOR_ROLLBACK,
+            data=payload,
+        )
+        row = self._emit_and_read(tmp_path, event)
+        data = row["data"]
+        assert data["loss_at_panic"] == 42.0
+        assert data["consecutive_panics"] == 3
+        assert data["panic_reason"] == "governor_divergence"
+        assert data["episode_idx"] == 5
+        assert GovernorRollbackPayload.from_dict(data) == payload
+
+    def test_morphology_causal_log_identity_fields_survive_jsonl(self, tmp_path: Path):
+        from esper.leyline.telemetry import MorphologyCausalLogPayload
+
+        payload = MorphologyCausalLogPayload(
+            phase="verdict",
+            env_id=1,
+            slot_id="slot_0",
+            operation="GERMINATE",
+            action_id="act-1",
+            proposal_id="prop-1",
+            verdict_id="ver-1",
+            mutation_id="mut-1",
+            observation_hash="abc123",
+            rng_stream="morph",
+            rng_seed=7,
+            topology="resnet",
+            blueprint_id="bp_1",
+            governor_approved=True,
+            governor_reason="ok",
+            governor_blocked_factor="none",
+            watch_window_evidence=0.42,
+            linked_event_id="evt-1",
+        )
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.MORPHOLOGY_CAUSAL_LOG,
+            data=payload,
+        )
+        row = self._emit_and_read(tmp_path, event)
+        data = row["data"]
+        assert data["proposal_id"] == "prop-1"
+        assert data["verdict_id"] == "ver-1"
+        assert data["mutation_id"] == "mut-1"
+        assert data["observation_hash"] == "abc123"
+        assert data["watch_window_evidence"] == 0.42
+        assert MorphologyCausalLogPayload.from_dict(data) == payload
+
+    def test_epoch_completed_observation_stats_survive_jsonl(self, tmp_path: Path):
+        """EpochCompletedPayload carries nested ObservationStatsTelemetry through JSONL."""
+        from esper.leyline.telemetry import EpochCompletedPayload
+        from esper.simic.telemetry.observation_stats import ObservationStatsTelemetry
+
+        obs = ObservationStatsTelemetry(
+            slot_features_mean=1.0,
+            slot_features_std=2.0,
+            outlier_pct=0.3,
+            nan_count=1,
+            inf_count=2,
+            batch_size=16,
+        )
+        payload = EpochCompletedPayload(
+            env_id=1,
+            val_accuracy=88.0,
+            val_loss=0.31,
+            inner_epoch=4,
+            episode_idx=8,
+            train_loss=0.41,
+            train_accuracy=86.0,
+            host_grad_norm=1.9,
+            seeds=None,
+            observation_stats=obs,
+        )
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            data=payload,
+        )
+        row = self._emit_and_read(tmp_path, event)
+        data = row["data"]
+        assert data["episode_idx"] == 8
+        assert data["train_loss"] == 0.41
+        assert data["host_grad_norm"] == 1.9
+        assert data["observation_stats"]["batch_size"] == 16
+        assert data["observation_stats"]["nan_count"] == 1
+        assert EpochCompletedPayload.from_dict(data) == payload

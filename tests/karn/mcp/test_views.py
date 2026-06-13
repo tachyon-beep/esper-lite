@@ -6,7 +6,11 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from esper.karn.mcp.views import create_views, VIEW_DEFINITIONS
+from esper.karn.mcp.views import (
+    create_views,
+    scan_ingestion_integrity,
+    VIEW_DEFINITIONS,
+)
 
 
 def test_view_definitions_exist():
@@ -919,3 +923,130 @@ def test_create_views_escapes_telemetry_dir_sql_literal(tmp_path):
     assert conn.execute("SELECT event_id FROM raw_events").fetchone() == ("evt-1",)
     with pytest.raises(duckdb.CatalogException):
         conn.execute(f"SELECT * FROM {injected_table}")
+
+
+# ---------------------------------------------------------------------------
+# KARN-PROOF-003: scan_ingestion_integrity re-reads events.jsonl independently
+# of DuckDB's ignore_errors and surfaces malformed lines so the proof FAILS
+# CLOSED on corruption. These pin the scanner the proof packet depends on.
+# ---------------------------------------------------------------------------
+
+
+def test_scan_ingestion_integrity_clean_on_empty_dir(tmp_path):
+    """No events.jsonl files at all is structurally clean (no corruption)."""
+    result = scan_ingestion_integrity(str(tmp_path))
+
+    assert result.is_clean is True
+    assert result.malformed_count == 0
+    assert result.malformed_lines == []
+
+
+def test_scan_ingestion_integrity_clean_on_valid_jsonl(tmp_path):
+    """Every line valid JSON -> clean, never a false positive."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    events = [
+        {"event_id": "a", "event_type": "TRAINING_STARTED"},
+        {"event_id": "b", "event_type": "EPISODE_OUTCOME"},
+    ]
+    (run_dir / "events.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in events) + "\n"
+    )
+
+    result = scan_ingestion_integrity(str(tmp_path))
+
+    assert result.is_clean is True
+    assert result.malformed_count == 0
+
+
+def test_scan_ingestion_integrity_ignores_blank_lines(tmp_path):
+    """Whitespace-only lines are not data and must not be flagged as corrupt."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "events.jsonl").write_text(
+        json.dumps({"event_id": "a", "event_type": "X"}) + "\n\n   \n"
+    )
+
+    result = scan_ingestion_integrity(str(tmp_path))
+
+    assert result.is_clean is True
+
+
+def test_scan_ingestion_integrity_blocks_on_malformed_jsonl(tmp_path):
+    """A corrupt JSONL line that DuckDB would silently drop is surfaced.
+
+    This is the independent re-read that makes the proof packet FAIL CLOSED:
+    the malformed line must be recorded with its run_dir, file, 1-based line
+    number, and a triage snippet -- it must NOT vanish the way DuckDB's
+    ignore_errors ingestion would let it.
+    """
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    good = json.dumps({"event_id": "a", "event_type": "EPISODE_OUTCOME"})
+    # Truncated JSON: DuckDB's ignore_errors reader would silently skip this.
+    corrupt = '{"event_id": "bad", "event_type": "EPISODE_OUTCOME", "data": {'
+    (run_dir / "events.jsonl").write_text(good + "\n" + corrupt + "\n")
+
+    result = scan_ingestion_integrity(str(tmp_path))
+
+    assert result.is_clean is False
+    assert result.malformed_count == 1
+    bad_line = result.malformed_lines[0]
+    assert bad_line.run_dir == "run"
+    assert bad_line.line_number == 2
+    assert bad_line.file.endswith("events.jsonl")
+    assert "bad" in bad_line.snippet
+
+
+def test_scan_ingestion_integrity_reports_every_malformed_line(tmp_path):
+    """Multiple corrupt lines across files are each recorded, none coalesced."""
+    run_a = tmp_path / "run_a"
+    run_a.mkdir()
+    run_b = tmp_path / "run_b"
+    run_b.mkdir()
+    (run_a / "events.jsonl").write_text(
+        json.dumps({"event_id": "ok"}) + "\n" + "{not json\n"
+    )
+    (run_b / "events.jsonl").write_text("also bad}\n")
+
+    result = scan_ingestion_integrity(str(tmp_path))
+
+    assert result.is_clean is False
+    assert result.malformed_count == 2
+    run_dirs = {line.run_dir for line in result.malformed_lines}
+    assert run_dirs == {"run_a", "run_b"}
+
+
+def test_run_confounders_view_empty_on_clean_run(tmp_path):
+    """A run with only benign events surfaces NO confounders (no false block)."""
+    from datetime import datetime
+
+    run_dir = tmp_path / "clean_run"
+    run_dir.mkdir()
+    events = [
+        {
+            "event_id": "start-1",
+            "event_type": "TRAINING_STARTED",
+            "timestamp": datetime.now().isoformat(),
+            "group_id": "A",
+            "data": {"episode_id": "proof"},
+            "severity": "info",
+        },
+        {
+            "event_id": "eo-1",
+            "event_type": "EPISODE_OUTCOME",
+            "timestamp": datetime.now().isoformat(),
+            "group_id": "A",
+            "data": {"env_id": 0, "final_accuracy": 80.0},
+            "severity": "info",
+        },
+    ]
+    (run_dir / "events.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in events) + "\n"
+    )
+
+    conn = duckdb.connect(":memory:")
+    create_views(conn, str(tmp_path))
+
+    rows = conn.execute("SELECT * FROM run_confounders").fetchall()
+    assert rows == []
