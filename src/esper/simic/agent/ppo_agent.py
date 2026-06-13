@@ -1624,7 +1624,8 @@ class PPOAgent:
         # the actual loaded weights, not random initialization.
         # P3 FIX: Use effective_compile_mode (may be overridden by parameter)
         if effective_compile_mode != "off":
-            agent.policy.compile(mode=effective_compile_mode, dynamic=True)
+            # P3-DYN: dynamic=False (static rollout shapes); see factory.py rationale.
+            agent.policy.compile(mode=effective_compile_mode, dynamic=False)
 
         # Update agent's stored compile_mode to reflect what we actually used
         agent.compile_mode = effective_compile_mode

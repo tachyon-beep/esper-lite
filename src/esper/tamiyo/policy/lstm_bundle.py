@@ -475,7 +475,7 @@ class LSTMPolicyBundle:
     def compile(
         self,
         mode: str = "default",
-        dynamic: bool = True,
+        dynamic: bool = False,
     ) -> None:
         """Compile the underlying network with torch.compile.
 
