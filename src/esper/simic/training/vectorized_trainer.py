@@ -91,6 +91,32 @@ def _masked_op_probs_for_telemetry(
     return MaskedCategorical(op_logits, op_mask, min_prob=op_min_prob).probs
 
 
+def apply_proof_baseline_action_controls(
+    *,
+    masks_batch: dict[str, torch.Tensor],
+    lifecycle_policy: str | None,
+) -> None:
+    """Apply proof-baseline lifecycle controls before action sampling."""
+    if lifecycle_policy is None:
+        return
+    if lifecycle_policy == "paired_lockstep_reward_comparison":
+        return
+
+    wait_only_policies = (
+        "force_wait_only",
+        "freeze_initial_topology",
+        "freeze_replayed_final_topology",
+        "apply_declared_lifecycle_schedule",
+    )
+    if lifecycle_policy not in wait_only_policies:
+        raise ValueError(f"Unknown proof baseline lifecycle policy: {lifecycle_policy}")
+
+    wait_idx = LifecycleOp.WAIT.value
+    controlled_op_mask = torch.zeros_like(masks_batch["op"])
+    controlled_op_mask[:, wait_idx] = True
+    masks_batch["op"] = controlled_op_mask
+
+
 def _check_vitals_before_snapshot(
     env_state: Any,
     *,
@@ -164,6 +190,7 @@ class VectorizedPPOTrainer:
     gpu_preload_augment: bool
     amp_enabled: bool
     resolved_amp_dtype: torch.dtype | None
+    proof_baseline_lifecycle_policy: str | None
     env_factory: EnvFactoryContext
     compiled_loss_and_correct: Callable[..., tuple[torch.Tensor, torch.Tensor, int]]
     run_ppo_updates: Callable[..., dict[str, Any]]
@@ -1339,6 +1366,10 @@ class VectorizedPPOTrainer:
                     masks_batch["slot_by_op"] = torch.stack(
                         [m["slot_by_op"] for m in all_masks]
                     ).to(device)
+                    apply_proof_baseline_action_controls(
+                        masks_batch=masks_batch,
+                        lifecycle_policy=self.proof_baseline_lifecycle_policy,
+                    )
 
                     # Accumulate raw states for deferred normalizer update
                     raw_states_for_normalizer_update.append(states_batch.detach())

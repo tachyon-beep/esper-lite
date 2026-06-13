@@ -670,6 +670,7 @@ def train_ppo_vectorized(
     torch_profiler_summary: bool = False,
     proof_baseline_mode: str | None = None,
     proof_baseline_pair_id: str | None = None,
+    proof_baseline_lifecycle_policy: str | None = None,
 ) -> tuple[PPOAgent, list[dict[str, Any]]]:
     """Train PPO with vectorized environments using INVERTED CONTROL FLOW.
 
@@ -1365,6 +1366,7 @@ def train_ppo_vectorized(
         gpu_preload_augment=gpu_preload_augment,
         amp_enabled=amp_enabled,
         resolved_amp_dtype=resolved_amp_dtype,
+        proof_baseline_lifecycle_policy=proof_baseline_lifecycle_policy,
         env_factory=env_factory,
         compiled_loss_and_correct=_compiled_loss_and_correct,
         run_ppo_updates=_run_ppo_updates,

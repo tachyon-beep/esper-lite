@@ -15,10 +15,17 @@ from esper.simic.training.ppo_coordinator import PPOCoordinator, PPOCoordinatorC
 class _StubBuffer:
     def __init__(self, length: int = 5) -> None:
         self.length = length
-        self.penalty_calls: list[tuple[int, float, float, float]] = []
+        self.penalty_calls: list[tuple[int, float, float, str]] = []
+        self.action_ids = (
+            ("morph-b0-e1-env0-r0c0-op3",),
+            ("morph-b0-e1-env1-r0c0-op4",),
+        )
 
     def __len__(self) -> int:
         return self.length
+
+    def last_action_id(self, env_id: int) -> str:
+        return self.action_ids[env_id][0]
 
     def mark_terminal_with_penalty(
         self,
@@ -26,9 +33,10 @@ class _StubBuffer:
         penalty: float,
         *,
         severity: float,
+        triggering_action_id: str,
         watch_window_evidence: float,
     ) -> bool:
-        self.penalty_calls.append((env_id, penalty, severity, watch_window_evidence))
+        self.penalty_calls.append((env_id, penalty, severity, triggering_action_id))
         return True
 
 
@@ -139,7 +147,9 @@ def test_handle_rollbacks_corrects_latest_episode_outcome_for_env():
     )
 
     assert rollback_envs == [0]
-    assert coordinator.agent.buffer.penalty_calls == [(0, -10.0, 10.0, 10.0)]
+    assert coordinator.agent.buffer.penalty_calls == [
+        (0, -10.0, 10.0, "morph-b0-e1-env0-r0c0-op3")
+    ]
     assert env_total_rewards == [-9.0]
     assert episode_history[0].episode_reward == 100.0
     assert episode_history[1].episode_reward == -9.0

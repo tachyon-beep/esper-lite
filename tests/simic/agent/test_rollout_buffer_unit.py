@@ -277,7 +277,7 @@ class TestMarkTerminalWithPenalty:
     def _add_steps(self, buffer: TamiyoRolloutBuffer, env_id: int, n: int) -> None:
         """Helper to add n minimal steps to buffer."""
         num_slots = buffer.num_slots
-        for _ in range(n):
+        for step_idx in range(n):
             buffer.add(
                 env_id=env_id,
                 state=torch.zeros(buffer.state_dim),
@@ -312,6 +312,7 @@ class TestMarkTerminalWithPenalty:
                 op_mask=torch.ones(buffer.num_ops, dtype=torch.bool),
                 hidden_h=torch.zeros(buffer.lstm_layers, 1, buffer.lstm_hidden_dim),
                 hidden_c=torch.zeros(buffer.lstm_layers, 1, buffer.lstm_hidden_dim),
+                action_id=f"test-env{env_id}-step{step_idx}",
             )
 
     def test_marks_last_step_terminal(self) -> None:
@@ -354,19 +355,19 @@ class TestMarkTerminalWithPenalty:
             0,
             penalty=-2.5,
             severity=7.0,
-            triggering_action_id=3,
+            triggering_action_id="morph-b2-e3-env0-r0c0-op3",
             watch_window_evidence=42.0,
         )
 
         assert buffer.rollback_transition_types[0, 4].item() == 1
         assert buffer.rollback_severity[0, 4].item() == 7.0
-        assert buffer.rollback_triggering_action_ids[0, 4].item() == 3
+        assert buffer.rollback_triggering_action_ids[0][4] == "morph-b2-e3-env0-r0c0-op3"
         assert buffer.rollback_watch_window_evidence[0, 4].item() == 42.0
 
         batch = buffer.get_batched_sequences()
         assert batch["rollback_transition_types"][0, 4].item() == 1
         assert batch["rollback_severity"][0, 4].item() == 7.0
-        assert batch["rollback_triggering_action_ids"][0, 4].item() == 3
+        assert batch["rollback_triggering_action_ids"][0][4] == "morph-b2-e3-env0-r0c0-op3"
         assert batch["rollback_watch_window_evidence"][0, 4].item() == 42.0
 
     def test_returns_false_for_empty_env(self) -> None:
@@ -537,6 +538,8 @@ class TestGetBatchedSequences:
 
         # All tensors should be on CPU
         for key, tensor in data.items():
+            if not torch.is_tensor(tensor):
+                continue
             assert tensor.device.type == "cpu", f"{key} not on CPU"
 
 

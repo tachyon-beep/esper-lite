@@ -131,6 +131,7 @@ class PPOCoordinator:
                 env_idx,
                 normalized_penalty,
                 severity=abs(penalty),
+                triggering_action_id=self.agent.buffer.last_action_id(env_idx),
                 watch_window_evidence=abs(penalty),
             )
             # B11-CR-03 fix: OVERWRITE last reward with RAW penalty (for telemetry interpretability).

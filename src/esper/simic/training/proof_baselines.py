@@ -1,13 +1,13 @@
 """Blueprint-health proof baseline contracts.
 
 These contracts make proof cohorts explicit before a run can support
-blueprint-health claims. The current PPO runtime does not yet enforce every
-control policy here, so the runner fails closed until those controls are wired.
+blueprint-health claims. The runner passes each cohort's lifecycle policy into
+the PPO runtime so controls are enforced before action sampling.
 """
 
 from __future__ import annotations
 
-from typing import NoReturn
+from typing import Any, Callable
 
 from esper.leyline.proof_baselines import (
     REQUIRED_BLUEPRINT_HEALTH_BASELINE_MODE_VALUES,
@@ -46,7 +46,7 @@ def build_blueprint_health_proof_plan(
                 training_seed=base_seed + 10_000,
                 lifecycle_policy="force_wait_only",
                 proof_baseline_pair_id=plan_id,
-                current_runner_supported=False,
+                current_runner_supported=True,
             ),
             ProofBaselineCohort(
                 cohort_id="static_initial",
@@ -55,7 +55,7 @@ def build_blueprint_health_proof_plan(
                 training_seed=base_seed + 20_000,
                 lifecycle_policy="freeze_initial_topology",
                 proof_baseline_pair_id=plan_id,
-                current_runner_supported=False,
+                current_runner_supported=True,
             ),
             ProofBaselineCohort(
                 cohort_id="static_final",
@@ -64,7 +64,7 @@ def build_blueprint_health_proof_plan(
                 training_seed=base_seed + 30_000,
                 lifecycle_policy="freeze_replayed_final_topology",
                 proof_baseline_pair_id=plan_id,
-                current_runner_supported=False,
+                current_runner_supported=True,
             ),
             ProofBaselineCohort(
                 cohort_id="fixed_schedule",
@@ -73,7 +73,7 @@ def build_blueprint_health_proof_plan(
                 training_seed=base_seed + 40_000,
                 lifecycle_policy="apply_declared_lifecycle_schedule",
                 proof_baseline_pair_id=plan_id,
-                current_runner_supported=False,
+                current_runner_supported=True,
             ),
             ProofBaselineCohort(
                 cohort_id="lockstep_reward_ab_A",
@@ -82,7 +82,7 @@ def build_blueprint_health_proof_plan(
                 training_seed=base_seed + 50_000,
                 lifecycle_policy="paired_lockstep_reward_comparison",
                 proof_baseline_pair_id=plan_id,
-                current_runner_supported=False,
+                current_runner_supported=True,
             ),
             ProofBaselineCohort(
                 cohort_id="lockstep_reward_ab_B",
@@ -91,7 +91,7 @@ def build_blueprint_health_proof_plan(
                 training_seed=base_seed + 50_000,
                 lifecycle_policy="paired_lockstep_reward_comparison",
                 proof_baseline_pair_id=plan_id,
-                current_runner_supported=False,
+                current_runner_supported=True,
             ),
         ),
     )
@@ -100,17 +100,51 @@ def build_blueprint_health_proof_plan(
 def train_blueprint_health_proof_baselines(
     *,
     plan: ProofBaselinePlan,
-) -> NoReturn:
-    """Fail closed until proof-control policies are enforced by the PPO runtime."""
+    train_kwargs: dict[str, Any] | None = None,
+    train_cohort: Callable[..., tuple[Any, list[dict[str, Any]]]] | None = None,
+) -> dict[str, tuple[Any, list[dict[str, Any]]]]:
+    return _train_blueprint_health_proof_baselines(
+        plan=plan,
+        train_kwargs={} if train_kwargs is None else train_kwargs,
+        train_cohort=train_cohort,
+    )
+
+
+def _train_blueprint_health_proof_baselines(
+    *,
+    plan: ProofBaselinePlan,
+    train_kwargs: dict[str, Any],
+    train_cohort: Callable[..., tuple[Any, list[dict[str, Any]]]] | None,
+) -> dict[str, tuple[Any, list[dict[str, Any]]]]:
+    """Train each blueprint-health proof cohort with its runtime controls."""
     unsupported = tuple(
         cohort.mode.value
         for cohort in plan.cohorts
         if not cohort.current_runner_supported
     )
-    raise NotImplementedError(
-        "Blueprint-health proof baselines are not wired into the PPO runtime: "
-        + ", ".join(unsupported)
-    )
+    if unsupported:
+        raise RuntimeError(
+            "Blueprint-health proof baselines are not supported by this runner: "
+            + ", ".join(unsupported)
+        )
+
+    if train_cohort is None:
+        from esper.simic.training.vectorized import train_ppo_vectorized
+
+        train_cohort = train_ppo_vectorized
+
+    results: dict[str, tuple[Any, list[dict[str, Any]]]] = {}
+    for cohort in plan.cohorts:
+        cohort_kwargs = dict(train_kwargs)
+        cohort_kwargs["group_id"] = cohort.cohort_id
+        cohort_kwargs["seed"] = cohort.training_seed
+        cohort_kwargs["reward_mode"] = cohort.reward_mode
+        cohort_kwargs["proof_baseline_mode"] = cohort.mode.value
+        cohort_kwargs["proof_baseline_pair_id"] = cohort.proof_baseline_pair_id
+        cohort_kwargs["proof_baseline_lifecycle_policy"] = cohort.lifecycle_policy
+        results[cohort.cohort_id] = train_cohort(**cohort_kwargs)
+
+    return results
 
 
 __all__ = [

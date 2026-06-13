@@ -342,7 +342,13 @@ def _build_lifecycle_mutation_context(
     topology: str,
 ) -> LifecycleMutationCausalContext:
     """Create stable morphology proposal/verdict/mutation identity for one action."""
-    base = f"morph-b{batch_idx}-e{epoch}-env{env_idx}-{target_slot}-op{op_action}"
+    base = _build_lifecycle_action_id(
+        batch_idx=batch_idx,
+        epoch=epoch,
+        env_idx=env_idx,
+        target_slot=target_slot,
+        op_action=op_action,
+    )
     digest = hashlib.sha256(base.encode("utf-8")).digest()
     rng_seed = int.from_bytes(digest[:8], byteorder="big", signed=False)
     return LifecycleMutationCausalContext(
@@ -357,6 +363,18 @@ def _build_lifecycle_mutation_context(
         slot_id=target_slot,
         operation=LifecycleOp(op_action).name,
     )
+
+
+def _build_lifecycle_action_id(
+    *,
+    batch_idx: int,
+    epoch: int,
+    env_idx: int,
+    target_slot: str,
+    op_action: int,
+) -> str:
+    """Create the stable action identity shared by buffer and causal log rows."""
+    return f"morph-b{batch_idx}-e{epoch}-env{env_idx}-{target_slot}-op{op_action}"
 
 
 def _observation_hash(observation: torch.Tensor) -> str:
@@ -571,6 +589,13 @@ def execute_actions(
         slot_is_enabled = action_spec.slot_is_enabled
         action_for_reward = action_spec.action_for_reward
         alpha_target = action_spec.alpha_target
+        action_id = _build_lifecycle_action_id(
+            batch_idx=batch_idx,
+            epoch=epoch,
+            env_idx=env_idx,
+            target_slot=target_slot,
+            op_action=op_action,
+        )
 
         action_success = False
 
@@ -690,6 +715,7 @@ def execute_actions(
                 truncated=False,
                 bootstrap_value=0.0,
                 forced_step=forced_batch_cpu[env_idx],
+                action_id=action_id,
                 contribution_targets=None,
                 contribution_mask=None,
                 has_fresh_contribution=False,
@@ -1401,6 +1427,7 @@ def execute_actions(
             truncated=truncated,
             bootstrap_value=0.0,
             forced_step=forced_step,
+            action_id=action_id,
             # Phase 2.2: Counterfactual contribution supervision targets
             contribution_targets=contribution_targets_tensor,
             contribution_mask=contribution_mask_tensor,

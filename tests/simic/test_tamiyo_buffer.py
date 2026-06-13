@@ -540,6 +540,7 @@ class TestTamiyoRolloutBuffer:
                 hidden_h=torch.zeros(1, 1, 512),
                 hidden_c=torch.zeros(1, 1, 512),
                 blueprint_indices=torch.zeros(buffer.num_slots, dtype=torch.long),
+                action_id=f"test-env0-step{i}",
             )
 
         # Simulate governor rollback with death penalty

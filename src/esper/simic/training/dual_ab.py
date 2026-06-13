@@ -81,6 +81,7 @@ def train_dual_policy_ab(
     use_telemetry: bool = True,
     slots: list[str] | None = None,
     proof_baseline_modes: dict[str, str] | None = None,
+    proof_baseline_lifecycle_policies: dict[str, str] | None = None,
     proof_baseline_pair_id: str | None = None,
     **kwargs: Any,
 ) -> dict[str, tuple[PPOAgent, list[dict[str, Any]]]]:
@@ -118,6 +119,8 @@ def train_dual_policy_ab(
             Defaults to ["r0c0", "r0c1", "r0c2"] (3 slots).
         proof_baseline_modes: Optional group_id -> proof baseline mode labels
             persisted into TRAINING_STARTED telemetry.
+        proof_baseline_lifecycle_policies: Optional group_id -> lifecycle
+            control policy labels enforced by vectorized PPO before sampling.
         proof_baseline_pair_id: Optional proof cohort pair identifier.
         **kwargs: Additional arguments passed to train_ppo_vectorized
 
@@ -202,6 +205,12 @@ def train_dual_policy_ab(
         proof_baseline_mode = None
         if proof_baseline_modes is not None and group_id in proof_baseline_modes:
             proof_baseline_mode = proof_baseline_modes[group_id]
+        proof_baseline_lifecycle_policy = None
+        if (
+            proof_baseline_lifecycle_policies is not None
+            and group_id in proof_baseline_lifecycle_policies
+        ):
+            proof_baseline_lifecycle_policy = proof_baseline_lifecycle_policies[group_id]
 
         # Train this group using vectorized PPO
         agent, history = train_ppo_vectorized(
@@ -225,6 +234,7 @@ def train_dual_policy_ab(
             group_id=group_id,  # Tag telemetry events with group
             proof_baseline_mode=proof_baseline_mode,
             proof_baseline_pair_id=proof_baseline_pair_id,
+            proof_baseline_lifecycle_policy=proof_baseline_lifecycle_policy,
             **kwargs,
         )
 
