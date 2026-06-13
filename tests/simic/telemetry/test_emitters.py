@@ -476,6 +476,79 @@ def test_emit_ppo_update_event_lstm_health_defaults_to_none():
     assert payload.lstm_has_inf is False
 
 
+def test_emit_ppo_update_event_surfaces_update_and_rollout_lstm_health():
+    """SIMIC-PROD-003: update-time and rollout-time LSTM health are emitted separately."""
+    hub = MagicMock()
+
+    emit_ppo_update_event(
+        hub=hub,
+        metrics=_make_mandatory_metrics(
+            # Update-time health (from finalize()).
+            lstm_h_rms=0.35,
+            lstm_c_rms=1.44,
+            lstm_h_max=2.1,
+            lstm_has_nan=False,
+            # Rollout-time health (from coordinator anomaly pass) — DISTINCT values.
+            rollout_lstm_h_l2_total=120.0,
+            rollout_lstm_c_l2_total=240.0,
+            rollout_lstm_h_rms=3.0,
+            rollout_lstm_c_rms=5.0,
+            rollout_lstm_h_env_rms_mean=2.9,
+            rollout_lstm_h_env_rms_max=3.5,
+            rollout_lstm_c_env_rms_mean=4.8,
+            rollout_lstm_c_env_rms_max=5.5,
+            rollout_lstm_h_max=6.0,
+            rollout_lstm_c_max=7.0,
+            rollout_lstm_has_nan=True,
+            rollout_lstm_has_inf=False,
+        ),
+        episodes_completed=10,
+        batch_idx=5,
+        epoch=100,
+        optimizer=None,
+        grad_norm=1.0,
+        update_time_ms=50.0,
+    )
+
+    payload = hub.emit.call_args[0][0].data
+    # Update-time fields preserved (not clobbered by rollout health).
+    assert payload.lstm_h_rms == 0.35
+    assert payload.lstm_c_rms == 1.44
+    assert payload.lstm_h_max == 2.1
+    assert payload.lstm_has_nan is False
+    # Rollout-time fields surfaced under distinct rollout_* keys with their own values.
+    assert payload.rollout_lstm_h_rms == 3.0
+    assert payload.rollout_lstm_c_rms == 5.0
+    assert payload.rollout_lstm_h_max == 6.0
+    assert payload.rollout_lstm_c_max == 7.0
+    assert payload.rollout_lstm_h_l2_total == 120.0
+    assert payload.rollout_lstm_has_nan is True
+    assert payload.rollout_lstm_has_inf is False
+    # The two signals are independent.
+    assert payload.rollout_lstm_h_rms != payload.lstm_h_rms
+
+
+def test_emit_ppo_update_event_rollout_lstm_defaults_to_none():
+    """Rollout LSTM fields default to None/False when absent (non-recurrent policy)."""
+    hub = MagicMock()
+    emit_ppo_update_event(
+        hub=hub,
+        metrics=_make_mandatory_metrics(),
+        episodes_completed=10,
+        batch_idx=5,
+        epoch=100,
+        optimizer=None,
+        grad_norm=1.0,
+        update_time_ms=50.0,
+    )
+    payload = hub.emit.call_args[0][0].data
+    assert payload.rollout_lstm_h_rms is None
+    assert payload.rollout_lstm_c_rms is None
+    assert payload.rollout_lstm_h_l2_total is None
+    assert payload.rollout_lstm_has_nan is False
+    assert payload.rollout_lstm_has_inf is False
+
+
 class TestComputeGradNormSurrogate:
     """Tests for compute_grad_norm_surrogate numerical stability."""
 

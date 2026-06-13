@@ -324,6 +324,196 @@ def test_check_finiteness_gate_emits_proof_blocking_anomaly_on_repeated_failures
     assert "values: Inf detected" in event.data.detail
 
 
+def _finiteness_skip_metrics(skip_count: int):
+    return {
+        "ppo_update_performed": False,
+        "finiteness_gate_skip_count": skip_count,
+        "finiteness_gate_failures": [
+            {"epoch": 0, "sources": ["log_probs[op]: NaN detected"]}
+        ],
+    }
+
+
+def test_check_finiteness_gate_emits_degraded_skip_telemetry_on_first_skip():
+    """SIMIC-PROD-004: the first (non-halting) finiteness skip emits auditable telemetry."""
+    hub = _CaptureHub()
+    coordinator = _make_coordinator(run_ppo_updates_fn=lambda **_kwargs: {}, hub=hub)
+    metrics = _finiteness_skip_metrics(skip_count=4)
+
+    consecutive_failures, should_continue = coordinator.check_finiteness_gate(
+        metrics=metrics,
+        consecutive_finiteness_failures=0,
+    )
+
+    assert consecutive_failures == 1
+    assert should_continue is True
+    assert metrics["run_governor_status"] == "degraded"
+    # Exactly one degraded anomaly, severity below "error", non-halting type.
+    assert len(hub.events) == 1
+    event = hub.events[0]
+    assert event.event_type == TelemetryEventType.NUMERICAL_INSTABILITY_DETECTED
+    assert event.severity == "warning"
+    assert event.data.anomaly_type == "ppo_finiteness_skip"
+    assert "1/3" in event.data.detail
+    assert "all 4 epochs" in event.data.detail
+    assert "log_probs[op]: NaN detected" in event.data.detail
+
+
+def test_check_finiteness_gate_emits_degraded_skip_on_second_skip_without_halt():
+    """SIMIC-PROD-004: the second consecutive skip also emits degraded telemetry, no halt."""
+    hub = _CaptureHub()
+    coordinator = _make_coordinator(run_ppo_updates_fn=lambda **_kwargs: {}, hub=hub)
+    metrics = _finiteness_skip_metrics(skip_count=4)
+
+    consecutive_failures, should_continue = coordinator.check_finiteness_gate(
+        metrics=metrics,
+        consecutive_finiteness_failures=1,
+    )
+
+    assert consecutive_failures == 2
+    assert should_continue is True
+    assert metrics["run_governor_status"] == "degraded"
+    assert metrics["run_governor_finiteness_streak"] == 2
+    assert len(hub.events) == 1
+    assert hub.events[0].data.anomaly_type == "ppo_finiteness_skip"
+    assert "2/3" in hub.events[0].data.detail
+
+
+def test_check_finiteness_gate_does_not_double_emit_on_halting_third_skip():
+    """SIMIC-PROD-004: the halting 3rd skip emits only the error anomaly, not the degraded one."""
+    hub = _CaptureHub()
+    coordinator = _make_coordinator(run_ppo_updates_fn=lambda **_kwargs: {}, hub=hub)
+    metrics = _finiteness_skip_metrics(skip_count=4)
+
+    with pytest.raises(RuntimeError, match="consecutive updates skipped"):
+        coordinator.check_finiteness_gate(
+            metrics=metrics,
+            consecutive_finiteness_failures=2,
+        )
+
+    # Exactly one event, and it is the halting error anomaly (no degraded ppo_finiteness_skip).
+    assert len(hub.events) == 1
+    event = hub.events[0]
+    assert event.severity == "error"
+    assert event.data.anomaly_type == "ppo_finiteness_failure"
+
+
+def test_run_anomaly_detection_threads_ratio_diagnostic_into_emitter():
+    """SIMIC-PROD-002: PPO's ratio_diagnostic must reach the emitted anomaly payload."""
+    captured: dict[str, object] = {}
+
+    def _emit_anomaly_diagnostics_fn(*_args, **kwargs):
+        captured.update(kwargs)
+
+    report = SimpleNamespace(
+        has_anomaly=True,
+        anomaly_types=["ratio_explosion"],
+        details={"ratio_explosion": "ratio max 12.0"},
+    )
+    detector = SimpleNamespace(
+        check_all=lambda **_kw: report,
+        check_lstm_health=lambda **_kw: SimpleNamespace(
+            has_anomaly=False, anomaly_types=[], details={}
+        ),
+    )
+    coordinator = PPOCoordinator(
+        agent=_StubAgent(),
+        config=PPOCoordinatorConfig(
+            ppo_updates_per_batch=1,
+            max_epochs=4,
+            total_env_episodes=16,
+            amp_enabled=False,
+            resolved_amp_dtype=None,
+        ),
+        reward_normalizer=SimpleNamespace(normalize_only=lambda r: r),
+        anomaly_detector=detector,
+        env_reward_configs=[SimpleNamespace(reward_mode=SimpleNamespace(value="basic"))],
+        reward_family_enum=SimpleNamespace(value="dense"),
+        hub=_CaptureHub(),
+        telemetry_config=None,
+        group_id="test-group",
+        run_ppo_updates_fn=lambda **_kw: {},
+        handle_telemetry_escalation_fn=lambda *a, **k: None,
+        emit_anomaly_diagnostics_fn=_emit_anomaly_diagnostics_fn,
+        logger=logging.getLogger(__name__),
+    )
+
+    ratio_diag = {"head": "op", "ratio": 12.0, "where": "epoch3"}
+    coordinator.run_anomaly_detection(
+        metrics={
+            "ratio_max": 12.0,
+            "ratio_min": 0.9,
+            "ratio_diagnostic": ratio_diag,
+        },
+        drift_metrics=None,
+        batched_lstm_hidden=None,
+        batch_epoch_id=3,
+        batch_idx=1,
+    )
+
+    assert captured["ratio_diagnostic"] == ratio_diag
+
+
+def test_run_anomaly_detection_preserves_update_lstm_and_adds_rollout_lstm():
+    """SIMIC-PROD-003: update-time lstm_* survives; rollout health lands under rollout_lstm_*."""
+    report = SimpleNamespace(has_anomaly=False, anomaly_types=[], details={})
+    detector = SimpleNamespace(
+        check_all=lambda **_kw: report,
+        check_lstm_health=lambda **_kw: SimpleNamespace(
+            has_anomaly=False, anomaly_types=[], details={}
+        ),
+    )
+    coordinator = PPOCoordinator(
+        agent=_StubAgent(),
+        config=PPOCoordinatorConfig(
+            ppo_updates_per_batch=1,
+            max_epochs=4,
+            total_env_episodes=16,
+            amp_enabled=False,
+            resolved_amp_dtype=None,
+        ),
+        reward_normalizer=SimpleNamespace(normalize_only=lambda r: r),
+        anomaly_detector=detector,
+        env_reward_configs=[SimpleNamespace(reward_mode=SimpleNamespace(value="basic"))],
+        reward_family_enum=SimpleNamespace(value="dense"),
+        hub=_CaptureHub(),
+        telemetry_config=None,
+        group_id="test-group",
+        run_ppo_updates_fn=lambda **_kw: {},
+        handle_telemetry_escalation_fn=lambda *a, **k: None,
+        emit_anomaly_diagnostics_fn=lambda *a, **k: None,
+        logger=logging.getLogger(__name__),
+    )
+
+    # Distinct rollout hidden state so rollout RMS differs from the update-time value.
+    rollout_hidden = (torch.full((1, 2, 4), 3.0), torch.full((1, 2, 4), 5.0))
+    metrics = {
+        "ratio_max": 1.1,
+        "ratio_min": 0.9,
+        # Update-time health from finalize() (must NOT be clobbered).
+        "lstm_h_rms": 0.5,
+        "lstm_c_rms": 0.7,
+        "lstm_h_max": 1.0,
+    }
+
+    coordinator.run_anomaly_detection(
+        metrics=metrics,
+        drift_metrics=None,
+        batched_lstm_hidden=rollout_hidden,
+        batch_epoch_id=3,
+        batch_idx=1,
+    )
+
+    # Update-time health preserved.
+    assert metrics["lstm_h_rms"] == 0.5
+    assert metrics["lstm_c_rms"] == 0.7
+    assert metrics["lstm_h_max"] == 1.0
+    # Rollout health surfaced under distinct keys and reflects rollout_hidden (RMS 3.0 / 5.0).
+    assert metrics["rollout_lstm_h_rms"] == pytest.approx(3.0)
+    assert metrics["rollout_lstm_c_rms"] == pytest.approx(5.0)
+    assert metrics["rollout_lstm_h_rms"] != metrics["lstm_h_rms"]
+
+
 @pytest.mark.parametrize("bad_norm", [float("nan"), float("inf"), float("-inf")])
 def test_check_gradient_drift_rejects_non_finite_norm_without_poisoning_tracker(bad_norm):
     """Non-finite grad norms must fail before entering EMA state."""

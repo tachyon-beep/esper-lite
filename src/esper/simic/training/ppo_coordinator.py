@@ -298,18 +298,18 @@ class PPOCoordinator:
 
             # All epochs skipped due to non-finite values
             consecutive_finiteness_failures += 1
+            halted = consecutive_finiteness_failures >= 3
+            status = "halted" if halted else "degraded"
             metrics["run_governor_signal"] = "ppo_finiteness_failure"
             metrics["run_governor_finiteness_streak"] = consecutive_finiteness_failures
-            metrics["run_governor_status"] = (
-                "halted" if consecutive_finiteness_failures >= 3 else "degraded"
-            )
+            metrics["run_governor_status"] = status
             self.logger.warning(
                 f"PPO update skipped (all {skip_count} epochs hit finiteness gate). "
                 f"Consecutive failures: {consecutive_finiteness_failures}/3"
             )
 
             # Escalate after 3 consecutive failures (DRL best practice)
-            if consecutive_finiteness_failures >= 3:
+            if halted:
                 self._emit_finiteness_failure_anomaly(
                     metrics=metrics,
                     consecutive_finiteness_failures=consecutive_finiteness_failures,
@@ -319,6 +319,16 @@ class PPOCoordinator:
                     "skipped due to non-finite values. Check policy/value network outputs for NaN. "
                     f"Last failure: {metrics['finiteness_gate_failures']}"
                 )
+
+            # SIMIC-PROD-004: emit auditable degraded skipped-update telemetry for the
+            # first/second consecutive skips (previously silent). The halting 3rd skip is
+            # handled by _emit_finiteness_failure_anomaly above, so this branch (status
+            # == "degraded") never double-emits with it.
+            self._emit_skipped_update_anomaly(
+                metrics=metrics,
+                skip_count=skip_count,
+                consecutive_finiteness_failures=consecutive_finiteness_failures,
+            )
             return consecutive_finiteness_failures, True
 
         # Reset counter on successful update
@@ -355,6 +365,48 @@ class PPOCoordinator:
                     detail=detail,
                 ),
                 severity="error",
+                group_id=self.group_id,
+            )
+        )
+
+    def _emit_skipped_update_anomaly(
+        self,
+        *,
+        metrics: dict[str, Any],
+        skip_count: int,
+        consecutive_finiteness_failures: int,
+    ) -> None:
+        """Emit auditable, non-halting telemetry for a degraded skipped PPO update.
+
+        SIMIC-PROD-004: A skipped PPO update (all epochs hit the finiteness gate) is an
+        auditable event even before the halting 3rd consecutive failure. This emits a
+        degraded-severity anomaly recording the skip, the skip count, the consecutive
+        streak, and the degraded status, so the first/second skips are no longer silent.
+        """
+        if self.hub is None:
+            return
+
+        failures = metrics["finiteness_gate_failures"]
+        sources: list[str] = []
+        for failure in failures:
+            sources.extend(failure["sources"])
+        detail = (
+            f"PPO update skipped (degraded): all {skip_count} epochs hit the finiteness "
+            f"gate. Consecutive finiteness failures: {consecutive_finiteness_failures}/3 "
+            "(run continues). Sources: " + "; ".join(sources)
+        )
+        self.hub.emit(
+            TelemetryEvent(
+                event_type=TelemetryEventType.NUMERICAL_INSTABILITY_DETECTED,
+                data=AnomalyDetectedPayload(
+                    anomaly_type="ppo_finiteness_skip",
+                    episode=0,
+                    batch=0,
+                    inner_epoch=self.config.max_epochs,
+                    total_episodes=self.config.total_env_episodes,
+                    detail=detail,
+                ),
+                severity="warning",
                 group_id=self.group_id,
             )
         )
@@ -427,9 +479,13 @@ class PPOCoordinator:
                 anomaly_report.anomaly_types.extend(drift_report.anomaly_types)
                 anomaly_report.details.update(drift_report.details)
 
-        # B7-DRL-04: Check LSTM hidden state health after PPO update
-        # LSTM hidden states can become corrupted during BPTT - monitor for
-        # explosion/saturation (RMS > threshold), vanishing (RMS < 1e-6), or NaN/Inf.
+        # B7-DRL-04: Check ROLLOUT LSTM hidden state health after PPO update.
+        # `batched_lstm_hidden` is the hidden state captured during on-policy rollout
+        # collection (behaviour policy). This is DISTINCT from the update-time LSTM
+        # health that PPOUpdateMetricsBuilder.finalize() computes from the re-evaluated
+        # hidden states under the updated params (already in metrics["lstm_*"]).
+        # SIMIC-PROD-003: surface rollout health under rollout_lstm_* keys instead of
+        # clobbering the update-time lstm_* keys.
         lstm_health = compute_lstm_health(batched_lstm_hidden)
         if lstm_health is not None:
             lstm_report = self.anomaly_detector.check_lstm_health(
@@ -444,8 +500,10 @@ class PPOCoordinator:
                 anomaly_report.has_anomaly = True
                 anomaly_report.anomaly_types.extend(lstm_report.anomaly_types)
                 anomaly_report.details.update(lstm_report.details)
-            # Add LSTM health to metrics for telemetry display in Sanctum
-            metrics.update(lstm_health.to_dict())
+            # Add ROLLOUT LSTM health to metrics under distinct rollout_* keys for
+            # telemetry display, preserving the update-time lstm_* health from finalize().
+            for key, value in lstm_health.to_dict().items():
+                metrics[f"rollout_{key}"] = value
 
         # Per-head entropy collapse detection (Task 6)
         # Check individual action heads for collapse even when total entropy appears healthy
@@ -472,6 +530,9 @@ class PPOCoordinator:
                 anomaly_report.details.update(per_head_report.details)
 
         self.handle_telemetry_escalation_fn(anomaly_report, self.telemetry_config)
+        # SIMIC-PROD-002: thread PPO's worst-ratio diagnostic into the emitted ratio
+        # anomaly payload. PPO produces it (metrics["ratio_diagnostic"], present when an
+        # update was performed) and the emitter accepts it, but it was never wired.
         self.emit_anomaly_diagnostics_fn(
             self.hub,
             anomaly_report,
@@ -481,6 +542,7 @@ class PPOCoordinator:
             self.config.max_epochs,
             self.config.total_env_episodes,
             False,
+            ratio_diagnostic=metrics.get("ratio_diagnostic"),
             group_id=self.group_id,
         )
 
