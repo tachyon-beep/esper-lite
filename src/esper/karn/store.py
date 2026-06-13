@@ -160,11 +160,11 @@ class HostSnapshot:
 
     epoch: int = 0
 
-    # Performance (required metrics)
-    val_loss: float = 0.0
+    # Performance (optional metrics - None = not computed, 0.0 = computed as zero)
+    val_loss: float | None = None
     val_accuracy: float = 0.0
 
-    # Performance (optional metrics - None = not computed, 0.0 = computed as zero)
+    # Training performance (optional metrics - None = not computed, 0.0 = computed as zero)
     train_loss: float | None = None
     train_accuracy: float | None = None
 
@@ -624,7 +624,7 @@ class TelemetryStore:
             data["train_accuracy"] = coerce_float_or_none(
                 data.get("train_accuracy"), field="HostSnapshot.train_accuracy"
             )
-            data["val_loss"] = coerce_float(data.get("val_loss"), field="HostSnapshot.val_loss", default=0.0)
+            data["val_loss"] = coerce_float_or_none(data.get("val_loss"), field="HostSnapshot.val_loss")
             data["val_accuracy"] = coerce_float(data.get("val_accuracy"), field="HostSnapshot.val_accuracy", default=0.0)
             data["host_params"] = coerce_int(data.get("host_params"), field="HostSnapshot.host_params", default=0, minimum=0)
             data["total_seed_params"] = coerce_int(

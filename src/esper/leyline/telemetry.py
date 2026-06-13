@@ -1648,6 +1648,8 @@ class AnalyticsSnapshotPayload:
     max_epochs: int | None = None
     max_batches: int | None = None
     min_fossilize_improvement: float | None = None
+    max_seeds: int | None = None
+    reward_mode: str | None = None
     telemetry_lifecycle_only: bool | None = None
     telemetry_level: str | None = None
 

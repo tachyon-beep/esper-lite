@@ -1088,12 +1088,8 @@ class TestSeedlessAttribution:
             f"Seedless germinate should get no attribution: {components.bounded_attribution}"
         )
 
-    def test_pre_blending_seed_still_gets_proxy_attribution(self):
-        """Pre-blending seed (no counterfactual) should still get proxy attribution.
-
-        This is different from seedless - a seed exists but hasn't reached
-        BLENDING yet, so we use acc_delta as a proxy signal.
-        """
+    def test_pre_blending_seed_requires_counterfactual_for_attribution(self):
+        """Pre-blending seed should not get causal attribution from host drift."""
 
         # Seed exists but in TRAINING (no counterfactual yet)
         training_seed = SeedInfo(
@@ -1116,9 +1112,9 @@ class TestSeedlessAttribution:
             return_components=True,
         )
 
-        # Should get proxy attribution (proxy_contribution_weight * acc_delta = 0.3 * 2.0 = 0.6)
-        assert components.bounded_attribution == pytest.approx(0.6), (
-            f"Pre-blending seed should get proxy attribution: {components.bounded_attribution}"
+        assert components.bounded_attribution == 0.0, (
+            f"Pre-blending seed without counterfactual proof should get no attribution: "
+            f"{components.bounded_attribution}"
         )
 
 

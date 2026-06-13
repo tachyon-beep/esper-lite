@@ -1022,6 +1022,10 @@ def train_ppo_vectorized(
             )
         )
     else:
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+
         # Create policy via Tamiyo factory
         # IMPORTANT: Pass actual slot_config to ensure action heads/masks align
         # with environment slot ordering (critical for non-default slot layouts)
@@ -1208,6 +1212,7 @@ def train_ppo_vectorized(
             env_devices=env_device_map,
             num_workers=effective_workers,
             shuffle=False,
+            drop_last=False,
         )
 
     num_train_batches = len(shared_train_iter)

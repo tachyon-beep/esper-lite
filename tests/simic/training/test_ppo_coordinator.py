@@ -203,6 +203,32 @@ def test_check_finiteness_gate_ignores_non_finiteness_skip_without_gradient_step
     assert should_continue is True
 
 
+def test_check_finiteness_gate_marks_batch_degraded_but_allows_telemetry():
+    """First finiteness-gate skip should advance through degraded batch telemetry."""
+
+    coordinator = _make_coordinator(run_ppo_updates_fn=lambda **_kwargs: {})
+    metrics = {
+        "ppo_update_performed": False,
+        "finiteness_gate_skip_count": 1,
+        "finiteness_gate_failures": [
+            {
+                "epoch": 0,
+                "sources": ["log_probs[op]: NaN detected"],
+            }
+        ],
+    }
+
+    consecutive_failures, should_continue = coordinator.check_finiteness_gate(
+        metrics=metrics,
+        consecutive_finiteness_failures=0,
+    )
+
+    assert consecutive_failures == 1
+    assert should_continue is True
+    assert metrics["run_governor_signal"] == "ppo_finiteness_failure"
+    assert metrics["run_governor_status"] == "degraded"
+
+
 def test_check_finiteness_gate_emits_proof_blocking_anomaly_on_repeated_failures():
     """Repeated PPO finiteness failures should surface as a run-level governor signal."""
     hub = _CaptureHub()

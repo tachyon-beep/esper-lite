@@ -10,7 +10,7 @@ import torch
 
 from esper.nissa import ConsoleOutput, DirectoryOutput, FileOutput, get_hub
 from esper.runtime.tasks import VALID_TASKS
-from esper.leyline import DEFAULT_LSTM_HIDDEN_DIM
+from esper.leyline import DEFAULT_EPISODE_LENGTH, DEFAULT_LSTM_HIDDEN_DIM
 from esper.simic.training import TrainingConfig
 
 _logger = logging.getLogger(__name__)
@@ -258,6 +258,20 @@ def build_parser() -> argparse.ArgumentParser:
     heur_parser.add_argument("--max-seeds", type=int, default=None,
         help="Maximum total seeds across all slots (default: unlimited)")
     heur_parser.add_argument(
+        "--reward-mode",
+        choices=[
+            "shaped",
+            "escrow",
+            "basic",
+            "basic_plus",
+            "sparse",
+            "minimal",
+            "simplified",
+        ],
+        default="shaped",
+        help="Contribution reward variant for heuristic reward telemetry (default: shaped)",
+    )
+    heur_parser.add_argument(
         "--min-fossilize-improvement",
         type=float,
         default=None,
@@ -413,7 +427,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="L",
         help="Epochs per environment per round (full train-loader passes). "
              "Also sets the LSTM sequence length (chunk_length), so longer episodes "
-             "demand longer temporal memory. (Maps to max_epochs. Default: 25)",
+             f"demand longer temporal memory. (Maps to max_epochs. Default: {DEFAULT_EPISODE_LENGTH})",
     )
     ppo_parser.add_argument(
         "--ppo-epochs",
@@ -714,6 +728,8 @@ def main() -> None:
                     telemetry_lifecycle_only=args.telemetry_lifecycle_only,
                     min_fossilize_improvement=args.min_fossilize_improvement,
                     gradient_telemetry_stride=args.gradient_telemetry_stride if args.gradient_telemetry_stride is not None else (1 if args.telemetry_level == "debug" else 10),
+                    max_seeds=args.max_seeds,
+                    reward_mode=args.reward_mode,
                 )
 
             elif args.algorithm == "ppo":

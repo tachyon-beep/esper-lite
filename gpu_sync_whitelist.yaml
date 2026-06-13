@@ -51,9 +51,6 @@ allow_hits:
 - key: src/esper/simic/agent/rollout_buffer.py:TamiyoRolloutBuffer.normalize_advantages:item:2
   owner: John
   reason: PPO update - pre-normalization std for diagnostics and D4 floor detection; once per update
-- key: src/esper/simic/agent/rollout_buffer.py:TamiyoRolloutBuffer.mark_terminal_with_penalty:item
-  owner: John
-  reason: Rollback bookkeeping - reads last effective op for terminal penalty attribution; only on rollback path, not policy hot path
 - key: src/esper/simic/agent/ppo_metrics.py:PPOUpdateMetricsBuilder.finalize:item
   owner: John
   reason: PPO metrics aggregation (telemetry payload)

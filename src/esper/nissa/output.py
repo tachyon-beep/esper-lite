@@ -810,6 +810,21 @@ class NissaHub:
             stats[worker._name] = worker.get_stats()
         return stats
 
+    def get_health_snapshot(self) -> dict[str, Any]:
+        """Return queue-pressure health for telemetry consumers."""
+        backend_stats = self.get_backend_stats()
+        backend_dropped_events = sum(
+            int(stats["dropped_events"]) for stats in backend_stats.values()
+        )
+        total_dropped_events = self._dropped_events + backend_dropped_events
+        return {
+            "status": "degraded" if total_dropped_events > 0 else "healthy",
+            "dropped_events": total_dropped_events,
+            "hub_dropped_events": self._dropped_events,
+            "backend_dropped_events": backend_dropped_events,
+            "backend_stats": backend_stats,
+        }
+
     def reset(self) -> None:
         """Reset the hub: close all backends and clear the list.
 

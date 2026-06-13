@@ -267,7 +267,7 @@ class PPOCoordinator:
                     "skipped due to non-finite values. Check policy/value network outputs for NaN. "
                     f"Last failure: {metrics['finiteness_gate_failures']}"
                 )
-            return consecutive_finiteness_failures, False
+            return consecutive_finiteness_failures, True
 
         # Reset counter on successful update
         return 0, True

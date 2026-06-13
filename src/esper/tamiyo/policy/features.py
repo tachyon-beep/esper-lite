@@ -65,6 +65,28 @@ def _previous_gradient_health(
     return gradient_health_prev[slot_id]
 
 
+def _validated_gradient_health(value: float | None, slot_id: str) -> float:
+    """Return finite current gradient health or fail the typed telemetry contract."""
+    if value is None:
+        raise ValueError(
+            f"Missing gradient_health for active slot {slot_id}. "
+            "This indicates malformed seed telemetry."
+        )
+    if isinstance(value, torch.Tensor):
+        raise ValueError(
+            f"gradient_health for slot {slot_id} must be a materialized scalar, "
+            f"got tensor shape {tuple(value.shape)}."
+        )
+    else:
+        raw_health = float(value)
+    if not math.isfinite(raw_health):
+        raise ValueError(
+            f"NaN/inf in gradient_health for slot {slot_id}. "
+            f"Value: {value}. This indicates malformed seed telemetry."
+        )
+    return safe(raw_health, 1.0, max_val=1.0)
+
+
 # =============================================================================
 # Symlog Transform for LSTM Saturation Prevention
 # =============================================================================
@@ -321,7 +343,10 @@ def _extract_slot_features_v3(
             gradient_norm = symlog(grad_norm_raw) / _SYMLOG_NORM
         else:
             gradient_norm = 0.0
-        gradient_health = safe(slot_report.telemetry.gradient_health, 1.0, max_val=1.0)
+        gradient_health = _validated_gradient_health(
+            slot_report.telemetry.gradient_health,
+            slot_id,
+        )
         has_vanishing = 1.0 if slot_report.telemetry.has_vanishing else 0.0
         has_exploding = 1.0 if slot_report.telemetry.has_exploding else 0.0
     else:
@@ -756,7 +781,10 @@ def batch_obs_to_features(
                     obs[env_idx, slot_offset + 23] = symlog(grad_norm_raw) / _SYMLOG_NORM
                 else:
                     obs[env_idx, slot_offset + 23] = 0.0
-                obs[env_idx, slot_offset + 24] = safe(report.telemetry.gradient_health, 1.0, max_val=1.0)
+                obs[env_idx, slot_offset + 24] = _validated_gradient_health(
+                    report.telemetry.gradient_health,
+                    slot_id,
+                )
                 obs[env_idx, slot_offset + 25] = 1.0 if report.telemetry.has_vanishing else 0.0
                 obs[env_idx, slot_offset + 26] = 1.0 if report.telemetry.has_exploding else 0.0
             else:

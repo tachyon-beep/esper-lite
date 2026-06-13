@@ -1212,6 +1212,28 @@ def test_batch_obs_to_features_rejects_non_finite_gradient_health_prev():
         )
 
 
+@pytest.mark.parametrize("bad_health", [None, float("nan"), float("inf"), float("-inf")])
+def test_batch_obs_to_features_rejects_malformed_gradient_health(bad_health):
+    """Present telemetry with malformed gradient_health should fail fast."""
+    from esper.leyline.slot_config import SlotConfig
+    from esper.tamiyo.policy.features import batch_obs_to_features
+
+    slot_config = SlotConfig.default()
+    device = torch.device("cpu")
+    report = _make_mock_seed_state_report("r0c0")
+    report.telemetry.gradient_health = bad_health
+
+    with pytest.raises(ValueError, match="gradient_health"):
+        batch_obs_to_features(
+            batch_signals=[_make_mock_training_signals()],
+            batch_slot_reports=[{"r0c0": report}],
+            batch_env_states=[_make_mock_parallel_env_state()],
+            slot_config=slot_config,
+            device=device,
+            max_epochs=MAX_EPOCHS,
+        )
+
+
 def test_device_cached_one_hot_tables_are_stable_on_cpu():
     """Stage/op one-hot lookup tables should cache per device and stay on device."""
     from esper.tamiyo.policy.features import _get_cached_op_table, _get_cached_stage_table

@@ -556,8 +556,9 @@ def compute_contribution_reward(
                     )
                     bounded_attribution *= timing_discount
         elif seed_info is not None and not seed_is_fossilized:
-            if acc_delta is not None and acc_delta > 0:
-                bounded_attribution = config.proxy_contribution_weight * acc_delta
+            # No counterfactual proof means no causal attribution. Host accuracy
+            # drift can still be useful telemetry, but it must not pay the seed.
+            bounded_attribution = 0.0
 
     if action == LifecycleOp.FOSSILIZE and seed_info is not None:
         if seed_info.total_improvement < 0:

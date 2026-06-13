@@ -31,7 +31,12 @@ if TYPE_CHECKING:
     from esper.tamiyo.heuristic import HeuristicTamiyo
 # NOTE: get_task_spec imported lazily inside functions to avoid circular import:
 #   runtime -> simic.rewards -> simic -> simic.training -> helpers -> runtime
-from esper.simic.rewards import compute_contribution_reward, ContributionRewardConfig, SeedInfo
+from esper.simic.rewards import (
+    ContributionRewardConfig,
+    RewardMode,
+    SeedInfo,
+    compute_contribution_reward,
+)
 from esper.simic.telemetry import (
     collect_seed_gradients_async,
     materialize_grad_stats,
@@ -54,6 +59,26 @@ class _HasSeedParameters(Protocol):
     def get_seed_parameters(self, slot: str | None = None) -> Iterator[torch.nn.Parameter]:
         """Yield seed parameters for gradient collection."""
         ...
+
+
+def _build_heuristic_seed_optimizer(
+    model: Any,
+    *,
+    slot_ids: list[str],
+    seed_lr: float,
+) -> torch.optim.Optimizer | None:
+    """Build a seed optimizer that excludes fossilized permanent seed modules."""
+    seed_parameters: list[torch.nn.Parameter] = []
+    for slot_id in slot_ids:
+        slot = model.seed_slots[slot_id]
+        state = slot.state
+        if state is None or state.stage == SeedStage.FOSSILIZED:
+            continue
+        seed_parameters.extend(param for param in slot.get_parameters() if param.requires_grad)
+
+    if not seed_parameters:
+        return None
+    return torch.optim.SGD(seed_parameters, lr=seed_lr, momentum=0.9)
 
 
 def compute_rent_and_shock_inputs(
@@ -447,6 +472,8 @@ def run_heuristic_episode(
     telemetry_config: TelemetryConfig | None = None,
     telemetry_lifecycle_only: bool = False,
     gradient_telemetry_stride: int = 10,
+    max_seeds: int | None = None,
+    reward_mode: str = "shaped",
 ) -> tuple[float, dict[str, int], list[Any]]:
     """Run a single training episode with heuristic policy.
 
@@ -476,6 +503,8 @@ def run_heuristic_episode(
         slots = list(SlotConfig.default().slot_ids)
     if not slots:
         raise ValueError("slots parameter is required and cannot be empty")
+    if max_seeds is not None and max_seeds < 1:
+        raise ValueError("max_seeds must be >= 1 when provided")
 
     torch.manual_seed(base_seed)
     random.seed(base_seed)
@@ -510,7 +539,8 @@ def run_heuristic_episode(
 
     # Calculate host_params before emitting (needed for Karn TUI)
     host_params = sum(p.numel() for p in model.get_host_parameters() if p.requires_grad)
-    reward_config = ContributionRewardConfig()
+    reward_mode_enum = RewardMode(reward_mode)
+    reward_config = ContributionRewardConfig(reward_mode=reward_mode_enum)
     prev_slot_alphas = {slot_id: 0.0 for slot_id in enabled_slots}
     prev_slot_params = {slot_id: 0 for slot_id in enabled_slots}
 
@@ -536,7 +566,7 @@ def run_heuristic_episode(
             policy_device="cpu",  # Heuristic policy runs on CPU
             env_devices=(device,),  # Use actual training device, not hardcoded "cpu"
             episode_id=episode_id,
-            reward_mode="shaped",  # Heuristic mode uses shaped rewards
+            reward_mode=reward_mode_enum.value,
         ),
     ))
 
@@ -739,7 +769,7 @@ def run_heuristic_episode(
             max_epochs=max_epochs,
             total_params=total_params,
             host_params=host_params,
-            acc_delta=acc_delta,  # Used as proxy signal
+            acc_delta=acc_delta,
             effective_seed_params=effective_seed_params,
             alpha_delta_sq_sum=alpha_delta_sq_sum,
             config=reward_config,
@@ -754,14 +784,24 @@ def run_heuristic_episode(
 
         # Execute action using FactoredAction properties
         if factored_action.is_germinate:
-            if germinate_slot is not None:
+            current_seed_count = sum(
+                1
+                for slot_id in enabled_slots
+                if model.seed_slots[slot_id].state is not None
+            )
+            seed_limit_allows_germination = (
+                max_seeds is None or current_seed_count < max_seeds
+            )
+            if germinate_slot is not None and seed_limit_allows_germination:
                 blueprint_id = factored_action.blueprint_id
                 if blueprint_id is not None:
                     seed_id = f"seed_{seeds_created}"
                     model.germinate_seed(blueprint_id, seed_id, slot=germinate_slot)
                     seeds_created += 1
-                    seed_optimizer = torch.optim.SGD(
-                        model.get_seed_parameters(), lr=task_spec.seed_lr, momentum=0.9
+                    seed_optimizer = _build_heuristic_seed_optimizer(
+                        model,
+                        slot_ids=enabled_slots,
+                        seed_lr=task_spec.seed_lr,
                     )
 
         elif factored_action.is_fossilize:
@@ -773,14 +813,20 @@ def run_heuristic_episode(
                     gate_result = slot.advance_stage(SeedStage.FOSSILIZED)
                     if gate_result.passed:
                         slot.set_alpha(1.0)
+                        seed_optimizer = _build_heuristic_seed_optimizer(
+                            model,
+                            slot_ids=enabled_slots,
+                            seed_lr=task_spec.seed_lr,
+                        )
 
         elif factored_action.is_prune:
             if decision.target_seed_id:
                 target_slot = resolve_slot_for_seed_id(decision.target_seed_id)
                 model.prune_seed(slot=target_slot)
-                seed_optimizer = (
-                    torch.optim.SGD(model.get_seed_parameters(), lr=task_spec.seed_lr, momentum=0.9)
-                    if model.has_active_seed else None
+                seed_optimizer = _build_heuristic_seed_optimizer(
+                    model,
+                    slot_ids=enabled_slots,
+                    seed_lr=task_spec.seed_lr,
                 )
         elif factored_action.op == LifecycleOp.ADVANCE:
             if decision.target_seed_id:
@@ -834,6 +880,8 @@ def train_heuristic(
     telemetry_lifecycle_only: bool = False,
     min_fossilize_improvement: float | None = None,
     gradient_telemetry_stride: int = 10,
+    max_seeds: int | None = None,
+    reward_mode: str = "shaped",
 ) -> list[dict[str, Any]]:
     """Train with heuristic policy.
 
@@ -849,6 +897,8 @@ def train_heuristic(
         telemetry_lifecycle_only: If True, only emit lifecycle events
         min_fossilize_improvement: Minimum improvement (%) required to fossilize a seed.
             If None, uses leyline default (0.5%). Lower values risk reward hacking.
+        max_seeds: Maximum total occupied seed slots, including fossilized seeds.
+        reward_mode: Contribution reward variant for parity with PPO reward reporting.
     """
     from esper.tamiyo import HeuristicTamiyo
     from esper.tamiyo.heuristic import HeuristicPolicyConfig
@@ -858,6 +908,8 @@ def train_heuristic(
         slots = list(SlotConfig.default().slot_ids)
     if not slots:
         raise ValueError("slots parameter is required and cannot be empty")
+    if max_seeds is not None and max_seeds < 1:
+        raise ValueError("max_seeds must be >= 1 when provided")
 
     task_spec = get_task_spec(task)
 
@@ -893,6 +945,8 @@ def train_heuristic(
             device=device,
             slots=tuple(slots),
             min_fossilize_improvement=min_fossilize_improvement,
+            max_seeds=max_seeds,
+            reward_mode=reward_mode,
         ),
     ))
 
@@ -926,6 +980,8 @@ def train_heuristic(
             telemetry_config=telemetry_config,
             telemetry_lifecycle_only=telemetry_lifecycle_only,
             gradient_telemetry_stride=gradient_telemetry_stride,
+            max_seeds=max_seeds,
+            reward_mode=reward_mode,
         )
 
         total_reward = sum(rewards)

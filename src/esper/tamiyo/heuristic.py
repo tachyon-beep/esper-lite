@@ -288,8 +288,14 @@ class HeuristicTamiyo:
                             f"but negative improvement ({total_improvement:.3f})"
                         )
 
-                # Use counterfactual if available, else total_improvement
-                improvement = contribution if contribution is not None else total_improvement
+                if contribution is None:
+                    return TamiyoDecision(
+                        action=Action.WAIT,
+                        target_seed_id=seed.seed_id,
+                        reason="Awaiting counterfactual contribution before fossilization",
+                    )
+
+                improvement = contribution
 
                 if improvement > self.config.min_improvement_to_fossilize:
                     return TamiyoDecision(

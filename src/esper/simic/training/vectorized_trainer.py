@@ -91,6 +91,24 @@ def _masked_op_probs_for_telemetry(
     return MaskedCategorical(op_logits, op_mask, min_prob=op_min_prob).probs
 
 
+def _reset_hidden_for_terminal_envs(
+    batched_lstm_hidden: tuple[torch.Tensor, torch.Tensor] | None,
+    *,
+    terminal_envs: list[int],
+) -> tuple[torch.Tensor, torch.Tensor] | None:
+    """Zero recurrent state for envs whose episode terminated mid-batch."""
+    if batched_lstm_hidden is None or not terminal_envs:
+        return batched_lstm_hidden
+
+    h_batch, c_batch = batched_lstm_hidden
+    h_reset = h_batch.clone()
+    c_reset = c_batch.clone()
+    for env_idx in terminal_envs:
+        h_reset[:, env_idx, :].zero_()
+        c_reset[:, env_idx, :].zero_()
+    return h_reset, c_reset
+
+
 def apply_proof_baseline_action_controls(
     *,
     masks_batch: dict[str, torch.Tensor],
@@ -334,7 +352,6 @@ class VectorizedPPOTrainer:
             ] = []  # Per-episode tracking for A/B testing
             episode_outcomes: list[Any] = []  # Pareto analysis outcomes
             best_avg_acc = 0.0
-            best_state = None
             recent_accuracies = []
             recent_rewards = []
             consecutive_finiteness_failures = (
@@ -1550,6 +1567,15 @@ class VectorizedPPOTrainer:
                         action_result_bundle.post_action_slot_reports
                     )
                     all_post_action_masks = action_result_bundle.post_action_masks
+                    rollback_terminal_envs = [
+                        env_idx
+                        for env_idx, rolled_back in enumerate(env_rollback_occurred)
+                        if rolled_back
+                    ]
+                    batched_lstm_hidden = _reset_hidden_for_terminal_envs(
+                        batched_lstm_hidden,
+                        terminal_envs=rollback_terminal_envs,
+                    )
 
                     # PHASE 2: Compute all bootstrap values in single batched forward pass
                     bootstrap_values: list[float] = []
@@ -1775,9 +1801,6 @@ class VectorizedPPOTrainer:
 
                 if rolling_avg_acc > best_avg_acc:
                     best_avg_acc = rolling_avg_acc
-                    best_state = {
-                        k: v.cpu().clone() for k, v in agent.policy.state_dict().items()
-                    }
 
                 episodes_completed = batch_epoch_id
                 batch_idx += 1
@@ -1809,13 +1832,11 @@ class VectorizedPPOTrainer:
                         "Run longer or reduce --torch-profiler-wait/--torch-profiler-warmup."
                     )
 
-        if best_state:
-            agent.policy.load_state_dict(best_state)
-
         if save_path:
             # B5-PT-02 FIX: Save normalizer state for correct training resume.
             # Resume expects these keys in metadata.
             checkpoint_metadata = {
+                "checkpoint_kind": "last",
                 # Observation normalizer (RunningMeanStd)
                 "obs_normalizer_mean": obs_normalizer.mean.tolist(),
                 "obs_normalizer_var": obs_normalizer.var.tolist(),

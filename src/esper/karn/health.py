@@ -420,19 +420,20 @@ class VitalSignsMonitor:
 
         vitals.epochs_without_improvement = self._epochs_since_improvement
 
-        # Check loss stability
-        self._loss_history.append(latest.host.val_loss)
-        if len(self._loss_history) > 50:
-            self._loss_history.pop(0)
+        # Check loss stability when validation loss was actually reported.
+        if latest.host.val_loss is not None:
+            self._loss_history.append(latest.host.val_loss)
+            if len(self._loss_history) > 50:
+                self._loss_history.pop(0)
 
-        vitals.loss_stable, vitals.loss_trend = self._analyze_loss_trend()
+            vitals.loss_stable, vitals.loss_trend = self._analyze_loss_trend()
 
-        # Count loss spikes
-        if len(self._loss_history) >= 2:
-            recent_losses = self._loss_history[-10:]
-            avg_loss = sum(recent_losses) / len(recent_losses)
-            spikes = sum(1 for loss_value in recent_losses if loss_value > avg_loss * self.loss_spike_threshold)
-            vitals.loss_spike_count = spikes
+            # Count loss spikes
+            if len(self._loss_history) >= 2:
+                recent_losses = self._loss_history[-10:]
+                avg_loss = sum(recent_losses) / len(recent_losses)
+                spikes = sum(1 for loss_value in recent_losses if loss_value > avg_loss * self.loss_spike_threshold)
+                vitals.loss_spike_count = spikes
 
         # Check seed health
         total_seeds = 0

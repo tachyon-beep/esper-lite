@@ -90,6 +90,36 @@ class TestDirectoryOutput:
         backend.close()
 
 
+class TestNissaHubHealth:
+    """Tests for queue-pressure health reporting."""
+
+    def test_health_snapshot_surfaces_hub_and_backend_drops(self):
+        class NoopBackend(OutputBackend):
+            def start(self) -> None:
+                pass
+
+            def emit(self, event: TelemetryEvent) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        hub = NissaHub()
+        backend = NoopBackend()
+        hub.add_backend(backend)
+        hub._dropped_events = 2
+        hub._backend_workers[0]._dropped_events = 3
+
+        health = hub.get_health_snapshot()
+
+        assert health["status"] == "degraded"
+        assert health["dropped_events"] == 5
+        assert health["hub_dropped_events"] == 2
+        assert health["backend_dropped_events"] == 3
+
+        hub.close()
+
+
 class TestNissaHubWithDirectoryOutput:
     """Integration tests for NissaHub with DirectoryOutput."""
 

@@ -459,7 +459,7 @@ class KarnCollector:
             current_epoch.epoch = epoch_num
             current_epoch.host.epoch = epoch_num
             current_epoch.host.val_accuracy = payload.avg_accuracy
-            # BATCH doesn't have val_loss - leave at default 0.0
+            current_epoch.host.val_loss = None
 
             # Increment epochs_in_stage for all occupied slots (only DORMANT excluded)
             for slot in current_epoch.slots.values():
