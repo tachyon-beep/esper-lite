@@ -121,13 +121,26 @@ class PPOCoordinator:
         if not rollback_env_indices:
             return rollback_env_indices
 
+        clip = self.reward_normalizer.clip
         for env_idx in rollback_env_indices:
             # B1-DRL-01 fix: Inject death penalty so PPO learns to avoid
             # catastrophic actions. Previously get_punishment_reward() was dead code.
-            # P1-NORM fix: Normalize penalty to match other rewards' scale.
-            # Use normalize_only to avoid polluting running stats with rare outliers.
+            # P1-DEATH fix (esper-lite-1e3d4e8fa6): inject the catastrophe penalty at an
+            # INTENTIONAL, std-INDEPENDENT magnitude by clamping the raw penalty directly
+            # to the reward clip, instead of passing it through normalize_only (which
+            # divided the raw penalty by the running reward std and then clipped). With a
+            # typical reward std < 1 that path saturated at -clip on every rollback
+            # regardless of severity, and it was std-FRAGILE: a larger running std would
+            # silently shrink the penalty toward the ordinary-reward scale. Clamping makes
+            # the penalty land at a fixed, dominating magnitude every time, regardless of
+            # the running reward statistics.
+            # NOTE: this alone does not guarantee dominance over the highest-return
+            # episodes -- a single -clip terminal step cannot outweigh a long run of
+            # positives that sums beyond clip. Sizing/propagation for that tail-dominance
+            # case is tracked separately (it changes training dynamics and needs a
+            # retraining run to tune).
             penalty = env_states[env_idx].governor.get_punishment_reward()
-            normalized_penalty = self.reward_normalizer.normalize_only(penalty)
+            normalized_penalty = float(max(-clip, min(clip, penalty)))
             # Do NOT resolve triggering_action_id eagerly: last_action_id() raises
             # on an empty buffer (first-step panic with no executed transition).
             # mark_terminal_with_penalty resolves it internally to the prior

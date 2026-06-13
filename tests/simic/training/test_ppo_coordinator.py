@@ -70,7 +70,7 @@ def _make_coordinator(*, run_ppo_updates_fn, hub=None):
             amp_enabled=False,
             resolved_amp_dtype=None,
         ),
-        reward_normalizer=SimpleNamespace(normalize_only=lambda reward: reward),
+        reward_normalizer=SimpleNamespace(clip=10.0),
         anomaly_detector=SimpleNamespace(),
         env_reward_configs=[SimpleNamespace(reward_mode=SimpleNamespace(value="basic"))],
         reward_family_enum=SimpleNamespace(value="dense"),
@@ -165,6 +165,45 @@ def test_handle_rollbacks_corrects_latest_episode_outcome_for_env():
     assert episode_history[1].episode_reward == -9.0
     assert episode_outcomes[0].episode_reward == 100.0
     assert episode_outcomes[1].episode_reward == -9.0
+
+
+def test_handle_rollbacks_clamps_death_penalty_std_independently():
+    """The rollback death penalty is clamped to the reward clip, std-INDEPENDENTLY.
+
+    Regression for esper-lite-1e3d4e8fa6: the penalty used to be passed through
+    normalize_only (raw_penalty / running_std, then clipped), which saturated at -clip
+    only by accident when std < 1 and would silently shrink if std rose. The fix clamps
+    the raw catastrophe penalty directly to the clip. This test's reward_normalizer mock
+    exposes ONLY `clip` (no normalize_only / no std) -- so it passes only if the code path
+    never consults the running std. A penalty larger than clip clamps to -clip; a penalty
+    within clip is preserved exactly (not std-scaled).
+    """
+    for raw_penalty, expected_injected in ((-50.0, -10.0), (-3.0, -3.0)):
+        coordinator = _make_coordinator(run_ppo_updates_fn=lambda **_kwargs: {})
+        env_states = [
+            SimpleNamespace(
+                governor=SimpleNamespace(get_punishment_reward=lambda p=raw_penalty: p),
+                episode_rewards=[1.0, 2.0],
+                telemetry_cb=lambda _e: None,
+                val_acc=12.5,
+                action_counts={"GERMINATE": 2, "PRUNE": 1, "FOSSILIZE": 0},
+            )
+        ]
+        episode_history = [SimpleNamespace(env_id=0, episode_reward=3.0)]
+        episode_outcomes = [_make_outcome(env_id=0, episode_idx=1, reward=3.0)]
+
+        coordinator.handle_rollbacks(
+            env_states=env_states,
+            env_rollback_occurred=[True],
+            env_total_rewards=[3.0],
+            episode_history=episode_history,
+            episode_outcomes=episode_outcomes,
+        )
+
+        env_idx, injected, severity, _action_id = coordinator.agent.buffer.penalty_calls[0]
+        assert env_idx == 0
+        assert injected == expected_injected  # clamped to clip, NOT raw/std
+        assert severity == abs(raw_penalty)  # severity still records the true magnitude
 
 
 def test_handle_rollbacks_drops_penalty_when_no_executed_transition(caplog):
@@ -489,7 +528,7 @@ def test_run_anomaly_detection_threads_ratio_diagnostic_into_emitter():
             amp_enabled=False,
             resolved_amp_dtype=None,
         ),
-        reward_normalizer=SimpleNamespace(normalize_only=lambda r: r),
+        reward_normalizer=SimpleNamespace(clip=10.0),
         anomaly_detector=detector,
         env_reward_configs=[SimpleNamespace(reward_mode=SimpleNamespace(value="basic"))],
         reward_family_enum=SimpleNamespace(value="dense"),
@@ -536,7 +575,7 @@ def test_run_anomaly_detection_preserves_update_lstm_and_adds_rollout_lstm():
             amp_enabled=False,
             resolved_amp_dtype=None,
         ),
-        reward_normalizer=SimpleNamespace(normalize_only=lambda r: r),
+        reward_normalizer=SimpleNamespace(clip=10.0),
         anomaly_detector=detector,
         env_reward_configs=[SimpleNamespace(reward_mode=SimpleNamespace(value="basic"))],
         reward_family_enum=SimpleNamespace(value="dense"),
