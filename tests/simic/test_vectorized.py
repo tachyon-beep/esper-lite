@@ -897,6 +897,28 @@ def test_aggregate_ppo_metrics_special_reductions_and_head_merging():
     }
 
 
+def test_aggregate_ppo_metrics_mean_reduces_per_head_clip_fraction():
+    """head_{name}_clip_fraction keys must mean-reduce across updates, not KeyError.
+
+    Regression for esper-lite-deb6b11575: _aggregate_ppo_metrics raises KeyError for
+    any metric with no declared reducer. The per-head clip-fraction telemetry relies
+    on the '_clip_fraction' suffix matching the mean-reduce branch (disjoint from the
+    joint 'clip_fraction'/'clip_fraction_positive'/'clip_fraction_negative' keys).
+    """
+    from esper.simic.training.vectorized import _aggregate_ppo_metrics
+
+    metrics = _aggregate_ppo_metrics([
+        {"head_slot_clip_fraction": 0.2, "clip_fraction": 0.1},
+        {"head_slot_clip_fraction": 0.4, "clip_fraction": 0.3},
+    ])
+
+    # Per-head key is mean-reduced via the suffix branch.
+    assert metrics["head_slot_clip_fraction"] == pytest.approx(0.3)
+    # The joint clip_fraction (in the MEAN frozenset) is also mean-reduced and is
+    # NOT double-handled by the suffix branch.
+    assert metrics["clip_fraction"] == pytest.approx(0.2)
+
+
 def test_aggregate_ppo_metrics_reduces_proof_fields_explicitly():
     """Proof-critical PPO fields must not fall through generic first-value merging."""
     from esper.simic.training.vectorized import _aggregate_ppo_metrics

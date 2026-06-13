@@ -65,6 +65,18 @@ class PPOUpdateMetrics(TypedDict, total=False):
     clip_fraction: float
     clip_fraction_positive: float
     clip_fraction_negative: float
+    # Per-head clip-fraction (factored-PPO trust-region telemetry): fraction of
+    # samples where each head's ratio left [1-clip, 1+clip]. Companion to the
+    # joint clip_fraction above; the loss clips per head, so these expose the
+    # per-head clipping the joint figure aggregates over.
+    head_slot_clip_fraction: float
+    head_blueprint_clip_fraction: float
+    head_style_clip_fraction: float
+    head_tempo_clip_fraction: float
+    head_alpha_target_clip_fraction: float
+    head_alpha_speed_clip_fraction: float
+    head_alpha_curve_clip_fraction: float
+    head_op_clip_fraction: float
     explained_variance: float
     entropy: float
     ratio_mean: float

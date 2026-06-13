@@ -361,6 +361,7 @@ class TestEntropyFloorIntegration:
             log_prob_max_across_epochs=torch.tensor(0.0),
             head_ratio_max_across_epochs={"blueprint": torch.tensor(1.0)},
             joint_ratio_max_across_epochs=torch.tensor(1.0),
+            head_clip_fraction_history={"blueprint": [torch.tensor(0.0)]},
             value_func_metrics={
                 "v_return_correlation": 0.0,
                 "td_error_mean": 0.0,

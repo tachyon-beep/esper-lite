@@ -1052,6 +1052,17 @@ def emit_ppo_update_event(
             head_alpha_curve_ratio_max=metrics.get("head_alpha_curve_ratio_max", 1.0),
             head_op_ratio_max=metrics.get("head_op_ratio_max", 1.0),
             joint_ratio_max=metrics.get("joint_ratio_max", 1.0),
+            # Per-head clip-fraction (factored-PPO trust-region telemetry).
+            # Surfaced alongside the joint clip_fraction so tuners can see which
+            # head the per-head surrogate is actually clipping.
+            head_slot_clip_fraction=metrics.get("head_slot_clip_fraction", 0.0),
+            head_blueprint_clip_fraction=metrics.get("head_blueprint_clip_fraction", 0.0),
+            head_style_clip_fraction=metrics.get("head_style_clip_fraction", 0.0),
+            head_tempo_clip_fraction=metrics.get("head_tempo_clip_fraction", 0.0),
+            head_alpha_target_clip_fraction=metrics.get("head_alpha_target_clip_fraction", 0.0),
+            head_alpha_speed_clip_fraction=metrics.get("head_alpha_speed_clip_fraction", 0.0),
+            head_alpha_curve_clip_fraction=metrics.get("head_alpha_curve_clip_fraction", 0.0),
+            head_op_clip_fraction=metrics.get("head_op_clip_fraction", 0.0),
             # Per-head NaN/Inf flags (for indicator lights)
             head_nan_detected=metrics.get("head_nan_detected"),
             head_inf_detected=metrics.get("head_inf_detected"),

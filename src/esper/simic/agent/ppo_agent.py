@@ -825,6 +825,14 @@ class PPOAgent:
         }
         joint_ratio_max_across_epochs = torch.tensor(float("-inf"), device=self.device)
 
+        # Per-head clip-fraction history (factored-PPO trust-region telemetry).
+        # Each entry is the fraction of samples where that head's ratio left
+        # [1-clip, 1+clip] in one epoch; the builder means them across epochs into
+        # head_{name}_clip_fraction metrics. Companion to the joint clip_fraction.
+        head_clip_fraction_history: dict[str, list[torch.Tensor]] = {
+            head: [] for head in HEAD_NAMES
+        }
+
         # Per-head NaN/Inf tracking (for indicator lights)
         # OR across all epochs - once detected, stays detected for this update
         head_nan_detected: dict[str, bool] = {head: False for head in HEAD_NAMES}
@@ -1059,6 +1067,8 @@ class PPOAgent:
             metrics["clip_fraction"].append(update_result.ratio_metrics.clip_fraction)
             metrics["clip_fraction_positive"].append(update_result.ratio_metrics.clip_fraction_positive)
             metrics["clip_fraction_negative"].append(update_result.ratio_metrics.clip_fraction_negative)
+            for key, head_clip in update_result.ratio_metrics.per_head_clip_fraction.items():
+                head_clip_fraction_history[key].append(head_clip)
 
             if update_result.ratio_metrics.early_stop:
                 early_stopped = True
@@ -1375,6 +1385,7 @@ class PPOAgent:
             log_prob_max_across_epochs=log_prob_max_across_epochs,
             head_ratio_max_across_epochs=head_ratio_max_across_epochs,
             joint_ratio_max_across_epochs=joint_ratio_max_across_epochs,
+            head_clip_fraction_history=head_clip_fraction_history,
             value_func_metrics=value_func_metrics,
             cuda_memory_metrics=cuda_memory_metrics,
             head_names=HEAD_NAMES,

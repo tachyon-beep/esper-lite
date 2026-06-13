@@ -843,6 +843,20 @@ class PPOUpdatePayload:
     head_op_ratio_max: float = 1.0
     joint_ratio_max: float = 1.0  # Product of per-head ratios (computed in log-space)
 
+    # Per-head PPO clip-fraction (factored-PPO trust-region telemetry).
+    # Fraction of samples where each head's ratio left [1-clip, 1+clip] -- i.e.
+    # where the per-head surrogate actually clipped. Companion to the JOINT
+    # clip_fraction: the loss clips per head, so a single head can be heavily
+    # clipped while the joint clip_fraction reads low.
+    head_slot_clip_fraction: float = 0.0
+    head_blueprint_clip_fraction: float = 0.0
+    head_style_clip_fraction: float = 0.0
+    head_tempo_clip_fraction: float = 0.0
+    head_alpha_target_clip_fraction: float = 0.0
+    head_alpha_speed_clip_fraction: float = 0.0
+    head_alpha_curve_clip_fraction: float = 0.0
+    head_op_clip_fraction: float = 0.0
+
     # PPO inner loop context
     inner_epoch: int = 0  # Host training epoch (1-150), NOT PPO update iteration
     batch: int = 0
@@ -1044,6 +1058,15 @@ class PPOUpdatePayload:
             head_alpha_curve_ratio_max=data.get("head_alpha_curve_ratio_max", 1.0),
             head_op_ratio_max=data.get("head_op_ratio_max", 1.0),
             joint_ratio_max=data.get("joint_ratio_max", 1.0),
+            # OPTIONAL: Per-head clip-fraction (only for factored policies, default 0.0).
+            head_slot_clip_fraction=data.get("head_slot_clip_fraction", 0.0),
+            head_blueprint_clip_fraction=data.get("head_blueprint_clip_fraction", 0.0),
+            head_style_clip_fraction=data.get("head_style_clip_fraction", 0.0),
+            head_tempo_clip_fraction=data.get("head_tempo_clip_fraction", 0.0),
+            head_alpha_target_clip_fraction=data.get("head_alpha_target_clip_fraction", 0.0),
+            head_alpha_speed_clip_fraction=data.get("head_alpha_speed_clip_fraction", 0.0),
+            head_alpha_curve_clip_fraction=data.get("head_alpha_curve_clip_fraction", 0.0),
+            head_op_clip_fraction=data.get("head_op_clip_fraction", 0.0),
             # REQUIRED: PPO inner loop context.
             inner_epoch=data["inner_epoch"],
             batch=data["batch"],

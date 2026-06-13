@@ -361,7 +361,12 @@ def _aggregate_ppo_metrics(update_metrics: list[PPOUpdateMetrics]) -> dict[str, 
         if not values:
             continue
 
-        if key in _PPO_MEAN_REDUCED_METRICS:
+        if key in _PPO_MEAN_REDUCED_METRICS or key.endswith("_clip_fraction"):
+            # head_{name}_clip_fraction keys are per-head fractions: mean across
+            # PPO updates, matching how the joint clip_fraction (in the frozenset)
+            # is reduced. The suffix only matches the per-head keys -- the joint
+            # 'clip_fraction'/'clip_fraction_positive'/'clip_fraction_negative'
+            # keys do not end in '_clip_fraction' and are handled by the frozenset.
             aggregated[key] = sum(values) / len(values)
         elif key in _PPO_MAX_REDUCED_METRICS or key.endswith("_ratio_max"):
             aggregated[key] = max(values)
