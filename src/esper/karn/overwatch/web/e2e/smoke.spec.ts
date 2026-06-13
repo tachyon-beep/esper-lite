@@ -347,11 +347,13 @@ function createMockSnapshot(): SanctumSnapshot {
       gpu_memory_total_gb: 8.0,
       gpu_utilization: 75,
       gpu_temperature: 65,
+      gpu_data_present: true,
       cpu_percent: 45,
       ram_used_gb: 16,
       ram_total_gb: 32,
       epochs_per_second: 2.5,
       batches_per_hour: 150,
+      throughput_present: true,
       host_params: 1000000
     },
     rewards: createMockRewardComponents(),

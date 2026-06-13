@@ -419,6 +419,48 @@ describe('PolicyDiagnostics', () => {
     })
   })
 
+  describe('Pending (no PPO data yet)', () => {
+    it('renders losses, ratios and advantage as pending (—) before first PPO update', () => {
+      const wrapper = mount(PolicyDiagnostics, {
+        props: {
+          // ppo_data_received false: all PPO fields are unmeasured 0.0 defaults.
+          tamiyo: createTamiyo({
+            ppo_data_received: false,
+            policy_loss: 0,
+            value_loss: 0,
+            entropy_loss: 0,
+            ratio_mean: 0,
+            advantage_mean: 0,
+            entropy: 0,
+            update_time_ms: 0
+          })
+        }
+      })
+
+      expect(wrapper.find('[data-testid="policy-loss"]').text()).toContain('—')
+      expect(wrapper.find('[data-testid="value-loss"]').text()).toContain('—')
+      expect(wrapper.find('[data-testid="ratio-mean"]').text()).toContain('—')
+      expect(wrapper.find('[data-testid="advantage-mean"]').text()).toContain('—')
+      expect(wrapper.find('[data-testid="update-time"]').text()).toContain('—')
+      // Entropy with no data must not flag a false warning.
+      expect(wrapper.find('[data-testid="global-entropy"]').classes()).toContain('health-good')
+      // Head entropy of 0 must not flag a false warning while pending.
+      expect(wrapper.find('[data-testid="head-entropy-slot"]').classes()).toContain('health-good')
+    })
+
+    it('renders a measured loss of 0.000 (not pending) when PPO data present', () => {
+      const wrapper = mount(PolicyDiagnostics, {
+        props: {
+          tamiyo: createTamiyo({ ppo_data_received: true, policy_loss: 0 })
+        }
+      })
+
+      // A genuinely measured 0 must render "0.000", never pending.
+      expect(wrapper.find('[data-testid="policy-loss"]').text()).toContain('0.000')
+      expect(wrapper.find('[data-testid="policy-loss"]').text()).not.toContain('—')
+    })
+  })
+
   describe('Value Formatting', () => {
     it('formats loss values to 3 decimal places', () => {
       const wrapper = mount(PolicyDiagnostics, {

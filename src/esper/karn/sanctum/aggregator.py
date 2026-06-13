@@ -950,7 +950,11 @@ class SanctumAggregator:
         if payload.skipped:
             return
 
-        # Mark that we've received PPO data (enables TamiyoBrain display)
+        # Mark that we've received PPO data (enables TamiyoBrain display).
+        # ORDERING IS LOAD-BEARING: this must stay AFTER the skipped-update guard
+        # above. A skipped update carries no health metrics, so the presence flag
+        # must not be set for it — otherwise UI-004's pending gate would show
+        # unmeasured 0.0 defaults as measured values.
         self._tamiyo.ppo_data_received = True
 
         # A/B testing group identification
@@ -1517,6 +1521,8 @@ class SanctumAggregator:
             total_epochs = self._current_episode * self._max_epochs
             self._vitals.epochs_per_second = total_epochs / elapsed
             self._vitals.batches_per_hour = (self._batches_completed / elapsed) * 3600
+            # Throughput is now a measured quantity (at least one batch completed).
+            self._vitals.throughput_present = True
 
         # Capture best_runs
         n_envs = payload.n_envs
@@ -2264,6 +2270,8 @@ class SanctumAggregator:
                     self._vitals.gpu_memory_total_gb = stats0.memory_total_gb
                     self._vitals.gpu_utilization = stats0.utilization
                     self._vitals.gpu_temperature = stats0.temperature
+                    # Real GPU sample landed: the convenience fields are now measured.
+                    self._vitals.gpu_data_present = True
         except ImportError as e:
             _logger.warning("Failed to import torch for GPU vitals: %s", e)
             self._vitals.gpu_stats = {}  # Explicit unavailable state

@@ -209,4 +209,52 @@ describe('HealthGauges', () => {
 
     expect(wrapper.find('[data-testid="temp-warning"]').exists()).toBe(false)
   })
+
+  it('renders GPU gauges as pending (—) when GPU stats not yet sampled', () => {
+    const wrapper = mount(HealthGauges, {
+      props: {
+        // gpu_data_present false, but the unmeasured-zero fields are present
+        vitals: createVitals({ gpu_data_present: false, gpu_utilization: 0, gpu_memory_total_gb: 0 }),
+        tamiyo: createTamiyo()
+      }
+    })
+
+    const gpuGauge = wrapper.find('[data-testid="gauge-gpu-util"]')
+    expect(gpuGauge.find('[data-testid="gauge-value"]').text()).toBe('—')
+    expect(gpuGauge.classes()).toContain('gauge-pending')
+    // Pending must not render a false-healthy/critical alarm.
+    expect(gpuGauge.classes()).not.toContain('health-critical')
+
+    const memGauge = wrapper.find('[data-testid="gauge-gpu-memory"]')
+    expect(memGauge.find('[data-testid="gauge-value"]').text()).toBe('—')
+  })
+
+  it('renders PPO gauges as pending (—) before the first PPO update', () => {
+    const wrapper = mount(HealthGauges, {
+      props: {
+        vitals: createVitals(),
+        // No PPO data yet: entropy default 0.0 would otherwise read as critical.
+        tamiyo: createTamiyo({ ppo_data_received: false, entropy: 0 })
+      }
+    })
+
+    const entropyGauge = wrapper.find('[data-testid="gauge-entropy"]')
+    expect(entropyGauge.find('[data-testid="gauge-value"]').text()).toBe('—')
+    expect(entropyGauge.classes()).toContain('gauge-pending')
+    expect(entropyGauge.classes()).not.toContain('health-critical')
+  })
+
+  it('renders a measured GPU utilization of 0% (not pending) when present', () => {
+    const wrapper = mount(HealthGauges, {
+      props: {
+        vitals: createVitals({ gpu_data_present: true, gpu_utilization: 0 }),
+        tamiyo: createTamiyo()
+      }
+    })
+
+    const gpuGauge = wrapper.find('[data-testid="gauge-gpu-util"]')
+    // A genuinely measured 0 must render "0%", never pending.
+    expect(gpuGauge.find('[data-testid="gauge-value"]').text()).toBe('0%')
+    expect(gpuGauge.classes()).not.toContain('gauge-pending')
+  })
 })

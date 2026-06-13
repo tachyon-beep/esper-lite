@@ -440,11 +440,13 @@ export interface SystemVitals {
   gpu_memory_total_gb: number;
   gpu_utilization: number;
   gpu_temperature: number;
+  gpu_data_present: boolean;
   cpu_percent: number | null;
   ram_used_gb: number | null;
   ram_total_gb: number | null;
   epochs_per_second: number;
   batches_per_hour: number;
+  throughput_present: boolean;
   host_params: number;
 }
 

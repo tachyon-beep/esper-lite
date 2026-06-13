@@ -220,3 +220,46 @@ class TestValueFunctionDisplay:
         output_str = str(output)
 
         assert "!" in output_str  # Alert indicator for critical status
+
+
+class TestPpoPresenceGate:
+    """No PPO data yet must render pending, never a measured/healthy status."""
+
+    def test_empty_snapshot_renders_pending_not_ok(self) -> None:
+        """A fresh TamiyoState (ppo_data_received=False) renders pending.
+
+        The PPO health fields default to 0.0; without a presence gate entropy=0.0
+        would read as Critical and grad_norm=0.0 as OK. Both are wrong: there is
+        no data. The panel must render an explicit pending block instead.
+        """
+        panel = HealthStatusPanel()
+        snapshot = SanctumSnapshot(tamiyo=TamiyoState())  # ppo_data_received=False
+        assert snapshot.tamiyo.ppo_data_received is False
+        panel._snapshot = snapshot
+
+        output = str(panel.render())
+        assert "pending" in output
+        # Must NOT render a real entropy/grad-norm status line ("!", colored value)
+        # Grad-norm and entropy values are placeholders, not 0.0 readings.
+        assert "0.000" not in output
+
+    def test_measured_zero_renders_real_status(self) -> None:
+        """With PPO data present, a measured 0.0 grad_norm renders its value.
+
+        grad_norm=0.0 is a genuinely measured value (OK status), distinct from
+        the pending placeholder shown before any PPO update.
+        """
+        panel = HealthStatusPanel()
+        snapshot = SanctumSnapshot(
+            tamiyo=TamiyoState(
+                ppo_data_received=True,
+                grad_norm=0.0,
+                entropy=1.0,  # healthy, above critical threshold
+            ),
+        )
+        panel._snapshot = snapshot
+
+        output = str(panel.render())
+        assert "pending" not in output
+        # Measured grad_norm of 0.0 renders with the standard " 7.3f" format.
+        assert "0.000" in output

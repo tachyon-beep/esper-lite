@@ -56,6 +56,13 @@ class HealthStatusPanel(Static):
         tamiyo = self._snapshot.tamiyo
         result = Text()
 
+        # PPO policy-health metrics co-arrive on the first PPO update. Until then
+        # the fields hold unmeasured defaults (0.0) that must NOT be rendered as
+        # healthy-or-critical status. Render an explicit pending block instead so
+        # "no data yet" is visibly distinct from a measured value.
+        if not tamiyo.ppo_data_received:
+            return self._render_pending()
+
         # Advantage stats with inline skewness/kurtosis and positive ratio
         adv_status = self._get_advantage_status(tamiyo.advantage_std)
         skew_status = self._get_skewness_status(tamiyo.advantage_skewness)
@@ -184,6 +191,33 @@ class HealthStatusPanel(Static):
         # LSTM hidden state health (B7-DRL-04)
         result.append(self._render_lstm_health())
 
+        return result
+
+    def _render_pending(self) -> Text:
+        """Render an explicit pending block before any PPO data has arrived.
+
+        Distinguishes "no PPO update yet" from a measured value: every policy
+        health row shows an em dash placeholder in dim style rather than a
+        status colour derived from the unmeasured 0.0 defaults.
+        """
+        result = Text()
+        result.append("Advantage   ", style="dim")
+        result.append("pending", style="dim")
+        result.append("\n")
+        result.append("Grad Norm  ", style="dim")
+        result.append("—", style="dim")
+        result.append("\n")
+        result.append("Log Prob     ", style="dim")
+        result.append("[—,—]", style="dim")
+        result.append("\n")
+        result.append("Entropy    ", style="dim")
+        result.append("—", style="dim")
+        result.append("\n")
+        result.append("Policy       ", style="dim")
+        result.append("awaiting first PPO update", style="dim")
+        result.append("\n")
+        result.append("Value Range  ", style="dim")
+        result.append("—", style="dim")
         return result
 
     def _render_entropy_trend(self) -> Text:

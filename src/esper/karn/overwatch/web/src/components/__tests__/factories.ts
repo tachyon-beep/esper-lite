@@ -375,11 +375,13 @@ export function createSystemVitals(overrides: Partial<SystemVitals> = {}): Syste
     gpu_memory_total_gb: 24,
     gpu_utilization: 85,
     gpu_temperature: 65,
+    gpu_data_present: true,
     cpu_percent: 45,
     ram_used_gb: 16,
     ram_total_gb: 64,
     epochs_per_second: 2.5,
     batches_per_hour: 100,
+    throughput_present: true,
     host_params: 1000000
   }
   return Object.assign(defaults, overrides)

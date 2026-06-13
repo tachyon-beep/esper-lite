@@ -1181,17 +1181,28 @@ class SystemVitals:
     gpu_memory_total_gb: float = 0.0
     gpu_utilization: float = 0.0
     gpu_temperature: float = 0.0
+    # Group-presence flag: True once GPU stats have actually been sampled.
+    # GPU vitals arrive from system-stats polling, independently of PPO updates.
+    # While False the convenience fields above are unmeasured defaults (0.0) and
+    # the UI must render "pending"/unknown rather than a healthy/measured value.
+    gpu_data_present: bool = False
 
     # FIX: CPU was collected but never displayed in old TUI
-    cpu_percent: float | None = 0.0
+    # None = not measured yet (or collection failed); a real reading is a float.
+    cpu_percent: float | None = None
 
     # RAM
-    ram_used_gb: float | None = 0.0
-    ram_total_gb: float | None = 0.0
+    # None = not measured yet (or collection failed); a real reading is a float.
+    ram_used_gb: float | None = None
+    ram_total_gb: float | None = None
 
     # Throughput
     epochs_per_second: float = 0.0
     batches_per_hour: float = 0.0
+    # Group-presence flag: True once throughput has been computed from at least
+    # one completed batch. While False the throughput fields above are unmeasured
+    # defaults (0.0) and the UI must render "pending" rather than "0.0/s".
+    throughput_present: bool = False
 
     # Host network
     host_params: int = 0
