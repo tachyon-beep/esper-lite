@@ -249,7 +249,7 @@ def _extract_base_features_v3(
     # Current metrics (3 dims)
     # Normalize epoch to [0, 1] range using runtime max_epochs
     max_epochs_den = float(max_epochs)
-    epoch_norm = float(signal.metrics.epoch) / max_epochs_den
+    epoch_norm = min(float(signal.metrics.epoch), max_epochs_den) / max_epochs_den
     # Loss normalization: symlog to prevent LSTM saturation
     # Old: log(1+loss)/log(16) allowed loss=100 → 1.67 (exceeded 1.0)
     # New: symlog(loss)/7 keeps all values in ~[0, 1] range
@@ -739,7 +739,7 @@ def batch_obs_to_features(
         # Fill directly into pre-allocated tensor
 
         # Current metrics (3 dims: epoch, val_loss, val_accuracy)
-        epoch_norm = float(signal.metrics.epoch) / max_epochs_den
+        epoch_norm = min(float(signal.metrics.epoch), max_epochs_den) / max_epochs_den
         # Loss normalization: symlog to prevent LSTM saturation
         val_loss_norm = symlog(signal.metrics.val_loss) / _SYMLOG_NORM
         val_accuracy_norm = signal.metrics.val_accuracy / 100.0

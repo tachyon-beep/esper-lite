@@ -1111,6 +1111,62 @@ def test_extract_base_features_v3_includes_action_feedback_and_normalization():
     assert base[17:23].tolist() == expected_one_hot
 
 
+def test_extract_base_features_v3_clamps_epoch_norm_above_max():
+    """epoch_norm must clamp to 1.0 when epoch >= max_epochs.
+
+    Parity with sibling temporal features (alpha_steps_total, epochs_in_stage,
+    seed_age) which are all min(..., max_epochs_den)-clamped. At episode
+    boundaries epoch can reach/exceed max_epochs; unclamped epoch_norm would
+    exceed the documented [0, 1] contract.
+    """
+    from esper.leyline.slot_config import SlotConfig
+    from esper.tamiyo.policy.features import _extract_base_features_v3
+
+    slot_config = SlotConfig.default()
+    # epoch 150 exceeds max_epochs 100: unclamped epoch_norm would be 1.5
+    signal = _make_mock_training_signals(epoch=150, val_loss=1.5, val_accuracy=73.0)
+    env_state = _make_mock_parallel_env_state(last_action_success=False, last_action_op=4)
+
+    base = _extract_base_features_v3(
+        signal=signal,
+        env_state=env_state,
+        num_training=1,
+        num_blending=1,
+        num_holding=1,
+        slot_config=slot_config,
+        max_epochs=MAX_EPOCHS,
+    )
+
+    assert base[0].item() == pytest.approx(1.0)
+    assert 0.0 <= base[0].item() <= 1.0
+
+
+def test_batch_obs_to_features_clamps_epoch_norm_above_max():
+    """Live production path (batch_obs_to_features) clamps epoch_norm to [0, 1]."""
+    from esper.leyline.slot_config import SlotConfig
+    from esper.tamiyo.policy.features import batch_obs_to_features
+
+    slot_config = SlotConfig.default()
+    device = torch.device("cpu")
+    # epoch 150 > max_epochs 100: unclamped epoch_norm would be 1.5
+    batch_signals = [_make_mock_training_signals(epoch=150, val_loss=1.5, val_accuracy=73.0)]
+
+    report = _make_mock_seed_state_report("r0c0")
+
+    obs, _ = batch_obs_to_features(
+        batch_signals=batch_signals,
+        batch_slot_reports=[{"r0c0": report}],
+        batch_env_states=[_make_mock_parallel_env_state()],
+        slot_config=slot_config,
+        device=device,
+        max_epochs=MAX_EPOCHS,
+    )
+
+    # epoch_norm is base feature index 0 (first base dim)
+    assert obs[0, 0].item() == pytest.approx(1.0)
+    assert 0.0 <= obs[0, 0].item() <= 1.0
+
+
 def test_extract_slot_features_v3_defaults_when_telemetry_absent():
     """Missing per-seed telemetry must not look like healthy gradient evidence."""
     from esper.tamiyo.policy.features import _extract_slot_features_v3
