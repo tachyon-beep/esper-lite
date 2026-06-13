@@ -519,6 +519,98 @@ def _validate_logits(logits: torch.Tensor) -> None:
         )
 
 
+def _apply_floor_to_logits(
+    logits: torch.Tensor,
+    mask: torch.Tensor,
+    min_prob: float,
+) -> torch.Tensor:
+    """Floor-preserving renormalization of masked logits (single source of truth).
+
+    Both the rollout path (``FactoredRecurrentActorCritic.get_action``) and the update
+    path (``evaluate_actions`` / ``MaskedCategorical``) delegate here, so the floor
+    algorithm cannot drift between the two legs of the PPO importance ratio.
+
+    Operates UNCONDITIONALLY in float32 (HIGH-1): importance-sampling ratios and KL must
+    be computed in FP32 regardless of a BF16 call-site dtype. The caller's masked_fill is
+    expected to already be FP32 too (the FP32 seam), but we re-`.float()` defensively here
+    so the floor itself is never the source of a BF16 leak.
+
+    Algorithm (floor-preserving renormalization):
+    1. softmax probabilities from logits
+    2. cap floor at 1/num_valid * 0.99 (can't exceed uniform)
+    3. split valid actions into underweight (< floor) and overweight (>= floor)
+    4. set underweight to floor, scale overweight to fill remaining mass
+    5. convert back to logits via log(prob)
+    """
+    logits_f32 = logits.float()
+    probs = F.softmax(logits_f32, dim=-1)
+
+    # Cap floor at uniform distribution (can't exceed 1/num_valid)
+    num_valid = mask.sum(dim=-1, keepdim=True).float().clamp(min=1)
+    max_floor = 1.0 / num_valid
+    effective_floor = torch.minimum(
+        torch.tensor(min_prob, device=logits.device, dtype=torch.float32),
+        max_floor * 0.99,
+    )
+
+    valid_probs = probs * mask.float()
+    is_underweight = mask & (probs < effective_floor)
+    is_overweight = mask & (probs >= effective_floor)
+
+    num_underweight = is_underweight.sum(dim=-1, keepdim=True).float()
+    floor_mass_needed = num_underweight * effective_floor
+
+    overweight_probs = torch.where(is_overweight, valid_probs, torch.zeros_like(valid_probs))
+    overweight_total = overweight_probs.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+
+    remaining_mass = (1.0 - floor_mass_needed).clamp(min=1e-8)
+    scale = remaining_mass / overweight_total
+
+    floored_probs = torch.where(
+        is_underweight,
+        effective_floor.expand_as(probs),
+        torch.where(is_overweight, probs * scale, probs),
+    )
+
+    safe_probs = torch.where(
+        mask,
+        floored_probs.clamp(min=1e-8),
+        torch.ones_like(floored_probs),
+    )
+    new_logits = torch.log(safe_probs)
+    return torch.where(mask, new_logits, torch.full_like(new_logits, MASKED_LOGIT_VALUE))
+
+
+def _masked_log_prob(masked_logits: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
+    """FP32 log-prob of ``action`` under already-masked logits (the rollout/update seam).
+
+    Upcasts to FP32 before ``log_softmax`` so the stored ``old_log_probs`` (rollout) and
+    the differentiable ``log_probs`` (update) are produced by the SAME FP32 pathway -> an
+    unbiased importance ratio even when the backbone runs in BF16 (CRITICAL-1).
+    """
+    all_log_probs = F.log_softmax(masked_logits.float(), dim=-1)
+    return all_log_probs.gather(-1, action.unsqueeze(-1)).squeeze(-1)
+
+
+def _normalized_entropy_from_masked_logits(
+    masked_logits: torch.Tensor,
+    mask: torch.Tensor,
+) -> torch.Tensor:
+    """Normalized [0, 1] entropy over valid actions from already-masked logits (FP32).
+
+    Single valid action -> exactly 0 (no choice = no uncertainty).
+    """
+    logits_f32 = masked_logits.float()
+    probs = F.softmax(logits_f32, dim=-1)
+    log_probs_all = F.log_softmax(logits_f32, dim=-1)
+    raw_entropy = -(probs * log_probs_all * mask.float()).sum(dim=-1)
+    num_valid = mask.sum(dim=-1).clamp(min=1)
+    max_entropy = torch.log(num_valid.float())
+    safe_max_entropy = torch.where(num_valid > 1, max_entropy, torch.ones_like(max_entropy))
+    normalized = raw_entropy / safe_max_entropy.clamp(min=1e-8)
+    return torch.where(num_valid == 1, torch.zeros_like(normalized), normalized)
+
+
 class MaskedCategorical:
     """Categorical distribution with action masking and correct entropy calculation.
 
@@ -595,84 +687,13 @@ class MaskedCategorical:
         mask: torch.Tensor,
         min_prob: float,
     ) -> torch.Tensor:
-        """Apply probability floor to valid actions and renormalize.
+        """Apply the floor-preserving renormalization (delegates to the shared helper).
 
-        Ensures all valid actions have at least min_prob probability,
-        which guarantees gradient flow even when entropy would otherwise collapse.
-
-        The algorithm (floor-preserving renormalization):
-        1. Compute softmax probabilities from logits
-        2. Cap floor at 1/num_valid * 0.99 (can't exceed uniform distribution)
-        3. Identify "underweight" actions (below floor) and "overweight" actions (above floor)
-        4. Set underweight actions to floor, scale overweight actions to fill remaining mass
-        5. Convert back to logits via log(prob)
-
-        This preserves the floor constraint after renormalization, unlike naive
-        clamp-then-renormalize which can violate the floor.
-
-        Args:
-            logits: Masked logits [batch, num_actions] (already masked)
-            mask: Boolean mask [batch, num_actions], True = valid
-            min_prob: Minimum probability for valid actions
-
-        Returns:
-            New logits with probability floor applied [batch, num_actions]
+        The algorithm lives once, at module scope, in ``_apply_floor_to_logits`` so the
+        rollout and update legs can never drift apart. ``logits`` here is already FP32
+        (``__init__`` upcasts at the masked_fill seam).
         """
-        probs = F.softmax(logits, dim=-1)
-
-        # Cap floor at uniform distribution (can't exceed 1/num_valid)
-        num_valid = mask.sum(dim=-1, keepdim=True).float().clamp(min=1)
-        max_floor = 1.0 / num_valid
-        effective_floor = torch.minimum(
-            torch.tensor(min_prob, device=logits.device, dtype=logits.dtype),
-            max_floor * 0.99,
-        )
-
-        # Identify underweight (need boosting) vs overweight (can be scaled down)
-        # Only valid actions participate in floor logic
-        valid_probs = probs * mask.float()
-        is_underweight = mask & (probs < effective_floor)  # Below floor
-        is_overweight = mask & (probs >= effective_floor)  # At or above floor
-
-        # Count underweight actions and compute mass needed for flooring
-        num_underweight = is_underweight.sum(dim=-1, keepdim=True).float()
-        floor_mass_needed = num_underweight * effective_floor
-
-        # Mass available from overweight actions (above their floor allocation)
-        overweight_probs = torch.where(is_overweight, valid_probs, torch.zeros_like(valid_probs))
-        overweight_total = overweight_probs.sum(dim=-1, keepdim=True).clamp(min=1e-8)
-
-        # Remaining mass for overweight actions after floor allocation
-        remaining_mass = (1.0 - floor_mass_needed).clamp(min=1e-8)
-
-        # Scale factor for overweight actions to fit in remaining mass
-        scale = remaining_mass / overweight_total
-
-        # Build final probabilities:
-        # - Underweight: set to floor
-        # - Overweight: scale down proportionally
-        # - Masked: keep at original (will be masked out anyway)
-        floored_probs = torch.where(
-            is_underweight,
-            effective_floor.expand_as(probs),
-            torch.where(
-                is_overweight,
-                probs * scale,
-                probs,  # Masked actions keep original prob (irrelevant)
-            ),
-        )
-
-        # Convert back to logits
-        # Use safe_probs to avoid log(0) for masked actions
-        safe_probs = torch.where(
-            mask,
-            floored_probs.clamp(min=1e-8),
-            torch.ones_like(floored_probs),
-        )
-        new_logits = torch.log(safe_probs)
-        new_logits = torch.where(mask, new_logits, torch.full_like(new_logits, MASKED_LOGIT_VALUE))
-
-        return new_logits
+        return _apply_floor_to_logits(logits, mask, min_prob)
 
     @property
     def probs(self) -> torch.Tensor:
@@ -709,14 +730,6 @@ class MaskedCategorical:
 
             The Esper default of entropy_coef=0.05 is appropriate for normalized entropy.
         """
-        probs = self._dist.probs
-        log_probs = self._dist.logits - self._dist.logits.logsumexp(dim=-1, keepdim=True)
-        raw_entropy = -(probs * log_probs * self.mask).sum(dim=-1)
-        num_valid = self.mask.sum(dim=-1).clamp(min=1)
-        max_entropy = torch.log(num_valid.float())
-        # Guard division to prevent FP16 overflow when num_valid == 1 (max_entropy = 0)
-        # Use 1.0 as safe divisor for single-action case; result is discarded by where().
-        safe_max_entropy = torch.where(num_valid > 1, max_entropy, torch.ones_like(max_entropy))
-        normalized = raw_entropy / safe_max_entropy.clamp(min=1e-8)
-        # Single valid action = zero entropy (no choice = no uncertainty)
-        return torch.where(num_valid == 1, torch.zeros_like(normalized), normalized)
+        # Single source of truth: same FP32 normalized-entropy math the rollout/update
+        # legs use. self.masked_logits is the post-floor masked logits (FP32).
+        return _normalized_entropy_from_masked_logits(self.masked_logits, self.mask)

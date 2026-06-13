@@ -48,6 +48,9 @@ from esper.leyline.slot_config import SlotConfig
 from esper.tamiyo.policy.action_masks import (
     InvalidStateMachineError,
     MaskedCategorical,
+    _apply_floor_to_logits,
+    _masked_log_prob,
+    _normalized_entropy_from_masked_logits,
     _validate_action_mask,
     _validate_logits,
 )
@@ -727,6 +730,17 @@ class FactoredRecurrentActorCritic(nn.Module):
         # multinomial avoids this overhead while maintaining correctness.
         # Note: op_logits is already masked (see above), so we can
         # compute softmax directly without re-masking.
+        #
+        # TODO: [FUTURE FUNCTIONALITY] sampler/scorer asymmetry for the op head — the op
+        # action is SAMPLED here from the unfloored op_probs in the call-site dtype, but
+        # get_action SCORES its stored old_log_prob against the FP32 + probability-floored
+        # op distribution. The PPO importance ratio stays UNBIASED (old and new log_prob
+        # both score the floored FP32 distribution), so this is not a ratio bug; it only
+        # means the rollout is mildly off-policy w.r.t. its own stored behavior log-prob
+        # when an "op" floor is configured. Closing it (apply the floor + FP32 here before
+        # sampling) changes the value-conditioned forward graph and needs its own parity
+        # gate/review — tracked separately. See tests/.../test_masked_logit_seam_parity.py
+        # (stochastic-op ratio symmetry is still pinned).
         op_probs = F.softmax(op_logits, dim=-1)  # [batch, seq_len, num_ops]
         op_probs_flat = op_probs.reshape(-1, self.num_ops)  # [batch*seq_len, num_ops]
         sampled_op_flat = torch.multinomial(op_probs_flat, num_samples=1).squeeze(-1)
@@ -888,96 +902,6 @@ class FactoredRecurrentActorCritic(nn.Module):
                 "op": output["op_logits"][:, 0, :],
             }
 
-            def _apply_floor_to_logits(
-                logits: torch.Tensor,
-                mask: torch.Tensor,
-                min_prob: float,
-            ) -> torch.Tensor:
-                """Apply probability floor to logits (fast path version).
-
-                MUST match MaskedCategorical._apply_probability_floor exactly to ensure
-                importance sampling ratios are correct. Uses underweight/overweight
-                algorithm, NOT clamp-then-renormalize (which violates floor guarantee).
-
-                Algorithm (floor-preserving renormalization):
-                1. Compute softmax probabilities from logits
-                2. Cap floor at 1/num_valid * 0.99 (can't exceed uniform distribution)
-                3. Identify "underweight" actions (below floor) and "overweight" actions
-                4. Set underweight actions to floor, scale overweight to fill remaining mass
-                5. Convert back to logits via log(prob)
-                """
-                probs = F.softmax(logits, dim=-1)
-
-                # Cap floor at uniform distribution (can't exceed 1/num_valid)
-                num_valid = mask.sum(dim=-1, keepdim=True).float().clamp(min=1)
-                max_floor = 1.0 / num_valid
-                effective_floor = torch.minimum(
-                    torch.tensor(min_prob, device=logits.device, dtype=logits.dtype),
-                    max_floor * 0.99,
-                )
-
-                # Identify underweight (need boosting) vs overweight (can be scaled down)
-                # Only valid actions participate in floor logic
-                valid_probs = probs * mask.float()
-                is_underweight = mask & (probs < effective_floor)  # Below floor
-                is_overweight = mask & (probs >= effective_floor)  # At or above floor
-
-                # Count underweight actions and compute mass needed for flooring
-                num_underweight = is_underweight.sum(dim=-1, keepdim=True).float()
-                floor_mass_needed = num_underweight * effective_floor
-
-                # Mass available from overweight actions (above their floor allocation)
-                overweight_probs = torch.where(is_overweight, valid_probs, torch.zeros_like(valid_probs))
-                overweight_total = overweight_probs.sum(dim=-1, keepdim=True).clamp(min=1e-8)
-
-                # Remaining mass for overweight actions after floor allocation
-                remaining_mass = (1.0 - floor_mass_needed).clamp(min=1e-8)
-
-                # Scale factor for overweight actions to fit in remaining mass
-                scale = remaining_mass / overweight_total
-
-                # Build final probabilities:
-                # - Underweight: set to floor
-                # - Overweight: scale down proportionally
-                # - Masked: keep at original (will be masked out anyway)
-                floored_probs = torch.where(
-                    is_underweight,
-                    effective_floor.expand_as(probs),
-                    torch.where(
-                        is_overweight,
-                        probs * scale,
-                        probs,  # Masked actions keep original prob (irrelevant)
-                    ),
-                )
-
-                # Convert back to logits
-                # Use safe_probs to avoid log(0) for masked actions
-                safe_probs = torch.where(
-                    mask,
-                    floored_probs.clamp(min=1e-8),
-                    torch.ones_like(floored_probs),
-                )
-                new_logits = torch.log(safe_probs)
-                return torch.where(mask, new_logits, torch.full_like(new_logits, MASKED_LOGIT_VALUE))
-
-            def _normalized_entropy_from_masked_logits(
-                masked_logits: torch.Tensor,
-                mask: torch.Tensor,
-            ) -> torch.Tensor:
-                logits_f32 = masked_logits.float()
-                probs = F.softmax(logits_f32, dim=-1)
-                log_probs_all = F.log_softmax(logits_f32, dim=-1)
-                raw_entropy = -(probs * log_probs_all * mask.float()).sum(dim=-1)
-                num_valid = mask.sum(dim=-1).clamp(min=1)
-                max_entropy = torch.log(num_valid.float())
-                safe_max_entropy = torch.where(
-                    num_valid > 1,
-                    max_entropy,
-                    torch.ones_like(max_entropy),
-                )
-                normalized = raw_entropy / safe_max_entropy.clamp(min=1e-8)
-                return torch.where(num_valid == 1, torch.zeros_like(normalized), normalized)
-
             def _sample_head(
                 key: str,
                 *,
@@ -1001,8 +925,10 @@ class FactoredRecurrentActorCritic(nn.Module):
                     _validate_action_mask(mask)
                     _validate_logits(logits)
 
-                # Apply mask directly (same as MaskedCategorical)
-                masked_logits = logits.masked_fill(~mask, MASKED_LOGIT_VALUE)
+                # FP32 seam (CRITICAL-1): upcast BEFORE masking/softmax so the stored
+                # old_log_probs share the SAME FP32 pathway as evaluate_actions, even when
+                # the backbone runs BF16 under autocast. Mirrors MaskedCategorical.__init__.
+                masked_logits = logits.float().masked_fill(~mask, MASKED_LOGIT_VALUE)
 
                 # Apply probability floor if specified (guarantees gradient flow for sparse heads)
                 min_prob = probability_floor.get(key) if probability_floor else None
@@ -1021,12 +947,8 @@ class FactoredRecurrentActorCritic(nn.Module):
                     probs = F.softmax(masked_logits, dim=-1)
                     action = torch.multinomial(probs, num_samples=1).squeeze(-1)
 
-                # Compute log_prob directly: log_softmax(logits)[action]
-                all_log_probs = F.log_softmax(masked_logits, dim=-1)
-                log_prob = all_log_probs.gather(-1, action.unsqueeze(-1)).squeeze(-1)
-
                 actions[key] = action
-                log_probs[key] = log_prob
+                log_probs[key] = _masked_log_prob(masked_logits, action)
 
             # === OP HEAD: CRITICAL FIX - Must use same op for value and action ===
             # Bug: Previously _sample_head("op") sampled independently from forward(),
@@ -1050,8 +972,9 @@ class FactoredRecurrentActorCritic(nn.Module):
                 _validate_action_mask(op_mask)
                 _validate_logits(op_logits)
 
-            # Compute masked logits directly (same as MaskedCategorical)
-            op_masked_logits = op_logits.masked_fill(~op_mask, MASKED_LOGIT_VALUE)
+            # FP32 seam (CRITICAL-1): upcast before masking so op old_log_probs match
+            # the FP32 evaluate_actions pathway under BF16 autocast.
+            op_masked_logits = op_logits.float().masked_fill(~op_mask, MASKED_LOGIT_VALUE)
 
             # Apply probability floor for op head if specified
             op_min_prob = probability_floor.get("op") if probability_floor else None
@@ -1080,10 +1003,8 @@ class FactoredRecurrentActorCritic(nn.Module):
                 value = output["value"][:, 0]  # Already Q(s, sampled_op)
 
             actions["op"] = selected_op
-            # Compute log_prob directly without creating Categorical (avoids 2 GPU syncs)
-            # log_prob = log_softmax(logits)[action]
-            op_log_probs = F.log_softmax(op_masked_logits, dim=-1)
-            log_probs["op"] = op_log_probs.gather(-1, selected_op.unsqueeze(-1)).squeeze(-1)
+            # FP32 log_prob via the shared seam (no Categorical -> no GPU syncs).
+            log_probs["op"] = _masked_log_prob(op_masked_logits, selected_op)
             sampled_op = selected_op  # For return value consistency
 
             # Style mask override based on selected_op (not from independent sample)
@@ -1423,9 +1344,20 @@ class FactoredRecurrentActorCritic(nn.Module):
 
             # Get per-head probability floor (guarantees gradient flow for sparse heads)
             min_prob = probability_floor.get(key) if probability_floor else None
-            dist = MaskedCategorical(logits=logits_flat, mask=mask_flat, min_prob=min_prob)
-            log_probs[key] = dist.log_prob(action_flat).reshape(batch, seq)
-            entropy[key] = dist.entropy().reshape(batch, seq)
+            # Sync-free update leg via the SAME shared helpers as the rollout leg
+            # (P1-EVAL). FP32 seam at the masked_fill; floor/log_prob/entropy all FP32 so
+            # the joint ratio and KL are precision-symmetric with old_log_probs.
+            masked_logits = logits_flat.float().masked_fill(~mask_flat, MASKED_LOGIT_VALUE)
+            if min_prob is not None and min_prob > 0:
+                masked_logits = _apply_floor_to_logits(masked_logits, mask_flat, min_prob)
+            log_probs[key] = _masked_log_prob(masked_logits, action_flat).reshape(batch, seq)
+            entropy[key] = _normalized_entropy_from_masked_logits(masked_logits, mask_flat).reshape(batch, seq)
+            # Validation moved off the hot tensor ops; honors MaskedCategorical.validate
+            # so dev/eval still fails loud on empty masks / nonfinite logits (P1-VALID
+            # keeps a separate sync-free empty-mask guard in the training process).
+            if MaskedCategorical.validate:
+                _validate_action_mask(mask_flat)
+                _validate_logits(logits_flat)
 
         return log_probs, value, entropy, new_hidden, pred_contributions
 
