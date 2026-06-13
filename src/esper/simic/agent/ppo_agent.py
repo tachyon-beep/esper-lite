@@ -270,6 +270,31 @@ class PPOAgent:
                     UserWarning,
                     stacklevel=2,
                 )
+        # BPTT INVARIANT (recurrent-PPO correctness):
+        # The PPO update unrolls each buffer row as ONE contiguous LSTM sequence
+        # of length chunk_length, starting from the rollout's timestep-0 hidden
+        # state, and does NOT reset hidden state at done boundaries inside the
+        # sequence (see update() -> evaluate_actions). Rollout collection, by
+        # contrast, zeroes hidden state across episode boundaries. Episodes
+        # terminate only at done == (epoch == max_epochs), and chunk_length is
+        # pinned to max_epochs == episode_length. If a single buffer row could
+        # hold more than one episode (max_steps_per_env > chunk_length), the
+        # recurrent gradient would leak hidden state across the done boundary in
+        # evaluate_actions but not in rollout, producing a SILENT recurrent-
+        # gradient bias. Guard the invariant loudly at construction time.
+        if max_steps_per_env > chunk_length:
+            raise ValueError(
+                "BPTT INVARIANT VIOLATED: max_steps_per_env "
+                f"({max_steps_per_env}) > chunk_length ({chunk_length}). "
+                "chunk_length == episode_length == max_epochs is the LSTM "
+                "sequence length the PPO update unrolls per buffer row. A row "
+                "longer than chunk_length would pack multiple episodes into one "
+                "BPTT sequence; evaluate_actions does not reset hidden state at "
+                "done boundaries, so recurrent gradients would leak across "
+                "episode boundaries (present in evaluate_actions but absent in "
+                "rollout collection) -> silent recurrent-gradient bias. Require "
+                "max_steps_per_env <= chunk_length."
+            )
         self.buffer = TamiyoRolloutBuffer(
             num_envs=num_envs,
             max_steps_per_env=max_steps_per_env,

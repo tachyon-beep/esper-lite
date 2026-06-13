@@ -1,5 +1,6 @@
 """Tests for PPO module."""
 import math
+import pytest
 import torch
 
 from esper.leyline import (
@@ -977,3 +978,57 @@ def test_ppo_update_collects_q_values():
     expected_spread = (valid_q_tensor.max() - valid_q_tensor.min()).item()
     assert math.isclose(metrics["q_variance"], expected_variance, rel_tol=1e-6, abs_tol=1e-6)
     assert math.isclose(metrics["q_spread"], expected_spread, rel_tol=1e-6, abs_tol=1e-6)
+
+
+def test_bptt_invariant_assertion_fires():
+    """PPOAgent must reject max_steps_per_env > chunk_length (BPTT invariant guard).
+
+    Regression for esper-lite-415bf1347d: a buffer row longer than chunk_length would
+    pack multiple episodes into one BPTT sequence; evaluate_actions does not reset
+    hidden state at done boundaries, so recurrent gradients would leak across episode
+    boundaries (present in the update leg but absent in rollout) -> silent gradient bias.
+    The guard converts that latent trap into a loud construction-time failure.
+    """
+    slot_config = SlotConfig.default()
+    policy = create_policy(
+        policy_type="lstm",
+        slot_config=slot_config,
+        device="cpu",
+        compile_mode="off",
+    )
+
+    with pytest.raises(ValueError, match="BPTT INVARIANT VIOLATED"):
+        PPOAgent(
+            policy=policy,
+            slot_config=slot_config,
+            num_envs=2,
+            chunk_length=5,
+            max_steps_per_env=6,  # > chunk_length: one row could hold >1 episode
+            device="cpu",
+        )
+
+
+def test_bptt_invariant_allows_equal_boundary():
+    """max_steps_per_env == chunk_length is valid (exactly one episode per row).
+
+    Confirms the guard is '>' not '>=': the boundary-equal config (the production
+    invariant max_steps_per_env == chunk_length == max_epochs) must construct cleanly.
+    """
+    slot_config = SlotConfig.default()
+    policy = create_policy(
+        policy_type="lstm",
+        slot_config=slot_config,
+        device="cpu",
+        compile_mode="off",
+    )
+
+    agent = PPOAgent(
+        policy=policy,
+        slot_config=slot_config,
+        num_envs=2,
+        chunk_length=5,
+        max_steps_per_env=5,  # equal: exactly one episode per row
+        device="cpu",
+    )
+    assert agent.max_steps_per_env == 5
+    assert agent.chunk_length == 5
