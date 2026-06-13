@@ -438,6 +438,22 @@ def compute_contribution_reward(
     if seed_contribution is not None and seed_info is not None:
         total_imp = seed_info.total_improvement
 
+        # Anti-gaming + ransomware gates must key on the CLEAN counterfactual
+        # (val_acc - all_disabled_acc = total seed-attributable improvement), NOT the
+        # host-drift-confounded total_improvement. In a still-learning host
+        # total_improvement is inflated by host drift (diluting the ratio check, letting
+        # gaming through); in a plateaued/declining host it goes <= 0 and a genuinely
+        # valuable seed is penalised for behaviour it did not cause. Providing
+        # seed_contribution without its counterfactual is a contract violation
+        # (production always supplies it via SeedInfo.from_seed_state from the trainer's
+        # all-disabled ablation); fail loudly rather than silently gate on host drift.
+        if seed_info.counterfactual_total_improvement is None:
+            raise ValueError(
+                "seed_contribution provided without counterfactual_total_improvement; "
+                "the anti-gaming/fossilization gates require the clean counterfactual signal"
+            )
+        counterfactual_imp = seed_info.counterfactual_total_improvement
+
         if not escrow_mode:
             if total_imp < 0:
                 exp_arg = min(-config.attribution_sigmoid_steepness * total_imp, 700.0)
@@ -445,23 +461,23 @@ def compute_contribution_reward(
 
         if seed_contribution > 1.0 and attribution_discount >= 0.5 and not config.disable_anti_gaming:
             safe_threshold = max(config.improvement_safe_threshold, 1e-8)
-            if total_imp > safe_threshold:
-                ratio = seed_contribution / total_imp
+            if counterfactual_imp > safe_threshold:
+                ratio = seed_contribution / counterfactual_imp
                 if ratio > config.hacking_ratio_threshold:
                     ratio_penalty = -min(
                         -config.prune_good_seed_penalty,
                         0.1 * (ratio - config.hacking_ratio_threshold) / config.hacking_ratio_threshold,
                     )
-            elif total_imp <= config.improvement_safe_threshold:
+            elif counterfactual_imp <= config.improvement_safe_threshold:
                 ratio_penalty = config.prune_good_seed_penalty * min(1.0, seed_contribution / 10.0)
 
         if slot_id is not None and seed_id is not None:
             hub = get_hub()
-            if total_imp > 0 and ratio_penalty != 0:
+            if counterfactual_imp > 0 and ratio_penalty != 0:
                 _check_reward_hacking(
                     hub,
                     seed_contribution=seed_contribution,
-                    total_improvement=total_imp,
+                    total_improvement=counterfactual_imp,
                     hacking_ratio_threshold=config.hacking_ratio_threshold,
                     slot_id=slot_id,
                     seed_id=seed_id,
@@ -469,7 +485,7 @@ def compute_contribution_reward(
             _check_ransomware_signature(
                 hub,
                 seed_contribution=seed_contribution,
-                total_improvement=total_imp,
+                total_improvement=counterfactual_imp,
                 slot_id=slot_id,
                 seed_id=seed_id,
             )
@@ -743,13 +759,18 @@ def compute_contribution_reward(
         #
         # Guards (must match _contribution_fossilize_shaping for consistency):
         # 1. seed_info exists and is in HOLDING stage (valid fossilize)
-        # 2. seed hasn't made accuracy worse (total_improvement >= 0)
+        # 2. the seed's CLEAN COUNTERFACTUAL contribution hasn't made accuracy worse
+        #    (counterfactual_total_improvement >= 0), NOT host-drift total_improvement:
+        #    a plateaued/declining host must not block a genuinely valuable seed from
+        #    fossilizing for behaviour it did not cause. None (no counterfactual measured)
+        #    => not legitimate (no causal proof of non-harm).
         # 3. seed meets contribution threshold
         # 4. terminal rewards are enabled
         is_valid_fossilize = (
             seed_info is not None
             and seed_info.stage == STAGE_HOLDING
-            and seed_info.total_improvement >= 0
+            and seed_info.counterfactual_total_improvement is not None
+            and seed_info.counterfactual_total_improvement >= 0
         )
         if (
             is_valid_fossilize
@@ -999,7 +1020,11 @@ def compute_basic_reward(
     if action == LifecycleOp.FOSSILIZE and seed_info is not None:
         is_valid = seed_info.stage == STAGE_HOLDING
         if is_valid:
-            improvement = seed_info.total_improvement
+            # Gate on the clean counterfactual, not host-drift total_improvement.
+            # None (no counterfactual measured) => no causal proof of benefit => 0.0,
+            # which routes to the non-contributing penalty branch below.
+            counterfactual_imp = seed_info.counterfactual_total_improvement
+            improvement = counterfactual_imp if counterfactual_imp is not None else 0.0
             meets_threshold = (
                 seed_contribution is not None
                 and seed_contribution >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION

@@ -475,6 +475,7 @@ def execute_actions(
     op_probs_cpu: np.ndarray | None,
     masked_np: np.ndarray | None,
     baseline_accs: list[dict[str, Any]],
+    all_disabled_accs: dict[int, float],
     governor_panic_envs: list[int],
     env_rollback_occurred: list[bool],
     reward_summary_accum: list[RewardSummaryAccumulator],
@@ -805,7 +806,21 @@ def execute_actions(
             if slot_is_enabled
             else 0
         )
-        seed_info = SeedInfo.from_seed_state(seed_state, seed_params_for_slot)
+        # Clean counterfactual for the anti-gaming / fossilization gates: the total
+        # seed-attributable improvement = val_acc(all seeds on) - val_acc(all seeds off).
+        # Fall back to the host-only baseline (min over the per-slot leave-one-out accs)
+        # when the all-disabled ablation wasn't measured for this env.
+        env_all_off_acc = all_disabled_accs.get(env_idx)
+        if env_all_off_acc is None and baseline_accs[env_idx]:
+            env_all_off_acc = min(baseline_accs[env_idx].values())
+        counterfactual_total_improvement = (
+            env_state.val_acc - env_all_off_acc if env_all_off_acc is not None else None
+        )
+        seed_info = SeedInfo.from_seed_state(
+            seed_state,
+            seed_params_for_slot,
+            counterfactual_total_improvement=counterfactual_total_improvement,
+        )
 
         # Initialize reward_components to None (only populated for CONTRIBUTION family)
         reward_components: RewardComponentsTelemetry | None = None

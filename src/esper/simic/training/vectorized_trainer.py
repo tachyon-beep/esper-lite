@@ -1662,6 +1662,7 @@ class VectorizedPPOTrainer:
                         op_probs_cpu=op_probs_cpu,
                         masked_np=masked_np,
                         baseline_accs=baseline_accs,
+                        all_disabled_accs=all_disabled_accs,
                         governor_panic_envs=governor_panic_envs,
                         env_rollback_occurred=env_rollback_occurred,
                         reward_summary_accum=reward_summary_accum,

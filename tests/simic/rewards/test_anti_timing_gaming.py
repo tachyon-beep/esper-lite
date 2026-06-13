@@ -60,6 +60,7 @@ class TestAntiTimingGamingIntegration:
             seed_age_epochs=98,  # epoch 100 - 98 = germinated at epoch 2
             interaction_sum=0.0,
             boost_received=0.0,
+            counterfactual_total_improvement=5.0,
         )
 
         # Gaming scenario: seed claims 30% contribution but host only improved 5%
@@ -193,6 +194,7 @@ class TestAntiTimingGamingIntegration:
             seed_age_epochs=50,  # germinated at epoch 50 (after warmup)
             interaction_sum=0.0,
             boost_received=0.0,
+            counterfactual_total_improvement=8.0,
         )
 
         # Legitimate scenario: contribution >= progress, both values close
@@ -242,6 +244,7 @@ class TestAntiTimingGamingIntegration:
             seed_age_epochs=50,  # After warmup, so timing_discount = 1.0
             interaction_sum=0.0,
             boost_received=0.0,
+            counterfactual_total_improvement=10.0,
         )
 
         # contribution (3) < progress (10), so capped at contribution
@@ -293,6 +296,7 @@ class TestAntiTimingGamingIntegration:
                 seed_age_epochs=100 - germ_epoch,  # Compute age from current epoch
                 interaction_sum=0.0,
                 boost_received=0.0,
+                counterfactual_total_improvement=5.0,
             )
 
             # Use contribution > progress to ensure formula applies

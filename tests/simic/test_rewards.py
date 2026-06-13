@@ -163,6 +163,7 @@ class TestPruneContributionShaping:
             seed_params=1000,
             previous_stage=STAGE_GERMINATED,
             seed_age_epochs=age,
+            counterfactual_total_improvement=improvement,
         )
 
     def test_prune_toxic_seed_rewarded(self):
@@ -273,6 +274,7 @@ class TestWaitBlendingShaping:
             seed_params=0,
             previous_stage=STAGE_TRAINING,
             seed_age_epochs=epochs,
+            counterfactual_total_improvement=improvement,
         )
 
     def test_wait_at_blending_with_positive_contribution(self):
@@ -366,6 +368,7 @@ class TestContributionRewardComponents:
             seed_params=1000,
             previous_stage=SeedStage.GERMINATED.value,
             seed_age_epochs=5,
+            counterfactual_total_improvement=1.0,
         )
 
         result = compute_contribution_reward(
@@ -400,6 +403,7 @@ class TestContributionRewardComponents:
             seed_params=5000,
             previous_stage=SeedStage.TRAINING.value,
             seed_age_epochs=8,
+            counterfactual_total_improvement=3.0,
         )
 
         reward, components = compute_contribution_reward(
@@ -441,6 +445,7 @@ class TestContributionRewardComponents:
             seed_params=5000,
             previous_stage=STAGE_TRAINING,
             seed_age_epochs=5,
+            counterfactual_total_improvement=1.5,
         )
         config = ContributionRewardConfig(alpha_shock_coef=1.0)
         reward, components = compute_contribution_reward(
@@ -502,6 +507,7 @@ class TestContributionRewardComponents:
             seed_params=1000,
             previous_stage=SeedStage.GERMINATED.value,
             seed_age_epochs=10,
+            counterfactual_total_improvement=-1.0,
         )
 
         reward, components = compute_contribution_reward(
@@ -530,6 +536,7 @@ class TestContributionRewardComponents:
             seed_params=5000,
             previous_stage=SeedStage.TRAINING.value,
             seed_age_epochs=10,
+            counterfactual_total_improvement=2.0,
         )
 
         reward, components = compute_contribution_reward(
@@ -709,6 +716,7 @@ class TestRansomwareSeedDetection:
                 total_improvement=-0.3,  # Negative trajectory
                 epochs_in_stage=epochs_in_stage,
                 seed_age_epochs=10 + epochs_in_stage,
+                counterfactual_total_improvement=-0.3,
             )
             _, components = compute_contribution_reward(
                 action=LifecycleOp.WAIT,
@@ -741,6 +749,7 @@ class TestRansomwareSeedDetection:
             total_improvement=2.0,  # Positive trajectory
             epochs_in_stage=5,
             seed_age_epochs=15,
+            counterfactual_total_improvement=2.0,
         )
 
         _, components = compute_contribution_reward(
@@ -765,6 +774,7 @@ class TestRansomwareSeedDetection:
                 total_improvement=total_improvement,
                 epochs_in_stage=5,
                 seed_age_epochs=15,
+                counterfactual_total_improvement=total_improvement,
             )
             _, components = compute_contribution_reward(
                 action=LifecycleOp.WAIT,
@@ -801,6 +811,7 @@ class TestRansomwareSeedDetection:
                 total_improvement=total_improvement,
                 epochs_in_stage=5,
                 seed_age_epochs=15,
+                counterfactual_total_improvement=total_improvement,
             )
             _, components = compute_contribution_reward(
                 action=LifecycleOp.WAIT,
@@ -844,6 +855,7 @@ class TestRansomwareSeedDetection:
             total_improvement=8.0,
             epochs_in_stage=10,
             seed_age_epochs=30,
+            counterfactual_total_improvement=8.0,
         )
 
         _, components = compute_contribution_reward(
@@ -876,6 +888,7 @@ class TestRansomwareSeedDetection:
             total_improvement=-0.02,  # Negative!
             epochs_in_stage=3,
             seed_age_epochs=15,
+            counterfactual_total_improvement=-0.02,
         )
 
         reward, components = compute_contribution_reward(
@@ -908,6 +921,7 @@ class TestHoldingIndecisionPenalty:
             total_improvement=2.0,
             epochs_in_stage=1,  # First epoch - grace period
             seed_age_epochs=10,
+            counterfactual_total_improvement=2.0,
         )
 
         _, components = compute_contribution_reward(
@@ -936,6 +950,7 @@ class TestHoldingIndecisionPenalty:
             total_improvement=2.0,
             epochs_in_stage=2,  # Second epoch
             seed_age_epochs=11,
+            counterfactual_total_improvement=2.0,
         )
 
         _, components = compute_contribution_reward(
@@ -968,6 +983,7 @@ class TestHoldingIndecisionPenalty:
                 total_improvement=2.0,
                 epochs_in_stage=epochs_in_stage,
                 seed_age_epochs=10 + epochs_in_stage,
+                counterfactual_total_improvement=2.0,
             )
             _, components = compute_contribution_reward(
                 action=LifecycleOp.WAIT,
@@ -1000,6 +1016,7 @@ class TestHoldingIndecisionPenalty:
             total_improvement=2.0,
             epochs_in_stage=5,  # Would have penalty if WAIT
             seed_age_epochs=15,
+            counterfactual_total_improvement=2.0,
         )
 
         _, components = compute_contribution_reward(
@@ -1134,6 +1151,7 @@ class TestRatioPenalty:
             total_improvement=-0.5,
             epochs_in_stage=3,
             seed_age_epochs=8,
+            counterfactual_total_improvement=-0.5,
         )
 
         _, components = compute_contribution_reward(
@@ -1166,6 +1184,7 @@ class TestRatioPenalty:
             total_improvement=-2.0,
             epochs_in_stage=5,
             seed_age_epochs=10,
+            counterfactual_total_improvement=-2.0,
         )
 
         _, components = compute_contribution_reward(
@@ -1199,6 +1218,7 @@ class TestRatioPenalty:
             total_improvement=0.05,  # Very low (below 0.1 threshold)
             epochs_in_stage=4,
             seed_age_epochs=9,
+            counterfactual_total_improvement=0.05,
         )
 
         _, components = compute_contribution_reward(
@@ -1235,6 +1255,7 @@ class TestRatioPenalty:
                 total_improvement=0.05,  # Low positive, not negative
                 epochs_in_stage=3,
                 seed_age_epochs=8,
+                counterfactual_total_improvement=0.05,
             )
             _, components = compute_contribution_reward(
                 action=LifecycleOp.WAIT,
@@ -1270,6 +1291,7 @@ class TestRatioPenalty:
             total_improvement=3.0,
             epochs_in_stage=5,
             seed_age_epochs=10,
+            counterfactual_total_improvement=3.0,
         )
 
         _, components = compute_contribution_reward(
@@ -1296,6 +1318,7 @@ class TestRatioPenalty:
             total_improvement=1.0,
             epochs_in_stage=4,
             seed_age_epochs=9,
+            counterfactual_total_improvement=1.0,
         )
 
         _, components = compute_contribution_reward(
@@ -1337,6 +1360,7 @@ class TestPenaltyAntiStacking:
             total_improvement=-2.0,  # Negative = ransomware
             epochs_in_stage=3,  # Would normally trigger PROB penalty
             seed_age_epochs=12,
+            counterfactual_total_improvement=-2.0,
         )
 
         _, components = compute_contribution_reward(
@@ -1379,6 +1403,7 @@ class TestPenaltyAntiStacking:
             total_improvement=5.0,  # Positive trajectory
             epochs_in_stage=3,  # Should trigger PROB penalty
             seed_age_epochs=12,
+            counterfactual_total_improvement=5.0,
         )
 
         _, components = compute_contribution_reward(
@@ -1672,6 +1697,7 @@ class TestFossilizeTerminalBonus:
             seed_age_epochs=10,
             interaction_sum=0.0,
             boost_received=0.0,
+            counterfactual_total_improvement=1.0,
         )
 
         config = ContributionRewardConfig()
@@ -1708,6 +1734,7 @@ class TestFossilizeTerminalBonus:
             seed_age_epochs=10,
             interaction_sum=0.0,
             boost_received=0.0,
+            counterfactual_total_improvement=1.0,
         )
 
         _, components_no_leg = compute_contribution_reward(

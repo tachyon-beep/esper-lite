@@ -120,6 +120,7 @@ def test_combined_fixes_reduce_gaming_incentive(inputs):
         seed_age_epochs=inputs["seed_age"],
         interaction_sum=0.0,
         boost_received=0.0,
+        counterfactual_total_improvement=5.0,
     )
 
     # Progress >> contribution scenario (gaming)

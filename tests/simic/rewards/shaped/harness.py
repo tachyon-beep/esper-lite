@@ -96,8 +96,15 @@ def seed_info(
     seed_params: int = 0,
     interaction_sum: float = 0.0,
     boost_received: float = 0.0,
+    counterfactual_total_improvement: float | None = None,
 ) -> SeedInfo:
-    """Convenience constructor with safe defaults for shaped tests."""
+    """Convenience constructor with safe defaults for shaped tests.
+
+    In these isolated unit tests there is no host-drift simulation, so the clean
+    counterfactual the anti-gaming/fossilization gates should see is the same
+    value as ``total_improvement``. By default it mirrors ``total_improvement``;
+    a test may override it explicitly.
+    """
     return SeedInfo(
         stage=stage.value,
         improvement_since_stage_start=improvement_since_stage_start,
@@ -109,6 +116,11 @@ def seed_info(
         seed_age_epochs=seed_age_epochs,
         interaction_sum=interaction_sum,
         boost_received=boost_received,
+        counterfactual_total_improvement=(
+            counterfactual_total_improvement
+            if counterfactual_total_improvement is not None
+            else total_improvement
+        ),
     )
 
 

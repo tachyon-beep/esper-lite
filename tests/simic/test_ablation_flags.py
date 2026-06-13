@@ -93,6 +93,7 @@ def _make_seed_info(stage: int = SeedStage.BLENDING.value) -> SeedInfo:
         previous_stage=SeedStage.TRAINING.value,
         previous_epochs_in_stage=2,
         seed_age_epochs=5,
+        counterfactual_total_improvement=1.0,
     )
 
 
@@ -186,6 +187,7 @@ def test_disable_anti_gaming_zeroes_ratio_penalty():
         previous_stage=SeedStage.TRAINING.value,
         previous_epochs_in_stage=2,
         seed_age_epochs=5,
+        counterfactual_total_improvement=0.05,
     )
 
     # With anti-gaming enabled (high contribution, low improvement -> ratio penalty)
@@ -271,6 +273,7 @@ def test_all_ablation_flags_combined():
         previous_stage=SeedStage.TRAINING.value,
         previous_epochs_in_stage=2,
         seed_age_epochs=5,
+        counterfactual_total_improvement=0.05,
     )
 
     config = ContributionRewardConfig(

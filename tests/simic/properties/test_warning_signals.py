@@ -39,6 +39,7 @@ class TestBlendingWarning:
             previous_stage=SeedStage.TRAINING.value,
             previous_epochs_in_stage=3,
             seed_age_epochs=epochs_in_stage + 5,
+            counterfactual_total_improvement=total_improvement,
         )
 
         _, components = compute_contribution_reward(
@@ -73,6 +74,7 @@ class TestBlendingWarning:
                 previous_stage=SeedStage.TRAINING.value,
                 previous_epochs_in_stage=3,
                 seed_age_epochs=epochs + 5,
+                counterfactual_total_improvement=-1.0,
             )
 
             _, components = compute_contribution_reward(
@@ -117,6 +119,7 @@ class TestHoldingWarning:
             previous_stage=STAGE_BLENDING,
             previous_epochs_in_stage=5,
             seed_age_epochs=epochs_in_stage + 10,
+            counterfactual_total_improvement=2.0,
         )
 
         _, components = compute_contribution_reward(
@@ -153,6 +156,7 @@ class TestHoldingWarning:
                 previous_stage=STAGE_BLENDING,
                 previous_epochs_in_stage=5,
                 seed_age_epochs=epochs + 10,
+                counterfactual_total_improvement=2.0,
             )
 
             _, components = compute_contribution_reward(

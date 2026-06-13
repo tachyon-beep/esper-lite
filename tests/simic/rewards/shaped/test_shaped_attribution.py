@@ -398,6 +398,7 @@ def test_shaped_timing_discount_reduces_early_germination_attribution() -> None:
         seed_age_epochs=18,  # epoch 20 - age 18 = germinated at epoch 2
         interaction_sum=0.0,
         boost_received=0.0,
+        counterfactual_total_improvement=5.0,
     )
 
     reward, components = compute_contribution_reward(
@@ -450,6 +451,7 @@ def test_shaped_timing_discount_disabled_gives_full_credit() -> None:
         seed_age_epochs=18,
         interaction_sum=0.0,
         boost_received=0.0,
+        counterfactual_total_improvement=5.0,
     )
 
     reward, components = compute_contribution_reward(
@@ -561,6 +563,7 @@ def test_shaped_harmonic_formula_reduces_drift_attribution() -> None:
         seed_age_epochs=50,
         interaction_sum=0.0,
         boost_received=0.0,
+        counterfactual_total_improvement=5.0,
     )
 
     # Scenario: contribution >= progress triggers bounded formula

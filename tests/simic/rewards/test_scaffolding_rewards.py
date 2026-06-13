@@ -19,6 +19,7 @@ def test_synergy_bonus_added_for_positive_interaction():
         seed_age_epochs=8,
         interaction_sum=2.5,  # Strong positive interaction
         boost_received=1.2,
+        counterfactual_total_improvement=0.05,
     )
 
     reward_with_synergy = compute_contribution_reward(
@@ -45,6 +46,7 @@ def test_synergy_bonus_added_for_positive_interaction():
         seed_age_epochs=8,
         interaction_sum=0.0,
         boost_received=0.0,
+        counterfactual_total_improvement=0.05,
     )
 
     reward_no_synergy = compute_contribution_reward(
@@ -94,7 +96,11 @@ def test_interaction_metrics_extracted_from_seed_state():
     )
 
     # Convert to SeedInfo (this is the critical pipeline step)
-    seed_info = SeedInfo.from_seed_state(seed_state, seed_params=10000)
+    seed_info = SeedInfo.from_seed_state(
+        seed_state,
+        seed_params=10000,
+        counterfactual_total_improvement=metrics.total_improvement,
+    )
 
     # Verify interaction metrics were extracted correctly
     assert seed_info is not None, "SeedInfo should not be None"

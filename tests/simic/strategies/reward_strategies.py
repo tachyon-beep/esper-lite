@@ -71,10 +71,14 @@ def seed_infos(draw, stage=None):
     interaction_sum = draw(st.floats(0.0, 5.0, allow_nan=False))
     boost_received = draw(st.floats(0.0, interaction_sum, allow_nan=False)) if interaction_sum > 0 else 0.0
 
+    # No host-drift simulation in property tests: the clean counterfactual the
+    # anti-gaming/fossilization gates require mirrors total_improvement.
+    total_improvement = draw(st.floats(-5.0, 10.0, allow_nan=False))
+
     return SeedInfo(
         stage=stage,
         improvement_since_stage_start=draw(st.floats(-10.0, 10.0, allow_nan=False)),
-        total_improvement=draw(st.floats(-5.0, 10.0, allow_nan=False)),
+        total_improvement=total_improvement,
         epochs_in_stage=epochs_in_stage,
         seed_params=draw(st.integers(0, 1_000_000)),
         previous_stage=previous_stage,
@@ -82,6 +86,7 @@ def seed_infos(draw, stage=None):
         seed_age_epochs=seed_age,
         interaction_sum=interaction_sum,
         boost_received=boost_received,
+        counterfactual_total_improvement=total_improvement,
     )
 
 
@@ -182,15 +187,20 @@ def ransomware_seed_inputs(draw):
     # Force BLENDING or HOLDING stage (where counterfactual is available)
     stage = draw(sampled_from([SeedStage.BLENDING.value, SeedStage.HOLDING.value]))
 
+    # Negative counterfactual is the ransomware signature; mirror total_improvement
+    # so the gate sees the same negative clean signal.
+    total_improvement = draw(st.floats(-2.0, -0.2, allow_nan=False))  # Negative!
+
     seed_info = SeedInfo(
         stage=stage,
         improvement_since_stage_start=draw(st.floats(-3.0, 0.0, allow_nan=False)),
-        total_improvement=draw(st.floats(-2.0, -0.2, allow_nan=False)),  # Negative!
+        total_improvement=total_improvement,
         epochs_in_stage=draw(st.integers(1, 10)),
         seed_params=draw(st.integers(10_000, 500_000)),
         previous_stage=stage - 1,
         previous_epochs_in_stage=draw(st.integers(1, 5)),
         seed_age_epochs=draw(st.integers(5, 20)),
+        counterfactual_total_improvement=total_improvement,
     )
 
     # High counterfactual contribution (the "ransom")
@@ -281,10 +291,12 @@ def prune_inputs(draw, valid: bool = True):
             stage = draw(sampled_from(ACTIVE_STAGES[:4]))  # Non-fossilized
             seed_age = 0  # Too young
 
+    total_improvement = draw(st.floats(-3.0, 5.0, allow_nan=False))
+
     seed_info = SeedInfo(
         stage=stage,
         improvement_since_stage_start=draw(st.floats(-5.0, 5.0, allow_nan=False)),
-        total_improvement=draw(st.floats(-3.0, 5.0, allow_nan=False)),
+        total_improvement=total_improvement,
         epochs_in_stage=draw(st.integers(0, 10)),
         seed_params=draw(st.integers(10_000, 200_000)),
         previous_stage=(
@@ -294,6 +306,7 @@ def prune_inputs(draw, valid: bool = True):
         ),
         previous_epochs_in_stage=draw(st.integers(0, 5)),
         seed_age_epochs=seed_age,
+        counterfactual_total_improvement=total_improvement,
     )
 
     seed_contribution = None

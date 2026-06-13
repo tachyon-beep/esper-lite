@@ -571,6 +571,7 @@ def test_basic_plus_mode_dispatches_through_compute_reward() -> None:
         previous_stage=SeedStage.BLENDING.value,
         previous_epochs_in_stage=3,
         seed_age_epochs=20,
+        counterfactual_total_improvement=5.0,
     )
 
     inputs = ContributionRewardInputs(
@@ -617,6 +618,7 @@ def test_basic_plus_mode_creates_drip_state() -> None:
         previous_stage=SeedStage.BLENDING.value,
         previous_epochs_in_stage=3,
         seed_age_epochs=20,
+        counterfactual_total_improvement=5.0,
     )
 
     (
@@ -681,6 +683,7 @@ def test_basic_plus_action_execution_requests_components_for_drip_transport() ->
             previous_stage=SeedStage.BLENDING.value,
             previous_epochs_in_stage=3,
             seed_age_epochs=20,
+            counterfactual_total_improvement=5.0,
         ),
         epoch=20,
         max_epochs=150,

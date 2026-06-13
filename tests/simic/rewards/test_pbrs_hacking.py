@@ -20,11 +20,13 @@ def _make_seed_info(
     previous_stage: SeedStage,
     previous_epochs_in_stage: int,
     seed_age_epochs: int,
+    counterfactual_total_improvement: float | None = None,
 ) -> SeedInfo:
+    total_improvement = 0.0
     return SeedInfo(
         stage=stage.value,
         improvement_since_stage_start=0.0,
-        total_improvement=0.0,
+        total_improvement=total_improvement,
         epochs_in_stage=epochs_in_stage,
         seed_params=0,
         previous_stage=previous_stage.value,
@@ -32,6 +34,11 @@ def _make_seed_info(
         seed_age_epochs=seed_age_epochs,
         interaction_sum=0.0,
         boost_received=0.0,
+        counterfactual_total_improvement=(
+            counterfactual_total_improvement
+            if counterfactual_total_improvement is not None
+            else total_improvement
+        ),
     )
 
 
