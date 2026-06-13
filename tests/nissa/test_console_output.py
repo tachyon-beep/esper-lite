@@ -55,6 +55,51 @@ class TestConsoleOutputFormatters:
         assert "BATCH 3" in captured.out
         assert "24/100" in captured.out
         assert "67.2%" in captured.out
+        assert "rolling: 65.1%" in captured.out
+
+    def test_formats_batch_completed_absent_rolling_accuracy(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """LN-004: absent rolling accuracy (None) renders 'n/a', not '0.0%'."""
+        console = ConsoleOutput()
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED,
+            data=BatchEpochCompletedPayload(
+                batch_idx=3,
+                episodes_completed=24,
+                total_episodes=100,
+                avg_accuracy=67.2,
+                avg_reward=2.3,
+                n_envs=1,
+                # rolling_accuracy omitted -> None (not measured)
+            ),
+        )
+        console.emit(event)
+        captured = capsys.readouterr()
+        assert "rolling: n/a" in captured.out
+        assert "rolling: 0.0%" not in captured.out
+
+    def test_formats_batch_completed_measured_zero_rolling_accuracy(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """LN-004: a measured rolling accuracy of 0.0 still renders '0.0%'."""
+        console = ConsoleOutput()
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED,
+            data=BatchEpochCompletedPayload(
+                batch_idx=3,
+                episodes_completed=24,
+                total_episodes=100,
+                avg_accuracy=67.2,
+                avg_reward=2.3,
+                n_envs=1,
+                rolling_accuracy=0.0,
+            ),
+        )
+        console.emit(event)
+        captured = capsys.readouterr()
+        assert "rolling: 0.0%" in captured.out
+        assert "rolling: n/a" not in captured.out
 
     def test_formats_checkpoint_loaded(self, capsys: pytest.CaptureFixture[str]) -> None:
         """CHECKPOINT_LOADED events print path and episode."""

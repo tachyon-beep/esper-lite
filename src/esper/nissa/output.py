@@ -396,10 +396,13 @@ class ConsoleOutput(OutputBackend):
                 avg_reward = event.data.avg_reward
                 env_accs = event.data.env_accuracies or ()
                 env_acc_str = ", ".join(f"{a:.1f}%" for a in env_accs) if env_accs else ""
+                # Absent rolling accuracy (None = not measured) renders "n/a", NOT a
+                # fabricated 0.0%; an explicit measured 0.0 still renders "0.0%" (LN-004).
+                rolling_str = "n/a" if rolling_acc is None else f"{rolling_acc:.1f}%"
                 print(f"[{timestamp}] BATCH {batch_idx} | Episodes {episodes}/{total}")
                 if env_acc_str:
                     print(f"[{timestamp}]   Env accs: [{env_acc_str}]")
-                print(f"[{timestamp}]   Avg: {avg_acc:.1f}% (rolling: {rolling_acc:.1f}%), reward: {avg_reward:.1f}")
+                print(f"[{timestamp}]   Avg: {avg_acc:.1f}% (rolling: {rolling_str}), reward: {avg_reward:.1f}")
         elif event_type == "CHECKPOINT_LOADED":
             if not isinstance(event.data, CheckpointLoadedPayload):
                 raise TypeError(f"CHECKPOINT_LOADED event has invalid payload type: {type(event.data)}")

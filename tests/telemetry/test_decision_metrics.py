@@ -297,6 +297,14 @@ class TestTELE800HeadTelemetry:
             alpha_target_confidence=0.90,
             alpha_speed_confidence=0.65,
             curve_confidence=0.80,
+            op_entropy=0.0,
+            slot_entropy=0.0,
+            blueprint_entropy=0.0,
+            style_entropy=0.0,
+            tempo_entropy=0.0,
+            alpha_target_entropy=0.0,
+            alpha_speed_entropy=0.0,
+            curve_entropy=0.0,
         )
 
         emitter.on_last_action(
@@ -345,6 +353,14 @@ class TestTELE800HeadTelemetry:
         }
 
         head_telemetry = HeadTelemetry(
+            op_confidence=0.0,
+            slot_confidence=0.0,
+            blueprint_confidence=0.0,
+            style_confidence=0.0,
+            tempo_confidence=0.0,
+            alpha_target_confidence=0.0,
+            alpha_speed_confidence=0.0,
+            curve_confidence=0.0,
             op_entropy=1.2,
             slot_entropy=0.8,
             blueprint_entropy=1.5,

@@ -183,19 +183,31 @@ __all__ = [
 # Observation V3 Feature Extraction (Phase 2)
 # =============================================================================
 
-def _pad_history(history: list[float], length: int = 5) -> list[float]:
-    """Left-pad history to fixed length with zeros.
+def _pad_history(history: list[float], length: int = 5) -> list[float | None]:
+    """Left-pad history to fixed length, marking absent steps with ``None``.
+
+    Early in an episode the history is shorter than ``length``: those leading
+    steps have simply not been observed yet. Padding them with ``0.0`` would
+    fabricate an observed value of zero where there was no observation at all,
+    making "absent" indistinguishable from a genuinely measured zero loss or
+    zero accuracy in the resulting observation tensor (TPD-005).
+
+    Instead, absent steps are returned as ``None``. Callers normalize the real
+    values and encode the ``None`` positions as ``OBS_V3_UNKNOWN_SENTINEL``,
+    which lies OUTSIDE the [0, 1] range of every history feature so the policy
+    can distinguish "not yet observed" from "observed zero".
 
     Args:
         history: Raw history values (may be shorter than length at episode start)
         length: Target length (default 5)
 
     Returns:
-        List of exactly `length` values, left-padded with 0.0 if needed
+        List of exactly ``length`` entries: the most recent values, left-padded
+        with ``None`` for steps that have not been observed yet.
     """
     if len(history) >= length:
-        return history[-length:]
-    return [0.0] * (length - len(history)) + history
+        return list(history[-length:])
+    return [None] * (length - len(history)) + list(history)
 
 
 def _extract_base_features_v3(
@@ -245,13 +257,21 @@ def _extract_base_features_v3(
     val_loss_norm = symlog(signal.metrics.val_loss) / _SYMLOG_NORM
     val_accuracy_norm = signal.metrics.val_accuracy / 100.0
 
-    # Extract and normalize loss history (5 dims) - symlog normalization
+    # Extract and normalize loss history (5 dims) - symlog normalization.
+    # Absent steps (None) encode as the UNKNOWN sentinel, NOT as observed-0.0.
     loss_history_padded = _pad_history(signal.loss_history, 5)
-    loss_history_norm = [symlog(x) / _SYMLOG_NORM for x in loss_history_padded]
+    loss_history_norm = [
+        OBS_V3_UNKNOWN_SENTINEL if x is None else symlog(x) / _SYMLOG_NORM
+        for x in loss_history_padded
+    ]
 
-    # Extract and normalize accuracy history (5 dims)
+    # Extract and normalize accuracy history (5 dims).
+    # Absent steps (None) encode as the UNKNOWN sentinel, NOT as observed-0.0.
     acc_history_padded = _pad_history(signal.accuracy_history, 5)
-    acc_history_norm = [x / 100.0 for x in acc_history_padded]
+    acc_history_norm = [
+        OBS_V3_UNKNOWN_SENTINEL if x is None else x / 100.0
+        for x in acc_history_padded
+    ]
 
     # Stage distribution (3 dims) - normalize by actual slot count
     # CRITICAL: Must use slot_config.num_slots for correctness with arbitrary grid sizes
@@ -728,15 +748,21 @@ def batch_obs_to_features(
         obs[env_idx, 1] = val_loss_norm
         obs[env_idx, 2] = val_accuracy_norm
 
-        # Loss history (5 dims) - symlog normalized
+        # Loss history (5 dims) - symlog normalized.
+        # Absent steps (None) encode as the UNKNOWN sentinel, NOT as observed-0.0.
         loss_history_padded = _pad_history(signal.loss_history, 5)
         for i, loss_val in enumerate(loss_history_padded):
-            obs[env_idx, 3 + i] = symlog(loss_val) / _SYMLOG_NORM
+            obs[env_idx, 3 + i] = (
+                OBS_V3_UNKNOWN_SENTINEL if loss_val is None else symlog(loss_val) / _SYMLOG_NORM
+            )
 
-        # Accuracy history (5 dims) - normalized to [0, 1]
+        # Accuracy history (5 dims) - normalized to [0, 1].
+        # Absent steps (None) encode as the UNKNOWN sentinel, NOT as observed-0.0.
         acc_history_padded = _pad_history(signal.accuracy_history, 5)
         for i, acc_val in enumerate(acc_history_padded):
-            obs[env_idx, 8 + i] = acc_val / 100.0
+            obs[env_idx, 8 + i] = (
+                OBS_V3_UNKNOWN_SENTINEL if acc_val is None else acc_val / 100.0
+            )
 
         # Stage distribution (3 dims)
         obs[env_idx, 13] = num_training / max_slots

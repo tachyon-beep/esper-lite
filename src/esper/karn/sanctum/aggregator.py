@@ -207,7 +207,7 @@ class SanctumAggregator:
     _reward_mode: str = ""  # A/B test cohort (shaped, simplified, sparse)
     _current_batch: int = 0  # Current batch index (from BATCH_EPOCH_COMPLETED)
     _batch_avg_accuracy: float = 0.0  # Batch-level average accuracy
-    _batch_rolling_accuracy: float = 0.0  # Rolling average for trend display
+    _batch_rolling_accuracy: float | None = None  # Rolling average for trend display; None = not measured
     _batch_avg_reward: float = 0.0  # Batch average reward
     _batch_total_episodes: int = 0  # Total episodes in run
     _run_config: "RunConfig" = field(default_factory=lambda: RunConfig())

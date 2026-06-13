@@ -639,7 +639,11 @@ class BatchEpochCompletedPayload:
     # OPTIONAL - resume-aware metadata
     start_episode: int = 0  # Resume offset (episode where this run started)
     requested_episodes: int = 0  # Total episodes requested by user
-    rolling_accuracy: float = 0.0
+    # Rolling-average accuracy. None = NOT MEASURED (e.g. partial/old telemetry
+    # with no rolling window yet); 0.0 = MEASURED zero. These must NOT collapse:
+    # an absent rolling accuracy renders as "n/a", a measured 0.0 as "0.0%"
+    # (LN-004).
+    rolling_accuracy: float | None = None
     env_accuracies: tuple[float, ...] | None = None
 
     @classmethod
@@ -660,7 +664,9 @@ class BatchEpochCompletedPayload:
             # OPTIONAL: Resume-aware fields default to 0 for fresh runs.
             start_episode=data.get("start_episode", 0),
             requested_episodes=data.get("requested_episodes", 0),
-            rolling_accuracy=data.get("rolling_accuracy", 0.0),
+            # OPTIONAL: None preserves "not measured" (absent key) distinct from a
+            # measured 0.0; the serializer always emits the key when present.
+            rolling_accuracy=data.get("rolling_accuracy"),
             env_accuracies=env_accuracies,
         )
 
@@ -1490,51 +1496,58 @@ class HeadTelemetry:
     Entropy measures how spread out the distribution is (higher = more uncertain).
     """
 
-    # Per-head confidence (probability of chosen action)
-    op_confidence: float = 0.0
-    slot_confidence: float = 0.0
-    blueprint_confidence: float = 0.0
-    style_confidence: float = 0.0
-    tempo_confidence: float = 0.0
-    alpha_target_confidence: float = 0.0
-    alpha_speed_confidence: float = 0.0
-    curve_confidence: float = 0.0
+    # Per-head confidence (probability of chosen action).
+    # All 16 fields are REQUIRED: the producer (_build_decision_head_telemetry)
+    # populates every head together from the policy's confidence/entropy tensors,
+    # or returns None when no head telemetry was measured at all. There is no
+    # partial-population path, so an absent field in a serialized head_telemetry
+    # dict means corrupted/partial telemetry and MUST fail loud rather than be
+    # fabricated as a measured 0.0 (TPD-004).
+    op_confidence: float
+    slot_confidence: float
+    blueprint_confidence: float
+    style_confidence: float
+    tempo_confidence: float
+    alpha_target_confidence: float
+    alpha_speed_confidence: float
+    curve_confidence: float
 
     # Per-head entropy (distribution spread - higher means more uncertain)
-    op_entropy: float = 0.0
-    slot_entropy: float = 0.0
-    blueprint_entropy: float = 0.0
-    style_entropy: float = 0.0
-    tempo_entropy: float = 0.0
-    alpha_target_entropy: float = 0.0
-    alpha_speed_entropy: float = 0.0
-    curve_entropy: float = 0.0
+    op_entropy: float
+    slot_entropy: float
+    blueprint_entropy: float
+    style_entropy: float
+    tempo_entropy: float
+    alpha_target_entropy: float
+    alpha_speed_entropy: float
+    curve_entropy: float
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "HeadTelemetry":
-        """Parse from dict.
+        """Parse from dict. Raises KeyError on any missing field.
 
-        ALL fields are optional with defaults of 0.0 because different heads
-        may be inactive depending on policy configuration and action masking.
+        Every field is required: to_dict() always emits all 16, so a valid
+        serialized HeadTelemetry always carries all of them. A missing key is
+        partial/corrupted telemetry, not a measured zero (TPD-004); we fail
+        fast instead of fabricating 0.0.
         """
         return cls(
-            # OPTIONAL: All confidence/entropy fields default to 0.0 for inactive heads.
-            op_confidence=data.get("op_confidence", 0.0),
-            slot_confidence=data.get("slot_confidence", 0.0),
-            blueprint_confidence=data.get("blueprint_confidence", 0.0),
-            style_confidence=data.get("style_confidence", 0.0),
-            tempo_confidence=data.get("tempo_confidence", 0.0),
-            alpha_target_confidence=data.get("alpha_target_confidence", 0.0),
-            alpha_speed_confidence=data.get("alpha_speed_confidence", 0.0),
-            curve_confidence=data.get("curve_confidence", 0.0),
-            op_entropy=data.get("op_entropy", 0.0),
-            slot_entropy=data.get("slot_entropy", 0.0),
-            blueprint_entropy=data.get("blueprint_entropy", 0.0),
-            style_entropy=data.get("style_entropy", 0.0),
-            tempo_entropy=data.get("tempo_entropy", 0.0),
-            alpha_target_entropy=data.get("alpha_target_entropy", 0.0),
-            alpha_speed_entropy=data.get("alpha_speed_entropy", 0.0),
-            curve_entropy=data.get("curve_entropy", 0.0),
+            op_confidence=data["op_confidence"],
+            slot_confidence=data["slot_confidence"],
+            blueprint_confidence=data["blueprint_confidence"],
+            style_confidence=data["style_confidence"],
+            tempo_confidence=data["tempo_confidence"],
+            alpha_target_confidence=data["alpha_target_confidence"],
+            alpha_speed_confidence=data["alpha_speed_confidence"],
+            curve_confidence=data["curve_confidence"],
+            op_entropy=data["op_entropy"],
+            slot_entropy=data["slot_entropy"],
+            blueprint_entropy=data["blueprint_entropy"],
+            style_entropy=data["style_entropy"],
+            tempo_entropy=data["tempo_entropy"],
+            alpha_target_entropy=data["alpha_target_entropy"],
+            alpha_speed_entropy=data["alpha_speed_entropy"],
+            curve_entropy=data["curve_entropy"],
         )
 
     def to_dict(self) -> dict[str, float]:

@@ -278,8 +278,11 @@ class WandbBackend(OutputBackend):
             "batch/avg_reward": event.data.avg_reward,
             "batch/episodes_completed": event.data.episodes_completed,
             "batch/batch_idx": event.data.batch_idx,
-            "batch/rolling_accuracy": event.data.rolling_accuracy,
         }
+        # Only log rolling accuracy when it was actually measured; None = not
+        # measured and must not be logged as a fabricated point (LN-004).
+        if event.data.rolling_accuracy is not None:
+            metrics["batch/rolling_accuracy"] = event.data.rolling_accuracy
 
         wandb.log(metrics, step=step)
 
